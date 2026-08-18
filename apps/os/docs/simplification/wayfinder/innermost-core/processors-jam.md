@@ -1,158 +1,167 @@
-# Processors jam v4 — THE SUBSCRIPTION TABLE
+# Processors jam v5 — grounded in apps/os, simplified where the ground allows
 
-v4 after eleven annotations on v3. The center of gravity moved: the owner asked to see **the
-exact table** — "we've got different kinds of subscribers; they all need to consume events from
-the stream" — and suggested the missing concept is inbound connections ("only nudge the
-processor if the processor's inbound connection currently doesn't exist"). v4 is that model,
-made explicit, with his hard requirements folded in. Decisions banked this round: **the SDK is
-TypeScript** (prebuilt; apps/os-style proper bundling later); the apps/os-**verbatim** doctrine
-is relaxed ("I'm not sure we need to verbatim anything from apps/os"); and terminology fixed —
-**a facet hosts a durable object** (a DO class instance with its own storage), not a vague
-"object".
+v5 after seven annotations on v4, two of which were an instruction: _ground this in what
+apps/os has today and find a simpler model that is equally expressive_, and _ephemeral events
+are a must_. Two mapping passes over apps/os back everything below (`stream-event-sender.ts`
+2485 lines, `stream-durable-object.ts`, the runner, the ephemeral buffer, and the three
+delivery-latency commits on `stream-for-audio`). Where v4 guessed, v5 cites.
 
-## The requirements (owner, verbatim intent — the design must satisfy these)
+The headline: **your annotation-5 instinct — "just call `processEventBatch` on the facet; wake
+is the thing that makes a far-away subscriber connect" — is almost verbatim the apps/os
+hosted-connection model.** The stream dials a cold processor once; the processor hands back
+`{checkpointOffset, processEventBatch}` (a callback stub); pushes then flow over that live
+connection, results returning on a separate one-shot callback (awaiting the push return can
+deadlock two DOs). v5 adopts that shape and deletes v4's facet-nudge framing.
 
-- **Extremely low latency and high throughput** on the append→subscriber path.
-- **In order. At-least-once is fine** (occasional double delivery ⇒ every side effect is
-  idempotent — the contract already requires this). **Never wait for an acknowledgement** —
-  acks confirm cursors asynchronously; they never block the commit or the next push.
-- **Dispose every push's RPC stub/promise** (the apps/os pattern that is "super important to
-  retain" — undisposed per-push promises leak the capnweb export table; we already have the
-  one shared `disposeStub`).
-- The commit path never head-of-line blocks on any subscriber.
+## What apps/os actually has (the ground)
 
-## ONE table: subscriptions
+**Five receiver kinds** (`SubscriptionReceiver`, core-processor-contract.ts):
 
-Every consumer of the stream is a row. A row is `{name, target, delivery, consumes?}` — the
-target is an itx expression, and `delivery` is one of exactly two modes. Concretely, one
-stream's table might read:
+| kind              | cursor owner                                                          | delivery                                                      |
+| ----------------- | --------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `facet-processor` | consumer (runner's own KV, CAS-fenced)                                | stream dials facet in-process; pushed batches over a callback |
+| `wake-processor`  | consumer                                                              | same, but the dial is an itx expression                       |
+| `itx-call`        | **stream** (SQLite cursor row; the awaited call resolving IS the ack) | one batch in flight, loop until caught up                     |
+| `webhook-post`    | **stream**                                                            | HTTP POST, batch size 1                                       |
+| `copy-to-stream`  | **stream**                                                            | append into another stream                                    |
 
-| name              | target (itx expression)                                                                          | delivery | cursor lives                    | consumes       |
-| ----------------- | ------------------------------------------------------------------------------------------------ | -------- | ------------------------------- | -------------- |
-| `browser:jonas`   | `itx.clients.get('conn-7f3')`                                                                    | **push** | on the row (confirmed: 4021)    | `*`            |
-| `tally`           | `itx.facets.get('tally')`                                                                        | **wake** | in the subscriber's own storage | `*`            |
-| `iterate-context` | `itx.facets.get('iterate-context')`                                                              | **wake** | subscriber's own                | `*`            |
-| `heavy`           | `itx.workers.get({ type: 'stateful', source: itx.files.read('/heavy.js'), className: 'Heavy' })` | **wake** | subscriber's own                | `*`            |
-| `digest`          | `itx.workers.get({ type: 'stateless', source: itx.files.read('/digest.js') })`                   | **push** | on the row (confirmed: 4019)    | `chat/message` |
+- **Configuration is event-sourced into the fold; cursor rows are projections, not truth**
+  (rows whose name left the fold are deleted on every pass). Exactly v4's rows-as-events +
+  derived-index shape — already proven there.
+- **Live sessions/browsers are NOT rows.** In-memory connections only; "they own no durable
+  cursor, so a hole costs them nothing"; the client replays after ITS OWN offset then goes
+  live. (Annotation 3 answered: apps/os agrees with you — the server does not track what a
+  browser has seen.)
+- **The commit path never awaits delivery.** Append → SQLite insert → synchronous `sendDue`;
+  real sends ride an alarm boundary (outside an alarm turn, `setAlarm(now)` and return) to
+  break the append↔delivery↔caller cycle.
+- **No dead-letter queue exists.** The real ladder: backoff retries (1s·2^n, cap 30min, ±20%
+  jitter, 15 attempts ≈ 2h), poison-event isolation (`onFailingEvent: "skip"`: 3 isolated
+  failures → skip + audit event), then **halt** — event-sourced, resumable
+  (`resumeSubscription`, `setSubscriptionCursor`). Simpler than a DLQ and fully auditable.
+- **The stateless worker is not a special mechanism** — it is an ordinary `itx-call` push
+  subscription named `project-worker` targeting `["processEventBatch"]`, `onFailingEvent:
+"skip"`. The author subclasses the SDK entrypoint and writes `processEvent(event)`; throwing
+  redelivers; the stream owns offset/retry machinery. (Your "must-support" case: confirmed, and
+  it is one row, not a subsystem.)
+- **Stub disposal** (the "super important to retain" code): every fire-and-forget push runs
+  `disposeIgnoredRpcResult(result)` — an unused RPC return is still a disposable stub and leaks
+  the remote reference otherwise; apps/os repeats the discipline at eight early-exit points on
+  the wake path.
 
-- **push** — for subscribers that cannot hold a cursor (a browser tab rendering the stream; a
-  **userspace stateless worker that just happens to export a `processEvent` function** — the
-  owner's always-include example). The stream owns the row's durable confirmed cursor. After a
-  commit it pipelines in-order batches into the resolved target (`target.processEvent(batch)`),
-  does NOT await, disposes each push's returned promise, and advances the confirmed cursor when
-  acks arrive asynchronously. A failed/never-acked push redelivers from the confirmed cursor —
-  at-least-once, in-order, zero blocking.
-- **wake** — for subscribers that own a cursor in their own durable storage (facet processors;
-  a remote DO processor). The nudge carries NOTHING; the subscriber reads contiguously from its
-  own cursor through the log (the cursor-driven discipline we already run). Delivery can never
-  be lost, only late — a dropped nudge is healed by the next commit or the next read.
+**Ephemeral events** (the must-have, as shipped):
 
-**Answering "shouldn't we only nudge if there's no connected subscriber?"** — split by mode.
-For push rows the question dissolves: the live inbound connection (the parked stub) IS the
-delivery path; there is no separate nudge. For wake rows it is right for REMOTE subscribers
-(if the subscriber currently holds a live inbound connection, push-style notification down
-that connection beats a cold cross-machine wake; nudge only when it doesn't) — and unnecessary
-for facets: a facet is in-process, an "inbound connection" to it cannot exist, and the nudge
-costs roughly a method call, so facets are nudged on every commit unconditionally.
+- An envelope field: `ephemeral: true` (with `idempotencyKey` rejected — nothing idempotent
+  about the unreplayable). Bodies live in a 10 MiB FIFO memory buffer; **the whole buffer dies
+  with the incarnation, by design** ("an ephemeral event's body cannot be redelivered by
+  anyone").
+- **One shared offset sequence.** Ephemerals consume offsets; after reboot their offsets remain
+  as _valid gaps_. Consumers advance on **scan-window proof** (`scannedAfterOffset` /
+  `scannedThroughOffset`), not by counting events — that one mechanism makes ephemeral holes,
+  filters, and reboot gaps all the same non-event.
+- **Almost zero writes — deliberately not zero:** a pure-ephemeral append performs exactly one
+  tiny SQLite write, the `stream_metadata` highest-assigned-offset update, because that is the
+  only thing preventing offset REUSE after the incarnation dies (a reused offset with a
+  different body hard-aborts browser stores). Everything else about the append is memory.
+- **Who sees them:** live sessions always; processors only by NAMING the type in `consumes`
+  (`"*"` never sweeps ephemerals); stream-cursor push kinds never (their cursor still
+  advances). Folds MAY reduce them, and a rebuild silently omits them — the written rule is
+  "never derive durable product truth from an ephemeral event" (chunks fold into live UI state;
+  the settled durable fact carries the full text).
+- **The delivery-latency trilogy** (the 2026-08-17 fixes, our design-ins rather than
+  retrofits): (1) all-ephemeral batches ride **uninsured** — no in-flight SQLite writes, no
+  alarm write; liveness comes from a wedge-check in the send loop instead; (2) **coalesce** —
+  batch limit is a function, not `=1`; 225 batches for 194 events was the smoking gun; (3)
+  **pipeline** uninsured batches back-to-back, bounded at 4 in flight. Recorded effect: uplink
+  lateness p90 188ms → 38ms; ~700ms shaved off a ~1900ms press-to-answer.
+- **Durability modulation that exists:** fold checkpoint debounced (every 64 events or 1s —
+  event rows are truth, boot folds past a stale checkpoint); runner commits once per delivered
+  batch (the deliberate at-least-once replay window); alarm writes deduped (`armNoLaterThan`).
+  Known cost hole pre-fix: hosted delivery spent ~2 SQLite writes + an alarm write per event.
 
-**Answering "does `wake()` need to exist? is it just forcing the DO into an isolate?"** —
-mechanically that is nearly all it does: load the facet's durable object and trigger its
-catch-up loop. Its reason to exist is _side-effect latency_, not correctness: folds are also
-caught up lazily by any read, so a processor nobody reads would still be correct — but its
-`processEvent` obligations (send the Slack message, move the robot) would wait until someone
-happened to look. The nudge bounds that staleness to ~zero. Correctness NEVER depends on a
-nudge arriving.
+## The clean-room model (simpler, same expressiveness)
 
-**`enableProcessor` dissolves.** Enrolling as a processor is not a special thing — it is a
-wake-mode subscription whose target happens to be a facet (annotation 4). `enableProcessor
-('tally')` becomes sugar for `subscribe({name: 'tally', target: "itx.facets.get('tally')",
-delivery: 'wake'})` plus the facet materialization. The separate facet-processors table dies
-into the subscription table. Browser rendering = `subscribe` with a push target of the
-client's parked stub. One verb, one table, every consumer kind.
+**Two subscription modes, not five kinds.** The three stream-cursor kinds differ only in what
+they call — which is exactly what an itx expression says. So:
 
-**Where the table lives (explicit, was fuzzy):** rows are ordinary events
-(`subscription-added` / `subscription-removed`, replace-by-name), folded into iterate-context
-state exactly like mounts — auditable, replayable, consistent with everything else. The parent
-keeps a tiny derived index of the current rows in its kv (refreshed on each fold) because the
-post-commit fan-out is the hot path and must not RPC into the facet to learn who to notify.
-Derived index, not a second source of truth. (Open question 3 if this smells wrong.)
+| mode          | cursor                            | the row                                                          |
+| ------------- | --------------------------------- | ---------------------------------------------------------------- |
+| **processor** | consumer-held                     | `{name, target: <expr resolving to the processor>, consumes}`    |
+| **push**      | stream-held (+ retries/skip/halt) | `{name, target: <any itx expression>, consumes, onFailingEvent}` |
 
-## The two doors into a facet (annotation 5 — fetch was missing)
+`webhook-post` = a push row whose target is an egress fetch expression. `copy-to-stream` = a
+push row targeting `itx.streams.get('/other').append(...?)`. `itx-call` = the general case.
+The stateless `processEvent` worker = a push row targeting the project worker. One retry/skip/
+halt ladder serves them all (no dead-letter — apps/os proves halt+skip+audit suffices). The
+jsonata transform does not come over; a transform is a real function in the config worker.
 
-1. **`facetInvoke(slug, path, args)`** — the RPC walk, parent-local because facet stubs are
-   non-transferable (the DataCloneError learning); `stepGet`-guarded, terminal `Reflect.apply`.
-2. **`fetch`** — the parent's existing native forward (`x-itx-cap` → `facet.fetch`), which
-   tunnels WebSocket 101 upgrades. You fetch the Stream DO; it hands the request natively to
-   the addressed facet. Already built and proven; v3 under-billed it as a footnote — it is the
-   second door, co-equal, and it is how a facet serves a page or a socket.
+**Delivery, one mechanism (annotations 5+6 resolved):**
 
-`roots.facets.get(slug)` + the seed `itx.facets ⇒ roots.facets` ride door 1 for calls and door
-2 for terminal-`fetch` expressions. (On the name `roots` itself the owner remains unsure —
-noted as open question 4; the _behavior_ — a host-only vocabulary event-provenance expressions
-cannot spell — is not in question, only what it's called.)
+- **THE PUMP lives in the stream** — the only sender. After a commit it pushes
+  `processEventBatch(batch, window)` to every current connection, in order, fire-and-forget,
+  disposing each push's returned stub. There is no separate per-subscriber "catch-up loop"
+  competing with it — what v4 called that is only **gap repair**: a subscriber that boots (or
+  sees a non-contiguous window) reads once from its own cursor, then rides pushes again.
+- **A facet IS a connection that never dials.** The parent pushes `processEventBatch` straight
+  into the facet on every commit — the call itself loads the durable object; no nudge concept,
+  no wake for facets, ever. Contiguity rides the same scan-window proof.
+- **`wake` is only for the far away** — the cold-start verb of the connection model: the
+  stream evaluates the row's target expression once, the remote durable object answers with
+  `{checkpointOffset, processEventBatch}` (your words: "in the callback it passes across the
+  RPC boundary, it can call its own this.processEventBatch" — that is literally the shipped
+  design), and pushes flow until the connection dies; every re-wake replays from the
+  subscriber's own checkpoint. Watchdog + rpc-broken detection bound the loss.
+- **Browsers:** live connections, no rows, no server-held cursor; the client says "everything
+  after 75" on reconnect. (Server-held per-tab cursors: rejected — apps/os agrees.)
 
-## Grammar fix (annotation 7): sub-expressions as call arguments
+**Ephemeral events, clean-room requirements (annotation 1):**
 
-`['itx','files',['read','/heavy.js']]` inside a target was the structured half smuggling a
-nested expression because the string grammar had no way to spell it. It should simply be:
+- Envelope `ephemeral: true`; memory ring with byte cap; shared offset sequence; scan-window
+  delivery. Adopt the ONE deliberate write (highest-assigned-offset) with its rationale stated
+  — or accept offset-reuse-after-reboot and delete even that; recommend adopting it, it is one
+  tiny UPDATE per append _batch_, and offset reuse is a data-corruption class.
+- **Zero fold/cursor writes on ephemeral-only activity**: uninsured push batches, coalescing,
+  bounded pipelining from day one (the trilogy as design, not retrofit); fold checkpoints
+  debounced and NEVER triggered by ephemeral-only deltas; processor progress commits only when
+  a window containing durable events completes.
+- Reduce may fold ephemerals; rebuilds omit them; the divergence rule is stated in the SDK
+  docs ("never derive durable truth from an ephemeral event") and the runner makes the
+  eventless rebuild-vs-live difference visible in `getRuntimeState`… which no longer exists —
+  so: visible in `snapshot()`'s offset honesty (it reports the durable fold offset).
 
-```
-itx.workers.get({ type: 'stateful', source: itx.files.read('/heavy.js'), className: 'Heavy' })
-```
+**Expression-valued arguments are strings (annotation 7):** no grammar change.
+`itx.workers.get({ type: 'stateful', source: "itx.files.read('/heavy.js')", className:
+'Heavy' })` — the receiving root parses the string as an expression (it already accepts either
+codec half). v4's call-by-value idea dies: the receiver _wants the name_, not the value.
 
-The fix is small and principled: the argument grammar admits dotted expressions as values,
-with **ordinary call-by-value semantics** — evaluate the argument expression first, pass its
-result. Rows store the unevaluated form (expressions are names; evaluation happens per
-resolve). The op-set does not grow — still get + call + hole; only what may appear as an
-argument does. Unambiguous to parse (an identifier start is not a JSON5 literal start).
+## Still standing (decided)
 
-## Verbs, restated plainly (annotation 3)
+- The collapse: registry → SDK base class (TypeScript, prebuilt); authors write
+  `reduce`/`processEvent`; read surface = `snapshot()` + `waitUntilProcessed` (kept: in
+  apps/os it is ONE uniform verb split by kind — processor kinds relay to the runner's
+  barrier, push kinds park a waiter on the row's confirmed cursor; same split here).
+- Facets host durable objects; the facet address (`facetInvoke` + the native fetch/101 door);
+  `enableProcessor` dissolves into `subscribe`.
+- `roots` naming still open (behavior settled); ITX-vs-STREAM identity still open.
 
-- **Author surface — the main verbs, unchanged:** `reduce` (pure fold) and `processEvent`
-  (side effects, with `blockProcessorWhile`/`runInBackground`). This is what you write; it is
-  the whole job description.
-- **Runner internals** (the SDK base class, invisible to authors): the cursor, the five rules,
-  refold-on-version-bump, and `wake()`.
-- **Read surface, now minimal:** `snapshot()` — and `waitUntilProcessed({offset})` as the one
-  barrier verb for read-your-writes. `getRuntimeState` is dropped (it was apps/os mirroring;
-  the verbatim doctrine is relaxed, and nothing here needs it). Reads reach a processor through
-  its facet address: `itx.facets.get('tally').snapshot()`.
+## Increment plan v5
 
-## Still standing (decided or unchanged)
+1. **Collapse + SDK** (unchanged scope, minus every `deliver`/nudge naming).
+2. **The pump + processor mode:** push `processEventBatch(batch, window)` into facets
+   per commit; scan-window contiguity; gap repair on boot; ephemeral envelope + memory ring +
+   the one metadata write; live proof: a voice-shaped ephemeral flood folds into a facet with
+   ZERO fold/cursor writes and byte-identical durable refold.
+3. **Push mode:** stream-held cursor rows + retry/skip/halt ladder; the stateless
+   `processEvent` worker proof; per-push disposal.
+4. **The facet address** (as before).
+5. **Deferred:** remote wake connections (the shape is fully specified above; built when a
+   remote processor exists).
 
-- **The collapse:** registry → SDK base class; net ~−150 lines, −3 concepts; `deliver` → the
-  mode-split above (`wake` nudges, `push` delivers); facet runner = host the durable object,
-  forward the role verbs.
-- **The SDK is TypeScript** (decided): mechanics stay TS, a minimal esbuild prebuild emits the
-  injected module — the simplest thing that works on this branch; proper apps/os-style
-  bundling when this graduates.
-- **zod stays host-side**; userspace contracts take `initialState: () => State`.
-- **Why facets are the default placement:** locality, subordinate lifecycle, co-hibernation,
-  no identity protocol (a remote target IS its identity; `configure` is facet-runner
-  bookkeeping authors never see).
-
-## Increment plan v4
-
-1. **Collapse + SDK (TS prebuild) + renames** — as before, minus any `deliver` naming.
-2. **The subscription table** — rows as events + the parent's derived index; `subscribe` /
-   `unsubscribe` verbs; `enableProcessor` becomes sugar; push mode with pipelined no-ack
-   delivery + per-push disposal + confirmed-cursor redelivery; live proof: a browser-shaped
-   push row and the stateless `processEvent` worker consuming side by side with the tally
-   facet.
-3. **The facet address** — `facetInvoke` + the fetch door, `roots.facets`, the seed; proof: a
-   facet with a normal RPC method invoked/aliased/shadowed through the table.
-4. **Grammar: sub-expressions as arguments** — parser + substitute + tests.
-5. **Deferred:** remote wake rows with connection-aware nudging (built when a real remote
-   processor exists; the row shape is ready above).
-
-## Open questions v4
+## Open questions v5
 
 1. Go on increments 1–4?
-2. Push-mode receiving verb: is `processEvent(batch)` the one convention for every push target
-   (browser-provided capability and stateless worker alike)?
-3. Rows-as-events + parent-side derived index for the hot path — right call, or should rows
-   live only in parent kv (operational wiring, not grants)?
-4. The name `roots` (owner unsure): keep, or rename the host-only vocabulary — candidates
-   welcome; behavior is settled, only the word is open.
-5. ITX vs STREAM as caller-visible concepts (owner explicitly undecided): v4 keeps one context
-   = one stream and spells addresses `itx.facets…`; revisit if sub-streams arrive.
+2. The one deliberate metadata write on ephemeral appends: adopt (recommended) or pursue true
+   zero-write with offset-reuse risk?
+3. Ephemeral opt-in for processors: apps/os requires NAMING the type in `consumes` (`"*"`
+   never sweeps ephemerals). Keep that rule verbatim?
+4. `waitUntilProcessed` kept as the one barrier verb (split by mode, as apps/os) — confirm?
