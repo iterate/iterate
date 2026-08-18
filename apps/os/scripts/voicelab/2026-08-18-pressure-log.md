@@ -161,11 +161,17 @@ speak: `silent` (bare WS to /api), `ping` (protocol pings), `rpc`
 (authenticated capnweb session, one RPC, then true silence), `open` (rpc +
 `openConnection` on a fresh stream + one durable append delivered back —
 the DO retaining a callback into a socket that then goes fully quiet).
-Results: THREE bare sockets and the ping socket sailed past 45 minutes;
-the rpc and open legs cleared many multiples of the supposed ~30 s window
-without a flicker. There is NO idle policy killing quiet sockets at any
-layer — not the edge, not the worker, not the DO connection machinery, and
-authenticated capnweb sessions are NOT torn down for being quiet.
+Final results: THREE bare-silent sockets and the rpc-silent socket
+SURVIVED the full 3600 s ceiling; the PING socket died at 3460 s (1006) —
+the only death in the battery was the one generating traffic. The open leg
+took a fresh at-head delivery frame at 649 s of silence (the DO can still
+call the retained callback ten minutes into quiet) and both session legs
+rode on through TWO worker deploys — in-flight WebSockets finish on the
+old isolate, so even a deploy is not an instant kill. There is NO idle
+policy killing quiet sockets at any layer — not the edge, not the worker,
+not the DO connection machinery — and authenticated capnweb sessions are
+NOT torn down for being quiet. Death is isolate reaping, uncorrelated with
+activity; pings buy nothing, which is F7's verdict measured.
 
 Re-reading the soak logs with that in hand: each "death by silence" run
 contained exactly ONE socket close (grok round 6, openai round 5 — every
@@ -179,3 +185,43 @@ that, which is the final nail for F7's verdict: redial-on-press is the
 correct posture, not a workaround. The append-stall failures (5 s
 unacknowledged on a FRESH socket) are a separate server-side wobble —
 F8 stays open, but it is not a socket-lifetime problem.
+
+**F10 (found while reading the error logs for F8/F9): two bricked
+scheduler streams, crashlooping since 2026-08-17 ~12–18Z at ~950
+errors/hour.** Both are `/scheduler/primary` of DELETED projects
+(`deleted-worker-bedc58ba`, `deleted-worker-303fa221`); a sweep of all
+519 preview-3 projects found no others, and prd is clean over 24 h. The
+chain, each link proven:
+
+1. The logged error (`failed to replay core event … offset 377/415, type
+subscription-delivery-halted, state version 31`) hid its zod cause —
+   `console.error`, RPC serialization and the observability pipeline all
+   drop `error.cause`. Fixed: the cause now rides in the message, and the
+   fold logs the exact stored row before throwing (boot failure gates
+   every RPC behind `blockConcurrencyWhile`, so the failing fold is the
+   ONLY window onto the bytes).
+2. The confessed row: a halted event written 2026-08-12T23:02Z whose
+   payload carries an extra `workerVersion` key. No committed code in the
+   entire history ever wrote that field — it came from an experimental
+   worktree deploy of that evening (preview-3 deploy 22:24Z). Today's
+   `z.strictObject` rejects the unknown key on replay.
+3. The event folded fine when appended (that build's schema knew the
+   field) and sat behind the checkpoint for five days. The brick only
+   detonates when a boot takes the full-replay lane and re-parses history
+   with today's schema — strict replay makes every payload-schema
+   tightening a delayed time bomb for any stream that predates it.
+4. A local repro through the real DO harness confirms today's write +
+   full-log rebuild round-trips cleanly — the current code is
+   self-consistent; only foreign history breaks it.
+5. `kill()` is boot-gated too: an unreplayable stream cannot even be
+   killed. There is NO repair verb that reaches a stream that cannot
+   boot. And the deleted projects' scheduler DOs still alarm forever —
+   deletion never tears down their heartbeat, which is what keeps the
+   crashloop burning.
+
+Decisions this leaves open (platform, for Jonas): whether replay of
+delivery-lifecycle bookkeeping events should be tolerant (they carry no
+product state; worst case a halted flag is lost and delivery re-halts),
+whether kill/quarantine must work pre-boot, and whether project deletion
+should tombstone the scheduler. The preview-3 zombies themselves are
+harmless noise until then.
