@@ -1089,8 +1089,9 @@ describe("a flush names a sequence number", () => {
     const h = makeHarness();
     await callIsLive(h, CLIENT_TAKES_TURNS);
     h.provider.responseCreated();
-    h.provider.answerAudio(8_000, "item_count");
+    h.provider.answerAudio(400, "item_count");
     h.provider.answerTranscript("one two three four five");
+    h.provider.answerAudio(7_600, "item_count");
     await playOutEverything(h, 600);
     const deliveredBeforeBarge = speakerMsDelivered(h);
     expect(deliveredBeforeBarge).toBeGreaterThan(0);

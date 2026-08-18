@@ -843,12 +843,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
    * item is undefined in exactly the way that bit us. Held here until the
    * `response.done` arrives, then sent against a settled item.
    */
-  #pendingTruncate: {
-    itemId: string;
-    contentIndex: number;
-    audioEndMs: number;
-    receivedMsAtBarge: number;
-  } | null = null;
+  #pendingTruncate: { itemId: string; contentIndex: number; audioEndMs: number } | null = null;
   /**
    * The provider's own transcript of the answer now playing, snapshotted at
    * the barge. Truncation deletes the item's transcript WHOLESALE (the
@@ -860,7 +855,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
    * audio at cancel), so a ratio cut over it starves the note — while the
    * lag itself lands the snapshot naturally near the heard boundary.
    */
-  #answerTranscript = "";
+  #answerTranscript: { atAnswerAudioMs: number; text: string }[] = [];
   /**
    * A barge cancelled the active response; its remaining deltas are dead.
    *
@@ -1164,7 +1159,16 @@ export class VoiceAgent2Processor extends StreamProcessor<
            * schedule: sent audio minus what still sat in the device's buffer
            * when the clear threw it away. */
           const nowAtFacetMs = this.deps.nowAtFacetMs();
-          const unplayedMs = Math.max(0, this.#deviceBufferEmptyAtFacetMs - nowAtFacetMs);
+          /* The device is the authority on what it played: a press may carry
+           * its actual buffered-ms (`spkBufferedMs`), measured at the button.
+           * The pacer schedule is only the fallback — it models the WORST
+           * CASE lead, and against a Mac draining into CoreAudio it claimed
+           * seconds sat unplayed that a listener had demonstrably heard. */
+          const reported = (event.payload as { spkBufferedMs?: unknown }).spkBufferedMs;
+          const unplayedMs =
+            typeof reported === "number" && Number.isFinite(reported) && reported >= 0
+              ? reported
+              : Math.max(0, this.#deviceBufferEmptyAtFacetMs - nowAtFacetMs);
           const heardMs = Math.max(0, Math.floor(this.#answerSentMs - unplayedMs));
           this.#dropAnswerInFlight(state.call.conversationId, nowAtFacetMs, append);
           if (this.#providerReady && this.#providerSocket !== null) {
@@ -1188,7 +1192,6 @@ export class VoiceAgent2Processor extends StreamProcessor<
                   itemId: this.#answerItemId!,
                   contentIndex: this.#answerContentIndex,
                   audioEndMs: heardMs,
-                  receivedMsAtBarge: this.#answerReceivedMs,
                 };
                 this.#answerItemId = null;
               }
@@ -1205,11 +1208,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
                 append,
               );
               this.#answerItemId = null;
-              this.#sendHeardPrefixNote(
-                heardMs / Math.max(1, this.#answerReceivedMs),
-                state.call.conversationId,
-                append,
-              );
+              this.#sendHeardPrefixNote(heardMs, state.call.conversationId, append);
             }
           }
         }
@@ -1350,7 +1349,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
       this.#answerReceivedMs = 0;
       this.#answerSentMs = 0;
       this.#pendingTruncate = null;
-      this.#answerTranscript = "";
+      this.#answerTranscript = [];
 
       /*
        * THE THIRD SWITCH, AND WHY IT IS NOT A STREAM EVENT.
@@ -1475,16 +1474,25 @@ export class VoiceAgent2Processor extends StreamProcessor<
               this.#answerItemId = null;
               this.#answerReceivedMs = 0;
               this.#answerSentMs = 0;
-              this.#answerTranscript = "";
+              this.#answerTranscript = [];
             }
             this.#dropAnswerInFlight(conversationId, receivedAtFacetMs, append);
             return;
 
           case "response.output_audio_transcript.delta":
-            /* Accumulated even while residue audio is being discarded: the
-             * heard-prefix note needs the transcript as generated, and the
-             * cut ratio was frozen at the barge. */
-            if (typeof grok.delta === "string") this.#answerTranscript += grok.delta;
+            /* Tagged with the answer-audio position it ARRIVED at: the two
+             * streams interleave with generation, so arrival position is the
+             * closest thing the wire offers to "spoken at". Ratio cuts over
+             * the concatenated text were wrong twice over (character length
+             * is not time; the transcriber lags), and told a listener who
+             * heard twelve numbers that they heard four. Residue still
+             * accumulates — the note is sent after the cancel. */
+            if (typeof grok.delta === "string") {
+              this.#answerTranscript.push({
+                atAnswerAudioMs: this.#answerReceivedMs,
+                text: grok.delta,
+              });
+            }
             return;
 
           case "response.output_audio.delta": {
@@ -1571,11 +1579,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
                 conversationId,
                 append,
               );
-              this.#sendHeardPrefixNote(
-                pending.audioEndMs / Math.max(1, pending.receivedMsAtBarge),
-                conversationId,
-                append,
-              );
+              this.#sendHeardPrefixNote(pending.audioEndMs, conversationId, append);
             }
             return;
           }
@@ -1842,28 +1846,18 @@ export class VoiceAgent2Processor extends StreamProcessor<
   }
 
   #sendHeardPrefixNote(
-    heardFraction: number,
+    heardMs: number,
     conversationId: string,
     append: ProcessEventArgs<VoiceAgent2Contract>["append"],
   ): void {
     if (this.#providerSocket === null || !this.#providerReady) return;
-    /*
-     * ALIGNED WINDOWS, or the note lies in whichever direction the run
-     * leaned: the transcript read NOW spans the audio GENERATED up to the
-     * cancel (both streams stopped there — measured, a barge-time snapshot
-     * ran 62 numbers ahead on a brisk count, and a barge-time ratio starved
-     * to 28 characters on a lagging transcriber). heard/received is a ratio
-     * of that same generated span, so it cuts this transcript to the heard
-     * boundary regardless of which stream was ahead at the press.
-     */
-    const transcript = this.#answerTranscript.trim();
-    this.#answerTranscript = "";
-    if (transcript === "") return;
-    const cut = transcript.slice(
-      0,
-      Math.max(1, Math.floor(transcript.length * Math.min(1, heardFraction))),
-    );
-    const heardPrefix = (cut.includes(" ") ? cut.slice(0, cut.lastIndexOf(" ")) : cut).trim();
+    const segments = this.#answerTranscript;
+    this.#answerTranscript = [];
+    const heardPrefix = segments
+      .filter((segment) => segment.atAnswerAudioMs <= heardMs)
+      .map((segment) => segment.text)
+      .join("")
+      .trim();
     if (heardPrefix === "") return;
     this.#sendControl(
       {
