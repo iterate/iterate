@@ -137,6 +137,16 @@ class FakeProvider {
     this.push({ type: "input_audio_buffer.speech_started" });
   }
 
+  /**
+   * The room went quiet again. On its own — no commit, no new response —
+   * this is how a tentative onset retracts: the measured echo-residue blip
+   * is a started/stopped pair and nothing else. A REAL turn follows it with
+   * `input_audio_buffer.committed` in the same server tick.
+   */
+  speechStopped(): void {
+    this.push({ type: "input_audio_buffer.speech_stopped" });
+  }
+
   /** A new answer begins. */
   responseCreated(): void {
     this.push({ type: "response.created" });
@@ -1175,7 +1185,10 @@ describe("a flush names a sequence number", () => {
    * the board's own drop counter reported, and with a boolean `drop` each one
    * emptied the speaker and the count restarted. Here the second through fifth
    * name a watermark that has already been passed, so they are no-ops, and the
-   * audio generated afterwards is untouched.
+   * audio generated afterwards is untouched. Each blip is a started/stopped
+   * PAIR because that is the measured signature — a false onset retracts as a
+   * `speech_stopped` with no commit behind it; five bare starts would be one
+   * onset the provider never settled, and the pacer rightly holds for that.
    */
   it("survives five spurious onsets during one answer", async () => {
     const h = makeHarness();
@@ -1186,6 +1199,7 @@ describe("a flush names a sequence number", () => {
 
     for (let blip = 0; blip < 5; blip++) {
       h.provider.speechStarted();
+      h.provider.speechStopped();
       await h.settle();
     }
     expect(speakerClears(h)).toHaveLength(1);
@@ -1224,9 +1238,18 @@ describe("a flush names a sequence number", () => {
     expect(afterClear.length).toBeGreaterThan(0);
   });
 
-  it("drops the queued tail of the answer that was interrupted", async () => {
+  /*
+   * UPDATED for the tentative-onset policy: the queued tail is destroyed on
+   * an onset only while the response is still GENERATING — the provider
+   * itself cancelled it server-side, so the tail is dead for certain. An
+   * onset after generation finished (grok's burst shape) HOLDS the tail
+   * instead of destroying it; that policy is pinned in "the open-mic barge"
+   * below.
+   */
+  it("drops the queued tail of the answer that was interrupted mid-generation", async () => {
     const h = makeHarness();
     await callIsLive(h);
+    h.provider.responseCreated();
     h.provider.answerAudio(8_000);
     await playOutEverything(h, 600);
     const deliveredBeforeBarge = speakerMsDelivered(h);
@@ -1423,6 +1446,156 @@ describe("a flush names a sequence number", () => {
     h.provider.responseCreated();
     await h.settle();
     expect(speakerClears(h)).toHaveLength(1);
+  });
+});
+
+/* ========================================================================== */
+/* THE OPEN-MIC BARGE                                                         */
+/* ========================================================================== */
+
+/*
+ * `input_audio_buffer.speech_started` is the ONLY interruption an open-mic
+ * board ever produces — no button, so the whole ptt barge chain used to be
+ * unreachable from it: the in-flight answer was dropped and the model went on
+ * believing it said everything it generated. And the onset is TENTATIVE
+ * (five per turn measured from echo residue), so what it may and may not
+ * destroy depends on whether the provider is still generating.
+ */
+describe("the open-mic barge", () => {
+  it("repairs the memory of a barged active response, and never sends cancel", async () => {
+    const h = makeHarness();
+    await callIsLive(h, GROK_LISTENS);
+    h.provider.responseCreated();
+    h.provider.answerAudio(400, "item_vad");
+    h.provider.answerTranscript("one two three four five");
+    h.provider.answerAudio(7_600, "item_vad");
+    await playOutEverything(h, 600);
+    const deliveredBeforeBarge = speakerMsDelivered(h);
+    expect(deliveredBeforeBarge).toBeGreaterThan(0);
+
+    h.provider.speechStarted();
+    await h.settle();
+    /*
+     * NO `response.cancel` from this arm, ever: OpenAI's server_vad
+     * `interrupt_response` defaults true — the provider cancelled this
+     * response server-side at the very onset, and a client cancel on top is
+     * a second owner of one cancellation. On grok a VAD-triggered cancel
+     * drew an error every time it was tried.
+     */
+    expect(h.provider.sentOfType("response.cancel")).toHaveLength(0);
+    /* And not yet: truncating an item its own response is still finalizing
+     * races the transcript write — the truncate waits for `response.done`. */
+    expect(h.provider.sentOfType("conversation.item.truncate")).toHaveLength(0);
+
+    /* The provider finalizes the barged response on its own. */
+    h.provider.answerComplete();
+    await h.settle();
+    const truncations = h.provider.sentOfType("conversation.item.truncate");
+    expect(truncations).toHaveLength(1);
+    expect(truncations[0]).toMatchObject({ item_id: "item_vad", content_index: 0 });
+    const audioEndMs = truncations[0]!.audio_end_ms as number;
+    expect(audioEndMs).toBeGreaterThan(0);
+    expect(audioEndMs).toBeLessThanOrEqual(deliveredBeforeBarge);
+
+    /* Truncation deletes the transcript wholesale; the note restores the
+     * heard prefix so recall is exact instead of confabulated. */
+    const notes = h.provider.sentOfType("conversation.item.create");
+    expect(notes).toHaveLength(1);
+    expect(JSON.stringify(notes[0])).toContain("heard only this much");
+    expect(JSON.stringify(notes[0])).toContain("one");
+    /* Still none — the finalization did not sneak one out. */
+    expect(h.provider.sentOfType("response.cancel")).toHaveLength(0);
+  });
+
+  it("holds the finished answer's tail through a false onset and resumes it", async () => {
+    const h = makeHarness();
+    await callIsLive(h, GROK_LISTENS);
+    /* Grok's shape: the whole answer bursts up front and generation is over
+     * long before the listener has heard it — the tail lives ONLY in the
+     * facet's queue, which is exactly what an onset must not destroy. */
+    h.provider.responseCreated();
+    h.provider.answerAudio(8_000);
+    h.provider.answerComplete();
+    await playOutEverything(h, 600);
+    const deliveredAtOnset = speakerMsDelivered(h);
+    expect(deliveredAtOnset).toBeGreaterThan(0);
+    expect(deliveredAtOnset).toBeLessThan(8_000);
+
+    h.provider.speechStarted();
+    await h.settle();
+    /* The device is silenced at once — the interrupt still FEELS instant. */
+    expect(speakerClears(h)).toHaveLength(1);
+    /* But the tail is held, not destroyed: nothing more goes out while the
+     * onset's verdict is pending. */
+    await playOutEverything(h, 2_000);
+    expect(speakerMsDelivered(h)).toBe(deliveredAtOnset);
+
+    /* The retraction: quiet again, no commit — it was echo residue. The
+     * tail resumes; what the false onset cost is the HOLE where the
+     * device's cleared lead was, not the remaining thirty-odd seconds. */
+    h.provider.speechStopped();
+    await playOutEverything(h, 12_000);
+    expect(speakerMsDelivered(h)).toBe(8_000);
+    /* Nobody's memory was touched: no commit means nothing to repair. */
+    expect(h.provider.sentOfType("conversation.item.truncate")).toHaveLength(0);
+    expect(h.provider.sentOfType("response.cancel")).toHaveLength(0);
+  });
+
+  it("a confirmed onset discards the held tail and repairs with heard-ms frozen at the clear", async () => {
+    const h = makeHarness();
+    await callIsLive(h, GROK_LISTENS);
+    h.provider.responseCreated();
+    h.provider.answerAudio(400, "item_burst");
+    h.provider.answerTranscript("one two three four five");
+    h.provider.answerAudio(7_600, "item_burst");
+    h.provider.answerComplete();
+    await playOutEverything(h, 600);
+    const deliveredAtOnset = speakerMsDelivered(h);
+
+    h.provider.speechStarted();
+    await h.settle();
+    /* The user keeps talking while the pacer holds; the schedule would keep
+     * advancing, which is why heard-ms is frozen AT the onset — repaired at
+     * the commit two seconds later, the number must still be the one from
+     * the moment the room went silent. */
+    await playOutEverything(h, 2_000);
+
+    /* A real turn: stopped and committed arrive in the same server tick —
+     * the retraction must not erase the frozen number the commit still
+     * owes. */
+    h.provider.speechStopped();
+    h.provider.push({ type: "input_audio_buffer.committed" });
+    await h.settle();
+
+    const truncations = h.provider.sentOfType("conversation.item.truncate");
+    expect(truncations).toHaveLength(1);
+    expect(truncations[0]).toMatchObject({ item_id: "item_burst", content_index: 0 });
+    /* Frozen: 600 ms had been heard when the clear fired. Recomputed at the
+     * commit it would claim 4,600 — everything ever handed over, none of the
+     * cleared buffer subtracted — which is exactly the lie the freeze
+     * prevents. */
+    expect(truncations[0]!.audio_end_ms).toBe(600);
+    const notes = h.provider.sentOfType("conversation.item.create");
+    expect(notes).toHaveLength(1);
+    expect(JSON.stringify(notes[0])).toContain("heard only this much");
+    expect(h.provider.sentOfType("response.cancel")).toHaveLength(0);
+
+    /* The held tail is gone for good — the retraction restarted the pacer
+     * one message before the commit landed, so the single in-flight frame
+     * may slip, and no more; the confirm's own watermark re-clears the
+     * device (the second clear), so the blurt is never heard. */
+    await playOutEverything(h, 2_000);
+    const deliveredAfterConfirm = speakerMsDelivered(h);
+    expect(deliveredAfterConfirm - deliveredAtOnset).toBeLessThanOrEqual(SPEAKER_FRAME_MS);
+    expect(speakerClears(h)).toHaveLength(2);
+
+    /* And the reply to the interruption plays clean, with none of the dead
+     * answer resuming underneath it. */
+    h.provider.responseCreated();
+    h.provider.answerAudio(1_000);
+    h.provider.answerComplete();
+    await playOutEverything(h, 3_000);
+    expect(speakerMsDelivered(h)).toBe(deliveredAfterConfirm + 1_000);
   });
 });
 
