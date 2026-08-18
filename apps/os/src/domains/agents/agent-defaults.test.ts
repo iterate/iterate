@@ -64,7 +64,7 @@ describe("agentCreationForPath — the atomic core, and nothing else", () => {
     });
   });
 
-  test("arms the headless keeper and the narrow collection copy in the same batch", () => {
+  test("arms the keeper and the narrow collection copy in the same batch", () => {
     const subscriptions = coreFor("/agents/demo").events.filter(
       (event) => event.type === "events.iterate.com/stream/subscription-configured",
     );
@@ -73,7 +73,7 @@ describe("agentCreationForPath — the atomic core, and nothing else", () => {
         // The subscription NAME is the contract selector (name == registered slug).
         event.payload.receiver.action === "facet-processor" ? [event.payload.name] : [],
       ),
-    ).toEqual(["agent-headless", "capability-host"]);
+    ).toEqual(["agent", "capability-host"]);
     expect(
       subscriptions.find((event) => event.payload.receiver.action === "copy-to-stream")?.payload,
     ).toMatchObject({

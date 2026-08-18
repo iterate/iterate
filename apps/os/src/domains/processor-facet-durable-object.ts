@@ -41,7 +41,7 @@ import { readProjectById } from "../project-directory.ts";
 import { facetProcessorFamilyForPath } from "./processor-facet-families.ts";
 import type { CapabilityDescription } from "./itx/describe.ts";
 import { DurableObjectNameCodec } from "./durable-object-names.ts";
-import { HeadlessAgentProcessor } from "./agents/agent-headless-processor.ts";
+import { AgentProcessor } from "./agents/agent-processor.ts";
 import {
   type AgentFileAttachment,
   type AgentLiveState,
@@ -579,16 +579,16 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
         return { absolutePath };
       },
     };
-    // The one built-in agent keeper (agent-headless-processor.ts).
-    // Registered WITH recovery: LLM turns are consequential `runInBackground`
-    // work (stream-committed requested/started obligations whose OUTCOME
+    // The one built-in agent keeper (agent-processor.ts). Registered WITH
+    // recovery: LLM turns are consequential `runInBackground` work
+    // (stream-committed requested/started obligations whose OUTCOME
     // matters). An incarnation that dies owing either must be revived.
-    const headlessProcessor = registry.register(new HeadlessAgentProcessor(agentArgs), {
+    const agentProcessor = registry.register(new AgentProcessor(agentArgs), {
       recovery: true,
     });
-    const headlessReads = registry.reads(headlessProcessor);
+    const agentReads = registry.reads(agentProcessor);
     this.#getLiveState = (): AgentLiveState => ({
-      runtimeChange: headlessReads.currentState.runtimeChange,
+      runtimeChange: agentReads.currentState.runtimeChange,
     });
 
     // The Slack presentation processor — see the retired agent DO's block
@@ -658,8 +658,8 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
     // slack-agent subscription exists). In the facet whose own name is
     // "slack-agent" the slack runner drives: present the latest pushed
     // transition whenever the slack fold changes.
-    registry.observeStateChanges(headlessProcessor, () => {
-      const transition = headlessReads.currentState.runtimeChange;
+    registry.observeStateChanges(agentProcessor, () => {
+      const transition = agentReads.currentState.runtimeChange;
       if (transition === undefined) return;
       void Promise.resolve(this.#parentStub(identity).presentAgentRuntimeTransition({ transition }))
         .then(disposeIgnoredRpcResult)

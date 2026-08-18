@@ -1,5 +1,5 @@
 // The agent's TURN LOOP component — one of the two parts composed into the
-// headless agent processor (see agent-headless-processor.ts). It owns the
+// agent processor (see agent-processor.ts). It owns the
 // conversational loop: mirroring visible chat messages into history,
 // interrupting an in-flight turn on new input, the birth-readiness hold (and
 // its degraded-start deadline), and the whole at-head lifecycle — resume,

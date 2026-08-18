@@ -309,10 +309,7 @@ test("Agent create replays its earlier birth and setup events through its subscr
       const payload = wakeSubscriptionPayload(event);
       return payload.receiver?.action === "facet-processor" && payload.name === name;
     });
-  const agentSubscriptionOffset = facetWakeSubscriptionOffset(
-    "agent keeper subscription",
-    "agent-headless",
-  );
+  const agentSubscriptionOffset = facetWakeSubscriptionOffset("agent keeper subscription", "agent");
   const capabilityHostSubscriptionOffset = facetWakeSubscriptionOffset(
     "capability-host processor subscription",
     "capability-host",
@@ -705,13 +702,11 @@ test("agents.get(path).create explicitly appends and processes the complete birt
       // The subscription NAME is the contract selector (name == registered slug).
       .map((event) => (event.payload as { name?: string } | undefined)?.name)
       .filter((slug): slug is string => typeof slug === "string");
-    if (processorSlugs.includes("agent-headless") && processorSlugs.includes("capability-host")) {
-      break;
-    }
+    if (processorSlugs.includes("agent") && processorSlugs.includes("capability-host")) break;
     if (Date.now() > mechanicsDeadline) break;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  expect(processorSlugs).toEqual(expect.arrayContaining(["agent-headless", "capability-host"]));
+  expect(processorSlugs).toEqual(expect.arrayContaining(["agent", "capability-host"]));
   expect(subscriptionCount).toBeGreaterThanOrEqual(3);
 });
 test("Project worker processEventBatch receives events from every project stream and can copy", async () => {

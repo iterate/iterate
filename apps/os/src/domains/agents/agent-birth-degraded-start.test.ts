@@ -14,10 +14,8 @@ import { expect, it } from "vitest";
 import type { ConsumedInput } from "iterate/processors";
 import { makeProcessorHarness } from "iterate/processors/testing";
 import { DEFAULT_AGENT_SYSTEM_PROMPT } from "./agent-defaults.ts";
-import {
-  HeadlessAgentProcessor,
-  HeadlessAgentProcessorContract,
-} from "./agent-headless-processor.ts";
+import { AgentProcessor } from "./agent-processor.ts";
+import type { AgentProcessorContract } from "./agent-processor-contract.ts";
 import { AGENT_BIRTH_FINALIZE_DEADLINE_MS } from "./agent-turn-loop.ts";
 import type { WorkersAiMessage } from "./workers-ai-transport.ts";
 
@@ -132,10 +130,10 @@ it("(b) a wrong-personality turn already in model-visible history cannot be un-s
 
 // -----------------------------------------------------------------------------
 // Harness: the generic step harness plus a minimal scripted LLM (mirrors
-// agent-headless-processor.test.ts).
+// agent-processor-no-interpretation.test.ts).
 // -----------------------------------------------------------------------------
 
-function userMessage(content: string): ConsumedInput<HeadlessAgentProcessorContract> {
+function userMessage(content: string): ConsumedInput<AgentProcessorContract> {
   return {
     type: "events.iterate.com/agents/context-added",
     payload: {
@@ -154,9 +152,9 @@ function makeHarness() {
     signal: AbortSignal;
     resolve: (result: { text: string }) => void;
   }[] = [];
-  const harness = makeProcessorHarness<HeadlessAgentProcessorContract>({
+  const harness = makeProcessorHarness<AgentProcessorContract>({
     createProcessor: (deps) =>
-      new HeadlessAgentProcessor({
+      new AgentProcessor({
         ...deps,
         callLlm: (args) =>
           new Promise((resolve) => {

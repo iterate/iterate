@@ -19,11 +19,7 @@ import {
   AgentProcessorContract,
   type AgentContextAddedPayload,
 } from "./agent-processor-contract.ts";
-import {
-  HeadlessAgentProcessor,
-  HeadlessAgentProcessorContract,
-  type AgentProcessorDeps,
-} from "./agent-headless-processor.ts";
+import { AgentProcessor, type AgentProcessorDeps } from "./agent-processor.ts";
 import {
   buildAgentCompactionRequestBody,
   contextWindowTokens,
@@ -33,7 +29,7 @@ import { interpretAgentEvent, type AgentInterpreterDeps } from "./agent-response
 import { buildAgentLlmRequestBody, projectContextAdded } from "./agent-prompt-fold.ts";
 import type { WorkersAiMessage } from "./workers-ai-transport.ts";
 
-type AgentEventInput = ConsumedInput<HeadlessAgentProcessorContract>;
+type AgentEventInput = ConsumedInput<AgentProcessorContract>;
 
 // -----------------------------------------------------------------------------
 // Event literals: the birth bundle and the recurring message shapes. These are
@@ -93,7 +89,7 @@ function agentLoopNote(content: string): AgentEventInput {
 
 const REVIVED = {
   type: "events.iterate.com/stream/processor-revived",
-  payload: { processorSlug: "agent-headless", revivals: 1, version: "test" },
+  payload: { processorSlug: "agent", revivals: 1, version: "test" },
 } satisfies StreamEventInput;
 
 // -----------------------------------------------------------------------------
@@ -144,14 +140,14 @@ function makeScriptedLlm() {
  * event on an agent stream, so this harness interprets every committed event
  * once, in order, after each step, appending the consequences exactly as the
  * service does (race-tolerantly: replays dedupe on the shared keys). The
- * keeper itself interprets nothing — agent-headless-processor.test.ts pins
+ * keeper itself interprets nothing — agent-processor-no-interpretation.test.ts pins
  * that by running WITHOUT this loop.
  */
 function makeAgentHarness(substrate?: HarnessSubstrate, extraDeps?: Partial<AgentProcessorDeps>) {
   const llm = makeScriptedLlm();
-  const harness = makeProcessorHarness<HeadlessAgentProcessorContract>({
+  const harness = makeProcessorHarness<AgentProcessorContract>({
     createProcessor: (deps) =>
-      new HeadlessAgentProcessor({ ...deps, callLlm: llm.transport, ...extraDeps }),
+      new AgentProcessor({ ...deps, callLlm: llm.transport, ...extraDeps }),
     path: "/agents/test",
     ...(substrate === undefined ? {} : { substrate }),
   });
@@ -1673,7 +1669,7 @@ describe("AgentProcessor script execution", () => {
     const replay = makeAgentHarness({
       clock: h.clock,
       stream: h.stream,
-      progress: makeMemoryProgressStore(HeadlessAgentProcessorContract),
+      progress: makeMemoryProgressStore(AgentProcessorContract),
     });
     await replay.settle(); // replays the whole journal; a wedge would throw here
 
@@ -2607,7 +2603,7 @@ describe("AgentProcessor compaction", () => {
     const replay = makeAgentHarness({
       clock: h.clock,
       stream: h.stream,
-      progress: makeMemoryProgressStore(HeadlessAgentProcessorContract),
+      progress: makeMemoryProgressStore(AgentProcessorContract),
     });
     await replay.settle();
     expect(replay.llm.calls).toHaveLength(0);

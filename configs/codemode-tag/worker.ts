@@ -47,7 +47,7 @@ const RESULT_HISTORY_LIMIT = 30_000;
 const RESULT_SPILL_PREVIEW_CHARS = 10_000;
 /** The platform keeper's processor slug — the stamp on assistant output it
  * committed for an accepted request. */
-const KEEPER_PROCESSOR_SLUG = "agent-headless";
+const KEEPER_PROCESSOR_SLUG = "agent";
 
 /** The agent's own workspace path: /workspaces + the agent stream path (the
  * platform's agentWorkspacePath convention). */

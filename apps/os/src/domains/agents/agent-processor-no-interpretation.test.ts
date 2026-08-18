@@ -1,4 +1,5 @@
-// The headless agent processor, driven through the memory harness: turn loop
+// The agent keeper WITHOUT any interpretation loop, driven through the
+// memory harness: turn loop
 // and LLM request run exactly as in the classic processor, but NOTHING
 // platform-side interprets assistant output — that is userland's job (the
 // project's config worker appends the consequences itself). These tests pin
@@ -10,10 +11,8 @@
 import { expect, it } from "vitest";
 import type { ConsumedInput } from "iterate/processors";
 import { makeProcessorHarness } from "iterate/processors/testing";
-import {
-  HeadlessAgentProcessor,
-  HeadlessAgentProcessorContract,
-} from "./agent-headless-processor.ts";
+import { AgentProcessor } from "./agent-processor.ts";
+import type { AgentProcessorContract } from "./agent-processor-contract.ts";
 import { AGENT_BIRTH_FINALIZE_DEADLINE_MS } from "./agent-turn-loop.ts";
 import type { WorkersAiMessage } from "./workers-ai-transport.ts";
 
@@ -22,7 +21,7 @@ const SCRIPT_REQUESTED = "events.iterate.com/capability-host/script-run-requeste
 const WEB_MESSAGE_SENT = "events.iterate.com/agents/web-message-sent";
 
 it("runs a full turn but interprets nothing: even a perfect ```ts script is left alone", async () => {
-  const h = makeHeadlessHarness();
+  const h = makeKeeperHarness();
   await h.play(
     ["append", ...NEW_AGENT_EVENTS, userMessage("run something")],
     ["advanceTime", 10_000],
@@ -44,8 +43,8 @@ it("runs a full turn but interprets nothing: even a perfect ```ts script is left
   );
 });
 
-it("slash commands are inert under headless: no execution, no LLM turn (userland's job)", async () => {
-  const h = makeHeadlessHarness();
+it("slash commands are inert without interpretation: no execution, no LLM turn (userland's job)", async () => {
+  const h = makeKeeperHarness();
   await h.play(
     ["append", ...NEW_AGENT_EVENTS, userMessage("/example describe-project {}")],
     ["advanceTime", 60_000],
@@ -55,7 +54,7 @@ it("slash commands are inert under headless: no execution, no LLM turn (userland
 });
 
 it("the full userland loop: worker-appended consequences drive scripts, chat, and the next turn", async () => {
-  const h = makeHeadlessHarness();
+  const h = makeKeeperHarness();
   await h.play(
     ["append", ...NEW_AGENT_EVENTS, userMessage("look into it")],
     ["advanceTime", 10_000],
@@ -131,7 +130,7 @@ it("the full userland loop: worker-appended consequences drive scripts, chat, an
 });
 
 it("a plain sendMessage (no llmRequestOffset) still mirrors into assistant history", async () => {
-  const h = makeHeadlessHarness();
+  const h = makeKeeperHarness();
   await h.play([
     "append",
     ...NEW_AGENT_EVENTS,
@@ -146,7 +145,7 @@ it("a plain sendMessage (no llmRequestOffset) still mirrors into assistant histo
 });
 
 it("holds the first turn until the birth is finalized; the finalize releases it", async () => {
-  const h = makeHeadlessHarness();
+  const h = makeKeeperHarness();
   await h.play(
     [
       "append",
@@ -182,7 +181,7 @@ it("holds the first turn until the birth is finalized; the finalize releases it"
 });
 
 it("degraded start: a missed readiness deadline appends the visible timed-out fact, the default personality, and finalize", async () => {
-  const h = makeHeadlessHarness();
+  const h = makeKeeperHarness();
   await h.play([
     "append",
     { type: "events.iterate.com/agent/created", payload: {} },
@@ -201,7 +200,7 @@ it("degraded start: a missed readiness deadline appends the visible timed-out fa
 });
 
 it("an idle unborn agent waits forever for free: no deadline arms before the first held trigger", async () => {
-  const h = makeHeadlessHarness();
+  const h = makeKeeperHarness();
   await h.play(
     ["append", { type: "events.iterate.com/agent/created", payload: {} }],
     ["advanceTime", 24 * 60 * 60_000],
@@ -215,7 +214,7 @@ it("an idle unborn agent waits forever for free: no deadline arms before the fir
 // agent-processor.test.ts).
 // -----------------------------------------------------------------------------
 
-type AgentEventInput = ConsumedInput<HeadlessAgentProcessorContract>;
+type AgentEventInput = ConsumedInput<AgentProcessorContract>;
 
 const NEW_AGENT_EVENTS = [
   { type: "events.iterate.com/agent/created", payload: {} },
@@ -228,7 +227,7 @@ const NEW_AGENT_EVENTS = [
     payload: {
       role: "system",
       key: "agent/system-prompt",
-      content: "You are a helpful headless test agent.",
+      content: "You are a helpful keeper test agent.",
     },
   },
   { type: "events.iterate.com/agent/birth-finalized", payload: {} },
@@ -246,11 +245,11 @@ function userMessage(content: string): AgentEventInput {
   };
 }
 
-function makeHeadlessHarness() {
+function makeKeeperHarness() {
   const llm = makeScriptedLlm();
-  const harness = makeProcessorHarness<HeadlessAgentProcessorContract>({
-    createProcessor: (deps) => new HeadlessAgentProcessor({ ...deps, callLlm: llm.transport }),
-    path: "/agents/headless-test",
+  const harness = makeProcessorHarness<AgentProcessorContract>({
+    createProcessor: (deps) => new AgentProcessor({ ...deps, callLlm: llm.transport }),
+    path: "/agents/keeper-test",
   });
   return { ...harness, llm };
 }

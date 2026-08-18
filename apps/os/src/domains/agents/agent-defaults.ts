@@ -26,14 +26,6 @@ import {
 import { AgentProcessorContract } from "./agent-processor-contract.ts";
 
 /**
- * The one built-in agent keeper's subscription name (the headless agent
- * processor's contract slug — see agent-headless-processor.ts; spelled as a
- * literal here so contracts-only consumers of this module never pull the
- * processor class and its transport into their bundles).
- */
-const AGENT_KEEPER_SUBSCRIPTION_NAME = "agent-headless";
-
-/**
  * Deterministic, synchronous content hash (djb2, hex) — the occurrence
  * identity for every shipped prompt and platform-default birth event.
  * Collision-tolerant because the full content also rides the keyed event and
@@ -406,8 +398,8 @@ const AGENT_WORKSPACE_POLICY_REVISION = "3";
 /**
  * Build the complete creation batch for one agent stream — the atomic CORE
  * and nothing else: the `agent/created` birth certificate, the capability
- * host pair, the workspace capability, the keeper subscription
- * (`agent-headless`), the collection copy, and any explicitly named sibling.
+ * host pair, the workspace capability, the keeper subscription (`agent`),
+ * the collection copy, and any explicitly named sibling.
  * No prompt, no model choice, no boot context: personality is authored by
  * the project's config worker reacting to `agent/created` (finalized with
  * `agent/birth-finalized`), and the keeper holds LLM triggers until it does.
@@ -465,8 +457,8 @@ export function agentCreationForPath<
     },
   });
   const keeperSubscription = buildFacetProcessorSubscriptionConfiguredEvent({
-    idempotencyKey: `stream/subscription-configured:${AGENT_KEEPER_SUBSCRIPTION_NAME}`,
-    name: AGENT_KEEPER_SUBSCRIPTION_NAME,
+    idempotencyKey: `stream/subscription-configured:${AgentProcessorContract.slug}`,
+    name: AgentProcessorContract.slug,
   });
   const collectionSubscription = CoreProcessorContract.buildEvent({
     type: "events.iterate.com/stream/subscription-configured",

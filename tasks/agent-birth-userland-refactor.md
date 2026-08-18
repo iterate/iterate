@@ -181,7 +181,7 @@ finalize → successful turn). Remaining: human review.
 - Generic watchdog primitive; rollback-offer UX.
 - Logical vs physical stream paths (build only if the "unfixable" spec
   starts matching production).
-- Renaming the `agent-headless` slug.
+- ~~Renaming the `agent-headless` slug~~ — done in this change after all: the keeper reclaimed "agent" (see implementation log).
 
 ## Implementation log
 
@@ -256,10 +256,28 @@ from the request lifecycle"; when unsure, keep mechanism in the core):
   is the per-agent renderable fact (event feed); `project/worker-update-failed`
   already journals at project level and renders in the project event feed.
   A styled banner + rollback offer is the follow-up the spec already lists.
-- **No migration for pre-existing agents**: streams subscribed to the retired
-  `agent` slug (and old `agents/birth-defaults` publishes) are not rewritten;
-  preview/dev environments get erased, and prod agents are short-lived
-  threads. Flagged for the PR rather than silently handled.
+- **Keeper slug reclaimed: "agent"** (Misha's call, 2026-08-18; supersedes
+  "slug kept for now"). With one keeper left, the two-contracts-one-vocabulary
+  arrangement dissolved: `HeadlessAgentProcessorContract` deleted, the keeper
+  registers under `AgentProcessorContract` itself (still v6.0.0 — the
+  vocabulary didn't change, and 6.0.0 already exceeds the classic era's
+  5.2.0, so stale "agent"-keyed progress refolds cleanly under the reclaimed
+  slug), `agent-headless-processor.ts` folded into `agent-processor.ts`
+  (class `AgentProcessor`), its no-worker-loop tests renamed to
+  `agent-processor-no-interpretation.test.ts`. "headless" survives only in
+  history comments and headless-browser docs.
+- **Legacy streams after the slug reclaim**: classic-era streams (subscribed
+  "agent") resolve against the current keeper again — the no-migration risk
+  shrinks to behavior: they have no `birth-finalized`, so their first NEW
+  message waits out the 10s degraded start, which appends the platform-default
+  personality as a superseding occurrence of their existing prompt slot, then
+  runs. Their old `agent/configured` events carrying the deleted `driver` key
+  fail the strict patch parse and reduce to nothing (skipped like any
+  malformed append). The RESIDUAL question is the short-lived
+  "agent-headless"-subscribed streams (codemode-tag experiments and this
+  branch's own pre-rename preview streams): that name now points at no
+  registered processor, so those streams' keeper never wakes again —
+  preview-only in practice, erased with the slot.
 - **Unit harness plays the worker**: agent-processor.test.ts auto-interprets
   every committed event after each step (exactly the default template's
   loop), so the classic lifecycle specs still read as real usage;
