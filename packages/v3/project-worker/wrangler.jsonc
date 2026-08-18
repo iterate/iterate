@@ -20,7 +20,7 @@
   // every hibernatable socket in one addressable parent.
   "durable_objects": {
     "bindings": [
-      { "name": "CONTEXT", "class_name": "IterateContextDurableObject" },
+      { "name": "CONTEXT", "class_name": "StreamDurableObject" },
       // The dedicated stateful-dynamic-worker runner (apps/os StatefulWorkerDurableObject). One instance per
       // stateful capability, each hosting the user's DO class as a facet.
       { "name": "STATEFUL_WORKER", "class_name": "StatefulWorkerDurableObject" },
@@ -39,6 +39,11 @@
     {
       "tag": "v6",
       "renamed_classes": [{ "from": "ContextDurableObject", "to": "IterateContextDurableObject" }],
+    },
+    // Jonas: the DO is the STREAM; the iterate context is a PROCESSOR on it.
+    {
+      "tag": "v7",
+      "renamed_classes": [{ "from": "IterateContextDurableObject", "to": "StreamDurableObject" }],
     },
   ],
 

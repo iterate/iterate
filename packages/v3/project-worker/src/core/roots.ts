@@ -5,7 +5,7 @@
 //      prefixed, sibling contexts are named through the codec, the loader's cache keys embed the
 //      context — so a cross-project reference is UNSPELLABLE, there is no method that takes one.
 //   2. Provenance-gated: `roots` is only in scope while resolving a CONFIG seed's target (see
-//      capability-host-processor.ts). Event-provided mounts never see it.
+//      iterate-context-stream-processor.ts). Event-provided mounts never see it.
 //
 // It is an RpcTarget so the same object works across a Workers-RPC hop (workerd exposes getters
 // and methods on RpcTargets; plain instance fields stay invisible) — a facet or loaded worker

@@ -1,18 +1,18 @@
 // The PROJECT WORKER — the stateless edge. capnweb terminates at `/api`; everything else forwards to the
-// IterateContextDurableObject over Workers RPC (the DO does the real work and stays hibernatable). `DummyControlPlane` is
+// StreamDurableObject over Workers RPC (the DO does the real work and stays hibernatable). `DummyControlPlane` is
 // the solo-mode fallback entrypoint (the deployed config binds FALLBACK to the real control-plane shell instead).
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { newWorkersWebSocketRpcResponse } from "capnweb";
-import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
+import { StreamDurableObject } from "./stream-durable-object.ts";
 import { canonicalName } from "./core/names.ts";
 import { ProjectSession } from "./core/itx-surface.ts";
 
-export { IterateContextDurableObject };
+export { StreamDurableObject };
 export { StatefulWorkerDurableObject } from "./stateful-worker-durable-object.ts";
 
 interface Env {
-  CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;
+  CONTEXT: DurableObjectNamespace<StreamDurableObject>;
   LOADER: WorkerLoader;
   SECRETS_KV?: KVNamespace;
   APP_CONFIG?: string;

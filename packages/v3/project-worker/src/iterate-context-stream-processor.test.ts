@@ -2,7 +2,7 @@
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import { parse, type Expression } from "./core/expression.ts";
-import { CapabilityHostProcessor } from "./capability-host-processor.ts";
+import { IterateContextStreamProcessor } from "./iterate-context-stream-processor.ts";
 import { createStreamProcessorRegistry, type ProcessorStream } from "./core/processor.ts";
 import {
   idempotencyConflictMessage,
@@ -82,7 +82,7 @@ const setup = (seeds: [string, string][] = []) => {
     projectId: "prj_t",
   });
   const host = registry.register(
-    new CapabilityHostProcessor({
+    new IterateContextStreamProcessor({
       stream,
       path: "/",
       projectId: "prj_t",
@@ -100,7 +100,7 @@ const setup = (seeds: [string, string][] = []) => {
   const reads = registry.reads(host);
   // wire the recursion: `itx.…` inside a target re-enters resolve with the freshly folded state
   host.resolveCurrent = async (call: Expression) => {
-    await registry.catchUp("capability-host");
+    await registry.catchUp("iterate-context");
     return host.resolve((await reads.snapshot()).state, call);
   };
   const invoke = (call: string) => host.resolveCurrent(parse(call));

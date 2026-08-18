@@ -1,5 +1,6 @@
-// iterate-context-durable-object.ts — THE context: one DO per `{projectId, path}` (codec-named
-// `{projectId}.iterate{path}`), which IS a stream AND a capability surface at once:
+// stream-durable-object.ts — THE STREAM: one DO per `{projectId, path}` (codec-named
+// `{projectId}.iterate{path}`). The stream is the parent; the ITERATE CONTEXT is a PROCESSOR
+// on it (iterate-context-stream-processor.ts — the routing table), one among many:
 //
 //   • the EVENT LOG — SQLite append/read, monotonic offsets, idempotency at the commit point;
 //   • the PROCESSORS — a registry driven after every commit; the capability-host processor
@@ -18,7 +19,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { substituteHeaderSecrets } from "@v3/shared/egress";
-import { CapabilityHostProcessor } from "./capability-host-processor.ts";
+import { IterateContextStreamProcessor } from "./iterate-context-stream-processor.ts";
 import { CODE_CAP_RUNNER, ITX_SURFACE_MODULE } from "./core/agent-runtime.ts";
 import { parseAppConfig } from "./core/config.ts";
 import {
@@ -36,7 +37,7 @@ import { Roots, type ClientsView, type WorkersView } from "./core/roots.ts";
 import type { StatefulWorkerDurableObject } from "./stateful-worker-durable-object.ts";
 
 interface Env {
-  CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;
+  CONTEXT: DurableObjectNamespace<StreamDurableObject>;
   STATEFUL_WORKER: DurableObjectNamespace<StatefulWorkerDurableObject>;
   LOADER: WorkerLoader;
   ITX_KV?: KVNamespace;
@@ -83,7 +84,7 @@ export class Counter extends DurableObject {
 };`,
 };
 
-export class IterateContextDurableObject extends DurableObject<Env> {
+export class StreamDurableObject extends DurableObject<Env> {
   // ── transport: the parked-stub registry over this DO's hibernatable sockets ──
   #stubs = new HibernatableStubs({
     acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
@@ -106,7 +107,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     projectId: this.#name.projectId,
   });
   #capHost = this.#registry.register(
-    new CapabilityHostProcessor({
+    new IterateContextStreamProcessor({
       stream: { append: (...e) => this.append(...e), read: (a, l) => this.read(a, l) },
       path: this.#name.path,
       projectId: this.#name.projectId,
@@ -195,7 +196,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** Resolve + run one call (either codec half) against the current table. */
   async invoke(call: string | Expression): Promise<unknown> {
-    await this.#registry.catchUp("capability-host");
+    await this.#registry.catchUp("iterate-context");
     const state = (await this.#capReads.snapshot()).state;
     return this.#capHost.resolve(state, toExpression(call));
   }
@@ -235,7 +236,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         const expr = capHeader.trimStart().startsWith("[")
           ? (JSON.parse(capHeader) as Expression)
           : parse(capHeader.startsWith("itx") ? capHeader : `itx.${capHeader}`);
-        await this.#registry.catchUp("capability-host");
+        await this.#registry.catchUp("iterate-context");
         const state = (await this.#capReads.snapshot()).state;
         const result = await this.#capHost.resolveFetch(state, expr, request);
         if (result instanceof Response) return result;
@@ -421,14 +422,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
                 "run.js",
                 { "run.js": CODE_CAP_RUNNER, ...modules },
               );
-              const resp = await worker
-                .getEntrypoint()
-                .fetch(
-                  new Request("https://code.local/", {
-                    method: "POST",
-                    body: JSON.stringify(args),
-                  }),
-                );
+              const resp = await worker.getEntrypoint().fetch(
+                new Request("https://code.local/", {
+                  method: "POST",
+                  body: JSON.stringify(args),
+                }),
+              );
               return ((await resp.json()) as { result: unknown }).result;
             },
             fetch: async (request: Request) => {

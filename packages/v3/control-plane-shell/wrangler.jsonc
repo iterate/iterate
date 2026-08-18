@@ -17,7 +17,7 @@
     "bindings": [
       {
         "name": "CONTEXT",
-        "class_name": "IterateContextDurableObject",
+        "class_name": "StreamDurableObject",
         "script_name": "project-worker",
       },
     ],

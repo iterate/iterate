@@ -28,7 +28,7 @@ import { DurableObject } from "cloudflare:workers";
 import { ITX_SURFACE_MODULE } from "./core/agent-runtime.ts";
 import type { Expression } from "./core/expression.ts";
 import { stringifyName } from "./core/names.ts";
-import type { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
+import type { StreamDurableObject } from "./stream-durable-object.ts";
 
 const FACET_NAME = "target";
 const VERSION_KEY = "stateful:version";
@@ -38,7 +38,7 @@ interface Env {
   // The context namespace (same worker). A stub to the owning context is minted into each facet's
   // env.ITX + globalOutbound AND is where this runner resolves its source expression — the
   // runner reads NO KV directly; source comes through the host like everything else.
-  CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;
+  CONTEXT: DurableObjectNamespace<StreamDurableObject>;
   // Deploy identity (wrangler `version_metadata`). Folded into the loader cacheKey so a redeploy
   // mints a FRESH loaded isolate — a facet built from a prior deployment's isolate cannot be
   // called from the new parent. Mirrors apps/os workerVersion(env). Absent locally → "unversioned".
@@ -70,7 +70,7 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
   /** A stub to the OWNING capability host — the `env.ITX` every hosted DO class gets (like a stateless code
    *  cap). Reconstructed from this runner's name `{projectId}::{path}::{callPath}`, which the host sets in
    *  ItxDurableObject#statefulRunner; the first two `::`-segments are the context {projectId, path}. */
-  #hostStub(): DurableObjectStub<IterateContextDurableObject> {
+  #hostStub(): DurableObjectStub<StreamDurableObject> {
     const [projectId, path] = (this.ctx.id.name ?? "").split("::");
     return this.env.CONTEXT.getByName(
       stringifyName({ projectId: projectId ?? "", path: path ?? "/" }),

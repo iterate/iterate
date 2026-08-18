@@ -1,5 +1,5 @@
 // core/itx-surface.ts — the client-facing capnweb surface + the stateless RELAY. This is the ONE place capnweb
-// terminates (the `/api` worker); it reaches the IterateContextDurableObject only over Workers RPC (the hard rule).
+// terminates (the `/api` worker); it reaches the StreamDurableObject only over Workers RPC (the hard rule).
 //
 // A client dials `/api` and gets a `ProjectSession`:
 //   • `get()`     → the project `Itx` (the iterate-context stub). Pure addressing.
@@ -15,9 +15,9 @@ import { RpcTarget } from "capnweb";
 import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
 import { openPager, parsePage } from "./hibernatable-pager.ts";
 import { canonicalName } from "./names.ts";
-import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";
+import type { StreamDurableObject } from "../stream-durable-object.ts";
 
-type ItxHostStub = DurableObjectStub<IterateContextDurableObject>;
+type ItxHostStub = DurableObjectStub<StreamDurableObject>;
 
 // `Symbol.dispose` isn't in the current lib target; reference it defensively to free a capnweb stub.
 const DISPOSE: symbol | undefined = (Symbol as { dispose?: symbol }).dispose;
@@ -103,7 +103,7 @@ export class ProjectSession extends RpcTarget {
   readonly #waitUntil: (p: Promise<unknown>) => void;
 
   constructor(
-    hostNamespace: DurableObjectNamespace<IterateContextDurableObject>,
+    hostNamespace: DurableObjectNamespace<StreamDurableObject>,
     projectId: string,
     ctx: ExecutionContext,
   ) {

@@ -559,3 +559,4 @@ args)` — invokes `[[Call]]` directly, runs inside the owning DO, returns plain
   `replayPath`), proven by `itx.counter.counters.add`. The no-op `idle` Page deleted (`wake` is the only
   page); `captureExpression` deleted (codec jam pending); the itx-DO's three `LOADER.get` blocks collapsed
   into one `#worker` helper.
+- **D42** (2026-08-18, crisp-1): mounts are EXPRESSIONS resolved by a routing table (shadow stack, provenance-gated roots); the capability host is `IterateContextStreamProcessor` on `StreamDurableObject` (the parent DO: log+sockets+registry); apps/os-mirrored processor API incl. the concurrency contract; facet hosting = next increment.

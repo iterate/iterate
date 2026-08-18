@@ -551,3 +551,26 @@ parent-path-then-shell fallback), **execution** (`load` a confined agent bound t
 **Next (candidates):** cross-script DO sharing so the control plane names/writes project streams (D27); the
 global/`__null__` outer-scope context on the control plane; extracting the core into `packages/itx` (D26) so
 the control plane runs the same core; billing-analytics verification of hibernation at 1000-scale.
+
+## Increment 23 (crisp-1): the codec + processors + routing table — the full resolved architecture
+
+- **What:** the expression codec (both halves: JS-subset string grammar ⇄ structured steps; holes
+  `?`/`?0`/`?name`/`...?`; match/substitute/evaluate/apply; frozen-wins spread-merge; terminal-fetch
+  lane rule), the processor layer with the apps/os-mirrored API (defineProcessorContract,
+  StreamProcessor reduce/processEvent, the five concurrency rules incl. strict per-event barrier +
+  one-persist-per-batch + at-head pass + version-bump refold), and the capability host REBUILT as
+  `IterateContextStreamProcessor` — reduced state IS the routing table (shadow stack: newest
+  same-pattern wins, revoke-by-offset restores; longest-bound-pattern specificity; default-deny;
+  `roots` in scope ONLY for config seeds — event provenance can't spell the physical layer).
+- **The merge:** `StreamDurableObject` is THE parent (SQLite log + registry + every hibernatable
+  socket + the fetch door + egress). Old ItxDurableObject + StreamDurableObject deleted
+  (migrations v4-v7 incl. the 10061 two-step + shell re-point); `Roots` = the primordial scope;
+  `provide(live)` = park + mount `pattern ⇒ itx.clients.get(socketId)` (the R13 desugar);
+  dynamic workers = `itx.workers.get({type, source})` through seeds (Mount union deleted).
+- **Naming (Jonas):** the DO is the STREAM; the iterate context is a PROCESSOR on it. Facet
+  hosting of processors (ctx.facets.get + configure(parentName) + both kinds) is the NEXT
+  increment — the registry is host-agnostic on purpose so processors don't change when it moves.
+- **Proven:** 62 unit tests; live 16/16 on `crisp-1` (seeds, kv, live-cap with DO dormant,
+  shadow stack override/restore/deny, mounted worker HTML + WS 101 via /cap, stateful deep
+  dotted + env.ITX callback, clients fan-out). Live-only bugs: private-field declaration order;
+  missing files/repo seeds; fetch-lane errors now surfaced with status.

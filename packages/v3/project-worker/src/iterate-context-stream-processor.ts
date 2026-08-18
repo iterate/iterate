@@ -1,4 +1,4 @@
-// capability-host-processor.ts — the capability host as a STREAM PROCESSOR (one processor among
+// iterate-context-stream-processor.ts — the capability host as a STREAM PROCESSOR (one processor among
 // many on a context's stream; apps/os runs its capability host the same way). Its reduced state
 // IS the routing table:
 //
@@ -40,8 +40,8 @@ const ExpressionSchema = z.array(
   z.union([z.string(), z.tuple([z.string()]).rest(z.unknown())]),
 ) as z.ZodType<Expression>;
 
-export const CapabilityHostContract = defineProcessorContract({
-  slug: "capability-host",
+export const IterateContextContract = defineProcessorContract({
+  slug: "iterate-context",
   version: "1.0.0",
   description:
     "The context's routing table: folds capability-provided/-revoked into the mount stack that resolveCapability dispatches against.",
@@ -78,11 +78,11 @@ export const CapabilityHostContract = defineProcessorContract({
   ],
 });
 
-type State = z.infer<typeof CapabilityHostContract.stateSchema>;
+type State = z.infer<typeof IterateContextContract.stateSchema>;
 type MountRow = State["mounts"][number];
 
-export class CapabilityHostProcessor extends StreamProcessor<State> {
-  readonly contract = CapabilityHostContract;
+export class IterateContextStreamProcessor extends StreamProcessor<State> {
+  readonly contract = IterateContextContract;
   /** Config seeds (bottom of every stack). Targets here — and ONLY here — may reference `roots`. */
   readonly #seeds: { pattern: Expression; target: Expression }[];
   /** The privileged physical-layer root, in scope only for seed targets. */
@@ -141,7 +141,7 @@ export class CapabilityHostProcessor extends StreamProcessor<State> {
       this.contract.buildEvent({
         type: "events.iterate.com/capability-host/capability-revoked",
         payload: { providedAtOffset: input.providedAtOffset },
-        idempotencyKey: `capability-host/revoke:${input.providedAtOffset}`,
+        idempotencyKey: `iterate-context/revoke:${input.providedAtOffset}`,
       }),
     );
   }
@@ -193,7 +193,7 @@ export class CapabilityHostProcessor extends StreamProcessor<State> {
     provenance: "config" | "event";
     providedAtOffset?: number;
   } | null {
-    let best: ReturnType<CapabilityHostProcessor["route"]> = null;
+    let best: ReturnType<IterateContextStreamProcessor["route"]> = null;
     const consider = (
       row: Pick<MountRow, "pattern" | "target">,
       provenance: "config" | "event",
