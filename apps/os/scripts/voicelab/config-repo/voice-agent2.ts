@@ -1162,9 +1162,12 @@ export class VoiceAgent2Processor extends StreamProcessor<
         /*
          * A TURN CAN END BEFORE THE LOG KNOWS A CALL BEGAN, and the fold is
          * several hundred milliseconds behind a person letting go of a button.
-         * Recorded here as well as below because every branch under
-         * `state.call === null` returns, and one of them is the ordinary case:
-         * speak, release, all inside one round trip.
+         * Recorded HERE, at the top of the case, because every interesting
+         * branch below returns early and one of them is the ordinary case —
+         * speak, release, all inside one round trip. This is the ONLY
+         * recorder: the live-call ptt-end arm at the bottom used to latch the
+         * flag again for a dial mid-handshake, and every delivery that
+         * reached that arm had already passed through this line.
          */
         if (
           event.type === "events.iterate.com/voice-agent/ptt-end" &&
@@ -1302,19 +1305,13 @@ export class VoiceAgent2Processor extends StreamProcessor<
         }
         /* A client that owns its turns commits them; when Grok is listening,
          * its buttons — if it has any — say nothing, because server VAD on top
-         * of a button answers halfway through a sentence. */
+         * of a button answers halfway through a sentence. No else-arm holding
+         * the turn over the handshake here: the recorder at the top of this
+         * case already latched #turnEndedDuringHandshake for exactly the
+         * dial-not-ready deliveries that reach this line. */
         if (event.type === "events.iterate.com/voice-agent/ptt-end" && state.clientTakesTurns) {
           const dial = this.#dial;
-          if (dial !== null && dial.ready && dial.socket !== null) {
-            this.#askForAnswer(dial.socket);
-          } else {
-            /* HELD, EXACTLY LIKE THE AUDIO IT BELONGS TO. This arm used to be
-             * `&& this.#providerReady` on the condition above, so a turn that
-             * ended before the handshake completed was not deferred, it was
-             * DISCARDED — every frame of it delivered and none of it asked
-             * about. See #turnEndedDuringHandshake. */
-            this.#turnEndedDuringHandshake = true;
-          }
+          if (dial !== null && dial.ready && dial.socket !== null) this.#askForAnswer(dial.socket);
         }
         return;
       }
