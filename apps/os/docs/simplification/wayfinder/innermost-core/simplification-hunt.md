@@ -259,6 +259,45 @@ seam is HIGH and **zero seam changes are needed now** — the two properties tha
 cheap already hold (park meta is pure storable data; every consumer goes through the facade).
 The one discipline to keep: presence only ever derives from sockets, never from stored rows.
 
+**Does restore work for WorkerEntrypoints, not just DOs? Yes — natively.** `ctx.restore(params)`
+exists on both `ExecutionContext` (stateless workers/entrypoints) and `DurableObjectState`, and
+persistent stubs are minted via `ctx.exports` — which includes props-parameterized loopback
+entrypoints. So a restorable stub can rebuild to a plain WorkerEntrypoint with no DO involved.
+(One sharp edge: raw `env` service-binding stubs can NOT be stored — only stubs minted through
+`ctx.exports` or your own `[restore]`. Storage always goes through a restore method you wrote.)
+
+**Your KV-cached-capabilities future, mapped onto Kenton's shipped shape.** The goal you named
+— itx capabilities cached in KV so stateless workers use them WITHOUT waking a DO — is
+structurally exactly his design, and we're already holding the right pieces:
+
+- Our mount rows are `{pattern, target-expression}` — pure JSON, trivially cacheable in KV.
+  **An itx expression IS restore-params** (storable data that re-materializes a capability on a
+  fresh instance); our resolver IS a `[restore]` method by another name.
+- After the roots-flatten, the builtins record splits naturally into **DO-free roots**
+  (bindings, workers/loader, kv, secrets, whoami) and **DO-resident roots** (stream, clients,
+  facets, contexts). A stateless worker holding a KV copy of the table can fully serve any
+  expression whose target stays DO-free; only genuinely actor-shaped targets wake the DO.
+- The platform-native veneer, when we want it: give the edge entrypoint
+  `[restore]({ctx, expr})` that resolves the expression **through the routed door** — then any
+  itx capability becomes a real persistent stub Cloudflare's chain-checking understands, and
+  routing through the table (not around it) preserves deletion-is-revocation even for stored
+  stubs. That's strictly better than his own irrevocable stopgap, using his own machinery.
+- The prefix-matcher simplification (§4 Q1) is also what makes stateless-side matching
+  trivial: element-by-element string comparison over a KV-cached array needs no specificity
+  algebra. One more reason to build it.
+
+Not for now, per you — but nothing we ship in the current arc fights it, and three things
+actively prepare it (expressions-as-JSON, the roots-flatten, the prefix matcher).
+
+**Standing doctrine (your order, recorded): everything we build stays cleanly aligned with
+Kenton's shipped direction.** Concretely: transport state placement per his #36 shape (edge
+terminates capnweb; DO speaks Workers RPC; the pager covers the unaddressable half he
+rejected); capability persistence per his restore shape (store re-derivation data, never raw
+stubs; our expressions are the params); revocation per his stated endgame (an auditable grants
+table — which our mount log already is; never adopt irrevocable semantics for anything
+currently revocable); loading per ctx.props (authority per-call, one isolate per content).
+Divergences require a written justification in BUILD-LOG.
+
 So the realistic landing zones: **~3,400 lines** with everything currently on the table,
 and **~3,150** if you also demote the string half to display/config — versus 3,976 today
 (the earlier "another −290 when upstream ships #36" is withdrawn per the research above),
