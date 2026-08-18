@@ -84,6 +84,16 @@ describe("parse ⇄ print", () => {
     });
   });
 
+  test("the depth budget: absurd nesting is a loud error, never a stack overflow", () => {
+    const deep = "[".repeat(70) + "]".repeat(70);
+    expect(() => parse(`itx.f(${deep})`)).toThrow(/nesting exceeds/);
+    let nested: unknown = { "?": 0 };
+    for (let i = 0; i < 70; i++) nested = { a: nested };
+    expect(() => substitute(["itx", ["f", nested]], { args: [1], captures: {} })).toThrow(
+      /nesting exceeds/,
+    );
+  });
+
   test("bare call on the scope symbol is a loud error — both halves", () => {
     expect(() => parse("itx(1)")).toThrow(/cannot call the scope symbol itself/);
     const itx = pathProxy(() => "unreachable") as (...args: unknown[]) => unknown;

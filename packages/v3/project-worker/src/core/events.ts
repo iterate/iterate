@@ -5,6 +5,18 @@
 
 import { z } from "zod";
 
+/** ONE non-resetting depth budget for every recursive JSON walk in this package (parser values,
+ *  substitution, hole scans, `jsonEqual`). Cycles are impossible (everything is parsed JSON, no
+ *  custom serializers), so the only exposure is stack exhaustion from deeply-nested-but-acyclic
+ *  input — and per the receiver-side-limits rule the budget must never reset at argument
+ *  boundaries. 64 is far beyond any honest expression. */
+export const MAX_VALUE_DEPTH = 64;
+export function deeper(depth: number, what: string): number {
+  if (depth >= MAX_VALUE_DEPTH)
+    throw new Error(`${what}: value nesting exceeds ${MAX_VALUE_DEPTH} levels`);
+  return depth + 1;
+}
+
 /** What `append` accepts: the event body, before the stream assigns its committed identity. */
 export const StreamEventInput = z.strictObject({
   /** Convention: `events.iterate.com/<domain>/<fact>`. */
@@ -61,10 +73,10 @@ export function sameIdempotentEvent(
 
 /** Structural deep-equal over plain JSON values — THE one deep-equal in this package (idempotency
  *  bodies here, literal-arg matching in core/expression.ts). Object key ORDER is insignificant. */
-export function jsonEqual(a: unknown, b: unknown): boolean {
+export function jsonEqual(a: unknown, b: unknown, depth = 0): boolean {
   if (Object.is(a, b)) return true;
   if (Array.isArray(a) && Array.isArray(b))
-    return a.length === b.length && a.every((x, i) => jsonEqual(x, b[i]));
+    return a.length === b.length && a.every((x, i) => jsonEqual(x, b[i], deeper(depth, "equal")));
   if (
     typeof a === "object" &&
     a !== null &&
@@ -77,7 +89,11 @@ export function jsonEqual(a: unknown, b: unknown): boolean {
     return (
       ka.length === Object.keys(b as object).length &&
       ka.every((k) =>
-        jsonEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]),
+        jsonEqual(
+          (a as Record<string, unknown>)[k],
+          (b as Record<string, unknown>)[k],
+          deeper(depth, "equal"),
+        ),
       )
     );
   }

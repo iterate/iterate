@@ -107,6 +107,15 @@ export class ProjectSession extends RpcTarget {
     this.#waitUntil = (p) => ctx.waitUntil(p);
   }
 
+  /** THE introduction door (the `authenticate()` pattern: the only way to get an authenticated
+   *  session is to be handed one by a gate that checked something). Deliberately a NO-OP today —
+   *  the clean room's `?ctx=` front door is designation-without-introduction scaffolding, and
+   *  this method is where the real check lands without changing any caller: clients already go
+   *  `session.authenticate(credentials).get()` / `.connect(...)`. */
+  authenticate(_credentials?: unknown): ProjectSession {
+    return this;
+  }
+
   /** Pure addressing → the iterate-context stub. */
   get(): Itx {
     return new Itx(this.#host, this.#relays, this.#waitUntil);

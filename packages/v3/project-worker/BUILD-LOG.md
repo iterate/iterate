@@ -804,3 +804,28 @@ From `research/kentonv/lessons-for-clean-room.md` (28 lessons; 19 ALIGNED, 7 DIS
 
 74 unit tests green (+2), typecheck clean. Deploy `lessons-1`: crisp 16/16, facet spine,
 userspace + built-in tally side-by-side — ALL PASS first run.
+
+## Increment 33 (verdicts-1): the owner's 9 jam-appendix verdicts — small approved items applied
+
+- **`authenticate()` shipped as the introduction door, deliberately a NO-OP** (owner: "implement
+  .authenticate() now but it should not actually do anything… call it on the main rpc stub and
+  get an authenticated session"): `ProjectSession.authenticate(credentials?)` returns the
+  session; the real check lands there later without changing any caller.
+- **ONE non-resetting depth budget** (`deeper`, cap 64, lives beside `jsonEqual` in
+  core/events.ts) guards every recursive JSON walk: the parser's `#value`, `substituteValue`,
+  the boundary-arg hole scan, the must-use walk, `jsonEqual`. Never resets at argument
+  boundaries (the receiver-side-limits rule). +1 test.
+- **The loader cacheKey is now documented as a DOLLAR AMOUNT** at `confinedWorker` — the
+  apps/os PR #2504 incident (~3.9M per-request-nonce identities ≈ $7.8k/3wk at
+  $0.002/worker/day, cold ~5MB isolate builds per dispatch) plus the binding-liveness tension
+  the nonce papered over. Our keys stay deploy × context × content hash; NEVER a nonce,
+  timestamp, request id, or offset.
+- **Remote processors deleted from the jam plan** (owner: "for now just assume all processors
+  run in a facet"); the routing-table circularity worry recorded for whenever remote returns.
+- Doctrine closed: whole-project trust is deliberate (attenuation = context granularity).
+- IN FLIGHT (two research agents): cloudflare/os + workerd error taxonomy + what capnweb
+  preserves in transit → `research/error-handling.md`; workerd facet output-gating + issue
+  #6800 idle-billing don't-trigger rule → `research/facet-gating-and-idle-billing.md`.
+
+75 unit tests green (+1), typecheck clean. Deploy `verdicts-1`: crisp proof 17/17 first run
+(including the new authenticate() check).

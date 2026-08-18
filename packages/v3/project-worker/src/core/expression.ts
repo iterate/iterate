@@ -36,7 +36,7 @@
 // forwards a whole missed call with zero special machinery.
 
 import { z } from "zod";
-import { jsonEqual } from "./events.ts";
+import { deeper, jsonEqual } from "./events.ts";
 
 /** One step: a property read (string) or a call (`[method, ...args]`). Args are plain JSON. */
 export type Step = string | [method: string, ...args: unknown[]];
@@ -126,8 +126,19 @@ class Parser {
     }
   }
 
+  #depth = 0;
+
   /** One JSON5-ish value, which may itself be (or contain) a hole. */
   #value(): unknown {
+    this.#depth = deeper(this.#depth, "parse");
+    try {
+      return this.#valueBody();
+    } finally {
+      this.#depth--;
+    }
+  }
+
+  #valueBody(): unknown {
     this.#ws();
     const c = this.#peek();
     if (c === "?") return this.#hole();
@@ -420,7 +431,7 @@ function substituteArgList(
   // `{ a: ?0 }` spends args[0] just as a top-level one does; scanning only the top level would
   // make `f({ a: ?0 }, ...?)` splice args[0] twice). `$`-escaped data is not a hole.
   let highest = -1;
-  const scan = (v: unknown): void => {
+  const scan = (v: unknown, depth: number): void => {
     if (typeof v !== "object" || v === null) return;
     const kind = holeKind(v);
     if (kind === "arg") {
@@ -429,9 +440,9 @@ function substituteArgList(
       return;
     }
     if (kind === "literal" || kind === "rest") return;
-    for (const inner of Object.values(v)) scan(inner);
+    for (const inner of Object.values(v)) scan(inner, deeper(depth, "hole scan"));
   };
-  for (const v of list) scan(v);
+  for (const v of list) scan(v, 0);
   const out: unknown[] = [];
   for (const v of list) {
     if (holeKind(v) === "rest" && (v as { "...": true | number })["..."] === true) {
@@ -444,6 +455,7 @@ function substituteArgList(
 function substituteValue(
   v: unknown,
   ctx: { args: unknown[]; captures: Record<string, unknown> },
+  depth = 0,
 ): unknown {
   switch (holeKind(v)) {
     case "arg": {
@@ -457,7 +469,7 @@ function substituteValue(
     case "rest":
       break; // object-spread handled below; bare rest outside a call list is meaningless
   }
-  if (Array.isArray(v)) return v.map((x) => substituteValue(x, ctx));
+  if (Array.isArray(v)) return v.map((x) => substituteValue(x, ctx, deeper(depth, "substitute")));
   if (isPlainObject(v)) {
     const spreadArg = "..." in v && Object.keys(v).length >= 1 ? (v["..."] as number) : undefined;
     const out: Record<string, unknown> = {};
@@ -469,7 +481,7 @@ function substituteValue(
     }
     for (const [k, val] of Object.entries(v)) {
       if (k === "...") continue;
-      out[k] = substituteValue(val, ctx); // frozen keys overwrite spread — frozen wins
+      out[k] = substituteValue(val, ctx, deeper(depth, "substitute")); // frozen keys overwrite spread — frozen wins
     }
     return out;
   }

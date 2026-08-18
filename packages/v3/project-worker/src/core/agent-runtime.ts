@@ -49,7 +49,19 @@ export default {
  *  (the dotted surface above) is always injected, and the worker's WHOLE world — `env.ITX` and
  *  every global fetch — is its owning context, so sibling calls and egress route through the
  *  host's dispatch with no second path. Callers version their `cacheKey` themselves (content
- *  hash + deploy id — see the stale-isolate learning in stateful-worker-durable-object.ts). */
+ *  hash + deploy id — see the stale-isolate learning in stateful-worker-durable-object.ts).
+ *
+ *  ═══════════════════════════════════════════════════════════════════════════════════════════
+ *  ⚠️  THE cacheKey IS A DOLLAR AMOUNT — one of the most cost-sensitive levers in the system.
+ *  Cloudflare bills EVERY DISTINCT value ever passed to `LOADER.get` as a Dynamic Worker at
+ *  $0.002/worker/day. apps/os PR #2504: a per-request random nonce in the key produced ~3.9M
+ *  identities ≈ $7.8k in ~3 weeks, plus a cold isolate build on every dispatch (~5MB, 1-2s).
+ *  Key components must be LOW-CARDINALITY and each one priced: deploy version × owning context
+ *  × content hash — NEVER a random nonce, timestamp, request id, or offset. (The tension the
+ *  nonce papered over is real — a loaded isolate captures the minting host's `env.ITX`/
+ *  `globalOutbound`, which can die with the host's incarnation; we accept the rare
+ *  re-dial failure and re-key on DEPLOY, not per use.)
+ *  ═══════════════════════════════════════════════════════════════════════════════════════════ */
 export function confinedWorker(
   loader: WorkerLoader,
   cacheKey: string,

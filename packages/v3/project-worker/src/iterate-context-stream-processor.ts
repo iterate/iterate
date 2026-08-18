@@ -18,6 +18,7 @@
 // config-provenance row — event rows literally cannot spell the physical layer.
 
 import { z } from "zod";
+import { deeper } from "./core/events.ts";
 import {
   apply,
   compareSpecificity,
@@ -251,13 +252,14 @@ function assertMustUse(pattern: Expression, target: Expression): void {
 }
 
 function walkHoles(expr: Expression, visit: (hole: string | number) => void): void {
-  const walkValue = (v: unknown): void => {
+  const walkValue = (v: unknown, depth: number): void => {
     // Classify via holeKind, exactly as match/substitute do — a private detector here would
     // disagree with them about `$`-escapes ($-escaped data is inert; rest binds no name).
     const kind = holeKind(v);
     if (kind === "arg") return visit((v as { "?": string | number })["?"]);
     if (kind === "literal" || kind === "rest") return;
-    if (typeof v === "object" && v !== null) for (const inner of Object.values(v)) walkValue(inner);
+    if (typeof v === "object" && v !== null)
+      for (const inner of Object.values(v)) walkValue(inner, deeper(depth, "must-use walk"));
   };
-  for (const step of expr) if (Array.isArray(step)) step.slice(1).forEach(walkValue);
+  for (const step of expr) if (Array.isArray(step)) step.slice(1).forEach((v) => walkValue(v, 0));
 }

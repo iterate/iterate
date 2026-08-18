@@ -17,13 +17,13 @@ deadlock two DOs). v5 adopts that shape and deletes v4's facet-nudge framing.
 
 **Five receiver kinds** (`SubscriptionReceiver`, core-processor-contract.ts):
 
-| kind              | cursor owner                                                          | delivery                                                      |
-| ----------------- | --------------------------------------------------------------------- | ------------------------------------------------------------- |
-| `facet-processor` | consumer (runner's own KV, CAS-fenced)                                | stream dials facet in-process; pushed batches over a callback |
-| `wake-processor`  | consumer                                                              | same, but the dial is an itx expression                       |
-| `itx-call`        | **stream** (SQLite cursor row; the awaited call resolving IS the ack) | one batch in flight, loop until caught up                     |
-| `webhook-post`    | **stream**                                                            | HTTP POST, batch size 1                                       |
-| `copy-to-stream`  | **stream**                                                            | append into another stream                                    |
+| kind              | cursor owner                                                          | delivery                                                      | OURS (owner verdicts, this round)                                |
+| ----------------- | --------------------------------------------------------------------- | ------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `facet-processor` | consumer (runner's own KV, CAS-fenced)                                | stream dials facet in-process; pushed batches over a callback | THE processor row — for now ALL processors are facets            |
+| `wake-processor`  | consumer                                                              | same, but the dial is an itx expression                       | **deleted for now** (remote deferred — see the circularity note) |
+| `itx-call`        | **stream** (SQLite cursor row; the awaited call resolving IS the ack) | one batch in flight, loop until caught up                     | push mode, the general case                                      |
+| `webhook-post`    | **stream**                                                            | HTTP POST, batch size 1                                       | push mode, target = an egress fetch expression                   |
+| `copy-to-stream`  | **stream**                                                            | append into another stream                                    | push mode, target = another stream's append                      |
 
 - **Configuration is event-sourced into the fold; cursor rows are projections, not truth**
   (rows whose name left the fold are deleted on every pass). Exactly v4's rows-as-events +
@@ -105,12 +105,14 @@ jsonata transform does not come over; a transform is a real function in the conf
 - **A facet IS a connection that never dials.** The parent pushes `processEventBatch` straight
   into the facet on every commit — the call itself loads the durable object; no nudge concept,
   no wake for facets, ever. Contiguity rides the same scan-window proof.
-- **`wake` is only for the far away** — the cold-start verb of the connection model: the
-  stream evaluates the row's target expression once, the remote durable object answers with
-  `{checkpointOffset, processEventBatch}` (your words: "in the callback it passes across the
-  RPC boundary, it can call its own this.processEventBatch" — that is literally the shipped
-  design), and pushes flow until the connection dies; every re-wake replays from the
-  subscriber's own checkpoint. Watchdog + rpc-broken detection bound the loss.
+- **Remote processors: DELETED for now (owner verdict) — all processors run in facets.** The
+  circularity worry that motivated the cut, recorded for when remote returns: if a processor
+  row's placement is an itx expression, resolving it needs the routing table — which lives in
+  the iterate-context facet, which is itself a subscriber the pump must reach. The recorded
+  way out: processor rows are `{slug}` only (the facet base case, parent-private, no table
+  consulted on the delivery path ever); a future remote row would resolve its expression only
+  at subscribe/reconnect time (cold path), never per commit. Until a real remote processor
+  exists, none of that is built.
 - **Browsers:** live connections, no rows, no server-held cursor; the client says "everything
   after 75" on reconnect. (Server-held per-tab cursors: rejected — apps/os agrees.)
 
@@ -199,9 +201,10 @@ already aligned, 2 applied in `lessons-1`). Each item below needs a verdict from
 Anyone can mint a session for any project by naming it in a query param — the
 CORBA-global-namespace shape Kenton's five-reasons critique attacks. Everything BEHIND the door
 is ocap-clean. Acknowledged clean-room scaffolding.
-**Decision:** record as a hard productionizing invariant (project id must arrive as an
-unforgeable introduction — minted key / control-plane token; his `authenticate()` shape fits
-`/api` exactly)? Or gate the clean room itself now?
+**VERDICT (owner) → DONE in `verdicts-1`:** implement `.authenticate()` now as a NO-OP — call
+it on the main RPC stub, get an authenticated session. Shipped: `ProjectSession.authenticate
+(credentials?)` returns the session; clients go `session.authenticate(...).get()/.connect(...)`;
+the real check lands in that method later without changing any caller. Live proof green.
 
 ## B2. A facet's fold could outrun the parent's durability
 
@@ -209,9 +212,9 @@ If parent→facet replies are not covered by the parent's output gate, a facet c
 persist a cursor past a parent commit that later FAILS to flush — and SQLite's autoincrement
 rollback means the reused offset's different event is silently skipped. Rare (a failed durable
 flush), but it violates "a cursor is only ever behind durable truth."
-**Decision:** (a) verify empirically whether facet-bound replies wait on the parent's gate,
-(b) `ctx.storage.sync()` before driving facets, or (c) epoch-stamp reads so a facet detects
-divergence. Recommend (a) first — it may already be safe.
+**VERDICT (owner):** ok to (a). IN FLIGHT: a workerd source analysis (does the output gate
+cover parent↔facet traffic; does a failed flush transitively abort facets before they can
+persist) — report lands in `research/facet-gating-and-idle-billing.md`.
 
 ## B3. Attenuation is per-context, not per-client
 
@@ -219,8 +222,8 @@ Every holder of a project session sees the project's whole table; narrowing happ
 subordinate its own context (cheap here), not per-session views of one context. This is exactly
 where Kenton honestly scores his own bindings ("not a complete capability system") — plus the
 audit/revocation log he wished for.
-**Decision:** is context-granularity attenuation the doctrine (recommend: yes, until two
-differently-trusted clients must share one context path), or do we need per-session narrowing?
+**VERDICT (owner) → CLOSED:** "absolutely deliberate — everything in a project is trusted to do
+everything in a project." Context-granularity attenuation is doctrine.
 
 ## B4. Per-context loader cacheKeys multiply ~5MB isolates
 
@@ -228,25 +231,33 @@ Confinement bakes the owning host into each isolate (`env.ITX` + `globalOutbound
 contexts running the same source hold N isolates at ~5MB each. Kenton's platform hit the same
 tension and solved it with parameterized entrypoints (authority in per-call props, one isolate
 serves many principals).
-**Decision:** accept the budget line for now (recommend: yes — contexts × sources is small) and
-note ctx.props as the shape to steal when it grows?
+**VERDICT (owner) → ESCALATED, addressed:** "extremely important… the cache key for the dynamic
+worker loader is one of the most sensitive cost levers in the entire system" — confirmed by
+apps/os PR #2504: a per-request nonce in the key minted ~3.9M distinct loader identities ≈
+**$7.8k in ~3 weeks** (every distinct `LOADER.get` key bills $0.002/worker/day) plus a cold
+~5MB isolate build per dispatch. The clean room's keys are already low-cardinality (deploy ×
+context × content hash, no nonces); `confinedWorker` now carries a LOUD comment stating the
+pricing constraint and the binding-liveness tension the nonce papered over, so no future change
+re-adds a high-cardinality component unpriced.
 
 ## B5. Depth budgets: mount recursion capped at 32, the JSON walks are not
 
 substitute/hole-scan/jsonEqual/parser recurse without a cap. Cycles are impossible (parsed
 JSON, no custom serializers), so the only exposure is stack exhaustion from deeply-nested input
 by an authenticated project client; JSON.parse and workerd RPC bound much of it upstream.
-**Decision:** add one small shared non-resetting depth counter as defense-in-depth (his rule:
-never reset at argument boundaries), or trust transport limits? Mild recommend: add it — ~10
-lines.
+**VERDICT (owner) → DONE in `verdicts-1`:** one shared non-resetting budget (`deeper`, cap 64)
+now guards the parser's value recursion, substitution, the hole scans, and `jsonEqual`; +1 test
+(70-deep nesting errs loudly in both halves).
 
 ## B6. Error classification by message regex
 
 The fetch lane maps `/no capability matches/` → 404; greppable message text is house doctrine —
 but that 404 silently depends on a sentence someone may innocently reword. capnweb 0.8.0 drops
 `error.name` in transit, so typed errors would not survive the client hop anyway.
-**Decision:** bless message-prefix-as-contract (name the stable prefixes in ONE module both
-ends import — recommend), or an error-code convention inside the message?
+**VERDICT (owner):** "How does cloudflare/os manage errors? tagged classes? json? can we steal
+it?" — IN FLIGHT: a research pass over cloudflare/os + workerd's error taxonomy + what our
+capnweb fork actually preserves in transit; report lands in `research/error-handling.md` with a
+concrete steal recommendation.
 
 ## B7. Hibernation vs eviction — and what idle facets may bill
 
@@ -254,8 +265,10 @@ Our incarnation counter detects reconstruction (hibernation and eviction indisti
 increment-29 growth was eviction-scale (~300s+). workerd #6800 says SQLite-backed facets can
 hold the parent "idle, non-hibernatable" — converting idle sockets into billed duration until
 the evictor arrives. The bill is the observable.
-**Decision:** two cheap follow-ups — a probe distinguishing the two states, and watching
-duration billing on a facet-enabled context with zero traffic. Do them now or after increment 2?
+**VERDICT (owner):** "we must make sure we don't trigger this." IN FLIGHT: workerd #6800 source
+analysis → the concrete don't-trigger rule (what pins, whether it's fixed upstream, whether
+facets must be aborted when idle) lands in `research/facet-gating-and-idle-billing.md` and
+becomes a design requirement of increment 2.
 
 # Appendix C — other open naming/identity calls (restated so everything is in one doc)
 

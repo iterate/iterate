@@ -227,9 +227,11 @@ true })` — that makes an upgrade Response deserialize to a Response whose
   exit hop.
 
 **Who uses them.** The clean-room relay, when servicing a live-cap fetch, requests
-the deferred form and returns `{ readable, writable }` over the Invoker leg
-(streams serialize over Workers RPC). The DO's `#fetchCapability` — replacing the
-`501` at `itx-durable-object.ts:488-493` — calls `materializeUpgrade(...)` and
+the deferred form and returns the **whole `response.webSocket` pair object** over
+the Invoker leg (byte streams serialize over Workers RPC; destructuring to
+`{ readable, writable }` would drop the shipped pair's `init` field and with it the
+negotiated subprotocol — see Status below). The DO's `#fetchCapability` — replacing
+the `501` at `itx-durable-object.ts:488-493` — calls `materializeUpgrade(...)` and
 returns the 101. One materialization, at the boundary, native stream backpressure,
 no per-frame RPC.
 
@@ -270,21 +272,26 @@ further," removing exactly the leak-prone machinery the quarantine warns about.
 
 **Concrete minimal change:**
 
-1. **Fork** (`@iterate-com/capnweb`): add `deferUpgradeMaterialization` on the
-   receive side so an upgrade Response deserializes to `{ readable, writable }`
-   (real streams) instead of a materialized socket
-   (`serialize.ts:1064-1094` / `websocket-streams.ts:359-372`); export
-   `materializeUpgrade({readable, writable}, init)` = today's `WebSocketPair`+pump
-   branch. ~1 small file, no protocol change (the wire format is unchanged — this
-   only chooses what the receiver builds).
+1. **Fork** (`@iterate-com/capnweb`): ✅ **shipped** (fork PR #7) — the
+   `deferUpgradeMaterialization` session option delivers `Response.webSocket` as an
+   opaque `DeferredWebSocketUpgrade` `{ readable, writable, init }` byte pair, and
+   `materializeUpgrade(pair, init?)` rebuilds the real upgrade Response at the exit
+   hop. No protocol change (the wire format is unchanged — this only chooses what
+   the receiver builds). See **Status** below for the contract details that differ
+   from this sketch.
 2. **Clean-room relay** (`worker.ts` live-cap path / `core/itx-surface.ts`): when a
-   live-cap `fetch` returns an upgrade, hand the `{ readable, writable }` back over
-   the Invoker leg (`hibernatable-stub.ts:81-88`) rather than a socket.
+   live-cap `fetch` returns an upgrade, hand the **whole `response.webSocket` pair
+   object** back over the Invoker leg (`hibernatable-stub.ts:81-88`) rather than a
+   socket — not a destructured `{ readable, writable }`, which drops `init` — and
+   keep the delivering Response referenced (undisposed) while the tunnel lives.
 3. **Clean-room DO** (`itx-durable-object.ts:488-493`): replace the `501` with
-   `materializeUpgrade(...)` and return the 101 — the fetch-lane exit.
-4. **apps/os**: the same deferred-materialize option flips its quarantined
-   `test.skip` → passing; then remove the boundary probe (or invert it) per
-   `tasks/quarantined-live-capability-websocket-e2e.md:60-63`.
+   `materializeUpgrade(pair)` and return the 101 — the fetch-lane exit. Detect a
+   deferred upgrade via `response.webSocket != null`, never via `status === 101`:
+   the deferred Response's own status is 200 (constructed Responses can't be 1xx).
+4. **apps/os**: the deferred-materialize option **plus a `materializeUpgrade()`
+   call at its exit hop** (the dynamic worker returning the 101) flips its
+   quarantined `test.skip` → passing; then remove the boundary probe (or invert it)
+   per `tasks/quarantined-live-capability-websocket-e2e.md:60-63`.
 
 **Use Level 1 only as a fallback** if we must ship without touching the fork; it
 closes the test but keeps the per-frame bridge and its failure modes. **Don't wait
@@ -292,37 +299,93 @@ on Level 3.**
 
 ---
 
-## Open spikes (known vs. needs proving)
+## Status: shipped in the fork (2026-08-18)
 
-**Known:**
+The fork side is done: `@iterate-com/capnweb` PR #7 (branch
+`defer-upgrade-materialization`, a normal single-commit PR against `main` — the
+v0.11.1 rebase PR #6 has landed, with main now on upstream `2de5871`), reviewed
+with two staged multi-agent adversarial passes. The contract differs from the
+Level 2 sketch above in ways the integration must respect:
 
-- Streams serialize across Workers RPC; a materialized `WebSocket` does not. (This
-  is the whole basis for Level 2.)
+- **The pair is byte-oriented, not the tunnel's value streams.** This doc's
+  premise that "streams serialize across Workers RPC" turned out to be true only
+  for **byte** streams: a value-chunk `ReadableStream` fails across a native hop
+  with `TypeError: This ReadableStream did not return bytes`, and string writes
+  into the proxied writable are refused. So the pair carries the tunnel's
+  text/binary/close frames in an internal length-prefixed framing spoken only by
+  the deferring session and `materializeUpgrade()` — invisible to us, but it means
+  the pair is **opaque**: never construct, parse, or partially consume it.
+- **Deferral is the default on Workers — the relay needs no option at all.** A
+  tunneled upgrade received over a capnweb session on workerd arrives as the
+  pair unless the session explicitly sets `deferUpgradeMaterialization: false`
+  (which an endpoint would only do to serve the socket itself). Node/browser
+  receivers keep getting a usable socket by default. So the edge-side change
+  for R3b is zero lines: the relay session is created with no options.
+- **The pair is `{ readable, writable, init }`** (`DeferredWebSocketUpgrade`).
+  `init` carries the provider's upgrade headers (e.g. the negotiated
+  `Sec-WebSocket-Protocol`) as plain data, so forwarding the **whole object**
+  preserves them; `materializeUpgrade(pair)` puts them on the real 101 (verified
+  down to a raw-socket RFC 6455 handshake — workerd/kj recomputes/drops reserved
+  handshake headers, so replaying provider headers is safe). An explicit `init`
+  argument to `materializeUpgrade` replaces `pair.init` wholesale.
+- **Detect deferred upgrades via `response.webSocket != null`.** The deferred
+  Response's own status is 200; and never forward the Response itself across a
+  native hop (its `webSocket` property is a JS expando that silently vanishes).
+- **Lifetime (spike 2, resolved):** no dup/claim call is needed. The pair's inner
+  ends are owned by the delivering capnweb payload for the tunnel's whole life;
+  an awaited call **result** is not auto-disposed, so the relay just keeps the
+  delivering Response referenced (undisposed) while the tunnel lives — it lives
+  until the session ends otherwise, and the session's lifetime is the provider
+  connection's anyway. A pair received in call **params** cannot be kept past the
+  call. `materializeUpgrade` consumes the pair (locks both streams synchronously;
+  a second call throws). For per-tunnel reclamation before session end, wrap the
+  pair's streams in observing pass-throughs before forwarding, or tie retention to
+  the Invoker/Pager connection. (Do not add a Promise field to the pair for this —
+  workerd RPC would await it during serialization.)
+- **Operational note:** a live materialized tunnel keeps its DO resident — the
+  pump is in-memory listeners, not the hibernatable-WebSocket API. Hibernation
+  applies to _parked_ capabilities, not DOs actively serving tunnels.
+- **Flow control:** capnweb stream acks fire as the pair is _read_, so an
+  unconsumed or in-transit pair keeps the device throttled to the flow-control
+  window (~256 KiB initial) — relay memory is window-bounded (asserted by test).
+
+---
+
+## Open spikes — all four resolved on the fork side
+
+**Known (corrected):**
+
+- **Byte** streams serialize across Workers RPC — value-chunk streams and
+  materialized `WebSocket`s do not. (Empirically probed; this reshaped Level 2
+  into the framed byte pair described under Status.)
 - The fork owns `websocket-streams.ts` end to end (absent upstream) — we can change
   it without a workerd change.
 - The provider can stay a plain `{ fetch }` in every level — no framing protocol
-  imposed on the client.
+  imposed on the client. (Held: the framing is entirely receiver-side.)
 
-**Needs a spike:**
+**Spike resolutions** (evidence: the fork's `websocket-tunnel.test.ts` and
+`workerd.test.ts` on the PR #7 branch):
 
-1. **The writableHook across one more RPC hop (load-bearing).** The deserialized
-   `writable` is backed by a capnweb `StubHook` tied to the _session_
-   (`serialize.ts:1090`). Does wrapping it as a `WritableStream`, passing it across
-   the **Invoker Workers-RPC hop** (relay → DO), and writing to it from the DO
-   still deliver frames to the device? I.e. does workerd RPC faithfully re-serialize
-   a `WritableStream` whose sink is a capnweb stub, end to end? If not, Level 2
-   needs the relay to keep the writable and expose a thin `send`/`close` (a partial
-   fallback toward Level 1 for the write direction).
-2. **Claim/lifetime before the Invoker call returns.** RPC params/return payloads
-   are released when the call returns; `TunneledWebSocket` only takes its own refs
-   on first interaction via `.dup()` (`websocket-streams.ts:174-347`, `#claim` at
-   `:274-298`). The relay must **claim/`dup` the socket (or the writable hook)
-   before its `invoke` returns**, mirroring the `.dup()` retention rule
-   (`live-capability.ts:25-37`), or the underlying connection closes under us.
-3. **Close/backpressure across the extra boundary.** Verify the in-band
-   `{close:{code,reason}}` final chunk (`websocket-streams.ts:109-117`, `:300-317`)
-   and flow-control window survive the added hop before materialization.
-4. **Fail-closed under the quarantine's bar.** Whatever we build must close every
-   stream/stub on any error and never cancel the serving isolate — the exact defect
-   that quarantined the test (`tasks/quarantined-live-capability-websocket-e2e.md:55-74`).
-   Prove it with the 25-consecutive-parallel-run exit criterion, not a single green.
+1. **The writableHook across one more RPC hop (was load-bearing).** ✅ Proven with
+   the framed byte pair: the pair crosses a real service-binding hop in a call
+   _param_ and in a _return payload_ (the exact relay → DO shape), echoes through
+   the full path, and close propagation is asserted at the origin through both
+   boundaries. No thin-`send`/`close` fallback needed.
+2. **Claim/lifetime before the Invoker call returns.** ✅ Resolved without a
+   dup/claim affordance — see Status: capnweb result payloads are not
+   auto-released; retention = keep the delivering Response referenced. The fork's
+   return-path test models exactly this contract.
+3. **Close/backpressure across the extra boundary.** ✅ Close: in-band close
+   records round-trip across the native hop in both directions with codes and
+   reasons intact; abnormal death surfaces as error + close 1006. Backpressure:
+   consumption-coupled acks keep the sender window-bounded until materialization
+   (asserted by a deterministic test); after materialization the endpoint behaves
+   like the non-deferred one (a slow eyeball is absorbed by the native socket's
+   send buffer, as on a direct WebSocket).
+4. **Fail-closed under the quarantine's bar.** ✅ Fork side: malformed frames,
+   oversized frames (128 MiB cap enforced on both encode and decode sides),
+   truncation at end-of-stream, and RPC-session death all tear the tunnel down
+   (abort the sender's socket / error + close 1006) rather than leaving anything
+   half-open, and the serving session survives tunnel teardowns (later tests keep
+   running on the same session). The **25-consecutive-parallel-run exit criterion
+   remains apps/os's to prove** when the quarantined e2e is re-enabled.
