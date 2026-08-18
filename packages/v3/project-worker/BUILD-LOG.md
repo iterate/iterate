@@ -829,3 +829,20 @@ userspace + built-in tally side-by-side — ALL PASS first run.
 
 75 unit tests green (+1), typecheck clean. Deploy `verdicts-1`: crisp proof 17/17 first run
 (including the new authenticate() check).
+
+## Increment 34 (verdicts-2): coded errors — the cloudflare-os steal (research verdict for jam B6)
+
+Research (`research/error-handling.md`, runtime-verified): capnweb coerces custom error NAMES
+and drops subclass identity, but preserves ALL own enumerable properties across the wire — and
+with enhanced_error_serialization own props survive native Workers-RPC hops too. cloudflare-os
+(github.com/cloudflare/cloudflare-os) uses exactly that channel: plain Error + a `code`
+own-property via Object.assign, defined once, read with `"code" in error` — never name,
+instanceof, or message regex. workerd stamps its own flags (`.retryable`, `.overloaded`,
+`.durableObjectReset`) on the same channel.
+
+Stolen: `core/errors.ts` (`codedError`/`errorCode`, SCREAMING_SNAKE codes, ~25 lines).
+Three call sites: default-deny throws `NO_CAPABILITY_MATCH`; idempotency conflicts throw
+`IDEMPOTENCY_CONFLICT` + `data.existingOffset`; the fetch lane's 404 now classifies BY CODE
+(the message-regex fragility the owner flagged is gone). Human messages verbatim — the code
+rides beside them, never instead. 75 tests green; deploy `verdicts-2`: crisp 17/17, live
+fetch-lane miss = 404 by code.

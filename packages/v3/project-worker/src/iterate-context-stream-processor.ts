@@ -18,6 +18,7 @@
 // config-provenance row — event rows literally cannot spell the physical layer.
 
 import { z } from "zod";
+import { codedError } from "./core/errors.ts";
 import { deeper } from "./core/events.ts";
 import {
   apply,
@@ -155,7 +156,8 @@ export class IterateContextStreamProcessor extends StreamProcessor<State> {
     const expr = toExpression(call);
     const winner = this.route(state, expr);
     if (!winner)
-      throw new Error(
+      throw codedError(
+        "NO_CAPABILITY_MATCH",
         `no capability matches ${JSON.stringify(print(expr))} (default-deny; mount one or add a seed)`,
       );
     const { row, m, provenance } = winner;

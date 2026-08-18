@@ -25,6 +25,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { substituteHeaderSecrets } from "@v3/shared/egress";
 import { confinedWorker } from "./core/agent-runtime.ts";
+import { codedError } from "./core/errors.ts";
 import {
   idempotencyConflictMessage,
   sameIdempotentEvent,
@@ -135,7 +136,11 @@ export class StreamDurableObject extends DurableObject<Env> {
             } as StreamEvent);
             continue;
           }
-          throw new Error(idempotencyConflictMessage(input.idempotencyKey, Number(hit.offset)));
+          throw codedError(
+            "IDEMPOTENCY_CONFLICT",
+            idempotencyConflictMessage(input.idempotencyKey, Number(hit.offset)),
+            { existingOffset: Number(hit.offset) },
+          );
         }
       }
       const body = { ...input, createdAt: new Date().toISOString() };

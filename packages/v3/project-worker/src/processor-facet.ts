@@ -24,6 +24,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
 import { parseAppConfig } from "./core/config.ts";
+import { errorCode } from "./core/errors.ts";
 import type { StreamEvent } from "./core/events.ts";
 import { parse, toExpression, type Expression } from "./core/expression.ts";
 import { stringifyName } from "./core/names.ts";
@@ -182,7 +183,8 @@ export class ProcessorFacet extends DurableObject<Env> {
       return new Response(`fetch lane: ${JSON.stringify(result)}\n`);
     } catch (error) {
       const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
-      const status = /no capability matches/.test(message) ? 404 : 500;
+      // Classification by CODE, never message text — the code survives every hop (core/errors.ts).
+      const status = errorCode(error) === "NO_CAPABILITY_MATCH" ? 404 : 500;
       return new Response(`fetch lane error: ${message}\n`, { status });
     }
   }
