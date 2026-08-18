@@ -191,6 +191,90 @@ it("reuses a loaded worker within one runner but not across runner lifetimes", a
   expect(loaderNonces[2]).not.toBe(loaderNonces[0]);
 });
 
+it("shares one loaded worker across parent-isolate-scoped runners", async () => {
+  h.resolveWorkerSource.mockResolvedValue({
+    ok: true,
+    source: {
+      assetConfig: undefined,
+      assetManifest: {},
+      assets: {},
+      cacheKey: "build-key",
+      commitOid: "commit-1",
+      mainModule: "worker.js",
+      modules: {},
+      wranglerConfig: undefined,
+    },
+  });
+  h.loadResolvedWorker.mockImplementation(() => ({
+    getEntrypoint: () => ({ fetch: () => Promise.resolve(new Response("ok")) }),
+  }));
+  const createRunner = (loaderNonceScope?: "parent-isolate" | "runner") =>
+    new DynamicWorkerRunner({
+      streamContext: { kind: "scope", scopePath: inlineRef.path },
+      exports: {} as ExecutionContext["exports"],
+      loaderNonceScope,
+      projectId: "prj_private",
+      scopePath: inlineRef.path,
+    });
+
+  await createRunner("parent-isolate").fetch({
+    ref: inlineRef,
+    request: new Request("https://example.com/1"),
+  });
+  await createRunner("parent-isolate").fetch({
+    ref: inlineRef,
+    request: new Request("https://example.com/2"),
+  });
+  await createRunner().fetch({ ref: inlineRef, request: new Request("https://example.com/3") });
+
+  const loaderNonces = h.loadResolvedWorker.mock.calls.map(([input]) => input.loaderInstanceNonce);
+  expect(loaderNonces[0]).toBe(loaderNonces[1]);
+  expect(loaderNonces[2]).not.toBe(loaderNonces[0]);
+});
+
+it("moves later parent-isolate runners off a clone-skew-replaced loader", async () => {
+  const workerFetch = vi
+    .fn()
+    .mockRejectedValueOnce(
+      new Error("Unable to deserialize cloned data due to invalid or unsupported version."),
+    )
+    .mockResolvedValue(new Response("ok"));
+  h.resolveWorkerSource.mockResolvedValue({
+    ok: true,
+    source: {
+      assetConfig: undefined,
+      assetManifest: {},
+      assets: {},
+      cacheKey: "build-key",
+      commitOid: "commit-1",
+      mainModule: "worker.js",
+      modules: {},
+      wranglerConfig: undefined,
+    },
+  });
+  h.loadResolvedWorker.mockImplementation(() => ({
+    getEntrypoint: () => ({ fetch: workerFetch }),
+  }));
+  const createRunner = () =>
+    new DynamicWorkerRunner({
+      streamContext: { kind: "scope", scopePath: inlineRef.path },
+      exports: {} as ExecutionContext["exports"],
+      loaderNonceScope: "parent-isolate",
+      projectId: "prj_private",
+      scopePath: inlineRef.path,
+    });
+
+  await createRunner().fetch({ ref: inlineRef, request: new Request("https://example.com/1") });
+  await createRunner().fetch({ ref: inlineRef, request: new Request("https://example.com/2") });
+
+  const loaderNonces = h.loadResolvedWorker.mock.calls.map(([input]) => input.loaderInstanceNonce);
+  expect(loaderNonces).toHaveLength(3);
+  // The skew retry replaced the shared nonce; the next runner must reuse the
+  // replacement, never return to the known-stale shared loader.
+  expect(loaderNonces[1]).not.toBe(loaderNonces[0]);
+  expect(loaderNonces[2]).toBe(loaderNonces[1]);
+});
+
 it("loads runScript workers once and releases both native handles", async () => {
   h.resolveWorkerSource.mockResolvedValue({
     ok: true,

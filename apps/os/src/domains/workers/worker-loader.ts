@@ -233,13 +233,22 @@ export function loadResolvedWorker({
   };
   if (mode === "one-off") return env.LOADER.load(workerCode);
 
-  // Loader isolates capture this runner's loopback RPC bindings. They must not
-  // survive the runner that minted them: a stateless ingress runner lives for
-  // one request, while a Durable Object runner lives for one incarnation.
-  // Crossing orphaned bindings from a later runner fails with
-  // "Unable to deserialize cloned data due to invalid or unsupported version".
-  // Build artifacts remain content-addressed and shared; only the cheap loaded
-  // isolate is runner-scoped. The deployment id still keeps identities easy
+  // THIS KEY IS UNBELIEVABLY EXPENSIVE TO GET WRONG. Cloudflare bills every
+  // distinct value ever passed to LOADER.get as a Dynamic Worker per day, so
+  // the key's cardinality is a direct dollar amount: a per-request component
+  // here turned ordinary traffic into ~3.9M billable identities (~$7.8k) in
+  // three weeks (2026-08), while also forcing a cold isolate build on every
+  // request and every stream delivery. Never add a component that varies more
+  // often than parent-isolate lifetime without pricing it first.
+  //
+  // Loader isolates capture the minting runner's loopback RPC bindings; using
+  // them from a mismatched lifetime fails with "Unable to deserialize cloned
+  // data due to invalid or unsupported version". The nonce scopes that
+  // lifetime (see DynamicWorkerRunner's loaderNonceScope): parent-isolate for
+  // request-scoped lanes so warm isolates are reused instead of billed and
+  // cold-started per request, per-runner for Durable Object incarnations.
+  // Build artifacts remain content-addressed and shared; only the loaded
+  // isolate is nonce-scoped. The deployment id still keeps identities easy
   // to attribute and guarantees separation across a rollout.
   const loaderIdentity = [
     "worker-loader",
