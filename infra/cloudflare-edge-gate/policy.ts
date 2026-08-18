@@ -7,12 +7,7 @@ export interface ScannerPathPolicyEntry {
   };
 }
 
-/**
- * Reviewed exact paths that Iterate will never intentionally serve.
- *
- * Additions need production traffic evidence and a compatibility review.
- * Discovered scanner candidates do not become blocks automatically.
- */
+/** Reviewed exact paths that Iterate will never intentionally serve. */
 export const scannerPathPolicy = [
   {
     path: "/.git/config",

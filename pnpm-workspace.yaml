@@ -3,7 +3,6 @@ packages:
   - apps/semaphore
   - apps/*
   - packages/*
-  - infra/*
   - lint
   - scripts
 

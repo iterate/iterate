@@ -6,6 +6,11 @@ import { parse as parseYaml } from "yaml";
 const repoRoot = resolve(import.meta.dirname, "../..");
 
 type WorkflowJob = {
+  concurrency?: {
+    group: string;
+    "cancel-in-progress": boolean;
+  };
+  if?: string;
   "runs-on": {
     image?: string;
     size?: string;
@@ -29,6 +34,9 @@ type Workflow = {
   jobs: Record<string, WorkflowJob>;
   permissions?: Record<string, string>;
   on?: {
+    pull_request?: {
+      paths?: string[];
+    };
     push?: {
       branches?: string[];
       paths?: string[];
@@ -115,6 +123,30 @@ describe("Depot deployment safety", () => {
     expect(workflow.on?.push?.paths).toContain(".depot/workflows/deploy-tunnels.yml");
   });
 
+  it("coalesces edge-gate plans while serializing production applies", () => {
+    const file = ".depot/workflows/cloudflare-edge-gate.yml";
+    const workflow = loadWorkflow(file);
+
+    expect(Object.keys(workflow.jobs).sort()).toEqual(["deploy", "plan"]);
+    expect(workflow.jobs.plan.concurrency).toEqual({
+      group: "cloudflare-edge-gate-plan-${{ github.head_ref || github.run_id }}",
+      "cancel-in-progress": true,
+    });
+    expect(workflow.jobs.deploy.concurrency).toEqual({
+      group: "deploy-cloudflare-edge-gate-production",
+      "cancel-in-progress": false,
+    });
+    const paths = [
+      file,
+      "infra/cloudflare-edge-gate/**",
+      "scripts/cloudflare-edge-gate/**",
+      "envs.ts",
+      "scripts/lib/**",
+    ];
+    expect(workflow.on?.pull_request?.paths).toEqual(expect.arrayContaining(paths));
+    expect(workflow.on?.push?.paths).toEqual(expect.arrayContaining(paths));
+  });
+
   it("redeploys OS when its iterate/sdk/itx/react workspace dependency changes", () => {
     const workflow = loadWorkflow(".depot/workflows/deploy-os.yml");
 
@@ -170,6 +202,10 @@ describe("Depot credential boundaries", () => {
     {
       file: ".depot/workflows/cloudflare-previews.yml",
       permissions: { contents: "read", "pull-requests": "write", statuses: "read" },
+    },
+    {
+      file: ".depot/workflows/cloudflare-edge-gate.yml",
+      permissions: { contents: "read" },
     },
     {
       file: ".depot/workflows/deploy-os.yml",

@@ -117,6 +117,7 @@ explicitly said so: **[Pull requests](docs/pull-requests.md)**.
 | `apps/os/`          | **Main app** — product dashboard (`os.iterate.com`; local dev: `localhost:<port>`) |
 | `apps/kit/`         | Browser installer for supported devices (`k.iterate.com`)                          |
 | `packages/iterate/` | `iterate` CLI — delegates to local source when run inside this repo                |
+| `infra/`            | Small reconcilers for shared Cloudflare account and zone policy                    |
 | `docs/`             | Detailed documentation                                                             |
 | `tasks/`            | Work tracking (markdown + frontmatter)                                             |
 
