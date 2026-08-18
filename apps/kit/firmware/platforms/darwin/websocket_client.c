@@ -5,6 +5,18 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+
+#include "iterate/kit/voice_device_profile.h"
+
+/** Monotonic microseconds; the quiet-ping must not follow a wall clock. */
+static int64_t posix_websocket_now_us(void) {
+  struct timespec now;
+  if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+    return 0;
+  }
+  return (int64_t)now.tv_sec * 1000000 + now.tv_nsec / 1000;
+}
 
 #include <openssl/evp.h>
 #include <openssl/rand.h>
@@ -519,6 +531,7 @@ iterate_kit_posix_websocket_client_receive(
   chunk->payload_offset = classified.payload_offset;
   chunk->opcode = (uint8_t)classified.opcode;
   chunk->final = classified.final;
+  client->last_inbound_us = posix_websocket_now_us();
   if (result == ITERATE_KIT_WEBSOCKET_RX_DATA) {
     return ITERATE_KIT_POSIX_WEBSOCKET_RECEIVE_DATA;
   }
@@ -562,6 +575,11 @@ iterate_kit_posix_websocket_client_send(
   }
   result = iterate_kit_websocket_tx_send(
       &client->tx, opcode, payload, payload_size);
+  if (result == ITERATE_KIT_WEBSOCKET_TX_SENT ||
+      result == ITERATE_KIT_WEBSOCKET_TX_PROGRESS ||
+      result == ITERATE_KIT_WEBSOCKET_TX_DEFERRED) {
+    client->last_outbound_us = posix_websocket_now_us();
+  }
   if (result == ITERATE_KIT_WEBSOCKET_TX_FAILED ||
       result == ITERATE_KIT_WEBSOCKET_TX_DISCONNECTED) {
     client->last_error = client->stream.last_errno != 0
@@ -577,6 +595,27 @@ iterate_kit_posix_websocket_client_service_control(
   enum iterate_kit_websocket_tx_result result;
   if (client == NULL || !client->upgraded) {
     return ITERATE_KIT_WEBSOCKET_TX_DISCONNECTED;
+  }
+  /*
+   * THE QUIET-PING, exactly as the ESP transport originates it: a probe only
+   * when the hop is silent BOTH ways, queued into the bounded control slot,
+   * stamped as outbound so one quiet period yields one probe. This adapter
+   * used to only ANSWER pings — and a push-to-talk session between turns is
+   * silent long enough that the edge closes the socket (measured ~30 s,
+   * close code 1006), which is why the period lives well inside that.
+   */
+  {
+    const int64_t now_us = posix_websocket_now_us();
+    const int64_t quiet_us = (int64_t)ITERATE_KIT_VOICE_HOP_KEEPALIVE_MS * 1000;
+    if (client->last_inbound_us != 0 && client->last_outbound_us != 0 &&
+        now_us - client->last_inbound_us > quiet_us &&
+        now_us - client->last_outbound_us > quiet_us) {
+      if (iterate_kit_websocket_tx_queue_control(
+              &client->tx, ITERATE_KIT_WEBSOCKET_PING, NULL, 0U) ==
+          ITERATE_KIT_OK) {
+        client->last_outbound_us = now_us;
+      }
+    }
   }
   result = iterate_kit_websocket_tx_poll_control(&client->tx);
   if (result == ITERATE_KIT_WEBSOCKET_TX_FAILED ||

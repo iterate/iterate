@@ -234,7 +234,13 @@ enum {
    *
    * THESE TWO MOVE TOGETHER, which is why the one below moved with it.
    */
-  ITERATE_KIT_VOICE_HOP_KEEPALIVE_MS = 120000,
+  /*
+   * A fully quiet hop was MEASURED being closed by the edge after ~30
+   * seconds (1006), which is shorter than a push-to-talk pause between
+   * turns. The probe must land well inside that window; two minutes — the
+   * old value — protected nothing that actually needed protecting.
+   */
+  ITERATE_KIT_VOICE_HOP_KEEPALIVE_MS = 15000,
   /*
    * Last resort: no PONG for this long on a READY transport and the chip
    * restarts, because a half-open TCP connection looks perfectly healthy from

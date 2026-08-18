@@ -80,6 +80,12 @@ struct iterate_kit_posix_websocket_client {
   size_t request_offset;
   size_t response_size;
   uint16_t port;
+  /**
+   * Monotonic microseconds of the last frame each way, for the quiet-ping.
+   * Zero until the first frame after the upgrade.
+   */
+  int64_t last_inbound_us;
+  int64_t last_outbound_us;
   int last_error;
   bool request_built;
   bool upgraded;
