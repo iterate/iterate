@@ -1085,3 +1085,27 @@ Two adopted hunt collapses, one increment (they churn the same seeds/tests/proof
 ephemeral/push/facetaddr/restore/rich — proofs re-spelled to itx.stream). Bonus sighting: the
 default-deny error crossed capnweb carrying `code: NO_CAPABILITY_MATCH` — the coded-error
 channel visibly at work.
+
+## Increment 44 (edge-1): the edge-adoption batch + the smallest possible repo
+
+- **One-shot HTTP at `/api`:** `newWorkersRpcResponse` serves BOTH the WebSocket upgrade and a
+  plain HTTP batch — a CLI script or cron does one POST, no socket handshake (live-proven with
+  `newHttpBatchRpcSession`). Batch sessions can't hold live capabilities (the relay must
+  outlive the response) — the park call failing is the honest error.
+- **Dead clients clean up instantly:** `ProjectSession[Symbol.dispose]` tears every relay down
+  when the /api session ends, and `onRpcBroken` on each retained provider closes its pager the
+  moment the client's session breaks — the DO reaps parked stubs immediately instead of the
+  roster lying until an invoke hits the 10s attach timeout.
+- **`Itx.fetchCap(cap, request)`:** the commissioned Upgrade-Response-over-RPC fork feature,
+  finally used — fetch-shaped capabilities (including 101s) ride the capnweb session itself; a
+  capnweb client needs no separate /cap door (the door stays for plain-HTTP callers).
+- **`disableProcessor(slug)`:** the missing off-switch — removes the row and DELETES the facet
+  (fold storage included; it is derived state, rebuildable from the log by re-enabling).
+  iterate-context refuses to be disabled.
+- **THE SMALLEST POSSIBLE REPO (owner's annotation 3, the seam):** `files.read` falls back to
+  the repo store — `itx.repo.put('/mine.js', src)` then
+  `itx.workers.get({ source: "itx.files.read('/mine.js')" }).run()` runs REAL project-authored
+  source (live-proven, with an itx round trip inside the loaded worker). The apps/os repo DO
+  grows from exactly this seam; the runner-into-stream/home-path design continues in the doc.
+
+87 unit tests green; deploy `edge-1`: NINE-suite board ALL PASS (+prove_edge 4/4).

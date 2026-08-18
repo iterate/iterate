@@ -584,6 +584,22 @@ export class StreamDurableObject extends DurableObject<Env> {
     return { ok: true };
   }
 
+  /** Disable a facet processor: remove its row and DELETE its facet — storage included (the
+   *  fold is derived state, rebuildable from the log by re-enabling; the missing off-switch
+   *  the hunt flagged: before this, a misbehaving userspace processor burned a loader
+   *  materialization + error log on EVERY commit with no remedy but hand-editing kv). */
+  disableProcessor(slug: string): { ok: true } {
+    if (slug === ICTX_SLUG) throw new Error("the iterate-context processor cannot be disabled");
+    this.ctx.storage.kv.put(
+      "facet-processors",
+      this.#facetEntries().filter((e) => e.slug !== slug),
+    );
+    const facets = this.ctx.facets as unknown as { delete?: (name: string) => void };
+    if (typeof facets.delete === "function") facets.delete(`proc:${slug}`);
+    else this.ctx.facets.abort(`proc:${slug}`, "disabled");
+    return { ok: true };
+  }
+
   /** THE generic facet door: resolve the facet LOCALLY (facet stubs are non-transferable — the
    *  walk happens where the stub lives), walk the dotted path with the exposure guard, apply
    *  the terminal. `roots.facets` (and via one seed, `itx.facets`) rides this to reach ANY

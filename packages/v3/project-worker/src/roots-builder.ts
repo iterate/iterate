@@ -222,9 +222,13 @@ export function buildHostScope(deps: BuildRootsDeps): Record<string, unknown> {
     clients: deps.clients,
     facets: deps.facets,
     workers,
+    /** The file store the source expressions read: demo files first, then THE REPO — put real
+     *  source with `itx.repo.put('/my.js', src)` and run it with
+     *  `itx.workers.get({ source: "itx.files.read('/my.js')" })`. (The smallest possible repo;
+     *  the apps/os repo DO grows from this seam.) */
     files: {
-      read: (p: string) => {
-        const content = HELLO_FILES[p];
+      read: async (p: string) => {
+        const content = HELLO_FILES[p] ?? (itxKv ? await itxKv.get(repoPrefix + p) : null);
         if (content == null) throw new Error(`files: no file "${p}"`);
         return { "cap.js": content };
       },

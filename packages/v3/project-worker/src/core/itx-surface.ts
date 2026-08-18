@@ -70,6 +70,16 @@ async function startRelay(
   const retained = provider.dup();
   const pager = await openPager(host, socketId);
   const disposeRetained = () => disposeStub(retained);
+  // The library's own death signal: the client's capnweb session broke → the retained provider
+  // can never answer again. Close the pager NOW so the DO reaps the parked stub immediately —
+  // without this the roster lies until an invoke hits the 10s attach timeout.
+  (retained as { onRpcBroken?: (cb: () => void) => void }).onRpcBroken?.(() => {
+    try {
+      pager.close(1000, "provider session broke");
+    } catch {
+      /* already closing */
+    }
+  });
   pager.addEventListener("message", (event: MessageEvent) => {
     const page = parsePage(event.data);
     if (!page) return; // not a Page — a "wake" is the only page there is
@@ -105,6 +115,14 @@ export class ProjectSession extends RpcTarget {
     super();
     this.#host = hostNamespace.getByName(canonicalName(projectId));
     this.#waitUntil = (p) => ctx.waitUntil(p);
+  }
+
+  /** capnweb invokes this when the client's /api session ends: tear every relay down so the
+   *  DO-side parked stubs die with their session instead of lying in the roster. */
+  // Symbol.dispose referenced defensively (lib target predates it) — same trick as disposeStub.
+  [(Symbol as { dispose?: symbol }).dispose ?? Symbol.for("dispose")](): void {
+    for (const relay of this.#relays) relay.dispose();
+    this.#relays.clear();
   }
 
   /** THE introduction door (the `authenticate()` pattern: the only way to get an authenticated
@@ -180,6 +198,15 @@ export class Itx extends RpcTarget {
     return this.#host.provideCapability(input);
   }
 
+  /** Reach a FETCH-shaped capability through the session itself (the fork's
+   *  Upgrade-Response-over-RPC carries the Response — including a 101 — back over capnweb, so
+   *  capnweb clients need no separate /cap door). */
+  fetchCap(cap: string | Expression, request: Request): Promise<Response> {
+    const headers = new Headers(request.headers);
+    headers.set("x-itx-cap", typeof cap === "string" ? cap : JSON.stringify(cap));
+    return this.#host.fetch(new Request(request, { headers }));
+  }
+
   /** Pop exactly that mount off the shadow stack (what it shadowed is restored). */
   revoke(input: { providedAtOffset: number }): Promise<void> {
     return this.#host.revokeCapability(input);
@@ -193,6 +220,10 @@ export class Itx extends RpcTarget {
     ref?: { source: string | Expression; export: string },
   ): Promise<{ ok: true }> {
     return this.#host.enableProcessor(slug, ref);
+  }
+
+  disableProcessor(slug: string): Promise<{ ok: true }> {
+    return this.#host.disableProcessor(slug);
   }
 
   /** A facet processor's fold — sugar over the facet ADDRESS (`itx.facets.get(slug).snapshot()`

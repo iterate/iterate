@@ -3,7 +3,7 @@
 // the solo-mode fallback entrypoint (the deployed config binds FALLBACK to the real control-plane shell instead).
 
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { newWorkersWebSocketRpcResponse } from "capnweb";
+import { newWorkersRpcResponse } from "capnweb";
 import { StreamDurableObject } from "./stream-durable-object.ts";
 import { canonicalName } from "./core/names.ts";
 import { ProjectSession } from "./core/itx-surface.ts";
@@ -30,7 +30,7 @@ export class DummyControlPlane extends WorkerEntrypoint {
 }
 
 // Bumped every deploy so a smoke test can wait for THIS build to propagate (workers.dev lags ~1-2min/colo).
-const CODE_VERSION = "vocab-1";
+const CODE_VERSION = "edge-1";
 
 /** The context host DO for a request's `?ctx=` (defaults to `prj_demo`). The DO does the real work. */
 function host(env: Env, url: URL) {
@@ -46,7 +46,11 @@ export default {
     // THE ONE capnweb ENTRYPOINT (the hard rule): capnweb terminates HERE, in the stateless worker; the DO is
     // reached only over Workers RPC. A client dials `/api` and gets a `ProjectSession` (`get`/`connect` → itx).
     if (url.pathname === "/api")
-      return newWorkersWebSocketRpcResponse(
+      // newWorkersRpcResponse serves BOTH a WebSocket upgrade AND a one-shot HTTP batch —
+      // a CLI script or cron does one POST, no socket handshake. (Batch sessions cannot hold
+      // live capabilities: connect/provideCapability need the relay to outlive the response —
+      // the relay's park call simply fails there, which is the honest error.)
+      return newWorkersRpcResponse(
         request,
         new ProjectSession(env.CONTEXT, url.searchParams.get("ctx") ?? "prj_demo", ctx),
       );
