@@ -1,6 +1,6 @@
-# The simplification hunt — v2, in plain language
+# The simplification hunt — v3
 
-v2 after your 15 annotations. Rewritten to talk normally; your verdicts are folded in and
+v3 after your second annotation round (10 notes). Rewritten to talk normally; your verdicts are folded in and
 marked. (Background: 23 agents hunted, every finding was adversarially re-checked against the
 code, ~40% died in verification.)
 
@@ -106,10 +106,41 @@ the bad mount could swallow _them_ too and you'd be locked out. So the handful o
 (revoke a mount, read the raw log, dump the table) talk straight to the DO and never route.
 That's the whole rule.
 
-**"Should `itx.log` be `itx.stream`?" Yes — renamed.** Your own stream's door is
-`itx.stream.append(...)` / `itx.stream.read(...)`; other contexts are
-`itx.contexts.get('/path')`. (Singular "stream" = mine; "contexts" = everyone's, and each of
-those is a whole context, not just a log.)
+**"Should `itx.log` be `itx.stream`?" Yes — and "stream" stays THE noun everywhere** (your
+note on the recovery kit too: it reads "unrouted stream read", not "raw log").
+
+**How to think about contexts and streams — the walkthrough you asked for.** The collapse says
+there is ONE thing, and you can call it a stream: a stream = one DO at a path
+(`prj_x` + `/agents/bob`) = its event log + its routing table + its processors + its connected
+clients. "Context" was our second name for the same thing seen from the capability side; after
+the collapse we don't need two nouns — _a stream HAS a table; there is nothing else for
+"context" to mean._ The tree is just paths: `/` is the project root stream, `/agents/bob` and
+`/clients/esp32-1` are other streams in the same project. Nothing is nested physically —
+"child" is naming convention plus one routing row.
+
+_Your agent example, walked end to end._ Agent bob lives at `/agents/bob`. His stream holds
+his conversation events; his processors run as facets on it. He makes himself a capability:
+his processor calls `provide({pattern: 'itx.scratch', target: …})` — that mount lives in
+**bob's** table, invisible to everyone else (attenuation-by-context, as decided). Bob's table
+also carries one seed: the default route `itx ⇒ itx.contexts.get('/')`. Now when bob's code
+calls `itx.scratch.note('…')`, his own table answers. When he calls `itx.slack.send(…)`, his
+table misses, the default route forwards the WHOLE call to the root stream, and the root's
+`slack` mount answers. That's the entire fallback machinery: one seed row. The root never
+sees `scratch`; bob never needed his own copy of `slack`.
+
+_Your device/browser example._ Today the honest answer is: every client connects to the
+project ROOT — `connect({path: '/clients/esp32-1', capabilities})` parks your live capability
+at the root DO, and `path` is just your roster name there; there is no per-client DO. That's
+the right default for browsers: presence + live capabilities, nothing durable, dies with the
+socket. The collapse makes the richer option natural for devices that EARN durable state: the
+ESP32 can connect _at_ `/clients/esp32-1` as a real stream of its own — its telemetry appends
+to its own log, its processors run there, capabilities it provides mount into ITS table — and
+its default-route seed falls through to the root exactly like bob's. Same one mechanism at
+every level. The rule of thumb to write down: **a roster row when you only need presence and
+live capabilities; your own stream when you need a log, processors, or mounts of your own** —
+and connecting "to a path" should eventually mean parking at that path's stream (today it
+always parks at the root; that's the one place the code hasn't caught up with the model yet,
+and it's a small change to the edge's connect()).
 
 ## 4. The four questions you "???"d, asked properly this time
 
@@ -130,16 +161,20 @@ equivalent of `invokeCapability("itx.a.b", args)` — a session hands you a smal
 still cost one round trip because capnweb pipelines. Strings/expressions exist only where
 config and agents live. For us that would mean: the TypeScript client SDK gets a typed
 surface (autocomplete, type errors), and `invoke(expression)` remains for agents, config, and
-dynamic callers. **Question: want a prototype of the typed client surface, or is
-expressions-everywhere the identity of the product?**
+dynamic callers. **Your verdict: in principle yes.** Noted alongside your two riders: capnweb's validate
+support exists now, and the real difference from cloudflare-os is that our capabilities are
+DYNAMIC — apps/os answers that with self-describing capabilities (types on each capability),
+which you deliberately didn't port because it's heavy but could exist. So: parked as a
+prototype for after the current arc, shaped as "typed root for the static surface,
+self-description as an optional layer for dynamic mounts".
 
 **Q3 — the routing table is doing two different jobs.** Job one: agents and humans mounting,
 shadowing, and revoking capabilities by pattern — the table with its shadow stack is _great_
 at this. Job two: boring wiring — "this loaded worker should see SLACK and KV" — where
 patterns, specificity, and shadowing buy nothing; a plain `{SLACK: …, KV: …}` map on that
 worker's row would be simpler and more direct (that's how cloudflare-os wires everything).
-**Question: keep using one table for both jobs (uniformity), or give loaded workers a plain
-bindings map and reserve the table for the agent-facing namespace?**
+**Your verdict: "everything is via one itx object plz." Closed** — no split; loaded-worker
+wiring keeps going through the one itx/table like everything else.
 
 **Q4 — who remembers where a live subscriber is up to?** For a browser/device connected over a
 socket, today's design keeps a durable cursor row on the stream. cloudflare-os keeps NOTHING
@@ -147,7 +182,9 @@ for consumers that can re-ask: the client remembers its own position ("give me e
 after 75"), and a dead socket just dies — reconnect re-asks. Durable stream-side cursors exist
 only for consumers that _can't_ re-ask (a webhook target can't call you back). We already
 decided browsers hold their own cursor; this extends that to every live-socket subscription.
-**Question: adopt "durable cursors only for targets that can't re-ask" as the rule?**
+**Your verdict: yes. Adopted as the rule** — stream-side durable cursors exist only for
+targets that can't re-ask (today: push rows — which is already true); any future live-socket
+subscription is client-cursor + re-ask, no row.
 
 ## 5. Everything else the hunt found (unchanged from v1, condensed)
 
@@ -201,6 +238,12 @@ deleted minus code the replacement adds):
 | **Total, everything above adopted**                          | **≈ −590**   | **3,976 → ≈ 3,400**                                        |
 | Codec parser demotion (§2c, your call)                       | −200 to −250 | parser+printer shrink to the seed/display subset           |
 | workerd ships the capnweb #36 runtime pieces (future, free)  | −290         | the pager/stub polyfill deletes                            |
+
+**Your question on the −290 ("how confident are we the upstream #36 shape slots into our
+pager seam?"):** a research agent is comparing our park/wake/attachment API shape against
+Kenton's actual #36 plan (and any 2026 movement on it) right now — report lands at
+`research/pager-vs-upstream-36.md` with a slot-in confidence rating and any cheap seam
+adjustments we should make today.
 
 So the realistic landing zones: **~3,400 lines** with everything currently on the table,
 **~3,150** if you also demote the string half to display/config, and **~2,900** the day
