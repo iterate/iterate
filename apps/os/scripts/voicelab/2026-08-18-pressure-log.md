@@ -260,3 +260,40 @@ The hook is deliberately NOT on `VoicelabConnectOptions` — command option
 types become CLI flags, and the first draft leaked a nonsense
 `--on-web-socket-close [json]` flag onto every voicelab command; it rides
 a separate programmatic-extras parameter instead.
+
+**F12 (the mount invariant, built and proven live): mount loss now
+arrives as a close, never as silence.** The connected-but-unreachable
+state F11 described — the platform's half of a live capability mount dies
+(pager closed by DO reset/deploy/eviction) while the client's /api socket
+stays healthy — was reproduced in the code before it was reproduced live:
+the relay's pager-close handler retired every mount SILENTLY and left the
+session up. Per Jonas: maximum teardown, deliberately — when the Pager
+dies from the far side with live mounts riding it, the session owner
+closes the client's whole socket (4901) and the client's one
+always-connected reconnect loop re-dials and re-runs its idempotent
+`connect`. (The alternative — quietly re-dialing the pager under the
+live session — is documented at the teardown site as the future option;
+rejected for now because it forks recovery into a rarely-exercised
+second path, and the client must own reconnect-and-re-mount anyway.)
+
+Pieces: the relay gains `onPagerLost` (its existing null-before-close
+ordering already excludes every self-initiated close — two new tests pin
+far-side-fires-once and own-close-never-fires); worker.ts inlines
+capnweb's WebSocket response so it can register a session-transport
+closer keyed on the request's ExecutionContext (`session-transport.ts`,
+the one seam between transport and target tree); the capability-host
+wiring closes 4901 on loss, a no-op for HTTP-batch and DO-side itx.
+
+Proven on preview-3 with socket-lifetime's new `mount` mode (a fake
+device: `projects.connect` + live `ping()` capability, then silence):
+capability answered end-to-end ("alive at 14.3s", stamped inside the
+device process), then `streams.get(scope).kill()` — and the device's
+socket closed within ~3 s: `code=4901 reason=live capability mounts
+lost; reconnect and connect() again`. This is the gate F11 named: with
+the invariant live, the firmware's 3-minute mount-watchdog flap, the
+120 s quiet-ping, and the 420 s no-pong restart lose their reason to
+exist. Open sibling: the kill() RPC's own reply errored client-side
+(capnweb evaluate on a response from a dying DO) — the kill worked;
+the reply's death rattle is a separate, pre-existing wrinkle. And the
+original four-boards-at-11-minutes mount loss remains un-root-caused;
+the invariant converts it from silent outage to a visible blip.
