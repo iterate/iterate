@@ -1152,3 +1152,31 @@ compiles; build-sdk.mjs bundles it (cap.js/processor.js/cloudflare:workers exter
 into `generated/processor-runner.ts`. The hand-written template string in agent-runtime — the
 drift class where the injected duck quietly diverges from the host contract — is deleted.
 Loader-touching suites re-proven live (userfacet/ephemeral/push/restore ALL PASS).
+
+## Increment 48 (live-3): LIVE STATE — the third delivery mode, built (design B, snapshots-first)
+
+- **One platform nudge type** (`live-state/changed`, ephemeral, payload {key}) that NOTHING can
+  consume — `#consumes` refuses it before contracts are consulted (owner's rule): the feedback
+  loop is unspellable, not discouraged. Emission is gated on THE FOLD OUTPUT changing (never
+  cursor/window movement), so offset-counting folds terminate in one bounce.
+- **A live-state subscription = the same mount** with `delivery.liveState: {key, get}` — NO
+  cursor, NO ladder, no new durable state; the row is the restore-param. The parent flushes
+  latest-wins (50ms debounce, single-flight, per-row `again` flag), re-pulling THROUGH the seed
+  door (`get`, a full call expression like "itx.chat.state()") and delivering
+  `{type:'snapshot', revision: maxAssigned, state}` by row identity. Seeds fire on subscribe
+  and on the resurrection pass; a failed flush is healed by the next nudge/alarm. The patch arm
+  ({from,to} LiveView-style deltas per subscriber) is reserved in the wire shape for a later
+  diff engine — snapshots-first per the owner's too-much-code worry.
+- **SDK, both flavors:** processors gain optional `liveState(state)` (projection; publishes on
+  changed folds); mini-apps get `liveState(env.ITX, key, initial)` (~15 lines — set() makes
+  mutation and notification inseparable; the author's accessor is the seed door). The SDK now
+  rides EVERY confined isolate (part of the confinement contract, like itx.js) — found live
+  when the chatroom's import failed on the stateful path.
+- **`Itx.subscribe` accepts a LIVE CALLBACK target** — parked via the ordinary live-capability
+  machinery, targeted as `itx.clients.get(sid)`; pathProxy grew `allowRootCall` for provider
+  proxies (a parked bare callback IS the callable; the scope-symbol guard stands elsewhere).
+  `deliverTo` generalized to a raw args array (event rows pass [events, window]; state rows
+  pass [update]).
+- Live proof (`prove_livestate.mjs`, ALL PASS): chatroom mini-app seed→mutate→latest-wins,
+  monotonic offset revisions, the processor flavor via `itx.facets.get('chunky').snapshot()`,
+  and the no-loop assertion. Full eight-suite regression board ALL PASS.

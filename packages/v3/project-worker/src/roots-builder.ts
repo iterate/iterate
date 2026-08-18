@@ -262,7 +262,10 @@ export function facetClientsView(
   parent: () => DurableObjectStub<StreamDurableObject>,
 ): ClientsView {
   return {
-    get: (key) => pathProxy((segments, args) => parent().stubInvoke(key, segments, args)),
+    get: (key) =>
+      pathProxy((segments, args) => parent().stubInvoke(key, segments, args), {
+        allowRootCall: true,
+      }),
     at: (path) => ({ call: (method, args) => parent().stubFanOut(path, method, args) }),
     list: () => parent().stubList(),
     connections: (path) => parent().stubConnections(path),

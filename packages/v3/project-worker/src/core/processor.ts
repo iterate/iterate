@@ -102,6 +102,13 @@ export type ProcessEventArgs<State> = {
 
 export type ProcessorSnapshot<State> = { offset: number; state: State };
 
+/** THE one live-state nudge type — ephemeral, payload {key}. HARD RULE: no processor can ever
+ *  consume it (#consumes refuses it before contracts are even consulted), so state-change
+ *  notifications can never feed a fold — the feedback-loop class is unspellable, not merely
+ *  discouraged. State is read through the seed door (snapshot / the row's `get` expression),
+ *  never through these events. */
+export const LIVE_STATE_CHANGED = "events.iterate.com/live-state/changed";
+
 type Progress<State> = {
   reducerVersion: string;
   reducedThroughOffset: number;
@@ -139,6 +146,11 @@ export abstract class StreamProcessor<State> {
 
   /** Side-effect hook. Synchronous by design: register async work via the two helpers. */
   protected processEvent(_args: ProcessEventArgs<State>): undefined {}
+
+  /** OPTIONAL live-state projection: define it and every batch whose fold CHANGED state
+   *  publishes a nudge (key = the contract slug); subscribers re-pull through this method.
+   *  Redact/trim here — this is the shape clients see. */
+  liveState?(state: State): unknown;
 
   /** Stable idempotency key namespaced by slug; add `whileProcessing` for per-event keys. */
   protected idempotencyKey(key: string, whileProcessing?: StreamEventT): string {
@@ -265,8 +277,10 @@ export abstract class StreamProcessor<State> {
     }
   }
 
-  /** `"*"` covers every durable event; an ephemeral event must be NAMED to be consumed. */
+  /** `"*"` covers every durable event; an ephemeral event must be NAMED to be consumed —
+   *  except LIVE_STATE_CHANGED, which nothing may consume, ever (the loop guard). */
   #consumes(event: StreamEventT): boolean {
+    if (event.type === LIVE_STATE_CHANGED) return false;
     if (event.ephemeral) return this.contract.consumes.includes(event.type);
     return this.contract.consumes.includes("*") || this.contract.consumes.includes(event.type);
   }

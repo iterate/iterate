@@ -69,6 +69,8 @@ export default class CodeCap extends WorkerEntrypoint {
 /** The cacheKey is MINTED HERE — the one audit point for the dollar lever. `kind` is a CLOSED
  *  union so a new key family is a deliberate type change; `owner` is the owning context (plus
  *  `:{slug}` for processor facets); `contentHash` versions the source. */
+import { PROCESSOR_SDK_MODULE } from "../generated/processor-sdk.ts";
+
 export function confinedWorker(
   env: { LOADER: WorkerLoader; CF_VERSION_METADATA?: { id: string } },
   key: { kind: "code" | "procfacet" | "stateful"; owner: string; contentHash: string },
@@ -84,7 +86,9 @@ export function confinedWorker(
     // handle back — every chain member needs the flag (see iterate-context-entrypoint.ts).
     compatibilityFlags: ["allow_irrevocable_stub_storage"],
     mainModule,
-    modules: { "itx.js": ITX_SURFACE_MODULE, ...modules },
+    // The SDK rides EVERY confined isolate (like itx.js): any loaded class — stateful mini-app
+    // or facet processor — can `import { liveState, StreamProcessor } from "./processor.js"`.
+    modules: { "itx.js": ITX_SURFACE_MODULE, "processor.js": PROCESSOR_SDK_MODULE, ...modules },
     env: { ITX: host },
     globalOutbound: host,
   }));

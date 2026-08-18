@@ -21,6 +21,18 @@ export class Counter extends DurableObject {
   // own cursor + counts in its OWN facet storage. Drives are fire-and-forget and a delivered
   // batch is only a WAKE-UP: both deliver and snapshot catch up from the stream via env.ITX (the
   // parent stub) from the OWN cursor, so a dropped drive can never leave a gap.
+  // THE LIVE-STATE CHATROOM — a mini-app durable-object class, NOT a stream processor: the SDK
+  // helper makes mutation and notification inseparable; state() is the seed door.
+  "/chatroom.js": `import { DurableObject } from "cloudflare:workers";
+import { liveState } from "./processor.js";
+export class Chatroom extends DurableObject {
+  #chat = liveState(this.env.ITX, "chat", { messages: [] });
+  post(from, text) {
+    this.#chat.set({ messages: [...this.#chat.get().messages, { from, text }] });
+    return { ok: true };
+  }
+  state() { return this.#chat.get(); }
+}`,
   // Rich-value probe: proves the stateless run lane carries what Workers RPC carries — a Date
   // arrives as a Date and a client CALLBACK is callable from inside the confined isolate.
   "/probe.js": `export default async (itx, v, cb) => ({
@@ -70,6 +82,7 @@ export class Chunky extends StreamProcessor {
     if (event.type === "chunk") return { ...state, chunks: state.chunks + 1 };
     if (event.type === "mark") return { ...state, marks: state.marks + 1 };
   }
+  liveState(state) { return { chunks: state.chunks, marks: state.marks }; }
 }`,
   // A userspace stream processor ON THE SDK: same contract helper, same schemas, same base
   // class as built-ins — the five rules, the cursor, refold and the read verbs all come free.

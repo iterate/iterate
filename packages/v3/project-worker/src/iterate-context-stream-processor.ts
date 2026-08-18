@@ -65,6 +65,9 @@ export const IterateContextContract = defineProcessorContract({
             onFailingEvent: z.enum(["halt", "skip"]).optional(),
             maxAttempts: z.number().int().positive().optional(),
             start: z.enum(["beginning", "now"]).optional(),
+            /** LIVE STATE mode: no cursor, no ladder — latest-wins flushes of `get` (an itx
+             *  expression answering current state), re-pulled on the key's nudge. */
+            liveState: z.object({ key: z.string(), get: z.string() }).optional(),
           })
           .optional(),
       }),
@@ -131,6 +134,7 @@ export class IterateContextStreamProcessor extends StreamProcessor<State> {
       onFailingEvent?: "halt" | "skip";
       maxAttempts?: number;
       start?: "beginning" | "now";
+      liveState?: { key: string; get: string };
     };
   }): Promise<{ providedAtOffset: number }> {
     const pattern = toExpression(input.pattern);
@@ -272,17 +276,12 @@ export class IterateContextStreamProcessor extends StreamProcessor<State> {
    *  through the table (a broad default route must not intercept deliveries). The stored
    *  target is an ordinary event-provenance expression: hole-free → called with
    *  (events, window); hole-bearing → the holes reshape the delivery, adapter-free. */
-  async deliverTo(
-    state: State,
-    providedAtOffset: number,
-    events: unknown[],
-    window: unknown,
-  ): Promise<unknown> {
+  async deliverTo(state: State, providedAtOffset: number, args: unknown[]): Promise<unknown> {
     const row = state.mounts.find((m) => m.providedAtOffset === providedAtOffset);
     if (!row) throw new Error(`no subscription mount at offset ${providedAtOffset}`);
-    const { steps, spentArgs } = substitute(row.target, { args: [events, window], captures: {} });
+    const { steps, spentArgs } = substitute(row.target, { args, captures: {} });
     return apply({ itx: this.#itxAtDepth(1) }, steps, {
-      boundaryArgs: spentArgs ? undefined : [events, window],
+      boundaryArgs: spentArgs ? undefined : args,
       remainder: [],
     });
   }

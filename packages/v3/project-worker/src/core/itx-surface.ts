@@ -48,6 +48,9 @@ class Invoker extends WorkersRpcTarget {
     this.#provider = provider;
   }
   async invoke(capPath: string[], args: unknown[]): Promise<unknown> {
+    // Empty path = the provider IS the callable (a bare callback parked as a capability).
+    if (capPath.length === 0)
+      return await (this.#provider as unknown as (...a: unknown[]) => unknown)(...args);
     let recv = this.#provider as unknown as Record<string, unknown>;
     for (let i = 0; i < capPath.length - 1; i++) recv = recv[capPath[i]] as Record<string, unknown>;
     return await (recv[capPath[capPath.length - 1]] as (...a: unknown[]) => unknown)(...args);
@@ -238,15 +241,37 @@ export class Itx extends RpcTarget {
   /** PUSH subscription (stream-held cursor + retry/skip/halt): the stream calls `target`'s
    *  terminal path segment with `(events, window)` per durable batch — for consumers that
    *  cannot hold a cursor (webhooks, stateless `processEvent`-style workers). */
-  subscribe(input: {
+  /** Subscribe. `target` may be an itx expression — or a LIVE CALLBACK (any capnweb
+   *  function/RpcTarget): the sugar parks it via the ordinary live-capability machinery and
+   *  targets the parked stub, so event windows or live-state snapshots flow straight into the
+   *  client's function. Add `liveState: {key, get}` for state mode (no cursor; latest-wins
+   *  snapshots re-pulled through `get` on every change to `key`). */
+  async subscribe(input: {
     name?: string;
-    target: string | Expression;
+    target: string | Expression | ((...args: never[]) => unknown) | object;
     consumes?: string[];
     onFailingEvent?: "halt" | "skip";
     maxAttempts?: number;
     start?: "beginning" | "now";
+    liveState?: { key: string; get: string };
   }): Promise<{ name: string; providedAtOffset: number }> {
-    return this.#host.subscribe(input);
+    let target = input.target as string | Expression;
+    if (
+      typeof input.target === "function" ||
+      (typeof input.target === "object" && !Array.isArray(input.target))
+    ) {
+      const socketId = crypto.randomUUID();
+      const relay = await startRelay(
+        this.#host,
+        input.target as unknown as ProviderStub,
+        socketId,
+        this.#waitUntil,
+      );
+      this.#relays.add(relay);
+      await this.#host.parkCapability({ socketId, description: `subscriber ${input.name ?? ""}` });
+      target = ["itx", "clients", ["get", socketId]];
+    }
+    return this.#host.subscribe({ ...input, target });
   }
 
   unsubscribe(input: { name: string }): Promise<{ ok: true }> {

@@ -84,6 +84,8 @@ type PushRow = {
   onFailingEvent: "halt" | "skip";
   maxAttempts?: number;
   start?: "beginning" | "now";
+  /** LIVE STATE row: no cursor, no ladder — latest-wins flush of `get` on the key's nudge. */
+  liveState?: { key: string; get: string };
 };
 /** The stream-held cursor + failure ladder state for one push row. */
 type PushCursor = {
@@ -232,6 +234,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           .catch((e) => console.error(`facet "${slug}" drive failed`, e));
       this.#foldSubscriptionProjection(committed); // parent sees every body at the commit point
       this.#drivePushRows(); // push rows read durable rows themselves — also never awaited
+      this.#driveStateRows(committed); // live-state flushes for nudged keys — never awaited
     }
     this.#noteActivity();
     return committed;
@@ -338,6 +341,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         void this.#facet(slug)
           .then((f) => f.snapshot())
           .catch((e) => console.error(`facet "${slug}" resurrection failed`, e));
+      this.#driveStateRows(null); // re-seed every live-state subscriber after an eviction
       await this.#armAlarmNoLaterThan(Date.now() + 60_000);
     } else if (Date.now() - this.#lastActivityMs >= 60_000) {
       // workerd #6800: a live facet client holds this actor idle-but-non-hibernatable,
@@ -404,6 +408,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     onFailingEvent?: "halt" | "skip";
     maxAttempts?: number;
     start?: "beginning" | "now";
+    liveState?: { key: string; get: string };
   }): Promise<{ name: string; providedAtOffset: number }> {
     this.#touch();
     const target = toExpression(input.target);
@@ -422,6 +427,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         onFailingEvent: input.onFailingEvent,
         maxAttempts: input.maxAttempts,
         start: input.start,
+        liveState: input.liveState,
       },
     });
     return { name, providedAtOffset };
@@ -451,7 +457,79 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   #drivePushRows(): void {
     for (const row of this.#activePushRows())
-      void this.#pumpPush(row).catch((e) => console.error(`push "${row.name}" pump failed`, e));
+      if (!row.liveState)
+        void this.#pumpPush(row).catch((e) => console.error(`push "${row.name}" pump failed`, e));
+  }
+
+  // ── LIVE STATE (the third delivery mode): latest-wins, cursorless, ladderless ──
+  // A state row never replays: recovery is RE-SEED (evaluate `get` — the row is the
+  // restore-param). Flushes are debounced + single-flight per row; a failed flush is healed by
+  // the next nudge or the resurrection pass. Wire v1 = snapshot frames {type, revision, state};
+  // the patch arm ({from,to,patch} — LiveView-style deltas per subscriber) is reserved in the
+  // shape and lands with a diff engine later, with no wire break.
+  #stateFlushPending = new Map<
+    number,
+    { timer?: ReturnType<typeof setTimeout>; inFlight: boolean; again: boolean }
+  >();
+
+  /** Flush state rows whose key was nudged in this batch (or all rows, for seeds/resurrection). */
+  #driveStateRows(committed: StreamEvent[] | null): void {
+    const nudged =
+      committed === null
+        ? null
+        : new Set(
+            committed
+              .filter((e) => e.type === "events.iterate.com/live-state/changed")
+              .map((e) => (e.payload as { key?: string } | undefined)?.key),
+          );
+    for (const row of this.#activePushRows()) {
+      if (!row.liveState) continue;
+      // a freshly provided row in THIS batch gets its seed flush regardless of nudges
+      const isNew = committed?.some((e) => e.offset === row.providedAtOffset && !e.ephemeral);
+      if (nudged !== null && !nudged.has(row.liveState.key) && !isNew) continue;
+      this.#scheduleStateFlush(row);
+    }
+  }
+
+  #scheduleStateFlush(row: PushRow): void {
+    let p = this.#stateFlushPending.get(row.providedAtOffset);
+    if (!p) {
+      p = { inFlight: false, again: false };
+      this.#stateFlushPending.set(row.providedAtOffset, p);
+    }
+    if (p.inFlight) {
+      p.again = true; // latest-wins: one more flush after the current one lands
+      return;
+    }
+    if (p.timer) return; // already debouncing — this change rides the pending flush
+    p.timer = setTimeout(() => {
+      p.timer = undefined;
+      void this.#flushState(row);
+    }, 50);
+  }
+
+  async #flushState(row: PushRow): Promise<void> {
+    const p = this.#stateFlushPending.get(row.providedAtOffset);
+    if (!p || p.inFlight) return;
+    p.inFlight = true;
+    try {
+      const state = await this.invoke(row.liveState!.get); // THE SEED DOOR — always current
+      const update = { type: "snapshot", revision: this.#maxAssigned(), state };
+      await Promise.race([
+        (await this.#ictx()).deliverSubscription(row.providedAtOffset, [update]),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error(`live-state "${row.name}": flush timed out`)), 20_000),
+        ),
+      ]);
+    } catch (e) {
+      console.error(`live-state "${row.name}" flush failed (healed by next nudge/alarm)`, e);
+    } finally {
+      p.inFlight = false;
+      if (p.again) {
+        p.again = false;
+        this.#scheduleStateFlush(row);
+      }
+    }
   }
 
   /** One in-flight delivery per row; loop until caught up. Never called from the commit path
@@ -488,7 +566,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           // Delivery BY ROW IDENTITY through the ictx facet — never by name through the table
           // (a broad default route must not intercept deliveries). Awaited resolve IS the ack.
           await Promise.race([
-            (await this.#ictx()).deliverSubscription(row.providedAtOffset, events, window),
+            (await this.#ictx()).deliverSubscription(row.providedAtOffset, [events, window]),
             new Promise((_, reject) =>
               setTimeout(
                 () => reject(new Error(`push "${row.name}": delivery timed out after 20s`)),

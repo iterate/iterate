@@ -616,13 +616,18 @@ export async function apply(
  *  for every dotted view (the itx scope symbol, the facet clients view, the stateful-worker
  *  proxy) — they differed only in what the terminal apply dispatches to. Calling the BARE root
  *  is a loud error (mirroring the parser), so `call` always receives ≥1 segment. */
-export function pathProxy(call: (segments: string[], args: unknown[]) => unknown): unknown {
+export function pathProxy(
+  call: (segments: string[], args: unknown[]) => unknown,
+  opts?: { allowRootCall?: boolean },
+): unknown {
   const build = (segments: string[]): unknown =>
     new Proxy(function () {} as object, {
       get: (_t, p) =>
         p === "then" || typeof p === "symbol" ? undefined : build([...segments, p as string]),
       apply: (_t, _this, args) => {
-        if (segments.length === 0)
+        // The SCOPE symbol refuses bare calls (increment 33); a PROVIDER proxy allows them —
+        // a parked bare callback IS the callable (live-state watchers, subscription targets).
+        if (segments.length === 0 && !opts?.allowRootCall)
           throw new Error("cannot call the scope symbol itself — name a capability first");
         return call(segments, args as unknown[]);
       },

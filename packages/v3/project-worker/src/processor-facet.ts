@@ -173,14 +173,10 @@ export class ProcessorFacet extends DurableObject<Env> {
   }
 
   /** Deliver a window to one subscription mount BY IDENTITY (see the processor's deliverTo). */
-  async deliverSubscription(
-    providedAtOffset: number,
-    events: unknown[],
-    window: unknown,
-  ): Promise<unknown> {
+  async deliverSubscription(providedAtOffset: number, args: unknown[]): Promise<unknown> {
     const processor = this.#ictx();
     const { state } = await processor.snapshot();
-    return processor.deliverTo(state, providedAtOffset, events, window);
+    return processor.deliverTo(state, providedAtOffset, args);
   }
 
   /** Mount a capability (event provenance — targets must be itx-rooted). */
