@@ -5,7 +5,7 @@ describe("parseAppConfig", () => {
   test("absent APP_CONFIG → the solo DEFAULT_SEEDS", () => {
     const { seeds } = parseAppConfig(undefined);
     expect(seeds).toHaveLength(DEFAULT_SEEDS.length);
-    expect(seeds[0]).toEqual({ pattern: ["itx", "whoami"], target: ["roots", "whoami"] });
+    expect(seeds[0]).toEqual({ pattern: ["itx", "whoami"], target: ["whoami"] });
   });
 
   test('explicit {"seeds": []} means DENY-ALL, never the defaults', () => {
@@ -15,9 +15,9 @@ describe("parseAppConfig", () => {
 
   test("string-half seeds parse into the structured half", () => {
     const { seeds } = parseAppConfig(
-      JSON.stringify({ seeds: [{ pattern: "itx.os", target: "roots.binding('FALLBACK')" }] }),
+      JSON.stringify({ seeds: [{ pattern: "itx.os", target: "bindings.get('FALLBACK')" }] }),
     );
-    expect(seeds).toEqual([{ pattern: ["itx", "os"], target: ["roots", ["binding", "FALLBACK"]] }]);
+    expect(seeds).toEqual([{ pattern: ["itx", "os"], target: ["bindings", ["get", "FALLBACK"]] }]);
   });
 
   test("malformed config fails loudly (a typo must not boot a mis-wired project)", () => {

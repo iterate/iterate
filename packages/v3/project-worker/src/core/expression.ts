@@ -568,7 +568,9 @@ export async function evaluate(
   expr: Expression,
 ): Promise<{ value: unknown; receiver: unknown }> {
   const [root, ...steps] = expr;
-  if (typeof root !== "string" || !(root in scope))
+  // Object.hasOwn, not `in`: scope absence IS the provenance gate, and the `in` operator would
+  // leak Object.prototype names as phantom roots.
+  if (typeof root !== "string" || !Object.hasOwn(scope, root))
     throw new Error(`expression root ${JSON.stringify(root)} is not in scope`);
   return walkSteps({ value: scope[root], receiver: undefined }, steps, "expression");
 }

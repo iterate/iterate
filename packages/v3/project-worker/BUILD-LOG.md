@@ -1054,3 +1054,34 @@ want to go much more complicated"; and args must not bind across multiple invoca
 
 87 unit tests green (+7); deploy `codec-2`: EIGHT-suite live board ALL PASS unchanged — the
 collapse is observably equivalent for every shipped mount shape.
+
+## Increment 43 (vocab-1): THE ROOTS-FLATTEN + itx.stream / itx.contexts (the vocabulary collapse)
+
+Two adopted hunt collapses, one increment (they churn the same seeds/tests/proofs):
+
+- **The Roots object is DELETED.** `buildHostScope` returns a plain record whose KEYS are the
+  expression roots (whoami/kv/repo/secrets/stream/contexts/clients/facets/workers/files/
+  bindings) — the RpcTarget shell was vestigial since increment 28, and deleting the object
+  deleted its naming debate (nothing is left to name). The provenance gate is now visibly a
+  scope-KEY-SET decision: seeds resolve against `{ ...hostScope, itx }` (itx LAST — no
+  host-scope key can shadow the resolver; the builder asserts it never registers `itx`), event
+  mounts against `{ itx }` alone. `provide()` checks `target[0] !== "itx"`;
+  `evaluate` uses `Object.hasOwn` (the `in` operator leaked Object.prototype names as phantom
+  roots). Seed targets read `kv`, `stream`, `bindings.get('FALLBACK')`.
+- **ITX-vs-STREAM closed as ONE concept ("stream" stays THE noun — owner).** `itx.streams` is
+  GONE. `itx.stream` = MY OWN stream, a deliberate chosen surface (append/read — never the raw
+  DO stub, closing the leaked-DO-surface hole): the commonest write is now dotted-door
+  spellable (`itx.stream.append({...})`). `itx.contexts.get('/x')` = sibling contexts,
+  ROUTED: calls resolve through the SIBLING's own table (its mounts answer, its default route
+  falls through) — attenuation-by-context is now spellable
+  (`provide({pattern:'itx.bot', target:"itx.contexts.get('/agents/bob')"})`); append/read
+  skip the facet hop (the physical fast path).
+- **The recovery kit, pinned:** doors you need when routing is broken must not route — and all
+  three already exist natively: `DO.revokeCapability` (a direct append),
+  `DO.read` (the unrouted log), `facetInvoke('iterate-context', ['snapshot'])` (the unrouted
+  table dump). No new code; the rule is now written down here.
+
+87 unit tests green; deploy `vocab-1`: NINE-suite live board ALL PASS (crisp/facet/userspace/
+ephemeral/push/facetaddr/restore/rich — proofs re-spelled to itx.stream). Bonus sighting: the
+default-deny error crossed capnweb carrying `code: NO_CAPABILITY_MATCH` — the coded-error
+channel visibly at work.

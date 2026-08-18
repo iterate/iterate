@@ -37,7 +37,12 @@ import {
   type ScanWindow,
 } from "./core/processor.ts";
 import { IterateContextStreamProcessor } from "./iterate-context-stream-processor.ts";
-import { buildRoots, facetAddressView, facetClientsView, type RootsEnv } from "./roots-builder.ts";
+import {
+  buildHostScope,
+  facetAddressView,
+  facetClientsView,
+  type RootsEnv,
+} from "./roots-builder.ts";
 import type { StreamDurableObject } from "./stream-durable-object.ts";
 
 interface Env extends RootsEnv {
@@ -105,7 +110,7 @@ const FACET_PROCESSORS: Record<
   "iterate-context": (args) => {
     const { stream, storage, path, projectId, identity, env, invoke } = args;
     const parent = () => env.CONTEXT.getByName(identity.parentName);
-    const roots = buildRoots({
+    const hostScope = buildHostScope({
       projectId,
       path,
       contextName: identity.parentName,
@@ -122,7 +127,7 @@ const FACET_PROCESSORS: Record<
       path,
       projectId,
       seeds: parseAppConfig(env.APP_CONFIG).seeds,
-      roots,
+      hostScope,
     });
     // Wire the resolver recursion LOCALLY: `itx.…` inside any mount target re-enters THIS
     // facet's dispatch (never a hop back through the parent).

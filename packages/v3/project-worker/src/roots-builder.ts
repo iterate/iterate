@@ -1,16 +1,39 @@
-// roots-builder.ts — ONE place Roots are assembled, for EITHER host of the iterate-context
-// processor: the Stream DO (same-isolate closures) or the built-in ProcessorFacet (which reaches
-// the parent BY NAME per call — sockets live on the parent forever, so its clients view is thin
-// RPC wrappers over the parent's stub facade). What varies between hosts is injected (`invoke`,
-// `context`, `clients`); what doesn't — the workers view, the file reader, the binding gate — is
-// built here from the shared worker env (a built-in facet inherits the WORKER's env, so both
-// hosts see the same bindings).
+// roots-builder.ts — THE HOST SCOPE: a plain record whose KEYS are the expression roots that
+// exist ONLY for config-provenance targets (the provenance gate is a scope-KEY-SET decision —
+// seeds resolve against { ...hostScope, itx }, event mounts against { itx } alone; nothing is
+// policed, the keys are simply absent). There is no Roots object anymore: the RpcTarget shell
+// was vestigial since increment 28 (it never crossed a hop; the tests faked it with literals),
+// and deleting the object deleted its naming debate. Seed targets now read `kv`, `stream`,
+// `contexts.get('/x')`, `bindings.get('FALLBACK')` — the vocabulary, unbundled.
 
 import { CODE_CAP_RUNNER, confinedWorker } from "./core/agent-runtime.ts";
 import { itxEntrypointFor } from "./iterate-context-entrypoint.ts";
 import { pathProxy, toExpression, type Expression } from "./core/expression.ts";
 import { hashSource } from "./core/hash.ts";
-import { Roots, type ClientsView, type FacetsView, type WorkersView } from "./core/roots.ts";
+
+/** The parked-stub registry view (clients + live capabilities — one registry). */
+export type ClientsView = {
+  /** Single-target: a method proxy over one parked stub (wake → leg → invoke). Deep dots walk. */
+  get(key: string): unknown;
+  /** Fan-out over every connection at a client path (allSettled; dead connections drop out). */
+  at(path: string): { call(method: string[], args: unknown[]): Promise<unknown[]> };
+  /** Promise-valued when the view is RPC-backed (the facet host) — evaluation awaits every step. */
+  list(): unknown[] | Promise<unknown[]>;
+  connections(path: string): unknown[] | Promise<unknown[]>;
+  close(key: string): { ok: true } | Promise<{ ok: true }>;
+};
+
+/** `facets.get(slug)` → a dotted method proxy over ONE enabled facet — ANY method its durable
+ *  object exposes (facet stubs are non-transferable, so the walk happens parent-side). */
+export type FacetsView = {
+  get(slug: string): unknown;
+};
+
+/** Run code in this context — THE fundamental context operation. `className` present = host
+ *  that exported class durably; absent = run the default export in a fresh confined isolate. */
+export type WorkersView = {
+  get(ref: { source: unknown; className?: string; type?: string }): unknown;
+};
 import { HELLO_FILES } from "./hello-files.ts";
 import type { StatefulWorkerDurableObject } from "./stateful-worker-durable-object.ts";
 import type { StreamDurableObject } from "./stream-durable-object.ts";
@@ -51,9 +74,10 @@ export interface BuildRootsDeps {
   hostCtx: unknown;
 }
 
-/** Assemble the Roots for one context. Every getter closes over the context's identity — the
- *  pre-scoped-not-policed rule (core/roots.ts) is enforced here, at construction. */
-export function buildRoots(deps: BuildRootsDeps): Roots {
+/** Assemble the host scope for one context. Every entry closes over the context's identity —
+ *  PRE-SCOPED, not policed: cross-project access is unspellable by construction. The builder
+ *  must never register `itx` (asserted below — the resolver's recursion symbol always wins). */
+export function buildHostScope(deps: BuildRootsDeps): Record<string, unknown> {
   const { projectId, path, contextName, env } = deps;
 
   const loadModules = async (source: Expression): Promise<Record<string, string>> =>
@@ -109,25 +133,112 @@ export function buildRoots(deps: BuildRootsDeps): Roots {
     },
   };
 
-  return new Roots({
-    projectId,
-    path,
-    itxKv: env.ITX_KV,
-    secretsKv: env.SECRETS_KV,
-    binding: (name) => {
-      if (name !== "FALLBACK") throw new Error(`roots.binding: no binding "${name}"`);
-      return env.FALLBACK;
+  const { itxKv, secretsKv } = { itxKv: env.ITX_KV, secretsKv: env.SECRETS_KV };
+  const kvPrefix = `${projectId}:`;
+  const repoPrefix = `${projectId}:repo:`;
+  const own = () => deps.context(path);
+
+  const scope: Record<string, unknown> = {
+    whoami: () => ({ projectId, path }),
+    /** Project-prefixed KV — the raw namespace is shared; the prefix is the isolation. */
+    kv: {
+      get: (k: string) => {
+        if (!itxKv) throw new Error("kv: no ITX_KV bound");
+        return itxKv.get(kvPrefix + k);
+      },
+      put: async (k: string, v: string) => {
+        if (!itxKv) throw new Error("kv: no ITX_KV bound");
+        await itxKv.put(kvPrefix + k, String(v));
+        return { ok: true };
+      },
+      delete: async (k: string) => {
+        if (!itxKv) throw new Error("kv: no ITX_KV bound");
+        await itxKv.delete(kvPrefix + k);
+        return { ok: true };
+      },
+      list: async (start = "") => {
+        if (!itxKv) throw new Error("kv: no ITX_KV bound");
+        return {
+          keys: (await itxKv.list({ prefix: kvPrefix + start })).keys.map((x) =>
+            x.name.slice(kvPrefix.length),
+          ),
+        };
+      },
     },
-    context: deps.context,
+    /** The project's file store (`repo:`-prefixed kv view) — where the config worker lives. */
+    repo: {
+      get: (k: string) => {
+        if (!itxKv) throw new Error("repo: no ITX_KV bound");
+        return itxKv.get(repoPrefix + k);
+      },
+      put: async (k: string, v: string) => {
+        if (!itxKv) throw new Error("repo: no ITX_KV bound");
+        await itxKv.put(repoPrefix + k, String(v));
+        return { ok: true };
+      },
+      list: async () => {
+        if (!itxKv) throw new Error("repo: no ITX_KV bound");
+        return {
+          files: (await itxKv.list({ prefix: repoPrefix })).keys.map((x) =>
+            x.name.slice(repoPrefix.length),
+          ),
+        };
+      },
+    },
+    /** Write-only secret store. Values come back out ONLY as `{{secret:NAME}}` substitution at
+     *  the egress terminal — never through a read here. */
+    secrets: {
+      set: async (name: string, value: string) => {
+        if (!secretsKv) throw new Error("secrets: no SECRETS_KV bound");
+        await secretsKv.put(`secret:${projectId}:${name}`, String(value));
+        return { ok: true };
+      },
+    },
+    /** MY OWN stream — a deliberate, chosen surface (append/read), never the raw DO stub. */
+    stream: {
+      append: (...e: unknown[]) => own().append(...e),
+      read: (after?: number, limit?: number) => own().read(after, limit),
+    },
+    /** Sibling contexts, ROUTED: `contexts.get('/x').anything(...)` resolves through the
+     *  SIBLING's own table (its mounts answer, its default route falls through) — a named,
+     *  shadowable whole-context capability. append/read skip the facet hop (the physical fast
+     *  path — the log door needs no routing). Codec-named, so only THIS project is reachable. */
+    contexts: {
+      get: (siblingPath: string) =>
+        pathProxy((segments, args) => {
+          const sibling = deps.context(siblingPath) as unknown as {
+            append(...e: unknown[]): unknown;
+            read(a?: number, l?: number): unknown;
+            invoke(call: unknown): Promise<unknown>;
+          };
+          if (segments.length === 1 && (segments[0] === "append" || segments[0] === "read"))
+            return segments[0] === "append"
+              ? sibling.append(...args)
+              : sibling.read(...(args as [number?, number?]));
+          const last = segments[segments.length - 1] as string;
+          return sibling.invoke(["itx", ...segments.slice(0, -1), [last, ...args]]);
+        }),
+    },
     clients: deps.clients,
     facets: deps.facets,
     workers,
-    readFile: (p) => {
-      const content = HELLO_FILES[p];
-      if (content == null) throw new Error(`roots.files: no file "${p}"`);
-      return { "cap.js": content };
+    files: {
+      read: (p: string) => {
+        const content = HELLO_FILES[p];
+        if (content == null) throw new Error(`files: no file "${p}"`);
+        return { "cap.js": content };
+      },
     },
-  });
+    /** The forker door: any wrangler service binding, referenced by name from a config seed. */
+    bindings: {
+      get: (name: string) => {
+        if (name !== "FALLBACK") throw new Error(`bindings.get: no binding "${name}"`);
+        return env.FALLBACK;
+      },
+    },
+  };
+  if (Object.hasOwn(scope, "itx")) throw new Error("host scope must never register 'itx'");
+  return scope;
 }
 
 /** The facet address as the resolver sees it: `facets.get(slug).anyMethod(...)` rides ONE

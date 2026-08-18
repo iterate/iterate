@@ -77,10 +77,11 @@ type MountRow = State["mounts"][number];
 
 export class IterateContextStreamProcessor extends StreamProcessor<State> {
   readonly contract = IterateContextContract;
-  /** Config seeds (bottom of every stack). Targets here — and ONLY here — may reference `roots`. */
+  /** Config seeds (bottom of every stack). ONLY their targets see the host-scope roots. */
   readonly #seeds: { pattern: Expression; target: Expression }[];
-  /** The privileged physical-layer root, in scope only for seed targets. */
-  readonly #roots: unknown;
+  /** The host scope: a plain record whose keys (kv, stream, contexts, bindings, …) are the
+   *  expression roots that exist only for config-provenance targets. Never contains `itx`. */
+  readonly #hostScope: Record<string, unknown>;
 
   constructor(args: {
     stream: ConstructorParameters<typeof StreamProcessor>[0]["stream"];
@@ -88,11 +89,11 @@ export class IterateContextStreamProcessor extends StreamProcessor<State> {
     path: string;
     projectId: string;
     seeds: { pattern: Expression; target: Expression }[];
-    roots: unknown;
+    hostScope: Record<string, unknown>;
   }) {
     super(args);
     this.#seeds = args.seeds;
-    this.#roots = args.roots;
+    this.#hostScope = args.hostScope;
   }
 
   // The routing table is pure fold — no side effects, so no processEvent needed.
@@ -115,8 +116,10 @@ export class IterateContextStreamProcessor extends StreamProcessor<State> {
   }): Promise<{ providedAtOffset: number }> {
     const pattern = toExpression(input.pattern);
     const target = toExpression(input.target);
-    if (target[0] === "roots")
-      throw new Error(`a provided capability may not reference "roots" (config seeds only)`);
+    if (target[0] !== "itx")
+      throw new Error(
+        `a provided capability's target must be rooted at "itx" (host-scope roots are config-seed-only)`,
+      );
     assertMustUse(pattern, target);
     const [event] = await this.stream.append(
       this.contract.buildEvent({
@@ -164,9 +167,13 @@ export class IterateContextStreamProcessor extends StreamProcessor<State> {
       args: m.boundaryArgs ?? [],
       captures: m.captures,
     });
-    // THE PROVENANCE GATE: `roots` exists in scope only for config seeds. Not policed — absent.
-    const base = { itx: this.#itxAtDepth(depth + 1) };
-    const scope = provenance === "config" ? { ...base, roots: this.#roots } : base;
+    // THE PROVENANCE GATE is a scope-KEY-SET decision: seed targets see the host-scope roots,
+    // event targets see only `itx`. Not policed — the keys are simply absent. `itx` spreads
+    // LAST so no host-scope key can ever shadow the resolver's recursion symbol.
+    const scope =
+      provenance === "config"
+        ? { ...this.#hostScope, itx: this.#itxAtDepth(depth + 1) }
+        : { itx: this.#itxAtDepth(depth + 1) };
     // Holes in the target SPENT the boundary args; a hole-free target receives them as a call.
     const boundaryArgs = spentArgs ? undefined : m.boundaryArgs;
     return await apply(scope, target, { remainder: m.remainder, boundaryArgs }, extraArgs);

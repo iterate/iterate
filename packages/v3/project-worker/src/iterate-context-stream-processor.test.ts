@@ -82,18 +82,18 @@ const throwOffline = (key: string): never => {
 const setup = (seeds: [string, string][] = []) => {
   const { stream, events } = memoryStream();
   const storage = memoryStorage();
-  const roots = fakeRoots();
+  const hostScope = fakeRoots();
   const host = new IterateContextStreamProcessor({
     stream,
     storage,
     path: "/",
     projectId: "prj_t",
-    roots,
+    hostScope: hostScope as unknown as Record<string, unknown>,
     seeds: [
       ...[
-        ["itx.whoami", "roots.whoami"],
-        ["itx.kv", "roots.kv"],
-        ["itx.clients", "roots.clients"],
+        ["itx.whoami", "whoami"],
+        ["itx.kv", "kv"],
+        ["itx.clients", "clients"],
       ],
       ...seeds,
     ].map(([pattern, target]) => ({ pattern: parse(pattern), target: parse(target) })),
@@ -103,7 +103,7 @@ const setup = (seeds: [string, string][] = []) => {
     return host.resolve((await host.snapshot()).state, call, undefined, depth);
   };
   const invoke = (call: string) => host.resolveCurrent(parse(call));
-  return { stream, events, host, roots, invoke };
+  return { stream, events, host, roots: hostScope, invoke };
 };
 
 describe("seeds (config provenance)", () => {
@@ -124,7 +124,7 @@ describe("seeds (config provenance)", () => {
   test("a provided capability may NOT reference roots (provenance gate at provide time)", async () => {
     const { host } = setup();
     await expect(host.provide({ pattern: "itx.evil", target: "roots.kv" })).rejects.toThrow(
-      /config seeds only/,
+      /must be rooted at "itx"/,
     );
   });
 
@@ -186,7 +186,7 @@ describe("event mounts + the shadow stack", () => {
   });
 
   test("frozen args + spread-merge: frozen wins", async () => {
-    const { host, invoke, roots } = setup([["itx.openai", "roots.openai"]]);
+    const { host, invoke, roots } = setup([["itx.openai", "openai"]]);
     await host.provide({
       pattern: "itx.grok",
       target: "itx.openai.chat({ model: 'grok-4', ...? })",
