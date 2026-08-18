@@ -82,13 +82,11 @@ export interface PttMarginalOptions extends VoicelabConnectOptions {
   /**
    * Also measure the bare append round trip, before each press.
    *
-   * OFF BY DEFAULT BECAUSE IT IS NOT FREE. The only event v2 consumes that
-   * starts nothing is `warmup`, and `warmup` is DURABLE — so each probe is a
-   * one-at-a-time delivery to the facet, which answers with a durable
-   * `warmup-ready`, which is another. Six of those land immediately before the
-   * button goes down, in front of the microphone frames, on the lane whose
-   * stalling is the thing under investigation. A probe that can produce the
-   * effect it is measuring has to be something you turn on deliberately.
+   * OFF BY DEFAULT out of habit rather than cost: the probe appends an event
+   * v2 does not consume (its warmup handshake is deleted — setup proves the
+   * facet through the platform's own fold barrier now), so nothing is
+   * delivered and nothing answers. What is measured is exactly the Stream
+   * DO's commit round trip, six times, right before the button goes down.
    */
   appendProbe?: boolean;
 }
@@ -688,11 +686,14 @@ export async function pttMarginal(options: PttMarginalOptions) {
    * DURATIONS, so subtracting them leaves everything that is ours with the
    * skew cancelled out.
    *
-   * IT PROBES WITH `warmup`, WHICH IS THE ONLY EVENT THAT STARTS NOTHING. It
-   * used to append an empty `mic-frame`, and on v2 that is not a null probe at
-   * all: a microphone frame is what OPENS A CALL, so three of them between
-   * rounds would dial the provider from a probe measuring the cost of not
-   * dialling it.
+   * IT PROBES WITH AN EVENT NOBODY CONSUMES, because a null probe must start
+   * nothing. It used to append an empty `mic-frame`, and on v2 that is not a
+   * null probe at all: a microphone frame is what OPENS A CALL, so three of
+   * them between rounds would dial the provider from a probe measuring the
+   * cost of not dialling it. It then probed with `warmup` — the one consumed
+   * event that started nothing — until v2's warmup handshake was deleted
+   * outright; an unconsumed voicelab event is now the honest null: committed
+   * by the Stream DO, delivered to nobody.
    */
   async function probeAppendRtt(): Promise<number | null> {
     if (options.appendProbe !== true) return null;
@@ -701,8 +702,8 @@ export async function pttMarginal(options: PttMarginalOptions) {
       const atDeviceMs = Date.now();
       await discardRpcResult(
         stream.append({
-          type: "events.iterate.com/voice-agent/warmup",
-          payload: { token: `append-rtt-${atDeviceMs}-${probe}` },
+          type: "events.iterate.com/voicelab/append-probe",
+          payload: { atDeviceMs, probe },
         }),
       );
       trips.push(Date.now() - atDeviceMs);

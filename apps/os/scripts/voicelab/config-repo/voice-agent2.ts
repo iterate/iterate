@@ -514,15 +514,6 @@ export const VoiceAgent2Contract = defineProcessorContract({
         tools: z.array(VoiceTool).optional(),
       }),
     },
-    "events.iterate.com/voice-agent/warmup": {
-      description: "A readiness probe for this stream's processor. Starts nothing.",
-      payloadSchema: z.looseObject({ token: z.string() }),
-    },
-    "events.iterate.com/voice-agent/warmup-ready": {
-      description: "This facet is built, running, and knows its brief; echoes the token.",
-      payloadSchema: z.looseObject({ token: z.string() }),
-    },
-
     /*
      * THE DEVICE'S HALF, and it is three verbs: the button went down, here is
      * audio, the button came up. Whether a call exists, what it is called and
@@ -703,7 +694,6 @@ export const VoiceAgent2Contract = defineProcessorContract({
   },
   consumes: [
     "events.iterate.com/voice-agent/created",
-    "events.iterate.com/voice-agent/warmup",
     "events.iterate.com/voice-agent/call-started",
     "events.iterate.com/voice-agent/conversation-end-requested",
     "events.iterate.com/voice-agent/conversation-ended",
@@ -714,7 +704,6 @@ export const VoiceAgent2Contract = defineProcessorContract({
     "events.iterate.com/voice-agent/ptt-end",
   ],
   emits: [
-    "events.iterate.com/voice-agent/warmup-ready",
     "events.iterate.com/voice-agent/call-started",
     "events.iterate.com/voice-agent/conversation-accepted",
     "events.iterate.com/voice-agent/conversation-end-requested",
@@ -1237,43 +1226,6 @@ export class VoiceAgent2Processor extends StreamProcessor<
     if (event === null) return;
 
     switch (event.type) {
-      case "events.iterate.com/voice-agent/warmup": {
-        /*
-         * BEING HERE IS THE PROOF. A delivered warm-up means this class is
-         * loaded and running in the stream's own Durable Object — and because
-         * delivery is ordered, everything setup appended before the token
-         * (the birth certificate included) has already been folded. There
-         * used to be a separate brief-current event gating this; ordering
-         * was always the guarantee, and the event said nothing it added.
-         */
-        const warmupToken = event.payload.token;
-        /*
-         * AND WHERE THIS PROCESS PHYSICALLY RUNS, because nothing else can
-         * say. This facet lives inside the stream's Durable Object, so a
-         * subrequest from here terminates at the DO's own colo — the trace's
-         * `colo=` line is the placement answer that no runtime-state surface
-         * carries. Best-effort with a hard timeout: a readiness probe that
-         * can be delayed by a diagnostics fetch has its priorities backwards.
-         */
-        runInBackground(async () => {
-          let colo = "unknown";
-          try {
-            const trace = await fetch("https://www.cloudflare.com/cdn-cgi/trace", {
-              signal: AbortSignal.timeout(1_500),
-            });
-            colo = /colo=([A-Z]{3})/.exec(await trace.text())?.[1] ?? "unparsed";
-          } catch (error) {
-            colo = `fetch-failed:${String(error).slice(0, 60)}`;
-          }
-          await append({
-            type: "events.iterate.com/voice-agent/warmup-ready",
-            idempotencyKey: this.idempotencyKey(`warmup:${warmupToken}`),
-            payload: { token: warmupToken, colo },
-          });
-        });
-        return;
-      }
-
       case "events.iterate.com/voice-agent/ptt-start":
       case "events.iterate.com/voice-agent/mic-frame":
       case "events.iterate.com/voice-agent/ptt-end": {
@@ -2737,8 +2689,8 @@ export async function dialProviderSocket(
  * agent brief, and proves the running processor folded THAT brief and not an
  * older one. This one has no tools, so it has no capabilities to describe, so
  * the prompt is just a string the caller passes — and the whole apparatus
- * collapses into: append the birth certificate, install the subscription, say
- * which instructions are current, and knock to see if anyone is home.
+ * collapses into: append the birth certificate, install the subscription, and
+ * hold the platform's fold-through barrier until the facet has folded both.
  *
  * It lives beside the facet rather than importing the first cut's because the
  * two tracks must be able to move independently. Sharing the setup would make
@@ -2790,7 +2742,7 @@ function voiceAgent2FacetRef(streamPath: string) {
   } satisfies StatefulDynamicWorkerRef;
 }
 
-/** How long to wait for the facet to answer the knock. A cold build is most of it. */
+/** How long setup's fold-through barrier waits. A cold facet build is most of it. */
 const WARMUP_DEADLINE_MS = 90_000;
 
 /** What setup needs to know to put this agent on a stream. */
@@ -2830,7 +2782,7 @@ export interface SetupVoiceAgent2Options {
 /** What setup did, in enough detail for a caller to print it. */
 export interface SetupVoiceAgent2Result {
   streamPath: string;
-  /** Facet clock: append the token, get the echo back. Cold build included. */
+  /** Setup's own clock: batch appended to fold-through proven. Cold build included. */
   warmMs: number;
 }
 
@@ -2938,7 +2890,7 @@ export default class VoiceAgent2Entrypoint extends IterateWorkerEntrypoint {
         },
       };
       const subscriptionKeyPrefix = `voice-agent2/subscription:${streamPath}`;
-      const events = await stream.append(
+      const committed = await stream.append(
         {
           type: "events.iterate.com/voice-agent/created",
           idempotencyKey: `voice-agent2/created:${streamPath}:${contentHash(birthPayload)}:setup:${setupId}`,
@@ -2952,42 +2904,45 @@ export default class VoiceAgent2Entrypoint extends IterateWorkerEntrypoint {
           payload: subscriptionPayload,
         },
       );
-      disposeRpcStub(events, "setup stream append result");
+      /* The batch's HIGHEST offset is the barrier target: an idempotent
+       * re-append returns the ORIGINAL committed events, so a re-run of setup
+       * waits on offsets long since folded and returns at once. */
+      let setupBatchMaxOffset = 0;
+      try {
+        for (const event of committed) {
+          setupBatchMaxOffset = Math.max(setupBatchMaxOffset, event.offset);
+        }
+      } finally {
+        disposeRpcStub(committed, "setup stream append result");
+      }
 
       /*
-       * THE KNOCK, AND THE WAIT STARTS BEHIND IT.
+       * THE PLATFORM'S OWN BARRIER, where a token knock used to be.
        *
-       * `waitForEvent` with no `afterOffset` watches from the head it finds when
-       * it opens, which is after this append has returned — and by then a warm
-       * facet has already answered. That cost most of a day on the first cut:
-       * `warmup` and `warmup-ready` 196ms apart, both on the stream, while setup
-       * sat out its full 90-second deadline reporting that nobody was home.
-       * Anchoring one offset behind the token's own commit makes the answer
-       * impossible to miss and costs nothing when the facet really is cold.
-       */
-      const token = crypto.randomUUID();
-      const warmStartedAt = Date.now();
-      const warmupAppend = await stream.append({
-        type: "events.iterate.com/voice-agent/warmup",
-        payload: { token },
-      });
-      let waitAfterOffset = 0;
-      try {
-        const committed = warmupAppend.at(0);
-        waitAfterOffset = committed === undefined ? 0 : committed.offset - 1;
-      } finally {
-        disposeRpcStub(warmupAppend, "warm-up append result");
-      }
-      const answer = await stream.waitForEvent({
-        afterOffset: waitAfterOffset,
-        eventTypes: ["events.iterate.com/voice-agent/warmup-ready"],
-        predicate: (event) => (event.payload as { token?: string } | null)?.token === token,
-        timeoutMs: WARMUP_DEADLINE_MS,
-      });
-      disposeRpcStub(answer, "warm-up wait result");
-      /* ENFORCED by the throw inside waitForEvent's timeout, not reported:
+       * `waitUntilProcessed` resolves once the facet subscription has durably
+       * folded through the batch above — forcing the same cold build the
+       * knock forced, and proving strictly more than the echo proved: not
+       * "someone answered" but "the fold has REACHED the birth certificate".
+       * The knock (a warmup event the facet echoed back, token and colo
+       * attached) dated from the pre-facet delivery lane, where an append
+       * proved nothing about the processor behind it; the facet
+       * subscription's barrier is precise even mid-connection, so the whole
+       * anchored-offset dance dies with the two warmup events.
+       *
+       * ENFORCED by the throw inside the barrier's timeout, not reported:
        * setup's contract is "ready to hold a conversation", and a caller that
-       * has to check a boolean will eventually forget to. */
+       * has to check a boolean will eventually forget to.
+       */
+      const warmStartedAt = Date.now();
+      const subscription = stream.subscriptions.get(VoiceAgent2Contract.slug);
+      try {
+        await subscription.waitUntilProcessed({
+          offset: setupBatchMaxOffset,
+          timeoutMs: WARMUP_DEADLINE_MS,
+        });
+      } finally {
+        disposeRpcStub(subscription, "setup subscription");
+      }
       return { streamPath, warmMs: Date.now() - warmStartedAt };
     } finally {
       disposeRpcStub(stream, "setup stream");

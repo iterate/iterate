@@ -342,24 +342,6 @@ afterEach(() => {
 /* THE HANDSHAKE                                                              */
 /* ========================================================================== */
 
-describe("warm-up", () => {
-  it("echoes the token", async () => {
-    /* Being delivered is the whole proof: ordering guarantees everything
-     * setup appended before the token — the birth certificate included —
-     * has already been folded. There used to be a brief-current event gating
-     * this; the ordering was always the guarantee, so the gate said nothing. */
-    const h = makeHarness();
-    await h.append({
-      type: "events.iterate.com/voice-agent/warmup",
-      payload: { token: "tok-1" },
-    });
-    await h.settle();
-    expect(
-      eventsOfType(h, "warmup-ready").map((event) => (event.payload as { token: string }).token),
-    ).toEqual(["tok-1"]);
-  });
-});
-
 describe("opening a call", () => {
   it("opens exactly one call however many frames arrive first", async () => {
     const h = makeHarness();
