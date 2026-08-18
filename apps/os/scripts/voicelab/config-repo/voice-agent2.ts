@@ -1832,14 +1832,24 @@ export class VoiceAgent2Processor extends StreamProcessor<
       });
 
       /*
-       * THE IDLE COUNTDOWN, in the same closure as the socket it will end.
+       * THE IDLE COUNTDOWN, in the same closure as the socket it will end —
+       * a SELF-RESCHEDULING TICK CHAIN, not a loop. One background closure
+       * that settles only when the call ends is indistinguishable from a
+       * wedge to the facet keepalive's busy-refire detector: after ~15 quiet
+       * minutes of a perfectly healthy call it would cross the detector's
+       * threshold, spend spurious revival passes against a live incarnation,
+       * and decay the alarm cadence toward its plateau — so a REAL eviction
+       * during a long call would get its revival hours late. Each tick is
+       * its own settling closure instead: one check, then hand the chain to
+       * a fresh closure, so the keepalive sees progress every five seconds.
+       * The chain dies naturally when the dial-identity fence fails.
        *
        * It compares two stamps from DIFFERENT clocks — the facet's now and
        * the stream's commit — which is only sound because both are wall-clock
        * milliseconds from Cloudflare's own clock and the deadline is a
        * minute. Anything tighter than that would need a single clock.
        */
-      for (;;) {
+      const idleTick = async (): Promise<void> => {
         await this.deps.sleep(IDLE_TICK_MS);
         if (this.#dial !== dial) return;
         const nowAtFacetMs = this.deps.nowAtFacetMs();
@@ -1873,12 +1883,18 @@ export class VoiceAgent2Processor extends StreamProcessor<
           this.#lastDeviceInputAtStreamMsMirror,
           dial.deviceBufferEmptyAtFacetMs,
         );
-        if (nowAtFacetMs - lastActivityAtFacetMs < IDLE_TIMEOUT_MS) continue;
+        if (nowAtFacetMs - lastActivityAtFacetMs < IDLE_TIMEOUT_MS) {
+          this.runInBackground(idleTick);
+          return;
+        }
         /* Still holding audio it has not handed over yet: not idle by any
          * reading, whatever the clocks say. A queue held for a tentative
          * onset does not count — an onset nobody ever settles (a board that
          * died mid-blip) would otherwise wedge the deadline open for ever. */
-        if (dial.speakerQueue.length > 0 && dial.tentativeOnset === null) continue;
+        if (dial.speakerQueue.length > 0 && dial.tentativeOnset === null) {
+          this.runInBackground(idleTick);
+          return;
+        }
         await append({
           type: "events.iterate.com/voice-agent/conversation-end-requested",
           idempotencyKey: this.idempotencyKey(`idle:${conversationId}`),
@@ -1887,8 +1903,8 @@ export class VoiceAgent2Processor extends StreamProcessor<
             reason: `no input from the device for ${IDLE_TIMEOUT_MS / 1000}s`,
           },
         });
-        return;
-      }
+      };
+      this.runInBackground(idleTick);
     });
   }
 
