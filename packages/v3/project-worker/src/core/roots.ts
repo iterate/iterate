@@ -39,9 +39,10 @@ export type ClientsView = {
   get(key: string): unknown;
   /** Fan-out over every connection at a client path (allSettled; dead connections drop out). */
   at(path: string): { call(method: string[], args: unknown[]): Promise<unknown[]> };
-  list(): unknown[];
-  connections(path: string): unknown[];
-  close(key: string): { ok: true };
+  /** Promise-valued when the view is RPC-backed (the facet host) — evaluation awaits every step. */
+  list(): unknown[] | Promise<unknown[]>;
+  connections(path: string): unknown[] | Promise<unknown[]>;
+  close(key: string): { ok: true } | Promise<{ ok: true }>;
 };
 
 export type WorkersView = {

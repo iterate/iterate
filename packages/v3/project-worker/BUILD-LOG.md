@@ -652,3 +652,32 @@ the control plane runs the same core; billing-analytics verification of hibernat
 - Proven live (prove_userfacet.mjs): fresh ctx → enable user-tally (by source expression) + the
   built-in tally → 2 provides + 1 revoke → BOTH facets fold identically (provided:2, revoked:1,
   own cursor at offset 3); `/state` lists both. Deploy `userfacet-1`.
+
+## Increment 28 (ictx-facet-1): the iterate context IS a facet — the parent is log+sockets+doors
+
+- `IterateContextStreamProcessor` moved INTO the built-in `ProcessorFacet`
+  (FACET_PROCESSORS["iterate-context"]). The Stream DO now delegates
+  `invoke`/`invokeCapability`/`provideCapability`/`revokeCapability` and the whole `x-itx-cap`
+  fetch branch to the facet (`#ictx()`: lazily enabled on first use, configured ONCE via a
+  durable marker, added to the driven set so every commit drives it like any other facet). The
+  in-DO `#registry`/`#capHost`/`#capReads`/`#roots`/`#clientsView`/`#workersView` wiring is
+  DELETED — append no longer awaits any delivery (all processors are facets, all fire-and-forget;
+  reads catch up from the log first, which keeps read-after-write).
+- SOCKETS STAY PARENT-SIDE, forever: a public stub FACADE (`stubInvoke`/`stubFanOut`/`stubList`/
+  `stubConnections`/`stubClose`) wraps the HibernatableStubs registry, and the facet's
+  `itx.clients` view is thin RPC wrappers over exactly those five (parent resolved BY NAME per
+  call — `roots-builder.ts` facetClientsView).
+- ONE `buildRoots(deps)` (`roots-builder.ts`) assembles Roots for either host: kv/secrets/loader/
+  fallback from the (inherited) worker env, the workers view (moved out of the DO verbatim),
+  HELLO_FILES (own module `hello-files.ts`) — what varies (`invoke`, `context`, `clients`) is
+  injected. The facet builds context stubs BY NAME (its own path resolves to the parent — the
+  parent IS the stream) and wires `resolveCurrent` to a LOCAL loop (catchUp → snapshot →
+  resolve; the recursion never hops back through the parent).
+- The fetch lane is NATIVE facet fetch: the parent forwards `x-itx-cap` requests with
+  `facet.fetch(request)` and the 101 tunnels (the stateful runner proved the pattern; now the
+  main WS proof rides it: parent DO → iterate-context facet → loader worker).
+- NO platform wall: all three live proofs pass IDENTICALLY on `ictx-facet-1`, first run — full
+  crisp (16/16 incl. WS 101 via /cap, stateful deep dotted + env.ITX callback, live-cap
+  park+alias, shadow stack, don't-pin dormant), facet spine cold catch-up, userspace + built-in
+  tally side by side. 70 unit tests untouched (the processor is host-agnostic — that was the
+  point). `/state` drops the in-DO `processors` list (facetProcessors + stubs remain).

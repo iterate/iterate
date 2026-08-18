@@ -1,40 +1,42 @@
 // stream-durable-object.ts — THE STREAM: one DO per `{projectId, path}` (codec-named
-// `{projectId}.iterate{path}`). The stream is the parent; the ITERATE CONTEXT is a PROCESSOR
-// on it (iterate-context-stream-processor.ts — the routing table), one among many:
+// `{projectId}.iterate{path}`). The stream is the parent — LOG + SOCKETS + DOORS only; the
+// ITERATE CONTEXT (the routing table, iterate-context-stream-processor.ts) is a facet-hosted
+// PROCESSOR on it (processor-facet.ts), one among many:
 //
 //   • the EVENT LOG — SQLite append/read, monotonic offsets, idempotency at the commit point;
-//   • the PROCESSORS — a registry driven after every commit; the capability-host processor
-//     (whose reduced state is the routing table) is the built-in first member;
+//   • the PROCESSORS — every enabled one a workerd FACET driven after each commit (built-ins by
+//     slug, userspace classes via the Worker Loader); the capability host (whose reduced state
+//     is the routing table) is the built-in first member, lazily enabled on first use;
 //   • the TRANSPORT — every hibernatable socket: relays park client/capability stubs behind
 //     Pagers (core/hibernatable-stub.ts) so ANY number of connected providers leave this DO
-//     free to hibernate; a live leg is borrowed per call burst only;
+//     free to hibernate; a live leg is borrowed per call burst only. The stub FACADE
+//     (stubInvoke/stubFanOut/stubList/stubConnections/stubClose) is how the facet-hosted
+//     capability host reaches the sockets — they can never move off the parent;
 //   • the FETCH DOOR — the one place a 101 can enter: `x-itx-pager` accepts a Pager,
-//     `x-itx-cap` rides the fetch lane into a resolved capability, anything else is EGRESS
-//     (secret placeholder substitution → the FALLBACK terminal).
+//     `x-itx-cap` forwards NATIVELY to the capability-host facet's fetch, anything else is
+//     EGRESS (secret placeholder substitution → the FALLBACK terminal).
 //
 // PURE WORKERS-RPC: capnweb never terminates here (hard rule) — the stateless `/api` worker
-// relays. Dispatch is ONE path: parse → route the table → substitute → evaluate → replay.
-// The dotted `invokeCapability(callPath, args)` door remains as the degenerate string half of
-// the codec (loaded workers + the stateful runner speak it).
+// relays. Dispatch is ONE path: parse → route the table → substitute → evaluate → replay — all
+// of it inside the iterate-context facet; this class only delegates. The dotted
+// `invokeCapability(callPath, args)` door remains as the degenerate string half of the codec
+// (loaded workers + the stateful runner speak it).
 
 import { DurableObject } from "cloudflare:workers";
 import { substituteHeaderSecrets } from "@v3/shared/egress";
-import { IterateContextStreamProcessor } from "./iterate-context-stream-processor.ts";
-import { CODE_CAP_RUNNER, ITX_SURFACE_MODULE } from "./core/agent-runtime.ts";
-import { parseAppConfig } from "./core/config.ts";
+import { ITX_SURFACE_MODULE } from "./core/agent-runtime.ts";
 import {
   idempotencyConflictMessage,
   sameIdempotentEvent,
   type StreamEvent,
   type StreamEventInput,
 } from "./core/events.ts";
-import { parse, toExpression, type Expression } from "./core/expression.ts";
+import { toExpression, type Expression } from "./core/expression.ts";
 import { hashSource } from "./core/hash.ts";
 import { PAGER_HEADER } from "./core/hibernatable-pager.ts";
 import { HibernatableStubs, type Invoker, type Stub } from "./core/hibernatable-stub.ts";
-import { parseName, stringifyName } from "./core/names.ts";
-import { createStreamProcessorRegistry } from "./core/processor.ts";
-import { Roots, type ClientsView, type WorkersView } from "./core/roots.ts";
+import { parseName } from "./core/names.ts";
+import type { FacetIdentity, ProcessorFacet } from "./processor-facet.ts";
 import type { StatefulWorkerDurableObject } from "./stateful-worker-durable-object.ts";
 
 interface Env {
@@ -51,57 +53,6 @@ interface Env {
   FALLBACK: Fetcher & { invokeCapability(callPath: string, args?: unknown[]): Promise<unknown> };
 }
 
-// The v1 "file reader" behind `itx.files.read` — provides hello modules (no repo/bundler yet).
-// A real repo-read-at-a-ref later slots in behind the SAME capability + source expressions.
-const HELLO_FILES: Record<string, string> = {
-  "/hello.js": `export default (itx, name) => "hello " + (name ?? "world");`,
-  "/counter.js": `import { DurableObject } from "cloudflare:workers";
-export class Counter extends DurableObject {
-  async increment(by) { const n = ((await this.ctx.storage.get("n")) ?? 0) + by; await this.ctx.storage.put("n", n); return n; }
-  async value() { return (await this.ctx.storage.get("n")) ?? 0; }
-  async whoAmI() { return await this.env.ITX.invokeCapability("itx.whoami", []); }
-  // A NESTED surface — proves the runner's deep dotted dispatch.
-  get counters() {
-    const self = this;
-    return { async add(by) { return self.increment(by); } };
-  }
-}`,
-  // A USERSPACE facet processor (duck-typed contract: configure/deliver/snapshot) — hosted as a
-  // workerd facet on the Stream DO via enableProcessor(slug, { source, className }). It keeps its
-  // own cursor + counts in its OWN facet storage; snapshot catches up from the stream via env.ITX
-  // (the parent stub) so reads are never stale even though drives are fire-and-forget.
-  "/user-tally.js": `import { DurableObject } from "cloudflare:workers";
-export class UserTally extends DurableObject {
-  configure() {} // identity unused — env.ITX already IS this stream
-  #fold(events) {
-    let offset = this.ctx.storage.kv.get("offset") ?? 0;
-    const counts = this.ctx.storage.kv.get("counts") ?? {};
-    for (const e of events)
-      if (e.offset > offset) { counts[e.type] = (counts[e.type] ?? 0) + 1; offset = e.offset; }
-    this.ctx.storage.kv.put("counts", counts);
-    this.ctx.storage.kv.put("offset", offset);
-    return { offset, state: { counts } };
-  }
-  deliver(events) { this.#fold(events); }
-  async snapshot() {
-    return this.#fold(await this.env.ITX.read(this.ctx.storage.kv.get("offset") ?? 0));
-  }
-}`,
-  // A fetch-serving stateless worker: an HTTP page AND a WebSocket upgrade (101) — the stand-in
-  // for "a device presents a website with WebSocket functionality", reached on the fetch lane.
-  "/site.js": `export default {
-  async fetch(request) {
-    if ((request.headers.get("Upgrade") || "").toLowerCase() === "websocket") {
-      const pair = new WebSocketPair();
-      pair[1].accept();
-      pair[1].addEventListener("message", (e) => pair[1].send("site-echo:" + e.data));
-      return new Response(null, { status: 101, webSocket: pair[0] });
-    }
-    return new Response("<!doctype html><title>dynamic site</title><h1>hello from a dynamic web capability</h1>", { headers: { "content-type": "text/html" } });
-  }
-};`,
-};
-
 /** One enabled facet-hosted processor: a built-in slug, or — with `ref` — USERSPACE code (a
  *  source expression resolved to modules + the exported DurableObject class name). */
 type FacetProcessorEntry = {
@@ -112,10 +63,13 @@ type FacetProcessorEntry = {
 /** The duck-typed contract BOTH facet kinds satisfy (the built-in ProcessorFacet and any
  *  loader-loaded userspace class): identity in, commit drives in, fold out. */
 type FacetProcessorHandle = {
-  configure(identity: import("./processor-facet.ts").FacetIdentity): Promise<unknown> | unknown;
+  configure(identity: FacetIdentity): Promise<unknown> | unknown;
   deliver(events: StreamEvent[], streamMaxOffset: number): Promise<unknown> | unknown;
   snapshot(): Promise<{ offset: number; state: unknown }>;
 };
+
+/** The capability host's slug — the one facet processor this class itself depends on. */
+const ICTX_SLUG = "iterate-context";
 
 export class StreamDurableObject extends DurableObject<Env> {
   // ── transport: the parked-stub registry over this DO's hibernatable sockets ──
@@ -124,31 +78,6 @@ export class StreamDurableObject extends DurableObject<Env> {
     getWebSockets: (tag) => this.ctx.getWebSockets(tag),
   });
   incarnation = 0; // durable, bumped per (re)construction — growth across idle ⇒ it hibernated
-  // Declared BEFORE #registry/#capHost: their field initializers call #roots(), and private
-  // fields are installed on `this` in declaration order — reading one that isn't yet declared
-  // throws (found live: "Cannot read private member #rootsInstance").
-  #rootsInstance?: Roots;
-
-  // ── the processors: registry + the built-in capability host ──
-  #registry = createStreamProcessorRegistry({
-    storage: {
-      get: <T>(k: string) => this.ctx.storage.kv.get(k) as T | undefined,
-      put: (k: string, v: unknown) => this.ctx.storage.kv.put(k, v),
-    },
-    stream: { append: (...e) => this.append(...e), read: (a, l) => this.read(a, l) },
-    path: this.#name.path,
-    projectId: this.#name.projectId,
-  });
-  #capHost = this.#registry.register(
-    new IterateContextStreamProcessor({
-      stream: { append: (...e) => this.append(...e), read: (a, l) => this.read(a, l) },
-      path: this.#name.path,
-      projectId: this.#name.projectId,
-      seeds: parseAppConfig(this.env.APP_CONFIG).seeds,
-      roots: this.#roots(),
-    }),
-  );
-  #capReads = this.#registry.reads(this.#capHost);
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -159,8 +88,6 @@ export class StreamDurableObject extends DurableObject<Env> {
          idempotency_key TEXT UNIQUE
        )`,
     );
-    // wire the resolver recursion: `itx.…` inside any mount target re-enters dispatch
-    this.#capHost.resolveCurrent = (call, depth) => this.invoke(call, depth);
     ctx.blockConcurrencyWhile(async () => {
       this.incarnation = ((await ctx.storage.get<number>("incarnation")) ?? 0) + 1;
       await ctx.storage.put("incarnation", this.incarnation);
@@ -174,8 +101,8 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   // ── the event log (the commit point) ──
 
-  /** Commit events: idempotency-checked, offset-assigned, then processors driven to head.
-   *  Awaiting delivery keeps read-after-write: a provide followed by an invoke sees the mount. */
+  /** Commit events: idempotency-checked, offset-assigned, then every enabled facet processor
+   *  driven. Reads stay read-after-write because every read path catches up from the log. */
   async append(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
     const committed: StreamEvent[] = [];
     for (const input of inputs) {
@@ -207,18 +134,33 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
     if (committed.length) {
       const head = committed[committed.length - 1].offset;
-      await this.#registry.deliver(committed, head);
-      // THE FACET SPINE: drive every enabled facet-hosted processor too (each an isolated
-      // workerd facet with its own storage — see processor-facet.ts). Fire-and-forget ON
-      // PURPOSE: an awaited drive would deadlock if a facet processor APPENDS during its
-      // batch (append → this method → await the same facet's busy chain). Reads stay correct
-      // because facetSnapshot() always catches up from the log first.
+      // THE FACET SPINE: drive every enabled facet-hosted processor (each an isolated workerd
+      // facet with its own storage — including the iterate-context capability host itself).
+      // Fire-and-forget ON PURPOSE: an awaited drive would deadlock if a facet processor
+      // APPENDS during its batch (append → this method → await the same facet's busy chain) —
+      // and the capability host DOES append (provide/revoke). Reads stay correct because every
+      // snapshot/invoke catches up from the log first.
       for (const { slug } of this.#facetEntries())
         void this.#facet(slug)
           .then((f) => f.deliver(committed, head))
           .catch((e) => console.error(`facet "${slug}" deliver failed`, e));
     }
     return committed;
+  }
+
+  read(afterOffset = 0, limit = 500): StreamEvent[] {
+    return this.ctx.storage.sql
+      .exec(
+        "SELECT offset, body FROM events WHERE offset > ? ORDER BY offset LIMIT ?",
+        afterOffset,
+        limit,
+      )
+      .toArray()
+      .map((r) => ({
+        ...(JSON.parse(String(r.body)) as StreamEventInput & { createdAt: string }),
+        offset: Number(r.offset),
+        path: this.#name.path,
+      }));
   }
 
   // ── facet-hosted processors (built-ins via processor-facet.ts; userspace via the LOADER) ──
@@ -281,14 +223,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       : { slug };
     const others = this.#facetEntries().filter((e) => e.slug !== slug);
     this.ctx.storage.kv.put("facet-processors", [...others, entry]);
-    await (
-      await this.#facet(slug)
-    ).configure({
-      parentName: this.ctx.id.name ?? "?",
-      projectId: this.#name.projectId,
-      path: this.#name.path,
-      slug,
-    });
+    await (await this.#facet(slug)).configure(this.#identityFor(slug));
     return { ok: true };
   }
 
@@ -299,27 +234,34 @@ export class StreamDurableObject extends DurableObject<Env> {
     return (await this.#facet(slug)).snapshot();
   }
 
-  read(afterOffset = 0, limit = 500): StreamEvent[] {
-    return this.ctx.storage.sql
-      .exec(
-        "SELECT offset, body FROM events WHERE offset > ? ORDER BY offset LIMIT ?",
-        afterOffset,
-        limit,
-      )
-      .toArray()
-      .map((r) => ({
-        ...(JSON.parse(String(r.body)) as StreamEventInput & { createdAt: string }),
-        offset: Number(r.offset),
-        path: this.#name.path,
-      }));
+  #identityFor(slug: string): FacetIdentity {
+    return {
+      parentName: this.ctx.id.name ?? "?",
+      projectId: this.#name.projectId,
+      path: this.#name.path,
+      slug,
+    };
   }
 
-  // ── dispatch (ONE path: the routing table) ──
+  /** THE capability host — the iterate-context facet, lazily enabled + configured ONCE on first
+   *  use (durable marker), and added to the driven set so every commit drives it too. */
+  async #ictx(): Promise<ProcessorFacet> {
+    const facet = (await this.#facet(ICTX_SLUG)) as unknown as ProcessorFacet;
+    if (!this.ctx.storage.kv.get("ictx:enabled")) {
+      await facet.configure(this.#identityFor(ICTX_SLUG));
+      const entries = this.#facetEntries();
+      if (!entries.some((e) => e.slug === ICTX_SLUG))
+        this.ctx.storage.kv.put("facet-processors", [...entries, { slug: ICTX_SLUG }]);
+      this.ctx.storage.kv.put("ictx:enabled", true);
+    }
+    return facet;
+  }
+
+  // ── dispatch (ONE path: the routing table — hosted in the iterate-context facet) ──
 
   /** Resolve + run one call (either codec half) against the current table. */
   async invoke(call: string | Expression, depth = 0): Promise<unknown> {
-    const state = (await this.#capReads.snapshot()).state; // snapshot itself catches up first
-    return this.#capHost.resolve(state, toExpression(call), undefined, depth);
+    return (await this.#ictx()).invoke(toExpression(call), depth);
   }
 
   /** The dotted door — the degenerate string half. Loaded workers' `itx.js` + the runner speak
@@ -335,11 +277,11 @@ export class StreamDurableObject extends DurableObject<Env> {
     pattern: string | Expression;
     target: string | Expression;
   }): Promise<{ providedAtOffset: number }> {
-    return this.#capHost.provide(input);
+    return (await this.#ictx()).provide(input);
   }
 
   async revokeCapability(input: { providedAtOffset: number }): Promise<void> {
-    return this.#capHost.revoke(input);
+    return (await this.#ictx()).revoke(input);
   }
 
   // ── native fetch: the pager door, the fetch lane, observability, egress ──
@@ -350,29 +292,14 @@ export class StreamDurableObject extends DurableObject<Env> {
     // A relay opens its hibernatable Pager (the DO→relay back-channel; no pin).
     if (request.headers.get(PAGER_HEADER)) return this.#stubs.accept(request);
 
-    // THE FETCH LANE: `x-itx-cap` carries an expression (either half); terminal-`fetch` rule.
-    const capHeader = request.headers.get("x-itx-cap");
-    if (capHeader) {
-      try {
-        const expr = capHeader.trimStart().startsWith("[")
-          ? (JSON.parse(capHeader) as Expression)
-          : parse(capHeader.startsWith("itx") ? capHeader : `itx.${capHeader}`);
-        const state = (await this.#capReads.snapshot()).state; // snapshot catches up first
-        const result = await this.#capHost.resolveFetch(state, expr, request);
-        if (result instanceof Response) return result;
-        return new Response(`fetch lane: ${JSON.stringify(result)}\n`);
-      } catch (error) {
-        const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
-        const status = /no capability matches/.test(message) ? 404 : 500;
-        return new Response(`fetch lane error: ${message}\n`, { status });
-      }
-    }
+    // THE FETCH LANE: `x-itx-cap` rides NATIVELY into the capability-host facet's own fetch
+    // (facet fetch tunnels a 101 — the stateful runner proves the pattern).
+    if (request.headers.get("x-itx-cap")) return (await this.#ictx()).fetch(request);
 
     // Observability: incarnation (the hibernation tell) + the stub registry's live state.
     if (url.pathname === "/state")
       return Response.json({
         incarnation: this.incarnation,
-        processors: this.#registry.names,
         facetProcessors: this.#facetEntries().map((e) => e.slug),
         ...this.#stubs.state(),
       });
@@ -435,182 +362,67 @@ export class StreamDurableObject extends DurableObject<Env> {
     return { ok: true };
   }
 
-  // ── roots (built once; every getter closes over this context's identity) ──
+  // ── the stub-registry FACADE (the clients view; sockets live HERE and can never move) ──
+  // ONE registry, two access verbs: `stubInvoke` single-target (throws when offline);
+  // `stubFanOut` per client path (allSettled — a dead connection drops out of the results).
+  // The facet-hosted capability host builds its `itx.clients` view as thin RPC wrappers over
+  // exactly these five methods (roots-builder.ts facetClientsView).
 
-  #roots(): Roots {
-    if (this.#rootsInstance) return this.#rootsInstance;
-    const { projectId, path } = this.#name;
-    this.#rootsInstance = new Roots({
-      projectId,
-      path,
-      itxKv: this.env.ITX_KV,
-      secretsKv: this.env.SECRETS_KV,
-      binding: (name) => {
-        if (name !== "FALLBACK") throw new Error(`roots.binding: no binding "${name}"`);
-        return this.env.FALLBACK;
-      },
-      context: (p) =>
-        p === path
-          ? {
-              append: (...e) => this.append(...(e as StreamEventInput[])),
-              read: (a, l) => this.read(a, l),
-            }
-          : this.env.CONTEXT.getByName(stringifyName({ projectId, path: p })),
-      clients: this.#clientsView(),
-      workers: this.#workersView(),
-      readFile: (p) => {
-        const content = HELLO_FILES[p];
-        if (content == null) throw new Error(`roots.files: no file "${p}"`);
-        return { "cap.js": content };
-      },
-    });
-    return this.#rootsInstance;
+  #findStub(key: string): Stub {
+    const s = this.#stubs.all().find((x) => x.connectionKey === key || x.socketId === key);
+    if (!s) throw new Error(`client "${key}" is offline`);
+    return s;
   }
 
-  /** ONE registry, two access verbs: `get(key)` single-target (throws when offline);
-   *  `at(path)` fan-out (allSettled — a dead connection drops out of the results). */
-  #clientsView(): ClientsView {
-    const stubs = this.#stubs;
-    const find = (key: string): Stub => {
-      const s = stubs.all().find((x) => x.connectionKey === key || x.socketId === key);
-      if (!s) throw new Error(`client "${key}" is offline`);
-      return s;
-    };
-    const proxyFor = (key: string, segments: string[]): unknown =>
-      new Proxy(function () {} as object, {
-        get: (_t, p) =>
-          p === "then" || typeof p === "symbol"
-            ? undefined
-            : proxyFor(key, [...segments, p as string]),
-        apply: (_t, _this, args) => stubs.invoke(find(key).socketId, segments, args as unknown[]),
-      });
-    return {
-      get: (key) => (find(key), proxyFor(key, [])),
-      at: (path) => ({
-        call: async (method, args) => {
-          const settled = await Promise.allSettled(
-            stubs
-              .all()
-              .filter((s) => s.clientPath === path)
-              .map((s) => stubs.invoke(s.socketId, method, args)),
-          );
-          return settled
-            .filter((r): r is PromiseFulfilledResult<unknown> => r.status === "fulfilled")
-            .map((r) => r.value);
-        },
-      }),
-      list: () => {
-        const byPath = new Map<string, Stub[]>();
-        for (const s of stubs.all())
-          if (typeof s.clientPath === "string")
-            byPath.set(s.clientPath, [...(byPath.get(s.clientPath) ?? []), s]);
-        return [...byPath.entries()].map(([p, list]) => ({
-          path: p,
-          description: list.at(-1)?.description ?? null,
-          connections: list.length,
-        }));
-      },
-      connections: (path) =>
-        stubs
-          .all()
-          .filter((s) => s.clientPath === path)
-          .map((s) => ({
-            connectionKey: s.connectionKey,
-            description: s.description,
-            openedAt: s.openedAt,
-          })),
-      close: (key) => {
-        const s = stubs.all().find((x) => x.connectionKey === key || x.socketId === key);
-        if (s) stubs.drop(s.socketId, "kicked");
-        return { ok: true };
-      },
-    };
+  /** Invoke one parked stub by connectionKey/socketId (wake → borrowed leg → invoke). */
+  stubInvoke(key: string, segments: string[], args: unknown[]): Promise<unknown> {
+    return this.#stubs.invoke(this.#findStub(key).socketId, segments, args);
   }
 
-  /** `roots.workers.get({type, source, className?})` — run code in this context.
-   *  stateless → a loader isolate: `{ run(...args), fetch(request) }`;
-   *  stateful  → the runner DO's facet: any (deep dotted) method + fetch. */
-  #workersView(): WorkersView {
-    return {
-      get: (ref) => {
-        const source = toExpression(ref.source as string | Expression);
-        if (ref.type === "stateless") {
-          return {
-            run: async (...args: unknown[]) => {
-              const modules = await this.#loadModules(source);
-              const v = this.env.CF_VERSION_METADATA?.id ?? "unversioned";
-              const worker = this.#worker(
-                `code:${v}:${this.ctx.id.name}:${hashSource(JSON.stringify(modules))}`,
-                "run.js",
-                { "run.js": CODE_CAP_RUNNER, ...modules },
-              );
-              const resp = await worker.getEntrypoint().fetch(
-                new Request("https://code.local/", {
-                  method: "POST",
-                  body: JSON.stringify(args),
-                }),
-              );
-              return ((await resp.json()) as { result: unknown }).result;
-            },
-            fetch: async (request: Request) => {
-              const modules = await this.#loadModules(source);
-              const v = this.env.CF_VERSION_METADATA?.id ?? "unversioned";
-              const worker = this.#worker(
-                `code-fetch:${v}:${this.ctx.id.name}:${hashSource(JSON.stringify(modules))}`,
-                "cap.js",
-                modules,
-              );
-              return worker.getEntrypoint().fetch(request);
-            },
-          };
-        }
-        // stateful: a method proxy onto the dedicated runner DO (deep dots ride the wire joined,
-        // the runner walks segments). fetch forwards natively so a 101 passes through.
-        const className = ref.className;
-        if (!className) throw new Error("workers.get: stateful ref needs a className");
-        const runner = this.env.STATEFUL_WORKER.getByName(
-          `${this.#name.projectId}::${this.#name.path}::${className}:${hashSource(JSON.stringify(source))}`,
-        );
-        const proxyFor = (segments: string[]): unknown =>
-          new Proxy(function () {} as object, {
-            get: (_t, p) => {
-              if (p === "then" || typeof p === "symbol") return undefined;
-              if (p === "fetch" && segments.length === 0)
-                return (request: Request) => {
-                  const headers = new Headers(request.headers);
-                  headers.set("x-itx-source", JSON.stringify(source));
-                  headers.set("x-itx-class", className);
-                  return runner.fetch(new Request(request, { headers }));
-                };
-              return proxyFor([...segments, p as string]);
-            },
-            apply: (_t, _this, args) =>
-              runner.invokeCapability({
-                source,
-                className,
-                method: segments.join("."),
-                args: args as unknown[],
-              }),
-          });
-        return proxyFor([]);
-      },
-    };
+  /** Fan out one method call over every open connection at a client path. */
+  async stubFanOut(path: string, method: string[], args: unknown[]): Promise<unknown[]> {
+    const settled = await Promise.allSettled(
+      this.#stubs
+        .all()
+        .filter((s) => s.clientPath === path)
+        .map((s) => this.#stubs.invoke(s.socketId, method, args)),
+    );
+    return settled
+      .filter((r): r is PromiseFulfilledResult<unknown> => r.status === "fulfilled")
+      .map((r) => r.value);
   }
 
-  /** Evaluate a source expression through THIS context's own dispatch into a modules map. */
-  async #loadModules(source: Expression): Promise<Record<string, string>> {
-    return (await this.invoke(source)) as Record<string, string>;
-  }
-
-  /** Load a confined dynamic worker: `itx.js` injected, env.ITX = globalOutbound = a self-stub. */
-  #worker(cacheKey: string, mainModule: string, modules: Record<string, string>) {
-    const self = this.env.CONTEXT.getByName(this.ctx.id.name ?? "?");
-    return this.env.LOADER.get(cacheKey, () => ({
-      compatibilityDate: "2026-07-01",
-      mainModule,
-      modules: { "itx.js": ITX_SURFACE_MODULE, ...modules },
-      env: { ITX: self },
-      globalOutbound: self,
+  /** The client roster, grouped by path. */
+  stubList(): { path: string; description: unknown; connections: number }[] {
+    const byPath = new Map<string, Stub[]>();
+    for (const s of this.#stubs.all())
+      if (typeof s.clientPath === "string")
+        byPath.set(s.clientPath, [...(byPath.get(s.clientPath) ?? []), s]);
+    return [...byPath.entries()].map(([p, list]) => ({
+      path: p,
+      description: list.at(-1)?.description ?? null,
+      connections: list.length,
     }));
+  }
+
+  /** Every open connection at a client path. */
+  stubConnections(
+    path: string,
+  ): { connectionKey: unknown; description: unknown; openedAt: unknown }[] {
+    return this.#stubs
+      .all()
+      .filter((s) => s.clientPath === path)
+      .map((s) => ({
+        connectionKey: s.connectionKey,
+        description: s.description,
+        openedAt: s.openedAt,
+      }));
+  }
+
+  /** Kick a connection by connectionKey/socketId (idempotent — unknown keys are a no-op). */
+  stubClose(key: string): { ok: true } {
+    const s = this.#stubs.all().find((x) => x.connectionKey === key || x.socketId === key);
+    if (s) this.#stubs.drop(s.socketId, "kicked");
+    return { ok: true };
   }
 }
