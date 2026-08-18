@@ -116,10 +116,20 @@ class FakeProvider {
    * The samples are a ramp rather than silence so a test that loses audio can
    * say WHICH audio it lost, and so mu-law encoding has something to do.
    */
-  answerAudio(ms: number): void {
+  answerAudio(ms: number, itemId = "item_fake"): void {
     const pcm = new Uint8Array(ms * PCM16_BYTES_PER_MS);
     for (let index = 0; index < pcm.length; index++) pcm[index] = index % 251;
-    this.push({ type: "response.output_audio.delta", delta: base64(pcm) });
+    this.push({
+      type: "response.output_audio.delta",
+      delta: base64(pcm),
+      item_id: itemId,
+      content_index: 0,
+    });
+  }
+
+  /** The provider's own transcript of the answer, streamed beside the audio. */
+  answerTranscript(text: string): void {
+    this.push({ type: "response.output_audio_transcript.delta", delta: text });
   }
 
   /** The provider decides somebody in the room is talking. */
@@ -1065,6 +1075,86 @@ describe("a flush names a sequence number", () => {
     h.provider.answerAudio(400);
     await playOutEverything(h, 1_000);
     expect(speakerMsDelivered(h)).toBeGreaterThan(deliveredBeforeBarge);
+  });
+
+  /*
+   * CANCELLING STOPS THE SOUND; TRUNCATING FIXES THE MEMORY. The provider's
+   * conversation still holds the ENTIRE answer it generated, so barged mid-
+   * count it will swear it "counted all the way to one hundred" — the model
+   * remembers what it said, not what anybody heard. conversation.item.truncate
+   * with the heard milliseconds trims the item's audio AND transcript, so its
+   * memory matches the listener's.
+   */
+  it("truncates the barged answer to what the device actually heard", async () => {
+    const h = makeHarness();
+    await callIsLive(h, CLIENT_TAKES_TURNS);
+    h.provider.responseCreated();
+    h.provider.answerAudio(8_000, "item_count");
+    h.provider.answerTranscript("one two three four five");
+    await playOutEverything(h, 600);
+    const deliveredBeforeBarge = speakerMsDelivered(h);
+    expect(deliveredBeforeBarge).toBeGreaterThan(0);
+
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+
+    /* Not yet: truncating an item its own response is still finalizing races
+     * the transcript write — observed live, the ack shared a millisecond with
+     * the response's done and the model still remembered the full count. */
+    expect(h.provider.sentOfType("conversation.item.truncate")).toHaveLength(0);
+
+    /* Transcript that arrives AFTER the press models the transcriber's lag:
+     * residue, never part of what the note says was heard. */
+    h.provider.answerTranscript(" six seven eight nine ten twenty");
+    h.provider.answerComplete();
+    await h.settle();
+    const truncations = h.provider.sentOfType("conversation.item.truncate");
+    expect(truncations).toHaveLength(1);
+    expect(truncations[0]).toMatchObject({ item_id: "item_count", content_index: 0 });
+    const audioEndMs = truncations[0]!.audio_end_ms as number;
+    /* Heard = sent minus what the clear threw out of the device's buffer:
+     * positive, and never more than was ever handed over. */
+    expect(audioEndMs).toBeGreaterThan(0);
+    expect(audioEndMs).toBeLessThanOrEqual(deliveredBeforeBarge);
+
+    /* And because truncation deletes the transcript wholesale, the note
+     * restores what the listener heard — a PREFIX, never the whole thing. */
+    const notes = h.provider.sentOfType("conversation.item.create");
+    expect(notes).toHaveLength(1);
+    const noteText = JSON.stringify(notes[0]);
+    expect(noteText).toContain("heard only this much");
+    expect(noteText).toContain("one");
+    expect(noteText).not.toContain("twenty");
+  });
+
+  it("truncates immediately when the barged answer had already finished generating", async () => {
+    const h = makeHarness();
+    await callIsLive(h, CLIENT_TAKES_TURNS);
+    h.provider.responseCreated();
+    h.provider.answerAudio(8_000, "item_done");
+    h.provider.answerComplete();
+    await playOutEverything(h, 600);
+
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    const truncations = h.provider.sentOfType("conversation.item.truncate");
+    expect(truncations).toHaveLength(1);
+    expect(truncations[0]).toMatchObject({ item_id: "item_done", content_index: 0 });
+    /* No cancel: there was nothing generating to cancel. */
+    expect(h.provider.sentOfType("response.cancel")).toHaveLength(0);
+  });
+
+  it("sends no truncate when the press finds nothing playing", async () => {
+    const h = makeHarness();
+    await callIsLive(h, CLIENT_TAKES_TURNS);
+    h.provider.responseCreated();
+    h.provider.answerAudio(400, "item_short");
+    h.provider.answerComplete();
+    await playOutEverything(h, 2_000);
+
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    expect(h.provider.sentOfType("conversation.item.truncate")).toHaveLength(0);
   });
 
   it("sends no cancel for a press when nothing is generating", async () => {

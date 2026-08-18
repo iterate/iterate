@@ -818,6 +818,50 @@ export class VoiceAgent2Processor extends StreamProcessor<
    */
   #responseActive = false;
   /**
+   * The provider's identity for the answer now playing, and the two clocks a
+   * truthful interruption needs: how much of it was RECEIVED from the
+   * provider and how much was actually HANDED TO THE DEVICE. On a barge,
+   * `conversation.item.truncate` gets heard-ms (sent minus what the clear
+   * threw out of the device's buffer) — trimming the item's audio AND
+   * transcript so the model remembers what the listener heard, not what it
+   * generated. Measured before this existed: barged eight seconds into a
+   * count, the model claimed "26" — the generated frontier, not the heard
+   * one.
+   */
+  #answerItemId: string | null = null;
+  #answerContentIndex = 0;
+  #answerReceivedMs = 0;
+  #answerSentMs = 0;
+  /**
+   * A truncate that must wait for the cancelled response to FINALIZE.
+   *
+   * Sent back-to-back with `response.cancel`, the truncate races the
+   * server finalizing the item — observed live: the ack and the response's
+   * `done` share a millisecond, and the model still remembered the full
+   * count. The provider processes client events in order, but the item's
+   * transcript is written at finalization; truncating a still-finalizing
+   * item is undefined in exactly the way that bit us. Held here until the
+   * `response.done` arrives, then sent against a settled item.
+   */
+  #pendingTruncate: {
+    itemId: string;
+    contentIndex: number;
+    audioEndMs: number;
+    receivedMsAtBarge: number;
+  } | null = null;
+  /**
+   * The provider's own transcript of the answer now playing, snapshotted at
+   * the barge. Truncation deletes the item's transcript WHOLESALE (the
+   * provider's documented behaviour), and the model grounds "what did I say"
+   * in text, not in its own audio — truncated without help it swings to "I
+   * never even started". The repair is a system note carrying the transcript
+   * AS OF THE PRESS, whole: the transcript stream lags the audio stream by
+   * seconds (measured: 28 characters of transcript against 17 s of received
+   * audio at cancel), so a ratio cut over it starves the note — while the
+   * lag itself lands the snapshot naturally near the heard boundary.
+   */
+  #answerTranscript = "";
+  /**
    * A barge cancelled the active response; its remaining deltas are dead.
    *
    * `response.cancel` is asynchronous — audio of the cancelled answer keeps
@@ -1116,11 +1160,57 @@ export class VoiceAgent2Processor extends StreamProcessor<
          * is what keeps it out of the speaker queue.
          */
         if (event.type === "events.iterate.com/voice-agent/ptt-start") {
-          this.#dropAnswerInFlight(state.call.conversationId, this.deps.nowAtFacetMs(), append);
-          if (this.#responseActive && this.#providerReady && this.#providerSocket !== null) {
-            this.#responseActive = false;
-            this.#dropDeltasUntilResponseCreated = true;
-            this.#providerSocket.send(JSON.stringify({ type: "response.cancel" }));
+          /* Heard-ms must be read BEFORE the drop zeroes the pacer's
+           * schedule: sent audio minus what still sat in the device's buffer
+           * when the clear threw it away. */
+          const nowAtFacetMs = this.deps.nowAtFacetMs();
+          const unplayedMs = Math.max(0, this.#deviceBufferEmptyAtFacetMs - nowAtFacetMs);
+          const heardMs = Math.max(0, Math.floor(this.#answerSentMs - unplayedMs));
+          this.#dropAnswerInFlight(state.call.conversationId, nowAtFacetMs, append);
+          if (this.#providerReady && this.#providerSocket !== null) {
+            /*
+             * Cancel stops the SOUND; truncate fixes the MEMORY. The item
+             * still holds every millisecond the provider generated — barged,
+             * the model would claim its generated frontier rather than what
+             * anybody heard. One frame of slack so a fully-played answer is
+             * never "truncated" to its own length by rounding. An ACTIVE
+             * response's truncate is deferred until its `response.done`
+             * (see #pendingTruncate); a finished item truncates right away.
+             */
+            const wantsTruncate =
+              this.#answerItemId !== null && heardMs + 25 < this.#answerReceivedMs;
+
+            if (this.#responseActive) {
+              this.#responseActive = false;
+              this.#dropDeltasUntilResponseCreated = true;
+              if (wantsTruncate) {
+                this.#pendingTruncate = {
+                  itemId: this.#answerItemId!,
+                  contentIndex: this.#answerContentIndex,
+                  audioEndMs: heardMs,
+                  receivedMsAtBarge: this.#answerReceivedMs,
+                };
+                this.#answerItemId = null;
+              }
+              this.#sendControl({ type: "response.cancel" }, state.call.conversationId, append);
+            } else if (wantsTruncate) {
+              this.#sendControl(
+                {
+                  type: "conversation.item.truncate",
+                  item_id: this.#answerItemId,
+                  content_index: this.#answerContentIndex,
+                  audio_end_ms: heardMs,
+                },
+                state.call.conversationId,
+                append,
+              );
+              this.#answerItemId = null;
+              this.#sendHeardPrefixNote(
+                heardMs / Math.max(1, this.#answerReceivedMs),
+                state.call.conversationId,
+                append,
+              );
+            }
           }
         }
 
@@ -1255,6 +1345,12 @@ export class VoiceAgent2Processor extends StreamProcessor<
       this.#answerEndsWhenQueueDrains = false;
       this.#responseActive = false;
       this.#dropDeltasUntilResponseCreated = false;
+      this.#answerItemId = null;
+      this.#answerContentIndex = 0;
+      this.#answerReceivedMs = 0;
+      this.#answerSentMs = 0;
+      this.#pendingTruncate = null;
+      this.#answerTranscript = "";
 
       /*
        * THE THIRD SWITCH, AND WHY IT IS NOT A STREAM EVENT.
@@ -1371,12 +1467,24 @@ export class VoiceAgent2Processor extends StreamProcessor<
           case "input_audio_buffer.speech_started":
           case "response.created":
             /* A created event can only belong to a LIVE answer, so it is
-             * what ends a barge's residue-discard window. */
+             * what ends a barge's residue-discard window — and it is where
+             * the per-answer identity and clocks start from zero. */
             if (grok.type === "response.created") {
               this.#dropDeltasUntilResponseCreated = false;
               this.#responseActive = true;
+              this.#answerItemId = null;
+              this.#answerReceivedMs = 0;
+              this.#answerSentMs = 0;
+              this.#answerTranscript = "";
             }
             this.#dropAnswerInFlight(conversationId, receivedAtFacetMs, append);
+            return;
+
+          case "response.output_audio_transcript.delta":
+            /* Accumulated even while residue audio is being discarded: the
+             * heard-prefix note needs the transcript as generated, and the
+             * cut ratio was frozen at the barge. */
+            if (typeof grok.delta === "string") this.#answerTranscript += grok.delta;
             return;
 
           case "response.output_audio.delta": {
@@ -1398,9 +1506,16 @@ export class VoiceAgent2Processor extends StreamProcessor<
              * last piece of a delta being short costs nothing but one extra
              * append. Nothing is carried between deltas and nothing is padded.
              */
+            /* The item identity rides every delta; remembering it here is
+             * what lets a barge name the thing it truncates. */
+            if (typeof grok.item_id === "string") this.#answerItemId = grok.item_id;
+            if (typeof grok.content_index === "number") {
+              this.#answerContentIndex = grok.content_index;
+            }
             /* The pipeline is 16 kHz from here to the speaker; a provider
              * that talks faster gets resampled at the door. */
             const pcm16 = resamplePcm16(base64ToBytes(grok.delta), provider.rate, 16_000);
+            this.#answerReceivedMs += pcm16.length / PCM16_BYTES_PER_MS;
             for (let cut = 0; cut < pcm16.length; cut += MAX_SPEAKER_PAYLOAD_BYTES) {
               this.#speakerQueue.push({
                 fromProviderDeltaSeq,
@@ -1439,6 +1554,31 @@ export class VoiceAgent2Processor extends StreamProcessor<
             this.#answerEndsWhenQueueDrains = true;
             this.#sendSpeakerAudio(conversationId, append, runInBackground);
             return;
+
+          case "response.done": {
+            /* The cancelled response is now FINAL — the deferred truncate
+             * can no longer race the item's own finalization. */
+            const pending = this.#pendingTruncate;
+            if (pending !== null && this.#providerReady && this.#providerSocket !== null) {
+              this.#pendingTruncate = null;
+              this.#sendControl(
+                {
+                  type: "conversation.item.truncate",
+                  item_id: pending.itemId,
+                  content_index: pending.contentIndex,
+                  audio_end_ms: pending.audioEndMs,
+                },
+                conversationId,
+                append,
+              );
+              this.#sendHeardPrefixNote(
+                pending.audioEndMs / Math.max(1, pending.receivedMsAtBarge),
+                conversationId,
+                append,
+              );
+            }
+            return;
+          }
 
           case "error":
             void append({
@@ -1666,6 +1806,86 @@ export class VoiceAgent2Processor extends StreamProcessor<
    * Measured on a real call: the device kept playing a dead answer for the
    * whole of the press. The button is the third caller.
    */
+  /**
+   * Tell the model what the listener actually heard of its cut-off answer.
+   *
+   * Truncation deleted the item's transcript wholesale, and a model asked
+   * "how far did you get" over audio-only memory swings to "I never
+   * started" (measured live). The note carries the heard PREFIX — the
+   * transcript cut at the barge's heard/received ratio, rounded down to a
+   * word — so recall becomes exact instead of confabulated in either
+   * direction. A system item: context, never speech.
+   */
+  /**
+   * Send one client control event AND record it on the `grok-event` lane as
+   * `client.<type>` — the lane is the wire's flight recorder, and a recorder
+   * that hears only one direction cannot explain an interruption gone wrong.
+   */
+  #sendControl(
+    message: Record<string, unknown>,
+    conversationId: string,
+    append: ProcessEventArgs<VoiceAgent2Contract>["append"],
+  ): void {
+    if (this.#providerSocket === null) return;
+    this.#providerSocket.send(JSON.stringify(message));
+    const { item, ...rest } = message;
+    void append({
+      type: "events.iterate.com/voice-agent/grok-event",
+      payload: {
+        ...rest,
+        type: `client.${String(message.type)}`,
+        ...(item === undefined ? {} : { itemSummary: JSON.stringify(item).slice(0, 300) }),
+        conversationId,
+        receivedAtFacetMs: this.deps.nowAtFacetMs(),
+      },
+    });
+  }
+
+  #sendHeardPrefixNote(
+    heardFraction: number,
+    conversationId: string,
+    append: ProcessEventArgs<VoiceAgent2Contract>["append"],
+  ): void {
+    if (this.#providerSocket === null || !this.#providerReady) return;
+    /*
+     * ALIGNED WINDOWS, or the note lies in whichever direction the run
+     * leaned: the transcript read NOW spans the audio GENERATED up to the
+     * cancel (both streams stopped there — measured, a barge-time snapshot
+     * ran 62 numbers ahead on a brisk count, and a barge-time ratio starved
+     * to 28 characters on a lagging transcriber). heard/received is a ratio
+     * of that same generated span, so it cuts this transcript to the heard
+     * boundary regardless of which stream was ahead at the press.
+     */
+    const transcript = this.#answerTranscript.trim();
+    this.#answerTranscript = "";
+    if (transcript === "") return;
+    const cut = transcript.slice(
+      0,
+      Math.max(1, Math.floor(transcript.length * Math.min(1, heardFraction))),
+    );
+    const heardPrefix = (cut.includes(" ") ? cut.slice(0, cut.lastIndexOf(" ")) : cut).trim();
+    if (heardPrefix === "") return;
+    this.#sendControl(
+      {
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "system",
+          content: [
+            {
+              type: "input_text",
+              text:
+                `The user interrupted your previous spoken reply. They heard only this much of it: ` +
+                `"${heardPrefix}". Nothing after that was heard.`,
+            },
+          ],
+        },
+      },
+      conversationId,
+      append,
+    );
+  }
+
   #dropAnswerInFlight(
     conversationId: string,
     decidedAtFacetMs: number,
@@ -1771,6 +1991,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
            * rather than from now, so the cost of an append is absorbed and the
            * average send rate equals the play rate. */
           this.#deviceBufferEmptyAtFacetMs += frame.pcm16.length / PCM16_BYTES_PER_MS;
+          this.#answerSentMs += frame.pcm16.length / PCM16_BYTES_PER_MS;
           const clearFirst = this.#clearSpeakerBufferBeforeNextFrame;
           this.#clearSpeakerBufferBeforeNextFrame = false;
           await append({

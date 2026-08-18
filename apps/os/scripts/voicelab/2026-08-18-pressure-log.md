@@ -333,3 +333,35 @@ exist. Open sibling: the kill() RPC's own reply errored client-side
 the reply's death rattle is a separate, pre-existing wrinkle. And the
 original four-boards-at-11-minutes mount loss remains un-root-caused;
 the invariant converts it from silent outage to a visible blip.
+
+**F14 (reported by Jonas; the barge's third half — the model must KNOW it
+was interrupted):** barged mid-count and asked "how far did you get?", the
+model claimed the full count — its conversation still held everything it
+GENERATED. The repair is provider-standard (`conversation.item.truncate`
+with heard-ms; grok speaks the same dialect), but three measured surprises
+shaped the implementation:
+
+1. Truncate raced the cancelled response's finalization (ack and `done`
+   shared a millisecond; the model still claimed the frontier) — the
+   truncate now DEFERS until `response.done`.
+2. Truncation deletes the item transcript WHOLESALE, and the model grounds
+   "what did I say" in text, not its own audio: cleanly truncated, it swung
+   to "I never even started". The facet now follows the truncate with a
+   system note carrying the heard PREFIX of the provider's own transcript.
+3. The transcript stream is unsynchronised with the audio stream in BOTH
+   directions (28 chars against 17 s received on a lagging run; 62 numbers
+   ahead on a brisk one), so the note's cut aligns windows explicitly:
+   the note-time transcript spans the audio generated up to the cancel,
+   and heard/received is a ratio of that same span.
+
+Proof: `voicelab interject-recall` — the failing e2e Jonas asked for,
+no hands (utterances synthesized with `say`, the reply judged from the
+provider's own transcript on the verbatim lane, yardsticks from the wire:
+the truncate ack's heard-ms, the note read back from the new client-event
+flight recorder, and a 3-numbers-per-second clock ceiling). Journey,
+each step measured live: "counted all the way to 100" (nothing) → "26/28"
+(cancel only) → "I didn't get to any numbers" (truncate, no note) →
+**"I got to 3 before you asked me to stop"** against a note that told it
+exactly that (PASS). The `grok-event` lane now records client-sent
+control events as `client.<type>` — the wire's flight recorder hears both
+directions. 61 agent unit tests pin the mechanics.
