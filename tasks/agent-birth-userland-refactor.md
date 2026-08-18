@@ -257,3 +257,27 @@ from the request lifecycle"; when unsure, keep mechanism in the core):
   loop), so the classic lifecycle specs still read as real usage;
   agent-headless-processor.test.ts runs WITHOUT that loop to pin that the
   keeper interprets nothing.
+
+### Preview post-mortem (2026-08-18)
+
+First preview run: 16 e2e failures, all one bug — the snapshot/liveState
+relays dialed facet "agent" but births subscribe "agent-headless" (fixed in
+02207e20d, not by this session). The one remaining failure
+(create-project.spec, no assistant message on the SECOND project) was NOT the
+deadline sleeper's durability: preview stream forensics showed the degraded
+start firing exactly on schedule on a cold bootstrap (held trigger 18:23:53 →
+birth-timed-out +10.03s → defaults + finalize + turn → settled succeeded
++10s later), and the default template's project on the same run worked fully
+end-to-end (worker birth at +2s, interpretation, script run, lowercase
+welcome via web-message-sent). The real cause: **configs/with-voice was never
+migrated** — no birth job (so only the degraded start ever dispatched) and no
+interpretResponse delegation (so the model's scripted welcome —
+itx.chat.sendMessage inside a ```ts fence — was never executed; the UI's
+visible assistant message IS that script's web-message-sent). Fixed by
+migrating with-voice like the default template (defaults + finalize, no
+tweaks; per-event interpreter delegation). The sleeper-durability concern was
+tested anyway: an eviction between the held trigger and the deadline is
+revived by the recovery keepalive (the keeper registers with recovery), and
+the revived at-head pass re-arms off the same trigger's atMs — pinned by the
+new eviction spec in agent-birth-degraded-start.test.ts, so no facet-alarm
+rearchitecture was needed.

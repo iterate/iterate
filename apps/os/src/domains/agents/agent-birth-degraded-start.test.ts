@@ -23,6 +23,32 @@ import type { WorkersAiMessage } from "./workers-ai-transport.ts";
 
 const WORKER_PROMPT = "You are the codemode-tag agent. Respond in <codemode> tags.";
 
+it("the readiness deadline survives incarnation death: an eviction mid-hold still degrades and dispatches", async () => {
+  // The deadline sleeper is a droppable runInBackground attempt, and the
+  // held trigger is the LAST event that ever arrives on its own — so the
+  // recovery keepalive (the keeper registers with recovery) is what makes
+  // the deadline durable: the alarm parked ahead of the in-flight sleep
+  // revives a fresh incarnation, whose at-head pass re-arms the deadline
+  // off the SAME held trigger's atMs (deterministic — already past, so it
+  // fires immediately). Without that, an eviction inside the ~10s window
+  // would hold the agent forever with no later delivery to save it.
+  const h = makeHarness();
+  await h.play(
+    ["append", { type: "events.iterate.com/agent/created", payload: {} }, userMessage("hello?")],
+    ["advanceTime", 2_000], // inside the window: held, sleeper parked
+  );
+  expect(h.llm.calls).toHaveLength(0);
+  expect(h.events("events.iterate.com/agent/birth-timed-out")).toHaveLength(0);
+
+  // Eviction: the incarnation dies with the parked sleeper closure.
+  h.crash();
+
+  await h.play(["advanceTime", AGENT_BIRTH_FINALIZE_DEADLINE_MS + 60_000]);
+  expect(h.events("events.iterate.com/agent/birth-timed-out")).toHaveLength(1);
+  expect(h.state().birthFinalizedAtOffset).toBeDefined();
+  expect(h.llm.calls).toHaveLength(1); // the held turn dispatched on the default personality
+});
+
 it("(a) a late worker's personality supersedes the degraded start in place — later turns run on it", async () => {
   const h = makeHarness();
   // A message arrives while the worker is down; the deadline expires and the

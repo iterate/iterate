@@ -359,13 +359,24 @@ test("agent/created runs the birth job: platform defaults + the house-style twea
   expect(getDefaultBirthEvents.mock.calls.length).toBe(birthsBefore);
 });
 
-test("agent-stream events delegate to the platform interpreter, per event", async () => {
-  const interpretResponse = vi.fn(async () => []);
+test("with-voice authors births too: platform defaults + finalize, no tweaks", async () => {
+  // The create-project spec caught this template unmigrated on a preview:
+  // without a birth job its onboarding agent only ever got the 10s degraded
+  // start, and without interpretation delegation the model's scripted
+  // welcome (itx.chat.sendMessage inside a ```ts fence) never ran — no
+  // visible assistant message at all.
+  const agentAppend = vi.fn(async (...events: unknown[]) => events);
+  const defaultPromptEvent = {
+    type: "events.iterate.com/agents/context-added",
+    idempotencyKey: "agent/default-birth:prompt:onboarding:abcd1234",
+    payload: { role: "system", key: "agent/system-prompt", content: "DEFAULT" },
+  };
+  const getDefaultBirthEvents = vi.fn(async () => [defaultPromptEvent]);
   const project = {
-    agents: { get: vi.fn(() => ({ interpretResponse })) },
+    agents: { get: vi.fn(() => ({ append: agentAppend, getDefaultBirthEvents })) },
     [Symbol.dispose]: vi.fn(),
   };
-  const worker = new ProjectWorker(
+  const worker = new VoiceProjectWorker(
     {} as never,
     {
       ITERATE_WORKER_VERSION: "test",
@@ -373,20 +384,49 @@ test("agent-stream events delegate to the platform interpreter, per event", asyn
     } as never,
   );
 
-  const assistantEvent = {
-    type: "events.iterate.com/agents/context-added",
-    path: "/agents/demo",
-    offset: 9,
-    payload: { role: "assistant", content: "```ts\nasync (itx) => 1\n```", llmRequestOffset: 8 },
-  };
-  await deliver(worker, assistantEvent);
-  expect(project.agents.get).toHaveBeenCalledWith("/agents/demo");
-  expect(interpretResponse).toHaveBeenCalledWith(expect.objectContaining({ offset: 9 }));
-
-  // Non-agent streams never interpret.
-  await deliver(worker, { ...assistantEvent, path: "/clients/os-app/tab" });
-  expect(interpretResponse).toHaveBeenCalledTimes(1);
+  await deliver(worker, {
+    type: "events.iterate.com/agent/created",
+    path: "/agents/onboarding",
+    payload: {},
+  });
+  expect(getDefaultBirthEvents).toHaveBeenCalledWith({ kind: "onboarding" });
+  expect(agentAppend.mock.calls[0]).toEqual([
+    defaultPromptEvent,
+    expect.objectContaining({ type: "events.iterate.com/agent/birth-finalized" }),
+  ]);
 });
+
+test.each([
+  { name: "default", worker: (env: never) => new ProjectWorker({} as never, env) },
+  { name: "with-voice", worker: (env: never) => new VoiceProjectWorker({} as never, env) },
+])(
+  "$name: agent-stream events delegate to the platform interpreter, per event",
+  async ({ worker: makeWorker }) => {
+    const interpretResponse = vi.fn(async () => []);
+    const project = {
+      agents: { get: vi.fn(() => ({ interpretResponse })) },
+      [Symbol.dispose]: vi.fn(),
+    };
+    const worker = makeWorker({
+      ITERATE_WORKER_VERSION: "test",
+      ITX: { get: vi.fn(() => pipelinedProject(project)) },
+    } as never);
+
+    const assistantEvent = {
+      type: "events.iterate.com/agents/context-added",
+      path: "/agents/demo",
+      offset: 9,
+      payload: { role: "assistant", content: "```ts\nasync (itx) => 1\n```", llmRequestOffset: 8 },
+    };
+    await deliver(worker, assistantEvent);
+    expect(project.agents.get).toHaveBeenCalledWith("/agents/demo");
+    expect(interpretResponse).toHaveBeenCalledWith(expect.objectContaining({ offset: 9 }));
+
+    // Non-agent streams never interpret.
+    await deliver(worker, { ...assistantEvent, path: "/clients/os-app/tab" });
+    expect(interpretResponse).toHaveBeenCalledTimes(1);
+  },
+);
 
 test("packaged apps stay behind the thin router", () => {
   const worker = templateFile("worker.ts");
