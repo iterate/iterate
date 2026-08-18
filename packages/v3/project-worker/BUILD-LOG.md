@@ -922,3 +922,28 @@ pump; +push-door and ephemeral blocks), typecheck clean.
 
 Whole-board regression on `address-1`: crisp 17/17, facet spine, userspace SDK, ephemeral 9/9,
 push 6/6 — ALL PASS. 79 unit tests, typecheck clean.
+
+## Increment 38 (verdicts-4): the hunt's approved fixes
+
+- **Print/$-escape round trip fixed** — printing no longer unwraps `$`; `{ $: ?0 }` round-trips
+  (frozen data can never become a live hole). +1 test.
+- **THE LADDER RESTRUCTURE (owner-approved as conceptually simpler):** one retry ladder to a
+  per-row `maxAttempts` (default 15); ONLY at exhaustion does `onFailingEvent` speak — halt
+  halts, skip drops exactly the pinned event with the audit fact. And a clean delivery resets
+  the WHOLE ladder including `skipsSinceSuccess` — consecutive now means consecutive. A target
+  outage and a poison event ride the same predictable ladder. (The push proof deliberately
+  subscribes with `maxAttempts: 2` — full-default poison isolation takes hours by design.)
+- **Fetch-lane guard:** a terminal `fetch(...)` carrying expression args is a LOUD error
+  (the Request rides in as the runtime arg); the silent drop is gone. All fetch shapes
+  re-verified: bare terminal, explicit `.fetch`, WS 101, facet fetch, stateful fetch.
+- **THE RESURRECTION PASS (owner: "fix this then"):** the first alarm of each incarnation asks
+  every facet for a snapshot — a behind facet gap-repairs from its own durable cursor, a
+  caught-up one no-ops; quiesce/abort waits for a later pass so it never races a fold it just
+  revived. An eviction mid-batch with no follow-up traffic now self-heals (the append-armed
+  alarm survives eviction).
+- Dead code out: `#running` (unreadable), numeric holes in the must-use walk (meaningless —
+  a numeric hole in a pattern binds nothing). Runtime floor noted: workerd ≥ 2026-07-02
+  (older alarm-woken-DO name bug not worked around, per owner).
+
+80 unit tests green; deploy `verdicts-4`: full board ALL PASS (crisp/facet/userspace/
+ephemeral/push incl. the new consecutive-skip-reset assertion/facet-address).

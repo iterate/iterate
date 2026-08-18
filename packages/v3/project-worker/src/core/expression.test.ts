@@ -94,6 +94,14 @@ describe("parse ⇄ print", () => {
     );
   });
 
+  test("$-escapes survive the print⇄parse round trip (frozen data never becomes a live hole)", () => {
+    const escaped: Expression = ["itx", ["f", { $: { "?": 0 } }]];
+    expect(print(escaped)).toBe("itx.f({ $: ?0 })");
+    expect(parse(print(escaped))).toEqual(escaped);
+    const nested: Expression = ["itx", ["f", { $: { $: 1 } }]];
+    expect(parse(print(nested))).toEqual(nested);
+  });
+
   test("bare call on the scope symbol is a loud error — both halves", () => {
     expect(() => parse("itx(1)")).toThrow(/cannot call the scope symbol itself/);
     const itx = pathProxy(() => "unreachable") as (...args: unknown[]) => unknown;

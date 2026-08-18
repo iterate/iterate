@@ -43,8 +43,8 @@ import type {
   StreamEventInput as StreamEventInputT,
 } from "./events.ts";
 
-/** One owned event type: its payload schema (and prose for humans/docs). Host-side only —
- *  SDK contracts don't carry schemas (zod stays out of loaded isolates). */
+/** One owned event type: its payload schema (and prose for humans/docs). Shipped in the SDK
+ *  too — userspace contracts carry real zod schemas, same as built-ins. */
 export type EventDefinition = {
   description?: string;
   payloadSchema: z.ZodType;
@@ -115,10 +115,8 @@ export abstract class StreamProcessor<State> {
   protected readonly projectId: string;
   readonly #storage: ProcessorStorage;
 
-  // Rule 1: the serial chain. `#running` marks a batch mid-flight so a re-entrant drive never
-  // awaits its own chain (a processor that APPENDS during its batch would deadlock otherwise).
+  // Rule 1: the serial chain.
   #chain: Promise<void> = Promise.resolve();
-  #running = false;
   #progress: Progress<State> | null = null; // in-memory cache of the persisted fold
   #waiters: { offset: number; resolve: () => void }[] = [];
 
@@ -207,9 +205,9 @@ export abstract class StreamProcessor<State> {
 
   // ── the runner (private) ──
 
-  /** Serialize on the chain. The returned promise must never be awaited from INSIDE a batch of
-   *  this same processor (append→drive callers are fire-and-forget; awaiting your own chain
-   *  deadlocks — the `#running` flag exists so hosts can check, mirrors the old registry rule). */
+  /** Serialize on the chain. THE RULE: never await your own chain from inside a batch — a
+   *  processor that appends during its batch would deadlock, which is why every append→drive
+   *  caller is fire-and-forget. */
   #enqueue(work: () => Promise<void>): Promise<void> {
     const run = this.#chain.then(work);
     this.#chain = run.catch(() => {}); // a failed batch never wedges the chain; retry via wake
@@ -275,101 +273,96 @@ export abstract class StreamProcessor<State> {
 
   /** Rules 2–5 over one contiguous window. The caller established contiguity. */
   async #processBatch(events: StreamEventT[], window: ScanWindow, atHead: boolean): Promise<void> {
-    this.#running = true;
-    try {
-      const progress = this.#loadProgress();
-      let { state } = progress;
-      let caughtUpDelivered = false;
+    const progress = this.#loadProgress();
+    let { state } = progress;
+    let caughtUpDelivered = false;
 
-      const makeAppend =
-        (whileProcessing: StreamEventT | null) =>
-        async (...inputs: StreamEventInputT[]): Promise<StreamEventT[]> => {
-          for (const input of inputs) {
-            if (!this.contract.emits.includes(input.type))
-              throw new Error(
-                `processor "${this.contract.slug}" emits ${JSON.stringify(input.type)} without declaring it`,
-              );
-            input.source = {
-              processor: {
-                slug: this.contract.slug,
-                version: this.contract.version,
-                ...(whileProcessing
-                  ? {
-                      whileProcessing: {
-                        offset: whileProcessing.offset,
-                        type: whileProcessing.type,
-                      },
-                    }
-                  : {}),
-              },
-            };
-          }
-          return await this.stream.append(...inputs);
-        };
-
-      const runOne = async (event: StreamEventT | null, caughtUp: boolean) => {
-        const previousState = state;
-        if (event) {
-          let next: State | null | undefined;
-          try {
-            next = this.reduce({ event, state });
-          } catch (error) {
-            // A malformed/hostile event must not wedge the fold forever: record the skip, move on.
-            console.error(
-              `processor "${this.contract.slug}" reduce failed at offset ${event.offset}`,
-              error,
+    const makeAppend =
+      (whileProcessing: StreamEventT | null) =>
+      async (...inputs: StreamEventInputT[]): Promise<StreamEventT[]> => {
+        for (const input of inputs) {
+          if (!this.contract.emits.includes(input.type))
+            throw new Error(
+              `processor "${this.contract.slug}" emits ${JSON.stringify(input.type)} without declaring it`,
             );
-            next = undefined;
-          }
-          state = next ?? state;
+          input.source = {
+            processor: {
+              slug: this.contract.slug,
+              version: this.contract.version,
+              ...(whileProcessing
+                ? {
+                    whileProcessing: {
+                      offset: whileProcessing.offset,
+                      type: whileProcessing.type,
+                    },
+                  }
+                : {}),
+            },
+          };
         }
-        // FIFO blocker chain for THIS event (rule 2); background work escapes it (rule 3).
-        let blockers: Promise<unknown> = Promise.resolve();
-        this.processEvent({
-          event,
-          state,
-          previousState,
-          append: makeAppend(event),
-          blockProcessorWhile: (work) => {
-            blockers = blockers.then(() => work());
-          },
-          runInBackground: (work) => {
-            void work().catch((error) =>
-              console.error(`processor "${this.contract.slug}" background work failed`, error),
-            );
-          },
-          delivery: { caughtUp },
-        });
-        await blockers; // STRICT PER-EVENT ORDERING: this event's blocking work completes first
-        if (caughtUp) caughtUpDelivered = true;
+        return await this.stream.append(...inputs);
       };
 
-      const sawDurable = events.some((e) => !e.ephemeral);
-      const consumable = events.filter(
-        (e) => this.#consumes(e) && e.offset > progress.reducedThroughOffset, // redelivery dedupe
-      );
-      for (let i = 0; i < consumable.length; i++) {
-        await runOne(consumable[i], atHead && i === consumable.length - 1);
+    const runOne = async (event: StreamEventT | null, caughtUp: boolean) => {
+      const previousState = state;
+      if (event) {
+        let next: State | null | undefined;
+        try {
+          next = this.reduce({ event, state });
+        } catch (error) {
+          // A malformed/hostile event must not wedge the fold forever: record the skip, move on.
+          console.error(
+            `processor "${this.contract.slug}" reduce failed at offset ${event.offset}`,
+            error,
+          );
+          next = undefined;
+        }
+        state = next ?? state;
       }
-      // Rule 5: reached the head without a caught-up event → one eventless at-head pass.
-      if (atHead && !caughtUpDelivered) await runOne(null, true);
-
-      // Rule 4: ONE persist per window, before the cursor advances — but NEVER for an
-      // ephemeral-only window (a pure-ephemeral flood costs zero writes; after eviction the
-      // cursor regresses only over events nobody can redeliver anyway).
-      const next: Progress<State> = {
-        reducerVersion: this.contract.version,
-        reducedThroughOffset: window.scannedThroughOffset,
+      // FIFO blocker chain for THIS event (rule 2); background work escapes it (rule 3).
+      let blockers: Promise<unknown> = Promise.resolve();
+      this.processEvent({
+        event,
         state,
-      };
-      if (sawDurable) this.#storage.put(this.#progressKey(), next);
-      this.#progress = next;
-      for (const w of this.#waiters.splice(0)) {
-        if (next.reducedThroughOffset >= w.offset) w.resolve();
-        else this.#waiters.push(w);
-      }
-    } finally {
-      this.#running = false;
+        previousState,
+        append: makeAppend(event),
+        blockProcessorWhile: (work) => {
+          blockers = blockers.then(() => work());
+        },
+        runInBackground: (work) => {
+          void work().catch((error) =>
+            console.error(`processor "${this.contract.slug}" background work failed`, error),
+          );
+        },
+        delivery: { caughtUp },
+      });
+      await blockers; // STRICT PER-EVENT ORDERING: this event's blocking work completes first
+      if (caughtUp) caughtUpDelivered = true;
+    };
+
+    const sawDurable = events.some((e) => !e.ephemeral);
+    const consumable = events.filter(
+      (e) => this.#consumes(e) && e.offset > progress.reducedThroughOffset, // redelivery dedupe
+    );
+    for (let i = 0; i < consumable.length; i++) {
+      await runOne(consumable[i], atHead && i === consumable.length - 1);
+    }
+    // Rule 5: reached the head without a caught-up event → one eventless at-head pass.
+    if (atHead && !caughtUpDelivered) await runOne(null, true);
+
+    // Rule 4: ONE persist per window, before the cursor advances — but NEVER for an
+    // ephemeral-only window (a pure-ephemeral flood costs zero writes; after eviction the
+    // cursor regresses only over events nobody can redeliver anyway).
+    const next: Progress<State> = {
+      reducerVersion: this.contract.version,
+      reducedThroughOffset: window.scannedThroughOffset,
+      state,
+    };
+    if (sawDurable) this.#storage.put(this.#progressKey(), next);
+    this.#progress = next;
+    for (const w of this.#waiters.splice(0)) {
+      if (next.reducedThroughOffset >= w.offset) w.resolve();
+      else this.#waiters.push(w);
     }
   }
 }

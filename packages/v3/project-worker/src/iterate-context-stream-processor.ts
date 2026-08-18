@@ -177,7 +177,13 @@ export class IterateContextStreamProcessor extends StreamProcessor<State> {
   resolveFetch(state: State, expr: Expression, request: Request): Promise<unknown> {
     const last = expr.at(-1);
     // Normalize the terminal to a PROPERTY step `fetch` — a call-step's JSON args could never
-    // carry the live Request; it always rides in as the runtime arg.
+    // carry the live Request; it always rides in as the runtime arg. A fetch CALL that carries
+    // expression args is a LOUD error (never the silent arg-drop this codebase rejects
+    // everywhere else): the author meant something the lane cannot do.
+    if (Array.isArray(last) && last[0] === "fetch" && last.length > 1)
+      throw new Error(
+        `fetch takes no expression args — the live Request rides in as the runtime arg (got ${JSON.stringify(last.slice(1))})`,
+      );
     const call: Expression =
       last === "fetch"
         ? expr
@@ -243,23 +249,29 @@ export class IterateContextStreamProcessor extends StreamProcessor<State> {
 /** Registration-time must-use rule: a pattern that binds caller input (holes/captures) must have
  *  a target that references it — silently ignoring caller args is almost certainly a bug. */
 function assertMustUse(pattern: Expression, target: Expression): void {
-  const patternBinds = new Set<string | number>();
-  walkHoles(pattern, (h) => patternBinds.add(h));
+  const patternBinds = new Set<string>();
+  walkNamedHoles(pattern, (h) => patternBinds.add(h));
   if (patternBinds.size === 0) return;
-  const used = new Set<string | number>();
-  walkHoles(target, (h) => used.add(h));
+  const used = new Set<string>();
+  walkNamedHoles(target, (h) => used.add(h));
   for (const bound of patternBinds) {
-    if (typeof bound === "string" && !used.has(bound))
+    if (!used.has(bound))
       throw new Error(`pattern binds ?${bound} but the target never uses it (must-use rule)`);
   }
 }
 
-function walkHoles(expr: Expression, visit: (hole: string | number) => void): void {
+/** NAMED captures only — a numeric hole in a pattern binds nothing (anonymous wildcard), so
+ *  numeric must-use is meaningless, not merely unenforced. */
+function walkNamedHoles(expr: Expression, visit: (hole: string) => void): void {
   const walkValue = (v: unknown, depth: number): void => {
     // Classify via holeKind, exactly as match/substitute do — a private detector here would
     // disagree with them about `$`-escapes ($-escaped data is inert; rest binds no name).
     const kind = holeKind(v);
-    if (kind === "arg") return visit((v as { "?": string | number })["?"]);
+    if (kind === "arg") {
+      const h = (v as { "?": string | number })["?"];
+      if (typeof h === "string") visit(h);
+      return;
+    }
     if (kind === "literal" || kind === "rest") return;
     if (typeof v === "object" && v !== null)
       for (const inner of Object.values(v)) walkValue(inner, deeper(depth, "must-use walk"));

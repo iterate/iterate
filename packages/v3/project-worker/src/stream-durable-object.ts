@@ -77,6 +77,9 @@ type PushRow = {
   target: Expression;
   consumes?: string[];
   onFailingEvent: "halt" | "skip";
+  /** Retries before the policy speaks. Default 15 (~2h of backoff); a webhook that would
+   *  rather fail fast can say so. */
+  maxAttempts?: number;
 };
 /** The stream-held cursor + failure ladder state for one push row. */
 type PushCursor = {
@@ -265,13 +268,29 @@ export class StreamDurableObject extends DurableObject<Env> {
     const current = await this.ctx.storage.getAlarm();
     if (current === null || current > target) await this.ctx.storage.setAlarm(target);
   }
+  // In-memory on purpose: a fresh incarnation always runs one resurrection pass, and losing
+  // the flag with an eviction is exactly the point.
+  #facetsResurrected = false;
+
   async alarm(): Promise<void> {
     this.#drivePushRows(); // retries whose backoff came due
-    // workerd #6800: a live facet client holds this actor idle-but-non-hibernatable, converting
-    // quiet time into billed duration. Abort every facet once the stream has been quiet — their
-    // cursors are durable in their OWN storage and delivery is cursor-driven, so nothing is
-    // lost (replies are output-gated; abort keeps storage; the next push rebuilds, ~50-700ms).
-    if (Date.now() - this.#lastActivityMs >= 60_000) {
+    if (!this.#facetsResurrected) {
+      // THE RESURRECTION PASS: a fold interrupted by eviction, with no follow-up traffic,
+      // would otherwise stall until the next append (the pump only fires on commits). The
+      // first alarm of each incarnation asks every facet for a snapshot — which IS its
+      // catch-up: a behind facet gap-repairs from its own durable cursor, a caught-up one
+      // no-ops. Quiesce/abort waits for a later pass so it can never race a fold it revived.
+      this.#facetsResurrected = true;
+      for (const { slug } of this.#facetEntries())
+        void this.#facet(slug)
+          .then((f) => f.snapshot())
+          .catch((e) => console.error(`facet "${slug}" resurrection failed`, e));
+      await this.#armAlarmNoLaterThan(Date.now() + 60_000);
+    } else if (Date.now() - this.#lastActivityMs >= 60_000) {
+      // workerd #6800: a live facet client holds this actor idle-but-non-hibernatable,
+      // converting quiet time into billed duration. Abort every facet once the stream has been
+      // quiet — their cursors are durable in their OWN storage and delivery is cursor-driven,
+      // so nothing is lost (replies are output-gated; abort keeps storage; rebuild ~50-700ms).
       for (const { slug } of this.#facetEntries()) {
         try {
           this.ctx.facets.abort(`proc:${slug}`, "idle quiesce");
@@ -282,7 +301,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     } else {
       await this.#armAlarmNoLaterThan(this.#lastActivityMs + 60_000);
     }
-    // keep the earliest pending push retry armed (the quiesce arm above may be later)
+    // keep the earliest pending push retry armed (the arms above may be later)
     const dues = this.#pushRows()
       .map((r) => this.#pushCursor(r.name)?.nextAttemptAtMs)
       .filter((t): t is number => typeof t === "number");
@@ -315,6 +334,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     target: string | Expression;
     consumes?: string[];
     onFailingEvent?: "halt" | "skip";
+    maxAttempts?: number;
     start?: "beginning" | "now";
   }): { name: string } {
     this.#touch();
@@ -331,7 +351,13 @@ export class StreamDurableObject extends DurableObject<Env> {
     const rows = this.#pushRows().filter((r) => r.name !== name);
     this.ctx.storage.kv.put("push-subscriptions", [
       ...rows,
-      { name, target, consumes: input.consumes, onFailingEvent: input.onFailingEvent ?? "halt" },
+      {
+        name,
+        target,
+        consumes: input.consumes,
+        onFailingEvent: input.onFailingEvent ?? "halt",
+        ...(input.maxAttempts !== undefined ? { maxAttempts: input.maxAttempts } : {}),
+      },
     ]);
     if (!this.#pushCursor(name))
       this.#putPushCursor(name, {
@@ -413,10 +439,12 @@ export class StreamDurableObject extends DurableObject<Env> {
               ),
             ),
           ]);
+          // A clean delivery resets the WHOLE ladder — including the skip counter, so
+          // "3 consecutive skips" really means consecutive.
           this.#putPushCursor(row.name, {
             confirmedOffset: window.scannedThroughOffset,
             attempt: 0,
-            skipsSinceSuccess: cursor.skipsSinceSuccess,
+            skipsSinceSuccess: 0,
           });
         } catch (error) {
           await this.#onPushFailure(row, cursor, events, error);
@@ -428,6 +456,12 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
   }
 
+  /** ONE ladder, then ONE policy decision — never interleaved. Every failure retries with
+   *  backoff (pinned to a single event after the first, so a poison event is isolated from its
+   *  batch); only when the 15 attempts are EXHAUSTED does `onFailingEvent` speak: "halt" stops
+   *  the subscription; "skip" drops exactly that one event (with an audit fact) and moves on —
+   *  and three consecutive skips (no clean delivery between) still halt. A target outage and a
+   *  poison event therefore ride the same, predictable ladder. */
   async #onPushFailure(
     row: PushRow,
     cursor: PushCursor,
@@ -436,8 +470,20 @@ export class StreamDurableObject extends DurableObject<Env> {
   ): Promise<void> {
     const attempt = cursor.attempt + 1;
     const message = error instanceof Error ? error.message : String(error);
-    // poison isolation: three failures of a PINNED single event → skip it, with an audit fact
-    if (row.onFailingEvent === "skip" && cursor.pinned && events.length === 1 && attempt >= 3) {
+    if (attempt < (row.maxAttempts ?? 15)) {
+      const backoff = Math.min(1000 * 2 ** (attempt - 1), 1_800_000);
+      const jittered = Math.round(backoff * (0.8 + Math.random() * 0.4));
+      this.#putPushCursor(row.name, {
+        ...cursor,
+        attempt,
+        pinned: true, // isolate-or-progress: every retry runs with batch size 1
+        nextAttemptAtMs: Date.now() + jittered,
+      });
+      void this.#armAlarmNoLaterThan(Date.now() + jittered).catch(() => {});
+      return;
+    }
+    // Retries exhausted — now, and only now, consult the policy.
+    if (row.onFailingEvent === "skip" && events.length === 1) {
       const skips = cursor.skipsSinceSuccess + 1;
       if (skips >= 3) return this.#haltPush(row, `3 consecutive skips (last error: ${message})`);
       await this.append({
@@ -447,22 +493,12 @@ export class StreamDurableObject extends DurableObject<Env> {
       this.#putPushCursor(row.name, {
         confirmedOffset: events[0].offset,
         attempt: 0,
-        pinned: true,
         skipsSinceSuccess: skips,
       });
       void this.#armAlarmNoLaterThan(Date.now()).catch(() => {}); // resume past the skip
       return;
     }
-    if (attempt >= 15) return this.#haltPush(row, `15 delivery attempts failed (last: ${message})`);
-    const backoff = Math.min(1000 * 2 ** (attempt - 1), 1_800_000);
-    const jittered = Math.round(backoff * (0.8 + Math.random() * 0.4));
-    this.#putPushCursor(row.name, {
-      ...cursor,
-      attempt,
-      pinned: true, // isolate-or-progress: retry with batch size 1
-      nextAttemptAtMs: Date.now() + jittered,
-    });
-    void this.#armAlarmNoLaterThan(Date.now() + jittered).catch(() => {});
+    return this.#haltPush(row, `${attempt} delivery attempts failed (last: ${message})`);
   }
 
   async #haltPush(row: PushRow, reason: string): Promise<void> {

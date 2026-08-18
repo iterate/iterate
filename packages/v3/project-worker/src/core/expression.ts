@@ -312,8 +312,9 @@ function printValue(v: unknown): string {
       const n = (v as { "...": true | number })["..."];
       return n === true ? "...?" : `...?${n}`;
     }
-    case "literal":
-      return printValue((v as { $: unknown }).$);
+    // NO "literal" arm on purpose: a $-escape must PRINT as `{ $: ... }` (the plain-object
+    // branch below), which re-parses to the identical tag. Unwrapping it here turned frozen
+    // data back into a live hole on the round trip — the exact inversion $ exists to prevent.
   }
   if (typeof v === "string") return `'${v.replaceAll("\\", "\\\\").replaceAll("'", "\\'")}'`;
   if (Array.isArray(v)) return `[${v.map(printValue).join(", ")}]`;
