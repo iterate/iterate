@@ -630,3 +630,25 @@ the control plane runs the same core; billing-analytics verification of hibernat
   `[...path.slice(0,-1), [path.at(-1), ...args]]`, with a loud guard for an empty path.
 - +5 tests (70 total: nested-hole rest scan, config seed semantics). No deploy — rides
   increment 27.
+
+## Increment 27 (userfacet-1): USERSPACE facet processors — loader classes on the facet spine
+
+- `enableProcessor(slug, ref?)`: an optional `{ source, className }` ref makes the processor
+  USERSPACE — the class arrives via the Worker Loader (source resolved through this context's own
+  dispatch, the same repo-agnostic resolution as dynamic workers) instead of the built-in
+  `ProcessorFacet` map. Durable record shape: `{ slug, ref? }[]` (was `string[]`; prod is
+  resettable, no backcompat).
+- The CONTRACT is duck-typed, uniform for both kinds: `configure(identity)` (may no-op),
+  `deliver(events, head)`, `snapshot()`. The userspace class reaches its context via `env.ITX`
+  (the parent stub) or the injected `itx.js`.
+- Loader wiring mirrors the stateful runner's proven pattern: cacheKey
+  `procfacet:{deployId}:{ctxName}:{slug}:{sourceHash}`, injected `itx.js`, `env.ITX` +
+  `globalOutbound` = the parent by name, abort+recreate the facet on source-hash change (the
+  VERSION_KEY marker pattern, keyed per slug — storage kept). The parent only ever calls the
+  duck-typed methods directly (`facet.deliver(...)`), which is Reflect.apply-safe by construction.
+- Demo `/user-tally.js` in HELLO_FILES: `UserTally extends DurableObject`, own cursor + counts in
+  its own facet storage; `snapshot()` catches up from the stream via `env.ITX.read(cursor)` so
+  reads are never stale despite fire-and-forget drives.
+- Proven live (prove_userfacet.mjs): fresh ctx → enable user-tally (by source expression) + the
+  built-in tally → 2 provides + 1 revoke → BOTH facets fold identically (provided:2, revoked:1,
+  own cursor at offset 3); `/state` lists both. Deploy `userfacet-1`.

@@ -184,9 +184,17 @@ export class Itx extends RpcTarget {
     return this.#host.revokeCapability(input);
   }
 
-  /** Enable a facet-hosted processor on this context's stream (the facet spine). */
-  enableProcessor(slug: string): Promise<{ ok: true }> {
-    return this.#host.enableProcessor(slug);
+  /** Enable a facet-hosted processor on this context's stream (the facet spine). With a `ref`
+   *  the processor is USERSPACE code loaded through the Worker Loader (duck-typed contract:
+   *  configure / deliver / snapshot). */
+  enableProcessor(
+    slug: string,
+    ref?: { source: string | unknown[]; className: string },
+  ): Promise<{ ok: true }> {
+    return this.#host.enableProcessor(
+      slug,
+      ref as { source: string | import("./expression.ts").Expression; className: string },
+    );
   }
 
   /** A facet processor's fold (offset + reduced state), served through the parent. */

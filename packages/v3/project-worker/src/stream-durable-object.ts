@@ -66,6 +66,27 @@ export class Counter extends DurableObject {
     return { async add(by) { return self.increment(by); } };
   }
 }`,
+  // A USERSPACE facet processor (duck-typed contract: configure/deliver/snapshot) — hosted as a
+  // workerd facet on the Stream DO via enableProcessor(slug, { source, className }). It keeps its
+  // own cursor + counts in its OWN facet storage; snapshot catches up from the stream via env.ITX
+  // (the parent stub) so reads are never stale even though drives are fire-and-forget.
+  "/user-tally.js": `import { DurableObject } from "cloudflare:workers";
+export class UserTally extends DurableObject {
+  configure() {} // identity unused — env.ITX already IS this stream
+  #fold(events) {
+    let offset = this.ctx.storage.kv.get("offset") ?? 0;
+    const counts = this.ctx.storage.kv.get("counts") ?? {};
+    for (const e of events)
+      if (e.offset > offset) { counts[e.type] = (counts[e.type] ?? 0) + 1; offset = e.offset; }
+    this.ctx.storage.kv.put("counts", counts);
+    this.ctx.storage.kv.put("offset", offset);
+    return { offset, state: { counts } };
+  }
+  deliver(events) { this.#fold(events); }
+  async snapshot() {
+    return this.#fold(await this.env.ITX.read(this.ctx.storage.kv.get("offset") ?? 0));
+  }
+}`,
   // A fetch-serving stateless worker: an HTTP page AND a WebSocket upgrade (101) — the stand-in
   // for "a device presents a website with WebSocket functionality", reached on the fetch lane.
   "/site.js": `export default {
@@ -79,6 +100,21 @@ export class Counter extends DurableObject {
     return new Response("<!doctype html><title>dynamic site</title><h1>hello from a dynamic web capability</h1>", { headers: { "content-type": "text/html" } });
   }
 };`,
+};
+
+/** One enabled facet-hosted processor: a built-in slug, or — with `ref` — USERSPACE code (a
+ *  source expression resolved to modules + the exported DurableObject class name). */
+type FacetProcessorEntry = {
+  slug: string;
+  ref?: { source: Expression; className: string };
+};
+
+/** The duck-typed contract BOTH facet kinds satisfy (the built-in ProcessorFacet and any
+ *  loader-loaded userspace class): identity in, commit drives in, fold out. */
+type FacetProcessorHandle = {
+  configure(identity: import("./processor-facet.ts").FacetIdentity): Promise<unknown> | unknown;
+  deliver(events: StreamEvent[], streamMaxOffset: number): Promise<unknown> | unknown;
+  snapshot(): Promise<{ offset: number; state: unknown }>;
 };
 
 export class StreamDurableObject extends DurableObject<Env> {
@@ -177,33 +213,77 @@ export class StreamDurableObject extends DurableObject<Env> {
       // PURPOSE: an awaited drive would deadlock if a facet processor APPENDS during its
       // batch (append → this method → await the same facet's busy chain). Reads stay correct
       // because facetSnapshot() always catches up from the log first.
-      for (const slug of this.#facetSlugs())
+      for (const { slug } of this.#facetEntries())
         void this.#facet(slug)
-          .deliver(committed, head)
+          .then((f) => f.deliver(committed, head))
           .catch((e) => console.error(`facet "${slug}" deliver failed`, e));
     }
     return committed;
   }
 
-  // ── facet-hosted processors (processor-facet.ts) ──
+  // ── facet-hosted processors (built-ins via processor-facet.ts; userspace via the LOADER) ──
 
-  #facetSlugs(): string[] {
-    return (this.ctx.storage.kv.get("facet-processors") as string[] | undefined) ?? [];
+  #facetEntries(): FacetProcessorEntry[] {
+    return (this.ctx.storage.kv.get("facet-processors") as FacetProcessorEntry[] | undefined) ?? [];
   }
 
-  /** Materialize (or reuse) the facet hosting `slug`, configured with this stream's identity. */
-  #facet(slug: string) {
-    const exports = (this.ctx as unknown as { exports: Record<string, unknown> }).exports;
+  /** Materialize (or reuse) the facet hosting `slug`. A stored `ref` means USERSPACE: the class
+   *  arrives via the Worker Loader (source resolved through this context's own dispatch — the
+   *  same repo-agnostic resolution as dynamic workers) instead of the built-in ProcessorFacet.
+   *  Both speak the same duck-typed contract: configure / deliver / snapshot. */
+  async #facet(slug: string): Promise<FacetProcessorHandle> {
+    const ref = this.#facetEntries().find((e) => e.slug === slug)?.ref;
+    if (!ref) {
+      const exports = (this.ctx as unknown as { exports: Record<string, unknown> }).exports;
+      return this.ctx.facets.get(`proc:${slug}`, () => ({
+        class: exports.ProcessorFacet as DurableObjectClass,
+      })) as unknown as FacetProcessorHandle;
+    }
+    const modules = (await this.invoke(ref.source)) as Record<string, string>;
+    const version = hashSource(JSON.stringify(modules));
+    const v = this.env.CF_VERSION_METADATA?.id ?? "unversioned";
+    const self = this.env.CONTEXT.getByName(this.ctx.id.name ?? "?");
+    const worker = this.env.LOADER.get(
+      // Deploy id in the key (the stale-isolate/DataCloneError family): see the stateful runner.
+      `procfacet:${v}:${this.ctx.id.name}:${slug}:${version}`,
+      () => ({
+        compatibilityDate: "2026-07-01",
+        mainModule: "cap.js",
+        modules: { "itx.js": ITX_SURFACE_MODULE, ...modules },
+        env: { ITX: self },
+        globalOutbound: self,
+      }),
+    );
+    const klass = worker.getDurableObjectClass(ref.className);
+    if (!klass) throw new Error(`userspace processor "${slug}": no class "${ref.className}"`);
+    // Abort + recreate the facet on a source change, KEEPING its storage — the stateful runner's
+    // version-marker pattern, keyed per slug. The parent only ever calls the duck-typed methods
+    // directly (facet.configure/deliver/snapshot), which is Reflect.apply-safe by construction.
+    const markerKey = `procfacet:${slug}:version`;
+    const prev = this.ctx.storage.kv.get(markerKey) as string | undefined;
+    if (prev !== undefined && prev !== version)
+      this.ctx.facets.abort(`proc:${slug}`, "source changed");
+    if (prev !== version) this.ctx.storage.kv.put(markerKey, version);
     return this.ctx.facets.get(`proc:${slug}`, () => ({
-      class: exports.ProcessorFacet as DurableObjectClass,
-    })) as unknown as import("./processor-facet.ts").ProcessorFacet;
+      class: klass,
+    })) as unknown as FacetProcessorHandle;
   }
 
-  /** Enable a facet-hosted processor on this stream (idempotent; identity configured durably). */
-  async enableProcessor(slug: string): Promise<{ ok: true }> {
-    const slugs = this.#facetSlugs();
-    if (!slugs.includes(slug)) this.ctx.storage.kv.put("facet-processors", [...slugs, slug]);
-    await this.#facet(slug).configure({
+  /** Enable a facet-hosted processor on this stream (idempotent; identity configured durably).
+   *  With a `ref` the processor is USERSPACE code: `source` (an expression resolved to modules)
+   *  + the exported `className` — stored durably so every incarnation rebuilds the same facet. */
+  async enableProcessor(
+    slug: string,
+    ref?: { source: string | Expression; className: string },
+  ): Promise<{ ok: true }> {
+    const entry: FacetProcessorEntry = ref
+      ? { slug, ref: { source: toExpression(ref.source), className: ref.className } }
+      : { slug };
+    const others = this.#facetEntries().filter((e) => e.slug !== slug);
+    this.ctx.storage.kv.put("facet-processors", [...others, entry]);
+    await (
+      await this.#facet(slug)
+    ).configure({
       parentName: this.ctx.id.name ?? "?",
       projectId: this.#name.projectId,
       path: this.#name.path,
@@ -213,9 +293,10 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /** A facet processor's fold, served through the parent (catches up first). */
-  facetSnapshot(slug: string): Promise<{ offset: number; state: unknown }> {
-    if (!this.#facetSlugs().includes(slug)) throw new Error(`no facet processor "${slug}" enabled`);
-    return this.#facet(slug).snapshot();
+  async facetSnapshot(slug: string): Promise<{ offset: number; state: unknown }> {
+    if (!this.#facetEntries().some((e) => e.slug === slug))
+      throw new Error(`no facet processor "${slug}" enabled`);
+    return (await this.#facet(slug)).snapshot();
   }
 
   read(afterOffset = 0, limit = 500): StreamEvent[] {
@@ -292,7 +373,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       return Response.json({
         incarnation: this.incarnation,
         processors: this.#registry.names,
-        facetProcessors: this.#facetSlugs(),
+        facetProcessors: this.#facetEntries().map((e) => e.slug),
         ...this.#stubs.state(),
       });
 
