@@ -283,20 +283,6 @@ test("Agent create replays its earlier birth and setup events through its subscr
     "agent birth certificate",
     (event) => event.type === "events.iterate.com/agent/created",
   );
-  const agentConfiguredOffset = requiredOffset(
-    "agent configuration",
-    (event) => event.type === "events.iterate.com/agent/configured",
-  );
-  const systemPromptOffset = requiredOffset(
-    "platform system context",
-    (event) =>
-      event.type === AGENT_CONTEXT_ADDED_TYPE && event.payload?.key === "agent/system-prompt",
-  );
-  const bootContextOffset = requiredOffset(
-    "boot context",
-    (event) =>
-      event.type === AGENT_CONTEXT_ADDED_TYPE && event.payload?.key === "agent/boot-context",
-  );
   const capabilityHostBirthOffset = requiredOffset(
     "capability-host birth certificate",
     (event) => event.type === "events.iterate.com/capability-host/created",
@@ -324,22 +310,20 @@ test("Agent create replays its earlier birth and setup events through its subscr
       return payload.receiver?.action === "facet-processor" && payload.name === name;
     });
   const agentSubscriptionOffset = facetWakeSubscriptionOffset(
-    "agent processor subscription",
-    "agent",
+    "agent keeper subscription",
+    "agent-headless",
   );
   const capabilityHostSubscriptionOffset = facetWakeSubscriptionOffset(
     "capability-host processor subscription",
     "capability-host",
   );
 
-  // This is the supported replay case: create commits one complete birth
-  // batch, with each processor's ordinary setup facts before its durable
-  // subscription. The creation barrier only resolves after both processors
-  // have replayed those earlier offsets.
+  // This is the supported replay case: create commits one complete CORE
+  // batch (personality is the config worker's job, after birth), with each
+  // processor's ordinary setup facts before its durable subscription. The
+  // creation barrier only resolves after both processors have replayed
+  // those earlier offsets.
   expect(agentSubscriptionOffset).toBeGreaterThan(birthCertificateOffset);
-  expect(agentSubscriptionOffset).toBeGreaterThan(agentConfiguredOffset);
-  expect(agentSubscriptionOffset).toBeGreaterThan(systemPromptOffset);
-  expect(agentSubscriptionOffset).toBeGreaterThan(bootContextOffset);
   expect(capabilityHostSubscriptionOffset).toBeGreaterThan(capabilityHostBirthOffset);
   expect(capabilityHostSubscriptionOffset).toBeGreaterThan(workspaceProvidedOffset);
 
@@ -348,6 +332,19 @@ test("Agent create replays its earlier birth and setup events through its subscr
   expect(agentSnapshot.state).toMatchObject({
     birthCertificate: { createdAtOffset: expect.any(Number) },
     config: { llm: { model: expect.any(String) } },
+  });
+
+  // The project's config worker authors the personality AFTER birth and
+  // finalizes; the keeper holds turns until then. The project's worker was
+  // probed during project creation, so the finalize is a delivery hop away.
+  await agent.stream.waitForEvent({
+    afterOffset: 0,
+    eventTypes: ["events.iterate.com/agent/birth-finalized"],
+    timeoutMs: 30_000,
+  });
+  const finalizedSnapshot = await agent.processor.snapshot();
+  expect(finalizedSnapshot.state).toMatchObject({
+    birthFinalizedAtOffset: expect.any(Number),
     contextItems: expect.arrayContaining([
       expect.objectContaining({ payload: expect.objectContaining({ key: "agent/system-prompt" }) }),
       expect.objectContaining({ payload: expect.objectContaining({ key: "agent/boot-context" }) }),
@@ -648,24 +645,36 @@ test("agents.get(path).create explicitly appends and processes the complete birt
     expect.arrayContaining([expect.objectContaining({ path: agentPath })]),
   );
 
-  // This test proves the durable birth batch and create()'s read-after-create
-  // barrier, not the live waitForEvent transport. Read the committed facts
-  // after create returns so a deployment replacing a waiter incarnation does
-  // not turn durable product truth into a test-only transient failure.
+  // This test proves the durable CORE birth batch and create()'s
+  // read-after-create barrier, not the live waitForEvent transport. Read the
+  // committed facts after create returns so a deployment replacing a waiter
+  // incarnation does not turn durable product truth into a test-only
+  // transient failure.
   const birthEvents = await agentStream.getEvents({ afterOffset: 0 });
   const birthEvent = birthEvents.find((event) => event.type === "events.iterate.com/agent/created");
-  const configured = birthEvents.find(
-    (event) => event.type === "events.iterate.com/agent/configured",
-  );
-  const basePrompt = birthEvents.find(
-    (event) =>
-      event.type === AGENT_CONTEXT_ADDED_TYPE &&
-      (event.payload as { key?: string } | undefined)?.key === "agent/system-prompt",
-  );
   const workspaceMount = birthEvents.find(
     (event) => event.type === "events.iterate.com/capability-host/capability-provided",
   );
   expect(birthEvent).toMatchObject({ payload: {} });
+  expect(workspaceMount?.payload).toMatchObject({ path: ["workspace"] });
+
+  // Personality is the config worker's job, arriving a delivery hop after
+  // the core: the platform-default prompt (via getDefaultBirthEvents), the
+  // model config, and the finalize that releases the keeper's hold.
+  await agentStream.waitForEvent({
+    afterOffset: 0,
+    eventTypes: ["events.iterate.com/agent/birth-finalized"],
+    timeoutMs: 30_000,
+  });
+  const authoredEvents = await agentStream.getEvents({ afterOffset: 0 });
+  const configured = authoredEvents.find(
+    (event) => event.type === "events.iterate.com/agent/configured",
+  );
+  const basePrompt = authoredEvents.find(
+    (event) =>
+      event.type === AGENT_CONTEXT_ADDED_TYPE &&
+      (event.payload as { key?: string } | undefined)?.key === "agent/system-prompt",
+  );
   expect(configured?.payload).toMatchObject({
     config: { llm: { model: expect.any(String) } },
   });
@@ -674,7 +683,6 @@ test("agents.get(path).create explicitly appends and processes the complete birt
     key: "agent/system-prompt",
     content: expect.stringContaining("async (itx)"),
   });
-  expect(workspaceMount?.payload).toMatchObject({ path: ["workspace"] });
 
   // Birth mechanics: project-worker (every project stream) + agent processor +
   // capability-host. One agent processor owns history, scheduling, and the
@@ -697,11 +705,13 @@ test("agents.get(path).create explicitly appends and processes the complete birt
       // The subscription NAME is the contract selector (name == registered slug).
       .map((event) => (event.payload as { name?: string } | undefined)?.name)
       .filter((slug): slug is string => typeof slug === "string");
-    if (processorSlugs.includes("agent") && processorSlugs.includes("capability-host")) break;
+    if (processorSlugs.includes("agent-headless") && processorSlugs.includes("capability-host")) {
+      break;
+    }
     if (Date.now() > mechanicsDeadline) break;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  expect(processorSlugs).toEqual(expect.arrayContaining(["agent", "capability-host"]));
+  expect(processorSlugs).toEqual(expect.arrayContaining(["agent-headless", "capability-host"]));
   expect(subscriptionCount).toBeGreaterThanOrEqual(3);
 });
 test("Project worker processEventBatch receives events from every project stream and can copy", async () => {
