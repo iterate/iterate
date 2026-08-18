@@ -1226,14 +1226,16 @@ describe("a flush names a sequence number", () => {
   });
 
   /*
-   * CANCELLING STOPS THE SOUND; TRUNCATING FIXES THE MEMORY. The provider's
+   * CANCELLING STOPS THE SOUND; THE REPAIR FIXES THE MEMORY. The provider's
    * conversation still holds the ENTIRE answer it generated, so barged mid-
    * count it will swear it "counted all the way to one hundred" — the model
-   * remembers what it said, not what anybody heard. conversation.item.truncate
-   * with the heard milliseconds trims the item's audio AND transcript, so its
-   * memory matches the listener's.
+   * remembers what it said, not what anybody heard. On a provider whose
+   * truncate works, the item is trimmed to the heard milliseconds. On grok
+   * — this harness's default — NO wire verb repairs an assistant item
+   * (truncate: silent no-op; delete: "Item not found"; both probed live
+   * 2026-08-18), so the heard-prefix note is the entire repair there.
    */
-  it("truncates the barged answer to what the device actually heard", async () => {
+  it("repairs the barged answer's memory — on grok, the note is the whole repair", async () => {
     const h = makeHarness();
     await callIsLive(h, CLIENT_TAKES_TURNS);
     h.provider.responseCreated();
@@ -1241,33 +1243,28 @@ describe("a flush names a sequence number", () => {
     h.provider.answerTranscript("one two three four five");
     h.provider.answerAudio(7_600, "item_count");
     await playOutEverything(h, 600);
-    const deliveredBeforeBarge = speakerMsDelivered(h);
-    expect(deliveredBeforeBarge).toBeGreaterThan(0);
+    expect(speakerMsDelivered(h)).toBeGreaterThan(0);
 
     await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
     await h.settle();
 
-    /* Not yet: truncating an item its own response is still finalizing races
+    /* Not yet: repairing an item its own response is still finalizing races
      * the transcript write — observed live, the ack shared a millisecond with
      * the response's done and the model still remembered the full count. */
-    expect(h.provider.sentOfType("conversation.item.truncate")).toHaveLength(0);
+    expect(h.provider.sentOfType("conversation.item.create")).toHaveLength(0);
 
     /* Transcript that arrives AFTER the press models the transcriber's lag:
      * residue, never part of what the note says was heard. */
     h.provider.answerTranscript(" six seven eight nine ten twenty");
     h.provider.answerComplete();
     await h.settle();
-    const truncations = h.provider.sentOfType("conversation.item.truncate");
-    expect(truncations).toHaveLength(1);
-    expect(truncations[0]).toMatchObject({ item_id: "item_count", content_index: 0 });
-    const audioEndMs = truncations[0]!.audio_end_ms as number;
-    /* Heard = sent minus what the clear threw out of the device's buffer:
-     * positive, and never more than was ever handed over. */
-    expect(audioEndMs).toBeGreaterThan(0);
-    expect(audioEndMs).toBeLessThanOrEqual(deliveredBeforeBarge);
+    /* Neither verb goes out on grok — a truncate is swallowed silently and
+     * a delete draws "Item not found"; either would be noise on the wire. */
+    expect(h.provider.sentOfType("conversation.item.truncate")).toHaveLength(0);
+    expect(h.provider.sentOfType("conversation.item.delete")).toHaveLength(0);
 
-    /* And because truncation deletes the transcript wholesale, the note
-     * restores what the listener heard — a PREFIX, never the whole thing. */
+    /* The note is the answer's only memory — the heard PREFIX, never the
+     * whole thing. */
     const notes = h.provider.sentOfType("conversation.item.create");
     expect(notes).toHaveLength(1);
     const noteText = JSON.stringify(notes[0]);
@@ -1276,24 +1273,27 @@ describe("a flush names a sequence number", () => {
     expect(noteText).not.toContain("twenty");
   });
 
-  it("truncates immediately when the barged answer had already finished generating", async () => {
+  it("repairs immediately when the barged answer had already finished generating", async () => {
     const h = makeHarness();
     await callIsLive(h, CLIENT_TAKES_TURNS);
     h.provider.responseCreated();
-    h.provider.answerAudio(8_000, "item_done");
+    h.provider.answerAudio(400, "item_done");
+    h.provider.answerTranscript("one two three");
+    h.provider.answerAudio(7_600, "item_done");
     h.provider.answerComplete();
     await playOutEverything(h, 600);
 
     await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
     await h.settle();
-    const truncations = h.provider.sentOfType("conversation.item.truncate");
-    expect(truncations).toHaveLength(1);
-    expect(truncations[0]).toMatchObject({ item_id: "item_done", content_index: 0 });
+    /* Immediate on grok means the NOTE goes now — no deferral, no verb. */
+    const notes = h.provider.sentOfType("conversation.item.create");
+    expect(notes).toHaveLength(1);
+    expect(JSON.stringify(notes[0])).toContain("heard only this much");
     /* No cancel: there was nothing generating to cancel. */
     expect(h.provider.sentOfType("response.cancel")).toHaveLength(0);
   });
 
-  it("sends no truncate when the press finds nothing playing", async () => {
+  it("sends no repair when the press finds nothing playing", async () => {
     const h = makeHarness();
     await callIsLive(h, CLIENT_TAKES_TURNS);
     h.provider.responseCreated();
@@ -1303,6 +1303,7 @@ describe("a flush names a sequence number", () => {
 
     await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
     await h.settle();
+    expect(h.provider.sentOfType("conversation.item.create")).toHaveLength(0);
     expect(h.provider.sentOfType("conversation.item.truncate")).toHaveLength(0);
   });
 
@@ -1376,22 +1377,20 @@ describe("the open-mic barge", () => {
      * drew an error every time it was tried.
      */
     expect(h.provider.sentOfType("response.cancel")).toHaveLength(0);
-    /* And not yet: truncating an item its own response is still finalizing
-     * races the transcript write — the truncate waits for `response.done`. */
-    expect(h.provider.sentOfType("conversation.item.truncate")).toHaveLength(0);
+    /* And not yet: repairing an item its own response is still finalizing
+     * races the transcript write — the repair waits for `response.done`. */
+    expect(h.provider.sentOfType("conversation.item.create")).toHaveLength(0);
 
     /* The provider finalizes the barged response on its own. */
     h.provider.answerComplete();
     await h.settle();
-    const truncations = h.provider.sentOfType("conversation.item.truncate");
-    expect(truncations).toHaveLength(1);
-    expect(truncations[0]).toMatchObject({ item_id: "item_vad", content_index: 0 });
-    const audioEndMs = truncations[0]!.audio_end_ms as number;
-    expect(audioEndMs).toBeGreaterThan(0);
-    expect(audioEndMs).toBeLessThanOrEqual(deliveredBeforeBarge);
+    /* No wire verb on grok — truncate is swallowed, delete is refused for
+     * assistant items (see PROVIDERS); the note carries the whole repair. */
+    expect(h.provider.sentOfType("conversation.item.delete")).toHaveLength(0);
+    expect(h.provider.sentOfType("conversation.item.truncate")).toHaveLength(0);
 
-    /* Truncation deletes the transcript wholesale; the note restores the
-     * heard prefix so recall is exact instead of confabulated. */
+    /* The note restores the heard prefix so recall has SOMETHING exact to
+     * ground on, even though the item itself cannot be touched. */
     const notes = h.provider.sentOfType("conversation.item.create");
     expect(notes).toHaveLength(1);
     expect(JSON.stringify(notes[0])).toContain("heard only this much");
@@ -1430,17 +1429,30 @@ describe("the open-mic barge", () => {
     await playOutEverything(h, 12_000);
     expect(speakerMsDelivered(h)).toBe(8_000);
     /* Nobody's memory was touched: no commit means nothing to repair. */
+    expect(h.provider.sentOfType("conversation.item.delete")).toHaveLength(0);
     expect(h.provider.sentOfType("conversation.item.truncate")).toHaveLength(0);
     expect(h.provider.sentOfType("response.cancel")).toHaveLength(0);
   });
 
   it("a confirmed onset discards the held tail and repairs with heard-ms frozen at the clear", async () => {
+    /* An OPENAI open-mic call, deliberately: the frozen number rides the
+     * truncate's audio_end_ms, and grok's repair (delete) carries no number
+     * to pin. OpenAI's 24 kHz deltas mean the fake's byte counts are 1.5x
+     * the real milliseconds — inputs below are scaled so the frozen number
+     * stays the same round 600 as the grok drop tests. */
     const h = makeHarness();
-    await callIsLive(h, GROK_LISTENS);
+    await h.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: { providerBaseUrl: "https://fake.provider.test/v1/realtime", provider: "openai" },
+    });
+    await h.append(micFrame(1));
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
     h.provider.responseCreated();
-    h.provider.answerAudio(400, "item_burst");
+    h.provider.answerAudio(600, "item_burst");
     h.provider.answerTranscript("one two three four five");
-    h.provider.answerAudio(7_600, "item_burst");
+    h.provider.answerAudio(11_400, "item_burst");
     h.provider.answerComplete();
     await playOutEverything(h, 600);
     const deliveredAtOnset = speakerMsDelivered(h);
@@ -1483,12 +1495,13 @@ describe("the open-mic barge", () => {
     expect(speakerClears(h)).toHaveLength(2);
 
     /* And the reply to the interruption plays clean, with none of the dead
-     * answer resuming underneath it. */
+     * answer resuming underneath it. (1,500 fake-ms = 1,000 real at 24 kHz;
+     * the resampler's half-kernel lookahead holds back ~1.3 ms of tail.) */
     h.provider.responseCreated();
-    h.provider.answerAudio(1_000);
+    h.provider.answerAudio(1_500);
     h.provider.answerComplete();
     await playOutEverything(h, 3_000);
-    expect(speakerMsDelivered(h)).toBe(deliveredAfterConfirm + 1_000);
+    expect(Math.abs(speakerMsDelivered(h) - (deliveredAfterConfirm + 1_000))).toBeLessThan(2);
   });
 });
 

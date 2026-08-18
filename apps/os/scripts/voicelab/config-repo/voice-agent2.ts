@@ -164,20 +164,34 @@ export type VoiceProvider = "grok" | "openai";
  * EVERYTHING PROVIDER-SPECIFIC, IN ONE TABLE. Grok's realtime API is a
  * deliberate clone of OpenAI's GA interface — same handshake, same event
  * names, same session.update shape — so the abstraction the birth
- * certificate selects is not an adapter layer, it is four values: where to
- * dial, which model, which voice, and the ONE real difference, the PCM rate.
- * OpenAI speaks 24 kHz where this whole pipeline is 16; the two resample
- * sites below are the entire cost of supporting it.
+ * certificate selects is not an adapter layer, it is five values: where to
+ * dial, which model, which voice, the PCM rate (OpenAI speaks 24 kHz where
+ * this pipeline is 16; the two resample sites below are that difference's
+ * entire cost), and which verb repairs a barged answer's memory.
+ *
+ * `truncates`: whether `conversation.item.truncate` actually works. The
+ * clone claim breaks exactly here, and silently — probed live 2026-08-18:
+ * grok returns no `conversation.item.truncated` ack, no error, nothing,
+ * even for a bogus item id (where OpenAI errors), and the barged
+ * full-count item stayed whole in context with the model recalling all
+ * of it. `conversation.item.delete` was probed as the fallback and is
+ * HALF-implemented: it acks for client-created items but answers "Item
+ * not found" for the assistant's own response items — the only ones a
+ * barge needs gone — twelve seconds after grok itself minted the id. So
+ * on grok there is NO wire verb that repairs a barged answer's memory;
+ * the heard-prefix note is the entire repair, and "how far did I get"
+ * recall stays wrong there until xAI fixes either verb.
  */
 const PROVIDERS: Record<
   VoiceProvider,
-  { url: string; model: string; voice: string; rate: number }
+  { url: string; model: string; voice: string; rate: number; truncates: boolean }
 > = {
   grok: {
     url: "https://api.x.ai/v1/realtime",
     model: "grok-voice-think-fast-2.0",
     voice: "eve",
     rate: 16_000,
+    truncates: false,
   },
   openai: {
     url: "https://api.openai.com/v1/realtime",
@@ -187,6 +201,7 @@ const PROVIDERS: Record<
     model: "gpt-realtime-2.1",
     voice: "marin",
     rate: 24_000,
+    truncates: true,
   },
 };
 
@@ -887,17 +902,25 @@ interface Dial {
   micResampler: Pcm16Resampler;
   spkResampler: Pcm16Resampler;
   /**
-   * A truncate that must wait for the cancelled response to FINALIZE.
+   * Whether this dial's provider honors `conversation.item.truncate` — the
+   * PROVIDERS row's fact, carried here so the repair sites need no second
+   * lookup. False means the note is the WHOLE repair: no wire verb works
+   * on that provider's assistant items (see the PROVIDERS table probes).
+   */
+  truncates: boolean;
+  /**
+   * A memory repair that must wait for the cancelled response to FINALIZE.
    *
    * Sent back-to-back with `response.cancel`, the truncate races the
    * server finalizing the item — observed live: the ack and the response's
    * `done` share a millisecond, and the model still remembered the full
    * count. The provider processes client events in order, but the item's
-   * transcript is written at finalization; truncating a still-finalizing
+   * transcript is written at finalization; repairing a still-finalizing
    * item is undefined in exactly the way that bit us. Held here until the
-   * `response.done` arrives, then sent against a settled item.
+   * `response.done` arrives, then sent against a settled item — as a
+   * truncate or, on a provider whose truncate is a silent no-op, a delete.
    */
-  pendingTruncate: { itemId: string; contentIndex: number; audioEndMs: number } | null;
+  pendingRepair: { itemId: string; contentIndex: number; audioEndMs: number } | null;
   /**
    * Tool calls issued by the model and not yet answered, by provider call_id.
    * Grok documents parallel calls as "all outputs, then ONE response.create";
@@ -916,7 +939,7 @@ interface Dial {
 }
 
 /** A dial just decided: no socket yet, nothing sent, a clear owed first. */
-const freshDial = (providerRate: number): Dial => ({
+const freshDial = (provider: { rate: number; truncates: boolean }): Dial => ({
   socket: null,
   ready: false,
   speakerQueue: [],
@@ -926,9 +949,10 @@ const freshDial = (providerRate: number): Dial => ({
   deviceBufferEmptyAtFacetMs: 0,
   sending: false,
   tentativeOnset: null,
-  micResampler: new Pcm16Resampler(16_000, providerRate),
-  spkResampler: new Pcm16Resampler(providerRate, 16_000),
-  pendingTruncate: null,
+  micResampler: new Pcm16Resampler(16_000, provider.rate),
+  spkResampler: new Pcm16Resampler(provider.rate, 16_000),
+  truncates: provider.truncates,
+  pendingRepair: null,
   openToolCallIds: new Set(),
   hangUpAfterAnswerDrains: null,
   answer: freshAnswer(),
@@ -1394,7 +1418,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
     /* CREATED BEFORE THE AWAITED DIAL, so a second caller finds `#dial`
      * taken and the mic path queues for the whole handshake. The socket
      * arrives below; everything else the dial owns starts fresh here. */
-    const dial = freshDial(provider.rate);
+    const dial = freshDial(provider);
     this.#dial = dial;
     const dialStartedAtFacetMs = this.deps.nowAtFacetMs();
     /* THIS DIAL'S OWN IDENTITY, for keys that must not collide with the
@@ -1789,19 +1813,16 @@ export class VoiceAgent2Processor extends StreamProcessor<
              * NEXT press would cancel a response that no longer exists. */
             dial.answer.responseActive = false;
             /* The barged response is now FINAL — whether a press cancelled
-             * it or the provider's own VAD did — so the deferred truncate
+             * it or the provider's own VAD did — so the deferred repair
              * can no longer race the item's own finalization. */
-            const pending = dial.pendingTruncate;
+            const pending = dial.pendingRepair;
             if (pending !== null && dial.ready && dial.socket !== null) {
-              dial.pendingTruncate = null;
-              this.#sendControl(
+              dial.pendingRepair = null;
+              this.#sendRepair(
                 dial,
-                {
-                  type: "conversation.item.truncate",
-                  item_id: pending.itemId,
-                  content_index: pending.contentIndex,
-                  audio_end_ms: pending.audioEndMs,
-                },
+                pending.itemId,
+                pending.contentIndex,
+                pending.audioEndMs,
                 conversationId,
                 append,
               );
@@ -2177,12 +2198,12 @@ export class VoiceAgent2Processor extends StreamProcessor<
     append: ProcessEventArgs<VoiceAgent2Contract>["append"],
   ): void {
     if (!dial.ready || dial.socket === null) return;
-    const wantsTruncate = dial.answer.itemId !== null && heardMs + 25 < dial.answer.receivedMs;
+    const wantsRepair = dial.answer.itemId !== null && heardMs + 25 < dial.answer.receivedMs;
     if (dial.answer.responseActive) {
       dial.answer.responseActive = false;
       dial.answer.dropDeltasUntilResponseCreated = true;
-      if (wantsTruncate) {
-        dial.pendingTruncate = {
+      if (wantsRepair) {
+        dial.pendingRepair = {
           itemId: dial.answer.itemId!,
           contentIndex: dial.answer.contentIndex,
           audioEndMs: heardMs,
@@ -2191,21 +2212,48 @@ export class VoiceAgent2Processor extends StreamProcessor<
       }
       return;
     }
-    if (wantsTruncate) {
-      this.#sendControl(
+    if (wantsRepair) {
+      this.#sendRepair(
         dial,
-        {
-          type: "conversation.item.truncate",
-          item_id: dial.answer.itemId,
-          content_index: dial.answer.contentIndex,
-          audio_end_ms: heardMs,
-        },
+        dial.answer.itemId!,
+        dial.answer.contentIndex,
+        heardMs,
         conversationId,
         append,
       );
       dial.answer.itemId = null;
       this.#sendHeardPrefixNote(dial, heardMs, conversationId, append);
     }
+  }
+
+  /**
+   * The wire half of fixing the model's memory of a barged item: truncate,
+   * where it works. Where it does not (grok — see the PROVIDERS table),
+   * NOTHING goes out and the heard-prefix note that always follows is the
+   * entire repair. Not for want of trying: truncate is a silent no-op
+   * there and delete answers "Item not found" for assistant items, so a
+   * verb here would only decorate every barge with a provider error.
+   */
+  #sendRepair(
+    dial: Dial,
+    itemId: string,
+    contentIndex: number,
+    audioEndMs: number,
+    conversationId: string,
+    append: ProcessEventArgs<VoiceAgent2Contract>["append"],
+  ): void {
+    if (!dial.truncates) return;
+    this.#sendControl(
+      dial,
+      {
+        type: "conversation.item.truncate",
+        item_id: itemId,
+        content_index: contentIndex,
+        audio_end_ms: audioEndMs,
+      },
+      conversationId,
+      append,
+    );
   }
 
   /**
