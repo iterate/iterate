@@ -151,8 +151,11 @@ codec half). v4's call-by-value idea dies: the receiver _wants the name_, not th
 1. **Collapse + SDK** (unchanged scope, minus every `deliver`/nudge naming).
 2. **The pump + processor mode:** push `processEventBatch(batch, window)` into facets
    per commit; scan-window contiguity; gap repair on boot; ephemeral envelope + memory ring +
-   the one metadata write; live proof: a voice-shaped ephemeral flood folds into a facet with
-   ZERO fold/cursor writes and byte-identical durable refold.
+   the one metadata write; **the #6800 quiesce rule (see B7): caught-up idle facets are
+   `abort`ed from the parent's idle path — storage kept, next burst rebuilds loss-free — and
+   facet stubs are never retained across bursts**; live proof: a voice-shaped ephemeral flood
+   folds into a facet with ZERO fold/cursor writes and byte-identical durable refold, plus an
+   idle context whose facets abort and rebuild.
 3. **Push mode:** stream-held cursor rows + retry/skip/halt ladder; the stateless
    `processEvent` worker proof; per-push disposal.
 4. **The facet address** (as before).
@@ -212,9 +215,14 @@ If parent→facet replies are not covered by the parent's output gate, a facet c
 persist a cursor past a parent commit that later FAILS to flush — and SQLite's autoincrement
 rollback means the reused offset's different event is silently skipped. Rare (a failed durable
 flush), but it violates "a cursor is only ever behind durable truth."
-**VERDICT (owner):** ok to (a). IN FLIGHT: a workerd source analysis (does the output gate
-cover parent↔facet traffic; does a failed flush transitively abort facets before they can
-persist) — report lands in `research/facet-gating-and-idle-billing.md`.
+**VERDICT (owner):** ok to (a). **RESULT — the hazard is IMPOSSIBLE** (workerd source, main
+@479771c30; `research/facet-gating-and-idle-billing.md`): the parent's output gate treats
+facet↔parent traffic as fully external — outgoing calls park caller-side until the gate opens,
+and the parent's RPC replies to a facet's loopback reads park callee-side after the handler
+returns; SQLite writes lock the gate and a failed flush BREAKS it. A facet can never durably
+record a cursor over anything but a flush-confirmed prefix. Conditions we already satisfy: no
+`allowUnconfirmed` (raw `sql.exec` can't even opt in), and facet↔parent data flows only over
+RPC. No `storage.sync()`, no epoch stamps — the design was already safe.
 
 ## B3. Attenuation is per-context, not per-client
 
@@ -254,10 +262,16 @@ now guards the parser's value recursion, substitution, the hole scans, and `json
 The fetch lane maps `/no capability matches/` → 404; greppable message text is house doctrine —
 but that 404 silently depends on a sentence someone may innocently reword. capnweb 0.8.0 drops
 `error.name` in transit, so typed errors would not survive the client hop anyway.
-**VERDICT (owner):** "How does cloudflare/os manage errors? tagged classes? json? can we steal
-it?" — IN FLIGHT: a research pass over cloudflare/os + workerd's error taxonomy + what our
-capnweb fork actually preserves in transit; report lands in `research/error-handling.md` with a
-concrete steal recommendation.
+**VERDICT (owner) → RESEARCHED AND STOLEN in `verdicts-2`.** cloudflare-os
+(github.com/cloudflare/cloudflare-os) uses plain `Error` + a `code` own-property via
+`Object.assign`, defined once, read with `"code" in error` — never name, instanceof, or message
+regex. That works because (runtime-verified) capnweb preserves ALL own enumerable properties
+across the wire even though it coerces custom names and drops subclass identity — and workerd
+stamps its own flags (`.retryable`/`.overloaded`/`.durableObjectReset`) on the same channel.
+Shipped: `core/errors.ts` (`codedError`/`errorCode`); `NO_CAPABILITY_MATCH` +
+`IDEMPOTENCY_CONFLICT` (+ `data.existingOffset`) wired; the fetch lane's 404 classifies by
+code; message regex gone; human messages verbatim. Full findings:
+`research/error-handling.md`.
 
 ## B7. Hibernation vs eviction — and what idle facets may bill
 
@@ -265,10 +279,17 @@ Our incarnation counter detects reconstruction (hibernation and eviction indisti
 increment-29 growth was eviction-scale (~300s+). workerd #6800 says SQLite-backed facets can
 hold the parent "idle, non-hibernatable" — converting idle sockets into billed duration until
 the evictor arrives. The bill is the observable.
-**VERDICT (owner):** "we must make sure we don't trigger this." IN FLIGHT: workerd #6800 source
-analysis → the concrete don't-trigger rule (what pins, whether it's fixed upstream, whether
-facets must be aborted when idle) lands in `research/facet-gating-and-idle-billing.md` and
-becomes a design requirement of increment 2.
+**VERDICT (owner):** "we must make sure we don't trigger this." **RESULT — #6800 is UNFIXED
+upstream (open, zero comments/PRs as of 2026-08-18) and the pin is any live facet client:**
+every `facets.get()` caches a strong container reference in the parent, nothing idle-releases
+it, and parent hibernation does NOT tear facets down — production data in the issue shows
+~2.4× GB-sec on an idle parent with an un-aborted SQLite facet. **The don't-trigger rule (now
+an increment-2 requirement):** deterministically `ctx.facets.abort(name)` from the parent's
+idle path once a facet's cursor is caught up — abort erases the container (un-pins), KEEPS the
+SQLite storage, and the next `get()` rebuilds over it in 50–700ms; loss-free because of the B2
+verdict above. Never retain facet stubs across delivery bursts (re-`get` per burst); keep facet
+constructors cheap (re-materialisation is the steady state); treat eviction as damage-bounding,
+never the mechanism. Full mechanics: `research/facet-gating-and-idle-billing.md`.
 
 # Appendix C — other open naming/identity calls (restated so everything is in one doc)
 
