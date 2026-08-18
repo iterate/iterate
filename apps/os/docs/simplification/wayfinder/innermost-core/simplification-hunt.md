@@ -317,3 +317,43 @@ eviction test lane. For scale: apps/os's delivery file alone is 2,485 lines.
 5. Edge adoption: HTTP one-shot `/api`, dispose/onRpcBroken, fetchCap, kv.list rows.
 6. The `unsafe.evict` CI lane.
 7. The codec direction (§2c) once you pick.
+
+---
+
+# STATUS AFTER THE BUILD SPRINT (increments 41–44, deploy `edge-1`)
+
+**Built and live-proven** (nine proof suites ALL PASS; 87 unit tests):
+
+| what                                                                                                                                                                             | increment    |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| Rich values everywhere — callback/Date/bytes across the FULL path; the one JSON boundary (stateless run fetch tunnel) replaced with a real RPC `run` method; frames idea dead    | 41 (rich-1)  |
+| Loader unification — one wrapper/isolate per source, cacheKeys minted in `confinedWorker`, `type` discriminator dropped                                                          | 41           |
+| THE MATCHER COLLAPSE — longest-prefix + newest-wins, one integer; single-binding-site rule; `spentArgs` from substitute (third walker dead); explicit `...?n`; table-based tests | 42 (codec-2) |
+| Roots-flatten — the object deleted; plain host-scope record; provenance gate = key-set; `Object.hasOwn`                                                                          | 43 (vocab-1) |
+| `itx.stream` (own, append/read only) + `itx.contexts` (ROUTED siblings — attenuation spellable); recovery-kit rule pinned                                                        | 43           |
+| One-shot HTTP batch at `/api`; instant dead-client cleanup (`Symbol.dispose` + `onRpcBroken`); `fetchCap` (the fork feature, used); `disableProcessor`                           | 44 (edge-1)  |
+| The smallest repo — `itx.repo.put` + `files.read` fallback: project-authored source runs as workers                                                                              | 44           |
+| Earlier this arc: entrypoint interposition (39), persistent stubs in use + cross-deploy restore proof (40), ladder restructure + resurrection pass + print/$ fix (38)            | 38–40        |
+
+**Still to build (next sessions, in order):**
+
+1. **Subscriptions-as-mounts** — the adopted storage collapse (event-sourced rows at
+   `itx.subscribers.<name>`, cursors keyed by providedAtOffset, freeze-and-fork wiretaps,
+   parent projection folded inline in append, delivery by row identity). The one big decided
+   piece not yet built — deliberately kept whole for a fresh session.
+2. **Runner-into-stream with the home-path framing** — now that the repo seam exists, the
+   design conversation you asked for can happen concretely (apps = repo-exported DO classes
+   living as facets of a home stream).
+3. Mechanical: TS-generated runner via build-sdk; `kv.list({prefix})` per-name rows; the
+   `unsafe.evict` CI lane.
+
+**Design questions still open for you:**
+
+- The browser/navigate story (your annotation 8): apps/os browsers connect at
+  `/clients/<id>` and the system calls `navigate` on them. In the current model that is: the
+  browser connects with `capabilities: { navigate }`, parked at the root, callable as
+  `itx.clients.at('/clients/<id>').call(['navigate'], [url])`. The open choice is whether a
+  browser ever earns its OWN stream (the roster-row vs own-stream rule from §3) and where a
+  system-wide "navigate someone" capability should be mounted.
+- The codec's string half: table tests are in; fidelity-reduction beyond the matcher collapse
+  is possible (drop mid-path captures? drop object spreads?) if you want to go further.
