@@ -1090,15 +1090,18 @@ export class VoiceAgent2Processor extends StreamProcessor<
      * incarnation that finishes the job is usually not the one that decided.
      */
     if (owedCall !== null && owedCall.endRequested !== null) {
+      const { conversationId, endRequested } = owedCall;
       this.#hangUp();
-      void append({
-        type: "events.iterate.com/voice-agent/conversation-ended",
-        idempotencyKey: this.idempotencyKey(`ended:${owedCall.conversationId}`),
-        payload: {
-          conversationId: owedCall.conversationId,
-          reason: owedCall.endRequested.reason,
-        },
-      });
+      /* A settlement at head: losing this append forever is a call the fold
+       * says is ending and nothing ever buries. The cursor waits the one
+       * colocated write. */
+      args.blockProcessorWhile(() =>
+        append({
+          type: "events.iterate.com/voice-agent/conversation-ended",
+          idempotencyKey: this.idempotencyKey(`ended:${conversationId}`),
+          payload: { conversationId, reason: endRequested.reason },
+        }),
+      );
     }
     if (owedCall !== null && owedCall.endRequested === null) {
       this.#openProviderConnection(owedCall.conversationId, state, append, runInBackground);
@@ -1135,7 +1138,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
           } catch (error) {
             colo = `fetch-failed:${String(error).slice(0, 60)}`;
           }
-          void append({
+          await append({
             type: "events.iterate.com/voice-agent/warmup-ready",
             idempotencyKey: this.idempotencyKey(`warmup:${warmupToken}`),
             payload: { token: warmupToken, colo },
@@ -1182,7 +1185,12 @@ export class VoiceAgent2Processor extends StreamProcessor<
         if (
           event.type === "events.iterate.com/voice-agent/ptt-end" &&
           state.clientTakesTurns &&
-          !this.#providerReady
+          !this.#providerReady &&
+          /* Only a turn belonging to a REAL opening call may be held over
+           * the handshake: a stray ptt-end with no call would leave the flag
+           * latched, and the NEXT press's session.updated would commit
+           * mid-sentence off a button nobody was holding. */
+          (state.call !== null || this.#callRequested)
         ) {
           this.#turnEndedDuringHandshake = true;
         }
@@ -1194,13 +1202,27 @@ export class VoiceAgent2Processor extends StreamProcessor<
             }
             return;
           }
+          /* ONLY SPEECH OPENS A CALL. The ephemeral lane drops and
+           * re-delivers, so a lone ptt-end arrives here — and a call minted
+           * for it would commit an EMPTY provider buffer: a provider error
+           * plus, sometimes, an unprompted answer spoken from bare context,
+           * then a zombie call squatting out the idle deadline. */
+          if (event.type === "events.iterate.com/voice-agent/ptt-end") return;
           const conversationId = `conv_${crypto.randomUUID()}`;
           this.#callRequested = true;
-          void append({
-            type: "events.iterate.com/voice-agent/call-started",
-            idempotencyKey: this.idempotencyKey(`call:${conversationId}`),
-            payload: { conversationId },
-          });
+          /* The one append the whole call hangs off: if it silently fails,
+           * #callRequested can never clear (its only clear needs the fold
+           * this append produces) and the incarnation is deaf until
+           * eviction. The cursor waits the one write; a refusal un-asks. */
+          args.blockProcessorWhile(() =>
+            append({
+              type: "events.iterate.com/voice-agent/call-started",
+              idempotencyKey: this.idempotencyKey(`call:${conversationId}`),
+              payload: { conversationId },
+            }).catch(() => {
+              this.#callRequested = false;
+            }),
+          );
           /*
            * DIAL NOW, NOT WHEN THE LOG AGREES. The append above is the durable
            * record that a call was opened; it is not permission to open one.
@@ -1330,21 +1352,12 @@ export class VoiceAgent2Processor extends StreamProcessor<
         return;
       }
 
-      case "events.iterate.com/voice-agent/conversation-end-requested": {
-        if (state.call === null || state.call.conversationId !== event.payload.conversationId) {
-          return;
-        }
-        this.#hangUp();
-        void append({
-          type: "events.iterate.com/voice-agent/conversation-ended",
-          idempotencyKey: this.idempotencyKey(`ended:${state.call.conversationId}`),
-          payload: {
-            conversationId: state.call.conversationId,
-            reason: event.payload.reason,
-          },
-        });
-        return;
-      }
+      /* There is NO conversation-end-requested arm. reduce folds the decision
+       * before delivery reaches this switch, so the caught-up pass above has
+       * already hung up and written the obituary on the very delivery that
+       * carried the event — and it, unlike an arm, also retries an obituary
+       * that an earlier incarnation died owing. An arm here was the same
+       * action twice behind one idempotency key. */
 
       case "events.iterate.com/voice-agent/conversation-ended":
         /* NAMED, like every other arm. Without the check, a redelivered
@@ -1393,11 +1406,34 @@ export class VoiceAgent2Processor extends StreamProcessor<
     const dialId = crypto.randomUUID();
     runInBackground(async () => {
       const provider = PROVIDERS[state.provider];
-      const socket = await this.deps
-        .dialProvider(state.provider, state.providerBaseUrl, state.providerModel ?? provider.model)
-        .finally(() => (this.#dialInFlight = false));
+      /* A dial can REJECT (DNS, TLS), not just refuse — and an uncaught
+       * throw here was measured as sixty seconds of dead air: the runner
+       * logs it, nothing appends, nothing re-dials, and the user's whole
+       * held sentence waits out the idle deadline. A throw IS a refusal. */
+      let socket: WebSocket | null;
+      try {
+        socket = await this.deps
+          .dialProvider(
+            state.provider,
+            state.providerBaseUrl,
+            state.providerModel ?? provider.model,
+          )
+          .finally(() => (this.#dialInFlight = false));
+      } catch (error) {
+        this.#dialInFlight = false;
+        socket = null;
+        await append({
+          type: "events.iterate.com/voice-agent/conversation-end-requested",
+          idempotencyKey: this.idempotencyKey(`dial-failed:${conversationId}`),
+          payload: {
+            conversationId,
+            reason: `the provider dial failed: ${String(error).slice(0, 200)}`,
+          },
+        });
+        return;
+      }
       if (socket === null) {
-        void append({
+        await append({
           type: "events.iterate.com/voice-agent/conversation-end-requested",
           idempotencyKey: this.idempotencyKey(`dial-failed:${conversationId}`),
           payload: { conversationId, reason: "Grok refused the connection" },
@@ -1539,19 +1575,21 @@ export class VoiceAgent2Processor extends StreamProcessor<
               this.#askForAnswer(socket);
             }
             this.#turnEndedDuringHandshake = false;
-            void append({
-              type: "events.iterate.com/voice-agent/conversation-accepted",
-              /* PER DIAL, not per conversation. A call rescued after an
-               * eviction handshakes a second time and its numbers are its
-               * own; keyed on the conversation, that append is refused
-               * outright and the re-dial cannot record it happened. */
-              idempotencyKey: this.idempotencyKey(`accepted:${conversationId}:${dialId}`),
-              payload: {
-                conversationId,
-                handshakeTookMs: receivedAtFacetMs - dialStartedAtFacetMs,
-                heldMicFrames,
-              },
-            });
+            this.runInBackground(() =>
+              append({
+                type: "events.iterate.com/voice-agent/conversation-accepted",
+                /* PER DIAL, not per conversation. A call rescued after an
+                 * eviction handshakes a second time and its numbers are its
+                 * own; keyed on the conversation, that append is refused
+                 * outright and the re-dial cannot record it happened. */
+                idempotencyKey: this.idempotencyKey(`accepted:${conversationId}:${dialId}`),
+                payload: {
+                  conversationId,
+                  handshakeTookMs: receivedAtFacetMs - dialStartedAtFacetMs,
+                  heldMicFrames,
+                },
+              }),
+            );
             return;
           }
 
@@ -1719,10 +1757,12 @@ export class VoiceAgent2Processor extends StreamProcessor<
           }
 
           case "error":
-            void append({
-              type: "events.iterate.com/voice-agent/provider-error",
-              payload: { conversationId, message: JSON.stringify(grok.error ?? grok) },
-            });
+            this.runInBackground(() =>
+              append({
+                type: "events.iterate.com/voice-agent/provider-error",
+                payload: { conversationId, message: JSON.stringify(grok.error ?? grok) },
+              }),
+            );
             return;
 
           default:
@@ -1734,11 +1774,13 @@ export class VoiceAgent2Processor extends StreamProcessor<
         if (this.#providerSocket !== socket) return;
         this.#providerSocket = null;
         this.#providerReady = false;
-        void append({
-          type: "events.iterate.com/voice-agent/conversation-end-requested",
-          idempotencyKey: this.idempotencyKey(`socket-closed:${conversationId}`),
-          payload: { conversationId, reason: "Grok's socket closed" },
-        });
+        this.runInBackground(() =>
+          append({
+            type: "events.iterate.com/voice-agent/conversation-end-requested",
+            idempotencyKey: this.idempotencyKey(`socket-closed:${conversationId}`),
+            payload: { conversationId, reason: "Grok's socket closed" },
+          }),
+        );
       });
 
       /*
@@ -1787,7 +1829,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
         /* Still holding audio it has not handed over yet: not idle by any
          * reading, whatever the clocks say. */
         if (this.#speakerQueue.length > 0) continue;
-        void append({
+        await append({
           type: "events.iterate.com/voice-agent/conversation-end-requested",
           idempotencyKey: this.idempotencyKey(`idle:${conversationId}`),
           payload: {
@@ -1833,10 +1875,12 @@ export class VoiceAgent2Processor extends StreamProcessor<
       const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
       body = { ...rest, deltaBytes: Math.floor(base64.length / 4) * 3 - padding };
     }
-    void append({
-      type: "events.iterate.com/voice-agent/grok-event",
-      payload: { ...body, conversationId, receivedAtFacetMs },
-    });
+    this.runInBackground(() =>
+      append({
+        type: "events.iterate.com/voice-agent/grok-event",
+        payload: { ...body, conversationId, receivedAtFacetMs },
+      }),
+    );
   }
 
   /* ------------------------------------------------------------------ turn */
@@ -2073,16 +2117,18 @@ export class VoiceAgent2Processor extends StreamProcessor<
     if (this.#providerSocket === null) return;
     this.#providerSocket.send(JSON.stringify(message));
     const { item, ...rest } = message;
-    void append({
-      type: "events.iterate.com/voice-agent/grok-event",
-      payload: {
-        ...rest,
-        type: `client.${String(message.type)}`,
-        ...(item === undefined ? {} : { itemSummary: JSON.stringify(item).slice(0, 300) }),
-        conversationId,
-        receivedAtFacetMs: this.deps.nowAtFacetMs(),
-      },
-    });
+    this.runInBackground(() =>
+      append({
+        type: "events.iterate.com/voice-agent/grok-event",
+        payload: {
+          ...rest,
+          type: `client.${String(message.type)}`,
+          ...(item === undefined ? {} : { itemSummary: JSON.stringify(item).slice(0, 300) }),
+          conversationId,
+          receivedAtFacetMs: this.deps.nowAtFacetMs(),
+        },
+      }),
+    );
   }
 
   #sendHeardPrefixNote(
@@ -2141,17 +2187,19 @@ export class VoiceAgent2Processor extends StreamProcessor<
      * "when was I interrupted" surviving the ephemeral lane. Nothing ever
      * read it: not a device, not a probe, not a debugging session. The
      * numbered clear frame IS the flush. */
-    void append({
-      type: "events.iterate.com/voice-agent/spk-frame",
-      payload: {
-        conversationId,
-        deviceSpeakerFrameSeq: clearFrameSeq,
-        fromProviderDeltaSeq: this.#lastProviderDeltaSeq,
-        pcm: "",
-        clearSpeakerBufferBeforeFrame: true,
-        sentAtFacetMs: decidedAtFacetMs,
-      },
-    });
+    this.runInBackground(() =>
+      append({
+        type: "events.iterate.com/voice-agent/spk-frame",
+        payload: {
+          conversationId,
+          deviceSpeakerFrameSeq: clearFrameSeq,
+          fromProviderDeltaSeq: this.#lastProviderDeltaSeq,
+          pcm: "",
+          clearSpeakerBufferBeforeFrame: true,
+          sentAtFacetMs: decidedAtFacetMs,
+        },
+      }),
+    );
   }
 
   /**
@@ -2281,7 +2329,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
           const reason = this.#hangUpAfterAnswerDrains;
           if (reason !== null && this.#speakerQueue.length === 0) {
             this.#hangUpAfterAnswerDrains = null;
-            void append({
+            await append({
               type: "events.iterate.com/voice-agent/conversation-end-requested",
               idempotencyKey: this.idempotencyKey(`hang-up:${conversationId}`),
               payload: { conversationId, reason },
