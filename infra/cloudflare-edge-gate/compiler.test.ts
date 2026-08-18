@@ -10,7 +10,6 @@ const validEntry: ScannerPathPolicyEntry = {
   evidence: {
     observedOn: "2026-08-17",
     productionInvocations: 1,
-    source: "test fixture",
   },
 };
 

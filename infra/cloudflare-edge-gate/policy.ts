@@ -4,7 +4,6 @@ export interface ScannerPathPolicyEntry {
   evidence: {
     observedOn: `${number}-${number}-${number}`;
     productionInvocations: number;
-    source: string;
   };
 }
 
@@ -21,7 +20,6 @@ export const scannerPathPolicy = [
     evidence: {
       observedOn: "2026-08-17",
       productionInvocations: 997,
-      source: "docs/cloudflare-public-scanner-edge-gate-research-2026-08-18.md",
     },
   },
   {
@@ -30,7 +28,6 @@ export const scannerPathPolicy = [
     evidence: {
       observedOn: "2026-08-17",
       productionInvocations: 574,
-      source: "docs/cloudflare-public-scanner-edge-gate-research-2026-08-18.md",
     },
   },
   {
@@ -39,7 +36,6 @@ export const scannerPathPolicy = [
     evidence: {
       observedOn: "2026-08-17",
       productionInvocations: 443,
-      source: "docs/cloudflare-public-scanner-edge-gate-research-2026-08-18.md",
     },
   },
 ] as const satisfies readonly ScannerPathPolicyEntry[];

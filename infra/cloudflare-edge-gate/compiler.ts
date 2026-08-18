@@ -89,7 +89,4 @@ function validatePolicyEntry(entry: ScannerPathPolicyEntry, existingPaths: Reado
   ) {
     throw new Error(`Scanner path ${JSON.stringify(entry.path)} needs a positive observed count.`);
   }
-  if (entry.evidence.source.trim().length === 0) {
-    throw new Error(`Scanner path ${JSON.stringify(entry.path)} needs an evidence source.`);
-  }
 }
