@@ -297,6 +297,7 @@ import {
   type AgentLiveState,
   type AgentProcessorState,
 } from "./domains/agents/agent-processor-contract.ts";
+import { HeadlessAgentProcessorContract } from "./domains/agents/agent-headless-processor.ts";
 import {
   capabilityHostCreationEvents,
   type CapabilityHostCreateInput,
@@ -4802,7 +4803,14 @@ function agentProcessorRelay(input: {
 }): ProcessorRelayRpcTarget<AgentProcessorState> {
   return facetProcessorRelay<AgentProcessorState>({
     auth: input.auth,
-    contract: AgentProcessorContract,
+    // The facet on an agent stream is registered under the ONE keeper's slug
+    // ("agent-headless"); the classic "agent" slug survives only as the
+    // vocabulary's home (docs, parsing, typed appends). Dialing by the
+    // vocabulary slug would ask the stream for a subscription that no birth
+    // configures — the exact stream-subscription-unconfigured failure the
+    // preview e2e caught. Same state schema by construction: the two
+    // contracts are one vocabulary hosted two ways.
+    contract: HeadlessAgentProcessorContract,
     path: input.path,
     projectId: input.projectId,
   });
@@ -4972,7 +4980,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   /** The agent's transient runtime as a push-driven live-state surface. */
   get liveState(): LiveStateRpc<AgentLiveState> {
     return facetProcessorLiveStateRelay<AgentLiveState>({
-      name: AgentProcessorContract.slug,
+      name: HeadlessAgentProcessorContract.slug,
       path: this.#path,
       projectId: this.#props.projectId,
     });
