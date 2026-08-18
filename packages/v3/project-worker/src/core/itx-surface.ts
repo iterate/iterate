@@ -245,7 +245,7 @@ export class Itx extends RpcTarget {
     onFailingEvent?: "halt" | "skip";
     maxAttempts?: number;
     start?: "beginning" | "now";
-  }): Promise<{ name: string }> {
+  }): Promise<{ name: string; providedAtOffset: number }> {
     return this.#host.subscribe(input);
   }
 

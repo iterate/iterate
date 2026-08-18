@@ -1109,3 +1109,38 @@ channel visibly at work.
   grows from exactly this seam; the runner-into-stream/home-path design continues in the doc.
 
 87 unit tests green; deploy `edge-1`: NINE-suite board ALL PASS (+prove_edge 4/4).
+
+## Increment 45 (subs-1): SUBSCRIBING IS PROVIDING — the last adopted collapse, built
+
+- **A subscription IS a mount** at `itx.subscribers.<name>`: `subscribe` is sugar that appends
+  the ordinary capability-provided event with the DELIVERY POLICY riding the same event
+  (consumes/onFailingEvent/maxAttempts/start in the payload) — subscription config is now
+  event-sourced like every other claim, never silent kv. `unsubscribe` = revoke the winning
+  mount; revoke doubles as cursor GC.
+- **The parent folds its projection INLINE in `append`** (it sees every event body at the
+  commit point — no facet round trip, no cache staleness): exact
+  `["itx","subscribers",<name>]` provided/revoked events maintain the derived rows + cursors.
+- **Cursors are keyed by `providedAtOffset`** (the row's identity): same-name re-provides STACK
+  — the shadowed row's cursor FREEZES; revoke pops and it resumes exactly where it stopped
+  (freeze-and-fork wiretaps, free from the shadow stack). `resumeSubscription` survives as the
+  one cursor-surgery verb.
+- **Delivery is BY ROW IDENTITY through the ictx facet** (`deliverSubscription(offset, events,
+window)` → the processor's `deliverTo` finds the mount in its fold and runs the ordinary
+  substitute+apply tail: hole-free target → called with (events, window); hole-bearing →
+  reshaped, adapter-free). Never by name through the table — a broad default route cannot
+  intercept deliveries. The ladder/skip/halt machinery is unchanged and re-proven live
+  (prove_push ALL PASS on the new storage, byte-identical behavior).
+
+## Increment 46 (rich-2 checks, same deploy): the owner's rich-value clarification, proven wider
+
+- **RpcTarget-with-methods as an arg:** provider called TWO methods on the client's object
+  (write/write/dump → "one|two"). **HTTP Request in, Response out** through a live capability:
+  201 + URL + body intact. Both live ALL PASS. Callbacks were already proven (41).
+- **fetchCap honesty note:** plain Responses ride the INSTALLED fork (0.10.0 — proven twice:
+  the 200 HTML and the 201 return). WebSocket/101 THROUGH fetchCap is NOT proven and may
+  depend on the unmerged capnweb PR — the /cap door stays for WS callers until that lands or
+  is rejected. ReadableStream args also not yet proven (the stream-serialization lane exists
+  in the fork; queued with the voice firehose work).
+
+87 unit tests; deploy `subs-1`: board re-proven (crisp/ephemeral/facetaddr/edge/userfacet/
+restore/push/rich) ALL PASS.

@@ -172,10 +172,22 @@ export class ProcessorFacet extends DurableObject<Env> {
     return processor.resolve(state, toExpression(call), undefined, depth);
   }
 
-  /** Mount a capability (event provenance — `roots` targets are rejected by the processor). */
+  /** Deliver a window to one subscription mount BY IDENTITY (see the processor's deliverTo). */
+  async deliverSubscription(
+    providedAtOffset: number,
+    events: unknown[],
+    window: unknown,
+  ): Promise<unknown> {
+    const processor = this.#ictx();
+    const { state } = await processor.snapshot();
+    return processor.deliverTo(state, providedAtOffset, events, window);
+  }
+
+  /** Mount a capability (event provenance — targets must be itx-rooted). */
   provide(input: {
     pattern: string | Expression;
     target: string | Expression;
+    delivery?: Parameters<IterateContextStreamProcessor["provide"]>[0]["delivery"];
   }): Promise<{ providedAtOffset: number }> {
     return this.#ictx().provide(input);
   }

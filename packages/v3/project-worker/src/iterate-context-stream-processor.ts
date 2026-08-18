@@ -54,7 +54,20 @@ export const IterateContextContract = defineProcessorContract({
   events: {
     "events.iterate.com/capability-host/capability-provided": {
       description: "Mount `target` at `pattern`. Same-pattern mounts SHADOW (newest wins).",
-      payloadSchema: z.object({ pattern: ExpressionSchema, target: ExpressionSchema }),
+      payloadSchema: z.object({
+        pattern: ExpressionSchema,
+        target: ExpressionSchema,
+        /** SUBSCRIPTION rows only (pattern itx.subscribers.<name>): the delivery policy rides
+         *  the SAME event as the grant — config is event-sourced, never silent kv. */
+        delivery: z
+          .object({
+            consumes: z.array(z.string()).optional(),
+            onFailingEvent: z.enum(["halt", "skip"]).optional(),
+            maxAttempts: z.number().int().positive().optional(),
+            start: z.enum(["beginning", "now"]).optional(),
+          })
+          .optional(),
+      }),
     },
     "events.iterate.com/capability-host/capability-revoked": {
       description:
@@ -113,6 +126,12 @@ export class IterateContextStreamProcessor extends StreamProcessor<State> {
   async provide(input: {
     pattern: string | Expression;
     target: string | Expression;
+    delivery?: {
+      consumes?: string[];
+      onFailingEvent?: "halt" | "skip";
+      maxAttempts?: number;
+      start?: "beginning" | "now";
+    };
   }): Promise<{ providedAtOffset: number }> {
     const pattern = toExpression(input.pattern);
     const target = toExpression(input.target);
@@ -124,7 +143,7 @@ export class IterateContextStreamProcessor extends StreamProcessor<State> {
     const [event] = await this.stream.append(
       this.contract.buildEvent({
         type: "events.iterate.com/capability-host/capability-provided",
-        payload: { pattern, target },
+        payload: { pattern, target, ...(input.delivery ? { delivery: input.delivery } : {}) },
       }),
     );
     return { providedAtOffset: event.offset };
@@ -246,6 +265,25 @@ export class IterateContextStreamProcessor extends StreamProcessor<State> {
     return pathProxy((segments, args) => {
       const last = segments[segments.length - 1] as string;
       return this.resolveCurrent(["itx", ...segments.slice(0, -1), [last, ...args]], depth);
+    });
+  }
+
+  /** Deliver a pushed window to ONE subscription mount BY ROW IDENTITY — never by name
+   *  through the table (a broad default route must not intercept deliveries). The stored
+   *  target is an ordinary event-provenance expression: hole-free → called with
+   *  (events, window); hole-bearing → the holes reshape the delivery, adapter-free. */
+  async deliverTo(
+    state: State,
+    providedAtOffset: number,
+    events: unknown[],
+    window: unknown,
+  ): Promise<unknown> {
+    const row = state.mounts.find((m) => m.providedAtOffset === providedAtOffset);
+    if (!row) throw new Error(`no subscription mount at offset ${providedAtOffset}`);
+    const { steps, spentArgs } = substitute(row.target, { args: [events, window], captures: {} });
+    return apply({ itx: this.#itxAtDepth(1) }, steps, {
+      boundaryArgs: spentArgs ? undefined : [events, window],
+      remainder: [],
     });
   }
 
