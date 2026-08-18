@@ -193,6 +193,11 @@ export class IterateContextStreamProcessor extends StreamProcessor<State> {
     provenance: "config" | "event";
     providedAtOffset?: number;
   } | null {
+    // The structured half of the bare-call rule: a call whose first step invokes the scope
+    // symbol itself ([["itx", …]]) is malformed — parser and pathProxy already reject it; this
+    // closes the hand-crafted-Expression door.
+    if (typeof call[0] !== "string")
+      throw new Error("cannot call the scope symbol itself — name a capability first");
     let best: ReturnType<IterateContextStreamProcessor["route"]> = null;
     const consider = (
       row: Pick<MountRow, "pattern" | "target">,
@@ -216,16 +221,12 @@ export class IterateContextStreamProcessor extends StreamProcessor<State> {
 
   /** The `itx` scope symbol at a given recursion depth: dotted/called access re-enters `resolve`
    *  with the CURRENT state, carrying the depth. This is what makes alias mounts compose and
-   *  default routes forward whole calls. (Calling bare `itx(...)` resolves `[["itx", ...args]]` —
-   *  boundary args for a bare default route.) */
+   *  default routes forward whole calls. (Bare `itx(...)` is a loud error — pathProxy rejects a
+   *  zero-segment call, so `segments` is never empty here.) */
   #itxAtDepth(depth: number): unknown {
     return pathProxy((segments, args) => {
-      const last = segments.at(-1);
-      const expr: Expression =
-        last === undefined
-          ? [["itx", ...args]]
-          : ["itx", ...segments.slice(0, -1), [last, ...args]];
-      return this.resolveCurrent(expr, depth);
+      const last = segments[segments.length - 1] as string;
+      return this.resolveCurrent(["itx", ...segments.slice(0, -1), [last, ...args]], depth);
     });
   }
 

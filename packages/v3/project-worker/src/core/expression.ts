@@ -94,6 +94,8 @@ class Parser {
         // turn the preceding property step into a call step
         const name = steps.pop();
         if (typeof name !== "string") throw this.#err("call must follow a name");
+        if (steps.length === 0)
+          throw this.#err("cannot call the scope symbol itself — name a capability first");
         steps.push([name, ...this.#args()]);
       } else if (this.#peek() === ".") {
         this.#i++;
@@ -588,13 +590,18 @@ export function usesCallerArgs(expr: Expression): boolean {
  *  gets accumulate path segments, calling hands `(segments, args)` to `call`. `then`/symbol
  *  probes return undefined so a proxy is never mistaken for a thenable mid-await. ONE builder
  *  for every dotted view (the itx scope symbol, the facet clients view, the stateful-worker
- *  proxy) — they differed only in what the terminal apply dispatches to. */
+ *  proxy) — they differed only in what the terminal apply dispatches to. Calling the BARE root
+ *  is a loud error (mirroring the parser), so `call` always receives ≥1 segment. */
 export function pathProxy(call: (segments: string[], args: unknown[]) => unknown): unknown {
   const build = (segments: string[]): unknown =>
     new Proxy(function () {} as object, {
       get: (_t, p) =>
         p === "then" || typeof p === "symbol" ? undefined : build([...segments, p as string]),
-      apply: (_t, _this, args) => call(segments, args as unknown[]),
+      apply: (_t, _this, args) => {
+        if (segments.length === 0)
+          throw new Error("cannot call the scope symbol itself — name a capability first");
+        return call(segments, args as unknown[]);
+      },
     });
   return build([]);
 }

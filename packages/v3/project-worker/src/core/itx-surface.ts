@@ -145,10 +145,6 @@ export class Itx extends RpcTarget {
     this.#waitUntil = waitUntil;
   }
 
-  whoami(): Promise<unknown> {
-    return this.#host.invokeCapability("itx.whoami", []);
-  }
-
   /** The universal dispatch door (built-ins + provided capabilities). `itx.a.b(x)` is client-side sugar for
    *  `invokeCapability({ path: ["a", "b"], args: [x] })`. */
   invokeCapability(input: { path: string[]; args?: unknown[] }): Promise<unknown> {

@@ -232,6 +232,14 @@ describe("event mounts + the shadow stack", () => {
     expect(await invoke("itx.whoami()")).toEqual({ projectId: "prj_t", path: "/" });
   });
 
+  test("bare CALL on the scope symbol is a loud error even as a hand-crafted Expression", async () => {
+    const { host } = setup();
+    // the string half can no longer spell this (parse rejects `itx(1)`); close the structured door too
+    await expect(host.resolveCurrent([["itx", 1]])).rejects.toThrow(
+      /cannot call the scope symbol itself/,
+    );
+  });
+
   test("live-capability desugar shape: provide = park + alias into clients", async () => {
     const { host, invoke, roots } = setup();
     // the edge parks the stub under a connection key, then provides the alias:

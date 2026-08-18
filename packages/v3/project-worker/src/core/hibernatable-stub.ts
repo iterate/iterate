@@ -74,7 +74,7 @@ export class HibernatableStubs {
   /** Park a stub: stamp its meta onto the (already-open) Pager socket, so it survives hibernation. */
   park(socketId: string, meta: Record<string, unknown>): void {
     const ws = pagerSocketFor(socketId, this.#hooks);
-    if (ws === undefined) throw new Error("hibernatable stub has no pager socket");
+    if (ws === undefined) throw new Error(`hibernatable stub ${socketId} has no pager socket`);
     stampPager(ws, { socketId, ...meta });
   }
 
@@ -147,14 +147,15 @@ export class HibernatableStubs {
     let leg = this.#legs.get(socketId);
     if (leg === undefined) {
       const ws = pagerSocketFor(socketId, this.#hooks);
-      if (ws === undefined) throw new Error("hibernatable stub offline (no pager)");
+      if (ws === undefined) throw new Error(`hibernatable stub ${socketId} offline (no pager)`);
       let pending = this.#pending.get(socketId);
       if (pending === undefined) {
         let resolve!: () => void;
         let reject!: (e: Error) => void;
         const arrived = new Promise<void>((res, rej) => ((resolve = res), (reject = rej)));
         const timer = setTimeout(() => {
-          if (this.#pending.delete(socketId)) reject(new Error("provider attach timed out"));
+          if (this.#pending.delete(socketId))
+            reject(new Error(`provider ${socketId} attach timed out`));
         }, ATTACH_TIMEOUT_MS);
         pending = { resolve, reject, timer, arrived };
         this.#pending.set(socketId, pending);
@@ -162,7 +163,7 @@ export class HibernatableStubs {
       }
       await pending.arrived;
       leg = this.#legs.get(socketId);
-      if (leg === undefined) throw new Error("provider attach completed empty");
+      if (leg === undefined) throw new Error(`provider ${socketId} attach completed empty`);
     }
     leg.inFlight += 1;
     return leg;
@@ -178,7 +179,7 @@ export class HibernatableStubs {
     if (p) {
       clearTimeout(p.timer);
       this.#pending.delete(socketId);
-      p.reject(new Error("provider went offline"));
+      p.reject(new Error(`provider ${socketId} went offline`));
     }
   }
 }

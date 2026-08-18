@@ -739,3 +739,26 @@ head)` — userspace processors really use them); Env interfaces trimmed to what
 - 70 unit tests green (−1 dead spec, +1 regression); typecheck clean. Deploy `kenton-1`:
   all three live proofs ALL PASS first run (crisp 16/16, facet spine, userspace + built-in
   tally side by side).
+
+## Increment 31 (annotations-1): the owner's Plannotator verdicts on REVIEW-KENTON
+
+Six annotations, six resolutions (detail: `REVIEW-KENTON.md` § RESOLVED):
+
+- **Bare `itx(...)` is now a LOUD ERROR at all three doors** — the parser rejects `itx(1)`, a
+  zero-segment `pathProxy` apply throws (so every dotted view shares the rule), and `route`
+  closes the hand-crafted `[["itx", …]]` Expression door. One greppable message: "cannot call
+  the scope symbol itself — name a capability first". The bare-PATTERN default route
+  (`{ pattern: "itx", … }` claiming whole missed calls) is untouched — the rule is about
+  CALLING the scope symbol, not naming it.
+- **`Itx.whoami()` deleted** — `invokeCapability({ path: ["whoami"] })` is the one door; the
+  seed and `roots.whoami` are unchanged. Proof harness updated.
+- **HibernatableStubs errors carry the socketId** (all five throws).
+- **`waitUntilProcessed` KEPT with evidence:** apps/os `rpc-targets.ts` has ~25 production call
+  sites — it is THE read-your-writes barrier (append → waitUntilProcessed → snapshot), not
+  incidental complexity. Its home after the registry collapse is a jam-doc question.
+- **Registry shape + `configure`** → next design leg, jam doc at
+  `apps/os/docs/simplification/wayfinder/innermost-core/processors-jam.md` (streams, stream
+  processors, dynamic worker loading; direction: facets-only + base class, future
+  own-DO placement woken the same way).
+
+72 unit tests green (+2), typecheck clean. Deploy `annotations-1`: crisp proof 16/16 first run.

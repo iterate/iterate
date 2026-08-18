@@ -98,3 +98,21 @@ regression).
   it clearer.
 - HibernatableStubs error messages could carry the socketId; they are relay-internal and the
   relay logs the id — left.
+
+## RESOLVED (owner annotations, applied in `annotations-1`)
+
+- **Registry-of-N vs one-processor facets** → this is the next design leg. Owner's direction:
+  processors run ONLY as facets for now, extending a base class that carries the machinery; keep
+  a future door open for a CPU-heavy processor running as its own DO woken the same way (maybe
+  by an itx expression). Jam doc: `apps/os/docs/simplification/wayfinder/innermost-core/processors-jam.md`.
+- **`waitUntilProcessed`** → investigated apps/os: ~25 production call sites in `rpc-targets.ts`,
+  all the read-your-writes barrier (append → waitUntilProcessed → snapshot). Not incidental
+  complexity there; KEPT here (it is ~20 lines). Its home in the collapsed design is in the jam doc.
+- **`Itx.whoami()`** → DELETED. `invokeCapability({ path: ["whoami"] })` is the one door.
+- **`configure`** → explained in the jam doc; the collapse proposal makes it host-internal so
+  userspace never writes it.
+- **Bare `itx(...)`** → now a LOUD ERROR at all three doors: the parser (`itx(1)` no longer
+  parses), `pathProxy` (zero-segment apply throws), and `route` (a hand-crafted
+  `[["itx", …]]` Expression throws). One greppable message: "cannot call the scope symbol
+  itself — name a capability first". +2 tests.
+- **HibernatableStubs error messages** → every throw now carries the socketId.

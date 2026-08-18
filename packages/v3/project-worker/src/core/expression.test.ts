@@ -6,6 +6,7 @@ import {
   evaluate,
   match,
   parse,
+  pathProxy,
   print,
   substitute,
   toExpression,
@@ -63,6 +64,12 @@ describe("parse ⇄ print", () => {
   test("toExpression accepts either half", () => {
     expect(toExpression("itx.kv")).toEqual(["itx", "kv"]);
     expect(toExpression(["itx", "kv"])).toEqual(["itx", "kv"]);
+  });
+
+  test("bare call on the scope symbol is a loud error — both halves", () => {
+    expect(() => parse("itx(1)")).toThrow(/cannot call the scope symbol itself/);
+    const itx = pathProxy(() => "unreachable") as (...args: unknown[]) => unknown;
+    expect(() => itx(1)).toThrow(/cannot call the scope symbol itself/);
   });
 });
 
