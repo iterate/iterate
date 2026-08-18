@@ -136,10 +136,6 @@ export function buildRoots(deps: BuildRootsDeps): Roots {
   });
 }
 
-/** The clients view as the FACET sees it: thin RPC wrappers over the parent's stub facade
- *  (stubInvoke/stubFanOut/stubList/stubConnections/stubClose). The parent is resolved BY NAME
- *  per call — never a retained stub (the back-channel rule). Promise-valued reads are fine:
- *  expression evaluation awaits every step. */
 /** The facet address as the resolver sees it: `facets.get(slug).anyMethod(...)` rides ONE
  *  generic parent door (`facetInvoke`) — the walk stays parent-side because facet stubs are
  *  non-transferable. Same thin-wrapper shape as the clients view. */
@@ -149,6 +145,10 @@ export function facetAddressView(parent: () => DurableObjectStub<StreamDurableOb
   };
 }
 
+/** The clients view as the FACET sees it: thin RPC wrappers over the parent's stub facade
+ *  (stubInvoke/stubFanOut/stubList/stubConnections/stubClose). The parent is resolved BY NAME
+ *  per call — never a retained stub (the back-channel rule). Promise-valued reads are fine:
+ *  expression evaluation awaits every step. */
 export function facetClientsView(
   parent: () => DurableObjectStub<StreamDurableObject>,
 ): ClientsView {
