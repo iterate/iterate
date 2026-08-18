@@ -19,27 +19,33 @@
 // This is the test that could.
 import { describe, expect, it } from "vitest";
 
-import { answerKey, type HeardFrame, firstFrameOfNewAnswer } from "./ptt-marginal.ts";
+import { type HeardFrame, type SpeakerHighWater, firstFrameOfNewAnswer } from "./ptt-marginal.ts";
 
-/** A frame off the wire, at a time, for a call, cut from a provider delta. */
+/** A frame off the wire, at a time, for a call, numbered on the speaker lane. */
 const frame = (
   atDeviceMs: number,
   conversationId: string,
-  fromProviderDeltaSeq: number,
+  deviceSpeakerFrameSeq: number,
   hasAudio = true,
 ): HeardFrame => ({
   atDeviceMs,
   sentAtFacetMs: atDeviceMs,
   conversationId,
-  fromProviderDeltaSeq,
+  deviceSpeakerFrameSeq,
   hasAudio,
   clearsBuffer: !hasAudio,
   lastOfAnswer: false,
   pcmMs: hasAudio ? 20 : 0,
 });
 
-/** What the probe knew before the button went down. */
-const seen = (...frames: HeardFrame[]) => new Set(frames.map(answerKey));
+/** What the probe knew before the button went down: the per-call high water. */
+const seen = (...frames: HeardFrame[]): SpeakerHighWater => {
+  const mark = new Map<string, number>();
+  for (const f of frames) {
+    mark.set(f.conversationId, Math.max(mark.get(f.conversationId) ?? 0, f.deviceSpeakerFrameSeq));
+  }
+  return mark;
+};
 
 describe("which frame answers this press", () => {
   it("takes the first frame of an answer nobody had heard yet", () => {
@@ -61,25 +67,25 @@ describe("which frame answers this press", () => {
      * arriving as the next press lands. Timing one of those reports a few
      * milliseconds for an answer that has not been generated.
      */
-    const stale = frame(150, "aaaaaaaa", 1);
-    const fresh = frame(900, "aaaaaaaa", 2);
+    const stale = frame(150, "aaaaaaaa", 5);
+    const fresh = frame(900, "aaaaaaaa", 9);
     expect(firstFrameOfNewAnswer([stale, fresh], seen(stale), 100)?.atDeviceMs).toBe(900);
   });
 
   it("hears an answer numbered 1 again, because the call is a new one", () => {
     /*
-     * THE REGRESSION, PINNED. Round one's answer is call `aaaaaaaa` answer 1;
-     * that call ends and the next press dials `bbbbbbbb`, whose answer is 1
+     * THE REGRESSION, PINNED. Round one's answer is call `aaaaaaaa`; that
+     * call ends and the next press dials `bbbbbbbb`, whose frames start at 1
      * again. A rule that compares numbers alone sees 1 against a high-water
-     * mark of 1 and waits out its deadline. Scoped to the conversation, the
-     * pair is new and the frame is the answer.
+     * mark of 1 and waits out its deadline. Marked per conversation, the new
+     * call has no mark and the frame is the answer.
      */
     const roundOne = frame(150, "aaaaaaaa", 1);
     const roundTwo = frame(900, "bbbbbbbb", 1);
     expect(firstFrameOfNewAnswer([roundTwo], seen(roundOne), 800)?.atDeviceMs).toBe(900);
   });
 
-  it("still refuses a repeat of a pair it has already timed", () => {
+  it("still refuses a repeat of a frame it has already timed", () => {
     /* A re-delivery of the same frames must not answer a later press. */
     const already = frame(900, "bbbbbbbb", 1);
     expect(firstFrameOfNewAnswer([frame(1_500, "bbbbbbbb", 1)], seen(already), 1_400)).toBe(
@@ -90,7 +96,7 @@ describe("which frame answers this press", () => {
   it("does not time the clear this very press caused", () => {
     /*
      * THE v2 TRAP. A press interrupts whatever is playing, and the facet says
-     * so by putting out a frame with no samples in it — carrying a delta
+     * so by putting out a frame with no samples in it — carrying a frame
      * number one past anything heard, arriving milliseconds after the release.
      * It is new, it is late enough, and it is not an answer: timing it reports
      * a couple of milliseconds for a reply the model has not started.

@@ -32,19 +32,21 @@
  *   second form: the flush cost one stutter, the emptied queue cost the
  *   whole unsent tail.
  *
- * THREE SEQUENCES, AND THEY ARE NOT INTERCHANGEABLE. Every count in this file
- * says which of the three it belongs to, because conflating them is how the
+ * TWO SEQUENCES, AND THEY ARE NOT INTERCHANGEABLE. Every count in this file
+ * says which of the two it belongs to, because conflating them is how the
  * first cut lost track of what a flush was flushing:
  *
  *   `deviceMicFrameSeq`      device microphone -> facet -> Grok. Minted by the
  *                            DEVICE; the facet never renumbers it.
- *   `providerDeltaSeq`      Grok -> facet. One per `response.output_audio.delta`
- *                            as the facet received it, counted per call.
- *   `deviceSpeakerFrameSeq`  facet -> device speaker. One per paced, mu-law
- *                            encoded chunk. A single Grok delta usually becomes
- *                            several of these, so the two counts diverge
- *                            immediately — which is exactly why a flush must
- *                            name this one and no other.
+ *   `deviceSpeakerFrameSeq`  facet -> device speaker. One per paced chunk. A
+ *                            single provider delta usually becomes several of
+ *                            these — which is exactly why a flush must name
+ *                            this one and no other. (There was a third count
+ *                            once, per received provider delta, riding every
+ *                            frame as `fromProviderDeltaSeq` — "debugging, not
+ *                            ordering" by its own docstring, read by no device
+ *                            and no instrument; the grok-event lane's
+ *                            `deltaBytes` keeps the coarse correlation.)
  *
  * EVERY TIMESTAMP SAYS WHERE IT WAS TAKEN, in its name, with no exceptions.
  * FOUR CLOCKS, and this is the whole taxonomy — anything measuring this system
@@ -593,8 +595,6 @@ export const VoiceAgent2Contract = defineProcessorContract({
         conversationId: z.string(),
         /** Monotonic within the call. The only ordering the device trusts. */
         deviceSpeakerFrameSeq: z.number(),
-        /** Which Grok delta this chunk was cut from. Debugging, not ordering. */
-        fromProviderDeltaSeq: z.number(),
         /**
          * 16 kHz mono PCM16, base64, of no particular length — the device
          * appends it to a byte ring. EMPTY on a frame whose only job is the
@@ -782,12 +782,8 @@ interface Dial {
    * cancelled audio as lost audio: 5 gaps and 423 absent numbers on a
    * seven-minute call where nothing had actually gone missing.
    */
-  speakerQueue: {
-    fromProviderDeltaSeq: number;
-    pcm16: Uint8Array;
-  }[];
-  /** Last sequence number minted on each lane, for this call. */
-  lastProviderDeltaSeq: number;
+  speakerQueue: Uint8Array[];
+  /** Last speaker-frame sequence number minted, for this call. */
   lastDeviceSpeakerFrameSeq: number;
   /**
    * How far a clear has already been declared, so a jittery detector is free.
@@ -905,7 +901,6 @@ const freshDial = (providerRate: number): Dial => ({
   socket: null,
   ready: false,
   speakerQueue: [],
-  lastProviderDeltaSeq: 0,
   lastDeviceSpeakerFrameSeq: 0,
   clearedThroughDeviceSpeakerFrameSeq: 0,
   clearSpeakerBufferBeforeNextFrame: true,
@@ -1676,7 +1671,6 @@ export class VoiceAgent2Processor extends StreamProcessor<
             if (typeof grok.delta !== "string") return;
             /* Residue of a cancelled answer: dead on arrival. */
             if (dial.answer.dropDeltasUntilResponseCreated) return;
-            const fromProviderDeltaSeq = ++dial.lastProviderDeltaSeq;
             /*
              * CUT ONLY TO FIT THE DEVICE'S RECEIVE BUFFER. A delta is audio
              * of no particular length — measured against the real provider,
@@ -1696,10 +1690,9 @@ export class VoiceAgent2Processor extends StreamProcessor<
             const pcm16 = dial.spkResampler.push(base64ToBytes(grok.delta));
             dial.answer.receivedMs += pcm16.length / PCM16_BYTES_PER_MS;
             for (let cut = 0; cut < pcm16.length; cut += MAX_SPEAKER_PAYLOAD_BYTES) {
-              dial.speakerQueue.push({
-                fromProviderDeltaSeq,
-                pcm16: pcm16.subarray(cut, Math.min(cut + MAX_SPEAKER_PAYLOAD_BYTES, pcm16.length)),
-              });
+              dial.speakerQueue.push(
+                pcm16.subarray(cut, Math.min(cut + MAX_SPEAKER_PAYLOAD_BYTES, pcm16.length)),
+              );
             }
             this.#sendSpeakerAudio(dial, conversationId, append, runInBackground);
             return;
@@ -2291,7 +2284,6 @@ export class VoiceAgent2Processor extends StreamProcessor<
         payload: {
           conversationId,
           deviceSpeakerFrameSeq: clearFrameSeq,
-          fromProviderDeltaSeq: dial.lastProviderDeltaSeq,
           pcm: "",
           clearSpeakerBufferBeforeFrame: true,
           sentAtFacetMs: decidedAtFacetMs,
@@ -2380,7 +2372,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
              */
             const overflowBytes =
               (dial.deviceBufferEmptyAtFacetMs - nowAtFacetMs) * PCM16_BYTES_PER_MS +
-              frame.pcm16.length -
+              frame.length -
               MAX_DEVICE_SPEAKER_BACKLOG_BYTES;
             if (overflowBytes > 0) {
               /* Full. Wait exactly long enough for the overflow to play off, then
@@ -2392,8 +2384,8 @@ export class VoiceAgent2Processor extends StreamProcessor<
             /* The device runs dry this much later. Advanced from the DEADLINE
              * rather than from now, so the cost of an append is absorbed and the
              * average send rate equals the play rate. */
-            dial.deviceBufferEmptyAtFacetMs += frame.pcm16.length / PCM16_BYTES_PER_MS;
-            dial.answer.sentMs += frame.pcm16.length / PCM16_BYTES_PER_MS;
+            dial.deviceBufferEmptyAtFacetMs += frame.length / PCM16_BYTES_PER_MS;
+            dial.answer.sentMs += frame.length / PCM16_BYTES_PER_MS;
             const clearFirst = dial.clearSpeakerBufferBeforeNextFrame;
             dial.clearSpeakerBufferBeforeNextFrame = false;
             await append({
@@ -2401,8 +2393,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
               payload: {
                 conversationId,
                 deviceSpeakerFrameSeq: ++dial.lastDeviceSpeakerFrameSeq,
-                fromProviderDeltaSeq: frame.fromProviderDeltaSeq,
-                pcm: bytesToBase64(frame.pcm16),
+                pcm: bytesToBase64(frame),
                 ...(clearFirst && { clearSpeakerBufferBeforeFrame: true }),
                 sentAtFacetMs: nowAtFacetMs,
               },
@@ -2430,7 +2421,6 @@ export class VoiceAgent2Processor extends StreamProcessor<
               payload: {
                 conversationId,
                 deviceSpeakerFrameSeq: dial.lastDeviceSpeakerFrameSeq,
-                fromProviderDeltaSeq: dial.lastProviderDeltaSeq,
                 pcm: "",
                 ...(clearFirst && { clearSpeakerBufferBeforeFrame: true }),
                 lastFrameOfAnswer: true,

@@ -391,16 +391,20 @@ export interface HeardFrame {
   atDeviceMs: number;
   /** The facet's own stamp on it, on the FACET's clock. Never subtract these. */
   sentAtFacetMs: number;
-  /** The call it belongs to. Delta numbers only mean anything inside one. */
+  /** The call it belongs to. Frame numbers only mean anything inside one. */
   conversationId: string;
   /**
-   * Which provider delta this chunk was cut from, as the facet numbered it.
+   * The frame's own number on the speaker lane, as the facet minted it.
    *
-   * v2 stamps this on every frame, so a probe telling one answer from the next
-   * needs no counting of its own. It restarts at zero on a fresh socket, which
-   * is why the key below is scoped to the call.
+   * v2 numbers every frame within the conversation — the same ordering the
+   * device trusts — so a probe telling one answer from the next needs no
+   * counting of its own. It restarts on a fresh call, which is why the
+   * high-water mark below is scoped to the call. (Frames used to carry
+   * `fromProviderDeltaSeq` beside this and the probe keyed on THAT; the field
+   * was deleted from the contract — debugging, not ordering — and the rule
+   * moved onto the numbering that was always the load-bearing one.)
    */
-  fromProviderDeltaSeq: number;
+  deviceSpeakerFrameSeq: number;
   /** False for a frame whose only job is a clear or an end-of-answer marker. */
   hasAudio: boolean;
   /** The frame asks the device to drop everything queued first. */
@@ -411,44 +415,44 @@ export interface HeardFrame {
   pcmMs: number;
 }
 
-/** A chunk of generated audio's identity on the wire: a call, and a delta in it. */
-export const answerKey = (frame: Pick<HeardFrame, "conversationId" | "fromProviderDeltaSeq">) =>
-  `${frame.conversationId}:${frame.fromProviderDeltaSeq}`;
+/** The highest speaker frame yet seen of each call: the probe's press-time snapshot. */
+export type SpeakerHighWater = ReadonlyMap<string, number>;
 
 /**
  * The first frame that can only belong to the answer this press asked for.
  *
- * THE DELTA NUMBER IS NOT A RUN-WIDE CLOCK, and reading it as one is what once
+ * A FRAME NUMBER IS NOT A RUN-WIDE CLOCK, and reading it as one is what once
  * made a working facet look like a dead server. The rule was "a frame numbered
  * above the highest seen so far", which is sound inside one call and
- * meaningless across two: the counter lives on the socket, and a call that
- * hangs up takes it away. Every answer was then numbered 1, so from round two
- * the probe sat out its full 30-second deadline waiting for a 2 that no longer
- * existed, and reported five silent rounds against a facet that had answered
- * all five.
+ * meaningless across two: the counter lives on the call, and a call that
+ * hangs up takes it away. Every answer was then numbered from one again, so
+ * from round two the probe sat out its full 30-second deadline waiting for a
+ * number that no longer existed, and reported five silent rounds against a
+ * facet that had answered all five.
  *
- * Scoping the comparison to the conversation is what makes it true again, and
- * it is still the honest match for the thing this guards against: the facet
- * paces a long answer out over its whole playing time, so frames of the
- * PREVIOUS answer are still arriving when the next button goes down. Those
- * carry a pair this turn has already seen; the answer it is waiting for cannot.
+ * Scoping the high-water mark to the conversation is what makes it true
+ * again (an unseen conversation passes at once), and it is still the honest
+ * match for the thing this guards against: frames of the PREVIOUS answer can
+ * still be in flight when the next button goes down. Those carry numbers at
+ * or under the mark this turn already saw; the answer it is waiting for is
+ * minted after the press, above it.
  *
  * REQUIRING AUDIO is the v2 half of the rule. That lane also carries frames
  * with no samples in them — the clear that a press puts out, and the marker
  * that ends an answer — and the clear is emitted BY THIS PRESS, microseconds
- * after the button goes down. Timing that would report a few milliseconds for
- * an answer nobody has generated yet.
+ * after the button goes down, numbered above everything heard. Timing that
+ * would report a few milliseconds for an answer nobody has generated yet.
  */
 export function firstFrameOfNewAnswer(
   frames: readonly HeardFrame[],
-  seenBeforeThePress: ReadonlySet<string>,
+  seenBeforeThePress: SpeakerHighWater,
   releasedAtDeviceMs: number,
 ): HeardFrame | undefined {
   return frames.find(
     (frame) =>
       frame.hasAudio &&
       frame.atDeviceMs >= releasedAtDeviceMs &&
-      !seenBeforeThePress.has(answerKey(frame)),
+      frame.deviceSpeakerFrameSeq > (seenBeforeThePress.get(frame.conversationId) ?? 0),
   );
 }
 
@@ -549,12 +553,12 @@ export async function pttMarginal(options: PttMarginalOptions) {
    */
   let spkAt: HeardFrame[] = [];
   /*
-   * Every (call, delta) pair this run has heard, for the whole run rather
-   * than the turn: `spkAt` is cleared per turn, so a straggler from the
-   * previous answer arrives into an empty list and would otherwise look new.
-   * See `firstFrameOfNewAnswer` for why the pair, and not the number alone.
+   * The highest frame number this run has heard of each call, for the whole
+   * run rather than the turn: `spkAt` is cleared per turn, so a straggler
+   * from the previous answer arrives into an empty list and would otherwise
+   * look new. See `firstFrameOfNewAnswer` for why the mark is per-call.
    */
-  const answersSeen = new Set<string>();
+  const spkHighWater = new Map<string, number>();
   let lastSpkAtDeviceMs = 0;
   /** The facet's stamps for the turn in flight; at most one per turn. */
   const timing: TurnMarks[] = [];
@@ -584,7 +588,7 @@ export async function pttMarginal(options: PttMarginalOptions) {
               sentAtFacetMs:
                 typeof payload.sentAtFacetMs === "number" ? payload.sentAtFacetMs : Number.NaN,
               conversationId: String(payload.conversationId ?? ""),
-              fromProviderDeltaSeq: Number(payload.fromProviderDeltaSeq ?? 0),
+              deviceSpeakerFrameSeq: Number(payload.deviceSpeakerFrameSeq ?? 0),
               hasAudio: pcm !== "",
               clearsBuffer: payload.clearSpeakerBufferBeforeFrame === true,
               lastOfAnswer: payload.lastFrameOfAnswer === true,
@@ -597,7 +601,13 @@ export async function pttMarginal(options: PttMarginalOptions) {
                     32,
             };
             spkAt.push(frame);
-            if (frame.hasAudio) answersSeen.add(answerKey(frame));
+            /* EVERY frame raises the mark, clears and markers included: they
+             * are numbered like any other frame, and a mark that skipped them
+             * would let the press's own clear look like an answer's floor. */
+            spkHighWater.set(
+              frame.conversationId,
+              Math.max(spkHighWater.get(frame.conversationId) ?? 0, frame.deviceSpeakerFrameSeq),
+            );
             continue;
           }
           if (event.type === "events.iterate.com/voice-agent/provider-error") {
@@ -789,7 +799,7 @@ export async function pttMarginal(options: PttMarginalOptions) {
 
   /** Wait for the first frame that answers a press released at `releasedAt`. */
   async function hearAnswer(
-    answersBefore: ReadonlySet<string>,
+    answersBefore: SpeakerHighWater,
     releasedAtDeviceMs: number,
   ): Promise<HeardFrame | undefined> {
     const deadline = Date.now() + 30_000;
@@ -808,7 +818,7 @@ export async function pttMarginal(options: PttMarginalOptions) {
     spkAt = [];
     timing.length = 0;
     faultThisTurn = false;
-    const answersBefore = new Set(answersSeen);
+    const answersBefore = new Map(spkHighWater);
     const releasedAtDeviceMs = await press(framesByKind[kind]);
     const heard = await hearAnswer(answersBefore, releasedAtDeviceMs);
     /*
@@ -881,7 +891,7 @@ export async function pttMarginal(options: PttMarginalOptions) {
     let healthFromAtMs = heard.atDeviceMs;
     if (kind === "barge") {
       await sleep(bargeDelayMs);
-      const answersBeforeBarge = new Set(answersSeen);
+      const answersBeforeBarge = new Map(spkHighWater);
       const bargePressedAtMs = Date.now();
       const bargeReleasedAtMs = await press(bargeFrames);
       const clearDeadline = Date.now() + 10_000;

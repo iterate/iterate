@@ -256,7 +256,6 @@ function speakerFrames(h: Harness) {
       (event) =>
         event.payload as {
           deviceSpeakerFrameSeq: number;
-          fromProviderDeltaSeq: number;
           pcm: string;
           clearSpeakerBufferBeforeFrame?: boolean;
           lastFrameOfAnswer?: boolean;
@@ -922,7 +921,10 @@ describe("the speaker lane", () => {
     expect(seqs.length).toBeGreaterThan(0);
   });
 
-  it("says which Grok delta each frame was cut from", async () => {
+  it("numbers the end-of-answer marker like any other frame", async () => {
+    /* (Frames used to carry `fromProviderDeltaSeq` too — which delta each was
+     * cut from; "debugging, not ordering" by its own docstring, read by
+     * nobody, deleted with the field.) */
     const h = makeHarness();
     await callIsLive(h);
     h.provider.answerAudio(400); /* delta 1 -> four 100ms frames */
@@ -931,16 +933,13 @@ describe("the speaker lane", () => {
     await playOutEverything(h, 2_000);
 
     const frames = speakerFrames(h);
-    /* The audio frames, by which delta they were cut from. */
-    expect(
-      frames.filter((frame) => frame.pcm !== "").map((frame) => frame.fromProviderDeltaSeq),
-    ).toEqual([1, 1, 1, 1, 2, 2, 2, 2]);
-    /* And behind them the end-of-answer marker, carrying no audio of its own.
-     * It is numbered like any other frame, because a device that skipped it
-     * would score the next one as a gap. */
+    /* Behind the audio sits the end-of-answer marker, carrying no audio of
+     * its own. It is numbered like any other frame, because a device that
+     * skipped it would score the next one as a gap. */
     const last = frames.at(-1)!;
     expect(last.pcm).toBe("");
     expect(last.lastFrameOfAnswer).toBe(true);
+    expect(last.deviceSpeakerFrameSeq).toBe(frames.length);
   });
 
   it("delivers every millisecond the provider generated", async () => {
