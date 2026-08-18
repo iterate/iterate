@@ -56,7 +56,9 @@ import {
 } from "../live-state-pager.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
-import { WorkerBuildFailedError } from "../workers/artifact-store.ts";
+import { isWorkerBuildInProgressError } from "../workers/worker-loader.ts";
+import { isWorkerBuildFailedError, WorkerBuildFailedError } from "../workers/artifact-store.ts";
+import { isRepoNotSeededError } from "../repos/utils.ts";
 import type { StatefulDynamicWorkerRef } from "../workers/schemas.ts";
 import { buildCopyAppends } from "./copy-appends.ts";
 import {
@@ -68,6 +70,7 @@ import { compileEventFilter, type EventFilter } from "./event-filter.ts";
 import { EphemeralEventBuffer } from "./ephemeral-event-buffer.ts";
 import { StreamSubscriberPagerRegistry } from "./stream-subscriber-pager.ts";
 import {
+  errorMessage,
   internalStreamId,
   isInternalStreamIdempotencyKey,
   sameCopiedEventIdentity,
@@ -296,11 +299,44 @@ function isWorkersHungEntrypointError(error: unknown): error is Error {
   );
 }
 
-/** Convert a canceled project-worker call into the receiver-availability error contract. */
+/**
+ * A project-worker delivery rejection that means the RECEIVER cannot take
+ * calls right now — not that it rejected these events. A worker whose source
+ * is still building (or whose config repo is not seeded yet: the pre-build
+ * moment of project bootstrap) is unavailability exactly like a canceled
+ * call: routing it into the failing-event lane would confirm-skip healthy
+ * events (agent births included) during every project's first ~minute and
+ * then trip the mass-skip halt. Name-based matchers because these errors
+ * cross Workers RPC; walk the cause chain because dispatch layers wrap.
+ */
+export function isProjectWorkerUnavailableDelivery(error: unknown): boolean {
+  const seen = new Set<object>();
+  let candidate = error;
+  while (typeof candidate === "object" && candidate !== null) {
+    if (
+      isWorkersHungEntrypointError(candidate) ||
+      isWorkerBuildInProgressError(candidate) ||
+      isRepoNotSeededError(candidate) ||
+      // A deterministic source-build failure marks the BUILD unretryable, but
+      // for delivery it still means "receiver down until a fix commit lands":
+      // parking loses nothing and recovers by itself, while the failing-event
+      // lane would skip three healthy events before halting anyway.
+      isWorkerBuildFailedError(candidate)
+    ) {
+      return true;
+    }
+    if (seen.has(candidate)) return false;
+    seen.add(candidate);
+    candidate = (candidate as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/** Convert an unavailable project-worker call into the receiver-availability error contract. */
 function rethrowItxDeliveryError(error: unknown): never {
-  if (isWorkersHungEntrypointError(error)) {
+  if (isProjectWorkerUnavailableDelivery(error)) {
     throw new StreamReceiverUnavailableError(
-      `project worker receiver was canceled before acknowledgement: ${error.message}`,
+      `project worker receiver is unavailable: ${errorMessage(error)}`,
       { cause: error },
     );
   }
