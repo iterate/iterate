@@ -84,6 +84,8 @@ type FacetProcessorArgs = {
   projectId: string;
   identity: FacetIdentity;
   env: Env;
+  /** The facet's own ctx — its `exports` mints the loaded-worker interposition entrypoint. */
+  hostCtx: unknown;
   invoke: (call: Expression, depth?: number) => Promise<unknown>;
 };
 
@@ -100,7 +102,8 @@ const FACET_PROCESSORS: Record<
   // loader/fallback from the inherited worker env; the own stream + sibling contexts BY NAME
   // through the parent namespace; the clients view = thin RPC wrappers over the parent's stub
   // facade (sockets live on the parent, always).
-  "iterate-context": ({ stream, storage, path, projectId, identity, env, invoke }) => {
+  "iterate-context": (args) => {
+    const { stream, storage, path, projectId, identity, env, invoke } = args;
     const parent = () => env.CONTEXT.getByName(identity.parentName);
     const roots = buildRoots({
       projectId,
@@ -111,6 +114,7 @@ const FACET_PROCESSORS: Record<
       context: (p) => env.CONTEXT.getByName(stringifyName({ projectId, path: p })),
       clients: facetClientsView(parent),
       facets: facetAddressView(parent),
+      hostCtx: args.hostCtx,
     });
     const processor = new IterateContextStreamProcessor({
       stream,
@@ -229,6 +233,7 @@ export class ProcessorFacet extends DurableObject<Env> {
       path: identity.path,
       projectId: identity.projectId,
       identity,
+      hostCtx: this.ctx,
       env: this.env,
       invoke: (call, depth) => this.invoke(call, depth),
     });

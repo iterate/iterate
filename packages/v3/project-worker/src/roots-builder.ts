@@ -7,6 +7,7 @@
 // hosts see the same bindings).
 
 import { CODE_CAP_RUNNER, confinedWorker } from "./core/agent-runtime.ts";
+import { itxEntrypointFor } from "./iterate-context-entrypoint.ts";
 import { pathProxy, toExpression, type Expression } from "./core/expression.ts";
 import { hashSource } from "./core/hash.ts";
 import { Roots, type ClientsView, type FacetsView, type WorkersView } from "./core/roots.ts";
@@ -45,6 +46,9 @@ export interface BuildRootsDeps {
   /** The parked-stub registry view (host-specific: in-DO closures or the parent facade). */
   clients: ClientsView;
   facets: FacetsView;
+  /** The ctx whose `exports` mints the IterateContextEntrypoint loopback (the loaded-worker
+   *  host — see iterate-context-entrypoint.ts for why it is never a raw getByName stub). */
+  hostCtx: unknown;
 }
 
 /** Assemble the Roots for one context. Every getter closes over the context's identity — the
@@ -55,9 +59,16 @@ export function buildRoots(deps: BuildRootsDeps): Roots {
   const loadModules = async (source: Expression): Promise<Record<string, string>> =>
     (await deps.invoke(source)) as Record<string, string>;
 
-  /** A confined dynamic worker whose world is THIS context (a self-stub). */
+  /** A confined dynamic worker whose world is THIS context — via the interposition entrypoint,
+   *  never a raw DO stub (iterate-context-entrypoint.ts). */
   const loaderWorker = (cacheKey: string, mainModule: string, modules: Record<string, string>) =>
-    confinedWorker(env.LOADER, cacheKey, mainModule, modules, env.CONTEXT.getByName(contextName));
+    confinedWorker(
+      env.LOADER,
+      cacheKey,
+      mainModule,
+      modules,
+      itxEntrypointFor(deps.hostCtx, contextName),
+    );
 
   /** `roots.workers.get({type, source, className?})` — run code in this context.
    *  stateless → a loader isolate: `{ run(...args), fetch(request) }`;

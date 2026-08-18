@@ -947,3 +947,33 @@ push 6/6 — ALL PASS. 79 unit tests, typecheck clean.
 
 80 unit tests green; deploy `verdicts-4`: full board ALL PASS (crisp/facet/userspace/
 ephemeral/push incl. the new consecutive-skip-reset assertion/facet-address).
+
+## Increment 39 (entry-1): the IterateContextEntrypoint — loaded workers never hold a raw DO stub
+
+Owner (2026-08-18): for restorable/KV-cached capability futures, "I wouldn't do
+env.CONTEXT.getByName — I would go through an iterate context entry point for now just to get
+ahead of that."
+
+- **`IterateContextEntrypoint`** (new, ~80 lines): a props-parameterized loopback
+  WorkerEntrypoint (`ctx.exports.IterateContextEntrypoint({ props: { contextName } })`) that is
+  now EVERY confined dynamic worker's whole world — `env.ITX` and `globalOutbound` at all three
+  loader sites (stateless code caps via roots-builder, userspace processor facets, the stateful
+  runner). Surface = exactly what loaded code speaks: invokeCapability / invoke / append /
+  read / fetch, each forwarding to the owning Stream DO by name TODAY — a swappable
+  implementation detail, not the stub's identity.
+- Why now (the doctrine): (1) THE INTERPOSITION POINT for the KV-cached-capabilities future —
+  DO-free capabilities get served right here without waking the DO, when we build that;
+  (2) Kenton-aligned persistence-ready — ctx.exports-minted stubs are exactly what the shipped
+  persistent-stub machinery can store and replay (raw getByName env-binding stubs can NEVER
+  be stored); a future `[restore]` lands on this class and resolves through the ROUTED door,
+  keeping deletion-is-revocation for stored stubs; (3) matches apps/os verbatim (its loaded
+  workers get `env.ITX = ctx.exports.ItxEntrypoint({props})` — we were behind both).
+- The stateful runner's #hostStub split into #hostName (the codec name) + #hostStub (module
+  resolution only); the hosted class's env.ITX rides the entrypoint.
+- Also this session: verified LIVE that production Cloudflare accepts
+  `allow_irrevocable_stub_storage` (deployed with the flag, then reverted — nothing uses it
+  yet). The restore machinery is shipped and available to us today.
+
+80 unit tests green; deploy `entry-1`: full proof board ALL PASS (crisp/facet/userspace/
+ephemeral/push/facet-address) — stateless run+fetch, stateful env.ITX callback, and the SDK
+runner's append/read all riding the entrypoint.

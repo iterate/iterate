@@ -30,6 +30,7 @@ import { confinedWorker } from "./core/agent-runtime.ts";
 import { stepGet, type Expression } from "./core/expression.ts";
 import { hashSource } from "./core/hash.ts";
 import { stringifyName } from "./core/names.ts";
+import { itxEntrypointFor } from "./iterate-context-entrypoint.ts";
 import type { StreamDurableObject } from "./stream-durable-object.ts";
 
 const FACET_NAME = "target";
@@ -62,17 +63,22 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     return (await this.#hostStub().invoke(source)) as Record<string, string>;
   }
 
-  /** A stub to the OWNING capability host — the `env.ITX` every hosted DO class gets (like a stateless code
-   *  cap). Reconstructed from this runner's name `{projectId}::{path}::{className}:{sourceHash}`, which
-   *  StreamDurableObject's #workersView sets; the first two `::`-segments are the context {projectId, path}. */
-  #hostStub(): DurableObjectStub<StreamDurableObject> {
+  /** The OWNING context's codec name, reconstructed from this runner's name
+   *  `{projectId}::{path}::{className}:{sourceHash}` (set by StreamDurableObject's workers view). */
+  #hostName(): string {
     const name = this.ctx.id.name;
     const [projectId, path] = name?.split("::") ?? [];
     if (!projectId || !path)
       throw new Error(
         `stateful worker: runner name ${JSON.stringify(name)} is not {projectId}::{path}::{className}:{sourceHash} — reach this DO via the capability host, never by raw id`,
       );
-    return this.env.CONTEXT.getByName(stringifyName({ projectId, path }));
+    return stringifyName({ projectId, path });
+  }
+
+  /** A stub to the OWNING capability host (module resolution + the hosted class's env.ITX rides
+   *  the interposition entrypoint instead — see iterate-context-entrypoint.ts). */
+  #hostStub(): DurableObjectStub<StreamDurableObject> {
+    return this.env.CONTEXT.getByName(this.#hostName());
   }
 
   /** Construct (or restart on a source change) the facet hosting the user's `className`, keeping its storage
@@ -91,7 +97,7 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
       `stateful:${deployVersion}:${this.ctx.id.name}:${version}`,
       "cap.js",
       modules,
-      this.#hostStub(),
+      itxEntrypointFor(this.ctx, this.#hostName()),
     );
     const klass = worker.getDurableObjectClass(className);
     if (!klass) throw new Error(`stateful worker does not export class "${className}"`);

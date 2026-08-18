@@ -37,6 +37,7 @@ import { hashSource } from "./core/hash.ts";
 import { PAGER_HEADER } from "./core/hibernatable-pager.ts";
 import { HibernatableStubs, type Invoker, type Stub } from "./core/hibernatable-stub.ts";
 import { parseName } from "./core/names.ts";
+import { itxEntrypointFor } from "./iterate-context-entrypoint.ts";
 import type { ScanWindow } from "./core/processor.ts";
 import { PROCESSOR_SDK_MODULE } from "./generated/processor-sdk.ts";
 import type { FacetIdentity, ProcessorFacet } from "./processor-facet.ts";
@@ -550,7 +551,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         "processor.js": PROCESSOR_SDK_MODULE,
         "runner.js": PROCESSOR_RUNNER_MODULE,
       },
-      this.env.CONTEXT.getByName(this.#doName),
+      itxEntrypointFor(this.ctx, this.#doName),
     );
     const klass = worker.getDurableObjectClass("ProcessorFacetRunner");
     if (!klass) throw new Error(`userspace processor "${slug}": runner class missing`);
