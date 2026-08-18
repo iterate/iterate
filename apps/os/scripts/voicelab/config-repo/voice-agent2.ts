@@ -1251,18 +1251,15 @@ export class VoiceAgent2Processor extends StreamProcessor<
             dial.hangUpAfterAnswerDrains = null;
             /* Heard-ms must be read BEFORE the drop zeroes the pacer's
              * schedule: sent audio minus what still sat in the device's buffer
-             * when the clear threw it away. */
+             * when the clear threw it away. (A `spkBufferedMs` device stamp
+             * was read here as the preferred source — the device is the
+             * authority on what it played, and the schedule models the WORST
+             * CASE lead — but no device or CLI ever produced the field, so
+             * the read was a branch that had never once run. Deleted; if a
+             * device grows the stamp, declare it in the ptt-start contract
+             * and take it as the authority again.) */
             const nowAtFacetMs = this.deps.nowAtFacetMs();
-            /* The device is the authority on what it played: a press may carry
-             * its actual buffered-ms (`spkBufferedMs`), measured at the button.
-             * The pacer schedule is only the fallback — it models the WORST
-             * CASE lead, and against a Mac draining into CoreAudio it claimed
-             * seconds sat unplayed that a listener had demonstrably heard. */
-            const reported = (event.payload as { spkBufferedMs?: unknown }).spkBufferedMs;
-            const heardMs =
-              typeof reported === "number" && Number.isFinite(reported) && reported >= 0
-                ? Math.max(0, Math.floor(dial.answer.sentMs - reported))
-                : this.#heardMsFromSchedule(dial, nowAtFacetMs);
+            const heardMs = this.#heardMsFromSchedule(dial, nowAtFacetMs);
             this.#dropAnswerInFlight(dial, state.call.conversationId, nowAtFacetMs, append);
             if (dial.ready && dial.socket !== null) {
               const responseWasActive = dial.answer.responseActive;
