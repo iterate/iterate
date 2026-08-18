@@ -37,7 +37,6 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-import { resamplePcm16 } from "./config-repo/voice-agent2.ts";
 import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
 import { closeAndDisposeRpcHandle, discardRpcResult } from "./rpc-ownership.ts";
 
@@ -114,11 +113,30 @@ const DIRECT_PROVIDERS = {
   },
 } as const;
 
-/** The agent's linear PCM16 resampler, over base64 for the direct socket. */
+/**
+ * Linear PCM16 resample over base64, for the direct socket.
+ *
+ * A COPY of the agent's resampler ON PURPOSE. Importing it was tried and
+ * broke every CLI command: config-repo files are WORKER code (they import
+ * `cloudflare:workers` transitively) and this is a Node script — the module
+ * boundary between the two runtimes is real, and thirteen duplicated lines
+ * are its fee. The test suite imports the agent's copy and pins both ends.
+ */
 function resampleFrame(base64Frame: string, fromRate: number, toRate: number): string {
   if (fromRate === toRate) return base64Frame;
-  const bytes = new Uint8Array(Buffer.from(base64Frame, "base64"));
-  return Buffer.from(resamplePcm16(bytes, fromRate, toRate)).toString("base64");
+  const bytes = Buffer.from(base64Frame, "base64");
+  const samples = Math.floor(bytes.length / 2);
+  const outLength = Math.max(1, Math.round((samples * toRate) / fromRate));
+  const out = Buffer.alloc(outLength * 2);
+  for (let index = 0; index < outLength; index++) {
+    const position = outLength === 1 ? 0 : (index * (samples - 1)) / (outLength - 1);
+    const base = Math.floor(position);
+    const fraction = position - base;
+    const first = bytes.readInt16LE(base * 2);
+    const second = base + 1 < samples ? bytes.readInt16LE((base + 1) * 2) : first;
+    out.writeInt16LE((first + (second - first) * fraction) | 0, index * 2);
+  }
+  return out.toString("base64");
 }
 
 /** One scenario in the mixed soak. */
@@ -146,6 +164,27 @@ const APPEND_PROBES = 3;
 const TURN_REPORT_GRACE_MS = 750;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * An awaited append with a deadline. Twice now a run has hung FOREVER on a
+ * dropped itx WebSocket — an RPC on a dead session resolves never, and a
+ * probe that awaits it unbounded turns one network blip into a killed run
+ * and a zombie press replayed into somebody's stream. Five seconds is an
+ * eternity for an append; past it the ROUND fails, not the run.
+ */
+async function appendWithDeadline(work: Promise<unknown>, label: string): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      discardRpcResult(work),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} unacknowledged after 5s`)), 5_000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /** The frames of a PCM16 mono 16 kHz WAV, base64, 20 ms at a time. */
 function framesFromWav(file: string): string[] {
@@ -652,12 +691,13 @@ export async function pttMarginal(options: PttMarginalOptions) {
       }
       if (index + batch >= frames.length) {
         const releasedAtDeviceMs = Date.now();
-        await discardRpcResult(
+        await appendWithDeadline(
           stream.append(...events, {
             type: "events.iterate.com/voice-agent/ptt-end",
             ephemeral: true,
             payload: {},
           }),
+          "release batch",
         );
         return releasedAtDeviceMs;
       }
@@ -669,12 +709,13 @@ export async function pttMarginal(options: PttMarginalOptions) {
   /** One press: ptt-start, the utterance paced to real time, ptt-end. */
   async function press(frames: string[]): Promise<number> {
     const pressedAtDeviceMs = Date.now();
-    await discardRpcResult(
+    await appendWithDeadline(
       stream.append({
         type: "events.iterate.com/voice-agent/ptt-start",
         ephemeral: true,
         payload: {},
       }),
+      "ptt-start",
     );
     return await speakToStream(pressedAtDeviceMs, frames);
   }
@@ -920,7 +961,36 @@ export async function pttMarginal(options: PttMarginalOptions) {
     for (let round = 0; round < rounds; round++) {
       const plan = plans[round]!;
       if (plan.preGapMs > 0) await sleep(plan.preGapMs);
-      const viaStream = await streamTurn(plan.kind, await probeAppendRtt());
+      let viaStream: StreamTurn;
+      try {
+        viaStream = await streamTurn(plan.kind, await probeAppendRtt());
+      } catch (error) {
+        /* A dead session fails the ROUND and says so; the loop carries on so
+         * one blip cannot silently discard every round after it. */
+        console.log(`  round ${round + 1} FAILED: ${String(error).slice(0, 120)}`);
+        viaStream = {
+          kind: plan.kind,
+          totalMs: null,
+          ourMs: null,
+          appendRttMs: null,
+          clean: false,
+          downlinkLagMs: null,
+          uplinkLagMs: null,
+          answerPcmMs: null,
+          answerWallMs: null,
+          maxAnswerGapMs: null,
+          sawEndOfAnswer: false,
+          bargeClearMs: null,
+          bargeAnswerMs: null,
+          facetMs: null,
+          providerRttMs: null,
+          providerThinkMs: null,
+          backlogMs: null,
+          micFramesSeen: null,
+          maxFrameGapMs: null,
+          maxFrameGapAfterFrames: null,
+        };
+      }
       streamTurns.push(viaStream);
       await settle();
 

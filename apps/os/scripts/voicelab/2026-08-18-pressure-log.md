@@ -60,3 +60,18 @@ names stay (`grok-event` et al) — boards and instruments speak them.
 Superseded probes `ptt-latency.ts` + `ptt-baseline.ts` deleted (−454
 lines); the probe's resampler now imports the agent's (−13). 375 voicelab
 tests green.
+
+**F3 (probe, second occurrence — FIXED):** the openai soak hung forever at
+round 3: the itx WebSocket dropped, the barge press's awaited `ptt-start`
+append never resolved, the call died at its 60 s idle deadline, and a
+buffered stray press later leaked into a zombie call. The probe's awaited
+appends now carry a 5 s deadline and a failed round no longer kills the run
+— it prints FAILED and the loop carries on. The zombie-press leak is worth
+knowing about: a reconnecting capnweb session can replay a stale press into
+a stream (server handled it correctly — opened, idled, buried).
+
+**F4 (tooling):** importing anything from `config-repo/` into a Node script
+breaks EVERY CLI command with `ERR_UNSUPPORTED_ESM_URL_SCHEME
+('cloudflare:')` — config-repo is worker code. The resample dedupe is
+reverted with a comment naming the boundary; thirteen duplicated lines are
+the fee for two runtimes.
