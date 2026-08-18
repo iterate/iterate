@@ -8,10 +8,14 @@ import {
   SheetTitle,
 } from "@iterate-com/ui/components/sheet";
 import { CreateProjectForm } from "~/components/create-project-form.tsx";
+import { getConfigRepoTemplateOptions } from "~/lib/config-repo-template-options.ts";
 import { breadcrumbStaticData } from "~/lib/route-breadcrumbs.ts";
 
 export const Route = createFileRoute("/_app/new-project")({
   staticData: breadcrumbStaticData("New project"),
+  loader: async () => ({
+    configRepoTemplates: await getConfigRepoTemplateOptions(),
+  }),
   component: NewProjectPage,
 });
 
@@ -23,6 +27,7 @@ export const Route = createFileRoute("/_app/new-project")({
  * refuses dismiss so Escape/overlay cannot race the success navigation.
  */
 function NewProjectPage() {
+  const { configRepoTemplates } = Route.useLoaderData();
   const navigate = useNavigate();
   const [creating, setCreating] = useState(false);
 
@@ -46,12 +51,14 @@ function NewProjectPage() {
         <SheetHeader className="border-b">
           <SheetTitle>Create project</SheetTitle>
           <SheetDescription>
-            Pick a slug and optionally copy a public config template. You can configure hostnames
-            later.
+            Pick a slug and project template. You can configure hostnames later.
           </SheetDescription>
         </SheetHeader>
         <div className="p-4">
-          <CreateProjectForm onPendingChange={setCreating} />
+          <CreateProjectForm
+            configRepoTemplates={configRepoTemplates}
+            onPendingChange={setCreating}
+          />
         </div>
       </SheetContent>
     </Sheet>

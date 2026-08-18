@@ -219,7 +219,7 @@ function inflateAt(pack: Uint8Array, offset: number): { consumed: number; out: U
   return { consumed: pushed - strm.avail_in, out: concat(chunks) };
 }
 
-function applyDelta(base: Uint8Array, program: Uint8Array): Uint8Array {
+function applyDelta(base: Uint8Array, program: Uint8Array, maximumBytes?: number): Uint8Array {
   let cursor = 0;
   const varint = () => {
     let value = 0;
@@ -240,6 +240,9 @@ function applyDelta(base: Uint8Array, program: Uint8Array): Uint8Array {
     );
   }
   const resultSize = varint();
+  if (maximumBytes !== undefined && resultSize > maximumBytes) {
+    throw new Error(`pack object exceeds ${maximumBytes} bytes`);
+  }
   const out = new Uint8Array(resultSize);
   let written = 0;
   while (cursor < program.length) {
@@ -287,7 +290,10 @@ function applyDelta(base: Uint8Array, program: Uint8Array): Uint8Array {
  * ref-deltas against in-pack bases. Every returned oid is recomputed from
  * the payload, and the trailing SHA-1 is checked first.
  */
-export async function parsePack(pack: Uint8Array): Promise<RawGitObject[]> {
+export async function parsePack(
+  pack: Uint8Array,
+  limits: { maxObjectBytes?: number; maxTotalObjectBytes?: number } = {},
+): Promise<RawGitObject[]> {
   if (pack.length < 32 || textDecoder.decode(pack.subarray(0, 4)) !== "PACK") {
     throw new Error("not a pack stream");
   }
@@ -314,6 +320,7 @@ export async function parsePack(pack: Uint8Array): Promise<RawGitObject[]> {
   };
   const entries: Entry[] = [];
   const byEntryOffset = new Map<number, Entry>();
+  let inflatedPayloadBytes = 0;
   let cursor = 12;
   for (let index = 0; index < count; index++) {
     const entryOffset = cursor;
@@ -327,6 +334,16 @@ export async function parsePack(pack: Uint8Array): Promise<RawGitObject[]> {
       cursor += 1;
       declaredSize |= (byte & 0x7f) << shift;
       shift += 7;
+    }
+    if (limits.maxObjectBytes !== undefined && declaredSize > limits.maxObjectBytes) {
+      throw new Error(`pack object exceeds ${limits.maxObjectBytes} bytes`);
+    }
+    inflatedPayloadBytes += declaredSize;
+    if (
+      limits.maxTotalObjectBytes !== undefined &&
+      inflatedPayloadBytes > limits.maxTotalObjectBytes
+    ) {
+      throw new Error(`pack objects exceed ${limits.maxTotalObjectBytes} bytes`);
     }
     const kind = OBJECT_TYPE_CODES[typeCode];
     if (kind === undefined) throw new Error(`unknown pack object type ${typeCode}`);
@@ -382,14 +399,20 @@ export async function parsePack(pack: Uint8Array): Promise<RawGitObject[]> {
           throw new Error(`ofs-delta base at ${entry.baseOffset} not in pack`);
         }
         const baseResolved = resolve(base);
-        out = { payload: applyDelta(baseResolved.payload, entry.payload), type: baseResolved.type };
+        out = {
+          payload: applyDelta(baseResolved.payload, entry.payload, limits.maxObjectBytes),
+          type: baseResolved.type,
+        };
       } else {
         const base = byOid.get(entry.baseOid!);
         if (base === undefined) {
           // Retryable: a later pass may have hashed this base by then.
           throw new Error(`thin pack: ref-delta base ${entry.baseOid} not in pack`);
         }
-        out = { payload: applyDelta(base.payload, entry.payload), type: base.type };
+        out = {
+          payload: applyDelta(base.payload, entry.payload, limits.maxObjectBytes),
+          type: base.type,
+        };
       }
       resolved.set(entry, out);
       return out;
@@ -400,8 +423,16 @@ export async function parsePack(pack: Uint8Array): Promise<RawGitObject[]> {
   // Ref-delta bases are found by oid, so hash non-delta entries first, then
   // sweep deltas in passes (a ref-delta may target another delta's RESULT).
   const objects: RawGitObject[] = [];
+  let resolvedObjectBytes = 0;
   const emit = async (entry: Entry) => {
     const out = resolve(entry);
+    resolvedObjectBytes += out.payload.byteLength;
+    if (
+      limits.maxTotalObjectBytes !== undefined &&
+      resolvedObjectBytes > limits.maxTotalObjectBytes
+    ) {
+      throw new Error(`pack objects exceed ${limits.maxTotalObjectBytes} bytes`);
+    }
     const oid = await hashObject(out.type, out.payload);
     byOid.set(oid, out);
     objects.push({ oid, ...out });
@@ -459,6 +490,7 @@ export async function buildPack(
 
 export function encodeFetchRequest(input: {
   deepen?: number;
+  filter?: "blob:none";
   haves?: string[];
   wants: string[];
 }): Uint8Array {
@@ -466,6 +498,7 @@ export function encodeFetchRequest(input: {
   for (const want of input.wants) parts.push(pktLine(`want ${want}`));
   for (const have of input.haves ?? []) parts.push(pktLine(`have ${have}`));
   if (input.deepen !== undefined) parts.push(pktLine(`deepen ${input.deepen}`));
+  if (input.filter !== undefined) parts.push(pktLine(`filter ${input.filter}`));
   parts.push(pktLine("no-progress"));
   parts.push(pktLine("done"));
   parts.push(FLUSH);
@@ -482,6 +515,7 @@ export function encodeLsRefsRequest(input: { prefixes: string[] }): Uint8Array {
 export interface LsRefsEntry {
   name: string;
   oid: string;
+  peeledOid?: string;
   symrefTarget?: string;
 }
 
@@ -494,6 +528,7 @@ export function parseLsRefs(body: Uint8Array): LsRefsEntry[] {
     const entry: LsRefsEntry = { name, oid };
     for (const attribute of attributes) {
       if (attribute.startsWith("symref-target:")) entry.symrefTarget = attribute.slice(14);
+      if (attribute.startsWith("peeled:")) entry.peeledOid = attribute.slice(7);
     }
     refs.push(entry);
   }

@@ -64,6 +64,7 @@ test.each([
       },
       clients: {
         get: vi.fn((path: string) => ({
+          __describe: vi.fn(async () => ({ capabilities: [{ path: ["capabilities"] }] })),
           invokeCapability:
             path === "/clients/os-app/landing-tab" ? landingTabCapability : busyTabCapability,
         })),
@@ -136,7 +137,7 @@ test.each([
         }),
       }),
     );
-    expect(project.clients.get).toHaveBeenCalledTimes(2);
+    expect(project.clients.get).toHaveBeenCalledTimes(name === "with-voice" ? 4 : 2);
     expect(project.clients.get).toHaveBeenCalledWith("/clients/os-app/landing-tab");
     expect(project.clients.get).toHaveBeenCalledWith("/clients/os-app/busy-tab");
     expect(landingTabCapability).toHaveBeenNthCalledWith(1, {

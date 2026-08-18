@@ -6,7 +6,11 @@ On the first turn:
 
 1. Briefly explain that the project starts with a working browser speech demo.
 2. Ask what the project should say, listen for, or automate.
-3. Record stable requirements in `AGENTS.md` before changing `worker.ts`.
+
+When the owner answers that first question, acknowledge their answer and ask
+one concrete follow-up question. Keep this first exchange conversational: do
+not inspect or change files yet. On later turns, record stable requirements in
+`AGENTS.md` before changing `worker.ts`.
 
 Keep the text-input fallback working while adding microphone or generated-audio
 features. Once the owner has chosen a first voice workflow, summarize it and

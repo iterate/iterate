@@ -35,28 +35,54 @@ export default class VoiceProjectWorker extends IterateWorkerEntrypoint {
       },
     );
 
-    const [{ slug }, clients] = await Promise.all([this.itx.identity(), this.itx.clients.list()]);
+    // Project creation can finish just before the creating tab mounts its
+    // ordinary project client. Keep that race entirely in this template: for
+    // eight seconds, look for an OS client whose browser capability is ready.
+    // No client is a valid outcome (CLI/API-created projects have none).
+    const clientDeadline = Date.now() + 8_000;
+    let browserClientPaths: string[] = [];
+    while (browserClientPaths.length === 0 && Date.now() < clientDeadline) {
+      const clients = await this.itx.clients.list();
+      browserClientPaths = (
+        await Promise.all(
+          clients
+            .filter((client) => client.connected && client.path.startsWith("/clients/os-app/"))
+            .map(async (client) => {
+              const description = await this.itx.clients.get(client.path).__describe();
+              return description.capabilities.some(
+                (capability) =>
+                  capability.path.length === 1 && capability.path[0] === "capabilities",
+              )
+                ? client.path
+                : undefined;
+            }),
+        )
+      ).filter((path): path is string => path !== undefined);
+      if (browserClientPaths.length === 0 && Date.now() < clientDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
+
+    const { slug } = await this.itx.identity();
     const projectHomePath = `/projects/${slug}`;
     const onboardingUrl = `/projects/${slug}/agents/streams/agents/onboarding`;
     await Promise.all(
-      clients
-        .filter((client) => client.connected && client.path.startsWith("/clients/os-app/"))
-        .map(async (client) => {
-          const browserClient = this.itx.clients.get(client.path);
-          const currentUrl = await browserClient.invokeCapability({
-            path: ["capabilities", "browser", "url"],
-          });
-          if (
-            typeof currentUrl !== "string" ||
-            new URL(currentUrl).pathname.replace(/\/$/, "") !== projectHomePath
-          ) {
-            return;
-          }
-          await browserClient.invokeCapability({
-            path: ["capabilities", "browser", "navigate"],
-            args: [onboardingUrl],
-          });
-        }),
+      browserClientPaths.map(async (clientPath) => {
+        const browserClient = this.itx.clients.get(clientPath);
+        const currentUrl = await browserClient.invokeCapability({
+          path: ["capabilities", "browser", "url"],
+        });
+        if (
+          typeof currentUrl !== "string" ||
+          new URL(currentUrl).pathname.replace(/\/$/, "") !== projectHomePath
+        ) {
+          return;
+        }
+        await browserClient.invokeCapability({
+          path: ["capabilities", "browser", "navigate"],
+          args: [onboardingUrl],
+        });
+      }),
     );
   }
 
