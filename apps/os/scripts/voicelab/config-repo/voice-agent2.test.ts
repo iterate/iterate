@@ -202,6 +202,10 @@ function makeHarness() {
     return { webSocket: socket } as unknown as Response;
   });
 
+  /* What a tool expression walks: a stand-in for the project root that a
+   * test replaces with whatever capabilities its tool needs. */
+  const projectRoot: { current: unknown } = { current: {} };
+
   const harness = makeProcessorHarness<VoiceAgent2Contract, VoiceAgent2Processor>({
     path: "/agents/voice/test",
     createProcessor: (deps) =>
@@ -212,6 +216,7 @@ function makeHarness() {
          * provider — including the `response.webSocket ?? null` line that has
          * broken in production. */
         dialProvider: (provider, baseUrl, model) => dialProviderSocket(provider, baseUrl, model),
+        withProject: (fn) => fn(projectRoot.current),
       }),
   });
   /* `grok` is always the socket of the CURRENT dial; `sockets` is every one
@@ -223,6 +228,7 @@ function makeHarness() {
       return sockets[sockets.length - 1]!;
     },
     dialledUrls,
+    projectRoot,
   };
 }
 
@@ -644,6 +650,228 @@ describe("the openai provider", () => {
     await callIsLive(h);
     const flushed = h.provider.sentOfType("input_audio_buffer.append")[0] as { audio: string };
     expect(atob(flushed.audio).length).toBe(640);
+  });
+});
+
+/* ========================================================================== */
+/* TOOLS                                                                      */
+/* ========================================================================== */
+
+describe("tools on the birth certificate", () => {
+  const HANG_UP = { name: "hang_up", description: "End the call." };
+
+  /** A live push-to-talk call whose certificate names some tools. */
+  async function callWithTools(
+    h: Harness,
+    tools: {
+      name: string;
+      description: string;
+      parameters?: Record<string, unknown>;
+      expression?: (string | [string, ...unknown[]])[];
+    }[],
+  ): Promise<string> {
+    await h.append({
+      type: "events.iterate.com/voice-agent/created",
+      payload: {
+        providerBaseUrl: "https://fake.provider.test/v1/realtime",
+        clientTakesTurns: CLIENT_TAKES_TURNS,
+        tools,
+      },
+    });
+    await h.append(micFrame(1));
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
+    const started = eventsOfType(h, "call-started");
+    return (started[0]!.payload as { conversationId: string }).conversationId;
+  }
+
+  /** Every tool debt the facet answered, oldest first. */
+  function toolOutputs(h: Harness) {
+    return h.provider
+      .sentOfType("conversation.item.create")
+      .map((message) => message.item as { type: string; call_id: string; output: string })
+      .filter((item) => item.type === "function_call_output");
+  }
+
+  it("declares the certificate's tools in the one session.update", async () => {
+    const h = makeHarness();
+    await callWithTools(h, [
+      HANG_UP,
+      {
+        name: "add_note",
+        description: "Add a note.",
+        parameters: { type: "object", properties: { text: { type: "string" } } },
+        expression: ["notes", "add"],
+      },
+    ]);
+    const update = h.provider.sentOfType("session.update")[0] as {
+      session: {
+        tool_choice?: string;
+        tools?: { type: string; name: string; parameters: unknown }[];
+      };
+    };
+    expect(update.session.tool_choice).toBe("auto");
+    expect(update.session.tools!.map((tool) => tool.name)).toEqual(["hang_up", "add_note"]);
+    /* A no-argument tool still declares an argument shape — the provider
+     * requires one. */
+    expect(update.session.tools![0]!.parameters).toEqual({ type: "object", properties: {} });
+  });
+
+  it("declares nothing when the certificate has no tools", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    const update = h.provider.sentOfType("session.update")[0] as {
+      session: Record<string, unknown>;
+    };
+    expect(update.session.tools).toBeUndefined();
+    expect(update.session.tool_choice).toBeUndefined();
+  });
+
+  it("walks the expression to a function, applies the model's arguments, answers the debt", async () => {
+    const h = makeHarness();
+    const added: unknown[] = [];
+    h.projectRoot.current = {
+      notes: {
+        for(day: string) {
+          return {
+            add: async (args: unknown) => {
+              added.push(args);
+              return { noted: day };
+            },
+          };
+        },
+      },
+    };
+    await callWithTools(h, [
+      {
+        name: "add_note",
+        description: "Add a note.",
+        expression: ["notes", ["for", "today"], "add"],
+      },
+    ]);
+    h.provider.push({
+      type: "response.function_call_arguments.done",
+      call_id: "call_1",
+      name: "add_note",
+      arguments: JSON.stringify({ text: "buy milk" }),
+    });
+    await h.settle();
+    expect(added).toEqual([{ text: "buy milk" }]);
+    const outputs = toolOutputs(h);
+    expect(outputs).toHaveLength(1);
+    expect(outputs[0]!.call_id).toBe("call_1");
+    expect(JSON.parse(outputs[0]!.output)).toEqual({ noted: "today" });
+    /* An expression's result deserves a spoken follow-up: exactly one. */
+    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
+  });
+
+  it("a failing expression answers the model with the error", async () => {
+    const h = makeHarness();
+    h.projectRoot.current = {
+      boom() {
+        throw new Error("the capability said no");
+      },
+    };
+    await callWithTools(h, [{ name: "boom", description: "Fails.", expression: ["boom"] }]);
+    h.provider.push({
+      type: "response.function_call_arguments.done",
+      call_id: "call_2",
+      name: "boom",
+      arguments: "{}",
+    });
+    await h.settle();
+    const outputs = toolOutputs(h);
+    expect(outputs).toHaveLength(1);
+    expect(outputs[0]!.output).toContain("the capability said no");
+    /* The follow-up is what turns the error into the model SAYING so. */
+    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
+  });
+
+  it("an unknown tool name is answered, never ignored", async () => {
+    const h = makeHarness();
+    await callWithTools(h, [HANG_UP]);
+    h.provider.push({
+      type: "response.function_call_arguments.done",
+      call_id: "call_3",
+      name: "does_not_exist",
+      arguments: "{}",
+    });
+    await h.settle();
+    expect(JSON.parse(toolOutputs(h)[0]!.output)).toEqual({ error: "no such tool" });
+  });
+
+  it("a barged response's tool call never runs", async () => {
+    const h = makeHarness();
+    let ran = 0;
+    h.projectRoot.current = {
+      count: async () => {
+        ran += 1;
+        return ran;
+      },
+    };
+    await callWithTools(h, [{ name: "count", description: "Count.", expression: ["count"] }]);
+    h.provider.responseCreated();
+    h.provider.answerAudio(100);
+    await h.settle();
+    /* The press cancels the response; the tool call is its residue — an
+     * intent the user erased, and a side effect must not survive it. */
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    h.provider.push({
+      type: "response.function_call_arguments.done",
+      call_id: "call_4",
+      name: "count",
+      arguments: "{}",
+    });
+    await h.settle();
+    expect(ran).toBe(0);
+    expect(toolOutputs(h)).toHaveLength(0);
+  });
+
+  it("hang_up ends the call only after the goodbye finishes playing", async () => {
+    const h = makeHarness();
+    await callWithTools(h, [HANG_UP]);
+    h.provider.responseCreated();
+    h.provider.answerAudio(200);
+    h.provider.push({
+      type: "response.function_call_arguments.done",
+      call_id: "call_5",
+      name: "hang_up",
+      arguments: "{}",
+    });
+    h.provider.answerComplete();
+    await h.settle();
+    /* The debt is answered at once; the call is NOT over yet. */
+    expect(toolOutputs(h)[0]!.output).toContain("hanging up");
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(0);
+    await playOutEverything(h, 400);
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
+    const requested = eventsOfType(h, "conversation-end-requested")[0]!.payload as {
+      reason: string;
+    };
+    expect(requested.reason).toBe("the model hung up");
+    /* Something the assistant DID, not something to talk about. */
+    expect(h.provider.sentOfType("response.create")).toHaveLength(0);
+  });
+
+  it("a press during the goodbye un-decides the hang-up", async () => {
+    const h = makeHarness();
+    await callWithTools(h, [HANG_UP]);
+    h.provider.responseCreated();
+    h.provider.answerAudio(200);
+    h.provider.push({
+      type: "response.function_call_arguments.done",
+      call_id: "call_6",
+      name: "hang_up",
+      arguments: "{}",
+    });
+    h.provider.answerComplete();
+    await h.settle();
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    await playOutEverything(h, 400);
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(0);
   });
 });
 

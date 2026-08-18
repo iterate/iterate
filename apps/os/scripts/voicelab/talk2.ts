@@ -74,6 +74,12 @@ interface VoiceAgent2Setup {
     providerVoice?: string;
     instructions?: string;
     clientTakesTurns?: boolean;
+    tools?: {
+      name: string;
+      description: string;
+      parameters?: Record<string, unknown>;
+      expression?: (string | [string, ...unknown[]])[];
+    }[];
     reinstall?: boolean;
   }): Promise<{ streamPath: string; warmMs: number }>;
 }
@@ -91,6 +97,11 @@ export interface Talk2Options extends TalkOptions {
   providerVoice?: string;
   /** Install the subscription under a fresh key even if an identical one exists. */
   reinstall?: boolean;
+  /**
+   * Offer the model a hang_up tool: say goodbye, end the call — the baseline
+   * proof the tool lane works end to end.
+   */
+  hangUp?: boolean;
   /**
    * Hold the microphone open for the whole call and let Grok find the turns.
    *
@@ -184,6 +195,17 @@ export async function talk2(options: Talk2Options = {}) {
        * never replies.
        */
       clientTakesTurns: options.openMic !== true,
+      ...(options.hangUp === true && {
+        tools: [
+          {
+            name: "hang_up",
+            description:
+              "End this call when the user says goodbye or the conversation is clearly " +
+              "over. Say a short goodbye BEFORE calling this; the call ends after you " +
+              "finish speaking.",
+          },
+        ],
+      }),
       ...(options.provider === undefined ? {} : { provider: options.provider }),
       ...(options.providerModel === undefined ? {} : { providerModel: options.providerModel }),
       ...(options.providerVoice === undefined ? {} : { providerVoice: options.providerVoice }),

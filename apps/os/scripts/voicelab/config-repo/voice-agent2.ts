@@ -264,6 +264,19 @@ const IDLE_STAMP_STEP_MS = 5_000;
 const IDLE_TICK_MS = 5_000;
 
 /**
+ * A tool that hangs must still be answered: the model hears "took too long"
+ * and says so, instead of the silence a lost debt produces — a voice model
+ * waiting on a tool output is a dropped call as far as the listener can tell.
+ */
+const TOOL_RUN_DEADLINE_MS = 10_000;
+
+/**
+ * A tool result lives in the model's context for the rest of the call, and
+ * nobody budgeted the session for a table dump.
+ */
+const TOOL_OUTPUT_MAX_CHARS = 4_000;
+
+/**
  * How many microphone frames may be held while Grok completes its handshake.
  *
  * Bounded because a handshake that never finishes must not grow a queue without
@@ -347,6 +360,49 @@ function base64ToBytes(base64: string): Uint8Array {
 /* ========================================================================== */
 
 /**
+ * One step of an itx expression — the platform's persisted-capability shape
+ * (apps/os/src/itx/expression.ts): a string is a property read, [method,
+ * ...args] is a call. The SDK exports the TYPE (ItxExpressionStep) but not
+ * the schema, so the contract mirrors it, reserved-name guard included.
+ */
+const ItxExpressionStep = z
+  .union([z.string(), z.tuple([z.string()], z.unknown())])
+  .refine(
+    (step) =>
+      !["__proto__", "constructor", "prototype"].includes(
+        typeof step === "string" ? step : step[0],
+      ),
+    { message: "itx expressions cannot use reserved property names" },
+  );
+
+/**
+ * One tool the model may call, as data on the birth certificate.
+ *
+ * `expression` is a walk from the PROJECT ROOT to a function; the model's
+ * parsed arguments object is that function's single argument. Persisting an
+ * expression persists the NAME of a capability, never its authority — every
+ * call re-derives authority from a fresh project session. A tool with NO
+ * expression is a name this agent already knows how to be: `hang_up` is the
+ * only one, and it is one atomic append of conversation-end-requested, no
+ * itx involved. The base case, not a registry — the way "grok" is one row
+ * of PROVIDERS rather than a Provider subclass.
+ */
+const VoiceTool = z
+  .strictObject({
+    name: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/),
+    /** What the provider shows the model; usage guidance lives here, not in
+     * `instructions` — "say goodbye BEFORE calling this" rides the tool. */
+    description: z.string(),
+    /** JSON Schema for the arguments, handed to the provider verbatim.
+     * Absent means a no-argument tool. */
+    parameters: z.looseObject({}).optional(),
+    expression: z.array(ItxExpressionStep).min(1).optional(),
+  })
+  .refine((tool) => tool.expression !== undefined || tool.name === "hang_up", {
+    message: 'a tool with no expression must be a name this agent knows; today that is "hang_up"',
+  });
+
+/**
  * Everything that outlives the Durable Object holding the socket.
  *
  * Note what is NOT here: no queues, no byte counts, no "is speaking" flag.
@@ -386,6 +442,8 @@ const VoiceState = z.object({
    * the recovery path has no event to read it from.
    */
   clientTakesTurns: z.boolean().default(false),
+  /** Tools the model may call — see {@link VoiceTool}. */
+  tools: z.array(VoiceTool).default([]),
   call: z
     .object({
       conversationId: z.string(),
@@ -429,7 +487,10 @@ export const VoiceAgent2Contract = defineProcessorContract({
    * `fromProviderDeltaSeq`, because half the streams this serves no longer
    * dial Grok. A persisted 3.x fold misnames those; the major bump re-reduces
    * instead of loading it. Clean break, no aliases. */
-  version: "4.0.0",
+  /* 5.0.0: the birth certificate carries `tools` — itx expressions the model
+   * may call, plus the well-known hang_up. Clean break like every bump before
+   * it: the major re-reduces any persisted older fold. */
+  version: "5.0.0",
   description: "Runs a voice call in the stream's own Durable Object, one flush watermark deep.",
   stateSchema: VoiceState,
   events: {
@@ -442,6 +503,7 @@ export const VoiceAgent2Contract = defineProcessorContract({
         providerVoice: z.string().optional(),
         instructions: z.string().optional(),
         clientTakesTurns: z.boolean().optional(),
+        tools: z.array(VoiceTool).optional(),
       }),
     },
     "events.iterate.com/voice-agent/warmup": {
@@ -699,6 +761,14 @@ export class VoiceAgent2Processor extends StreamProcessor<
       baseUrl: string | null,
       model: string,
     ): Promise<WebSocket | null>;
+    /**
+     * Open a fresh project itx session, use it, dispose it. Stubs from
+     * `env.ITX.get()` must not outlive the invocation that dialed them, so
+     * every tool call opens its own — the SDK's own pattern (its alarm proxy
+     * does exactly this from inside the facet), inherited rather than
+     * invented.
+     */
+    withProject<T>(fn: (project: unknown) => Promise<T>): Promise<T>;
   }
 > {
   readonly contract = VoiceAgent2Contract;
@@ -828,6 +898,19 @@ export class VoiceAgent2Processor extends StreamProcessor<
    */
   #pendingTruncate: { itemId: string; contentIndex: number; audioEndMs: number } | null = null;
   /**
+   * Tool calls issued by the model and not yet answered, by provider call_id.
+   * Grok documents parallel calls as "all outputs, then ONE response.create";
+   * the follow-up fires when this empties. A future Gemini listener would
+   * delete ids here on toolCallCancellation.
+   */
+  #openToolCallIds = new Set<string>();
+  /**
+   * The model decided the call is over; settle at the drain point, after the
+   * goodbye PLAYS. v1's instant version was measured cutting "Goodbye!"
+   * mid-word. Runtime on purpose: evicted, the 60s idle deadline backstops.
+   */
+  #hangUpAfterAnswerDrains: string | null = null;
+  /**
    * The provider's own transcript of the answer now playing, snapshotted at
    * the barge. Truncation deletes the item's transcript WHOLESALE (the
    * provider's documented behaviour), and the model grounds "what did I say"
@@ -919,6 +1002,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
           providerVoice: event.payload.providerVoice ?? null,
           instructions: event.payload.instructions ?? "",
           clientTakesTurns: event.payload.clientTakesTurns ?? false,
+          tools: event.payload.tools ?? [],
         };
 
       case "events.iterate.com/voice-agent/call-started":
@@ -1149,6 +1233,10 @@ export class VoiceAgent2Processor extends StreamProcessor<
          * is what keeps it out of the speaker queue.
          */
         if (event.type === "events.iterate.com/voice-agent/ptt-start") {
+          /* A press UN-DECIDES a pending hang-up: the user talked past the
+           * goodbye. The model already heard "hanging up" as its tool
+           * output; the transcript shows what happened next — the truth. */
+          this.#hangUpAfterAnswerDrains = null;
           /* Heard-ms must be read BEFORE the drop zeroes the pacer's
            * schedule: sent audio minus what still sat in the device's buffer
            * when the clear threw it away. */
@@ -1344,6 +1432,8 @@ export class VoiceAgent2Processor extends StreamProcessor<
       this.#answerSentMs = 0;
       this.#pendingTruncate = null;
       this.#answerTranscript = [];
+      this.#openToolCallIds = new Set();
+      this.#hangUpAfterAnswerDrains = null;
       this.#micResampler = new Pcm16Resampler(16_000, provider.rate);
       this.#spkResampler = new Pcm16Resampler(provider.rate, 16_000);
 
@@ -1398,6 +1488,18 @@ export class VoiceAgent2Processor extends StreamProcessor<
                 session: {
                   type: "realtime",
                   ...(state.instructions === "" ? {} : { instructions: state.instructions }),
+                  /* The certificate's tools, declared verbatim; the GA shape
+                   * both providers speak. The expression never touches the
+                   * wire — the provider knows names, we know what they do. */
+                  ...(state.tools.length > 0 && {
+                    tool_choice: "auto",
+                    tools: state.tools.map(({ name, description, parameters }) => ({
+                      type: "function",
+                      name,
+                      description,
+                      parameters: parameters ?? { type: "object", properties: {} },
+                    })),
+                  }),
                   audio: {
                     input: {
                       format: { type: "audio/pcm", rate: provider.rate },
@@ -1564,6 +1666,10 @@ export class VoiceAgent2Processor extends StreamProcessor<
             return;
 
           case "response.done": {
+            /* Every response ends here, audio or not — a pure function-call
+             * response never sends output_audio.done, so without this the
+             * NEXT press would cancel a response that no longer exists. */
+            this.#responseActive = false;
             /* The cancelled response is now FINAL — the deferred truncate
              * can no longer race the item's own finalization. */
             const pending = this.#pendingTruncate;
@@ -1581,6 +1687,34 @@ export class VoiceAgent2Processor extends StreamProcessor<
               );
               this.#sendHeardPrefixNote(pending.audioEndMs, conversationId, append);
             }
+            /* The floor is free; a hang-up waiting on the drain settles now. */
+            this.#sendSpeakerAudio(conversationId, append, runInBackground);
+            return;
+          }
+
+          case "response.function_call_arguments.done": {
+            /* Residue discipline, same as audio: a cancelled response's tool
+             * call is an intent the user erased, and running it anyway is the
+             * barge failing at the worst altitude — a side effect. */
+            if (this.#dropDeltasUntilResponseCreated) return;
+            if (typeof grok.call_id !== "string") return;
+            /* Unparseable arguments go through raw; the capability decides
+             * what that means. */
+            let modelArgs: unknown = grok.arguments;
+            try {
+              modelArgs = JSON.parse(String(grok.arguments ?? "{}"));
+            } catch {
+              /* Raw it is. */
+            }
+            this.#runTool(
+              grok.call_id,
+              state.tools.find((tool) => tool.name === grok.name),
+              modelArgs,
+              conversationId,
+              socket,
+              append,
+              runInBackground,
+            );
             return;
           }
 
@@ -1821,6 +1955,112 @@ export class VoiceAgent2Processor extends StreamProcessor<
    * direction. A system item: context, never speech.
    */
   /**
+   * Run one tool call the model made, off the frame path, and ALWAYS answer
+   * it. A function call is a debt: a model that never hears an output waits
+   * on it, so every path out — error and deadline included — sends exactly
+   * one function_call_output. Silence is the one forbidden result.
+   */
+  #runTool(
+    callId: string,
+    tool: z.infer<typeof VoiceTool> | undefined,
+    modelArgs: unknown,
+    conversationId: string,
+    socket: WebSocket,
+    append: ProcessEventArgs<VoiceAgent2Contract>["append"],
+    runInBackground: ProcessEventArgs<VoiceAgent2Contract>["runInBackground"],
+  ): void {
+    this.#openToolCallIds.add(callId);
+    runInBackground(async () => {
+      let output: string;
+      if (tool === undefined) {
+        output = JSON.stringify({ error: "no such tool" });
+      } else if (tool.expression === undefined) {
+        /* THE BASE CASE, NOT A REGISTRY: hanging up is one atomic append of
+         * conversation-end-requested, deferred to the drain point so the
+         * goodbye being spoken right now gets PLAYED, not cut. */
+        this.#hangUpAfterAnswerDrains = "the model hung up";
+        output = JSON.stringify({ status: "hanging up once this answer finishes playing" });
+      } else {
+        const expression = tool.expression;
+        try {
+          /* A sentinel loser, never a throwing one: the branch that loses the
+           * race still settles later, and a floating rejection is a crash
+           * nobody attributed. */
+          const timedOut = Symbol("tool deadline");
+          const work = this.deps.withProject(async (project) => {
+            /* The platform's own walk (apps/os/src/itx/expression.ts):
+             * reads pipeline, calls invoke. Intermediate stubs chain inside
+             * this one session and die with its disposal. */
+            let receiver: unknown;
+            let value: unknown = project;
+            for (const step of expression) {
+              const target = (await value) as object;
+              if (typeof step === "string") {
+                receiver = target;
+                value = Reflect.get(target, step);
+              } else {
+                const [method, ...bound] = step;
+                receiver = undefined;
+                value = Reflect.apply(
+                  Reflect.get(target, method) as (...args: unknown[]) => unknown,
+                  target,
+                  bound,
+                );
+              }
+            }
+            const fn = await value;
+            if (typeof fn !== "function") {
+              throw new Error(`the "${tool.name}" expression did not end at a function`);
+            }
+            return (await Reflect.apply(fn, receiver, [modelArgs])) as unknown;
+          });
+          const result = await Promise.race([
+            work,
+            this.deps.sleep(TOOL_RUN_DEADLINE_MS).then(() => timedOut as unknown),
+          ]);
+          if (result === timedOut) {
+            void work.catch(() => {});
+            throw new Error(`took longer than ${TOOL_RUN_DEADLINE_MS}ms`);
+          }
+          const json = JSON.stringify(result ?? { status: "done" });
+          output =
+            json.length > TOOL_OUTPUT_MAX_CHARS
+              ? JSON.stringify({ truncated: json.slice(0, TOOL_OUTPUT_MAX_CHARS) })
+              : json;
+        } catch (error) {
+          /* The model HEARS the failure; the follow-up below is what turns
+           * "nothing happened" into it saying "that did not work, because…". */
+          output = JSON.stringify({ error: String(error).slice(0, 300) });
+        }
+      }
+      /* The fence every provider-lane completion wears: a re-dialed call is
+       * a NEW session that never issued this call_id. */
+      if (this.#providerSocket !== socket) return;
+      this.#openToolCallIds.delete(callId);
+      this.#sendControl(
+        {
+          type: "conversation.item.create",
+          item: { type: "function_call_output", call_id: callId, output },
+        },
+        conversationId,
+        append,
+      );
+      /* ONE follow-up, only when the floor is free: all parallel outputs in
+       * (grok's documented contract), no response talking, no barge residue
+       * pending — the press owns the floor it took. hang_up asks for nothing:
+       * it is something the assistant DID, not something to talk about. */
+      if (
+        tool?.expression !== undefined &&
+        this.#openToolCallIds.size === 0 &&
+        !this.#responseActive &&
+        !this.#dropDeltasUntilResponseCreated
+      ) {
+        this.#sendControl({ type: "response.create" }, conversationId, append);
+      }
+    });
+  }
+
+  /**
    * Send one client control event AND record it on the `grok-event` lane as
    * `client.<type>` — the lane is the wire's flight recorder, and a recorder
    * that hears only one direction cannot explain an interruption gone wrong.
@@ -2024,6 +2264,30 @@ export class VoiceAgent2Processor extends StreamProcessor<
             },
           });
         }
+        /* THE MODEL HUNG UP, and the drain point is where that settles — the
+         * same place lastFrameOfAnswer is decided, for the same reason: it is
+         * where the answer is knowable. The device holds the whole goodbye;
+         * the pacer's own deadline says when it finishes PLAYING. Sleep that
+         * off, re-check (a press during playout un-decides it), then one
+         * atomic append; the ordinary end-requested machinery does the rest. */
+        if (
+          this.#hangUpAfterAnswerDrains !== null &&
+          this.#speakerQueue.length === 0 &&
+          !this.#responseActive
+        ) {
+          await this.deps.sleep(
+            Math.max(0, this.#deviceBufferEmptyAtFacetMs - this.deps.nowAtFacetMs()),
+          );
+          const reason = this.#hangUpAfterAnswerDrains;
+          if (reason !== null && this.#speakerQueue.length === 0) {
+            this.#hangUpAfterAnswerDrains = null;
+            void append({
+              type: "events.iterate.com/voice-agent/conversation-end-requested",
+              idempotencyKey: this.idempotencyKey(`hang-up:${conversationId}`),
+              payload: { conversationId, reason },
+            });
+          }
+        }
       } finally {
         this.#sending = false;
       }
@@ -2173,6 +2437,9 @@ export interface SetupVoiceAgent2Options {
    * ended, and the call goes silent with nothing logged.
    */
   clientTakesTurns?: boolean;
+  /** Tools the model may call: name/description/parameters go to the
+   * provider; the itx expression is the run. No expression = hang_up. */
+  tools?: z.input<typeof VoiceTool>[];
   /** Install the subscription under a fresh key even if an identical one exists. */
   reinstall?: boolean;
 }
@@ -2266,6 +2533,7 @@ export default class VoiceAgent2Entrypoint extends IterateWorkerEntrypoint {
         ...(options.clientTakesTurns === undefined
           ? {}
           : { clientTakesTurns: options.clientTakesTurns }),
+        ...(options.tools === undefined ? {} : { tools: options.tools }),
       };
       /*
        * ONE IDENTITY FOR THIS SETUP, so the birth certificate is re-applied when
@@ -2373,6 +2641,18 @@ export class VoiceAgent2Facet extends StreamProcessorFacet {
        * from. */
       sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
       dialProvider: (provider, baseUrl, model) => dialProviderSocket(provider, baseUrl, model),
+      withProject: async <T>(fn: (project: unknown) => Promise<T>): Promise<T> => {
+        const project = await this.env.ITX.get();
+        try {
+          return await fn(project);
+        } finally {
+          try {
+            (project as Partial<Disposable>)[Symbol.dispose]?.();
+          } catch {
+            /* Already gone. */
+          }
+        }
+      },
     });
   }
 }
