@@ -8,14 +8,18 @@ blocked-by: worker-delivery-obligations
 
 ## Status summary
 
-Implementation essentially complete; unit lanes green. Landed: the whole
-decided model — worker-authored births with the finalize hold + degraded-start
-deadline, headless-only keeper, `getDefaultBirthEvents` /
-`interpretResponse` itx services, router channel-facts migration, the
-same-change cleanup (defaults store, allowlist, prompt-pinning publish), both
-templates rewritten, both boundary specs. Remaining: live verification on a
-preview slot (fresh project first turn; broken-worker → visible degraded
-start), and CI on the PR.
+Implementation complete; ALL CI lanes green including preview e2e
+(`720a5a7f0`). Landed: the whole decided model — worker-authored births with
+the finalize hold + degraded-start deadline, headless-only keeper,
+`getDefaultBirthEvents` / `interpretResponse` itx services, router
+channel-facts migration, the same-change cleanup (defaults store, allowlist,
+prompt-pinning publish), all THREE templates rewritten (with-voice was
+initially missed — see the preview post-mortem below), both boundary specs.
+Live verification happened on preview-5: worker-authored birth + interpreted
+first turn end-to-end (default template, +2s), and — courtesy of the
+pre-migration with-voice run — the degraded-start chain proven live on a
+cold bootstrapping project (held trigger → timed-out at +10.03s → defaults +
+finalize → successful turn). Remaining: human review.
 
 ## The decided model
 
@@ -159,12 +163,16 @@ start), and CI on the PR.
       slug; the interpreter emits the same events with the same keys the
       classic component did, so the agent-ui-reducer's llmRequestOffset
       linkage is unchanged_
-- [ ] Full lanes green: `pnpm typecheck && pnpm lint && pnpm knip &&
+- [x] Full lanes green: `pnpm typecheck && pnpm lint && pnpm knip &&
       pnpm format && pnpm test`; live verification on a preview slot
-      (fresh project first turn correct; broken-worker commit → visible
-      degraded-start offer, not silence or wrong format) _local pipeline
-      green (format → lint:fix → knip → typecheck → full test, 2800+
-      tests); preview-slot live verification not yet run_
+      _all CI lanes green at `720a5a7f0` incl. preview deploy + e2e. Live
+      on preview-5: default-template project born worker-authored (+2s,
+      house-style tweak included) with the first turn interpreted and
+      delivered; degraded-start chain proven live by the pre-migration
+      with-voice project (timed-out at +10.03s → defaults → dispatch —
+      see preview post-mortem). The "visible offer" UX is the auto-degrade
+      slice per the decided policy; interactive offer remains follow-up
+      polish_
 
 ## Explicitly out of scope (follow-up rounds)
 
