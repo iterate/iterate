@@ -10,15 +10,15 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { substituteHeaderSecrets } from "@v3/shared/egress";
 // Type-only: the class lives in (and stays deployed with) the project-worker script — see the
-// cross-script STREAM_DO binding in wrangler.jsonc.
-import type { StreamDurableObject } from "project-worker";
+// cross-script CONTEXT binding in wrangler.jsonc.
+import type { IterateContextDurableObject } from "project-worker";
 
 interface Env {
   PLATFORM_SECRETS_KV?: KVNamespace; // first-party keys (hosted only); keyed by bare name (not project-prefixed)
-  // CROSS-SCRIPT binding to the project worker's StreamDurableObject namespace (D27): ONE shared streams
-  // namespace, so the control plane can name + write into a PROJECT's stream. A project can only ever name its
-  // OWN streams (constructive isolation) — so this reach is outer→inner ONLY.
-  STREAM_DO?: DurableObjectNamespace<StreamDurableObject>;
+  // CROSS-SCRIPT binding to the project worker's IterateContextDurableObject namespace (D27): a context IS a stream,
+  // so the control plane can name + write into a PROJECT's context. A project can only ever name its
+  // OWN contexts (constructive isolation) — so this reach is outer→inner ONLY.
+  CONTEXT?: DurableObjectNamespace<IterateContextDurableObject>;
 }
 
 export class ControlPlaneShell extends WorkerEntrypoint<Env> {
@@ -40,19 +40,21 @@ export class ControlPlaneShell extends WorkerEntrypoint<Env> {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    // The OUTER shell writing INTO a project's stream (D27): the control plane names `{projectId}:{path}`
-    // directly (the SAME name a project's itx.streams builds) and appends — e.g. a project-created event or a
-    // routed inbound webhook. A project can only ever name its own streams, so this direction is outer→inner.
+    // The OUTER shell writing INTO a project's context (D27): the control plane names
+    // `{projectId}.iterate{path}` (the SAME codec a project's itx.streams builds) and appends —
+    // e.g. a project-created event or a routed inbound webhook. A project can only ever name its
+    // own contexts, so this direction is outer→inner.
     if (url.pathname === "/emit") {
       const projectId = url.searchParams.get("projectId") ?? "";
       const path = url.searchParams.get("path") ?? "/inbox";
       const type = url.searchParams.get("type") ?? "project-created";
-      if (!env.STREAM_DO) return new Response("no STREAM_DO bound\n", { status: 500 });
-      const r = await env.STREAM_DO.getByName(`${projectId}:${path}`).append({
+      if (!env.CONTEXT) return new Response("no CONTEXT bound\n", { status: 500 });
+      const name = `${projectId}.iterate${path.startsWith("/") ? path : `/${path}`}`;
+      const [event] = await env.CONTEXT.getByName(name).append({
         type,
         payload: { by: "control-plane", projectId },
       });
-      return Response.json({ ok: true, wroteInto: `${projectId}:${path}`, ...r });
+      return Response.json({ ok: true, wroteInto: name, offset: event.offset });
     }
     return new Response("iterate control-plane (shell)\n", {
       headers: { "content-type": "text/plain" },

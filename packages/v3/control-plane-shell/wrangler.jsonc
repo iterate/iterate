@@ -11,11 +11,15 @@
   // plane with no first-party keys.
   "kv_namespaces": [{ "binding": "PLATFORM_SECRETS_KV", "id": "34af8f4b5e49447f9b7bd63039a39ce3" }],
 
-  // CROSS-SCRIPT binding (D27): the ONE shared streams namespace is DEFINED in project-worker; the control
-  // plane binds it here (script_name → no migration) so it can write into a project's stream.
+  // CROSS-SCRIPT binding (D27): the context namespace is DEFINED in project-worker; the control
+  // plane binds it here (script_name → no migration) so it can write into a project's context.
   "durable_objects": {
     "bindings": [
-      { "name": "STREAM_DO", "class_name": "StreamDurableObject", "script_name": "project-worker" },
+      {
+        "name": "CONTEXT",
+        "class_name": "IterateContextDurableObject",
+        "script_name": "project-worker",
+      },
     ],
   },
 }

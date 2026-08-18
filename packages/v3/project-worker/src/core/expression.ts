@@ -519,6 +519,10 @@ export async function apply(
   scope: Record<string, unknown>,
   target: Expression,
   m: Pick<Match, "boundaryArgs" | "remainder">,
+  /** Runtime values applied to the FINAL value (after the remainder walk) on its carried
+   *  receiver — the fetch lane hands the live Request in here, since a Request is not
+   *  expression data and must never pass through `substitute`'s JSON walk. */
+  extraArgs?: unknown[],
 ): Promise<unknown> {
   let { value, receiver } = await evaluate(scope, target);
   if (m.boundaryArgs) {
@@ -543,6 +547,14 @@ export async function apply(
       receiver = undefined;
       value = await Reflect.apply(fn, value, args);
     }
+  }
+  value = await value;
+  if (extraArgs) {
+    if (typeof value !== "function")
+      throw new Error(
+        `the resolved value is not callable but ${extraArgs.length} runtime arg(s) were passed`,
+      );
+    value = await Reflect.apply(value, receiver, extraArgs);
   }
   return await value;
 }

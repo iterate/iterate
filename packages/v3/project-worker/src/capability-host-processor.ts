@@ -151,7 +151,7 @@ export class CapabilityHostProcessor extends StreamProcessor<State> {
    * match; equal specificity → recency (event mounts by offset; seeds oldest of all); nothing
    * matches → default-deny with a readable error naming the call.
    */
-  async resolve(state: State, call: string | Expression): Promise<unknown> {
+  async resolve(state: State, call: string | Expression, extraArgs?: unknown[]): Promise<unknown> {
     const expr = toExpression(call);
     const winner = this.route(state, expr);
     if (!winner)
@@ -164,7 +164,23 @@ export class CapabilityHostProcessor extends StreamProcessor<State> {
     const scope = provenance === "config" ? { ...this.#scope, roots: this.#roots } : this.#scope;
     // Holes in the target SPEND the boundary args; a hole-free target receives them as a call.
     const boundaryArgs = usesCallerArgs(row.target) ? undefined : m.boundaryArgs;
-    return await apply(scope, target, { remainder: m.remainder, boundaryArgs });
+    return await apply(scope, target, { remainder: m.remainder, boundaryArgs }, extraArgs);
+  }
+
+  /** THE FETCH LANE entry: resolve `expr.fetch` and call it with the live Request as a runtime
+   *  arg (a Request is not expression data — it never passes through substitute's JSON walk).
+   *  Everything stays in-isolate or on native stub hops, so a 101 flows back out untouched. */
+  resolveFetch(state: State, expr: Expression, request: Request): Promise<unknown> {
+    const last = expr.at(-1);
+    // Normalize the terminal to a PROPERTY step `fetch` — a call-step's JSON args could never
+    // carry the live Request; it always rides in as the runtime arg.
+    const call: Expression =
+      last === "fetch"
+        ? expr
+        : Array.isArray(last) && last[0] === "fetch"
+          ? [...expr.slice(0, -1), "fetch"]
+          : [...expr, "fetch"];
+    return this.resolve(state, call, [request]);
   }
 
   /** Pure routing (exposed for describe/debug): the winning row or null. */

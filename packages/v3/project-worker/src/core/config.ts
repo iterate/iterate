@@ -40,6 +40,8 @@ export const DEFAULT_SEEDS: { pattern: string; target: string }[] = [
   { pattern: "itx.streams", target: "roots.streams" },
   { pattern: "itx.clients", target: "roots.clients" },
   { pattern: "itx.workers", target: "roots.workers" },
+  { pattern: "itx.files", target: "roots.files" },
+  { pattern: "itx.repo", target: "roots.repo" },
   { pattern: "itx.os", target: "roots.binding('FALLBACK')" },
 ];
 

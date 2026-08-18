@@ -1,5 +1,5 @@
 // core/itx-surface.ts — the client-facing capnweb surface + the stateless RELAY. This is the ONE place capnweb
-// terminates (the `/api` worker); it reaches the ItxDurableObject only over Workers RPC (the hard rule).
+// terminates (the `/api` worker); it reaches the IterateContextDurableObject only over Workers RPC (the hard rule).
 //
 // A client dials `/api` and gets a `ProjectSession`:
 //   • `get()`     → the project `Itx` (the iterate-context stub). Pure addressing.
@@ -15,9 +15,9 @@ import { RpcTarget } from "capnweb";
 import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
 import { openPager, parsePage } from "./hibernatable-pager.ts";
 import { canonicalName } from "./names.ts";
-import type { ItxDurableObject } from "../itx-durable-object.ts";
+import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";
 
-type ItxHostStub = DurableObjectStub<ItxDurableObject>;
+type ItxHostStub = DurableObjectStub<IterateContextDurableObject>;
 
 // `Symbol.dispose` isn't in the current lib target; reference it defensively to free a capnweb stub.
 const DISPOSE: symbol | undefined = (Symbol as { dispose?: symbol }).dispose;
@@ -103,7 +103,7 @@ export class ProjectSession extends RpcTarget {
   readonly #waitUntil: (p: Promise<unknown>) => void;
 
   constructor(
-    hostNamespace: DurableObjectNamespace<ItxDurableObject>,
+    hostNamespace: DurableObjectNamespace<IterateContextDurableObject>,
     projectId: string,
     ctx: ExecutionContext,
   ) {
@@ -165,16 +165,40 @@ export class Itx extends RpcTarget {
     return new ClientCollection(this.#host);
   }
 
-  /** Provide an ADDITIONAL live capability (beyond the ones a client provides by connecting). */
+  /** Mount an EXPRESSION capability (either codec half; event provenance — `roots` targets are
+   *  rejected by the host). Returns the mount's identity for `revoke`. */
+  provide(input: {
+    pattern: string | unknown[];
+    target: string | unknown[];
+  }): Promise<{ providedAtOffset: number }> {
+    return this.#host.provideCapability(
+      input as {
+        pattern: string | import("./expression.ts").Expression;
+        target: string | import("./expression.ts").Expression;
+      },
+    );
+  }
+
+  /** Pop exactly that mount off the shadow stack (what it shadowed is restored). */
+  revoke(input: { providedAtOffset: number }): Promise<void> {
+    return this.#host.revokeCapability(input);
+  }
+
+  /** Provide an ADDITIONAL live capability (beyond the ones a client provides by connecting).
+   *  The R13 desugar, done here in two calls: PARK the stub (transport), then MOUNT the alias
+   *  `pattern ⇒ itx.clients.get(socketId)` (an ordinary routing-table row, shadowable/revocable). */
   async provideCapability(input: ProvideLiveInput): Promise<CapabilityProvision> {
     if (input.type !== "live")
       throw new Error("itx.provideCapability here only mounts live capabilities");
     const socketId = crypto.randomUUID();
-    const capPath = `itx.${input.path.join(".")}`;
     const relay = await startRelay(this.#host, input.capability, socketId, this.#waitUntil);
     this.#relays.add(relay);
-    await this.#host.parkCapability({ socketId, capPath, description: input.instructions });
-    return new CapabilityProvision(this.#host, capPath, relay, this.#relays);
+    await this.#host.parkCapability({ socketId, description: input.instructions });
+    const { providedAtOffset } = await this.#host.provideCapability({
+      pattern: ["itx", ...input.path],
+      target: ["itx", "clients", ["get", socketId]],
+    });
+    return new CapabilityProvision(this.#host, providedAtOffset, socketId, relay, this.#relays);
   }
 }
 
@@ -189,7 +213,7 @@ export class ClientCollection extends RpcTarget {
     return new Client(this.#host, path);
   }
   list(): Promise<unknown[]> {
-    return this.#host.clientsList() as Promise<unknown[]>;
+    return this.#host.invoke(["itx", "clients", ["list"]]) as Promise<unknown[]>;
   }
 }
 
@@ -203,11 +227,16 @@ export class Client extends RpcTarget {
     this.#path = path;
   }
   connections(): Promise<unknown[]> {
-    return this.#host.clientConnections(this.#path) as Promise<unknown[]>;
+    return this.#host.invoke(["itx", "clients", ["connections", this.#path]]) as Promise<unknown[]>;
   }
-  /** FAN OUT over every open connection at this path (Promise.all; `[]` if none). */
+  /** FAN OUT over every open connection at this path (allSettled; `[]` if none). */
   invokeCapability(input: { path: string[]; args?: unknown[] }): Promise<unknown[]> {
-    return this.#host.invokeClientCapabilities(this.#path, input.path, input.args ?? []);
+    return this.#host.invoke([
+      "itx",
+      "clients",
+      ["at", this.#path],
+      ["call", input.path, input.args ?? []],
+    ]) as Promise<unknown[]>;
   }
   getConnection(connectionKey: string): ClientConnection {
     return new ClientConnection(this.#host, connectionKey);
@@ -224,10 +253,23 @@ export class ClientConnection extends RpcTarget {
     this.#connectionKey = connectionKey;
   }
   invokeCapability(input: { path: string[]; args?: unknown[] }): Promise<unknown> {
-    return this.#host.invokeClientCapability(this.#connectionKey, input.path, input.args ?? []);
+    const [head, ...rest] = input.path;
+    const last = rest.length ? rest[rest.length - 1] : head;
+    const mid = rest.length ? [head, ...rest.slice(0, -1)] : [];
+    return this.#host.invoke([
+      "itx",
+      "clients",
+      ["get", this.#connectionKey],
+      ...mid,
+      [last, ...(input.args ?? [])],
+    ]);
   }
   close(): Promise<unknown> {
-    return this.#host.closeClientConnection(this.#connectionKey) as Promise<unknown>;
+    return this.#host.invoke([
+      "itx",
+      "clients",
+      ["close", this.#connectionKey],
+    ]) as Promise<unknown>;
   }
 }
 
@@ -235,24 +277,35 @@ export class ClientConnection extends RpcTarget {
  *  (a watchdog can poll it without defeating hibernation). */
 export class CapabilityProvision extends RpcTarget {
   readonly #host: ItxHostStub;
-  readonly #capPath: string;
+  readonly #providedAtOffset: number;
+  readonly #socketId: string;
   readonly #relay: Relay;
   readonly #relays: Set<Relay>;
   #active = true;
-  constructor(host: ItxHostStub, capPath: string, relay: Relay, relays: Set<Relay>) {
+  constructor(
+    host: ItxHostStub,
+    providedAtOffset: number,
+    socketId: string,
+    relay: Relay,
+    relays: Set<Relay>,
+  ) {
     super();
     this.#host = host;
-    this.#capPath = capPath;
+    this.#providedAtOffset = providedAtOffset;
+    this.#socketId = socketId;
     this.#relay = relay;
     this.#relays = relays;
   }
   __leaseActive(): boolean {
     return this.#active;
   }
+  /** Pop exactly this mount off the shadow stack (whatever it shadowed is restored) + drop the
+   *  parked stub. */
   async revoke(): Promise<void> {
     this.#active = false;
     this.#relays.delete(this.#relay);
-    await this.#host.dropCapability({ capPath: this.#capPath });
+    await this.#host.revokeCapability({ providedAtOffset: this.#providedAtOffset });
+    await this.#host.dropStub({ socketId: this.#socketId });
     this.#relay.dispose();
   }
 }

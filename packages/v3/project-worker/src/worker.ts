@@ -1,19 +1,18 @@
 // The PROJECT WORKER — the stateless edge. capnweb terminates at `/api`; everything else forwards to the
-// ItxDurableObject over Workers RPC (the DO does the real work and stays hibernatable). `DummyControlPlane` is
+// IterateContextDurableObject over Workers RPC (the DO does the real work and stays hibernatable). `DummyControlPlane` is
 // the solo-mode fallback entrypoint (the deployed config binds FALLBACK to the real control-plane shell instead).
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { newWorkersWebSocketRpcResponse } from "capnweb";
-import { ItxDurableObject } from "./itx-durable-object.ts";
+import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 import { canonicalName } from "./core/names.ts";
 import { ProjectSession } from "./core/itx-surface.ts";
 
-export { ItxDurableObject };
-export { StreamDurableObject } from "./stream-durable-object.ts";
+export { IterateContextDurableObject };
 export { StatefulWorkerDurableObject } from "./stateful-worker-durable-object.ts";
 
 interface Env {
-  ITX_HOST: DurableObjectNamespace<ItxDurableObject>;
+  CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;
   LOADER: WorkerLoader;
   SECRETS_KV?: KVNamespace;
   APP_CONFIG?: string;
@@ -32,11 +31,11 @@ export class DummyControlPlane extends WorkerEntrypoint<Env> {
 }
 
 // Bumped every deploy so a smoke test can wait for THIS build to propagate (workers.dev lags ~1-2min/colo).
-const CODE_VERSION = "cook-1";
+const CODE_VERSION = "crisp-1";
 
 /** The context host DO for a request's `?ctx=` (defaults to `prj_demo`). The DO does the real work. */
 function host(env: Env, url: URL) {
-  return env.ITX_HOST.getByName(canonicalName(url.searchParams.get("ctx") ?? "prj_demo"));
+  return env.CONTEXT.getByName(canonicalName(url.searchParams.get("ctx") ?? "prj_demo"));
 }
 
 export default {
@@ -50,7 +49,7 @@ export default {
     if (url.pathname === "/api")
       return newWorkersWebSocketRpcResponse(
         request,
-        new ProjectSession(env.ITX_HOST, url.searchParams.get("ctx") ?? "prj_demo", ctx),
+        new ProjectSession(env.CONTEXT, url.searchParams.get("ctx") ?? "prj_demo", ctx),
       );
 
     // THE FETCH LANE — the ONE fetch door: reach a fetch-shaped capability (WS upgrades and all) by a
