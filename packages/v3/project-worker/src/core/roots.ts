@@ -28,6 +28,8 @@ export type RootsDeps = {
   };
   /** The parked-stub registry view (clients + live capabilities — one registry). */
   clients: ClientsView;
+  /** The facet address (a facet hosts a durable object; processor is just a role it may play). */
+  facets: FacetsView;
   /** Run dynamic workers (stateless entrypoints + stateful runner facets). */
   workers: WorkersView;
   /** The v1 file reader (a hello-module map; later a real repo read at a ref). */
@@ -47,6 +49,13 @@ export type ClientsView = {
 
 export type WorkersView = {
   get(ref: { type: "stateless" | "stateful"; source: unknown; className?: string }): unknown;
+};
+
+/** `roots.facets.get(slug)` → a dotted method proxy over ONE enabled facet — ANY method its
+ *  durable object exposes, not just the processor role (facet stubs are non-transferable, so
+ *  the walk happens parent-side and this view is thin RPC wrappers, like the clients view). */
+export type FacetsView = {
+  get(slug: string): unknown;
 };
 
 export class Roots extends RpcTarget {
@@ -110,6 +119,10 @@ export class Roots extends RpcTarget {
 
   get clients(): ClientsView {
     return this.#deps.clients;
+  }
+
+  get facets(): FacetsView {
+    return this.#deps.facets;
   }
 
   get workers(): WorkersView {

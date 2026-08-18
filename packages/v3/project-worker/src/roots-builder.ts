@@ -9,7 +9,7 @@
 import { CODE_CAP_RUNNER, confinedWorker } from "./core/agent-runtime.ts";
 import { pathProxy, toExpression, type Expression } from "./core/expression.ts";
 import { hashSource } from "./core/hash.ts";
-import { Roots, type ClientsView, type WorkersView } from "./core/roots.ts";
+import { Roots, type ClientsView, type FacetsView, type WorkersView } from "./core/roots.ts";
 import { HELLO_FILES } from "./hello-files.ts";
 import type { StatefulWorkerDurableObject } from "./stateful-worker-durable-object.ts";
 import type { StreamDurableObject } from "./stream-durable-object.ts";
@@ -44,6 +44,7 @@ export interface BuildRootsDeps {
   };
   /** The parked-stub registry view (host-specific: in-DO closures or the parent facade). */
   clients: ClientsView;
+  facets: FacetsView;
 }
 
 /** Assemble the Roots for one context. Every getter closes over the context's identity — the
@@ -125,6 +126,7 @@ export function buildRoots(deps: BuildRootsDeps): Roots {
     },
     context: deps.context,
     clients: deps.clients,
+    facets: deps.facets,
     workers,
     readFile: (p) => {
       const content = HELLO_FILES[p];
@@ -138,6 +140,15 @@ export function buildRoots(deps: BuildRootsDeps): Roots {
  *  (stubInvoke/stubFanOut/stubList/stubConnections/stubClose). The parent is resolved BY NAME
  *  per call — never a retained stub (the back-channel rule). Promise-valued reads are fine:
  *  expression evaluation awaits every step. */
+/** The facet address as the resolver sees it: `facets.get(slug).anyMethod(...)` rides ONE
+ *  generic parent door (`facetInvoke`) — the walk stays parent-side because facet stubs are
+ *  non-transferable. Same thin-wrapper shape as the clients view. */
+export function facetAddressView(parent: () => DurableObjectStub<StreamDurableObject>): FacetsView {
+  return {
+    get: (slug) => pathProxy((segments, args) => parent().facetInvoke(slug, segments, args)),
+  };
+}
+
 export function facetClientsView(
   parent: () => DurableObjectStub<StreamDurableObject>,
 ): ClientsView {

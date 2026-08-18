@@ -21,6 +21,15 @@ export class Counter extends DurableObject {
   // own cursor + counts in its OWN facet storage. Drives are fire-and-forget and a delivered
   // batch is only a WAKE-UP: both deliver and snapshot catch up from the stream via env.ITX (the
   // parent stub) from the OWN cursor, so a dropped drive can never leave a gap.
+  // The stateless push consumer: a plain code cap the stream drives via a push subscription
+  // (target "itx.digest.run"). No cursor of its own — the stream owns offsets/retries/halt.
+  "/digest.js": `export default async (itx, events, window) => {
+  const poison = events.find((e) => e.payload && e.payload.poison);
+  if (poison) throw new Error("digest: refusing poison at offset " + poison.offset);
+  const n = Number((await itx.kv.get("digested")) ?? 0) + events.length;
+  await itx.kv.put("digested", String(n));
+  return n;
+};`,
   // A userspace processor consuming a NAMED ephemeral type ("chunk" — the voice-chunk shape):
   // naming the type is the opt-in; "*" never sweeps ephemerals.
   "/chunky.js": `import { StreamProcessor, defineProcessorContract, z } from "./processor.js";

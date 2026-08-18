@@ -37,7 +37,7 @@ import {
   type ScanWindow,
 } from "./core/processor.ts";
 import { IterateContextStreamProcessor } from "./iterate-context-stream-processor.ts";
-import { buildRoots, facetClientsView, type RootsEnv } from "./roots-builder.ts";
+import { buildRoots, facetAddressView, facetClientsView, type RootsEnv } from "./roots-builder.ts";
 import type { StreamDurableObject } from "./stream-durable-object.ts";
 
 interface Env extends RootsEnv {
@@ -110,6 +110,7 @@ const FACET_PROCESSORS: Record<
       invoke: (call) => invoke(call),
       context: (p) => env.CONTEXT.getByName(stringifyName({ projectId, path: p })),
       clients: facetClientsView(parent),
+      facets: facetAddressView(parent),
     });
     const processor = new IterateContextStreamProcessor({
       stream,

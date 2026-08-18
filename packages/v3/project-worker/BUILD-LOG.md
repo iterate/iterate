@@ -889,3 +889,36 @@ scannedThroughOffset})` into every facet row, fire-and-forget. Contiguous window
 
 79 unit tests green (the registry suite rewritten class-direct with a DO-faithful in-memory
 pump; +push-door and ephemeral blocks), typecheck clean.
+
+## Increment 36 (push-1): PUSH MODE — the stream-held cursor + retry/skip/halt ladder (jam increment 3)
+
+- **One push mode replaces three apps/os receiver kinds** (itx-call/webhook-post/copy-to-stream):
+  a row `{name, target, consumes?, onFailingEvent}` whose `target` is an itx PATH expression —
+  the sender turns the terminal segment into the call `(events, window)` per durable batch, and
+  the AWAITED call resolving IS the ack (20s watchdog). Push rows never see ephemerals; their
+  cursor still advances over ephemeral offsets via scan windows. Verbs: `subscribe` /
+  `unsubscribe` / `resumeSubscription` (DO + Itx); `/state` reports every row's cursor + ladder.
+- **The ladder, no dead-letter on purpose** (apps/os proves halt+skip+audit suffices): bounded
+  retries (1s·2^n, cap 30min, ±20% jitter, 15 attempts) → poison isolation (`skip`: pin the
+  batch to 1; 3 failures → skip + `subscription-event-skipped` audit fact on the stream) → HALT
+  (audited via `subscription-delivery-halted`, resumable). One in-flight delivery per row; the
+  commit path never awaits a subscriber; retries ride the (deduped) alarm.
+- **The stateless `processEvent` worker is one row, not a subsystem:** live proof — digest.js
+  (a plain code cap) driven at `itx.digest.run`, 3 marks digested; a POISON mark pinned, failed
+  3×, skipped with the audit fact, and the good mark behind it delivered; row alive at the head
+  with `skipsSinceSuccess: 1`. ALL PASS first run.
+
+## Increment 37 (address-1): THE FACET ADDRESS (jam increment 4)
+
+- **`facetInvoke(slug, path, args)`** — ONE generic parent door: facet resolved locally (facet
+  stubs are non-transferable; the walk happens where the stub lives), `stepGet`-guarded dotted
+  walk, terminal `Reflect.apply`. A facet hosts a durable object with ANY methods; processor is
+  a role.
+- **`roots.facets` + one seed (`itx.facets ⇒ roots.facets`)**: every facet is an ordinary
+  address — `itx.facets.get('tally').snapshot()`, aliasable (`itx.counts ⇒ …`), shadowable,
+  probe-resistant (inherited built-ins read as missing through the address too). The barrier
+  verb rides it: `itx.facets.get(slug).waitUntilProcessed({offset})`.
+- **`facetSnapshot` is now sugar over the address** (Itx-side; the dedicated DO door died).
+
+Whole-board regression on `address-1`: crisp 17/17, facet spine, userspace SDK, ephemeral 9/9,
+push 6/6 — ALL PASS. 79 unit tests, typecheck clean.

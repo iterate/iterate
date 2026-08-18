@@ -33,6 +33,7 @@ export const DEFAULT_SEEDS: { pattern: string; target: string }[] = [
   { pattern: "itx.secrets", target: "roots.secrets" },
   { pattern: "itx.streams", target: "roots.streams" },
   { pattern: "itx.clients", target: "roots.clients" },
+  { pattern: "itx.facets", target: "roots.facets" },
   { pattern: "itx.workers", target: "roots.workers" },
   { pattern: "itx.files", target: "roots.files" },
   { pattern: "itx.repo", target: "roots.repo" },

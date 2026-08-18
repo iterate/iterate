@@ -195,9 +195,35 @@ export class Itx extends RpcTarget {
     return this.#host.enableProcessor(slug, ref);
   }
 
-  /** A facet processor's fold (offset + reduced state), served through the parent. */
+  /** A facet processor's fold — sugar over the facet ADDRESS (`itx.facets.get(slug).snapshot()`
+   *  through the routing table; aliasable and shadowable like any other capability). */
   facetSnapshot(slug: string): Promise<{ offset: number; state: unknown }> {
-    return this.#host.facetSnapshot(slug);
+    return this.#host.invoke(["itx", "facets", ["get", slug], ["snapshot"]]) as Promise<{
+      offset: number;
+      state: unknown;
+    }>;
+  }
+
+  /** PUSH subscription (stream-held cursor + retry/skip/halt): the stream calls `target`'s
+   *  terminal path segment with `(events, window)` per durable batch — for consumers that
+   *  cannot hold a cursor (webhooks, stateless `processEvent`-style workers). */
+  subscribe(input: {
+    name?: string;
+    target: string | Expression;
+    consumes?: string[];
+    onFailingEvent?: "halt" | "skip";
+    start?: "beginning" | "now";
+  }): Promise<{ name: string }> {
+    return this.#host.subscribe(input);
+  }
+
+  unsubscribe(input: { name: string }): Promise<{ ok: true }> {
+    return this.#host.unsubscribe(input);
+  }
+
+  /** Recovery from HALT (or an operator cursor seek). */
+  resumeSubscription(input: { name: string; afterOffset?: number }): Promise<{ ok: true }> {
+    return this.#host.resumeSubscription(input);
   }
 
   /** Provide an ADDITIONAL live capability (beyond the ones a client provides by connecting).

@@ -32,7 +32,7 @@ import {
   type StreamEvent,
   type StreamEventInput,
 } from "./core/events.ts";
-import { toExpression, type Expression } from "./core/expression.ts";
+import { stepGet, toExpression, type Expression } from "./core/expression.ts";
 import { hashSource } from "./core/hash.ts";
 import { PAGER_HEADER } from "./core/hibernatable-pager.ts";
 import { HibernatableStubs, type Invoker, type Stub } from "./core/hibernatable-stub.ts";
@@ -68,6 +68,24 @@ type FacetProcessorHandle = {
   processEventBatch(events: StreamEvent[], window: ScanWindow): Promise<unknown> | unknown;
   snapshot(): Promise<{ offset: number; state: unknown }>;
   waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<unknown>;
+};
+
+/** One push subscription: `target` is an itx path expression whose terminal segment the sender
+ *  calls with `(events, window)`; the stream owns the cursor. */
+type PushRow = {
+  name: string;
+  target: Expression;
+  consumes?: string[];
+  onFailingEvent: "halt" | "skip";
+};
+/** The stream-held cursor + failure ladder state for one push row. */
+type PushCursor = {
+  confirmedOffset: number;
+  attempt: number; // consecutive failures of the CURRENT batch
+  skipsSinceSuccess: number;
+  pinned?: boolean; // after a failure: batch size 1 (isolate-or-progress)
+  nextAttemptAtMs?: number;
+  halted?: { reason: string };
 };
 
 /** The capability host's slug — the one facet processor this class itself depends on. */
@@ -205,6 +223,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         void this.#facet(slug)
           .then((f) => f.processEventBatch(committed, window))
           .catch((e) => console.error(`facet "${slug}" drive failed`, e));
+      this.#drivePushRows(); // push rows read durable rows themselves — also never awaited
     }
     this.#noteActivity();
     return committed;
@@ -247,6 +266,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (current === null || current > target) await this.ctx.storage.setAlarm(target);
   }
   async alarm(): Promise<void> {
+    this.#drivePushRows(); // retries whose backoff came due
     // workerd #6800: a live facet client holds this actor idle-but-non-hibernatable, converting
     // quiet time into billed duration. Abort every facet once the stream has been quiet — their
     // cursors are durable in their OWN storage and delivery is cursor-driven, so nothing is
@@ -262,6 +282,202 @@ export class StreamDurableObject extends DurableObject<Env> {
     } else {
       await this.#armAlarmNoLaterThan(this.#lastActivityMs + 60_000);
     }
+    // keep the earliest pending push retry armed (the quiesce arm above may be later)
+    const dues = this.#pushRows()
+      .map((r) => this.#pushCursor(r.name)?.nextAttemptAtMs)
+      .filter((t): t is number => typeof t === "number");
+    if (dues.length) await this.#armAlarmNoLaterThan(Math.min(...dues));
+  }
+
+  // ── PUSH SUBSCRIPTIONS: the stream-held cursor + the retry/skip/halt ladder ──
+  // For consumers that CANNOT hold a cursor (a webhook, the stateless `processEvent`-style
+  // worker). The row's `target` is a path expression; the sender turns its terminal segment
+  // into the call `(events, window)` per batch, and the AWAITED call resolving IS the ack.
+  // Push rows never see ephemeral events (reads are durable-only); their cursor still advances
+  // over ephemeral offsets via scan windows. There is no dead-letter queue on purpose: the
+  // ladder is bounded retries (1s·2^n, cap 30min, ±20% jitter, 15 attempts) → poison isolation
+  // (`onFailingEvent: "skip"`: pin the batch to 1, three failures → skip + audit event) →
+  // HALT (audited, resumable) — the apps/os shape, one mode instead of three kinds.
+
+  #pushInFlight = new Set<string>();
+  #pushRows(): PushRow[] {
+    return (this.ctx.storage.kv.get("push-subscriptions") as PushRow[] | undefined) ?? [];
+  }
+  #pushCursor(name: string): PushCursor | undefined {
+    return this.ctx.storage.kv.get(`push-cursor:${name}`) as PushCursor | undefined;
+  }
+  #putPushCursor(name: string, cursor: PushCursor): void {
+    this.ctx.storage.kv.put(`push-cursor:${name}`, cursor);
+  }
+
+  subscribe(input: {
+    name?: string;
+    target: string | Expression;
+    consumes?: string[];
+    onFailingEvent?: "halt" | "skip";
+    start?: "beginning" | "now";
+  }): { name: string } {
+    this.#touch();
+    const target = toExpression(input.target);
+    if (target[0] !== "itx")
+      throw new Error(
+        `subscribe: target must be an itx expression (got ${JSON.stringify(target[0])})`,
+      );
+    if (typeof target[target.length - 1] !== "string")
+      throw new Error(
+        "subscribe: target must END in a property step — the sender appends the (events, window) call",
+      );
+    const name = input.name ?? `subscription:${this.#maxAssigned()}`;
+    const rows = this.#pushRows().filter((r) => r.name !== name);
+    this.ctx.storage.kv.put("push-subscriptions", [
+      ...rows,
+      { name, target, consumes: input.consumes, onFailingEvent: input.onFailingEvent ?? "halt" },
+    ]);
+    if (!this.#pushCursor(name))
+      this.#putPushCursor(name, {
+        confirmedOffset: input.start === "beginning" ? 0 : this.#maxAssigned(),
+        attempt: 0,
+        skipsSinceSuccess: 0,
+      });
+    this.#drivePushRows();
+    return { name };
+  }
+
+  unsubscribe(input: { name: string }): { ok: true } {
+    this.ctx.storage.kv.put(
+      "push-subscriptions",
+      this.#pushRows().filter((r) => r.name !== input.name),
+    );
+    this.ctx.storage.kv.delete(`push-cursor:${input.name}`);
+    return { ok: true };
+  }
+
+  /** Recovery from HALT (and the operator's cursor seek): clear the failure state, optionally
+   *  move the cursor, kick the pump. */
+  resumeSubscription(input: { name: string; afterOffset?: number }): { ok: true } {
+    const cursor = this.#pushCursor(input.name);
+    if (!cursor) throw new Error(`no push subscription "${input.name}"`);
+    this.#putPushCursor(input.name, {
+      confirmedOffset: input.afterOffset ?? cursor.confirmedOffset,
+      attempt: 0,
+      skipsSinceSuccess: 0,
+    });
+    this.#drivePushRows();
+    return { ok: true };
+  }
+
+  #drivePushRows(): void {
+    for (const row of this.#pushRows())
+      void this.#pumpPush(row).catch((e) => console.error(`push "${row.name}" pump failed`, e));
+  }
+
+  /** One in-flight delivery per row; loop until caught up. Never called from the commit path
+   *  with an await — the commit never blocks on a subscriber. */
+  async #pumpPush(row: PushRow): Promise<void> {
+    if (this.#pushInFlight.has(row.name)) return;
+    this.#pushInFlight.add(row.name);
+    try {
+      for (;;) {
+        const cursor = this.#pushCursor(row.name);
+        if (!cursor || cursor.halted) return;
+        if (cursor.nextAttemptAtMs && Date.now() < cursor.nextAttemptAtMs) {
+          void this.#armAlarmNoLaterThan(cursor.nextAttemptAtMs).catch(() => {});
+          return;
+        }
+        const page = this.read(cursor.confirmedOffset, cursor.pinned ? 1 : 100);
+        if (page.scannedThroughOffset <= cursor.confirmedOffset) return; // caught up
+        const window = {
+          scannedAfterOffset: cursor.confirmedOffset,
+          scannedThroughOffset: page.scannedThroughOffset,
+        };
+        const events = row.consumes
+          ? page.events.filter((e) => row.consumes!.includes(e.type))
+          : page.events;
+        if (events.length === 0) {
+          // everything in the window was filtered — confirm through it, no call
+          this.#putPushCursor(row.name, {
+            ...cursor,
+            confirmedOffset: window.scannedThroughOffset,
+          });
+          continue;
+        }
+        try {
+          const last = row.target[row.target.length - 1] as string;
+          const call = [...row.target.slice(0, -1), [last, events, window]] as Expression;
+          await Promise.race([
+            this.invoke(call), // the awaited call resolving IS the ack
+            new Promise((_, reject) =>
+              setTimeout(
+                () => reject(new Error(`push "${row.name}": delivery timed out after 20s`)),
+                20_000,
+              ),
+            ),
+          ]);
+          this.#putPushCursor(row.name, {
+            confirmedOffset: window.scannedThroughOffset,
+            attempt: 0,
+            skipsSinceSuccess: cursor.skipsSinceSuccess,
+          });
+        } catch (error) {
+          await this.#onPushFailure(row, cursor, events, error);
+          return;
+        }
+      }
+    } finally {
+      this.#pushInFlight.delete(row.name);
+    }
+  }
+
+  async #onPushFailure(
+    row: PushRow,
+    cursor: PushCursor,
+    events: StreamEvent[],
+    error: unknown,
+  ): Promise<void> {
+    const attempt = cursor.attempt + 1;
+    const message = error instanceof Error ? error.message : String(error);
+    // poison isolation: three failures of a PINNED single event → skip it, with an audit fact
+    if (row.onFailingEvent === "skip" && cursor.pinned && events.length === 1 && attempt >= 3) {
+      const skips = cursor.skipsSinceSuccess + 1;
+      if (skips >= 3) return this.#haltPush(row, `3 consecutive skips (last error: ${message})`);
+      await this.append({
+        type: "events.iterate.com/stream/subscription-event-skipped",
+        payload: { name: row.name, offset: events[0].offset, error: message },
+      });
+      this.#putPushCursor(row.name, {
+        confirmedOffset: events[0].offset,
+        attempt: 0,
+        pinned: true,
+        skipsSinceSuccess: skips,
+      });
+      void this.#armAlarmNoLaterThan(Date.now()).catch(() => {}); // resume past the skip
+      return;
+    }
+    if (attempt >= 15) return this.#haltPush(row, `15 delivery attempts failed (last: ${message})`);
+    const backoff = Math.min(1000 * 2 ** (attempt - 1), 1_800_000);
+    const jittered = Math.round(backoff * (0.8 + Math.random() * 0.4));
+    this.#putPushCursor(row.name, {
+      ...cursor,
+      attempt,
+      pinned: true, // isolate-or-progress: retry with batch size 1
+      nextAttemptAtMs: Date.now() + jittered,
+    });
+    void this.#armAlarmNoLaterThan(Date.now() + jittered).catch(() => {});
+  }
+
+  async #haltPush(row: PushRow, reason: string): Promise<void> {
+    const cursor = this.#pushCursor(row.name);
+    if (cursor)
+      this.#putPushCursor(row.name, {
+        confirmedOffset: cursor.confirmedOffset,
+        attempt: 0,
+        skipsSinceSuccess: cursor.skipsSinceSuccess,
+        halted: { reason },
+      });
+    await this.append({
+      type: "events.iterate.com/stream/subscription-delivery-halted",
+      payload: { name: row.name, reason },
+    });
   }
 
   // ── facet-hosted processors (built-ins via processor-facet.ts; userspace via the LOADER) ──
@@ -332,11 +548,27 @@ export class StreamDurableObject extends DurableObject<Env> {
     return { ok: true };
   }
 
-  /** A facet processor's fold, served through the parent (catches up first). */
-  async facetSnapshot(slug: string): Promise<{ offset: number; state: unknown }> {
-    if (!this.#facetEntries().some((e) => e.slug === slug))
-      throw new Error(`no facet processor "${slug}" enabled`);
-    return (await this.#facet(slug)).snapshot();
+  /** THE generic facet door: resolve the facet LOCALLY (facet stubs are non-transferable — the
+   *  walk happens where the stub lives), walk the dotted path with the exposure guard, apply
+   *  the terminal. `roots.facets` (and via one seed, `itx.facets`) rides this to reach ANY
+   *  method a facet's durable object exposes — a facet hosts an object; processor is a role. */
+  async facetInvoke(slug: string, path: string[], args: unknown[]): Promise<unknown> {
+    if (path.length === 0) throw new Error(`facet "${slug}": name a method`);
+    if (slug !== ICTX_SLUG && !this.#facetEntries().some((e) => e.slug === slug))
+      throw new Error(`no facet "${slug}" enabled`);
+    const facet = (await this.#facet(slug)) as unknown as object;
+    let receiver: unknown = facet;
+    for (let i = 0; i < path.length - 1; i++) {
+      receiver = await stepGet(receiver as object, path[i]);
+      if (receiver == null)
+        throw new Error(
+          `facet "${slug}": "${path.join(".")}" hit ${String(receiver)} at "${path[i]}"`,
+        );
+    }
+    const handler = stepGet(receiver as object, path[path.length - 1]);
+    if (typeof handler !== "function")
+      throw new Error(`facet "${slug}" has no method "${path.join(".")}"`);
+    return await Reflect.apply(handler, receiver, args);
   }
 
   #identityFor(slug: string, exportName?: string): FacetIdentity {
@@ -407,6 +639,16 @@ export class StreamDurableObject extends DurableObject<Env> {
           ? this.incarnation
           : ((this.ctx.storage.kv.get("incarnation") as number | undefined) ?? 0),
         facetProcessors: this.#facetEntries().map((e) => e.slug),
+        pushSubscriptions: this.#pushRows().map((r) => {
+          const c = this.#pushCursor(r.name);
+          return {
+            name: r.name,
+            confirmedOffset: c?.confirmedOffset ?? 0,
+            attempt: c?.attempt ?? 0,
+            skipsSinceSuccess: c?.skipsSinceSuccess ?? 0,
+            ...(c?.halted ? { halted: c.halted.reason } : {}),
+          };
+        }),
         ...this.#stubs.state(),
       });
 
