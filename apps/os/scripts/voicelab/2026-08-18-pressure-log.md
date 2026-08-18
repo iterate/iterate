@@ -390,3 +390,17 @@ tone that would alias arrives 50 dB down instead of at full strength,
 3 kHz passes at unity and at its true frequency (zero-crossing count),
 byte-identical output under ragged rechunking, steady-state pushes at
 the exact 2:3 ratio, DC flat across every polyphase arm.
+
+F15 proof, live on preview-3 (stream `/agents/voice2/pcm-151440`): the
+two-file config repo (voice-agent2.ts + pcm.ts) installs and builds —
+warm in 1.7 s — and `interject-recall` PASSES through both directions of
+the new filter on real gpt-realtime: 15.2 s of count delivered, barged,
+truncate acked at 14,577 ms heard, note carried "1…12", the model
+answered "I got to 17". Measured response of the shipped 24→16 kernel:
+0 dB through 6.5 kHz, −1.4 dB at 7 kHz, and everything at or above
+8 kHz — the entire band the linear version folded into audible range —
+arrives at −80 dB or lower. (Two earlier probe FAILs on this change were
+the 13:57:53Z preview deploy's DO-reset wave mid-run, not the code:
+two `conversation-accepted` 32 s apart with "Durable Object reset
+because its code was updated" across the tail. Preview evidence keeps
+its shelf life.)
