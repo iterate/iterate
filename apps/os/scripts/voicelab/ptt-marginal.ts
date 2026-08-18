@@ -513,14 +513,31 @@ export async function pttMarginal(options: PttMarginalOptions) {
   );
 
   /*
-   * THE SESSION IS ALLOWED TO DIE. A quiet /api socket gets closed from the
-   * far side after ~30 s of true silence (1006) — and rather than pinning it
-   * open with artificial traffic, this probe does what a real push-to-talk
-   * client must do: treat the session as ephemeral, redial on the next use,
-   * and REPORT what that redial costs. The number is the point: it is the
-   * latency a person pays on the first press after a long pause.
+   * THE CLIENT'S JOB IS TO BE CONNECTED. The /api socket is how the server
+   * reaches a device (server-triggered conversations, pushes), so a real
+   * client holds one open at all times and reconnects THE MOMENT it dies —
+   * only the voice provider is dialed on demand. Sockets still die (isolate
+   * churn, deploys; measured 2026-08-18 — no idle policy anywhere, pings
+   * prevent nothing), so this probe does what the firmware transport does:
+   * the close event triggers an immediate background reconnect, a press in
+   * the gap pays whatever remains of it, and the cost is REPORTED. Never
+   * pinned open with artificial traffic; never left dead until the next use.
    */
-  let itx = await connectProject(options);
+  let sessionGeneration = 0;
+  async function dialSession() {
+    const thisGeneration = ++sessionGeneration;
+    return await connectProject(options, {
+      onWebSocketClose: ({ code }) => {
+        /* A socket this probe already buried announces its close late; only
+         * the CURRENT session's death starts a reconnect. */
+        if (thisGeneration !== sessionGeneration) return;
+        void redial(`socket closed (${code})`).catch((error) => {
+          console.log(`  reconnect failed: ${String(error).slice(0, 90)}`);
+        });
+      },
+    });
+  }
+  let itx = await dialSession();
   let stream = itx.streams.get(streamPath);
   const redialMs: number[] = [];
 
@@ -621,25 +638,37 @@ export async function pttMarginal(options: PttMarginalOptions) {
   }
   let connection = await openProbeConnection();
 
-  /** Bury the dead session, dial a fresh one, and say what it cost. */
-  async function redial(reason: string): Promise<void> {
-    const startedAt = Date.now();
-    try {
-      closeAndDisposeRpcHandle(connection);
-    } catch {
-      /* Already dead — that is why we are here. */
-    }
-    try {
-      (itx as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
-    } catch {
-      /* Same. */
-    }
-    itx = await connectProject(options);
-    stream = itx.streams.get(streamPath);
-    connection = await openProbeConnection();
-    const tookMs = Date.now() - startedAt;
-    redialMs.push(tookMs);
-    console.log(`  session redialed in ${tookMs}ms after: ${reason.slice(0, 90)}`);
+  /**
+   * Bury the dead session, dial a fresh one, and say what it cost.
+   *
+   * Single-flight: the close hook, a failed append, and a failed round can
+   * all notice the same death — they join one reconnect instead of racing
+   * three.
+   */
+  let redialInFlight: Promise<void> | undefined;
+  function redial(reason: string): Promise<void> {
+    redialInFlight ??= (async () => {
+      const startedAt = Date.now();
+      try {
+        closeAndDisposeRpcHandle(connection);
+      } catch {
+        /* Already dead — that is why we are here. */
+      }
+      try {
+        (itx as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
+      } catch {
+        /* Same. */
+      }
+      itx = await dialSession();
+      stream = itx.streams.get(streamPath);
+      connection = await openProbeConnection();
+      const tookMs = Date.now() - startedAt;
+      redialMs.push(tookMs);
+      console.log(`  session reconnected in ${tookMs}ms after: ${reason.slice(0, 90)}`);
+    })().finally(() => {
+      redialInFlight = undefined;
+    });
+    return redialInFlight;
   }
 
   /**
@@ -1001,11 +1030,13 @@ export async function pttMarginal(options: PttMarginalOptions) {
         viaStream = await streamTurn(plan.kind, await probeAppendRtt());
       } catch (error) {
         /*
-         * A DEAD SESSION IS THE EXPECTED SHAPE OF A LONG PAUSE, not a
-         * failure of the run: bury it, redial, and press again — which is
-         * exactly what a device does. The retry's own timing is honest (a
-         * fresh press on a fresh session) and the redial cost is reported
-         * on its own line and in the summary.
+         * The eager close-hook reconnect usually beats this path to it; a
+         * press still lands here when the socket died QUIETLY (half-open, no
+         * close event) and the append deadline was the first to notice.
+         * Either way this joins the single-flight reconnect and presses
+         * again — the retry's own timing is honest (a fresh press on a live
+         * session) and the reconnect cost is reported on its own line and in
+         * the summary.
          */
         try {
           await redial(String(error));
@@ -1291,7 +1322,7 @@ export async function pttMarginal(options: PttMarginalOptions) {
   line("  mac→xAI→mac", report.providerRttFromHereMs);
   line("  model thinking", report.providerThinkMs);
   line("  append to DO only", report.appendRttMs);
-  line("session redial", report.redialMs);
+  line("session reconnect", report.redialMs);
   if (report.marginalMs !== null) {
     console.log(`\n  MARGINAL OVERHEAD  ${report.marginalMs > 0 ? "+" : ""}${report.marginalMs}ms`);
   }

@@ -236,10 +236,15 @@ enum {
    */
   /*
    * A liveness PROBE for a hop silent both ways this long — deliberately
-   * NOT a keepalive racing anybody's idle policy. A quiet session is
-   * allowed to die; a client's job is to redial on its next use. The probe
-   * exists to DETECT a dead hop before minutes of capture are spoken into
-   * it.
+   * NOT a keepalive racing anybody's idle policy. A client's standing job
+   * is to BE CONNECTED and available: the socket is how the server reaches
+   * this device (server-triggered conversations, pushes), so it exists
+   * whether or not anyone is pressing anything — only the voice PROVIDER is
+   * dialed on demand. Sockets still die (isolate churn, deploys; measured
+   * 2026-08-18: no idle policy anywhere, pings prevent nothing), and a
+   * half-open one looks healthy from here. The probe exists to DETECT that,
+   * so the transport's reconnect loop runs NOW — not at the next use, and
+   * not after minutes of capture are spoken into a corpse.
    */
   ITERATE_KIT_VOICE_HOP_KEEPALIVE_MS = 120000,
   /*

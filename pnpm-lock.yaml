@@ -510,9 +510,6 @@ importers:
       esp-web-tools:
         specifier: ^10.4.0
         version: 10.4.0
-      iterate:
-        specifier: workspace:*
-        version: link:../../packages/iterate
       lucide-react:
         specifier: ^0.553.0
         version: 0.553.0(@types/react@19.2.17)(react@19.2.7)

@@ -20,6 +20,20 @@ export interface VoicelabConnectOptions {
   baseUrl?: string;
 }
 
+/**
+ * Programmatic-only connection extras — a separate parameter, NOT part of
+ * {@link VoicelabConnectOptions}, because command option types become CLI
+ * flags and a callback has no flag spelling.
+ */
+interface VoicelabConnectExtras {
+  /**
+   * Observe the session socket closing. A client's standing job is to BE
+   * CONNECTED — the socket is how the server reaches it — so a long-lived
+   * caller reconnects from this hook, immediately, not at its next use.
+   */
+  onWebSocketClose?: (close: { code: number; reason: string }) => void;
+}
+
 export function resolveVoicelabBaseUrl(options: Pick<VoicelabConnectOptions, "baseUrl">) {
   const baseUrl =
     options.baseUrl ??
@@ -35,7 +49,10 @@ export function resolveVoicelabBaseUrl(options: Pick<VoicelabConnectOptions, "ba
   return baseUrl;
 }
 
-export async function connectProject(options: VoicelabConnectOptions) {
+export async function connectProject(
+  options: VoicelabConnectOptions,
+  extras: VoicelabConnectExtras = {},
+) {
   const baseUrl = resolveVoicelabBaseUrl(options);
   const secret = process.env.APP_CONFIG_ADMIN_API_SECRET?.trim() ?? "";
   if (!secret) throw new Error("APP_CONFIG_ADMIN_API_SECRET is required.");
@@ -43,6 +60,7 @@ export async function connectProject(options: VoicelabConnectOptions) {
     auth: { type: "admin-secret", secret },
     baseUrl,
     projectId: options.project,
+    ...(extras.onWebSocketClose === undefined ? {} : { onWebSocketClose: extras.onWebSocketClose }),
   });
 }
 

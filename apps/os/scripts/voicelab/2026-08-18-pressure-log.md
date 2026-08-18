@@ -225,3 +225,36 @@ product state; worst case a halted flag is lost and delivery re-halts),
 whether kill/quarantine must work pre-boot, and whether project deletion
 should tombstone the scheduler. The preview-3 zombies themselves are
 harmless noise until then.
+
+**F11 (doctrine correction on F7, per Jonas): THE CLIENT'S JOB IS TO BE
+CONNECTED.** "Redial on the next press" was the wrong posture — a client's
+one standing job is to remain connected to /api, `connect`, and stay
+available, because the socket is how the SERVER reaches the device
+(server-triggered conversations, pushes). Only the voice provider is dialed
+on demand. F9's measurements slot straight into this frame: nothing kills a
+quiet socket on purpose, churn kills any socket eventually, so
+always-connected means reconnect-the-moment-it-dies rather than
+lazily-at-next-use. What changed:
+
+- The firmware already LIVES the doctrine mechanically — the ESP/Darwin
+  network task redials whenever the socket is down and the retry gate is
+  ready (backoff as a timestamp, never a sleep), the 120 s quiet-hop probe
+  detects half-open sockets, and the mount watchdog remounts after long
+  quiet. Only the words were wrong: the keepalive constant's comment
+  preached "a quiet session is allowed to die; redial on next use" and now
+  states the always-connected doctrine.
+- The itx node client stays vanilla capnweb but gains a passive
+  `onWebSocketClose` observer hook — the moment an always-connected caller
+  reconnects from. No pings, no retries, no reconnection inside the
+  library; the consumer owns the loop.
+- ptt-marginal now models the real client: the close hook triggers an
+  immediate single-flight background reconnect (generation-guarded against
+  late closes from buried sockets), the 5 s append deadline remains as the
+  half-open fallback, and the summary line is renamed `session reconnect`.
+  A press during the gap pays only what remains of a reconnect that is
+  already running.
+
+The hook is deliberately NOT on `VoicelabConnectOptions` — command option
+types become CLI flags, and the first draft leaked a nonsense
+`--on-web-socket-close [json]` flag onto every voicelab command; it rides
+a separate programmatic-extras parameter instead.
