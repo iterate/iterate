@@ -24,7 +24,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { substituteHeaderSecrets } from "@v3/shared/egress";
-import { ITX_SURFACE_MODULE } from "./core/agent-runtime.ts";
+import { confinedWorker } from "./core/agent-runtime.ts";
 import {
   idempotencyConflictMessage,
   sameIdempotentEvent,
@@ -37,20 +37,18 @@ import { PAGER_HEADER } from "./core/hibernatable-pager.ts";
 import { HibernatableStubs, type Invoker, type Stub } from "./core/hibernatable-stub.ts";
 import { parseName } from "./core/names.ts";
 import type { FacetIdentity, ProcessorFacet } from "./processor-facet.ts";
-import type { StatefulWorkerDurableObject } from "./stateful-worker-durable-object.ts";
 
+// What THIS class touches of the shared worker env (the facets see the rest — a built-in facet
+// inherits the whole worker env; see roots-builder.ts RootsEnv).
 interface Env {
   CONTEXT: DurableObjectNamespace<StreamDurableObject>;
-  STATEFUL_WORKER: DurableObjectNamespace<StatefulWorkerDurableObject>;
   LOADER: WorkerLoader;
-  ITX_KV?: KVNamespace;
   SECRETS_KV?: KVNamespace;
-  APP_CONFIG?: string;
   /** Deploy identity — folded into loader cacheKeys so a redeploy mints fresh isolates (the
    *  stale-isolate/DataCloneError family the stateful runner documents). */
   CF_VERSION_METADATA?: { id: string };
-  /** The shell this context's egress + `itx.os` bottom out at (a whole control plane). */
-  FALLBACK: Fetcher & { invokeCapability(callPath: string, args?: unknown[]): Promise<unknown> };
+  /** The shell this context's egress bottoms out at (a whole control plane). */
+  FALLBACK: Fetcher;
 }
 
 /** One enabled facet-hosted processor: a built-in slug, or — with `ref` — USERSPACE code (a
@@ -94,9 +92,17 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
+  /** This DO's codec name. A stream is only ever reached `getByName` — an id-addressed instance
+   *  has no identity and must fail before it writes anything. */
+  get #doName(): string {
+    const name = this.ctx.id.name;
+    if (!name) throw new Error("StreamDurableObject requires a named id (reach it via getByName)");
+    return name;
+  }
+
   /** The context this DO is — parsed from its unforgeable codec name. */
   get #name(): { projectId: string; path: string } {
-    return parseName(this.ctx.id.name ?? "?");
+    return parseName(this.#doName);
   }
 
   // ── the event log (the commit point) ──
@@ -123,7 +129,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           throw new Error(idempotencyConflictMessage(input.idempotencyKey, Number(hit.offset)));
         }
       }
-      const body = { ...input, createdAt: new Date(Date.now()).toISOString() };
+      const body = { ...input, createdAt: new Date().toISOString() };
       this.ctx.storage.sql.exec(
         "INSERT INTO events (body, idempotency_key) VALUES (?, ?)",
         JSON.stringify(body),
@@ -184,17 +190,13 @@ export class StreamDurableObject extends DurableObject<Env> {
     const modules = (await this.invoke(ref.source)) as Record<string, string>;
     const version = hashSource(JSON.stringify(modules));
     const v = this.env.CF_VERSION_METADATA?.id ?? "unversioned";
-    const self = this.env.CONTEXT.getByName(this.ctx.id.name ?? "?");
-    const worker = this.env.LOADER.get(
+    const worker = confinedWorker(
+      this.env.LOADER,
       // Deploy id in the key (the stale-isolate/DataCloneError family): see the stateful runner.
-      `procfacet:${v}:${this.ctx.id.name}:${slug}:${version}`,
-      () => ({
-        compatibilityDate: "2026-07-01",
-        mainModule: "cap.js",
-        modules: { "itx.js": ITX_SURFACE_MODULE, ...modules },
-        env: { ITX: self },
-        globalOutbound: self,
-      }),
+      `procfacet:${v}:${this.#doName}:${slug}:${version}`,
+      "cap.js",
+      modules,
+      this.env.CONTEXT.getByName(this.#doName),
     );
     const klass = worker.getDurableObjectClass(ref.className);
     if (!klass) throw new Error(`userspace processor "${slug}": no class "${ref.className}"`);
@@ -236,25 +238,22 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   #identityFor(slug: string): FacetIdentity {
     return {
-      parentName: this.ctx.id.name ?? "?",
+      parentName: this.#doName,
       projectId: this.#name.projectId,
       path: this.#name.path,
       slug,
     };
   }
 
-  /** THE capability host — the iterate-context facet, lazily enabled + configured ONCE on first
-   *  use (durable marker), and added to the driven set so every commit drives it too. */
+  /** THE capability host — the iterate-context facet, lazily enabled on first use like any other
+   *  facet processor (so every commit drives it too); the durable marker keeps the enable to
+   *  once, not once per call. */
   async #ictx(): Promise<ProcessorFacet> {
-    const facet = (await this.#facet(ICTX_SLUG)) as unknown as ProcessorFacet;
     if (!this.ctx.storage.kv.get("ictx:enabled")) {
-      await facet.configure(this.#identityFor(ICTX_SLUG));
-      const entries = this.#facetEntries();
-      if (!entries.some((e) => e.slug === ICTX_SLUG))
-        this.ctx.storage.kv.put("facet-processors", [...entries, { slug: ICTX_SLUG }]);
+      await this.enableProcessor(ICTX_SLUG);
       this.ctx.storage.kv.put("ictx:enabled", true);
     }
-    return facet;
+    return (await this.#facet(ICTX_SLUG)) as unknown as ProcessorFacet;
   }
 
   // ── dispatch (ONE path: the routing table — hosted in the iterate-context facet) ──
@@ -349,7 +348,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       clientPath: input.path,
       connectionKey: input.connectionKey,
       description: input.description,
-      openedAt: new Date(Date.now()).toISOString(),
+      openedAt: new Date().toISOString(),
     });
     return { ok: true, connectionKey: input.connectionKey };
   }

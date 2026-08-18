@@ -711,3 +711,31 @@ is a real workers.dev property, not a bug in the spine:
   in 4 keepalive windows vs 5 in 8 no-keepalive windows ≥300s. Controls (bare ctx + sockets-only
   ctx, no facets) both evicted at 300s, so facets do NOT prevent hibernation; 240s windows are
   simply shorter than today's eviction latency (the spec's 240s hold never saw one).
+
+## Increment 30 (kenton-1): the Kenton-bar review — simplicity/clarity/elegance pass
+
+- Full findings (incl. what was deliberately NOT changed): `REVIEW-KENTON.md`. Net −49 lines.
+- **One honest way per thing:** ONE `pathProxy` (core/expression.ts) replaces the three verbatim
+  accumulating proxies (itx scope symbol, facet clients view, stateful-worker proxy); ONE
+  `confinedWorker` (core/agent-runtime.ts) replaces the three verbatim loader wirings and states
+  the confinement invariant once (`itx.js` injected; `env.ITX` + `globalOutbound` = the owning
+  context); ONE `ExpressionSchema` (the codec owns its wire schema); ONE `disposeStub`;
+  `#ictx()` enables through `enableProcessor` instead of re-implementing it;
+  `ProcessorFacet.snapshot` reads through `registry.reads` instead of the registry's private
+  storage key (also: empty-stream state is now schema-initial, not `{}`).
+- **Two real bugs:** the must-use rule's `walkHoles` had its own hole detector that descended
+  into `$`-escapes (disagreeing with match/substitute; now classifies via the shared `holeKind`,
+  +regression test); the user-tally demo folded the DELIVERED batch — a dropped fire-and-forget
+  drive would have left a permanent gap (now folds from its own cursor on every wake).
+- **Honest signatures:** `registry.deliver()` is nullary (it ignored both params since delivery
+  went cursor-driven in increment 25; the duck-typed facet contract keeps `deliver(events,
+head)` — userspace processors really use them); Env interfaces trimmed to what each class
+  touches; itx-surface params typed `string | Expression` (inline `import()` casts deleted).
+- **Fail early:** a Stream DO / stateful runner reached without a name now throws instead of
+  fabricating a `"?"` project / garbage host stub.
+- **Subtractive:** `isFetchTerminal` (nothing consulted it — the lane is header-driven and
+  `resolveFetch` normalizes), `parentPath`, `registry.names`, the unused public `itx` getter,
+  the empty `processEvent` override, the redundant per-batch refold, `CF_VERSION_METADATA.tag`.
+- 70 unit tests green (−1 dead spec, +1 regression); typecheck clean. Deploy `kenton-1`:
+  all three live proofs ALL PASS first run (crisp 16/16, facet spine, userspace + built-in
+  tally side by side).

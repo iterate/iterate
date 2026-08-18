@@ -4,7 +4,6 @@ import {
   apply,
   compareSpecificity,
   evaluate,
-  isFetchTerminal,
   match,
   parse,
   print,
@@ -267,16 +266,5 @@ describe("evaluate/apply", () => {
     const s = scope();
     const eventScope = { itx: s.itx }; // event provenance: no `roots` symbol at all
     await expect(evaluate(eventScope, parse("roots.kv.get('x')"))).rejects.toThrow(/not in scope/);
-  });
-});
-
-// ───────────────────────────── the fetch lane rule ─────────────────────────────
-
-describe("isFetchTerminal", () => {
-  test("terminal fetch — property or call — rides the fetch lane", () => {
-    expect(isFetchTerminal(parse("itx.site.fetch"))).toBe(true);
-    expect(isFetchTerminal(parse("itx.site.fetch()"))).toBe(true);
-    expect(isFetchTerminal(parse("itx.site"))).toBe(false);
-    expect(isFetchTerminal(parse("itx.fetchOrders.list"))).toBe(false); // substring is NOT the rule
   });
 });

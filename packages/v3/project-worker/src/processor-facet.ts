@@ -102,13 +102,17 @@ const FACET_PROCESSORS: Record<
       context: (p) => env.CONTEXT.getByName(stringifyName({ projectId, path: p })),
       clients: facetClientsView(parent),
     });
-    return new IterateContextStreamProcessor({
+    const processor = new IterateContextStreamProcessor({
       stream,
       path,
       projectId,
       seeds: parseAppConfig(env.APP_CONFIG).seeds,
       roots,
     });
+    // Wire the resolver recursion LOCALLY: `itx.…` inside any mount target re-enters THIS
+    // facet's dispatch (never a hop back through the parent).
+    processor.resolveCurrent = (call, depth) => invoke(call, depth);
+    return processor;
   },
 };
 
@@ -126,19 +130,17 @@ export class ProcessorFacet extends DurableObject<Env> {
     return { ok: true };
   }
 
-  /** The parent drives this after each commit (and for catch-up on cold reads). */
-  async deliver(events: StreamEvent[], streamMaxOffset: number): Promise<void> {
-    await this.#boot().registry.deliver(events, streamMaxOffset);
+  /** The parent drives this after each commit (and for catch-up on cold reads). The batch is a
+   *  WAKE-UP only — the registry is cursor-driven; the params exist because the duck-typed facet
+   *  contract carries them (userspace processors do use them). */
+  async deliver(_events: StreamEvent[], _streamMaxOffset: number): Promise<void> {
+    await this.#boot().registry.deliver();
   }
 
   /** Catch up from the parent's log, then report the fold (offset + reduced state). */
   async snapshot(): Promise<ProcessorSnapshot<unknown>> {
-    const { registry, slug } = this.#boot();
-    await registry.catchUp(slug);
-    const stored = this.ctx.storage.kv.get(`processor:${slug}:progress`) as
-      | { reducedThroughOffset: number; state: unknown }
-      | undefined;
-    return { offset: stored?.reducedThroughOffset ?? 0, state: stored?.state ?? {} };
+    const { registry, processor } = this.#boot();
+    return registry.reads(processor).snapshot();
   }
 
   // ── the iterate-context surface (only valid when this facet hosts that slug) ──
@@ -146,8 +148,8 @@ export class ProcessorFacet extends DurableObject<Env> {
   /** Resolve + run one call against the CURRENT table: catch up own registry → snapshot →
    *  resolve. This is also the facet's `resolveCurrent` — the recursion stays LOCAL. */
   async invoke(call: string | Expression, depth = 0): Promise<unknown> {
-    const { processor } = this.#ictx();
-    const state = (await this.#tableState()) as Parameters<typeof processor.resolve>[0];
+    const processor = this.#ictx();
+    const { state } = await this.#boot().registry.reads(processor).snapshot();
     return processor.resolve(state, toExpression(call), undefined, depth);
   }
 
@@ -156,11 +158,11 @@ export class ProcessorFacet extends DurableObject<Env> {
     pattern: string | Expression;
     target: string | Expression;
   }): Promise<{ providedAtOffset: number }> {
-    return this.#ictx().processor.provide(input);
+    return this.#ictx().provide(input);
   }
 
   revoke(input: { providedAtOffset: number }): Promise<void> {
-    return this.#ictx().processor.revoke(input);
+    return this.#ictx().revoke(input);
   }
 
   /** THE FETCH LANE terminal: the parent forwards `x-itx-cap` requests NATIVELY
@@ -173,8 +175,8 @@ export class ProcessorFacet extends DurableObject<Env> {
       const expr = capHeader.trimStart().startsWith("[")
         ? (JSON.parse(capHeader) as Expression)
         : parse(capHeader.startsWith("itx") ? capHeader : `itx.${capHeader}`);
-      const { processor } = this.#ictx();
-      const state = (await this.#tableState()) as Parameters<typeof processor.resolveFetch>[0];
+      const processor = this.#ictx();
+      const { state } = await this.#boot().registry.reads(processor).snapshot();
       const result = await processor.resolveFetch(state, expr, request);
       if (result instanceof Response) return result;
       return new Response(`fetch lane: ${JSON.stringify(result)}\n`);
@@ -185,17 +187,11 @@ export class ProcessorFacet extends DurableObject<Env> {
     }
   }
 
-  /** The current routing-table state — the registry's snapshot catches up from the log first. */
-  async #tableState(): Promise<unknown> {
-    const { registry, processor } = this.#boot();
-    return (await registry.reads(processor).snapshot()).state;
-  }
-
-  #ictx(): { processor: IterateContextStreamProcessor } {
+  #ictx(): IterateContextStreamProcessor {
     const { processor, slug } = this.#boot();
     if (!(processor instanceof IterateContextStreamProcessor))
       throw new Error(`facet "${slug}" is not the iterate-context processor`);
-    return { processor };
+    return processor;
   }
 
   /** Rehydrate from the durable identity (every incarnation — facets restart independently). */
@@ -229,10 +225,6 @@ export class ProcessorFacet extends DurableObject<Env> {
       invoke: (call, depth) => this.invoke(call, depth),
     });
     registry.register(processor);
-    // Wire the resolver recursion LOCALLY: `itx.…` inside any mount target re-enters THIS
-    // facet's dispatch (never a hop back through the parent).
-    if (processor instanceof IterateContextStreamProcessor)
-      processor.resolveCurrent = (call, depth) => this.invoke(call, depth);
     this.#booted = { registry, slug: identity.slug, processor };
     return this.#booted;
   }

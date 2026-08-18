@@ -28,11 +28,3 @@ export function parseName(name: string): ContextName {
 export function canonicalName(raw: string): string {
   return stringifyName(parseName(raw));
 }
-
-/** The enclosing path a context falls back to; `null` at the root (which falls back to the shell instead). */
-export function parentPath(path: string): string | null {
-  const p = normalizePath(path);
-  if (p === "/") return null;
-  const i = p.lastIndexOf("/");
-  return i <= 0 ? "/" : p.slice(0, i);
-}

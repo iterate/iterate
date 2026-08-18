@@ -43,3 +43,25 @@ export default {
 // (The STATEFUL dynamic-worker wrapper `statefulDoRunner` was removed: with native facet RPC
 // (Reflect.apply in StatefulWorkerDurableObject.invokeCapability), the runner loads the user's
 // `DurableObject` class DIRECTLY and calls its methods — no `__HostedActor` fetch-tunnel wrapper.)
+
+/** Load a confined dynamic worker — THE one loader wiring (stateless code caps, userspace facet
+ *  processors, the stateful runner all ride it). The confinement contract, stated once: `itx.js`
+ *  (the dotted surface above) is always injected, and the worker's WHOLE world — `env.ITX` and
+ *  every global fetch — is its owning context, so sibling calls and egress route through the
+ *  host's dispatch with no second path. Callers version their `cacheKey` themselves (content
+ *  hash + deploy id — see the stale-isolate learning in stateful-worker-durable-object.ts). */
+export function confinedWorker(
+  loader: WorkerLoader,
+  cacheKey: string,
+  mainModule: string,
+  modules: Record<string, string>,
+  host: Fetcher,
+) {
+  return loader.get(cacheKey, () => ({
+    compatibilityDate: "2026-07-01",
+    mainModule,
+    modules: { "itx.js": ITX_SURFACE_MODULE, ...modules },
+    env: { ITX: host },
+    globalOutbound: host,
+  }));
+}

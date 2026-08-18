@@ -13,18 +13,13 @@
 
 import { RpcTarget } from "capnweb";
 import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
+import type { Expression } from "./expression.ts";
 import { openPager, parsePage } from "./hibernatable-pager.ts";
+import { disposeStub } from "./hibernatable-stub.ts";
 import { canonicalName } from "./names.ts";
 import type { StreamDurableObject } from "../stream-durable-object.ts";
 
 type ItxHostStub = DurableObjectStub<StreamDurableObject>;
-
-// `Symbol.dispose` isn't in the current lib target; reference it defensively to free a capnweb stub.
-const DISPOSE: symbol | undefined = (Symbol as { dispose?: symbol }).dispose;
-function disposeStub(stub: unknown): void {
-  const fn = DISPOSE ? (stub as Record<symbol, unknown>)[DISPOSE] : undefined;
-  if (typeof fn === "function") (fn as () => void).call(stub);
-}
 
 /** A retained provider stub (capnweb) from the client. `.dup()` keeps it past the connect/provide call; other
  *  keys are its (remote) methods, resolving back on the client. */
@@ -168,15 +163,10 @@ export class Itx extends RpcTarget {
   /** Mount an EXPRESSION capability (either codec half; event provenance — `roots` targets are
    *  rejected by the host). Returns the mount's identity for `revoke`. */
   provide(input: {
-    pattern: string | unknown[];
-    target: string | unknown[];
+    pattern: string | Expression;
+    target: string | Expression;
   }): Promise<{ providedAtOffset: number }> {
-    return this.#host.provideCapability(
-      input as {
-        pattern: string | import("./expression.ts").Expression;
-        target: string | import("./expression.ts").Expression;
-      },
-    );
+    return this.#host.provideCapability(input);
   }
 
   /** Pop exactly that mount off the shadow stack (what it shadowed is restored). */
@@ -189,12 +179,9 @@ export class Itx extends RpcTarget {
    *  configure / deliver / snapshot). */
   enableProcessor(
     slug: string,
-    ref?: { source: string | unknown[]; className: string },
+    ref?: { source: string | Expression; className: string },
   ): Promise<{ ok: true }> {
-    return this.#host.enableProcessor(
-      slug,
-      ref as { source: string | import("./expression.ts").Expression; className: string },
-    );
+    return this.#host.enableProcessor(slug, ref);
   }
 
   /** A facet processor's fold (offset + reduced state), served through the parent. */

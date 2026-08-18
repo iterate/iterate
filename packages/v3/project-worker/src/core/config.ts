@@ -12,12 +12,9 @@
 // request headers, substituted at the egress terminal from the per-project store.
 
 import { z } from "zod";
-import { parse, type Expression } from "./expression.ts";
+import { ExpressionSchema, parse, type Expression } from "./expression.ts";
 
-const ExpressionInput = z.union([
-  z.string().transform((s) => parse(s)),
-  z.array(z.union([z.string(), z.tuple([z.string()]).rest(z.unknown())])) as z.ZodType<Expression>,
-]);
+const ExpressionInput = z.union([z.string().transform((s) => parse(s)), ExpressionSchema]);
 
 const SeedRow = z.object({
   pattern: ExpressionInput,

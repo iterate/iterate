@@ -155,11 +155,11 @@ describe("contract", () => {
 
 describe("the concurrency contract", () => {
   test("rules 1+2 — strict per-event barrier: blocked work finishes before the next event starts", async () => {
-    const { registry, processor, tick, events } = setup();
+    const { registry, processor, tick } = setup();
     tick();
     tick();
     tick();
-    await registry.deliver(events.slice(), 3);
+    await registry.deliver();
     const starts = processor.trace.filter((t) => t.startsWith("start"));
     const dones = processor.trace.filter((t) => t.startsWith("blocked-done"));
     expect(starts).toEqual(["start 1", "start 2", "start 3"]);
@@ -174,7 +174,7 @@ describe("the concurrency contract", () => {
   });
 
   test("rule 3 — runInBackground escapes the barrier", async () => {
-    const { stream, registry, events } = setup();
+    const { stream, registry } = setup();
     const order: string[] = [];
     const Contract = defineProcessorContract({
       slug: "bg",
@@ -198,40 +198,40 @@ describe("the concurrency contract", () => {
     }
     registry.register(new Bg({ stream, path: "/", projectId: "p" }));
     stream.append({ type: "e" }, { type: "e" }) as StreamEvent[];
-    await registry.deliver(events.slice(), 2);
+    await registry.deliver();
     expect(order).toEqual(["fg 1", "fg 2"]); // background hasn't landed — it overtakes/loiters
     await new Promise((r) => setTimeout(r, 30));
     expect(order.slice(2).sort()).toEqual(["bg 1", "bg 2"]);
   });
 
   test("rule 4 — one persist per batch, cursor advances only after", async () => {
-    const { registry, storage, tick, events } = setup();
+    const { registry, storage, tick } = setup();
     tick();
     tick();
     tick();
     const before = storage.writes;
-    await registry.deliver(events.slice(), 3);
+    await registry.deliver();
     // one progress write for the whole 3-event batch (+ the milestone append is stream-side)
     expect(storage.writes - before).toBe(1);
   });
 
   test("rule 5 — at-head pass fires exactly once when the batch reaches the head", async () => {
-    const { registry, processor, stream, events } = setup();
+    const { registry, processor, stream } = setup();
     stream.append({ type: "unrelated" }) as StreamEvent[]; // consumed by nobody
-    await registry.deliver(events.slice(), 1);
+    await registry.deliver();
     expect(processor.trace).toEqual(["at-head ticks=0"]); // no consumable events → eventless pass
   });
 
   test("redelivery dedupes against the persisted cursor", async () => {
-    const { registry, processor, tick, events } = setup();
+    const { registry, processor, tick } = setup();
     tick();
-    await registry.deliver(events.slice(), 1);
-    await registry.deliver(events.slice(), 1); // same batch again
+    await registry.deliver();
+    await registry.deliver(); // same batch again
     expect(processor.trace.filter((t) => t === "start 1")).toHaveLength(1);
   });
 
   test("a failing batch persists nothing and catchUp retries it whole", async () => {
-    const { stream, storage, events } = setup();
+    const { stream, storage } = setup();
     let attempts = 0;
     const Contract = defineProcessorContract({
       slug: "flaky",
@@ -258,7 +258,7 @@ describe("the concurrency contract", () => {
     const registry = createStreamProcessorRegistry({ storage, stream, path: "/", projectId: "p" });
     const flaky = registry.register(new Flaky({ stream, path: "/", projectId: "p" }));
     stream.append({ type: "e" }) as StreamEvent[];
-    await expect(registry.deliver(events.slice(), 1)).rejects.toThrow("boom");
+    await expect(registry.deliver()).rejects.toThrow("boom");
     expect(storage.get("processor:flaky:progress")).toBeUndefined(); // nothing persisted
     await registry.catchUp("flaky"); // retried whole
     expect(attempts).toBe(2);
@@ -276,7 +276,7 @@ describe("review round 1 regressions", () => {
     const rawAppend = stream.append.bind(stream);
     stream.append = async (...inputs: StreamEventInput[]) => {
       const committed = rawAppend(...inputs) as StreamEvent[];
-      await registry.deliver(committed, committed[committed.length - 1]!.offset);
+      await registry.deliver();
       return committed;
     };
     const Contract = defineProcessorContract({
@@ -302,7 +302,7 @@ describe("review round 1 regressions", () => {
   }, 5000);
 
   test("delivery is cursor-driven: a late-enabled processor never skips history", async () => {
-    const { stream, events } = memoryStream();
+    const { stream } = memoryStream();
     stream.append({ type: "a" }, { type: "b" }) as StreamEvent[]; // history BEFORE registration
     const storage = memoryStorage();
     const registry = createStreamProcessorRegistry({ storage, stream, path: "/", projectId: "p" });
@@ -323,15 +323,15 @@ describe("review round 1 regressions", () => {
       }
     }
     registry.register(new Late({ stream, path: "/", projectId: "p" }));
-    const c = stream.append({ type: "c" }) as StreamEvent[];
-    await registry.deliver(c, 3); // pre-fix: only "c" — the a/b gap was skipped forever
+    stream.append({ type: "c" }) as StreamEvent[];
+    await registry.deliver(); // pre-fix: only "c" — the a/b gap was skipped forever
     expect(seen).toEqual(["a", "b", "c"]);
   });
 });
 
 describe("fold cache + refold", () => {
   test("version bump refolds via reduce only — effects never re-run", async () => {
-    const { stream, events } = setup();
+    const { stream } = setup();
     const storage = memoryStorage();
     const make = (version: string, effects: string[]) => {
       const Contract = defineProcessorContract({
@@ -355,12 +355,12 @@ describe("fold cache + refold", () => {
     };
     const effects: string[] = [];
     const r1 = createStreamProcessorRegistry({ storage, stream, path: "/", projectId: "p" });
-    const p1 = r1.register(make("1.0.0", effects));
+    r1.register(make("1.0.0", effects));
     stream.append(
       { type: "events.iterate.com/counter/ticked" },
       { type: "events.iterate.com/counter/ticked" },
     ) as StreamEvent[];
-    await r1.deliver(events.slice(), 2);
+    await r1.deliver();
     expect(effects).toHaveLength(2);
     // new incarnation with a bumped contract version: refold, but NO new effects for old events
     const r2 = createStreamProcessorRegistry({ storage, stream, path: "/", projectId: "p" });
@@ -368,18 +368,17 @@ describe("fold cache + refold", () => {
     const snap = await r2.reads(p2).snapshot();
     expect(snap.state.n).toBe(2); // refolded
     expect(effects).toHaveLength(2); // side effects did NOT re-run
-    void p1;
   });
 });
 
 describe("emit rules + idempotency", () => {
   test("milestone emitted with provenance stamp + idempotency key; duplicate deliver dedupes", async () => {
-    const { registry, tick, events, stream } = setup();
+    const { registry, tick, events } = setup();
     tick();
     tick();
     tick();
     tick(); // ticks: 1,2,3,4 — milestone at state.ticks===3 (after 3rd tick)
-    await registry.deliver(events.slice(), 4);
+    await registry.deliver();
     const milestones = events.filter((e) => e.type === "events.iterate.com/counter/milestone");
     expect(milestones).toHaveLength(1);
     expect(milestones[0].payload).toEqual({ at: 3 });
@@ -388,11 +387,10 @@ describe("emit rules + idempotency", () => {
     // the milestone append itself lands on the stream and re-delivers — drive again, still one
     await registry.catchUp();
     expect(events.filter((e) => e.type === "events.iterate.com/counter/milestone")).toHaveLength(1);
-    void stream;
   });
 
   test("undeclared emit throws", async () => {
-    const { stream, storage, events } = setup();
+    const { stream, storage } = setup();
     const Contract = defineProcessorContract({
       slug: "rogue",
       version: "1",
@@ -411,14 +409,14 @@ describe("emit rules + idempotency", () => {
     const registry = createStreamProcessorRegistry({ storage, stream, path: "/", projectId: "p" });
     registry.register(new Rogue({ stream, path: "/", projectId: "p" }));
     stream.append({ type: "e" }) as StreamEvent[];
-    await expect(registry.deliver(events.slice(), 1)).rejects.toThrow(/without declaring/);
+    await expect(registry.deliver()).rejects.toThrow(/without declaring/);
   });
 
   test("waitUntilProcessed resolves at the cursor", async () => {
-    const { registry, processor, tick, events } = setup();
+    const { registry, processor, tick } = setup();
     tick();
     const wait = registry.reads(processor).waitUntilProcessed({ offset: 1, timeoutMs: 1000 });
-    await registry.deliver(events.slice(), 1);
+    await registry.deliver();
     await expect(wait).resolves.toBeUndefined();
   });
 });

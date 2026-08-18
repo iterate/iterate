@@ -242,9 +242,9 @@ export function createStreamProcessorRegistry(options: {
   const consumes = (p: Registered, event: StreamEventT): boolean =>
     p.hooks.contract.consumes.includes("*") || p.hooks.contract.consumes.includes(event.type);
 
-  /** Rules 2-5: one event at a time, FIFO blockers, one persist per batch, at-head pass. */
+  /** Rules 2-5: one event at a time, FIFO blockers, one persist per batch, at-head pass.
+   *  The one caller (`catchUpBody`) has already refolded. */
   const processBatch = async (p: Registered, events: StreamEventT[], streamMaxOffset: number) => {
-    await refoldIfNeeded(p);
     const progress = loadProgress(p);
     let { state, reducedThroughOffset } = progress;
     let caughtUpDelivered = false;
@@ -386,15 +386,16 @@ export function createStreamProcessorRegistry(options: {
       return processor;
     },
 
-    /** The drive door: the DO calls this after every commit. The committed events are a WAKE-UP
-     *  only — each processor reads its own contiguous batch from its persisted cursor. A chain
-     *  already mid-batch is enqueued but NOT awaited: awaiting it would deadlock a processor
-     *  that appends during its own batch (append → deliver → its own busy chain). */
-    deliver(_events: StreamEventT[], _streamMaxOffset: number): Promise<void> {
+    /** The drive door: the DO calls this after every commit. It takes NO batch on purpose —
+     *  delivery is cursor-driven, so a commit is only a wake-up and each processor reads its own
+     *  contiguous batch from its persisted cursor. A chain already mid-batch is enqueued but NOT
+     *  awaited: awaiting it would deadlock a processor that appends during its own batch
+     *  (append → deliver → its own busy chain). */
+    deliver(): Promise<void> {
       const waits: Promise<void>[] = [];
       for (const p of processors.values()) {
         const wasRunning = p.running;
-        const run = enqueue(p, () => catchUpBody(p));
+        const run = catchUpOne(p);
         if (!wasRunning) waits.push(run);
       }
       return Promise.all(waits).then(() => undefined);
@@ -440,10 +441,6 @@ export function createStreamProcessorRegistry(options: {
             void catchUpOne(p);
           }),
       };
-    },
-
-    get names(): string[] {
-      return [...processors.keys()];
     },
   };
 }

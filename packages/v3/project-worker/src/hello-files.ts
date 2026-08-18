@@ -18,24 +18,25 @@ export class Counter extends DurableObject {
 }`,
   // A USERSPACE facet processor (duck-typed contract: configure/deliver/snapshot) — hosted as a
   // workerd facet on the Stream DO via enableProcessor(slug, { source, className }). It keeps its
-  // own cursor + counts in its OWN facet storage; snapshot catches up from the stream via env.ITX
-  // (the parent stub) so reads are never stale even though drives are fire-and-forget.
+  // own cursor + counts in its OWN facet storage. Drives are fire-and-forget and a delivered
+  // batch is only a WAKE-UP: both deliver and snapshot catch up from the stream via env.ITX (the
+  // parent stub) from the OWN cursor, so a dropped drive can never leave a gap.
   "/user-tally.js": `import { DurableObject } from "cloudflare:workers";
 export class UserTally extends DurableObject {
   configure() {} // identity unused — env.ITX already IS this stream
-  #fold(events) {
+  async #catchUp() {
     let offset = this.ctx.storage.kv.get("offset") ?? 0;
     const counts = this.ctx.storage.kv.get("counts") ?? {};
-    for (const e of events)
-      if (e.offset > offset) { counts[e.type] = (counts[e.type] ?? 0) + 1; offset = e.offset; }
+    for (const e of await this.env.ITX.read(offset)) {
+      counts[e.type] = (counts[e.type] ?? 0) + 1;
+      offset = e.offset;
+    }
     this.ctx.storage.kv.put("counts", counts);
     this.ctx.storage.kv.put("offset", offset);
     return { offset, state: { counts } };
   }
-  deliver(events) { this.#fold(events); }
-  async snapshot() {
-    return this.#fold(await this.env.ITX.read(this.ctx.storage.kv.get("offset") ?? 0));
-  }
+  deliver() { return this.#catchUp(); }
+  snapshot() { return this.#catchUp(); }
 }`,
   // A fetch-serving stateless worker: an HTTP page AND a WebSocket upgrade (101) — the stand-in
   // for "a device presents a website with WebSocket functionality", reached on the fetch lane.

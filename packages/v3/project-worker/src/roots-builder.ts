@@ -6,8 +6,8 @@
 // built here from the shared worker env (a built-in facet inherits the WORKER's env, so both
 // hosts see the same bindings).
 
-import { CODE_CAP_RUNNER, ITX_SURFACE_MODULE } from "./core/agent-runtime.ts";
-import { toExpression, type Expression } from "./core/expression.ts";
+import { CODE_CAP_RUNNER, confinedWorker } from "./core/agent-runtime.ts";
+import { pathProxy, toExpression, type Expression } from "./core/expression.ts";
 import { hashSource } from "./core/hash.ts";
 import { Roots, type ClientsView, type WorkersView } from "./core/roots.ts";
 import { HELLO_FILES } from "./hello-files.ts";
@@ -54,17 +54,9 @@ export function buildRoots(deps: BuildRootsDeps): Roots {
   const loadModules = async (source: Expression): Promise<Record<string, string>> =>
     (await deps.invoke(source)) as Record<string, string>;
 
-  /** Load a confined dynamic worker: `itx.js` injected, env.ITX = globalOutbound = a self-stub. */
-  const loaderWorker = (cacheKey: string, mainModule: string, modules: Record<string, string>) => {
-    const self = env.CONTEXT.getByName(contextName);
-    return env.LOADER.get(cacheKey, () => ({
-      compatibilityDate: "2026-07-01",
-      mainModule,
-      modules: { "itx.js": ITX_SURFACE_MODULE, ...modules },
-      env: { ITX: self },
-      globalOutbound: self,
-    }));
-  };
+  /** A confined dynamic worker whose world is THIS context (a self-stub). */
+  const loaderWorker = (cacheKey: string, mainModule: string, modules: Record<string, string>) =>
+    confinedWorker(env.LOADER, cacheKey, mainModule, modules, env.CONTEXT.getByName(contextName));
 
   /** `roots.workers.get({type, source, className?})` — run code in this context.
    *  stateless → a loader isolate: `{ run(...args), fetch(request) }`;
@@ -103,34 +95,22 @@ export function buildRoots(deps: BuildRootsDeps): Roots {
         };
       }
       // stateful: a method proxy onto the dedicated runner DO (deep dots ride the wire joined,
-      // the runner walks segments). fetch forwards natively so a 101 passes through.
+      // the runner walks segments). A top-level `.fetch` forwards natively so a 101 passes through.
       const className = ref.className;
       if (!className) throw new Error("workers.get: stateful ref needs a className");
       const runner = env.STATEFUL_WORKER.getByName(
         `${projectId}::${path}::${className}:${hashSource(JSON.stringify(source))}`,
       );
-      const proxyFor = (segments: string[]): unknown =>
-        new Proxy(function () {} as object, {
-          get: (_t, p) => {
-            if (p === "then" || typeof p === "symbol") return undefined;
-            if (p === "fetch" && segments.length === 0)
-              return (request: Request) => {
-                const headers = new Headers(request.headers);
-                headers.set("x-itx-source", JSON.stringify(source));
-                headers.set("x-itx-class", className);
-                return runner.fetch(new Request(request, { headers }));
-              };
-            return proxyFor([...segments, p as string]);
-          },
-          apply: (_t, _this, args) =>
-            runner.invokeCapability({
-              source,
-              className,
-              method: segments.join("."),
-              args: args as unknown[],
-            }),
-        });
-      return proxyFor([]);
+      return pathProxy((segments, args) => {
+        if (segments.length === 1 && segments[0] === "fetch") {
+          const request = args[0] as Request;
+          const headers = new Headers(request.headers);
+          headers.set("x-itx-source", JSON.stringify(source));
+          headers.set("x-itx-class", className);
+          return runner.fetch(new Request(request, { headers }));
+        }
+        return runner.invokeCapability({ source, className, method: segments.join("."), args });
+      });
     },
   };
 
@@ -161,16 +141,8 @@ export function buildRoots(deps: BuildRootsDeps): Roots {
 export function facetClientsView(
   parent: () => DurableObjectStub<StreamDurableObject>,
 ): ClientsView {
-  const proxyFor = (key: string, segments: string[]): unknown =>
-    new Proxy(function () {} as object, {
-      get: (_t, p) =>
-        p === "then" || typeof p === "symbol"
-          ? undefined
-          : proxyFor(key, [...segments, p as string]),
-      apply: (_t, _this, args) => parent().stubInvoke(key, segments, args as unknown[]),
-    });
   return {
-    get: (key) => proxyFor(key, []),
+    get: (key) => pathProxy((segments, args) => parent().stubInvoke(key, segments, args)),
     at: (path) => ({ call: (method, args) => parent().stubFanOut(path, method, args) }),
     list: () => parent().stubList(),
     connections: (path) => parent().stubConnections(path),

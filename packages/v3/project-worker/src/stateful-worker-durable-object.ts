@@ -26,7 +26,7 @@
 // The `fetch` lane (WS/streaming, where a 101 can't ride RPC) forwards to the facet's own `fetch`.
 
 import { DurableObject } from "cloudflare:workers";
-import { ITX_SURFACE_MODULE } from "./core/agent-runtime.ts";
+import { confinedWorker } from "./core/agent-runtime.ts";
 import type { Expression } from "./core/expression.ts";
 import { hashSource } from "./core/hash.ts";
 import { stringifyName } from "./core/names.ts";
@@ -44,7 +44,7 @@ interface Env {
   // Deploy identity (wrangler `version_metadata`). Folded into the loader cacheKey so a redeploy
   // mints a FRESH loaded isolate — a facet built from a prior deployment's isolate cannot be
   // called from the new parent. Mirrors apps/os workerVersion(env). Absent locally → "unversioned".
-  CF_VERSION_METADATA?: { id: string; tag?: string };
+  CF_VERSION_METADATA?: { id: string };
 }
 
 /** The RPC-lane payload the capability host forwards (mirrors apps/os's StatefulWorkerDurableObject input). */
@@ -66,10 +66,13 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
    *  cap). Reconstructed from this runner's name `{projectId}::{path}::{className}:{sourceHash}`, which
    *  StreamDurableObject's #workersView sets; the first two `::`-segments are the context {projectId, path}. */
   #hostStub(): DurableObjectStub<StreamDurableObject> {
-    const [projectId, path] = (this.ctx.id.name ?? "").split("::");
-    return this.env.CONTEXT.getByName(
-      stringifyName({ projectId: projectId ?? "", path: path ?? "/" }),
-    );
+    const name = this.ctx.id.name;
+    const [projectId, path] = name?.split("::") ?? [];
+    if (!projectId || !path)
+      throw new Error(
+        `stateful worker: runner name ${JSON.stringify(name)} is not {projectId}::{path}::{className}:{sourceHash} — reach this DO via the capability host, never by raw id`,
+      );
+    return this.env.CONTEXT.getByName(stringifyName({ projectId, path }));
   }
 
   /** Construct (or restart on a source change) the facet hosting the user's `className`, keeping its storage
@@ -82,18 +85,13 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     // cross-Worker to the new parent and thus un-transferable (same DataCloneError family). Mirrors
     // apps/os's cacheKey (WORKER_SELF + workerVersion(env)). CF_VERSION_METADATA.id changes every deploy.
     const deployVersion = this.env.CF_VERSION_METADATA?.id ?? "unversioned";
-    // env.ITX (+ globalOutbound) = a stub to the OWNING capability host, so the hosted DO class calls sibling
-    // capabilities and egresses exactly like a stateless code cap; `itx.js` lets it import the dotted surface.
-    const host = this.#hostStub();
-    const worker = this.env.LOADER.get(
+    // The confinement contract (env.ITX + globalOutbound = the owning host) is confinedWorker's.
+    const worker = confinedWorker(
+      this.env.LOADER,
       `stateful:${deployVersion}:${this.ctx.id.name}:${version}`,
-      () => ({
-        compatibilityDate: "2026-07-01",
-        mainModule: "cap.js",
-        modules: { "itx.js": ITX_SURFACE_MODULE, ...modules },
-        env: { ITX: host },
-        globalOutbound: host,
-      }),
+      "cap.js",
+      modules,
+      this.#hostStub(),
     );
     const klass = worker.getDurableObjectClass(className);
     if (!klass) throw new Error(`stateful worker does not export class "${className}"`);

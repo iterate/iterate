@@ -21,7 +21,10 @@ import { z } from "zod";
 import {
   apply,
   compareSpecificity,
+  ExpressionSchema,
+  holeKind,
   match,
+  pathProxy,
   print,
   substitute,
   toExpression,
@@ -29,16 +32,7 @@ import {
   type Expression,
   type Match,
 } from "./core/expression.ts";
-import {
-  defineProcessorContract,
-  StreamProcessor,
-  type ProcessEventArgs,
-  type ReduceArgs,
-} from "./core/processor.ts";
-
-const ExpressionSchema = z.array(
-  z.union([z.string(), z.tuple([z.string()]).rest(z.unknown())]),
-) as z.ZodType<Expression>;
+import { defineProcessorContract, StreamProcessor, type ReduceArgs } from "./core/processor.ts";
 
 export const IterateContextContract = defineProcessorContract({
   slug: "iterate-context",
@@ -112,7 +106,6 @@ export class IterateContextStreamProcessor extends StreamProcessor<State> {
     }
     return undefined;
   }
-  protected override processEvent(_args: ProcessEventArgs<State>): undefined {}
 
   /** Provide = append the mount event; the offset that comes back IS the mount's identity. */
   async provide(input: {
@@ -221,26 +214,19 @@ export class IterateContextStreamProcessor extends StreamProcessor<State> {
     return best;
   }
 
-  /** The `itx` scope symbol: dotted/called access re-enters `resolve` with the CURRENT state.
-   *  This is what makes alias mounts compose and default routes forward whole calls. */
-  get itx(): unknown {
-    return this.#itxAtDepth(1);
-  }
-
-  /** The `itx` scope symbol at a given recursion depth — re-enters resolve carrying the depth. */
+  /** The `itx` scope symbol at a given recursion depth: dotted/called access re-enters `resolve`
+   *  with the CURRENT state, carrying the depth. This is what makes alias mounts compose and
+   *  default routes forward whole calls. (Calling bare `itx(...)` resolves `[["itx", ...args]]` —
+   *  boundary args for a bare default route.) */
   #itxAtDepth(depth: number): unknown {
-    const build = (steps: Expression): unknown =>
-      new Proxy(function () {} as object, {
-        get: (_t, p) =>
-          p === "then" || typeof p === "symbol" ? undefined : build([...steps, p as string]),
-        apply: (_t, _this, args) => {
-          const last = steps.at(-1);
-          if (typeof last !== "string") throw new Error("itx: cannot call a call result here");
-          const expr: Expression = [...steps.slice(0, -1), [last, ...(args as unknown[])]];
-          return this.resolveCurrent(expr, depth);
-        },
-      });
-    return build(["itx"]);
+    return pathProxy((segments, args) => {
+      const last = segments.at(-1);
+      const expr: Expression =
+        last === undefined
+          ? [["itx", ...args]]
+          : ["itx", ...segments.slice(0, -1), [last, ...args]];
+      return this.resolveCurrent(expr, depth);
+    });
   }
 
   /** Overridden by the host to hand `resolve` the current folded state. */
@@ -265,13 +251,12 @@ function assertMustUse(pattern: Expression, target: Expression): void {
 
 function walkHoles(expr: Expression, visit: (hole: string | number) => void): void {
   const walkValue = (v: unknown): void => {
-    if (typeof v === "object" && v !== null) {
-      if (!Array.isArray(v) && Object.keys(v).length === 1 && "?" in (v as object)) {
-        visit((v as { "?": string | number })["?"]);
-        return;
-      }
-      for (const inner of Object.values(v)) walkValue(inner);
-    }
+    // Classify via holeKind, exactly as match/substitute do — a private detector here would
+    // disagree with them about `$`-escapes ($-escaped data is inert; rest binds no name).
+    const kind = holeKind(v);
+    if (kind === "arg") return visit((v as { "?": string | number })["?"]);
+    if (kind === "literal" || kind === "rest") return;
+    if (typeof v === "object" && v !== null) for (const inner of Object.values(v)) walkValue(inner);
   };
   for (const step of expr) if (Array.isArray(step)) step.slice(1).forEach(walkValue);
 }

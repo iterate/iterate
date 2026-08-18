@@ -35,9 +35,10 @@ type Hooks = {
   getWebSockets(tag: string): WebSocket[];
 };
 
-// `Symbol.dispose` isn't in the current lib target; reference it defensively to free a (Workers-RPC) leg.
+// `Symbol.dispose` isn't in the current lib target; reference it defensively. THE one disposer
+// for any RPC-ish stub (Workers-RPC legs here, retained capnweb providers in itx-surface.ts).
 const DISPOSE: symbol | undefined = (Symbol as { dispose?: symbol }).dispose;
-function dispose(x: unknown): void {
+export function disposeStub(x: unknown): void {
   const f = DISPOSE ? (x as Record<symbol, unknown>)[DISPOSE] : undefined;
   if (typeof f === "function") (f as () => void).call(x);
 }
@@ -93,7 +94,7 @@ export class HibernatableStubs {
     } finally {
       if (--leg.inFlight === 0 && this.#legs.get(socketId) === leg) {
         this.#legs.delete(socketId);
-        dispose(leg.invoker);
+        disposeStub(leg.invoker);
       }
     }
   }
@@ -107,7 +108,7 @@ export class HibernatableStubs {
       invoker: input.invoker.dup?.() ?? input.invoker,
       inFlight: 0,
     });
-    if (prev) dispose(prev.invoker);
+    if (prev) disposeStub(prev.invoker);
     clearTimeout(pending.timer);
     this.#pending.delete(input.socketId);
     pending.resolve();
@@ -171,7 +172,7 @@ export class HibernatableStubs {
     const leg = this.#legs.get(socketId);
     if (leg) {
       this.#legs.delete(socketId);
-      dispose(leg.invoker);
+      disposeStub(leg.invoker);
     }
     const p = this.#pending.get(socketId);
     if (p) {

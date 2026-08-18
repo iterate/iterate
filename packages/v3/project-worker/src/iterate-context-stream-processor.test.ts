@@ -211,6 +211,14 @@ describe("event mounts + the shadow stack", () => {
     );
   });
 
+  test("$-escaped data that merely LOOKS like a capture is inert to the must-use rule", async () => {
+    const { host } = setup();
+    // pattern arg is the LITERAL {"?": "x"}, not a binding — provide must not demand a use of ?x
+    await expect(
+      host.provide({ pattern: ["itx", ["f", { $: { "?": "x" } }]], target: ["itx", "kv"] }),
+    ).resolves.toEqual({ providedAtOffset: expect.any(Number) });
+  });
+
   test("default route: bare `itx` forwards whole missed calls (ancestry with zero machinery)", async () => {
     const { host, invoke, roots } = setup();
     const osCalls: string[] = [];

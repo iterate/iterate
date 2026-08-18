@@ -14,14 +14,11 @@ export { ProcessorFacet } from "./processor-facet.ts";
 
 interface Env {
   CONTEXT: DurableObjectNamespace<StreamDurableObject>;
-  LOADER: WorkerLoader;
-  SECRETS_KV?: KVNamespace;
-  APP_CONFIG?: string;
 }
 
 // The SOLO fallback (target-core §3.4): a whole control plane, trivially — platform-secret substitution (none in
 // solo) then terminal; `invokeCapability` is the capability fallthrough. Bound as FALLBACK only in solo config.
-export class DummyControlPlane extends WorkerEntrypoint<Env> {
+export class DummyControlPlane extends WorkerEntrypoint {
   async fetch(request: Request): Promise<Response> {
     return fetch(request);
   }
@@ -32,7 +29,7 @@ export class DummyControlPlane extends WorkerEntrypoint<Env> {
 }
 
 // Bumped every deploy so a smoke test can wait for THIS build to propagate (workers.dev lags ~1-2min/colo).
-const CODE_VERSION = "ictx-facet-1";
+const CODE_VERSION = "kenton-1";
 
 /** The context host DO for a request's `?ctx=` (defaults to `prj_demo`). The DO does the real work. */
 function host(env: Env, url: URL) {

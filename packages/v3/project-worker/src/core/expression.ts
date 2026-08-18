@@ -35,18 +35,28 @@
 // replayed on the evaluated target — which is how a bare default route `itx ⇒ itx.cd('/')`
 // forwards a whole missed call with zero special machinery.
 
+import { z } from "zod";
 import { jsonEqual } from "./events.ts";
 
 /** One step: a property read (string) or a call (`[method, ...args]`). Args are plain JSON. */
 export type Step = string | [method: string, ...args: unknown[]];
 export type Expression = Step[];
 
+/** THE structured half as a wire schema — persisted mount rows and APP_CONFIG seeds validate
+ *  against this one spelling (two spellings would eventually disagree). */
+export const ExpressionSchema = z.array(
+  z.union([z.string(), z.tuple([z.string()]).rest(z.unknown())]),
+) as z.ZodType<Expression>;
+
 /** A hole/spread/escape marker inside an arg tree (see the header table). */
 type Hole = { "?": number | string } | { "...": true | number } | { $: unknown };
 
 const isPlainObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
-const holeKind = (v: unknown): "arg" | "rest" | "literal" | null => {
+/** Classify a tagged value — THE one detector every hole walk must share (match, substitute,
+ *  the must-use rule): a walker with its own idea of a hole will eventually disagree with
+ *  `substitute` about what `$` escapes. */
+export const holeKind = (v: unknown): "arg" | "rest" | "literal" | null => {
   if (!isPlainObject(v) || Object.keys(v).length !== 1) return null;
   if ("?" in v) return "arg";
   if ("..." in v) return "rest";
@@ -166,10 +176,8 @@ class Parser {
         this.#expect("?");
         out["..."] = this.#number() ?? 0;
       } else {
-        const key =
-          this.#peek() === "'" || this.#peek() === '"'
-            ? (this.#string(this.#peek() as '"') as string)
-            : this.#word();
+        const q = this.#peek();
+        const key = q === "'" || q === '"' ? this.#string(q) : this.#word();
         this.#ws();
         this.#expect(":");
         out[key] = this.#value();
@@ -576,9 +584,17 @@ export function usesCallerArgs(expr: Expression): boolean {
   return found;
 }
 
-/** Does a resolved call ride the fetch lane? Exactly when the terminal method is `fetch` — the one
- *  method workerd grants 101/upgrade semantics. Check AFTER alias resolution, on the final shape. */
-export function isFetchTerminal(expr: Expression): boolean {
-  const last = expr.at(-1);
-  return last === "fetch" || (Array.isArray(last) && last[0] === "fetch");
+/** The dotted surface as a runtime Proxy — the programmatic write-half of the codec: property
+ *  gets accumulate path segments, calling hands `(segments, args)` to `call`. `then`/symbol
+ *  probes return undefined so a proxy is never mistaken for a thenable mid-await. ONE builder
+ *  for every dotted view (the itx scope symbol, the facet clients view, the stateful-worker
+ *  proxy) — they differed only in what the terminal apply dispatches to. */
+export function pathProxy(call: (segments: string[], args: unknown[]) => unknown): unknown {
+  const build = (segments: string[]): unknown =>
+    new Proxy(function () {} as object, {
+      get: (_t, p) =>
+        p === "then" || typeof p === "symbol" ? undefined : build([...segments, p as string]),
+      apply: (_t, _this, args) => call(segments, args as unknown[]),
+    });
+  return build([]);
 }
