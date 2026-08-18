@@ -51,6 +51,24 @@ describe("isProjectWorkerUnavailableDelivery", () => {
     expect(isProjectWorkerUnavailableDelivery(a)).toBe(false);
   });
 
+  it("does not classify userland errors carrying Artifacts-lifecycle codes", () => {
+    // isRepoNotSeededError's broad branch matches ANY object with
+    // `code: "NOT_FOUND"` — fine around actual repo operations, wrong for
+    // arbitrary handler rejections walked cause-by-cause: a worker whose
+    // handler throws a fetch/storage error with that code is a userland bug,
+    // not an unavailable receiver.
+    const notFound = Object.assign(new Error("thing not found"), { code: "NOT_FOUND" });
+    expect(isProjectWorkerUnavailableDelivery(notFound)).toBe(false);
+    expect(isProjectWorkerUnavailableDelivery(new Error("wrapped", { cause: notFound }))).toBe(
+      false,
+    );
+    const artifactsError = Object.assign(new Error("repo not ready"), {
+      name: "ArtifactsError",
+      numericCode: 404,
+    });
+    expect(isProjectWorkerUnavailableDelivery(artifactsError)).toBe(false);
+  });
+
   it("does not classify an ordinary handler error — that stays in the failing-event lane", () => {
     // A worker that is up but throws on one event is the case the
     // isolate-confirm-skip machinery exists for; broadening this matcher

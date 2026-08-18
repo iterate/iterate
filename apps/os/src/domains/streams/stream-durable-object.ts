@@ -58,7 +58,7 @@ import { projectEgressFetcher } from "../projects/utils.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import { isWorkerBuildInProgressError } from "../workers/worker-loader.ts";
 import { isWorkerBuildFailedError, WorkerBuildFailedError } from "../workers/artifact-store.ts";
-import { isRepoNotSeededError } from "../repos/utils.ts";
+import { RepoNotSeededError } from "../repos/utils.ts";
 import type { StatefulDynamicWorkerRef } from "../workers/schemas.ts";
 import { buildCopyAppends } from "./copy-appends.ts";
 import {
@@ -316,7 +316,13 @@ export function isProjectWorkerUnavailableDelivery(error: unknown): boolean {
     if (
       isWorkersHungEntrypointError(candidate) ||
       isWorkerBuildInProgressError(candidate) ||
-      isRepoNotSeededError(candidate) ||
+      // The EXACT not-seeded name only — deliberately narrower than
+      // isRepoNotSeededError, whose Artifacts-lifecycle branch matches any
+      // object carrying `code: "NOT_FOUND"`. Cause-chain walking over
+      // arbitrary userland handler rejections would turn such errors into
+      // hours of invisible receiver-unavailable parking; a userland bug
+      // belongs in the isolate-skip-audit lane.
+      (candidate as { name?: string }).name === RepoNotSeededError.NAME ||
       // A deterministic source-build failure marks the BUILD unretryable, but
       // for delivery it still means "receiver down until a fix commit lands":
       // parking loses nothing and recovers by itself, while the failing-event
