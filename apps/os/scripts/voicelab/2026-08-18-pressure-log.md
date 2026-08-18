@@ -154,3 +154,28 @@ this hour; the redial machinery carried the run regardless. Whether the
 probe's 5 s append deadline is too tight for a degraded hour, and who
 exactly closes idle sockets (edge policy vs worker isolate eviction),
 remain open — needs worker logs during a quiet window.
+
+**F9 (socket lifetime, measured — F5's "~30 s idle kill" was misread):**
+`socket-lifetime.ts` opens one socket per mode and lets the close event
+speak: `silent` (bare WS to /api), `ping` (protocol pings), `rpc`
+(authenticated capnweb session, one RPC, then true silence), `open` (rpc +
+`openConnection` on a fresh stream + one durable append delivered back —
+the DO retaining a callback into a socket that then goes fully quiet).
+Results: THREE bare sockets and the ping socket sailed past 45 minutes;
+the rpc and open legs cleared many multiples of the supposed ~30 s window
+without a flicker. There is NO idle policy killing quiet sockets at any
+layer — not the edge, not the worker, not the DO connection machinery, and
+authenticated capnweb sessions are NOT torn down for being quiet.
+
+Re-reading the soak logs with that in hand: each "death by silence" run
+contained exactly ONE socket close (grok round 6, openai round 5 — every
+later `FAILED: 1006` was the pre-redial probe reusing the corpse), both in
+one overnight window, and `wrangler deployments list` shows no deploy
+within hours of either (last: 21:44Z; deaths ~01:15Z, ~02:20Z). So the
+true rate is: two 1006s across ~50 soak rounds — routine isolate churn.
+A stateless worker's WebSocket has no lifetime guarantee; Cloudflare may
+recycle the isolate at will (a deploy always does). No ping can prevent
+that, which is the final nail for F7's verdict: redial-on-press is the
+correct posture, not a workaround. The append-stall failures (5 s
+unacknowledged on a FRESH socket) are a separate server-side wobble —
+F8 stays open, but it is not a socket-lifetime problem.
