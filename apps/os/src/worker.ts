@@ -15,8 +15,9 @@
  * https://developers.cloudflare.com/workers/runtime-apis/bindings/#importing-env-as-a-global
  */
 import handler from "@tanstack/react-start/server-entry";
-import { newHttpBatchRpcResponse, newWorkersWebSocketRpcResponse } from "capnweb";
+import { newHttpBatchRpcResponse, newWebSocketRpcSession } from "capnweb";
 import type { Env } from "./env.ts";
+import { registerItxSessionTransport } from "./session-transport.ts";
 import { decideIngressRoute, type IngressResolvers } from "./ingress.ts";
 import { readProjectByHostname } from "./project-hostname-directory.ts";
 import { readProjectById, readProjectBySlug, resolveProjectIdBySlug } from "./project-directory.ts";
@@ -284,7 +285,20 @@ async function apiFetch(
   if (request.method === "POST") {
     return newHttpBatchRpcResponse(request, unauthenticated, itxObservability("http"));
   }
-  return newWorkersWebSocketRpcResponse(request, unauthenticated, itxObservability("websocket"));
+  // Inlined capnweb newWorkersWebSocketRpcResponse, because the helper does
+  // not hand back the server socket — and this session must be closable from
+  // INSIDE the target tree: when the platform's half of a live capability
+  // mount dies, the capability relay ends the whole session so the client
+  // redials and re-mounts (see session-transport.ts for the invariant).
+  if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
+    return new Response("This endpoint only accepts WebSocket requests.", { status: 400 });
+  }
+  const pair = new WebSocketPair();
+  const server = pair[0];
+  server.accept();
+  registerItxSessionTransport(ctx, (code, reason) => server.close(code, reason));
+  newWebSocketRpcSession(server as never, unauthenticated, itxObservability("websocket"));
+  return new Response(null, { status: 101, webSocket: pair[1] });
 }
 
 function ingressLogFields(request: Request, route: Awaited<ReturnType<typeof decideIngressRoute>>) {

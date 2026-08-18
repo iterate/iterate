@@ -62,6 +62,7 @@ import type {
 } from "@iterate-com/auth-contract/worker";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
+import { closeItxSessionTransport } from "./session-transport.ts";
 import {
   isStreamDeliveryAuth,
   resolveItxAuth,
@@ -5493,6 +5494,14 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
    * with it. Callers invoke it through the scope's capability host:
    * `itx.clients.get(path).capabilities.browser.navigate(url)`.
    * Returns the project itx, exactly like `get`.
+   *
+   * THE MOUNT INVARIANT: the reverse teardown holds too. If the platform's
+   * half of the mount dies while this session's socket is healthy (the
+   * Pager closes from the far side — DO reset, deploy, eviction), the
+   * session is closed (4901) rather than left connected-but-unreachable.
+   * A client's job is to stay connected and re-run `connect` on every
+   * reconnect; this guarantees that job is sufficient — an open socket
+   * means a live mount, and mount loss always arrives as a close event.
    */
   async connect(
     idOrSlug: string,
@@ -5826,6 +5835,17 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
         env,
         scope: { path: this.#props.path, projectId: this.#props.projectId },
         waitUntil: (promise) => this.#props.ctx.waitUntil(promise),
+        // The mount invariant: mounts died server-side, so the session dies
+        // with them — the client's reconnect re-dials and re-mounts. Sessions
+        // with no client transport (HTTP batch, Durable-Object-side itx) have
+        // no registration and this is a no-op.
+        onPagerLost: () => {
+          closeItxSessionTransport(
+            this.#props.ctx,
+            4901,
+            "live capability mounts lost; reconnect and connect() again",
+          );
+        },
       });
       const provision = await this.#capabilityProviderPagerRelay.provide(input);
       return new CapabilityProvisionRpcTarget({

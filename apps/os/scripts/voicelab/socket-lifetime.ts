@@ -11,6 +11,10 @@
 //   open    rpc + streams.get(fresh path) + openConnection + one durable
 //           append delivered back, then true silence — the DO now retains a
 //           callback into this socket while everything goes quiet
+//   mount   a fake DEVICE: projects.connect with a live capability, then
+//           silence. The close code is the mount invariant's instrument —
+//           kill the client scope's stream from another shell and this
+//           socket must close 4901 within moments, never sit unreachable.
 //
 // The raw socket's close event is the entire instrument: its code, reason and
 // elapsed time say who hung up and when. Nothing probes, so nothing generates
@@ -57,6 +61,35 @@ if (mode === "silent" || mode === "ping") {
   socket.on("pong", () => console.log(`[${mode}] pong at ${stamp()}`));
   socket.on("message", (data) =>
     console.log(`[${mode}] message at ${stamp()}: ${String(data).slice(0, 80)}`),
+  );
+} else if (mode === "mount") {
+  await new Promise((resolve, reject) => {
+    socket.once("open", resolve);
+    socket.once("error", reject);
+  });
+  console.log(`[${mode}] open after ${stamp()}`);
+  const session = newWebSocketRpcSession(
+    socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
+  );
+  const secret = process.env.APP_CONFIG_ADMIN_API_SECRET?.trim() ?? "";
+  if (!secret) throw new Error("APP_CONFIG_ADMIN_API_SECRET is required");
+  const root = (session as unknown as { authenticate(auth: unknown): unknown }).authenticate({
+    type: "admin-secret",
+    secret,
+  }) as { projects: { connect(idOrSlug: string, opts: unknown): Promise<unknown> } };
+  const clientPath = `/clients/lifetime-${startedAt.toString(36)}`;
+  await root.projects.connect(process.env.ITERATE_PROJECT ?? "voice-test", {
+    path: clientPath,
+    description: "socket-lifetime mount-invariant instrument",
+    capabilities: {
+      ping: () => `alive at ${stamp()}`,
+    },
+  });
+  console.log(
+    `[${mode}] connected as ${clientPath} with a live capability at ${stamp()}; going silent`,
+  );
+  console.log(
+    `[${mode}] to prove the invariant: kill that scope's stream and watch for close 4901`,
   );
 } else if (mode === "rpc" || mode === "open") {
   await new Promise((resolve, reject) => {
