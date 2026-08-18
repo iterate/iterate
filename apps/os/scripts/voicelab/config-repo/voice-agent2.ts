@@ -809,6 +809,28 @@ export class VoiceAgent2Processor extends StreamProcessor<
    * where the answer is always knowable.
    */
   #answerEndsWhenQueueDrains = false;
+  /**
+   * A response is streaming right now (between `response.created` and its
+   * `response.output_audio.done`) — the precondition for `response.cancel`
+   * meaning anything. Without the gate, every ordinary press (no answer
+   * playing, which is most of them) would draw a "nothing to cancel" error
+   * event from the provider.
+   */
+  #responseActive = false;
+  /**
+   * A barge cancelled the active response; its remaining deltas are dead.
+   *
+   * `response.cancel` is asynchronous — audio of the cancelled answer keeps
+   * arriving until the provider processes it — and the queue-emptying in
+   * #dropAnswerInFlight only discards what has ALREADY arrived. Without this
+   * flag the residue refills the queue and the dead answer audibly resumes:
+   * measured 2026-08-18 on gpt-realtime, "count to a hundred" counted right
+   * through a barge, because openai streams near real time (grok bursts the
+   * whole answer up front, which is why the same gap never sounded on grok).
+   * Cleared by the next `response.created`, the first event that can only
+   * belong to a LIVE answer.
+   */
+  #dropDeltasUntilResponseCreated = false;
 
   /**
    * When the device will run dry, on the facet clock. The only pacing state,
@@ -1084,9 +1106,22 @@ export class VoiceAgent2Processor extends StreamProcessor<
          * provider events that used to be the whole of barge-in cannot fire.
          * Without this line the dead answer keeps streaming to the speaker for
          * the entire press and only stops when the NEXT answer begins.
+         *
+         * Dropping what arrived is half the interruption; the other half is
+         * telling the provider to STOP GENERATING. `response.cancel` ends the
+         * active response (both providers speak it — one API is a clone of
+         * the other), which is also what frees the provider to accept the
+         * commit this press is about to produce. Until the cancel lands, the
+         * dead answer's residue keeps arriving — #dropDeltasUntilResponseCreated
+         * is what keeps it out of the speaker queue.
          */
         if (event.type === "events.iterate.com/voice-agent/ptt-start") {
           this.#dropAnswerInFlight(state.call.conversationId, this.deps.nowAtFacetMs(), append);
+          if (this.#responseActive && this.#providerReady && this.#providerSocket !== null) {
+            this.#responseActive = false;
+            this.#dropDeltasUntilResponseCreated = true;
+            this.#providerSocket.send(JSON.stringify({ type: "response.cancel" }));
+          }
         }
 
         if (micPcm16 !== null) {
@@ -1218,6 +1253,8 @@ export class VoiceAgent2Processor extends StreamProcessor<
        */
       this.#clearSpeakerBufferBeforeNextFrame = true;
       this.#answerEndsWhenQueueDrains = false;
+      this.#responseActive = false;
+      this.#dropDeltasUntilResponseCreated = false;
 
       /*
        * THE THIRD SWITCH, AND WHY IT IS NOT A STREAM EVENT.
@@ -1333,11 +1370,21 @@ export class VoiceAgent2Processor extends StreamProcessor<
 
           case "input_audio_buffer.speech_started":
           case "response.created":
+            /* A created event can only belong to a LIVE answer, so it is
+             * what ends a barge's residue-discard window. */
+            if (grok.type === "response.created") {
+              this.#dropDeltasUntilResponseCreated = false;
+              this.#responseActive = true;
+            }
             this.#dropAnswerInFlight(conversationId, receivedAtFacetMs, append);
             return;
 
           case "response.output_audio.delta": {
             if (typeof grok.delta !== "string") return;
+            /* Residue of a cancelled answer: dead on arrival. Returning
+             * before #reportTurnTiming matters as much as before the queue —
+             * a dead delta must not stamp the NEXT turn's first-delta time. */
+            if (this.#dropDeltasUntilResponseCreated) return;
             /* The turn is over the moment its first byte exists, so the report
              * goes out before this delta is cut up and paced — which can take
              * as long as the answer is. */
@@ -1384,6 +1431,11 @@ export class VoiceAgent2Processor extends StreamProcessor<
            * is its own frame.
            */
           case "response.output_audio.done":
+            /* The cancelled answer's own done is residue like its deltas:
+             * marking end-of-answer for audio nobody heard would tell the
+             * device a turn finished that the press already erased. */
+            if (this.#dropDeltasUntilResponseCreated) return;
+            this.#responseActive = false;
             this.#answerEndsWhenQueueDrains = true;
             this.#sendSpeakerAudio(conversationId, append, runInBackground);
             return;

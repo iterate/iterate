@@ -1766,8 +1766,19 @@ static void cli_main_start_talk(
   cli_microphone_clear(&runtime->microphone);
   cli_speaker_clear(&runtime->speaker);
   iterate_kit_voice_playback_clock_reprime(&runtime->playback_clock);
-  (void)iterate_kit_voicelab_mark_turn(
+  /*
+   * A LOST ptt-start IS A LOST BARGE-IN: the server's answer-drop triggers on
+   * this exact event, so a press that captures audio but fails to say
+   * "start" leaves a dead answer playing through the whole interruption —
+   * with nothing anywhere saying why. Never voided.
+   */
+  const enum capnweb_status turn_start_status = iterate_kit_voicelab_mark_turn(
       &runtime->voicelab, ITERATE_KIT_VOICELAB_TURN_START);
+  if (turn_start_status != CAPNWEB_OK) {
+    cli_runtime_log(
+        "error", "ptt-start append failed: capnweb status %d",
+        (int)turn_start_status);
+  }
 }
 
 static void cli_main_finish_talk(
@@ -1784,8 +1795,15 @@ static void cli_main_finish_talk(
   }
   runtime->talking = false;
   runtime->flushing_turn = false;
-  (void)iterate_kit_voicelab_mark_turn(
+  /* A lost commit strands the provider holding an uncommitted turn — as
+   * invisible as a lost start, and logged for the same reason. */
+  const enum capnweb_status turn_commit_status = iterate_kit_voicelab_mark_turn(
       &runtime->voicelab, ITERATE_KIT_VOICELAB_TURN_COMMIT);
+  if (turn_commit_status != CAPNWEB_OK) {
+    cli_runtime_log(
+        "error", "ptt-end append failed: capnweb status %d",
+        (int)turn_commit_status);
+  }
   runtime->turn_committed_ms = now_ms;
 }
 

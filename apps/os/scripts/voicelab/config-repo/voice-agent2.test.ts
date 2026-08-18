@@ -1032,6 +1032,54 @@ describe("a flush names a sequence number", () => {
     expect(speakerMsDelivered(h)).toBe(deliveredBeforeBarge);
   });
 
+  /*
+   * THE HALF THE QUEUE-DROP CANNOT DO. Emptying the queue kills what already
+   * arrived; a provider that streams near real time (gpt-realtime) has barely
+   * anything queued and keeps generating — measured 2026-08-18, "count to a
+   * hundred" counted straight through a barge. The press must also CANCEL the
+   * response, and the cancelled answer's late deltas must stay dead.
+   */
+  it("cancels the provider's response on a barge and deafens its residue", async () => {
+    const h = makeHarness();
+    await callIsLive(h, CLIENT_TAKES_TURNS);
+    h.provider.responseCreated();
+    h.provider.answerAudio(8_000);
+    await playOutEverything(h, 600);
+    const deliveredBeforeBarge = speakerMsDelivered(h);
+    expect(deliveredBeforeBarge).toBeGreaterThan(0);
+
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    expect(h.provider.sentOfType("response.cancel")).toHaveLength(1);
+
+    /* The cancel is asynchronous: residue of the dead answer still arrives —
+     * and none of it may reach the speaker, nor mark an end nobody heard. */
+    h.provider.answerAudio(2_000);
+    h.provider.answerComplete();
+    await playOutEverything(h, 4_000);
+    expect(speakerMsDelivered(h)).toBe(deliveredBeforeBarge);
+    expect(speakerFrames(h).filter((frame) => frame.lastFrameOfAnswer === true)).toHaveLength(0);
+
+    /* The NEXT answer is live again from its first delta. */
+    h.provider.responseCreated();
+    h.provider.answerAudio(400);
+    await playOutEverything(h, 1_000);
+    expect(speakerMsDelivered(h)).toBeGreaterThan(deliveredBeforeBarge);
+  });
+
+  it("sends no cancel for a press when nothing is generating", async () => {
+    const h = makeHarness();
+    await callIsLive(h, CLIENT_TAKES_TURNS);
+    h.provider.responseCreated();
+    h.provider.answerAudio(400);
+    h.provider.answerComplete();
+    await playOutEverything(h, 2_000);
+
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    expect(h.provider.sentOfType("response.cancel")).toHaveLength(0);
+  });
+
   /** A button held down while nothing is playing costs one comparison. */
   it("says nothing when the floor was already free", async () => {
     const h = makeHarness();
