@@ -74,6 +74,7 @@ interface VoiceAgent2Setup {
     providerVoice?: string;
     instructions?: string;
     clientTakesTurns?: boolean;
+    turnDetection?: Record<string, unknown> & { type: string };
     tools?: {
       name: string;
       description: string;
@@ -116,6 +117,12 @@ export interface Talk2Options extends TalkOptions {
    * being able to exercise from here — with a driver that keeps sending.
    */
   openMic?: boolean;
+  /**
+   * The provider's own turn_detection object as JSON, passed to the birth
+   * certificate verbatim — open-mic VAD tuning per stream. Example:
+   * '{"type":"server_vad","threshold":0.5,"silence_duration_ms":300}'.
+   */
+  turnDetection?: string;
 }
 
 export async function talk2(options: Talk2Options = {}) {
@@ -195,6 +202,11 @@ export async function talk2(options: Talk2Options = {}) {
        * never replies.
        */
       clientTakesTurns: options.openMic !== true,
+      ...(options.turnDetection !== undefined && {
+        turnDetection: JSON.parse(options.turnDetection) as Record<string, unknown> & {
+          type: string;
+        },
+      }),
       ...(options.hangUp === true && {
         tools: [
           {

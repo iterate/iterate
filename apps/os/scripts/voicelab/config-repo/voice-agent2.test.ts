@@ -638,6 +638,52 @@ describe("the openai provider", () => {
     expect(grokUpdate.session.audio.input.noise_reduction).toBeUndefined();
   });
 
+  it("a certificate turn_detection rides the session verbatim, beating the defaults", async () => {
+    const h = makeHarness();
+    await h.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: {
+        providerBaseUrl: "https://fake.provider.test/v1/realtime",
+        provider: "openai",
+        turnDetection: { type: "semantic_vad", eagerness: "high", create_response: true },
+      },
+    });
+    await h.append(micFrame(1));
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
+    const update = h.provider.sentOfType("session.update")[0] as {
+      session: { audio: { input: { turn_detection: Record<string, unknown> } } };
+    };
+    /* VERBATIM: the certificate's object, not a merge with the defaults —
+     * a stream that names its VAD owns every knob of it. */
+    expect(update.session.audio.input.turn_detection).toEqual({
+      type: "semantic_vad",
+      eagerness: "high",
+      create_response: true,
+    });
+  });
+
+  it("a push-to-talk client's button beats any certificate turn_detection", async () => {
+    const h = makeHarness();
+    await h.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: {
+        providerBaseUrl: "https://fake.provider.test/v1/realtime",
+        clientTakesTurns: true,
+        turnDetection: { type: "server_vad", threshold: 0.2 },
+      },
+    });
+    await h.append(micFrame(1));
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
+    const update = h.provider.sentOfType("session.update")[0] as {
+      session: { audio: { input: { turn_detection: unknown } } };
+    };
+    expect(update.session.audio.input.turn_detection).toBeNull();
+  });
+
   it("upsamples the device's 16 kHz capture on its way in", async () => {
     const h = makeHarness();
     await openaiCallIsLive(h);

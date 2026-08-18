@@ -453,3 +453,23 @@ provider pins (interrupt_response/create_response/silence_duration_ms
 explicit + far_field on openai). Hot file 3,041 → ~2,900 lines with
 three bug-fix subsystems ADDED; sweeps alone were net −223. Suite 67
 green + 7 ptt-marginal + 10 pcm. Hang-up tool re-proven post-refactor.
+
+**F18 (server VAD + full duplex, proven from the wire on BOTH providers;
+VAD configurable via the birth certificate): contract 7.0.0.** The
+certificate carries the provider's own `turn_detection` object VERBATIM
+(`turnDetection`, loose and provider-shaped — no re-modelled knobs), the
+session sends it in place of the measured defaults, and push-to-talk
+still forces null. Proven by the new `vad-duplex` probe: a continuous
+open-mic driver — realtime-paced frames including silence, ZERO ptt
+verbs — whose verdict reads five facts off the wire: the provider's
+`session.updated` echoing the certificate's exact object back as the
+ACCEPTED session; two turns detected and committed by VAD alone; the
+mic stream never stopping while answer audio flowed down (full duplex);
+a spoken barge clearing the device (openai 760 ms, grok 1,285 ms after
+the interjection began); and the interjection answered. openai:
+truncate ack + note both seen — the B3 VAD-path repair live-proven at
+last. grok: note only, per F17, and a bonus fact — grok ECHOES
+`threshold`/`silence_duration_ms`/`prefix_padding_ms` back in its
+accepted session, so those knobs are honored there (its
+`interrupt_response`/`create_response` remain unprobed; the probe sent
+documented knobs only).

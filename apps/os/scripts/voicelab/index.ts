@@ -18,6 +18,7 @@ export { talk2 } from "./talk2.ts";
 export { teardown } from "./teardown.ts";
 export { pttMarginal } from "./ptt-marginal.ts";
 export { interjectRecall } from "./interject-recall.ts";
+export { vadDuplex } from "./vad-duplex.ts";
 export { timeline } from "./timeline.ts";
 export { utterances } from "./utterances.ts";
 export { wire } from "./wire.ts";

@@ -470,6 +470,19 @@ const VoiceState = z.object({
    * the recovery path has no event to read it from.
    */
   clientTakesTurns: z.boolean().default(false),
+  /**
+   * The provider's own `turn_detection` object, VERBATIM, for open-mic
+   * streams that want their VAD tuned per stream — a quieter room wants a
+   * lower threshold, a deliberate speaker a longer silence, the OpenAI-app
+   * feel wants `semantic_vad`. Loose and provider-shaped on purpose: the
+   * knobs are the provider's vocabulary (`threshold`,
+   * `silence_duration_ms`, `eagerness`, …), they differ per dialect, and a
+   * certificate that re-modelled them would gatekeep every new one. Null
+   * takes this file's measured default (SERVER_VAD plus the openai pins).
+   * Ignored entirely under `clientTakesTurns` — a button owns its turns
+   * and the session gets `turn_detection: null` regardless.
+   */
+  turnDetection: z.looseObject({ type: z.string() }).nullable().default(null),
   /** Tools the model may call — see {@link VoiceTool}. */
   tools: z.array(VoiceTool).default([]),
   call: z
@@ -527,7 +540,10 @@ export const VoiceAgent2Contract = defineProcessorContract({
    * persisted older fold; old streams re-fold their historical `created`
    * payloads into nothing (existence) and are reconfigured by the next
    * setup run. */
-  version: "6.0.0",
+  /* 7.0.0: the certificate can carry the provider's own `turn_detection`
+   * object verbatim (`turnDetection`), so open-mic VAD is tuned per stream
+   * instead of per deploy. Clean break as ever. */
+  version: "7.0.0",
   description: "Runs a voice call in the stream's own Durable Object, one flush watermark deep.",
   stateSchema: VoiceState,
   events: {
@@ -549,6 +565,7 @@ export const VoiceAgent2Contract = defineProcessorContract({
         providerVoice: z.string().optional(),
         instructions: z.string().optional(),
         clientTakesTurns: z.boolean().optional(),
+        turnDetection: z.looseObject({ type: z.string() }).optional(),
         tools: z.array(VoiceTool).optional(),
       }),
     },
@@ -1085,6 +1102,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
           providerVoice: event.payload.providerVoice ?? null,
           instructions: event.payload.instructions ?? "",
           clientTakesTurns: event.payload.clientTakesTurns ?? false,
+          turnDetection: event.payload.turnDetection ?? null,
           tools: event.payload.tools ?? [],
         };
 
@@ -1556,16 +1574,19 @@ export class VoiceAgent2Processor extends StreamProcessor<
                        * is unprobed, and an unknown key in its session has
                        * not been tried against a live socket.
                        */
+                      /* The certificate's own turn_detection wins over the
+                       * defaults, verbatim — the stream knows its room. */
                       turn_detection: state.clientTakesTurns
                         ? null
-                        : state.provider === "openai"
-                          ? {
-                              ...SERVER_VAD,
-                              interrupt_response: true,
-                              create_response: true,
-                              silence_duration_ms: 500,
-                            }
-                          : SERVER_VAD,
+                        : (state.turnDetection ??
+                          (state.provider === "openai"
+                            ? {
+                                ...SERVER_VAD,
+                                interrupt_response: true,
+                                create_response: true,
+                                silence_duration_ms: 500,
+                              }
+                            : SERVER_VAD)),
                       /* The boards are far-field boxes, and the 0.85 VAD
                        * threshold exists because of their echo residue —
                        * this is the knob that may one day let it drop.
@@ -2722,6 +2743,9 @@ export interface SetupVoiceAgent2Options {
    * ended, and the call goes silent with nothing logged.
    */
   clientTakesTurns?: boolean;
+  /** The provider's own turn_detection object, verbatim, for open-mic VAD
+   * tuning per stream. Omitted takes the measured defaults. */
+  turnDetection?: Record<string, unknown> & { type: string };
   /** Tools the model may call: name/description/parameters go to the
    * provider; the itx expression is the run. No expression = hang_up. */
   tools?: z.input<typeof VoiceTool>[];
@@ -2823,6 +2847,7 @@ export default class VoiceAgent2Entrypoint extends IterateWorkerEntrypoint {
         ...(options.clientTakesTurns === undefined
           ? {}
           : { clientTakesTurns: options.clientTakesTurns }),
+        ...(options.turnDetection === undefined ? {} : { turnDetection: options.turnDetection }),
         ...(options.tools === undefined ? {} : { tools: options.tools }),
       };
       /*
