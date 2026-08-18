@@ -605,6 +605,39 @@ describe("the openai provider", () => {
     expect(update.session.audio.output.voice).toBe("marin");
   });
 
+  it("pins the server-VAD knobs the barge machinery assumes, and far-field NR", async () => {
+    /* The VAD barge arm never sends response.cancel BECAUSE the provider
+     * cancels server-side at the onset — on OpenAI that is
+     * `interrupt_response`, a default today. A default is a dependency
+     * nobody can grep for, so the session pins it (and its siblings)
+     * explicitly. Grok stays bare: its support for these knobs is unprobed. */
+    const h = makeHarness();
+    await openaiCallIsLive(h);
+    const update = h.provider.sentOfType("session.update")[0] as {
+      session: {
+        audio: { input: { turn_detection: Record<string, unknown>; noise_reduction: unknown } };
+      };
+    };
+    expect(update.session.audio.input.turn_detection).toMatchObject({
+      type: "server_vad",
+      threshold: 0.85,
+      interrupt_response: true,
+      create_response: true,
+      silence_duration_ms: 500,
+    });
+    expect(update.session.audio.input.noise_reduction).toEqual({ type: "far_field" });
+
+    const grok = makeHarness();
+    await callIsLive(grok, GROK_LISTENS);
+    const grokUpdate = grok.provider.sentOfType("session.update")[0] as {
+      session: {
+        audio: { input: { turn_detection: Record<string, unknown>; noise_reduction?: unknown } };
+      };
+    };
+    expect(grokUpdate.session.audio.input.turn_detection).not.toHaveProperty("interrupt_response");
+    expect(grokUpdate.session.audio.input.noise_reduction).toBeUndefined();
+  });
+
   it("upsamples the device's 16 kHz capture on its way in", async () => {
     const h = makeHarness();
     await openaiCallIsLive(h);
@@ -1337,7 +1370,7 @@ describe("the open-mic barge", () => {
     await h.settle();
     /*
      * NO `response.cancel` from this arm, ever: OpenAI's server_vad
-     * `interrupt_response` defaults true — the provider cancelled this
+     * `interrupt_response` is pinned true in the session — the provider cancelled this
      * response server-side at the very onset, and a client cancel on top is
      * a second owner of one cancellation. On grok a VAD-triggered cancel
      * drew an error every time it was tried.

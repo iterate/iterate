@@ -1300,9 +1300,9 @@ export class VoiceAgent2Processor extends StreamProcessor<
                * that sends it: turn_detection is null in push-to-talk, so no
                * provider VAD will ever cancel for a button. The
                * speech_started arm must NOT send this — OpenAI's server_vad
-               * `interrupt_response` defaults true and has already cancelled
-               * server-side at the onset, and grok drew an error every time
-               * a VAD-triggered cancel was tried. */
+               * `interrupt_response` (pinned true in our session.update) has
+               * already cancelled server-side at the onset, and grok drew an
+               * error every time a VAD-triggered cancel was tried. */
               if (responseWasActive) {
                 this.#sendControl(
                   dial,
@@ -1516,7 +1516,39 @@ export class VoiceAgent2Processor extends StreamProcessor<
                   audio: {
                     input: {
                       format: { type: "audio/pcm", rate: provider.rate },
-                      turn_detection: state.clientTakesTurns ? null : SERVER_VAD,
+                      /*
+                       * SINGLE-OWNER SEMANTICS, MADE VISIBLE. The VAD barge
+                       * arm RELIES on the provider cancelling a barged
+                       * response server-side at the onset — that is why it
+                       * never sends response.cancel — and on OpenAI that
+                       * behaviour is `interrupt_response`, a DEFAULT today.
+                       * A default is a dependency nobody can grep for, so
+                       * both booleans are pinned to what the machinery
+                       * already assumes. `silence_duration_ms: 500` pins the
+                       * documented default too: it sits inside every
+                       * turn-end latency ever measured here, and tuning it
+                       * should be an edit, not an archaeology dig. Grok
+                       * keeps bare SERVER_VAD — its support for these knobs
+                       * is unprobed, and an unknown key in its session has
+                       * not been tried against a live socket.
+                       */
+                      turn_detection: state.clientTakesTurns
+                        ? null
+                        : state.provider === "openai"
+                          ? {
+                              ...SERVER_VAD,
+                              interrupt_response: true,
+                              create_response: true,
+                              silence_duration_ms: 500,
+                            }
+                          : SERVER_VAD,
+                      /* The boards are far-field boxes, and the 0.85 VAD
+                       * threshold exists because of their echo residue —
+                       * this is the knob that may one day let it drop.
+                       * OpenAI-only: grok's docs are silent on it. */
+                      ...(state.provider === "openai" && {
+                        noise_reduction: { type: "far_field" },
+                      }),
                     },
                     output: {
                       format: { type: "audio/pcm", rate: provider.rate },
@@ -1594,10 +1626,11 @@ export class VoiceAgent2Processor extends StreamProcessor<
                * in flight dies exactly as a press kills it — queue, device
                * clear, memory repair — with ONE deliberate omission: no
                * `response.cancel`. OpenAI's server_vad `interrupt_response`
-               * defaults true, so the provider already cancelled this
-               * response server-side at this very onset — a client cancel on
-               * top is a second owner of one cancellation. And grok drew an
-               * error every time a VAD-triggered cancel was tried. The
+               * (pinned true in our session.update) means the provider
+               * already cancelled this response server-side at this very
+               * onset — a client cancel on top is a second owner of one
+               * cancellation. And grok drew an error every time a
+               * VAD-triggered cancel was tried. The
                * barged response still finalizes with a `response.done`,
                * which is where the pending truncate settles.
                *
@@ -2131,8 +2164,9 @@ export class VoiceAgent2Processor extends StreamProcessor<
    *   closes here too. What this method deliberately does NOT send is
    *   `response.cancel`: the press arm owns that (no provider cancels for a
    *   button), and the VAD arm must never send it — OpenAI's
-   *   `interrupt_response` defaults true and already cancelled server-side
-   *   at the onset, and grok errored on every VAD-triggered cancel tried.
+   *   `interrupt_response` (pinned true in our session.update) already
+   *   cancelled server-side at the onset, and grok errored on every
+   *   VAD-triggered cancel tried.
    *
    *   SETTLED — truncate and note go immediately; nothing finalizes late.
    */
