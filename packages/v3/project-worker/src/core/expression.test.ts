@@ -2,7 +2,6 @@
 import { describe, expect, test } from "vitest";
 import {
   apply,
-  compareSpecificity,
   evaluate,
   match,
   parse,
@@ -109,115 +108,171 @@ describe("parse ⇄ print", () => {
   });
 });
 
-// ───────────────────────────── matching + specificity ─────────────────────────────
+// ───────────────────────────── matching (table-based) ─────────────────────────────
+// THE RULE, whole: element by element from the start; longest matching prefix wins; ties go to
+// the newest mount. Literal args decide only WHETHER a step matches, never how well.
 
 describe("match", () => {
-  test("ex 1 — plain alias: remainder replays", () => {
-    const m = match(parse("itx.db"), parse("itx.db.get('x')"))!;
-    expect(m.remainder).toEqual([["get", "x"]]);
-    expect(m.boundaryArgs).toBeUndefined();
+  test.each([
+    [
+      "plain alias: remainder replays",
+      "itx.db",
+      "itx.db.get('x')",
+      { steps: 2, remainder: [["get", "x"]] },
+    ],
+    [
+      "boundary args: pattern name, call invokes",
+      "itx.grok",
+      "itx.grok({ messages: [] })",
+      { steps: 2, boundaryArgs: [{ messages: [] }], remainder: [] },
+    ],
+    [
+      "capture binds mid-path",
+      "itx.agents.get(?name)",
+      "itx.agents.get('blah').ask('hi')",
+      { steps: 3, captures: { name: "blah" }, remainder: [["ask", "hi"]] },
+    ],
+    [
+      "mid-path LITERAL call is an ordinary step",
+      "itx.streams.get('/bla').append",
+      "itx.streams.get('/bla').append({ type: 'x' })",
+      { steps: 4, boundaryArgs: [{ type: "x" }], remainder: [] },
+    ],
+    [
+      "bare default route claims everything",
+      "itx",
+      "itx.some.thing.deep('x')",
+      { steps: 1, remainder: ["some", "thing", ["deep", "x"]] },
+    ],
+    [
+      "rest hole accepts extra args",
+      "itx.f(?x, ...?)",
+      "itx.f(1, 2, 3)",
+      { steps: 2, remainder: [] },
+    ],
+  ])("%s", (_label, pattern, call, expected) => {
+    const m = match(parse(pattern as string), parse(call as string))!;
+    expect(m).not.toBeNull();
+    const e = expected as {
+      steps: number;
+      captures?: object;
+      boundaryArgs?: unknown[];
+      remainder: unknown[];
+    };
+    expect(m.matchedSteps).toBe(e.steps);
+    if (e.captures) expect(m.captures).toEqual(e.captures);
+    if (e.boundaryArgs) expect(m.boundaryArgs).toEqual(e.boundaryArgs);
+    expect(m.remainder).toEqual(e.remainder);
   });
 
-  test("ex 3 — boundary args: pattern name, call invokes", () => {
-    const m = match(parse("itx.grok"), parse("itx.grok({ messages: [] })"))!;
-    expect(m.boundaryArgs).toEqual([{ messages: [] }]);
-    expect(m.remainder).toEqual([]);
+  test.each([
+    ["literal arg mismatch", "itx.f('a')", "itx.f('b')"],
+    ["method mismatch", "itx.f()", "itx.g()"],
+    ["name-only consume is FINAL-step only", "itx.a.b", "itx.a('x').b"],
+    ["no rest hole → exact arg count", "itx.f(?x)", "itx.f(1, 2)"],
+    ["pattern longer than call", "itx.a.b.c", "itx.a.b"],
+  ])("rejects: %s", (_label, pattern, call) => {
+    expect(match(parse(pattern as string), parse(call as string))).toBeNull();
   });
 
-  test("ex 6 — capture binds and is available", () => {
-    const m = match(parse("itx.agents.get(?name)"), parse("itx.agents.get('blah').ask('hi')"))!;
-    expect(m.captures).toEqual({ name: "blah" });
-    expect(m.remainder).toEqual([["ask", "hi"]]);
+  test.each([
+    [
+      "longer prefix beats shorter",
+      "itx.clients.get('robot-arm-1')",
+      "itx.clients",
+      "itx.clients.get('robot-arm-1').ping()",
+    ],
+    [
+      "a binding call step counts like any other step",
+      "itx.agents.get(?name)",
+      "itx.agents",
+      "itx.agents.get('bob').ask('hi')",
+    ],
+  ])("ranking: %s", (_label, winner, loser, call) => {
+    const w = match(parse(winner as string), parse(call as string))!;
+    const l = match(parse(loser as string), parse(call as string))!;
+    expect(w.matchedSteps).toBeGreaterThan(l.matchedSteps);
   });
 
-  test("ex 7 — bare default route claims everything, whole call is the remainder", () => {
-    const m = match(parse("itx"), parse("itx.some.thing.deep('x')"))!;
-    expect(m.remainder).toEqual(["some", "thing", ["deep", "x"]]);
-  });
-
-  test("ex 8 — literal arg beats bare prefix", () => {
-    const call = parse("itx.clients.get('robot-arm-1').ping()");
-    const specific = match(parse("itx.clients.get('robot-arm-1')"), call)!;
-    const general = match(parse("itx.clients"), call)!;
-    expect(compareSpecificity(specific.specificity, general.specificity)).toBeGreaterThan(0);
-  });
-
-  test("literal arg beats hole at the same depth", () => {
+  test("equal-length literal and hole patterns TIE — recency decides (the documented change)", () => {
     const call = parse("itx.clients.get('robot-arm-1')");
     const literal = match(parse("itx.clients.get('robot-arm-1')"), call)!;
     const holed = match(parse("itx.clients.get(?k)"), call)!;
-    expect(compareSpecificity(literal.specificity, holed.specificity)).toBeGreaterThan(0);
-  });
-
-  test("name-only consume is FINAL-step only", () => {
-    expect(match(parse("itx.a.b"), parse("itx.a('x').b"))).toBeNull();
-  });
-
-  test("arity: no rest hole → exact arg count", () => {
-    expect(match(parse("itx.f(?x)"), parse("itx.f(1, 2)"))).toBeNull();
-    expect(match(parse("itx.f(?x, ...?)"), parse("itx.f(1, 2, 3)"))).not.toBeNull();
-  });
-
-  test("method mismatch / literal mismatch reject", () => {
-    expect(match(parse("itx.f('a')"), parse("itx.f('b')"))).toBeNull();
-    expect(match(parse("itx.f()"), parse("itx.g()"))).toBeNull();
+    expect(literal.matchedSteps).toBe(holed.matchedSteps);
   });
 });
 
 // ───────────────────────────── substitution ─────────────────────────────
 
-describe("substitute", () => {
-  test("ex 3 — frozen model, caller messages fill the hole", () => {
-    const target = parse("itx.openai.chat({ model: 'grok-4', messages: ?0 })");
-    expect(substitute(target, { args: [["msg!"]], captures: {} })).toEqual([
-      "itx",
-      "openai",
-      ["chat", { model: "grok-4", messages: ["msg!"] }],
-    ]);
+describe("substitute (table-based)", () => {
+  test.each([
+    [
+      "frozen model, caller messages fill the hole",
+      "itx.openai.chat({ model: 'grok-4', messages: ?0 })",
+      [["msg!"]],
+      {},
+      ["itx", "openai", ["chat", { model: "grok-4", messages: ["msg!"] }]],
+      true,
+    ],
+    [
+      "capture referenced on the target side (does NOT spend)",
+      "itx.cd('/agents', ?name)",
+      [],
+      { name: "blah" },
+      ["itx", ["cd", "/agents", "blah"]],
+      false,
+    ],
+    ["bare rest = ALL the args", "itx.f(...?)", [1, 2, 3], {}, ["itx", ["f", 1, 2, 3]], true],
+    [
+      "explicit rest ...?1 = args.slice(1)",
+      "itx.f(?0, ...?1)",
+      [1, 2, 3],
+      {},
+      ["itx", ["f", 1, 2, 3]],
+      true,
+    ],
+    [
+      "hole-free target spends nothing",
+      "itx.kv.get('a')",
+      ["ignored"],
+      {},
+      ["itx", "kv", ["get", "a"]],
+      false,
+    ],
+  ])("%s", (_label, target, args, captures, expectedSteps, expectedSpent) => {
+    const { steps, spentArgs } = substitute(parse(target as string), {
+      args: args as unknown[],
+      captures: captures as Record<string, unknown>,
+    });
+    expect(steps).toEqual(expectedSteps);
+    expect(spentArgs).toBe(expectedSpent);
   });
 
-  test("ex 4 — spread-merge: FROZEN WINS on collision", () => {
-    const target = parse("itx.openai.chat({ ...?, model: 'grok-4' })");
-    const [, , chat] = substitute(target, {
+  test("bare ...? beside numeric holes is a LOUD error (explicit, never inferred)", () => {
+    expect(() => substitute(parse("itx.f(?0, ...?)"), { args: [1, 2], captures: {} })).toThrow(
+      /say \.\.\.\?n/,
+    );
+    // nested numeric holes count too — the shape the old inference got wrong
+    expect(() =>
+      substitute(parse("itx.f({ a: ?0 }, ...?)"), { args: [1, 2], captures: {} }),
+    ).toThrow(/say \.\.\.\?n/);
+  });
+
+  test("spread-merge: FROZEN WINS on collision (and spends)", () => {
+    const { steps, spentArgs } = substitute(parse("itx.openai.chat({ ...?, model: 'grok-4' })"), {
       args: [{ model: "evil", temperature: 0.5 }],
       captures: {},
-    }) as [string, string, [string, Record<string, unknown>]];
+    });
+    const [, , chat] = steps as [string, string, [string, Record<string, unknown>]];
     expect(chat[1]).toEqual({ model: "grok-4", temperature: 0.5 });
+    expect(spentArgs).toBe(true);
   });
 
-  test("ex 6 — capture referenced on the target side", () => {
-    const target = parse("itx.cd('/agents', ?name)");
-    expect(substitute(target, { args: [], captures: { name: "blah" } })).toEqual([
-      "itx",
-      ["cd", "/agents", "blah"],
-    ]);
-  });
-
-  test("rest splices remaining args after the highest numbered hole", () => {
-    const target = parse("itx.f(?0, ...?)");
-    expect(substitute(target, { args: [1, 2, 3], captures: {} })).toEqual(["itx", ["f", 1, 2, 3]]);
-  });
-
-  test("rest scan finds NESTED numbered holes — f({ a: ?0 }, ...?) never splices args[0] twice", () => {
-    const target = parse("itx.f({ a: ?0 }, ...?)");
-    expect(substitute(target, { args: ["first", "second"], captures: {} })).toEqual([
-      "itx",
-      ["f", { a: "first" }, "second"],
-    ]);
-    // $-escaped data that merely LOOKS like a hole must not shift the splice point
-    const escaped: Expression = ["itx", ["f", { $: { "?": 7 } }, { "...": true }]];
-    expect(substitute(escaped, { args: ["a", "b"], captures: {} })).toEqual([
-      "itx",
-      ["f", { "?": 7 }, "a", "b"],
-    ]);
-  });
-
-  test("$ literal escape passes tagged-looking data through verbatim", () => {
+  test("$ literal escape passes tagged-looking data through verbatim (and does NOT spend)", () => {
     const target: Expression = ["itx", ["f", { $: { "?": 0 } }]];
-    expect(substitute(target, { args: ["ignored"], captures: {} })).toEqual([
-      "itx",
-      ["f", { "?": 0 }],
-    ]);
+    const { steps, spentArgs } = substitute(target, { args: ["ignored"], captures: {} });
+    expect(steps).toEqual(["itx", ["f", { "?": 0 }]]);
+    expect(spentArgs).toBe(false);
   });
 
   test("unbound capture throws loudly", () => {
@@ -275,7 +330,7 @@ describe("evaluate/apply", () => {
     const target = parse("itx.clients.get('robot-arm-1')");
     const call = parse("itx.robot.arm.move(10)");
     const m = match(pattern, call)!;
-    const result = await apply(s, substitute(target, { args: [], captures: m.captures }), m);
+    const result = await apply(s, substitute(target, { args: [], captures: m.captures }).steps, m);
     expect(result).toBe("moved");
     expect(s.log).toEqual(["move 10 @robot-arm-1"]);
   });
@@ -287,7 +342,7 @@ describe("evaluate/apply", () => {
       args: m.boundaryArgs!,
       captures: m.captures,
     });
-    const result = await apply(s, target, { ...m, boundaryArgs: undefined });
+    const result = await apply(s, target.steps, { ...m, boundaryArgs: undefined });
     expect(result).toBe("chat(grok-4)");
   });
 

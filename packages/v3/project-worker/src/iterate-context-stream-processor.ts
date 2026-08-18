@@ -22,7 +22,6 @@ import { codedError } from "./core/errors.ts";
 import { deeper, defineProcessorContract } from "./core/events.ts";
 import {
   apply,
-  compareSpecificity,
   ExpressionSchema,
   holeKind,
   match,
@@ -30,7 +29,6 @@ import {
   print,
   substitute,
   toExpression,
-  usesCallerArgs,
   type Expression,
   type Match,
 } from "./core/expression.ts";
@@ -140,9 +138,9 @@ export class IterateContextStreamProcessor extends StreamProcessor<State> {
   }
 
   /**
-   * Resolve + run one call against the CURRENT table state. The winner is the most specific
-   * match; equal specificity → recency (event mounts by offset; seeds oldest of all); nothing
-   * matches → default-deny with a readable error naming the call.
+   * Resolve + run one call against the CURRENT table state. The winner is the LONGEST matching
+   * prefix; ties → recency (event mounts by offset; seeds oldest of all); nothing matches →
+   * default-deny with a readable error naming the call.
    */
   async resolve(
     state: State,
@@ -162,12 +160,15 @@ export class IterateContextStreamProcessor extends StreamProcessor<State> {
         `no capability matches ${JSON.stringify(print(expr))} (default-deny; mount one or add a seed)`,
       );
     const { row, m, provenance } = winner;
-    const target = substitute(row.target, { args: m.boundaryArgs ?? [], captures: m.captures });
+    const { steps: target, spentArgs } = substitute(row.target, {
+      args: m.boundaryArgs ?? [],
+      captures: m.captures,
+    });
     // THE PROVENANCE GATE: `roots` exists in scope only for config seeds. Not policed — absent.
     const base = { itx: this.#itxAtDepth(depth + 1) };
     const scope = provenance === "config" ? { ...base, roots: this.#roots } : base;
-    // Holes in the target SPEND the boundary args; a hole-free target receives them as a call.
-    const boundaryArgs = usesCallerArgs(row.target) ? undefined : m.boundaryArgs;
+    // Holes in the target SPENT the boundary args; a hole-free target receives them as a call.
+    const boundaryArgs = spentArgs ? undefined : m.boundaryArgs;
     return await apply(scope, target, { remainder: m.remainder, boundaryArgs }, extraArgs);
   }
 
@@ -216,10 +217,11 @@ export class IterateContextStreamProcessor extends StreamProcessor<State> {
     ) => {
       const m = match(row.pattern, call);
       if (!m) return;
+      // THE ranking rule, whole: longest matching prefix wins; ties go to the newest mount.
       if (
         best === null ||
-        compareSpecificity(m.specificity, best.m.specificity) > 0 ||
-        (compareSpecificity(m.specificity, best.m.specificity) === 0 &&
+        m.matchedSteps > best.m.matchedSteps ||
+        (m.matchedSteps === best.m.matchedSteps &&
           (providedAtOffset ?? -1) > (best.providedAtOffset ?? -1))
       )
         best = { row, m, provenance, providedAtOffset };
@@ -249,6 +251,15 @@ export class IterateContextStreamProcessor extends StreamProcessor<State> {
 /** Registration-time must-use rule: a pattern that binds caller input (holes/captures) must have
  *  a target that references it — silently ignoring caller args is almost certainly a bug. */
 function assertMustUse(pattern: Expression, target: Expression): void {
+  // Args bind at ONE call step only (owner's rule): a pattern must not collect caller input
+  // across several invocation sites — one place binds, everything else is literal path.
+  const bindingSteps = pattern.filter(
+    (step) =>
+      Array.isArray(step) &&
+      step.slice(1).some((a) => holeKind(a) !== null && holeKind(a) !== "literal"),
+  );
+  if (bindingSteps.length > 1)
+    throw new Error("a pattern may bind caller args at only ONE call step");
   const patternBinds = new Set<string>();
   walkNamedHoles(pattern, (h) => patternBinds.add(h));
   if (patternBinds.size === 0) return;

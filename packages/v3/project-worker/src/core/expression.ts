@@ -329,9 +329,11 @@ function printValue(v: unknown): string {
 
 /** A successful claim of `call` by `pattern`. */
 export type Match = {
-  /** Per-step scores, literal-heavier is bigger; compare with `compareSpecificity`. */
-  specificity: number[];
-  /** Values bound by `?name` captures in the pattern. */
+  /** THE WHOLE RANKING RULE: the longest matching prefix wins; ties go to the newest mount.
+   *  This is that prefix's length — literal args decide only WHETHER a pattern matches, never
+   *  how well (element-by-element, like apps/os matching an array of strings). */
+  matchedSteps: number;
+  /** Values bound by `?name` captures in the pattern (at most ONE call step may bind). */
   captures: Record<string, unknown>;
   /** The call's invocation args at the boundary, when the matched call step carried args the
    *  pattern did not consume (pattern `itx.grok` vs call `itx.grok({...})`). */
@@ -347,10 +349,9 @@ export type Match = {
  *  - a call pattern step `[m, ...pargs]` matches a call step `[m, ...cargs]` by unifying args:
  *    literals must deep-equal, `?`-holes bind anything (captures record it), `...?` binds the rest;
  *    without a rest hole the arities must be equal;
- *  - specificity per step: 1 for a name bind, +1 per literal arg bound (holes add nothing).
+ *  Mid-path calls are ordinary steps (`itx.streams.get('/logs').append` is a 4-step pattern).
  */
 export function match(pattern: Expression, call: Expression): Match | null {
-  const specificity: number[] = [];
   const captures: Record<string, unknown> = {};
   let boundaryArgs: unknown[] | undefined;
 
@@ -361,17 +362,14 @@ export function match(pattern: Expression, call: Expression): Match | null {
     if (typeof p === "string") {
       if (typeof c === "string") {
         if (p !== c) return null;
-        specificity.push(1);
       } else {
         if (c[0] !== p || i !== pattern.length - 1) return null; // name-only consume: final step only
         boundaryArgs = c.slice(1);
-        specificity.push(1);
       }
     } else {
       if (typeof c === "string" || c[0] !== p[0]) return null;
       const pargs = p.slice(1);
       const cargs = c.slice(1);
-      let score = 1;
       const rest = pargs.findIndex((a) => holeKind(a) === "rest");
       if (rest === -1 && pargs.length !== cargs.length) return null;
       if (rest !== -1 && cargs.length < rest) return null;
@@ -381,23 +379,16 @@ export function match(pattern: Expression, call: Expression): Match | null {
         if (kind === "arg") {
           const h = (pargs[j] as { "?": number | string })["?"];
           if (typeof h === "string") captures[h] = cargs[j];
-        } else if (jsonEqual(unliteral(pargs[j]), cargs[j])) {
-          score += 1;
-        } else return null;
+        } else if (!jsonEqual(unliteral(pargs[j]), cargs[j])) return null;
       }
-      specificity.push(score);
     }
   }
-  return { specificity, captures, boundaryArgs, remainder: call.slice(pattern.length) };
-}
-
-/** Longest-bound-prefix, literal-beats-hole ordering. Returns >0 when `a` is more specific. */
-export function compareSpecificity(a: number[], b: number[]): number {
-  for (let i = 0; i < Math.max(a.length, b.length); i++) {
-    const d = (a[i] ?? -1) - (b[i] ?? -1);
-    if (d !== 0) return d;
-  }
-  return 0;
+  return {
+    matchedSteps: pattern.length,
+    captures,
+    boundaryArgs,
+    remainder: call.slice(pattern.length),
+  };
 }
 
 const unliteral = (v: unknown): unknown =>
@@ -406,11 +397,17 @@ const unliteral = (v: unknown): unknown =>
 // ────────────────────────────────────────────── substitute ──────────────────────────────────────────────
 
 /**
- * Make a target expression concrete: replace every hole with the caller's values.
+ * Make a target expression concrete: replace every hole with the caller's values. Returns the
+ * substituted steps plus `spentArgs` — did substitution CONSUME the caller's args? (Numeric
+ * holes, rest splices, and object spreads spend; named captures and `$`-escapes do not.) The
+ * flag is computed by the same walk that does the work, so it can never drift from it — the
+ * standalone walker it replaced is the drift class that shipped two codec bugs.
  *  - `{ "?": n }`      → args[n]           (missing → undefined, like JS)
  *  - `{ "?": "name" }` → captures[name]    (unbound capture → registration bug, throws)
- *  - `{ "...": true }` in a call-arg list  → splice args from (highest numbered hole in that
- *                                            list)+1, or all args when none are numbered
+ *  - `{ "...": n }` in a call-arg list     → splice args from n (`...?2` = args.slice(2))
+ *  - `{ "...": true }` in a call-arg list  → ALL the args; a LOUD error when the list also has
+ *                                            numeric holes — say `...?n` (explicit, never
+ *                                            inferred: the inferred splice start shipped a bug)
  *  - `{ "...": n }` in an object           → shallow-merge args[n] (must be an object) under the
  *                                            frozen keys — FROZEN WINS
  *  - `{ "$": v }`      → v verbatim
@@ -418,26 +415,29 @@ const unliteral = (v: unknown): unknown =>
 export function substitute(
   target: Expression,
   ctx: { args: unknown[]; captures: Record<string, unknown> },
-): Expression {
-  return target.map((step) =>
-    typeof step === "string" ? step : ([step[0], ...substituteArgList(step.slice(1), ctx)] as Step),
+): { steps: Expression; spentArgs: boolean } {
+  const spent = { flag: false };
+  const steps = target.map((step) =>
+    typeof step === "string"
+      ? step
+      : ([step[0], ...substituteArgList(step.slice(1), ctx, spent)] as Step),
   );
+  return { steps, spentArgs: spent.flag };
 }
 
 function substituteArgList(
   list: unknown[],
   ctx: { args: unknown[]; captures: Record<string, unknown> },
+  spent: { flag: boolean },
 ): unknown[] {
-  // The highest numbered `?n` ANYWHERE in the list (nested in objects/arrays too — a hole inside
-  // `{ a: ?0 }` spends args[0] just as a top-level one does; scanning only the top level would
-  // make `f({ a: ?0 }, ...?)` splice args[0] twice). `$`-escaped data is not a hole.
-  let highest = -1;
+  // Detect numeric holes ANYWHERE in the list (nested too) — bare `...?` beside one is the
+  // ambiguity that shipped the increment-26 double-splice bug; it now demands explicit `...?n`.
+  let hasNumericHole = false;
   const scan = (v: unknown, depth: number): void => {
     if (typeof v !== "object" || v === null) return;
     const kind = holeKind(v);
     if (kind === "arg") {
-      const h = (v as { "?": number | string })["?"];
-      if (typeof h === "number") highest = Math.max(highest, h);
+      if (typeof (v as { "?": number | string })["?"] === "number") hasNumericHole = true;
       return;
     }
     if (kind === "literal" || kind === "rest") return;
@@ -446,9 +446,18 @@ function substituteArgList(
   for (const v of list) scan(v, 0);
   const out: unknown[] = [];
   for (const v of list) {
-    if (holeKind(v) === "rest" && (v as { "...": true | number })["..."] === true) {
-      out.push(...ctx.args.slice(highest + 1));
-    } else out.push(substituteValue(v, ctx));
+    const restOf = holeKind(v) === "rest" ? (v as { "...": true | number })["..."] : undefined;
+    if (restOf === true) {
+      if (hasNumericHole)
+        throw new Error(
+          "bare ...? beside numeric holes is ambiguous — say ...?n (splice from arg n)",
+        );
+      spent.flag = true;
+      out.push(...ctx.args);
+    } else if (typeof restOf === "number") {
+      spent.flag = true;
+      out.push(...ctx.args.slice(restOf));
+    } else out.push(substituteValue(v, ctx, spent));
   }
   return out;
 }
@@ -456,12 +465,16 @@ function substituteArgList(
 function substituteValue(
   v: unknown,
   ctx: { args: unknown[]; captures: Record<string, unknown> },
+  spent: { flag: boolean },
   depth = 0,
 ): unknown {
   switch (holeKind(v)) {
     case "arg": {
       const h = (v as { "?": number | string })["?"];
-      if (typeof h === "number") return ctx.args[h];
+      if (typeof h === "number") {
+        spent.flag = true;
+        return ctx.args[h];
+      }
       if (!(h in ctx.captures)) throw new Error(`unbound capture "?${h}" — pattern never bound it`);
       return ctx.captures[h];
     }
@@ -470,7 +483,8 @@ function substituteValue(
     case "rest":
       break; // object-spread handled below; bare rest outside a call list is meaningless
   }
-  if (Array.isArray(v)) return v.map((x) => substituteValue(x, ctx, deeper(depth, "substitute")));
+  if (Array.isArray(v))
+    return v.map((x) => substituteValue(x, ctx, spent, deeper(depth, "substitute")));
   if (isPlainObject(v)) {
     const spreadArg = "..." in v && Object.keys(v).length >= 1 ? (v["..."] as number) : undefined;
     const out: Record<string, unknown> = {};
@@ -478,11 +492,12 @@ function substituteValue(
       const src = ctx.args[spreadArg];
       if (!isPlainObject(src))
         throw new Error(`...?${spreadArg} spread: caller arg is not an object`);
+      spent.flag = true;
       Object.assign(out, src);
     }
     for (const [k, val] of Object.entries(v)) {
       if (k === "...") continue;
-      out[k] = substituteValue(val, ctx, deeper(depth, "substitute")); // frozen keys overwrite spread — frozen wins
+      out[k] = substituteValue(val, ctx, spent, deeper(depth, "substitute")); // frozen keys overwrite spread — frozen wins
     }
     return out;
   }
@@ -591,34 +606,6 @@ export async function apply(
     value = await Reflect.apply(value, receiver, extraArgs);
   }
   return await value;
-}
-
-/** Does this target expression consume the caller's invocation args (numeric/rest/spread holes)?
- *  If yes, `substitute` spends the boundary args and `apply` must not re-apply them; if no, the
- *  boundary args apply to the evaluated value itself (a plain function/method alias). */
-export function usesCallerArgs(expr: Expression): boolean {
-  let found = false;
-  const walk = (v: unknown): void => {
-    if (found || typeof v !== "object" || v === null) return;
-    const kind = holeKind(v);
-    if (kind === "arg") {
-      if (typeof (v as { "?": number | string })["?"] === "number") found = true;
-      return;
-    }
-    if (kind === "rest") {
-      found = true;
-      return;
-    }
-    if (kind === "literal") return; // escaped user data — never a hole
-    // an object-SPREAD is a "..." key on a (possibly multi-key) object, not a single-key tag
-    if (!Array.isArray(v) && "..." in (v as Record<string, unknown>)) {
-      found = true;
-      return;
-    }
-    for (const inner of Object.values(v)) walk(inner);
-  };
-  for (const step of expr) if (Array.isArray(step)) step.slice(1).forEach(walk);
-  return found;
 }
 
 /** The dotted surface as a runtime Proxy — the programmatic write-half of the codec: property

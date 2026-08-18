@@ -1027,3 +1027,30 @@ through these capabilities and through invoke — very important."
 
 80 unit tests green; deploy `rich-1`: EIGHT-suite board ALL PASS (crisp/facet/userspace/
 ephemeral/push/facetaddr/restore/rich).
+
+## Increment 42 (codec-2): THE MATCHER COLLAPSE + spentArgs + explicit rest (hunt round 3, annotations 1+9)
+
+Owner: "just matched prefix length… apps/os really just matches an array of strings — we don't
+want to go much more complicated"; and args must not bind across multiple invocation sites.
+
+- **THE ranking rule is now one sentence:** element by element from the start; the longest
+  matching prefix wins; ties go to the newest mount. `Match.specificity: number[]` and
+  `compareSpecificity` are DELETED — `Match.matchedSteps` is a single integer (the pattern's
+  length). Literal args decide only WHETHER a step matches, never how well. Mid-path literal
+  calls are ordinary steps (`itx.streams.get('/bla').append` = a 4-step pattern — the owner's
+  own example). Documented behavioral change: an equal-length literal pattern and hole pattern
+  now TIE (recency decides) where lex ordering made the literal always win.
+- **Single-binding-site rule:** a pattern may bind caller args at ONE call step only —
+  provide() rejects patterns collecting input across several invocation sites.
+- **`substitute` returns `{ steps, spentArgs }`** — the did-the-target-consume-the-args verdict
+  is now a byproduct of consuming them; the standalone `usesCallerArgs` walker (the third
+  hole-classifier, the drift class that shipped two codec bugs) is DELETED.
+- **Rest is explicit:** `...?n` = args.slice(n) in a call-arg list (the old
+  `...?n`-means-object-copy overload is gone); bare `...?` = ALL the args, and a LOUD error
+  beside numeric holes ("say ...?n") — the inferred splice start that shipped the increment-26
+  double-splice bug can no longer be spelled.
+- **Table-based tests** (the owner's ask): match and substitute are now `test.each` tables —
+  every rule visible as a row of [pattern, call, expected].
+
+87 unit tests green (+7); deploy `codec-2`: EIGHT-suite live board ALL PASS unchanged — the
+collapse is observably equivalent for every shipped mount shape.
