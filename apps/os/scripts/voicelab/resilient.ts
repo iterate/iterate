@@ -110,7 +110,7 @@ export async function openResilientConnection(
         connectionKey: `${options.connectionKey}-g${openingGeneration}`,
         eventTypes: options.eventTypes,
         processEventBatch: handleBatch,
-        ...(lastSeenOffset >= 0 ? { replayAfterOffset: lastSeenOffset } : {}),
+        ...(lastSeenOffset >= 0 && { replayAfterOffset: lastSeenOffset }),
       });
       if (closed || openingGeneration !== generation) {
         closeAndDisposeRpcHandle(next);

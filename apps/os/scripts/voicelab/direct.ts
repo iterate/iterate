@@ -99,9 +99,9 @@ export async function direct(options: DirectOptions = {}) {
   const mic = new MicSource(syntheticPcmPath ? { syntheticPcmPath } : {});
   const grok = new GrokClient({
     apiKey,
-    ...(options.url ? { url: options.url } : {}),
-    ...(options.model ? { model: options.model } : {}),
-    ...(options.voice ? { voice: options.voice } : {}),
+    ...(options.url && { url: options.url }),
+    ...(options.model && { model: options.model }),
+    ...(options.voice && { voice: options.voice }),
     reasoningEffort: options.effort === "high" ? "high" : "none",
   });
 
@@ -272,7 +272,7 @@ export async function direct(options: DirectOptions = {}) {
 
   const summary = {
     role: options.url ? "ws-proxy" : "direct",
-    ...(options.url ? { url: options.url } : {}),
+    ...(options.url && { url: options.url }),
     model: grok.options.model,
     config: {
       effort: grok.options.reasoningEffort,

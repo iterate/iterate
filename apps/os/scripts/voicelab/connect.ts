@@ -20,20 +20,6 @@ export interface VoicelabConnectOptions {
   baseUrl?: string;
 }
 
-/**
- * Programmatic-only connection extras — a separate parameter, NOT part of
- * {@link VoicelabConnectOptions}, because command option types become CLI
- * flags and a callback has no flag spelling.
- */
-interface VoicelabConnectExtras {
-  /**
-   * Observe the session socket closing. A client's standing job is to BE
-   * CONNECTED — the socket is how the server reaches it — so a long-lived
-   * caller reconnects from this hook, immediately, not at its next use.
-   */
-  onWebSocketClose?: (close: { code: number; reason: string }) => void;
-}
-
 export function resolveVoicelabBaseUrl(options: Pick<VoicelabConnectOptions, "baseUrl">) {
   const baseUrl =
     options.baseUrl ??
@@ -47,6 +33,20 @@ export function resolveVoicelabBaseUrl(options: Pick<VoicelabConnectOptions, "ba
     );
   }
   return baseUrl;
+}
+
+/**
+ * Programmatic-only connection extras — a separate parameter, NOT part of
+ * {@link VoicelabConnectOptions}, because command option types become CLI
+ * flags and a callback has no flag spelling.
+ */
+interface VoicelabConnectExtras {
+  /**
+   * Observe the session socket closing. A client's standing job is to BE
+   * CONNECTED — the socket is how the server reaches it — so a long-lived
+   * caller reconnects from this hook, immediately, not at its next use.
+   */
+  onWebSocketClose?: (close: { code: number; reason: string }) => void;
 }
 
 export async function connectProject(

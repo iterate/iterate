@@ -317,13 +317,6 @@ async function waitForVoiceAgent(
   );
 }
 
-/** The subset of the secret capability this command uses. */
-interface XaiSecret {
-  __describe(): Promise<{ created?: boolean; hasMaterial?: boolean }>;
-  create(input: { egress: { urls: string[] }; material: string }): Promise<unknown>;
-  update(input: { material: string }): Promise<unknown>;
-}
-
 /**
  * Make sure the project can reach the provider, using the key from the
  * Doppler config this command is already running inside.
@@ -355,6 +348,13 @@ export async function ensureOpenaiSecret(itx: unknown): Promise<string> {
     envNames: ["OPENAI_API_KEY", "APP_CONFIG_OPENAI_API_KEY"],
     egress: ["https://api.openai.com"],
   });
+}
+
+/** The subset of the secret capability this command uses. */
+interface XaiSecret {
+  __describe(): Promise<{ created?: boolean; hasMaterial?: boolean }>;
+  create(input: { egress: { urls: string[] }; material: string }): Promise<unknown>;
+  update(input: { material: string }): Promise<unknown>;
 }
 
 async function ensureProviderSecret(

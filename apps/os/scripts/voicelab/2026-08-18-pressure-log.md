@@ -365,3 +365,28 @@ each step measured live: "counted all the way to 100" (nothing) → "26/28"
 exactly that (PASS). The `grok-event` lane now records client-sent
 control events as `client.<type>` — the wire's flight recorder hears both
 directions. 61 agent unit tests pin the mechanics.
+
+**F15 (reported by Jonas; openai audibly worse than the OpenAI app —
+the pipeline's one transcode was the defect): voice-agent2's
+`resamplePcm16` was linear interpolation, per delta, with no
+anti-aliasing filter.** Three compounding faults, all invisible on grok
+because grok is 16 kHz native and the resampler was an identity there:
+(1) decimating 24 → 16 kHz unfiltered folds the source's 8–12 kHz band
+back into 4–8 kHz as inharmonic grit — the "substantially worse"; (2)
+endpoint pinning (`index * (n-1) / (m-1)`) resampled every delta at a
+slightly wrong, chunk-length-dependent rate; (3) each delta restarted
+the conversion phase — a seam per provider flush. The provider offers no
+escape hatch: GA formats are pcm16 at a fixed 24 kHz or G.711 at 8, so
+the fix is doing our one transcode properly. `pcm.ts` now holds a
+polyphase windowed-sinc resampler (64 taps, Blackman, per-phase DC
+normalisation) whose conversion phase and input tail are CARRIED ACROSS
+PUSHES — one continuous conversion per stream however the deltas chunk;
+per-dial instances both directions, speaker side reset per answer.
+Decision with Jonas: the fleet stays 16 kHz (no per-device native-rate
+negotiation; the host CLI is the boards' instrument and the firmware's
+byte budgets assume 32 bytes/ms), so the 24 kHz passthrough idea died
+here. Proof is arithmetic, not opinion — 10 new unit tests: a 10 kHz
+tone that would alias arrives 50 dB down instead of at full strength,
+3 kHz passes at unity and at its true frequency (zero-crossing count),
+byte-identical output under ragged rechunking, steady-state pushes at
+the exact 2:3 ratio, DC flat across every polyphase arm.

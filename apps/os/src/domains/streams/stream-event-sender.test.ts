@@ -2094,7 +2094,7 @@ describe("hosted delivery coalesces ephemeral events", () => {
    * latency, because the lane delivered slower than audio arrived.
    */
   const frame = (offset: number, ephemeral: boolean) => ({
-    event: { ...streamEvent(offset, "events.example.com/f"), ...(ephemeral ? { ephemeral } : {}) },
+    event: { ...streamEvent(offset, "events.example.com/f"), ...(ephemeral && { ephemeral }) },
   });
 
   it("takes a whole run of ephemeral events", () => {

@@ -1060,24 +1060,12 @@ async function ensureVoiceAgent(
  * this bridge acts on are still validated; the rest ride along untouched.
  */
 
-/**
- * G.711 mu-law to little-endian PCM16. The inverse of what the device does to
- * fit its microphone through a link that could not carry PCM16.
+/*
+ * `mulawToPcm16` — the uplink DECODER — was here, and only the encoder below
+ * survives: the device's spk lane still ships mu-law, but nothing mu-law
+ * arrives any more (the mic lane's read is gone; see the PCM16-always note at
+ * the decode site). `git log` has it intact if a compressed uplink returns.
  */
-function mulawToPcm16(mulaw: ArrayBuffer): ArrayBuffer {
-  const input = new Uint8Array(mulaw);
-  const output = new Int16Array(input.length);
-  for (let index = 0; index < input.length; index++) {
-    const value = ~input[index]!;
-    const sign = value & 0x80;
-    const exponent = (value >> 4) & 0x07;
-    const mantissa = value & 0x0f;
-    let sample = ((mantissa << 3) + 0x84) << exponent;
-    sample -= 0x84;
-    output[index] = sign !== 0 ? -sample : sample;
-  }
-  return output.buffer;
-}
 
 /**
  * PCM16 to G.711 mu-law. Shared, because the facet and the retiring bridge both

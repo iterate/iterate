@@ -959,10 +959,10 @@ export async function startFakeGrok(options?: {
       fetch: fake.handler,
       gateway:
         options?.gateway ?? process.env.CAPTUN_GATEWAY?.trim() ?? "https://tunnels.iterate.com",
-      ...(options?.name ? { name: options.name } : {}),
-      ...((options?.token ?? process.env.CAPTUN_TOKEN?.trim())
-        ? { token: options?.token ?? process.env.CAPTUN_TOKEN!.trim() }
-        : {}),
+      ...(options?.name && { name: options.name }),
+      ...((options?.token ?? process.env.CAPTUN_TOKEN?.trim()) && {
+        token: options?.token ?? process.env.CAPTUN_TOKEN!.trim(),
+      }),
     });
   } catch (error) {
     throw new Error(

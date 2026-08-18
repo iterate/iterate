@@ -752,9 +752,8 @@ export class StreamEventSender {
            * configured on this incarnation, a slow one is a slow processor
            * again and the ordinary deadline is the right answer.
            */
-          ...(receiver.action === "facet-processor" && !this.#facetEverWoken.has(name)
-            ? { timeoutMs: COLD_FACET_WAKE_TIMEOUT_MS }
-            : {}),
+          ...(receiver.action === "facet-processor" &&
+            !this.#facetEverWoken.has(name) && { timeoutMs: COLD_FACET_WAKE_TIMEOUT_MS }),
         });
         this.#facetEverWoken.add(name);
         const current = this.#hooks.coreState().subscriptions.outbound.byName[name];

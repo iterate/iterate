@@ -609,11 +609,13 @@ describe("the openai provider", () => {
   it("upsamples the device's 16 kHz capture on its way in", async () => {
     const h = makeHarness();
     await openaiCallIsLive(h);
-    /* The held frame flushed at session.updated: 20 ms is 640 bytes at
-     * 16 kHz and 960 at 24. */
+    /* 20 ms is 640 bytes at 16 kHz and 960 at 24. The FIRST append runs a
+     * couple of ms short — the filter holds its half-kernel of input until
+     * the next frame proves what follows — and only the first: the debt is
+     * fixed, so from then on every 20 ms in is exactly 20 ms out. */
     const flushed = h.provider.sentOfType("input_audio_buffer.append")[0] as { audio: string };
-    expect(atob(flushed.audio).length).toBe(960);
-    /* And the live path after the handshake does the same. */
+    expect(atob(flushed.audio).length).toBeGreaterThanOrEqual(800);
+    expect(atob(flushed.audio).length).toBeLessThanOrEqual(960);
     await h.append(micFrame(2));
     await h.settle();
     const live = h.provider.sentOfType("input_audio_buffer.append")[1] as { audio: string };
@@ -631,8 +633,10 @@ describe("the openai provider", () => {
     await playOutEverything(h, 200);
     const frames = speakerFrames(h).filter((frame) => frame.pcm !== "");
     const deliveredBytes = frames.reduce((sum, frame) => sum + atob(frame.pcm).length, 0);
-    /* The same 100 ms, now at the pipeline's 16 kHz: 3,200 bytes. */
-    expect(deliveredBytes).toBe(3_200);
+    /* The same 100 ms at the pipeline's 16 kHz is 3,200 bytes, less the
+     * resampler's held half-kernel — the next delta would carry it. */
+    expect(deliveredBytes).toBeGreaterThanOrEqual(3_100);
+    expect(deliveredBytes).toBeLessThanOrEqual(3_200);
   });
 
   it("leaves grok's audio untouched", async () => {

@@ -135,6 +135,7 @@ import {
   type ReduceArgs,
 } from "iterate/processors";
 import { z } from "zod";
+import { Pcm16Resampler } from "./pcm.ts";
 
 /* ========================================================================== */
 /* CONSTANTS                                                                  */
@@ -289,7 +290,10 @@ const MAX_HELD_MIC_FRAMES = 500;
 /* ========================================================================== */
 /* AUDIO                                                                      */
 /* ========================================================================== */
-/* The only helpers in this file, and all three are pure functions over bytes. */
+/* Base64 is handled here; RATE CONVERSION is not — see pcm.ts, which holds
+ * the one real transcode in this pipeline and the story of why its linear
+ * predecessor was the audible difference between OpenAI here and OpenAI's
+ * own app. */
 
 /**
  * PCM16 to G.711 mu-law.
@@ -325,30 +329,6 @@ function bytesToBase64(bytes: Uint8Array): string {
     binary += String.fromCharCode(...bytes.subarray(index, index + chunk));
   }
   return btoa(binary);
-}
-
-/**
- * Linear-interpolation PCM16 resampling, for the one provider that does not
- * speak this pipeline's 16 kHz. Linear costs a little treble against a
- * windowed-sinc kernel and nothing anybody hears on speech through these
- * speakers; what matters is that it is allocation-light and runs per frame.
- */
-export function resamplePcm16(bytes: Uint8Array, fromRate: number, toRate: number): Uint8Array {
-  if (fromRate === toRate) return bytes;
-  const samples = Math.floor(bytes.byteLength / 2);
-  if (samples === 0) return new Uint8Array(0);
-  const source = new Int16Array(bytes.buffer, bytes.byteOffset, samples);
-  const outLength = Math.max(1, Math.round((samples * toRate) / fromRate));
-  const out = new Int16Array(outLength);
-  for (let index = 0; index < outLength; index++) {
-    const position = outLength === 1 ? 0 : (index * (samples - 1)) / (outLength - 1);
-    const base = Math.floor(position);
-    const fraction = position - base;
-    const first = source[base] ?? 0;
-    const second = source[base + 1] ?? first;
-    out[index] = (first + (second - first) * fraction) | 0;
-  }
-  return new Uint8Array(out.buffer);
 }
 
 /** Base64 back to bytes. */
@@ -870,6 +850,17 @@ export class VoiceAgent2Processor extends StreamProcessor<
    * belong to a LIVE answer.
    */
   #dropDeltasUntilResponseCreated = false;
+  /**
+   * The two rate converters, one per direction, re-minted at each dial for
+   * whatever rate that dial's provider speaks (an identity for grok's
+   * native 16 kHz). Instances rather than calls because the conversion
+   * phase must survive the chunking: a provider flushes deltas at whatever
+   * cadence it likes, and resampling each delta as its own little signal
+   * put a seam at every boundary — see pcm.ts. The speaker side resets per
+   * answer; the mic side is one continuous capture for the whole dial.
+   */
+  #micResampler = new Pcm16Resampler(16_000, 16_000);
+  #spkResampler = new Pcm16Resampler(16_000, 16_000);
 
   /**
    * When the device will run dry, on the facet clock. The only pacing state,
@@ -1222,7 +1213,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
             this.#providerSocket.send(
               JSON.stringify({
                 type: "input_audio_buffer.append",
-                audio: bytesToBase64(resamplePcm16(pcm, 16_000, PROVIDERS[state.provider].rate)),
+                audio: bytesToBase64(this.#micResampler.push(pcm)),
               }),
             );
           } else if (this.#micQueue.length < MAX_HELD_MIC_FRAMES) {
@@ -1350,6 +1341,8 @@ export class VoiceAgent2Processor extends StreamProcessor<
       this.#answerSentMs = 0;
       this.#pendingTruncate = null;
       this.#answerTranscript = [];
+      this.#micResampler = new Pcm16Resampler(16_000, provider.rate);
+      this.#spkResampler = new Pcm16Resampler(provider.rate, 16_000);
 
       /*
        * THE THIRD SWITCH, AND WHY IT IS NOT A STREAM EVENT.
@@ -1425,7 +1418,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
               socket.send(
                 JSON.stringify({
                   type: "input_audio_buffer.append",
-                  audio: bytesToBase64(resamplePcm16(held, 16_000, provider.rate)),
+                  audio: bytesToBase64(this.#micResampler.push(held)),
                 }),
               );
             }
@@ -1475,6 +1468,10 @@ export class VoiceAgent2Processor extends StreamProcessor<
               this.#answerReceivedMs = 0;
               this.#answerSentMs = 0;
               this.#answerTranscript = [];
+              /* A new answer is a new signal; without this, the filter's
+               * held tail of a CANCELLED answer would smear its first
+               * milliseconds. */
+              this.#spkResampler.reset();
             }
             this.#dropAnswerInFlight(conversationId, receivedAtFacetMs, append);
             return;
@@ -1522,7 +1519,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
             }
             /* The pipeline is 16 kHz from here to the speaker; a provider
              * that talks faster gets resampled at the door. */
-            const pcm16 = resamplePcm16(base64ToBytes(grok.delta), provider.rate, 16_000);
+            const pcm16 = this.#spkResampler.push(base64ToBytes(grok.delta));
             this.#answerReceivedMs += pcm16.length / PCM16_BYTES_PER_MS;
             for (let cut = 0; cut < pcm16.length; cut += MAX_SPEAKER_PAYLOAD_BYTES) {
               this.#speakerQueue.push({
@@ -1995,7 +1992,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
               deviceSpeakerFrameSeq: ++this.#lastDeviceSpeakerFrameSeq,
               fromProviderDeltaSeq: frame.fromProviderDeltaSeq,
               pcm: bytesToBase64(frame.pcm16),
-              ...(clearFirst ? { clearSpeakerBufferBeforeFrame: true } : {}),
+              ...(clearFirst && { clearSpeakerBufferBeforeFrame: true }),
               sentAtFacetMs: nowAtFacetMs,
             },
           });
@@ -2018,7 +2015,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
               deviceSpeakerFrameSeq: this.#lastDeviceSpeakerFrameSeq,
               fromProviderDeltaSeq: this.#lastProviderDeltaSeq,
               pcm: "",
-              ...(clearFirst ? { clearSpeakerBufferBeforeFrame: true } : {}),
+              ...(clearFirst && { clearSpeakerBufferBeforeFrame: true }),
               lastFrameOfAnswer: true,
               sentAtFacetMs: this.deps.nowAtFacetMs(),
             },
