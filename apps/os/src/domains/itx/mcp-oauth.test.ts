@@ -83,7 +83,7 @@ function makeFakeServer(opts: { protectedResource?: boolean; registration?: bool
         issuer: ORIGIN,
         authorization_endpoint: `${ORIGIN}/oauth/authorize`,
         token_endpoint: `${ORIGIN}/oauth/token`,
-        ...(registration ? { registration_endpoint: `${ORIGIN}/oauth/register` } : {}),
+        ...(registration && { registration_endpoint: `${ORIGIN}/oauth/register` }),
         response_types_supported: ["code"],
         grant_types_supported: ["authorization_code", "refresh_token"],
         code_challenge_methods_supported: ["S256"],
@@ -117,7 +117,7 @@ function makeFakeServer(opts: { protectedResource?: boolean; registration?: bool
       }
       const code = `code-${codes.size + 1}`;
       const challenge = url.searchParams.get("code_challenge") ?? undefined;
-      codes.set(code, { clientId, redirectUri, ...(challenge ? { challenge } : {}) });
+      codes.set(code, { clientId, redirectUri, ...(challenge && { challenge }) });
       const target = new URL(redirectUri);
       target.searchParams.set("code", code);
       const state = url.searchParams.get("state");

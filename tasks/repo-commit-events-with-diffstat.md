@@ -52,10 +52,6 @@ Prefer reusing that type on the event rather than inventing a parallel shape.
 3. Walk incomplete `commits[]` via log when `commitsTruncated`.
 4. Revisit whether task-specific events still need a separate path once
    generic file stats land on every commit event.
-5. Related product idea (not required by this task): drive onboarding
-   completion off `ONBOARDING.md` deletion once delete is visible on these
-   events.
-
 ## Explicitly deferred
 
 Not implementing now — captured so future work has context.

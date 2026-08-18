@@ -232,8 +232,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   #todoApp = TodoApp.create(this.env);
 
   async fetch(request: Request): Promise<Response> {
-    using itx = await this.env.ITX.get();
-    const denied = await itx.auth.get({ policy: "project-member" }).fetch(request);
+    const denied = await this.fetchProjectAuth(request, { policy: "project-member" });
     if (denied) return denied;
     return this.#todoApp.fetch(request);
   }

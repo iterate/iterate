@@ -103,9 +103,18 @@ export default function NotificationsScreen() {
     projectId,
     streamPath: "/",
   });
+  // Batches decided from THIS screen instance. A decided batch normally
+  // leaves the synthetic list (all-reject closes it instantly), but it must
+  // not vanish under the finger that just decided it — these linger with
+  // their outcome for the rest of the session. Genuine ephemeral UI state,
+  // same as the row expansion toggle.
+  const [sessionDecidedOffsets, setSessionDecidedOffsets] = useState<ReadonlySet<number>>(
+    new Set(),
+  );
   const rows = deriveNotificationListRows(
     deriveDeviceNotifications(events.data || []),
     approvalEvents.data || [],
+    sessionDecidedOffsets,
   );
 
   return (
@@ -155,6 +164,9 @@ export default function NotificationsScreen() {
             <NotificationRow
               baseUrl={baseUrl!}
               liveApprovalEvents={approvalEvents.data || []}
+              onSessionDecided={(offset) =>
+                setSessionDecidedOffsets((previous) => new Set(previous).add(offset))
+              }
               projectId={projectId}
               projectSlug={slug || ""}
               row={row}
@@ -181,6 +193,7 @@ export default function NotificationsScreen() {
 function NotificationRow({
   baseUrl,
   liveApprovalEvents,
+  onSessionDecided,
   projectId,
   projectSlug,
   row,
@@ -188,6 +201,7 @@ function NotificationRow({
 }: {
   baseUrl: string;
   liveApprovalEvents: StreamEvent[];
+  onSessionDecided: (offset: number) => void;
   projectId: string;
   projectSlug: string;
   row: NotificationListRow;
@@ -250,6 +264,7 @@ function NotificationRow({
           baseUrl={baseUrl}
           batchOffset={row.approvalRequestEventOffset}
           liveApprovalEvents={liveApprovalEvents}
+          onSessionDecided={onSessionDecided}
           projectId={projectId}
           projectSlug={projectSlug}
         />
@@ -270,12 +285,14 @@ function ApprovalNotificationDetail({
   baseUrl,
   batchOffset,
   liveApprovalEvents,
+  onSessionDecided,
   projectId,
   projectSlug,
 }: {
   baseUrl: string;
   batchOffset: number;
   liveApprovalEvents: StreamEvent[];
+  onSessionDecided: (offset: number) => void;
   projectId: string;
   projectSlug: string;
 }) {
@@ -353,6 +370,7 @@ function ApprovalNotificationDetail({
               styles.outcomeBadge,
               resolved.decisionSummary === "Approved" ? styles.approvedBadge : styles.rejectedBadge,
             ]}
+            testID="approval-decision-badge"
           >
             {resolved.decisionSummary}
           </Text>
@@ -397,13 +415,22 @@ function ApprovalNotificationDetail({
         <ApprovalBatchActions
           baseUrl={baseUrl}
           offset={batchOffset}
+          onDecideStarted={() =>
+            // Pinned BEFORE the decision event is appended: if the live
+            // stream echo closed the batch first, this row would unmount and
+            // take the mutation's observer callbacks with it — the vanish
+            // this state exists to prevent. Only actually-closed batches
+            // linger, so a cancelled reject prompt recording here is inert.
+            onSessionDecided(batchOffset)
+          }
           onDecided={() => {
             void queryClient.invalidateQueries({
               queryKey: ["notification-approval-batch", baseUrl, projectId, batchOffset],
             });
             // Synthetic-row MEMBERSHIP derives from the live approval cache —
-            // refetch it too, so a decided orphan row leaves (or flips to
-            // awaiting-release) without waiting on the websocket catch-up.
+            // refetch it too, so a decided orphan row flips to its outcome
+            // (or awaiting-release) without waiting on the websocket
+            // catch-up.
             void queryClient.invalidateQueries({
               queryKey: ["approval-events", baseUrl, projectId],
             });

@@ -1,9 +1,16 @@
 ---
-status: ready
+status: maybe
 size: medium
 ---
 
 # Stealable preview leases for draft PRs
+
+> **Update 2026-08-10:** the v1 draft-skip policy (and the `preview` opt-in
+> label, `--allow-draft`, `decideDraftPreviewPolicy`) was removed outright —
+> every open PR now gets previews, draft or not. That deletes this task's
+> premise and its "revert v1" checklist items. The stealing idea only becomes
+> relevant again if slot contention returns; the draft/ready split would then
+> need a different priority signal since drafts are no longer second-class.
 
 Follow-up to `tasks/complete/2026-07-07-draft-prs-no-preview-lease.md` (PR
 #1720), which is the blunt v1: draft PRs skip previews entirely unless they

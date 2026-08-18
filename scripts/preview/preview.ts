@@ -29,7 +29,7 @@ import {
 import { fetchCloudflareWith429Retry } from "../lib/cloudflare-429-retry.ts";
 import {
   compactRetryFailure,
-  OS_ONBOARDING_SMOKE_TIMEOUT_SECS,
+  OS_AGENT_SMOKE_TIMEOUT_SECS,
   OS_PREVIEW_LANE_TIMEOUT_SECS,
   OS_TUI_LANE_TIMEOUT_SECS,
 } from "../../packages/shared/src/test-support/e2e-policy/index.ts";
@@ -56,14 +56,6 @@ type PullRequestCommandOptions = {
   pullRequestNumber?: number;
 };
 
-/** Label a draft PR can wear to get previews despite the draft policy below. */
-const previewOptInLabel = "preview";
-
-const draftPreviewNotice = [
-  "This PR is a draft, so it doesn't claim a preview slot.",
-  `To get previews: add the \`${previewOptInLabel}\` label, mark the PR ready for review, or dispatch the Cloudflare Previews workflow for a one-off run.`,
-].join(" ");
-
 // Cloudflare documents that a Worker/DO code update is globally eventually
 // consistent after the new edge Worker version is serving. A newly addressed
 // Durable Object can therefore still be assigned the prior code for seconds
@@ -75,28 +67,6 @@ const draftPreviewNotice = [
 const previewMinimumDeploymentAgeMs = 90_000;
 const previewRolloutRemainingSecondsEnvironment = "PREVIEW_APP_ROLLOUT_REMAINING_SECONDS";
 
-/**
- * Draft PRs don't hold preview slots unless they ask: there are only nine
- * slots and drafts are the default for agent-opened PRs, so a busy night of
- * drafts was exhausting the fleet before any human asked for a preview.
- * "Asking" = the `preview` label, marking ready for review, or an explicit
- * `--allow-draft` run (the workflow_dispatch path). A draft that still holds
- * a slot per the semaphore (it was ready once, or opted out again) gives it
- * back.
- */
-function decideDraftPreviewPolicy(input: {
-  allowDraft: boolean;
-  holdsSlot: boolean;
-  isDraft: boolean;
-  labels: string[];
-}): "deploy" | "skip" | "teardown" {
-  if (!input.isDraft || input.allowDraft || input.labels.includes(previewOptInLabel)) {
-    return "deploy";
-  }
-
-  return input.holdsSlot ? "teardown" : "skip";
-}
-
 type DeployCommandOptions = PullRequestCommandOptions & {
   /**
    * Deploy every preview app regardless of the diff. Diff selection only
@@ -106,13 +76,6 @@ type DeployCommandOptions = PullRequestCommandOptions & {
    * happening to touch a fleet-shared path.
    */
   allApps?: boolean;
-  /**
-   * Deploy even when the PR is a draft without the `preview` label. Draft
-   * PRs otherwise skip previews (or give their slot back); an explicit
-   * invocation — workflow_dispatch, the flake-hunt marathon, a human at a
-   * terminal — is an ask, so those callers pass this.
-   */
-  allowDraft?: boolean;
 };
 
 /** One PR context + runtime shared by every phase of a preview command. */
@@ -303,7 +266,7 @@ export async function testTarget(options: TestTargetOptions) {
  * structurally gone. The lease is shared through the semaphore itself (same
  * holder; test's adopt re-issues the slot deploy just claimed), never
  * through a handed-around copy. A deploy failure throws before any test
- * runs; a draft skip skips both phases.
+ * runs.
  */
 export async function run(options: DeployCommandOptions = {}) {
   const { context, runtime } = await resolvePreviewCommandSetup(options);
@@ -311,10 +274,6 @@ export async function run(options: DeployCommandOptions = {}) {
     const deployResult = await measurePreviewDeployRun(telemetry, () =>
       deployPreviewApps({ context, options, runtime, telemetry }),
     );
-    if ("skippedReason" in deployResult && deployResult.skippedReason === "draft") {
-      return deployResult;
-    }
-
     // A "nothing to deploy" skip still tests. Unchanged apps may reuse their
     // exact recorded Worker versions, but every PR head earns its own e2e
     // result; a previous head's green is never promoted to this check.
@@ -347,7 +306,7 @@ async function withPreviewE2eTelemetry<T>(
   telemetry.runFinished({
     status: operationError ? "failed" : previewOperationWasSkipped(result) ? "skipped" : "passed",
     durationMs: Date.now() - startedAt,
-    ...(operationError ? { error: operationError } : {}),
+    ...(!!operationError && { error: operationError }),
   });
   let telemetryError: unknown;
   try {
@@ -433,61 +392,8 @@ async function deployPreviewApps({
       : "PR body shows no slot — this PR has not recorded a deploy yet",
   );
 
-  // The semaphore is the single source of lease truth: the draft policy's
-  // "does this PR hold a slot?" question goes there, not to the PR body,
-  // whose copy can be stale (a cancelled run can claim without recording).
   const semaphore = runtime.createPreviewSemaphoreResourceClient();
   const holder = pullRequestHolder(context.pullRequestNumber);
-  const heldSlots = await listSlotsLeasedToHolder(semaphore, holder);
-  const draftPolicy = decideDraftPreviewPolicy({
-    allowDraft: options.allowDraft === true,
-    holdsSlot: heldSlots.length > 0,
-    isDraft: context.pullRequestIsDraft,
-    labels: context.pullRequestLabels,
-  });
-  if (draftPolicy === "skip") {
-    logPreview(
-      `draft PR without the ${previewOptInLabel} label — not claiming a preview slot (mark ready, add the label, or pass --allow-draft)`,
-    );
-    const update = await updatePreviewState(context, (state) => ({
-      ...state,
-      notice: draftPreviewNotice,
-    }));
-    return {
-      ok: true,
-      skipped: true,
-      skippedReason: "draft",
-      state: update.state,
-    };
-  }
-  if (draftPolicy === "teardown") {
-    logPreview(
-      `draft PR without the ${previewOptInLabel} label holds ${heldSlots.map((slot) => slot.slug).join(", ")} — tearing down and releasing the slot (mark ready, add the label, or pass --allow-draft to keep previews)`,
-    );
-    const cleanupResult = await cleanupPreviewForPullRequest({ ...runtime, context });
-    if (!cleanupResult.ok) {
-      // ok=false means the lease RELEASE failed (a failed teardown alone
-      // still releases and reports ok — see cleanupPreviewForPullRequest).
-      throw new Error("Failed to release the draft PR's preview slot lease.");
-    }
-    // Pin the post-teardown state in this write: the GitHub read inside
-    // updatePreviewState can be stale (read-after-write lag) and would
-    // otherwise resurrect the released lease and app rows — and this run's
-    // test step would then re-acquire the slot the draft just gave up.
-    const update = await updatePreviewState(context, (state) => ({
-      ...state,
-      ...cleanupResult.state,
-      notice: draftPreviewNotice,
-    }));
-    return {
-      ok: true,
-      skipped: true,
-      skippedReason: "draft",
-      releasedLease: cleanupResult.released,
-      state: update.state,
-    };
-  }
-
   const selectedApps = options.allApps
     ? (logPreview("--all-apps: deploying the full preview fleet regardless of diff"),
       Object.values(cloudflarePreviewApps))
@@ -640,9 +546,8 @@ async function deployPreviewApps({
             // are moving targets, while the sha pins the exact builds this
             // deploy shipped.
             PREVIEW_PULL_REQUEST_HEAD_SHA: context.pullRequestHeadSha,
-            ...(app.slug === "os" && osContainerRollout
-              ? { OS_CONTAINERS_ROLLOUT: osContainerRollout.mode }
-              : {}),
+            ...(app.slug === "os" &&
+              osContainerRollout && { OS_CONTAINERS_ROLLOUT: osContainerRollout.mode }),
           },
           dopplerConfig: environmentConfigLease.dopplerConfig,
           mainWorkerSize: workerSizeBaselines[app.slug] ?? null,
@@ -702,6 +607,13 @@ async function deployPreviewApps({
       ),
     ].join("\n"),
   );
+  if (ok) {
+    await seedPreviewTestLogin({
+      lease: toSlotDisplay(environmentConfigLease),
+      pullRequestNumber: context.pullRequestNumber,
+    });
+  }
+
   const result = {
     ok,
     state: latestState,
@@ -714,6 +626,41 @@ async function deployPreviewApps({
   }
 
   return result;
+}
+
+/**
+ * Visit the PR's one-click login link once per deploy: auth's /test-login
+ * (apps/auth/src/server/test-login.ts) creates the pr<N> test user, org, and
+ * project before answering with its redirect — we stop there — so the Login
+ * link in the PR comment lands on a pre-warmed, already-existing project and
+ * the endpoint itself gets smoke-tested. Non-fatal by design: a slot serving
+ * an auth build without /test-login (fingerprint reuse of a pre-feature
+ * deploy) logs and moves on — the first human click seeds the same way.
+ */
+async function seedPreviewTestLogin(input: {
+  lease: CloudflarePreviewSlotDisplay;
+  pullRequestNumber: number;
+}) {
+  const url = previewLoginUrl(input.lease, input.pullRequestNumber);
+  if (!url) {
+    return;
+  }
+  try {
+    const response = await fetch(url, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (response.status >= 300 && response.status < 400) {
+      logPreview(
+        `test-login seeded: pr${input.pullRequestNumber}+test@nustom.com user, org, and project exist on ${input.lease.slug}`,
+      );
+    } else {
+      const detail = (await response.text().catch(() => "")).slice(0, 200);
+      logPreview(`test-login seed skipped: ${url} answered ${response.status} ${detail}`);
+    }
+  } catch (error) {
+    logPreview(`test-login seed skipped: ${formatPreviewErrorMessage(error)}`);
+  }
 }
 
 function resolvePreviewTestBaseUrlEnvironment({
@@ -1064,9 +1011,9 @@ async function testPreviewApps({
           context,
           previewSlot: environmentConfigLease.slug,
         }),
-        ...(telemetryArtifactDirectory
-          ? { TEST_TELEMETRY_ARTIFACT_DIR: telemetryArtifactDirectory }
-          : {}),
+        ...(telemetryArtifactDirectory && {
+          TEST_TELEMETRY_ARTIFACT_DIR: telemetryArtifactDirectory,
+        }),
       },
       signal: runtime.signal,
       workingDirectory: resolve(runtime.repositoryRoot, app.appPath),
@@ -1277,7 +1224,7 @@ export async function assign(options: AssignOptions = {}) {
 /**
  * Show environment config lease inventory, cross-check holders against GitHub
  * PR state, and explain why the fleet can look full even when only a handful
- * of PRs are open (orphaned closed-PR leases, idle holds, draft opt-ins, …).
+ * of PRs are open (orphaned closed-PR leases, idle holds, manual holds, …).
  *
  *   doppler run --project _shared --config prd -- pnpm preview status
  */
@@ -1326,9 +1273,6 @@ export async function status(options: StatusOptions = {}) {
       number: pullRequest.number,
       title: pullRequest.title,
       url: pullRequest.url,
-      isDraft: pullRequest.isDraft,
-      labels: pullRequest.labels,
-      previewEligible: pullRequestWouldClaimPreviewSlot(pullRequest),
       holdsSlot: diagnosis.holdersWithOpenPrs.includes(pullRequest.number),
     })),
     diagnosis,
@@ -1896,8 +1840,8 @@ export type PreviewTestSummary = PreviewRetrySummary & {
  * (marathon loops) can't leak stale telemetry.
  */
 const osVitestRetryTelemetryFile = "/tmp/os-preview-vitest-retries.json";
-/** Structured timing for the standalone onboarding smoke's logical test. */
-const osOnboardingSmokeTelemetryFile = "/tmp/os-preview-onboarding-smoke.json";
+/** Structured timing for the standalone agent smoke's logical test. */
+const osAgentSmokeTelemetryFile = "/tmp/os-preview-agent-smoke.json";
 /** Same JSON shape, written by the Microsoft TUI Test wrapper. */
 const osTuiRetryTelemetryFile = "/tmp/os-preview-tui-retries.json";
 /** Same contract for the streams-example-app lane's vitest sub-lane. */
@@ -1924,7 +1868,7 @@ async function readCanonicalTestTelemetry(
         name: record.fullName,
         retryCount: record.retryCount,
         passedAfterRetry: record.passedAfterRetry,
-        ...(record.firstFailure ? { firstFailure: record.firstFailure } : {}),
+        ...(record.firstFailure && { firstFailure: record.firstFailure }),
       })),
     collectionErrors: [],
   };
@@ -1983,7 +1927,7 @@ async function readPlaywrightTestTelemetry(
               .join(" › "),
             retryCount,
             passedAfterRetry: test.status === "flaky" || finalResult?.status === "passed",
-            ...(firstFailureSummary ? { firstFailure: firstFailureSummary } : {}),
+            ...(firstFailureSummary && { firstFailure: firstFailureSummary }),
           });
         }
       }
@@ -2227,7 +2171,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "dummy-petshop": "PETSHOP_BASE_URL",
     },
     previewTestArtifactSources: [
-      previewScriptArtifactSource("onboarding-smoke", "onboarding-smoke", "iterate-root"),
+      previewScriptArtifactSource("agent-smoke", "agent-smoke", "iterate-root"),
       previewScriptArtifactSource("tui-quarantine", "tui", "iterate-root"),
       previewVitestArtifactSource("@iterate-com/os"),
       previewPlaywrightArtifactSource("iterate-root"),
@@ -2247,7 +2191,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // previous run on the same machine (marathon loops), and
         // collectRetryTelemetry runs pass or fail, so a leftover file would
         // report a previous run's retries against this one.
-        `rm -f ${osVitestRetryTelemetryFile} ${osTuiRetryTelemetryFile} ${osOnboardingSmokeTelemetryFile} ../../test-results/playwright-results.json`,
+        `rm -f ${osVitestRetryTelemetryFile} ${osTuiRetryTelemetryFile} ${osAgentSmokeTelemetryFile} ../../test-results/playwright-results.json`,
         // The chromium download hits no deployed slot, so start it first and
         // let it overlap the smoke and TUI lanes; it's ready by the
         // time we reach the specs instead of adding ~4s in front of them.
@@ -2257,7 +2201,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // project-creation helpers and the smoke consume the absolute rollout
         // boundary passed above, so unrelated setup continues while fresh
         // project-backed DO work waits. The high-fanout Vitest lane waits for
-        // both the production-shaped onboarding smoke and the same bounded age.
+        // both the production-shaped agent smoke and the same bounded age.
         // Edge readiness cannot prove global Durable Object code propagation:
         // Cloudflare may reset an object when its assigned version changes.
         // The age clock starts when deploy completes and overlaps every lane
@@ -2279,7 +2223,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         'run_logged_lane() { local lane="$1"; local log="$2"; shift 2; local started="$SECONDS"; local rc=0; echo "[preview:os] lane start: $lane"; "$@" > "$log" 2>&1 || rc=$?; echo "[preview:os] lane finish: $lane ($((SECONDS - started))s, exit $rc)"; return "$rc"; }',
         'run_visible_lane() { local lane="$1"; shift; local started="$SECONDS"; local rc=0; echo "[preview:os] lane start: $lane"; "$@" || rc=$?; echo "[preview:os] lane finish: $lane ($((SECONDS - started))s, exit $rc)"; return "$rc"; }',
         `run_visible_lane rollout-settle sleep "$${previewRolloutRemainingSecondsEnvironment}" & ROLLOUT_PID=$!`,
-        `run_logged_lane smoke /tmp/os-preview-smoke.log env TEST_TELEMETRY_LANE=onboarding-smoke TEST_TELEMETRY_WORKSPACE=iterate-root TEST_TELEMETRY_ARTIFACT_FILE=${osOnboardingSmokeTelemetryFile} timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts & SMOKE_PID=$!`,
+        `run_logged_lane smoke /tmp/os-preview-smoke.log env TEST_TELEMETRY_LANE=agent-smoke TEST_TELEMETRY_WORKSPACE=iterate-root TEST_TELEMETRY_ARTIFACT_FILE=${osAgentSmokeTelemetryFile} timeout ${OS_AGENT_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/agent-smoke.ts & SMOKE_PID=$!`,
         `run_logged_lane tui /tmp/os-preview-tui.log env TEST_TELEMETRY_LANE=tui TEST_TELEMETRY_WORKSPACE=iterate-root TEST_TELEMETRY_ARTIFACT_FILE=${osTuiRetryTelemetryFile} timeout ${OS_TUI_LANE_TIMEOUT_SECS} pnpm exec tsx e2e/tui-test/run.ts & TUI_PID=$!`,
         'PW_INSTALL_OK=0; wait "$PW_INSTALL_PID" || PW_INSTALL_OK=$?',
         `SPEC_OK=0; SPEC_PID=""; if [ "$PW_INSTALL_OK" -eq 0 ]; then run_visible_lane playwright env TEST_TELEMETRY_LANE=playwright TEST_TELEMETRY_WORKSPACE=iterate-root PLAYWRIGHT_PREVIEW_SLOW_FIRST=1 timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec & SPEC_PID=$!; else cat /tmp/os-preview-pw-install.log; SPEC_OK=$PW_INSTALL_OK; fi`,
@@ -2297,8 +2241,8 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     ],
     collectTestTelemetry: async ({ repositoryRoot }) => {
       const [smoke, vitest, specs] = await Promise.all([
-        readTestTelemetryLane("os onboarding smoke", () =>
-          readCanonicalTestTelemetry(osOnboardingSmokeTelemetryFile, "onboarding smoke"),
+        readTestTelemetryLane("os agent smoke", () =>
+          readCanonicalTestTelemetry(osAgentSmokeTelemetryFile, "agent smoke"),
         ),
         readTestTelemetryLane("os vitest lane", () =>
           readCanonicalTestTelemetry(osVitestRetryTelemetryFile, "vitest"),
@@ -2839,8 +2783,6 @@ type PullRequestPreviewContext = {
   pullRequestBody: string;
   pullRequestHeadSha: string;
   pullRequestHeadRef?: string;
-  pullRequestIsDraft: boolean;
-  pullRequestLabels: string[];
   pullRequestNumber: number;
   repositoryFullName: string;
   workflowRunUrl: string | null;
@@ -2855,9 +2797,9 @@ function resolvePreviewTestTelemetryEnvironment(input: {
     TEST_TELEMETRY_KIND: "e2e",
     TEST_TELEMETRY_APP: input.app,
     TEST_TELEMETRY_HEAD_SHA: input.context.pullRequestHeadSha,
-    ...(input.context.pullRequestHeadRef
-      ? { TEST_TELEMETRY_BRANCH: input.context.pullRequestHeadRef }
-      : {}),
+    ...(input.context.pullRequestHeadRef && {
+      TEST_TELEMETRY_BRANCH: input.context.pullRequestHeadRef,
+    }),
     TEST_TELEMETRY_PULL_REQUEST_NUMBER: String(input.context.pullRequestNumber),
     TEST_TELEMETRY_PREVIEW_SLOT: input.previewSlot,
   };
@@ -3025,7 +2967,7 @@ async function updateCloudflarePreviewState(params: {
 
   await writePullRequestBody({
     ...params,
-    body: renderCloudflarePreviewPullRequestBody(current.body, nextState),
+    body: renderCloudflarePreviewPullRequestBody(current.body, nextState, params.pullRequestNumber),
   });
 
   return { state: nextState };
@@ -3059,13 +3001,43 @@ function parseCloudflarePreviewState(body: string): CloudflarePreviewState {
   }
 }
 
-function renderCloudflarePreviewPullRequestBody(body: string, state: CloudflarePreviewState) {
+function renderCloudflarePreviewPullRequestBody(
+  body: string,
+  state: CloudflarePreviewState,
+  pullRequestNumber: number,
+) {
   return markdownAnnotator(body, cloudflarePreviewSectionLabel).update(
-    renderCloudflarePreviewSection(CloudflarePreviewState.parse(state)),
+    renderCloudflarePreviewSection(CloudflarePreviewState.parse(state), pullRequestNumber),
   );
 }
 
-function renderCloudflarePreviewSection(state: CloudflarePreviewState) {
+/**
+ * One-click login into the leased slot's os deployment: auth's /test-login
+ * (apps/auth/src/server/test-login.ts, fixed-test-OTP deployments only)
+ * signs the per-PR `pr<N>+test@nustom.com` user in server-side, ensures
+ * their org+project exist, and hands the session to os' OAuth flow — the
+ * click on this link is the only interaction. The deploy also visits this
+ * URL once (seedPreviewTestLogin) so the user+project already exist.
+ */
+function previewLoginUrl(lease: CloudflarePreviewSlotDisplay, pullRequestNumber: number) {
+  let authBaseUrl: string;
+  let osBaseUrl: string;
+  try {
+    authBaseUrl = cloudflarePreviewApps.auth.resolvePreviewAppConfig(lease.dopplerConfig).baseUrl;
+    osBaseUrl = cloudflarePreviewApps.os.resolvePreviewAppConfig(lease.dopplerConfig).baseUrl;
+  } catch {
+    // A body can carry a doppler config this checkout doesn't know (e.g. a
+    // retired slot) — drop the link rather than failing the whole render.
+    return null;
+  }
+  const url = new URL("/test-login", authBaseUrl);
+  url.searchParams.set("email", `pr${pullRequestNumber}+test@nustom.com`);
+  url.searchParams.set("project", `pr${pullRequestNumber}`);
+  url.searchParams.set("return_to", new URL("/api/iterate-auth/login", osBaseUrl).toString());
+  return url.toString();
+}
+
+function renderCloudflarePreviewSection(state: CloudflarePreviewState, pullRequestNumber: number) {
   const entries = Object.values(state.apps).sort((left, right) =>
     left.appDisplayName.localeCompare(right.appDisplayName),
   );
@@ -3076,8 +3048,12 @@ function renderCloudflarePreviewSection(state: CloudflarePreviewState) {
     ? ["> [!CAUTION]", ...state.notice.split("\n").map((line) => `> ${line}`)].join("\n")
     : null;
 
+  const loginUrl = state.environmentConfigLease
+    ? previewLoginUrl(state.environmentConfigLease, pullRequestNumber)
+    : null;
+
   return [
-    "## Environment Config Lease",
+    `## Environment Config Lease${loginUrl ? ` [Login ↗](${loginUrl})` : ""}`,
     notice,
     markdownAnnotator("", cloudflarePreviewStateLabel).update(wrapHiddenStateBlock(state)),
     renderPreviewAppTableDetails({
@@ -4713,21 +4689,7 @@ type PreviewDiagnosisOpenPullRequest = {
   number: number;
   title: string;
   url: string;
-  isDraft: boolean;
-  labels: string[];
 };
-
-/**
- * Draft PRs only claim a slot when they opt in (same policy as deploy). Used
- * by `preview status` so "9 open PRs" is not compared apples-to-oranges with
- * the 9-slot fleet.
- */
-function pullRequestWouldClaimPreviewSlot(pullRequest: {
-  isDraft: boolean;
-  labels: readonly string[];
-}): boolean {
-  return !pullRequest.isDraft || pullRequest.labels.includes(previewOptInLabel);
-}
 
 type PreviewDiagnosisSlot = {
   slug: string;
@@ -4755,17 +4717,8 @@ function diagnosePreviewFleetCapacity(input: {
   const holdersWithOpenPrs = input.openPullRequests
     .map((pullRequest) => pullRequest.number)
     .filter((number) => leased.some((slot) => parsePullRequestHolder(slot.holder) === number));
-  const previewEligibleOpen = input.openPullRequests.filter(pullRequestWouldClaimPreviewSlot);
-  const previewEligibleWithoutSlot = previewEligibleOpen.filter(
+  const openWithoutSlot = input.openPullRequests.filter(
     (pullRequest) => !holdersWithOpenPrs.includes(pullRequest.number),
-  );
-  // Drafts that opted in via a one-shot `--allow-draft` dispatch hold a slot
-  // without the label, so exclude any that actually hold one — otherwise we'd
-  // tell the operator it "correctly claims no slot" next to holdsSlot: true.
-  const openButIneligible = input.openPullRequests.filter(
-    (pullRequest) =>
-      !pullRequestWouldClaimPreviewSlot(pullRequest) &&
-      !holdersWithOpenPrs.includes(pullRequest.number),
   );
   const closedHolders = leased.filter((slot) => slot.pullRequestState === "closed");
   const nonPrHolders = leased.filter((slot) => parsePullRequestHolder(slot.holder) === null);
@@ -4800,16 +4753,9 @@ function diagnosePreviewFleetCapacity(input: {
         .join(", ")}.`,
     );
   }
-  if (previewEligibleWithoutSlot.length > 0) {
+  if (openWithoutSlot.length > 0) {
     reasons.push(
-      `${previewEligibleWithoutSlot.length} open preview-eligible PR(s) have no slot: ${previewEligibleWithoutSlot
-        .map((pullRequest) => `#${pullRequest.number}`)
-        .join(", ")}.`,
-    );
-  }
-  if (openButIneligible.length > 0) {
-    reasons.push(
-      `${openButIneligible.length} open draft PR(s) without the \`${previewOptInLabel}\` label correctly claim no slot: ${openButIneligible
+      `${openWithoutSlot.length} open PR(s) have no slot: ${openWithoutSlot
         .map((pullRequest) => `#${pullRequest.number}`)
         .join(", ")}.`,
     );
@@ -4818,10 +4764,10 @@ function diagnosePreviewFleetCapacity(input: {
     input.openPullRequests.length > 0 &&
     closedHolders.length === 0 &&
     available.length === 0 &&
-    previewEligibleOpen.length <= input.slots.length
+    input.openPullRequests.length <= input.slots.length
   ) {
     reasons.push(
-      `Open-PR count alone (${input.openPullRequests.length} open, ${previewEligibleOpen.length} preview-eligible) does not explain a full fleet — check idle/manual holders above.`,
+      `Open-PR count alone (${input.openPullRequests.length} open) does not explain a full fleet — check idle/manual holders above.`,
     );
   }
 
@@ -4834,9 +4780,7 @@ function diagnosePreviewFleetCapacity(input: {
     closedHolders.length > 0 ? `${closedHolders.length} orphaned (closed PR)` : null,
     idle.length > 0 ? `${idle.length} idle` : null,
     active.length > 0 ? `${active.length} active` : null,
-    previewEligibleWithoutSlot.length > 0
-      ? `${previewEligibleWithoutSlot.length} open PR(s) waiting for a slot`
-      : null,
+    openWithoutSlot.length > 0 ? `${openWithoutSlot.length} open PR(s) waiting for a slot` : null,
   ].filter(Boolean);
 
   return {
@@ -4846,8 +4790,7 @@ function diagnosePreviewFleetCapacity(input: {
     idleCount: idle.length,
     activeCount: active.length,
     openPullRequestCount: input.openPullRequests.length,
-    previewEligibleOpenCount: previewEligibleOpen.length,
-    previewEligibleWithoutSlotCount: previewEligibleWithoutSlot.length,
+    openWithoutSlotCount: openWithoutSlot.length,
     holdersWithOpenPrs,
     nextLeaseExpiryAt:
       leased
@@ -4876,10 +4819,6 @@ async function listOpenPullRequestsForPreviewDiagnosis(
     number: pullRequest.number,
     title: pullRequest.title,
     url: pullRequest.html_url,
-    isDraft: Boolean(pullRequest.draft),
-    labels: (pullRequest.labels ?? [])
-      .map((label) => (typeof label === "string" ? label : label.name))
-      .filter((name): name is string => typeof name === "string" && name.length > 0),
   }));
 }
 
@@ -6198,8 +6137,6 @@ async function resolvePullRequestPreviewContext(params: {
     pullRequestBody: pullRequest.data.body || "",
     pullRequestHeadSha: pullRequest.data.head.sha,
     pullRequestHeadRef: pullRequest.data.head.ref,
-    pullRequestIsDraft: pullRequest.data.draft === true,
-    pullRequestLabels: pullRequest.data.labels.map((label) => label.name),
     pullRequestNumber: params.pullRequestNumber,
     repositoryFullName,
     workflowRunUrl:
@@ -6226,7 +6163,6 @@ export const previewInternals = {
   claimEnvironmentConfigLease,
   classifyEnvironmentConfigLeases,
   classifyLeaseForReclaim,
-  decideDraftPreviewPolicy,
   describeEnvironmentConfigLeases,
   describeForcePushCompareHazard,
   describeLostSlotOwnership,
@@ -6235,7 +6171,6 @@ export const previewInternals = {
   evaluateCloudflareZoneCheck,
   holderPullRequestUrl,
   pullRequestHolder,
-  pullRequestWouldClaimPreviewSlot,
   requireExplicitReclaimForce,
   retakeRecordedSlotIfFree,
   resolveSlotWaitTotalMs,

@@ -73,8 +73,16 @@ same merges are the ones that need a manual dev-client rebuild
 
 `eas update` publishes stamp `src/build-info.json` via
 `scripts/write-build-info.mjs` (EAS native builds run it through the
-`eas-build-pre-install` hook). The checked-in file is an all-empty
-placeholder — don't commit a stamped one. Manual publish to the shared
+`eas-build-pre-install` hook). Besides provenance, the stamp carries the
+bundle's _expected backend_ (`expectedBackendEnv` — the PR's leased preview
+slot — plus a `pr<N>+test@nustom.com` test identity). The QR confirm screen
+is the ONE surface that acts on it: after a channel switch it compares the
+new bundle's expectation against the phone's server/sign-in and offers the
+fix as a default-checked checkbox on Continue
+(`src/lib/expected-backend.ts`); the sign-in screen and Build info only
+display it. Main and local bundles stamp it empty — no recommendation,
+phones default to prd. The checked-in file is an all-empty placeholder —
+don't commit a stamped one. Manual publish to the shared
 main channel (rare — see per-PR channels below):
 `pnpm --dir apps/mobile update:preview`.
 
@@ -90,7 +98,10 @@ app to the PR's channel (confirm screen, then fetch + reload), and the
 matching build's install page for when the runtime differs or the app isn't
 installed. Whichever the fingerprint heuristic says you need is expanded.
 The switch persists across restarts; get back with **Build info → Reset to
-default channel**.
+default channel**. Installing a native build overpowers that persistence:
+the first boot of a new binary force-clears any pre-existing channel
+override (with a notice), so the build you installed is the build you run
+(`src/lib/native-install-guard.ts`).
 
 Lifecycle: closing a PR deletes its channel, update branch, and QR assets
 (`.depot/workflows/mobile-pr-preview-cleanup.yml`). Channel discovery is the
@@ -126,10 +137,10 @@ deterministic and credential-free at the signed-out entry point.
 
 ## Pointing it at a deployment
 
-The sign-in screen has an editable server field with one-tap presets:
-**Production** (`os.iterate.com`, default) and every preview slot
-(`os.iterate-preview-N.com`). Anything else — a captun tunnel, a teammate's
-box — gets typed in and remembered as a recent.
+The sign-in screen has an editable server field with at most two one-tap
+presets: **Production** (`os.iterate.com`, default) and the running bundle's
+expected backend when it names a preview slot. Anything else — another
+preview slot, a captun tunnel, a teammate's box — gets typed in.
 
 - **Local dev from the phone**: the phone can't see `localhost`, so publish
   your dev server through captun — `CAPTUN_TUNNEL_NAME=<name> pnpm dev` —

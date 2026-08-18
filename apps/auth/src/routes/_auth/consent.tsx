@@ -17,6 +17,7 @@ import { ITERATE_PROJECT_SELECTION_SCOPE } from "@iterate-com/shared/auth-claims
 import { authClient, useSession } from "../../utils/auth-client.ts";
 import { oauthClientQueryOptions } from "../../utils/auth-query-options.ts";
 import { getInitials } from "../../utils/initials.ts";
+import { redirectAndStayPending } from "../../utils/redirect-and-stay-pending.ts";
 
 export const Route = createFileRoute("/_auth/consent")({
   component: RouteComponent,
@@ -41,8 +42,10 @@ function RouteComponent() {
         throw new Error("Could not continue the OAuth redirect");
       }
 
-      window.location.href = result.url;
-      return result;
+      // Keep "Authorizing..." showing until the browser actually leaves —
+      // a bare href assignment flips isPending off mid-redirect, leaving the
+      // page with no loading state while the slow round trip completes.
+      return await redirectAndStayPending(result.url);
     },
   });
 
@@ -56,7 +59,13 @@ function RouteComponent() {
 
   if (oauthClientQuery.isPending) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-muted/20 p-4">
+      // role/aria: a marked loading state — assistive tech announces it, and
+      // the e2e spinner-waiter extends its wait budget while it shows.
+      <div
+        aria-label="Loading"
+        className="flex min-h-screen items-center justify-center bg-muted/20 p-4"
+        role="status"
+      >
         <Card className="w-full max-w-md">
           <CardHeader>
             <div className="h-12 w-12 rounded-lg bg-muted" />

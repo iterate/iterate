@@ -18,7 +18,7 @@ test("can sign up with an email one-time passcode", async ({ page }, testInfo) =
   );
 
   const slug = uniqueFixtureSlug("signup");
-  // Back on OS, signed in: onboarding created the first project's container
+  // Back on OS, signed in: auth created the first project's container
   // on auth, and the root `/` starts the engine bootstrap. The creation panel
   // is deliberately transient (and can be hidden in a responsive side panel),
   // so it is not a completion signal. Assert the durable destination below.
@@ -29,20 +29,19 @@ test("can sign up with an email one-time passcode", async ({ page }, testInfo) =
   });
 
   await spinnerWaiter.settings.run({ disabled: true }, async () => {
-    // The composer is the destination route's structural chrome — it renders
-    // on mount, independent of any LLM output. 60s covers the cold-slot
-    // bootstrap + redirect straggle without serially waiting for an optional
-    // intermediate paint first.
-    await page.getByPlaceholder("Message this agent").waitFor({ timeout: 60_000 });
+    // The default config template handles project/created, creates its
+    // onboarding agent, and drives the connected OS tab to the new chat. The
+    // composer is structural route chrome, independent of any LLM output;
+    // manual timeout covers the cold build, creation saga, and redirect while
+    // spinner-waiter is disabled for the unmarked intermediate skeleton.
+    await page.getByPlaceholder("Message this agent").waitFor({ timeout: 60_000 }); // timeout: spinner-waiter is disabled for the intermediate skeleton
   });
-  // The composer only renders under an agent-stream route, so the URL has
-  // settled — assert the redirect landed on the new project's onboarding agent.
-  expect(page.url()).toContain(`/projects/${slug}/agents/streams/agents/onboarding`);
+  expect(new URL(page.url())).toMatchObject({
+    pathname: `/projects/${slug}/agents/streams/agents/onboarding`,
+  });
 
-  // `onboardingActive` keeps the manual "Continue onboarding" affordance,
-  // but ordinary OS entry must not turn that durable state into an automatic
-  // agent redirect.
+  // Ordinary OS entry returns to the ready project's dashboard.
   await page.goto("/");
-  await page.getByRole("link", { name: "Continue onboarding" }).waitFor();
+  await page.getByTestId("project-dashboard").waitFor();
   expect(new URL(page.url())).toMatchObject({ pathname: `/projects/${slug}` });
 });

@@ -122,6 +122,45 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
   and sends no real email. This is controlled by
   `APP_CONFIG_FIXED_TEST_OTP_ENABLED`; production sets it false and always sends
   a real email OTP.
+- One-click login links: on fixed-test-OTP deployments, auth's `/test-login`
+  endpoint signs a test address in server-side (no typing at all), ensures the
+  user has an org + project, and redirects into the relying party's OAuth flow:
+
+  ```
+  https://auth.<env-host>/test-login?email=pr<N>%2Btest%40nustom.com&project=pr<N>&return_to=https://os.<env-host>/api/iterate-auth/login
+  ```
+
+  `project` (optional) names the org and first project; it defaults to the
+  email local part minus `+test`. `return_to` may be a same-origin path or a
+  registered relying party URL (the deployment's seeded OAuth clients).
+  Preview PR comments render this as the `Login ↗` link, and the preview
+  deploy visits it once so the `pr<N>` user + project already exist by the
+  time anyone clicks. It grants nothing the fixed OTP doesn't already grant;
+  production 404s the route (`apps/auth/src/server/test-login.ts`).
+
+- Template-carrying login links: a single URL can preselect the test user AND
+  the project to create — maximally useful in PR bodies:
+
+  ```
+  https://os.<env-host>/api/iterate-auth/login?login_hint=pr<N>%2Btest%40nustom.com&project_hint=pr<N>-template-<name>
+  ```
+
+  `login_hint` (an email) prefills sign-in ("Continue as …", fixed OTP as
+  above). `project_hint` (a project slug) rides the OAuth flow the same way
+  and prefills the first-run project slug instead of the derived-from-email
+  suggestion. The slug convention does the rest on the OS side: a slug ending
+  `-template-<name>` makes `create()` use `configs/<name>` from
+  `github:iterate/iterate` as the project's config template, and a slug
+  prefix starting `pr<N>` pins the ref to `pull/<N>/head` — so a
+  config-template PR can link to a project born from its own in-flight
+  template, and `pr<N>-<anything>-template-<name>` gives everyone their own
+  collision-free slug for the same template. A template folder GitHub
+  definitively reports absent (404) creates the project stock; a
+  rate-limited or unreachable GitHub records the template anyway, so a
+  quota'd birth fails visibly instead of silently going stock. Hints are
+  suggestions only: the user still confirms every step (the hint also names
+  the first-run organization, keeping test signups collision-free), and
+  explicit `configRepoTemplate` arguments always win over the convention.
 
 The dev-global auth deploys from `main` (alongside prd auth) and reseeds its
 OAuth clients from Doppler on every deploy — see
@@ -348,14 +387,6 @@ invariants:
   GC sweep — see **[Preview resource GC](preview-resource-gc.md)** for how
   teardown is decoupled from releasing the slot (and how disposable data
   expires 3h after last use).
-- **Draft PRs don't claim a slot unless they ask.** Drafts are the default
-  for agent-opened PRs, and nineteen slots don't survive a busy night of them. A
-  draft asks by wearing the `preview` label (durable — previews then behave
-  as for a ready PR), being marked ready for review, or a one-shot explicit
-  run (dispatching the `Cloudflare Previews` workflow, or
-  `pnpm preview deploy --allow-draft`; the next push re-applies the policy).
-  A draft that holds a slot without asking — e.g. a ready PR converted back
-  to draft — gives it back on the next lifecycle run.
 - **The semaphore is the single source of lease truth.** The PR body's
   managed section only _displays_ the slot (and per-app results); it is never
   consulted for ownership and never a reason to skip. Before running tests or
@@ -375,7 +406,7 @@ invariants:
   someone else on it.
 - **Everything is attributable and visible.** `pnpm preview status` shows
   each slot's holder, PR open/closed state, idle/orphaned verdict, open
-  preview-eligible PRs without a slot, and reclaim commands when the fleet
+  PRs without a slot, and reclaim commands when the fleet
   is full for a reason other than "nineteen open PRs". The semaphore UI at
   semaphore.iterate.com shows the same live leases; every lease transition
   (acquired/renewed/evicted/expired/force-released) is logged as an event in
@@ -393,15 +424,13 @@ invariants:
   doppler run --project _shared --config prd -- pnpm preview gc --dry-run
   ```
 
-An eligible PR can request one configured slot by putting an exact standalone
+A PR can request one configured slot by putting an exact standalone
 line in its body:
 
 ```text
 preview_environment=preview-17
 ```
 
-This selects a slot; it does not opt a draft into previews. The PR must still
-carry the `preview` label, be ready for review, or use an explicit one-off run.
 If the requested slot is unknown or held by another owner, acquisition fails
 without forcing the holder or silently falling back to another slot.
 

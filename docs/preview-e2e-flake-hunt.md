@@ -74,7 +74,7 @@ That run also isolated the leading time floor. OS deployment took 79.45
 seconds and OS E2E took 171.99 seconds, while OS Vitest itself took 63.55
 seconds. Fresh project creation was held until the deployment-wide Durable
 Object rollout clock reached 90 seconds, and Vitest began only after that
-boundary plus onboarding smoke settled. Round 15 begins at 0/25 and first
+boundary plus agent smoke settled. Round 15 begins at 0/25 and first
 measures unchanged warm-slot runs through the canonical Depot workflow before
 changing the rollout critical path.
 
@@ -428,7 +428,7 @@ independent sources of preview tail latency and absorbed retries:
 - project-directory registration now retries only the missing slug or
   project-index write, so a partial KV failure cannot replay a successful
   sibling write;
-- onboarding smoke consumes the deployment-wide rollout deadline immediately
+- agent smoke consumes the deployment-wide rollout deadline immediately
   before project creation instead of beginning a second rollout wait; and
 - stream-backed read-your-writes paths no longer perform an unbounded,
   redundant processor catch-up before entering the existing offset wait that
@@ -585,7 +585,7 @@ Round-10 preflight ledger:
 
 The smallest deterministic CI boundary is a 90-second minimum age from the
 successful OS deploy command to high-fanout Vitest. The clock starts before
-exact-version readiness and runs concurrently with readiness, onboarding
+exact-version readiness and runs concurrently with readiness, agent
 smoke, Chromium installation, Playwright, TUI, and every other app suite;
 reused older deployments wait zero seconds. Playwright remains on the critical
 path in the observed runs, so the clock should add little or no wall time. This
@@ -596,7 +596,7 @@ remains 0/25 until the new immutable PR head completes the canonical marathon.
 The first formal head then passed four consecutive full runs in 231–241
 seconds with zero retries. Run 5 took 361 seconds and was rejected because two
 Playwright cases needed their permitted retry. Both failed before their named
-stimulus: one fresh onboarding feed never painted its greeting, and one REPL
+stimulus: one fresh agent feed never painted its reply, and one REPL
 case timed out inside project creation. Cloudflare telemetry for the first
 project records successful birth/readiness followed by `durableObjectReset`
 warnings on its stream sink at `00:05:00Z` and `00:05:04Z`. Its creation began
@@ -706,7 +706,7 @@ immutable head can restart it.
 The first canonical run after removing the probes, [Depot run
 `69ccf2rkj7`](https://depot.dev/orgs/0p91s0lz49/workflows/jj6p9xkh2z?job=tqpx1h1kwr&attempt=5cj8k7kk2d),
 made the remaining boundary precise. All five deploys passed and every non-OS
-suite passed. OS Playwright passed 63/63 and the onboarding smoke completed on
+suite passed. OS Playwright passed 63/63 and the agent smoke completed on
 its first attempt in 26 seconds, but nine OS Vitest cases entered retry; eight
 recovered and the preview-smoke case failed both attempts. Every affected test
 was scheduled within the first second of Vitest. The errors were rollout-wide
@@ -715,7 +715,7 @@ connections, and internal references), while files scheduled later had no
 retry. This is a fresh-deployment fan-out race, not nine independent test
 defects.
 
-The minimal boundary is now the existing production-shaped onboarding smoke,
+The minimal boundary is now the existing production-shaped agent smoke,
 not a synthetic fleet sampler. Chromium installation, the smoke, and TUI start
 immediately; Playwright starts as soon as Chromium is ready; high-fanout Vitest
 starts only after the smoke has successfully created a real project and served
@@ -1006,7 +1006,7 @@ times across six merged main heads. Detailed per-run log in the PR comments.
   (preview-1) and moved on.
 - **marathon r4-3** `4xg33k0bf5` (merged main ce18a7d79): **25/25 green**,
   01:09–02:17 UTC. Runs 24–25 slowed to ~6 min (os lane 372s/355s) with
-  recovered onboarding-stream `liveness probe` WebSocket reconnects — the
+  recovered agent-stream `liveness probe` WebSocket reconnects — the
   flake-23 pool-saturation tail signature (the pool rides at the per-type
   `SANDBOX_MAX_INSTANCES` preview cap; #1747 replaced the flat cap-150 with
   that table), fully absorbed by the
@@ -1065,8 +1065,8 @@ to be reset; reference = v6frpcasd5hp70rrhv37kmr4`) during an active
 - **marathon6** `gb1g4sg7rs`: 25 clean at a steady ~60-90s/run — cap 500
   eliminated the saturation slowdown entirely (pool rode at `assigned: 491`
   with NO latency growth, where cap-100 marathons were at 3-5min/run by run
-  20). Run 26 failed on the lane's one retry-less gate: `onboarding-smoke.ts`
-  — the onboarding agent didn't greet within 90s ("saw 0 events") and the
+  20). Run 26 failed on the lane's one retry-less gate: `agent-smoke.ts`
+  — the agent didn't reply within 90s ("saw 0 events") and the
   remote timeout crashed the bare tsx process. Fix: the smoke now makes 3
   attempts, each with a fresh session + project, matching the vitest lane's
   `retry: 2` policy; a broken slot still fails all three inside ~5min.
@@ -1740,7 +1740,7 @@ pre-existing flakes that round 3 fixes:
 - **Guarded: deploy→test race: `Durable Object reset because its code was
 updated`.** `wrangler deploy` can return while Cloudflare is still propagating
   the new code. This produced a rollout-wide failure on commit `1796831c`: the
-  onboarding smoke reset on its first attempt, 30 Vitest tests retried, and 19
+  agent smoke reset on its first attempt, 30 Vitest tests retried, and 19
   still failed. A retry was not a sufficient boundary. OS `/api/health` now
   reports its `CF_VERSION_METADATA` id, and the preview orchestrator parses the
   final `Current Version ID` from the deploy (the main Worker follows its two

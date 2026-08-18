@@ -117,7 +117,7 @@ const AMBIENT_NAMES = new Set([
 function openProject(fsOverlay?: Map<string, string>) {
   const api = new API({
     cwd: projectDir,
-    ...(fsOverlay ? { fs: { readFile: (fileName) => fsOverlay.get(path.resolve(fileName)) } } : {}),
+    ...(fsOverlay && { fs: { readFile: (fileName) => fsOverlay.get(path.resolve(fileName)) } }),
   });
   const snapshot = api.updateSnapshot({ openProjects: [tsconfigPath] });
   const project = snapshot.getProject(tsconfigPath);

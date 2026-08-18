@@ -185,7 +185,15 @@ export class StreamCoreProcessor {
     authority: "public" | "core-event" | "copy";
   }): void {
     if (args.event.ephemeral && args.event.type.startsWith("events.iterate.com/stream/")) {
-      throw new Error("stream control events cannot be ephemeral");
+      // The contract decides which control events are ephemeral (currently
+      // the connection presence facts — see their definitions). Everything
+      // else durable state may depend on, so the guard stands.
+      const definition = (CoreProcessorContract.events as Record<string, { ephemeral?: boolean }>)[
+        args.event.type
+      ];
+      if (definition?.ephemeral !== true) {
+        throw new Error("stream control events cannot be ephemeral");
+      }
     }
 
     if (args.authority === "public" && isInternalStreamIdempotencyKey(args.event.idempotencyKey)) {

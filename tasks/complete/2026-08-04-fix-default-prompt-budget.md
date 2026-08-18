@@ -19,7 +19,7 @@ Each PR was green alone; the merge is 13 chars over.
 ## Plan
 
 - [x] Trim the #2400 bullet wording in `apps/os/src/domains/agents/agent-defaults.ts` to get comfortably under 16800 without losing meaning _("a small structural preview" → "a preview", "in plain TypeScript" → "in TypeScript"; prompt now 16786 chars, 14 headroom. Bullet 207 already teaches that the script body is real TypeScript.)_
-- [x] Bump `DEFAULT_AGENT_SYSTEM_PROMPT_REVISION` 7 → 8 _(MCP/onboarding revisions derive from it automatically)_
+- [x] Bump `DEFAULT_AGENT_SYSTEM_PROMPT_REVISION` 7 → 8 _(the MCP revision derives from it automatically)_
 - [x] `pnpm vitest run agent-prompt-budgets` green in apps/os _(7/7; full apps/os suite also green: 2547 passed)_
 - [x] typecheck/lint/knip clean _(all green locally)_
 

@@ -1,10 +1,7 @@
-import { useCallback, useEffect, useRef } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { toast } from "@iterate-com/ui/components/sonner";
 import { connectItx, useLiveState } from "iterate/sdk/itx/react";
 import { AgentDetailsSheet } from "~/components/agents/agent-details-sheet.tsx";
 import { filesToAgentPayload } from "~/lib/web-agent.ts";
-import { ONBOARDING_AGENT_PATH, ensureOnboardingAgentReady } from "~/lib/onboarding-agent.ts";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import {
   breadcrumbLoaderData,
@@ -37,7 +34,6 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/agents/streams
 function ProjectAgentDetailContent() {
   const { project } = Route.useLoaderData();
   const { _splat: streamPath } = Route.useParams();
-  const onboardingBirthRef = useRef<{ key: string; promise: Promise<void> } | null>(null);
   const agents =
     useLiveState(
       (itx) => itx.agents.liveState,
@@ -51,67 +47,13 @@ function ProjectAgentDetailContent() {
     { slug: project.id },
   ).value;
 
-  // THE onboarding-agent birth: the agent is deliberately not born during
-  // project bootstrap (it costs a real LLM turn), so opening its chat is what
-  // births it. The onboarding prompt and kickoff are appended explicitly here
-  // after generic creation rather than inferred from the stream path. One
-  // shared promise closes the race between this eager birth and a user sending
-  // immediately; retries cover the create-flow window where the itx session's
-  // claims may still be catching up.
-  const ensureOnboardingAgent = useCallback((): Promise<void> => {
-    if (streamPath !== ONBOARDING_AGENT_PATH) return Promise.resolve();
-
-    const key = `${project.id}:${streamPath}`;
-    if (onboardingBirthRef.current?.key === key) {
-      return onboardingBirthRef.current.promise;
-    }
-
-    const promise = (async () => {
-      let lastError: unknown;
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          const itx = await connectItx(project.id);
-          const agent = itx.agents.get(ONBOARDING_AGENT_PATH);
-          await ensureOnboardingAgentReady({ agent });
-          return;
-        } catch (error) {
-          lastError = error;
-          if (attempt < 2) {
-            await new Promise((resolve) => setTimeout(resolve, 2_000 * (attempt + 1)));
-          }
-        }
-      }
-      throw new Error("Could not create the onboarding agent.", { cause: lastError });
-    })();
-
-    onboardingBirthRef.current = { key, promise };
-    void promise.catch(() => {
-      if (onboardingBirthRef.current?.promise === promise) {
-        onboardingBirthRef.current = null;
-      }
-    });
-    return promise;
-  }, [project.id, streamPath]);
-
-  useEffect(() => {
-    let active = true;
-    void ensureOnboardingAgent().catch((error: unknown) => {
-      if (active) {
-        toast.error(error instanceof Error ? error.message : String(error));
-      }
-    });
-    return () => {
-      active = false;
-    };
-  }, [ensureOnboardingAgent]);
   // The stream view subscribes live, so a send needs no cache invalidation —
   // the new events arrive over the socket. Agent setup is represented by
   // explicit project and agent facts; sendMessage appends only the user-facing
   // input fact.
   // The socket is keyed by project ID (the provider pre-warmed it), and agents
-  // are addressed by their stream path (e.g. "/agents/onboarding").
+  // are addressed by their stream path.
   async function submitAgentMessage(message: string) {
-    await ensureOnboardingAgent();
     const itx = await connectItx(project.id);
     // Returned so the composer can feed the committed offset into the
     // store's consume-own-append metric (real append→observed latency).
@@ -119,13 +61,12 @@ function ProjectAgentDetailContent() {
   }
 
   async function submitAgentFiles({ files, message }: { files: File[]; message: string }) {
-    await ensureOnboardingAgent();
     const itx = await connectItx(project.id);
     // One addFiles call → ONE input event carrying every attachment, so the
     // feed shows a single message and the agent gets one turn trigger.
     const { event } = await itx.agents.get(streamPath).addFiles({
       files: await filesToAgentPayload(files),
-      ...(message ? { message } : {}),
+      ...(message && { message }),
     });
     return event;
   }

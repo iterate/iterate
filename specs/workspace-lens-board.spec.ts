@@ -35,15 +35,15 @@ test("workspace lens board demo", async ({ page }) => {
   await page.getByTestId("email-input").fill("demo2+test@nustom.com");
   await page.getByTestId("email-submit-button").click();
   await page.getByTestId("email-otp-input").fill("424242");
-  await page.getByTestId("email-verify-button").click({ timeout: 15_000 });
+  await page.getByTestId("email-verify-button").click({ timeout: 15_000 }); // timeout: auth-server round trip with no spinner-waiter-visible loading UI
   // The OAuth hop lands back on OS; wait for the signed-in shell before
   // navigating on, or the in-flight redirect aborts the next goto.
-  await page.getByRole("button", { name: "Toggle Sidebar" }).waitFor({ timeout: 90_000 });
+  await page.getByRole("button", { name: "Toggle Sidebar" }).waitFor({ timeout: 90_000 }); // timeout: cross-server OAuth hop + cold preview shell — past the spinner-waiter's 30s ceiling
   await page.goto(OS_PROJECT_URL);
 
   // 1. Ask a fresh agent for five jokes and a review link.
   const composer = page.getByRole("textbox", { name: "Message a new agent" });
-  await composer.waitFor({ timeout: 60_000 });
+  await composer.waitFor({ timeout: 60_000 }); // timeout: cold live-preview route load — past the spinner-waiter's 30s ceiling
   // "your own workspace" on purpose: agents sometimes echo a workspace path
   // from earlier context instead of the one in their own boot context.
   await composer.fill(
@@ -60,25 +60,25 @@ test("workspace lens board demo", async ({ page }) => {
   await page.goto(docsHref);
   await passProjectGate(page);
   const comment = page.getByRole("textbox", { name: /Comment on the entire document/ });
-  await comment.waitFor({ timeout: 60_000 });
+  await comment.waitFor({ timeout: 60_000 }); // timeout: docs lens cold load on the live preview — past the spinner-waiter's 30s ceiling
   // Comments are whole-file transforms routed through the live document, so
   // they refuse until the collab session has attached ("the editor is still
   // connecting"). Wait for live, then retry the submit until it lands.
-  await page.getByText(/^live · v/).waitFor({ timeout: 60_000 });
+  await page.getByText(/^live · v/).waitFor({ timeout: 60_000 }); // timeout: collab-session attach on the live preview — past the spinner-waiter's 30s ceiling
   const commentCount = page.getByRole("button", { name: /Comments \(\d+\)/ });
   for (let attempt = 0; attempt < 10 && !(await commentCount.isVisible()); attempt++) {
     await comment.fill(
       "Joke 3 is too niche — swap it for something broader. The rest are keepers!",
     );
     await page.getByRole("button", { name: "Add document comment" }).click();
-    await commentCount.or(page.getByText(/still connecting/)).waitFor({ timeout: 10_000 });
+    await commentCount.or(page.getByText(/still connecting/)).waitFor({ timeout: 10_000 }); // timeout: bounded retry slice — the "still connecting" refusal is product text the spinner-waiter cannot treat as a spinner
   }
-  await commentCount.waitFor({ timeout: 30_000 });
+  await commentCount.waitFor({ timeout: 30_000 }); // timeout: manual demo-lane budget — no loading UI marks the comment transform for the spinner-waiter
 
   // 3. Tell the agent to incorporate the feedback and stage tasks.
   await page.goto(threadUrl);
   const reply = page.getByRole("textbox", { name: "Message this agent" });
-  await reply.waitFor({ timeout: 60_000 });
+  await reply.waitFor({ timeout: 60_000 }); // timeout: thread route cold load on the live preview — past the spinner-waiter's 30s ceiling
   await reply.fill(
     'thanks — incorporate my feedback in jokes.md, then create 5 task files under tasks/ in /repos/config in your workspace (one per joke, do NOT commit). Then send me a board link minted with itx.worker.docs.link({ workspace: <your workspace>, repo: "/repos/config" }) so I can review them.',
   );
@@ -94,10 +94,10 @@ test("workspace lens board demo", async ({ page }) => {
   // breadcrumbs, the agent's uncommitted joke tasks, no Commit control.
   await page.goto(boardHref);
   await passProjectGate(page);
-  await page.getByText("GUEST").waitFor({ timeout: 60_000 });
+  await page.getByText("GUEST").waitFor({ timeout: 60_000 }); // timeout: board lens cold load on the live preview — past the spinner-waiter's 30s ceiling
   await page.getByText("/repos/config").first().waitFor();
   await page.getByRole("button", { name: /joke/i }).first().click();
-  await page.getByRole("combobox", { name: "Task state" }).waitFor({ timeout: 30_000 });
+  await page.getByRole("combobox", { name: "Task state" }).waitFor({ timeout: 30_000 }); // timeout: manual demo-lane budget — the task drawer renders with no spinner-waiter-visible loading UI
 });
 
 /**
@@ -112,7 +112,7 @@ async function waitForAgentReply(
 ): Promise<void> {
   for (let slice = 0; slice < 4; slice++) {
     try {
-      await locator.waitFor({ timeout: 120_000 });
+      await locator.waitFor({ timeout: 120_000 }); // timeout: one bounded LLM-turn slice (see docstring) — far past any spinner-waiter ceiling
       return;
     } catch {
       // keep waiting — the turn is still running
@@ -126,7 +126,7 @@ async function waitForAgentReply(
 async function passProjectGate(page: import("@playwright/test").Page): Promise<void> {
   const gate = page.getByRole("link", { name: "Continue with iterate" });
   try {
-    await gate.click({ timeout: 10_000 });
+    await gate.click({ timeout: 10_000 }); // timeout: presence probe — the gate may legitimately never appear, nothing for the spinner-waiter to wait on
   } catch {
     // already authorized on this host
   }

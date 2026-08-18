@@ -11,12 +11,11 @@
 // exact pkg.pr.new artifact produced by the pull request.
 import { DurableObject, RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 import type {
+  AgentEventInput,
   DynamicWorkerCapability,
   DynamicWorkerRef,
   ItxBinding,
   Project,
-  ProjectAuthActor,
-  ProjectAuthCredentials,
   ProjectAuthPolicy,
   StatefulDynamicWorkerRef,
   StreamEvent,
@@ -47,6 +46,34 @@ import {
 export type * from "./itx-api.generated.ts";
 
 /**
+ * Compile-time shape for the `"agents/birth-defaults"` value of a
+ * `project/defaults-configured` append — the project's standing contribution
+ * to every matching agent birth batch. The platform stores the value
+ * opaquely and validates it at the agent creation door (degrading to
+ * platform-default births on mismatch; runtime owner:
+ * apps/os/src/domains/agents/agent-defaults.ts), so this type exists to give
+ * config workers compile-time reassurance that what they publish will
+ * survive that check: agent-consumed events, plus the one allowlisted
+ * platform-lane exception — a builtin facet-processor subscription (the
+ * runtime additionally allowlists the subscription name).
+ */
+export type AgentBirthDefaultsValue = {
+  /** Which agents these defaults apply to; absent = every agent born through
+   * the generic creation door. */
+  matches?: { pathPrefix: string };
+  birthEvents: Array<
+    | AgentEventInput
+    | {
+        type: "events.iterate.com/stream/subscription-configured";
+        payload: {
+          name: string;
+          receiver: { action: "facet-processor"; source: { kind: "builtin" } };
+        };
+      }
+  >;
+};
+
+/**
  * What the platform supplies to every dynamic worker: the `ITX` binding
  * (`get()` for capability method calls, `fetch()` for HTTP into sibling
  * workers) and `ITERATE_WORKER_VERSION` — the worker's own content-addressed
@@ -56,92 +83,7 @@ export type * from "./itx-api.generated.ts";
  * worker recovers on its next build instead of waiting out the backoff.
  */
 type IterateEnv = { ITX: ItxBinding; ITERATE_WORKER_VERSION: string };
-
-/**
- * The remote auth target cannot receive an ordinary Request just to inspect
- * its metadata: Workers RPC transfers the body stream even when the target
- * never reads it. Keep the normal partial-fetch contract local instead.
- */
-type ProjectAuthMetadata = {
-  headers: [string, string][];
-  method: string;
-  url: string;
-};
-
-type RemoteProjectAuth = {
-  authenticate(
-    request: ProjectAuthMetadata,
-    credentials: ProjectAuthCredentials,
-  ): Promise<ProjectAuthActor>;
-  get(policy: ProjectAuthPolicy): RemoteProjectAuth;
-  fetch(request: ProjectAuthMetadata | Request): Promise<Response | null>;
-};
-
-function requestMetadata(request: Request): ProjectAuthMetadata {
-  const headers: [string, string][] = [];
-  request.headers.forEach((value, name) => headers.push([name, value]));
-  return {
-    headers,
-    method: request.method,
-    url: request.url,
-  };
-}
-
-function wrapProjectAuth(remote: RemoteProjectAuth): Project["auth"] {
-  return {
-    async authenticate(request, credentials) {
-      return await remote.authenticate(requestMetadata(request), credentials);
-    },
-    get(policy) {
-      return wrapProjectAuth(remote.get(policy));
-    },
-    async fetch(request) {
-      // The callback POST belongs to auth and its body is the token, so auth
-      // deliberately consumes it and always answers. Every other path sends
-      // metadata only; a null answer therefore leaves the original Request
-      // byte-for-byte available to the app.
-      return await remote.fetch(
-        request.method === "POST" && new URL(request.url).pathname === "/_iterate/auth/callback"
-          ? request
-          : requestMetadata(request),
-      );
-    },
-  };
-}
-
-function wrapProject(itx: Project & Disposable): Project & Disposable {
-  let auth: Project["auth"] | undefined;
-  return new Proxy(itx, {
-    get(target, property) {
-      if (property === "auth") {
-        auth ??= wrapProjectAuth(
-          Reflect.get(target, property, target) as unknown as RemoteProjectAuth,
-        );
-        return auth;
-      }
-      if (property === Symbol.dispose) {
-        const dispose = Reflect.get(target, property, target) as (() => void) | undefined;
-        return dispose === undefined ? undefined : () => Reflect.apply(dispose, target, []);
-      }
-      // Cap'n Web uses the same callable proxy shape for methods, nested
-      // capabilities, and property promises. Preserve that proxy verbatim;
-      // wrapping callable values would erase paths such as
-      // `itx.processor.snapshot()`.
-      return Reflect.get(target, property, target) as unknown;
-    },
-  });
-}
-
-function wrapItxBinding(binding: ItxBinding): ItxBinding {
-  return {
-    fetch: (request) => binding.fetch(request),
-    get: async () => wrapProject(await binding.get()),
-  };
-}
-
-function wrapIterateEnv<Env extends IterateEnv>(env: Env): Env {
-  return { ...env, ITX: wrapItxBinding(env.ITX) };
-}
+type PipelinedProject = ReturnType<ItxBinding["get"]>;
 
 /**
  * Forward a request to one of the project's dynamic workers (an "app") —
@@ -393,25 +335,46 @@ function selfAlarmState<State extends DurableObjectState>(ctx: State, env: Itera
 export class IterateWorkerEntrypoint<
   Env extends IterateEnv = IterateEnv,
 > extends WorkerEntrypoint<Env> {
-  #itx: Promise<Project> | undefined;
+  #itx: PipelinedProject | undefined;
 
   constructor(ctx: ConstructorParameters<typeof WorkerEntrypoint<Env>>[0], env: Env) {
     super(ctx, env);
-    this.env = wrapIterateEnv(env);
+    this.env = env;
   }
 
   /**
    * This invocation's project-root itx. Cloudflare constructs one
    * WorkerEntrypoint per invocation and releases its RPC stubs when that
-   * execution context ends, so every handler can simply `await this.itx`;
-   * repeated access within one event batch or fetch reuses the same session.
+   * execution context ends. The getter returns the native Workers RPC
+   * promise-proxy, so `await this.itx.agents.list()` pipelines immediately;
+   * repeated access within one event batch or fetch reuses the same handle.
    *
    * Durable Objects have a longer, multi-invocation lifetime and no eviction
    * callback, so IterateDurableObject deliberately does not expose this
    * memoized getter.
    */
-  protected get itx(): Promise<Project> {
+  protected get itx(): PipelinedProject {
     return (this.#itx ??= this.env.ITX.get());
+  }
+
+  /**
+   * Run the project-member auth partial fetch without transferring the app's
+   * request body on paths auth only inspects. The callback POST belongs to
+   * auth, so that one path deliberately transfers the complete request.
+   */
+  protected async fetchProjectAuth(
+    request: Request,
+    policy: ProjectAuthPolicy,
+  ): Promise<Response | null> {
+    if (request.method === "POST" && new URL(request.url).pathname === "/_iterate/auth/callback") {
+      return await this.itx.auth.get(policy).fetch(request);
+    }
+
+    const authRequest = new Request(request.url, {
+      headers: request.headers,
+      method: request.method,
+    });
+    return await this.itx.auth.get(policy).fetch(authRequest);
   }
 
   /** See `fetchDynamicWorker` at module level: a real fetch hop into a
@@ -456,7 +419,7 @@ export class IterateWorkerEntrypoint<
 export class IterateDurableObject<Env extends IterateEnv = IterateEnv> extends DurableObject<Env> {
   constructor(ctx: ConstructorParameters<typeof DurableObject<Env>>[0], env: Env) {
     super(ctx, env);
-    this.env = wrapIterateEnv(env);
+    this.env = env;
     // Read back through the property so the overlay carries the exact ctx
     // type the base class declares in every typecheck context.
     this.ctx = selfAlarmState(this.ctx, this.env);

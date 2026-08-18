@@ -17,7 +17,7 @@ import { test } from "./test-support/test.ts";
 // Assertions ride window.__streamRuntimeDebug() (stream-browser-store.ts's
 // debug registry) — transport-level truth, immune to UI-layer noise.
 
-const ONBOARDING_AGENT_PATH = "/agents/onboarding";
+const TEST_AGENT_PATH = "/agents/suspend-test";
 const MARKER_EVENT_TYPE = "events.iterate.test/spec/suspend-marker";
 const WEB_MESSAGE_SENT = "events.iterate.com/agents/web-message-sent";
 // This is the failure stimulus, not a recovery budget. The test arms an
@@ -54,9 +54,10 @@ test("control: appended event is delivered to a live stream feed", async ({
 
   using admin = await connectAdminItx(baseURL);
   using project = admin.projects.get(fixture.project.id);
-  using agent = project.agents.get(ONBOARDING_AGENT_PATH);
+  using agent = project.agents.get(TEST_AGENT_PATH);
+  await agent.create();
 
-  await page.goto(`/projects/${fixture.project.slug}/agents/streams/agents/onboarding`);
+  await page.goto(`/projects/${fixture.project.slug}/agents/streams/agents/suspend-test`);
   const keys = runtimeDebugKeys(fixture.project.id);
   await waitForSubscribed(page, keys);
 
@@ -91,9 +92,10 @@ test("feed resumes after the /api WebSocket dies (clean close)", async ({
 
   using admin = await connectAdminItx(baseURL);
   using project = admin.projects.get(fixture.project.id);
-  using agent = project.agents.get(ONBOARDING_AGENT_PATH);
+  using agent = project.agents.get(TEST_AGENT_PATH);
+  await agent.create();
 
-  await page.goto(`/projects/${fixture.project.slug}/agents/streams/agents/onboarding`);
+  await page.goto(`/projects/${fixture.project.slug}/agents/streams/agents/suspend-test`);
   const keys = runtimeDebugKeys(fixture.project.id);
   await waitForSubscribed(page, keys);
 
@@ -142,9 +144,10 @@ test("feed resumes after page freeze + socket death (mobile suspend shape)", asy
 
   using admin = await connectAdminItx(baseURL);
   using project = admin.projects.get(fixture.project.id);
-  using agent = project.agents.get(ONBOARDING_AGENT_PATH);
+  using agent = project.agents.get(TEST_AGENT_PATH);
+  await agent.create();
 
-  await page.goto(`/projects/${fixture.project.slug}/agents/streams/agents/onboarding`);
+  await page.goto(`/projects/${fixture.project.slug}/agents/streams/agents/suspend-test`);
   const keys = runtimeDebugKeys(fixture.project.id);
   await waitForSubscribed(page, keys);
 
@@ -175,6 +178,7 @@ test("feed resumes after page freeze + socket death (mobile suspend shape)", asy
     await expect
       .poll(async () => (await readSuspendTimerEvidence(page)).maxTimerGapMs, {
         message: "the armed page timer should remain suspended for the stimulus window",
+        // timeout: poll budget — expect.poll is outside the spinner-waiter's reach
         timeout: 5_000,
       })
       .toBeGreaterThanOrEqual(SUSPEND_EVIDENCE_MIN_GAP_MS);
@@ -220,7 +224,7 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
   page,
   baseURL,
 }) => {
-  // The greeting-settle wait (up to 120s) stacks on the probe window, the
+  // The initial-reply wait (up to 120s) stacks on the probe window, the
   // paint wait (90s — see that step), and the two send assertions, so this
   // lane gets the heavy ceiling.
   test.setTimeout(360_000);
@@ -231,29 +235,31 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
 
   using admin = await connectAdminItx(baseURL);
   using project = admin.projects.get(fixture.project.id);
-  using agent = project.agents.get(ONBOARDING_AGENT_PATH);
+  using agent = project.agents.get(TEST_AGENT_PATH);
+  await agent.create();
+  await agent.message("Reply with exactly: ready");
 
-  await page.goto(`/projects/${fixture.project.slug}/agents/streams/agents/onboarding`);
+  await page.goto(`/projects/${fixture.project.slug}/agents/streams/agents/suspend-test`);
   const keys = runtimeDebugKeys(fixture.project.id);
   await waitForSubscribed(page, keys);
 
-  // The composer initially renders a Send button before the onboarding
-  // greeting's activity reaches the browser. Waiting on that button alone can
-  // therefore race with the greeting and watch it turn into Stop generation
-  // while the test fills its draft. First require the greeting's durable
+  // The composer initially renders a Send button before the initial reply's
+  // activity reaches the browser. Waiting on that button alone can therefore
+  // race with the reply and watch it turn into Stop generation
+  // while the test fills its draft. First require the reply's durable
   // response event and its painted row; only then is Send a settled control.
-  await test.step("half-open: wait for onboarding greeting", async () => {
+  await test.step("half-open: wait for initial reply", async () => {
     await agent.stream.waitForEvent({
       afterOffset: 0,
       eventTypes: [WEB_MESSAGE_SENT],
       timeoutMs: 120_000,
     });
   });
-  // The durable greeting already exists; these waits only let its live browser
+  // The durable reply already exists; these waits only let its live browser
   // mirror paint and settle the composer. There is intentionally no spinner in
   // that push-only gap, so Middlewright's 1ms no-progress clamp must not replace
   // the explicit bounded waits.
-  await test.step("half-open: paint greeting and settle composer", async () => {
+  await test.step("half-open: paint reply and settle composer", async () => {
     await spinnerWaiter.settings.run({ disabled: true }, async () => {
       // 90s, not 30s: on a cold preview deployment this first paint rides a
       // freshly deployed worker plus a cold Stream DO chain, and 30s failed
@@ -268,8 +274,8 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
       await page
         .locator('[data-testid="agent-feed-message"][data-kind="assistant"]')
         .first()
-        .waitFor({ timeout: 90_000 });
-      await page.getByRole("button", { name: "Send message" }).waitFor({ timeout: 120_000 });
+        .waitFor({ timeout: 90_000 }); // timeout: manual, see the cold-preview note above — spinner-waiter is disabled for this step
+      await page.getByRole("button", { name: "Send message" }).waitFor({ timeout: 120_000 }); // timeout: manual, same cold-preview lane — spinner-waiter is disabled for this step
     });
   });
 
@@ -315,7 +321,7 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
               window as unknown as { __mutedApiSocketsStillOpen: () => number }
             ).__mutedApiSocketsStillOpen(),
           ),
-        { timeout: 30_000 },
+        { timeout: 30_000 }, // timeout: poll budget spanning two 10s probe strikes — outside the spinner-waiter's reach
       )
       .toBe(0);
   });
@@ -365,13 +371,13 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
           landed || enabled,
           "the mid-outage send never settled — stranded on a ghost session",
         ).toBe(true);
-      }).toPass({ timeout: 60_000, intervals: [1_000] });
+      }).toPass({ timeout: 60_000, intervals: [1_000] }); // timeout: toPass poll budget — outside the spinner-waiter's reach
       if (!(await sentRow.isVisible())) {
         // The stranded call rejected; the composer kept the draft — resend on
         // the recovered transport.
         await sendButton.click();
       }
-      await sentRow.waitFor({ timeout: 30_000 });
+      await sentRow.waitFor({ timeout: 30_000 }); // timeout: manual — spinner-waiter is disabled for this step
     });
   });
 
@@ -388,7 +394,7 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
             window as unknown as { __mutedApiSocketsStillOpen: () => number }
           ).__mutedApiSocketsStillOpen(),
         ),
-      { timeout: 20_000 },
+      { timeout: 20_000 }, // timeout: poll budget — expect.poll is outside the spinner-waiter's reach
     )
     .toBe(0);
   await expect
@@ -397,7 +403,7 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
         page.evaluate(() =>
           (window as unknown as { __countLiveApiSockets: () => number }).__countLiveApiSockets(),
         ),
-      { timeout: 10_000 },
+      { timeout: 10_000 }, // timeout: poll budget — expect.poll is outside the spinner-waiter's reach
     )
     .toBeLessThanOrEqual(socketsBaseline);
 });
@@ -407,7 +413,7 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
 // feed projector). Its debug-registry key is `${projectId} ${streamPath}
 // browser-stream-processors` (stream-browser-store.ts).
 function runtimeDebugKeys(projectId: string) {
-  return [`${projectId} ${ONBOARDING_AGENT_PATH} browser-stream-processors`];
+  return [`${projectId} ${TEST_AGENT_PATH} browser-stream-processors`];
 }
 
 type RuntimeDebug = {

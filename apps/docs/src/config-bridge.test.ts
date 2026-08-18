@@ -6,9 +6,12 @@ afterEach(() => {
 });
 
 describe("DocsApp", () => {
-  test("gates project members and proxies the complete request URL", async () => {
+  test("preserves a declined request body when proxying the complete URL", async () => {
     const dispose = vi.fn();
-    const fetchMock = vi.fn(async (request: Request) => new Response(request.url));
+    const authFetch = vi.fn(async (_request: Request) => null);
+    const fetchMock = vi.fn(
+      async (request: Request) => new Response(`${request.url}|${await request.text()}`),
+    );
     vi.stubGlobal("fetch", fetchMock);
     const app = DocsApp.create(
       {
@@ -16,7 +19,7 @@ describe("DocsApp", () => {
           get: async () => ({
             [Symbol.dispose]: dispose,
             appUrl: async () => "https://docs--demo.iterate.app",
-            auth: { get: () => ({ fetch: async () => null }) },
+            auth: { get: () => ({ fetch: authFetch }) },
             kv: { get: async () => null },
           }),
         },
@@ -30,15 +33,18 @@ describe("DocsApp", () => {
       },
     );
 
-    const response = await app.fetch(
-      new Request(
-        "https://docs--demo.iterate.app/?workspace=%2Fworkspaces%2Fagents%2Freviewer&path=plan.md",
-      ),
+    const request = new Request(
+      "https://docs--demo.iterate.app/?workspace=%2Fworkspaces%2Fagents%2Freviewer&path=plan.md",
+      { body: "still here", method: "POST" },
     );
+    const response = await app.fetch(request);
 
     await expect(response.text()).resolves.toBe(
-      "https://docs.iterate.workers.dev/?workspace=%2Fworkspaces%2Fagents%2Freviewer&path=plan.md",
+      "https://docs.iterate.workers.dev/?workspace=%2Fworkspaces%2Fagents%2Freviewer&path=plan.md|still here",
     );
+    expect(authFetch).toHaveBeenCalledOnce();
+    expect(authFetch.mock.calls[0]![0]).not.toBe(request);
+    expect(authFetch.mock.calls[0]![0].body).toBeNull();
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(dispose).toHaveBeenCalledOnce();
   });

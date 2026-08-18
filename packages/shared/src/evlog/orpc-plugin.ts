@@ -27,7 +27,7 @@ function setOrpcRequestLogContext(options: {
   const logRequestId = options.context.log.getContext().requestId;
 
   options.context.log.set({
-    ...(requestId !== undefined && requestId !== logRequestId ? { requestId } : {}),
+    ...(requestId !== undefined && requestId !== logRequestId && { requestId }),
     rpc: options.context.rawRequest
       ? {
           url: options.context.rawRequest.url,

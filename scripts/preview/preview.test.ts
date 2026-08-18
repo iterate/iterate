@@ -342,7 +342,7 @@ describe("preview workflow scope", () => {
         "vitest-retry-telemetry-reporter:vitest/e2e/vitest@@iterate-com/dummy-petshop",
       ],
       os: [
-        "onboarding-smoke:script/e2e/onboarding-smoke@iterate-root",
+        "agent-smoke:script/e2e/agent-smoke@iterate-root",
         "tui-quarantine:script/e2e/tui@iterate-root",
         "vitest-retry-telemetry-reporter:vitest/e2e/vitest@@iterate-com/os",
         "playwright-telemetry-reporter:playwright/e2e/playwright@iterate-root",
@@ -759,57 +759,15 @@ describe("preview workflow scope", () => {
   });
 });
 
-describe("draft preview policy", () => {
-  const { decideDraftPreviewPolicy } = previewInternals;
-
-  test.for([
-    {
-      name: "deploys ready PRs regardless of labels or leases",
-      input: { allowDraft: false, holdsSlot: false, isDraft: false, labels: [] },
-      expected: "deploy",
-    },
-    {
-      name: "skips drafts that hold no slot",
-      input: { allowDraft: false, holdsSlot: false, isDraft: true, labels: ["bug"] },
-      expected: "skip",
-    },
-    {
-      name: "gives a draft's slot back when the semaphore says it holds one without asking",
-      input: { allowDraft: false, holdsSlot: true, isDraft: true, labels: [] },
-      expected: "teardown",
-    },
-    {
-      name: "deploys drafts wearing the preview label",
-      input: { allowDraft: false, holdsSlot: false, isDraft: true, labels: ["preview"] },
-      expected: "deploy",
-    },
-    {
-      name: "deploys drafts when the caller explicitly allows it",
-      input: { allowDraft: true, holdsSlot: false, isDraft: true, labels: [] },
-      expected: "deploy",
-    },
-  ])("$name", ({ input, expected }) => {
-    expect(decideDraftPreviewPolicy(input)).toBe(expected);
-  });
-
-  test("wires the lifecycle events and the dispatch override into the workflow", () => {
+describe("preview workflow dispatch", () => {
+  test("a manual dispatch redeploys the full fleet", () => {
     const workflow = readFileSync(
       resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"),
       "utf8",
     );
 
-    // Draft/label transitions must re-run the policy so a PR can claim a
-    // slot (ready_for_review, labeled) or give one back (converted_to_draft,
-    // unlabeled).
-    expect(workflow).toContain("- ready_for_review");
-    expect(workflow).toContain("- converted_to_draft");
-    expect(workflow).toContain("- labeled");
-    expect(workflow).toContain("- unlabeled");
-    // A manual dispatch is an explicit ask for a fresh preview: it bypasses
-    // the draft policy and cannot false-green after cleanup recorded this
-    // exact head as released.
     expect(workflow).toContain(
-      "${{ github.event_name == 'workflow_dispatch' && '--allow-draft --all-apps' || '' }}",
+      "${{ github.event_name == 'workflow_dispatch' && '--all-apps' || '' }}",
     );
   });
 });
@@ -956,8 +914,6 @@ describe("preview test commands", () => {
           pullRequestBody: "",
           pullRequestHeadSha: "head-sha",
           pullRequestHeadRef: "telemetry-branch",
-          pullRequestIsDraft: false,
-          pullRequestLabels: [],
           pullRequestNumber: 2237,
           repositoryFullName: "iterate/iterate",
           workflowRunUrl: "https://github.com/iterate/iterate/actions/runs/123",
@@ -997,7 +953,7 @@ describe("preview test commands", () => {
   test("starts Playwright early while gating project-backed work and Vitest", () => {
     const script = cloudflarePreviewApps.os.previewTestCommandArgs[2];
     const playwrightInstall = "pnpm --dir ../.. exec playwright install chromium";
-    const smokeLane = "pnpm exec tsx e2e/vitest/onboarding-smoke.ts";
+    const smokeLane = "pnpm exec tsx e2e/vitest/agent-smoke.ts";
     const tuiLane = "pnpm exec tsx e2e/tui-test/run.ts";
     const e2eLane = "pnpm e2e --project node";
     const playwrightSpec = "pnpm --dir ../.. spec";
@@ -1678,11 +1634,14 @@ describe("cloudflare preview state helpers", () => {
     const body = renderCloudflarePreviewPullRequestBody(
       "## Summary\n\nExisting user-authored description.",
       state,
+      2474,
     );
 
     expect(parseCloudflarePreviewState(body)).toEqual(state);
     expect(body).toContain("## Summary");
-    expect(body).toContain("## Environment Config Lease");
+    expect(body).toContain(
+      "## Environment Config Lease [Login ↗](https://auth.iterate-preview-2.com/test-login?email=pr2474%2Btest%40nustom.com&project=pr2474&return_to=https%3A%2F%2Fos.iterate-preview-2.com%2Fapi%2Fiterate-auth%2Flogin)",
+    );
     expect(body).toContain(
       "<summary>Slot: preview-2 | Doppler config: preview_2</summary>\n\n| app | status | commit | preview | size (gzip) | deploy duration | test duration | retries | cleanup duration | workflow run | updated | summary |",
     );
@@ -1710,24 +1669,31 @@ describe("cloudflare preview state helpers", () => {
       "Footer",
     ].join("\n");
 
-    const body = renderCloudflarePreviewPullRequestBody(initialBody, {
-      apps: {
-        os: CloudflarePreviewAppEntry.parse({
-          appDisplayName: "OS",
-          appSlug: "os",
-          message: "AssertionError: expected 2 to be +0",
-          runUrl: "https://github.com/iterate/iterate/actions/runs/456",
-          shortSha: "1234567",
-          status: "tests-failed" as const,
-          updatedAt: "2026-04-02T10:00:00.000Z",
-        }),
+    const body = renderCloudflarePreviewPullRequestBody(
+      initialBody,
+      {
+        apps: {
+          os: CloudflarePreviewAppEntry.parse({
+            appDisplayName: "OS",
+            appSlug: "os",
+            message: "AssertionError: expected 2 to be +0",
+            runUrl: "https://github.com/iterate/iterate/actions/runs/456",
+            shortSha: "1234567",
+            status: "tests-failed" as const,
+            updatedAt: "2026-04-02T10:00:00.000Z",
+          }),
+        },
+        environmentConfigLease: null,
+        notice: null,
       },
-      environmentConfigLease: null,
-      notice: null,
-    });
+      9999,
+    );
 
     expect(body).toContain("# User content");
     expect(body).toContain("Footer");
+    // No lease recorded — the heading carries no login link.
+    expect(body).toContain("## Environment Config Lease\n");
+    expect(body).not.toContain("[Login ↗]");
     expect(body).toContain("<summary>No preview slot recorded.</summary>");
     expect(body).toContain(
       "| OS | tests failed | `1234567` |  |  |  |  |  |  | [Workflow run](https://github.com/iterate/iterate/actions/runs/456) | 2026-04-02T10:00:00.000Z | AssertionError: expected 2 to be +0 |",
@@ -1748,23 +1714,43 @@ describe("cloudflare preview state helpers", () => {
     // Old bodies persisted the full lease (leaseId, leasedUntil, type). The
     // display schema keeps only slot + doppler config; the rest must parse
     // away cleanly rather than blanking the whole recorded state.
-    const body = renderCloudflarePreviewPullRequestBody("", {
-      apps: {},
-      environmentConfigLease: {
-        dopplerConfig: "preview_2",
-        leasedUntil: 1_700_000_000_000,
-        leaseId: "9d975621-72c8-459d-936d-e9b4335e0f5d",
-        slug: "preview-2",
-        type: "environment-config-lease",
-        // oxlint-disable-next-line no-explicit-any
-      } as any,
-      notice: null,
-    });
+    const body = renderCloudflarePreviewPullRequestBody(
+      "",
+      {
+        apps: {},
+        environmentConfigLease: {
+          dopplerConfig: "preview_2",
+          leasedUntil: 1_700_000_000_000,
+          leaseId: "9d975621-72c8-459d-936d-e9b4335e0f5d",
+          slug: "preview-2",
+          type: "environment-config-lease",
+          // oxlint-disable-next-line no-explicit-any
+        } as any,
+        notice: null,
+      },
+      9999,
+    );
 
     expect(parseCloudflarePreviewState(body).environmentConfigLease).toEqual({
       dopplerConfig: "preview_2",
       slug: "preview-2",
     });
+  });
+
+  test("skips the heading login link when the lease's doppler config is unknown", () => {
+    const body = renderCloudflarePreviewPullRequestBody(
+      "",
+      {
+        apps: {},
+        environmentConfigLease: { dopplerConfig: "preview_999", slug: "preview-999" },
+        notice: null,
+        // oxlint-disable-next-line no-explicit-any
+      } as any,
+      9999,
+    );
+
+    expect(body).toContain("## Environment Config Lease\n");
+    expect(body).not.toContain("[Login ↗]");
   });
 
   test("returns empty state when the managed state block is malformed", () => {
@@ -2055,6 +2041,7 @@ describe("preview section notice banner", () => {
         environmentConfigLease: null,
         notice: "All preview slots are leased.\n  preview-1  leased by pr-1601",
       } as any,
+      9999,
     );
     expect(body).toContain("> [!CAUTION]");
     expect(body).toContain("> All preview slots are leased.");
@@ -2066,6 +2053,7 @@ describe("preview section notice banner", () => {
       "",
       // oxlint-disable-next-line no-explicit-any
       { apps: {}, environmentConfigLease: null, notice: null } as any,
+      9999,
     );
     expect(body).not.toContain("[!CAUTION]");
   });
@@ -2584,42 +2572,7 @@ describe("lease reclaim verdicts", () => {
 });
 
 describe("preview fleet capacity diagnosis", () => {
-  const { diagnosePreviewFleetCapacity, pullRequestWouldClaimPreviewSlot } = previewInternals;
-
-  test("treats ready PRs and preview-labeled drafts as slot-eligible", () => {
-    expect(pullRequestWouldClaimPreviewSlot({ isDraft: false, labels: [] })).toBe(true);
-    expect(pullRequestWouldClaimPreviewSlot({ isDraft: true, labels: ["preview"] })).toBe(true);
-    expect(pullRequestWouldClaimPreviewSlot({ isDraft: true, labels: [] })).toBe(false);
-  });
-
-  test("does not call a label-less draft slot-less when it actually holds one (--allow-draft)", () => {
-    const diagnosis = diagnosePreviewFleetCapacity({
-      openPullRequests: [
-        {
-          number: 4242,
-          title: "draft dispatched with --allow-draft",
-          url: "https://github.com/iterate/iterate/pull/4242",
-          isDraft: true,
-          labels: [],
-        },
-      ],
-      slots: [
-        {
-          slug: "preview-1",
-          verdict: "active",
-          holder: "pr-4242",
-          pullRequestUrl: "https://github.com/iterate/iterate/pull/4242",
-          pullRequestState: "open",
-          leasedUntil: "2026-07-16T09:20:18.639Z",
-          lastUsedAgo: "2m ago",
-        },
-      ],
-    });
-
-    // It holds a slot, so it must not be reported as "correctly claims no slot".
-    expect(diagnosis.holdersWithOpenPrs).toContain(4242);
-    expect(diagnosis.reasons.some((reason) => reason.includes("claim no slot"))).toBe(false);
-  });
+  const { diagnosePreviewFleetCapacity } = previewInternals;
 
   test("explains a full fleet held mostly by closed PRs despite few open ones", () => {
     const diagnosis = diagnosePreviewFleetCapacity({
@@ -2628,15 +2581,11 @@ describe("preview fleet capacity diagnosis", () => {
           number: 2008,
           title: "ready pr without a slot",
           url: "https://github.com/iterate/iterate/pull/2008",
-          isDraft: false,
-          labels: [],
         },
         {
           number: 1983,
-          title: "draft without opt-in",
+          title: "draft pr without a slot",
           url: "https://github.com/iterate/iterate/pull/1983",
-          isDraft: true,
-          labels: [],
         },
       ],
       slots: [
@@ -2664,7 +2613,7 @@ describe("preview fleet capacity diagnosis", () => {
     expect(diagnosis.availableCount).toBe(0);
     expect(diagnosis.leasedCount).toBe(2);
     expect(diagnosis.orphanedCount).toBe(1);
-    expect(diagnosis.previewEligibleWithoutSlotCount).toBe(1);
+    expect(diagnosis.openWithoutSlotCount).toBe(2);
     expect(diagnosis.reclaimCommands).toEqual(["pnpm preview reclaim --slot preview-1 --force"]);
     expect(diagnosis.reasons.some((reason) => reason.includes("closed/merged"))).toBe(true);
     expect(diagnosis.reasons.some((reason) => reason.includes("#2008"))).toBe(true);

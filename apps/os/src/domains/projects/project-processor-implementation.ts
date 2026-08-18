@@ -64,7 +64,8 @@ const SIBLING_BIRTH_BARRIER_TIMEOUT_MS = 75_000;
  * `project-worker` feed and appends the terminal `project/created`
  * certificate that create() callers await plus the first
  * `project/worker-updated` lifecycle fact. The feed begins at its own
- * configuration event, after the platform's preceding creation facts.
+ * configuration event, so `project/created` is the first userspace event
+ * while the platform's preceding creation facts remain private to the saga.
  *
  * A config-repo failure or deterministic worker source-build failure closes
  * the saga with `project/create-failed`. Transient worker availability errors
@@ -251,7 +252,7 @@ export class ProjectProcessor extends StreamProcessor<
                   payload: {
                     name: "project-worker",
                     description:
-                      "Default project worker: every later root event; project creation remains platform-owned.",
+                      "Default project worker: root events from the terminal project/created certificate onward.",
                     receiver: {
                       action: "itx-call",
                       expression: ["processEventBatch"],
@@ -409,7 +410,7 @@ export class ProjectProcessor extends StreamProcessor<
         });
         break;
       }
-      // created/heartbeat-triggered/onboarding-completed/notification facts,
+      // created/heartbeat-triggered/notification facts,
       // catalog facts, egress rules and approval events: no platform side
       // effect. The project worker handles userspace lifecycle events.
     }
@@ -626,7 +627,6 @@ export class ProjectProcessor extends StreamProcessor<
           ...state,
           createRequest: event.payload,
           createRequestedAtOffset: event.offset,
-          onboardingActive: event.payload.config.onboardingActive === true,
         };
       case "events.iterate.com/project/created":
       case "events.iterate.com/project/create-failed": {
@@ -649,8 +649,15 @@ export class ProjectProcessor extends StreamProcessor<
           ? { ...state, birthCertificate: terminal.payload }
           : { ...state, createFailure: terminal.payload };
       }
-      case "events.iterate.com/project/onboarding-completed":
-        return { ...state, onboardingActive: false, onboardingCompletedAt: event.createdAt };
+      case "events.iterate.com/project/defaults-configured":
+        // Latest occurrence wins per key, stored RAW: the project never
+        // interprets a value. Whichever domain reads a key validates there
+        // and degrades to its own defaults on a malformed value — never to
+        // the stale predecessor, because the raw latest always replaces it.
+        return {
+          ...state,
+          defaults: { ...state.defaults, [event.payload.key]: event.payload.value },
+        };
       case "events.iterate.com/notification/created":
         return { ...state, notificationReady: true };
       case "events.iterate.com/stream/created":

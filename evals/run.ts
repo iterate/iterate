@@ -2,8 +2,14 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
+import { existsSync } from "node:fs";
 import dedent from "dedent";
 import { createCli } from "trpc-cli";
+
+export async function list() {
+  const list = await fs.readdir(import.meta.dirname);
+  return list.filter((item) => existsSync(path.join(import.meta.dirname, item, "eval.md")));
+}
 
 export default async function run(
   slug: string,
@@ -43,6 +49,10 @@ export default async function run(
     Run the product-agent request asynchronously so capability requests yield back to this same main Codex session. Use your full eval context—including referenced historical streams—to construct realistic, coherent responses. Maintain state across calls, support concurrent requests, log every exchange, use bounded timeouts, and keep the live capability connected until the product agent finishes.
 
     Include in ${resultFile} every agent stream created in the eval project and the total token usage. You can write helper tools in the \`evals/\` directory. Track a helper in git only if it will help future evals; otherwise give it a gitignored filename.
+
+    Also include the coding agent session id in the result so it can be resumed later.
+
+    If there are links to agent chats that are relevant, include a command like \`cd apps/os && doppler run --config prd -- pnpm cli session create --project prj_... --return-to /projects/eval-.../agents/streams/agents/... --open\` to make them easy to inspect after the run.
 
     The eval must state its success criteria. If it does not, immediately mark the run as a failure and recommend suitable criteria in the explanation.
 

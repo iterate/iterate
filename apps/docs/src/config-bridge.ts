@@ -103,7 +103,14 @@ export const DocsApp = {
       async fetch(request: Request): Promise<Response> {
         const itx = await env.ITX.get();
         try {
-          const denied = await itx.auth.get(options.auth).fetch(request);
+          const authRequest =
+            request.method === "POST" && new URL(request.url).pathname === "/_iterate/auth/callback"
+              ? request
+              : new Request(request.url, {
+                  headers: request.headers,
+                  method: request.method,
+                });
+          const denied = await itx.auth.get(options.auth).fetch(authRequest);
           if (denied !== null) return denied;
           const override = await itx.kv.get(options.proxy.originOverrideKvKey);
           const origin =

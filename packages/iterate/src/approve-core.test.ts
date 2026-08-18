@@ -3,6 +3,7 @@ import type { RpcStub } from "@iterate-com/capnweb";
 import type { Stream, StreamEvent } from "./itx-api.generated.ts";
 import {
   awaitSettlement,
+  decide,
   EVENT,
   reconcileBacklog,
   safeHost,
@@ -47,6 +48,74 @@ function fakeStream(log: StreamEvent[]): RpcStub<Stream> {
 const REQUEST_OFFSET = 10;
 // A short settlement window so the no-match cases resolve fast under test.
 const WINDOW_MS = 40;
+
+test("decide keys the submitted decision, so a corrected retry does not collide", async () => {
+  const appended: any[] = [];
+  const stream: any = {
+    append: async (event: any) => {
+      appended.push(event);
+      return [];
+    },
+  };
+  const request: any = {
+    stream,
+    projectId: "prj_test",
+    offset: 41,
+    payload: {
+      requests: [],
+      ruleKey: "needs-human",
+      ruleDescription: "needs a human",
+      streamContext: { kind: "client-session", principal: "admin", admin: true },
+      expiresAt: "2026-08-10T15:00:00.000Z",
+    },
+    verdicts: [],
+  };
+
+  // A stale client can submit an unsigned decision after the project has
+  // enrolled a key. The door ignores it, then the client reloads the key and
+  // submits the corrected signed decision for the same request offset.
+  await decide({ ...request, key: null });
+  await decide({
+    ...request,
+    key: {
+      kind: "secure-enclave",
+      keyId: "approval-key-1",
+      publicKey: "public-key",
+      label: "Test key",
+      keyBlob: "key-blob",
+    },
+    verdicts: ["approve"],
+    signature: "correct-signature",
+  });
+  await decide({
+    ...request,
+    key: {
+      kind: "secure-enclave",
+      keyId: "approval-key-1",
+      publicKey: "public-key",
+      label: "Test key",
+      keyBlob: "key-blob",
+    },
+    verdicts: ["approve"],
+    signature: "correct-signature",
+  });
+
+  expect(appended[0]).toMatchObject({
+    type: EVENT.decided,
+    payload: { approvalRequestEventOffset: 41, decidedBy: "human" },
+  });
+  expect(appended[1]).toMatchObject({
+    type: EVENT.decided,
+    payload: {
+      approvalRequestEventOffset: 41,
+      decidedBy: "human",
+      keyId: "approval-key-1",
+      signature: "correct-signature",
+    },
+  });
+  expect(appended[0].idempotencyKey).not.toBe(appended[1].idempotencyKey);
+  expect(appended[1].idempotencyKey).toBe(appended[2].idempotencyKey);
+});
 
 test("safeHost preserves the port that identifies a destination", () => {
   expect(safeHost("http://localhost:8080/refund")).toBe("localhost:8080");

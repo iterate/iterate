@@ -34,6 +34,8 @@ export default defineConfig([
     // supplies only package.json so worker-bundler can resolve these files.
     entry: {
       "starter-apps/guestbook/configured-worker": "src/starter-apps/guestbook/configured-worker.ts",
+      "starter-apps/media/configured-worker": "src/starter-apps/media/configured-worker.ts",
+      "starter-apps/notes/configured-worker": "src/starter-apps/notes/configured-worker.ts",
       "starter-apps/todo/configured-worker": "src/starter-apps/todo/configured-worker.ts",
     },
     format: "esm",
@@ -47,7 +49,9 @@ export default defineConfig([
       },
     },
     deps: {
-      alwaysBundle: ["@iterate-com/capnweb", "sqlfu", "zod"],
+      // yaml rides along for the notes app's frontmatter (the config repo
+      // installs only what its own package.json declares).
+      alwaysBundle: ["@iterate-com/capnweb", "sqlfu", "yaml", "zod"],
       neverBundle: ["cloudflare:workers"],
     },
     dts: false,
@@ -134,6 +138,12 @@ export default defineConfig([
       "starter-apps/github-ai-linter/worker": "src/starter-apps/github-ai-linter/worker.ts",
       "starter-apps/guestbook/index": "src/starter-apps/guestbook/index.ts",
       "starter-apps/guestbook/worker": "src/starter-apps/guestbook/worker.ts",
+      "starter-apps/media/index": "src/starter-apps/media/index.ts",
+      "starter-apps/media/ref": "src/starter-apps/media/ref.ts",
+      "starter-apps/media/worker": "src/starter-apps/media/worker.ts",
+      "starter-apps/notes/index": "src/starter-apps/notes/index.ts",
+      "starter-apps/notes/ref": "src/starter-apps/notes/ref.ts",
+      "starter-apps/notes/worker": "src/starter-apps/notes/worker.ts",
       "starter-apps/todo/index": "src/starter-apps/todo/index.ts",
       processors: "src/processors/index.ts",
       "processors-cloudflare": "src/processors/cloudflare.ts",

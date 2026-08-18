@@ -16,6 +16,7 @@ import {
   formatAgentUiActivitySummary,
   groupActivityRounds,
   isAgentUiActivityWorking,
+  formatAgentUiDuration,
   summarizeAgentUiActivity,
   type AgentUiActivity,
   type AgentUiFileAttachment,
@@ -343,6 +344,14 @@ function AgentActivityRow({
 }) {
   const summary = summarizeAgentUiActivity(activity);
   const failed = summary.outcome === "failed";
+  // The agent's own latest activity line for this stretch of work
+  // ("Factoring the number") — from the status attribute / summary-updated
+  // fold stamped onto code steps. Leads the quiet stats so the header says
+  // WHAT happened, not just how much.
+  const activityLabel = [...activity.steps]
+    .reverse()
+    .flatMap((step) => (step.kind === "code" && step.activitySummary ? [step.activitySummary] : []))
+    .at(0);
 
   return (
     <div className="flex flex-col py-0.5">
@@ -364,10 +373,23 @@ function AgentActivityRow({
         ) : (
           <CodeIcon data-icon="inline-start" className="text-muted-foreground/60" />
         )}
-        {formatAgentUiActivitySummary(activity, {
-          summary,
-          interruptedPartialHint: "click to see partial response",
-        })}
+        {activityLabel == null || summary.outcome !== "clean"
+          ? // No agent-authored label (or something went wrong — failures and
+            // interruptions keep the full stats line): the quiet counts row.
+            `${activityLabel == null ? "" : `${activityLabel} · `}${formatAgentUiActivitySummary(
+              activity,
+              { summary, interruptedPartialHint: "click to see partial response" },
+            )}`
+          : // The agent said WHAT it did — that plus the duration is the
+            // headline; counts are one expand away.
+            [
+              activityLabel,
+              activity.endedAtMs == null
+                ? null
+                : formatAgentUiDuration(Math.max(0, activity.endedAtMs - activity.startedAtMs)),
+            ]
+              .filter((part) => part != null)
+              .join(" · ")}
         <ChevronRightIcon
           data-icon="inline-end"
           className={cn("text-muted-foreground/50 transition-transform", expanded && "rotate-90")}

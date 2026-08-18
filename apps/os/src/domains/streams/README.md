@@ -405,10 +405,11 @@ waits for the trusted config-repo template worker to build, then atomically
 appends the `project-worker` receiver with `start: "now"`, terminal
 `project/created`, and the first `project/worker-updated`. Delaying that
 subscription prevents the stream from classifying the worker as unavailable
-during its initial build. Creation does not wait for userspace to consume a
-platform creation event. Later config commits and all other root facts use the
-ordinary feed; if a later worker build is in progress, delivery retries without
-advancing its cursor.
+during its initial build. The same-batch ordering makes `project/created` the
+first userspace event, though creation does not wait for the userspace reaction
+to finish. Later config commits and all other root facts use the ordinary feed;
+if a later worker build is in progress, delivery retries without advancing its
+cursor.
 
 ## Testing
 

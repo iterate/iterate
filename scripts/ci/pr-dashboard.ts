@@ -173,7 +173,7 @@ export async function findDashboardState(
           ((parent.bot_id && message.bot_id === parent.bot_id) ||
             (parent.user && message.user === parent.user)),
       );
-      return { ts: parent.ts, ...(details?.ts ? { detailsTs: details.ts } : {}) };
+      return { ts: parent.ts, ...(details?.ts && { detailsTs: details.ts }) };
     }
 
     cursor = history.response_metadata?.next_cursor || undefined;

@@ -37,11 +37,10 @@ judging individual chunk names:
   libraries, and modules loaded before the route can use them;
 - add deterministic budgets only after the current graph is understood.
 
-Common OS examples are the global command palette mounted while closed, route
-imports that pull onboarding prompts through a tiny constant, the ITX REPL, and
-SQLite/WASM used only after opening a stream mirror. Prefer lazy boundaries at
-the interaction that needs the code and split tiny stable constants from heavy
-implementations.
+Common OS examples are the global command palette mounted while closed, the ITX
+REPL, and SQLite/WASM used only after opening a stream mirror. Prefer lazy
+boundaries at the interaction that needs the code and split tiny stable
+constants from heavy implementations.
 
 ## Diagnose by layer
 

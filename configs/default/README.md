@@ -15,10 +15,11 @@ every agent.
 ## Project lifecycle hooks
 
 The `processEvent` switch in `worker.ts` exposes the lifecycle events. Each
-case is ordinary userspace TypeScript: `const itx = await this.itx` gives that
-stateless invocation one memoized project-root session, then write whatever
-calls the project needs. There is no configuration-reconciliation framework
-around them.
+case is ordinary userspace TypeScript: call through `this.itx` directly, such
+as `await this.itx.scheduler.set(...)`. The getter memoizes the native Workers
+RPC promise-proxy for that stateless invocation, so nested calls pipeline
+without first awaiting the project root. There is no
+configuration-reconciliation framework around them.
 
 - `project/heartbeat-triggered` is the ordinary event appended by that
   Scheduler script. Its payload is only `{ scheduleKey }`. Put arbitrary
@@ -34,10 +35,18 @@ around them.
   deliberately a reconcile-current-config hook, not an exact per-commit
   activation callback. The seeded example calls
   `itx.scheduler.set(...)` here to install one 15-minute heartbeat.
+- `project/created` is the first userspace event. The root worker subscription
+  is installed immediately before it in the same atomic append, so the seeded
+  worker receives it after the platform creation saga has completed. This
+  template uses it to create `/agents/onboarding`, install the template-local
+  `ONBOARDING.md` prompt, trigger the agent's first turn, and navigate each
+  connected `/clients/os-app/**` browser client that is still on the new
+  project's landing page to its chat.
 
-`project/create-requested` and `project/created` belong to the platform's
-creation saga. They are not userspace lifecycle hooks and the config worker
-does not handle them.
+`project/create-requested` remains platform-only: it precedes the userspace
+worker subscription. The terminal `project/created` certificate includes the
+birth configuration, including `config.configRepoTemplate` when the project
+was created from a public template.
 
 The heartbeat uses the Scheduler's native recurrence shape:
 `{ every: seconds }`, `{ cron, timezone? }`, or `{ at: ISO timestamp }`. Copy

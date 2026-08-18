@@ -91,10 +91,12 @@ different settle policy).
 
 The default worker in each project's config repo handles raw lifecycle events
 in its literal `processEvent` switch. There is no userspace configuration
-framework: each case can `await this.itx` and run arbitrary project code
-directly. `IterateWorkerEntrypoint` memoizes that project-root session for its
-one stateless invocation; Cloudflare releases the RPC stubs with the execution
-context. This is deliberately not a Durable Object lifetime contract.
+framework: each case can run arbitrary project code directly through calls
+such as `await this.itx.scheduler.set(...)`. `IterateWorkerEntrypoint`
+memoizes the native Workers RPC promise-proxy for its one stateless invocation,
+so nested calls pipeline without first awaiting the project root. Cloudflare
+releases the RPC stubs with the execution context. This is deliberately not a
+Durable Object lifetime contract.
 
 - `project/heartbeat-triggered` is appended to `/` by a project-owned Scheduler
   script and carries only `{ scheduleKey }`.
@@ -110,16 +112,21 @@ context. This is deliberately not a Durable Object lifetime contract.
   deterministic source failure becomes `project/worker-update-failed`. A later
   HEAD may satisfy an earlier commit fact, so this certifies runnable current
   configuration rather than activating one exact artifact.
+- `project/created` on `/` is the first userspace hook. The platform installs
+  the root worker subscription immediately before the terminal certificate in
+  one atomic append. The checked-in templates use it to create and proactively
+  open their own onboarding agents; a template can implement a different
+  reaction or none.
 
-`project/create-requested` and `project/created` belong to the platform's
-creation saga; the userspace worker does not handle them. The seeded
-worker-update case directly calls `scheduler.set(...)` for one 15-minute
-heartbeat. This is ordinary itx code, not declarative desired state. Copy the
-call for multiple schedules, use `{ every: 1 }` for a fast test, or remove it
-for no heartbeat. Changing an existing project's schedules is explicit too:
-call `set(...)` or `cancel(...)` from the lifecycle case where that action
-belongs. `set(...)` preserves the clock, run count, and defining event when the
-canonical definition already matches.
+`project/create-requested` remains private to the platform creation saga
+because it precedes the userspace subscription. The seeded worker-update case
+directly calls `scheduler.set(...)` for one 15-minute heartbeat. This is
+ordinary itx code, not declarative desired state. Copy the call for multiple
+schedules, use `{ every: 1 }` for a fast test, or remove it for no heartbeat.
+Changing an existing project's schedules is explicit too: call `set(...)` or
+`cancel(...)` from the lifecycle case where that action belongs. `set(...)`
+preserves the clock, run count, and defining event when the canonical
+definition already matches.
 
 The heartbeat action appends one durable `project/heartbeat-triggered` event,
 using the Scheduler execution ID for append idempotency. Missed interval

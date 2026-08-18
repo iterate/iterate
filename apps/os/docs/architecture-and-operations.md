@@ -226,7 +226,7 @@ One-turn real agent smoke ([agent-smoke-testing.md](./agent-smoke-testing.md)):
 
 ```bash
 doppler run --project os --config preview_2 -- pnpm cli itx agent-smoke \
-  --project <prj_id> --agent-path /agents/onboarding --message "Reply with exactly: pong"
+  --project <prj_id> --agent-path /agents/smoke --message "Reply with exactly: pong"
 ```
 
 Browser smoke with `Playwriter`:

@@ -79,7 +79,7 @@ export default class PlaywrightTelemetryReporter implements Reporter {
         startedAt: result.startTime.toISOString(),
         finishedAt: new Date(finishedAtMs).toISOString(),
         durationMs,
-        ...(this.globalErrors[0] ? { error: this.globalErrors[0] } : {}),
+        ...(this.globalErrors[0] && { error: this.globalErrors[0] }),
       },
       lanes: [
         {
@@ -120,7 +120,7 @@ function toTestRecord(test: TestCase, runStartedAtMs: number): TestTelemetryReco
       attachmentCount: result.attachments?.length ?? 0,
       stdoutBytes: outputSize(result.stdout ?? []),
       stderrBytes: outputSize(result.stderr ?? []),
-      ...(error ? { error } : {}),
+      ...(error && { error }),
       phases: flattenSteps(result.steps),
     };
   });
@@ -147,22 +147,22 @@ function toTestRecord(test: TestCase, runStartedAtMs: number): TestTelemetryReco
     tags: test.tags ?? [],
     annotations: (test.annotations ?? []).map(({ type, description }) => ({
       type,
-      ...(description ? { description } : {}),
+      ...(description && { description }),
     })),
-    ...(testProject ? { context: { testProject } } : {}),
+    ...(testProject && { context: { testProject } }),
     retryCount,
     passedAfterRetry: test.outcome() === "flaky",
     state: finalAttempt?.state ?? "skipped",
     outcome: test.outcome(),
     durationMs: attempts.reduce((total, attempt) => total + attempt.durationMs, 0),
     attemptDetail: "complete",
-    ...(firstStartedAt ? { startedAt: firstStartedAt } : {}),
-    ...(firstStartedAt ? { startedAtSource: "runner" as const } : {}),
-    ...(attempts[0] ? { scheduleDelayMs: attempts[0].scheduleDelayMs } : {}),
+    ...(firstStartedAt && { startedAt: firstStartedAt }),
+    ...(firstStartedAt && { startedAtSource: "runner" as const }),
+    ...(attempts[0] && { scheduleDelayMs: attempts[0].scheduleDelayMs }),
     attempts,
     phases: [],
     errors,
-    ...(errors[0] ? { firstFailure: errors[0].message.slice(0, 300) } : {}),
+    ...(errors[0] && { firstFailure: errors[0].message.slice(0, 300) }),
   };
 }
 
@@ -174,15 +174,13 @@ function flattenSteps(steps: readonly TestStep[]): TestTelemetryPhase[] {
         name: step.titlePath().filter(Boolean).join(" › "),
         category: step.category,
         durationMs: nonnegativeDuration(step.duration),
-        ...(step.startTime ? { startedAt: step.startTime.toISOString() } : {}),
+        ...(step.startTime && { startedAt: step.startTime.toISOString() }),
         attachmentCount: step.attachments?.length ?? 0,
-        ...(step.location
-          ? {
-              sourceFile: step.location.file,
-              sourceLine: step.location.line,
-              sourceColumn: step.location.column,
-            }
-          : {}),
+        ...(step.location && {
+          sourceFile: step.location.file,
+          sourceLine: step.location.line,
+          sourceColumn: step.location.column,
+        }),
         ...(step.error
           ? { error: normalizePlaywrightError(step.error) }
           : unfinished
@@ -219,6 +217,6 @@ function firstResultError(errors: readonly TestError[], error: TestError | undef
 function normalizePlaywrightError(error: TestError): TestTelemetryError {
   return {
     message: error.message ?? error.value ?? "Unknown Playwright error",
-    ...(error.stack ? { stack: error.stack } : {}),
+    ...(error.stack && { stack: error.stack }),
   };
 }

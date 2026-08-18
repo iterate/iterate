@@ -57,7 +57,7 @@ describe("catchUpAvailableHistory", () => {
       offset,
       createdAt: new Date(offset).toISOString(),
       path: "/tests/catch-up",
-      ...(ephemeral ? { ephemeral: true as const } : {}),
+      ...(ephemeral && { ephemeral: true as const }),
     });
     const serverEvents = [event(1), event(2, true), event(3), event(4, true)];
     const reads: Array<{ afterOffset: number; beforeOffset: number; limit: number }> = [];

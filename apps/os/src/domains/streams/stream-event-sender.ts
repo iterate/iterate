@@ -2753,13 +2753,11 @@ function parseWakeDeliveryResult(
     outcome: "error",
     error: Object.assign(error, {
       ...(typeof serialized.itxCallId === "string" &&
-      serialized.itxCallId.length > 0 &&
-      serialized.itxCallId.length <= 200
-        ? { itxCallId: serialized.itxCallId }
-        : {}),
-      ...(serialized.durableObjectReset === true ? { durableObjectReset: true } : {}),
-      ...(serialized.overloaded === true ? { overloaded: true } : {}),
-      ...(serialized.retryable === true ? { retryable: true } : {}),
+        serialized.itxCallId.length > 0 &&
+        serialized.itxCallId.length <= 200 && { itxCallId: serialized.itxCallId }),
+      ...(serialized.durableObjectReset === true && { durableObjectReset: true }),
+      ...(serialized.overloaded === true && { overloaded: true }),
+      ...(serialized.retryable === true && { retryable: true }),
     }),
   };
 }

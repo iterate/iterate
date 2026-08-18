@@ -1,5 +1,4 @@
 import type { Page, TestInfo } from "@playwright/test";
-import { spinnerWaiter } from "middlewright";
 import { waitForPreviewRolloutBeforeProjectCreation } from "@iterate-com/shared/test-support/preview-rollout-gate";
 
 /**
@@ -54,21 +53,23 @@ export async function signUpWithEmailOtp(
 ) {
   await page.getByTestId("email-input").fill(input.email);
   await page.getByTestId("email-submit-button").click();
-  await page.getByTestId("email-otp-input").fill("424242");
-  await page.getByTestId("email-verify-button").click({ timeout: 15_000 });
+  // The submit crosses an auth-server action before the OTP form mounts; the
+  // button shows "Sending code..." meanwhile, so the spinner-waiter extends
+  // the wait — no manual budget.
+  const emailOtpInput = page.getByTestId("email-otp-input");
+  await emailOtpInput.waitFor({ state: "visible" });
+  await emailOtpInput.fill("424242");
+  await page.getByTestId("email-verify-button").click();
 
   // A brand-new user has no organization, so the OAuth post-login flow parks
   // on the auth app's first-run onboarding — organization name and first
-  // project slug in one form. The page loads behind an unmarked skeleton, so
-  // spinner-waiter can't help here — wait for the form directly instead.
-  await spinnerWaiter.settings.run({ disabled: true }, async () => {
-    await page
-      .getByLabel("Organization name")
-      .fill(`Playwright ${input.email.split("@")[0]}`, { timeout: 30_000 });
-    await page.getByLabel("Project slug").fill(input.projectSlug, { timeout: 15_000 });
-    await waitForPreviewRolloutBeforeProjectCreation({
-      beforeWait: (waitMs) => input.testInfo.setTimeout(input.testInfo.timeout + waitMs),
-    });
-    await page.getByRole("button", { name: "Get started" }).click({ timeout: 15_000 });
+  // project slug in one form. "Signing in..." persists through the redirect
+  // (redirectAndStayPending) and the onboarding skeleton is loading-marked,
+  // so the spinner-waiter rides real product UI the whole way.
+  await page.getByLabel("Organization name").fill(`Playwright ${input.email.split("@")[0]}`);
+  await page.getByLabel("Project slug").fill(input.projectSlug);
+  await waitForPreviewRolloutBeforeProjectCreation({
+    beforeWait: (waitMs) => input.testInfo.setTimeout(input.testInfo.timeout + waitMs),
   });
+  await page.getByRole("button", { name: "Get started" }).click();
 }

@@ -185,7 +185,7 @@ bespoke runner.
 | Surface      | in-process / itx API / browser / PTY              | which lane you invoke (`pnpm test` / `pnpm e2e` / `pnpm spec` / tui) + vitest `--project`                             | works today    |
 | Speed        | fast / slow-by-contract                           | per-test `{ timeout }` capped at `E2E_HEAVY_TEST_TIMEOUT_MS`; the slowest-first sequencer feeds on observed seconds   | works today    |
 | Determinism  | deterministic / retry-absorbed                    | `E2E_CI_RETRIES = 1` + retry telemetry — a nondeterministic test that retries is visible, never silent                | works today    |
-| Cost         | free / pays for LLM turns                         | **gap** — implicit today (the onboarding smoke and codemode proofs pay; nothing marks them)                           | proposal below |
+| Cost         | free / pays for LLM turns                         | **gap** — implicit today (the agent smoke and codemode proofs pay; nothing marks them)                                | proposal below |
 | Remote reach | hermetic / hits a deployment / hits a third party | **partial** — `APP_CONFIG_INTEGRATIONS__*` presence gates third-party suites; deployment-reach is implied by the lane | proposal below |
 
 Draft proposal for the two gaps, keeping vanilla CLIs:
@@ -290,7 +290,7 @@ lane is revived.
 | `TEST_TELEMETRY_ARTIFACT_FILE`       | The preview orchestrator, or you                      | Optional named immediate canonical JSON used by the PR retry summary                                                    | Unset → no immediate copy             |
 | `TEST_TELEMETRY_ARTIFACT_DIR`        | CI, or you                                            | Durable canonical JSON directory consumed by the always-running finalizer                                               | Unset → reporter does not write       |
 | `TEST_TELEMETRY_KIND`                | CI/orchestrator                                       | Shared `unit`, `integration`, or `e2e` dimension                                                                        | Runner-appropriate default            |
-| `TEST_TELEMETRY_LANE`                | CI/orchestrator                                       | Shared lane dimension (`unit`, `vitest`, `playwright`, `onboarding-smoke`, …)                                           | Runner-appropriate default            |
+| `TEST_TELEMETRY_LANE`                | CI/orchestrator                                       | Shared lane dimension (`unit`, `vitest`, `playwright`, `agent-smoke`, …)                                                | Runner-appropriate default            |
 | `TEST_TELEMETRY_APP`                 | Preview orchestrator                                  | Deployed application dimension                                                                                          | Unset outside app e2e                 |
 | `TEST_TELEMETRY_PREVIEW_SLOT`        | Preview orchestrator                                  | Preview slot dimension                                                                                                  | Unset outside preview                 |
 | `TEST_TELEMETRY_HEAD_SHA`            | Preview orchestrator                                  | Exact tested commit identity, including manually dispatched PR runs                                                     | Ambient GitHub SHA, then local HEAD   |
@@ -408,7 +408,7 @@ only on genuine infra wedges).
 
 1. **Retries live in exactly one layer: the individual test.** The test is
    the smallest unit that owns its state — independently scheduled tests (and
-   every onboarding-smoke attempt) provision isolated projects — so it is the
+   every agent-smoke attempt) provision isolated projects — so it is the
    cheapest genuinely independent trial. `E2E_CI_RETRIES = 1` in CI, zero
    locally, everywhere: retrying anything larger re-runs minutes of healthy
    work to re-roll one six-second dice.
@@ -436,19 +436,19 @@ only on genuine infra wedges).
 
 ### The ladder
 
-| What it bounds              | Knob                                   | Where                                                                                                       | Value                                             | On expiry                                                   |
-| --------------------------- | -------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------- | ----------------------------------------------------------- |
-| One UI action               | `actionTimeout` + spinner-waiter       | `playwright.config.ts` ← `SPEC_ACTION_TIMEOUT_MS`                                                           | 750ms (→ ~30s with spinner)                       | fail the attempt                                            |
-| One assertion               | `expect.timeout`                       | `playwright.config.ts` ← `SPEC_EXPECT_TIMEOUT_MS`                                                           | 15s                                               | fail the attempt                                            |
-| One TUI workflow spec       | _(lane skipped — see the lanes table)_ | `apps/os/e2e/tui-test/` ← `SPEC_EXPECT_TIMEOUT_MS` / `TUI_TEST_TIMEOUT_MS`                                  | 15–30s assertions; 55s hard watchdog (dormant)    | n/a while skipped                                           |
-| One Playwright spec         | `timeout`                              | `playwright.config.ts` ← `SPEC_TEST_TIMEOUT_MS`                                                             | 90s                                               | retry once (CI)                                             |
-| One vitest e2e test/hook    | `testTimeout` / `hookTimeout`          | `apps/os/e2e/vitest.config.ts` ← `E2E_TEST_TIMEOUT_MS`                                                      | 120s                                              | retry once (CI)                                             |
-| The built-package TUI lane  | `timeout N <lane command>`             | `scripts/preview/preview.ts` ← `OS_TUI_LANE_TIMEOUT_SECS`                                                   | 180s (wraps the no-op skip stub)                  | **fail — never retry**                                      |
-| A container-cold-boot test  | per-test `{ timeout }`                 | individual tests, capped at `E2E_HEAVY_TEST_TIMEOUT_MS`                                                     | ≤ 240s                                            | retry once (CI)                                             |
-| The onboarding smoke lane   | attempt loop + `timeout N <command>`   | `apps/os/e2e/vitest/onboarding-smoke.ts`; `scripts/preview/preview.ts` ← `OS_ONBOARDING_SMOKE_TIMEOUT_SECS` | 90s greeting wait per attempt; 240s lane watchdog | one more attempt, then fail; watchdog expiry fails the lane |
-| Each Vitest/Playwright lane | `timeout N <lane command>`             | `scripts/preview/preview.ts` ← `OS_PREVIEW_LANE_TIMEOUT_SECS`                                               | 480s                                              | **fail — never retry**                                      |
-| One whole preview run       | `RUN_TIMEOUT_SECS` Depot cancellation  | `scripts/preview/flake-hunt-loop.sh` ← `PREVIEW_RUN_WATCHDOG_SECS`                                          | 600s                                              | **cancel — never retry**                                    |
-| The Depot CI job            | `timeout-minutes`                      | `.depot/workflows/*.yml`                                                                                    | 10–45 minutes (20 for preview)                    | outer edge: re-run button                                   |
+| What it bounds              | Knob                                   | Where                                                                                             | Value                                          | On expiry                                                   |
+| --------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------- | ---------------------------------------------- | ----------------------------------------------------------- |
+| One UI action               | `actionTimeout` + spinner-waiter       | `playwright.config.ts` ← `SPEC_ACTION_TIMEOUT_MS`                                                 | 750ms (→ ~30s with spinner)                    | fail the attempt                                            |
+| One assertion               | `expect.timeout`                       | `playwright.config.ts` ← `SPEC_EXPECT_TIMEOUT_MS`                                                 | 15s                                            | fail the attempt                                            |
+| One TUI workflow spec       | _(lane skipped — see the lanes table)_ | `apps/os/e2e/tui-test/` ← `SPEC_EXPECT_TIMEOUT_MS` / `TUI_TEST_TIMEOUT_MS`                        | 15–30s assertions; 55s hard watchdog (dormant) | n/a while skipped                                           |
+| One Playwright spec         | `timeout`                              | `playwright.config.ts` ← `SPEC_TEST_TIMEOUT_MS`                                                   | 90s                                            | retry once (CI)                                             |
+| One vitest e2e test/hook    | `testTimeout` / `hookTimeout`          | `apps/os/e2e/vitest.config.ts` ← `E2E_TEST_TIMEOUT_MS`                                            | 120s                                           | retry once (CI)                                             |
+| The built-package TUI lane  | `timeout N <lane command>`             | `scripts/preview/preview.ts` ← `OS_TUI_LANE_TIMEOUT_SECS`                                         | 180s (wraps the no-op skip stub)               | **fail — never retry**                                      |
+| A container-cold-boot test  | per-test `{ timeout }`                 | individual tests, capped at `E2E_HEAVY_TEST_TIMEOUT_MS`                                           | ≤ 240s                                         | retry once (CI)                                             |
+| The agent smoke lane        | attempt loop + `timeout N <command>`   | `apps/os/e2e/vitest/agent-smoke.ts`; `scripts/preview/preview.ts` ← `OS_AGENT_SMOKE_TIMEOUT_SECS` | 90s reply wait per attempt; 240s lane watchdog | one more attempt, then fail; watchdog expiry fails the lane |
+| Each Vitest/Playwright lane | `timeout N <lane command>`             | `scripts/preview/preview.ts` ← `OS_PREVIEW_LANE_TIMEOUT_SECS`                                     | 480s                                           | **fail — never retry**                                      |
+| One whole preview run       | `RUN_TIMEOUT_SECS` Depot cancellation  | `scripts/preview/flake-hunt-loop.sh` ← `PREVIEW_RUN_WATCHDOG_SECS`                                | 600s                                           | **cancel — never retry**                                    |
+| The Depot CI job            | `timeout-minutes`                      | `.depot/workflows/*.yml`                                                                          | 10–45 minutes (20 for preview)                 | outer edge: re-run button                                   |
 
 The ladder is strictly ordered and the guard test asserts it stays that way.
 Note the deliberate rule-3 consequence: the 480s lane watchdog does _not_
@@ -465,7 +465,7 @@ be diagnosed, even though the same test outcome remains green in normal CI.
 
 - **Run log**: Vitest and TUI lanes print `[retry-telemetry] N test(s) needed
 retries: ...` (the Vitest `RetryTelemetryReporter` lives in
-  `packages/shared/src/test-support/e2e-policy/`); the onboarding smoke
+  `packages/shared/src/test-support/e2e-policy/`); the agent smoke
   prints the same marker when it needed attempt 2. Vitest and Playwright
   records retain the first failed attempt's compact error even when the retry
   passes. Grep any run log for `retry-telemetry`.

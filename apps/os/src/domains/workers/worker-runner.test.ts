@@ -191,6 +191,138 @@ it("reuses a loaded worker within one runner but not across runner lifetimes", a
   expect(loaderNonces[2]).not.toBe(loaderNonces[0]);
 });
 
+it("loads shared-scope runners under the bare identity, with no nonce at all", async () => {
+  h.resolveWorkerSource.mockResolvedValue({
+    ok: true,
+    source: {
+      assetConfig: undefined,
+      assetManifest: {},
+      assets: {},
+      cacheKey: "build-key",
+      commitOid: "commit-1",
+      mainModule: "worker.js",
+      modules: {},
+      wranglerConfig: undefined,
+    },
+  });
+  h.loadResolvedWorker.mockImplementation(() => ({
+    getEntrypoint: () => ({ fetch: () => Promise.resolve(new Response("ok")) }),
+  }));
+  const createRunner = (loaderScope?: "shared" | "runner") =>
+    new DynamicWorkerRunner({
+      streamContext: { kind: "scope", scopePath: inlineRef.path },
+      exports: {} as ExecutionContext["exports"],
+      loaderScope,
+      projectId: "prj_private",
+      scopePath: inlineRef.path,
+    });
+
+  await createRunner("shared").fetch({
+    ref: inlineRef,
+    request: new Request("https://example.com/1"),
+  });
+  await createRunner("shared").fetch({
+    ref: inlineRef,
+    request: new Request("https://example.com/2"),
+  });
+  await createRunner().fetch({ ref: inlineRef, request: new Request("https://example.com/3") });
+
+  const loaderNonces = h.loadResolvedWorker.mock.calls.map(([input]) => input.loaderInstanceNonce);
+  // Undefined IS the design: the bare identity is the key, so parent isolates
+  // coming and going mint no new billable Dynamic Workers.
+  expect(loaderNonces[0]).toBeUndefined();
+  expect(loaderNonces[1]).toBeUndefined();
+  expect(loaderNonces[2]).toEqual(expect.any(String));
+});
+
+it("moves every later shared-scope runner onto the clone-skew recovery nonce", async () => {
+  const workerFetch = vi
+    .fn()
+    .mockRejectedValueOnce(
+      new Error("Unable to deserialize cloned data due to invalid or unsupported version."),
+    )
+    .mockResolvedValue(new Response("ok"));
+  h.resolveWorkerSource.mockResolvedValue({
+    ok: true,
+    source: {
+      assetConfig: undefined,
+      assetManifest: {},
+      assets: {},
+      cacheKey: "build-key",
+      commitOid: "commit-1",
+      mainModule: "worker.js",
+      modules: {},
+      wranglerConfig: undefined,
+    },
+  });
+  h.loadResolvedWorker.mockImplementation(() => ({
+    getEntrypoint: () => ({ fetch: workerFetch }),
+  }));
+  const createRunner = () =>
+    new DynamicWorkerRunner({
+      streamContext: { kind: "scope", scopePath: inlineRef.path },
+      exports: {} as ExecutionContext["exports"],
+      loaderScope: "shared",
+      projectId: "prj_private",
+      scopePath: inlineRef.path,
+    });
+
+  await createRunner().fetch({ ref: inlineRef, request: new Request("https://example.com/1") });
+  await createRunner().fetch({ ref: inlineRef, request: new Request("https://example.com/2") });
+
+  const loaderNonces = h.loadResolvedWorker.mock.calls.map(([input]) => input.loaderInstanceNonce);
+  expect(loaderNonces).toHaveLength(3);
+  // Steady state loads the bare identity; the skew retry mints a recovery
+  // nonce, and the next runner must reuse that replacement rather than
+  // return to the known-stale shared entry.
+  expect(loaderNonces[0]).toBeUndefined();
+  expect(loaderNonces[1]).toEqual(expect.any(String));
+  expect(loaderNonces[2]).toBe(loaderNonces[1]);
+});
+
+it("loads runScript workers once and releases both native handles", async () => {
+  h.resolveWorkerSource.mockResolvedValue({
+    ok: true,
+    source: {
+      assetConfig: undefined,
+      assetManifest: {},
+      assets: {},
+      cacheKey: "script-build-key",
+      mainModule: "worker.js",
+      modules: {},
+      wranglerConfig: undefined,
+    },
+  });
+  const disposeEntrypoint = vi.fn();
+  const disposeWorker = vi.fn();
+  h.loadResolvedWorker.mockReturnValue({
+    [Symbol.dispose]: disposeWorker,
+    getEntrypoint: () => ({
+      [Symbol.dispose]: disposeEntrypoint,
+      run: () => Promise.resolve("done"),
+    }),
+  });
+  const runner = new DynamicWorkerRunner({
+    streamContext: {
+      kind: "script-execution",
+      executionId: "agent-output:1",
+      scriptRunRequestedEventOffset: 2,
+      streamPath: "/agents/refund-agent",
+    },
+    exports: {} as ExecutionContext["exports"],
+    projectId: "prj_private",
+    scopePath: "/agents/refund-agent",
+  });
+
+  await expect(
+    runner.invokeCapability({ path: ["run"], ref: inlineRef, traceRole: "run_script" }),
+  ).resolves.toBe("done");
+
+  expect(h.loadResolvedWorker).toHaveBeenCalledWith(expect.objectContaining({ mode: "one-off" }));
+  expect(disposeEntrypoint).toHaveBeenCalledOnce();
+  expect(disposeWorker).toHaveBeenCalledOnce();
+});
+
 describe("dynamic worker spans", () => {
   it.each<{
     expectedKind: string;

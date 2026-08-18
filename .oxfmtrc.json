@@ -25,6 +25,8 @@
     "config-repo-template.generated.ts",
     "viseme-model.generated.ts",
     "apps/kit/firmware/components/avatar/src/face_avatar_catalog_generated.inc",
+    "configs/default/prompts/",
+    "configs/codemode-tag/prompts/",
     "worker-configuration.d.ts",
     "apps/auth/wrangler.jsonc",
     "apps/semaphore/wrangler.jsonc",

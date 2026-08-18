@@ -12,7 +12,11 @@ export { BrowserRawEventsContract } from "./contract.ts";
 // v7 clears local event tables that may contain ephemeral events persisted by
 // the previous browser projection. Ephemeral events now feed only the volatile
 // UI overlay, so those old rows cannot remain visible after an upgrade.
-export const BROWSER_RAW_EVENTS_SCHEMA_VERSION = 7;
+// v8 makes local_index a browser-allocated dense position instead of
+// offset - 1: connection presence facts are ephemeral now, so offset gaps are
+// routine, and the virtualized list (indexes 0..count-1 over local_index)
+// silently lost every row after a gap.
+export const BROWSER_RAW_EVENTS_SCHEMA_VERSION = 8;
 
 /**
  * Tables this processor owns. Views pass this to the runtime so a database
@@ -63,11 +67,16 @@ export class BrowserRawEventsProcessor extends StreamProcessor<
     // Sparse offsets are expected: memory-only ephemeral events are
     // intentionally absent. The runner validates the enclosing scan envelope before this
     // hook runs, so accepting a gap here means "proved omitted", not "lost".
+    // local_index is allocated densely at insert (0, 1, 2, …) so the
+    // virtualized list's window query stays aligned with the row count even
+    // across offset gaps. A replayed duplicate is RAISE(IGNORE)d by the
+    // insert trigger, so its computed allocation is simply discarded.
     this.projectionBuffer.append(event.offset, [
       {
         build: () => ({
-          sql: `INSERT INTO events (local_index, raw_jsonb) VALUES (?, jsonb(?))`,
-          params: [event.offset - 1, JSON.stringify(event)] satisfies SqlValue[],
+          sql: `INSERT INTO events (local_index, raw_jsonb)
+                SELECT COALESCE(MAX(local_index) + 1, 0), jsonb(?) FROM events`,
+          params: [JSON.stringify(event)] satisfies SqlValue[],
         }),
       },
     ]);
@@ -109,12 +118,13 @@ const ensureBrowserRawEventsSchema = createSchemaEnsurer({
             -- SQLite derives the queryable event fields from it, so future JSON-field
             -- indexes can use the same payload without duplicating text JSON.
             --
-            -- local_index is deliberately separate from offset. Today it is offset - 1,
-            -- because server offsets are one-based and TanStack Virtual indexes are
-            -- zero-based. Neither column is guaranteed dense: ephemeral event
-            -- bodies are never written to durable storage, while their offsets
-            -- stay consumed, so replays can carry permanent gaps. The actual consumers (inspector panels' offset point
-            -- reads and ORDER BY offset walks) are gap-proof.
+            -- local_index is deliberately separate from offset: it is the DENSE
+            -- zero-based local list position (allocated at insert as
+            -- MAX(local_index) + 1), which is what TanStack Virtual indexes
+            -- against the row count. offset keeps the stream identity and is
+            -- NOT dense: ephemeral event bodies (connection presence facts,
+            -- streaming chunks) are never written to durable storage while
+            -- their offsets stay consumed, so replays carry permanent gaps.
             CREATE TABLE IF NOT EXISTS events (
               local_index INTEGER PRIMARY KEY,
               raw_jsonb BLOB NOT NULL,
@@ -122,8 +132,7 @@ const ensureBrowserRawEventsSchema = createSchemaEnsurer({
               type TEXT GENERATED ALWAYS AS (json_extract(raw_jsonb, '$.type')) STORED NOT NULL,
               idempotency_key TEXT GENERATED ALWAYS AS (json_extract(raw_jsonb, '$.idempotencyKey')) STORED,
               created_at TEXT GENERATED ALWAYS AS (json_extract(raw_jsonb, '$.createdAt')) STORED NOT NULL,
-              inserted_at TEXT NOT NULL DEFAULT (datetime('now')),
-              CHECK (local_index = offset - 1)
+              inserted_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
           `,
         },

@@ -16,7 +16,10 @@
 // anything incarnation-shaped through the optional `keepAlive` hook.
 //
 // Event batches: `openEventBatchCallback()` returns the committed processing
-// offset plus the `processEventBatch` callback a stream can retain and call.
+// offset plus the `processEventBatch` callback a direct source can retain and call.
+// `openHostedEventBatchCallback()` is the trusted hosted-source variant: it
+// accepts the source's own lifetime identity and defers any journal refold until
+// the one-way callback, breaking a source-alarm -> facet-wake -> source-read cycle.
 // Hosted wake wraps its promise with an independent one-way settlement
 // capability; a browser's local event database calls the same runtime-neutral
 // API directly.
@@ -152,6 +155,13 @@ export type ProcessorProgressStore<State> = {
 export type ProcessorRecovery = {
   keepAliveWhile(work: () => Promise<unknown>): void;
   handleAlarm(info?: unknown): MaybePromise<void>;
+  /**
+   * Operator seam: clear the keepalive's crash-loop budget and pull an owed
+   * retry in to the confirmation lead — the no-deploy antidote for a
+   * 3-strikes revival plateau. Optional: in-memory/test recoveries without a
+   * durable budget have nothing to reset.
+   */
+  resetBackoff?(): void;
 };
 
 /**
@@ -263,8 +273,10 @@ export class StreamProcessorRunner<
    * `isLoaded` invariant). `snapshot()` additionally
    * awaits the load, so partial state cannot escape through it either. */
   #hasLoaded = false;
-  /** The COMMITTED progress — what snapshot()/openEventBatchCallback() publish. Batch
-   * folds accumulate in locals and land here only after the durable commit. */
+  /** The COMMITTED, loaded progress — what snapshots and direct callbacks publish.
+   * A hosted wake may publish only the separately-read processing cursor before this
+   * reduction cache loads. Batch folds accumulate in locals and land here only after
+   * the durable commit. */
   #progress: ProcessorProgress<ProcessorState<Contract>> | undefined;
   /** Highest stream offset observed across all batches this incarnation. */
   #highestObservedOffset = 0;
@@ -316,30 +328,66 @@ export class StreamProcessorRunner<
    * hosting transport may adapt how the promise is observed, but must not
    * duplicate these semantics.
    */
-  async openEventBatchCallback(
-    expectedStreamId?: string,
-    options?: {
-      /**
-       * The callback source scans every raw offset and sends empty batches for
-       * filtered gaps. It is therefore the sole catch-up driver: a second,
-       * unfiltered journal pull here would bypass the source's filter.
-       */
-      sourceScansAllEvents?: boolean;
-    },
-  ): Promise<{
+  async openEventBatchCallback(expectedStreamId?: string): Promise<{
     checkpointOffset: number;
     processEventBatch: (batch: StreamProcessorEventBatch) => Promise<void>;
   }> {
     this.#assertNotDisposed();
-    const checkpointOffset = await this.#enqueue(async () => {
+    const opened = await this.#enqueue(async () => {
       const streamId = await this.#readCurrentStreamId(expectedStreamId);
       await this.#load(streamId);
-      return this.#requireProgress().processing.acknowledgedThroughOffset;
+      return {
+        streamId,
+        checkpointOffset: this.#requireProgress().processing.acknowledgedThroughOffset,
+      };
     });
-    return {
+    return this.#eventBatchCallback({
+      ...opened,
+      deferredLoad: false,
+      sourceScansAllEvents: false,
+    });
+  }
+
+  /**
+   * Open the callback used by a trusted hosted source Stream.
+   *
+   * The request already carries that source's authoritative stream ID. Reading
+   * it back before returning would deadlock a colocated Processor Facet: the
+   * source alarm owns the wake RPC while the facet's identity/refold read waits
+   * for that same source turn. Return the durable processing cursor without a
+   * source read, then finish any reduction-cache load when the source invokes
+   * the independent one-way batch callback.
+   */
+  async openHostedEventBatchCallback(streamId: string): Promise<{
+    checkpointOffset: number;
+    processEventBatch: (batch: StreamProcessorEventBatch) => Promise<void>;
+  }> {
+    this.#assertNotDisposed();
+    const checkpointOffset = await this.#enqueue(() => this.#prepareHostedCheckpoint(streamId));
+    return this.#eventBatchCallback({
+      streamId,
       checkpointOffset,
+      deferredLoad: true,
+      sourceScansAllEvents: true,
+    });
+  }
+
+  #eventBatchCallback(args: {
+    streamId: string;
+    checkpointOffset: number;
+    deferredLoad: boolean;
+    sourceScansAllEvents: boolean;
+  }): {
+    checkpointOffset: number;
+    processEventBatch: (batch: StreamProcessorEventBatch) => Promise<void>;
+  } {
+    return {
+      checkpointOffset: args.checkpointOffset,
       processEventBatch: (batch: StreamProcessorEventBatch) => {
-        const attempt = this.#enqueue(() => this.#processBatch(batch));
+        const attempt = this.#enqueue(async () => {
+          if (args.deferredLoad) await this.#loadPreparedStream(args.streamId);
+          await this.#processBatch(batch);
+        });
         // Zero-lag recovery must cover the WHOLE batch attempt, not merely
         // the work registered inside it (the June-10/July-7 incident class):
         // an eviction mid-batch on a stream that also died still gets this
@@ -360,7 +408,7 @@ export class StreamProcessorRunner<
         // raw offset and sends empty frames across configured-filter gaps.
         // That transport must remain the only catch-up driver or a runner pull
         // would consume events the subscription explicitly excluded.
-        if (options?.sourceScansAllEvents !== true) {
+        if (!args.sourceScansAllEvents) {
           this.#runInBackground(() =>
             attempt.then(
               () =>
@@ -790,11 +838,12 @@ export class StreamProcessorRunner<
       const newestEventCreatedAtMs = Date.parse(committedEvents.at(-1)!.createdAt);
       this.hooks.noteBatchIngested({
         ingestedThroughOffset: next.processing.acknowledgedThroughOffset,
-        // The offsets, not just how many: the cursor above sweeps past rows a
-        // filtered subscription skipped, so only these can say an own append
-        // came BACK rather than merely being overtaken.
+        // The offsets, not just how many (main's eventCount is subsumed —
+        // the metrics derive the count from these): the cursor above sweeps
+        // past rows a filtered subscription skipped, so only these can say an
+        // own append came BACK rather than merely being overtaken.
         ingestedOffsets: committedEvents.map((event) => event.offset),
-        ...(Number.isFinite(newestEventCreatedAtMs) ? { newestEventCreatedAtMs } : {}),
+        ...(Number.isFinite(newestEventCreatedAtMs) && { newestEventCreatedAtMs }),
         ingestStartedAtMs: ctx.ingestStartedAtMs,
         atMs: this.now(),
       });
@@ -847,7 +896,66 @@ export class StreamProcessorRunner<
   // Progress load / refold / commit.
   // ---------------------------------------------------------------------------
 
+  /**
+   * Return the hosted source's authoritative effect cursor without reading
+   * that source. Fresh/recreated lifetimes still land their durable fence
+   * before the checkpoint escapes; an existing lifetime leaves its disposable
+   * reduction cache unloaded until the one-way delivery callback.
+   */
+  async #prepareHostedCheckpoint(streamId: string): Promise<number> {
+    if (this.#hasLoaded && this.#progress?.streamId === streamId) {
+      return this.#progress.processing.acknowledgedThroughOffset;
+    }
+    if (this.#hasLoaded) {
+      this.#hasLoaded = false;
+      this.#loaded = undefined;
+      this.#loadingStreamId = undefined;
+    }
+
+    const persisted = await this.durability?.progress.read();
+    if (persisted === undefined) {
+      const fresh = this.#freshProgress(streamId, 0);
+      await this.#commit(fresh, {
+        expectedCursorRevision: 0,
+        expectedStreamId: undefined,
+      });
+      this.#progress = fresh;
+      this.#hasLoaded = true;
+      return 0;
+    }
+    if (persisted.streamId === streamId) {
+      return persisted.processing.acknowledgedThroughOffset;
+    }
+
+    const replaceForStream = this.durability?.progress.replaceForStream;
+    if (replaceForStream === undefined) {
+      throw new Error(
+        `stream processor "${this.hooks.contract.slug}" progress belongs to stream ID ` +
+          `${persisted.streamId}, but the current stream ID is ${streamId}; ` +
+          `this durability backend must reset its related projections before reopening`,
+      );
+    }
+    const fresh = this.#freshProgress(streamId, persisted.processing.cursorRevision + 1);
+    await replaceForStream(fresh, {
+      expectedCursorRevision: persisted.processing.cursorRevision,
+      expectedStreamId: persisted.streamId,
+    });
+    this.#progress = fresh;
+    this.#hasLoaded = true;
+    this.#notifyStateChange({ offset: 0, state: fresh.reduction.state });
+    return 0;
+  }
+
   #load(streamId: string): Promise<void> {
+    return this.#loadWithStreamReplacement(streamId, true);
+  }
+
+  #loadPreparedStream(streamId: string): Promise<void> {
+    if (this.#hasLoaded) return Promise.resolve();
+    return this.#loadWithStreamReplacement(streamId, false);
+  }
+
+  #loadWithStreamReplacement(streamId: string, replaceMismatchedStream: boolean): Promise<void> {
     if (this.#hasLoaded && this.#progress?.streamId === streamId) return Promise.resolve();
     if (this.#hasLoaded) {
       this.#hasLoaded = false;
@@ -856,10 +964,12 @@ export class StreamProcessorRunner<
     }
     if (this.#loaded !== undefined) {
       if (this.#loadingStreamId === streamId) return this.#loaded;
-      return this.#loaded.then(() => this.#load(streamId));
+      return this.#loaded.then(() =>
+        this.#loadWithStreamReplacement(streamId, replaceMismatchedStream),
+      );
     }
     this.#loadingStreamId = streamId;
-    this.#loaded = this.#loadOnce(streamId).catch((error: unknown) => {
+    this.#loaded = this.#loadOnce(streamId, replaceMismatchedStream).catch((error: unknown) => {
       // Clear the memoized load so a later call retries instead of replaying
       // this rejection forever.
       this.#loaded = undefined;
@@ -884,7 +994,7 @@ export class StreamProcessorRunner<
     };
   }
 
-  async #loadOnce(streamId: string): Promise<void> {
+  async #loadOnce(streamId: string, replaceMismatchedStream: boolean): Promise<void> {
     const persisted = await this.durability?.progress.read();
     if (persisted === undefined) {
       // Fresh processor: nothing observed yet, so the schema default IS the
@@ -902,6 +1012,12 @@ export class StreamProcessorRunner<
     }
 
     if (persisted.streamId !== streamId) {
+      if (!replaceMismatchedStream) {
+        throw new Error(
+          `hosted callback for stream ID ${streamId} is stale; processor progress belongs to ` +
+            `${persisted.streamId}`,
+        );
+      }
       const replaceForStream = this.durability?.progress.replaceForStream;
       if (replaceForStream === undefined) {
         throw new Error(

@@ -78,7 +78,7 @@ export function CreateProjectForm({
       // server-side nudge, and the project home plays it from live pushes.
       const project = session.projects.get(input.slug).create(
         {
-          ...(input.organizationSlug ? { organizationSlug: input.organizationSlug } : {}),
+          ...(input.organizationSlug && { organizationSlug: input.organizationSlug }),
           ...(input.configRepoTemplate === undefined
             ? {}
             : { configRepoTemplate: input.configRepoTemplate }),
@@ -93,7 +93,7 @@ export function CreateProjectForm({
     onSuccess: ({ slug }) => {
       setNavigatingAway(true);
       // The project home plays bootstrap progress from live state, then
-      // `welcome` hands the new owner into onboarding once created.
+      // `welcome` keeps the creation checklist visible until bootstrap completes.
       void router.navigate({
         to: "/projects/$projectSlug",
         params: { projectSlug: slug },
@@ -129,7 +129,7 @@ export function CreateProjectForm({
     onSubmit: async ({ value }) => {
       const parsed = CreateProjectInput.parse(value);
       await createProject.mutateAsync({
-        ...(parsed.configRepoTemplate ? { configRepoTemplate: parsed.configRepoTemplate } : {}),
+        ...(parsed.configRepoTemplate && { configRepoTemplate: parsed.configRepoTemplate }),
         slug: parsed.slug,
         organizationSlug: parsed.organizationSlug,
       });

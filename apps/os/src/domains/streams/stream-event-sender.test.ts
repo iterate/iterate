@@ -18,6 +18,7 @@ import {
 import { compileEventFilter } from "./event-filter.ts";
 import type { RetainedProcessEventBatch } from "./retained-event-callbacks.ts";
 import { DEFAULT_DELIVERY_TIMEOUT_MS, internalStreamId } from "./stream-delivery-utils.ts";
+import { StreamCoreProcessor } from "./core-processor.ts";
 import {
   hostedDeliveryLimit,
   StreamConnections,
@@ -465,6 +466,57 @@ describe("StreamEventSender hosted processor delivery", () => {
     await rebuilt.settle();
     expect(rebuilt.wakeCalls).toHaveLength(1);
     expect(rebuilt.eventSender.connections.has(PROCESSOR_KEY)).toBe(true);
+  });
+
+  it("classifies reconnect-churn presence facts as ephemeral, so wake/idle cycles cannot grow the durable journal", async () => {
+    // The 2026-08-11 revival death spiral: a crash-looping processor host
+    // reopened its event connections over and over, each cycle journaling
+    // durable connection-opened/closed pairs (~1500 per revival cycle in
+    // prod), so every revival replayed a longer journal than the last —
+    // until Durable Object storage timed out and reset the object, thrice,
+    // and the keepalive muted the agent for six hours.
+    const core = new StreamCoreProcessor({ projectId: "project" });
+    const durablePresenceFacts: StreamEventInput[] = [];
+    const ephemeralPresenceFacts: StreamEventInput[] = [];
+    const events = [event(2, "b", { keep: true })];
+    const h = harness({
+      events,
+      appendDeliveryEvent: (input) => {
+        // The Stream DO's append pipeline in miniature: canonicalize (the
+        // core contract attaches the ephemeral flag) and split — only
+        // non-ephemeral bodies become durable SQLite rows.
+        const body = core.canonicalize(input);
+        if (!body.type.startsWith("events.iterate.com/stream/connection-")) return true;
+        (body.ephemeral === true ? ephemeralPresenceFacts : durablePresenceFacts).push(body);
+        return true;
+      },
+      wakeProcessor: async () => ({
+        streamId: SOURCE_STREAM_ID,
+        checkpointOffset: 0,
+        processEventBatch: retainedProcessEventBatch((batch) => {
+          batch.reportDeliveryResult({ outcome: "ok" });
+        }),
+      }),
+    });
+
+    for (let cycle = 0; cycle < 3; cycle += 1) {
+      h.eventSender.sendDue();
+      await h.settle();
+      expect(h.eventSender.connections.has(PROCESSOR_KEY)).toBe(true);
+      h.setNow(15_000 + cycle * 10_000);
+      h.eventSender.onAlarm(); // idle teardown closes the hosted connection
+      await h.settle();
+      expect(h.eventSender.connections.has(PROCESSOR_KEY)).toBe(false);
+      // Fresh product traffic re-wakes the processor for the next cycle.
+      events.push(event(3 + cycle, "b", { keep: true }));
+      h.state.maxOffset = 3 + cycle;
+    }
+
+    // Presence churn happened (an opened+closed pair per cycle)...
+    expect(ephemeralPresenceFacts.length).toBeGreaterThanOrEqual(6);
+    // ...and NONE of it is durable: N revive/reconnect cycles append zero
+    // durable journal rows.
+    expect(durablePresenceFacts).toEqual([]);
   });
 
   it("wakes a hosted processor whose filter explicitly names a lifecycle event", async () => {

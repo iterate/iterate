@@ -43,7 +43,7 @@ import {
 type ParsedRouter = ReturnType<typeof parseRouter>;
 
 const OAUTH_REFRESH_SKEW_MS = 60_000;
-const DEFAULT_CHAT_AGENT_PATH = "/agents/onboarding";
+const DEFAULT_CHAT_AGENT_PATH = "/agents/default";
 type OsAuthHeaders = { cookie?: string; authorization?: string };
 type OsAuth = { credentials: ItxAuthCredentials; requestHeaders?: HeadersInit };
 type CreateOsSession = (input: { auth: OsAuth; baseUrl: string }) => RpcStub<Session>;
@@ -370,7 +370,7 @@ const setupMissingProjectForChat = async (session: RpcStub<Session>, project: Pr
   try {
     projectItx = (await session.projects.get(project.slug).create({
       projectId: project.id,
-      ...(project.organizationSlug ? { organizationSlug: project.organizationSlug } : {}),
+      ...(project.organizationSlug && { organizationSlug: project.organizationSlug }),
     })) as unknown as RpcStub<Project>;
   } catch (error) {
     throw new Error(
@@ -1017,7 +1017,7 @@ const launcherProcedures = {
           .startsWith("/agents/")
           .optional()
           .default(DEFAULT_CHAT_AGENT_PATH)
-          .describe("Agent stream path to chat with (default: /agents/onboarding)"),
+          .describe("Agent stream path to chat with (default: /agents/default)"),
       }),
     )
     .meta({

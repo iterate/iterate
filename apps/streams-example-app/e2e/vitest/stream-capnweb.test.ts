@@ -410,7 +410,8 @@ describe("stream capnweb protocol", () => {
           },
         }),
         first,
-        // Opening the callback appends a durable presence fact after the replay
+        // Opening the callback appends a presence fact (ephemeral, but session
+        // connections receive buffered ephemeral events) after the replay
         // cursor is fixed, so it arrives at the end of the first batch.
         expect.objectContaining({
           type: "events.iterate.com/stream/connection-opened",

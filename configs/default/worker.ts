@@ -1,7 +1,13 @@
 import { DocsApp } from "@iterate-com/docs";
 import { GithubAiLinter } from "iterate/starter-apps/github-ai-linter";
 import { GuestbookApp } from "iterate/starter-apps/guestbook";
-import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
+import { MediaApp } from "iterate/starter-apps/media";
+import { NotesApp } from "iterate/starter-apps/notes";
+import {
+  IterateWorkerEntrypoint,
+  type AgentBirthDefaultsValue,
+  type StreamEvent,
+} from "iterate/sdk";
 import { TodoApp } from "iterate/starter-apps/todo";
 
 // An iterate project is, in the abstract, just a fetch function.
@@ -34,6 +40,8 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     },
   });
   #guestbookApp = GuestbookApp.create(this.env);
+  #mediaApp = MediaApp.create(this.env);
+  #notesApp = NotesApp.create(this.env);
   #todoApp = TodoApp.create(this.env);
 
   /** Agent-callable app helpers: `itx.worker.docs.link({ workspace, path })`
@@ -62,7 +70,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
    */
   async #syncAgentsMdContext(agentPaths: string[]): Promise<void> {
     if (agentPaths.length === 0) return;
-    const itx = await this.itx;
+    const itx = this.itx;
     const file = await itx.repo.readFile({ path: "AGENTS.md" });
     const content =
       file === null
@@ -103,10 +111,131 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     if (failed !== undefined && failed.status === "rejected") throw failed.reason;
   }
 
+  /**
+   * THE PROJECT'S PROMPT, published as data: the project root's generic
+   * defaults store (`project/defaults-configured`, latest occurrence wins
+   * per key) holds this repo's birth events under the "agents/birth-defaults"
+   * key, and the platform's agent-creation door folds them into every agent
+   * birth batch — so agents in this project are BORN with this repo's
+   * prompts/agent-system-prompt.md as their system prompt. Edit that file
+   * and commit to change it — the content-hash key re-publishes and the
+   * newest event wins; no platform deploy. Deleting the file publishes an
+   * EMPTY list, which restores the platform's embedded fallback prompt
+   * (identical text until you fork the file). Rough token budget: prompts
+   * ride every LLM request, so a much larger file mostly buys latency and
+   * cost — keep it lean.
+   */
+  async #publishAgentBirthDefaults(): Promise<void> {
+    const itx = this.itx;
+    const file = await itx.repo.readFile({ path: "prompts/agent-system-prompt.md" });
+    const birthEvents: AgentBirthDefaultsValue["birthEvents"] =
+      file === null
+        ? []
+        : [
+            {
+              type: "events.iterate.com/agents/context-added",
+              payload: {
+                // The platform's embedded copy of this file is newline-stripped;
+                // publishing the same normalization keeps "unchanged file" a
+                // byte-identical no-op.
+                content: file.content.replace(/\n$/, ""),
+                key: "agent/system-prompt",
+                role: "system",
+              },
+            },
+          ];
+    // Best-effort size guard (~4 chars/token): the platform's own default
+    // prompt is budget-tested at ~4.3k tokens; warn well before a fork's
+    // edits silently double every request's cost.
+    if (file !== null && file.content.length > 6_000 * 4) {
+      console.warn(
+        `prompts/agent-system-prompt.md is ~${Math.round(file.content.length / 4)} tokens; ` +
+          "it rides every LLM request of every agent — consider trimming.",
+      );
+    }
+    const encoded = new TextEncoder().encode(JSON.stringify(birthEvents));
+    const digest = await crypto.subtle.digest("SHA-256", encoded);
+    const hash = [...new Uint8Array(digest).slice(0, 8)]
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+    await itx.streams.get("/").append({
+      type: "events.iterate.com/project/defaults-configured",
+      // New prefix on purpose: the stream rejects same-key-different-body
+      // appends, so the generic event must not reuse the legacy
+      // `iterate/config/agent-birth-defaults:` keys.
+      idempotencyKey: `iterate/config/defaults:agents/birth-defaults:${hash}`,
+      payload: {
+        key: "agents/birth-defaults",
+        value: { birthEvents } satisfies AgentBirthDefaultsValue,
+      },
+    });
+  }
+
   // The base class delivers committed events on ANY stream here at least once and in
   // per-stream order.
   protected override async processEvent(event: StreamEvent): Promise<void> {
     switch (event.type) {
+      case "events.iterate.com/project/created": {
+        if (event.path !== "/") break;
+        const instructions = await this.itx.repo.readFile({ path: "ONBOARDING.md" });
+        if (instructions === null) {
+          throw new Error("The default template enables onboarding but ONBOARDING.md is missing.");
+        }
+
+        const onboardingAgent = this.itx.agents.get("/agents/onboarding");
+        await onboardingAgent.create();
+        await onboardingAgent.append(
+          {
+            type: "events.iterate.com/agents/context-added",
+            idempotencyKey: "iterate/config/onboarding-instructions:v1",
+            payload: {
+              role: "system",
+              key: "config/onboarding-instructions",
+              content: instructions.content,
+              llmRequestPolicy: { behaviour: "dont-trigger-request" },
+            },
+          },
+          {
+            type: "events.iterate.com/agents/context-added",
+            idempotencyKey: "iterate/config/onboarding-start:v1",
+            payload: {
+              role: "developer",
+              key: "config/onboarding-start",
+              content:
+                "Begin onboarding now. The project owner just created this project. Welcome them, then follow the onboarding instructions one question at a time.",
+              llmRequestPolicy: { behaviour: "after-current-request" },
+            },
+          },
+        );
+
+        const [{ slug }, clients] = await Promise.all([
+          this.itx.identity(),
+          this.itx.clients.list(),
+        ]);
+        const projectHomePath = `/projects/${slug}`;
+        const onboardingUrl = `/projects/${slug}/agents/streams/agents/onboarding`;
+        await Promise.all(
+          clients
+            .filter((client) => client.connected && client.path.startsWith("/clients/os-app/"))
+            .map(async (client) => {
+              const browserClient = this.itx.clients.get(client.path);
+              const currentUrl = await browserClient.invokeCapability({
+                path: ["capabilities", "browser", "url"],
+              });
+              if (
+                typeof currentUrl !== "string" ||
+                new URL(currentUrl).pathname.replace(/\/$/, "") !== projectHomePath
+              ) {
+                return;
+              }
+              await browserClient.invokeCapability({
+                path: ["capabilities", "browser", "navigate"],
+                args: [onboardingUrl],
+              });
+            }),
+        );
+        break;
+      }
       case "events.iterate.com/agent/created": {
         // The birth event on the agent's own stream (copies carry
         // source.copiedFrom and must not re-target the collection stream).
@@ -118,7 +247,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         // Any config-repo commit MAY have changed AGENTS.md — the sync's
         // read-compare step turns the ones that didn't into no-ops.
         if (event.path !== "/repos/config") break;
-        const itx = await this.itx;
+        const itx = this.itx;
         const agents = await itx.agents.list();
         await this.#syncAgentsMdContext(agents.map((agent) => agent.path));
         break;
@@ -127,13 +256,13 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         if (event.path !== "/") break;
         console.log("Project heartbeat fired", { scheduleKey: event.payload?.scheduleKey });
         // Write arbitrary periodic work against itx here:
-        // const itx = await this.itx;
+        // await this.itx.scheduler.set(/* ... */);
         break;
       }
       case "events.iterate.com/stream/woken": {
         if (event.path !== "/") break;
         // Write arbitrary project-stream wake work against itx here:
-        // const itx = await this.itx;
+        // await this.itx.streams.get("/").append(/* ... */);
         break;
       }
       case "events.iterate.com/project/worker-updated": {
@@ -141,8 +270,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         // The platform appends this only after the current config worker has
         // built, loaded, and answered. Put arbitrary idempotent ITX calls
         // directly in this case.
-        const itx = await this.itx;
-        await itx.scheduler.set({
+        await this.itx.scheduler.set({
           key: "iterate/config/heartbeat/every-15-minutes",
           recurrence: { every: 15 * 60 },
           script: `async (itx, schedule, trigger) => {
@@ -153,6 +281,9 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
             });
           }`,
         });
+        // Any commit MAY have changed the prompt file; unchanged content
+        // dedupes on the content-hash key.
+        await this.#publishAgentBirthDefaults();
         break;
       }
       default:
@@ -161,13 +292,14 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
 
     await this.#aiLintApp.processEvent(event);
     await this.#guestbookApp.processEvent(event);
+    await this.#mediaApp.processEvent(event);
+    await this.#notesApp.processEvent(event);
   }
 
   async fetch(req: Request): Promise<Response> {
     const app = req.headers.get("x-iterate-app");
     if (app === "todo") {
-      const itx = await this.itx;
-      const authResponse = await itx.auth.get({ policy: "project-member" }).fetch(req);
+      const authResponse = await this.fetchProjectAuth(req, { policy: "project-member" });
       if (authResponse) return authResponse;
       return this.#todoApp.fetch(req);
     }

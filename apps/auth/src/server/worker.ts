@@ -43,6 +43,7 @@ import {
   mintProjectId,
   userCanAccessProject,
 } from "./project-directory.ts";
+import { handleTestLogin } from "./test-login.ts";
 import { buildAccessTokenGrantClaims } from "./oauth-project-selection.ts";
 import { getUserByEmail } from "./db/queries/index.ts";
 
@@ -97,6 +98,10 @@ app.get("/logout", async (c) => {
   appendSetCookieHeaders(response.headers, signOutResponse.headers);
   return response;
 });
+
+// One-click test sign-in for fixed-test-OTP deployments (preview/dev only;
+// 404 in production). See test-login.ts for the gate and the seeding it does.
+app.get("/test-login", handleTestLogin);
 
 export const orpcHandler = new RPCHandler(appRouter, {
   plugins: [new RequestHeadersPlugin()],

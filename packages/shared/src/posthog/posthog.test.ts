@@ -1,5 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { proxyPosthogRequest } from "./posthog.ts";
+import { proxyPosthogRequest, shouldSendPosthogEvents } from "./posthog.ts";
+
+describe("shouldSendPosthogEvents", () => {
+  it.each(["os-prd", "semaphore-prd", "prd"])("sends from production deployment %s", (env) => {
+    expect(shouldSendPosthogEvents(env)).toBe(true);
+  });
+
+  it.each(["os-preview-3", "os-local", "dev", "", undefined])(
+    "drops everything from non-production environment %s",
+    (env) => {
+      expect(shouldSendPosthogEvents(env)).toBe(false);
+    },
+  );
+});
 
 describe("proxyPosthogRequest", () => {
   afterEach(() => vi.unstubAllGlobals());

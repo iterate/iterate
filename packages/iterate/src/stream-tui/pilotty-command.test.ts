@@ -8,7 +8,7 @@ describe("buildStreamTuiPilottySpawnArgs", () => {
         sessionName: "stream-tui",
         cwd: "/repo",
         projectId: "prj_demo",
-        agentPath: "/agents/onboarding",
+        agentPath: "/agents/demo",
       }),
     ).toEqual([
       "spawn",
@@ -22,7 +22,7 @@ describe("buildStreamTuiPilottySpawnArgs", () => {
       "--project",
       "prj_demo",
       "--agent-path",
-      "/agents/onboarding",
+      "/agents/demo",
     ]);
   });
 });

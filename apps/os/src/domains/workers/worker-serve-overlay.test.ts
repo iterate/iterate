@@ -55,6 +55,20 @@ describe("withWorkerCommit", () => {
     expect(stamped.headers.get("x-app")).toBe("1");
     expect(await stamped.text()).toBe("payload");
   });
+
+  test("keeps ownership of the dynamic-worker response after stamping it", () => {
+    let disposeCount = 0;
+    const dynamicWorkerResponse = Object.assign(new Response("ok"), {
+      [Symbol.dispose]() {
+        disposeCount += 1;
+      },
+    });
+
+    const stamped = withWorkerCommit(dynamicWorkerResponse, commitOid) as Response & Disposable;
+    stamped[Symbol.dispose]();
+
+    expect(disposeCount).toBe(1);
+  });
 });
 
 describe("workerOverlayDecision", () => {

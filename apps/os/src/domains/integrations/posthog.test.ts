@@ -116,6 +116,19 @@ describe("first-party PostHog stream integration", () => {
     expect(() => CoreProcessorContract.parseEventInput(event)).not.toThrow();
   });
 
+  it.each(["os-preview-3", "os-local"])(
+    "acknowledges without egress on non-production worker %s",
+    async (workerName) => {
+      const captureFetch = acceptingFetch();
+
+      await capturePosthogStreamEventBatch(captureArgs([streamEvent()], workerName), {
+        fetch: captureFetch,
+      });
+
+      expect(captureFetch).not.toHaveBeenCalled();
+    },
+  );
+
   it("captures the raw durable event with only useful indexed dimensions", async () => {
     const durable = streamEvent();
     const requests: CapturedRequest[] = [];
@@ -223,7 +236,6 @@ describe("first-party PostHog stream integration", () => {
         createRequestedAtOffset: 1,
         config: {
           creatorEmail: "owner@example.com",
-          onboardingActive: true,
           slug: "gold-path",
         },
       },

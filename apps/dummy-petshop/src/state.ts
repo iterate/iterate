@@ -181,8 +181,8 @@ export class PetshopStateDurableObject extends DurableObject {
     state.clients[clientId] = {
       clientSecret,
       accessTokenTtlSeconds: input.accessTokenTtlSeconds ?? DEFAULT_ACCESS_TTL_SECONDS,
-      ...(input.redirectUris ? { redirectUris: input.redirectUris } : {}),
-      ...(input.public ? { public: true } : {}),
+      ...(input.redirectUris && { redirectUris: input.redirectUris }),
+      ...(input.public && { public: true }),
     };
     await this.#save(state);
     return { clientId, clientSecret };

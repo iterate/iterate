@@ -12,7 +12,11 @@ import { Stack, useRouter } from "expo-router";
 import * as Updates from "expo-updates";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { buildInfo } from "../lib/build-info.ts";
-import { getPreviewChannelOverride, switchChannelAndReload } from "../lib/preview-channel.ts";
+import {
+  fetchLatestUpdateAndReload,
+  getPreviewChannelOverride,
+  switchChannelAndReload,
+} from "../lib/preview-channel.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
 
 export default function BuildInfoScreen() {
@@ -38,13 +42,8 @@ export default function BuildInfoScreen() {
   });
   const check = useMutation({
     mutationFn: async () => {
-      const result = await Updates.checkForUpdateAsync();
-      if (!result.isAvailable) {
-        return "Already up to date";
-      }
-      await Updates.fetchUpdateAsync();
-      await Updates.reloadAsync();
-      return "Restarting…";
+      const result = await fetchLatestUpdateAndReload();
+      return result === "up-to-date" ? "Already up to date" : "Restarting…";
     },
   });
 
@@ -67,6 +66,10 @@ export default function BuildInfoScreen() {
         />
         <Row label="Bundled at" value={formatTime(buildInfo.builtAt)} />
         <Row label="Source" value={bundleSource} />
+        {/* What this bundle was published to talk to (empty on main/local
+            bundles) — the first thing to check when a preview looks wrong. */}
+        <Row label="Expected backend" value={buildInfo.expectedBackendEnv} />
+        <Row label="Test login" value={buildInfo.testLoginEmail} />
       </Section>
       <Section title="Updates">
         <Row label="Channel" value={Updates.channel} />
@@ -75,6 +78,25 @@ export default function BuildInfoScreen() {
         <Row label="Update id" value={Updates.updateId} />
         <Row label="Update published" value={formatTime(Updates.createdAt?.toISOString())} />
       </Section>
+      {/* Both update actions live together, right under the Updates card. */}
+      {Updates.isEnabled ? (
+        <Pressable
+          accessibilityRole="button"
+          disabled={check.isPending}
+          onPress={() => check.mutate()}
+          style={[styles.button, check.isPending && styles.buttonDisabled]}
+        >
+          <Text style={styles.buttonLabel}>
+            {check.isPending ? "Checking…" : "Check for update"}
+          </Text>
+        </Pressable>
+      ) : (
+        <Text style={styles.note}>
+          OTA updates are off in this bundle — it came from a Metro dev server.
+        </Text>
+      )}
+      {check.data ? <Text style={styles.note}>{check.data}</Text> : null}
+      {check.error ? <Text style={styles.errorNote}>{String(check.error)}</Text> : null}
       {channelOverride.data ? (
         <Pressable
           accessibilityRole="button"
@@ -96,24 +118,6 @@ export default function BuildInfoScreen() {
         <Row label="Native build" value={Application.nativeBuildVersion} />
         <Row label="Installed" value={formatTime(installedAt.data?.toISOString())} />
       </Section>
-      {Updates.isEnabled ? (
-        <Pressable
-          accessibilityRole="button"
-          disabled={check.isPending}
-          onPress={() => check.mutate()}
-          style={[styles.button, check.isPending && styles.buttonDisabled]}
-        >
-          <Text style={styles.buttonLabel}>
-            {check.isPending ? "Checking…" : "Check for update"}
-          </Text>
-        </Pressable>
-      ) : (
-        <Text style={styles.note}>
-          OTA updates are off in this bundle — it came from a Metro dev server.
-        </Text>
-      )}
-      {check.data ? <Text style={styles.note}>{check.data}</Text> : null}
-      {check.error ? <Text style={styles.errorNote}>{String(check.error)}</Text> : null}
       {!router.canGoBack() ? (
         // Deep-link flows (preview-channel switch) replace into this screen
         // with no back stack, so the header has no back button.

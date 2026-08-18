@@ -1,11 +1,5 @@
 import { admin } from "better-auth/plugins/admin";
-import {
-  bearer,
-  deviceAuthorization,
-  emailOTP,
-  multiSession,
-  oneTimeToken,
-} from "better-auth/plugins";
+import { bearer, deviceAuthorization, multiSession, oneTimeToken } from "better-auth/plugins";
 import { oauthProvider } from "@better-auth/oauth-provider";
 import { organization } from "better-auth/plugins/organization";
 import {
@@ -40,13 +34,11 @@ import {
 import { isPlatformAdminUser } from "./platform-admin.ts";
 import {
   type CloudflareEmailBinding,
-  TEST_OTP_CODE,
   getOrganizationInvitationEmailConfigError,
-  sendEmailOtp,
   sendOrganizationInvitationEmail,
-  shouldUseTestOtp,
 } from "./email.ts";
 import type { AuthJwtPlugin } from "./auth-jwt.ts";
+import { createEmailOtpPlugin } from "./email-otp-plugin.ts";
 
 // Custom claims go out on three surfaces, configured further down in
 // oauthProvider():
@@ -192,27 +184,10 @@ export function getAuthPlugins(options: AuthPluginOptions) {
     }),
     ...(options.emailOtpEnabled
       ? [
-          emailOTP({
-            otpLength: 6,
-            expiresIn: 300,
-            generateOTP: ({ email }) => {
-              if (shouldUseTestOtp({ email, fixedTestOtpEnabled: options.fixedTestOtpEnabled })) {
-                return TEST_OTP_CODE;
-              }
-              return undefined;
-            },
-            sendVerificationOTP: async ({ email, otp }) => {
-              if (shouldUseTestOtp({ email, fixedTestOtpEnabled: options.fixedTestOtpEnabled })) {
-                return;
-              }
-
-              await sendEmailOtp({
-                email,
-                otp,
-                senderDomain: options.emailSenderDomain,
-                emailBinding: options.emailBinding,
-              });
-            },
+          createEmailOtpPlugin({
+            fixedTestOtpEnabled: options.fixedTestOtpEnabled,
+            emailBinding: options.emailBinding,
+            emailSenderDomain: options.emailSenderDomain,
           }),
         ]
       : []),
