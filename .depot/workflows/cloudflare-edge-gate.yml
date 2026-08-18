@@ -1,0 +1,102 @@
+name: Cloudflare Edge Gate
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    paths:
+      - .depot/workflows/cloudflare-edge-gate.yml
+      - infra/cloudflare-edge-gate/**
+      - envs.ts
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+  push:
+    branches:
+      - main
+    paths:
+      - .depot/workflows/cloudflare-edge-gate.yml
+      - infra/cloudflare-edge-gate/**
+      - envs.ts
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to apply. Leave empty for the current branch or commit.
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  plan:
+    if: github.event_name == 'pull_request'
+    concurrency:
+      group: cloudflare-edge-gate-plan-${{ github.head_ref || github.run_id }}
+      cancel-in-progress: true
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Test and typecheck policy
+        run: pnpm --dir infra/cloudflare-edge-gate test && pnpm --dir infra/cloudflare-edge-gate typecheck
+      - name: Configure production Alchemy profile
+        env:
+          CI: "true"
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |-
+          doppler run --project _shared --config prd --preserve-env=CI -- \
+            pnpm --dir infra/cloudflare-edge-gate exec alchemy login --profile iterate-prd
+      - name: Plan production edge gate
+        env:
+          CI: "true"
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          EDGE_GATE_ENV: prd
+        run: |-
+          doppler run --project _shared --config prd --preserve-env=CI,EDGE_GATE_ENV -- \
+            pnpm --dir infra/cloudflare-edge-gate plan --stage prd --profile iterate-prd
+
+  deploy:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    concurrency:
+      # Every run targets the same account phase. Finish an active apply and
+      # retain only the newest queued revision.
+      group: deploy-cloudflare-edge-gate-production
+      cancel-in-progress: false
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ inputs.ref || github.sha }}
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Test and typecheck policy
+        run: pnpm --dir infra/cloudflare-edge-gate test && pnpm --dir infra/cloudflare-edge-gate typecheck
+      - name: Configure production Alchemy profile
+        env:
+          CI: "true"
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |-
+          doppler run --project _shared --config prd --preserve-env=CI -- \
+            pnpm --dir infra/cloudflare-edge-gate exec alchemy login --profile iterate-prd
+      - name: Apply production edge gate
+        env:
+          CI: "true"
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          EDGE_GATE_ENV: prd
+        run: |-
+          doppler run --project _shared --config prd --preserve-env=CI,EDGE_GATE_ENV -- \
+            pnpm --dir infra/cloudflare-edge-gate deploy --stage prd --profile iterate-prd --yes
