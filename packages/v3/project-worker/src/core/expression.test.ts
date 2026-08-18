@@ -66,6 +66,24 @@ describe("parse ⇄ print", () => {
     expect(toExpression(["itx", "kv"])).toEqual(["itx", "kv"]);
   });
 
+  test("inherited built-ins are not capability surface (the RPC exposure doctrine)", async () => {
+    const scope = { itx: { kv: { get: (k: string) => `v:${k}` } } };
+    // an inherited method errs EXACTLY like a missing one — callers cannot probe
+    await expect(evaluate(scope, ["itx", "kv", ["toString"]])).rejects.toThrow(/is not a method/);
+    await expect(evaluate(scope, ["itx", "kv", ["hasOwnProperty", "get"]])).rejects.toThrow(
+      /is not a method/,
+    );
+    // the magic names never resolve — a property step yields undefined → the null guard
+    await expect(evaluate(scope, ["itx", "kv", "constructor", "name"])).rejects.toThrow(
+      /hit undefined/,
+    );
+    // an OWN override with the same name passes — the doctrine allows what the object chose
+    const own = { itx: { kv: { toString: () => "mine" } } };
+    await expect(evaluate(own, ["itx", "kv", ["toString"]])).resolves.toMatchObject({
+      value: "mine",
+    });
+  });
+
   test("bare call on the scope symbol is a loud error — both halves", () => {
     expect(() => parse("itx(1)")).toThrow(/cannot call the scope symbol itself/);
     const itx = pathProxy(() => "unreachable") as (...args: unknown[]) => unknown;

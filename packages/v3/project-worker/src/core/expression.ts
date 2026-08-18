@@ -478,6 +478,28 @@ function substituteValue(
 
 // ─────────────────────────────────────────────── evaluate ───────────────────────────────────────────────
 
+// The RPC exposure doctrine (Kenton, workerd PR #1028), enforced at THE dispatch point — the
+// parser's name blacklist is client-side convenience that the structured-Expression and dotted
+// invokeCapability doors bypass: what every object merely INHERITS from Object/Function.prototype
+// is not capability surface, and the three magic names never resolve. Refusal is
+// indistinguishable from absence (same behavior as a missing step), so callers cannot probe.
+// Identity-based on purpose, never a descriptor walk: views may be Proxies (pathProxy, capnweb /
+// Workers-RPC stubs) whose descriptor traps don't mirror `get`. An own/override with the same
+// name resolves to a DIFFERENT function and passes — the doctrine allows what the object chose.
+const INHERITED_BUILTINS = new Set<unknown>(
+  [Object.prototype, Function.prototype].flatMap((proto) =>
+    Object.getOwnPropertyNames(proto)
+      .map((k) => Object.getOwnPropertyDescriptor(proto, k)?.value)
+      .filter((v) => typeof v === "function"),
+  ),
+);
+/** Resolve one step's property as capability surface — `undefined` for anything only inherited. */
+export function stepGet(value: object, key: string): unknown {
+  if (key === "__proto__" || key === "constructor" || key === "prototype") return undefined;
+  const resolved = Reflect.get(value, key);
+  return INHERITED_BUILTINS.has(resolved) ? undefined : resolved;
+}
+
 /**
  * THE step walk (shared by `evaluate` and `apply`): property steps `Reflect.get` with the
  * receiver carried; call steps `Reflect.apply` ON that receiver (detaching a method from a
@@ -495,10 +517,10 @@ async function walkSteps(
     if (value == null) throw new Error(`${where} hit ${String(value)} at ${JSON.stringify(step)}`);
     if (typeof step === "string") {
       receiver = value;
-      value = Reflect.get(value as object, step);
+      value = stepGet(value as object, step);
     } else {
       const [method, ...args] = step;
-      const fn = Reflect.get(value as object, method);
+      const fn = stepGet(value as object, method);
       if (typeof fn !== "function")
         throw new Error(`${where}: ${JSON.stringify(method)} is not a method`);
       receiver = undefined;

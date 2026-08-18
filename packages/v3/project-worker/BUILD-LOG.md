@@ -701,16 +701,28 @@ is a real workers.dev property, not a bug in the spine:
   unchanged; sockets never left the parent).
 - **Cross-client invoke after a LONG hold: PROVEN** (echo through wake→leg→invoke after 8-11 min
   holds, 3 runs) — but in those runs the eviction happened not to fire.
-- **The platform finding (why the conjunction never landed in one run):** on workers.dev, actor
-  eviction and STATELESS-EDGE-ISOLATE recycling are coupled — the same process idleness that
-  evicts the DO also reclaims the `/api` isolate holding the capnweb relays, killing that
-  relay's client socket AND its Pager (peer close 1006, observed ~5-8 min idle, ~50%/window).
-  Relay gone → its parked stubs vanish (working as designed; a real client reconnects and
-  parkClient replaces by connectionKey). And the mirror finding: ANY client→edge traffic — even
-  a pure-addressing `session.get()` that never RPCs the DO — kept the actor WARM: 0 evictions
-  in 4 keepalive windows vs 5 in 8 no-keepalive windows ≥300s. Controls (bare ctx + sockets-only
-  ctx, no facets) both evicted at 300s, so facets do NOT prevent hibernation; 240s windows are
-  simply shorter than today's eviction latency (the spec's 240s hold never saw one).
+- **The platform finding, CORRECTED by independent re-measurement (2026-08-18,
+  `research/ws-lifetime-analysis.md` — the paragraph below supersedes this increment's original
+  claim):** actor eviction and edge-socket death are INDEPENDENT, not coupled — a DO evicted and
+  reconstructed (incarnation 1→2) while its relay's client socket stayed open for 28 minutes,
+  and 30s client→edge heartbeats did NOT keep the actor warm (its DO evicted too; the earlier
+  keepalive correlation was a confound). What kills an idle relay is probabilistic reclaim of
+  the idle edge invocation: 14 deaths at 158–1203s (median ~5.6 min, no fixed constant, always
+  1006/no close frame), with different-aged sockets co-dying <2.5s apart — per-process
+  recycling, not an idle timer. WS pings don't protect (3×); unrelated HTTPS to the same worker
+  doesn't protect (2×); only on-socket application traffic did (30s `session.get()`, 28 min,
+  0 deaths). A non-Cloudflare idle control survived the whole window (local network exonerated).
+  The pager hop is independently mortal as well — a live client socket is not evidence the
+  parked provider is still reachable; reconnect heals both hops. Controls (bare ctx +
+  sockets-only ctx, no facets) both evicted at 300s, so facets do NOT prevent hibernation —
+  that part of the original finding stands.
+- **Design stance (owner, 2026-08-18): socket death is FINE.** Clients endeavour to reconnect
+  the moment a socket dies (parkClient replaces by connectionKey); Cloudflare reclaiming idle
+  edge invocations is exactly why the platform is cheap, and we want it that way. NO keepalive
+  machinery. One future option, deliberately not built: when an inbound hibernatable
+  capability's pager is gone, the host could wait a few seconds for the provider to reconnect
+  before failing the invoke — keyed by connectionKey/capability path, NOT the dead socketId
+  (reconnect mints a fresh socketId).
 
 ## Increment 30 (kenton-1): the Kenton-bar review — simplicity/clarity/elegance pass
 
@@ -762,3 +774,33 @@ Six annotations, six resolutions (detail: `REVIEW-KENTON.md` § RESOLVED):
   own-DO placement woken the same way).
 
 72 unit tests green (+2), typecheck clean. Deploy `annotations-1`: crisp proof 16/16 first run.
+
+## Increment 32 (lessons-1): the two APPLY verdicts from the Kenton cross-reference + the WS-lifetime correction
+
+From `research/kentonv/lessons-for-clean-room.md` (28 lessons; 19 ALIGNED, 7 DISCUSS, 2 APPLY):
+
+- **APPLY 1 — inherited built-ins are not capability surface** (the workerd PR #1028 exposure
+  doctrine, enforced at THE dispatch point): `stepGet` in core/expression.ts replaces bare
+  `Reflect.get` in `walkSteps` and the stateful runner's dotted walk — the three magic names
+  never resolve, and anything IDENTITY-equal to an Object/Function.prototype built-in reads as
+  missing (identical error to a genuinely absent step, so callers cannot probe). Identity-based
+  on purpose: descriptor walks would break Proxy views (pathProxy, capnweb/Workers-RPC stubs).
+  Own overrides still pass. The parser's name blacklist stays as client-side convenience;
+  the structured-Expression and dotted doors it never covered are now closed. +2 tests.
+- **APPLY 2 — a DO that never writes must never mint storage** (the workerd PR #6101 doctrine):
+  the Stream DO constructor no longer touches storage. `#touch()` — called from append,
+  enableProcessor, parkCapability, parkClient — runs the named-id guard BEFORE the first write,
+  creates the events table, and bumps the incarnation once per WRITING incarnation (the
+  hibernation tell survives; workless constructions no longer count, which is the point).
+  `read()` answers `[]` on a virgin stream without creating the table; `/state` is read-only
+  (a probed ctx reports incarnation 0 forever and leaves nothing behind — verified live:
+  two probes of a fresh ctx, no storage, incarnation stays 0).
+- **The 7 DISCUSS lessons await the owner** (front-door `?ctx=` introduction; facet-fold vs
+  parent-durability output-gating; and five more — see the lessons file).
+- Also this increment: BUILD-LOG increment 29's platform finding CORRECTED per the independent
+  WS-lifetime measurement (`research/ws-lifetime-analysis.md`) — see the amended increment-29
+  section: eviction and socket death are INDEPENDENT; keepalives were a confound; owner's
+  stance recorded (ephemeral sockets, reconnect-on-close, NO keepalive machinery).
+
+74 unit tests green (+2), typecheck clean. Deploy `lessons-1`: crisp 16/16, facet spine,
+userspace + built-in tally side-by-side — ALL PASS first run.

@@ -75,21 +75,29 @@ export class StreamDurableObject extends DurableObject<Env> {
     acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
     getWebSockets: (tag) => this.ctx.getWebSockets(tag),
   });
-  incarnation = 0; // durable, bumped per (re)construction — growth across idle ⇒ it hibernated
+  incarnation = 0; // durable, bumped once per incarnation that WRITES — growth across idle ⇒ it hibernated
+  #storageReady = false;
 
-  constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env);
-    ctx.storage.sql.exec(
+  // The constructor deliberately touches NO storage: a DO that never writes must never mint
+  // backing storage (workerd auto-deletes empty objects, and a probed /state or typo'd ctx must
+  // leave nothing behind — the Kenton PR #6101 doctrine). All writes funnel through #touch().
+
+  /** First write of this incarnation: name-check BEFORE anything persists, then the events
+   *  table + one incarnation bump (the hibernation tell — workless incarnations no longer
+   *  count, which is the point). Synchronous (the kv API), so append needs no boot barrier. */
+  #touch(): void {
+    if (this.#storageReady) return;
+    void this.#doName; // an id-addressed instance must fail before its first write
+    this.ctx.storage.sql.exec(
       `CREATE TABLE IF NOT EXISTS events (
          offset INTEGER PRIMARY KEY AUTOINCREMENT,
          body TEXT NOT NULL,
          idempotency_key TEXT UNIQUE
        )`,
     );
-    ctx.blockConcurrencyWhile(async () => {
-      this.incarnation = ((await ctx.storage.get<number>("incarnation")) ?? 0) + 1;
-      await ctx.storage.put("incarnation", this.incarnation);
-    });
+    this.incarnation = ((this.ctx.storage.kv.get("incarnation") as number | undefined) ?? 0) + 1;
+    this.ctx.storage.kv.put("incarnation", this.incarnation);
+    this.#storageReady = true;
   }
 
   /** This DO's codec name. A stream is only ever reached `getByName` — an id-addressed instance
@@ -110,6 +118,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   /** Commit events: idempotency-checked, offset-assigned, then every enabled facet processor
    *  driven. Reads stay read-after-write because every read path catches up from the log. */
   async append(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
+    this.#touch();
     const committed: StreamEvent[] = [];
     for (const input of inputs) {
       if (input.idempotencyKey) {
@@ -155,6 +164,14 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   read(afterOffset = 0, limit = 500): StreamEvent[] {
+    // A virgin stream has no events table (and reading must not create one — see #touch).
+    if (
+      !this.#storageReady &&
+      this.ctx.storage.sql
+        .exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'events'")
+        .toArray().length === 0
+    )
+      return [];
     return this.ctx.storage.sql
       .exec(
         "SELECT offset, body FROM events WHERE offset > ? ORDER BY offset LIMIT ?",
@@ -220,6 +237,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     slug: string,
     ref?: { source: string | Expression; className: string },
   ): Promise<{ ok: true }> {
+    this.#touch();
     const entry: FacetProcessorEntry = ref
       ? { slug, ref: { source: toExpression(ref.source), className: ref.className } }
       : { slug };
@@ -296,9 +314,12 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (request.headers.get("x-itx-cap")) return (await this.#ictx()).fetch(request);
 
     // Observability: incarnation (the hibernation tell) + the stub registry's live state.
+    // Read-only on purpose — probing /state must never be the write that mints storage.
     if (url.pathname === "/state")
       return Response.json({
-        incarnation: this.incarnation,
+        incarnation: this.#storageReady
+          ? this.incarnation
+          : ((this.ctx.storage.kv.get("incarnation") as number | undefined) ?? 0),
         facetProcessors: this.#facetEntries().map((e) => e.slug),
         ...this.#stubs.state(),
       });
@@ -327,6 +348,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   /** Park a live capability's stub; the caller then mounts `itx.clients.get(socketId)` at its
    *  pattern (provide = park + alias — the R13 desugar, done BY the edge in two calls). */
   parkCapability(input: { socketId: string; description?: string }): { ok: true } {
+    this.#touch(); // a park is real project use (durable socket attachments follow)
     this.#stubs.park(input.socketId, { description: input.description });
     return { ok: true };
   }
@@ -337,6 +359,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     connectionKey: string;
     description?: string;
   }): { ok: true; connectionKey: string } {
+    this.#touch(); // a park is real project use (durable socket attachments follow)
     for (const s of this.#stubs.all())
       if (
         s.clientPath === input.path &&

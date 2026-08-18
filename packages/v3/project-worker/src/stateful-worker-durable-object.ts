@@ -27,7 +27,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { confinedWorker } from "./core/agent-runtime.ts";
-import type { Expression } from "./core/expression.ts";
+import { stepGet, type Expression } from "./core/expression.ts";
 import { hashSource } from "./core/hash.ts";
 import { stringifyName } from "./core/names.ts";
 import type { StreamDurableObject } from "./stream-durable-object.ts";
@@ -120,16 +120,18 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     // The SAME rule governs a DOTTED path: walk intermediates with awaited `Reflect.get(receiver, seg)` and
     // apply ONLY the terminal — receiver-preserving, exactly apps/os `replayPath` (live-capability.ts).
     // ═══════════════════════════════════════════════════════════════════════════════════════════════════
+    // `stepGet` (not bare Reflect.get) so the plain objects walked after the first await never
+    // expose Object.prototype inheritance — workerd filters the stub hop itself.
     const path = input.method.split(".");
     let receiver: unknown = facet;
     for (let i = 0; i < path.length - 1; i++) {
-      receiver = await Reflect.get(receiver as object, path[i]);
+      receiver = await stepGet(receiver as object, path[i]);
       if (receiver == null)
         throw new Error(
           `stateful worker: "${input.className}" path "${input.method}" hit ${String(receiver)} at "${path[i]}"`,
         );
     }
-    const handler = Reflect.get(receiver as object, path[path.length - 1]);
+    const handler = stepGet(receiver as object, path[path.length - 1]);
     if (typeof handler !== "function")
       throw new Error(`stateful worker: "${input.className}" has no method "${input.method}"`);
     return await Reflect.apply(handler, receiver, input.args ?? []);

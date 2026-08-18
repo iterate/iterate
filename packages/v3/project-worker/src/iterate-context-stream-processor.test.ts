@@ -232,6 +232,11 @@ describe("event mounts + the shadow stack", () => {
     expect(await invoke("itx.whoami()")).toEqual({ projectId: "prj_t", path: "/" });
   });
 
+  test("inherited built-ins are unreachable through the table (probe-resistance end to end)", async () => {
+    const { invoke } = setup();
+    await expect(invoke("itx.kv.toString()")).rejects.toThrow(/is not a method/);
+  });
+
   test("bare CALL on the scope symbol is a loud error even as a hand-crafted Expression", async () => {
     const { host } = setup();
     // the string half can no longer spell this (parse rejects `itx(1)`); close the structured door too
