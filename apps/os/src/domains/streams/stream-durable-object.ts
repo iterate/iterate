@@ -2527,8 +2527,15 @@ export class StreamDurableObject extends DurableObject<Env> {
       try {
         next = this.#coreProcessor.reduce({ event, state: next });
       } catch (error) {
+        // The cause goes INTO the message: this error crosses console.error,
+        // RPC serialization, and observability pipelines that all drop
+        // `cause`, and a replay failure is undebuggable without the zod issue
+        // that produced it (2026-08-18: two bricked scheduler streams logged
+        // only this wrapper line for eleven hours).
         throw new Error(
-          `failed to replay core event at path "${this.name.path}", offset ${event.offset}, type "${event.type}", state version ${CORE_STATE_VERSION}`,
+          `failed to replay core event at path "${this.name.path}", offset ${event.offset}, type "${event.type}", state version ${CORE_STATE_VERSION}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
           { cause: error },
         );
       }
