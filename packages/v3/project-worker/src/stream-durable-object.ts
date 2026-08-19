@@ -627,13 +627,14 @@ export class StreamDurableObject extends DurableObject<Env> {
       // would otherwise stall until the next append (the pump only fires on commits). The
       // first alarm of each incarnation asks every facet for a snapshot — which IS its
       // catch-up: a behind facet gap-repairs from its own durable cursor, a caught-up one
-      // no-ops. The pass is AWAITED and does not count as activity — otherwise it would
-      // re-materialize every facet exactly when the stream went quiet and then buy them a
-      // second 60s of billed idle before the quiesce below could fire.
+      // no-ops. The pass is idle-neutral by construction: #facet no longer calls #noteActivity
+      // (it was moved to facetInvoke), so materializing every facet here does NOT refresh the
+      // quiet clock — and a genuine append that DID land during this await must keep its
+      // #noteActivity, so we must NOT capture-and-restore #lastActivityMs (that erased real
+      // traffic → wrongful abort + an immediate-fire alarm loop on a fresh incarnation).
       // (State rows need no resurrection: the stream holds no live-state delivery state — a
       // dropped forward surfaces as a chain gap at the client, which re-reads the door.)
       this.#facetsResurrected = true;
-      const idleSince = this.#lastActivityMs;
       await Promise.allSettled(
         this.#facetEntries().map(({ slug }) =>
           this.#facet(slug)
@@ -641,7 +642,6 @@ export class StreamDurableObject extends DurableObject<Env> {
             .catch((e) => reportIssue("stream-do.facet-resurrection", e, { slug })),
         ),
       );
-      this.#lastActivityMs = idleSince;
     }
     if (Date.now() - this.#lastActivityMs >= 60_000 && this.#facetWorkInFlight === 0) {
       // workerd #6800: a live facet client holds this actor idle-but-non-hibernatable,

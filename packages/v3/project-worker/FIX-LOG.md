@@ -50,3 +50,8 @@ REFACTORS-LATER.md instead, not here.
   reuses the cursor for absent state). 7/8 prior fixes probed SOUND by the regression hunter.
   Deferred: 48 (forgeable source/excess-keys — needs public/internal append split), 49 (egress
   URL/body substitution). New tests vendored: fix-regressions, boundary-egress, connections-deep.
+- Sprawl round 2 (alarm/quiesce, live-22): defect 1a FIXED (net −2) — deleted alarm()'s
+  idleSince capture/restore that erased concurrent traffic (the resurrection is already
+  idle-neutral since #noteActivity moved out of #facet) → no more wrongful facet abort /
+  immediate-fire alarm loop. 5 pool-lane regression locks vendored. 1b/3 (forwarder pump
+  uncounted / quiesce doesn't re-arm) DEFERRED with exact fixes — unforceable in-lane.

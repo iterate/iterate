@@ -114,7 +114,10 @@ async function openSession(ctx: string): Promise<any> {
   sessions.push(session);
   return session as any;
 }
-afterAll(() => {
+afterAll(async () => {
+  // Let any fire-and-forget page/alarm cleanup drain before the pool worker's RPC is torn down —
+  // otherwise a still-pending resolve surfaces as a (harmless) EnvironmentTeardownError.
+  await new Promise((r) => setTimeout(r, 50));
   for (const s of sessions) {
     try {
       if (DISPOSE) (s as Record<symbol, () => void>)[DISPOSE]?.();

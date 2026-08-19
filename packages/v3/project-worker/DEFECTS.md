@@ -223,6 +223,24 @@ client reading a victim's connectionId then connect({connectionKey: '<id>'}) cou
 onFinalClose auto-revoke against the victim's mount (intra-context). Structured-expression arg
 depth has no guard (benign now that jsonEqual is depth-free). 7 of 8 prior fixes probed SOUND.
 
+## Family M — alarm/quiesce (pool-lane hunt: **workers-tests**/failing-alarm-quiesce.test.ts)
+
+5 regression LOCKS (quiesce preserves cursor+state, quiesce→evict→wake once, disable→re-enable,
+page-in races quiesce, scale drop+evict). No new FORCEABLE bug; the 3 deferred quiesce items are
+real by code inspection but unforceable in the pool lane (built-in facets don't materialize via
+ctx.exports there; a live facet pins the DO so evict-mid-drive times out — production-faithful).
+1a ⚠ (FIXED, net −2): alarm()'s idleSince capture/restore erased genuine concurrent traffic
+(#facet no longer calls #noteActivity, so the resurrection is already idle-neutral) → wrongful
+facet abort + immediate-fire alarm loop on a fresh incarnation. Deleted the capture/restore.
+1b ⚠ (DEFERRED, +4): #facetWorkInFlight counts only append-drives, not the alarm's own
+fire-and-forget forwarder pump — the same alarm can abort proc:subscription-forwarder mid-pump.
+FIX: track/await the pump in the in-flight guard before the quiesce gate.
+3 ⚠ (DEFERRED, +3): the quiesce branch never re-arms — a +30min forwarder retry hides behind the
++60s quiesce alarm, and the pump meant to re-derive it (1b) can be aborted. FIX: re-arm the
+earliest pending forwarder retry in the quiesce branch. (1b + 3 fix together.)
+ENV facts: userspace loader facets DO materialize in the pool lane, built-in ctx.exports facets
+do NOT; a live facet pins the DO (evict needs a prior quiesce — the production sequence).
+
 ## Infra findings (not defects in our code)
 
 - Harness lane can't boot the Worker Loader (workerd --experimental knob missing in
