@@ -396,7 +396,16 @@ void waveshare_avatar_viseme_reset(void) {
 void waveshare_avatar_set_call_active(bool active) {
   if (!face.ready || face.call_active == active) return;
   face.call_active = active;
-  face_animator_set_external_mouth(&face.animator, active);
+  /*
+   * THE ENVELOPE KEEPS THE MOUTH. Handing it to the external viseme track
+   * for the call's duration meant the mouth moved only as fast as the
+   * 10 Hz runtime-state poll delivered shapes — a handful per answer next
+   * to the CoreS3's fifty envelope frames a second, and a person reads
+   * that as a worse robot, not a different lane. The delay line already
+   * feeds this animator the PCM the hardware actually played, which is the
+   * same mouth the CoreS3 wears; the viseme queue stays wired and inert
+   * unless a stream certificate turns `visemes` back on.
+   */
   if (!active) waveshare_avatar_viseme_reset();
 }
 

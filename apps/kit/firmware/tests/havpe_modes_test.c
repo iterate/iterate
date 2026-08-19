@@ -184,27 +184,31 @@ static void the_state_is_the_loops_two_facts(void) {
 
 /* Open-mic: the tap is the wake (chime, session opens), the next tap the
  * end, and a hold is never anything — leaning cannot wake or hang up. */
-static void a_tap_wakes_an_open_mic_idle_and_a_tap_ends_it(void) {
+static void a_tap_wakes_an_open_mic_idle_and_a_hold_ends_it(void) {
   struct havpe_session session = {0};
   struct havpe_session_actions actions =
       drive(&session, true, false, false, false, false);
   assert(actions.start_call && actions.wake_chime);
   assert(!actions.end_call && !actions.mode_flash && !actions.talk_held);
-  /* Waking or in-call, the tap ends the session... */
+  /*
+   * THE MID-CALL TAP IS NOTHING: any reflexive press the instant a call
+   * opened used to say "call ended" to a person who meant nothing by it.
+   */
   actions = drive(&session, true, false, true, false, false);
-  assert(actions.end_call && !actions.start_call && !actions.wake_chime);
+  assert(!actions.end_call && !actions.start_call && !actions.wake_chime);
   actions = drive(&session, true, false, true, true, false);
+  assert(!actions.end_call && !actions.start_call && !actions.wake_chime);
+  /* Ending is deliberate: press past the tap threshold, then let go. The
+   * hold itself is not a turn in open mic, so it reports no talk. */
+  actions = drive(&session, false, true, true, true, false);
+  assert(!actions.end_call && !actions.talk_held && !actions.start_call);
+  actions = drive(&session, false, false, true, true, false);
   assert(actions.end_call && !actions.start_call && !actions.wake_chime);
   /* ...and the return to idle says "call ended", exactly once. */
   actions = drive(&session, false, false, false, false, false);
   assert(actions.end_chime && !actions.start_call && !actions.wake_chime);
   actions = drive(&session, false, false, false, false, false);
   assert(quiet(&actions));
-  /* The lean: a hold in an open-mic state does nothing at all. */
-  actions = drive(&session, false, true, false, false, false);
-  assert(quiet(&actions));
-  actions = drive(&session, false, true, true, true, false);
-  assert(!actions.end_call && !actions.talk_held && !actions.start_call);
 }
 
 /*
@@ -290,7 +294,7 @@ int main(void) {
   a_call_cancels_an_unsettled_spin();
   settling_in_place_still_answers();
   the_state_is_the_loops_two_facts();
-  a_tap_wakes_an_open_mic_idle_and_a_tap_ends_it();
+  a_tap_wakes_an_open_mic_idle_and_a_hold_ends_it();
   the_hold_is_the_wake_in_push_to_talk();
   a_bare_tap_in_push_to_talk_only_flashes_the_mode();
   an_ended_session_stays_ended_until_the_next_wake();

@@ -117,9 +117,11 @@ struct FaceState {
 
 FaceState face;
 
-/* 12 Hz: fast enough for a blink to read as a blink, slow enough that the SPI
- * transfer stays a small fraction of the half-duplex audio budget. */
-constexpr int64_t FACE_FRAME_INTERVAL_US = 83000;
+/* 15 Hz, matching the CoreS3, because the mouths are compared side by side
+ * on one desk: at 12 the same envelope read as a worse robot. The audio
+ * instruments (spkStarvedMs, micDropped) are the check that the extra SPI
+ * stays affordable; they read zero at 12 and must stay zero here. */
+constexpr int64_t FACE_FRAME_INTERVAL_US = 66000;
 
 bool face_init(void) {
   if (!face_avatar_registry_init(&face.registry)) return false;

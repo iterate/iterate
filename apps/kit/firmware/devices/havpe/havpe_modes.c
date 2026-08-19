@@ -141,6 +141,7 @@ void havpe_session_step(
   const enum havpe_session_state state =
       havpe_session_classify(poll->wants_call, poll->call_active);
   const bool hold_began = poll->held && !session->was_held;
+  const bool hold_ended = !poll->held && session->was_held;
   session->was_held = poll->held;
   memset(out, 0, sizeof(*out));
   /*
@@ -177,10 +178,16 @@ void havpe_session_step(
       break;
     case HAVPE_SESSION_WAKING:
     case HAVPE_SESSION_IN_CALL:
-      /* A tap during a session ends it, in both postures. The hold is a
-       * turn in push-to-talk and nothing in open-mic, so leaning on the
-       * button cannot hang up. */
-      if (poll->tap) out->end_call = true;
+      /*
+       * ENDING IS DELIBERATE, AND THE GESTURE DIFFERS BY POSTURE. In
+       * push-to-talk a hold is a turn, so the tap is the end — unambiguous
+       * there. In open mic the tap turned out to be a hair trigger: any
+       * reflexive press the instant a call opened said "call ended" to a
+       * person who meant nothing by it. So open mic ends on the completed
+       * HOLD instead — press, keep it down past the tap threshold, let go —
+       * and a bare tap mid-call is nothing at all.
+       */
+      if (poll->push_to_talk ? poll->tap : hold_ended) out->end_call = true;
       out->talk_held = poll->push_to_talk && poll->held;
       break;
     case HAVPE_SESSION_ENDING:
