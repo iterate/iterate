@@ -141,7 +141,6 @@ void havpe_session_step(
   const enum havpe_session_state state =
       havpe_session_classify(poll->wants_call, poll->call_active);
   const bool hold_began = poll->held && !session->was_held;
-  const bool hold_ended = !poll->held && session->was_held;
   session->was_held = poll->held;
   memset(out, 0, sizeof(*out));
   /*
@@ -183,11 +182,13 @@ void havpe_session_step(
        * push-to-talk a hold is a turn, so the tap is the end — unambiguous
        * there. In open mic the tap turned out to be a hair trigger: any
        * reflexive press the instant a call opened said "call ended" to a
-       * person who meant nothing by it. So open mic ends on the completed
-       * HOLD instead — press, keep it down past the tap threshold, let go —
-       * and a bare tap mid-call is nothing at all.
+       * person who meant nothing by it — and so did the first hold cut,
+       * because an ordinary press crosses the 250 ms talk threshold without
+       * meaning anything either. So open mic ends on the DELIBERATE hold:
+       * the 800 ms latch the button fires while still pressed. A bare tap
+       * mid-call is nothing at all.
        */
-      if (poll->push_to_talk ? poll->tap : hold_ended) out->end_call = true;
+      if (poll->push_to_talk ? poll->tap : poll->end_hold) out->end_call = true;
       out->talk_held = poll->push_to_talk && poll->held;
       break;
     case HAVPE_SESSION_ENDING:

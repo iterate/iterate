@@ -396,6 +396,19 @@ void playback_hardware_task(void *argument) {
       if (xQueueReceive(
               playback_mailbox, &frame, pdMS_TO_TICKS(DMA_DESCRIPTOR_MS)) !=
           pdTRUE) {
+        /*
+         * The MOUTH decays only when it is fed, and this task feeds it only
+         * what it plays — so between deltas and at every answer's end the
+         * envelope froze mid-shape and the face hung open. The boards whose
+         * mouths read right never stop feeding: the CoreS3's DMA tap pushes
+         * its idle silence, the Waveshare's delay line drains continuously.
+         * One zero frame per empty tick is that same discipline here.
+         */
+        {
+          static const int16_t silence[M5STICKS3_AUDIO_FRAME_SAMPLES] = {0};
+          m5sticks3_board_observe_playout(
+              silence, M5STICKS3_AUDIO_FRAME_SAMPLES);
+        }
         continue;
       }
       const uint32_t frame_ms = static_cast<uint32_t>(

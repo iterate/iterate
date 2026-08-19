@@ -119,6 +119,11 @@ bool havpe_button_talk_held(void);
 /** One completed short tap (consumed on read). */
 bool havpe_button_take_tap(void);
 
+/** One deliberate end-hold (a press crossing 800 ms), consumed on read.
+ * Fires while still pressed, so the hang-up answers the finger, not the
+ * release. Latched once per press. */
+bool havpe_button_take_end_hold(void);
+
 #ifdef __cplusplus
 }
 #endif

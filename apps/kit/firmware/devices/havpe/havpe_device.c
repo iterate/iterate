@@ -226,6 +226,7 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
     const struct havpe_session_poll gestures = {
       .tap = havpe_button_take_tap(),
       .held = havpe_button_talk_held(),
+      .end_hold = havpe_button_take_end_hold(),
       .wants_call = mode_state.wants_call,
       .call_active = mode_state.call_active,
       .push_to_talk = havpe_mode_push_to_talk(mode_state.mode),

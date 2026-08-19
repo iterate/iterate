@@ -39,6 +39,9 @@ enum {
   BUTTON_DEBOUNCE_MS = 30,
   /* Shorter is a tap (call toggle); longer is push-to-talk. */
   BUTTON_TAP_THRESHOLD_MS = 250,
+  /* The deliberate hang-up: long enough that no press meaning "talk" or
+   * "wake" wanders across it, short enough to answer a person who means it. */
+  BUTTON_END_HOLD_MS = 800,
   /* The rotary ring around the top face: same pins and quadrature grain as
    * the official firmware's `dial` (pin_a GPIO16, pin_b GPIO18,
    * resolution 2). */
@@ -117,6 +120,12 @@ static struct {
   uint64_t pressed_since_ms;
   bool talk_latched;
   bool tap_pending;
+  /* The deliberate end: latched ONCE when a press crosses END_HOLD_MS,
+   * fired while still pressed so the answer is immediate. An ordinary
+   * press crosses the 250 ms talk threshold without meaning anything —
+   * measured on the desk as "call ended" the moment a call opened. */
+  bool end_hold_latched;
+  bool end_hold_pending;
 } button;
 
 /*
@@ -479,6 +488,18 @@ void havpe_button_poll(void) {
       now - button.pressed_since_ms >= BUTTON_TAP_THRESHOLD_MS) {
     button.talk_latched = true;
   }
+  if (button.debounced_pressed && !button.end_hold_latched &&
+      now - button.pressed_since_ms >= BUTTON_END_HOLD_MS) {
+    button.end_hold_latched = true;
+    button.end_hold_pending = true;
+  }
+  if (!button.debounced_pressed) button.end_hold_latched = false;
+}
+
+bool havpe_button_take_end_hold(void) {
+  const bool held = button.end_hold_pending;
+  button.end_hold_pending = false;
+  return held;
 }
 
 bool havpe_button_talk_held(void) {

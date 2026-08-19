@@ -198,11 +198,22 @@ static void a_tap_wakes_an_open_mic_idle_and_a_hold_ends_it(void) {
   assert(!actions.end_call && !actions.start_call && !actions.wake_chime);
   actions = drive(&session, true, false, true, true, false);
   assert(!actions.end_call && !actions.start_call && !actions.wake_chime);
-  /* Ending is deliberate: press past the tap threshold, then let go. The
-   * hold itself is not a turn in open mic, so it reports no talk. */
+  /* An ordinary press crossing the 250 ms talk threshold is still nothing:
+   * the hold level alone must not hang up. */
   actions = drive(&session, false, true, true, true, false);
   assert(!actions.end_call && !actions.talk_held && !actions.start_call);
-  actions = drive(&session, false, false, true, true, false);
+  /* Ending is deliberate: the 800 ms latch, fired while still pressed. */
+  {
+    const struct havpe_session_poll poll = {
+      .tap = false,
+      .held = true,
+      .end_hold = true,
+      .wants_call = true,
+      .call_active = true,
+      .push_to_talk = false,
+    };
+    havpe_session_step(&session, &poll, &actions);
+  }
   assert(actions.end_call && !actions.start_call && !actions.wake_chime);
   /* ...and the return to idle says "call ended", exactly once. */
   actions = drive(&session, false, false, false, false, false);

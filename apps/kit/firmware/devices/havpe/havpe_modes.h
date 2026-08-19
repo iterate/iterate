@@ -181,6 +181,8 @@ struct havpe_session {
 struct havpe_session_poll {
   bool tap;          /**< A completed short tap (edge). */
   bool held;         /**< The hold level, raw; the machine applies posture. */
+  /** The 800 ms deliberate-end latch (edge); open mic's hang-up gesture. */
+  bool end_hold;
   bool wants_call;   /**< The loop's intent, mirrored by the last present. */
   bool call_active;  /**< The loop's call fact, likewise. */
   bool push_to_talk; /**< The adopted mode's posture. */
