@@ -1,9 +1,9 @@
 // Server VAD + full duplex, proven from the wire — no buttons anywhere.
 //
 //   doppler run --config preview_3 -- pnpm cli voicelab vad-duplex \
-//     --project voice-test --stream-path /agents/voice2/vad-1
+//     --project voice-test --stream-path /agents/voice/vad-1
 //
-// The stream must be set up OPEN-MIC (talk2 --open-mic --setup-only). Pass
+// The stream must be set up OPEN-MIC (talk --open-mic --setup-only). Pass
 // --turn-detection with the SAME JSON the certificate carries and the CONFIG
 // leg below proves the object was honored, not merely echoed.
 //
@@ -52,7 +52,7 @@ export interface VadDuplexOptions extends VoicelabConnectOptions {
   bargeAfterMs?: number;
   /**
    * The turn_detection object the stream's certificate is EXPECTED to carry,
-   * as JSON — the same spelling talk2 takes. When present, the CONFIG leg
+   * as JSON — the same spelling talk takes. When present, the CONFIG leg
    * deep-compares every key of it against the session.updated echo (a
    * subset compare, because openai fills defaults like create_response into
    * the echo). Absent, the echo is printed but CONFIG is not claimed.

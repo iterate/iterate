@@ -1,7 +1,7 @@
 /**
  * The face module, pinned WITHOUT the harness: pcm chunks, answer boundaries
  * and barge events in, one newest face value out. The processor's own tests
- * (voice-agent2.test.ts, "the face") prove the call sites against a pretend
+ * (voice-agent.test.ts, "the face") prove the call sites against a pretend
  * provider; these prove the mechanism itself — which is the point of it being
  * pure: no sockets, no clock, no fixture, just inputs.
  */

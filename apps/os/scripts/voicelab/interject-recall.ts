@@ -16,9 +16,9 @@
 // interruption; exit 1 when it claims the full count.
 //
 //   doppler run --config preview_3 -- pnpm cli voicelab interject-recall \
-//     --project voice-test --stream-path /agents/voice2/<set-up-stream>
+//     --project voice-test --stream-path /agents/voice/<set-up-stream>
 //
-// The stream must already carry the agent (voicelab talk2 --setup-only).
+// The stream must already carry the agent (voicelab talk --setup-only).
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";

@@ -14,6 +14,10 @@
 // Everything the conversation needs on the server side is installed by the
 // config repo's own `setupVoiceAgent`, so a fresh project needs no manual
 // preparation and a second run changes nothing.
+//
+// The agent numbers every speaker frame within a conversation, so the report
+// can say whether a long call lost any of them. See --report at the bottom:
+// that is the proof, and it is arithmetic rather than opinion.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -56,6 +60,17 @@ const XAI_SECRET = "/secrets/xai";
 const XAI_ENV = "APP_CONFIG_X_AI_API_KEY";
 /** Where the key may be sent. A secret pinned nowhere can be sent anywhere. */
 const XAI_EGRESS = ["https://api.x.ai"];
+
+/**
+ * What to tell the model it is, when the caller does not say.
+ *
+ * Counting is in here on purpose: a monotonic sequence spoken aloud is the
+ * one answer whose gaps a human ear can hear, so it is the utterance every
+ * audio bug in this lab has been caught with.
+ */
+const DEFAULT_INSTRUCTIONS =
+  "You are Iterate, a voice assistant on a small speaker. Keep replies short and " +
+  "natural. When asked to count, count steadily and do not stop early.";
 
 /** Options for `pnpm cli voicelab talk`. */
 export interface TalkOptions extends Partial<VoicelabConnectOptions> {
@@ -108,13 +123,67 @@ export interface TalkOptions extends Partial<VoicelabConnectOptions> {
    * recording it leaves is the true timeline, silence included.
    */
   pretendSpeaker?: string;
+  /** What the model is told it is. Defaults to a short assistant prompt. */
+  instructions?: string;
+  /** Dial this instead of x.ai. Carries no credential. */
+  providerBaseUrl?: string;
+  /** Which realtime voice provider the stream's birth certificate names. */
+  provider?: "grok" | "openai";
+  /** Model and voice overrides for that provider. */
+  providerModel?: string;
+  providerVoice?: string;
+  /** Install the subscription under a fresh key even if an identical one exists. */
+  reinstall?: boolean;
+  /**
+   * Offer the model a hang_up tool: say goodbye, end the call — the baseline
+   * proof the tool lane works end to end.
+   */
+  hangUp?: boolean;
+  /**
+   * Hold the microphone open for the whole call and let Grok find the turns.
+   *
+   * OFF BY DEFAULT, BECAUSE THIS CLI IS NOT AN OPEN-MIC CLIENT. It sends audio
+   * only while a turn is in progress — the space bar in attended mode, one
+   * utterance at a time in unattended mode — and then stops. Server VAD needs
+   * the silence AFTER speech to decide the turn ended, so on a stream that
+   * simply stops it hears `speech_started` and then waits for ever. Measured:
+   * Grok took the audio, detected the speech, and never once answered.
+   *
+   * The boards ARE open-mic and this is the path they take, so it is worth
+   * being able to exercise from here — with a driver that keeps sending.
+   */
+  openMic?: boolean;
+  /**
+   * The provider's own turn_detection object as JSON, passed to the birth
+   * certificate verbatim — open-mic VAD tuning per stream. Example:
+   * '{"type":"server_vad","threshold":0.5,"silence_duration_ms":300}'.
+   */
+  turnDetection?: string;
+  /** Classify the answer into mouth shapes for a face-rendering board. */
+  visemes?: boolean;
+  /**
+   * Thinking fast and slow: arm `note_to_self`, which mints a colleague
+   * agent on a fresh `/agents/voice-notes/<conversationId>` stream per
+   * conversation and reads its chat replies back into the call.
+   */
+  colleague?: boolean;
+  /**
+   * Extra tools for the birth certificate, as a JSON array of
+   * `{name, description, parameters?, expression}` entries — appended after
+   * the `--hang-up` base tool. Each `expression` is the itx walk the fold
+   * validates and the tool runner applies, e.g.
+   * `["clients",["get","/clients/stackchan"],"capabilities","face","set"]`.
+   */
+  tools?: string;
 }
 
 /**
- * v1's RPC contract, picked off the real entrypoint class — the same
- * zero-drift treatment as talk2's. Type imports cross the worker/node
- * boundary (erased by tsx before resolution); value imports never do (F4,
- * ERR_UNSUPPORTED_ESM_URL_SCHEME).
+ * The RPC contract exported by voice-agent.ts, which no generated client can
+ * carry — picked off the REAL entrypoint class rather than hand-mirrored, so
+ * there are zero fields to drift, ever. The import is `type`-only, which is
+ * what lets it cross the worker/node boundary: type imports are erased by tsx
+ * before any resolution (proven both ways), where a VALUE import from
+ * config-repo dies at load with ERR_UNSUPPORTED_ESM_URL_SCHEME (F4).
  */
 type VoiceAgentSetup = Pick<VoiceAgentEntrypoint, "health" | "setupVoiceAgent">;
 
@@ -141,21 +210,19 @@ export async function talk(options: TalkOptions = {}) {
   if (!Number.isFinite(minutes) || minutes <= 0) {
     throw new Error(`--minutes must be greater than zero; received ${JSON.stringify(minutes)}`);
   }
-  // Resolved before any network call: a missing checkout should fail in a
-  // second, not after setting up a conversation nobody can join.
+  /* Resolved before any network call: a missing checkout should fail in a
+   * second, not after setting up a conversation nobody can join. */
   const kitDir = options.setupOnly === true ? null : resolveKitDir(options.kitDir);
 
   const connection = { baseUrl: options.baseUrl, project };
   const baseUrl = resolveVoicelabBaseUrl(connection);
   using itx = await connectProject(connection);
 
-  /*
-   * Install the guest BEFORE calling into it. `setupVoiceAgent` lives inside
-   * voice-agent.ts, so the file has to be in the config repo before there is
+  /* Install the guest BEFORE calling into it: `setupVoiceAgent` lives inside
+   * voice-agent.ts, so the file has to be in the repo before there is
    * anything to call — a talk command that only ran setup would work on the
    * machine that had already deployed by hand and fail against a fresh
-   * project. Committing identical content is a no-op the platform reports.
-   */
+   * project. Committing identical content is a no-op the platform reports. */
   const install = await installVoiceAgent(itx);
   console.log(
     install.changed
@@ -163,14 +230,19 @@ export async function talk(options: TalkOptions = {}) {
       : `voice-agent.ts already current (${install.commitOid.slice(0, 8)})`,
   );
 
-  console.log(`xai secret ${await ensureXaiSecret(itx)}`);
+  /* Only the secret the chosen provider's dial will spend — setup's gate is
+   * per-provider (secretForHost), and a baseUrl seam needs none at all. */
+  if (options.providerBaseUrl === undefined) {
+    console.log(
+      options.provider === "openai"
+        ? `openai secret ${await ensureOpenaiSecret(itx)}`
+        : `xai secret ${await ensureXaiSecret(itx)}`,
+    );
+  }
 
-  // The generated Cap'n Web client cannot carry a userspace worker's methods;
-  // this is the RPC contract exported by the exact source ref above.
   using voiceAgent = itx.workers.get(
     voiceAgentEntrypointRef,
   ) as unknown as DynamicWorkerCapability<VoiceAgentSetup>;
-  // Wait for the guest to actually build before anything with consequences.
   const health = await waitForVoiceAgent(voiceAgent);
   console.log(`voice-agent healthy for ${health.projectId}`);
 
@@ -184,19 +256,65 @@ export async function talk(options: TalkOptions = {}) {
     throw new Error(`stream path must be absolute; received ${JSON.stringify(streamPath)}`);
   }
   const setup = await withRpcResult(
-    voiceAgent.setupVoiceAgent({ streamPath }),
-    ({ streamPath: resultPath, created, alreadyThere, warm }) => ({
-      streamPath: resultPath,
-      created: [...created],
-      alreadyThere: [...alreadyThere],
-      warm: { ok: warm.ok, ms: warm.ms },
+    voiceAgent.setupVoiceAgent({
+      streamPath,
+      instructions: options.instructions ?? DEFAULT_INSTRUCTIONS,
+      /*
+       * THIS CLI SEGMENTS ITS OWN TURNS, in both of its modes.
+       *
+       * Attended, a person holds the space bar. Unattended, the driver plays
+       * one utterance and stops. Either way the audio ENDS rather than going
+       * quiet, and server VAD cannot tell a finished sentence from a stalled
+       * connection without hearing the silence that follows it. `--open-mic`
+       * exists to exercise the boards' path deliberately; it is not the
+       * default because on this client it produces a call that hears you and
+       * never replies.
+       */
+      clientTakesTurns: options.openMic !== true,
+      ...(options.visemes === true && { visemes: true }),
+      ...(options.colleague === true && { colleague: true }),
+      ...(options.turnDetection !== undefined && {
+        turnDetection: JSON.parse(options.turnDetection) as Record<string, unknown> & {
+          type: string;
+        },
+      }),
+      ...(() => {
+        const tools = [
+          ...(options.hangUp === true
+            ? [
+                {
+                  name: "hang_up",
+                  description:
+                    "End this call when the user says goodbye or the conversation is " +
+                    "clearly over. Say a short goodbye BEFORE calling this; the call " +
+                    "ends after you finish speaking.",
+                },
+              ]
+            : []),
+          ...(options.tools === undefined
+            ? []
+            : (JSON.parse(options.tools) as {
+                name: string;
+                description: string;
+                parameters?: Record<string, unknown>;
+                expression?: (string | [string, ...unknown[]])[];
+              }[])),
+        ];
+        return tools.length > 0 ? { tools } : {};
+      })(),
+      ...(options.provider === undefined ? {} : { provider: options.provider }),
+      ...(options.providerModel === undefined ? {} : { providerModel: options.providerModel }),
+      ...(options.providerVoice === undefined ? {} : { providerVoice: options.providerVoice }),
+      ...(options.providerBaseUrl === undefined
+        ? {}
+        : { providerBaseUrl: options.providerBaseUrl }),
+      ...(options.reinstall === undefined ? {} : { reinstall: options.reinstall }),
     }),
+    ({ streamPath: resultPath, warmMs }) => ({ streamPath: resultPath, warmMs }),
   );
 
   console.log(`stream ${setup.streamPath}`);
-  for (const item of setup.created) console.log(`  created       ${item}`);
-  for (const item of setup.alreadyThere) console.log(`  already there ${item}`);
-  console.log(`  warm          processor acknowledged in ${setup.warm.ms}ms`);
+  console.log(`  warm          processor acknowledged in ${setup.warmMs}ms`);
   if (kitDir === null) return;
 
   using ingressSecret = itx.secrets.get("/secrets/project-api-key");
@@ -251,7 +369,7 @@ export async function talk(options: TalkOptions = {}) {
       `mac${stamp}`,
       "--stream-path",
       setup.streamPath,
-      ...driverArgs(options, minutes),
+      ...driverArgs(options, minutes, options.openMic === true),
       ...(options.pretendSpeaker === undefined
         ? []
         : ["--pretend-speaker", options.pretendSpeaker]),
@@ -273,46 +391,93 @@ export async function talk(options: TalkOptions = {}) {
       ITERATE_PROJECT_ID: project,
     },
   );
+
+  reportSpeakerContinuity(reportJson);
 }
 
 /**
- * Wait until the guest worker answers, retrying a cold build.
+ * THE PROOF, AND WHY IT CAN ONLY BE READ HERE.
  *
- * The first call into a dynamic worker builds it, so it is both the slowest
- * and the only one that can fail for reasons that have nothing to do with
- * what was asked. Doing that here means a build failure is reported as a
- * build failure, and that the calls after it — which append events and start
- * conversations — are never the ones absorbing a cold start.
+ * `spk-frame` is ephemeral, so it is never persisted and no amount of reading
+ * the stream afterwards can say how many frames there were. The only witness
+ * to what actually arrived is the device that received them, which is why the
+ * agent numbers every frame within a conversation and why the host CLI counts
+ * the gaps: a missing sequence number is a lost frame, and there is no other
+ * way to distinguish "the answer was short" from "the answer was cut".
  *
- * The last error is re-thrown verbatim on timeout. A summary would hide the
- * compile error that is almost always the actual answer.
+ * Printed from the report rather than asserted, because a long conversation
+ * has many legitimate reasons to be interesting and only one to be wrong.
  */
+function reportSpeakerContinuity(reportJson: string): void {
+  let summary: Record<string, unknown>;
+  try {
+    const report = JSON.parse(fs.readFileSync(reportJson, "utf8")) as {
+      summary?: Record<string, unknown>;
+    };
+    summary = report.summary ?? {};
+  } catch (error) {
+    console.log(`\n  no report at ${reportJson} (${String(error).slice(0, 80)})`);
+    return;
+  }
+  const number = (key: string): number | undefined =>
+    typeof summary[key] === "number" ? (summary[key] as number) : undefined;
+  const received = number("spkFramesReceived");
+  const gaps = number("spkSeqGaps");
+  const missing = number("spkSeqMissing");
+  const regressions = number("spkSeqRegressions");
+  const decodeFailures = number("spkDecodeFailures");
+
+  console.log(`\n  SPEAKER CONTINUITY`);
+  if (gaps === undefined) {
+    /* Said plainly rather than reported as zero: a binary too old to count
+     * gaps reports no gaps, and that reads exactly like a clean run. */
+    console.log(
+      `    this host CLI does not count sequence gaps, so this run proves nothing ` +
+        `about lost frames. Rebuild apps/kit/firmware.`,
+    );
+    return;
+  }
+  if ((received ?? 0) === 0) {
+    /*
+     * NOTHING ARRIVED, SO NOTHING IS PROVEN. Zero gaps out of zero frames is
+     * vacuously true and prints as a tick, which is precisely how a totally
+     * silent call reported itself as a clean one on this instrument's first
+     * run. A proof that cannot fail is not a proof.
+     */
+    console.log(`    no speaker frames arrived at all — this call was silent.`);
+    console.log(`\n    ✗ nothing to measure. ${reportJson}`);
+    return;
+  }
+  console.log(`    frames received      ${received}`);
+  console.log(`    sequence gaps        ${gaps}${gaps === 0 ? "  ✓" : ""}`);
+  console.log(`    frames missing       ${missing ?? "?"}`);
+  console.log(`    out of order/dupes   ${regressions ?? "?"}`);
+  console.log(`    decode failures      ${decodeFailures ?? "?"}`);
+  if (gaps === 0 && (decodeFailures ?? 0) === 0) {
+    console.log(`\n    ✓ every speaker frame the agent numbered arrived and decoded.`);
+  } else {
+    console.log(`\n    ✗ this call lost audio. ${reportJson}`);
+  }
+}
+
+/** Wait until the guest answers, retrying a cold build; re-throw the last error verbatim. */
 async function waitForVoiceAgent(
   voiceAgent: DynamicWorkerCapability<VoiceAgentSetup>,
-): Promise<{ ok: true; projectId: string; xaiSecretReady: boolean }> {
+): Promise<{ ok: true; projectId: string }> {
   const deadline = Date.now() + HEALTH_TIMEOUT_MS;
-  let attempts = 0;
   let lastError: unknown;
   for (;;) {
-    attempts++;
     try {
-      return await withRpcResult(voiceAgent.health(), ({ ok, projectId, xaiSecretReady }) => ({
+      return await withRpcResult(voiceAgent.health(), ({ ok, projectId }) => ({
         ok,
         projectId,
-        xaiSecretReady,
       }));
     } catch (error) {
       lastError = error;
-      if (Date.now() >= deadline) break;
-      if (attempts === 1) console.log("waiting for the voice-agent worker to build…");
+      if (Date.now() >= deadline) throw lastError;
       await new Promise((resolve) => setTimeout(resolve, HEALTH_RETRY_MS));
     }
   }
-  throw new Error(
-    `voice-agent did not become healthy within ${String(HEALTH_TIMEOUT_MS / 1000)}s ` +
-      `after ${String(attempts)} attempts. This is usually a compile error in the ` +
-      `committed voice-agent.ts. The last error was:\n${String(lastError)}`,
-  );
 }
 
 /**
@@ -431,7 +596,7 @@ export function driverArgs(
   minutes: number,
   /** Attended open mic: the C streams continuously and the server's VAD owns
    * the turns. Off, the space bar owns them. Must match the stream's
-   * certificate, which is why talk2 passes its own --open-mic here. */
+   * certificate, which is why talk passes its own --open-mic here. */
   openMic = false,
 ): string[] {
   if (options.converse === undefined) {
@@ -496,12 +661,6 @@ export async function promptWithDefault(label: string, defaultValue: string): Pr
 }
 
 /**
- * Run with the terminal attached, and report what happened verbatim.
- *
- * `stdio: "inherit"` is load-bearing rather than a convenience: the C puts the
- * terminal into raw mode for hold-to-talk and cannot do that through a pipe.
- */
-/**
  * Where a run's artifacts go: `.voicelab-runs/` at the repo root, gitignored.
  *
  * At the ROOT rather than under apps/os, because a run is about the whole
@@ -513,6 +672,12 @@ export function voicelabRunsDir(): string {
   return path.resolve(here, "../../../../.voicelab-runs");
 }
 
+/**
+ * Run with the terminal attached, and report what happened verbatim.
+ *
+ * `stdio: "inherit"` is load-bearing rather than a convenience: the C puts the
+ * terminal into raw mode for hold-to-talk and cannot do that through a pipe.
+ */
 export function runInherited(command: string, args: string[], env = process.env): void {
   const result = spawnSync(command, args, { env, stdio: "inherit" });
   if (result.error) throw result.error;

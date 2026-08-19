@@ -58,10 +58,8 @@ function voiceAgentSources(
 ): { path: string; content: string }[] {
   const directory = path.dirname(entryFile);
   const files = new Map<string, string>();
-  /* The entry lands under the name the matching *-ref.ts asks the platform to
-   * build, whatever it is called on disk. Parameterised because the two tracks
-   * share this repo: committing v2's source as `voice-agent.ts` would not add a
-   * second agent, it would overwrite the first one. */
+  /* The entry lands under the name `voice-agent-ref.ts` asks the platform to
+   * build, whatever it is called on disk. */
   const queue: { name: string; readFrom: string }[] = [{ name: entryName, readFrom: entryFile }];
   while (queue.length > 0) {
     const next = queue.shift()!;
@@ -105,9 +103,9 @@ interface ConfigRepo {
  */
 export async function installVoiceAgent(
   itx: unknown,
-  options: { file?: string; message?: string; entryName?: string } = {},
+  options: { file?: string; message?: string } = {},
 ): Promise<InstallResult> {
-  const entryName = options.entryName ?? "voice-agent.ts";
+  const entryName = "voice-agent.ts";
   const file = options.file ?? new URL(`./config-repo/${entryName}`, import.meta.url).pathname;
   const changes = voiceAgentSources(file, entryName);
   const repo = (itx as { repo: ConfigRepo }).repo;
@@ -125,25 +123,6 @@ export async function installVoiceAgent(
     file,
     paths: changes.map((change) => change.path),
   };
-}
-
-/**
- * Commit the SECOND track's guest, beside the first rather than over it.
- *
- * The config repo is flat and both entry points sit in it at once, so a
- * project can run `voice-agent.ts` on one stream and `voice-agent2.ts` on
- * another and be compared without redeploying between runs — which is the only
- * way a comparison means anything, since redeploying is itself a variable.
- */
-export async function deploy2(options: DeployOptions) {
-  using itx = await connectProject(options);
-  const result = await installVoiceAgent(itx, { ...options, entryName: "voice-agent2.ts" });
-  console.log(
-    result.changed
-      ? `committed ${result.commitOid.slice(0, 8)}: ${result.paths.join(", ")}`
-      : `no change — the project already runs this worker (${result.commitOid.slice(0, 8)})`,
-  );
-  console.log(`${String(result.bytes)} bytes from ${result.file}`);
 }
 
 export async function deploy(options: DeployOptions) {

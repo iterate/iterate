@@ -16,7 +16,7 @@
 // the difference between the two medians is the plumbing between them.
 //
 //   doppler run --config preview_3 -- pnpm cli voicelab ptt-marginal \
-//     --project voice-test --stream-path /agents/voice2/marginal-1 \
+//     --project voice-test --stream-path /agents/voice/marginal-1 \
 //     --mic-wav /tmp/utterance.wav --rounds 20
 //
 // Attribution, not just a total, and WITHOUT aligning two clocks. The facet
@@ -27,7 +27,7 @@
 // simpler and tighter than estimating an offset and splitting the answer into
 // an uplink and a downlink either side of it.
 //
-// EVERY STAMP HERE NAMES ITS CLOCK, per the taxonomy in `voice-agent2.ts`:
+// EVERY STAMP HERE NAMES ITS CLOCK, per the taxonomy in `voice-agent.ts`:
 // `...AtDeviceMs` is this process (it is the client — it holds the microphone),
 // `...AtFacetMs` is the facet's. Nothing subtracts one from the other. This
 // file used to call them `at` and `facetT`, which is how a probe ends up
@@ -93,7 +93,7 @@ export interface PttMarginalOptions extends VoicelabConnectOptions {
 
 const FRAME_MS = 20;
 
-/** The direct half's per-provider dial sheet. Mirrors voice-agent2.ts. */
+/** The direct half's per-provider dial sheet. Mirrors voice-agent.ts. */
 const DIRECT_PROVIDERS = {
   grok: {
     url: "https://api.x.ai/v1/realtime",
@@ -104,7 +104,7 @@ const DIRECT_PROVIDERS = {
   },
   openai: {
     url: "https://api.openai.com/v1/realtime",
-    /* Tracks voice-agent2's default: a direct baseline on a different
+    /* Tracks voice-agent's default: a direct baseline on a different
      * model than the agent dials measures the models, not our overhead. */
     model: "gpt-realtime-2.1",
     voice: "marin",
@@ -478,7 +478,7 @@ export async function pttMarginal(options: PttMarginalOptions) {
       `one of ${directProvider.keyEnvs.join("/")} is required for the direct ${providerName} half.`,
     );
   }
-  const streamPath = options.streamPath ?? "/agents/voice2/marginal-1";
+  const streamPath = options.streamPath ?? "/agents/voice/marginal-1";
   const rounds = options.rounds ?? 8;
   const settleMs = options.settleMs ?? 8_000;
   const batch = Math.max(1, options.framesPerAppend ?? 12);

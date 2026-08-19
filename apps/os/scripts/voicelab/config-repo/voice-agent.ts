@@ -1,10 +1,144 @@
+/**
+ * The voice agent, second cut: one fold, one reaction, and a sequence number on
+ * every frame that says which lane it belongs to.
+ *
+ * WHY A REWRITE RATHER THAN AN EDIT.
+ *
+ * The first cut grew a class per concern — a call object, a speaker module, a
+ * viseme tracker, event factories — and the concerns then had to agree with
+ * each other. They stopped agreeing in one specific place, and it is the bug
+ * this file exists to make unrepresentable:
+ *
+ *   `drop` WAS A BOOLEAN. "Discard whatever you are holding" names no audio, so
+ *   a second one arriving late discards the answer that replaced the one it
+ *   meant. Grok's `input_audio_buffer.speech_started` is a TENTATIVE VAD onset
+ *   — it fires on any voice-shaped energy, including a board's own echo
+ *   residue, and retracts itself without ceremony — and the first cut made
+ *   every one of them destructive. Five per turn were measured on the board's
+ *   own counter. What you hear is an assistant that counts to four, stops,
+ *   counts to nine, stops.
+ *
+ *   HERE A FLUSH NAMES A SEQUENCE NUMBER. "Every speaker frame up to and
+ *   including 47 is dead." Repeat it and it is a no-op; deliver it late and it
+ *   cannot touch frame 48, because 48 was minted after the decision was taken.
+ *   The same five VAD blips cost one flush and four no-ops. Idempotence by
+ *   construction, not by care.
+ *
+ *   AND THE FLUSH IS ONLY THE DEVICE'S. The facet's own queue — up to ~36 s
+ *   of a burst answer the pacer has not handed over yet — survives a
+ *   tentative onset: the device is silenced at once, the pacer pauses, and
+ *   the queue waits for the onset to commit or retract (see the
+ *   speech_started arm). Emptying it on every blip was the counting bug in a
+ *   second form: the flush cost one stutter, the emptied queue cost the
+ *   whole unsent tail.
+ *
+ * TWO SEQUENCES, AND THEY ARE NOT INTERCHANGEABLE. Every count in this file
+ * says which of the two it belongs to, because conflating them is how the
+ * first cut lost track of what a flush was flushing:
+ *
+ *   `deviceMicFrameSeq`      device microphone -> facet -> Grok. Minted by the
+ *                            DEVICE; the facet never renumbers it.
+ *   `deviceSpeakerFrameSeq`  facet -> device speaker. One per paced chunk. A
+ *                            single provider delta usually becomes several of
+ *                            these — which is exactly why a flush must name
+ *                            this one and no other. (There was a third count
+ *                            once, per received provider delta, riding every
+ *                            frame as `fromProviderDeltaSeq` — "debugging, not
+ *                            ordering" by its own docstring, read by no device
+ *                            and no instrument; the grok-event lane's
+ *                            `deltaBytes` keeps the coarse correlation.)
+ *
+ * EVERY TIMESTAMP SAYS WHERE IT WAS TAKEN, in its name, with no exceptions.
+ * FOUR CLOCKS, and this is the whole taxonomy — anything measuring this system
+ * uses these four names and coins no fifth:
+ *
+ *   `...AtDeviceMs`   THE CLIENT that holds the microphone: a board's uptime,
+ *                     or a laptop running the host CLI or a latency probe. Not
+ *                     wall time on a board, and not the same clock twice if
+ *                     there are two clients.
+ *   `...AtFacetMs`    read inside this processor, `deps.nowAtFacetMs()`
+ *   `...AtStreamMs`   the Stream Durable Object's commit stamp (`event.createdAt`)
+ *   `...AtProviderMs`     a stamp the PROVIDER put on its own event
+ *
+ * None of them is synchronised with any other. A duration is only meaningful
+ * between two stamps with the SAME suffix; subtracting across them is the
+ * mistake that produced a device muting itself against a deadline from
+ * somebody else's clock, and a latency probe reporting minus fifty-nine
+ * seconds because one end of the subtraction was `Date.now()` and the other
+ * was `performance.now()` — two clocks on ONE machine, which is why "it is all
+ * local" is not a defence.
+ *
+ * A duration therefore has no `At`: it is `...Ms`, it belongs to no clock, and
+ * it is the ONLY thing safe to send across a boundary. That is how an
+ * instrument on a laptop attributes a turn it measured itself to work done on
+ * a facet whose clock it has never seen: it subtracts facet-clock durations
+ * read off the `grok-event` lane's own stamps.
+ *
+ * THE CLIENT IS DUMB, AND THAT IS THE DESIGN, NOT A LIMITATION.
+ *
+ * An ESP32 has a few hundred kilobytes of RAM, one core to spare, and no idea
+ * what a conversation is. So it is given no decisions to make. Its entire
+ * contract is three sentences:
+ *
+ *   1. Send microphone frames up, numbered, forever. It does not decide when a
+ *      turn starts or ends, whether anyone is talking over anyone, or whether
+ *      it should be listening. Turn taking is Grok's job and the server's; the
+ *      board that tried to help is the board that muted itself.
+ *   2. Play speaker frames in `deviceSpeakerFrameSeq` order.
+ *   3. If a frame says `clearSpeakerBufferBeforeFrame`, throw away everything
+ *      queued before playing it.
+ *
+ * THE SERVER PACES TO THE DEVICE'S BUFFER, rather than sending as fast as it
+ * can and hoping. Grok hands over a forty-second answer in a few seconds; a
+ * board given that at wire speed drops most of it on the floor and conceals the
+ * shortfall as clipped words — measured at 9-31 frames a second against the 50
+ * realtime needs. So the drain loop below hands over at most
+ * `MAX_DEVICE_SPEAKER_BACKLOG_BYTES` and then sends at exactly the rate
+ * the audio plays, so the backlog cannot grow past that budget.
+ *
+ * THAT IS A MODEL OF MEMORY ON ANOTHER MACHINE, and the honest thing is to say
+ * so rather than dress it up. A budget denominated in the device's RAM cannot
+ * be expressed without one. It carries an error term nobody can measure — the
+ * lag between handing a frame to the stream and the board starting to play it
+ * — and it is paid for by keeping the budget well under the firmware's own
+ * ceiling, where the margin cannot be spent by tuning. What it buys is that the
+ * device is never asked how it is doing: a server that needs the client to
+ * report is a server that stalls when the client goes quiet, and half the fleet
+ * says nothing at all while it is listening to an answer.
+ *
+ * AND THE CLEAR RIDES ON A FRAME. It was a separate event once, on a second
+ * lane, where it could arrive behind the audio it invalidates. Attached to a
+ * numbered frame it cannot: the frame carrying the clear has a higher sequence
+ * number than everything it cancels, so a device that orders by sequence number
+ * gets the right answer even out of order. An interruption with no audio behind
+ * it is an EMPTY frame carrying the flag — still a frame, still numbered, still
+ * ordered.
+ *
+ * THE SHAPE:
+ *
+ *   REDUCED STATE is what survives an eviction: which call is up, how far the
+ *   speaker clear has reached, when the device was last heard from.
+ *
+ *   RUNTIME STATE is the provider socket plus two frame queues, and nothing
+ *   else that a restart would miss.
+ *
+ *   TWO SWITCHES. `reduce` folds, `processEvent` acts. There is a third inside
+ *   the provider socket's message listener, and its comment says why it cannot
+ *   be a stream event like everything else.
+ *
+ * WHAT IT DELIBERATELY DOES NOT DO: no head gestures, and no mouth of its
+ * own — the face lives in face.ts as a pure mechanism this file only feeds
+ * from four thin call sites. This one runs a call. (There was a
+ * `turn-timing` lane here once — four per-turn stamps for the latency
+ * campaign; that campaign concluded and the subsystem was deleted whole
+ * rather than half-moved. `grok-event` still carries every provider stamp an
+ * instrument needs, minus the mic-frame gap histogram, which did not survive.)
+ */
 import {
   IterateWorkerEntrypoint,
-  type Agent,
-  type StatefulDynamicWorkerRef,
-  type Stream,
   StreamProcessorFacet,
   type ProcessorHostDeps,
+  type StatefulDynamicWorkerRef,
 } from "iterate/sdk";
 import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 import {
@@ -14,1115 +148,3232 @@ import {
   type ReduceArgs,
 } from "iterate/processors";
 import { z } from "zod";
-import { createVisemeTracker, type VisemeChangeEvent } from "./viseme.ts";
-import {
-  DEFAULT_SPEAKER_LIMITS,
-  speakerComplete,
-  speakerPush,
-  speakerRelease,
-  speakerReplace,
-  speakerStart,
-  speakerSummary,
-  type SpeakerChunk,
-  type SpeakerLimits,
-  type SpeakerRelease,
-  type SpeakerState,
-} from "./speaker.ts";
+import { Pcm16Resampler } from "./pcm.ts";
+import { createFace } from "./face.ts";
 
-// This file is copied into and built from a user's config repo, so it cannot
-// import the CLI-local rpc-ownership.ts module. Keep these three deployment-
-// boundary equivalents aligned with that module's explicit ownership rules.
-/** Release one Cap'n Web/Workers RPC capability without hiding a failed release. */
-function disposeRpcStub(value: unknown, label: string): void {
-  try {
-    disposeIgnoredRpcResult(value);
-  } catch (error) {
-    console.error("voice-agent RPC stub disposal failed", { error, label });
-  }
-}
-
-/** Await an RPC result whose payload is intentionally ignored, then release its wrapper. */
-async function discardRpcResult(result: Promise<unknown>, label: string): Promise<void> {
-  disposeRpcStub(await result, label);
-}
-
-// Voice-agent guest worker: the "server side" of the voice pipe, in userspace.
-//
-// Three modes, one Durable Object, reached via wss to the `voice` app host
-// (voice--<slug>.<base>/?mode=...):
-//
-//   mode=proxy    client WS <-> Grok WS, frames pumped verbatim. The client
-//                 speaks the Grok realtime protocol itself. This is the
-//                 "simple websocket proxy" baseline.
-//
-//   mode=bridge   audio rides the STREAM: mic-frame ephemeral events in,
-//                 spk-frame/grok-event ephemeral events out, exactly the
-//                 voicelab node-bridge protocol. The client's WebSocket to
-//                 this DO carries no audio — it is the lifetime anchor that
-//                 keeps this invocation's context (and with it the outbound
-//                 Grok socket + the live openConnection callback) alive.
-//
-//   mode=detached same bridge, no anchor socket: the call holds ITSELF open
-//                 with ctx.waitUntil for as long as it is doing work, and
-//                 ends on the stream's conversation-ended event, on Grok hanging up,
-//                 on silence, or at the hard deadline. This is what a device
-//                 uses — an `events.iterate.com/voice-agent/conversation-requested` stream event returns the moment the
-//                 Grok session is live and nothing outside the platform has
-//                 to stay running for the call to continue.
-//
-// The Grok key never enters this isolate: the upgrade fetch carries a
-// getSecret placeholder that the platform substitutes en route to the
-// pinned origin.
+/* ========================================================================== */
+/* CONSTANTS                                                                  */
+/* ========================================================================== */
 
 const XAI_SECRET = "/secrets/xai";
-/* The provider the facet dials. Fixed here rather than per-request: the key
- * goes to x.ai and nowhere else, and a caller-chosen URL would carry it. */
-const GROK_REALTIME_URL = "https://api.x.ai/v1/realtime";
-const GROK_MODEL = "grok-voice-think-fast-2.0";
-const GROK_VOICE = "eve";
-/**
- * How long a dial may go without becoming usable before it counts as dead.
- *
- * Exported so a scenario that means "slower than the bridge will wait" can be
- * written against the number the bridge actually enforces, rather than a copy
- * of it that goes stale the day this moves (see `fake-grok.ts`'s
- * `slow-connect` and `dead-connect`).
- */
-export const GROK_HANDSHAKE_DEADLINE_MS = 10_000;
-/**
- * A CALL WITH NO UTTERANCE FROM EITHER SIDE FOR THIS LONG IS OVER.
- *
- * A conversation is one call across many presses, so this is the only clock
- * that ends an idle one. Both directions count: what goes to the provider and
- * what comes back from it, so a long answer cannot age a call out and neither
- * can somebody who pauses to think and then speaks again. Anything either way
- * restarts the minute.
- *
- * What deliberately does NOT count is liveness. The retiring bridge made the
- * same distinction for the same reason — a device pinging into an empty room
- * is exactly the case this exists to end — and it still holds now that those
- * pings are gone: presence, warm-ups and brief markers are traffic about the
- * stream, not somebody talking on it.
- */
-const IDLE_TIMEOUT_MS = 60_000;
-/**
- * THE ONE SENTENCE AN IDLE END IS ASKED FOR IN, and it has to be one sentence.
- *
- * Two things can notice the minute has passed — the countdown on a live call
- * and the at-head pass on a revived one (see {@link idleDeadlinePassed}) — and
- * both append the SAME `conversation-end-requested` under the SAME idempotency
- * key, so whichever gets there first wins and the other collapses into it.
- * That only works while the payload is byte-identical: the stream REJECTS a
- * same-key append with a different body rather than deduplicating it. Hence a
- * constant, not two sentences that happen to agree today.
- */
-const IDLE_END_REASON = `no utterance from either side for ${IDLE_TIMEOUT_MS / 1000}s`;
+const OPENAI_SECRET = "/secrets/openai";
+
+/** A realtime voice provider this agent can dial. */
+export type VoiceProvider = "grok" | "openai";
 
 /**
- * Has this call gone a whole minute with nothing said, as far as the FOLD
- * knows?
+ * EVERYTHING PROVIDER-SPECIFIC, IN ONE TABLE. Grok's realtime API is a
+ * deliberate clone of OpenAI's GA interface — same handshake, same event
+ * names, same session.update shape — so the abstraction the birth
+ * certificate selects is not an adapter layer, it is five values: where to
+ * dial, which model, which voice, the PCM rate (OpenAI speaks 24 kHz where
+ * this pipeline is 16; the two resample sites below are that difference's
+ * entire cost), and which verb repairs a barged answer's memory.
  *
- * THE SECOND OF TWO CLOCKS, and the only one that survives an eviction.
+ * `truncates`: whether `conversation.item.truncate` actually works. The
+ * clone claim breaks exactly here, and silently — probed live 2026-08-18:
+ * grok returns no `conversation.item.truncated` ack, no error, nothing,
+ * even for a bogus item id (where OpenAI errors), and the barged
+ * full-count item stayed whole in context with the model recalling all
+ * of it. `conversation.item.delete` was probed as the fallback and is
+ * HALF-implemented: it acks for client-created items but answers "Item
+ * not found" for the assistant's own response items — the only ones a
+ * barge needs gone — twelve seconds after grok itself minted the id. So
+ * on grok there is NO wire verb that repairs a barged answer's memory;
+ * the heard-prefix note is the entire repair, and "how far did I get"
+ * recall stays wrong there until xAI fixes either verb.
  *
- * The first is the countdown in `#holdUntilIdle`: a keepalive-backed loop
- * reading `GrokCall.lastSpokeAtMs`, which everything either side says moves,
- * and the one that ends a call on a Durable Object that is still up. It cannot
- * survive the object dying, and the object dying is exactly the case an
- * abandoned call is in.
- *
- * So the deadline is also derivable from reduced state. `lastHeardAtMs` is
- * folded from the events a client speaks with — the press verbs, every
- * microphone frame, a typed turn — using each event's own commit stamp, which
- * costs NOTHING: reduced state is already committed once per delivered batch,
- * so this rides a write that happens anyway. It is deliberately not a
- * heartbeat event; that is the thing deleted this morning for pinning four
- * Durable Objects awake around the clock.
- *
- * WHY THE TWO CANNOT DISAGREE, which is the whole argument. The fold's clock
- * is BLIND TO THE PROVIDER: a ninety-second answer is the model talking, and
- * none of it reaches the fold (`grok-event` is not consumed, and consuming it
- * would put the provider's whole firehose back on the delivery lane). So the
- * fold's clock can only be BEHIND the truth, never ahead — it can only call a
- * call dead early, never keep a dead one alive. That would be a real hazard,
- * except for where it is read: ONLY on an at-head pass for a call this
- * incarnation does not hold. A provider can only speak through a socket, a
- * socket belongs to the incarnation that opened it, and an incarnation that
- * holds no socket therefore has nothing left that could be speaking. The most
- * this can cost is ending a call whose answer died with its socket — an answer
- * nobody can hear any more.
- *
- * A live incarnation reads its own countdown and never this.
+ * `cancelsOnVadOnset`: whether the provider kills a STREAMING response
+ * ITSELF the moment its VAD detects speech. On openai it does —
+ * server_vad's `interrupt_response`, pinned true in our session.update —
+ * so a mid-stream onset there means the tail is dead for certain. On grok
+ * NOTHING cancels server-side: its turn_detection has no
+ * `interrupt_response`, and a client `response.cancel` drew an error every
+ * time a VAD-triggered one was tried. The barge machinery branches on this
+ * fact: an onset on a provider that cancelled server-side is destructive;
+ * on one that did not, it is only ever a tentative hold.
  */
-export function idleDeadlinePassed(lastHeardAtMs: number, nowMs: number): boolean {
-  return nowMs - lastHeardAtMs >= IDLE_TIMEOUT_MS;
-}
+const PROVIDERS: Record<
+  VoiceProvider,
+  {
+    url: string;
+    model: string;
+    voice: string;
+    rate: number;
+    truncates: boolean;
+    cancelsOnVadOnset: boolean;
+  }
+> = {
+  grok: {
+    url: "https://api.x.ai/v1/realtime",
+    model: "grok-voice-think-fast-2.0",
+    voice: "eve",
+    rate: 16_000,
+    truncates: false,
+    cancelsOnVadOnset: false,
+  },
+  openai: {
+    url: "https://api.openai.com/v1/realtime",
+    /* The bare `gpt-realtime` alias stays on the ORIGINAL 2025 GA family
+     * for ever; the successors ship under new names. Proven through the
+     * barge/truncate/note gauntlet 2026-08-18 before becoming the default. */
+    model: "gpt-realtime-2.1",
+    voice: "marin",
+    rate: 24_000,
+    truncates: true,
+    cancelsOnVadOnset: true,
+  },
+};
 
 /**
- * When the stream committed this event, in epoch milliseconds.
+ * Grok's own default threshold, restored.
  *
- * `reduce` is pure and cannot ask a clock — and does not need to: every event
- * carries the stamp the Stream Durable Object gave it at commit. That is the
- * SAME Durable Object the facet runs inside, so a deadline folded from this
- * and compared against `deps.now()` is one clock read twice, not two clocks.
- * (Two clock bases quietly disagreeing is what left every board mute for a
- * day; it is worth saying out loud which one this is.)
+ * It was lowered to 0.4 to make barge-in feel quick, at a time when every
+ * detection destroyed the speaker queue — so the two changes together turned
+ * echo residue into a stutter. With a flush that names a sequence number a
+ * false onset is cheap, so the threshold no longer has to buy responsiveness by
+ * being wrong more often. `prefix_padding_ms` keeps the audio just BEFORE the
+ * detector fired, so the first consonant of an interruption survives.
  */
-function eventTimeMs(event: { createdAt: string }): number {
-  return Date.parse(event.createdAt);
-}
+const SERVER_VAD = { type: "server_vad", threshold: 0.85, prefix_padding_ms: 333 } as const;
 
 /**
- * Does an event naming `named` speak about the call this stream is on?
+ * The most unplayed audio the device may be holding, in wire bytes.
  *
- * Worker-minted ids are eight hex chars, so a matching 8-hex id names its own
- * call, a MISMATCHED 8-hex id is a stale message about a predecessor and must
- * not touch the successor, and an id that is not 8-hex at all cannot possibly
- * name a predecessor: it is the device speaking about the one call it is on,
- * under its own name ("scdev", "havpedev" — the firmware does not yet echo the
- * real id). An exact-match-only rule made those self-named hang-ups fold to
- * nothing, which left the call IMMORTAL: every fresh incarnation's at-head
- * pass re-dialled the corpse, and every press folded into it in silence. Both
- * open-mic boards were wedged exactly this way.
+ * WIRE BYTES ARE RING BYTES NOW, which is the one good thing about dropping
+ * mu-law here. The device used to expand every byte on receipt, so one wire
+ * byte became two in its ring and a budget written against the ring without
+ * halving was a 2x error in a safety margin. PCM16 on the wire is PCM16 in the
+ * ring and the two numbers are finally the same number.
+ *
+ * DERIVED FROM THE FIRMWARE, NOT CHOSEN. The ring is 320,000 bytes of PCM16 in
+ * PSRAM (voice_device_profile.h), and the device skips frames once its backlog
+ * passes ITERATE_KIT_VOICE_SPEAKER_HIGH_WATER_MS (9,000 ms) — a ceiling of
+ * 288,000 bytes. 128,000 is four seconds, exactly forty frames, and 40% of the
+ * ring. The remaining 60% pays for three things no instrument on either side
+ * can measure: the lag between handing a frame to the stream and the device
+ * starting to play it, a playback clock running slow, and a revived
+ * incarnation bursting a budget on top of one the dead incarnation already
+ * sent.
+ *
+ * OVERFLOWING IS SILENT, WHICH IS WHY THE MARGIN IS LARGE. The device refuses
+ * whole frames at the door and its loss counters stay innocent — a 1.5 s ring
+ * was measured hiding 2,080 discarded frames, 41 seconds of speech, across two
+ * minutes of ordinary conversation. A gap in speech complains; this does not.
+ *
+ * COUPLED TO MAX_SPEAKER_PAYLOAD_BYTES, which is a separate ceiling on a
+ * single message rather than on the backlog, and much the smaller of the two.
  */
-export function namesThisCall(liveId: string, named: string): boolean {
-  return liveId === named || !/^[0-9a-f]{8}$/.test(named);
-}
+export const MAX_DEVICE_SPEAKER_BACKLOG_BYTES = 128_000;
+
 /**
- * The agent that does the actual thinking. Grok is a mouth and a pair of
- * ears with a ~200ms budget; anything that needs reading a repo, calling a
- * tool, or being RIGHT belongs to a text model with no clock on it.
- */
-/*
- * THERE IS NO SEPARATE BACK-OFFICE AGENT.
+ * The most audio one speaker frame may carry, in bytes.
  *
- * This used to be a fixed `/agents/colleague`, which made the thinking half of
- * every conversation on the deployment ONE GLOBAL SINGLETON: two devices, or
- * one device on two conversations, shared a single agent, a single stream and a
- * single memory. Starting a "new conversation" on the device changed the voice
- * path and left the agent behind, still holding the last conversation.
+ * A CEILING, NOT A UNIT. Frames are whatever length the audio happens to be,
+ * up to this; the device appends the bytes to its speaker ring and neither end
+ * cares where one frame stops and the next starts. What survives here is only
+ * the device's receive path: a chunk over ITERATE_KIT_VOICELAB_CHUNK_BYTES
+ * (4,800), or a base64 encoding of it over ITERATE_KIT_VOICELAB_B64_CAPACITY
+ * (6,912) inside an envelope capped at ITERATE_KIT_VOICELAB_ARGS_CAPACITY
+ * (7,600), is dropped at the door without a word. 3,200 is 100 ms, encodes to
+ * 4,268 characters, and leaves the margin unspent.
  *
- * The voice agent and the back office are the same agent, living at the voice
- * path itself. Change the voice path and the identity changes with it, which is
- * what "new conversation" is supposed to mean.
+ * WHAT THIS REPLACED was a 640-byte alignment rule, and the difference is the
+ * whole point. The board used to be handed exactly one 20 ms frame at a time,
+ * so a chunk with anything left over on the end was a protocol violation it
+ * counted and threw away — which every Grok delta had, none of them being a
+ * multiple of 640. Cutting each delta independently cost 118 dropped chunks in
+ * three turns, and buying that back needed a carried remainder between deltas
+ * and a silence-padded tail at the end of each answer. The ring on the device
+ * never needed any of it: it takes bytes.
  */
-const VOICE_AGENT_PROCESSOR_SLUG = "voice-agent";
-/*
- * The warm-up handshake's own revision.
- *
- * Separate from the processor contract's version, which is 1.0.0 and does not
- * move when this handshake changes — so it cannot tell a caller whether the
- * running processor speaks the protocol the caller expects. Bump this whenever
- * the warm-up request or acknowledgement changes shape.
- */
-const WARMUP_PROTOCOL_REVISION = "warmup/4-marked-brief";
+export const MAX_SPEAKER_PAYLOAD_BYTES = 3_200;
+
 /**
- * How long setup will wait for its own warm-up to be acknowledged.
- *
- * Deliberately generous, and deliberately NOT the 15s a call has to go live in.
- * Those are opposite bounds: the call gate is a promise to the person holding
- * the device, while this is setup volunteering to pay a cost so the call does
- * not. A run that times out here pushes that cost back into the first call,
- * which is the defect this whole handshake exists to remove.
- *
- * NINETY SECONDS BECAUSE 45 WAS MEASURABLY TOO SHORT, and not for the reason
- * it looks like. The build artifact is a KV HIT on a new stream — the build
- * key (build-key.ts) is content-addressed and carries no path, and setup is
- * itself running inside a dynamic worker built from the byte-identical
- * source, so the bundler cannot be in this window. What IS in it is loader
- * isolate instantiation, which is genuinely per-incarnation: `loaderIdentity`
- * (worker-loader.ts) includes `scopePath` because the isolate bakes `env.ITX`
- * from it, so two stream paths sharing one isolate would be privilege
- * confusion rather than a saving.
- *
- * Measured: a brand-new stream path with byte-identical source took 52s and
- * failed here; the immediate retry warmed in ~350ms. So the cost is real,
- * paid once per incarnation, and the only thing 45s bought was a first setup
- * that always failed and always worked on the second run.
+ * How a 16 kHz provider's delta is cut WITHOUT decoding it: the largest
+ * multiple of 3 under the payload ceiling, sliced off the delta's own
+ * base64. A multiple of 3 because every 4-character base64 group encodes 3
+ * whole bytes — so an interior slice of a group-aligned string is itself
+ * valid base64 and the device decodes it with no help — and 3,198 happens
+ * to be even, so no sample is split either. Derived, not chosen: the
+ * ceiling moves, this follows. (The decode-everything path still cuts at
+ * the ceiling itself; only the identity path slices strings.)
  */
-const WARMUP_DEADLINE_MS = 90_000;
+const IDENTITY_SLICE_BYTES = Math.floor(MAX_SPEAKER_PAYLOAD_BYTES / 3) * 3;
+const IDENTITY_SLICE_B64_CHARS = (IDENTITY_SLICE_BYTES / 3) * 4;
+
+/** 16 kHz mono PCM16: two bytes per sample, sixteen samples per millisecond. */
+const PCM16_BYTES_PER_MS = 32;
+
+/** No input from the device for this long and the call is over. Exported
+ * for the tests that drive it — a re-declared copy passes silently the day
+ * the two diverge, and this value has already moved once. */
+export const IDLE_TIMEOUT_MS = 60_000;
+
 /**
- * The subscription's name, which at CORE_STATE_VERSION 30 must EQUAL the
- * processor slug.
+ * The idle stamp advances in steps of this, not per frame.
  *
- * There used to be two identities here: a `subscriptionKey`
- * (`app-voice-agent#voice-agent`) naming the subscription and a
- * `receiver.processorSlug` naming the contract to run. Version 30 collapsed
- * them — "the subscription NAME alone selects which registered contract a
- * processor-wake runs" — and made the payload strict, so the old pair is now
- * rejected outright. That rejection is what stopped every device: setup threw
- * a ZodError before it ever reached the warm-up, and the firmware, having no
- * way to report a rejected call, simply prepared a conversation again every
- * thirty seconds.
- *
- * Nothing checks this equality at configure time. A name matching no
- * registered processor commits happily and fails at the FIRST WAKE with the
- * registry's unknown-name error — which is a delivery failure on a live
- * conversation, not a setup failure anyone is watching.
+ * Folding every mic frame's commit stamp made EVERY delivery batch dirty the
+ * reduced state, and the runner durably commits dirtied state once per batch,
+ * inside the delivery acknowledgement — an output-gated storage write per
+ * 240 ms of audio, paid before the next batch may dispatch. The deadline this
+ * stamp feeds is sixty seconds; knowing the device's last input to five is
+ * every bit as good, and it makes the fold a no-op for ~95% of mic batches —
+ * which is what lets the runner skip the commit entirely once it learns to.
  */
-const VOICE_AGENT_SUBSCRIPTION_NAME = VOICE_AGENT_PROCESSOR_SLUG;
+const IDLE_STAMP_STEP_MS = 5_000;
+
+/** How often the idle countdown looks at the facet clock. */
+const IDLE_TICK_MS = 5_000;
+
 /**
- * What the voice model is told it is.
+ * How long after a dial failure before anything may dial again.
  *
- * Three paragraphs are load-bearing. Without an explicit instruction to keep
- * talking, a voice model handed an asynchronous tool goes silent waiting for
- * it, which sounds exactly like a dropped call. Without being told that
- * the back office is a colleague rather than a function — free to reply out
- * of order, several times, or not at all — it treats the first message that
- * arrives as the answer to whatever it asked last, and says so out loud.
- *
- * And without being told it is not the judge of its own limits, it declines.
- * A voice model knows what a voice model can usually do, which is nothing, so
- * it refuses on its own authority — and the half that could actually have done
- * the thing is never asked. The refusal paragraph exists because the honest
- * default is not "no", it is "let me see": only a RESULT line settles what
- * cannot be done, and only the careful half writes those.
+ * Without it, a provider outage against an open-mic board is unbounded
+ * churn: dial fails, the ended obituary folds, and the very next of the
+ * board's fifty frames a second mints a NEW conversation and dials again —
+ * call-started/end-requested/ended appended forever at fold-round-trip
+ * cadence. Five seconds turns an outage into a dozen tidy attempts a
+ * minute; the press after recovery still connects in one.
  */
+const DIAL_RETRY_COOLDOWN_MS = 5_000;
+
+/**
+ * How long the provider gets from socket adoption to `session.updated`.
+ *
+ * Nothing else bounds this gap, and an open-mic call that never becomes
+ * ready is SILENT FOREVER: mic frames keep the idle stamp fresh, so the
+ * sixty-second backstop can never fire — the one wedge the idle deadline
+ * cannot see. The concrete way in is a certificate `turnDetection` carrying
+ * keys the provider chokes on without an error event (the certificate is
+ * loose by design). Measured handshakes run ~1-1.4 s; fifteen seconds is
+ * generous to a slow provider and still ends the wedge while somebody is
+ * standing there.
+ */
+const HANDSHAKE_DEADLINE_MS = 15_000;
+
+/**
+ * A tool that hangs must still be answered: the model hears "took too long"
+ * and says so, instead of the silence a lost debt produces — a voice model
+ * waiting on a tool output is a dropped call as far as the listener can tell.
+ */
+const TOOL_RUN_DEADLINE_MS = 10_000;
+
+/**
+ * A tool result lives in the model's context for the rest of the call, and
+ * nobody budgeted the session for a table dump.
+ */
+const TOOL_OUTPUT_MAX_CHARS = 4_000;
 
 /* ===========================================================================
- * DIRECT TOOLS — what the voice half does ITSELF.
+ * THINKING, FAST AND SLOW — the v1 back-office framing on v2 plumbing.
  *
- * The voice model is a mouth, a pair of ears and about 200ms of judgement.
- * Nearly everything asked of it belongs to the slower half through
- * `note_to_self`, and this table is the exception: the things that are INSTANT
- * AND LOCAL, where a round trip through a thinking model would be the only slow
- * part of them. Hanging up. Turning the head. Changing the face.
- *
- * ADDING ONE IS ONE ENTRY HERE, and nothing else in this file learns its name.
- * The entry carries the lot: what the model is told the tool is, what arguments
- * it may pass, which device methods it needs, and what happens when it is
- * called.
- *
- * WHAT IS OFFERED IS DERIVED, NEVER LISTED. `needs` names device methods, and a
- * tool reaches a call only if that call's device ADVERTISES them in its own
- * mount `instructions` — the same string the prompt quotes, written in the
- * firmware next to the dispatch table it describes. So a board with no servos
- * is never handed a nod tool, a board that grows one is handed it on the next
- * call, and no list of board names appears anywhere in this file.
+ * The voice model is a mouth, a pair of ears and about 200ms of judgement;
+ * anything that needs reading a repo, calling a tool chain, or being RIGHT
+ * belongs to a text model with no clock on it. `note_to_self` is the seam:
+ * the note goes as a user message to a full agent minted on its own fresh
+ * `/agents/voice-notes/<conversationId>` stream — one colleague per
+ * conversation, its memory born and discarded with the call — and the
+ * agent's chat reply is read back into the live session as a bracketed
+ * note. No new event types: the reply rides `ask()`, so the subscription
+ * is untouched and an evicted incarnation merely loses replies in flight.
  * ======================================================================== */
 
-/**
- * One frame of a head gesture.
- *
- * `speed` is the device's name for the fourth argument of
- * `iterate_kit_stackchan_body_move_head`, and that argument is `duration_ms` —
- * the on-servo move time. So a step is not finished until `speed` milliseconds
- * have passed, and issuing the next one early overrides a move in progress
- * instead of following it.
- */
-const BACK_OFFICE_BRIEF = [
-  "You are the careful, thinking half of ONE assistant. The other half is a",
-  "voice talking to a customer out loud, and it is the only way anything you",
-  "say reaches them. Everything the customer says and everything the voice",
-  "says arrives here as context, so you always know the conversation without",
-  "being asked about it.",
-  "",
-  "YOU ARE NOT A SEPARATE PERSON, AND THE CUSTOMER MUST NEVER LEARN",
-  "OTHERWISE. The voice presents your work as its own, because it is: you",
-  "are the same assistant thinking properly. So write in the assistant's own",
-  "first person — 'I checked the billing records and the March invoice was",
-  "never sent' — never 'tell them that…', never 'the back office found',",
-  "never anything that implies a second party. If a sentence you are about",
-  "to send would sound odd coming straight out of the assistant's mouth,",
-  "rewrite it until it does not.",
-  "",
-  "This is messaging, not question-and-answer. Send whenever you have",
-  "something worth saying: an answer, a partial answer while you keep",
-  "working, a question back, a correction, or something nobody asked for",
-  "that they plainly need to know. Send as many as you like, in any order,",
-  "at any time. Nothing is waiting on you, so silence is always an option",
-  "and a slow careful reply is better than a fast wrong one.",
-  "",
-  "TO PUT SOMETHING IN FRONT OF THE VOICE DIRECTLY, append an",
-  "`events.iterate.com/voice-agent/context-added` event to your own stream.",
-  "It mirrors the `agents/context-added` you already use on yourself, one",
-  "layer along:",
-  "  content       what the voice should know, in plain spoken language",
-  '  speechPolicy  { behaviour: "dont-trigger-speech" } — it learns this',
-  '                but says nothing now; { behaviour: "after-current-speech" }',
-  "                — it says this as soon as it stops talking, the normal",
-  '                choice for an answer; { behaviour: "interrupt-current-speech" }',
-  "                — it stops mid-sentence and says this, for when the customer",
-  "                is about to act on something wrong. Rare.",
-  "Nothing you append this way is attributed to the customer, so never write",
-  "it as though you were them.",
-  "",
-  "YOUR `activity` IS NARRATED OUT LOUD, so write it as NEWS, not as a",
-  "label. Every time you update it the customer hears a version of it, so",
-  "it should say what just happened and what you are doing about it:",
-  "'found a live weather source, fetching Bath now', 'that source returned",
-  "an error, trying a different one', 'got the data, working out the",
-  "forecast'. Not 'checking the weather' twice in a row with different",
-  "words — that is the assistant sounding stuck, and it is worse than",
-  "silence. If nothing material has changed, DO NOT UPDATE IT. Plain",
-  "language a listener would understand: never 'invoking egress fetch'.",
-  "",
-  "Your `title` and `description` are different: they are the standing",
-  "summary of the whole job and nobody reads them out. Set them once and",
-  "leave them unless the job itself changes.",
-  "",
-  "What you SEND is the answer, and reaches the voice as a RESULT line.",
-  "",
-  "Messages arrive labelled 'Message #n'. When yours is about a particular",
-  "one, START with that label — '#3: an octopus has three hearts…' — so the",
-  "voice can tell the customer which thread it is picking up. When it is",
-  "about nothing in particular, just say it. Labels go after 'NOW:' when you",
-  "use both.",
-  "",
-  "SEND A CHAT MESSAGE. That is the only channel that reaches the customer",
-  "— work in scripts all you like, but the words themselves have to be a",
-  "message. Everything you send will be read out loud, so write to be",
-  "spoken: two or three sentences of plain language, no lists, no URLs, no",
-  "code. Lead with the point.",
-].join("\n");
-/** One key for every brief, so the head brief can be found and compared. */
-const BRIEF_KEY = "voice-agent/voice-agent-brief";
+/** How long a note waits for the careful half. Generous: agent first turns
+ * are measured in tens of seconds, and nothing is blocked on it. */
+const NOTE_REPLY_DEADLINE_MS = 180_000;
 
-/** The brief as the context event that carries it. */
-const briefContext = (content: string) =>
-  ({
-    content,
-    key: BRIEF_KEY,
-    llmRequestPolicy: { behaviour: "dont-trigger-request" },
-    role: "system",
-  }) as const;
-/**
- * The brief's identity follows its CONTENT, so a changed brief installs and an
- * unchanged one deduplicates. That is what makes setup safe to re-run and what
- * makes a device gaining a capability reach the prompt without a second path
- * for "refresh".
- */
-const briefKey = (context: ReturnType<typeof briefContext>) =>
-  `voice-agent/brief:${contentHash(context)}`;
-
-export interface HeadGestureStep {
-  /** -128..128; 0 is forward (servo raw 460). */
-  yawDegrees: number;
-  /** 0..90; 0 is level (servo raw 620). */
-  pitchDegrees: number;
-  /** Milliseconds the servos are given for this move; the device caps it at 1000. */
-  speed: number;
-}
-
-/**
- * Nod and shake, as the servo moves they are actually made of.
- *
- * DELIBERATELY NOT FIRMWARE. There is no `servos.nod()` and there should not
- * be: the device exposes one primitive — `servos.move({yawDegrees, pitchDegrees,
- * speed})` — and a gesture is a sequence of those with the timing that makes it
- * read as a gesture. That timing is a thing to tune by watching a robot, which
- * is a thing to do here rather than behind a reflash.
- *
- * Every gesture starts and ends at home (yaw 0, pitch 0) because nothing else
- * in the firmware ever moves the head: this capability is the only caller of
- * `move_head`, so home is where the head is unless a gesture left it elsewhere.
- * Which way pitch leans is the board's own convention and both readings of it
- * are a nod.
- */
-export const HEAD_GESTURES = {
-  nod: [
-    { yawDegrees: 0, pitchDegrees: 24, speed: 260 },
-    { yawDegrees: 0, pitchDegrees: 0, speed: 260 },
-    { yawDegrees: 0, pitchDegrees: 24, speed: 260 },
-    { yawDegrees: 0, pitchDegrees: 0, speed: 260 },
-  ],
-  shake: [
-    { yawDegrees: -26, pitchDegrees: 0, speed: 240 },
-    { yawDegrees: 26, pitchDegrees: 0, speed: 240 },
-    { yawDegrees: -26, pitchDegrees: 0, speed: 240 },
-    { yawDegrees: 0, pitchDegrees: 0, speed: 240 },
-  ],
-} as const satisfies Record<string, readonly HeadGestureStep[]>;
-
-/**
- * Does a device's own mount `instructions` advertise this method?
- *
- * THE DEVICE'S WORD, NOT OURS. `instructions` is the one description of a board
- * that ever leaves it (`options.instructions` at the bottom of each
- * `*_device.c`, straight into `provideCapability`), it is what the prompt
- * already quotes, and it is written beside the dispatch table it describes. So
- * "does this board have servos" is asked of the board rather than answered from
- * a table of board names here, which would be wrong the first time somebody
- * added a servo to a board.
- *
- * Matches the method NAME followed by an open bracket, which is how every one
- * of them is written — `servos.move({yawDegrees,…})`, `health()`. The leading
- * guard stops `speaker.volume(` from satisfying a need for `volume(`.
- */
-export function advertisesMethod(instructions: string, method: string): boolean {
-  const escaped = method.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(?:^|[^\\w.])${escaped}\\s*\\(`).test(instructions);
-}
-
-/**
- * What a direct tool may do when the model calls it.
- *
- * EVERY VERB HERE RETURNS IMMEDIATELY. This is the realtime lane: a tool that
- * waits on a device call is a voice model saying nothing, and thirty seconds of
- * nothing is a dropped call as far as anyone listening can tell. The work is
- * handed to the call's own background lane and the tool answers the model in
- * the same tick.
- */
-export interface DirectToolCall {
-  /** Whatever the model sent, already parsed. Untrusted: a tool checks its own. */
-  args: Record<string, unknown>;
-  /** One method on the device this tool was derived from. Fire and forget. */
-  device(method: string, argument?: unknown): void;
-  /** A sequence of head moves, paced so each one finishes before the next. */
-  gesture(steps: readonly HeadGestureStep[]): void;
-  /** End the call once whatever is being said has finished PLAYING — see settleHangUp. */
-  hangUp(reason: string): void;
-}
-
-/** One direct tool, as the table declares it. */
-export interface DirectTool {
-  /** The name the model calls, and part of the prompt: read it out in your head. */
-  name: string;
-  /** What the model is told this is for. The only place that explains it. */
-  description: string;
-  /** JSON Schema for the arguments, as the provider's `tools` entry carries it. */
-  parameters: { properties: Record<string, unknown>; required?: string[]; type: "object" };
-  /**
-   * Device methods this tool cannot work without, exactly as the firmware
-   * advertises them. Empty means it needs no device at all.
-   */
-  needs: readonly string[];
-  /** Do it, and return the line handed back to the model as the tool's output. */
-  run(call: DirectToolCall): string;
-}
-
-/** The 11 held expressions `face_stage_apply_held_expression` takes, lowercased. */
-const FACE_EXPRESSIONS = [
-  "neutral",
-  "warm",
-  "joy",
-  "concern",
-  "surprise",
-  "thoughtful",
-  "skeptical",
-  "determined",
-  "sleepy",
-  "excited",
-  "embarrassed",
-] as const;
-
-/** THE TABLE. Everything a direct tool is, in one entry each. */
-export const DIRECT_TOOLS: readonly DirectTool[] = [
-  {
-    /*
-     * ONE WAY TO END A CALL, and this is not a second one. The bridge's own
-     * teardown appends `events.iterate.com/voice-agent/conversation-ended`, which
-     * is the same event the device appends when somebody touches the screen and
-     * the same one `endCall` appends — so hanging up here joins the existing
-     * lifecycle path rather than inventing a parallel one.
-     *
-     * `needs` is empty on purpose. Ending a call is a property of the CALL, not
-     * of the hardware: a bridge with no device mounted at all can still be hung
-     * up, and every board can be.
-     */
-    name: "hang_up",
-    description:
-      "End the call. Say your goodbye FIRST, in the same breath — this hangs up as soon as " +
-      "you stop speaking, and the person hears everything you said before it. Use it when " +
-      "they say goodbye, when the conversation is plainly finished, or when they ask you to " +
-      "hang up. Not to escape a question you would rather not answer.",
-    needs: [],
-    parameters: { properties: {}, type: "object" },
-    run: (call) => {
-      call.hangUp("the assistant hung up");
-      return "hanging up as soon as you stop talking — finish your goodbye, then say nothing more";
-    },
-  },
-  {
-    name: "nod",
-    description:
-      "Nod your head, physically. A real robot head moves. Use it the way a person nods: " +
-      "agreeing, saying yes, or showing you are listening while they talk. It makes no sound " +
-      "and does not interrupt you, so you can nod in the middle of a sentence.",
-    needs: ["servos.move"],
-    parameters: { properties: {}, type: "object" },
-    run: (call) => {
-      call.gesture(HEAD_GESTURES.nod);
-      return "nodding";
-    },
-  },
-  {
-    name: "shake_head",
-    description:
-      "Shake your head, physically. Use it the way a person does: disagreeing, saying no, or " +
-      "showing something is not right. It makes no sound and does not interrupt you.",
-    needs: ["servos.move"],
-    parameters: { properties: {}, type: "object" },
-    run: (call) => {
-      call.gesture(HEAD_GESTURES.shake);
-      return "shaking your head";
-    },
-  },
-  {
-    /*
-     * NO BOARD ADVERTISES `face.set(` TODAY, so nothing is offered this tool and
-     * that is the correct answer rather than a gap.
-     *
-     * The mechanism is all there in firmware and none of it is reachable:
-     * `face_stage_apply_held_expression` takes the eleven expressions below and
-     * its only caller is the doze animation, hardcoded to SLEEPY, so ten of them
-     * have never been seen. Its own header says the shape is "suitable for AI
-     * tool calls". What is missing is the RPC: a `face.set` method in the
-     * dispatch table, and the method named in that board's `instructions[]`.
-     * The day both exist, this entry lights up on every board that has them and
-     * on no board that does not, with no edit here.
-     */
-    name: "set_face",
-    description:
-      "Change the expression on your face. You have a face and people watch it, so let it " +
-      "follow what you are saying — warm when you greet someone, thoughtful while you work " +
-      "something out, concern when the news is bad. It makes no sound and does not interrupt " +
-      "you.",
-    needs: ["face.set"],
-    parameters: {
-      properties: {
-        expression: { enum: [...FACE_EXPRESSIONS], type: "string" },
+/** The tool itself, injected when the certificate says `colleague` — never
+ * part of `state.tools`, so no certificate can shadow or redefine it. */
+const NOTE_TO_SELF_TOOL: z.infer<typeof VoiceTool> = {
+  name: "note_to_self",
+  description:
+    "Write a note to your careful, thinking half — a slower you with tools, files and time. " +
+    "Use it for anything that needs looking up, working out, or doing properly. Keep talking " +
+    "after you send it; the answer arrives later as a bracketed note, out of order or not at " +
+    "all, and until it does you speak from what you already know.",
+  parameters: {
+    type: "object",
+    properties: {
+      note: {
+        type: "string",
+        description: "The note, in plain language: what you need and why.",
       },
-      required: ["expression"],
-      type: "object",
     },
-    run: (call) => {
-      const expression = String(call.args.expression ?? "");
-      if (!FACE_EXPRESSIONS.includes(expression as (typeof FACE_EXPRESSIONS)[number])) {
-        return `there is no expression called "${expression}"; the ones you have are ${FACE_EXPRESSIONS.join(", ")}`;
-      }
-      call.device("face.set", { expression });
-      return `your face is now ${expression}`;
-    },
+    required: ["note"],
   },
-];
-
-/** One live capability mount, as both the prompt and the tool table read it. */
-export interface LiveCapability {
-  /**
-   * The CLIENT this mount belongs to — an absolute stream path, e.g.
-   * `"/clients/stackchan"`.
-   *
-   * Devices connect with `projects.connect`, which makes each board its own
-   * capability-host scope rather than a name on the project root. Reaching one
-   * therefore takes the path, not just a dotted name: the invocation goes to
-   * `clients.get(clientPath)`, and `path` addresses the mount within it.
-   */
-  clientPath: string;
-  /** Mount path within that client's host — `["capabilities"]` for a connect. */
-  path: string[];
-  /** The device's own description of itself — see advertisesMethod. */
-  instructions: string;
-}
-
-/** Everything the project's live mounts add up to, or why they could not be read. */
-export interface ProvidedCapabilities {
-  live: LiveCapability[];
-  /** Set when `__describe` failed; `live` is then empty and nothing is claimed. */
-  error?: string;
-}
+};
 
 /**
- * A direct tool, bound to the mount that earned it.
- *
- * `mountPath` is null exactly when the tool needs no device (`needs: []`). When
- * two mounted devices both advertise what a tool needs, the FIRST wins: a call
- * runs on one stream with one device on it, and there is nothing in a
- * capability inventory that says which. A second board with servos would get a
- * nod tool aimed at the first, which is a reason to look here — not a reason to
- * offer the model two tools called `nod`.
+ * What the fast half is told about the arrangement. Adapted from v1's three
+ * load-bearing paragraphs: without the keep-talking instruction a voice
+ * model handed an asynchronous tool goes silent waiting, which sounds
+ * exactly like a dropped call; without the colleague framing it treats the
+ * first note that arrives as the answer to whatever it asked last; and
+ * without being told it is not the judge of its own limits, it declines.
  */
-export interface DerivedTool {
-  tool: DirectTool;
-  mountPath: string[] | null;
-  /** The client scope `mountPath` lives in; null exactly when `mountPath` is. */
-  clientPath: string | null;
-}
+const FAST_HALF_INSTRUCTIONS = [
+  "You are the fast half of one assistant: a mouth and ears with quick judgement. Your",
+  "careful half — the same assistant, thinking properly, with tools and time — is reached",
+  "through note_to_self. Anything that needs looking up, working out, remembering, or doing",
+  "properly: send a note, say you are on it, and keep the conversation going. Never go",
+  "silent waiting for a reply, and never refuse a request because a voice cannot do it —",
+  "your careful half usually can, so the honest answer is 'let me look into that', plus a note.",
+  "",
+  "Notes come back as bracketed messages, late, out of order, or not at all. They are your",
+  "own thoughts arriving, so present them as your own — never mention notes, halves, or",
+  "colleagues to the person. If a reply contradicts something you already said, correct",
+  "yourself plainly.",
+].join("\n");
 
 /**
- * Which direct tools this project's live mounts earn, and what each acts on.
- *
- * Pure, exported and separate from the call path, because "a board with no
- * servos must never be offered a nod" is the whole design and is exactly the
- * kind of claim that is true until somebody edits the table.
+ * What the careful half is told at birth, as a system context item under a
+ * stable key. Trimmed from v1's BACK_OFFICE_BRIEF: the activity narration
+ * and the speechPolicy plumbing are gone because v0's only return lane is
+ * the chat reply, which is exactly what `ask()` resolves with.
  */
-export function directToolsFor(provided: ProvidedCapabilities): DerivedTool[] {
-  const derived: DerivedTool[] = [];
-  for (const tool of DIRECT_TOOLS) {
-    if (tool.needs.length === 0) {
-      derived.push({ tool, mountPath: null, clientPath: null });
-      continue;
-    }
-    const mount = provided.live.find((entry) =>
-      tool.needs.every((method) => advertisesMethod(entry.instructions, method)),
-    );
-    if (mount !== undefined) {
-      derived.push({ tool, mountPath: mount.path, clientPath: mount.clientPath });
-    }
-  }
-  return derived;
-}
-
-/** The derived tools as the provider's `session.update` carries them. */
-export function directToolDefinitions(derived: readonly DerivedTool[]) {
-  return derived.map(({ tool }) => ({
-    description: tool.description,
-    name: tool.name,
-    parameters: tool.parameters,
-    type: "function" as const,
-  }));
-}
-
-/** One speaker frame is 640 bytes of PCM16 at 16 kHz. */
-const SPK_FRAME_MS = 20;
-/**
- * The most a hang-up will ever wait for audio to finish.
- *
- * The device's playout ring holds thirty seconds, so nothing it is still
- * holding can be older than that — and a wait computed longer than this is
- * arithmetic that has gone wrong, not a very long goodbye.
- */
-const MAX_PLAYOUT_WAIT_MS = 30_000;
-/**
- * How long a hang-up waits for the floor before it happens anyway.
- *
- * A hang-up that waits forever is the failure this bound exists to stop. The
- * settle is a POLL rather than a callback for the same reason: four separate
- * places set `responseActive = false` — response.done, an interrupting line
- * taking the floor, a barge-in cancel, a turn commit — and only one of them
- * ever called the settle, so a hang-up that came free on any of the other
- * three sat pending for the rest of the call. Measured on the StackChan: the
- * tool fired, the model said "Goodbye!", the call stayed up.
- */
-const HANG_UP_DEADLINE_MS = 15_000;
+const COLLEAGUE_BRIEF = [
+  "You are the careful, thinking half of ONE assistant. The other half is a voice talking",
+  "to a person out loud, and your chat replies here are read back to it mid-conversation",
+  "and spoken as its own words. You are not a separate person, and the person must never",
+  "learn otherwise: write in the assistant's own first person — 'I checked the calendar and",
+  "Thursday is free' — never 'tell them that…', never anything that implies a second party.",
+  "",
+  "Notes arrive from the voice as messages. Reply when you have something worth saying: an",
+  "answer, a partial answer while you keep working, a correction, or a question back.",
+  "A slow careful reply beats a fast wrong one, and silence is always an option.",
+  "",
+  "Everything you send will be READ OUT LOUD, so write to be spoken: two or three",
+  "sentences of plain language, no lists, no URLs, no code. Lead with the point. Work with",
+  "your tools as much as you like — but the words that reach the person are only ever your",
+  "chat reply.",
+].join("\n");
 
 /**
- * Whether a hang-up the model asked for should be acted on now.
+ * How many microphone frames may be held while Grok completes its handshake.
  *
- * Two ways to become due, and the second is what makes this safe: the floor is
- * free (the goodbye has been generated, so all that is left is playing it), or
- * the deadline has passed and the call ends regardless of what any flag says.
- * "The assistant said it was hanging up and the call stayed open" is worse than
- * a goodbye clipped by a second.
+ * Bounded because a handshake that never finishes must not grow a queue without
+ * limit. The NEWEST frames are refused once it is full, not the oldest: the
+ * start of what somebody said is what makes the rest of it intelligible, and a
+ * handshake this slow has already lost the turn either way.
  */
-export function hangUpIsDue(
-  pending: { askedAtMs: number } | null,
-  floorBusy: boolean,
-  nowMs: number,
-): boolean {
-  if (pending === null) return false;
-  if (nowMs - pending.askedAtMs >= HANG_UP_DEADLINE_MS) return true;
-  return !floorBusy;
-}
-
-/**
- * How much of the answer the device has still to play, in milliseconds.
- *
- * HANGING UP IS DESTRUCTIVE, and this is what stops it cutting a goodbye in
- * half. `conversation-ended` reaching a device calls `abandon_speaker_audio()`
- * — its own comment: "a call that ends mid-answer would otherwise play the dead
- * conversation out" — so everything still in the ring is thrown away. And the
- * ring is usually full: frames leave this bridge as fast as the wire takes them
- * while the device plays them at realtime (see THE SERVER DOES NOT PACE), so at
- * the moment `response.done` arrives the device may be holding almost the whole
- * answer.
- *
- * The bound is computable rather than guessed: an answer is `frames` × 20ms of
- * speech, it started playing no earlier than its first frame went out, so what
- * is left is the difference. Never negative, never past the size of the ring.
- */
-export function playoutRemainingMs(
-  answer: { frames: number; firstFrameAtMs: number },
-  nowMs: number,
-): number {
-  if (answer.frames <= 0 || answer.firstFrameAtMs <= 0) return 0;
-  const spoken = nowMs - answer.firstFrameAtMs;
-  const total = answer.frames * SPK_FRAME_MS;
-  return Math.max(0, Math.min(MAX_PLAYOUT_WAIT_MS, total - spoken));
-}
-
-/**
- * Every live capability this project provides, as the model should be told
- * about it — read from the capabilities themselves.
- *
- * ONE SOURCE, DELIBERATELY. The alternative is a description of the device
- * written here in TypeScript beside the real one written in the firmware, and
- * two copies of a list of methods drift the first time somebody adds one. The
- * device already advertises what it can do (its mount `instructions`), so the
- * prompt quotes that rather than restating it. A method that does not exist
- * therefore cannot be mentioned, and one that is added arrives on the next
- * setup without anybody editing this file.
- */
-export function capabilityBrief(provided: ProvidedCapabilities): string {
-  if (provided.error !== undefined) {
-    return `The device description could not be read (${provided.error}). Do not guess at what hardware can do.`;
-  }
-  /*
-   * WHAT THE VOICE CAN ALREADY DO WITHOUT YOU.
-   *
-   * The thinking half is the one that decides whether something is possible, so
-   * it has to know the short list of things the voice does NOT need it for —
-   * otherwise it plans a way to hang up a call the voice can simply hang up.
-   * Names only: the full descriptions are written at the voice, in the second
-   * person, and read as nonsense addressed to anybody else. Derived from the
-   * same table as the tools themselves, so the two halves cannot come to
-   * disagree about which is which.
-   */
-  const itself = [
-    "",
-    "## What the voice half can already do on its own",
-    "",
-    `It does these itself, this instant, without asking you: ${directToolsFor(provided)
-      .map(({ tool }) => tool.name)
-      .join(", ")}. Never plan a way to do one of them for it, and never say`,
-    "one of them cannot be done.",
-  ].join("\n");
-  if (provided.live.length === 0) {
-    return [
-      "No device is mounted on this project right now. Do not claim to have",
-      "read anything from one; say it is not connected.",
-      itself,
-    ].join("\n");
-  }
-  return [
-    provided.live
-      .map((entry) =>
-        [
-          `Capability \`itx.clients.get("${entry.clientPath}").${entry.path.join(".")}\` — call it with dotted paths.`,
-          entry.instructions,
-        ].join("\n"),
-      )
-      .join("\n\n"),
-    itself,
-  ].join("\n");
-}
-
-/**
- * Read the project's live device mounts. Never throws: an honest gap beats a
- * wrong claim.
- *
- * DEVICES ARE CLIENTS, so this walks `clients.list()` and describes each
- * connected scope rather than reading the project root. A board used to mount
- * itself at a root name (`kit.stackchan`) and appear in the root's own
- * `__describe`; it now connects with `projects.connect`, which gives it a
- * capability-host scope of its own. The root describes nothing about it, so a
- * root read here would silently report a project with no devices — every tool
- * withdrawn, the model quietly unable to move a servo, and no error anywhere.
- *
- * Disconnected clients are skipped: presence is last-known but honest, and
- * offering a tool for a board that is not on the network buys a timeout
- * instead of a gesture.
- */
-async function readProvidedCapabilities(
-  project: Awaited<IterateWorkerEntrypoint["itx"]>,
-): Promise<ProvidedCapabilities> {
-  try {
-    const clients = await project.clients.list();
-    const connected = clients.filter((client) => client.connected);
-    const described = await Promise.all(
-      connected.map(async (client) => {
-        let description:
-          | Awaited<ReturnType<ReturnType<typeof project.clients.get>["__describe"]>>
-          | undefined;
-        try {
-          description = await project.clients.get(client.path).__describe();
-          return (description.capabilities ?? [])
-            .filter(
-              (entry) => entry.type === "live" && (entry.instructions ?? "").trim().length > 0,
-            )
-            .map((entry) => ({
-              clientPath: client.path,
-              path: entry.path ?? [],
-              instructions: entry.instructions ?? "",
-            }));
-        } catch {
-          /* One unreachable board must not blind the agent to the others. */
-          return [];
-        } finally {
-          disposeRpcStub(description, `client ${client.path} description result`);
-        }
-      }),
-    );
-    return { live: described.flat() };
-  } catch (error) {
-    return { live: [], error: String(error) };
-  }
-}
-
-/**
- * The back office exists, and knows what it is for.
- *
- * Called from setup AND from the call path, because a call can perfectly well
- * start without setup ever having run: a direct `startCall`, a `mode=bridge`
- * host, a project somebody configured by hand. Appending to an agent that is
- * not there fails quietly down in the call path while `handleToolCall` goes on
- * telling the model "the back office will reply when it has something" — so
- * the assistant keeps promising a colleague that never answers.
- */
-/**
- * Which brief is current, as a fact the processor is TOLD rather than one it
- * goes looking for.
- *
- * Every readable design failed on the same rock: filtered stream reads only go
- * forward (`StreamEventReadInput` has `afterOffset`, `beforeOffset`, `limit` —
- * no reverse order), so "the newest matching event" is the LAST page, and every
- * attempt to find it cheaply was a guess about how far back to look.
- *
- *  1. `getEvents({eventTypes, limit: 500})` reads from offset ZERO and returned
- *     the first brief ever installed, while its comment claimed to compare the
- *     head.
- *  2. A bounded tail (`head - 10_000`) worked until the brief fell out of the
- *     window: two full sessions of audio frames move the head about that far,
- *     and session 3 of a ten-session run failed with "no brief is at the head"
- *     seconds after refreshing one.
- *  3. Paging the filter to the end is exact, but it still scans history that is
- *     overwhelmingly audio, and its page cap is one more arbitrary number.
- *
- * So setup states the answer instead. Each setup appends the brief under a
- * per-setup identity and then a marker naming it; the marker is a type the
- * processor's subscription carries, so the processor learns which brief is
- * current through the same filtered delivery a `conversation-requested` arrives on, and
- * folds it into state. No history is read by anyone.
- */
-const BRIEF_MARKER_TYPE = "events.iterate.com/voice-agent/brief-current";
-
-/** The brief setup installed, and the setup that installed it. */
-export interface BriefMarker {
-  /** Unique per setup: what makes "the current brief" a checkable identity. */
-  setupId: string;
-  /** The idempotencyKey of the context event carrying the brief text. */
-  briefKey: string;
-  /** Of the brief text, so a changed prompt is visible without reading it. */
-  contentHash: string;
-}
-
-/**
- * The marker an event carries, or null.
- *
- * Pure, exported and separate from `reduce` so the folding rule can be tested
- * against a history with tens of thousands of audio events between markers —
- * the shape that broke all three reading designs.
- */
-export function briefMarkerFromEvent(event: {
-  type: string;
-  payload?: unknown;
-}): BriefMarker | null {
-  if (event.type !== BRIEF_MARKER_TYPE) return null;
-  const payload = event.payload as Partial<BriefMarker> | null;
-  if (
-    typeof payload?.setupId !== "string" ||
-    typeof payload.briefKey !== "string" ||
-    typeof payload.contentHash !== "string" ||
-    payload.setupId.length === 0 ||
-    payload.briefKey.length === 0
-  ) {
-    return null;
-  }
-  return {
-    setupId: payload.setupId,
-    briefKey: payload.briefKey,
-    contentHash: payload.contentHash,
-  };
-}
-
-/** One `events.iterate.com/voice-agent/viseme` outbound event, ready for the append lane. */
-export interface VisemeAppendEvent {
-  type: "events.iterate.com/voice-agent/viseme";
-  ephemeral: true;
-  payload: {
-    /** The call whose mouth this drives. */
-    conversationId: string;
-    /** Which answer the offset is relative to — the spk-frame `answer`. */
-    answer: number;
-    /** 16 kHz samples from the answer's first sample. */
-    playoutSamples: number;
-    /** Firmware viseme id 0-14; 14 (SIL) closes the mouth. */
-    viseme: number;
-    /** Classification confidence 0-255; 0 for SIL. */
-    confidence: number;
-  };
-}
-
-/**
- * The per-call seam between speaker audio and the device's mouth: the same
- * whole 20 ms frames `appendSpkPcm` ships (their PCM16, before the mu-law
- * encode) go in, and the sparse `events.iterate.com/voice-agent/viseme` events to append come
- * out, already shaped for the outbound lane. Exported, and separate from the
- * lane itself, so the emission rule can be tested with literal expectations.
- *
- * `end` closes the current answer's track — the mouth always closes with SIL
- * — and `reset` starts the next one, offsets back at zero. Audio arriving
- * after `end` for the same answer is dropped rather than reopening a closed
- * mouth; the next `reset` starts a fresh track.
- */
-export function createVisemeEmitter(conversationId: string) {
-  const tracker = createVisemeTracker();
-  let ended = false;
-  const shape = (event: VisemeChangeEvent, answer: number): VisemeAppendEvent => ({
-    type: "events.iterate.com/voice-agent/viseme",
-    ephemeral: true,
-    payload: {
-      conversationId,
-      answer,
-      playoutSamples: event.playoutSamples,
-      viseme: event.viseme,
-      confidence: event.confidence,
-    },
-  });
-  return {
-    /** Consumes an answer PCM16 chunk; returns the events to append after it. */
-    push(pcm: Int16Array, answer: number): VisemeAppendEvent[] {
-      if (ended) return [];
-      return tracker.push(pcm).map((event) => shape(event, answer));
-    },
-    /** Ends the answer; returns the closing SIL to append when one is due. */
-    end(answer: number): VisemeAppendEvent[] {
-      if (ended) return [];
-      ended = true;
-      const closing = tracker.end();
-      return closing === undefined ? [] : [shape(closing, answer)];
-    },
-    /** Starts the next answer: track and playout clock back to zero. */
-    reset(): void {
-      tracker.reset();
-      ended = false;
-    },
-  };
-}
-
-async function ensureVoiceAgent(
-  agent: Agent,
-  capabilityBrief: string,
-  /** This setup's identity, which becomes part of the brief's own identity. */
-  setupId: string,
-) {
-  const context = briefContext(
-    [
-      BACK_OFFICE_BRIEF,
-      "",
-      "## The hardware you are speaking through",
-      "",
-      /*
-       * This stream is append-only, so an earlier description of the hardware is
-       * still sitting in the context above. Saying which one wins is cheaper and
-       * more reliable than hoping the model prefers the later text — and a
-       * device that GAINS or LOSES a method between setups is the ordinary case,
-       * not an exception.
-       */
-      "This section replaces any earlier description of this device in this",
-      "conversation. If an earlier one lists a method that is not named here,",
-      "that method no longer exists — do not call it.",
-      "",
-      capabilityBrief,
-    ].join("\n"),
-  );
-  try {
-    // Nothing may be appended to the agent's stream before the agent exists.
-    await discardRpcResult(agent.create({}), "agent create result");
-  } catch {
-    /* Already born: create over an existing agent is loud, not fatal. */
-  }
-  /*
-   * A FRESH OCCURRENCE EVERY SETUP, AND NOTHING READ TO DECIDE IT.
-   *
-   * The key used to be a hash of the content alone, which deduplicates against
-   * ANY brief already on the stream — so a prompt that changed and then changed
-   * BACK did not reinstall, and the newest system context the model saw stayed
-   * the intermediate one. Measured: a diagnostic-only tool was removed from the
-   * device, setup reported "already there", and the newest brief still told the
-   * model the tool existed. Suffixing the key with the previous brief's offset
-   * fixed that but required FINDING the previous brief, which is the read that
-   * cannot be done cheaply or exactly (see BRIEF_MARKER_TYPE).
-   *
-   * So each setup writes its own occurrence, unconditionally. The platform's
-   * agent reducer is built for exactly this: a keyed system item is replaced in
-   * place by an update with the same `key`, and compaction keeps the latest
-   * occurrence per key. `payload.key` stays BRIEF_KEY — the slot — while the
-   * idempotencyKey carries this setup's identity, so the newest brief is always
-   * the one this setup just installed and never a survivor of an older one.
-   */
-  const installed = await agent.append({
-    type: "events.iterate.com/agents/context-added",
-    idempotencyKey: `${briefKey(context)}:setup:${setupId}`,
-    payload: context,
-  });
-  return installed;
-}
+const MAX_HELD_MIC_FRAMES = 500;
 
 /*
- * LOOSE, DELIBERATELY — the same doctrine the conversationId filter is built on: the
- * peers are not all in this repository.
+ * WHO TAKES THE TURNS was a hardcoded list of board names, and it is now a
+ * setting on the stream that defaults to Grok.
  *
- * A strict object rejects the whole event for one field nobody here has heard
- * of, and the failure is total and silent: the event is skipped, no call
- * happens, and nothing says why. Firmware stamping a build id, a script
- * carrying its own correlation field, a future field added on the device
- * before it is added here — every one of those is a dropped call. The fields
- * this bridge acts on are still validated; the rest ride along untouched.
+ * The list held all three boards this lab owns, which is the tell: "the
+ * microphone rides the call open and server VAD segments it" was never the
+ * exception, it was every client, and push-to-talk is the special case. As a
+ * list it also failed in the worst available way — a client whose name was not
+ * in it got `turn_detection: null`, so Grok waited for a commit that an
+ * open-mic client never sends, and the call sat there perfectly healthy and
+ * completely silent with nothing logged anywhere. That cost a full unattended
+ * run against real Grok to find, and the fix is not a longer list: it is that
+ * the question has an answer the client knows and the server cannot guess.
+ *
+ * See `clientTakesTurns` on the birth certificate.
  */
 
-/*
- * `mulawToPcm16` — the uplink DECODER — was here, and only the encoder below
- * survives: the device's spk lane still ships mu-law, but nothing mu-law
- * arrives any more (the mic lane's read is gone; see the PCM16-always note at
- * the decode site). `git log` has it intact if a compressed uplink returns.
- */
+/* ========================================================================== */
+/* AUDIO                                                                      */
+/* ========================================================================== */
+/* Base64 is handled here; RATE CONVERSION is not — see pcm.ts, which holds
+ * the one real transcode in this pipeline and the story of why its linear
+ * predecessor was the audible difference between OpenAI here and OpenAI's
+ * own app. */
 
 /**
- * PCM16 to G.711 mu-law. Shared, because the facet and the retiring bridge both
- * encode the downlink and two copies of this would be two subtly different
- * voices.
+ * PCM16 to G.711 mu-law.
  *
- * Halving the bytes is what lets a microcontroller RECEIVE speech at all: the
- * device was measured taking 9-31 frames a second against the 50 realtime
- * needs, and concealing the shortfall. ~950 bytes per 20 ms becomes ~520.
+ * Halving the bytes is what lets a microcontroller receive speech at all: the
+ * board was measured taking 9-31 frames a second against the 50 that realtime
+ * needs, and concealing the shortfall as clipped words.
  */
-function encodeMulawFromPcm16(pcm: Uint8Array): Uint8Array {
-  const BIAS = 0x84;
-  const CLIP = 32635;
-  const samples = pcm.length >> 1;
-  const out = new Uint8Array(samples);
-  for (let index = 0; index < samples; index++) {
-    let sample = ((pcm[index * 2]! | (pcm[index * 2 + 1]! << 8)) << 16) >> 16;
-    const sign = sample < 0 ? 0x80 : 0;
-    if (sample < 0) sample = -sample;
-    if (sample > CLIP) sample = CLIP;
-    sample += BIAS;
-    let exponent = 7;
-    for (let mask = 0x4000; (sample & mask) === 0 && exponent > 0; exponent--) {
-      mask >>= 1;
-    }
-    const mantissa = (sample >> (exponent + 3)) & 0x0f;
-    out[index] = ~(sign | (exponent << 4) | mantissa) & 0xff;
-  }
-  return out;
-}
+/*
+ * THE TWO MU-LAW CODECS WERE HERE, AND WHY THEY MIGHT COME BACK.
+ *
+ * One codec on the wire instead of two. The pair of them cost this file two
+ * entirely silent calls against the real provider — the device sent mu-law,
+ * this end read it as PCM16, and Grok heard broadband noise at half the
+ * intended duration, found no speech, and answered nothing. No error anywhere.
+ * A transcode that both ends have to agree about is a thing both ends can be
+ * wrong about, and the unit tests could not help because the fake device in
+ * them was written by whoever was already confused.
+ *
+ * What it bought was real and is not visible from here: on an ESP32 over
+ * Wi-Fi, base64 PCM16 once stalled the TCP flow outright, and the downlink
+ * delivered 9-31 frames a second against the 50 that realtime needs. Both
+ * numbers were measured on boards, and no run from a Mac on a wired network
+ * can reproduce either. If a board goes quiet or starts concealing, this is
+ * the first thing to put back; `git log` has both functions intact.
+ */
 
+/** Bytes to base64, chunked so a long answer cannot blow the argument list. */
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = "";
   const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  for (let index = 0; index < bytes.length; index += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunk));
   }
   return btoa(binary);
 }
 
+/** Base64 back to bytes. */
+function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
 /**
- * A short stable fingerprint of a payload, for deriving idempotency keys FROM
- * WHAT IS BEING APPENDED rather than from a number somebody has to remember to
- * bump.
- *
- * An append whose key matches an existing event but whose payload does not
- * THROWS, naming an offset rather than a cause. So a hand-versioned key turns
- * every future edit to a payload into a setup that fails for every stream
- * already configured — and for the project-global back-office brief, one
- * unbumped edit would brick setup for every stream in the project at once.
- * Content-derived, an unchanged payload keeps its key and deduplicates, and a
- * changed one gets a new key and commits.
- *
- * FNV-1a over the serialised payload. Deterministic and dependency-free is the
- * whole requirement: this is not a security boundary, it is a way of noticing
- * that two payloads differ.
+ * Decoded byte length of a base64 string, WITHOUT decoding it — how the
+ * identity paths (a 16 kHz provider feeding a 16 kHz pipeline) do all their
+ * byte arithmetic on audio they never decode. Also what puts `deltaBytes`
+ * on the mirror lane: the field says bytes and it means the audio's bytes,
+ * not the base64 string's length, which is a third longer.
  */
+function base64ByteLength(base64: string): number {
+  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+  return Math.floor(base64.length / 4) * 3 - padding;
+}
+
+/* ========================================================================== */
+/* CONTRACT                                                                   */
+/* ========================================================================== */
+
+/**
+ * One step of an itx expression — the platform's persisted-capability shape
+ * (apps/os/src/itx/expression.ts): a string is a property read, [method,
+ * ...args] is a call. The SDK exports the TYPE (ItxExpressionStep) but not
+ * the schema, so the contract mirrors it, reserved-name guard included.
+ */
+const ItxExpressionStep = z
+  .union([z.string(), z.tuple([z.string()], z.unknown())])
+  .refine(
+    (step) =>
+      !["__proto__", "constructor", "prototype"].includes(
+        typeof step === "string" ? step : step[0],
+      ),
+    { message: "itx expressions cannot use reserved property names" },
+  );
+
+/**
+ * One tool the model may call, as data on the birth certificate.
+ *
+ * `expression` is a walk from the PROJECT ROOT to a function; the model's
+ * parsed arguments object is that function's single argument. Persisting an
+ * expression persists the NAME of a capability, never its authority — every
+ * call re-derives authority from a fresh project session. A tool with NO
+ * expression is a name this agent already knows how to be: `hang_up` is the
+ * only one, and it is one atomic append of conversation-end-requested, no
+ * itx involved. The base case, not a registry — the way "grok" is one row
+ * of PROVIDERS rather than a Provider subclass.
+ */
+const VoiceTool = z
+  .strictObject({
+    name: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/),
+    /** What the provider shows the model; usage guidance lives here, not in
+     * `instructions` — "say goodbye BEFORE calling this" rides the tool. */
+    description: z.string(),
+    /** JSON Schema for the arguments, handed to the provider verbatim.
+     * Absent means a no-argument tool. */
+    parameters: z.looseObject({}).optional(),
+    expression: z.array(ItxExpressionStep).min(1).optional(),
+  })
+  .refine((tool) => tool.expression !== undefined || tool.name === "hang_up", {
+    message: 'a tool with no expression must be a name this agent knows; today that is "hang_up"',
+  });
+
+/**
+ * Everything that outlives the Durable Object holding the socket.
+ *
+ * Note what is NOT here: no queues, no byte counts, no "is speaking" flag.
+ * Reduced state that depends on a buffer no restart can replay is a lie, and
+ * every derived number kept beside its source is a chance for the two to
+ * disagree.
+ */
+const VoiceState = z.object({
+  /** Dial this instead of x.ai. Test seam; carries no credential. */
+  providerBaseUrl: z.string().nullable().default(null),
+  /** Which realtime voice provider this stream's calls dial. */
+  provider: z.enum(["grok", "openai"]).default("grok"),
+  /** Model and voice overrides; null takes the provider's default. */
+  providerModel: z.string().nullable().default(null),
+  providerVoice: z.string().nullable().default(null),
+  /** What the model is told it is. Empty means Grok's own default. */
+  instructions: z.string().default(""),
+  /**
+   * The call, as an obligation rather than a closure.
+   *
+   * A socket dies with its incarnation; this does not. `call-started` opens it,
+   * `conversation-ended` closes it, and the caught-up pass re-dials anything
+   * still open — which is what makes an eviction mid-call recoverable without
+   * anyone having to notice it happened.
+   */
+  /**
+   * The client segments its own turns with the push-to-talk verbs.
+   *
+   * FALSE MEANS GROK LISTENS, which is the right default: every board this lab
+   * has holds its microphone open for the whole call, and full duplex with
+   * server-side VAD is the behaviour being built towards. A client that really
+   * does own its turns — a terminal where somebody holds the space bar — says
+   * so at setup, and then `ptt-end` is what commits the buffer.
+   *
+   * On the stream rather than on the call because it is a fact about the
+   * client that outlives any one conversation, and because a call opened by
+   * the recovery path has no event to read it from.
+   */
+  clientTakesTurns: z.boolean().default(false),
+  /**
+   * The provider's own `turn_detection` object, VERBATIM, for open-mic
+   * streams that want their VAD tuned per stream — a quieter room wants a
+   * lower threshold, a deliberate speaker a longer silence, the OpenAI-app
+   * feel wants `semantic_vad`. Loose and provider-shaped on purpose: the
+   * knobs are the provider's vocabulary (`threshold`,
+   * `silence_duration_ms`, `eagerness`, …), they differ per dialect, and a
+   * certificate that re-modelled them would gatekeep every new one. Null
+   * takes this file's measured default (SERVER_VAD plus the openai pins).
+   * Ignored entirely under `clientTakesTurns` — a button owns its turns
+   * and the session gets `turn_detection: null` regardless.
+   */
+  turnDetection: z.looseObject({ type: z.string() }).nullable().default(null),
+  /**
+   * Classify the answer's audio into mouth shapes and publish the newest one
+   * in the runtime bag, where a face-rendering board's 10 Hz poll reads it.
+   * Certificate data because it is a fact about the CLIENT (does anything
+   * render a mouth?), and because on a 16 kHz-native provider the classifier
+   * costs the one delta decode the identity path otherwise never pays.
+   */
+  visemes: z.boolean().default(false),
+  /**
+   * Thinking, fast and slow. The voice model is a mouth, a pair of ears and
+   * about 200ms of judgement; with this on it gets a `note_to_self` tool
+   * that writes to the careful half — a full LLM agent minted on its own
+   * fresh `/agents/voice-notes/<conversationId>` stream, one per
+   * conversation, whose chat replies are read back into the call as
+   * bracketed notes. The v1 back-office framing, on v2 plumbing.
+   */
+  colleague: z.boolean().default(false),
+  /** Tools the model may call — see {@link VoiceTool}. */
+  tools: z.array(VoiceTool).default([]),
+  call: z
+    .object({
+      conversationId: z.string(),
+      /**
+       * When the Stream DO committed the device's most recent input — a mic
+       * frame or a button edge.
+       *
+       * THE DEVICE'S INPUT, not "the last thing anybody said": the agent's own
+       * speech leaves no durable event, so this cannot see it and must not
+       * claim to. It is the floor under the idle deadline, and it is on the
+       * STREAM clock because that is the only clock every incarnation shares.
+       */
+      lastDeviceInputAtStreamMs: z.number(),
+      /** Decided, not yet done: nothing re-dials a call with this set. */
+      endRequested: z.strictObject({ reason: z.string() }).nullable(),
+    })
+    .nullable()
+    .default(null),
+});
+
+const EPH = { ephemeral: true as const };
+
+export const VoiceAgentContract = defineProcessorContract({
+  /* THE SAME SLUG AS THE FIRST CUT, because the slug IS the contract selector:
+   * the live subscription is named for it, and the device speaks these event
+   * names already. A new slug would have meant re-provisioning every board to
+   * say the same three verbs down a differently-named pipe. */
+  slug: "voice-agent",
+  /* 3.0.0: the fold is renamed and extended almost throughout —
+   * `birthCertificate: { providerBaseUrl }` flattened, `lastHeardAtMs` renamed
+   * now that it says whose input it records and on which clock, plus a client
+   * on the call and a flush watermark under it. The watermark is the first
+   * durable speaker state this processor has ever had; the first cut's speaker
+   * lived entirely in memory and died with every incarnation, which is why a
+   * revived one could replay an answer the listener had already talked over.
+   * A persisted 2.x fold is missing or misnaming most of this, so bumping the
+   * major is how the runner is told to re-reduce rather than load it. */
+  /* 4.0.0: the provider abstraction finished what it started — the fold's
+   * `grokBaseUrl`/`grokInstructions` became `providerBaseUrl`/`instructions`
+   * and the speaker frame's `fromGrokAudioDeltaSeq` became
+   * `fromProviderDeltaSeq`, because half the streams this serves no longer
+   * dial Grok. A persisted 3.x fold misnames those; the major bump re-reduces
+   * instead of loading it. Clean break, no aliases. */
+  /* 5.0.0: the birth certificate carries `tools` — itx expressions the model
+   * may call, plus the well-known hang_up. Clean break like every bump before
+   * it: the major re-reduces any persisted older fold. */
+  /* 6.0.0: the mutable birth certificate splits. `created` becomes
+   * existence-only under a stable per-stream key — a second birth is
+   * corruption, not an update — and the whole provider configuration moves to
+   * a new `configured` event under the content-hash+setupId key `created`
+   * used to wear. Config-after-birth is an ordinary event now, which is what
+   * the explicit-birth doctrine always said it was. The major re-reduces any
+   * persisted older fold; old streams re-fold their historical `created`
+   * payloads into nothing (existence) and are reconfigured by the next
+   * setup run. */
+  /* 7.0.0: the certificate can carry the provider's own `turn_detection`
+   * object verbatim (`turnDetection`), so open-mic VAD is tuned per stream
+   * instead of per deploy. Clean break as ever. */
+  /* 8.0.0: the face returns — `visemes` on the certificate classifies the
+   * answer's audio into mouth shapes and publishes the newest in the
+   * runtime bag, where the boards' existing 10 Hz poll has been reading
+   * nothing since v1. */
+  /* 9.0.0: thinking fast and slow returns — `colleague` on the certificate
+   * arms `note_to_self`, which mints a fresh agent stream per conversation
+   * and reads its chat replies back into the call. Clean break as ever. */
+  version: "9.0.0",
+  description: "Runs a voice call in the stream's own Durable Object, one flush watermark deep.",
+  stateSchema: VoiceState,
+  events: {
+    "events.iterate.com/voice-agent/created": {
+      description:
+        "The voice agent exists on this stream. Existence and nothing else — appended once, " +
+        "under a stable key; configuration rides `configured`.",
+      payloadSchema: z.strictObject({}),
+    },
+    "events.iterate.com/voice-agent/configured": {
+      description:
+        "The agent's whole provider configuration, REPLACED WHOLESALE: an absent field means " +
+        "its default, never 'keep the old value'. Appended by every setup run whose content " +
+        "differs.",
+      payloadSchema: z.strictObject({
+        providerBaseUrl: z.string().optional(),
+        provider: z.enum(["grok", "openai"]).optional(),
+        providerModel: z.string().optional(),
+        providerVoice: z.string().optional(),
+        instructions: z.string().optional(),
+        clientTakesTurns: z.boolean().optional(),
+        turnDetection: z.looseObject({ type: z.string() }).optional(),
+        visemes: z.boolean().optional(),
+        colleague: z.boolean().optional(),
+        tools: z.array(VoiceTool).optional(),
+      }),
+    },
+    /*
+     * THE DEVICE'S HALF, and it is three verbs: the button went down, here is
+     * audio, the button came up. Whether a call exists, what it is called and
+     * when it ends are the server's, because the server is the only side that
+     * can know them.
+     */
+    "events.iterate.com/voice-agent/ptt-start": {
+      description: "The user began speaking. Opens a call if one is not already up.",
+      ...EPH,
+      payloadSchema: z.looseObject({}),
+    },
+    "events.iterate.com/voice-agent/mic-frame": {
+      description: "One capture frame, numbered by the device that captured it.",
+      ...EPH,
+      payloadSchema: z.looseObject({
+        /** 16 kHz mono PCM16, base64. The only encoding this lane carries.
+         * The loose object is deliberate: devices decorate frames with their
+         * own counters and clocks, and the facet reads none of it. */
+        pcm: z.string(),
+      }),
+    },
+    "events.iterate.com/voice-agent/ptt-end": {
+      description: "The user stopped speaking; the turn is complete.",
+      ...EPH,
+      payloadSchema: z.looseObject({}),
+    },
+    /* There was briefly a `keepalive` event here — a client-appended no-op
+     * whose delivery reset the stream's five-second idle teardown, because
+     * the teardown fired in every between-turn gap and charged its
+     * resurrection to every press. It measured what it needed to measure
+     * (uplink lateness p90 188ms -> 38ms) and then died: the platform now
+     * holds delivery lanes open on its own while a facet has work in flight,
+     * which it can see from the facet keepalive's alarm desire. A contract
+     * should never need to say "I am still here" — the platform knows. */
+
+    "events.iterate.com/voice-agent/call-started": {
+      description: "The server opened a call and what it is called.",
+      payloadSchema: z.looseObject({
+        conversationId: z.string(),
+      }),
+    },
+    "events.iterate.com/voice-agent/conversation-accepted": {
+      description: "Grok accepted the session; the call is live.",
+      payloadSchema: z.looseObject({
+        conversationId: z.string(),
+        /** Facet clock: dial to usable, the number a cold call is judged on. */
+        handshakeTookMs: z.number(),
+        /** Capture held during the handshake and released in one go. */
+        heldMicFrames: z.number(),
+      }),
+    },
+    "events.iterate.com/voice-agent/conversation-end-requested": {
+      description: "Somebody has decided this call is over, and why.",
+      payloadSchema: z.looseObject({ conversationId: z.string(), reason: z.string() }),
+    },
+    "events.iterate.com/voice-agent/conversation-ended": {
+      description: "The call is over.",
+      payloadSchema: z.looseObject({ conversationId: z.string(), reason: z.string() }),
+    },
+    "events.iterate.com/voice-agent/provider-error": {
+      description: "Grok reported an error, verbatim.",
+      payloadSchema: z.looseObject({ conversationId: z.string(), message: z.string() }),
+    },
+
+    /*
+     * THE SPEAKER LANE. Two events, and between them the device's entire buffer
+     * policy: play frames in sequence order, and throw away anything at or
+     * below a watermark.
+     */
+    "events.iterate.com/voice-agent/spk-frame": {
+      description: "One paced chunk of the answer, numbered within the conversation.",
+      ...EPH,
+      payloadSchema: z.looseObject({
+        conversationId: z.string(),
+        /** Monotonic within the call. The only ordering the device trusts. */
+        deviceSpeakerFrameSeq: z.number(),
+        /**
+         * 16 kHz mono PCM16, base64, of no particular length — the device
+         * appends it to a byte ring. EMPTY on a frame whose only job is the
+         * clear.
+         *
+         * THERE IS NO CODEC FIELD BESIDE IT, and there was one until the lane
+         * carried a second codec's worth of nothing: `enc` was written by both
+         * ends, read by neither on this track, and branched on by exactly one
+         * line in v1 against a value the firmware had stopped sending. A
+         * negotiation field for a protocol with one encoding is a conditional
+         * waiting to take the wrong arm.
+         */
+        pcm: z.string(),
+        /**
+         * Throw away everything queued, then play this frame.
+         *
+         * Named for what the device DOES, because the device is dumb by design
+         * and its whole buffer policy should be readable off the payload. It
+         * was `drop: true` once, which named no audio — so a late one discarded
+         * the answer that replaced the one it meant. Bound to a numbered frame
+         * it cannot: it clears what precedes THIS sequence number and nothing
+         * else.
+         */
+        clearSpeakerBufferBeforeFrame: z.boolean().optional(),
+        /**
+         * Nothing more is coming for this answer; what you hold is all of it.
+         *
+         * The device needs this and cannot infer it: silence on the wire looks
+         * identical to a slow provider, so without it a client waits for a tail
+         * that will never arrive and never closes the turn. It rides a NUMBERED
+         * frame and is raised only once the queue behind it is empty, which is
+         * what makes it safe — the old `last` had to be attached to whichever
+         * frame turned out to be final, and an answer shorter than the head
+         * start had already been sent by the time the provider said it was
+         * over, so there was nothing left to attach it to and the flag was
+         * simply lost. Here the marker is its own frame when it has to be.
+         */
+        lastFrameOfAnswer: z.boolean().optional(),
+        /** Facet clock, at the moment this frame was handed to the stream. */
+        sentAtFacetMs: z.number(),
+      }),
+    },
+    "events.iterate.com/voice-agent/grok-event": {
+      description:
+        "Grok's own events for instruments — verbatim, except an audio delta's bytes become `deltaBytes`.",
+      ...EPH,
+      payloadSchema: z.looseObject({
+        conversationId: z.string(),
+        /** Facet clock, at the moment the socket message was parsed. */
+        receivedAtFacetMs: z.number(),
+      }),
+    },
+  },
+  consumes: [
+    "events.iterate.com/voice-agent/created",
+    "events.iterate.com/voice-agent/configured",
+    "events.iterate.com/voice-agent/call-started",
+    "events.iterate.com/voice-agent/conversation-end-requested",
+    "events.iterate.com/voice-agent/conversation-ended",
+    /* The live half. Naming them is the whole opt-in — `"*"` never matches an
+     * ephemeral event, so nobody gets this firehose by accident. */
+    "events.iterate.com/voice-agent/ptt-start",
+    "events.iterate.com/voice-agent/mic-frame",
+    "events.iterate.com/voice-agent/ptt-end",
+  ],
+  emits: [
+    "events.iterate.com/voice-agent/call-started",
+    "events.iterate.com/voice-agent/conversation-accepted",
+    "events.iterate.com/voice-agent/conversation-end-requested",
+    "events.iterate.com/voice-agent/conversation-ended",
+    "events.iterate.com/voice-agent/provider-error",
+    "events.iterate.com/voice-agent/spk-frame",
+    "events.iterate.com/voice-agent/grok-event",
+  ],
+});
+export type VoiceAgentContract = typeof VoiceAgentContract;
+
+/**
+ * Everything whose lifetime is ONE ANSWER from the provider.
+ *
+ * REPLACED WHOLESALE at `response.created` — the first event that can only
+ * belong to a live answer — instead of hand-reset field by field. The hand
+ * lists disagreed: `endsWhenQueueDrains` was reset by neither
+ * `response.created` nor the hang-up, and the stale flag could fire
+ * `lastFrameOfAnswer` in the middle of the next answer. An object that is
+ * swapped cannot forget a field.
+ */
+interface Answer {
+  /**
+   * The provider's identity for the answer now playing, beside the two
+   * clocks a truthful interruption needs (`receivedMs`, `sentMs`). On a
+   * barge, `conversation.item.truncate` gets heard-ms (sent minus what the
+   * clear threw out of the device's buffer) — trimming the item's audio AND
+   * transcript so the model remembers what the listener heard, not what it
+   * generated. Measured before this existed: barged eight seconds into a
+   * count, the model claimed "26" — the generated frontier, not the heard
+   * one.
+   */
+  itemId: string | null;
+  contentIndex: number;
+  /** How much of the answer was RECEIVED from the provider, in audio ms. */
+  receivedMs: number;
+  /** How much of it was actually HANDED TO THE DEVICE, in audio ms. */
+  sentMs: number;
+  /**
+   * The provider's own transcript of the answer now playing, snapshotted at
+   * the barge. Truncation deletes the item's transcript WHOLESALE (the
+   * provider's documented behaviour), and the model grounds "what did I say"
+   * in text, not in its own audio — truncated without help it swings to "I
+   * never even started". The repair is a system note carrying the transcript
+   * AS OF THE PRESS, whole: the transcript stream lags the audio stream by
+   * seconds (measured: 28 characters of transcript against 17 s of received
+   * audio at cancel), so a ratio cut over it starves the note — while the
+   * lag itself lands the snapshot naturally near the heard boundary.
+   */
+  transcript: { atAnswerAudioMs: number; text: string }[];
+  /**
+   * Where the answer is in its life — one field, three states, where two
+   * booleans used to leave the fourth combination representable.
+   *
+   *   "streaming"  between `response.created` and the response finishing —
+   *                the precondition for `response.cancel` meaning anything.
+   *                Without the gate, every ordinary press (no answer
+   *                playing, which is most of them) would draw a "nothing to
+   *                cancel" error event from the provider.
+   *
+   *   "cancelled"  a barge killed the active response; its remaining audio
+   *                and tool calls are dead. The cancellation is asynchronous
+   *                — residue keeps arriving until the provider processes it
+   *                — and the queue-emptying in #dropAnswerInFlight only
+   *                discards what has ALREADY arrived. Without this state the
+   *                residue refills the queue and the dead answer audibly
+   *                resumes: measured 2026-08-18 on gpt-realtime, "count to a
+   *                hundred" counted right through a barge, because openai
+   *                streams near real time (grok bursts the whole answer up
+   *                front, which is why the same gap never sounded on grok).
+   *                Cancelled OUTLIVES the response's own `done` — the tool
+   *                follow-up gate reads exactly that — and only the next
+   *                `response.created`, the first event that can only belong
+   *                to a LIVE answer, ends it.
+   *
+   *   "settled"    nothing streaming and no residue owed: the between-answers
+   *                state, and what `response.done` leaves behind when nobody
+   *                barged.
+   *
+   * TRANSCRIPT DELTAS ACCUMULATE IN EVERY PHASE, deliberately: the
+   * transcriber lags the audio by seconds (measured 28 characters against
+   * 17 s of received audio at a cancel), so the residue transcript arriving
+   * post-cancel is exactly what feeds the heard-prefix note when the pending
+   * repair settles at `response.done`.
+   */
+  phase: "streaming" | "cancelled" | "settled";
+  /**
+   * The provider has finished this answer; say so once the queue is empty.
+   *
+   * Deliberately NOT "mark the frame that happens to be last": that rule is
+   * what made the flag losable. This is a question asked at the drain point,
+   * where the answer is always knowable.
+   */
+  endsWhenQueueDrains: boolean;
+}
+
+/**
+ * A memory repair ready to send: the barged item's identity and the heard
+ * milliseconds both halves of the repair name. ONE shape for the dial's
+ * `pendingRepair` and for `#settleRepair`'s argument — they used to be the
+ * same three fields spelled twice.
+ */
+interface Repair {
+  itemId: string;
+  contentIndex: number;
+  audioEndMs: number;
+}
+
+/** The between-answers state: nothing playing, nothing owed. */
+const freshAnswer = (): Answer => ({
+  itemId: null,
+  contentIndex: 0,
+  receivedMs: 0,
+  sentMs: 0,
+  transcript: [],
+  phase: "settled",
+  endsWhenQueueDrains: false,
+});
+
+/**
+ * Everything whose lifetime is one provider dial.
+ *
+ * CREATED BEFORE THE AWAITED DIAL — `socket` stays null while the dial is in
+ * flight, which is what lets the mic path keep queueing during the handshake
+ * — and dropped whole when the dial fails, its socket closes, or the call is
+ * hung up. One object where the hand-maintained reset lists used to
+ * disagree: the dial block reset 19 fields, `response.created` 7, `#hangUp`
+ * 6, and the fields in nobody's intersection were exactly where the last two
+ * stale-state bug hunts ended. A hang-up is now one assignment, and it
+ * cannot forget a field.
+ */
+interface Dial {
+  /**
+   * The call this dial serves. A Dial belongs to exactly ONE conversation
+   * — a re-dial of the same call is a NEW Dial carrying the same id — so
+   * the id lives here, per this object's own doctrine ("everything scoped
+   * to the dial lives ON it"), instead of threading through every private
+   * method as a second argument naming a fact the first argument owns.
+   * The closure-captured copy survives only in the appends that outlive
+   * the dial: dial-failed, handshake-timeout, socket-closed, idle.
+   */
+  readonly conversationId: string;
+  /** The provider's socket, or null while the dial is still in flight. */
+  socket: WebSocket | null;
+  /** True once the provider's handshake completed and audio may flow. */
+  ready: boolean;
+  /**
+   * Paced answer audio waiting for its turn on the wire, oldest first — as
+   * BASE64, the wire's own spelling, so the frame goes out verbatim. On an
+   * identity dial (grok) each entry is an O(1) slice of the provider's own
+   * delta string: a ~36 s burst answer used to pay a whole-answer decode
+   * (~1.5 M-character atob) at arrival plus a re-encode per frame at send,
+   * all on the DO's single thread while mic frames flowed, for
+   * byte-identical output. A resampling dial encodes each cut once at
+   * arrival — the same total encodes as before, merely off the pacer.
+   *
+   * NOTHING IN HERE HAS A SEQUENCE NUMBER YET, and that is the point. A number
+   * is minted when a frame is HANDED TO THE STREAM, so a number existing means
+   * a frame left this machine — which is what makes a hole in the numbering
+   * mean one thing instead of two. Numbered at queue time, a barge-in that
+   * discarded the queue burned the numbers with it, and the device scored the
+   * cancelled audio as lost audio: 5 gaps and 423 absent numbers on a
+   * seven-minute call where nothing had actually gone missing.
+   */
+  speakerQueue: string[];
+  /** Last speaker-frame sequence number minted, for this call. */
+  lastDeviceSpeakerFrameSeq: number;
+  /**
+   * How far a clear has already been declared, so a jittery detector is free.
+   *
+   * Five `speech_started` in one answer was measured on real hardware. The
+   * first moves this to the highest frame minted; the other four find nothing
+   * new below it and cost one comparison each.
+   */
+  clearedThroughDeviceSpeakerFrameSeq: number;
+  /**
+   * The next frame out must tell the device to empty its speaker first.
+   *
+   * TRUE FROM THE MOMENT THE DIAL IS DECIDED, which is what lets the
+   * sequence restart at one. The device may still be holding frames from the
+   * incarnation that died, numbered higher than the ones about to arrive.
+   * Rather than remembering how high — a durable number, written to survive
+   * a thing that cannot be survived — the first frame of the new session
+   * simply says "clear". Whatever the board was holding belonged to an
+   * answer whose socket is gone; nobody wants to hear the rest of it anyway.
+   * Consumed by the sender, so it costs nothing when there is no audio to
+   * send — an idle call never issues a clear nobody needed.
+   */
+  clearSpeakerBufferBeforeNextFrame: boolean;
+  /**
+   * When the device will run dry, on the facet clock. The only pacing state,
+   * and the whole model of its memory:
+   *
+   *   heldBytes = max(0, deviceBufferEmptyAtFacetMs - now) * PCM16_BYTES_PER_MS
+   *
+   * A deadline rather than a byte count beside a timestamp, because a deadline
+   * drains implicitly with the clock. The pair would need a decay tick to stay
+   * honest, and a decay tick that stops running is a field that silently lies.
+   */
+  deviceBufferEmptyAtFacetMs: number;
+  /**
+   * One sender at a time — PER DIAL, so a pacer that outlives its dial
+   * cannot hold the next dial's lock: the identity fence retires it, the
+   * release frees only its own dial, and the new dial's pacer starts clean.
+   */
+  sending: boolean;
+  /**
+   * Audio has been sent to the provider since the last commit — the gate
+   * that keeps a redelivered ptt-end from committing an EMPTY buffer (the
+   * ephemeral lane redelivers by design), which drew a provider error and,
+   * sometimes, an unprompted second answer spoken from bare context.
+   */
+  micSentSinceCommit: boolean;
+  /**
+   * A tentative VAD onset holding the floor, or null.
+   *
+   * SET WHENEVER THE PROVIDER DID NOT CANCEL SERVER-SIDE — grok always
+   * (no `interrupt_response`, and a client cancel drew an error every
+   * time it was tried), openai only once generation has settled
+   * (mid-stream, its pinned `interrupt_response` already killed the
+   * response at the onset, so the tail is dead for certain and the
+   * destructive arm takes it — see `cancelsOnVadOnset`). The tail this
+   * hold protects — up to ~36 s of a burst answer against the device's
+   * ≤4 s lead — exists ONLY in `speakerQueue`, and on grok it may still
+   * be GROWING: mid-burst deltas keep arriving and keep queueing behind
+   * the pause, which is exactly what the hold wants. And the onset is
+   * TENTATIVE: five per turn were measured from echo residue, each
+   * retracting as a `speech_stopped` with no commit behind it. So the
+   * onset silences the DEVICE (the numbered clear — the interrupt still
+   * feels instant) but keeps the queue and pauses the pacer until there
+   * is a verdict:
+   *
+   *   CONFIRMS: `input_audio_buffer.committed` — a turn really happened.
+   *   The tail is discarded and the memory repair runs with `heardMs`.
+   *   (`response.created` is deliberately NOT a confirmation: a real
+   *   turn's committed precedes its created on both providers, so a
+   *   created that finds a live hold can only be one this agent asked
+   *   for itself — see that arm.)
+   *
+   *   RETRACTS: `speech_stopped` with no commit — residue. The tail
+   *   resumes. What a false onset costs now is the HOLE: the device's
+   *   cleared lead is not resent, so playback skips it — bounded by the
+   *   ≤4 s the device held, against the whole tail before.
+   *
+   * `heardMs` is frozen AT the onset because the schedule keeps advancing
+   * while the verdict is out, and the repair must name what was heard at
+   * the silence, not at the commit. `retracted` keeps the frozen number
+   * through a resume rather than erasing it: a real turn's
+   * `speech_stopped` and `committed` arrive in the same server tick, and
+   * the commit still owes the repair. The hold dies when the tail
+   * finishes playing whole (the drain marker — nothing left to repair,
+   * and a stale frozen number must never truncate an answer that was
+   * heard entire) or with the dial.
+   */
+  tentativeOnset: { heardMs: number; retracted: boolean } | null;
+  /**
+   * The two rate converters, one per direction, minted with the dial for
+   * whatever rate its provider speaks (an identity for grok's native
+   * 16 kHz). Instances rather than calls because the conversion phase must
+   * survive the chunking: a provider flushes deltas at whatever cadence it
+   * likes, and resampling each delta as its own little signal put a seam at
+   * every boundary — see pcm.ts. The speaker side resets per answer; the
+   * mic side is one continuous capture for the whole dial.
+   */
+  micResampler: Pcm16Resampler;
+  spkResampler: Pcm16Resampler;
+  /**
+   * Whether this dial's provider honors `conversation.item.truncate` — the
+   * PROVIDERS row's fact, carried here so the repair sites need no second
+   * lookup. False means the note is the WHOLE repair: no wire verb works
+   * on that provider's assistant items (see the PROVIDERS table probes).
+   */
+  truncates: boolean;
+  /**
+   * The face, when the certificate says something renders one; null costs
+   * nothing. Per dial like the classifier it wraps — a re-dial is a new
+   * mouth with its answer count back at zero. The whole mouth lifecycle
+   * (tracker, answer numbering, the published value) lives in face.ts;
+   * this file only feeds it.
+   */
+  face: ReturnType<typeof createFace> | null;
+  /**
+   * Whether this dial's provider kills a streaming response itself at a
+   * VAD onset — the PROVIDERS row's fact, carried here like `truncates`.
+   * The speech_started arm branches on it: true (openai) means a
+   * mid-stream onset is destructive for certain; false (grok) means even
+   * a mid-burst onset only ever takes the tentative hold, because nothing
+   * cancelled the answer anywhere and destroying it turns every echo blip
+   * back into the counting bug.
+   */
+  cancelsOnVadOnset: boolean;
+  /**
+   * A memory repair that must wait for the cancelled response to FINALIZE.
+   *
+   * Sent back-to-back with `response.cancel`, the truncate races the
+   * server finalizing the item — observed live: the ack and the response's
+   * `done` share a millisecond, and the model still remembered the full
+   * count. The provider processes client events in order, but the item's
+   * transcript is written at finalization; repairing a still-finalizing
+   * item is undefined in exactly the way that bit us. Held here until the
+   * `response.done` arrives, then sent against a settled item — as a
+   * truncate or, on a provider whose truncate is a silent no-op, a delete.
+   */
+  pendingRepair: Repair | null;
+  /**
+   * Tool calls issued by the model and not yet answered, by provider call_id.
+   * Grok documents parallel calls as "all outputs, then ONE response.create";
+   * the follow-up fires when this empties. A future Gemini listener would
+   * delete ids here on toolCallCancellation.
+   */
+  openToolCallIds: Set<string>;
+  /**
+   * The next `response.created` is one this agent asked for itself — the
+   * tool follow-up #runTool sends — not the answer to a user turn.
+   *
+   * Consumed at `response.created`, where it decides ONE thing: whether
+   * the wholesale answer swap also wipes the queue and the device. A
+   * follow-up legitimately begins while the previous answer's spoken
+   * preamble ("let me check the weather for you", handed over whole
+   * inside the pacer's ≤4 s lead) still sits UNPLAYED in the device's
+   * buffer, and the unconditional wipe cut it off mid-word — every fast
+   * tool call with a spoken preamble, on both providers. Every OTHER
+   * path into `response.created` had a barge clear the device first, so
+   * the wipe stays for those.
+   */
+  followUpResponsePending: boolean;
+  /**
+   * The model decided the call is over; settle at the drain point, after the
+   * goodbye PLAYS. v1's instant version was measured cutting "Goodbye!"
+   * mid-word. Runtime on purpose: evicted, the 60s idle deadline backstops.
+   */
+  hangUpAfterAnswerDrains: string | null;
+  /** The answer in flight — replaced wholesale at `response.created`. */
+  answer: Answer;
+}
+
+/** A dial just decided: no socket yet, nothing sent, a clear owed first. */
+const freshDial = (
+  conversationId: string,
+  provider: {
+    rate: number;
+    truncates: boolean;
+    cancelsOnVadOnset: boolean;
+  },
+): Dial => ({
+  conversationId,
+  socket: null,
+  ready: false,
+  speakerQueue: [],
+  lastDeviceSpeakerFrameSeq: 0,
+  clearedThroughDeviceSpeakerFrameSeq: 0,
+  clearSpeakerBufferBeforeNextFrame: true,
+  deviceBufferEmptyAtFacetMs: 0,
+  sending: false,
+  micSentSinceCommit: false,
+  tentativeOnset: null,
+  micResampler: new Pcm16Resampler(16_000, provider.rate),
+  spkResampler: new Pcm16Resampler(provider.rate, 16_000),
+  truncates: provider.truncates,
+  face: null,
+  cancelsOnVadOnset: provider.cancelsOnVadOnset,
+  pendingRepair: null,
+  openToolCallIds: new Set(),
+  followUpResponsePending: false,
+  hangUpAfterAnswerDrains: null,
+  answer: freshAnswer(),
+});
+
+/* ========================================================================== */
+/* PROCESSOR                                                                  */
+/* ========================================================================== */
+
+export class VoiceAgentProcessor extends StreamProcessor<
+  VoiceAgentContract,
+  {
+    /** The facet clock. Every `...AtFacetMs` in this file comes from here. */
+    nowAtFacetMs(): number;
+    /** The only way this processor waits, injected so tests use a fake clock. */
+    sleep(ms: number): Promise<void>;
+    dialProvider(
+      provider: VoiceProvider,
+      baseUrl: string | null,
+      model: string,
+    ): Promise<WebSocket | null>;
+    /**
+     * Open a fresh project itx session, use it, dispose it. Stubs from
+     * `env.ITX.get()` must not outlive the invocation that dialed them, so
+     * every tool call opens its own — the SDK's own pattern (its alarm proxy
+     * does exactly this from inside the facet), inherited rather than
+     * invented.
+     */
+    withProject<T>(fn: (project: unknown) => Promise<T>): Promise<T>;
+  }
+> {
+  readonly contract = VoiceAgentContract;
+
+  /* --------------------------------------------------------- runtime state */
+  /* Every one of these dies with the incarnation on purpose. Anything that
+   * must outlive an eviction is in the fold above. */
+
+  /**
+   * The dial this incarnation is running, or null when there is none.
+   *
+   * ONE DIAL AT A TIME: created synchronously the moment a dial is decided —
+   * so two caught-up deliveries cannot open two sockets — and null again
+   * when the dial fails, its socket closes, or the call is hung up.
+   * Everything scoped to the dial lives ON it (see {@link Dial}), which is
+   * what lets a hang-up be one assignment instead of a hand-reset list, and
+   * lets every closure the dial spawns fence itself with `this.#dial !==
+   * dial` — strictly stronger than the socket-identity check it replaces.
+   */
+  #dial: Dial | null = null;
+  /**
+   * Capture that arrived before Grok's handshake finished, oldest first.
+   *
+   * The device's own base64 strings and nothing else — still 16 kHz
+   * semantically, decoded only at the flush and only when the dial's
+   * provider speaks another rate, so a re-dial to a DIFFERENT provider
+   * still replays at the right rate. `deviceMicFrameSeq` belongs to the
+   * device and is never renumbered here, so holding a copy of it would be
+   * a field nobody reads. Order in this array IS the order it was captured
+   * in.
+   *
+   * NOT ON THE DIAL, because it can start filling before one exists: a
+   * revived incarnation holds frames from deliveries that arrive before the
+   * caught-up pass re-dials, and they must survive INTO that dial's
+   * session.updated flush — which is why the dial's own reset never touched
+   * this queue either.
+   */
+  #micQueue: string[] = [];
+  /**
+   * The device finished its turn while the handshake was still in flight.
+   * Like `#micQueue` it is NOT on the dial: the turn can end before the
+   * dial exists, and the flag must survive into it.
+   *
+   * THE HALF OF THE BUFFER THAT WAS MISSING. Capture arriving early was held
+   * and replayed; the `ptt-end` that turns that capture into a QUESTION was
+   * dropped on the floor, because committing needs a socket and there wasn't
+   * one yet. Measured on a real session: 296 frames held and flushed into the
+   * provider — `heldMicFrames: 296` in the acceptance — and then silence,
+   * because nothing ever asked it to answer. The person had spoken a whole
+   * sentence to something that was still politely listening a minute later,
+   * when the idle deadline ended the call.
+   *
+   * A boolean rather than a queue: a turn that ended is a turn that ended, and
+   * two presses inside one handshake still owe exactly one commit.
+   */
+  #turnEndedDuringHandshake = false;
+
+  /**
+   * A call has been ASKED for, and the log has not caught up yet.
+   *
+   * An append is not instant, so between asking for a call and the fold showing
+   * one there is a window in which `state.call` is still null. A board streams
+   * microphone frames continuously, so that window is never empty — the first
+   * batch after a call opens is three or four frames, and without this every
+   * one of them minted its own conversation. Idempotency keys cannot help: each
+   * frame proposes a DIFFERENT id, so each key is genuinely new.
+   *
+   * A BOOLEAN, because nothing reads which id it was. There is deliberately no
+   * mirror-image field for a call this incarnation has BURIED: `endRequested`
+   * in the fold is that, it is strictly stronger — it survives the eviction a
+   * runtime field does not — and the guard that reads it runs first.
+   */
+  #callRequested = false;
+  /**
+   * When this incarnation last saw a conversation end, for the mint
+   * cooldown: the frames a device drained in a call's final ~100 ms arrive
+   * BEHIND the obituary and must not mint the call's successor. An
+   * incarnation rebuilt inside the window forgets it and fails open, which
+   * is the old behavior for one delivery in a blue moon.
+   */
+  #conversationEndedAtMs: number | null = null;
+  /**
+   * The fold's `lastDeviceInputAtStreamMs`, refreshed on every delivery.
+   *
+   * A MIRROR, never a second source of truth: the idle loop runs between
+   * deliveries and has no way to read the fold, and closing over a stamp would
+   * miss a call kept alive by frames that arrived after it started waiting.
+   * Written only from `state`.
+   */
+  #lastDeviceInputAtStreamMsMirror = 0;
+  /** When the last dial FAILED, for the retry cooldown. Class-level, not on
+   * a Dial: the failed dial is already gone when the next caller asks. */
+  #lastDialFailedAtFacetMs = 0;
+  /**
+   * The mirror lane's outbox, drained by ONE background flush at a time.
+   *
+   * Every provider message and every client control used to be its own
+   * runInBackground registration and its own single-event append — and the
+   * facet's append opens a full itx session per call, so a grok burst (~77
+   * audio deltas plus the transcript deltas, inside a few seconds) was ~150
+   * session round trips competing with the pacer on the DO's single
+   * thread. The drain swaps this queue out whole and sends it as ONE
+   * variadic append, so whatever accumulated while the previous append RPC
+   * was in flight coalesces naturally: burst-time RPC count drops about an
+   * order of magnitude, idle chatter stays one event per drain. Order
+   * within the lane is the FIFO's — which is all the flight recorder ever
+   * promised: every payload, verbatim, in arrival order, its
+   * `receivedAtFacetMs` stamped at enqueue. Cross-lane ordering against
+   * spk-frame was never guaranteed; the mirror was always fire-and-forget.
+   */
+  #mirrorQueue: {
+    payload: Record<string, unknown> & { conversationId: string; receivedAtFacetMs: number };
+    append: ProcessEventArgs<VoiceAgentContract>["append"];
+  }[] = [];
+  #mirrorFlushing = false;
+
+  /* ------------------------------------------------------------------ fold */
+
+  reduce({ state, event }: ReduceArgs<VoiceAgentContract>) {
+    const committedAtStreamMs = Date.parse(event.createdAt);
+    switch (event.type) {
+      case "events.iterate.com/voice-agent/created":
+        /* Existence is the event's whole content, and the fold's defaults
+         * already ARE the unconfigured agent — an existence flag beside them
+         * would be a field nothing reads. Returning state unchanged is the
+         * honest arm. */
+        return state;
+
+      case "events.iterate.com/voice-agent/configured":
+        /* REPLACED WHOLESALE, defaults and all: an absent field resets rather
+         * than survives, so a rerun of setup with a shorter config cannot
+         * leave last week's tools armed. */
+        return {
+          ...state,
+          providerBaseUrl: event.payload.providerBaseUrl ?? null,
+          provider: event.payload.provider ?? "grok",
+          providerModel: event.payload.providerModel ?? null,
+          providerVoice: event.payload.providerVoice ?? null,
+          instructions: event.payload.instructions ?? "",
+          clientTakesTurns: event.payload.clientTakesTurns ?? false,
+          turnDetection: event.payload.turnDetection ?? null,
+          visemes: event.payload.visemes ?? false,
+          colleague: event.payload.colleague ?? false,
+          tools: event.payload.tools ?? [],
+        };
+
+      case "events.iterate.com/voice-agent/call-started":
+        /* The id was minted INTO the event rather than here, so this is
+         * deterministic under replay. The deadline starts here too: opening a
+         * call IS the device saying something. */
+        return {
+          ...state,
+          call: {
+            conversationId: event.payload.conversationId,
+            lastDeviceInputAtStreamMs: committedAtStreamMs,
+            endRequested: null,
+          },
+        };
+
+      case "events.iterate.com/voice-agent/ptt-start":
+      case "events.iterate.com/voice-agent/mic-frame":
+      case "events.iterate.com/voice-agent/ptt-end":
+        /* Their BODIES never reach the fold — that would be state depending on
+         * a queue no restart can replay — but their commit stamps are as
+         * durable as any event's, and folding the newest is what makes the idle
+         * deadline outlive an eviction. `max` so a redelivered batch cannot
+         * walk the deadline backwards, and IDLE_STAMP_STEP_MS so fifty frames
+         * a second do not dirty the state fifty times a second. */
+        return state.call === null ||
+          committedAtStreamMs - state.call.lastDeviceInputAtStreamMs < IDLE_STAMP_STEP_MS
+          ? state
+          : {
+              ...state,
+              call: {
+                ...state.call,
+                lastDeviceInputAtStreamMs: Math.max(
+                  state.call.lastDeviceInputAtStreamMs,
+                  committedAtStreamMs,
+                ),
+              },
+            };
+
+      case "events.iterate.com/voice-agent/conversation-end-requested":
+        /* Decided, not done. The call stays open in the fold until the obituary
+         * lands; what changes is that nothing will re-dial it. */
+        return state.call === null || state.call.conversationId !== event.payload.conversationId
+          ? state
+          : { ...state, call: { ...state.call, endRequested: { reason: event.payload.reason } } };
+
+      case "events.iterate.com/voice-agent/conversation-ended":
+        return state.call === null || state.call.conversationId !== event.payload.conversationId
+          ? state
+          : { ...state, call: null };
+
+      default:
+        return state;
+    }
+  }
+
+  /* ----------------------------------------------------------------- react */
+
+  processEvent(args: ProcessEventArgs<VoiceAgentContract>): undefined {
+    const { state, event, delivery, append, runInBackground } = args;
+
+    /* The log has caught up with whichever append we were remembering for it;
+     * both memories exist only to cover the gap, so both end here. */
+    if (state.call !== null) {
+      this.#callRequested = false;
+      this.#lastDeviceInputAtStreamMsMirror = state.call.lastDeviceInputAtStreamMs;
+    }
+
+    /*
+     * THE CAUGHT-UP PASS IS THE RECOVERY, and it runs FIRST.
+     *
+     * An eventless caught-up delivery is how a revived incarnation learns it
+     * owes a call, so this cannot sit behind the event switch — every arm of
+     * which returns, and one of them (a microphone frame on a socketless
+     * incarnation) is exactly the delivery that has to reach here.
+     */
+    const owedCall = delivery.caughtUp ? state.call : null;
+    /*
+     * AN OBITUARY NOBODY WROTE IS A CALL NOBODY CAN END. Somebody decided this
+     * call was over; if the incarnation that decided died before writing the
+     * ending, the fold says `endRequested` for ever, nothing re-dials it, and
+     * nothing buries it. Re-running it here is what retries a refused or
+     * interrupted obituary — idempotent by key, so the ordinary path landing it
+     * first costs nothing. This is why `endRequested` keeps the REASON: the
+     * incarnation that finishes the job is usually not the one that decided.
+     */
+    if (owedCall !== null && owedCall.endRequested !== null) {
+      const { conversationId, endRequested } = owedCall;
+      this.#hangUp();
+      /* A settlement at head: losing this append forever is a call the fold
+       * says is ending and nothing ever buries. The cursor waits the one
+       * colocated write. */
+      args.blockProcessorWhile(() =>
+        append({
+          type: "events.iterate.com/voice-agent/conversation-ended",
+          idempotencyKey: this.idempotencyKey(`ended:${conversationId}`),
+          payload: { conversationId, reason: endRequested.reason },
+        }),
+      );
+    }
+    if (owedCall !== null && owedCall.endRequested === null) {
+      this.#openProviderConnection(owedCall.conversationId, state, append, runInBackground);
+    }
+
+    if (event === null) return;
+
+    switch (event.type) {
+      case "events.iterate.com/voice-agent/ptt-start":
+      case "events.iterate.com/voice-agent/mic-frame":
+      case "events.iterate.com/voice-agent/ptt-end": {
+        /*
+         * NOT DECODED HERE, on purpose. The frame stays the device's own
+         * base64 string all the way to `#sendMicAudio`, the ONE site that
+         * knows the encoding: a same-rate provider (grok, 16 kHz) gets the
+         * string verbatim with no decode and no re-encode — two O(n)
+         * transcodes and two allocations per frame, 50/s on an open mic,
+         * that used to buy nothing — and a 24 kHz provider decodes there,
+         * at the socket boundary. One site instead of the three that each
+         * used to do their own `base64ToBytes`, because the encoding is the
+         * kind of thing that gets fixed in two of three.
+         */
+        const micB64 =
+          event.type === "events.iterate.com/voice-agent/mic-frame" ? event.payload.pcm : null;
+        /*
+         * A CALL IS OPENED BY SOMEBODY TALKING, not by anybody asking for one.
+         * The device has no way to know whether a call exists, and asking it to
+         * say made two sources of truth for one fact.
+         */
+        /*
+         * A TURN CAN END BEFORE THE LOG KNOWS A CALL BEGAN, and the fold is
+         * several hundred milliseconds behind a person letting go of a button.
+         * Recorded HERE, at the top of the case, because every interesting
+         * branch below returns early and one of them is the ordinary case —
+         * speak, release, all inside one round trip. This is the ONLY
+         * recorder: the live-call ptt-end arm at the bottom used to latch the
+         * flag again for a dial mid-handshake, and every delivery that
+         * reached that arm had already passed through this line.
+         */
+        if (
+          event.type === "events.iterate.com/voice-agent/ptt-end" &&
+          state.clientTakesTurns &&
+          this.#dial?.ready !== true &&
+          /* Only a turn belonging to a REAL opening call may be held over
+           * the handshake: a stray ptt-end with no call would leave the flag
+           * latched, and the NEXT press's session.updated would commit
+           * mid-sentence off a button nobody was holding. */
+          (state.call !== null || this.#callRequested)
+        ) {
+          this.#turnEndedDuringHandshake = true;
+        }
+        /* A buried call takes no further input. A NULL call passes — the
+         * `?.` makes this one gate serve both shapes, and the mint below is
+         * what handles the null. */
+        if (state.call?.endRequested != null) return;
+        if (state.call === null && !this.#callRequested) {
+          /* ONLY SPEECH OPENS A CALL. The ephemeral lane drops and
+           * re-delivers, so a lone ptt-end arrives here — and a call minted
+           * for it would commit an EMPTY provider buffer: a provider error
+           * plus, sometimes, an unprompted answer spoken from bare context,
+           * then a zombie call squatting out the idle deadline. */
+          if (event.type === "events.iterate.com/voice-agent/ptt-end") return;
+          /*
+           * AND NOT THE LAST CALL'S DYING BREATH. A device drains its mic
+           * queue for ~100 ms after the far end hangs up — it cannot know
+           * yet — so those frames arrive right behind the obituary, land on
+           * a null call, and minted its successor within 171 ms: the person
+           * hears "call ended" twice and a conversation nobody wanted squats
+           * out the idle deadline. A fresh WAKE dials by `call-started`, not
+           * by this mint, so holding the mint briefly costs a real caller
+           * nothing.
+           */
+          if (
+            this.#conversationEndedAtMs !== null &&
+            this.deps.nowAtFacetMs() - this.#conversationEndedAtMs < 1500
+          ) {
+            return;
+          }
+          const conversationId = `conv_${crypto.randomUUID()}`;
+          this.#callRequested = true;
+          /* The one append the whole call hangs off: if it silently fails,
+           * #callRequested can never clear (its only clear needs the fold
+           * this append produces) and the incarnation is deaf until
+           * eviction. The cursor waits the one write; a refusal un-asks. */
+          args.blockProcessorWhile(() =>
+            append({
+              type: "events.iterate.com/voice-agent/call-started",
+              idempotencyKey: this.idempotencyKey(`call:${conversationId}`),
+              payload: { conversationId },
+            }).catch(() => {
+              this.#callRequested = false;
+            }),
+          );
+          /*
+           * DIAL NOW, NOT WHEN THE LOG AGREES. The append above is the durable
+           * record that a call was opened; it is not permission to open one.
+           * Waiting for it to come back and be folded put a full stream round
+           * trip in front of every first word — measured at 7.4 seconds on a
+           * real session, against a provider handshake of 973 ms.
+           *
+           * And NO return: the frame that opened the call falls through to
+           * the one hold site below like every frame after it — the dial
+           * exists (created synchronously above) and is never ready yet, so
+           * the mic block holds it. "Hold the frame if room" used to be
+           * spelled three times in this case; this fall-through is what
+           * deleted two of the copies.
+           */
+          this.#openProviderConnection(conversationId, state, append, runInBackground);
+        }
+
+        /*
+         * THE BUTTON IS AN INTERRUPTION, and in push-to-talk it is the ONLY
+         * one anybody sends. `turn_detection` is null when the client owns its
+         * turns, so the provider never reports speech starting and the two
+         * provider events that used to be the whole of barge-in cannot fire.
+         * Without this arm the dead answer keeps streaming to the speaker for
+         * the entire press and only stops when the NEXT answer begins.
+         * #bargeAnswer carries the rest of the story; the press is its one
+         * caller that also cancels — no provider VAD will ever cancel for a
+         * button. Guarded on the FOLD's call, not just the dial: the press
+         * that MINTED the call above barges nothing, same reachability as
+         * when the mint block still returned early.
+         */
+        if (event.type === "events.iterate.com/voice-agent/ptt-start" && state.call !== null) {
+          const dial = this.#dial;
+          /* No dial means nothing playing and nothing to cancel: a press on
+           * a revived incarnation that has not re-dialled yet changes
+           * nothing until the caught-up pass opens the connection. */
+          if (dial !== null) {
+            /* Heard-ms is read BEFORE the barge zeroes the pacer's schedule.
+             * (A `spkBufferedMs` device stamp was read here as the preferred
+             * source — the device is the authority on what it played, and the
+             * schedule models the WORST CASE lead — but no device or CLI ever
+             * produced the field, so the read was a branch that had never
+             * once run. Deleted; if a device grows the stamp, declare it in
+             * the ptt-start contract and take it as the authority again.) */
+            const nowAtFacetMs = this.deps.nowAtFacetMs();
+            this.#bargeAnswer(
+              dial,
+              this.#heardMsFromSchedule(dial, nowAtFacetMs),
+              nowAtFacetMs,
+              append,
+              true,
+            );
+          }
+        }
+
+        if (micB64 !== null) {
+          const dial = this.#dial;
+          if (dial !== null && dial.ready && dial.socket !== null) {
+            this.#sendMicAudio(dial, dial.socket, micB64);
+          } else if (this.#micQueue.length < MAX_HELD_MIC_FRAMES) {
+            this.#micQueue.push(micB64);
+          }
+          return;
+        }
+        /* A client that owns its turns commits them; when Grok is listening,
+         * its buttons — if it has any — say nothing, because server VAD on top
+         * of a button answers halfway through a sentence. No else-arm holding
+         * the turn over the handshake here: the recorder at the top of this
+         * case already latched #turnEndedDuringHandshake for exactly the
+         * dial-not-ready deliveries that reach this line. */
+        if (event.type === "events.iterate.com/voice-agent/ptt-end" && state.clientTakesTurns) {
+          const dial = this.#dial;
+          /* Only a turn that carried AUDIO commits — the ephemeral lane
+           * redelivers, and a duplicate ptt-end against an empty provider
+           * buffer drew an error plus, sometimes, an unprompted answer. */
+          if (dial !== null && dial.ready && dial.socket !== null && dial.micSentSinceCommit) {
+            this.#askForAnswer(dial);
+          }
+        }
+        return;
+      }
+
+      /* There is NO conversation-end-requested arm. reduce folds the decision
+       * before delivery reaches this switch, so the caught-up pass above has
+       * already hung up and written the obituary on the very delivery that
+       * carried the event — and it, unlike an arm, also retries an obituary
+       * that an earlier incarnation died owing. An arm here was the same
+       * action twice behind one idempotency key. */
+
+      case "events.iterate.com/voice-agent/conversation-ended": {
+        /*
+         * THE ARM THAT WAS DELETED AS DEAD, AND WHY IT IS BACK. Reduce nulls
+         * `state.call` before delivery reaches this switch, so a guard on
+         * STATE was indeed unreachable — but the guard was never the point.
+         * A DEVICE-appended obituary (the hang-up button) takes this path
+         * without any end-requested ever existing, so the caught-up
+         * settlement never runs, and deleting this arm left the DIAL alive:
+         * a zombie provider socket squatting `#dial`, blocking every new
+         * dial until the 60 s idle tick finally killed it. Measured on
+         * HAVPE 2026-08-19 — a button end at :56:25, the zombie idled out
+         * at :01:32, and every press in between was deaf. The fence is the
+         * DIAL's own conversation, which a stale obituary cannot name.
+         *
+         * And the device is silenced NOW: a call that ends mid-answer
+         * leaves up to the pacer's whole lead buffered in the ring, and
+         * "the call is over" must not sound like four more seconds of it.
+         */
+        /* Arms the mint cooldown below: the mic frames a device drained in
+         * the last ~100 ms of a call arrive AFTER this event, and a call
+         * minted for them is the zombie the person hears as a second
+         * "call ended" — measured relaunches 87 and 171 ms after an end. */
+        this.#conversationEndedAtMs = this.deps.nowAtFacetMs();
+        const dial = this.#dial;
+        if (dial !== null && dial.conversationId === event.payload.conversationId) {
+          this.#clearDeviceSpeaker(dial, this.deps.nowAtFacetMs(), append);
+          this.#hangUp();
+        }
+        return;
+      }
+
+      default:
+        return;
+    }
+  }
+
+  /**
+   * Open a provider connection for this call, now.
+   *
+   * WHY THIS IS CALLED FROM TWO PLACES. It used to run only on a caught-up
+   * delivery, reading the call out of REDUCED state — so opening a
+   * connection meant appending `call-started`, waiting for the log to
+   * deliver it back, waiting for the fold, and only then dialling. Measured
+   * on a real session: `call-started` at 12.6s and the provider accepted at
+   * 21.0s, of which the handshake itself was 973ms. Seven and a half seconds
+   * of a person waiting for a full stream round trip that told this
+   * incarnation something it already knew.
+   *
+   * The caught-up path is still here and still needed — it is how a REVIVED
+   * incarnation learns it owes a call nobody is dialling. The dial object's
+   * synchronous creation is what makes the two callers safe together.
+   */
+  #openProviderConnection(
+    conversationId: string,
+    state: ProcessEventArgs<VoiceAgentContract>["state"],
+    append: ProcessEventArgs<VoiceAgentContract>["append"],
+    runInBackground: ProcessEventArgs<VoiceAgentContract>["runInBackground"],
+  ): void {
+    if (this.#dial !== null) return;
+    /* The one choke point both callers share, so a dead provider cannot be
+     * re-dialled at frame cadence — see DIAL_RETRY_COOLDOWN_MS. */
+    if (this.deps.nowAtFacetMs() - this.#lastDialFailedAtFacetMs < DIAL_RETRY_COOLDOWN_MS) return;
+    const provider = PROVIDERS[state.provider];
+    /* CREATED BEFORE THE AWAITED DIAL, so a second caller finds `#dial`
+     * taken and the mic path queues for the whole handshake. The socket
+     * arrives below; everything else the dial owns starts fresh here. */
+    const dial = freshDial(conversationId, provider);
+    if (state.visemes) dial.face = createFace();
+    this.#dial = dial;
+    const dialStartedAtFacetMs = this.deps.nowAtFacetMs();
+    /* THIS DIAL'S OWN IDENTITY, for keys that must not collide with the
+     * previous dial of the SAME call. A timestamp is not enough: a re-dial
+     * inside the same millisecond — or on a test's virtual clock, which does
+     * not move on its own — reuses it. */
+    const dialId = crypto.randomUUID();
+    runInBackground(async () => {
+      /* A dial can REJECT (DNS, TLS), not just refuse — and an uncaught
+       * throw here was measured as sixty seconds of dead air: the runner
+       * logs it, nothing appends, nothing re-dials, and the user's whole
+       * held sentence waits out the idle deadline. A throw IS a refusal,
+       * and both failures share one exit: same key, same teardown, only
+       * the reason differs. */
+      let socket: WebSocket | null = null;
+      let failure = "the provider refused the connection";
+      try {
+        socket = await this.deps.dialProvider(
+          state.provider,
+          state.providerBaseUrl,
+          state.providerModel ?? provider.model,
+        );
+      } catch (error) {
+        failure = `the provider dial failed: ${String(error).slice(0, 200)}`;
+      }
+      if (socket === null) {
+        this.#lastDialFailedAtFacetMs = this.deps.nowAtFacetMs();
+        if (this.#dial === dial) this.#dial = null;
+        await this.#requestEnd(conversationId, "dial-failed", failure, append);
+        return;
+      }
+      if (this.#dial !== dial) {
+        /* Hung up while dialling: the call this socket was for is already
+         * over, and adopting it would resurrect a buried conversation. */
+        try {
+          socket.close();
+        } catch {
+          /* Already gone. */
+        }
+        return;
+      }
+      dial.socket = socket;
+
+      /*
+       * THE HANDSHAKE GETS A DEADLINE, because the idle backstop cannot see
+       * this wedge: an open-mic board's frames keep the idle stamp fresh
+       * while the un-ready dial holds them, so a session.update the provider
+       * never answers is a call that is silent FOREVER with nothing logged.
+       * Nulling #dial first fences the close listener out; the obituary
+       * says what actually happened.
+       */
+      this.runInBackground(async () => {
+        await this.deps.sleep(HANDSHAKE_DEADLINE_MS);
+        if (this.#dial !== dial || dial.ready) return;
+        this.#dial = null;
+        try {
+          socket.close();
+        } catch {
+          /* Already gone. */
+        }
+        await this.#requestEnd(
+          conversationId,
+          "handshake-timeout",
+          `the provider handshake did not complete within ${HANDSHAKE_DEADLINE_MS}ms`,
+          append,
+        );
+      });
+
+      /*
+       * THE THIRD SWITCH, AND WHY IT IS NOT A STREAM EVENT.
+       *
+       * Everything else in this file reaches `processEvent` by being
+       * appended. Grok's messages do not, and the reason is measured rather
+       * than stylistic: the ephemeral lane coalesces, delivering in clumps
+       * seconds late. Routing an audio delta through it before acting on it
+       * would put a second full stream round trip in front of the first word
+       * of every answer. The provider's timeline is still appended for
+       * instruments — just not waited for, and see `#forwardProviderEvent` for the
+       * one part of it that is not.
+       */
+      socket.addEventListener("message", (message: MessageEvent) => {
+        /*
+         * A SUPERSEDED SOCKET IS STILL A TALKING SOCKET, and this is the
+         * fence. `close()` is not instant and a message already in flight
+         * arrives after it: without this line a late `session.updated` from
+         * an abandoned socket marked the call ready again, emptied the
+         * microphone queue into a dead connection, and — because the dial
+         * guard reads the same field — let a SECOND socket be opened while
+         * the first was still delivering. The close listener has always had
+         * this check; the message listener is the one that needed it. The
+         * fence is the DIAL's identity rather than the socket's — strictly
+         * stronger: it also retires a listener whose call was hung up while
+         * its socket lingered.
+         */
+        if (this.#dial !== dial) return;
+        if (typeof message.data !== "string") return;
+        let grok: Record<string, unknown>;
+        try {
+          grok = JSON.parse(message.data) as Record<string, unknown>;
+        } catch {
+          return;
+        }
+        const providerEventType = String(grok.type ?? "");
+        const receivedAtFacetMs = this.deps.nowAtFacetMs();
+        this.#forwardProviderEvent(dial, grok, providerEventType, receivedAtFacetMs, append);
+
+        switch (providerEventType) {
+          case "session.created":
+            /* The one edge that makes us configure the session; miss it and
+             * the handshake never completes and the call hangs, silently. */
+            socket.send(
+              JSON.stringify({
+                type: "session.update",
+                session: {
+                  type: "realtime",
+                  ...((state.instructions !== "" || state.colleague) && {
+                    instructions: [
+                      ...(state.instructions === "" ? [] : [state.instructions]),
+                      ...(state.colleague ? [FAST_HALF_INSTRUCTIONS] : []),
+                    ].join("\n\n"),
+                  }),
+                  /* The certificate's tools, declared verbatim; the GA shape
+                   * both providers speak. The expression never touches the
+                   * wire — the provider knows names, we know what they do. */
+                  ...((state.tools.length > 0 || state.colleague) && {
+                    tool_choice: "auto",
+                    tools: [...state.tools, ...(state.colleague ? [NOTE_TO_SELF_TOOL] : [])].map(
+                      ({ name, description, parameters }) => ({
+                        type: "function",
+                        name,
+                        description,
+                        parameters: parameters ?? { type: "object", properties: {} },
+                      }),
+                    ),
+                  }),
+                  audio: {
+                    input: {
+                      format: { type: "audio/pcm", rate: provider.rate },
+                      /*
+                       * SINGLE-OWNER SEMANTICS, MADE VISIBLE. The VAD barge
+                       * arm RELIES on the provider cancelling a barged
+                       * response server-side at the onset — that is why it
+                       * never sends response.cancel — and on OpenAI that
+                       * behaviour is `interrupt_response`, a DEFAULT today.
+                       * A default is a dependency nobody can grep for, so
+                       * both booleans are pinned to what the machinery
+                       * already assumes. `silence_duration_ms: 500` pins the
+                       * documented default too: it sits inside every
+                       * turn-end latency ever measured here, and tuning it
+                       * should be an edit, not an archaeology dig. Grok
+                       * keeps bare SERVER_VAD — its support for these knobs
+                       * is unprobed, and an unknown key in its session has
+                       * not been tried against a live socket.
+                       */
+                      /* The certificate's own turn_detection wins over the
+                       * defaults, verbatim — the stream knows its room. */
+                      turn_detection: state.clientTakesTurns
+                        ? null
+                        : (state.turnDetection ??
+                          (state.provider === "openai"
+                            ? {
+                                ...SERVER_VAD,
+                                interrupt_response: true,
+                                create_response: true,
+                                silence_duration_ms: 500,
+                              }
+                            : SERVER_VAD)),
+                      /* The boards are far-field boxes, and the 0.85 VAD
+                       * threshold exists because of their echo residue —
+                       * this is the knob that may one day let it drop.
+                       * OpenAI-only: grok's docs are silent on it. */
+                      ...(state.provider === "openai" && {
+                        noise_reduction: { type: "far_field" },
+                        /* The user's side of the conversation, transcribed
+                         * by the provider and mirrored to the lane like
+                         * every other provider event. Until this, the
+                         * durable record held everything the MODEL said and
+                         * nothing anybody said TO it — and the acoustic
+                         * board proof had no way to show the provider heard
+                         * the words that were spoken through air. */
+                        transcription: { model: "gpt-live-transcribe" },
+                      }),
+                    },
+                    output: {
+                      format: { type: "audio/pcm", rate: provider.rate },
+                      voice: state.providerVoice ?? provider.voice,
+                    },
+                  },
+                },
+              }),
+            );
+            return;
+
+          case "session.updated": {
+            /* Usable. Everything the handshake made us hold goes now. */
+            dial.ready = true;
+            const heldMicFrames = this.#micQueue.length;
+            for (const held of this.#micQueue) {
+              try {
+                this.#sendMicAudio(dial, socket, held);
+              } catch {
+                /* A malformed held frame (bad base64, decoded only on a
+                 * resampling dial) must not cost the rest of the queue or
+                 * the held-turn commit below. It used to throw at ingress,
+                 * before it could be held; holding strings moved the decode
+                 * here. On the identity dial nothing decodes and nothing
+                 * throws. */
+              }
+            }
+            this.#micQueue = [];
+            /*
+             * AND THE END OF THE TURN, if it happened while we were connecting.
+             * The held capture is only a question once somebody commits it —
+             * without this the provider holds a complete sentence in its input
+             * buffer and waits, for ever, for an instruction that was thrown
+             * away sixty seconds earlier.
+             */
+            if (
+              this.#turnEndedDuringHandshake &&
+              state.clientTakesTurns &&
+              dial.micSentSinceCommit
+            ) {
+              this.#askForAnswer(dial);
+            }
+            this.#turnEndedDuringHandshake = false;
+            this.runInBackground(() =>
+              append({
+                type: "events.iterate.com/voice-agent/conversation-accepted",
+                /* PER DIAL, not per conversation. A call rescued after an
+                 * eviction handshakes a second time and its numbers are its
+                 * own; keyed on the conversation, that append is refused
+                 * outright and the re-dial cannot record it happened. */
+                idempotencyKey: this.idempotencyKey(`accepted:${conversationId}:${dialId}`),
+                payload: {
+                  conversationId,
+                  handshakeTookMs: receivedAtFacetMs - dialStartedAtFacetMs,
+                  heldMicFrames,
+                },
+              }),
+            );
+            return;
+          }
+
+          case "input_audio_buffer.committed":
+            /* A commit is a turn that really happened, so the onset that
+             * preceded it was no echo blip. A RETRACTED hold confirms here
+             * too: a real turn's speech_stopped and committed arrive in the
+             * same server tick, and the frozen number from the silence is
+             * still the honest one. */
+            this.#confirmTentativeOnset(dial, append);
+            return;
+
+          case "input_audio_buffer.speech_started":
+            /*
+             * THE BOARDS' ONLY BARGE. An open microphone has no button, so
+             * this onset is the one interruption an open-mic client ever
+             * produces — and it is TENTATIVE: five per turn were measured
+             * from echo residue, each retracting as a `speech_stopped` with
+             * no commit behind it. Which story it opens depends on whether
+             * the provider CANCELLED anything at this onset.
+             */
+            if (dial.answer.phase === "streaming" && dial.cancelsOnVadOnset) {
+              /*
+               * STILL GENERATING, AND THE PROVIDER KILLED IT SERVER-SIDE at
+               * this very onset (openai's server_vad `interrupt_response`,
+               * pinned true in our session.update): the tail is dead for
+               * certain, so the answer dies exactly as a press kills it —
+               * with cancel:false, because a client cancel on top of the
+               * server's is a second owner of one cancellation. The barged
+               * response still finalizes with a `response.done`, which is
+               * where the pending repair settles.
+               *
+               * Heard-ms is read BEFORE the barge zeroes the pacer's
+               * schedule, same as the press.
+               */
+              this.#bargeAnswer(
+                dial,
+                this.#heardMsFromSchedule(dial, receivedAtFacetMs),
+                receivedAtFacetMs,
+                append,
+                false,
+              );
+              return;
+            }
+            /*
+             * EVERYTHING ELSE HOLDS. Either generation already finished
+             * (grok bursts whole answers up front, so the unsent tail — up
+             * to ~36 s against the device's ≤4 s lead — lives ONLY in the
+             * local queue), or the provider is one that cancels NOTHING at
+             * an onset (grok mid-burst: no interrupt_response, and a client
+             * cancel drew an error every time — deltas keep arriving and
+             * keep queueing behind this pause, which is exactly what the
+             * hold wants). Emptying the queue on a tentative onset was the
+             * counting bug in a second form: the header's "one flush and
+             * four no-ops" was true of the DEVICE's buffer and false of
+             * this one. So the device is silenced NOW (the numbered clear —
+             * the interrupt still feels instant), the schedule is zeroed to
+             * say so, and the queue WAITS:
+             *
+             *   CONFIRMS: `input_audio_buffer.committed` — discard the
+             *   tail, repair the memory.
+             *
+             *   RETRACTS: `speech_stopped` with no commit — the tail
+             *   resumes. The false onset costs the HOLE where the device's
+             *   cleared lead was (≤4 s, not resent), against the whole tail
+             *   it used to cost.
+             *
+             * Heard-ms freezes HERE — the schedule keeps advancing while
+             * the verdict is out, and a confirm must repair to what was
+             * heard at the silence, not at the commit. A blip landing on an
+             * onset a retraction just released re-freezes: more was heard
+             * since.
+             */
+            if (dial.tentativeOnset === null || dial.tentativeOnset.retracted) {
+              dial.tentativeOnset = {
+                heardMs: this.#heardMsFromSchedule(dial, receivedAtFacetMs),
+                retracted: false,
+              };
+            }
+            this.#clearDeviceSpeaker(dial, receivedAtFacetMs, append);
+            dial.deviceBufferEmptyAtFacetMs = 0;
+            return;
+
+          case "input_audio_buffer.speech_stopped":
+            /* The retraction half of a tentative onset: the room went quiet
+             * and no commit followed — residue, so the held tail resumes.
+             * The hold keeps its frozen heard-ms rather than dying, because
+             * a REAL turn's speech_stopped is followed by its committed in
+             * the same server tick and that commit still owes the repair;
+             * frames the resume lets slip in that gap are re-cleared by the
+             * confirm's own watermark. */
+            if (dial.tentativeOnset !== null && !dial.tentativeOnset.retracted) {
+              dial.tentativeOnset.retracted = true;
+              this.#sendSpeakerAudio(dial, append, runInBackground);
+            }
+            return;
+
+          case "response.created": {
+            /* A created event can only belong to a LIVE answer, so it is
+             * what ends a barge's residue-discard window — and it is where
+             * the per-answer state is replaced WHOLESALE, identity and
+             * clocks included.
+             *
+             * A STILL-HELD ONSET HERE: WHOSE CREATED IS THIS?
+             *
+             * OURS (`followUpResponsePending` — the tool follow-up;
+             * push-to-talk has no VAD onsets): nobody interrupted, so no
+             * repair note. Confirming here was a real bug — a fast tool
+             * landing inside an echo blip discarded the held tail and told
+             * the model "the user interrupted your previous spoken reply"
+             * when the blip would have retracted milliseconds later. The
+             * hold is simply dropped.
+             *
+             * THE PROVIDER'S: a real turn is beginning, and this created IS
+             * the confirmation — grok creates a turn's response BEFORE its
+             * `committed` arrives (measured live: created at .456, stopped
+             * at .652, committed at .708 of the same barge), so waiting for
+             * the commit confirms nothing: this arm's own swap would have
+             * erased the barged answer's identity and transcript first, and
+             * the note never went out — the model recalled a count nobody
+             * heard. Confirm NOW, before the swap, so the repair reads the
+             * old answer. OpenAI's order (committed first) still confirms
+             * at the committed arm; both arms share the no-op guard. */
+            const followUp = dial.followUpResponsePending;
+            dial.followUpResponsePending = false;
+            if (followUp) {
+              dial.tentativeOnset = null;
+            } else {
+              this.#confirmTentativeOnset(dial, append);
+            }
+            dial.answer = freshAnswer();
+            dial.answer.phase = "streaming";
+            /* A new answer is a new signal; without this, the filter's
+             * held tail of a CANCELLED answer would smear its first
+             * milliseconds. */
+            dial.spkResampler.reset();
+            /* And a new mouth track — face.ts owns why. */
+            dial.face?.answerStarted();
+            if (followUp) {
+              /* The follow-up this agent asked for: the previous answer's
+               * spoken preamble is still draining — most of it UNPLAYED in
+               * the device's buffer inside the ≤4 s lead — and no barge
+               * cleared it, so wiping here cut "let me check the weather
+               * for you" off mid-word on every fast tool call. Kick the
+               * pacer instead: a tail a hold may have parked resumes and
+               * the new answer queues behind it. */
+              this.#sendSpeakerAudio(dial, append, runInBackground);
+            } else {
+              /* Every other created follows a barge (whose clear makes this
+               * a watermark no-op) or replaces an answer nobody defended:
+               * a new answer is a flush of the old one. */
+              this.#dropAnswerInFlight(dial, receivedAtFacetMs, append);
+            }
+            return;
+          }
+
+          case "response.output_audio_transcript.delta":
+            /* Tagged with the answer-audio position it ARRIVED at: the two
+             * streams interleave with generation, so arrival position is the
+             * closest thing the wire offers to "spoken at". Ratio cuts over
+             * the concatenated text were wrong twice over (character length
+             * is not time; the transcriber lags), and told a listener who
+             * heard twelve numbers that they heard four. Residue still
+             * accumulates — the note is sent after the cancel. */
+            if (typeof grok.delta === "string") {
+              dial.answer.transcript.push({
+                atAnswerAudioMs: dial.answer.receivedMs,
+                text: grok.delta,
+              });
+            }
+            return;
+
+          case "response.output_audio.delta": {
+            if (typeof grok.delta !== "string") return;
+            /* Residue of a cancelled answer: dead on arrival. */
+            if (dial.answer.phase === "cancelled") return;
+            /*
+             * CUT ONLY TO FIT THE DEVICE'S RECEIVE BUFFER. A delta is audio
+             * of no particular length — measured against the real provider,
+             * 0 of 77 in one answer were a multiple of anything — and the
+             * board appends whatever bytes arrive to its speaker ring, so the
+             * last piece of a delta being short costs nothing but one extra
+             * append. Nothing is carried between deltas and nothing is padded.
+             */
+            /* The item identity rides every delta; remembering it here is
+             * what lets a barge name the thing it truncates. */
+            if (typeof grok.item_id === "string") dial.answer.itemId = grok.item_id;
+            if (typeof grok.content_index === "number") {
+              dial.answer.contentIndex = grok.content_index;
+            }
+            if (
+              dial.spkResampler.fromRate === dial.spkResampler.toRate &&
+              grok.delta.length % 4 === 0
+            ) {
+              /* A 16 kHz provider's delta bytes ARE the pipeline's bytes, so
+               * the whole answer stays base64 end to end: cut the STRING at
+               * group boundaries (see IDENTITY_SLICE_BYTES) and never decode
+               * it. The interior slices carry no padding, the final slice
+               * keeps the delta's own. Guarded on `% 4`: atob tolerates the
+               * ragged base64 that group-aligned slicing would silently
+               * corrupt into noise on the device, so anything unaligned
+               * takes the decode path below and one modulo is the whole
+               * cost. */
+              dial.answer.receivedMs += base64ByteLength(grok.delta) / PCM16_BYTES_PER_MS;
+              for (let cut = 0; cut < grok.delta.length; cut += IDENTITY_SLICE_B64_CHARS) {
+                dial.speakerQueue.push(grok.delta.slice(cut, cut + IDENTITY_SLICE_B64_CHARS));
+              }
+              /* The FACE is deliberately not fed here: the whole answer can
+               * arrive in one burst, and a mouth folded at ingest races to
+               * the answer's final shape while the device spends seconds
+               * playing it — measured 6 shape changes across a six-second
+               * answer. The pacer feeds it at send time instead. */
+            } else {
+              /* The pipeline is 16 kHz from here to the speaker; a provider
+               * that talks faster gets resampled at the door — and encoded
+               * per cut HERE, at arrival, not on the pacer's clock. */
+              const pcm16 = dial.spkResampler.push(base64ToBytes(grok.delta));
+              dial.answer.receivedMs += pcm16.length / PCM16_BYTES_PER_MS;
+              for (let cut = 0; cut < pcm16.length; cut += MAX_SPEAKER_PAYLOAD_BYTES) {
+                dial.speakerQueue.push(
+                  bytesToBase64(
+                    pcm16.subarray(cut, Math.min(cut + MAX_SPEAKER_PAYLOAD_BYTES, pcm16.length)),
+                  ),
+                );
+              }
+            }
+            this.#sendSpeakerAudio(dial, append, runInBackground);
+            return;
+          }
+
+          /*
+           * THE ANSWER IS OVER, and the device does have to be told.
+           *
+           * This was deleted on the theory that a device which plays what
+           * arrives needs no telling — its speaker goes quiet on its own. That
+           * is true of the speaker and false of everything else: silence on
+           * the wire is indistinguishable from a provider taking its time, so
+           * a client waiting for the end of a turn waits for ever. Measured
+           * on the host CLI, where every turn of a working call was reported
+           * as a failure because the driver's `answer_done` never came.
+           *
+           * What is NOT restored is the old rule that lost it. `last` had to
+           * be attached to whichever frame turned out to be final, and an
+           * answer shorter than the head start had already been sent by the
+           * time this arrived — nothing left to mark. Asking at the DRAIN
+           * POINT instead makes it unloseable: if audio is still queued the
+           * marker follows it, and if the queue is already empty the marker
+           * is its own frame.
+           */
+          case "response.output_audio.done":
+            /* The cancelled answer's own done is residue like its deltas:
+             * marking end-of-answer for audio nobody heard would tell the
+             * device a turn finished that the press already erased. */
+            if (dial.answer.phase === "cancelled") return;
+            dial.answer.phase = "settled";
+            dial.answer.endsWhenQueueDrains = true;
+            /* The mouth's SIL rides the drain marker with the rest of the
+             * face track — closing it here, at ingest, shut the mouth
+             * seconds before the device finished speaking. */
+            this.#sendSpeakerAudio(dial, append, runInBackground);
+            return;
+
+          case "response.done": {
+            /* Every response ends here, audio or not — a pure function-call
+             * response never sends output_audio.done, so without this the
+             * NEXT press would cancel a response that no longer exists. A
+             * CANCELLED answer stays cancelled: its residue window closes
+             * only at the next `response.created`, and the tool follow-up
+             * gate reads exactly that. */
+            if (dial.answer.phase === "streaming") dial.answer.phase = "settled";
+            /* The barged response is now FINAL — whether a press cancelled
+             * it or the provider's own VAD did — so the deferred repair
+             * can no longer race the item's own finalization. */
+            const pending = dial.pendingRepair;
+            if (pending !== null && dial.ready && dial.socket !== null) {
+              dial.pendingRepair = null;
+              this.#settleRepair(dial, pending, append);
+            }
+            /* The floor is free; a hang-up waiting on the drain settles now. */
+            this.#sendSpeakerAudio(dial, append, runInBackground);
+            return;
+          }
+
+          case "response.function_call_arguments.done": {
+            /* Residue discipline, same as audio: a cancelled response's tool
+             * call is an intent the user erased, and running it anyway is the
+             * barge failing at the worst altitude — a side effect. */
+            if (dial.answer.phase === "cancelled") return;
+            if (typeof grok.call_id !== "string") return;
+            /* Unparseable arguments go through raw; the capability decides
+             * what that means. */
+            let modelArgs: unknown = grok.arguments;
+            try {
+              modelArgs = JSON.parse(String(grok.arguments ?? "{}"));
+            } catch {
+              /* Raw it is. */
+            }
+            this.#runTool(
+              dial,
+              grok.call_id,
+              /* The injected tool resolves here, not from the certificate, so
+               * no certificate can shadow it with an expression of its own. */
+              state.colleague && grok.name === NOTE_TO_SELF_TOOL.name
+                ? NOTE_TO_SELF_TOOL
+                : state.tools.find((tool) => tool.name === grok.name),
+              modelArgs,
+              append,
+              runInBackground,
+            );
+            return;
+          }
+
+          case "error":
+            this.runInBackground(() =>
+              append({
+                type: "events.iterate.com/voice-agent/provider-error",
+                payload: { conversationId, message: JSON.stringify(grok.error ?? grok) },
+              }),
+            );
+            return;
+
+          default:
+            return;
+        }
+      });
+
+      socket.addEventListener("close", () => {
+        if (this.#dial !== dial) return;
+        this.#dial = null;
+        this.runInBackground(() =>
+          this.#requestEnd(conversationId, "socket-closed", "Grok's socket closed", append),
+        );
+      });
+
+      /*
+       * THE IDLE COUNTDOWN, in the same closure as the socket it will end —
+       * a SELF-RESCHEDULING TICK CHAIN, not a loop. One background closure
+       * that settles only when the call ends is indistinguishable from a
+       * wedge to the facet keepalive's busy-refire detector: after ~15 quiet
+       * minutes of a perfectly healthy call it would cross the detector's
+       * threshold, spend spurious revival passes against a live incarnation,
+       * and decay the alarm cadence toward its plateau — so a REAL eviction
+       * during a long call would get its revival hours late. Each tick is
+       * its own settling closure instead: one check, then hand the chain to
+       * a fresh closure, so the keepalive sees progress every five seconds.
+       * The chain dies naturally when the dial-identity fence fails.
+       *
+       * It compares two stamps from DIFFERENT clocks — the facet's now and
+       * the stream's commit — which is only sound because both are wall-clock
+       * milliseconds from Cloudflare's own clock and the deadline is a
+       * minute. Anything tighter than that would need a single clock.
+       */
+      const idleTick = async (): Promise<void> => {
+        await this.deps.sleep(IDLE_TICK_MS);
+        if (this.#dial !== dial) return;
+        const nowAtFacetMs = this.deps.nowAtFacetMs();
+        /*
+         * IDLE SINCE THE LAST THING THAT HAPPENED, whichever end it happened
+         * at — and the second half of that is why this is a max rather than
+         * a skip.
+         *
+         * The durable stamp only records the DEVICE's input, because that is
+         * the only side leaving events, and a listener hearing out a
+         * ninety-second answer sends nothing. Merely refusing to hang up
+         * WHILE speaking is not enough: the stamp goes on ageing behind the
+         * answer, so the moment the queue drains the clock is already past
+         * the deadline and the call dies one tick later. Measured — a 64s
+         * answer, then `conversation-ended` 1.1s after it finished, between
+         * turns, with the listener about to speak.
+         *
+         * Finishing an answer is an event on this call as much as hearing one
+         * is. `deviceBufferEmptyAtFacetMs` is when the device runs dry, so
+         * while it is in the future this end is still talking, and once it
+         * passes it is the moment this end stopped. Both readings are what
+         * the deadline wants.
+         *
+         * In-memory ON PURPOSE: after an eviction there is no answer in
+         * flight and nothing was said, so a revived incarnation falls back to
+         * the durable stamp alone and the deadline still bites. Moving THAT
+         * into memory is the thing that once let a keepalive restart the
+         * minute for ever.
+         */
+        const lastActivityAtFacetMs = Math.max(
+          this.#lastDeviceInputAtStreamMsMirror,
+          dial.deviceBufferEmptyAtFacetMs,
+        );
+        if (nowAtFacetMs - lastActivityAtFacetMs < IDLE_TIMEOUT_MS) {
+          this.runInBackground(idleTick);
+          return;
+        }
+        /* Still holding audio it has not handed over yet: not idle by any
+         * reading, whatever the clocks say. A queue held for a tentative
+         * onset does not count — an onset nobody ever settles (a board that
+         * died mid-blip) would otherwise wedge the deadline open for ever. */
+        if (dial.speakerQueue.length > 0 && dial.tentativeOnset === null) {
+          this.runInBackground(idleTick);
+          return;
+        }
+        await this.#requestEnd(
+          conversationId,
+          "idle",
+          `no input from the device for ${IDLE_TIMEOUT_MS / 1000}s`,
+          append,
+        );
+      };
+      this.runInBackground(idleTick);
+    });
+  }
+
+  /**
+   * The provider's timeline, for instruments — WITHOUT the audio in it.
+   *
+   * This lane forwarded every message verbatim, `delta` included, which means
+   * every answer went out twice: once cut up and paced on `spk-frame`, and
+   * once again whole, in tens of kilobytes of base64 per chunk, hundreds of
+   * chunks an answer, on a lane no client subscribes to. v1 learned this the
+   * expensive way and strips it; v2 was written fresh and did not, so the
+   * lesson had to be paid for a second time.
+   *
+   * What a reader of this lane actually wants is the TRANSITIONS — the edges
+   * that diagnose a silent call, which is what proved a barge-in one
+   * millisecond after `response.created` was cancelling four answers in six.
+   * The audio's content is already on `spk-frame`. So the delta rides as its
+   * LENGTH: the shape of the answer stays visible and the bytes go once.
+   */
+  #forwardProviderEvent(
+    dial: Dial,
+    grok: Record<string, unknown>,
+    providerEventType: string,
+    receivedAtFacetMs: number,
+    append: ProcessEventArgs<VoiceAgentContract>["append"],
+  ): void {
+    if (providerEventType === "response.output_audio.delta") {
+      const { delta, ...rest } = grok;
+      this.#appendMirror(
+        {
+          ...rest,
+          deltaBytes: base64ByteLength(typeof delta === "string" ? delta : ""),
+          conversationId: dial.conversationId,
+          receivedAtFacetMs,
+        },
+        append,
+      );
+    } else {
+      this.#appendMirror(
+        { ...grok, conversationId: dial.conversationId, receivedAtFacetMs },
+        append,
+      );
+    }
+  }
+
+  /**
+   * Put one payload on the mirror lane — see `#mirrorQueue` for why this is
+   * a queue and a single drain rather than an append per event.
+   */
+  #appendMirror(
+    payload: Record<string, unknown> & { conversationId: string; receivedAtFacetMs: number },
+    append: ProcessEventArgs<VoiceAgentContract>["append"],
+  ): void {
+    this.#mirrorQueue.push({ payload, append });
+    if (this.#mirrorFlushing) return;
+    this.#mirrorFlushing = true;
+    this.runInBackground(async () => {
+      /* The flag clears in a finally around the WHOLE loop: a rejected
+       * append (runInBackground logs it) loses only its own batch, never
+       * the lane — a stuck flag would silence the recorder for the rest of
+       * the call. */
+      try {
+        while (this.#mirrorQueue.length > 0) {
+          const batch = this.#mirrorQueue;
+          this.#mirrorQueue = [];
+          await batch[0]!.append(
+            ...batch.map(({ payload }) => ({
+              type: "events.iterate.com/voice-agent/grok-event" as const,
+              payload,
+            })),
+          );
+        }
+      } finally {
+        this.#mirrorFlushing = false;
+      }
+    });
+  }
+
+  /**
+   * One resample-at-send rule for both mic paths — live frames and the
+   * held-flush at session.updated — because the encoding is the kind of
+   * thing that gets fixed in one of two sites. THE ONE SITE THAT KNOWS THE
+   * ENCODING: on an identity dial (grok — the pipeline's own 16 kHz) the
+   * device's base64 goes to the wire VERBATIM, because decoding it only to
+   * re-encode the same bytes was two O(n) passes and two allocations per
+   * frame at 50/s for byte-identical output; a 24 kHz dial decodes,
+   * resamples through the dial's stateful converter, and re-encodes here,
+   * at the socket boundary. Also the one place the commit gate learns
+   * audio exists to commit.
+   */
+  #sendMicAudio(dial: Dial, socket: WebSocket, b64: string): void {
+    socket.send(
+      JSON.stringify({
+        type: "input_audio_buffer.append",
+        audio:
+          dial.micResampler.fromRate === dial.micResampler.toRate
+            ? b64
+            : bytesToBase64(dial.micResampler.push(base64ToBytes(b64))),
+      }),
+    );
+    dial.micSentSinceCommit = true;
+  }
+
+  /**
+   * Commit the captured turn and ask for an answer — the two sends that a
+   * client owning its own turns pays for, kept together so neither can be
+   * forgotten alone. Consumes the commit gate: the next ptt-end needs new
+   * audio behind it.
+   */
+  #askForAnswer(dial: Dial): void {
+    dial.socket?.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+    dial.socket?.send(JSON.stringify({ type: "response.create" }));
+    dial.micSentSinceCommit = false;
+  }
+
+  /**
+   * One obituary shape for every reason this processor decides a call is
+   * over — it was the identical append spelled out five times. The key
+   * class scopes the dedupe: a retried decision collides with itself and
+   * never with a different reason's. Each site keeps its own scheduling
+   * (the close listener cannot await; the rest do), which is why this
+   * returns the append's promise instead of hiding it.
+   */
+  async #requestEnd(
+    conversationId: string,
+    keyClass: "dial-failed" | "handshake-timeout" | "socket-closed" | "idle" | "hang-up",
+    reason: string,
+    append: ProcessEventArgs<VoiceAgentContract>["append"],
+  ): Promise<void> {
+    await append({
+      type: "events.iterate.com/voice-agent/conversation-end-requested",
+      idempotencyKey: this.idempotencyKey(`${keyClass}:${conversationId}`),
+      payload: { conversationId, reason },
+    });
+  }
+
+  /* ----------------------------------------------------------------- lanes */
+
+  /**
+   * Run one tool call the model made, off the frame path, and ALWAYS answer
+   * it. A function call is a debt: a model that never hears an output waits
+   * on it, so every path out — error and deadline included — sends exactly
+   * one function_call_output. Silence is the one forbidden result.
+   */
+  #runTool(
+    dial: Dial,
+    callId: string,
+    tool: z.infer<typeof VoiceTool> | undefined,
+    modelArgs: unknown,
+    append: ProcessEventArgs<VoiceAgentContract>["append"],
+    runInBackground: ProcessEventArgs<VoiceAgentContract>["runInBackground"],
+  ): void {
+    dial.openToolCallIds.add(callId);
+    runInBackground(async () => {
+      let output: string;
+      if (tool === undefined) {
+        output = JSON.stringify({ error: "no such tool" });
+      } else if (tool.name === NOTE_TO_SELF_TOOL.name && tool.expression === undefined) {
+        /* The note is FIRE-AND-FORGET from the tool's point of view: the
+         * output settles now so the model keeps talking, and the reply —
+         * if one ever comes — arrives later as a bracketed note. */
+        const note =
+          typeof (modelArgs as { note?: unknown })?.note === "string"
+            ? ((modelArgs as { note: string }).note ?? "")
+            : String(modelArgs ?? "");
+        this.#noteToColleague(dial, note, append, runInBackground);
+        output = JSON.stringify({
+          status:
+            "noted — the reply arrives later as a bracketed note; keep the conversation going",
+        });
+      } else if (tool.expression === undefined) {
+        /* THE BASE CASE, NOT A REGISTRY: hanging up is one atomic append of
+         * conversation-end-requested, deferred to the drain point so the
+         * goodbye being spoken right now gets PLAYED, not cut. */
+        dial.hangUpAfterAnswerDrains = "the model hung up";
+        output = JSON.stringify({ status: "hanging up once this answer finishes playing" });
+      } else {
+        const expression = tool.expression;
+        try {
+          /* A sentinel loser, never a throwing one: the branch that loses the
+           * race still settles later, and a floating rejection is a crash
+           * nobody attributed. */
+          const timedOut = Symbol("tool deadline");
+          const work = this.deps.withProject(async (project) => {
+            /* The platform's own walk (apps/os/src/itx/expression.ts):
+             * reads pipeline, calls invoke. Intermediate stubs chain inside
+             * this one session and die with its disposal. */
+            let receiver: unknown;
+            let value: unknown = project;
+            for (const step of expression) {
+              const target = (await value) as object;
+              if (typeof step === "string") {
+                receiver = target;
+                value = Reflect.get(target, step);
+              } else {
+                const [method, ...bound] = step;
+                receiver = undefined;
+                value = Reflect.apply(
+                  Reflect.get(target, method) as (...args: unknown[]) => unknown,
+                  target,
+                  bound,
+                );
+              }
+            }
+            const fn = await value;
+            if (typeof fn !== "function") {
+              throw new Error(`the "${tool.name}" expression did not end at a function`);
+            }
+            return (await Reflect.apply(fn, receiver, [modelArgs])) as unknown;
+          });
+          const result = await Promise.race([
+            work,
+            this.deps.sleep(TOOL_RUN_DEADLINE_MS).then(() => timedOut as unknown),
+          ]);
+          if (result === timedOut) {
+            void work.catch(() => {});
+            throw new Error(`took longer than ${TOOL_RUN_DEADLINE_MS}ms`);
+          }
+          const json = JSON.stringify(result ?? { status: "done" });
+          output =
+            json.length > TOOL_OUTPUT_MAX_CHARS
+              ? JSON.stringify({ truncated: json.slice(0, TOOL_OUTPUT_MAX_CHARS) })
+              : json;
+        } catch (error) {
+          /* The model HEARS the failure; the follow-up below is what turns
+           * "nothing happened" into it saying "that did not work, because…". */
+          output = JSON.stringify({ error: String(error).slice(0, 300) });
+        }
+      }
+      /* The fence every provider-lane completion wears: a re-dialed call is
+       * a NEW session that never issued this call_id. */
+      if (this.#dial !== dial) return;
+      dial.openToolCallIds.delete(callId);
+      this.#sendControl(
+        dial,
+        {
+          type: "conversation.item.create",
+          item: { type: "function_call_output", call_id: callId, output },
+        },
+        append,
+      );
+      /* ONE follow-up, only when the floor is free: all parallel outputs in
+       * (grok's documented contract), the answer settled — neither still
+       * talking nor inside a barge's residue window, because the press owns
+       * the floor it took. hang_up asks for nothing: it is something the
+       * assistant DID, not something to talk about. */
+      if (
+        tool?.expression !== undefined &&
+        dial.openToolCallIds.size === 0 &&
+        dial.answer.phase === "settled"
+      ) {
+        /* The created this draws must not wipe the device — the spoken
+         * preamble is usually still sitting unplayed there. See
+         * `followUpResponsePending`. */
+        dial.followUpResponsePending = true;
+        this.#sendControl(dial, { type: "response.create" }, append);
+      }
+    });
+  }
+
+  /**
+   * Conversations whose colleague has been born and briefed by THIS
+   * incarnation — an RPC saver, not the truth: both the create and the brief
+   * dedupe server-side by idempotency key, so a rebuilt incarnation that
+   * re-runs them pays two no-op round trips and nothing else.
+   */
+  #colleagueBriefed = new Set<string>();
+
+  /**
+   * THE SLOW HALF. Mint the conversation's colleague (a full agent on its
+   * own fresh `/agents/voice-notes/<conversationId>` stream), brief it once,
+   * send the note as an ordinary user message, and read its chat reply back
+   * into the live session as a bracketed system item. Fire-and-forget from
+   * the caller's side; the reply races nothing and loses nothing if it never
+   * comes — silence is always an option. An eviction mid-ask loses that one
+   * reply, which is the price of needing no new event types at all.
+   */
+  #noteToColleague(
+    dial: Dial,
+    note: string,
+    append: ProcessEventArgs<VoiceAgentContract>["append"],
+    runInBackground: ProcessEventArgs<VoiceAgentContract>["runInBackground"],
+  ): void {
+    runInBackground(async () => {
+      try {
+        const reply = await this.deps.withProject(async (project) => {
+          const agent = (
+            project as {
+              agents: {
+                get(path: string): {
+                  create(payload?: object): Promise<unknown>;
+                  append(event: {
+                    type: string;
+                    idempotencyKey: string;
+                    payload: object;
+                  }): Promise<unknown>;
+                  ask(input: { message: string; timeoutMs?: number }): Promise<{
+                    payload?: { message?: unknown };
+                  }>;
+                };
+              };
+            }
+          ).agents.get(`/agents/voice-notes/${dial.conversationId}`);
+          if (!this.#colleagueBriefed.has(dial.conversationId)) {
+            await agent.create({});
+            await agent.append({
+              type: "events.iterate.com/agents/context-added",
+              idempotencyKey: this.idempotencyKey(`colleague-brief:${dial.conversationId}`),
+              payload: {
+                content: COLLEAGUE_BRIEF,
+                key: "voice-agent/colleague-brief",
+                llmRequestPolicy: { behaviour: "dont-trigger-request" },
+                role: "system",
+              },
+            });
+            this.#colleagueBriefed.add(dial.conversationId);
+          }
+          return await agent.ask({ message: note, timeoutMs: NOTE_REPLY_DEADLINE_MS });
+        });
+        const text = reply?.payload?.message;
+        if (typeof text !== "string" || text.length === 0) return;
+        /* The fence every provider-lane completion wears. */
+        if (this.#dial !== dial) return;
+        this.#sendControl(
+          dial,
+          {
+            type: "conversation.item.create",
+            item: {
+              type: "message",
+              role: "system",
+              content: [{ type: "input_text", text: `[note from your thinking half] ${text}` }],
+            },
+          },
+          append,
+        );
+        /* Same floor discipline as a tool follow-up: speak the note only
+         * when nothing else holds the floor; otherwise it waits in context
+         * for the model's next turn, which is what a note is. */
+        if (dial.openToolCallIds.size === 0 && dial.answer.phase === "settled") {
+          dial.followUpResponsePending = true;
+          this.#sendControl(dial, { type: "response.create" }, append);
+        }
+      } catch {
+        /* A lost note reply is a colleague who did not write back. */
+      }
+    });
+  }
+
+  /**
+   * Send one client control event AND record it on the `grok-event` lane as
+   * `client.<type>` — the lane is the wire's flight recorder, and a recorder
+   * that hears only one direction cannot explain an interruption gone wrong.
+   */
+  #sendControl(
+    dial: Dial,
+    message: Record<string, unknown>,
+    append: ProcessEventArgs<VoiceAgentContract>["append"],
+  ): void {
+    if (dial.socket === null) return;
+    dial.socket.send(JSON.stringify(message));
+    const { item, ...rest } = message;
+    this.#appendMirror(
+      {
+        ...rest,
+        type: `client.${String(message.type)}`,
+        ...(item === undefined ? {} : { itemSummary: JSON.stringify(item).slice(0, 300) }),
+        conversationId: dial.conversationId,
+        receivedAtFacetMs: this.deps.nowAtFacetMs(),
+      },
+      append,
+    );
+  }
+
+  /**
+   * What a face-rendering board's 10 Hz poll reads. The boards have been
+   * polling this the whole time — v2 simply had nothing to say until now.
+   * The face rides the dial: a call that ended is a mouth that shut, and
+   * the firmware treats a missing face as nothing to render.
+   *
+   * A POLL, NOT A LIVESTATE SUBSCRIPTION, and not by preference: the value
+   * is exactly what liveState exists to diff, but a userspace facet's
+   * liveState node serves the runner's committed FOLD — `assembleLive` in
+   * the SDK's stream-processor-registry publishes `currentState`, and the
+   * `getLiveState` override that could project a runtime bag instead is a
+   * hook `StreamProcessorFacet.createHost` never exposes to userspace. The
+   * day that seam opens, `face.read()` is the value to put through it and
+   * this poll becomes the compatibility path.
+   */
+  override async getRuntimeState() {
+    return {
+      runtime: {
+        face: this.#dial?.face?.read() ?? null,
+        now: this.deps.nowAtFacetMs(),
+      },
+    };
+  }
+
+  /**
+   * What the listener has HEARD of the answer, read off the pacer's own
+   * schedule: everything handed to the device, minus what still sat unplayed
+   * in its buffer — which a clear is about to throw away. The schedule
+   * models the WORST-CASE lead, so this can only understate; the floor at
+   * zero covers an answer that never started.
+   */
+  #heardMsFromSchedule(dial: Dial, nowAtFacetMs: number): number {
+    const unplayedMs = Math.max(0, dial.deviceBufferEmptyAtFacetMs - nowAtFacetMs);
+    return Math.max(0, Math.floor(dial.answer.sentMs - unplayedMs));
+  }
+
+  /**
+   * Fix the model's memory of an answer the listener cut off.
+   *
+   * Cancels and clears stop the SOUND; this repairs the MEMORY. The
+   * provider's conversation still holds every millisecond it GENERATED —
+   * barged eight seconds into a count, the model claimed "26", the generated
+   * frontier rather than the heard one. `conversation.item.truncate` at
+   * heard-ms trims the item's audio AND transcript; the heard-prefix note
+   * then restores what was actually heard, because truncation deletes the
+   * transcript wholesale and a model asked "how far did you get" over
+   * audio-only memory swings to "I never even started" (measured live).
+   * One frame of slack (25 ms) so a fully-played answer is never
+   * "truncated" to its own length by rounding.
+   *
+   * TWO SHAPES, by the response's state:
+   *
+   *   STREAMING — the settle must WAIT. Sent beside the cancellation it
+   *   races the item's own finalization (observed live: the ack and the
+   *   response's `done` shared a millisecond, and the model still
+   *   remembered the full count). So the repair is armed on the dial and
+   *   settled at the response's `response.done`; the answer moves to
+   *   "cancelled" here too, which is what deafens the residue. What this
+   *   method deliberately does NOT send is `response.cancel`: #bargeAnswer
+   *   owns that decision, and only the press ever says yes.
+   *
+   *   SETTLED — the repair settles immediately; nothing finalizes late.
+   */
+  #repairBargedAnswerMemory(
+    dial: Dial,
+    heardMs: number,
+    append: ProcessEventArgs<VoiceAgentContract>["append"],
+  ): void {
+    if (!dial.ready || dial.socket === null) return;
+    /* One frame of slack (25 ms) so a fully-played answer is never
+     * "truncated" to its own length by rounding — see the method doc. */
+    const repair: Repair | null =
+      dial.answer.itemId !== null && heardMs + 25 < dial.answer.receivedMs
+        ? {
+            itemId: dial.answer.itemId,
+            contentIndex: dial.answer.contentIndex,
+            audioEndMs: heardMs,
+          }
+        : null;
+    if (repair !== null) dial.answer.itemId = null;
+    if (dial.answer.phase === "streaming") {
+      dial.answer.phase = "cancelled";
+      if (repair !== null) dial.pendingRepair = repair;
+      return;
+    }
+    if (repair !== null) this.#settleRepair(dial, repair, append);
+  }
+
+  /**
+   * Send one repair, whole: the truncate where it works, then the note that
+   * is ALWAYS the recall half. Two verbs, one action — its two callers (the
+   * immediate settled-answer path and the deferred `response.done` settle)
+   * used to spell the pair separately, and a pair spelled twice is a pair
+   * that drifts.
+   *
+   * THE TRUNCATE, where it works: `conversation.item.truncate` at heard-ms
+   * trims the item's audio AND transcript. Where it does not (grok — see
+   * the PROVIDERS table), NOTHING goes out and the note is the entire
+   * repair. Not for want of trying: truncate is a silent no-op there and
+   * delete answers "Item not found" for assistant items, so a verb would
+   * only decorate every barge with a provider error.
+   *
+   * THE NOTE: truncation deletes the item's transcript wholesale, and a
+   * model asked "how far did you get" over audio-only memory swings to "I
+   * never started" (measured live). The note carries the heard PREFIX —
+   * the transcript segments that had arrived by heard-ms, consumed here so
+   * a second settle cannot repeat them — so recall becomes exact instead
+   * of confabulated in either direction. A system item: context, never
+   * speech.
+   */
+  #settleRepair(
+    dial: Dial,
+    repair: Repair,
+    append: ProcessEventArgs<VoiceAgentContract>["append"],
+  ): void {
+    if (dial.truncates) {
+      this.#sendControl(
+        dial,
+        {
+          type: "conversation.item.truncate",
+          item_id: repair.itemId,
+          content_index: repair.contentIndex,
+          audio_end_ms: repair.audioEndMs,
+        },
+        append,
+      );
+    }
+    const segments = dial.answer.transcript;
+    dial.answer.transcript = [];
+    const heardPrefix = segments
+      .filter((segment) => segment.atAnswerAudioMs <= repair.audioEndMs)
+      .map((segment) => segment.text)
+      .join("")
+      .trim();
+    if (heardPrefix === "") return;
+    this.#sendControl(
+      dial,
+      {
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "system",
+          content: [
+            {
+              type: "input_text",
+              text:
+                `The user interrupted your previous spoken reply. They heard only this much of it: ` +
+                `"${heardPrefix}". Nothing after that was heard.`,
+            },
+          ],
+        },
+      },
+      append,
+    );
+  }
+
+  /**
+   * THE FLOOR CHANGED HANDS: kill the answer everywhere, then repair the
+   * model's memory of it.
+   *
+   * One method because its three callers — the button, a VAD onset on a
+   * provider that cancelled server-side, and a confirmed tentative onset —
+   * used to be three hand-copied sites, and the copies drifted into two
+   * real bugs. None of them reset `endsWhenQueueDrains`, so a press on a
+   * SETTLED answer mid-drain left the pacer to mark the end of an answer
+   * the press had just erased (the exact stale marker the Answer docstring
+   * records as a prior bug class). And neither VAD path un-decided a
+   * pending hang-up, so an open-mic listener — whose ONLY barge is VAD —
+   * talked past the goodbye, got the follow-up answered, and the call hung
+   * up anyway. Every barge now does both by construction: taking the floor
+   * back IS un-deciding the hang-up ("the user talked past the goodbye" —
+   * the model already heard "hanging up" as its tool output; the
+   * transcript shows what happened next, the truth).
+   *
+   * `heardMs` is the CALLER's, read before this method zeroes the pacer's
+   * schedule: sent audio minus what still sat unplayed in the device's
+   * buffer when the clear threw it away. A confirmed onset passes the
+   * number frozen at its clear.
+   *
+   * `cancel` — whether to also tell the provider to STOP GENERATING. Only
+   * the press says true: turn_detection is null in push-to-talk, so no
+   * provider VAD will ever cancel for a button. The VAD callers say false
+   * — OpenAI's server_vad `interrupt_response` (pinned true in our
+   * session.update) already cancelled server-side at the onset, and grok
+   * drew an error every time a VAD-triggered cancel was tried. Gated on a
+   * STREAMING answer either way: without the gate every ordinary press (no
+   * answer playing, which is most of them) drew a "nothing to cancel"
+   * error from the provider.
+   */
+  #bargeAnswer(
+    dial: Dial,
+    heardMs: number,
+    decidedAtFacetMs: number,
+    append: ProcessEventArgs<VoiceAgentContract>["append"],
+    cancel: boolean,
+  ): void {
+    dial.hangUpAfterAnswerDrains = null;
+    dial.face?.barge(decidedAtFacetMs);
+    /* Read BEFORE the repair moves a streaming answer to "cancelled". */
+    const responseWasStreaming = dial.answer.phase === "streaming";
+    this.#dropAnswerInFlight(dial, decidedAtFacetMs, append);
+    /* An answer that died unheard must not mark an end: the drain marker
+     * would tell the device a turn finished that the barge just erased. */
+    dial.answer.endsWhenQueueDrains = false;
+    this.#repairBargedAnswerMemory(dial, heardMs, append);
+    if (cancel && responseWasStreaming) {
+      this.#sendControl(dial, { type: "response.cancel" }, append);
+    }
+  }
+
+  /**
+   * A tentative onset proved itself: a turn was committed — the ONE
+   * confirming arm is `input_audio_buffer.committed`; `response.created`
+   * deliberately is not one, see that arm. The retained tail dies now and
+   * the memory repair runs with the heard-ms frozen at the onset's clear,
+   * via #bargeAnswer — so a confirmed turn also un-decides a pending
+   * hang-up, because it IS the user taking the floor back. No-op when
+   * nothing is held, which is every commit outside a barge. The device
+   * needs no second clear (it was silenced at the onset), except when a
+   * retraction let frames slip out in the stopped-to-committed gap — and
+   * then #dropAnswerInFlight's watermark sends exactly one.
+   */
+  #confirmTentativeOnset(dial: Dial, append: ProcessEventArgs<VoiceAgentContract>["append"]): void {
+    const onset = dial.tentativeOnset;
+    if (onset === null) return;
+    dial.tentativeOnset = null;
+    this.#bargeAnswer(dial, onset.heardMs, this.deps.nowAtFacetMs(), append, false);
+  }
+
+  /**
+   * Throw away the answer being spoken, here and on the device, right now.
+   *
+   * THE FLOOR CHANGED HANDS, and every caller means the same thing by it:
+   * every frame minted so far belongs to an answer nobody will hear.
+   *
+   * Grok's `turn_detection` has no `interrupt_response`, so detecting speech
+   * does NOT cancel the answer being generated — and by the time it fires the
+   * generation has usually finished anyway, which is why `response.cancel`
+   * came back as an error every time it was tried. Nothing but us dropping our
+   * own queue stops the audio.
+   *
+   * WHY THIS IS A METHOD AND NOT A CASE. It began as one arm of the provider
+   * switch, reachable only from `speech_started` and `response.created` — and
+   * in push-to-talk `turn_detection` is null, so the provider never sends
+   * `speech_started` at all. The floor changed hands when the button went
+   * down and the only thing that noticed was the next answer, seconds later.
+   * Measured on a real call: the device kept playing a dead answer for the
+   * whole of the press. The button is the third caller.
+   *
+   * A tentative onset takes only the DEVICE half — #clearDeviceSpeaker —
+   * because until it commits or retracts, the local queue is evidence, not
+   * a backlog.
+   */
+  #dropAnswerInFlight(
+    dial: Dial,
+    decidedAtFacetMs: number,
+    append: ProcessEventArgs<VoiceAgentContract>["append"],
+  ): void {
+    dial.speakerQueue = [];
+    dial.deviceBufferEmptyAtFacetMs = 0;
+    this.#clearDeviceSpeaker(dial, decidedAtFacetMs, append);
+  }
+
+  /**
+   * Tell the device to empty its speaker, and touch nothing local.
+   *
+   * THE CLEAR RIDES ON A FRAME, and an empty one is still a frame. The device
+   * is holding up to a head start of dead audio and has to be told NOW, not
+   * when the next answer starts — which is a second and a half later,
+   * measured. So the instruction goes out as a frame of its own with no audio
+   * in it, carrying the next sequence number, and the whole of the device's
+   * policy stays "play frames in order; clear first if the frame says to".
+   *
+   * Sending it as a separate KIND of event was the first cut's mistake in a
+   * different costume: two lanes for one decision, and the one carrying the
+   * clear can arrive behind the audio it invalidates. Riding a numbered frame,
+   * it cannot — the device orders by sequence number and this one is higher
+   * than every frame it cancels.
+   */
+  #clearDeviceSpeaker(
+    dial: Dial,
+    decidedAtFacetMs: number,
+    append: ProcessEventArgs<VoiceAgentContract>["append"],
+  ): void {
+    const clearedThroughDeviceSpeakerFrameSeq = dial.lastDeviceSpeakerFrameSeq;
+    /* Nothing minted since the last clear means nothing to clear: the repeat
+     * blips of a jittery detector cost one append each, and this is where they
+     * stop costing anything at all. */
+    if (clearedThroughDeviceSpeakerFrameSeq <= dial.clearedThroughDeviceSpeakerFrameSeq) return;
+    /* The clear frame gets a number of its own, and the watermark moves PAST
+     * it — otherwise the next blip sees the clear frame as something new to
+     * clear and the guard never closes. */
+    const clearFrameSeq = ++dial.lastDeviceSpeakerFrameSeq;
+    dial.clearedThroughDeviceSpeakerFrameSeq = clearFrameSeq;
+    /* There used to be a durable speaker-flush record appended beside this —
+     * "when was I interrupted" surviving the ephemeral lane. Nothing ever
+     * read it: not a device, not a probe, not a debugging session. The
+     * numbered clear frame IS the flush. */
+    this.runInBackground(() =>
+      append({
+        type: "events.iterate.com/voice-agent/spk-frame",
+        payload: {
+          conversationId: dial.conversationId,
+          deviceSpeakerFrameSeq: clearFrameSeq,
+          pcm: "",
+          clearSpeakerBufferBeforeFrame: true,
+          sentAtFacetMs: decidedAtFacetMs,
+        },
+      }),
+    );
+  }
+
+  /**
+   * Hand over one frame of audio per frame of audio's worth of time.
+   *
+   * THAT IS THE WHOLE RULE, and it is the only thing keeping the device's
+   * speaker buffer from overflowing. Audio plays at one second per second, so
+   * a sender that runs at the same rate can never make the backlog grow: the
+   * board drains exactly as fast as we fill it. What it holds is therefore
+   * bounded by the head start we deliberately give it —
+   * MAX_DEVICE_SPEAKER_BACKLOG_BYTES, one constant, in the unit the board runs
+   * out of, chosen rather than estimated.
+   *
+   * WHAT THIS REPLACED, because the difference is the point. The first version
+   * kept a running guess at how full the device's buffer was, advancing it by
+   * each frame's duration and correcting it whenever it fell behind. That is a
+   * model of memory on another machine, on a clock we do not share, and it can
+   * only ever be wrong in a direction nobody can measure. There is no model
+   * here: `deviceBufferEmptyAtFacetMs` is a schedule this processor invented
+   * and controls, and the device is never mentioned.
+   *
+   * The schedule is a DEADLINE rather than `sleep(FRAME_MS)` between sends,
+   * because the append itself takes time — a fixed sleep would run slower than
+   * real time by however long an append costs, and the board would run dry a
+   * little more with every frame.
+   */
+  #sendSpeakerAudio(
+    dial: Dial,
+    append: ProcessEventArgs<VoiceAgentContract>["append"],
+    runInBackground: ProcessEventArgs<VoiceAgentContract>["runInBackground"],
+  ): void {
+    if (dial.sending) return;
+    dial.sending = true;
+    runInBackground(async () => {
+      try {
+        /*
+         * ONE LOOP, THREE JOBS, AND IT EXITS ONLY WHEN NONE REMAINS. The
+         * straight-line version — drain, then maybe mark, then maybe hang up
+         * — had a window: while it awaited the end-marker append, `sending`
+         * was still held, so a delta landing there queued with no pacer to
+         * come, and a second `output_audio.done` re-raised the marker flag
+         * with nobody left to consume it. The audio was stranded and the
+         * stale flag fired `lastFrameOfAnswer` in the middle of the NEXT
+         * answer. Looping back after every await is the fix: nothing lands
+         * during an await that the next iteration does not see.
+         */
+        for (;;) {
+          /* The dial this pacer belongs to is gone — a hang-up or a re-dial
+           * owns the wire now, and its queue died with it. Stop, so the
+           * release below frees only this dial's lock and the new dial's own
+           * pacer runs unimpeded. */
+          if (this.#dial !== dial) return;
+          /* A tentative onset owns the floor: the queue is evidence held
+           * for a verdict, not a backlog to pace out. The retraction or the
+           * confirm restarts this loop. */
+          if (dial.tentativeOnset !== null && !dial.tentativeOnset.retracted) return;
+          if (dial.speakerQueue.length > 0) {
+            const nowAtFacetMs = this.deps.nowAtFacetMs();
+            /*
+             * A DEADLINE IN THE PAST MEANS THE DEVICE RAN DRY WHILE WE WERE
+             * AWAY, and the backlog cannot be less than nothing.
+             *
+             * Without this the model banks credit for silence the device never
+             * had to play: thirty seconds between answers would "earn" 480 KB of
+             * headroom, which is the firehose this whole lane exists to prevent.
+             */
+            if (dial.deviceBufferEmptyAtFacetMs < nowAtFacetMs) {
+              dial.deviceBufferEmptyAtFacetMs = nowAtFacetMs;
+            }
+            /* PEEK, never shift: a clear arriving during the sleep below has to
+             * be able to filter this frame out of the queue. */
+            const frame = dial.speakerQueue[0]!;
+            /* The frame is base64 and goes out verbatim; its BYTE length —
+             * what every piece of pacing arithmetic below is denominated in
+             * — is read off the string without decoding it. */
+            const frameBytes = base64ByteLength(frame);
+            /*
+             * THE WHOLE SAFETY PROOF, IN ONE INEQUALITY. A frame goes only when
+             * what the device already holds, plus this frame, fits the budget —
+             * so the backlog is never above it. Bytes rather than a frame count
+             * because the tail of a Grok delta is a partial frame, and a count
+             * would mis-size exactly that one.
+             */
+            const overflowBytes =
+              (dial.deviceBufferEmptyAtFacetMs - nowAtFacetMs) * PCM16_BYTES_PER_MS +
+              frameBytes -
+              MAX_DEVICE_SPEAKER_BACKLOG_BYTES;
+            if (overflowBytes > 0) {
+              /* Full. Wait exactly long enough for the overflow to play off, then
+               * look again — the queue may be gone and the clock must be reread. */
+              await this.deps.sleep(Math.ceil(overflowBytes / PCM16_BYTES_PER_MS));
+              continue;
+            }
+            dial.speakerQueue.shift();
+            /* The device runs dry this much later. Advanced from the DEADLINE
+             * rather than from now, so the cost of an append is absorbed and the
+             * average send rate equals the play rate. */
+            dial.deviceBufferEmptyAtFacetMs += frameBytes / PCM16_BYTES_PER_MS;
+            dial.answer.sentMs += frameBytes / PCM16_BYTES_PER_MS;
+            /*
+             * THE FACE FOLDS AT SEND TIME, on the frame the device is about
+             * to play — the cadence the retired per-frame viseme lane had.
+             * Folded at ingest it raced a burst-delivered answer to its
+             * final shape and the mouth stood still for the playout; folded
+             * here it leads playout only by the device's small backlog. The
+             * decode is the one this lane pays for a face, and only when a
+             * face is rendering — which is why `visemes` is certificate
+             * data rather than always-on.
+             */
+            if (dial.face !== null) {
+              dial.face.audio(base64ToBytes(frame), nowAtFacetMs);
+            }
+            const clearFirst = dial.clearSpeakerBufferBeforeNextFrame;
+            dial.clearSpeakerBufferBeforeNextFrame = false;
+            await append({
+              type: "events.iterate.com/voice-agent/spk-frame",
+              payload: {
+                conversationId: dial.conversationId,
+                deviceSpeakerFrameSeq: ++dial.lastDeviceSpeakerFrameSeq,
+                pcm: frame,
+                ...(clearFirst && { clearSpeakerBufferBeforeFrame: true }),
+                sentAtFacetMs: nowAtFacetMs,
+              },
+            });
+            continue;
+          }
+          /*
+           * THE QUEUE IS EMPTY, so if the provider has finished, the device now
+           * holds the whole answer and can be told so. Behind the drain rather
+           * than beside it: that ordering is the guarantee — the marker cannot
+           * overtake audio it is about, because there is none left.
+           */
+          if (dial.answer.endsWhenQueueDrains) {
+            dial.answer.endsWhenQueueDrains = false;
+            /* The tail a retracted onset resumed has now played WHOLE, so
+             * there is nothing left for a late commit to repair — and its
+             * frozen heard-ms is stale: truncating a fully-heard answer to
+             * it would damage the very memory the repair protects. */
+            dial.tentativeOnset = null;
+            /* The mouth closes WITH the marker, not at the provider's done:
+             * SIL at ingest shut it seconds before the speech finished. */
+            dial.face?.answerAudioDone(this.deps.nowAtFacetMs());
+            dial.lastDeviceSpeakerFrameSeq += 1;
+            const clearFirst = dial.clearSpeakerBufferBeforeNextFrame;
+            dial.clearSpeakerBufferBeforeNextFrame = false;
+            await append({
+              type: "events.iterate.com/voice-agent/spk-frame",
+              payload: {
+                conversationId: dial.conversationId,
+                deviceSpeakerFrameSeq: dial.lastDeviceSpeakerFrameSeq,
+                pcm: "",
+                ...(clearFirst && { clearSpeakerBufferBeforeFrame: true }),
+                lastFrameOfAnswer: true,
+                sentAtFacetMs: this.deps.nowAtFacetMs(),
+              },
+            });
+            continue;
+          }
+          /* THE MODEL HUNG UP, and the drain point is where that settles — the
+           * same place lastFrameOfAnswer is decided, for the same reason: it is
+           * where the answer is knowable. The device holds the whole goodbye;
+           * the pacer's own deadline says when it finishes PLAYING. Sleep that
+           * off, re-check (a press during playout un-decides it), then one
+           * atomic append; the ordinary end-requested machinery does the rest.
+           * A hang-up behind a still-STREAMING response is not settleable yet —
+           * `response.done` re-triggers the pacer and it settles then. */
+          if (dial.hangUpAfterAnswerDrains !== null && dial.answer.phase !== "streaming") {
+            await this.deps.sleep(
+              Math.max(0, dial.deviceBufferEmptyAtFacetMs - this.deps.nowAtFacetMs()),
+            );
+            if (this.#dial !== dial) return;
+            /* A LISTENER ANSWERING THE GOODBYE lands exactly here: the
+             * playout sleep is the goodbye's last device-lead seconds, the
+             * likeliest place to talk past it, and settling before the
+             * onset's committed can arrive would hang up mid-user-turn. An
+             * UNRETRACTED hold sends the settle back to the top, where the
+             * pause gate parks the pacer — the confirm un-decides the
+             * hang-up (#bargeAnswer) and a retraction resumes, re-runs this
+             * branch, and settles it. Unretracted holds ONLY: the onset
+             * zeroed the schedule, so continuing for a retracted-but-held
+             * one too would spin this loop through sleep(0) for ever. */
+            if (dial.tentativeOnset !== null && !dial.tentativeOnset.retracted) continue;
+            const reason = dial.hangUpAfterAnswerDrains;
+            if (reason !== null && dial.speakerQueue.length === 0) {
+              dial.hangUpAfterAnswerDrains = null;
+              await this.#requestEnd(dial.conversationId, "hang-up", reason, append);
+            }
+            continue;
+          }
+          return;
+        }
+      } finally {
+        dial.sending = false;
+      }
+    });
+  }
+
+  /** Let the dial and everything hanging off it go. Safe to call twice. */
+  #hangUp(): void {
+    this.#micQueue = [];
+    this.#turnEndedDuringHandshake = false;
+    const dial = this.#dial;
+    this.#dial = null;
+    try {
+      dial?.socket?.close();
+    } catch {
+      /* Already gone. */
+    }
+  }
+}
+
+/* ========================================================================== */
+/* FACET                                                                      */
+/* ========================================================================== */
+
+/**
+ * The credential follows the HOST, never the flag: a test seam pointing at
+ * a fake gets no secret at all, whichever provider it fakes. THE ONE COPY
+ * of the host→secret rule — the dial spends it and setup's gate demands it,
+ * so the two cannot disagree about which secret a stream actually needs.
+ * (Setup used to hard-require /secrets/xai whatever the provider: a fresh
+ * project with provider "openai" failed setup over a credential its dial
+ * would never send, and talk2 carried a workaround creating it.)
+ */
+function secretForHost(hostname: string): string | null {
+  if (hostname === "api.x.ai" || hostname.endsWith(".x.ai")) return XAI_SECRET;
+  if (hostname === "api.openai.com") return OPENAI_SECRET;
+  return null;
+}
+
+export async function dialProviderSocket(
+  provider: VoiceProvider,
+  baseUrl: string | null,
+  model: string,
+): Promise<WebSocket | null> {
+  const target = new URL(baseUrl ?? PROVIDERS[provider].url);
+  target.searchParams.set("model", model);
+  const headers: Record<string, string> = { Upgrade: "websocket" };
+  const secret = secretForHost(target.hostname);
+  if (secret !== null) headers.Authorization = `Bearer getSecret("${secret}")`;
+  const response = await fetch(target.toString(), { headers });
+  /* `?? null` rather than `=== null`: a runtime with no WebSockets in it has no
+   * such property at all, and `undefined === null` is false — which turned a
+   * provider refusal into a TypeError on the next line. */
+  const socket = response.webSocket ?? null;
+  if (socket === null) return null;
+  socket.binaryType = "arraybuffer"; // before accept(): the current default is Blob
+  socket.accept();
+  return socket;
+}
+
+/* ========================================================================== */
+/* SETUP                                                                      */
+/* ========================================================================== */
+
+/*
+ * INSTALLING THIS THING, AND WHY IT IS ITS OWN ENTRYPOINT.
+ *
+ * The first cut's `setupVoiceAgent` was four hundred lines because it also
+ * derived a prompt from the project's live capabilities, installed it as an
+ * agent brief, and proved the running processor folded THAT brief and not an
+ * older one. This one has no capabilities to describe, so the prompt is just
+ * a string the caller passes — and the whole apparatus collapses into: append
+ * the birth certificate, install the subscription, and hold the platform's
+ * fold-through barrier until the facet has folded both.
+ */
+
+/** A stable short digest, so re-running setup with identical input appends nothing. */
 function contentHash(value: unknown): string {
   const json = JSON.stringify(value);
   let hash = 0x811c9dc5;
@@ -1133,40 +3384,22 @@ function contentHash(value: unknown): string {
   return hash.toString(36).padStart(7, "0");
 }
 
+/** Release an RPC wrapper whose contents have already been read. */
+function disposeRpcStub(value: unknown, label: string): void {
+  try {
+    disposeIgnoredRpcResult(value);
+  } catch (error) {
+    console.error("voice-agent RPC stub disposal failed", { error, label });
+  }
+}
+
 /**
- * The idempotency key the birth certificate is appended under.
+ * Where the loader finds this facet: this file, in the project's config repo.
  *
- * ONE OCCURRENCE PER SETUP, and it has to be, for exactly the reason
- * {@link ensureVoiceAgent} gives about the brief: an append keyed on its own
- * CONTENT deduplicates against any identical event already on the stream, so a
- * decision that changed and then changed BACK is silently not applied. Here
- * the decision is which provider to dial, and a morning of hardware runs
- * alternates it — mock, real, another mock, real — so by the second `real` the
- * content key was already taken, nothing was appended, and the newest `created`
- * the fold could see still named a captun tunnel that had closed an hour
- * before. Silent, and it fails as "the call just does not answer".
- *
- * `contentHash` is deliberately NOT used. The stream stays in the key so two
- * streams cannot collide; the setup's own id is what makes it an occurrence.
+ * The key names the durable worker, so it is load-bearing rather than
+ * cosmetic: a second class claiming the same key would be two classes
+ * claiming one identity.
  */
-export function birthCertificateKey(
-  streamPath: string,
-  payload: { providerBaseUrl?: string },
-  setupId: string,
-): string {
-  /* The payload is in the key only so a reader can see what an occurrence
-   * decided; the setup's id is what makes it one. */
-  return `voice-agent/created:${streamPath}:${contentHash(payload)}:setup:${setupId}`;
-}
-
-function base64ToBytes(base64: string): ArrayBuffer {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes.buffer;
-}
-
-/** Where the loader finds the facet class: this file, in the project's config repo. */
 function voiceAgentFacetRef(streamPath: string) {
   return {
     className: "VoiceAgentFacet",
@@ -1182,152 +3415,73 @@ function voiceAgentFacetRef(streamPath: string) {
   } satisfies StatefulDynamicWorkerRef;
 }
 
-/** What setup needs to know to install the agent on a stream. */
+/** How long setup's fold-through barrier waits. A cold facet build is most of it. */
+const WARMUP_DEADLINE_MS = 90_000;
+
+/** What setup needs to know to put this agent on a stream. */
 export interface SetupVoiceAgentOptions {
   /** The conversation stream. A fresh /agents/voice/* path is generated when omitted. */
   streamPath?: string;
   /**
-   * Install the subscription under a fresh key.
-   *
-   * A MANUAL OVERRIDE, no longer a requirement: setup appends its subscription
-   * under a key derived from the stream path and the payload's own content, so
-   * re-running it is a no-op — which is the point, but it also means a
-   * subscription somebody removed would stay removed, the re-install being
-   * deduplicated against the original. Setup now checks whether the
-   * subscription is really active afterwards and heals it under a fresh key if
-   * it is not, so a plain re-run after `removeVoiceAgent` works. This says "do
-   * it again anyway" without asking.
-   */
-  reinstall?: boolean;
-  /**
    * Dial THIS instead of x.ai, for a deterministic test.
    *
-   * A real provider is a bad oracle: its answers vary in length, its deltas
-   * land wherever they land, and "count to one hundred" is ninety seconds of
-   * wall clock per run. A mock speaking exactly N milliseconds on demand turns
-   * every audio question — did anything stutter, overrun, underrun, or speed
-   * up — into arithmetic, against the REAL facet on a REAL deployment rather
-   * than an in-process double.
-   *
-   * NO CREDENTIAL FOLLOWS IT. The URL used to be pinned precisely because a
-   * caller-chosen one is a bearer token waiting to be exfiltrated. It still is,
-   * so the rule is not "trust the caller" but "a host that is not x.ai gets no
-   * Authorization header at all" — see {@link dialGrokSocket}. A mock has no
-   * use for the key, and the only way to receive it remains being x.ai.
+   * NO CREDENTIAL FOLLOWS IT — see {@link secretForHost}: a host that is no
+   * known provider's gets no Authorization header and no setup gate.
    */
   providerBaseUrl?: string;
+  /** Which realtime voice provider the birth certificate names. Default grok. */
+  provider?: VoiceProvider;
+  /** Model and voice overrides for that provider. */
+  providerModel?: string;
+  providerVoice?: string;
+  /** What to tell the model it is. Empty leaves the provider's own default. */
+  instructions?: string;
+  /**
+   * This client segments its own turns with the push-to-talk verbs.
+   *
+   * Omitted means Grok listens, which is what every board wants. Say true only
+   * for a client that really does own its turns — a terminal holding the space
+   * bar — because on an open microphone it means Grok is never told a turn
+   * ended, and the call goes silent with nothing logged.
+   */
+  clientTakesTurns?: boolean;
+  /** The provider's own turn_detection object, verbatim, for open-mic VAD
+   * tuning per stream. Omitted takes the measured defaults. */
+  turnDetection?: Record<string, unknown> & { type: string };
+  /** Classify the answer into mouth shapes for a face-rendering client. */
+  visemes?: boolean;
+  /** Tools the model may call: name/description/parameters go to the
+   * provider; the itx expression is the run. No expression = hang_up. */
+  tools?: z.input<typeof VoiceTool>[];
+  /** Install the subscription under a fresh key even if an identical one exists. */
+  reinstall?: boolean;
 }
 
+/** What setup did, in enough detail for a caller to print it. */
 export interface SetupVoiceAgentResult {
   streamPath: string;
-  created: string[];
-  alreadyThere: string[];
-  /**
-   * Proof that setup left this stream ready, not merely configured.
-   *
-   * `acknowledged` is the processor for this stream having consumed a token and
-   * answered it — the only proof that is not structural. `briefMatched` is that
-   * answer carrying the brief setup just installed, so the running processor is
-   * known to see the current prompt. Setup throws rather than returning with
-   * either false, or with a protocol revision it does not recognise.
-   */
-  warm: {
-    ok: boolean;
-    ms: number;
-    token: string;
-    acknowledged: boolean;
-    briefMatched: boolean;
-    /** The bridge worker calls go through was built and instantiated. */
-    bridgeWarmed: boolean;
-    bridgeWarmMs?: number;
-    protocolRevision?: string;
-    expectedBriefKey: string;
-    expectedSetupId: string;
-    seenBriefKey?: string;
-    seenSetupId?: string;
-    error?: string;
-  };
-}
-
-/*
- * Both lifecycle events carry the subscription's `name`. It is optional only
- * on configuration (an omitted name derives `subscription:<offset>`), and this
- * setup always sends one, so an event without a name is somebody else's.
- */
-const SubscriptionLifecyclePayload = z.object({ name: z.string() });
-
-async function voiceAgentSubscriptionStatus(stream: Stream): Promise<{
-  active: boolean;
-  installation: number;
-}> {
-  let active = false;
-  let installation = 0;
-  using pager = stream.readEvents({
-    eventTypes: [
-      "events.iterate.com/stream/subscription-configured",
-      "events.iterate.com/stream/subscription-removed",
-    ],
-  });
-  for (;;) {
-    const events = await pager.next();
-    if (events.length === 0) break;
-    for (const event of events) {
-      const payload = SubscriptionLifecyclePayload.safeParse(event.payload);
-      if (!payload.success || payload.data.name !== VOICE_AGENT_SUBSCRIPTION_NAME) {
-        continue;
-      }
-      if (event.type === "events.iterate.com/stream/subscription-configured") {
-        installation++;
-        active = true;
-      }
-      if (event.type === "events.iterate.com/stream/subscription-removed") active = false;
-    }
-  }
-  return { active, installation };
+  /** Setup's own clock: batch appended to fold-through proven. Cold build included. */
+  warmMs: number;
 }
 
 export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
   /**
-   * Prove this guest is BUILT, RUNNING, and able to reach its own project.
+   * Prove this guest is built, running, and can reach its own project.
    *
    * A dynamic worker is built lazily on the first call into it, so that first
-   * call carries a cold build — and if the build fails, it fails there, in
-   * whatever the caller happened to be doing. Committing the file says
-   * nothing about whether it compiles.
+   * call carries a cold build and a build failure surfaces in whatever the
+   * caller happened to be doing. Having a call whose only job is to be the
+   * first one means a caller can pay for the build deliberately.
    *
-   * Having a call whose only job is to be the first one means a caller can
-   * wait for the worker deliberately, retry a cold start without retrying
-   * anything that has side effects, and report a build failure as a build
-   * failure rather than as "the conversation would not start".
-   *
-   * It touches `this.itx` on purpose: a worker that loads but cannot reach
-   * its project is not healthy, and answering from a field would prove only
-   * that the isolate booted.
+   * That is the WHOLE job, which the reachable projectId proves. It used to
+   * also report `xaiSecretReady` — a secrets.__describe round trip per poll
+   * that nothing anywhere gated on (talk2 destructured it and printed only
+   * the projectId), and the wrong secret besides for an openai stream.
+   * Setup is where the right secret is demanded, per provider.
    */
-  async health(): Promise<{ ok: true; projectId: string; xaiSecretReady: boolean }> {
+  async health(): Promise<{ ok: true; projectId: string }> {
     const project = await this.itx;
-    const projectId = await project.projectId;
-    const xaiSecret = project.secrets.get(XAI_SECRET);
-    try {
-      const secret = await xaiSecret.__describe();
-      try {
-        /*
-         * Reported rather than thrown. Whether a credential exists is the
-         * caller's decision to act on, and a health check that fails on policy
-         * cannot distinguish "this worker is broken" from "you have not finished
-         * setting up" — which are different problems with different fixes.
-         */
-        return {
-          ok: true,
-          projectId,
-          xaiSecretReady: secret.created === true && secret.hasMaterial === true,
-        };
-      } finally {
-        disposeRpcStub(secret, "health secret description result");
-      }
-    } finally {
-      disposeRpcStub(xaiSecret, "health secret");
-    }
+    return { ok: true, projectId: await project.projectId };
   }
 
   async setupVoiceAgent(options: SetupVoiceAgentOptions = {}): Promise<SetupVoiceAgentResult> {
@@ -1339,2709 +3493,189 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
     }
 
     const project = await this.itx;
-    const xaiSecret = project.secrets.get(XAI_SECRET);
-    let xaiDescription: { created: boolean; hasMaterial: boolean };
-    try {
-      const description = await xaiSecret.__describe();
+    /* Demand exactly the secret the certificate's dial will spend — the one
+     * host→credential rule in secretForHost, shared with the dial itself. A
+     * providerBaseUrl seam resolves to no secret and gets no gate, matching
+     * "a test seam gets no credential". */
+    const dialTarget = new URL(
+      options.providerBaseUrl ?? PROVIDERS[options.provider ?? "grok"].url,
+    );
+    const secretPath = secretForHost(dialTarget.hostname);
+    if (secretPath !== null) {
+      const providerSecret = project.secrets.get(secretPath);
+      let secretReady = false;
       try {
-        xaiDescription = {
-          created: description.created,
-          hasMaterial: description.hasMaterial,
-        };
+        const description = await providerSecret.__describe();
+        try {
+          secretReady = description.created === true && description.hasMaterial === true;
+        } finally {
+          disposeRpcStub(description, "setup secret description result");
+        }
       } finally {
-        disposeRpcStub(description, "setup secret description result");
+        disposeRpcStub(providerSecret, "setup secret");
       }
-    } finally {
-      disposeRpcStub(xaiSecret, "setup secret");
-    }
-    if (!xaiDescription.created || !xaiDescription.hasMaterial) {
-      throw new Error(
-        'Voice agent setup requires secret "/secrets/xai" with material. Create it explicitly with ' +
-          'await itx.secrets.get("/secrets/xai").create({ egress: { urls: ["https://api.x.ai"] }, material: "<xAI API key>" }); then rerun setupVoiceAgent. The voice agent never creates or copies credentials.',
-      );
+      if (!secretReady) {
+        throw new Error(
+          `voice-agent setup requires secret "${secretPath}" with material. Create it with ` +
+            `await itx.secrets.get("${secretPath}").create({ egress: { urls: ["${dialTarget.origin}"] }, ` +
+            `material: "<API key>" }); then rerun. This agent never creates or copies credentials.`,
+        );
+      }
     }
 
-    /*
-     * Setting up is APPENDING, and an append carrying an idempotencyKey is
-     * already idempotent — the platform deduplicates on it. So nothing below
-     * is read before it is written: every event is appended unconditionally
-     * under a key derived from what it is, and a second run appends the same
-     * keys and changes nothing.
-     *
-     * The earlier shape asked "does this exist?" before each append purely to
-     * print a nicer report. That cost four extra round trips, raced with
-     * itself (two concurrent setups would both read "absent" and both claim
-     * to have created), and still could not be trusted. What is reported
-     * instead is derived from what came back: a deduplicated append returns
-     * the event that was already on the stream, so an event older than this
-     * call is one this call did not create.
-     *
-     * There is ONE read, at the end, and it is a different question: not "did
-     * I create this?" but "is this stream actually listening?" — see below.
-     */
     const stream = project.streams.get(streamPath);
-    /* The voice agent for THIS conversation is also its back office. */
-    const backOffice = project.agents.get(streamPath);
-    let voiceEvents: Awaited<ReturnType<Stream["append"]>> | undefined;
-    let agentEvents: Awaited<ReturnType<typeof ensureVoiceAgent>> | undefined;
     try {
-      /* The birth certificate is where per-stream provider configuration
-       * belongs: it is appended once, folded into state, and survives the
-       * eviction that a per-call option would not. */
-      const birthPayload =
-        options.providerBaseUrl === undefined ? {} : { providerBaseUrl: options.providerBaseUrl };
       /*
-       * THE SUBSCRIPTION, as one value, because its KEY is derived from it.
+       * BIRTH AND CONFIGURATION, SPLIT — the explicit-birth doctrine applied
+       * to this agent at last. `created` is existence only, under a key with
+       * nothing but the stream path in it: appended once for the life of the
+       * stream, and a second setup run finds the key taken and appends
+       * nothing, because a second birth is corruption rather than an update.
        *
-       * `name` inside the payload is the platform's own handle on the
-       * subscription and must stay the stable VOICE_AGENT_SUBSCRIPTION_NAME:
-       * that is what makes a re-install REPLACE this subscription rather than
-       * run a second one alongside it, AND — since version 30 — what selects
-       * which registered processor contract the wake runs. The idempotency key
-       * underneath is a different thing entirely and follows the content — see
-       * contentHash.
+       * The configuration is an ordinary event. Which provider to dial and
+       * what to say the model is are per-stream settings that must survive
+       * the eviction a per-call argument would not, so they ride `configured`
+       * — keyed per SETUP RUN, so a morning that alternates mock, real,
+       * mock, real applies each switch. The first cut keyed its config on
+       * content ALONE and by the second `real` the key was taken, nothing
+       * was appended, and the fold still named a tunnel that had closed an
+       * hour before.
        */
+      /* SetupVoiceAgentOptions IS the configured payload plus the two
+       * setup-only keys — the rest-destructure says so, where a lattice of
+       * eight conditional spreads used to. An explicitly-undefined value
+       * survives the rest but vanishes in JSON.stringify, at the content
+       * hash and on the wire alike, so the appended payload is
+       * byte-identical either way. */
+      const { streamPath: _streamPath, reinstall: _reinstall, ...configPayload } = options;
+      /*
+       * ONE IDENTITY FOR THIS SETUP: the setup id makes every run an
+       * OCCURRENCE rather than a value, so the configuration is re-applied
+       * however often the same content recurs. (A content hash rode this
+       * key once, decoratively — the fresh setupId already made every key
+       * new; the subscription key below is where content-dedupe is real.)
+       */
+      const setupId = crypto.randomUUID();
       const subscriptionPayload = {
-        name: VOICE_AGENT_SUBSCRIPTION_NAME,
-        description: "Wake the separately deployed voice-agent guest for call requests.",
-        /*
-         * THE FILTER IS THE CONTRACT'S OWN `consumes`, and it must be.
-         *
-         * Delivery is this filter INTERSECTED with `consumes`, so a type in
-         * one and not the other is silently never delivered. Maintaining two
-         * hand-written lists of the same thing cost three separate debugging
-         * sessions in one day: first the audio types, then the warm-up
-         * handshake, then the press verbs — each time the symptom was total
-         * silence with nothing in any log, because a filtered-out event leaves
-         * no trace anywhere.
-         *
-         * Deriving it means the two cannot drift. Adding a type to `consumes`
-         * is now the whole change.
-         */
-        filter: { eventTypes: [...VoiceAgentFacetContract.consumes] },
-        /*
-         * A FACET, IN THIS STREAM'S OWN DURABLE OBJECT.
-         *
-         * This could not be done until #2455: a facet used to be dialled by
-         * name out of the composition in processor-facet-durable-object.ts,
-         * whose arms are chosen purely from the stream path, so a facet
-         * contract had to be one the OS worker itself registers. This contract
-         * is defined here, in the project's config repo, so it could not be in
-         * that composition. `source: userspace` LOADS the class from the repo
-         * instead, which removes that restriction entirely.
-         *
-         * What it buys is a hop per frame. The old expression lane woke a
-         * SECOND Durable Object that held the provider socket, so every 20 ms
-         * of microphone crossed a DO boundary on the way out and every 20 ms
-         * of answer crossed it coming back. In-facet, delivery is a function
-         * call and the socket is the only network boundary left.
-         */
+        name: VoiceAgentContract.slug,
+        description: "Wake the voice-agent facet in this stream's own Durable Object.",
+        /* DERIVED from the contract, never hand-written: delivery is this filter
+         * INTERSECTED with `consumes`, so a type in one list and not the other is
+         * silently never delivered, and two hand-maintained copies of one list
+         * drift. Adding a type to `consumes` is now the whole change. */
+        filter: { eventTypes: [...VoiceAgentContract.consumes] },
         receiver: {
           action: "facet-processor",
           source: { kind: "userspace", worker: voiceAgentFacetRef(streamPath) },
         },
       };
-      const subscriptionKeyPrefix = `voice-agent/subscription-configured:${streamPath}`;
-      const subscriptionKey = options.reinstall
-        ? `${subscriptionKeyPrefix}:reinstall:${crypto.randomUUID()}`
-        : `${subscriptionKeyPrefix}:${contentHash(subscriptionPayload)}`;
-      /*
-       * ONE IDENTITY FOR THIS SETUP, carried by the brief it installs and by the
-       * marker that names it, so the acknowledgement can be checked against THIS
-       * setup rather than against whatever the stream last happened to hold.
-       */
-      const setupId = crypto.randomUUID();
-      const birthKey = birthCertificateKey(streamPath, birthPayload, setupId);
-      const startedAt = Date.now();
-      /*
-       * Keep RPC ownership sequential: if the agent branch rejects after the
-       * stream branch fulfills, the outer finally still owns and releases the
-       * first wrapper. Promise.all cannot expose that fulfilled sibling on its
-       * rejection path.
-       */
-      voiceEvents = await stream.append(
+      const subscriptionKeyPrefix = `voice-agent/subscription:${streamPath}`;
+      const committed = await stream.append(
         {
           type: "events.iterate.com/voice-agent/created",
-          idempotencyKey: birthKey,
-          payload: birthPayload,
+          idempotencyKey: `voice-agent/created:${streamPath}`,
+          payload: {},
+        },
+        {
+          type: "events.iterate.com/voice-agent/configured",
+          idempotencyKey: `voice-agent/configured:${streamPath}:setup:${setupId}`,
+          payload: configPayload,
         },
         {
           type: "events.iterate.com/stream/subscription-configured",
-          idempotencyKey: subscriptionKey,
+          idempotencyKey: options.reinstall
+            ? `${subscriptionKeyPrefix}:reinstall:${crypto.randomUUID()}`
+            : `${subscriptionKeyPrefix}:${contentHash(subscriptionPayload)}`,
           payload: subscriptionPayload,
         },
       );
-      /* Born and briefed — the same helper the call path uses, so a call that
-       * never went through setup gets the same colleague. The brief text comes
-       * from the project's live __describe every time, which is the whole point:
-       * a device that gained or lost a method must not be described by a prompt
-       * written before it did. */
-      agentEvents = await ensureVoiceAgent(
-        backOffice,
-        capabilityBrief(await readProvidedCapabilities(project)),
-        setupId,
-      );
-
-      /*
-       * THE MARKER, appended after the brief it names.
-       *
-       * Delivery is ordered, so a processor that receives the warm-up token has
-       * already folded this. Its type is in the subscription filter below, which
-       * is how the processor learns which brief is current without reading any
-       * history — the thing three successive read designs could not do exactly.
-       */
-      const installedBrief = agentEvents?.at(-1);
-      if (!installedBrief?.idempotencyKey) {
-        throw new Error(
-          `setupVoiceAgent: the brief append for ${streamPath} returned no event, so there is ` +
-            `nothing to mark current`,
-        );
-      }
-      const installedBriefContent = z
-        .object({ content: z.string() })
-        .parse(installedBrief.payload).content;
-      const briefMarker = {
-        setupId,
-        briefKey: installedBrief.idempotencyKey,
-        contentHash: contentHash({
-          content: installedBriefContent,
-        }),
-      } satisfies BriefMarker;
-      await discardRpcResult(
-        stream.append({
-          type: BRIEF_MARKER_TYPE,
-          idempotencyKey: `voice-agent/brief-current:${setupId}`,
-          payload: { ...briefMarker },
-        }),
-        "brief marker append result",
-      );
-
-      const created: string[] = [];
-      const alreadyThere: string[] = [];
-      for (const event of [...(voiceEvents ?? []), ...(agentEvents ?? [])]) {
-        const key = event.idempotencyKey ?? `${event.path}@${String(event.offset)}`;
-        (Date.parse(event.createdAt) < startedAt ? alreadyThere : created).push(key);
-      }
-      /*
-       * AND IS IT ACTUALLY LISTENING?
-       *
-       * Setup's contract is "this stream is ready to hold a conversation", so it
-       * must not report success having left it deaf. The append above
-       * deduplicates against the original install, which is the point — but
-       * after `removeVoiceAgent` the original is REMOVED, and a deduplicated
-       * re-append changes nothing while reporting that it did. Nobody discovers
-       * that until a conversation fails to start.
-       */
-      if (!(await voiceAgentSubscriptionStatus(stream)).active) {
-        const healKey = `${subscriptionKeyPrefix}:reinstall:${crypto.randomUUID()}`;
-        await discardRpcResult(
-          stream.append({
-            type: "events.iterate.com/stream/subscription-configured",
-            idempotencyKey: healKey,
-            payload: subscriptionPayload,
-          }),
-          "subscription heal append result",
-        );
-        created.push(healKey);
-      }
-
-      /*
-       * AND IS IT WARM?
-       *
-       * Setup used to return with the subscription configured and the worker
-       * never instantiated, so the FIRST call paid for building it. Measured: the
-       * bridge's own share of a call start is ~1.4s (dial 0.5s, session.created
-       * 0.6-1.2s, accepted 0.8-1.4s), yet the first call after a remount took 8-16s
-       * to go live. All of that difference is pre-bridge — the dynamic worker being
-       * built and its processor woken — and a remount left it cold every time,
-       * which is why removing the harness's duplicate-press retry did not help.
-       *
-       * So setup warms the processor it just configured and does not return until
-       * it has answered. Bounded, and reported rather than swallowed: a setup that
-       * could not warm its own worker says so, because the alternative is a caller
-       * that thinks it is ready and then waits 16 seconds.
-       */
-      /*
-       * WARM-UP: A TOKEN THROUGH THE REAL PROCESSOR, AND THE BRIEF IT SEES.
-       *
-       * Nothing structural can prove readiness. A registered subscription is a
-       * fact about the STREAM; a health reply from a ref proves a wrapper answered;
-       * reading `this.processor` only fetches a function. Each of those was tried
-       * and each was vacuous. What is left is an end-to-end round trip: append a
-       * benign token, have the processor that owns this stream consume it and
-       * answer with that token plus the brief it can actually resolve, and refuse
-       * to return until the answer matches.
-       *
-       * The cost this exists to remove: the first call after a remount paid for
-       * compiling this file out of the config repo — 8 to 16 seconds to go live
-       * against a bridge whose own share is 1.4.
-       *
-       * The warm-up event starts no call and reaches neither the provider nor the
-       * device's downlink, which subscribe to different types.
-       */
-      /*
-       * WHAT THE ACKNOWLEDGEMENT MUST NAME: the brief this setup installed, by the
-       * identity this setup gave it.
-       *
-       * Nothing is read to establish this. The brief was appended under
-       * `...:setup:<setupId>` and the marker naming it was appended straight after,
-       * so the expectation is a fact this function created rather than an
-       * observation it went looking for. That closes the last hole: an earlier
-       * version derived the expectation from its own append result, which was null
-       * whenever the refresh deduplicated, and the check degraded to "the
-       * processor resolved SOME brief".
-       */
-      const expectedBriefKey = briefMarker.briefKey;
-      const token = crypto.randomUUID();
-      const warm: {
-        ok: boolean;
-        ms: number;
-        token: string;
-        acknowledged: boolean;
-        briefMatched: boolean;
-        bridgeWarmed: boolean;
-        bridgeWarmMs?: number;
-        protocolRevision?: string;
-        expectedBriefKey: string;
-        expectedSetupId: string;
-        seenBriefKey?: string;
-        seenSetupId?: string;
-        error?: string;
-      } = {
-        ok: false,
-        ms: 0,
-        token,
-        acknowledged: false,
-        briefMatched: false,
-        bridgeWarmed: false,
-        expectedBriefKey,
-        expectedSetupId: setupId,
-      };
-      const warmStartedAt = Date.now();
-      /*
-       * THE WAIT STARTS BEHIND THE QUESTION, and that is the whole repair.
-       *
-       * `waitForEvent` with no `afterOffset` watches from the head it finds
-       * when it opens — which is AFTER this append has returned, and by then a
-       * warm facet has already answered. MEASURED on preview-3: `warmup` at
-       * 16:04:11.970 and `warmup-ready` at 16:04:12.166, 196ms apart and both
-       * on the stream, while this call sat out its full 90-second deadline and
-       * reported `acknowledged=false`. A readiness probe that fails BECAUSE
-       * the processor was ready is worse than no probe: it cost most of a
-       * day's debugging, and the facet it condemned went on to hold a call for
-       * fifteen minutes.
-       *
-       * Anchoring the wait one offset behind the token's own commit makes the
-       * answer impossible to miss — it is replayed if it already landed — and
-       * costs nothing when the facet really is cold.
-       */
-      const warmupAppend = await stream.append({
-        type: "events.iterate.com/voice-agent/warmup",
-        payload: { token },
-      });
-      let waitAfterOffset = 0;
+      /* The batch's HIGHEST offset is the barrier target: an idempotent
+       * re-append returns the ORIGINAL committed events, so a re-run of setup
+       * waits on offsets long since folded and returns at once. */
+      let setupBatchMaxOffset = 0;
       try {
-        const committed = warmupAppend.at(0);
-        waitAfterOffset = committed === undefined ? 0 : committed.offset - 1;
+        for (const event of committed) {
+          setupBatchMaxOffset = Math.max(setupBatchMaxOffset, event.offset);
+        }
       } finally {
-        disposeRpcStub(warmupAppend, "warm-up append result");
+        disposeRpcStub(committed, "setup stream append result");
       }
+
+      /*
+       * THE PLATFORM'S OWN BARRIER, where a token knock used to be.
+       *
+       * `waitUntilProcessed` resolves once the facet subscription has durably
+       * folded through the batch above — forcing the same cold build the
+       * knock forced, and proving strictly more than the echo proved: not
+       * "someone answered" but "the fold has REACHED the birth certificate".
+       * The knock (a warmup event the facet echoed back, token and colo
+       * attached) dated from the pre-facet delivery lane, where an append
+       * proved nothing about the processor behind it; the facet
+       * subscription's barrier is precise even mid-connection, so the whole
+       * anchored-offset dance dies with the two warmup events.
+       *
+       * ENFORCED by the throw inside the barrier's timeout, not reported:
+       * setup's contract is "ready to hold a conversation", and a caller that
+       * has to check a boolean will eventually forget to.
+       */
+      const warmStartedAt = Date.now();
+      const subscription = stream.subscriptions.get(VoiceAgentContract.slug);
       try {
-        /*
-         * BOTH ANSWERS, so a failure is classified in milliseconds rather than
-         * being indistinguishable from a processor that never woke. The token
-         * correlates either one to THIS attempt: a stale answer from a previous
-         * setup on this long-lived stream must not satisfy or fail this one.
-         */
-        const answer = await stream.waitForEvent({
-          afterOffset: waitAfterOffset,
-          eventTypes: [
-            "events.iterate.com/voice-agent/warmup-ready",
-            "events.iterate.com/voice-agent/warmup-unresolved",
-          ],
-          predicate: (event) => (event.payload as { token?: string } | null)?.token === token,
+        await subscription.waitUntilProcessed({
+          offset: setupBatchMaxOffset,
           timeoutMs: WARMUP_DEADLINE_MS,
         });
-        try {
-          const payload = (answer.payload ?? {}) as {
-            briefKey?: string;
-            briefSetupId?: string;
-            protocolRevision?: string;
-            reason?: string;
-            stage?: string;
-            bridgeWarmMs?: number;
-          };
-          if (answer.type === "events.iterate.com/voice-agent/warmup-unresolved") {
-            /* Woke and failed. Never a success, whatever else matches. */
-            warm.error =
-              `the processor woke and got as far as the ${payload.stage ?? "unknown"} stage: ` +
-              `${payload.reason ?? "(no reason given)"}`;
-          } else {
-            warm.acknowledged = true;
-            warm.protocolRevision = payload.protocolRevision;
-            warm.seenBriefKey = payload.briefKey;
-            /*
-             * EXACTLY the brief at the head. Not "a brief", not "non-empty" — the
-             * same idempotencyKey, which is what makes this a proof that the prompt
-             * derived from the current __describe is the prompt the running processor
-             * will use.
-             */
-            warm.seenSetupId = payload.briefSetupId;
-            /*
-             * THIS setup's brief, by both halves of its identity.
-             *
-             * The key alone would be satisfied by an identical brief installed by
-             * some other setup; the setupId alone would not prove which context
-             * event it named. Requiring both makes the acknowledgement a statement
-             * about the prompt this call to setupVoiceAgent just derived from
-             * __describe and appended.
-             */
-            warm.briefMatched =
-              payload.briefKey === expectedBriefKey && payload.briefSetupId === setupId;
-            warm.bridgeWarmMs = payload.bridgeWarmMs;
-            /*
-             * The bridge leg is part of readiness, not a detail: an acknowledgement
-             * carrying no bridge timing came from a processor that never reached it,
-             * which is exactly the state that cost 8 seconds on the first call.
-             */
-            warm.bridgeWarmed = typeof payload.bridgeWarmMs === "number";
-            warm.ok =
-              warm.briefMatched &&
-              warm.bridgeWarmed &&
-              payload.protocolRevision === WARMUP_PROTOCOL_REVISION;
-          }
-        } finally {
-          disposeRpcStub(answer, "warm-up wait result");
-        }
-      } catch (error) {
-        warm.error = String(error).slice(0, 160);
+      } finally {
+        disposeRpcStub(subscription, "setup subscription");
       }
-      warm.ms = Date.now() - warmStartedAt;
-      /* ENFORCED, not reported: setup's contract is "ready to hold a conversation". */
-      if (!warm.ok) {
-        throw new Error(
-          `setupVoiceAgent: the processor for ${streamPath} did not acknowledge warm-up within ` +
-            `${warm.ms}ms — acknowledged=${String(warm.acknowledged)} ` +
-            `briefMatched=${String(warm.briefMatched)} ` +
-            `bridgeWarmed=${String(warm.bridgeWarmed)} ` +
-            `protocol=${warm.protocolRevision ?? "(none)"} expected=${WARMUP_PROTOCOL_REVISION} ` +
-            `expectedBrief=${expectedBriefKey} ` +
-            `seenBrief=${warm.seenBriefKey ?? "(none)"} ` +
-            `expectedSetup=${setupId} seenSetup=${warm.seenSetupId ?? "(none)"}` +
-            (warm.error ? ` lastError=${warm.error}` : ""),
-        );
-      }
-      return { streamPath, created, alreadyThere, warm };
+      return { streamPath, warmMs: Date.now() - warmStartedAt };
     } finally {
-      disposeRpcStub(agentEvents, "setup agent append result");
-      disposeRpcStub(voiceEvents, "setup stream append result");
-      disposeRpcStub(backOffice, "setup back-office agent");
       disposeRpcStub(stream, "setup stream");
     }
   }
 
-  async removeVoiceAgent(options: { streamPath: string }): Promise<{
-    streamPath: string;
-    removed: string[];
-    alreadyAbsent: string[];
-    /**
-     * What to call to get this stream talking again.
-     *
-     * Named here because setup's subscription key is derived from the stream
-     * path and the payload's content, so a plain re-run after a removal
-     * deduplicates against the original install. Setup heals that itself now —
-     * it checks the subscription really is active and re-installs it under a
-     * fresh key if not — but saying so still beats making the caller work it
-     * out by watching a conversation fail to start.
-     */
-    reinstallWith: string;
-  }> {
-    if (!options.streamPath?.startsWith("/")) {
-      throw new Error(
-        `removeVoiceAgent requires an absolute streamPath; received ${JSON.stringify(options.streamPath)}`,
-      );
-    }
+  /** Take the subscription off a stream, so the facet stops waking. */
+  async removeVoiceAgent(options: { streamPath: string }): Promise<{ streamPath: string }> {
     const project = await this.itx;
     const stream = project.streams.get(options.streamPath);
     try {
-      const subscription = await voiceAgentSubscriptionStatus(stream);
-
-      const removed: string[] = [];
-      const alreadyAbsent: string[] = [];
-      if (subscription.active) {
-        const removalKey = `voice-agent/subscription-removed:v1:${options.streamPath}:install:${subscription.installation}`;
-        await discardRpcResult(
-          stream.append({
-            type: "events.iterate.com/stream/subscription-removed",
-            idempotencyKey: removalKey,
-            payload: { name: VOICE_AGENT_SUBSCRIPTION_NAME, reason: "requested" },
-          }),
-          "subscription removal append result",
-        );
-        removed.push(removalKey);
-      } else {
-        alreadyAbsent.push(VOICE_AGENT_SUBSCRIPTION_NAME);
-      }
-
-      return {
-        streamPath: options.streamPath,
-        removed,
-        alreadyAbsent,
-        reinstallWith: `setupVoiceAgent({ streamPath: ${JSON.stringify(options.streamPath)}, reinstall: true })`,
-      };
+      const removed = await stream.append({
+        type: "events.iterate.com/stream/subscription-removed",
+        idempotencyKey: `voice-agent/subscription-removed:${options.streamPath}:${crypto.randomUUID()}`,
+        payload: { name: VoiceAgentContract.slug },
+      });
+      disposeRpcStub(removed, "remove append result");
+      return { streamPath: options.streamPath };
     } finally {
       disposeRpcStub(stream, "remove stream");
     }
   }
-
-  /** Spike diagnostic: dial Grok realtime through the egress lane, report timings. */
-  async probeGrok(): Promise<Record<string, unknown>> {
-    const t0 = Date.now();
-    const response = await fetch("https://api.x.ai/v1/realtime?model=grok-voice-think-fast-2.0", {
-      headers: { Upgrade: "websocket", Authorization: 'Bearer getSecret("/secrets/xai")' },
-    });
-    const socket = response.webSocket;
-    if (socket === null) {
-      return { ok: false, status: response.status, body: (await response.text()).slice(0, 300) };
-    }
-    socket.accept();
-    const upgradeMs = Date.now() - t0;
-    const seen: string[] = [];
-    const result = await new Promise<Record<string, unknown>>((resolve) => {
-      const timer = setTimeout(() => resolve({ ok: false, reason: "timeout", seen }), 10_000);
-      socket.addEventListener("message", (message) => {
-        if (typeof message.data !== "string") return;
-        const event = JSON.parse(message.data) as { type?: string };
-        seen.push(event.type ?? "?");
-        if (event.type === "session.created") {
-          socket.send(JSON.stringify({ type: "session.update", session: { voice: "eve" } }));
-        }
-        if (event.type === "session.updated") {
-          clearTimeout(timer);
-          resolve({ ok: true, upgradeMs, sessionReadyMs: Date.now() - t0, seen });
-        }
-      });
-      socket.addEventListener("close", (event) => {
-        clearTimeout(timer);
-        resolve({ ok: false, reason: `closed ${event.code}`, seen });
-      });
-    });
-    socket.close();
-    return result;
-  }
-
-  /*
-   * There is no HTTP door any more.
-   *
-   * This routed `x-iterate-app: voice` into a per-call VoiceBridge Durable
-   * Object. The agent is a facet of the stream's own DO now: it is reached by
-   * appending to the stream, and a call is opened by pressing a button, not by
-   * fetching a URL.
-   */
-  async fetch(): Promise<Response> {
-    return new Response("voicelab project worker — the voice agent is a facet of its stream", {
-      headers: { "content-type": "text/plain" },
-    });
-  }
 }
 
-/**
- * Dial the provider.
- *
- * `baseUrl` overrides the endpoint so a test can point a real deployment at a
- * mock and get a provider that says exactly what the test asked for, for
- * exactly as long. It is deliberately NOT a general-purpose knob.
- *
- * THE CREDENTIAL RULE IS THE WHOLE SAFETY ARGUMENT, and it does not depend on
- * trusting whoever set the URL. A caller-chosen endpoint is a bearer token
- * waiting to follow it somewhere it should not go, so the Authorization header
- * is attached only when the host IS x.ai. Anywhere else gets the dial and no
- * key — which is all a mock ever needed, and which means the worst an attacker
- * can do by writing this field is talk to their own empty socket.
- */
-export async function dialGrokSocket(baseUrl: string | null): Promise<WebSocket | null> {
-  const target = new URL(baseUrl ?? GROK_REALTIME_URL);
-  target.searchParams.set("model", GROK_MODEL);
-  const headers: Record<string, string> = { Upgrade: "websocket" };
-  if (target.hostname === "api.x.ai" || target.hostname.endsWith(".x.ai")) {
-    headers.Authorization = `Bearer getSecret("${XAI_SECRET}")`;
-  }
-  const response = await fetch(target.toString(), { headers });
-  /*
-   * `?? null` RATHER THAN `=== null`, because "no socket on it" has two
-   * spellings. A platform Response carries `webSocket: null` when the upgrade
-   * did not happen; a Response from a runtime that has no WebSockets in it at
-   * all — the one a test or a local driver holds — simply has no such property,
-   * and `undefined === null` is false. The strict test therefore let the
-   * undefined through, and the line below turned a provider REFUSAL into
-   * `TypeError: Cannot set properties of undefined (setting 'binaryType')`
-   * written on the stream where the reason belongs. Named by
-   * voice-agent.fake-grok.e2e.test.ts's `?refuseUpgrade=1`.
-   */
-  const socket = response.webSocket ?? null;
-  if (socket === null) return null;
-  socket.binaryType = "arraybuffer"; // before accept(): the post-2025-03-17 default is Blob
-  socket.accept();
-  return socket;
-}
-
-/** The one `session.update` this facet sends, on the `session.created` edge. */
-function grokSessionUpdate(serverVad: boolean): Record<string, unknown> {
-  return {
-    type: "session.update",
-    session: {
-      type: "realtime",
-      audio: {
-        input: {
-          format: { type: "audio/pcm", rate: 16_000 },
-          /* A push-to-talk board segments its own turns with its button, and
-           * server VAD on top of that answers halfway through a sentence. An
-           * open-mic board has no button at all: without server VAD nothing
-           * ever commits its audio and the call is silent forever. The board's
-           * echo story decides which it is (the SKILL's
-           * capture_is_echo_cancelled rule), carried here per client. */
-          turn_detection: serverVad ? { type: "server_vad", ...SERVER_VAD } : null,
-        },
-        output: { format: { type: "audio/pcm", rate: 16_000 }, voice: GROK_VOICE },
-      },
-    },
-  };
-}
-
-/**
- * Clients whose microphone rides the whole call open (hardware/tuned echo
- * cancellation, no talk button). Their turns belong to server VAD; everyone
- * else segments manually with ptt-start/ptt-end.
- */
-const OPEN_MIC_CLIENTS = new Set([
-  "/clients/stackchan",
-  "/clients/home-assistant-voice-preview-edition",
-]);
-
-/**
- * How hard the provider listens before it believes somebody is talking.
- *
- * xAI's own defaults are `threshold: 0.85` (of a documented 0.1–0.9) and
- * `prefix_padding_ms: 333`, and sending `{ type: "server_vad" }` with nothing
- * else — which this did — takes them. 0.85 is the most conservative setting
- * the API offers, chosen upstream for devices whose microphone carries their
- * own loudspeaker: it is a way of not believing an echo. Measured cost on a
- * board that does not need that protection: x.ai reported an interruption
- * 2489 ms after the Mac started speaking, twice, within six milliseconds of
- * each other — a detector waiting for the loudest syllable of the sentence
- * rather than its onset.
- *
- * This board earns a lower threshold rather than assuming one. On the AEC tap
- * its echo residual sits about a decibel above the room floor and a person
- * lands 7 to 21 dB above THAT, so there is real distance to spend, and the
- * `ANSWER` line in `voicelab aec --real` is the check that spending it has
- * not started the device interrupting itself. If self-interruptions ever
- * reappear, this number is the first thing to move back up — and the tap it
- * depends on is the reason it can be this low at all
- * (apps/kit/firmware/devices/havpe/voice_pe_hardware_config.c).
- *
- * `prefix_padding_ms` keeps the audio just BEFORE the detector fired, so a
- * lower threshold does not cost the first consonant of the interruption.
- */
-const SERVER_VAD = {
-  threshold: 0.4,
-  prefix_padding_ms: 333,
-} as const;
-
-/*
- * ============================================================================
- * THE VOICE AGENT AS A FACET
- * ============================================================================
- *
- * One processor, hosted in the Stream Durable Object that owns the call's own
- * stream, that happens to hold a Grok socket open behind it.
- *
- * WHY THIS IS FASTER, and it is the whole point. The bridge above is a second
- * Durable Object: every 20 ms microphone frame was appended here, delivered
- * over RPC to that worker, decoded there, and pushed to Grok — one extra hop,
- * every frame, in both directions. A facet runs INSIDE this stream's own
- * incarnation, so delivery is a function call. The socket is the only network
- * boundary left between a device's microphone and the model.
- *
- * The shape is deliberately boring: `reduce` is one switch and is pure,
- * `processEvent` is one switch and never blocks the lane. Everything slow —
- * dialing Grok, waiting for a session, playing audio back — happens in
- * background work owned by the incarnation, and the fold is what recovers it.
- */
-
-/**
- * The live Grok session for ONE call, owned by one processor incarnation.
- *
- * Deliberately not durable and deliberately not in reduced state: a socket
- * cannot be folded. What survives an eviction is the stream's own record that
- * a call was requested and not yet ended, and the at-head pass re-dials from
- * that. This class is therefore free to be plain mutable state.
- *
- * FRAMES ARRIVING BEFORE THE SESSION IS UP ARE BUFFERED, NOT DROPPED. A device
- * starts talking the instant its button goes down — that is the entire latency
- * budget — and the handshake takes as long as it takes. Audio captured during
- * the handshake is exactly the audio the user cared about most, so it queues
- * here and is flushed in order the moment the provider is ready.
- */
-
-class GrokCall {
-  readonly conversationId: string;
-  /** Null until `session.updated`; queued PCM is flushed on that edge. */
-  #socket: WebSocket | null = null;
-  #ready = false;
-  #closed = false;
-  /**
-   * Everything to say to the provider, held until the session is configured.
-   *
-   * MESSAGES, not PCM. Queueing decoded audio meant only audio was queued:
-   * `input_audio_buffer.clear` and a text turn went straight to `send`, so
-   * before the socket existed they were dropped on the floor, and after it
-   * existed but before `session.updated` they were pushed into a session that
-   * was not configured yet. One queue orders all three for free.
-   *
-   * Null once the provider is configured — the flag and the buffer are the
-   * same thing, so they cannot disagree.
-   */
-  #pending: Record<string, unknown>[] | null = [];
-  #openedAtMs: number;
-  #readyAtMs: number | null = null;
-  #framesQueued = 0;
-  /**
-   * THE ANSWER, HELD HERE INSTEAD OF ON THE DEVICE.
-   *
-   * The provider emits a ninety-second answer in a few seconds. Somebody has
-   * to hold the difference, and for a while it was the board — its ring was
-   * grown to thirty seconds and redescribed as "the answer" rather than a
-   * cushion. This is that buffer, moved to where memory is free and a unit
-   * test can watch it. See speaker.ts; everything about pacing lives there and
-   * nothing about it lives here.
-   */
-  speaker: SpeakerState = speakerStart();
-  /** Set while the facet's drain loop is alive for this call. */
-  pacerRunning = false;
-  /** Tail of this call's speaker append chain — see {@link inSpeakerOrder}. */
-  #speakerTail: Promise<unknown> = Promise.resolve();
-  /*
-   * THE MOUTH IS THE SERVER'S, not the board's.
-   *
-   * Boards have subscribed to `viseme` since the sprite work landed, and the
-   * facet has never emitted one — every reference to the emitter lived in the
-   * bridge, so lip-sync has been silently off for the whole facet era. The
-   * classifier is unchanged and still covered by its own tests; all that was
-   * missing was a caller on this side.
-   *
-   * It rides the speaker lane deliberately: a viseme is a claim about a
-   * position in the answer's audio, so it has to be ordered against the frames
-   * it describes, and appending it in the same batch makes that free.
-   */
-  #visemes: ReturnType<typeof createVisemeEmitter>;
-  #answerSeq = 0;
-  /** The provider's own id for the answer in flight — see {@link answerIs}. */
-  #answerId: string | null = null;
-  /*
-   * THE OBLIGATION THAT KEEPS THE DURABLE OBJECT UP, and its one release.
-   *
-   * A call is work in flight for as long as it is open, so the processor
-   * registers this promise as `runInBackground` work at the dial (see `#dial`)
-   * and the runner's keepalive holds the object — and revives it — until the
-   * promise settles. There is no `setAlarm` anywhere in this file, and there
-   * must not be: the keepalive already parks a durable alarm ahead of tracked
-   * work, and a second timer would be a second answer to the same question.
-   *
-   * It resolves in {@link close}, which is deliberate rather than convenient:
-   * `close` is the ONE route out of a call — the idle end, a device's own, a
-   * provider close, a failed dial, being superseded — so "the object may
-   * hibernate" and "this call is over" are the same event by construction and
-   * cannot come apart.
-   */
-  #declareOver!: () => void;
-  readonly over: Promise<void>;
-
-  /** The processor's clock, so `spoke` stays a one-line assignment at every
-   * call site — including `send`, where forgetting it would silently stop a
-   * whole class of traffic counting as somebody talking. */
-  readonly #now: () => number;
-
-  constructor(conversationId: string, now: () => number) {
-    this.conversationId = conversationId;
-    this.#now = now;
-    this.#openedAtMs = now();
-    /* Opening a call IS somebody speaking; the minute starts here, so a dial
-     * that neither completes nor errors ages out on the same clock as a
-     * silence rather than never. */
-    this.lastSpokeAtMs = this.#openedAtMs;
-    this.#visemes = createVisemeEmitter(conversationId);
-    this.over = new Promise<void>((resolve) => {
-      this.#declareOver = resolve;
-    });
-  }
-
-  get ready(): boolean {
-    return this.#ready;
-  }
-  get closed(): boolean {
-    return this.#closed;
-  }
-  /**
-   * When THIS dial began — the identity of one attempt at a conversation.
-   *
-   * A rescued call re-dials under the SAME conversationId, so anything keyed
-   * on the conversation alone claims to be the same fact twice. For a
-   * statement that is genuinely per-dial (how long the handshake took, how
-   * much audio it held) that is a lie the stream REJECTS rather than
-   * deduplicates, and the rejection takes its whole append batch with it.
-   */
-  get openedAtMs(): number {
-    return this.#openedAtMs;
-  }
-
-  /**
-   * Is this call still worth talking to?
-   *
-   * A socket can die without its close listener ever running — the provider
-   * goes away, the incarnation is resumed, the event is simply missed — and
-   * the call object survives as a corpse. Every later press then folds into
-   * it: `ptt-start` sees a non-null call, decides this is the same
-   * conversation, sends `input_audio_buffer.clear` into a dead socket, and
-   * nothing dials. Measured on a board: 479 microphone frames delivered to a
-   * facet that dropped every one, with no error anywhere.
-   *
-   * Ask the socket rather than trusting a flag we might never have been told
-   * to set.
-   */
-  alive(now: number): boolean {
-    if (this.#closed) return false;
-    /*
-     * A HANDSHAKE THAT NEVER FINISHES IS ALSO A CORPSE, and a quieter one:
-     * this returned true for anything still dialling, so a dial that neither
-     * completed nor errored made the call immortal. Measured on this stream: a
-     * provider socket closed after 32 minutes, the next press dialled
-     * `057e8469`, and no acceptance and no failure ever followed it — four
-     * consecutive presses folded into a handshake that was never going to end,
-     * with nothing on the stream to say so.
-     *
-     * A usable session takes about a second. Ten is not a tuning parameter,
-     * it is the point past which waiting is worse than dialling again.
-     */
-    if (!this.#ready) return now - this.#openedAtMs < GROK_HANDSHAKE_DEADLINE_MS;
-    if (this.#socket === null) return true;
-    return this.#socket.readyState === WebSocket.OPEN;
-  }
-
-  /** Whether this call's session asks the provider to run server VAD. */
-  serverVad = false;
-  /** Milliseconds from dial to a usable session, or null while still dialing. */
-  get handshakeMs(): number | null {
-    return this.#readyAtMs === null ? null : this.#readyAtMs - this.#openedAtMs;
-  }
-  /** How much captured audio the handshake made us hold. */
-  get framesQueued(): number {
-    return this.#framesQueued;
-  }
-
-  attach(socket: WebSocket): void {
-    this.#socket = socket;
-  }
-
-  /**
-   * A new answer begins, and it supersedes whatever was in flight.
-   *
-   * Anything of the previous answer still held is dead: nobody will hear it,
-   * and sending it first would delay the answer the person interrupted FOR.
-   * The device is told by the `drop` that `speakerReplace` arms on the next
-   * chunk — the decision travelling with the audio it invalidates, rather than
-   * on a second lane that could be reordered against it.
-   */
-  beginAnswer(_now: number, responseId: string | null = null): void {
-    this.#answerSeq++;
-    this.#answerId = responseId;
-    speakerReplace(this.speaker);
-    this.#visemes.reset();
-  }
-
-  /**
-   * Whether a completion event belongs to the answer currently in flight.
-   *
-   * IDS, NOT A FLAG, and the reason is measured: xAI OVERLAPS responses rather
-   * than erroring, so with two live the first one's `response.done` arrives
-   * while the second is still speaking. Completing the answer on it would mark
-   * a chunk `last` in the middle of the reply the listener is actually hearing
-   * — and, worse, close the speaker, so every delta after it is held for ever
-   * and the rest of that answer is silent.
-   *
-   * An unnamed completion (or one arriving before any `response.created` was
-   * seen) counts: a provider that names neither cannot be disambiguated
-   * anyway, and an answer left open for ever is the worse failure of the two.
-   */
-  answerIs(responseId: string | null): boolean {
-    return responseId === null || this.#answerId === null || responseId === this.#answerId;
-  }
-
-  /**
-   * The provider produced more audio for the answer in flight.
-   *
-   * Mu-law goes in, because the encode has to happen anyway and the face
-   * needs the PCM16 it came from — doing it here means it happens once.
-   * Nothing is decided about WHEN any of it leaves; speaker.ts owns that, and
-   * this call owns no timer at all.
-   */
-  pushAudio(mulaw: Uint8Array): void {
-    speakerPush(this.speaker, mulaw);
-  }
-
-  /**
-   * The provider has finished this answer. What is held is all there is.
-   *
-   * Not "send the last frame now": the tail may still be several seconds of
-   * audio the listener has not caught up with, and shipping it early is
-   * exactly the burst this lane exists to prevent. The `last` bit is attached
-   * to whichever chunk turns out to be final — see speakerRelease.
-   */
-  completeAnswer(): void {
-    speakerComplete(this.speaker);
-  }
-
-  /**
-   * Somebody started talking. Whatever is still held will never be wanted.
-   *
-   * `beginAnswer` already does this, and for most of a conversation that is
-   * enough: the provider cancels, answers, and the `response.created` for the
-   * new answer drops the old one's tail. It is NOT enough for an
-   * interruption, because between "stop talking" and the provider having
-   * something to say there is a gap — it is still listening — and this lane
-   * is paced, so it spends that gap faithfully playing out the answer the
-   * person just asked it to stop.
-   *
-   * Measured against x.ai: the provider reported the interruption 2.5 s in
-   * and the board kept talking for another five to eight seconds. Nothing was
-   * wrong with the echo canceller, the uplink, or the provider's detector —
-   * the audio had already arrived and nobody had told the lane it was dead.
-   */
-  abandonHeldAudio(): void {
-    speakerReplace(this.speaker);
-    this.#visemes.reset();
-  }
-
-  /** What may go to the device now, and when to come back. */
-  releaseAudio(now: number, limits: SpeakerLimits): SpeakerRelease {
-    return speakerRelease(this.speaker, now, limits);
-  }
-
-  /**
-   * ONE APPEND ORDER FOR THE SPEAKER LANE, whoever is doing the appending.
-   *
-   * `#drainSpeaker` appends from two places: the provider's delta handler,
-   * un-awaited, straight off the socket-message turn, and the pacer's drain
-   * loop, which awaits its own. Both are RPCs to the Stream Durable Object, so
-   * two of them in flight at once commit in whatever order they arrive — and
-   * one of them is always in flight, because a conversation is ONE call across
-   * many answers and the previous answer's loop is still alive when the next
-   * one begins (it exits only on `nextWakeMs === null`).
-   *
-   * The chunk that loses is the one that matters. `speakerReplace` arms `drop`
-   * on the first chunk of the new answer, so an inverted append lands the
-   * CLEAR behind audio it then tells the device to throw away. MEASURED on the
-   * mock, against boards whose clock counters were all zero: 0.7 s discarded
-   * on turn 2 and 2.0 s on turn 4, never once on turn 1 — the only answer with
-   * no loop already running. The device dedupes by offset, so a clear that
-   * acted really did carry the highest offset of its group; the inversion was
-   * in the append, not in delivery.
-   *
-   * A FIFO of ONE promise fixes it, and it has to be here rather than at the
-   * call sites because the two sites disagree about awaiting by design: the
-   * delta handler must not block the delivery lane, and the pacer's await is
-   * its backpressure. Enqueuing is what they can both do.
-   *
-   * THE FIRST CHUNK OF AN ANSWER IS THE LATENCY EVERYBODY NOTICES (~1150 ms
-   * press-to-audio), so what this costs it is worth stating: one microtask
-   * when the lane is idle, and otherwise however long the one append already
-   * in flight takes — a single append into the stream this facet is hosted
-   * IN. It cannot deadlock the synchronous `processEvent` path either: that
-   * path never awaits what it enqueues, and the chain only ever waits on
-   * appends, never on anything that waits on the chain.
-   *
-   * A failed append must not wedge the lane, so the tail is advanced by a
-   * derivative that cannot reject. The caller still sees its own rejection.
-   */
-  inSpeakerOrder<T>(append: () => Promise<T>): Promise<T> {
-    const committed = this.#speakerTail.then(append, append);
-    this.#speakerTail = committed.then(
-      () => undefined,
-      () => undefined,
-    );
-    return committed;
-  }
-
-  /**
-   * The mouth shapes for this delta's audio, if any.
-   *
-   * Read from the PCM16 the speaker will actually play, before the mu-law
-   * encode — a companding curve is not speech and the classifier would read
-   * its quantisation steps as one.
-   */
-  visemesFor(pcm: Uint8Array) {
-    if (pcm.length < 2) return [];
-    return this.#visemes.push(
-      new Int16Array(pcm.buffer, pcm.byteOffset, pcm.length >> 1),
-      this.#answerSeq,
-    );
-  }
-
-  /** The answer is over, so the mouth closes. SIL, once. */
-  closeMouth() {
-    return this.#visemes.end(this.#answerSeq);
-  }
-
-  /** A new turn's gaps are its own; the silence since the last one is not one. */
-  resetFrameClock(): void {
-    this.#lastFrameAtMs = null;
-  }
-
-  /** Say this to the provider, or hold it until the session is configured. */
-  send(message: Record<string, unknown>): void {
-    if (this.#closed) return;
-    /* EVERY send is the client's half of "either side": audio frames, the
-     * buffer verbs a press writes, a text turn. Restarting here rather than at
-     * each call site is what makes it impossible to add a new send and forget
-     * that it keeps the call alive. */
-    this.spoke();
-    if (this.#pending !== null) {
-      this.#pending.push(message);
-      return;
-    }
-    this.sendNow(message);
-  }
-
-  /**
-   * Bypass the queue. Exactly one caller: `session.update` is the message that
-   * ENDS the queue, so queueing it would deadlock the handshake.
-   */
-  sendNow(message: Record<string, unknown>): void {
-    if (this.#socket === null || this.#closed) return;
-    try {
-      this.#socket.send(JSON.stringify(message));
-    } catch {
-      /* The socket is going away; teardown follows from its close event. */
-    }
-  }
-
-  /**
-   * Hand one decoded PCM16 frame to the provider. Never awaits: this is called
-   * straight off the delivery lane, and the only work is a base64 encode.
-   */
-  offer(pcm: ArrayBuffer, now: number): void {
-    if (this.#pending !== null) this.#framesQueued++;
-    if (this.framesThisTurn === 0) this.firstFrameAtMs = now;
-    if (this.#lastFrameAtMs !== null) {
-      this.maxFrameGapMs = Math.max(this.maxFrameGapMs, now - this.#lastFrameAtMs);
-    }
-    this.#lastFrameAtMs = now;
-    this.framesThisTurn++;
-    this.send({
-      type: "input_audio_buffer.append",
-      audio: bytesToBase64(new Uint8Array(pcm)),
-    });
-  }
-
-  /*
-   * WHERE THE TURN'S TIME WENT, on the only clock that can see all of it.
-   *
-   * Press-to-answer is measured at the client, and from there the middle of it
-   * is one opaque number: an answer that took 1.1s says nothing about whether
-   * the delay was reaching us, us reaching the provider, or the model
-   * thinking. These four stamps split it, and cost one tiny ephemeral event
-   * per turn — as against reading the same thing off the verbatim `grok-event`
-   * lane, which would ship every audio delta to the observer and inflate the
-   * very measurement it was opened to take.
-   */
-  endSeenAtMs: number | null = null;
-  commitSentAtMs: number | null = null;
-  committedAckAtMs: number | null = null;
-  /** Cleared per answer, so exactly one timing event is emitted per turn. */
-  timingReported = false;
-  /*
-   * DID THE FACET KEEP UP WITH THE MICROPHONE?
-   *
-   * The delivery lane hands ephemeral events to a facet in bounded batches. If
-   * a turn's frames arrive faster than the lane drains them, the backlog is
-   * paid AFTER the button comes up — the release waits behind audio the person
-   * has already finished speaking. These two turn the question into
-   * arithmetic: the facet's own span from first frame to release, against the
-   * span the client actually spoke.
-   */
-  firstFrameAtMs: number | null = null;
-  framesThisTurn = 0;
-  /**
-   * The longest silence between two consecutive frames of one turn.
-   *
-   * A lane that is merely slow drifts; a lane that STALLS shows one large gap
-   * and nothing else. Measured on this stream: seven turns in eight arrived
-   * ahead of real time, and the eighth arrived 1.9 seconds late — which is a
-   * stall to find, not a throughput to tune.
-   */
-  maxFrameGapMs = 0;
-  #lastFrameAtMs: number | null = null;
-
-  /**
-   * NO AUDIO AFTER THE RELEASE, until the next press.
-   *
-   * A frame that lands after the commit is audio the provider's own VAD reads
-   * as the user starting to talk again — and a barge-in one millisecond after
-   * `response.created` cancels the answer before a single delta is generated.
-   * Measured on this stream: four turns in six, `response.created` immediately
-   * followed by `input_audio_buffer.speech_started` and then nothing at all,
-   * forever. The client races its own frames (a fire-and-forget append can
-   * overtake the release that follows it), and a device on a lossy link will
-   * reorder too, so the rule belongs here rather than in any one client.
-   *
-   * Open-mic calls are exempt: they have no release, their turns are the
-   * provider's own to segment, and gating them would deafen the board.
-   */
-  turnClosed = false;
-  /** Frames refused by that rule, so "rare" is a number and not a hope. */
-  droppedAfterEnd = 0;
-
-  /*
-   * WHEN SOMEBODY LAST SPOKE, whichever way round — a timestamp and nothing
-   * more.
-   *
-   * A provider socket held open keeps this stream's Durable Object awake, and
-   * xAI only drops an idle session after 900 seconds — so a call nobody ends
-   * pins a DO, and burns a provider session, for fifteen minutes of silence.
-   * The wrong fix for that was hanging up as soon as an answer had been handed
-   * over: streams are not meant to hibernate between button presses, and a
-   * push-to-talk caller ended up re-dialling the provider on every press.
-   *
-   * THIS USED TO BE A `setTimeout` AND IT NEVER FIRED. MEASURED on preview-3:
-   * a call went live, nobody spoke for 150 seconds, and no end was ever
-   * requested — the facet was demonstrably alive throughout (it answered a
-   * warm-up probe in 154ms) and the stream carried no traffic at all, so
-   * nothing had restarted the countdown. A timer armed from the SYNCHRONOUS
-   * body of a delivery belongs to a request context that ends with that
-   * delivery; whatever the callback then tries to do, it does with no I/O
-   * context to do it in. The pacer's `sleep` loop works for the opposite
-   * reason: it runs inside a `runInBackground` closure the keepalive holds.
-   *
-   * So the countdown is that same shape now — `VoiceAgentFacetProcessor`'s
-   * `#holdUntilIdle`, one keepalive-backed loop that sleeps exactly as long as
-   * this call has left and reads this field when it wakes. All this has to do
-   * is be current, which makes {@link spoke} a single assignment on a path
-   * that runs fifty times a second.
-   *
-   * It is the FAST and COMPLETE half of the deadline: it sees both directions,
-   * so a long answer cannot age a call out. It cannot outlive the object,
-   * which is what the other half — {@link idleDeadlinePassed}, read off the
-   * fold when no socket is held — is for. Neither half hangs up by itself:
-   * both append `conversation-end-requested` and let the ordinary delivery
-   * lane do the ending, so there stays exactly one way to end a call and three
-   * things that can decide to.
-   */
-  lastSpokeAtMs: number;
-
-  /** Something was said, whichever way round: the minute starts again. */
-  spoke(): void {
-    if (this.#closed) return;
-    this.lastSpokeAtMs = this.#now();
-  }
-
-  /** The turn is complete: commit what was captured and ask for an answer. */
-  commit(now: number): void {
-    this.turnClosed = true;
-    this.endSeenAtMs = now;
-    this.committedAckAtMs = null;
-    this.timingReported = false;
-    this.send({ type: "input_audio_buffer.commit" });
-    this.send({ type: "response.create" });
-    /* AFTER the sends, deliberately: what this stamps is the moment the
-     * messages were handed to the socket, which is where the facet's own
-     * contribution to the turn ends. */
-    this.commitSentAtMs = this.#pending === null ? now : null;
-  }
-
-  /**
-   * The session is usable. Flush everything the handshake made us hold, in
-   * order, before anything newer can reach the provider — and if the user
-   * already let go of the button, commit that turn immediately rather than
-   * waiting for another frame to notice.
-   */
-  markReady(now: number): void {
-    if (this.#ready || this.#closed) return;
-    this.#ready = true;
-    this.#readyAtMs = now;
-    /* Drain in arrival order, and close the queue FIRST so a message sent from
-     * inside this loop cannot be appended to a list already being drained. */
-    const held = this.#pending ?? [];
-    this.#pending = null;
-    for (const message of held) this.sendNow(message);
-    /* A turn that ended during the handshake had its commit held with
-     * everything else; this flush is when it actually left. */
-    if (this.endSeenAtMs !== null && this.commitSentAtMs === null) this.commitSentAtMs = now;
-  }
-
-  close(): void {
-    if (this.#closed) return;
-    this.#closed = true;
-    /* EVERY route out of a call comes through here — the idle end, a device's
-     * own, a provider close, a failed dial, being superseded — so this line is
-     * what ends the countdown loop, releases the keepalive, and lets the
-     * Durable Object hibernate the moment the last call on it is over. */
-    this.#declareOver();
-    this.#pending = null;
-    /* Nobody will ever hear what is still held, and the drain loop checks
-     * `closed` before every release, so this only frees the memory. */
-    speakerReplace(this.speaker);
-    try {
-      this.#socket?.close();
-    } catch {
-      /* Already gone. */
-    }
-    this.#socket = null;
-  }
-}
-
-/** What the facet processor folds: one call at a time, and whether it is open. */
-const VoiceFacetState = z.object({
-  birthCertificate: z
-    .strictObject({ providerBaseUrl: z.string().optional() })
-    .nullable()
-    .default(null),
-  /**
-   * Which brief setup last marked current, folded from delivery.
-   *
-   * Held in state rather than looked up because the marker ARRIVES through
-   * this subscription, in order, ahead of the token it has to answer. Its
-   * absence therefore means this processor was genuinely never told — a
-   * failure to report, not a gap to paper over with a scan of history.
-   */
-  briefCurrent: z
-    .strictObject({ setupId: z.string(), briefKey: z.string(), contentHash: z.string() })
-    .nullable()
-    .default(null),
-  /**
-   * The call this stream is on, as an OBLIGATION rather than a closure.
-   *
-   * A socket dies with its incarnation; this does not. `conversation-requested`
-   * opens it, `conversation-ended` closes it, and the at-head pass re-dials
-   * anything still open — which is what makes an eviction mid-call recoverable
-   * without anybody having to notice it happened.
-   */
-  call: z
-    .object({
-      /** Server-minted, and stamped on everything belonging to this call. */
-      conversationId: z.string(),
-      /**
-       * When a client was last heard on this call, on the stream's own clock.
-       *
-       * The durable half of the idle deadline — see {@link idleDeadlinePassed}
-       * for why it is folded rather than appended, and why "a client" rather
-       * than "either side" is the honest name for what it can see.
-       */
-      lastHeardAtMs: z.number(),
-      /**
-       * Somebody has decided this call is over, and why.
-       *
-       * The obligation, in the ordinary shape: the request is the durable
-       * desire, `conversation-ended` is the completion, and the at-head pass
-       * is what performs one and recovers the other. Holding the reason here
-       * is what lets a revived incarnation finish a teardown it did not start
-       * and still write the same sentence the decider gave.
-       */
-      endRequested: z.strictObject({ reason: z.string() }).nullable(),
-    })
-    .nullable()
-    .default(null),
-});
-
-const EPH = { ephemeral: true as const };
-/**
- * One frame of captured audio.
- *
- * `seq` is the CLIENT's own counter and the only ordering this trusts. There
- * is deliberately no conversationId: the client does not know which call it is
- * on and does not need to — frames belong to whatever call the press opened,
- * and asking the client to name one made it a second source of truth for a
- * fact only the server holds.
- */
-const MicFrame = z.looseObject({
-  seq: z.number().optional(),
-  pcm: z.string(),
-  enc: z.string().optional(),
-});
-/** One frame of the answer, stamped with the call the server minted. */
-const AudioFrame = z.looseObject({
-  conversationId: z.string(),
-  pcm: z.string(),
-  enc: z.string().optional(),
-  /*
-   * THE TWO BITS A CLIENT NEEDS TO MANAGE ITS SPEAKER, carried by the audio
-   * rather than alongside it. Both used to be read off the provider's own
-   * event firehose — a subscription to everything xAI says, for two bits.
-   * Riding the frames means they cannot be reordered against the audio they
-   * are about, and a board's whole buffer policy becomes: drop on `drop`,
-   * release on `last`, and otherwise play what arrives.
-   */
-  /** Discard anything still queued before playing this one. */
-  drop: z.boolean().optional(),
-  /** The answer ends here: drain, and stop waiting for more. */
-  last: z.boolean().optional(),
-});
-
-/**
- * The facet's own contract, and it is deliberately not the bridge's.
- *
- * A different processor with a different fold: this one holds ONE call as an
- * obligation and nothing else, because everything the bridge kept in reduced
- * state (briefs, warm-up tokens) belonged to the worker that no longer exists.
- */
-export const VoiceAgentFacetContract = defineProcessorContract({
-  /* The subscription NAME selects the contract, and the live subscription is
-   * named for this slug. They are one identity; drifting them apart is the
-   * failure that took every board offline on the v30 flag day. */
-  slug: VOICE_AGENT_PROCESSOR_SLUG,
-  /* 2.1.0: the fold gained the idle deadline and the end-request. A persisted
-   * 2.0.0 fold has no `lastHeardAtMs`, so it must be re-reduced rather than
-   * trusted — bumping is how the runner is told to, and re-reducing a call
-   * whose ephemeral utterances are long gone correctly concludes it is over. */
-  version: "2.1.0",
-  description: "Runs a voice call in the stream's own Durable Object, holding the Grok socket.",
-  stateSchema: VoiceFacetState,
-  events: {
-    "events.iterate.com/voice-agent/created": {
-      description: "The voice-agent facet exists on this stream.",
-      payloadSchema: z.strictObject({
-        /** Dial this instead of x.ai. Test seam; carries no credential. */
-        providerBaseUrl: z.string().optional(),
-      }),
-    },
-    "events.iterate.com/voice-agent/conversation-accepted": {
-      description: "The provider accepted the session; the call is live.",
-      payloadSchema: z.looseObject({ conversationId: z.string() }),
-    },
-    "events.iterate.com/voice-agent/conversation-failed": {
-      description: "The call is not happening, and why.",
-      payloadSchema: z.looseObject({ conversationId: z.string(), reason: z.string() }),
-    },
-    /*
-     * SOMEBODY HAS DECIDED, and this is where they say so.
-     *
-     * ONE WAY TO END A CALL AND THREE THINGS THAT CAN DECIDE TO: the person,
-     * the model, and the clock. Deciding and doing are separated because the
-     * decider is often not holding the socket — the clock notices a minute has
-     * passed in an incarnation that was revived precisely because the old one
-     * (and its socket) died. So the decision is an append with a reason, the
-     * facet consumes it on its ordinary delivery lane, and the ending itself
-     * stays exactly one code path.
-     *
-     * Deliberately provider-agnostic: nothing here says "Grok", "socket" or
-     * "disconnect". What ends is the conversation.
-     */
-    "events.iterate.com/voice-agent/conversation-end-requested": {
-      description: "Somebody has decided this call is over, and why.",
-      payloadSchema: z.looseObject({ conversationId: z.string(), reason: z.string() }),
-    },
-    "events.iterate.com/voice-agent/conversation-ended": {
-      description: "The call is over.",
-      payloadSchema: z.looseObject({ conversationId: z.string() }),
-    },
-    "events.iterate.com/voice-agent/device-presence": {
-      description:
-        "The board on this call connected or disconnected, copied from its client scope.",
-      payloadSchema: z.looseObject({ connected: z.boolean(), client: z.string().optional() }),
-    },
-    /*
-     * THREE VERBS, and that is the whole client contract: the button went
-     * down, here is audio, the button came up. Whether a call exists, what it
-     * is called and when it ends are the SERVER's, because the server is the
-     * only side that can know them. Having the client ask for a call as well
-     * was a second source of truth for one fact, and the two disagreeing is
-     * what a wedged stream looks like.
-     */
-    "events.iterate.com/voice-agent/ptt-start": {
-      description: "The user began speaking. Opens a call if one is not already up.",
-      ...EPH,
-      payloadSchema: z.looseObject({}),
-    },
-    "events.iterate.com/voice-agent/mic-frame": {
-      description: "One 20 ms capture frame, in the client's own sequence.",
-      ...EPH,
-      payloadSchema: MicFrame,
-    },
-    "events.iterate.com/voice-agent/ptt-end": {
-      description: "The user stopped speaking; the turn is complete.",
-      ...EPH,
-      payloadSchema: z.looseObject({}),
-    },
-    "events.iterate.com/voice-agent/call-started": {
-      description: "The server opened a call, and what it is called.",
-      payloadSchema: z.looseObject({ conversationId: z.string() }),
-    },
-    /*
-     * THE NUMBER THIS DESIGN EXISTS FOR. Audio captured while the provider was
-     * still being dialled is held and flushed the instant it is usable; this
-     * says how much was held and what the hold cost, so "did buffering earn
-     * anything" is a measurement rather than an argument.
-     */
-    /*
-     * WHAT THE PROVIDER SAID WENT WRONG, on the stream where it can be read.
-     *
-     * Without this the facet dropped every provider event it did not handle,
-     * so "Grok took the audio and answered nothing" and "Grok rejected the
-     * commit" were the same observation: silence. An error nobody can see
-     * costs an hour every time it happens.
-     */
-    "events.iterate.com/voice-agent/provider-error": {
-      description: "The provider reported an error, verbatim.",
-      payloadSchema: z.looseObject({ conversationId: z.string(), message: z.string() }),
-    },
-    "events.iterate.com/voice-agent/buffer-flushed": {
-      description: "Queued capture went to the provider; how many frames, and the handshake cost.",
-      payloadSchema: z.looseObject({
-        conversationId: z.string(),
-        frames: z.number(),
-        handshakeMs: z.number(),
-      }),
-    },
-    "events.iterate.com/voice-agent/spk-frame": {
-      description: "One frame of the answer, for the device's speaker.",
-      ...EPH,
-      payloadSchema: AudioFrame,
-    },
-    "events.iterate.com/voice-agent/grok-event": {
-      description:
-        "The provider's VAD/transcript subset: speech edges for barge-in, transcripts for instruments.",
-      ...EPH,
-      payloadSchema: z.looseObject({ conversationId: z.string(), t: z.number() }),
-    },
-    "events.iterate.com/voice-agent/turn-timing": {
-      description:
-        "Where this turn's time went, on the facet's clock: end seen, commit, ack, delta.",
-      ...EPH,
-      payloadSchema: z.looseObject({
-        conversationId: z.string(),
-        endSeenT: z.number(),
-        commitSentT: z.number().nullable(),
-        committedAckT: z.number().nullable(),
-        firstDeltaT: z.number(),
-        /** First frame of the turn as the FACET saw it, and how many arrived. */
-        firstFrameT: z.number().nullable(),
-        micFrames: z.number(),
-        /** Longest silence between two frames: a stall, as against a drift. */
-        maxFrameGapMs: z.number(),
-        /** Frames that arrived after the release and were refused, lifetime. */
-        droppedAfterEnd: z.number(),
-      }),
-    },
-    "events.iterate.com/voice-agent/say": {
-      description: "A turn made of text rather than speech.",
-      ...EPH,
-      payloadSchema: z.looseObject({ text: z.string() }),
-    },
-    /*
-     * THE WARM-UP HANDSHAKE. Setup blocks on this, so a facet that does not
-     * answer it cannot be installed at all — which is exactly how the first
-     * attempt failed: the types were in the subscription filter but not in
-     * `consumes`, and delivery is the INTERSECTION, so the token never arrived.
-     */
-    "events.iterate.com/voice-agent/brief-current": {
-      description: "Setup's statement of which brief is current.",
-      payloadSchema: z.looseObject({
-        setupId: z.string(),
-        briefKey: z.string(),
-        contentHash: z.string(),
-      }),
-    },
-    "events.iterate.com/voice-agent/warmup": {
-      description: "A readiness probe for this stream's processor. Starts nothing.",
-      payloadSchema: z.looseObject({ token: z.string() }),
-    },
-    "events.iterate.com/voice-agent/warmup-ready": {
-      description: "This facet is built, running, and knows its brief; echoes the token.",
-      payloadSchema: z.looseObject({ token: z.string() }),
-    },
-    "events.iterate.com/voice-agent/warmup-unresolved": {
-      description: "The facet woke for a warm-up but could not resolve its brief.",
-      payloadSchema: z.looseObject({ token: z.string() }),
-    },
-    /*
-     * WHERE THE IDLE COUNTDOWN GOT TO, on the stream, because from outside a
-     * loop that never ticks and a loop that ticks but never concludes are the
-     * same observation: no end requested. Durable on purpose — the whole point
-     * is to read it after fifteen minutes of nobody being connected.
-     */
-    "events.iterate.com/voice-agent/idle-countdown": {
-      description: "One step of the idle countdown: which lap, which phase, how idle.",
-      payloadSchema: z.looseObject({
-        conversationId: z.string(),
-        phase: z.string(),
-        lap: z.number(),
-        idleForMs: z.number(),
-      }),
-    },
-  },
-  consumes: [
-    "events.iterate.com/voice-agent/created",
-    "events.iterate.com/voice-agent/call-started",
-    "events.iterate.com/voice-agent/conversation-end-requested",
-    "events.iterate.com/voice-agent/conversation-ended",
-    "events.iterate.com/voice-agent/conversation-failed",
-    "events.iterate.com/voice-agent/device-presence",
-    "events.iterate.com/voice-agent/brief-current",
-    "events.iterate.com/voice-agent/warmup",
-    /* The live half. Naming them is the whole opt-in — `"*"` never matches an
-     * ephemeral event, so no processor gets this firehose by accident. */
-    "events.iterate.com/voice-agent/ptt-start",
-    "events.iterate.com/voice-agent/mic-frame",
-    "events.iterate.com/voice-agent/ptt-end",
-    "events.iterate.com/voice-agent/say",
-  ],
-  emits: [
-    "events.iterate.com/voice-agent/call-started",
-    "events.iterate.com/voice-agent/buffer-flushed",
-    "events.iterate.com/voice-agent/provider-error",
-    "events.iterate.com/voice-agent/conversation-accepted",
-    "events.iterate.com/voice-agent/conversation-end-requested",
-    "events.iterate.com/voice-agent/conversation-ended",
-    "events.iterate.com/voice-agent/conversation-failed",
-    "events.iterate.com/voice-agent/spk-frame",
-    "events.iterate.com/voice-agent/grok-event",
-    "events.iterate.com/voice-agent/turn-timing",
-    "events.iterate.com/voice-agent/warmup-ready",
-    "events.iterate.com/voice-agent/warmup-unresolved",
-    "events.iterate.com/voice-agent/idle-countdown",
-  ],
-});
-export type VoiceAgentFacetContract = typeof VoiceAgentFacetContract;
-
-/**
- * The voice agent. Two switches: `reduce` folds, `processEvent` acts.
- *
- * Nothing here awaits the provider on the delivery lane. A microphone frame
- * costs one decode and one `send`, which is the floor — anything more would
- * put the model's round trip inside the audio path.
- */
-/**
- * One chunk of the answer, as the speaker lane ships it.
- *
- * FOUR FIELDS, and three of them are the client's entire buffer policy: clear
- * on `drop`, release the fence on `last`, otherwise write `pcm` and play it.
- *
- * What used to be here as well — `answer`, `frame`, `seq`, `t`, `enc` — was a
- * numbering scheme the device used to work out, on its own, whether a chunk
- * belonged to an answer it should still be playing. It cost 230 lines of
- * high-water marks and abandoned-answer latches on the board, every one of
- * which could silence it permanently, and it was answering a question the
- * sender already knows the answer to. The sender says `drop` instead.
- */
-interface SpkFramePayload {
-  /* The contract's schema is loose, so the lane's own shape has to admit the
-   * same open record or the two types cannot meet. */
-  [key: string]: unknown;
-  conversationId: string;
-  /** Discard anything still queued before playing this one. */
-  drop?: boolean;
-  /** The answer ends here: drain, and stop waiting for more. */
-  last?: boolean;
-  /** Mu-law, base64. Empty only on a chunk whose sole job is to close. */
-  pcm: string;
-}
-
-/** One released chunk, shaped for the append lane. */
-function asSpkFrame(call: GrokCall, chunk: SpeakerChunk) {
-  const payload: SpkFramePayload = {
-    conversationId: call.conversationId,
-    pcm: chunk.mulaw.length === 0 ? "" : bytesToBase64(chunk.mulaw),
-  };
-  /* Both bits are omitted rather than sent false: they are exceptions, they
-   * ride in every chunk's envelope, and the device treats absent as false. */
-  if (chunk.drop) payload.drop = true;
-  if (chunk.last) payload.last = true;
-  return {
-    type: "events.iterate.com/voice-agent/spk-frame" as const,
-    ephemeral: true as const,
-    payload,
-  };
-}
-
-export class VoiceAgentFacetProcessor extends StreamProcessor<
-  VoiceAgentFacetContract,
-  {
-    now(): number;
-    /**
-     * The ONLY way this processor waits, and there is deliberately no second
-     * one. Both the pacer's drain loop and the idle countdown are
-     * `runInBackground` closures that sleep, which is what puts their wakes
-     * inside a context the keepalive holds — see `#holdUntilIdle` for the
-     * measurement that says a bare `setTimeout` is not a substitute. Injected
-     * so a sixty-second deadline is tested on a virtual clock rather than by
-     * waiting a minute.
-     */
-    sleep(ms: number): Promise<void>;
-    /** `baseUrl` is the birth certificate's override, or null for x.ai. */
-    dialGrok(baseUrl: string | null): Promise<WebSocket | null>;
-  }
-> {
-  readonly contract = VoiceAgentFacetContract;
-  /**
-   * How hard the speaker lane is allowed to push, and it is a FIELD.
-   *
-   * Overridable per instance so a test can pin a tighter lead and prove the
-   * same invariants in milliseconds, and so a device profile that cannot take
-   * 300 ms chunks can be served without editing this file. The defaults are
-   * the firmware's real ceilings — see speaker.ts, where the failure modes of
-   * exceeding each one are written down.
-   */
-  speakerLimits: SpeakerLimits = DEFAULT_SPEAKER_LIMITS;
-  /** The live call, or null. Empty after an eviction — deliberately. */
-  #call: GrokCall | null = null;
-  /**
-   * THE CALL THIS INCARNATION HAS ALREADY BURIED, until the log agrees.
-   *
-   * An obituary is APPENDED, which means there is a window — a write and a
-   * delivery wide — in which this processor has let a call go and the fold
-   * still says it is open. Every caught-up delivery landing inside that window
-   * reads "the log owes a call and I am not holding it" and does the one thing
-   * that used to be right: re-dials it.
-   *
-   * The window barely existed while calls were dialled once and held; hanging
-   * up after every push-to-talk answer put it milliseconds in front of the
-   * next press, which is the worst possible place for it. Two things went
-   * wrong there, and both look from outside like a server that stopped
-   * answering. The at-head pass opened a second provider session for a
-   * conversation that was over — undoing the hang-up it had just performed —
-   * and the press that arrived next found that freshly dialled corpse `alive`,
-   * folded into it instead of opening its own call, and was then killed
-   * outright when the obituary finally landed. No `call-started`, no answer,
-   * no error: one silent round per press.
-   *
-   * Remembering the id closes it. This is in-memory ONLY, which is exactly
-   * right: an eviction is the case the at-head pass exists for, and a revived
-   * incarnation has buried nothing and must re-dial whatever the log says is
-   * open.
-   */
-  #retiredId: string | null = null;
-
-  /* ------------------------------------------------------------------ fold */
-
-  reduce({ state, event }: ReduceArgs<VoiceAgentFacetContract>) {
-    switch (event.type) {
-      case "events.iterate.com/voice-agent/created":
-        return {
-          ...state,
-          birthCertificate:
-            event.payload.providerBaseUrl === undefined
-              ? {}
-              : { providerBaseUrl: event.payload.providerBaseUrl },
-        };
-      case "events.iterate.com/voice-agent/brief-current":
-        return {
-          ...state,
-          briefCurrent: {
-            setupId: event.payload.setupId,
-            briefKey: event.payload.briefKey,
-            contentHash: event.payload.contentHash,
-          },
-        };
-      case "events.iterate.com/voice-agent/call-started":
-        /* The server's own record that a call is up. Deterministic under
-         * replay because the id was minted INTO the event, not here — and the
-         * deadline starts here for the same reason: minting a call IS somebody
-         * speaking, so the stamp the stream gave this event is the floor under
-         * every later utterance, including for a call whose first press was
-         * ephemeral and is already gone. */
-        return {
-          ...state,
-          call: {
-            conversationId: event.payload.conversationId,
-            lastHeardAtMs: eventTimeMs(event),
-            endRequested: null,
-          },
-        };
-      case "events.iterate.com/voice-agent/ptt-start":
-      case "events.iterate.com/voice-agent/mic-frame":
-      case "events.iterate.com/voice-agent/ptt-end":
-      case "events.iterate.com/voice-agent/say":
-        /*
-         * SOMEBODY IS TALKING, which is the only fact these four leave behind.
-         *
-         * Their BODIES still never reach the fold — reduced state that
-         * depended on a buffer no restart can replay would be a lie — but
-         * their commit STAMPS are as durable as any event's, and folding the
-         * newest is what makes the idle deadline outlive an eviction without
-         * a single extra append. `max` because a redelivered batch must not
-         * be able to walk the deadline backwards.
-         */
-        return state.call === null
-          ? state
-          : {
-              ...state,
-              call: {
-                ...state.call,
-                lastHeardAtMs: Math.max(state.call.lastHeardAtMs, eventTimeMs(event)),
-              },
-            };
-      case "events.iterate.com/voice-agent/conversation-end-requested":
-        /* Decided, not yet done. The call stays open in the fold until the
-         * obituary lands — what changes is that nothing will re-dial it, and
-         * that any incarnation reaching head now owes the ending. */
-        return state.call !== null &&
-          namesThisCall(state.call.conversationId, String(event.payload.conversationId))
-          ? { ...state, call: { ...state.call, endRequested: { reason: event.payload.reason } } }
-          : state;
-      case "events.iterate.com/voice-agent/conversation-ended":
-      case "events.iterate.com/voice-agent/conversation-failed":
-        /* An obituary closes the call it NAMES — and a mis-named one still
-         * closes the current call; see {@link namesThisCall}. */
-        return state.call !== null &&
-          namesThisCall(state.call.conversationId, String(event.payload.conversationId))
-          ? { ...state, call: null }
-          : state;
-      default:
-        return state;
-    }
-  }
-
-  /* ----------------------------------------------------------------- react */
-
-  processEvent(args: ProcessEventArgs<VoiceAgentFacetContract>): undefined {
-    const { state, event, delivery, append, runInBackground } = args;
-    /*
-     * Which provider this stream dials, read from the FOLD rather than held in
-     * a field. A field would be empty in exactly the incarnation that needs it
-     * — the revived one, dialling from the at-head pass — and the call would
-     * silently go to x.ai instead of the mock a test had pointed it at.
-     */
-    const providerBaseUrl = state.birthCertificate?.providerBaseUrl ?? null;
-    /* The log has caught up with the obituary, so stop remembering it. */
-    if (state.call?.conversationId !== this.#retiredId) this.#retiredId = null;
-    /*
-     * THE AT-HEAD PASS IS THE RECOVERY. An eventless caught-up delivery is how
-     * a revived incarnation learns it owes a call, so this runs before the
-     * event switch and is the only thing that ever dials.
-     */
-    const wanted = state.call;
-    if (delivery.caughtUp && wanted !== null) {
-      if (wanted.endRequested !== null) {
-        /*
-         * THE OBLIGATION'S RECOVERY PASS, and its ordinary execution too.
-         *
-         * Somebody has decided this call is over. Doing it from here rather
-         * than from the per-event switch is what makes a dropped attempt
-         * self-healing: the desire is in the fold, so an incarnation that dies
-         * — or merely fails to write the obituary — is simply asked again the
-         * next time anything reaches head. It is also the only place that CAN
-         * do it after an eviction, where the decider left no socket behind.
-         *
-         * Deliberately NOT behind the `#retiredId` guard. That guard exists to
-         * stop a DIAL resurrecting a call this incarnation has already let go
-         * of; re-running the ending is the opposite — idempotent by key, and
-         * the only thing that ever retries a refused obituary.
-         */
-        this.#endAsRequested(wanted.conversationId, wanted.endRequested.reason, append);
-      } else if (
-        wanted.conversationId !== this.#retiredId &&
-        this.#call?.conversationId !== wanted.conversationId
-      ) {
-        /*
-         * THE FOLD OWES A CALL THIS INCARNATION IS NOT HOLDING, which is
-         * either a call to rescue or a call to bury, and telling those two
-         * apart is what stops the loop below.
-         *
-         * THE LOOP, measured: a call held open as background work arms the
-         * runner's keepalive, the keepalive revives the processor every ten
-         * seconds, and every revival's at-head pass re-dialled — burning one
-         * provider session per lap and, because the deadline lived only in the
-         * dead incarnation's memory, starting the minute again on each one. An
-         * abandoned call kept alive forever by the machinery meant to rescue
-         * it. The cure is that the deadline is derivable from the fold: a
-         * revival can ask "is this past due" instead of "is this open".
-         *
-         * A NEWER CALL STILL SUPERSEDES THE ONE IN FLIGHT. The guard used to
-         * be `this.#call === null`, which reads as "only dial when idle" and
-         * is really "dial once, ever": one test call that was never ended made
-         * this incarnation refuse every later request in silence. Comparing
-         * the id makes the rule the honest one — whatever the fold says the
-         * current call is, that is the call this incarnation holds — and a
-         * repeat of the SAME id stays a no-op, so a redelivery does not churn
-         * a live socket.
-         */
-        if (idleDeadlinePassed(wanted.lastHeardAtMs, this.deps.now())) {
-          this.#requestEnd(wanted.conversationId, IDLE_END_REASON, append, runInBackground);
-        } else {
-          this.#endCall("superseded by a newer call on this stream");
-          this.#dial(wanted.conversationId, providerBaseUrl, append, runInBackground);
-        }
-      }
-    }
-    if (event === null) return;
-    const call = this.#call;
-    switch (event.type) {
-      case "events.iterate.com/voice-agent/ptt-start": {
-        /*
-         * THE PRESS IS THE ONLY TRIGGER, and it does two things at once: opens
-         * a call if none is up, and tells a provider that already is that a
-         * fresh utterance starts here.
-         *
-         * Dialling begins NOW, in the background, while the user is already
-         * talking. That overlap is the entire latency design: by the time
-         * somebody has said two or three seconds of anything, the session is up
-         * and the audio they spoke into the handshake has already been flushed.
-         */
-        if (call === null || !call.alive(this.deps.now())) {
-          /* A dead call is not a call. Retire it and dial a fresh one rather
-           * than folding this press into a corpse. */
-          if (call !== null) {
-            this.#endCall(
-              call.ready ? "provider socket is gone" : "provider handshake never completed",
-              append,
-            );
-          }
-          const conversationId = crypto.randomUUID().slice(0, 8);
-          this.#dial(
-            conversationId,
-            providerBaseUrl,
-            append,
-            runInBackground,
-            OPEN_MIC_CLIENTS.has(String(event.payload.client ?? "")),
-          );
-          runInBackground(async () => {
-            await append({
-              type: "events.iterate.com/voice-agent/call-started",
-              payload: { conversationId },
-            });
-          });
-          return;
-        }
-        /* Whatever the provider still holds is from a turn that never
-         * committed; prepending it would answer a blend of two utterances.
-         * (And, being a send, it is also what restarts this call's idle
-         * countdown for a caller who paused to think and then pressed again.) */
-        call.send({ type: "input_audio_buffer.clear" });
-        /* A fresh utterance starts here, so the frame count that measures
-         * whether this facet keeps up with the microphone starts here too —
-         * and audio is welcome again. */
-        call.turnClosed = false;
-        call.framesThisTurn = 0;
-        call.firstFrameAtMs = null;
-        call.maxFrameGapMs = 0;
-        call.resetFrameClock();
-        /*
-         * SAY YES AGAIN. The device latches call_active from
-         * `conversation-accepted` on its live connection, and the original
-         * accept was emitted once, under this call's idempotency key, possibly
-         * hours ago to a connection that no longer exists. A press that folds
-         * into a live call therefore produced NOTHING the presser could see:
-         * the call was up, the device never learned it, the face slept on.
-         * Re-accepting per press (keyed by the press's own clock so a
-         * redelivery cannot duplicate it) closes the loop for every press, not
-         * just the one that dialled.
-         */
-        void append({
-          type: "events.iterate.com/voice-agent/conversation-accepted",
-          idempotencyKey: this.idempotencyKey(
-            `accepted:${call.conversationId}:press:${String(event.payload.t ?? "-")}`,
-          ),
-          payload: { conversationId: call.conversationId },
-        });
-        return;
-      }
-      case "events.iterate.com/voice-agent/mic-frame": {
-        /* The hot path, and it stays this short on purpose: one decode, one
-         * send, no await. Held instead if the session is not up — see
-         * GrokCall.offer. */
-        if (call === null) return;
-        /* A frame is somebody talking whatever we then do with it, so this is
-         * BEFORE the refusal below on purpose: a client that keeps streaming
-         * past its own release is still a client on this call. */
-        call.spoke();
-        /* Straggling audio from a turn that has already been committed would
-         * read to the provider as a barge-in and cancel the answer. */
-        if (call.turnClosed && !call.serverVad) {
-          call.droppedAfterEnd++;
-          return;
-        }
-        /* PCM16, always. This read `enc === "u" ? mulawToPcm16(bytes) : bytes`
-         * until the boards stopped sending mu-law, after which it was a live
-         * conditional on a value nothing produced — correct only by taking its
-         * else arm every time, and one stray "u" away from decoding PCM16 as
-         * G.711. The contract no longer carries a codec field. */
-        call.offer(base64ToBytes(event.payload.pcm), this.deps.now());
-        return;
-      }
-      case "events.iterate.com/voice-agent/ptt-end": {
-        if (call === null) return;
-        call.commit(this.deps.now());
-        return;
-      }
-      case "events.iterate.com/voice-agent/say": {
-        if (call === null) return;
-        const text = event.payload.text.trim();
-        if (text.length === 0 || text.length > 4096) return;
-        call.send({
-          type: "conversation.item.create",
-          item: { type: "message", role: "user", content: [{ type: "input_text", text }] },
-        });
-        call.send({ type: "response.create" });
-        return;
-      }
-      case "events.iterate.com/voice-agent/warmup": {
-        /*
-         * BEING HERE IS THE PROOF. The old handshake had to go and warm a
-         * separate bridge worker and report how long that took; the facet IS
-         * the bridge, so a delivered warm-up means the class is already loaded
-         * and running in this stream's own Durable Object. The only thing left
-         * that can be missing is the brief.
-         */
-        const token = event.payload.token;
-        const marker = state.briefCurrent;
-        runInBackground(async () => {
-          if (marker === null) {
-            await append({
-              type: "events.iterate.com/voice-agent/warmup-unresolved",
-              payload: {
-                token,
-                streamPath: this.path,
-                reason: "no brief-current has reached this processor",
-                stage: "brief",
-              },
-            });
-            return;
-          }
-          await append({
-            type: "events.iterate.com/voice-agent/warmup-ready",
-            payload: {
-              token,
-              streamPath: this.path,
-              briefKey: marker.briefKey,
-              briefSetupId: marker.setupId,
-              briefContentHash: marker.contentHash,
-              /* Zero, and honestly so: there is no second worker to build. */
-              bridgeWarmMs: 0,
-              bridgeBuilding: false,
-              protocolRevision: WARMUP_PROTOCOL_REVISION,
-              processorSlug: VOICE_AGENT_PROCESSOR_SLUG,
-            },
-          });
-        });
-        return;
-      }
-      case "events.iterate.com/voice-agent/device-presence": {
-        /* The board left, said out loud rather than inferred from silence. */
-        if (event.payload.connected === false) this.#endCall("device disconnected");
-        return;
-      }
-      case "events.iterate.com/voice-agent/conversation-ended": {
-        /* Same rule as the fold — see {@link namesThisCall}. The log keeps the
-         * firmware's self-naming visible until the device echoes the real id. */
-        if (call !== null) {
-          const named = String(event.payload.conversationId);
-          if (!namesThisCall(call.conversationId, named)) return;
-          if (call.conversationId !== named) {
-            console.log(
-              `conversation-ended self-named: live=${call.conversationId} ` +
-                `event=${named} — retiring the live call`,
-            );
-          }
-          this.#endCall("conversation-ended event");
-        }
-        return;
-      }
-      default:
-        return;
-    }
-  }
-
-  /* --------------------------------------------------------------- private */
-
-  /**
-   * Dial Grok for a call the fold says is open.
-   *
-   * Runs in background work and returns immediately, so a cold provider never
-   * sits on the delivery lane. The device may already be sending audio — that
-   * is the point of `GrokCall`'s queue — so the call object exists BEFORE the
-   * socket does and starts collecting frames straight away.
-   */
-  #dial(
-    conversationId: string,
-    providerBaseUrl: string | null,
-    append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
-    runInBackground: ProcessEventArgs<VoiceAgentFacetContract>["runInBackground"],
-    serverVad = false,
-  ): void {
-    const call = new GrokCall(conversationId, this.deps.now);
-    call.serverVad = serverVad;
-    this.#call = call;
-    /*
-     * A LIVE CALL IS WORK IN FLIGHT, and saying so is the whole keepalive.
-     *
-     * `runInBackground` is keepalive-backed: while this promise is unsettled
-     * the runner parks a durable alarm ahead of it, so the object stays up
-     * through a silence and a dead incarnation is revived rather than
-     * forgotten. The loop ends when `GrokCall.close` resolves `over`, which is
-     * why there is no alarm code in this file and no second definition of
-     * "the call is over".
-     *
-     * Its answer to "what recovers the OUTCOME if this attempt drops?" is the
-     * at-head pass above, reading `lastHeardAtMs` out of the fold: a revival
-     * either re-dials a conversation that is still going or asks for the end
-     * of one that is not. Without that reading, this registration IS the
-     * eternal re-dial loop — which is exactly how it was measured.
-     *
-     * AND IT IS A CORRECTNESS FIX, NOT ONLY A COST ONE. MEASURED on the
-     * platform: a worker-loader facet whose PARENT goes 73 seconds (±2)
-     * without inbound activity is CORRUPTED rather than reaped — its timers
-     * keep firing and its outbound socket keeps sending (one ran 15+ hours),
-     * its storage writes begin throwing, and the next `facets.get()` hands out
-     * a SECOND fresh facet beside the zombie still holding the provider
-     * socket. A periodic alarm on the parent is the measured cure (30s 9/9
-     * intact, 45s 6/6, 60s 4/4, 120s 0/3), and this registration is exactly
-     * that alarm: the keepalive re-arms ten seconds ahead of in-flight work on
-     * EVERY fire, not once, so a silent call pokes its parent six or seven
-     * times inside the minute it has left. The margin that matters is that
-     * ten, not the thirteen seconds between the deadline and the threshold.
-     * (Checked, not assumed: "keeps the parent poked on a ten-second cadence"
-     * in voice-agent.facet.test.ts.)
-     *
-     * The keepalive's own wedge detector — 90 consecutive fires with nothing
-     * settling, after which the cadence decays into the revival backoff and
-     * would cross the threshold — sits at ~15 minutes, fourteen past the
-     * deadline that ends a silent call. It cannot be reached from here.
-     *
-     * The countdown rides the SAME registration rather than a timer of its
-     * own, because "this call is still open" and "this call has been quiet
-     * long enough" are one question asked twice. See `#holdUntilIdle` for why
-     * a bare `setTimeout` could not answer it.
-     */
-    runInBackground(() => this.#holdUntilIdle(call, append));
-    runInBackground(async () => {
-      let failure: string | null = null;
-      try {
-        const socket = await this.deps.dialGrok(providerBaseUrl);
-        if (socket === null) failure = "provider refused the websocket upgrade";
-        else if (call.closed) {
-          /*
-           * BEING SUPERSEDED IS NOT FAILING. This fell through to the obituary
-           * below with `failure` still null, so a call that was deliberately
-           * replaced — a second press, a revival — wrote
-           * `conversation-failed` with an EMPTY reason. Two of those appeared
-           * on the boards' stream the first time they successfully called,
-           * which reads as a broken dial rather than a tidy hand-over.
-           */
-          socket.close();
-          return;
-        } else {
-          call.attach(socket);
-          this.#listen(call, socket, append, runInBackground);
-          return;
-        }
-      } catch (error) {
-        failure = String(error);
-      }
-      /* Say so on the stream. A device that hears nothing cannot tell "still
-       * connecting" from "never going to happen", and used to wait forever. */
-      if (this.#call === call) this.#call = null;
-      /* `conversation-failed` closes the call in the fold exactly as an
-       * obituary does, so it opens the same re-dial window. */
-      this.#retiredId = call.conversationId;
-      call.close();
-      await append({
-        type: "events.iterate.com/voice-agent/conversation-failed",
-        idempotencyKey: this.idempotencyKey(`failed:${conversationId}`),
-        payload: { conversationId, reason: (failure ?? "").slice(0, 500) },
-      });
-    });
-  }
-
-  /** Wire the provider's events to the stream. Nothing here blocks delivery. */
-  #listen(
-    call: GrokCall,
-    socket: WebSocket,
-    append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
-    runInBackground: ProcessEventArgs<VoiceAgentFacetContract>["runInBackground"],
-  ): void {
-    socket.addEventListener("close", () => {
-      /*
-       * A PROVIDER-SIDE CLOSE MUST REACH THE FOLD, not just this incarnation's
-       * memory. Only the in-memory call was retired here, so an abandoned call
-       * (opened, never spoken into, never hung up) stayed open in `state.call`
-       * forever — and the at-head recovery re-dialled it on every caught-up
-       * delivery. Measured on two boards' streams: the same conversationId
-       * collecting a "timed out after 900.0 seconds due to inactivity" error
-       * every ~15 minutes, all night — an eternal re-dial loop burning one
-       * provider session per lap, with every fresh press folding into the
-       * loop's "alive" call instead of opening its own.
-       *
-       * The supersede path also lands here after it retires a call; its end is
-       * a mismatched 8-hex obituary by then, which the fold ignores — so this
-       * cannot close a successor.
-       */
-      const wasLive = this.#call === call;
-      if (wasLive) {
-        this.#call = null;
-        /* Same window as `#endCall`'s: this obituary is a write away from the
-         * fold, and until it lands the at-head pass would re-dial the corpse. */
-        this.#retiredId = call.conversationId;
-      }
-      call.close();
-      if (wasLive) {
-        /* CAUGHT, for the reason `#endCall` spells out: a socket close is the
-         * last thing that happens before this Durable Object is allowed to go
-         * quiet, so a bare rejection here is an unhandled rejection racing the
-         * eviction it just permitted. Losing the obituary costs a fold that
-         * names a dead call until the next press; `#retiredId` above already
-         * stops the at-head pass resurrecting it in the meantime. */
-        void append({
-          type: "events.iterate.com/voice-agent/conversation-ended",
-          payload: { conversationId: call.conversationId, reason: "provider socket closed" },
-        }).catch((error: unknown) => {
-          console.log(
-            `voice call ${call.conversationId} obituary failed to append: ${String(error)}`,
-          );
-        });
-      }
-    });
-    socket.addEventListener("message", (message: MessageEvent) => {
-      if (typeof message.data !== "string") return;
-      let provider: { type?: string; delta?: string; response?: { id?: string } };
-      try {
-        provider = JSON.parse(message.data) as {
-          type?: string;
-          delta?: string;
-          response?: { id?: string };
-        };
-        /* Every provider event, so a silent call can be explained from the
-         * log rather than guessed at. Audio deltas are excluded by name:
-         * there are hundreds and they say nothing the frames do not. */
-        if (provider.type !== "response.output_audio.delta") {
-          console.log(`grok <- ${String(provider.type)}`);
-        }
-      } catch {
-        return;
-      }
-      /*
-       * THE OTHER HALF OF "EITHER SIDE". A ninety-second answer is the model
-       * talking, and ageing the call out from under it would cut the reply off
-       * mid-sentence; the provider's own turn edges and transcripts are the
-       * same conversation.
-       *
-       * BUT NOT ITS KEEPALIVE. This used to count every provider message and
-       * said in its own comment that "xAI sends nothing on an idle session".
-       * That was wrong: xAI sends a `ping` roughly every fifty seconds.
-       * Measured on preview, `lastSpokeAtMs` advanced every 50.002 s through
-       * a silence nobody was speaking into, so the sixty-second deadline was
-       * reset forever and the call ran until xAI's own 900 s inactivity
-       * timeout ended it — the deadline never fired once in fifteen minutes.
-       *
-       * The retiring bridge knew this and its own idle timeout excluded
-       * liveness pings by name, with the reason written down: a device
-       * pinging into an empty room is not a conversation. The same is true of
-       * a provider pinging into one.
-       */
-      if (provider.type !== "ping") call.spoke();
-      /* The verbatim lane first, unconditionally — deltas included. */
-      this.#forwardGrokEvent(call, provider as Record<string, unknown>, append);
-      switch (provider.type) {
-        case "session.created":
-          /* The ONLY edge that makes us configure the session; miss it and the
-           * handshake never completes and the call hangs, silently. */
-          call.sendNow(grokSessionUpdate(call.serverVad));
-          return;
-        case "session.updated": {
-          /* Usable. Everything the handshake made us hold goes now. */
-          call.markReady(this.deps.now());
-          const framesQueued = call.framesQueued;
-          void append(
-            {
-              type: "events.iterate.com/voice-agent/conversation-accepted",
-              idempotencyKey: this.idempotencyKey(`accepted:${call.conversationId}`),
-              payload: { conversationId: call.conversationId },
-            },
-            {
-              type: "events.iterate.com/voice-agent/buffer-flushed",
-              /* Per DIAL, not per conversation — see GrokCall.openedAtMs. A
-               * call rescued after an eviction handshakes again, and its
-               * numbers are its own; keyed on the conversation, the second
-               * handshake's append was rejected outright and took the
-               * acceptance beside it down too. */
-              idempotencyKey: this.idempotencyKey(
-                `flushed:${call.conversationId}:${call.openedAtMs}`,
-              ),
-              payload: {
-                conversationId: call.conversationId,
-                frames: framesQueued,
-                handshakeMs: call.handshakeMs ?? 0,
-              },
-            },
-          );
-          return;
-        }
-        case "error": {
-          const detail = JSON.stringify(provider).slice(0, 600);
-          console.log(`grok error: ${detail}`);
-          /* Durable, as its declaration says: the whole point is that a
-           * silent call can be explained later, and an ephemeral one is gone
-           * as soon as the buffer rolls. */
-          void append({
-            type: "events.iterate.com/voice-agent/provider-error",
-            payload: { conversationId: call.conversationId, message: detail },
-          });
-          return;
-        }
-        case "input_audio_buffer.speech_started":
-          /*
-           * THE FLOOR HAS BEEN TAKEN, AND BOTH ENDS HAVE TO BE TOLD.
-           *
-           * Dropping what is held is not enough on its own, and the reason is
-           * an asymmetry in the API: xAI's `turn_detection` has no
-           * `interrupt_response` field, so detecting speech does NOT cancel
-           * the answer it is generating. It keeps producing deltas, the pacer
-           * keeps releasing them, and the board keeps talking — measured at
-           * about six seconds past the interruption with the held queue
-           * already cleared, which is what made it look like a flush bug
-           * rather than a missing request.
-           *
-           * TURN TAKING IS THE SERVER'S JOB. The device's half of this is to
-           * send microphone frames up and play what comes down; it does not
-           * decide anything about turns, and nothing here asks it to. What it
-           * does need is to be TOLD, because it is holding up to `leadMs` of
-           * audio that is now dead — and `speakerReplace` only arms `drop` on
-           * the next chunk, which after an interruption never comes, because
-           * the whole point is that there is no more audio.
-           *
-           * An empty chunk carrying `drop` is already a shape this lane sends
-           * (the one whose sole job is to close), so this is the existing
-           * mechanism used at the one moment it was missing, not a new one.
-           *
-           * `response.cancel` was tried here and removed: the provider's own
-           * event log shows `response.done` arriving BEFORE
-           * `speech_started`, so there is never an in-flight response to
-           * cancel and the request came back as an error every time.
-           */
-          call.abandonHeldAudio();
-          append(asSpkFrame(call, { drop: true, last: false, mulaw: new Uint8Array(0) }));
-          return;
-        case "input_audio_buffer.committed":
-          /* The provider has the turn. Everything before this stamp is ours
-           * and the wire; everything after it until the first delta is the
-           * model. */
-          call.committedAckAtMs = this.deps.now();
-          return;
-        case "response.created":
-          /* Numbering the answer makes a barge-in a comparison: a client
-           * holding frames from answer 3 drops them on seeing a 4. */
-          call.beginAnswer(this.deps.now(), provider.response?.id ?? null);
-          return;
-        case "response.output_audio.delta":
-          if (typeof provider.delta === "string") {
-            this.#reportTurnTiming(call, append);
-            this.#speak(call, provider.delta, append, runInBackground);
-          }
-          return;
-        case "response.done":
-        case "response.output_audio.done": {
-          /*
-           * THE ANSWER IS OVER, AND THE PROVIDER GETS TO SAY SO ITS OWN WAY.
-           *
-           * `response.done` is the end of a turn as this codebase has always
-           * observed it: the retired bridge freed the floor on it, `direct.ts`
-           * counts turns with it against the real xAI endpoint, and it is what
-           * `fake-grok.ts` sends. `response.output_audio.done` is the realtime
-           * spelling for the audio part specifically, and the facet used to
-           * handle ONLY that — a name that appears nowhere else in this
-           * repository, including in the code that has actually talked to xAI.
-           *
-           * With neither name handled, `speakerComplete` never ran: no chunk
-           * was ever marked `last`, the device's fence was never released, and
-           * the mouth stayed open on the final shape it was given. A reply
-           * that plays and then a board that has gone deaf. Both existing
-           * facet suites missed it because their inline providers send the
-           * event the implementation happened to handle — see
-           * voice-agent.fake-grok.e2e.test.ts, which sends what a provider
-           * sends.
-           *
-           * Whichever arrives first ends the answer, and a second one changes
-           * nothing: `speakerComplete` is a flag and `closeMouth` is guarded.
-           */
-          if (!call.answerIs(provider.response?.id ?? null)) return;
-          /* THE MOUTH MUST CLOSE. Without a closing SIL the face holds the
-           * last shape it was given, so the board sits there mid-syllable
-           * until the next answer — which reads as a crash, not a pause. */
-          this.#foldFace(call.closeMouth());
-          /*
-           * AND THE CALL STAYS UP. This used to hang up the provider socket
-           * here, on every push-to-talk answer, so the next press re-dialled —
-           * which is a new conversation per button press rather than one
-           * conversation across many. The socket now goes when the call does:
-           * a minute after the last utterance, or when either side ends it.
-           */
-          /* NOT "send the closing chunk now". The tail may still be seconds
-           * of audio the listener has not caught up with; `last` is attached
-           * to whichever chunk turns out to be final, and the drain loop is
-           * what finds out which. */
-          call.completeAnswer();
-          this.#drainSpeaker(call, append, runInBackground);
-          return;
-        }
-        default:
-          /* Already on the verbatim lane above; nothing else to do. */
-          return;
-      }
-    });
-  }
-
-  /**
-   * The provider's timeline, verbatim, as ephemeral `grok-event`s — audio
-   * deltas included. The paced `spk-frame` lane says what the device was
-   * GIVEN; this lane says what the provider SENT and when. They deliberately
-   * need not match: consuming both off one stream is the whole buffer-
-   * management debugging story, no device in hand.
-   */
-  #forwardGrokEvent(
-    call: GrokCall,
-    provider: Record<string, unknown>,
-    append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
-  ): void {
-    /*
-     * THE TIMELINE, AND NOT ONE FRAME OF THE AUDIO.
-     *
-     * Forwarding provider events verbatim meant forwarding `delta`: tens of
-     * kilobytes of base64 per chunk, hundreds of chunks per answer, to every
-     * subscriber. The host CLI died on it — `protoFail=10 recvFail=10`, the
-     * `/api` socket torn down and re-dialled every few seconds for a whole
-     * conversation — because an embedded client reassembles a delivery batch
-     * into a fixed buffer and a delta does not fit.
-     *
-     * Replacing the bytes with their length fixed the buffer and left the
-     * worse half of the problem: hundreds of EVENTS an answer, each competing
-     * for a slot in a board's sixteen-event batch against the speaker frames
-     * that are the point. So the audio delta does not ride this lane at all.
-     * It is the one provider event whose content is already here, paced and
-     * framed, on `spk-frame` — and `turn-timing` says when the first one
-     * landed, which is the only thing its timestamp was ever read for.
-     *
-     * Everything else stays verbatim, because a silent call is diagnosed from
-     * the transitions: this lane is what proved a barge-in one millisecond
-     * after `response.created` was cancelling four answers in six.
-     */
-    if (provider.type === "response.output_audio.delta") return;
-    void append({
-      type: "events.iterate.com/voice-agent/grok-event",
-      payload: { conversationId: call.conversationId, t: this.deps.now(), event: provider },
-    });
-  }
-
-  /**
-   * The turn's four facet-side stamps, once, as the answer's first byte lands.
-   *
-   * Read against a client's own release time (aligned with a `ping`/`pong`
-   * round trip) this turns press-to-answer into four terms that can each be
-   * attacked separately: reaching the facet, the facet's own work, the facet's
-   * round trip to the provider, and the model thinking.
-   */
-  #reportTurnTiming(
-    call: GrokCall,
-    append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
-  ): void {
-    if (call.timingReported || call.endSeenAtMs === null) return;
-    call.timingReported = true;
-    void append({
-      type: "events.iterate.com/voice-agent/turn-timing",
-      ephemeral: true,
-      payload: {
-        conversationId: call.conversationId,
-        endSeenT: call.endSeenAtMs,
-        commitSentT: call.commitSentAtMs,
-        committedAckT: call.committedAckAtMs,
-        firstDeltaT: this.deps.now(),
-        firstFrameT: call.firstFrameAtMs,
-        micFrames: call.framesThisTurn,
-        maxFrameGapMs: call.maxFrameGapMs,
-        droppedAfterEnd: call.droppedAfterEnd,
-      },
-    });
-  }
-
-  /*
-   * THE FACE IS A VALUE, NOT A STREAM.
-   *
-   * Mouth shapes arrive tens of times a second, and sending each as an event
-   * would put a second firehose on the lane we just cleared of the first —
-   * every shape competing with the speaker frames it describes for a slot in
-   * a board's delivery batch, to deliver something that is stale the instant
-   * the next one exists. Audio is a stream because every sample matters and a
-   * gap is audible. A face is the opposite: only the latest matters, and a
-   * missed intermediate pose is invisible.
-   *
-   * So the shapes fold here and are published through `liveState`, which
-   * coalesces by nature — a client that falls behind gets the current pose
-   * rather than a backlog of positions the mouth has already left. It is
-   * deliberately not durable: after a restart the mouth should be shut, not
-   * restored to whatever shape it held when the incarnation died.
-   */
-  #face: { viseme: number; answer: number; playoutSamples: number; at: number } | null = null;
-
-  #foldFace(
-    shapes: readonly { payload: { viseme: number; answer: number; playoutSamples: number } }[],
-  ): void {
-    const latest = shapes.at(-1);
-    if (latest === undefined) return;
-    this.#face = { ...latest.payload, at: this.deps.now() };
-  }
-
-  /**
-   * What a face-rendering client watches. `liveState` pins this against the
-   * runner's snapshot, so a board reads one consistent picture of the call and
-   * the mouth rather than two that can disagree.
-   */
-  override async getRuntimeState() {
-    return {
-      runtime: {
-        face: this.#face,
-        conversationId: this.#call?.conversationId ?? null,
-        ready: this.#call?.ready === true,
-        /*
-         * THE CLOCK, WHICH IS WHY `ping`/`pong` ARE GONE.
-         *
-         * Those two event types existed to prove this incarnation was alive
-         * and to let a caller align its clock with it. Both were duplicates: a
-         * WebSocket has its own ping/pong and already knows whether it is
-         * alive, the platform hands the stream a real connection-layer ping
-         * (t0/t1/t2) for transport RTT, and reading THIS bag is itself proof
-         * that the facet is loaded and answering. A read that has to happen
-         * anyway is a better liveness probe than two event types on the lane
-         * we are trying to reduce to almost nothing.
-         */
-        now: this.deps.now(),
-        /*
-         * THE SPEAKER LANE, IN MILLISECONDS.
-         *
-         * The audio itself is never published — it is megabytes, and it is
-         * already on its way to the only consumer that wants it. What is
-         * published is the answer to the question anybody debugging this asks
-         * first: how much is held, how much has gone, and how far ahead of the
-         * listener we are. `overflowBytes` non-zero means audio was dropped.
-         */
-        speaker: this.#call === null ? null : speakerSummary(this.#call.speaker, this.deps.now()),
-      },
-    };
-  }
-
-  /** Provider audio out to the device, paced by speaker.ts. */
-  #speak(
-    call: GrokCall,
-    deltaBase64: string,
-    append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
-    runInBackground: ProcessEventArgs<VoiceAgentFacetContract>["runInBackground"],
-  ): void {
-    /* The PCM the classifier reads is the PCM the speaker will play, so it is
-     * taken before the mu-law encode spends it. */
-    const pcm = new Uint8Array(base64ToBytes(deltaBase64));
-    /*
-     * The mouth moves on every delta, including one too short to release. Its
-     * audio has still been seen by the classifier, and holding the shapes back
-     * would make the face lag the voice by however long the provider takes to
-     * send the rest.
-     */
-    this.#foldFace(call.visemesFor(pcm));
-    call.pushAudio(encodeMulawFromPcm16(pcm));
-    this.#drainSpeaker(call, append, runInBackground);
-  }
-
-  /**
-   * Release what the listener has room for, and keep one loop alive to release
-   * the rest.
-   *
-   * ONE LOOP PER CALL, and it is the only thing in this file that decides when
-   * audio moves. It sleeps exactly as long as speaker.ts says — never a fixed
-   * tick — so a ninety-second answer costs ninety wakes rather than one every
-   * four hundred milliseconds forever, and a call with nothing to say costs
-   * none at all.
-   *
-   * Re-entrant by design: every provider delta calls this, and all but the
-   * first find the loop already running and simply return. The loop exits when
-   * the answer is fully handed over, which is what lets the Durable Object
-   * hibernate between turns instead of being pinned by a pacer.
-   */
-  #drainSpeaker(
-    call: GrokCall,
-    append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
-    runInBackground: ProcessEventArgs<VoiceAgentFacetContract>["runInBackground"],
-  ): void {
-    const first = call.releaseAudio(this.deps.now(), this.speakerLimits);
-    if (first.chunks.length > 0) {
-      call.spoke();
-      const frames = first.chunks.map((c) => asSpkFrame(call, c));
-      /* ENQUEUED, not fired. Un-awaited here is deliberate — this runs on the
-       * delivery lane and must not block it — and un-ORDERED was the bug; see
-       * GrokCall.inSpeakerOrder. */
-      void call.inSpeakerOrder(() => append(...frames));
-    }
-    if (first.nextWakeMs === null || call.pacerRunning) return;
-    call.pacerRunning = true;
-    runInBackground(async () => {
-      try {
-        let wake = first.nextWakeMs;
-        while (!call.closed && wake !== null) {
-          await this.deps.sleep(wake);
-          if (call.closed) break;
-          const release = call.releaseAudio(this.deps.now(), this.speakerLimits);
-          if (release.chunks.length > 0) {
-            /*
-             * HANDING SPEECH TO THE LISTENER IS THE CALL BEING USED.
-             *
-             * The provider dumps a ninety-second answer in a few seconds, so
-             * `lastSpokeAtMs` stopped advancing the moment the last delta
-             * landed — and then the idle countdown, which has no idea an
-             * answer is still going out, ended the call sixty seconds into it.
-             * MEASURED: a count to one hundred delivered 63 s of 90 s and then
-             * `conversation-ended: no utterance from either side for 60s`,
-             * mid-sentence. The provider going quiet is not the room going
-             * quiet while we are still talking.
-             */
-            call.spoke();
-            const frames = release.chunks.map((c) => asSpkFrame(call, c));
-            /* Through the same queue as the delta handler's, and still awaited
-             * — the await is this loop's backpressure, the queue is what stops
-             * it overtaking a clear the delta handler enqueued first. */
-            await call.inSpeakerOrder(() => append(...frames));
-          }
-          wake = release.nextWakeMs;
-        }
-      } finally {
-        /* Cleared however the loop leaves — a throw here used to strand the
-         * flag set, and a stranded flag means no later delta can ever start a
-         * drain again, which is an answer that arrives and is never sent. */
-        call.pacerRunning = false;
-      }
-    });
-  }
-
-  /**
-   * Stay in flight for the life of this call, and ASK for its end when a whole
-   * minute has passed with nothing said either way.
-   *
-   * TWO JOBS, ONE PROMISE, and they belong together. Unsettled, this is the
-   * obligation that keeps the Durable Object up (and its parent poked, which
-   * is what stops a facet being corrupted at 73 seconds); settled, it is the
-   * release that lets the object hibernate. Asking for the end is simply the
-   * last thing it does before settling.
-   *
-   * IT IS A LOOP AND NOT A TIMER, and that is the whole repair. A
-   * `setTimeout` armed from the synchronous body of a delivery belongs to a
-   * request context that ends with that delivery — MEASURED on preview-3: a
-   * live call, 150 seconds of silence, a facet demonstrably alive (it answered
-   * a warm-up probe in 154ms), a stream with no traffic on it at all, and no
-   * end ever requested. Running inside a `runInBackground` closure is what
-   * gives the wake somewhere to happen and the append something to happen in;
-   * the pacer's drain loop has always worked for exactly this reason.
-   *
-   * The sleep is EXACTLY as long as the call has left, so somebody speaking
-   * costs nothing (the next wake simply recomputes) and the deadline is the
-   * deadline rather than a polling interval rounded up.
-   *
-   * Not a hang-up: this appends the decision and lets the delivery lane do the
-   * ending in {@link #endAsRequested}, so there stays one code path that
-   * closes a socket and writes an obituary however the decision was reached.
-   */
-  async #holdUntilIdle(
-    call: GrokCall,
-    append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
-  ): Promise<void> {
-    let lap = 0;
-    this.#countdownStep(call, "entered", 0, append);
-    while (!call.closed) {
-      lap += 1;
-      const idleForMs = this.deps.now() - call.lastSpokeAtMs;
-      if (idleForMs < IDLE_TIMEOUT_MS) {
-        /* Racing `over` is what makes a call that ends by any other route —
-         * a device's hang-up, a provider close, being superseded — release
-         * this immediately instead of holding the object for the rest of the
-         * minute it no longer has. */
-        this.#countdownStep(call, "sleeping", lap, append, IDLE_TIMEOUT_MS - idleForMs);
-        await Promise.race([this.deps.sleep(IDLE_TIMEOUT_MS - idleForMs), call.over]);
-        this.#countdownStep(call, call.closed ? "woke-closed" : "woke", lap, append);
-        continue;
-      }
-      this.#countdownStep(call, "due", lap, append, idleForMs);
-      try {
-        await append({
-          type: "events.iterate.com/voice-agent/conversation-end-requested",
-          idempotencyKey: this.idempotencyKey(`end-requested:${call.conversationId}`),
-          payload: { conversationId: call.conversationId, reason: IDLE_END_REASON },
-        });
-      } catch (error) {
-        /* Nothing was decided, so nothing will end this call unless the next
-         * minute is started here. */
-        console.log(
-          `voice call ${call.conversationId} idle end-request failed to append: ${String(error)}`,
-        );
-        this.#countdownStep(call, `ask-failed: ${String(error).slice(0, 120)}`, lap, append);
-        call.spoke();
-        continue;
-      }
-      this.#countdownStep(call, "asked", lap, append);
-      /*
-       * ASKED, NOT DONE. Settling now would release the keepalive between the
-       * decision and the ending — the object could hibernate holding a socket
-       * nobody has closed. So wait for the delivery lane to close the call;
-       * if a minute passes and it somehow has not, ask again (the idempotency
-       * key collapses the repeat into the request already on the log).
-       */
-      await Promise.race([call.over, this.deps.sleep(IDLE_TIMEOUT_MS)]);
-    }
-    this.#countdownStep(call, "released", lap, append);
-  }
-
-  /**
-   * Say on the stream where the countdown got to.
-   *
-   * Fire-and-forget on purpose: an instrument that can throw, block, or change
-   * the control flow it is measuring is not an instrument. Durable because the
-   * thing being measured is a stream nobody is connected to.
-   */
-  #countdownStep(
-    call: GrokCall,
-    phase: string,
-    lap: number,
-    append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
-    idleForMs = this.deps.now() - call.lastSpokeAtMs,
-  ): void {
-    console.log(`voice call ${call.conversationId} countdown lap ${String(lap)}: ${phase}`);
-    void append({
-      type: "events.iterate.com/voice-agent/idle-countdown",
-      idempotencyKey: this.idempotencyKey(
-        `countdown:${call.conversationId}:${String(lap)}:${phase}`,
-      ),
-      payload: { conversationId: call.conversationId, phase, lap, idleForMs },
-    }).catch(() => undefined);
-  }
-
-  /**
-   * Ask for a call to end, from inside a delivery.
-   *
-   * Keyed on the conversation, so the countdown and the at-head pass racing
-   * each other collapse into ONE request rather than a queue of identical
-   * decisions. Within one incarnation they cannot race — a live one reads only
-   * its countdown, a revived one only the fold — so the key is for the case
-   * across incarnations, where a dying incarnation's request is still in
-   * flight as its successor concludes the same thing. That race is real and no
-   * unit test here can stage it (a crash drops in-flight closures), which is
-   * exactly why {@link IDLE_END_REASON} is a constant: same key, same body,
-   * collapse rather than the rejection a differing body would earn.
-   *
-   * Registered as background work so the append rides the keepalive; if it
-   * drops, the next at-head pass asks again — the same recovery the request
-   * itself provides for the obituary.
-   */
-  #requestEnd(
-    conversationId: string,
-    reason: string,
-    append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
-    runInBackground: ProcessEventArgs<VoiceAgentFacetContract>["runInBackground"],
-  ): void {
-    console.log(`voice call ${conversationId} end requested: ${reason}`);
-    runInBackground(async () => {
-      await append({
-        type: "events.iterate.com/voice-agent/conversation-end-requested",
-        idempotencyKey: this.idempotencyKey(`end-requested:${conversationId}`),
-        payload: { conversationId, reason },
-      });
-    });
-  }
-
-  /**
-   * Somebody decided; do it. Close the provider socket if this incarnation is
-   * the one holding it, and write the obituary either way.
-   *
-   * EITHER WAY is the load-bearing half. A revived incarnation holds no
-   * socket, and if it declined to write the obituary on that account the fold
-   * would name an open call forever and every later pass would ask for the
-   * same ending again. The idempotency key makes the retry free and the
-   * duplicate impossible.
-   */
-  #endAsRequested(
-    conversationId: string,
-    reason: string,
-    append: ProcessEventArgs<VoiceAgentFacetContract>["append"],
-  ): void {
-    /* Only if it is THIS call: an in-flight `call-started` can mean the socket
-     * in hand is a successor the fold has not heard about yet. */
-    if (this.#call?.conversationId === conversationId) this.#endCall(reason);
-    this.#retiredId = conversationId;
-    void append({
-      type: "events.iterate.com/voice-agent/conversation-ended",
-      idempotencyKey: this.idempotencyKey(`ended:${conversationId}`),
-      payload: { conversationId, reason },
-    }).catch((error: unknown) => {
-      /* CAUGHT, for the reason `#endCall` spells out: this is the last thing
-       * the facet does before the object is allowed to hibernate. Losing it
-       * costs one more pass — the fold still says an end was requested, so the
-       * next incarnation to reach head writes it. */
-      console.log(`voice call ${conversationId} obituary failed to append: ${String(error)}`);
-    });
-  }
-
-  /**
-   * Retire the live call, and SAY SO on the stream.
-   *
-   * The obituary used to come only from the socket's close listener, which
-   * means a call whose socket never opened produced none at all: the fold went
-   * on believing a call was open, and the at-head recovery re-dialled that
-   * same dead id on every caught-up delivery, forever. Emitting it here covers
-   * both — the listener's own append is guarded on still being the live call,
-   * so a close that follows this one cannot duplicate it.
-   */
-  #endCall(reason: string, append?: ProcessEventArgs<VoiceAgentFacetContract>["append"]): void {
-    const call = this.#call;
-    if (call === null) return;
-    this.#call = null;
-    this.#retiredId = call.conversationId;
-    console.log(`voice call ${call.conversationId} ended: ${reason}`);
-    /* Takes the idle countdown with it — see GrokCall.close. */
-    call.close();
-    if (append !== undefined) {
-      /*
-       * CAUGHT, because this is the LAST thing the facet does before going
-       * quiet, and an uncaught rejection here is an unhandled rejection inside
-       * the Durable Object at the exact moment it is allowed to hibernate —
-       * a fire-and-forget append racing the eviction it has just permitted.
-       *
-       * Losing the obituary is not fatal. The call is already retired in
-       * memory and `#retiredId` stops the at-head pass re-dialling it, so the
-       * only cost is a fold that still names a dead call until the next press
-       * opens a live one. Saying so out loud is the point: silence here would
-       * make that state impossible to explain from the log.
-       */
-      void append({
-        type: "events.iterate.com/voice-agent/conversation-ended",
-        payload: { conversationId: call.conversationId, reason },
-      }).catch((error: unknown) => {
-        console.log(
-          `voice call ${call.conversationId} obituary failed to append: ${String(error)}`,
-        );
-      });
-    }
-  }
-}
-
-/**
- * The whole userspace facet: recovery on (this processor owes a live call it
- * must re-dial after an eviction) and one factory. Everything else — the itx
- * alarm proxy, the stream handle, configure/handleAlarm — is the base.
- */
 export class VoiceAgentFacet extends StreamProcessorFacet {
   protected readonly recovery = true;
   protected createProcessor(deps: ProcessorHostDeps) {
-    return new VoiceAgentFacetProcessor({
+    return new VoiceAgentProcessor({
       ...deps,
-      now: () => Date.now(),
-      /* A plain `setTimeout`, and it is safe to be one BECAUSE of where it is
-       * awaited: every wait in this processor happens inside a
-       * `runInBackground` closure the keepalive holds, so the object is up to
-       * receive it and there is an I/O context to append from. What covers the
-       * silence a live object cannot — because it died anyway — is the same
-       * deadline folded into reduced state. Nothing here needs to know either. */
+      nowAtFacetMs: () => Date.now(),
+      /* Safe as a bare setTimeout BECAUSE of where it is awaited: every wait
+       * here happens inside a `runInBackground` closure the keepalive holds, so
+       * the object is up to receive it and there is an I/O context to append
+       * from. */
       sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
-      dialGrok: (baseUrl) => dialGrokSocket(baseUrl),
+      dialProvider: (provider, baseUrl, model) => dialProviderSocket(provider, baseUrl, model),
+      withProject: async <T>(fn: (project: unknown) => Promise<T>): Promise<T> => {
+        const project = await this.env.ITX.get();
+        try {
+          return await fn(project);
+        } finally {
+          try {
+            (project as Partial<Disposable>)[Symbol.dispose]?.();
+          } catch {
+            /* Already gone. */
+          }
+        }
+      },
     });
   }
 }

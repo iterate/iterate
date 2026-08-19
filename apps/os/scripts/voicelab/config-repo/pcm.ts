@@ -38,7 +38,7 @@
  * sub-frame latency.
  *
  * WHAT IT IS NOT. Not a codec (mu-law lived and died elsewhere — see
- * voice-agent2.ts), not arbitrary-ratio (the bank is built per rational
+ * voice-agent.ts), not arbitrary-ratio (the bank is built per rational
  * ratio and cached; any pair of rates whose ratio reduces small works,
  * which is all a fleet of fixed-rate devices needs), and not zero-cost:
  * 2 * HALF_TAPS multiplies per output sample, ~200k per second of speech,
