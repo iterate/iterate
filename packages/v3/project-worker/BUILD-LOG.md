@@ -1347,3 +1347,47 @@ delivery was always "by row identity, never the table"; the dominant shape now p
 Menu #1 (subscriptions into the ictx facet, −160 lines) is VIABLE — the cursor-read RPC
 concern measured out at ~2 ms noise — but recommended DEFERRED until workerd#6810 (facet
 alarms, still open) deletes the one ugly bit, the parent alarm-proxy verb.
+
+## Increment 54 (live-11): THE INLINE CORE — the routing table folds at the commit point, and the core processor is back
+
+The owner's direction ("move parts of iterate-context into the stream parent… bring back the
+core stream processor from apps/os as a reduce-only processor and the ability to circuit break
+a stream"), grounded in the apps/os precedent: its stream DO "runs [the core processor] inline
+during append instead of through the normal event-batch runner", and that same reducer owns
+the pause flag and the token-bucket breaker. Design memo: wayfinder/innermost-core/
+core-processor-jam.md. The insight that makes it elegant: THE RUNNER IS THE PRICE OF DISTANCE
+— serial chain, cursors, scan windows, gap repair, resurrection all exist to cope with being
+away from the commit point; a fold that runs AT it needs none of them.
+
+- **`ReduceOnlyProcessor` (core/processor.ts)**: same `defineProcessorContract`, same
+  `reduce({event, state})` — NOT having a `processEvent` is what qualifies a processor for
+  inline hosting (the rule is the type). Three placements, one authoring surface: inline
+  (zero distance), built-in facet (ProcessorFacet — kept, now purely generic), userspace
+  (loader runner — untouched).
+- **The inline host (~90 lines in the parent)**: per-slug in-memory state + a versioned kv
+  checkpoint written INSIDE append's transactionSync — the routing table and core state are
+  atomically exact as of the last committed event, so the pump-races-the-provide class is
+  unspellable, not carefully avoided. Rebuild (eviction, version skew, first contact) is one
+  synchronous replay of the durable log. Inline folds see durable events only.
+- **The iterate context moved in**: `IterateContextStreamProcessor` dropped its async base
+  class (reduce-only + resolver methods; mounts now CARRY their delivery policy, so the
+  parent's push rows are a derived view of the one fold — the double fold is DEAD, and so are
+  `#ictx()`, the ictx facet, its resurrection/quiesce cases, the deliverSubscription facet
+  lane, and the `x-itx-cap` facet-fetch tunnel; dispatch/provide/revoke/subscribe/deliver/
+  fetch-lane are all parent-local now). ProcessorFacet shrank 260→153 lines (generic shell +
+  Tally, which stays as the built-in-facet lane's proof). Push cursors mint lazily on first
+  pump; revoke GCs them in the verb.
+- **The core processor (core-processor.ts, ~113 lines)**: pause + token-bucket circuit
+  breaker, exactly the apps/os shape. Control is ORDINARY EVENTS (pause/resume/
+  breaker-configured are appends — auditable, shadowable, zero new verbs); enforcement reads
+  the fold at the commit point; the bucket refills from EVENT time so the fold stays pure and
+  rebuilds bit-identically (only enforcement consults the clock). Control events are exempt —
+  a tripped or paused stream always accepts its own resume. Ephemeral appends bypass the
+  breaker (it meters durable growth).
+- Measured on live-11: table-routed `stream.read` from a loaded isolate 9.8→5.7 ms (the facet
+  resolve + snapshot barrier per dispatch is gone); delivery medians hold at increment 53's
+  levels. Unit: core-processor.test.ts (pause latch, exact-capacity trip, event-time refill,
+  control exemption, bit-identical refold) — 109 tests. Live: NEW prove_core.mjs ALL PASS
+  (pause refuses with reason, control passes, breaker admits exactly 3 then trips, ~2.6s
+  refill admits exactly one more, breaker-off restores, /state shows the core fold) + the
+  full ten-suite board ALL PASS.

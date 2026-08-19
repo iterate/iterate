@@ -34,19 +34,11 @@ function memoryStream(path = "/") {
       });
     },
   };
-  return { stream };
+  return { stream, events };
 }
 
-const memoryStorage = () => {
-  const map = new Map<string, unknown>();
-  return {
-    get: <T>(k: string) => map.get(k) as T | undefined,
-    put: (k: string, v: unknown) => void map.set(k, structuredClone(v)),
-  };
-};
-
 test("contexts.get(own path) resets depth — the guard never fires (loop repro)", async () => {
-  const { stream } = memoryStream();
+  const { stream, events } = memoryStream();
   let hops = 0;
 
   // The parent-DO stub as the facet's `deps.context(p)` hands it back: invoke(call, depth = 0).
@@ -75,14 +67,17 @@ test("contexts.get(own path) resets depth — the guard never fires (loop repro)
 
   const host = new IterateContextStreamProcessor({
     stream,
-    storage: memoryStorage(),
-    path: "/",
-    projectId: "prj_t",
     hostScope: hostScope as unknown as Record<string, unknown>,
     seeds: [{ pattern: parse("itx.contexts"), target: parse("contexts") }],
   });
+  const fold = () =>
+    events.reduce(
+      (st: ReturnType<typeof host.contract.initialState>, e: StreamEvent) =>
+        host.reduce({ event: e, state: st }) ?? st,
+      host.contract.initialState(),
+    );
   host.resolveCurrent = async (call: Expression, depth = 0) =>
-    host.resolve((await host.snapshot()).state, call, undefined, depth);
+    host.resolve(fold(), call, undefined, depth);
 
   // The one-character topology typo from the claim: own path instead of a sibling's.
   await host.provide({ pattern: "itx.a", target: "itx.contexts.get('/').a" });

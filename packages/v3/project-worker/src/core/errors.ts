@@ -10,7 +10,11 @@
 // own-property channel; honor them rather than inventing a retry taxonomy.
 
 /** The stable machine-readable codes — SCREAMING_SNAKE, defined once, both ends import this. */
-export type ErrorCode = "NO_CAPABILITY_MATCH" | "IDEMPOTENCY_CONFLICT";
+export type ErrorCode =
+  | "NO_CAPABILITY_MATCH"
+  | "IDEMPOTENCY_CONFLICT"
+  | "STREAM_PAUSED"
+  | "STREAM_BREAKER_OPEN";
 
 /** A plain Error carrying `code` (+ optional `data`) as own enumerable properties. */
 export function codedError(code: ErrorCode, message: string, data?: unknown): Error {

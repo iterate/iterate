@@ -1,8 +1,10 @@
-// processor-facet.ts — THE FACET SPINE: a stream processor hosted in a real workerd facet
-// (`ctx.facets.get`) on the Stream DO, with its OWN isolated SQLite-backed storage and
+// processor-facet.ts — THE BUILT-IN FACET SPINE: a stream processor hosted in a real workerd
+// facet (`ctx.facets.get`) on the Stream DO, with its OWN isolated SQLite-backed storage and
 // independent abort/restart. A facet hosts a DURABLE OBJECT; *stream processor* is the role its
-// object plays. Since increment 28 the ITERATE CONTEXT ITSELF is one of these: the parent DO is
-// log + sockets + doors only, and the routing table lives here.
+// object plays. This is the DISTANCE lane — for built-in processors with effects (processEvent,
+// retries, isolation needs); the ITERATE CONTEXT and the CORE processor are reduce-only and run
+// INLINE at the parent's commit point instead (zero distance needs zero runner — see
+// core/processor.ts ReduceOnlyProcessor and the core-processor jam doc).
 //
 // The parent↔facet channel:
 //   • IDENTITY via first-contact `configure({ parentName, projectId, path, slug })` — plain data,
@@ -23,11 +25,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
-import { parseAppConfig } from "./core/config.ts";
-import { errorCode } from "./core/errors.ts";
 import { defineProcessorContract, type StreamEvent } from "./core/events.ts";
-import { parse, toExpression, type Expression } from "./core/expression.ts";
-import { stringifyName } from "./core/names.ts";
 import {
   StreamProcessor,
   type ProcessorSnapshot,
@@ -36,14 +34,7 @@ import {
   type ReduceArgs,
   type ScanWindow,
 } from "./core/processor.ts";
-import { IterateContextStreamProcessor } from "./iterate-context-stream-processor.ts";
-import {
-  buildHostScope,
-  facetAddressView,
-  facetClientsView,
-  type RootsEnv,
-} from "./roots-builder.ts";
-import type { StreamDurableObject } from "./stream-durable-object.ts";
+import type { RootsEnv } from "./roots-builder.ts";
 
 interface Env extends RootsEnv {
   APP_CONFIG?: string;
@@ -79,19 +70,13 @@ class TallyProcessor extends StreamProcessor<{ counts: Record<string, number> }>
   }
 }
 
-/** What a built-in facet-processor factory receives: the stream + storage + identity, the worker
- *  env, and a late-bound `invoke` back into THIS facet's own dispatch (only ever CALLED lazily,
- *  from inside resolved targets). */
+/** What a built-in facet-processor factory receives: the stream + storage + identity. */
 type FacetProcessorArgs = {
   stream: ProcessorStream;
   storage: ProcessorStorage;
   path: string;
   projectId: string;
   identity: FacetIdentity;
-  env: Env;
-  /** The facet's own ctx — its `exports` mints the loaded-worker interposition entrypoint. */
-  hostCtx: unknown;
-  invoke: (call: Expression, depth?: number) => Promise<unknown>;
 };
 
 /** Built-in facet-hosted processors by slug. (Loader-loaded userspace classes ride the same
@@ -103,37 +88,6 @@ const FACET_PROCESSORS: Record<
   (args: FacetProcessorArgs) => StreamProcessor<any>
 > = {
   tally: (args) => new TallyProcessor(args),
-  // THE capability host: reduced state IS the routing table. Roots are FACET-BUILT: kv/secrets/
-  // loader/fallback from the inherited worker env; the own stream + sibling contexts BY NAME
-  // through the parent namespace; the clients view = thin RPC wrappers over the parent's stub
-  // facade (sockets live on the parent, always).
-  "iterate-context": (args) => {
-    const { stream, storage, path, projectId, identity, env, invoke } = args;
-    const parent = () => env.CONTEXT.getByName(identity.parentName);
-    const hostScope = buildHostScope({
-      projectId,
-      path,
-      contextName: identity.parentName,
-      env,
-      invoke: (call) => invoke(call),
-      context: (p) => env.CONTEXT.getByName(stringifyName({ projectId, path: p })),
-      clients: facetClientsView(parent),
-      facets: facetAddressView(parent),
-      hostCtx: args.hostCtx,
-    });
-    const processor = new IterateContextStreamProcessor({
-      stream,
-      storage,
-      path,
-      projectId,
-      seeds: parseAppConfig(env.APP_CONFIG).seeds,
-      hostScope,
-    });
-    // Wire the resolver recursion LOCALLY: `itx.…` inside any mount target re-enters THIS
-    // facet's dispatch (never a hop back through the parent).
-    processor.resolveCurrent = (call, depth) => invoke(call, depth);
-    return processor;
-  },
 };
 
 export class ProcessorFacet extends DurableObject<Env> {
@@ -167,65 +121,6 @@ export class ProcessorFacet extends DurableObject<Env> {
     return this.#p().waitUntilProcessed(input);
   }
 
-  // ── the iterate-context surface (only valid when this facet hosts that slug) ──
-
-  /** Resolve + run one call against the CURRENT table: catch up → snapshot → resolve. This is
-   *  also the facet's `resolveCurrent` — the recursion stays LOCAL. */
-  async invoke(call: string | Expression, depth = 0): Promise<unknown> {
-    const processor = this.#ictx();
-    const { state } = await processor.snapshot();
-    return processor.resolve(state, toExpression(call), undefined, depth);
-  }
-
-  /** Deliver a window to one subscription mount BY IDENTITY (see the processor's deliverTo). */
-  async deliverSubscription(providedAtOffset: number, args: unknown[]): Promise<unknown> {
-    const processor = this.#ictx();
-    const { state } = await processor.snapshot();
-    return processor.deliverTo(state, providedAtOffset, args);
-  }
-
-  /** Mount a capability (event provenance — targets must be itx-rooted). */
-  provide(input: {
-    pattern: string | Expression;
-    target: string | Expression;
-    delivery?: Parameters<IterateContextStreamProcessor["provide"]>[0]["delivery"];
-  }): Promise<{ providedAtOffset: number }> {
-    return this.#ictx().provide(input);
-  }
-
-  revoke(input: { providedAtOffset: number }): Promise<void> {
-    return this.#ictx().revoke(input);
-  }
-
-  /** THE FETCH LANE terminal: the parent forwards `x-itx-cap` requests NATIVELY
-   *  (`facet.fetch(request)`), so a 101 tunnels straight through. */
-  async fetch(request: Request): Promise<Response> {
-    const capHeader = request.headers.get("x-itx-cap");
-    if (!capHeader) return new Response("processor facet: no x-itx-cap header\n", { status: 400 });
-    try {
-      const expr = capHeader.trimStart().startsWith("[")
-        ? (JSON.parse(capHeader) as Expression)
-        : parse(capHeader.startsWith("itx") ? capHeader : `itx.${capHeader}`);
-      const processor = this.#ictx();
-      const { state } = await processor.snapshot();
-      const result = await processor.resolveFetch(state, expr, request);
-      if (result instanceof Response) return result;
-      return new Response(`fetch lane: ${JSON.stringify(result)}\n`);
-    } catch (error) {
-      const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
-      // Classification by CODE, never message text — the code survives every hop (core/errors.ts).
-      const status = errorCode(error) === "NO_CAPABILITY_MATCH" ? 404 : 500;
-      return new Response(`fetch lane error: ${message}\n`, { status });
-    }
-  }
-
-  #ictx(): IterateContextStreamProcessor {
-    const processor = this.#p();
-    if (!(processor instanceof IterateContextStreamProcessor))
-      throw new Error(`facet is not the iterate-context processor`);
-    return processor;
-  }
-
   /** Rehydrate from the durable identity (every incarnation — facets restart independently,
    *  and the parent's quiesce alarm aborts idle facets on purpose). */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -251,9 +146,6 @@ export class ProcessorFacet extends DurableObject<Env> {
       path: identity.path,
       projectId: identity.projectId,
       identity,
-      hostCtx: this.ctx,
-      env: this.env,
-      invoke: (call, depth) => this.invoke(call, depth),
     });
     return this.#processor;
   }

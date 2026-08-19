@@ -104,6 +104,18 @@ export type ProcessEventArgs<State> = {
 
 export type ProcessorSnapshot<State> = { offset: number; state: State };
 
+/** A REDUCE-ONLY processor: pure fold, no effects — hostable at ZERO DISTANCE (inline at the
+ *  parent's commit point) because it needs none of the async runner below. The entire runner
+ *  apparatus — serial chain, cursors, scan windows, gap repair, resurrection — is the price of
+ *  being AWAY from the commit point; a fold that runs synchronously inside append pays none of
+ *  it. Same `defineProcessorContract`, same `reduce({event, state})` signature; NOT having a
+ *  `processEvent` is what qualifies a processor for inline hosting (the rule is the type).
+ *  Inline folds see DURABLE events only — their checkpoint must be rebuildable from the log. */
+export type ReduceOnlyProcessor<State> = {
+  contract: ProcessorContract<State>;
+  reduce(args: ReduceArgs<State>): State | null | undefined;
+};
+
 /** THE one live-state change type — ephemeral, payload `{key, from, to, patch}`: the delta
  *  patch itself rides the event (LiveView-style), chained by producer-owned revisions (`from` =
  *  the previous emission's `to`). HARD RULE: no processor can ever consume it (#consumes

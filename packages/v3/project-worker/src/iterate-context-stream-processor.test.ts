@@ -1,6 +1,5 @@
 // The routing table's executable spec — shadow stack, provenance gate, default-deny, recursion.
 import { describe, expect, test } from "vitest";
-import { z } from "zod";
 import { parse, type Expression } from "./core/expression.ts";
 import { IterateContextStreamProcessor } from "./iterate-context-stream-processor.ts";
 import { type ProcessorStream } from "./core/processor.ts";
@@ -48,14 +47,6 @@ function memoryStream(path = "/") {
   return { stream, events };
 }
 
-const memoryStorage = () => {
-  const map = new Map<string, unknown>();
-  return {
-    get: <T>(k: string) => map.get(k) as T | undefined,
-    put: (k: string, v: unknown) => void map.set(k, structuredClone(v)),
-  };
-};
-
 /** A tiny fake `roots` — enough physical layer to route into. */
 const fakeRoots = () => {
   const kv = new Map<string, string>();
@@ -81,13 +72,9 @@ const throwOffline = (key: string): never => {
 
 const setup = (seeds: [string, string][] = []) => {
   const { stream, events } = memoryStream();
-  const storage = memoryStorage();
   const hostScope = fakeRoots();
   const host = new IterateContextStreamProcessor({
     stream,
-    storage,
-    path: "/",
-    projectId: "prj_t",
     hostScope: hostScope as unknown as Record<string, unknown>,
     seeds: [
       ...[
@@ -99,9 +86,14 @@ const setup = (seeds: [string, string][] = []) => {
     ].map(([pattern, target]) => ({ pattern: parse(pattern), target: parse(target) })),
   });
   // wire the recursion: `itx.…` inside a target re-enters resolve with the freshly folded state
-  host.resolveCurrent = async (call: Expression, depth = 0) => {
-    return host.resolve((await host.snapshot()).state, call, undefined, depth);
-  };
+  // INLINE HOSTING, exactly like the parent: fold the durable log through reduce per call.
+  const fold = () =>
+    events.reduce(
+      (st, e) => host.reduce({ event: e, state: st }) ?? st,
+      host.contract.initialState(),
+    );
+  host.resolveCurrent = async (call: Expression, depth = 0) =>
+    host.resolve(fold(), call, undefined, depth);
   const invoke = (call: string) => host.resolveCurrent(parse(call));
   return { stream, events, host, roots: hostScope, invoke };
 };

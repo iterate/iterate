@@ -32,7 +32,7 @@ import {
   type Expression,
   type Match,
 } from "./core/expression.ts";
-import { StreamProcessor, type ReduceArgs } from "./core/processor.ts";
+import type { ProcessorStream, ReduceArgs, ReduceOnlyProcessor } from "./core/processor.ts";
 
 export const IterateContextContract = defineProcessorContract({
   slug: "iterate-context",
@@ -47,6 +47,9 @@ export const IterateContextContract = defineProcessorContract({
           target: ExpressionSchema,
           /** The mount's identity — the offset of the capability-provided event (no synthetic ids). */
           providedAtOffset: z.number().int().positive(),
+          /** Subscription mounts carry their delivery policy IN the table — the routing table
+           *  is the ONE fold; the parent derives its push rows from these rows directly. */
+          delivery: z.record(z.string(), z.unknown()).optional(),
         }),
       )
       .default([]),
@@ -89,11 +92,18 @@ export const IterateContextContract = defineProcessorContract({
   ],
 });
 
-type State = z.infer<typeof IterateContextContract.stateSchema>;
-type MountRow = State["mounts"][number];
+export type IctxState = z.infer<typeof IterateContextContract.stateSchema>;
+type State = IctxState;
+export type MountRow = State["mounts"][number];
 
-export class IterateContextStreamProcessor extends StreamProcessor<State> {
+/** The capability host as a REDUCE-ONLY processor: pure fold (the routing table) + the
+ *  resolver methods the parent calls against that fold's state. Hosted INLINE at the parent's
+ *  commit point (zero distance — no chain, no cursor, no facet); the provide/revoke side
+ *  effects live in the VERBS below, which simply append. */
+export class IterateContextStreamProcessor implements ReduceOnlyProcessor<State> {
   readonly contract = IterateContextContract;
+  /** The parent's own append/read, in-process. */
+  readonly stream: ProcessorStream;
   /** Config seeds (bottom of every stack). ONLY their targets see the host-scope roots. */
   readonly #seeds: { pattern: Expression; target: Expression }[];
   /** The host scope: a plain record whose keys (kv, stream, contexts, bindings, …) are the
@@ -101,31 +111,37 @@ export class IterateContextStreamProcessor extends StreamProcessor<State> {
   readonly #hostScope: Record<string, unknown>;
 
   constructor(args: {
-    stream: ConstructorParameters<typeof StreamProcessor>[0]["stream"];
-    storage: ConstructorParameters<typeof StreamProcessor>[0]["storage"];
-    path: string;
-    projectId: string;
+    stream: ProcessorStream;
     seeds: { pattern: Expression; target: Expression }[];
     hostScope: Record<string, unknown>;
   }) {
-    super(args);
+    this.stream = args.stream;
     this.#seeds = args.seeds;
     this.#hostScope = args.hostScope;
   }
 
-  // The routing table is pure fold — no side effects, so no processEvent needed. Ephemeral
-  // capability events are IGNORED (they would vanish from any refold, leaving this fold and
-  // the parent's projection disagreeing forever); a malformed payload is SKIPPED loudly — one
-  // bad hand-appended event must not wedge every later resolve with a matcher throw.
-  protected override reduce({ event, state }: ReduceArgs<State>): State | undefined {
+  // The routing table is pure fold — no side effects (which is exactly what qualifies it for
+  // inline hosting). Ephemeral capability events are IGNORED (they would vanish from any
+  // refold); a malformed payload is SKIPPED loudly — one bad hand-appended event must not
+  // wedge every later resolve with a matcher throw.
+  reduce({ event, state }: ReduceArgs<State>): State | undefined {
     if (event.ephemeral) return undefined;
     if (event.type === "events.iterate.com/capability-host/capability-provided") {
-      const { pattern, target } = event.payload as { pattern: Expression; target: Expression };
+      const { pattern, target, delivery } = event.payload as {
+        pattern: Expression;
+        target: Expression;
+        delivery?: Record<string, unknown>;
+      };
       if (!Array.isArray(pattern) || !Array.isArray(target)) {
         console.error(`iterate-context: skipping malformed capability-provided at ${event.offset}`);
         return undefined;
       }
-      return { mounts: [...state.mounts, { pattern, target, providedAtOffset: event.offset }] };
+      return {
+        mounts: [
+          ...state.mounts,
+          { pattern, target, providedAtOffset: event.offset, ...(delivery ? { delivery } : {}) },
+        ],
+      };
     }
     if (event.type === "events.iterate.com/capability-host/capability-revoked") {
       const { providedAtOffset } = event.payload as { providedAtOffset: number };
