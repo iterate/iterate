@@ -1286,7 +1286,10 @@ increment 51. Highlights, by blast radius:
 The re-derivation workflow's verdict (three designers + a cartographer, judged): the
 architecture is already at its fixed point on most axes — the dead weight was RE-SPELLINGS.
 This increment gives every duplicated idea exactly one home and deletes the grep-verified dead
-surface; net −187 lines with behavior pinned by the ten-suite live board.
+surface. (Measured honestly: ~145 duplicate/dead source lines died but the new helpers carry
+doc banners, so the SOURCE net is −6 lines — the shrink is in SPELLINGS, 6→1 policy, 3→1
+walks, 2→1 facet dances, two dead classes — not in raw line count. The big line-count wins
+are on the owner's menu.) Behavior pinned by the ten-suite live board.
 
 - **`invokePath` (core/expression.ts)** — the one dotted-walk applier (stepGet + Reflect.apply,
   receiver carried). The parent's `facetInvoke` and the stateful runner's `invokeCapability`
@@ -1318,3 +1321,15 @@ surface; net −187 lines with behavior pinned by the ten-suite live board.
 
 104 unit tests; ten-suite live board ALL PASS on live-8 (facetaddr's expected error text
 updated — the unified walk says "is not a method"; the refusal semantics are unchanged).
+
+## Increment 52 (live-9): live-state forwards get latest-wins backpressure
+
+The resumed verify wave's one NEW confirmed finding: `#forwardLiveState` fired one
+fire-and-forget delivery per change per row with no in-flight cap, no timeout, no coalescing —
+a 50Hz producer with a 5s subscriber grows ~unbounded pending RPCs and pins the DO's billed
+duration until something dies. Now: ONE delivery in flight per row + ONE pending payload per
+row (latest wins) + the 20s cleared watchdog. Dropping intermediate frames is the DESIGNED
+path — the client sees a chain mismatch and re-reads the door, getting the freshest state in
+one hop instead of replaying a stale-delta backlog. Also: the same wave re-verified five of
+increment 50's fixes as fixed (unique anonymous names, the named-capture guard, repo-wins,
+the skip-pin ladder, the cleared watchdog). Ten-suite board ALL PASS on live-9.

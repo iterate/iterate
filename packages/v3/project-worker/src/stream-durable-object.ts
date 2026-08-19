@@ -329,6 +329,7 @@ export class StreamDurableObject extends DurableObject<Env> {
             rows.filter((r) => r.providedAtOffset !== providedAtOffset),
           );
           this.ctx.storage.kv.delete(`push-cursor:${providedAtOffset}`); // revoke doubles as GC
+          this.#liveStatePending.delete(providedAtOffset);
         }
       }
     }
@@ -524,6 +525,13 @@ export class StreamDurableObject extends DurableObject<Env> {
   // patch when `from` matches the held rev, re-read the door on any mismatch). Deliveries are
   // fire-and-forget and NOT mutually ordered; a reordered or dropped frame is just a chain
   // mismatch at the client, which is the same one recovery path as everything else.
+  // Latest-wins backpressure: ONE delivery in flight per row, ONE pending payload per row. A
+  // chatty producer with a slow subscriber must never grow an unbounded queue of stale deltas —
+  // dropped intermediate frames ARE the designed path (the client sees a chain mismatch and
+  // re-reads the door, receiving the freshest state in one hop instead of replaying history).
+  #liveStateInFlight = new Set<number>();
+  #liveStatePending = new Map<number, unknown>();
+
   #forwardLiveState(committed: StreamEvent[]): void {
     let rows: PushRow[] | undefined; // read once per batch, not once per change event
     for (const e of committed) {
@@ -531,12 +539,42 @@ export class StreamDurableObject extends DurableObject<Env> {
       const { key } = e.payload as { key: string };
       for (const row of (rows ??= this.#activePushRows())) {
         if (row.liveState?.key !== key) continue;
-        void this.#ictx()
-          .then((f) => f.deliverSubscription(row.providedAtOffset, [e.payload]))
-          .catch((err) =>
-            console.error(`live-state "${row.name}" forward failed (client re-seeds on gap)`, err),
-          );
+        this.#liveStatePending.set(row.providedAtOffset, e.payload); // latest wins
+        void this.#pumpLiveState(row).catch((err) =>
+          console.error(`live-state "${row.name}" pump failed`, err),
+        );
       }
+    }
+  }
+
+  async #pumpLiveState(row: PushRow): Promise<void> {
+    if (this.#liveStateInFlight.has(row.providedAtOffset)) return;
+    this.#liveStateInFlight.add(row.providedAtOffset);
+    try {
+      for (;;) {
+        const payload = this.#liveStatePending.get(row.providedAtOffset);
+        if (payload === undefined) return;
+        this.#liveStatePending.delete(row.providedAtOffset);
+        let watchdog: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            (await this.#ictx()).deliverSubscription(row.providedAtOffset, [payload]),
+            new Promise((_, reject) => {
+              watchdog = setTimeout(
+                () => reject(new Error(`live-state "${row.name}": delivery timed out after 20s`)),
+                20_000,
+              );
+            }),
+          ]);
+        } catch (err) {
+          // A dropped frame is a chain gap at the client — the one recovery path heals it.
+          console.error(`live-state "${row.name}" forward failed (client re-seeds on gap)`, err);
+        } finally {
+          if (watchdog !== undefined) clearTimeout(watchdog);
+        }
+      }
+    } finally {
+      this.#liveStateInFlight.delete(row.providedAtOffset);
     }
   }
 
