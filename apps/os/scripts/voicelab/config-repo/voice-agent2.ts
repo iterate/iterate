@@ -288,6 +288,19 @@ export const MAX_DEVICE_SPEAKER_BACKLOG_BYTES = 128_000;
  */
 export const MAX_SPEAKER_PAYLOAD_BYTES = 3_200;
 
+/**
+ * How a 16 kHz provider's delta is cut WITHOUT decoding it: the largest
+ * multiple of 3 under the payload ceiling, sliced off the delta's own
+ * base64. A multiple of 3 because every 4-character base64 group encodes 3
+ * whole bytes — so an interior slice of a group-aligned string is itself
+ * valid base64 and the device decodes it with no help — and 3,198 happens
+ * to be even, so no sample is split either. Derived, not chosen: the
+ * ceiling moves, this follows. (The decode-everything path still cuts at
+ * the ceiling itself; only the identity path slices strings.)
+ */
+const IDENTITY_SLICE_BYTES = Math.floor(MAX_SPEAKER_PAYLOAD_BYTES / 3) * 3;
+const IDENTITY_SLICE_B64_CHARS = (IDENTITY_SLICE_BYTES / 3) * 4;
+
 /** 16 kHz mono PCM16: two bytes per sample, sixteen samples per millisecond. */
 const PCM16_BYTES_PER_MS = 32;
 
@@ -426,6 +439,18 @@ function base64ToBytes(base64: string): Uint8Array {
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
   return bytes;
+}
+
+/**
+ * Decoded byte length of a base64 string, WITHOUT decoding it — how the
+ * identity paths (a 16 kHz provider feeding a 16 kHz pipeline) do all their
+ * byte arithmetic on audio they never decode. Also what puts `deltaBytes`
+ * on the mirror lane: the field says bytes and it means the audio's bytes,
+ * not the base64 string's length, which is a third longer.
+ */
+function base64ByteLength(base64: string): number {
+  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+  return Math.floor(base64.length / 4) * 3 - padding;
 }
 
 /* ========================================================================== */
@@ -903,7 +928,14 @@ interface Dial {
   /** True once the provider's handshake completed and audio may flow. */
   ready: boolean;
   /**
-   * Paced answer audio waiting for its turn on the wire, oldest first.
+   * Paced answer audio waiting for its turn on the wire, oldest first — as
+   * BASE64, the wire's own spelling, so the frame goes out verbatim. On an
+   * identity dial (grok) each entry is an O(1) slice of the provider's own
+   * delta string: a ~36 s burst answer used to pay a whole-answer decode
+   * (~1.5 M-character atob) at arrival plus a re-encode per frame at send,
+   * all on the DO's single thread while mic frames flowed, for
+   * byte-identical output. A resampling dial encodes each cut once at
+   * arrival — the same total encodes as before, merely off the pacer.
    *
    * NOTHING IN HERE HAS A SEQUENCE NUMBER YET, and that is the point. A number
    * is minted when a frame is HANDED TO THE STREAM, so a number existing means
@@ -913,7 +945,7 @@ interface Dial {
    * cancelled audio as lost audio: 5 gaps and 423 absent numbers on a
    * seven-minute call where nothing had actually gone missing.
    */
-  speakerQueue: Uint8Array[];
+  speakerQueue: string[];
   /** Last speaker-frame sequence number minted, for this call. */
   lastDeviceSpeakerFrameSeq: number;
   /**
@@ -1155,9 +1187,13 @@ export class VoiceAgent2Processor extends StreamProcessor<
   /**
    * Capture that arrived before Grok's handshake finished, oldest first.
    *
-   * Bytes and nothing else: `deviceMicFrameSeq` belongs to the device and is
-   * never renumbered here, so holding a copy of it would be a field nobody
-   * reads. Order in this array IS the order it was captured in.
+   * The device's own base64 strings and nothing else — still 16 kHz
+   * semantically, decoded only at the flush and only when the dial's
+   * provider speaks another rate, so a re-dial to a DIFFERENT provider
+   * still replays at the right rate. `deviceMicFrameSeq` belongs to the
+   * device and is never renumbered here, so holding a copy of it would be
+   * a field nobody reads. Order in this array IS the order it was captured
+   * in.
    *
    * NOT ON THE DIAL, because it can start filling before one exists: a
    * revived incarnation holds frames from deliveries that arrive before the
@@ -1165,7 +1201,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
    * session.updated flush — which is why the dial's own reset never touched
    * this queue either.
    */
-  #micQueue: Uint8Array[] = [];
+  #micQueue: string[] = [];
   /**
    * The device finished its turn while the handshake was still in flight.
    * Like `#micQueue` it is NOT on the dial: the turn can end before the
@@ -1213,6 +1249,28 @@ export class VoiceAgent2Processor extends StreamProcessor<
   /** When the last dial FAILED, for the retry cooldown. Class-level, not on
    * a Dial: the failed dial is already gone when the next caller asks. */
   #lastDialFailedAtFacetMs = 0;
+  /**
+   * The mirror lane's outbox, drained by ONE background flush at a time.
+   *
+   * Every provider message and every client control used to be its own
+   * runInBackground registration and its own single-event append — and the
+   * facet's append opens a full itx session per call, so a grok burst (~77
+   * audio deltas plus the transcript deltas, inside a few seconds) was ~150
+   * session round trips competing with the pacer on the DO's single
+   * thread. The drain swaps this queue out whole and sends it as ONE
+   * variadic append, so whatever accumulated while the previous append RPC
+   * was in flight coalesces naturally: burst-time RPC count drops about an
+   * order of magnitude, idle chatter stays one event per drain. Order
+   * within the lane is the FIFO's — which is all the flight recorder ever
+   * promised: every payload, verbatim, in arrival order, its
+   * `receivedAtFacetMs` stamped at enqueue. Cross-lane ordering against
+   * spk-frame was never guaranteed; the mirror was always fire-and-forget.
+   */
+  #mirrorQueue: {
+    payload: Record<string, unknown> & { conversationId: string; receivedAtFacetMs: number };
+    append: ProcessEventArgs<VoiceAgent2Contract>["append"];
+  }[] = [];
+  #mirrorFlushing = false;
 
   /* ------------------------------------------------------------------ fold */
 
@@ -1350,16 +1408,18 @@ export class VoiceAgent2Processor extends StreamProcessor<
       case "events.iterate.com/voice-agent/mic-frame":
       case "events.iterate.com/voice-agent/ptt-end": {
         /*
-         * DECODED ONCE, HERE, so no path below can forget to. The three places
-         * that hand microphone audio on — held for a call being opened, held
-         * for a handshake in flight, and straight to a live socket — each used
-         * to do their own `base64ToBytes`, and the encoding is the kind of
-         * thing that gets fixed in two of three.
+         * NOT DECODED HERE, on purpose. The frame stays the device's own
+         * base64 string all the way to `#sendMicAudio`, the ONE site that
+         * knows the encoding: a same-rate provider (grok, 16 kHz) gets the
+         * string verbatim with no decode and no re-encode — two O(n)
+         * transcodes and two allocations per frame, 50/s on an open mic,
+         * that used to buy nothing — and a 24 kHz provider decodes there,
+         * at the socket boundary. One site instead of the three that each
+         * used to do their own `base64ToBytes`, because the encoding is the
+         * kind of thing that gets fixed in two of three.
          */
-        const micPcm16 =
-          event.type === "events.iterate.com/voice-agent/mic-frame"
-            ? base64ToBytes(event.payload.pcm)
-            : null;
+        const micB64 =
+          event.type === "events.iterate.com/voice-agent/mic-frame" ? event.payload.pcm : null;
         /*
          * A CALL IS OPENED BY SOMEBODY TALKING, not by anybody asking for one.
          * The device has no way to know whether a call exists, and asking it to
@@ -1467,12 +1527,12 @@ export class VoiceAgent2Processor extends StreamProcessor<
           }
         }
 
-        if (micPcm16 !== null) {
+        if (micB64 !== null) {
           const dial = this.#dial;
           if (dial !== null && dial.ready && dial.socket !== null) {
-            this.#sendMicAudio(dial, dial.socket, micPcm16);
+            this.#sendMicAudio(dial, dial.socket, micB64);
           } else if (this.#micQueue.length < MAX_HELD_MIC_FRAMES) {
-            this.#micQueue.push(micPcm16);
+            this.#micQueue.push(micB64);
           }
           return;
         }
@@ -1727,7 +1787,16 @@ export class VoiceAgent2Processor extends StreamProcessor<
             dial.ready = true;
             const heldMicFrames = this.#micQueue.length;
             for (const held of this.#micQueue) {
-              this.#sendMicAudio(dial, socket, held);
+              try {
+                this.#sendMicAudio(dial, socket, held);
+              } catch {
+                /* A malformed held frame (bad base64, decoded only on a
+                 * resampling dial) must not cost the rest of the queue or
+                 * the held-turn commit below. It used to throw at ingress,
+                 * before it could be held; holding strings moved the decode
+                 * here. On the identity dial nothing decodes and nothing
+                 * throws. */
+              }
             }
             this.#micQueue = [];
             /*
@@ -1938,14 +2007,36 @@ export class VoiceAgent2Processor extends StreamProcessor<
             if (typeof grok.content_index === "number") {
               dial.answer.contentIndex = grok.content_index;
             }
-            /* The pipeline is 16 kHz from here to the speaker; a provider
-             * that talks faster gets resampled at the door. */
-            const pcm16 = dial.spkResampler.push(base64ToBytes(grok.delta));
-            dial.answer.receivedMs += pcm16.length / PCM16_BYTES_PER_MS;
-            for (let cut = 0; cut < pcm16.length; cut += MAX_SPEAKER_PAYLOAD_BYTES) {
-              dial.speakerQueue.push(
-                pcm16.subarray(cut, Math.min(cut + MAX_SPEAKER_PAYLOAD_BYTES, pcm16.length)),
-              );
+            if (
+              dial.spkResampler.fromRate === dial.spkResampler.toRate &&
+              grok.delta.length % 4 === 0
+            ) {
+              /* A 16 kHz provider's delta bytes ARE the pipeline's bytes, so
+               * the whole answer stays base64 end to end: cut the STRING at
+               * group boundaries (see IDENTITY_SLICE_BYTES) and never decode
+               * it. The interior slices carry no padding, the final slice
+               * keeps the delta's own. Guarded on `% 4`: atob tolerates the
+               * ragged base64 that group-aligned slicing would silently
+               * corrupt into noise on the device, so anything unaligned
+               * takes the decode path below and one modulo is the whole
+               * cost. */
+              dial.answer.receivedMs += base64ByteLength(grok.delta) / PCM16_BYTES_PER_MS;
+              for (let cut = 0; cut < grok.delta.length; cut += IDENTITY_SLICE_B64_CHARS) {
+                dial.speakerQueue.push(grok.delta.slice(cut, cut + IDENTITY_SLICE_B64_CHARS));
+              }
+            } else {
+              /* The pipeline is 16 kHz from here to the speaker; a provider
+               * that talks faster gets resampled at the door — and encoded
+               * per cut HERE, at arrival, not on the pacer's clock. */
+              const pcm16 = dial.spkResampler.push(base64ToBytes(grok.delta));
+              dial.answer.receivedMs += pcm16.length / PCM16_BYTES_PER_MS;
+              for (let cut = 0; cut < pcm16.length; cut += MAX_SPEAKER_PAYLOAD_BYTES) {
+                dial.speakerQueue.push(
+                  bytesToBase64(
+                    pcm16.subarray(cut, Math.min(cut + MAX_SPEAKER_PAYLOAD_BYTES, pcm16.length)),
+                  ),
+                );
+              }
             }
             this.#sendSpeakerAudio(dial, append, runInBackground);
             return;
@@ -2146,34 +2237,78 @@ export class VoiceAgent2Processor extends StreamProcessor<
     receivedAtFacetMs: number,
     append: ProcessEventArgs<VoiceAgent2Contract>["append"],
   ): void {
-    let body = grok;
     if (providerEventType === "response.output_audio.delta") {
       const { delta, ...rest } = grok;
-      const base64 = typeof delta === "string" ? delta : "";
-      /* DECODED length, not the base64 string's: the field says bytes and it
-       * should mean the audio's bytes. */
-      const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
-      body = { ...rest, deltaBytes: Math.floor(base64.length / 4) * 3 - padding };
+      this.#appendMirror(
+        {
+          ...rest,
+          deltaBytes: base64ByteLength(typeof delta === "string" ? delta : ""),
+          conversationId: dial.conversationId,
+          receivedAtFacetMs,
+        },
+        append,
+      );
+    } else {
+      this.#appendMirror(
+        { ...grok, conversationId: dial.conversationId, receivedAtFacetMs },
+        append,
+      );
     }
-    this.runInBackground(() =>
-      append({
-        type: "events.iterate.com/voice-agent/grok-event",
-        payload: { ...body, conversationId: dial.conversationId, receivedAtFacetMs },
-      }),
-    );
+  }
+
+  /**
+   * Put one payload on the mirror lane — see `#mirrorQueue` for why this is
+   * a queue and a single drain rather than an append per event.
+   */
+  #appendMirror(
+    payload: Record<string, unknown> & { conversationId: string; receivedAtFacetMs: number },
+    append: ProcessEventArgs<VoiceAgent2Contract>["append"],
+  ): void {
+    this.#mirrorQueue.push({ payload, append });
+    if (this.#mirrorFlushing) return;
+    this.#mirrorFlushing = true;
+    this.runInBackground(async () => {
+      /* The flag clears in a finally around the WHOLE loop: a rejected
+       * append (runInBackground logs it) loses only its own batch, never
+       * the lane — a stuck flag would silence the recorder for the rest of
+       * the call. */
+      try {
+        while (this.#mirrorQueue.length > 0) {
+          const batch = this.#mirrorQueue;
+          this.#mirrorQueue = [];
+          await batch[0]!.append(
+            ...batch.map(({ payload }) => ({
+              type: "events.iterate.com/voice-agent/grok-event" as const,
+              payload,
+            })),
+          );
+        }
+      } finally {
+        this.#mirrorFlushing = false;
+      }
+    });
   }
 
   /**
    * One resample-at-send rule for both mic paths — live frames and the
    * held-flush at session.updated — because the encoding is the kind of
-   * thing that gets fixed in one of two sites. Also the one place the
-   * commit gate learns audio exists to commit.
+   * thing that gets fixed in one of two sites. THE ONE SITE THAT KNOWS THE
+   * ENCODING: on an identity dial (grok — the pipeline's own 16 kHz) the
+   * device's base64 goes to the wire VERBATIM, because decoding it only to
+   * re-encode the same bytes was two O(n) passes and two allocations per
+   * frame at 50/s for byte-identical output; a 24 kHz dial decodes,
+   * resamples through the dial's stateful converter, and re-encodes here,
+   * at the socket boundary. Also the one place the commit gate learns
+   * audio exists to commit.
    */
-  #sendMicAudio(dial: Dial, socket: WebSocket, pcm16: Uint8Array): void {
+  #sendMicAudio(dial: Dial, socket: WebSocket, b64: string): void {
     socket.send(
       JSON.stringify({
         type: "input_audio_buffer.append",
-        audio: bytesToBase64(dial.micResampler.push(pcm16)),
+        audio:
+          dial.micResampler.fromRate === dial.micResampler.toRate
+            ? b64
+            : bytesToBase64(dial.micResampler.push(base64ToBytes(b64))),
       }),
     );
     dial.micSentSinceCommit = true;
@@ -2336,17 +2471,15 @@ export class VoiceAgent2Processor extends StreamProcessor<
     if (dial.socket === null) return;
     dial.socket.send(JSON.stringify(message));
     const { item, ...rest } = message;
-    this.runInBackground(() =>
-      append({
-        type: "events.iterate.com/voice-agent/grok-event",
-        payload: {
-          ...rest,
-          type: `client.${String(message.type)}`,
-          ...(item === undefined ? {} : { itemSummary: JSON.stringify(item).slice(0, 300) }),
-          conversationId: dial.conversationId,
-          receivedAtFacetMs: this.deps.nowAtFacetMs(),
-        },
-      }),
+    this.#appendMirror(
+      {
+        ...rest,
+        type: `client.${String(message.type)}`,
+        ...(item === undefined ? {} : { itemSummary: JSON.stringify(item).slice(0, 300) }),
+        conversationId: dial.conversationId,
+        receivedAtFacetMs: this.deps.nowAtFacetMs(),
+      },
+      append,
     );
   }
 
@@ -2710,6 +2843,10 @@ export class VoiceAgent2Processor extends StreamProcessor<
             /* PEEK, never shift: a clear arriving during the sleep below has to
              * be able to filter this frame out of the queue. */
             const frame = dial.speakerQueue[0]!;
+            /* The frame is base64 and goes out verbatim; its BYTE length —
+             * what every piece of pacing arithmetic below is denominated in
+             * — is read off the string without decoding it. */
+            const frameBytes = base64ByteLength(frame);
             /*
              * THE WHOLE SAFETY PROOF, IN ONE INEQUALITY. A frame goes only when
              * what the device already holds, plus this frame, fits the budget —
@@ -2719,7 +2856,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
              */
             const overflowBytes =
               (dial.deviceBufferEmptyAtFacetMs - nowAtFacetMs) * PCM16_BYTES_PER_MS +
-              frame.length -
+              frameBytes -
               MAX_DEVICE_SPEAKER_BACKLOG_BYTES;
             if (overflowBytes > 0) {
               /* Full. Wait exactly long enough for the overflow to play off, then
@@ -2731,8 +2868,8 @@ export class VoiceAgent2Processor extends StreamProcessor<
             /* The device runs dry this much later. Advanced from the DEADLINE
              * rather than from now, so the cost of an append is absorbed and the
              * average send rate equals the play rate. */
-            dial.deviceBufferEmptyAtFacetMs += frame.length / PCM16_BYTES_PER_MS;
-            dial.answer.sentMs += frame.length / PCM16_BYTES_PER_MS;
+            dial.deviceBufferEmptyAtFacetMs += frameBytes / PCM16_BYTES_PER_MS;
+            dial.answer.sentMs += frameBytes / PCM16_BYTES_PER_MS;
             const clearFirst = dial.clearSpeakerBufferBeforeNextFrame;
             dial.clearSpeakerBufferBeforeNextFrame = false;
             await append({
@@ -2740,7 +2877,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
               payload: {
                 conversationId: dial.conversationId,
                 deviceSpeakerFrameSeq: ++dial.lastDeviceSpeakerFrameSeq,
-                pcm: bytesToBase64(frame),
+                pcm: frame,
                 ...(clearFirst && { clearSpeakerBufferBeforeFrame: true }),
                 sentAtFacetMs: nowAtFacetMs,
               },

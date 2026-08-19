@@ -461,11 +461,12 @@ describe("opening a call", () => {
       payload: { providerBaseUrl: "https://fake.provider.test/v1/realtime" },
     });
     const pcmBytes = 320;
+    const devicePcm = base64(new Uint8Array(pcmBytes));
     await h.append({
       type: "events.iterate.com/voice-agent/mic-frame",
       payload: {
         deviceMicFrameSeq: 1,
-        pcm: base64(new Uint8Array(pcmBytes)),
+        pcm: devicePcm,
         capturedAtDeviceMs: 20,
       },
     });
@@ -475,7 +476,9 @@ describe("opening a call", () => {
 
     const appended = h.provider.sentOfType("input_audio_buffer.append") as { audio: string }[];
     expect(appended).toHaveLength(1);
-    expect(atob(appended[0]!.audio).length).toBe(pcmBytes);
+    /* The EXACT string, not merely the same byte count: the identity path
+     * forwards the device's own base64 with no decode/re-encode round trip. */
+    expect(appended[0]!.audio).toBe(devicePcm);
   });
 
   /*
@@ -1008,8 +1011,8 @@ describe("the speaker lane", () => {
      * nobody, deleted with the field.) */
     const h = makeHarness();
     await callIsLive(h);
-    h.provider.answerAudio(400); /* delta 1 -> four 100ms frames */
-    h.provider.answerAudio(400); /* delta 2 -> four 100ms frames */
+    h.provider.answerAudio(400); /* delta 1 -> five frames of ~99.94ms (3,198-byte slices) */
+    h.provider.answerAudio(400); /* delta 2 -> five more */
     h.provider.answerComplete();
     await playOutEverything(h, 2_000);
 
@@ -2050,8 +2053,9 @@ describe("edges nothing was holding down", () => {
     await playOutEverything(h, 1_000);
     /*
      * 250 ms is 8,000 bytes of PCM16, and the only thing that shapes it on the
-     * way out is the 3,200-byte ceiling: 3,200 + 3,200 + 1,600, so three
-     * frames of 100, 100 and 50 ms.
+     * way out is the identity path's 3,198-byte slice (the largest whole
+     * number of base64 groups under the 3,200-byte ceiling): 3,198 + 3,198 +
+     * 1,604, so three frames and a short tail of 50.125 ms.
      *
      * WHAT THIS USED TO SAY, because the difference is the whole change. The
      * device's frame was 640 bytes and a chunk with a remainder was dropped
@@ -2064,7 +2068,7 @@ describe("edges nothing was holding down", () => {
     const frames = speakerFrames(h).filter((frame) => frame.pcm !== "");
     expect(frames).toHaveLength(3);
     expect(speakerMsDelivered(h)).toBe(250);
-    expect(atob(frames[2]!.pcm).length / PCM16_BYTES_PER_MS).toBe(50);
+    expect(atob(frames[2]!.pcm).length / PCM16_BYTES_PER_MS).toBe(50.125);
   });
 
   it("ends the call when the provider refuses the upgrade", async () => {
