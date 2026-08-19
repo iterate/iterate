@@ -8,8 +8,7 @@
     "deploy": "node build-sdk.mjs && wrangler deploy",
     "typecheck": "tsc --noEmit",
     "test": "node build-sdk.mjs && vitest run",
-    "test:harness": "node build-sdk.mjs && vitest run --config vitest.harness.config.ts",
-    "test:workers": "node build-sdk.mjs && vitest run --config vitest.workers.config.ts"
+    "test:unit": "vitest run --project unit"
   },
   "exports": {
     ".": "./src/worker.ts"
