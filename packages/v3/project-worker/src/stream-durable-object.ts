@@ -82,7 +82,24 @@ type PushRow = DeliveryPolicy & {
   name: string;
   providedAtOffset: number; // the row's identity AND its cursor key
   onFailingEvent: "halt" | "skip"; // defaulted at projection time
+  /** The mount's target, carried into the projection so the CANONICAL parked-callback shape
+   *  (itx.clients.get(sid)) delivers via the parent's own stubInvoke — zero facet hops. Any
+   *  other target keeps the facet lane (deliverSubscription: substitute + apply). */
+  target?: Expression;
 };
+
+/** The one short-circuitable target shape: exactly `itx.clients.get('<key>')`. */
+const parkedKey = (t?: Expression): string | undefined =>
+  t &&
+  t.length === 3 &&
+  t[0] === "itx" &&
+  t[1] === "clients" &&
+  Array.isArray(t[2]) &&
+  t[2].length === 2 &&
+  t[2][0] === "get" &&
+  typeof t[2][1] === "string"
+    ? t[2][1]
+    : undefined;
 /** The stream-held cursor + failure ladder state for one push row. */
 type PushCursor = {
   confirmedOffset: number;
@@ -290,8 +307,9 @@ export class StreamDurableObject extends DurableObject<Env> {
     for (const e of committed) {
       if (e.offset <= scannedAfterOffset || e.ephemeral) continue;
       if (e.type === "events.iterate.com/capability-host/capability-provided") {
-        const { pattern, delivery } = e.payload as {
+        const { pattern, target, delivery } = e.payload as {
           pattern: unknown[];
+          target?: Expression;
           delivery?: DeliveryPolicy;
         };
         if (
@@ -308,6 +326,7 @@ export class StreamDurableObject extends DurableObject<Env> {
             providedAtOffset: e.offset,
             ...(delivery ?? {}),
             onFailingEvent: delivery?.onFailingEvent ?? "halt",
+            ...(Array.isArray(target) ? { target } : {}),
           });
           this.ctx.storage.kv.put("push-subscriptions", rows);
           // State rows are cursorless by design — only event rows mint one. (No mount seed
@@ -558,7 +577,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         let watchdog: ReturnType<typeof setTimeout> | undefined;
         try {
           await Promise.race([
-            (await this.#ictx()).deliverSubscription(row.providedAtOffset, [payload]),
+            this.#deliverToRow(row, [payload]),
             new Promise((_, reject) => {
               watchdog = setTimeout(
                 () => reject(new Error(`live-state "${row.name}": delivery timed out after 20s`)),
@@ -576,6 +595,16 @@ export class StreamDurableObject extends DurableObject<Env> {
     } finally {
       this.#liveStateInFlight.delete(row.providedAtOffset);
     }
+  }
+
+  /** THE delivery leg: the canonical parked-callback target (itx.clients.get(sid)) rides the
+   *  parent's own stubInvoke — zero facet hops, zero table routing (delivery was always "by
+   *  row identity, never the table"; this makes the dominant shape pay like it). Any other
+   *  target — an expression, holes, a durable capability — keeps the facet lane. */
+  #deliverToRow(row: PushRow, args: unknown[]): Promise<unknown> {
+    const key = parkedKey(row.target);
+    if (key !== undefined) return this.stubInvoke(key, [], args);
+    return this.#ictx().then((f) => f.deliverSubscription(row.providedAtOffset, args));
   }
 
   /** One in-flight delivery per row; loop until caught up. Never called from the commit path
@@ -612,14 +641,14 @@ export class StreamDurableObject extends DurableObject<Env> {
           });
           continue;
         }
-        // Delivery BY ROW IDENTITY through the ictx facet — never by name through the table
-        // (a broad default route must not intercept deliveries). Awaited resolve IS the ack.
-        // The watchdog timer is CLEARED on the happy path: a leaked 20s timer per delivery
-        // pins the DO out of hibernation — quiet time converted into billed duration.
+        // Delivery BY ROW IDENTITY — never by name through the table (a broad default route
+        // must not intercept deliveries). Awaited resolve IS the ack. The watchdog timer is
+        // CLEARED on the happy path: a leaked 20s timer per delivery pins the DO out of
+        // hibernation — quiet time converted into billed duration.
         let watchdog: ReturnType<typeof setTimeout> | undefined;
         try {
           await Promise.race([
-            (await this.#ictx()).deliverSubscription(row.providedAtOffset, [events, window]),
+            this.#deliverToRow(row, [events, window]),
             new Promise((_, reject) => {
               watchdog = setTimeout(
                 () => reject(new Error(`push "${row.name}": delivery timed out after 20s`)),

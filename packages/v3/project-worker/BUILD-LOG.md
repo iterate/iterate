@@ -1333,3 +1333,17 @@ path — the client sees a chain mismatch and re-reads the door, getting the fre
 one hop instead of replaying a stale-delta backlog. Also: the same wave re-verified five of
 increment 50's fixes as fixed (unique anonymous names, the named-capture guard, repo-wins,
 the skip-pin ladder, the cleared watchdog). Ten-suite board ALL PASS on live-9.
+
+## Increment 53 (live-10): the delivery short-circuit — spike-proven, kept
+
+The two mutually-trading menu items got their spike (numbers + shapes in
+apps/os/docs/simplification/wayfinder/innermost-core/subscriptions-facet-spike.md). Menu #2
+landed: push rows carry their mount `target` into the projection, and the canonical
+parked-callback shape (`itx.clients.get('<key>')` exactly) delivers via the parent's OWN
+stubInvoke — zero facet hops, zero table routing; every other target keeps the facet lane.
+Measured on the live deployment: push delivery 53→30 ms median (−43%), live-state set→frame
+83→~50 ms (−~35%); the ten-suite board stays green. This is an alignment, not a break —
+delivery was always "by row identity, never the table"; the dominant shape now pays like it.
+Menu #1 (subscriptions into the ictx facet, −160 lines) is VIABLE — the cursor-read RPC
+concern measured out at ~2 ms noise — but recommended DEFERRED until workerd#6810 (facet
+alarms, still open) deletes the one ugly bit, the parent alarm-proxy verb.
