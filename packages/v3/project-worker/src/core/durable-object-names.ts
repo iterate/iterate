@@ -10,7 +10,9 @@
 
 const DURABLE_OBJECT_HOST_SUFFIX = ".iterate";
 
-export type DurableObjectAddress = { projectId: string; path: string };
+/** A parsed DO address. `name` is its own canonical string form — parse once, carry both
+ *  halves together (no separate re-stringify field at call sites). */
+export type DurableObjectAddress = { projectId: string; path: string; name: string };
 
 /** Normalize a path to leading-slash form (`""` → `"/"`, `"x"` → `"/x"`). */
 export function normalizePath(path: string): string {
@@ -19,23 +21,26 @@ export function normalizePath(path: string): string {
 
 export const DurableObjectNameCodec = {
   /** Formats the project-scoped Durable Object name `{projectId}.iterate{path}`. */
-  stringify({ projectId, path }: DurableObjectAddress): string {
+  stringify({ projectId, path }: { projectId: string; path: string }): string {
     return `${projectId}${DURABLE_OBJECT_HOST_SUFFIX}${normalizePath(path)}`;
   },
   /** Parses a Durable Object name. A bare name (no `.iterate`) is that project's root — the
    *  edge's convenience for `?ctx=prj_x`. */
   parse(name: string): DurableObjectAddress {
     const i = name.indexOf(DURABLE_OBJECT_HOST_SUFFIX);
-    if (i === -1) return { projectId: name, path: "/" };
-    return {
-      projectId: name.slice(0, i),
-      path: normalizePath(name.slice(i + DURABLE_OBJECT_HOST_SUFFIX.length)),
-    };
+    const parts =
+      i === -1
+        ? { projectId: name, path: "/" }
+        : {
+            projectId: name.slice(0, i),
+            path: normalizePath(name.slice(i + DURABLE_OBJECT_HOST_SUFFIX.length)),
+          };
+    return { ...parts, name: DurableObjectNameCodec.stringify(parts) };
   },
 };
 
 /** Canonical faux-URL form of any accepted name (bare or full), so getByName always hits the
  *  same DO. */
 export function canonicalName(raw: string): string {
-  return DurableObjectNameCodec.stringify(DurableObjectNameCodec.parse(raw));
+  return DurableObjectNameCodec.parse(raw).name;
 }

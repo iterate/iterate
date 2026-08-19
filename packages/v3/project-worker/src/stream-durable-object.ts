@@ -180,22 +180,21 @@ const CAPABILITY_TABLE_SLUG = "capability-table";
 const CORE_PROCESSOR = new CoreStreamProcessor();
 
 export class StreamDurableObject extends DurableObject<Env> {
-  /** WHO THIS DO IS — parsed ONCE from the unforgeable codec name (the apps/os idiom). A
-   *  stream is only ever reached `getByName`; an id-addressed instance fails right here in the
-   *  constructor, before it can touch anything. */
-  readonly name = parseStreamDurableObjectName(this.ctx.id.name);
-  readonly #doName = DurableObjectNameCodec.stringify(this.name);
+  /** WHO THIS DO IS — parsed ONCE from the unforgeable codec name; carries projectId, path
+   *  AND its canonical string form (`.name`). A stream is only ever reached `getByName`; an
+   *  id-addressed instance fails right here in the constructor, before it can touch anything. */
+  readonly #address = parseStreamDurableObjectName(this.ctx.id.name);
   // ── transport: every ItxConnection is a HIBERNATABLE RPC STUB (keyed by connectionId) ──
-  #hibernatableRpcStubs = new HibernatableRpcStubManager({
+  readonly #hibernatableRpcStubs = new HibernatableRpcStubManager({
     acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
     getWebSockets: (tag) => this.ctx.getWebSockets(tag),
   });
   /** Records handed to `attachItxConnection`, waiting for their stub pager WebSocket to arrive
    *  (the two-phase attach: RPC first — it mints connectedAtOffset — then the upgrade). In
    *  memory on purpose: if the DO dies in between, the upgrade 409s and the relay re-attaches. */
-  #pendingConnectionRecords = new Map<string, Record<string, unknown>>();
+  readonly #pendingConnectionRecords = new Map<string, Record<string, unknown>>();
   readonly #alarmArmer = new StreamAlarmArmer(this.ctx.storage);
-  incarnation = 0; // durable, bumped once per incarnation that WRITES — growth across idle ⇒ it hibernated
+  #incarnation = 0; // durable, bumped once per incarnation that WRITES — growth across idle ⇒ it hibernated
   #storageReady = false;
 
   // The constructor deliberately touches NO storage: a DO that never writes must never mint
@@ -215,8 +214,8 @@ export class StreamDurableObject extends DurableObject<Env> {
          idempotency_key TEXT UNIQUE
        )`,
     );
-    this.incarnation = ((this.ctx.storage.kv.get("incarnation") as number | undefined) ?? 0) + 1;
-    this.ctx.storage.kv.put("incarnation", this.incarnation);
+    this.#incarnation = ((this.ctx.storage.kv.get("incarnation") as number | undefined) ?? 0) + 1;
+    this.ctx.storage.kv.put("incarnation", this.#incarnation);
     this.#storageReady = true;
   }
 
@@ -286,7 +285,7 @@ export class StreamDurableObject extends DurableObject<Env> {
               committed.push({
                 ...existing,
                 offset: Number(hit.offset),
-                path: this.name.path,
+                path: this.#address.path,
               } as StreamEvent);
               continue; // a dedupe hit consumes NO offset
             }
@@ -307,7 +306,7 @@ export class StreamDurableObject extends DurableObject<Env> {
             input.idempotencyKey ?? null,
           );
         }
-        committed.push({ ...body, offset: nextOffset, path: this.name.path } as StreamEvent);
+        committed.push({ ...body, offset: nextOffset, path: this.#address.path } as StreamEvent);
       }
       if (nextOffset > scannedAfterOffset) {
         this.ctx.storage.kv.put("maxAssignedOffset", nextOffset); // THE one deliberate write
@@ -372,8 +371,8 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   // Per-facet drive serialization + the in-flight count the quiesce alarm respects (aborting a
   // facet MID-FOLD is exactly the stall the resurrection pass exists to heal — never cause it).
-  #driveChains = new Map<string, Promise<unknown>>();
-  #driveWindows = new Map<string, number>(); // per-facet lastDeliveredThrough (skipped spans ride the next window)
+  readonly #driveChains = new Map<string, Promise<unknown>>();
+  readonly #driveWindows = new Map<string, number>(); // per-facet lastDeliveredThrough (skipped spans ride the next window)
   #facetWorkInFlight = 0;
 
   // ── THE INLINE CORE: reduce-only processors reduced synchronously at the commit point ──
@@ -382,7 +381,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   // kv value per slug, committed atomically with the batch; rebuild = replay the durable log
   // (version skew, eviction, first contact — all the same path). Inline reduces see DURABLE
   // events only, so the checkpoint always rebuilds bit-identically.
-  #inlineCache = new Map<
+  readonly #inlineCache = new Map<
     string,
     { proc: ReduceOnlyProcessor<unknown>; state: unknown; throughOffset: number }
   >();
@@ -391,7 +390,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   /** THE capability host, parent-constructed: same class, same contract, zero distance. */
   #capabilityTableProcessor(): CapabilityTableProcessor {
     if (this.#capabilityTableInstance) return this.#capabilityTableInstance;
-    const { projectId, path } = this.name;
+    const { projectId, path } = this.#address;
     const ownContext = {
       append: (...e: unknown[]) => this.append(...(e as StreamEventInput[])),
       read: (after?: number, limit?: number) => this.read(after, limit),
@@ -400,7 +399,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     const builtIns = buildBuiltIns({
       projectId,
       path,
-      contextName: this.#doName,
+      contextName: this.#address.name,
       env: this.env,
       invoke: (call) => this.invoke(call),
       context: (p) =>
@@ -521,7 +520,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       .map((r) => ({
         ...(JSON.parse(String(r.body)) as StreamEventInput & { createdAt: string }),
         offset: Number(r.offset),
-        path: this.name.path,
+        path: this.#address.path,
       }));
     // The scan-window proof: a FULL page is only contiguously known through its last row; a
     // short page proves the read scanned to the head (ephemeral holes and all).
@@ -638,7 +637,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    *  whole batches receive the skipped span inside its next delivered ScannedOffsetRange (so the
    *  client's contiguity check holds without empty-batch sends). Losing it (eviction) just makes
    *  one delivered range start late — the client sees a gap once and pulls once. */
-  #subscriptionDeliveredThrough = new Map<number, number>();
+  readonly #subscriptionDeliveredThrough = new Map<number, number>();
 
   #deliverToConnectedSubscriptions(
     committed: StreamEvent[],
@@ -775,14 +774,14 @@ export class StreamDurableObject extends DurableObject<Env> {
     const worker = confinedWorker(
       this.env,
       // Deploy id rides the minted key (the stale-isolate/DataCloneError family).
-      { kind: "procfacet", owner: `${this.#doName}:${slug}`, contentHash: version },
+      { kind: "procfacet", owner: `${this.#address.name}:${slug}`, contentHash: version },
       "runner.js",
       {
         ...userModules,
         "processor.js": PROCESSOR_SDK_MODULE,
         "runner.js": PROCESSOR_RUNNER_MODULE,
       },
-      itxEntrypointFor(this.ctx, this.#doName),
+      itxEntrypointFor(this.ctx, this.#address.name),
     );
     return versionedFacet(this.ctx, {
       worker,
@@ -862,9 +861,9 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   #identityFor(slug: string, exportName?: string, props?: Record<string, unknown>): FacetIdentity {
     return {
-      parentName: this.#doName,
-      projectId: this.name.projectId,
-      path: this.name.path,
+      parentName: this.#address.name,
+      projectId: this.#address.projectId,
+      path: this.#address.path,
       slug,
       ...(exportName ? { export: exportName } : {}),
       ...(props ? { props } : {}),
@@ -983,7 +982,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (url.pathname === "/state")
       return Response.json({
         incarnation: this.#storageReady
-          ? this.incarnation
+          ? this.#incarnation
           : ((this.ctx.storage.kv.get("incarnation") as number | undefined) ?? 0),
         facetProcessors: this.#facetEntries().map((e) => e.slug),
         core: (() => {
@@ -1011,7 +1010,9 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     // EGRESS: substitute `{{secret:NAME}}` placeholders, then the FALLBACK terminal.
     const sub = await substituteHeaderSecrets(request, "project", (name) =>
-      this.env.SECRETS_KV ? this.env.SECRETS_KV.get(`secret:${this.name.projectId}:${name}`) : null,
+      this.env.SECRETS_KV
+        ? this.env.SECRETS_KV.get(`secret:${this.#address.projectId}:${name}`)
+        : null,
     );
     return this.env.FALLBACK.fetch(sub);
   }

@@ -84,7 +84,7 @@ export class SubscriptionForwarderProcessor extends StreamProcessor<ForwarderSta
   readonly #deliveryStorage: FacetProcessorArgs["storage"];
   readonly #parent: FacetProcessorArgs["parent"];
   /** One pump per row at a time — in memory only (a dropped pump re-runs from the cursor). */
-  #deliveriesInFlight = new Set<number>();
+  readonly #deliveriesInFlight = new Set<number>();
 
   constructor(args: FacetProcessorArgs) {
     super(args);
