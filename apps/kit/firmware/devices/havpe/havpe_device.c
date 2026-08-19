@@ -414,7 +414,15 @@ static size_t health(void *context, char *out, size_t capacity) {
     const char *name;
     uint32_t value;
   };
+  uint8_t vnr = 0U;
+  (void)havpe_audio_read_vnr(&vnr);
   const struct field fields[] = {
+    /*
+     * The DSP's own opinion of the uplink, 0-255, read live from the XMOS.
+     * Reads as 0 both in silence and when the read fails; the codec failure
+     * counters below say which.
+     */
+    {"xmosVnr", vnr},
     {"codecCaptureOverruns", havpe_audio_capture_overruns()},
     {"codecCaptureFailures", havpe_audio_capture_driver_failures()},
     /* The task-side starvation measure: ms the ring was empty, and how often. */

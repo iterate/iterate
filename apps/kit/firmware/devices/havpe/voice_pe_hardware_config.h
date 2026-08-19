@@ -100,6 +100,18 @@ bool iterate_kit_voice_pe_xmos_pipeline_response_matches(
     size_t response_size,
     enum iterate_kit_voice_pe_xmos_stage expected_stage);
 
+/**
+ * The XMOS DSP's own voice-to-noise estimate, 0-255: the one uplink-quality
+ * number the hardware volunteers, and free soak evidence for open-mic runs.
+ */
+enum iterate_kit_status iterate_kit_voice_pe_xmos_vnr_command(
+    uint8_t *destination,
+    size_t destination_capacity);
+enum iterate_kit_status iterate_kit_voice_pe_parse_xmos_vnr(
+    const uint8_t *response,
+    size_t response_size,
+    uint8_t *vnr);
+
 #ifdef __cplusplus
 }
 #endif

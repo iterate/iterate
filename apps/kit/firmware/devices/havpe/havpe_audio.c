@@ -688,6 +688,24 @@ static esp_err_t configure_xmos_pipeline(
       : ESP_ERR_INVALID_RESPONSE;
 }
 
+enum iterate_kit_status havpe_audio_read_vnr(uint8_t *vnr) {
+  uint8_t command[3];
+  uint8_t response[2] = {0xffU, 0xffU};
+  if (vnr == NULL) return ITERATE_KIT_INVALID_ARGUMENT;
+  if (xmos_device == NULL) return ITERATE_KIT_UNAVAILABLE;
+  if (iterate_kit_voice_pe_xmos_vnr_command(command, sizeof(command)) !=
+      ITERATE_KIT_OK) {
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+  if (i2c_master_transmit(
+          xmos_device, command, sizeof(command), I2C_TIMEOUT_MS) != ESP_OK ||
+      i2c_master_receive(
+          xmos_device, response, sizeof(response), I2C_TIMEOUT_MS) != ESP_OK) {
+    return ITERATE_KIT_IO_ERROR;
+  }
+  return iterate_kit_voice_pe_parse_xmos_vnr(response, sizeof(response), vnr);
+}
+
 static esp_err_t verify_xmos_version(
     struct iterate_kit_voice_pe_xmos_version *version) {
   uint8_t command[3];

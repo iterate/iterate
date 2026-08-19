@@ -758,9 +758,17 @@ export const VoiceAgentContract = defineProcessorContract({
      * when it ends are the server's, because the server is the only side that
      * can know them.
      */
+    /*
+     * DURABLE, alone among the device's three verbs. The opening press is
+     * the one event whose loss strands a human: measured on preview, the
+     * first touch of an idle stream resets its Durable Object, an ephemeral
+     * press dies with the old incarnation, and the caller waits out the
+     * device's 3s retry in silence. Durable, the rebuilt facet's catch-up
+     * mints the call itself. One append per press is nothing; mic-frame and
+     * ptt-end stay ephemeral because losing them costs a turn, not a call.
+     */
     "events.iterate.com/voice-agent/ptt-start": {
       description: "The user began speaking. Opens a call if one is not already up.",
-      ...EPH,
       payloadSchema: z.looseObject({}),
     },
     "events.iterate.com/voice-agent/mic-frame": {
@@ -1605,6 +1613,25 @@ export class VoiceAgentProcessor extends StreamProcessor<
             this.deps.nowAtFacetMs() - this.#conversationEndedAtMs < 1500
           ) {
             return;
+          }
+          /*
+           * AND NOT A PRESS FROM ANOTHER ERA. ptt-start is durable so a
+           * press that killed its own Durable Object still mints once the
+           * rebuilt facet catches up — seconds later. But durable also
+           * means a press could in principle be replayed after a LONG
+           * facet outage, and a half-hour-old press minting a call to an
+           * empty room is worse than a lost one. The device re-presses
+           * every 3s while it still wants the call, so 30s of validity
+           * loses nobody.
+           */
+          if (event.type === "events.iterate.com/voice-agent/ptt-start") {
+            const pressedAtStreamMs = Date.parse(event.createdAt);
+            if (
+              Number.isFinite(pressedAtStreamMs) &&
+              this.deps.nowAtFacetMs() - pressedAtStreamMs > 30_000
+            ) {
+              return;
+            }
           }
           const conversationId = `conv_${crypto.randomUUID()}`;
           this.#callRequested = true;

@@ -234,6 +234,35 @@ enum iterate_kit_status iterate_kit_voice_pe_xmos_version_command(
   return ITERATE_KIT_OK;
 }
 
+enum iterate_kit_status iterate_kit_voice_pe_xmos_vnr_command(
+    uint8_t *destination,
+    size_t destination_capacity) {
+  if (destination == NULL || destination_capacity < 3U) {
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+  /*
+   * Command 0x00 on the configuration servicer is the DSP's own
+   * voice-to-noise estimate, 0-255. Nabu Casa's firmware reads it the same
+   * way; it is the one uplink-quality number the XMOS will volunteer.
+   */
+  destination[0] = VOICE_PE_XMOS_CONFIGURATION_RESOURCE;
+  destination[1] = 0x00U | VOICE_PE_XMOS_READ_BIT;
+  destination[2] = 2U;
+  return ITERATE_KIT_OK;
+}
+
+enum iterate_kit_status iterate_kit_voice_pe_parse_xmos_vnr(
+    const uint8_t *response,
+    size_t response_size,
+    uint8_t *vnr) {
+  if (response == NULL || response_size != 2U || vnr == NULL ||
+      response[0] != VOICE_PE_XMOS_CONTROL_DONE) {
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+  *vnr = response[1];
+  return ITERATE_KIT_OK;
+}
+
 enum iterate_kit_status iterate_kit_voice_pe_parse_xmos_version(
     const uint8_t *response,
     size_t response_size,

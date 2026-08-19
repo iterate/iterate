@@ -32,8 +32,15 @@ extern "C" {
  * callPending: false` forever, indefinitely "preparing" and never dialling.
  */
 
-/** Retry for placing the call itself; a start takes ~1-3s. */
-#define ITERATE_KIT_LAUNCH_PLACE_RETRY_MS 8000U
+/**
+ * Retry for placing the call itself. A warm start measures 1.4-1.5s, so 3s
+ * re-places with real headroom while capping the penalty when the FIRST
+ * press is swallowed — measured on preview: touching an idle stream resets
+ * its Durable Object, the ephemeral opening press dies with the old
+ * incarnation, and this retry was the 8-second clock the whole cold dial
+ * waited on.
+ */
+#define ITERATE_KIT_LAUNCH_PLACE_RETRY_MS 3000U
 
 /** What the device loop should do about calls this tick. */
 enum iterate_kit_launch_step {

@@ -21,6 +21,13 @@ enum iterate_kit_status havpe_audio_set_volume(
     uint8_t percent, uint8_t *applied);
 uint8_t havpe_audio_volume(void);
 
+/*
+ * The XMOS DSP's live voice-to-noise estimate (0-255) over the servicer
+ * I2C lane. Fails UNAVAILABLE before audio bring-up; the bus lock makes it
+ * safe to ask from the health path while a call is running.
+ */
+enum iterate_kit_status havpe_audio_read_vnr(uint8_t *vnr);
+
 enum {
   HAVPE_AUDIO_SAMPLE_RATE_HZ = 16000,
   HAVPE_AUDIO_FRAME_SAMPLES = 320, /* 20 ms mono on the wire */
