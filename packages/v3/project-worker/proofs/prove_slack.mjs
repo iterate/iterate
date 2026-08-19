@@ -57,6 +57,17 @@ class SlackReplayTarget extends RpcTarget {
   }
 }
 
+/** THE ZERO-DECLARATION SHAPE (the apps/os replayPathCall idea, pushed to the client): a Proxy
+ *  over a bare RpcTarget forwards every unknown property straight to the LITERAL SDK instance —
+ *  no per-method table, no getters; `new WebClient(token)` drops in as `sdk` unchanged. (capnweb
+ *  only passes RpcTargets/functions by reference, so the bare-RpcTarget core is what crosses;
+ *  the Proxy fills its property surface from the SDK.) */
+const replayOnto = (sdk) =>
+  new Proxy(new (class extends RpcTarget {})(), {
+    get: (target, prop, recv) => (prop in target ? Reflect.get(target, prop, recv) : sdk[prop]),
+    has: (target, prop) => prop in target || prop in sdk,
+  });
+
 // ── bridge session (the provider) + a second ordinary client ──
 const bridgeSession = newWebSocketRpcSession(`wss://${BASE}/api?ctx=${CTX}`);
 const bridgeItx = await bridgeSession.authenticate().get();
@@ -104,7 +115,26 @@ check(
   JSON.stringify(aliased),
 );
 
-// 4. revoke the provision → the mount is gone, default-deny answers
+// 4. the SAME thing with ZERO declarations: replay literally onto the SDK instance
+const provision2 = await bridgeItx.provideCapability({
+  type: "live",
+  path: ["slack2"],
+  capability: replayOnto(slackSdk),
+  instructions: "slack sdk bridge, zero-declaration replay",
+});
+const posted2 = await itx.invokeCapability({
+  path: ["slack2", "chat", "postMessage"],
+  args: [{ channel: "#zero", text: "no rpctarget declared" }],
+});
+check(
+  posted2?.ok === true &&
+    sdkCalls.some(([m, o]) => m === "chat.postMessage" && o.channel === "#zero"),
+  "replayOnto(sdk): the LITERAL SDK instance replayed with no per-method declarations",
+  JSON.stringify(posted2),
+);
+await provision2.revoke();
+
+// 5. revoke the provision → the mount is gone, default-deny answers
 await provision.revoke();
 const denied = await until("revoke propagated", async () => {
   try {
