@@ -24,6 +24,7 @@
 #include "m5sticks3_board.h"
 
 #include "esp_heap_caps.h"
+#include "iterate/kit/avatar/face_animator.h"
 #include "iterate/kit/avatar/face_avatar_registry.h"
 #include "iterate/kit/avatar/face_doze.h"
 #include "iterate/kit/avatar/face_keyframe.h"
@@ -31,6 +32,9 @@
 #include "iterate/kit/conversation_overlay.h"
 #include "iterate/kit/face_wake.h"
 
+#include "m5sticks3_audio.h"
+
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 
@@ -89,6 +93,16 @@ namespace {
 
 struct FaceState {
   face_avatar_registry_t registry;
+  /*
+   * The MOUTH: the same envelope animator the CoreS3 runs, fed by the
+   * playback task with the PCM it just handed to I2S, snapshotted here at
+   * 12 Hz. The snapshot API is the bounded cross-task seam — a contended
+   * attempt keeps the previous pose rather than waiting.
+   */
+  face_animator_t animator;
+  face_animator_state_t latest_pose;
+  /* Latest-only face request, catalogue index + 1; zero means none. */
+  std::atomic<uint32_t> pending_face_index_plus_one;
   uint16_t *frame;      /* FACE_RENDER_WIDTH x FACE_RENDER_HEIGHT, PSRAM */
   bool ready;
   int32_t x;            /* where the scaled face lands on this panel */
@@ -109,6 +123,7 @@ constexpr int64_t FACE_FRAME_INTERVAL_US = 83000;
 
 bool face_init(void) {
   if (!face_avatar_registry_init(&face.registry)) return false;
+  face_animator_init(&face.animator, M5STICKS3_AUDIO_SAMPLE_RATE_HZ);
   const size_t pixels = (size_t)FACE_RENDER_WIDTH * (size_t)FACE_RENDER_HEIGHT;
   /*
    * PSRAM, not internal: 38.4 KiB of internal heap is what Wi-Fi and the I2S
@@ -204,8 +219,34 @@ bool face_draw(void) {
    * something drives it. The clock is milliseconds of uptime, which is what
    * makes the animation move at all — a fixed clock renders one frozen pose.
    */
+  /*
+   * A pending face request lands between frames, where the registry is
+   * this task's alone. Validated at request time, so a failed select here
+   * is a real fault, not a typo.
+   */
+  {
+    const uint32_t requested =
+        face.pending_face_index_plus_one.exchange(0U, std::memory_order_acq_rel);
+    if (requested != 0U &&
+        !face_avatar_registry_select(
+            &face.registry, static_cast<size_t>(requested - 1U))) {
+      ++face.render_failures;
+    }
+  }
+  /*
+   * The pose is the animator's — level, blink, gaze, and the MOUTH the
+   * playback task has been feeding — not a neutral key. A contended
+   * snapshot keeps the previous pose; the ambient clock below still moves,
+   * so idle life never freezes with it.
+   */
+  {
+    face_animator_state_t candidate = face.latest_pose;
+    if (face_animator_snapshot(&face.animator, &candidate)) {
+      face.latest_pose = candidate;
+    }
+  }
   face_render_key_t key = {};
-  key.schema_version = FACE_RENDER_KEY_SCHEMA_VERSION;
+  face_render_key_from_pose(&face.latest_pose, &key);
   const uint32_t sample_clock = static_cast<uint32_t>(now_us / 1000);
   const size_t pixels = (size_t)FACE_RENDER_WIDTH * (size_t)FACE_RENDER_HEIGHT;
   const iterate_kit_conversation_visual_state status = face_status();
@@ -415,6 +456,28 @@ bool m5sticks3_ui_call_requested(void) {
 
 uint32_t m5sticks3_board_face_frames(void) { return face.rendered; }
 uint32_t m5sticks3_board_face_failures(void) { return face.render_failures; }
+
+void m5sticks3_board_observe_playout(const int16_t *samples, size_t count) {
+  if (!face.ready || samples == nullptr || count == 0U) return;
+  /* Playback task only — the animator has ONE writer, and this is it. */
+  face_animator_push_pcm(&face.animator, samples, count);
+}
+
+bool m5sticks3_board_request_face(const char *slug, size_t slug_length) {
+  if (slug == nullptr || slug_length == 0U || !face.ready) return false;
+  const size_t count = face_avatar_registry_count();
+  for (size_t index = 0U; index < count; ++index) {
+    const char *const candidate = face_avatar_registry_slug_at(index);
+    if (candidate == nullptr) continue;
+    if (std::strlen(candidate) == slug_length &&
+        std::memcmp(candidate, slug, slug_length) == 0) {
+      face.pending_face_index_plus_one.store(
+          static_cast<uint32_t>(index) + 1U, std::memory_order_release);
+      return true;
+    }
+  }
+  return false;
+}
 
 void m5sticks3_ui_tick(void) {
   /*

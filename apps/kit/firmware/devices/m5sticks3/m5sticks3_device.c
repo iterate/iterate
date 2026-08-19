@@ -20,12 +20,63 @@
 #include <stdio.h>
 
 #include "iterate/kit/audio_processor.h"
+#include "iterate/kit/capabilities/arguments.h"
 #include "iterate/kit/devices/m5sticks3.h"
 #include "iterate/kit/voice/loop.h"
 #include "iterate/kit/voice_device_profile.h"
 
 #include "m5sticks3_audio.h"
 #include "m5sticks3_board.h"
+
+/*
+ * `face.set({face})` — the same catalogue the CoreS3 wears, on the small
+ * panel. There is no local face control at all on this board, so a face
+ * nobody can ask for by name is a face it never makes.
+ */
+static const char *const face_set_path[] = {"face", "set"};
+
+static enum capnweb_status face_set(
+    void *context,
+    const struct capnweb_call *call,
+    struct capnweb_reply *reply) {
+  struct capnweb_value object = {0};
+  struct capnweb_value slug = {0};
+  char buffer[48];
+  size_t length = 0U;
+  (void)context;
+  if (!iterate_kit_read_object_argument(call, &object) ||
+      !capnweb_value_object_get(&object, "face", &slug) ||
+      capnweb_value_copy_string(&slug, buffer, sizeof(buffer), &length) !=
+          CAPNWEB_OK) {
+    return capnweb_reply_set_error(
+        reply, "TypeError", "face.set needs {face} as a catalogue slug");
+  }
+  if (!m5sticks3_board_request_face(buffer, length)) {
+    return capnweb_reply_set_error(
+        reply,
+        "Error",
+        "unknown face — the catalogue is dot-matrix-oracle, furnace-imp, "
+        "karakuri-brass, moonscope, starbyte");
+  }
+  return capnweb_reply_set_boolean(reply, true);
+}
+
+static size_t modules(
+    void *context, struct iterate_kit_module *out, size_t capacity) {
+  static const struct iterate_kit_method board_methods[] = {
+    {face_set_path, 2U, face_set},
+  };
+  (void)context;
+  if (capacity < 1U) return 0U;
+  out[0] = (struct iterate_kit_module){
+    .methods = board_methods,
+    .method_count = sizeof(board_methods) / sizeof(board_methods[0]),
+    .context = NULL,
+    .close = NULL,
+    .session_ended = NULL,
+  };
+  return 1U;
+}
 
 static bool start(void *context, struct iterate_kit_board_audio *out) {
   (void)context;
@@ -165,10 +216,14 @@ static const struct iterate_kit_board_ops ops = {
   /* Providing this pair is how this board declares itself half duplex. */
   .capture_fence = capture_fence,
   .playout_fenced_out = playout_fenced_out,
-  /* No avatar: this board's screen is text, and its face has no mouth track. */
+  /*
+   * The mouth is fed by the AUDIO layer, not from here: the playback task
+   * hands each mono frame it wrote to the board's envelope animator, so the
+   * face animates audio the hardware actually accepted.
+   */
   .observe_playout = NULL,
   .observe_answer = NULL,
-  .modules = NULL,
+  .modules = modules,
   .health = health,
 };
 
@@ -187,6 +242,9 @@ static const struct iterate_kit_board_facts facts = {
       "so it only listens while talk is held. "
       "conversation.start() opens a call WITHOUT holding the microphone, for "
       "when you want it to greet you first; conversation.end() hangs up. "
+      "face.set({face}) changes which animated face it wears; the catalogue "
+      "is dot-matrix-oracle, furnace-imp, karakuri-brass, moonscope, "
+      "starbyte. "
       "health() returns this device's full diagnostics — start there when it "
       "seems unwell. "
       "speaker.setVolume({percent}) sets how loud it plays, 0-100; "
@@ -197,10 +255,12 @@ static const struct iterate_kit_board_facts facts = {
       "pushToTalk.start() opens a call and holds the microphone open the way "
       "the front button does, and pushToTalk.stop() commits the turn; "
       "conversation.start() opens a call without holding the microphone and "
-      "conversation.end() hangs up. speaker.setVolume({percent}) sets how loud "
-      "it plays, 0-100, and answers {percent,ceiling}, which speaker.volume() "
-      "also returns. health() returns this device's full diagnostics "
-      "document.\",\"children\":{}}",
+      "conversation.end() hangs up. face.set({face}) changes which animated "
+      "face it wears; the catalogue is dot-matrix-oracle, furnace-imp, "
+      "karakuri-brass, moonscope, starbyte. speaker.setVolume({percent}) sets "
+      "how loud it plays, 0-100, and answers {percent,ceiling}, which "
+      "speaker.volume() also returns. health() returns this device's full "
+      "diagnostics document.\",\"children\":{}}",
   .talk_hint = "hold the front button to talk",
   .call_hint = "connection lost — press side to call",
   .speaker = {

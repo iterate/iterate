@@ -25,6 +25,8 @@
  */
 #include "m5sticks3_audio.h"
 
+#include "m5sticks3_board.h"
+
 #include <atomic>
 #include <cstring>
 
@@ -417,6 +419,10 @@ void playback_hardware_task(void *argument) {
               1000U) != ESP_OK) {
         m5sticks3_audio_rollback_write(frame_ms);
         playback_driver_failures.fetch_add(1U, std::memory_order_relaxed);
+      } else {
+        /* The mouth animates audio the hardware actually accepted — the
+         * mono frame, not the stereo expansion the amplifier eats. */
+        m5sticks3_board_observe_playout(frame.samples, frame.sample_count);
       }
     } else if (now_stage == Stage::playbackHandoff) {
       if (build_playback_channel()) {

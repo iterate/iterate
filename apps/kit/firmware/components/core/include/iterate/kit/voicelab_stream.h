@@ -340,6 +340,16 @@ struct iterate_kit_voicelab {
    * honours conversation-ended only from the bridge whose conversation-accepted it last saw.
    */
   char live_bridge_id[24];
+  /*
+   * Which conversation the device is actually on, learned at acceptance.
+   * The obituary filter needs it: consecutive calls share a bridge, so a
+   * LATE conversation-ended from the previous call walks through the
+   * bridge guard and kills the call a person just opened — measured
+   * 2026-08-19 14:41:09, a fresh call shot down 71 ms after acceptance by
+   * its predecessor's obituary. And the device's own end can name the real
+   * conversation instead of its compiled-in default.
+   */
+  char live_conversation_id[64];
   uint32_t batches_on_connection;
   uint32_t spk_frames_received;
   uint32_t spk_decode_failures;

@@ -666,6 +666,32 @@ EXT_RAM_BSS_ATTR static struct {
   uint32_t loop_count;
   uint64_t last_pulse_ms;
   bool talking;
+  /*
+   * Speech spoken INTO THE DIAL is captured, not thrown away. From the
+   * press that wants a call until the call is active, capture queues into
+   * mic_queue (5.12 s deep) and the drain holds it back; the accepted call
+   * then carries it. Without this, everything said between the wake press
+   * and CALL_ACCEPTED — two to four seconds warm, twenty cold — was
+   * discarded at the capture gate, and a person who pressed and spoke got
+   * an answer to nothing. The host CLI never showed it only because its
+   * dial is warm in about a second.
+   */
+  bool dial_buffering;
+  /* A push-to-talk dial buffered speech; the OPENING turn must not reset
+   * the queue that holds it. Consumed at turn start, cleared with the call. */
+  bool dial_speech_queued;
+  /*
+   * A call that vanished WITHOUT its obituary holds the relaunch ladder
+   * until this deadline, because the obituary may simply not have arrived
+   * yet: the far end's hang-up settles the device's call RPC ~100 ms before
+   * its conversation-ended event can be delivered, and relaunching in that
+   * gap births a zombie call the late obituary then kills — measured
+   * 2026-08-19 14:22:42: relaunch 87 ms after the end, the zombie shot down
+   * mid-wake ("call ended" twice in a row), its conversation orphaned until
+   * the 60 s idle timeout. A genuine connection recycle still relaunches,
+   * just this much later.
+   */
+  uint64_t obituary_grace_until_ms;
   /* Release pressed, but the capture queue is not yet on the wire. */
   bool flushing_turn;
   atomic_bool speaker_reprime;
@@ -1161,6 +1187,8 @@ static void on_control(
      */
     runtime.view.wants_call = (false);
     runtime.view.call_active = (false);
+    /* The dial buffer dies with the call it was dialling. */
+    runtime.dial_speech_queued = false;
     /* Envelope mouth returns for whatever local life the face has next. */
     runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_IDLE;
     runtime.view.status = ("call ended");
@@ -1730,7 +1758,7 @@ static enum iterate_kit_status bridge_copy_egress(
    * measurement that would show a real uplink fault was buried in room noise
    * nobody wanted.
    */
-  if (!runtime.talking) {
+  if (!runtime.talking && !runtime.dial_buffering) {
     ++runtime.mic_frames_idle;
     return ITERATE_KIT_OK;
   }
@@ -2938,6 +2966,13 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
      */
     if (runtime.intent.end_call) {
       runtime.view.wants_call = false;
+      /*
+       * THE TAIL DIES WITH THE PRESS. The far end's conversation-ended will
+       * also abandon, but that is a round trip away, and the ring holds
+       * thirty seconds — a person who just ended a call and keeps hearing
+       * the answer reads the button as broken, not the call as draining.
+       */
+      (void)abandon_speaker_audio();
       ESP_LOGI(tag, "control: ending call");
     }
     if (runtime.intent.start_call && !runtime.voicelab.call_active) {
@@ -2946,6 +2981,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
     }
     if (runtime.intent.toggle_call) {
       runtime.view.wants_call = !runtime.view.wants_call;
+      if (!runtime.view.wants_call) (void)abandon_speaker_audio();
       ESP_LOGI(
           tag, "control: %s call",
           runtime.view.wants_call ? "starting" : "ending");
@@ -3316,6 +3352,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
         runtime.voicelab_generation = runtime.connection.generation;
         runtime.frame_sequence = 0U;
         (void)xQueueReset(runtime.mic_queue); /* drop pre-session stale audio */
+        runtime.dial_speech_queued = false;
         /*
          * NOTHING TO FORGET ABOUT THE SENDER ANY MORE.
          *
@@ -3370,7 +3407,15 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
      */
     if (runtime.talking && !runtime.flushing_turn &&
         (runtime.voicelab.state != ITERATE_KIT_VOICELAB_READY ||
-         !runtime.voicelab.call_active)) {
+         /*
+          * `&& !wants_call`: talking WITHOUT a call is now the legitimate
+          * WAKING state — the microphone opens at the wake press and
+          * buffers into the dial. Without this conjunct the abandon fired
+          * on every pass of every dial, flapping `talking` and resetting
+          * the queue at 200 Hz, which erased the dial buffer this state
+          * exists to hold and spammed a WARN per pass while doing it.
+          */
+         (!runtime.voicelab.call_active && !runtime.view.wants_call))) {
       ESP_LOGW(tag, "turn abandoned: session or call went away");
       runtime.talking = false;
       runtime.flushing_turn = false;
@@ -3449,7 +3494,15 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
        */
       const bool wants_talk =
           turn_policy == ITERATE_KIT_VOICE_TURNS_SERVER_VAD
-          ? runtime.voicelab.call_active
+          /*
+           * `|| wants_call`: the microphone opens at the WAKE PRESS, not at
+           * CALL_ACCEPTED, so speech spoken into the dial lands in the
+           * queue and the accepted call carries it — see `dial_buffering`.
+           * The drain below still waits for the call, so nothing is SENT
+           * early; end-goes-silent means wants_call only rises on a
+           * deliberate wake, so this no longer admits idle room noise.
+           */
+          ? (runtime.voicelab.call_active || wants_call)
           : (wants_call &&
              (runtime.intent.talk_held || runtime.remote_talk));
       runtime.view.talk_held = wants_talk;
@@ -3550,6 +3603,17 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
       if (!runtime.voicelab.call_pending) call_pending_since = 0U;
 
       /*
+       * The obituary grace is armed HERE, before the ladder ever sees the
+       * fall: the fall and the ladder share a pass, and arming it in the
+       * display reconcile sixty lines below let the ladder place the
+       * zombie first — measured twice, 126 ms and 87 ms end-to-relaunch.
+       * `call_active_shown` still carries last pass's value at this point;
+       * the display reconcile below is what updates it.
+       */
+      if (call_active_shown && !runtime.voicelab.call_active && wants_call) {
+        runtime.obituary_grace_until_ms = now + 1500U;
+      }
+      /*
        * GETTING INTO A CALL. The ladder — prepare ahead, prepare now, place —
        * and its three separate deadlines live in conversation_launch.c, which
        * every board shares and which is tested on the host.
@@ -3560,7 +3624,10 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
             .call_pending = runtime.voicelab.call_pending,
             .link_ready = outbox_free >= 3U,
             .now_ms = now,
-            .wants_call = wants_call,
+            /* Masked, not cleared: if the obituary lands during the grace it
+             * clears the intent itself; if none comes, the want resumes. */
+            .wants_call =
+                wants_call && now >= runtime.obituary_grace_until_ms,
         };
         runtime.last_launch_step = (int)iterate_kit_launch_next_step(&launch, &launching);
         ++runtime.launch_polls;
@@ -3622,6 +3689,15 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
         runtime.speaker_writes = 0U;
       }
       if (runtime.voicelab.call_active != call_active_shown) {
+        /*
+         * The call fell while still WANTED and no obituary explained it —
+         * either a genuine connection recycle, or a far-end hang-up whose
+         * conversation-ended is still in flight. Hold the relaunch long
+         * enough to tell them apart; see `obituary_grace_until_ms`.
+         */
+        if (call_active_shown && !runtime.voicelab.call_active && wants_call) {
+          runtime.obituary_grace_until_ms = now + 1500U;
+        }
         call_active_shown = runtime.voicelab.call_active;
         runtime.view.call_active = (call_active_shown);
         /*
@@ -3663,6 +3739,33 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
        */
       const bool marks_turns =
           turn_policy == ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK;
+      /*
+       * DIAL-TIME SPEECH IS BUFFERED, NOT SENT AND NOT DROPPED. While a
+       * call is wanted-but-not-active and the posture says the person is
+       * talking (open mic: the wake press itself; push-to-talk: the held
+       * button), capture queues and the drain waits for the call. The
+       * queue is reset once, at the moment buffering begins, so pre-press
+       * room noise is dropped exactly where the press is.
+       */
+      {
+        const bool buffering =
+            wants_talk && !runtime.voicelab.call_active;
+        if (buffering && !runtime.dial_buffering) {
+          (void)xQueueReset(runtime.mic_queue); /* pre-press room noise */
+          runtime.frame_sequence = 0U;
+        }
+        if (buffering && marks_turns) runtime.dial_speech_queued = true;
+        if (!buffering && runtime.dial_buffering &&
+            !runtime.voicelab.call_active) {
+          /*
+           * Released during the dial: the turn that would have carried this
+           * speech never opened, so it must not prepend itself to whatever
+           * the NEXT press says. Hold through the connect and it is kept.
+           */
+          runtime.dial_speech_queued = false;
+        }
+        runtime.dial_buffering = buffering;
+      }
       if (!marks_turns) {
         /*
          * The microphone rides the call, so this is one edge, not two, and it
@@ -3709,8 +3812,13 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
          * every answer after a turn.
          */
         (void)abandon_speaker_audio();
-        (void)xQueueReset(runtime.mic_queue); /* drop pre-press room noise */
-        runtime.frame_sequence = 0U;
+        if (!runtime.dial_speech_queued) {
+          (void)xQueueReset(runtime.mic_queue); /* drop pre-press room noise */
+          runtime.frame_sequence = 0U;
+        }
+        /* Consumed either way: only the turn that OPENED the call may keep
+         * the dial buffer, and it just did. */
+        runtime.dial_speech_queued = false;
         if (publish_turn_marker(ITERATE_KIT_VOICELAB_TURN_START)) {
           runtime.talking = true;
           runtime.turn_started_ms = now;
@@ -3812,7 +3920,11 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
          * window, so the sender can actually catch up.
          */
         const bool behind = queued >= (size_t)(MIC_FRAMES_PER_APPEND * 2U);
-        if (runtime.talking && (behind || now >= drain_window_at) &&
+        /* `call_active &&`: dial-buffered speech leaves only once there is
+         * a call to carry it. Push-to-talk already implied this through the
+         * turn machinery; the open microphone now needs it said. */
+        if (runtime.talking && runtime.voicelab.call_active &&
+            (behind || now >= drain_window_at) &&
             queued >= needed && outbox_free >= (size_t)MIC_OUTBOX_RESERVE) {
           const size_t take = queued < (size_t)MIC_FRAMES_PER_APPEND
               ? queued

@@ -393,15 +393,24 @@ static void downlink_flow(void) {
    * (the zero-return-frame lane never pulls). */
   {
     static char message[16384];
+    /*
+     * The acceptance leads the audio, as it does on the wire: the delivery
+     * lane refuses `spk-frame`s for a call the device is not on — that
+     * refusal is what keeps an ended call's in-flight tail from playing
+     * after the end chime — so an answer with no accepted call in front of
+     * it is silence by design, here as on the desk.
+     */
     (void)snprintf(
         message, sizeof(message),
         "[\"push\",[\"pipeline\",-1,[],[{\"projectId\":\"prj_test\","
         "\"path\":\"/voice-agent/dev-test\",\"streamId\":\"sid\",\"events\":[["
+        "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\","
+        "\"offset\":39,\"payload\":{\"conversationId\":\"wsdev\"}},"
         "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":40,"
         "\"payload\":{\"pcm\":\"%s\"}},"
         "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":41,"
         "\"payload\":{\"drop\":true,\"pcm\":\"%s\"}}"
-        "]],\"scannedAfterOffset\":39,\"scannedThroughOffset\":41,"
+        "]],\"scannedAfterOffset\":38,\"scannedThroughOffset\":41,"
         "\"streamMaxOffset\":41,\"state\":null}]]]",
         frames_b64(1U, 0x41), frames_b64(1U, 0x45));
     receive(&fixture, message);
@@ -510,8 +519,10 @@ static void downlink_flow(void) {
   assert(spoken_bytes == 720U);
   assert(spoken_length == 720U);
 
-  /* conversation-accepted on the stream is what makes a call live. */
-  assert(!fixture.voicelab.call_active);
+  /* conversation-accepted on the stream is what made the call live — it led
+   * the audio above, so by here the call has been live the whole time. A
+   * re-delivered acceptance is idempotent. */
+  assert(fixture.voicelab.call_active);
   receive(
       &fixture,
       "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
@@ -690,9 +701,23 @@ static void speaker_sequence_continuity(void) {
   speech_started_count = 0;
   spoken_frames = 0U;
 
-  /* Contiguous from zero: no gaps, no regressions, watermark follows. */
-  push_spk(
-      &fixture, 1, 100, "\"deviceSpeakerFrameSeq\":0,", frames_b64(1U, 0x40));
+  /* Contiguous from zero: no gaps, no regressions, watermark follows. The
+   * acceptance leads the audio in one batch, as it does on the wire — the
+   * delivery lane refuses frames for a call the device is not on. */
+  {
+    static char message[16384];
+    (void)snprintf(
+        message, sizeof(message),
+        "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
+        "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\","
+        "\"offset\":99,\"payload\":{\"conversationId\":\"wsdev\"}},"
+        "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":100,"
+        "\"payload\":{\"deviceSpeakerFrameSeq\":0,\"pcm\":\"%s\"}}"
+        "]],\"scannedThroughOffset\":100,\"state\":null}]]]",
+        frames_b64(1U, 0x40));
+    receive(&fixture, message);
+    receive(&fixture, "[\"release\",1,1]");
+  }
   push_spk(
       &fixture, 2, 101, "\"deviceSpeakerFrameSeq\":1,", frames_b64(1U, 0x41));
   push_spk(

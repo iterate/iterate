@@ -1263,6 +1263,14 @@ export class VoiceAgent2Processor extends StreamProcessor<
    */
   #callRequested = false;
   /**
+   * When this incarnation last saw a conversation end, for the mint
+   * cooldown: the frames a device drained in a call's final ~100 ms arrive
+   * BEHIND the obituary and must not mint the call's successor. An
+   * incarnation rebuilt inside the window forgets it and fails open, which
+   * is the old behavior for one delivery in a blue moon.
+   */
+  #conversationEndedAtMs: number | null = null;
+  /**
    * The fold's `lastDeviceInputAtStreamMs`, refreshed on every delivery.
    *
    * A MIRROR, never a second source of truth: the idle loop runs between
@@ -1484,6 +1492,22 @@ export class VoiceAgent2Processor extends StreamProcessor<
            * plus, sometimes, an unprompted answer spoken from bare context,
            * then a zombie call squatting out the idle deadline. */
           if (event.type === "events.iterate.com/voice-agent/ptt-end") return;
+          /*
+           * AND NOT THE LAST CALL'S DYING BREATH. A device drains its mic
+           * queue for ~100 ms after the far end hangs up — it cannot know
+           * yet — so those frames arrive right behind the obituary, land on
+           * a null call, and minted its successor within 171 ms: the person
+           * hears "call ended" twice and a conversation nobody wanted squats
+           * out the idle deadline. A fresh WAKE dials by `call-started`, not
+           * by this mint, so holding the mint briefly costs a real caller
+           * nothing.
+           */
+          if (
+            this.#conversationEndedAtMs !== null &&
+            this.deps.nowAtFacetMs() - this.#conversationEndedAtMs < 1500
+          ) {
+            return;
+          }
           const conversationId = `conv_${crypto.randomUUID()}`;
           this.#callRequested = true;
           /* The one append the whole call hangs off: if it silently fails,
@@ -1605,6 +1629,11 @@ export class VoiceAgent2Processor extends StreamProcessor<
          * leaves up to the pacer's whole lead buffered in the ring, and
          * "the call is over" must not sound like four more seconds of it.
          */
+        /* Arms the mint cooldown below: the mic frames a device drained in
+         * the last ~100 ms of a call arrive AFTER this event, and a call
+         * minted for them is the zombie the person hears as a second
+         * "call ended" — measured relaunches 87 and 171 ms after an end. */
+        this.#conversationEndedAtMs = this.deps.nowAtFacetMs();
         const dial = this.#dial;
         if (dial !== null && dial.conversationId === event.payload.conversationId) {
           this.#clearDeviceSpeaker(dial, this.deps.nowAtFacetMs(), append);

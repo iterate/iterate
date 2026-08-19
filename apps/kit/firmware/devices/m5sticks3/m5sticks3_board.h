@@ -2,6 +2,7 @@
 #define ITERATE_KIT_M5STICKS3_BOARD_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -73,6 +74,19 @@ bool m5sticks3_ui_call_requested(void);
  */
 uint32_t m5sticks3_board_face_frames(void);
 uint32_t m5sticks3_board_face_failures(void);
+
+/**
+ * Feed the mouth the PCM the hardware just played. Playback task only —
+ * the envelope animator has one writer, and the render path snapshots it.
+ */
+void m5sticks3_board_observe_playout(const int16_t *samples, size_t count);
+
+/**
+ * Latest-only request to wear a catalogue face by slug. Validates against
+ * the compiled catalogue and returns false for a slug it does not hold;
+ * the render tick applies the newest accepted request between frames.
+ */
+bool m5sticks3_board_request_face(const char *slug, size_t slug_length);
 
 void m5sticks3_ui_tick(void);
 

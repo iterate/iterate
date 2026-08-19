@@ -341,6 +341,42 @@ static void deliver_chunk(bool drop, bool last, size_t frames) {
           connection, release, strlen(release)) == CAPNWEB_OK);
 }
 
+/**
+ * Deliver the call's acceptance, exactly as the stream delivers it.
+ *
+ * The delivery lane refuses `spk-frame`s for a call the device is not on —
+ * that refusal is what stops an ended call's in-flight tail from playing
+ * after the end chime — so an answer with no accepted call in front of it
+ * is now silence by design, in this harness as on the desk.
+ */
+static void deliver_accepted(void) {
+  static char message[512];
+  char release[64];
+  struct iterate_kit_itx_connection *connection =
+      iterate_kit_fake_platform_connection();
+  const long long offset = next_offset++;
+  assert(connection != NULL);
+  (void)snprintf(
+      message,
+      sizeof(message),
+      "[\"push\",[\"pipeline\",%ld,[],[{\"events\":[["
+      "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\","
+      "\"offset\":%lld,"
+      "\"payload\":{\"conversationId\":\"convtest\",\"handshakeTookMs\":1}}"
+      "]],\"scannedThroughOffset\":%lld,\"state\":null}]]]",
+      callback_export_id(),
+      offset,
+      offset);
+  assert(
+      iterate_kit_itx_connection_receive_text(
+          connection, message, strlen(message)) == CAPNWEB_OK);
+  (void)snprintf(
+      release, sizeof(release), "[\"release\",%lld,1]", next_release_id++);
+  assert(
+      iterate_kit_itx_connection_receive_text(
+          connection, release, strlen(release)) == CAPNWEB_OK);
+}
+
 /** A whole answer: a chunk that clears, then a chunk that closes. */
 static void deliver_answer(void) {
   deliver_chunk(true, false, CHUNK_FRAMES);
@@ -493,6 +529,8 @@ int main(void) {
   assert(board.started);
   iterate_kit_fake_platform_connect();
   pump();
+  /* The call this whole file's audio belongs to; see deliver_accepted. */
+  deliver_accepted();
 
   the_first_answer_plays_whole();
   a_later_answer_plays_whole_too();

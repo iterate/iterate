@@ -1943,9 +1943,19 @@ describe("ending a call", () => {
     expect(speakerClears(h).length).toBe(clearsBefore + 1);
     expect(h.provider.closed).toBe(true);
 
-    /* And the next press is NOT deaf: speech dials a fresh provider
-     * socket at once instead of waiting out a zombie's idle deadline. */
+    /* The dying call's OWN last frames mint nothing: a device drains its
+     * mic for ~100 ms after the far end hangs up, and the call those
+     * frames used to mint was the zombie a person heard as a second
+     * "call ended". */
     await h.append(micFrame(2));
+    await h.settle();
+    expect(h.sockets.length).toBe(socketsBefore);
+
+    /* And the next press is NOT deaf: once the trailing-frame window has
+     * passed, speech dials a fresh provider socket at once instead of
+     * waiting out a zombie's idle deadline. */
+    await h.advanceTime(2_000);
+    await h.append(micFrame(3));
     await h.settle();
     expect(h.sockets.length).toBe(socketsBefore + 1);
   });
@@ -2243,6 +2253,9 @@ describe("bugs the review proved", () => {
     });
     await h.settle();
 
+    /* Past the trailing-frame mint cooldown: this frame is a person
+     * speaking again, not the dead call's last drained audio. */
+    await h.advanceTime(2_000);
     await h.append(micFrame(20));
     await h.settle();
     h.provider.completeHandshake();

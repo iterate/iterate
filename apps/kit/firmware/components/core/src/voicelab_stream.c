@@ -220,6 +220,15 @@ static void handle_spk_frame(
   bool drop = false;
   bool last = false;
 
+  /*
+   * NOTHING PLAYS INTO A CALL THIS DEVICE IS NOT ON. The end button's
+   * abandon empties the queue, but the rest of the answer is still IN
+   * FLIGHT and refilled it — "call ended", then the call kept talking. The
+   * device's own end clears `call_active` synchronously, so the tail dies
+   * here; a far-end goodbye keeps the call until its obituary, so it plays.
+   */
+  if (!voicelab->call_active) return;
+
 
   if (capnweb_value_object_get(payload, "drop", &flag)) {
     (void)capnweb_value_get_boolean(&flag, &drop);
@@ -467,6 +476,19 @@ static enum capnweb_status batch_dispatch(
               &length);
         }
       }
+      {
+        struct capnweb_value conversation_value;
+        size_t length = 0U;
+        voicelab->live_conversation_id[0] = '\0';
+        if (capnweb_value_object_get(
+                &payload, "conversationId", &conversation_value)) {
+          (void)capnweb_value_copy_string(
+              &conversation_value,
+              voicelab->live_conversation_id,
+              sizeof(voicelab->live_conversation_id),
+              &length);
+        }
+      }
       voicelab->call_active = true;
       voicelab->call_pending = false;
       /*
@@ -500,7 +522,31 @@ static enum capnweb_status batch_dispatch(
           strcmp(ended_by, voicelab->live_bridge_id) != 0) {
         continue; /* a stale bridge shutting down; not our call */
       }
+      /*
+       * AND ONLY THIS CONVERSATION'S OBITUARY COUNTS. Consecutive calls on
+       * one stream share a bridge, so the bridge guard alone let the
+       * previous call's late obituary kill the call a person had JUST
+       * opened — accepted at 14:41:09.576, dead at .647, and the device
+       * then announced an end it never asked for.
+       */
+      {
+        struct capnweb_value conversation_value;
+        char ended_conversation[sizeof(voicelab->live_conversation_id)] = {0};
+        size_t ended_length = 0U;
+        if (voicelab->live_conversation_id[0] != '\0' &&
+            capnweb_value_object_get(
+                &payload, "conversationId", &conversation_value) &&
+            capnweb_value_copy_string(
+                &conversation_value,
+                ended_conversation,
+                sizeof(ended_conversation),
+                &ended_length) == CAPNWEB_OK &&
+            strcmp(ended_conversation, voicelab->live_conversation_id) != 0) {
+          continue; /* an earlier conversation's obituary; not our call */
+        }
+      }
       voicelab->live_bridge_id[0] = '\0';
+      voicelab->live_conversation_id[0] = '\0';
       voicelab->call_active = false;
       if (voicelab->options.on_control != NULL) {
         voicelab->options.on_control(
@@ -1302,7 +1348,11 @@ enum capnweb_status iterate_kit_voicelab_end_call(
       sizeof(voicelab->args_buffer),
       "[{\"type\":\"events.iterate.com/voice-agent/conversation-ended\",\"payload\":{"
       "\"conversationId\":\"%s\",\"reason\":\"%s\"}}]",
-      voicelab->options.conversation_id,
+      /* The conversation actually being ended, not the compiled-in default:
+       * an end named "scdev" is unattributable in the stream record. */
+      voicelab->live_conversation_id[0] != '\0'
+          ? voicelab->live_conversation_id
+          : voicelab->options.conversation_id,
       reason != NULL ? reason : "hangup");
   if (length < 0 || (size_t)length >= sizeof(voicelab->args_buffer)) {
     return CAPNWEB_E_LIMIT;
