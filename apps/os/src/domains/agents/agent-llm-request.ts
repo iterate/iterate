@@ -10,12 +10,7 @@
 // decides WHEN a normal request runs and calls `run()`/`abortInFlight()`.
 
 import type { EmittedInput, ProcessEventArgs, StreamEvent } from "iterate/processors";
-import {
-  appendUnlessLostIdempotencyRace,
-  stringifyError,
-  type AgentHost,
-  type AgentComponent,
-} from "./agent-host.ts";
+import { appendUnlessLostIdempotencyRace, stringifyError, type AgentHost } from "./agent-host.ts";
 import {
   AgentProcessorContract,
   type AgentFileAttachment,
@@ -35,7 +30,7 @@ import {
   type WorkersAiMessage,
 } from "./workers-ai-transport.ts";
 
-export class AgentLlmRequest implements AgentComponent {
+export class AgentLlmRequest {
   readonly #host: AgentHost;
 
   /**

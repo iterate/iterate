@@ -37,7 +37,7 @@ export const AgentProcessorContract = defineProcessorContract({
   description:
     "Maintains model-visible history, schedules debounced offset-identified LLM turns, runs " +
     "them through the Workers AI transport, and executes scripts through the capability host. " +
-    "Response interpretation is a config flag (enableDefaultLlmResponseParsing) — off, project " +
+    "Response interpretation is a config flag (interpretResponses) — off, project " +
     "code parses assistant output and appends the consequences itself.",
   stateSchema: z.object({
     birthCertificate: z
@@ -161,7 +161,7 @@ export const AgentProcessorContract = defineProcessorContract({
               "turns before the window actually fills, so a slow or failed summary attempt " +
               "never races an imminent context overflow.",
           }),
-        enableDefaultLlmResponseParsing: z
+        interpretResponses: z
           .boolean()
           .default(true)
           .meta({
@@ -377,10 +377,10 @@ export const AgentProcessorContract = defineProcessorContract({
             maxAutonomousTurns: z.number().int().positive().optional(),
             scriptResultHistoryLimit: z.number().int().positive().optional(),
             compactionTriggerFraction: z.number().positive().max(1).optional(),
-            enableDefaultLlmResponseParsing: z.boolean().optional(),
+            interpretResponses: z.boolean().optional(),
             // DEPRECATED shim: the retired two-processor selection knob. Old
             // streams and old seeded worker code still append it; the fold
-            // maps "agent-headless" to enableDefaultLlmResponseParsing: false
+            // maps "agent-headless" to interpretResponses: false
             // and it never reaches state. Delete once no deployed config repo
             // appends driver events.
             driver: z.enum(["agent", "agent-headless"]).optional(),

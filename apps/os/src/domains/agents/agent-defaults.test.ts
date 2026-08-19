@@ -246,7 +246,7 @@ describe("birth config", () => {
         idempotencyKey: `agent/birth-config:v1:${PROJECT_ID}:/agents/demo`,
         payload: {
           config: {
-            enableDefaultLlmResponseParsing: true,
+            interpretResponses: true,
             llmRequestDebounceMs: AGENT_INITIAL_DEBOUNCE_MS,
           },
         },

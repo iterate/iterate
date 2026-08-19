@@ -80,7 +80,7 @@ function reduceAgentEventCore(input: {
         config: AgentProcessorContract.stateSchema.shape.config.parse(
           mergeProcessorConfig(state.config, {
             ...(driver !== undefined && {
-              enableDefaultLlmResponseParsing: driver === "agent",
+              interpretResponses: driver === "agent",
             }),
             ...patch,
           }),

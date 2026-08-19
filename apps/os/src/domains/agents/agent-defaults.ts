@@ -363,7 +363,7 @@ export function agentCreationForPath<
           idempotencyKey: `agent/birth-config:v${AGENT_BIRTH_CONFIG_REVISION}:${projectId}:${agentPath}`,
           payload: {
             config: {
-              enableDefaultLlmResponseParsing: true,
+              interpretResponses: true,
               llmRequestDebounceMs: AGENT_INITIAL_DEBOUNCE_MS,
             },
           },

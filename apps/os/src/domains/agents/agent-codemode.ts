@@ -1,14 +1,13 @@
-// The agent's CODEMODE component — one of the three parts composed into the
-// agent processor (see agent-processor-implementation.ts), and the one a
-// variant processor swaps or REMOVES: everything that turns text into itx
-// scripts and script results back into conversation. Slash commands (user
-// text → script, no LLM), response parsing (accepted assistant output → one
-// script via the injected AgentResponseFormat, or corrective feedback), and
-// settlement rendering (script result → developer context that drives the
-// next turn, spilling oversized results to the agent's workspace). A
-// processor composed WITHOUT this component interprets nothing — that is the
-// headless lane userland experiments build on: project code consumes the raw
-// assistant output events and appends these same consequences itself.
+// The agent's CODEMODE part — one of the three parts of the agent processor
+// (see agent-processor-implementation.ts), and the one that is CONFIGURABLE:
+// everything that turns text into itx scripts and script results back into
+// conversation. Slash commands (user text → script, no LLM), response
+// parsing (accepted assistant output → one script via the fenced-ts response
+// format, or corrective feedback), and settlement rendering (script result →
+// developer context that drives the next turn, spilling oversized results to
+// the agent's workspace). With `config.interpretResponses` off the processor
+// never calls this part — project code consumes the raw assistant output
+// events and appends these same consequences itself.
 
 import type { ProcessEventArgs } from "iterate/processors";
 import { inferJsonType } from "../../lib/infer-json-type.ts";
@@ -17,12 +16,11 @@ import { previewJson } from "../../lib/truncate-json.ts";
 import { INLINE_RESULT_PREAMBLE_LIMIT } from "../capability-host/capability-host-preamble.ts";
 import {
   appendUnlessLostIdempotencyRace,
-  type AgentComponent,
   type AgentHost,
   type AgentProcessorDeps,
 } from "./agent-host.ts";
 import type { AgentProcessorContract } from "./agent-processor-contract.ts";
-import type { AgentResponseFormat } from "./agent-response-format.ts";
+import { fencedTsResponseFormat } from "./agent-response-format.ts";
 import {
   buildSlashCommandCode,
   resolveSlashCommand,
@@ -30,24 +28,19 @@ import {
   SLASH_COMMAND_EXECUTION_PREFIX,
 } from "./slash-commands.ts";
 
-export class AgentCodemode implements AgentComponent {
+export class AgentCodemode {
   readonly #host: AgentHost;
-  readonly #format: AgentResponseFormat;
+  readonly #format = fencedTsResponseFormat;
 
-  constructor(host: AgentHost, format: AgentResponseFormat) {
+  constructor(host: AgentHost) {
     this.#host = host;
-    this.#format = format;
   }
 
+  // Called by the owning processor for every delivery — ONLY while
+  // `config.interpretResponses` is on (the gate lives at the composition
+  // point, agent-processor-implementation.ts).
   processEvent(args: ProcessEventArgs<AgentProcessorContract>): undefined {
     const { event, previousState, state, blockProcessorWhile, append } = args;
-    // The component-level off switch: with default parsing disabled this
-    // component does NOTHING — no slash commands, no response parsing, no
-    // settlement rendering. Project code consumes the raw events and appends
-    // these same consequences itself, minting the same fixed `agent/`
-    // idempotency keys, so flipping the flag mid-life dedupes instead of
-    // double-executing.
-    if (!state.config.enableDefaultLlmResponseParsing) return;
     switch (event?.type) {
       case "events.iterate.com/agents/context-added": {
         const payload = event.payload;

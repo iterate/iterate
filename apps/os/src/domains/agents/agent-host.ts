@@ -1,10 +1,10 @@
-// What the agent components borrow from their owning StreamProcessor. The
-// agent processor is a COMPOSITION of three components — AgentTurnLoop
+// What the agent processor's parts borrow from the owning StreamProcessor.
+// The processor is split into three parts — AgentTurnLoop
 // (agent-turn-loop.ts), AgentLlmRequest (agent-llm-request.ts), AgentCodemode
 // (agent-codemode.ts) — and this host is the whole surface they share: deps,
 // the key mint, stream reads, the processor's own out-of-frame append, and
-// the injectable clock. A variant processor (a different response format, a
-// different codemode component) builds the same host and swaps one element.
+// the injectable clock. Built by AgentProcessor#makeHost
+// (agent-processor-implementation.ts).
 
 import { isIdempotencyConflict } from "iterate/processors";
 import type { EmittedInput, ProcessEventArgs, StreamEvent } from "iterate/processors";
@@ -74,20 +74,13 @@ export type AgentProcessorDeps = {
   sleep?: (ms: number) => Promise<void>;
 };
 
-/** One agent component: called for every delivery, exactly like the owning
- * processor's own `processEvent`. Components fold nothing themselves — they
- * read the shared reduced state off the frame args. */
-export type AgentComponent = {
-  processEvent: (args: ProcessEventArgs<AgentProcessorContract>) => undefined;
-};
-
 export type AgentHost = {
   deps: AgentProcessorDeps;
   /**
-   * Mints `agent/<suffix>` — the FIXED namespace, deliberately NOT derived
-   * from the hosting contract's slug: a stream handed from the classic
-   * processor to a variant (or back) must dedupe every recorded consequence
-   * on identical keys instead of re-executing scripts under a fresh prefix.
+   * Mints `agent/<suffix>` — the FIXED namespace: a userland interpreter
+   * (an agent with `interpretResponses` off) appends the same recorded
+   * consequences under identical keys, so any overlap with this processor
+   * dedupes instead of re-executing scripts.
    */
   idempotencyKey: (suffix: string) => string;
   /** Page reader over the home stream (prompt building, compaction guards). */

@@ -149,7 +149,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         {
           type: "events.iterate.com/agent/configured",
           idempotencyKey: "codemode-tag/birth-parsing-off:v1",
-          payload: { config: { enableDefaultLlmResponseParsing: false } },
+          payload: { config: { interpretResponses: false } },
         },
         {
           type: "events.iterate.com/agents/context-added",
@@ -187,7 +187,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
           type: "events.iterate.com/agent/configured",
           idempotencyKey: "codemode-tag/convert:v1",
           payload: {
-            config: { enableDefaultLlmResponseParsing: false, llmRequestDebounceMs: 250 },
+            config: { interpretResponses: false, llmRequestDebounceMs: 250 },
           },
         }),
       );
@@ -220,7 +220,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         // keeps the fenced prompt — teaching it <codemode> while the fenced
         // parser still interprets its output would break every turn. The
         // conversion sweep flips the flag; this sync follows it.
-        if (snapshot.state.config.enableDefaultLlmResponseParsing) return;
+        if (snapshot.state.config.interpretResponses) return;
         const slot = snapshot.state.contextItems.findLast(
           (item) => item.payload.key === SYSTEM_PROMPT_KEY,
         );
@@ -310,7 +310,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     // the turn — a second interpretation here would double the visible chat
     // message. One snapshot per assistant turn is cheap.
     const snapshot = await this.itx.agents.get(event.path).processor.snapshot();
-    if (snapshot.state.config.enableDefaultLlmResponseParsing) return;
+    if (snapshot.state.config.interpretResponses) return;
     const outcome = parseCodemodeResponse(payload.content);
     const itx = this.itx;
     const agent = itx.agents.get(event.path);

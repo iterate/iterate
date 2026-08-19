@@ -274,7 +274,7 @@ describe("AgentProcessor turn lifecycle", () => {
         {
           type: "events.iterate.com/agent/configured",
           payload: {
-            config: { enableDefaultLlmResponseParsing: true, llmRequestDebounceMs: 10_000 },
+            config: { interpretResponses: true, llmRequestDebounceMs: 10_000 },
           },
         },
         userMessage("hello?"),
@@ -311,7 +311,7 @@ describe("AgentProcessor turn lifecycle", () => {
         {
           type: "events.iterate.com/agent/configured",
           payload: {
-            config: { enableDefaultLlmResponseParsing: true, llmRequestDebounceMs: 10_000 },
+            config: { interpretResponses: true, llmRequestDebounceMs: 10_000 },
           },
         },
         userMessage("anyone there?"),

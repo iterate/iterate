@@ -22,7 +22,7 @@ and the #2507 readiness-machinery approach (open draft, to be closed).
 - **Platform defaults ride the create batch, inline.** `create()` keeps
   appending the full default batch exactly as `agentCreationForPath` does
   today — plus an explicit `agent/configured` with
-  `{enableDefaultLlmResponseParsing: true, llmRequestDebounceMs: 10_000}`.
+  `{interpretResponses: true, llmRequestDebounceMs: 10_000}`.
   The 10s is an explicit event, NOT a schema default: changing the schema
   default would retroactively slow every existing agent.
 - **All-in on debounce; no readiness machinery.** No birth-finalized, no
@@ -34,12 +34,12 @@ and the #2507 readiness-machinery approach (open draft, to be closed).
   Worker slow past the window → the agent answers with platform defaults;
   keyed supersession heals later turns.
 - **One agent processor, flag-configurable parsing.** New config field
-  `enableDefaultLlmResponseParsing` (schema default `true`). Flag-off
+  `interpretResponses` (schema default `true`). Flag-off
   semantics = exactly today's agent-headless: turn loop + LLM request run,
   nothing platform-side parses assistant output. `HeadlessAgentProcessor`
   and its contract are deleted; `config.driver` is deprecated — the payload
   still tolerates it and the fold maps `driver: "agent-headless"` to
-  `enableDefaultLlmResponseParsing: false`, so existing headless agents and
+  `interpretResponses: false`, so existing headless agents and
   old seeded worker code keep exact semantics (shim, delete later). The
   `"agent-headless"` slug is NOT re-registered (review decision): leftover
   subscriptions under that name fail loudly, which is fine — those agents
@@ -75,12 +75,13 @@ and the #2507 readiness-machinery approach (open draft, to be closed).
       `AgentBirthDefaultsValue` in sdk.ts, and the project processor's
       generic defaults store (`project/defaults-configured` + state.defaults
       — agents was its only consumer)_
-- [x] Contract: `enableDefaultLlmResponseParsing` + driver deprecation
+- [x] Contract: `interpretResponses` + driver deprecation
       _v6.0.0; fold shim in agent-prompt-fold.ts maps driver→flag, explicit
       flag wins; stale "measured from FIRST trigger" debounce description
       fixed in passing (the fold anchors to the NEWEST trigger)_
-- [x] Merge headless into `AgentProcessor` _flag gate lives at the top of
-      AgentCodemode.processEvent; agent-headless-processor.ts deleted
+- [x] Merge headless into `AgentProcessor` _flag gate lives at the
+      composition point in AgentProcessor.processEvent (review round:
+      originally inside AgentCodemode); agent-headless-processor.ts deleted
       outright (review decision: no stub — old streams' "agent-headless"
       subscription deliveries fail loudly, accepted; their agents still work
       through the "agent" subscription every stream carries from birth);
@@ -127,13 +128,13 @@ and the #2507 readiness-machinery approach (open draft, to be closed).
 > case "events.iterate.com/agent/created":
 >   await itx.streams.get(event.path).append(
 >     { type: ".../agent/configured",
->       payload: { config: { enableDefaultLlmResponseParsing: false, llmRequestDebounceMs: 250 } } },
+>       payload: { config: { interpretResponses: false, llmRequestDebounceMs: 250 } } },
 >     { type: ".../agents/context-added",
 >       payload: { role: "system", key: "agent/system-prompt", content: "...<codemode> blocks..." } },
 >   );
 > ```
 >
-> - `enableDefaultLlmResponseParsing` replaces `config.driver`; the
+> - `interpretResponses` replaces `config.driver`; the
 >   headless processor and its slug are deleted (flag-off = old headless
 >   semantics; `driver: "agent-headless"` still parses and maps to the flag
 >   for existing streams; leftover "agent-headless" subscriptions fail
@@ -182,3 +183,13 @@ and the #2507 readiness-machinery approach (open draft, to be closed).
     (event + state.defaults): the agents key was its only consumer.
   - Deleted two stray `*.ignoreme.ts` scratch files in apps/os that broke
     typecheck (left over from an earlier debugging session).
+- 2026-08-19 (review round): renamed the flag
+  `enableDefaultLlmResponseParsing` → `interpretResponses` (the original
+  was a placeholder), and stripped the two-processor plumbing the flag had
+  made vestigial: the `AgentComponent` interface and generic components
+  list are gone (AgentProcessor now holds three named parts and calls them
+  explicitly, with the interpretResponses gate visible in processEvent);
+  the module-level `agentComponentHost` adapter and its protected-member
+  cast became a private `#makeHost()` method; the injected
+  `AgentResponseFormat` (only ever fencedTs) is now a direct import in
+  agent-codemode.ts — agent-response-format.ts stays as the dialect module.

@@ -1,4 +1,4 @@
-// The enableDefaultLlmResponseParsing flag, driven through the memory
+// The interpretResponses flag, driven through the memory
 // harness. OFF: turn loop and LLM request run exactly as ever, but NOTHING
 // platform-side interprets assistant output — that is userland's job (the
 // project's config worker appends the consequences itself). These tests pin
@@ -145,7 +145,7 @@ it("a plain sendMessage (no llmRequestOffset) still mirrors into assistant histo
 it("the deprecated driver knob maps onto the parsing flag; an explicit flag wins", async () => {
   const h = makeAgentHarness();
   await h.play(["append", { type: "events.iterate.com/agent/created", payload: {} }]);
-  expect(h.state().config.enableDefaultLlmResponseParsing).toBe(true);
+  expect(h.state().config.interpretResponses).toBe(true);
 
   // Old seeded worker code appends driver flips; they land as flag flips.
   await h.play([
@@ -155,22 +155,22 @@ it("the deprecated driver knob maps onto the parsing flag; an explicit flag wins
       payload: { config: { driver: "agent-headless" } },
     },
   ]);
-  expect(h.state().config.enableDefaultLlmResponseParsing).toBe(false);
+  expect(h.state().config.interpretResponses).toBe(false);
   await h.play([
     "append",
     { type: "events.iterate.com/agent/configured", payload: { config: { driver: "agent" } } },
   ]);
-  expect(h.state().config.enableDefaultLlmResponseParsing).toBe(true);
+  expect(h.state().config.interpretResponses).toBe(true);
 
   // Both in one payload: the explicit flag wins over the deprecated knob.
   await h.play([
     "append",
     {
       type: "events.iterate.com/agent/configured",
-      payload: { config: { driver: "agent", enableDefaultLlmResponseParsing: false } },
+      payload: { config: { driver: "agent", interpretResponses: false } },
     },
   ]);
-  expect(h.state().config.enableDefaultLlmResponseParsing).toBe(false);
+  expect(h.state().config.interpretResponses).toBe(false);
 });
 
 // -----------------------------------------------------------------------------
@@ -184,7 +184,7 @@ const PARSING_OFF_AGENT_EVENTS = [
   { type: "events.iterate.com/agent/created", payload: {} },
   {
     type: "events.iterate.com/agent/configured",
-    payload: { config: { llm: { model: "test-model" }, enableDefaultLlmResponseParsing: false } },
+    payload: { config: { llm: { model: "test-model" }, interpretResponses: false } },
   },
   {
     type: CONTEXT_ADDED,
