@@ -1466,10 +1466,11 @@ consume offsets and are counted by "\*" reducers — the audit trail the kv regi
   client, the expression door works, an alias mount (`itx.notify` ⇒
   `itx.slack.chat.postMessage`) rides the same bridge, and provision.revoke() restores
   default-deny.
-- **prove_ephemeralflood.mjs** (NEW, board suite 13): 500 ephemeral 256B chunks, batched
-  appends, one CONNECTED subscriber: **500/500 delivered, in order, p50 35ms / p95 45ms
-  end-to-end (node → commit → one-directional delivery → node), 545 ev/s sustained
-  (append-bound), 25 callback invocations for 500 events (20× batching), delivered
-  ScannedOffsetRanges chained with zero heal-pulls.** The ultra-low-latency invariant,
-  measured.
+- **prove_ephemeralflood.mjs** (NEW, board suite 13): ephemeral 256B chunks, PIPELINED batched
+  appends (awaiting each batch serializes the producer on its own RTT — the owner caught the
+  first draft measuring exactly that), one CONNECTED subscriber. **2000/2000 delivered,
+  15,038 ev/s end-to-end, p50 106ms / p95 128ms under the burst (35ms/45ms at trickle rates),
+  40 callback invocations for 2000 events (50× batching), delivered ScannedOffsetRanges
+  chained with zero heal-pulls, every seq exactly once.** The ultra-low-latency invariant,
+  measured — and no acks anywhere on the delivery path.
 - Board is now THIRTEEN suites, all green against the swept deploy.
