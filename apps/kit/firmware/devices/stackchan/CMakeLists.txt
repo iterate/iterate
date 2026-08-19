@@ -37,7 +37,7 @@ idf_component_register(
     mbedtls
     nvs_flash
     espressif__esp-sr
-    espressif__m5stack_core_s3
+    core_s3_board
     espressif__esp32-camera
     espressif__esp_jpeg)
 

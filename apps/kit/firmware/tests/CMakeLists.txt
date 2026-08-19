@@ -19,17 +19,38 @@ add_test(
     "-DITERATE_KIT_FIRMWARE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}/.."
     -P "${ITERATE_KIT_BOUNDARY_CHECK}")
 
-function(iterate_kit_add_core_test NAME SOURCE)
-  add_executable(${NAME} ${SOURCE})
-  target_compile_features(${NAME} PRIVATE c_std_99)
+# Every host test is one executable behind the same warning wall, registered
+# with CTest under its own name. A declaration lists the test's sources and
+# states only what differs: STD <n> (C standard, default 99), INCLUDES,
+# DEFINES, extra warning OPTIONS, and the libraries to LINK.
+function(iterate_kit_add_test NAME)
+  cmake_parse_arguments(T "" "STD" "INCLUDES;DEFINES;OPTIONS;LINK" ${ARGN})
+  if(NOT T_STD)
+    set(T_STD 99)
+  endif()
+  add_executable(${NAME} ${T_UNPARSED_ARGUMENTS})
+  target_compile_features(${NAME} PRIVATE c_std_${T_STD})
   target_compile_options(${NAME} PRIVATE
     -UNDEBUG
     -Wall
     -Wextra
     -Werror
-    -Wpedantic)
-  target_link_libraries(${NAME} PRIVATE iterate-kit-core)
+    -Wpedantic
+    ${T_OPTIONS})
+  if(T_INCLUDES)
+    target_include_directories(${NAME} PRIVATE ${T_INCLUDES})
+  endif()
+  if(T_DEFINES)
+    target_compile_definitions(${NAME} PRIVATE ${T_DEFINES})
+  endif()
+  if(T_LINK)
+    target_link_libraries(${NAME} PRIVATE ${T_LINK})
+  endif()
   add_test(NAME ${NAME} COMMAND ${NAME})
+endfunction()
+
+function(iterate_kit_add_core_test NAME)
+  iterate_kit_add_test(${NAME} ${ARGN} LINK iterate-kit-core)
 endfunction()
 
 iterate_kit_add_core_test(iterate-kit-atomic-test atomic_test.c)
@@ -60,99 +81,33 @@ iterate_kit_add_core_test(iterate-kit-websocket-tx-test websocket_tx_test.c)
 # outside a flash had ever compiled it, so the mapping from a press to an
 # intent was verified only by diffing against the device files it replaced.
 # The pretend ESP-IDF it links is tests/fakes/esp_idf; see the README there.
-add_executable(iterate-kit-voice-loop-intent-test voice_loop_intent_test.c)
-target_compile_features(iterate-kit-voice-loop-intent-test PRIVATE c_std_11)
-target_compile_options(iterate-kit-voice-loop-intent-test PRIVATE
-  -UNDEBUG
-  -Wall
-  -Wextra
-  -Werror
-  -Wpedantic)
-target_link_libraries(iterate-kit-voice-loop-intent-test PRIVATE
-  iterate-kit-voice
-  iterate-kit-esp-idf-fakes)
-add_test(
-  NAME iterate-kit-voice-loop-intent-test
-  COMMAND iterate-kit-voice-loop-intent-test)
+iterate_kit_add_test(
+  iterate-kit-voice-loop-intent-test voice_loop_intent_test.c
+  STD 11 LINK iterate-kit-voice iterate-kit-esp-idf-fakes)
 
 # THE SAME LOOP, DRIVEN FROM THE AUDIO SIDE. A separate executable rather than
 # more scenarios in the file above, because the loop is a PROGRAM: its state is
 # one file-static and it brings itself up once, so a board that takes turns
 # differently is a different process. `on_control` is reachable only by
 # delivering a spk-frame batch, which is why the bug in it was in no host build.
-add_executable(
-  iterate-kit-voice-loop-answer-clock-test voice_loop_answer_clock_test.c)
-target_compile_features(
-  iterate-kit-voice-loop-answer-clock-test PRIVATE c_std_11)
-target_compile_options(iterate-kit-voice-loop-answer-clock-test PRIVATE
-  -UNDEBUG
-  -Wall
-  -Wextra
-  -Werror
-  -Wpedantic)
-target_link_libraries(iterate-kit-voice-loop-answer-clock-test PRIVATE
-  iterate-kit-voice
-  iterate-kit-esp-idf-fakes)
-add_test(
-  NAME iterate-kit-voice-loop-answer-clock-test
-  COMMAND iterate-kit-voice-loop-answer-clock-test)
+iterate_kit_add_test(
+  iterate-kit-voice-loop-answer-clock-test voice_loop_answer_clock_test.c
+  STD 11 LINK iterate-kit-voice iterate-kit-esp-idf-fakes)
 
-add_executable(iterate-kit-audio-seams-test audio_seams_test.c)
-target_compile_features(iterate-kit-audio-seams-test PRIVATE c_std_99)
-target_compile_options(iterate-kit-audio-seams-test PRIVATE
-  -UNDEBUG
-  -Wall
-  -Wextra
-  -Werror
-  -Wpedantic)
-target_link_libraries(iterate-kit-audio-seams-test PRIVATE iterate-kit-audio)
-add_test(NAME iterate-kit-audio-seams-test COMMAND iterate-kit-audio-seams-test)
+iterate_kit_add_test(iterate-kit-audio-seams-test audio_seams_test.c
+  LINK iterate-kit-audio)
 
-add_executable(iterate-kit-camera-test camera_test.c)
-target_compile_features(iterate-kit-camera-test PRIVATE c_std_99)
-target_compile_options(iterate-kit-camera-test PRIVATE
-  -UNDEBUG
-  -Wall
-  -Wextra
-  -Werror
-  -Wpedantic)
-target_link_libraries(iterate-kit-camera-test PRIVATE iterate-kit-capabilities)
-add_test(NAME iterate-kit-camera-test COMMAND iterate-kit-camera-test)
+iterate_kit_add_test(iterate-kit-camera-test camera_test.c
+  LINK iterate-kit-capabilities)
 
-add_executable(iterate-kit-health-test health_test.c)
-target_compile_features(iterate-kit-health-test PRIVATE c_std_99)
-target_compile_options(iterate-kit-health-test PRIVATE
-  -UNDEBUG
-  -Wall
-  -Wextra
-  -Werror
-  -Wpedantic)
-target_link_libraries(iterate-kit-health-test PRIVATE iterate-kit-capabilities)
-add_test(NAME iterate-kit-health-test COMMAND iterate-kit-health-test)
+iterate_kit_add_test(iterate-kit-health-test health_test.c
+  LINK iterate-kit-capabilities)
 
-add_executable(iterate-kit-push-to-talk-test push_to_talk_test.c)
-target_compile_features(iterate-kit-push-to-talk-test PRIVATE c_std_99)
-target_compile_options(iterate-kit-push-to-talk-test PRIVATE
-  -UNDEBUG
-  -Wall
-  -Wextra
-  -Werror
-  -Wpedantic)
-target_link_libraries(
-  iterate-kit-push-to-talk-test PRIVATE iterate-kit-capabilities)
-add_test(NAME iterate-kit-push-to-talk-test COMMAND iterate-kit-push-to-talk-test)
+iterate_kit_add_test(iterate-kit-push-to-talk-test push_to_talk_test.c
+  LINK iterate-kit-capabilities)
 
-function(iterate_kit_add_avatar_test NAME SOURCE)
-  add_executable(${NAME} ${SOURCE})
-  target_compile_features(${NAME} PRIVATE c_std_99)
-  target_compile_options(${NAME} PRIVATE
-    -UNDEBUG
-    -Wall
-    -Wextra
-    -Werror
-    -Wpedantic)
-  target_link_libraries(${NAME} PRIVATE iterate-kit-avatar)
-  add_test(NAME ${NAME} COMMAND ${NAME})
+function(iterate_kit_add_avatar_test NAME)
+  iterate_kit_add_test(${NAME} ${ARGN} LINK iterate-kit-avatar)
 endfunction()
 
 iterate_kit_add_avatar_test(
@@ -185,64 +140,22 @@ iterate_kit_add_avatar_test(
 
 if(APPLE)
   function(iterate_kit_add_cli_test NAME)
-    add_executable(${NAME} ${ARGN})
-    target_include_directories(
-      ${NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../targets/host_cli")
-    target_compile_features(${NAME} PRIVATE c_std_11)
-    target_compile_options(${NAME} PRIVATE
-      -UNDEBUG
-      -Wall
-      -Wextra
-      -Werror
-      -Wpedantic
-      -Wconversion
-      -Wshadow)
-    target_link_libraries(${NAME} PRIVATE iterate-kit-core)
-    add_test(NAME ${NAME} COMMAND ${NAME})
+    iterate_kit_add_test(${NAME} ${ARGN} STD 11
+      INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/../targets/host_cli"
+      OPTIONS -Wconversion -Wshadow
+      LINK iterate-kit-core)
   endfunction()
 
-  add_executable(
-    iterate-kit-darwin-audio-codec-test
-    darwin_audio_codec_test.c)
-  target_compile_features(iterate-kit-darwin-audio-codec-test PRIVATE c_std_11)
-  target_compile_options(iterate-kit-darwin-audio-codec-test PRIVATE
-    -UNDEBUG
-    -Wall
-    -Wextra
-    -Werror
-    -Wpedantic
-    -Wconversion
-    -Wshadow)
-  target_link_libraries(
-    iterate-kit-darwin-audio-codec-test PRIVATE iterate-kit-darwin)
-  add_test(
-    NAME iterate-kit-darwin-audio-codec-test
-    COMMAND iterate-kit-darwin-audio-codec-test)
+  iterate_kit_add_test(
+    iterate-kit-darwin-audio-codec-test darwin_audio_codec_test.c
+    STD 11 OPTIONS -Wconversion -Wshadow LINK iterate-kit-darwin)
 
-  add_executable(
-    iterate-kit-cli-device-controls-test
-    ../targets/host_cli/cli_device_controls.c
-    cli_device_controls_test.c)
-  target_include_directories(
-    iterate-kit-cli-device-controls-test
-    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../targets/host_cli")
-  target_compile_features(
-    iterate-kit-cli-device-controls-test PRIVATE c_std_11)
-  target_compile_options(iterate-kit-cli-device-controls-test PRIVATE
-    -UNDEBUG
-    -Wall
-    -Wextra
-    -Werror
-    -Wpedantic
-    -Wconversion
-    -Wshadow)
-  target_link_libraries(
-    iterate-kit-cli-device-controls-test PRIVATE
-    iterate-kit-capabilities
-    iterate-kit-darwin)
-  add_test(
-    NAME iterate-kit-cli-device-controls-test
-    COMMAND iterate-kit-cli-device-controls-test)
+  iterate_kit_add_test(iterate-kit-cli-device-controls-test
+    ../targets/host_cli/cli_device_controls.c cli_device_controls_test.c
+    STD 11 INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/../targets/host_cli"
+    OPTIONS -Wconversion -Wshadow
+    LINK iterate-kit-capabilities iterate-kit-darwin)
+
   iterate_kit_add_cli_test(
     iterate-kit-cli-keyboard-test
     ../targets/host_cli/cli_keyboard.c
@@ -277,80 +190,21 @@ if(APPLE)
     ../targets/host_cli/cli_wav.c
     cli_wav_test.c)
 
-  add_executable(
-    iterate-kit-darwin-audio-input-test
-    darwin_audio_input_test.c)
-  target_compile_features(iterate-kit-darwin-audio-input-test PRIVATE c_std_11)
-  target_compile_options(iterate-kit-darwin-audio-input-test PRIVATE
-    -UNDEBUG
-    -Wall
-    -Wextra
-    -Werror
-    -Wpedantic
-    -Wconversion
-    -Wshadow)
-  target_link_libraries(
-    iterate-kit-darwin-audio-input-test
-    PRIVATE iterate-kit-darwin)
-  add_test(
-    NAME iterate-kit-darwin-audio-input-test
-    COMMAND iterate-kit-darwin-audio-input-test)
+  iterate_kit_add_test(
+    iterate-kit-darwin-audio-input-test darwin_audio_input_test.c
+    STD 11 OPTIONS -Wconversion -Wshadow LINK iterate-kit-darwin)
 
-  add_executable(
-    iterate-kit-darwin-audio-output-test
-    darwin_audio_output_test.c)
-  target_compile_features(iterate-kit-darwin-audio-output-test PRIVATE c_std_11)
-  target_compile_options(iterate-kit-darwin-audio-output-test PRIVATE
-    -UNDEBUG
-    -Wall
-    -Wextra
-    -Werror
-    -Wpedantic
-    -Wconversion
-    -Wshadow)
-  target_link_libraries(
-    iterate-kit-darwin-audio-output-test
-    PRIVATE iterate-kit-darwin)
-  add_test(
-    NAME iterate-kit-darwin-audio-output-test
-    COMMAND iterate-kit-darwin-audio-output-test)
+  iterate_kit_add_test(
+    iterate-kit-darwin-audio-output-test darwin_audio_output_test.c
+    STD 11 OPTIONS -Wconversion -Wshadow LINK iterate-kit-darwin)
 
-  add_executable(
-    iterate-kit-posix-websocket-test
-    posix_websocket_test.c)
-  target_compile_features(iterate-kit-posix-websocket-test PRIVATE c_std_99)
-  target_compile_options(iterate-kit-posix-websocket-test PRIVATE
-    -UNDEBUG
-    -Wall
-    -Wextra
-    -Werror
-    -Wpedantic)
-  target_link_libraries(
-    iterate-kit-posix-websocket-test PRIVATE iterate-kit-darwin)
-  add_test(
-    NAME iterate-kit-posix-websocket-test
-    COMMAND iterate-kit-posix-websocket-test)
+  iterate_kit_add_test(iterate-kit-posix-websocket-test posix_websocket_test.c
+    LINK iterate-kit-darwin)
 
-  add_executable(
-    iterate-kit-posix-itx-transport-test
-    posix_itx_transport_test.c
-    fakes/fake_posix_websocket.c
-    ../platforms/darwin/posix_itx_transport.c)
-  target_include_directories(iterate-kit-posix-itx-transport-test PRIVATE
-    fakes
-    ../platforms/darwin/include)
-  target_compile_features(iterate-kit-posix-itx-transport-test PRIVATE c_std_99)
-  target_compile_options(iterate-kit-posix-itx-transport-test PRIVATE
-    -UNDEBUG
-    -Wall
-    -Wextra
-    -Werror
-    -Wpedantic)
-  target_link_libraries(
-    iterate-kit-posix-itx-transport-test PRIVATE iterate-kit-darwin)
-  add_test(
-    NAME iterate-kit-posix-itx-transport-test
-    COMMAND iterate-kit-posix-itx-transport-test)
+  iterate_kit_add_test(iterate-kit-posix-itx-transport-test
+    posix_itx_transport_test.c fakes/fake_posix_websocket.c
+    ../platforms/darwin/posix_itx_transport.c
+    INCLUDES fakes ../platforms/darwin/include LINK iterate-kit-darwin)
 endif()
 
 # HAVPE's adopted pure hardware policy: byte-exact register/wire vectors and
@@ -358,83 +212,44 @@ endif()
 # the device sources directly because devices/ are ESP-IDF components, not
 # host libraries; the two files under test are pure C99 by construction.
 function(iterate_kit_add_havpe_pure_test NAME)
-  add_executable(${NAME} ${ARGN})
-  target_include_directories(${NAME} PRIVATE
-    ../devices/havpe
-    ../components/core/include)
-  target_compile_features(${NAME} PRIVATE c_std_99)
-  target_compile_options(${NAME} PRIVATE
-    -UNDEBUG
-    -Wall
-    -Wextra
-    -Werror
-    -Wpedantic)
-  add_test(NAME ${NAME} COMMAND ${NAME})
+  iterate_kit_add_test(${NAME} ${ARGN}
+    INCLUDES ../devices/havpe ../components/core/include)
 endfunction()
 
-iterate_kit_add_havpe_pure_test(
-  iterate-kit-havpe-hardware-config-test
-  havpe_hardware_config_test.c
-  ../devices/havpe/voice_pe_hardware_config.c)
+iterate_kit_add_havpe_pure_test(iterate-kit-havpe-hardware-config-test
+  havpe_hardware_config_test.c ../devices/havpe/voice_pe_hardware_config.c)
 
 iterate_kit_add_havpe_pure_test(
   iterate-kit-havpe-hardware-config-aec-override-test
   havpe_hardware_config_aec_override_test.c
-  ../devices/havpe/voice_pe_hardware_config.c)
-target_compile_definitions(
-  iterate-kit-havpe-hardware-config-aec-override-test PRIVATE
-  ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE=1)
+  ../devices/havpe/voice_pe_hardware_config.c
+  DEFINES ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE=1)
 
-iterate_kit_add_havpe_pure_test(
-  iterate-kit-havpe-pcm-format-test
-  havpe_pcm_format_test.c
-  ../devices/havpe/voice_pe_pcm_format.c)
+iterate_kit_add_havpe_pure_test(iterate-kit-havpe-pcm-format-test
+  havpe_pcm_format_test.c ../devices/havpe/voice_pe_pcm_format.c)
 
 # The dial and the button: mode table (a wire contract with four provisioned
 # streams), the polled quadrature decoder, the spin-then-settle wheel policy,
 # and the wake/converse/idle session grammar.
-iterate_kit_add_havpe_pure_test(
-  iterate-kit-havpe-modes-test
-  havpe_modes_test.c
-  ../devices/havpe/havpe_modes.c)
+iterate_kit_add_havpe_pure_test(iterate-kit-havpe-modes-test
+  havpe_modes_test.c ../devices/havpe/havpe_modes.c)
 
 # StackChan's menu and side button: the two-stream mode table (a wire
 # contract like the HAVPE's), the face-tap provider menu, and the same
 # wake/converse/idle session grammar with its single end-chime edge.
 function(iterate_kit_add_stackchan_pure_test NAME)
-  add_executable(${NAME} ${ARGN})
-  target_include_directories(${NAME} PRIVATE
-    ../devices/stackchan
-    ../components/core/include)
-  target_compile_features(${NAME} PRIVATE c_std_99)
-  target_compile_options(${NAME} PRIVATE
-    -UNDEBUG
-    -Wall
-    -Wextra
-    -Werror
-    -Wpedantic)
-  add_test(NAME ${NAME} COMMAND ${NAME})
+  iterate_kit_add_test(${NAME} ${ARGN}
+    INCLUDES ../devices/stackchan ../components/core/include)
 endfunction()
 
-iterate_kit_add_stackchan_pure_test(
-  iterate-kit-stackchan-modes-test
-  stackchan_modes_test.c
-  ../devices/stackchan/stackchan_modes.c)
+iterate_kit_add_stackchan_pure_test(iterate-kit-stackchan-modes-test
+  stackchan_modes_test.c ../devices/stackchan/stackchan_modes.c)
 
 # StackChan's adopted pure DSP primitives (components/audio): the AEC cadence
 # bridge, reference scaler, uplink selector, and near high-pass, each with the
 # donor's host tests. They link the audio component, not core.
-function(iterate_kit_add_audio_test NAME SOURCE)
-  add_executable(${NAME} ${SOURCE})
-  target_compile_features(${NAME} PRIVATE c_std_99)
-  target_compile_options(${NAME} PRIVATE
-    -UNDEBUG
-    -Wall
-    -Wextra
-    -Werror
-    -Wpedantic)
-  target_link_libraries(${NAME} PRIVATE iterate-kit-audio)
-  add_test(NAME ${NAME} COMMAND ${NAME})
+function(iterate_kit_add_audio_test NAME)
+  iterate_kit_add_test(${NAME} ${ARGN} LINK iterate-kit-audio)
 endfunction()
 
 iterate_kit_add_audio_test(
@@ -448,21 +263,6 @@ iterate_kit_add_audio_test(
 
 # The capture reserve is StackChan's ISR-side raw ring; pure C outside
 # ESP_PLATFORM, built from the device sources like the HAVPE modules.
-add_executable(
-  iterate-kit-core-s3-capture-reserve-test
-  core_s3_capture_reserve_test.c
+iterate_kit_add_stackchan_pure_test(
+  iterate-kit-core-s3-capture-reserve-test core_s3_capture_reserve_test.c
   ../devices/stackchan/core_s3_capture_reserve.c)
-target_include_directories(iterate-kit-core-s3-capture-reserve-test PRIVATE
-  ../devices/stackchan
-  ../components/core/include)
-target_compile_features(
-  iterate-kit-core-s3-capture-reserve-test PRIVATE c_std_99)
-target_compile_options(iterate-kit-core-s3-capture-reserve-test PRIVATE
-  -UNDEBUG
-  -Wall
-  -Wextra
-  -Werror
-  -Wpedantic)
-add_test(
-  NAME iterate-kit-core-s3-capture-reserve-test
-  COMMAND iterate-kit-core-s3-capture-reserve-test)

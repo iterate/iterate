@@ -143,60 +143,19 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.1.1
-  espressif/esp_lvgl_port:
-    component_hash: d3c020b45c3dfc0d1706a83b63a1c34a6eb444a6e935f9afff79f92b7b94dcef
-    dependencies:
-    - name: idf
-      require: private
-      version: '>=5.2'
-    - name: lvgl/lvgl
-      registry_url: https://components.espressif.com
-      require: public
-      version: '>=8,<10'
-    source:
-      registry_url: https://components.espressif.com/
-      type: service
-    version: 2.9.0
-  espressif/m5stack_core_s3:
-    dependencies:
-    - name: espressif/esp32-camera
-      public: true
-      version: ^2.0.11
-    - name: espressif/esp_codec_dev
-      public: true
-      version: ~1.5
-    - name: espressif/esp_lcd_ili9341
-      version: ^2.0.1
-    - name: espressif/esp_lcd_touch_ft5x06
-      version: ^1
-    - name: espressif/esp_lvgl_port
-      public: true
-      version: ^2
-    - name: idf
-      version: '>=5.4'
-    source:
-      path: /Users/jonastemplestein/.herdr/worktrees/iterate/stream-for-audio/apps/kit/firmware/platforms/iterate_esp_idf/idf_overrides/espressif__m5stack_core_s3
-      type: local
-    targets:
-    - esp32s3
-    version: 3.0.2
   idf:
     source:
       type: idf
     version: 5.4.2
-  lvgl/lvgl:
-    component_hash: 184e532558c1c45fefed631f3e235423d22582aafb4630f3e8885c35281a49ae
-    dependencies: []
-    source:
-      registry_url: https://components.espressif.com
-      type: service
-    version: 9.5.0
 direct_dependencies:
 - capnweb
 - espressif/esp-sr
+- espressif/esp32-camera
+- espressif/esp_codec_dev
 - espressif/esp_jpeg
-- espressif/m5stack_core_s3
+- espressif/esp_lcd_ili9341
+- espressif/esp_lcd_touch_ft5x06
 - idf
-manifest_hash: 80be19121832a90664628e506911f3419b9e625f3622922627549bcc9e20c59f
+manifest_hash: 22cdf3d6ecaa1080445327cc01d7a6829fb90586b07bb744254652095897738f
 target: esp32s3
 version: 2.0.0

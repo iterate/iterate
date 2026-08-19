@@ -27,7 +27,7 @@
 #include <stdatomic.h>
 #include <string.h>
 
-#include "bsp/esp-bsp.h"
+#include "bsp/m5stack_core_s3.h"
 #include "driver/i2s_std.h"
 #include "driver/i2s_tdm.h"
 #include "esp_codec_dev.h"

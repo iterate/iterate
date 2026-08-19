@@ -1,0 +1,142 @@
+{
+  "assembly_cell": [400, 400],
+  "assembly_gap": 24,
+  "background": "#9bbc0f",
+  "display_name": "Game Boy Robot",
+  "expressions": "canonical11",
+  "flags": ["breathe"],
+  "id": "gameboy-bot",
+  "license": "project-generated",
+  "notes": "Original AI-assisted robot art generated for this project. StackChan deploys the light Game Boy ink on a true-black LCD background; the light-background source remains only as immutable pipeline provenance.",
+  "palette": {
+    "despeckle": false,
+    "locked": ["#0f380f", "#306230", "#8bac0f", "#9bbc0f"],
+    "max_colors": 4,
+    "variants": [
+      {
+        "background": "#000000",
+        "colors": ["#9bbc0f", "#8bac0f", "#306230", "#0f380f"],
+        "display_name": "Light on true black",
+        "id": "dark"
+      }
+    ]
+  },
+  "rig": {
+    "baseline_y": 60,
+    "canvas": [80, 60],
+    "eyes": {
+      "blink": "none",
+      "left": [7, 13, 27, 22],
+      "right": [46, 13, 27, 22]
+    },
+    "composition": {
+      "mode": "features_only",
+      "regions": [
+        [7, 0, 27, 30],
+        [46, 0, 27, 30]
+      ],
+      "brows": {
+        "color": "#0f380f",
+        "thickness": 1,
+        "poses": {
+          "neutral": {
+            "left": [18, 16, 31, 16],
+            "right": [49, 16, 62, 16]
+          },
+          "warm": {
+            "left": [18, 18, 31, 16],
+            "right": [49, 16, 62, 18]
+          },
+          "joy": {
+            "left": [18, 16, 31, 14],
+            "right": [49, 14, 62, 16]
+          },
+          "surprise": {
+            "left": [18, 14, 31, 14],
+            "right": [49, 14, 62, 14]
+          },
+          "sleepy": {
+            "left": [18, 24, 31, 23],
+            "right": [49, 23, 62, 24]
+          },
+          "excited": {
+            "left": [18, 14, 31, 13],
+            "right": [49, 13, 62, 14]
+          },
+          "embarrassed": {
+            "left": [18, 18, 31, 16],
+            "right": [49, 16, 62, 18]
+          }
+        }
+      },
+      "transparent_colors": ["#c8d722"],
+      "transparent_tolerance": 24
+    },
+    "max_body": [80, 58],
+    "mouth": {
+      "box": [25, 44, 30, 13],
+      "erase": false,
+      "source": "isolated"
+    }
+  },
+  "sources": [
+    {
+      "background_tolerance": 96,
+      "grid": [4, 3],
+      "inset": 4,
+      "names": [
+        "neutral",
+        "warm",
+        "joy",
+        "concern",
+        "surprise",
+        "thoughtful",
+        "skeptical",
+        "determined",
+        "sleepy",
+        "excited",
+        "embarrassed",
+        null
+      ],
+      "path": "source/expressions-light-v1.png",
+      "role": "expression"
+    },
+    {
+      "background_tolerance": 96,
+      "grid": [5, 3],
+      "inset": 4,
+      "names": [
+        "sil",
+        "pp",
+        "ff",
+        "th",
+        "dd",
+        "kk",
+        "ch",
+        "ss",
+        "nn",
+        "rr",
+        "aa",
+        "e",
+        "ih",
+        "oh",
+        "ou"
+      ],
+      "path": "source/mouths-v1.png",
+      "role": "mouth"
+    }
+  ],
+  "targets": [
+    {
+      "canvas": [80, 60],
+      "frame": [160, 120],
+      "framing": "face_fill",
+      "id": "cores3-fine",
+      "catalog_slug": "gameboy-fine-black",
+      "catalog_name": "GB fine light-on-black",
+      "device_themes": [],
+      "max_flash_bytes": 48000,
+      "scale": 2
+    }
+  ]
+}

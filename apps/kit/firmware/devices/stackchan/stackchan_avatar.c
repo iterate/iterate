@@ -11,9 +11,7 @@
 #include "iterate/kit/face_wake.h"
 #include "iterate/kit/touch_tap.h"
 
-#include "bsp/display.h"
 #include "bsp/m5stack_core_s3.h"
-#include "bsp/touch.h"
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_lcd_panel_io.h"

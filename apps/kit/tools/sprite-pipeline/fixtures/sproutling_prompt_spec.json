@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "id": "sproutling",
+  "display_name": "Sproutling",
+  "license": "CC0-1.0",
+  "notes": "Prompt-source example: run `spritepipe.py brief --spec fixtures/sproutling_prompt_spec.json --out <dir>` to get the constrained sheet request for an image model, then build the returned sheet with --sheet.",
+  "source": {
+    "kind": "prompt",
+    "prompt": "A tiny cheerful forest sprite: a round mossy green body with stubby feet, two big dark friendly eyes, a single leaf sprout on top of its head, drawn as chunky retro pixel art with a dark outline.",
+    "background": "auto",
+    "background_tolerance": 24,
+    "pixel_grid": "auto"
+  },
+  "layout": {
+    "mode": "bands",
+    "row_gap": 10,
+    "column_gap": 8,
+    "rows": [
+      {
+        "role": "expression",
+        "names": ["neutral", "warm", "joy", "concern", "surprise", "thoughtful"]
+      },
+      {
+        "role": "expression",
+        "names": ["skeptical", "determined", "sleepy", "excited", "embarrassed"]
+      },
+      {
+        "role": "mouth",
+        "names": ["sil", "pp", "grin", "tongue", "lateral"]
+      },
+      {
+        "role": "mouth",
+        "names": ["aa", "oh", "ou", "ih", "gasp"]
+      }
+    ]
+  },
+  "rig": {
+    "canvas": [80, 60],
+    "baseline_y": 56,
+    "max_body": [74, 53],
+    "mouth": {
+      "box": [25, 36, 30, 16],
+      "erase": true
+    },
+    "eyes": {
+      "left": [24, 20, 14, 12],
+      "right": [42, 20, 14, 12],
+      "blink": "synth"
+    }
+  },
+  "palette": {
+    "max_colors": 15,
+    "locked": null,
+    "despeckle": true
+  },
+  "expressions": "canonical11",
+  "flags": ["auto_blink", "breathe"],
+  "targets": [
+    {
+      "id": "cores3-face",
+      "framing": "face_fill",
+      "scale": 2,
+      "max_flash_bytes": 65536
+    },
+    {
+      "id": "pocket-stage",
+      "framing": "stage",
+      "canvas": [40, 30],
+      "scale": 1,
+      "margin": 2,
+      "max_flash_bytes": 32768
+    }
+  ]
+}

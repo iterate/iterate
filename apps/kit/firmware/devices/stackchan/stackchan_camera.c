@@ -191,7 +191,7 @@ static bool start_sensor(void) {
    *
    * The CoreS3 gates the sensor rail through the AW9523 expander, and the BSP
    * raises it inside bsp_display_new() — camera and LCD are enabled together
-   * there (see the vendored m5stack_core_s3.c, BSP_FEATURE_CAMERA beside
+   * there (see core_s3_board.c, BSP_FEATURE_CAMERA beside
    * BSP_FEATURE_LCD). The same call brings up the I2C bus the sensor's SCCB
    * control channel borrows (its sccb pins are NC and its port is the BSP's).
    * So there is deliberately no rail or bus work here: doing it again would

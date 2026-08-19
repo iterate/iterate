@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "id": "moonscope",
+  "display_name": "Moonscope",
+  "license": "project-generated",
+  "notes": "Prompt spec for the serene lunar-observatory bot avatar; see characters/moonscope/avatar.json for the build recipe.",
+  "source": {
+    "kind": "prompt",
+    "prompt": "A serene lunar observatory robot: two big round telescope-lens porthole eyes with concentric rim rings and soft glowing pupils, thin calm arc eyebrows floating above, and a small gentle mouth. Everything round, smooth, and quiet like moonlight on an observatory dome, drawn as chunky retro pixel art with flat fills.",
+    "background": "#ff00ff",
+    "background_tolerance": 96,
+    "pixel_grid": "auto"
+  },
+  "layout": {
+    "mode": "bands",
+    "row_gap": 10,
+    "column_gap": 8,
+    "rows": [
+      {
+        "role": "expression",
+        "names": ["neutral", "warm", "joy", "concern"]
+      },
+      {
+        "role": "expression",
+        "names": ["surprise", "thoughtful", "skeptical", "determined"]
+      },
+      {
+        "role": "expression",
+        "names": ["sleepy", "excited", "embarrassed"]
+      },
+      {
+        "role": "mouth",
+        "names": ["sil", "pp", "ff", "th", "dd"]
+      },
+      {
+        "role": "mouth",
+        "names": ["kk", "ch", "ss", "nn", "rr"]
+      },
+      {
+        "role": "mouth",
+        "names": ["aa", "e", "ih", "oh", "ou"]
+      }
+    ]
+  },
+  "rig": {
+    "canvas": [80, 60],
+    "baseline_y": 43,
+    "max_body": [76, 42],
+    "mouth": {
+      "box": [23, 45, 34, 13],
+      "erase": false
+    },
+    "eyes": {
+      "left": [4, 6, 32, 31],
+      "right": [44, 6, 32, 31],
+      "blink": "none"
+    }
+  },
+  "palette": {
+    "max_colors": 4,
+    "locked": ["#1b1035", "#5b4a9e", "#a99ae6", "#f4f0ff"],
+    "despeckle": false
+  },
+  "expressions": "canonical11",
+  "flags": ["breathe"],
+  "targets": [
+    {
+      "id": "cores3-fine",
+      "framing": "face_fill",
+      "scale": 2,
+      "canvas": [80, 60],
+      "max_flash_bytes": 48000
+    }
+  ]
+}

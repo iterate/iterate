@@ -1,0 +1,16 @@
+# The managed drivers the distilled CoreS3 board file is built on.  These
+# used to arrive through the vendored espressif/m5stack_core_s3 BSP manifest;
+# esp32-camera stays public because consumers instantiate
+# BSP_CAMERA_DEFAULT_CONFIG from our public header.
+dependencies:
+  esp32-camera:
+    public: true
+    version: ^2.0.11
+  esp_codec_dev:
+    public: true
+    version: ~1.5
+  esp_lcd_ili9341: ^2.0.1
+  esp_lcd_touch_ft5x06: ^1
+  idf: ">=5.4"
+description: First-party M5Stack CoreS3 board support, distilled for StackChan
+version: 1.0.0
