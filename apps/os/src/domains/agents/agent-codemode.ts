@@ -41,6 +41,13 @@ export class AgentCodemode implements AgentComponent {
 
   processEvent(args: ProcessEventArgs<AgentProcessorContract>): undefined {
     const { event, previousState, state, blockProcessorWhile, append } = args;
+    // The component-level off switch: with default parsing disabled this
+    // component does NOTHING — no slash commands, no response parsing, no
+    // settlement rendering. Project code consumes the raw events and appends
+    // these same consequences itself, minting the same fixed `agent/`
+    // idempotency keys, so flipping the flag mid-life dedupes instead of
+    // double-executing.
+    if (!state.config.enableDefaultLlmResponseParsing) return;
     switch (event?.type) {
       case "events.iterate.com/agents/context-added": {
         const payload = event.payload;

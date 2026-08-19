@@ -26,6 +26,7 @@ function deliver(
     type: string;
     path: string;
     payload?: Record<string, unknown>;
+    source?: Record<string, unknown>;
   },
 ): Promise<void> {
   return worker.processEventBatch({ events: [event] } as never);
@@ -196,8 +197,6 @@ test("project lifecycle cases directly install and handle the default heartbeat"
   const append = vi.fn(async (input: unknown) => [input]);
   const project = {
     repos: { list: async () => [] },
-    // The worker-updated case re-publishes the repo's prompt file as the
-    // project's agent birth defaults.
     repo: {
       readFile: async (input: { path: string }) =>
         input.path === "prompts/agent-system-prompt.md" ? { content: "PROMPT TEXT\n" } : null,
@@ -247,27 +246,10 @@ test("project lifecycle cases directly install and handle the default heartbeat"
   );
   expect(configured.script).toContain("payload: { scheduleKey: schedule.key }");
 
-  // The same case publishes the repo's prompt file as birth defaults under
-  // the generic per-key defaults event: one prompt-slot event,
-  // newline-stripped (matching the platform's embedded copy), under a
-  // content-hash key — an unchanged file republishes the SAME occurrence, so
-  // redeliveries dedupe server-side.
-  expect(append).toHaveBeenCalledTimes(2);
-  expect(append.mock.calls[0]![0]).toMatchObject({
-    type: "events.iterate.com/project/defaults-configured",
-    payload: {
-      key: "agents/birth-defaults",
-      value: {
-        birthEvents: [
-          {
-            type: "events.iterate.com/agents/context-added",
-            payload: { content: "PROMPT TEXT", key: "agent/system-prompt", role: "system" },
-          },
-        ],
-      },
-    },
-  });
-  expect(append.mock.calls[1]![0]).toEqual(append.mock.calls[0]![0]);
+  // Worker-updated appends nothing: agent configuration is a REACTION to
+  // each agent/created (see the birth-reaction test below), not a standing
+  // publish.
+  expect(append).not.toHaveBeenCalled();
 
   const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
   await deliver(worker, {
@@ -307,6 +289,90 @@ test("project lifecycle cases directly install and handle the default heartbeat"
   for (const event of ignored) await deliver(worker, event);
   expect(set).toHaveBeenCalledTimes(2);
   expect(log).toHaveBeenCalledOnce();
+});
+
+test("the birth reaction shapes each newborn and lowers the debounce as its last word", async () => {
+  const makeReactionWorker = (promptFileContent: string) => {
+    const append = vi.fn(async (...events: unknown[]) => events);
+    const snapshot = vi.fn(async () => ({
+      state: {
+        contextItems: [
+          // The platform's embedded prompt slot, newline-stripped at birth.
+          { offset: 5, payload: { key: "agent/system-prompt", content: "PROMPT TEXT" } },
+        ],
+      },
+    }));
+    const project = {
+      repo: {
+        readFile: vi.fn(async (input: { path: string }) => {
+          if (input.path === "prompts/agent-system-prompt.md")
+            return { content: promptFileContent };
+          if (input.path === "AGENTS.md") return { content: "Project notes." };
+          return null;
+        }),
+      },
+      agents: { get: vi.fn(() => ({ append, processor: { snapshot } })) },
+      [Symbol.dispose]: vi.fn(),
+    };
+    const worker = new ProjectWorker(
+      {} as never,
+      {
+        ITERATE_WORKER_VERSION: "test",
+        ITX: { get: vi.fn(() => pipelinedProject(project)) },
+      } as never,
+    );
+    return { worker, append, project };
+  };
+
+  // Unforked prompt file (byte-identical to the platform's embedded copy):
+  // no supersession — just the AGENTS.md sync, the house style, and the
+  // debounce lowered LAST (the done-configuring signal).
+  const unforked = makeReactionWorker("PROMPT TEXT\n");
+  await deliver(unforked.worker, {
+    type: "events.iterate.com/agent/created",
+    path: "/agents/demo",
+    payload: {},
+  });
+  expect(unforked.project.agents.get).toHaveBeenCalledWith("/agents/demo");
+  const unforkedEvents = unforked.append.mock.calls.flat() as {
+    type: string;
+    payload: Record<string, unknown>;
+  }[];
+  expect(unforkedEvents.map((event) => event.payload.key || event.type)).toEqual([
+    "config/agents-md",
+    "config/house-style",
+    "events.iterate.com/agent/configured",
+  ]);
+  expect(unforkedEvents.at(-1)).toMatchObject({
+    type: "events.iterate.com/agent/configured",
+    idempotencyKey: "iterate/config/agent-birth-configured:v1",
+    payload: { config: { llmRequestDebounceMs: 250 } },
+  });
+
+  // Forked prompt file: the repo's version supersedes the platform slot.
+  const forked = makeReactionWorker("FORKED PROMPT\n");
+  await deliver(forked.worker, {
+    type: "events.iterate.com/agent/created",
+    path: "/agents/demo",
+    payload: {},
+  });
+  const forkedEvents = forked.append.mock.calls.flat() as {
+    type: string;
+    payload: Record<string, unknown>;
+  }[];
+  expect(forkedEvents.find((event) => event.payload.key === "agent/system-prompt")).toMatchObject({
+    payload: { content: "FORKED PROMPT", role: "system" },
+  });
+
+  // Copies to the collection stream never re-trigger the reaction.
+  const copied = makeReactionWorker("PROMPT TEXT\n");
+  await deliver(copied.worker, {
+    type: "events.iterate.com/agent/created",
+    path: "/agents",
+    payload: {},
+    source: { copiedFrom: { path: "/agents/demo", offset: 1 } },
+  });
+  expect(copied.append).not.toHaveBeenCalled();
 });
 
 test("packaged apps stay behind the thin router", () => {

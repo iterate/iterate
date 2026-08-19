@@ -423,11 +423,8 @@ import {
 } from "./domains/email/email-processor-contract.ts";
 import { EmailAgentProcessorContract } from "./domains/email/email-agent-processor-contract.ts";
 import {
-  AGENT_BIRTH_DEFAULTS_KEY,
-  AgentBirthDefaults,
   agentCollectionCreationEvents,
   agentCreationForPath,
-  validateAgentBirthEvents,
   type AgentCreateInput,
 } from "./domains/agents/agent-defaults.ts";
 import { ChatReplyNotifyProcessorContract } from "./domains/notifications/chat-reply-notify-contract.ts";
@@ -2190,58 +2187,6 @@ class ClientsRpcTarget extends IterateRpcTarget<"Clients"> {
  * bases normalize). Absent (id-only boot line) when the directory has no
  * record yet — never a birth blocker.
  */
-/**
- * The project's agent birth defaults, read from the generic per-key defaults
- * store on the project processor's fold (`state.defaults` — raw latest value
- * per key; the project holds it opaquely). THIS is where the agents domain
- * interprets its key: schema parse plus the agent-vocabulary/allowlist check,
- * both at the read site so the project contract never learns what an agent
- * is. Absent, malformed, non-matching, or unreadable → no defaults — a
- * broken or missing defaults declaration must degrade to platform-default
- * births, never break agent creation (and never fall back to a stale
- * predecessor: the raw latest is all the fold keeps).
- */
-async function agentBirthDefaultsForProject(props: {
-  agentPath: string;
-  auth: ItxAuth;
-  projectId: string;
-}): Promise<{ defaults?: AgentBirthDefaults }> {
-  try {
-    const { state } = await facetProcessorRelay<ProjectProcessorState>({
-      auth: props.auth,
-      name: ProjectProcessorContract.slug,
-      path: "/",
-      projectId: props.projectId,
-    }).snapshot();
-    const raw = state.defaults[AGENT_BIRTH_DEFAULTS_KEY];
-    if (raw === undefined) return {};
-    const parsed = AgentBirthDefaults.safeParse(raw);
-    if (!parsed.success) {
-      console.warn("[agent] ignoring malformed agent birth defaults; using platform defaults", {
-        error: parsed.error.message,
-        projectId: props.projectId,
-      });
-      return {};
-    }
-    const check = validateAgentBirthEvents(parsed.data.birthEvents);
-    if (!check.ok) {
-      console.warn("[agent] ignoring invalid agent birth defaults; using platform defaults", {
-        error: check.error,
-        projectId: props.projectId,
-      });
-      return {};
-    }
-    const pathPrefix = parsed.data.matches?.pathPrefix;
-    if (pathPrefix !== undefined && !props.agentPath.startsWith(pathPrefix)) return {};
-    return { defaults: parsed.data };
-  } catch (error) {
-    console.warn("[agent] agent birth defaults read failed; using platform defaults", {
-      error: String(error),
-      projectId: props.projectId,
-    });
-    return {};
-  }
-}
 
 async function agentBootProjectFacts(
   projectId: string,
@@ -5080,16 +5025,21 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       projectId: this.#props.projectId,
     });
     const workspaceReady = workspace.create({});
+    // Newborn probe: the high-initial-debounce birth config (the window in
+    // which the project's config worker customizes this agent before its
+    // first turn) belongs to BRAND-NEW streams only. create() is
+    // get-or-create and revision-bumped batch events deliberately land on
+    // existing agents as upgrades — but a late high-debounce event would
+    // overwrite the worker's lowered value, so it needs this existence
+    // gate. Race-safe: concurrent creates that both read an empty stream
+    // append identical batches, which dedupe on their idempotency keys.
+    const preexisting = (await this.stream.getEvents({ limit: 1 })).length > 0;
     const creation = agentCreationForPath({
       agentPath: this.#path,
       projectId: this.#props.projectId,
+      highInitialDebounce: !preexisting,
       ...(payload === undefined ? {} : { payload }),
       ...(await agentBootProjectFacts(this.#props.projectId)),
-      // Project-level birth defaults (driver, prompt, extra processor
-      // subscriptions) apply to every agent born through this generic door;
-      // integration routers use their own creation calls with explicit
-      // policies and never pick these up.
-      ...(await agentBirthDefaultsForProject({ ...this.#props, agentPath: this.#path })),
       // Plain chat threads (mobile + web — everything born through this
       // generic door) get the chat-reply push producer as their sibling.
       // Integration threads (Slack/Telegram/Email) are born elsewhere with

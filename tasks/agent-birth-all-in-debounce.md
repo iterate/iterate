@@ -9,8 +9,10 @@ supersedes: agent-birth-userland-refactor (PR #2507, to be closed)
 ## Status summary
 
 Spec settled via plannotator (2 rounds, approved 2026-08-19). Implementation
-starting. Branch lives on the root worktree per request; commits pushed, no PR
-yet — proposed PR body at the bottom.
+complete: platform, all three templates, tests, codegen. Full suite verified
+locally. Branch lives on the root worktree per request; commits pushed, no PR
+yet — proposed PR body at the bottom. #2507 closed as superseded. Main open
+question for discussion: the existing-projects migration consequence below.
 
 ## The decided model
 
@@ -66,33 +68,44 @@ and the #2507 readiness-machinery approach (open draft, to be closed).
 
 ## Checklist
 
-- [ ] Task file spec commit (this file)
-- [ ] Delete #2497 stored wishes: `AgentBirthDefaults`,
-      `validateAgentBirthEvents`, `AGENT_BIRTH_DEFAULTS_KEY`, subscription
-      allowlist, `defaults` folding in `agentCreationForPath`,
-      `readAgentBirthDefaults` + create-site reads in rpc-targets.ts,
-      `AgentBirthDefaultsValue` in packages/iterate/src/sdk.ts, and the
-      project processor's generic defaults store if agents was its only
-      consumer
-- [ ] Contract: add `enableDefaultLlmResponseParsing` (default true);
-      deprecate `driver` (tolerated in configured payload; fold maps
-      agent-headless → parsing off); version bump
-- [ ] Merge headless into `AgentProcessor` (flag-gate the interpretation
-      component); delete agent-headless-processor.ts; alias-register
-      `"agent-headless"` in processor-facet-durable-object.ts
-- [ ] create(): explicit birth config event (parsing on, debounce 10s)
-- [ ] configs/default: birth reaction (debounce 250 + lowercase context);
-      delete birth-defaults publishing
-- [ ] configs/codemode-tag: birth reaction (parsing off, debounce 250, XML
-      codemode prompt); parser → XML dialect; delete defaults publishing +
-      driver handover
-- [ ] configs/with-voice: migrate same shape
-- [ ] Tests: birth-config assertions; flag-off behavior (repurpose headless
-      tests); organic-early-release spec (config append mid-window fires the
-      request early); remove defaults-store tests
-- [ ] format → lint:fix → knip → regenerate template codegen + itx-api →
-      full test suite
-- [ ] Push; close #2507 with a link here
+- [x] Task file spec commit (this file) _committed first as `ecc65fb1a`_
+- [x] Delete #2497 stored wishes _`agent-defaults.ts` (schema, validator,
+      allowlist, folding), `readAgentBirthDefaults` in rpc-targets.ts,
+      `AgentBirthDefaultsValue` in sdk.ts, and the project processor's
+      generic defaults store (`project/defaults-configured` + state.defaults
+      — agents was its only consumer)_
+- [x] Contract: `enableDefaultLlmResponseParsing` + driver deprecation
+      _v6.0.0; fold shim in agent-prompt-fold.ts maps driver→flag, explicit
+      flag wins; stale "measured from FIRST trigger" debounce description
+      fixed in passing (the fold anchors to the NEWEST trigger)_
+- [x] Merge headless into `AgentProcessor` _flag gate lives at the top of
+      AgentCodemode.processEvent; agent-headless-processor.ts is now a
+      registered no-op stub (subscriptions can't be removed, so old streams'
+      "agent-headless" deliveries must resolve); liveState reads one fold_
+- [x] create(): explicit birth config event _`agent/birth-config:v1` —
+      parsing on, debounce 10s. NEWBORN-GATED: create() is get-or-create and
+      revision-bumped batch events deliberately land on existing agents as
+      upgrades, so a `getEvents({limit: 1})` probe skips the event for
+      pre-existing streams (a late 10s event would overwrite the worker's
+      lowered value). Integration routers pass highInitialDebounce: false —
+      their agents carry explicit prompts at birth and keep 250ms_
+- [x] configs/default _#configureNewbornAgent on agent/created: forked-prompt
+      supersession (read-compare vs the platform slot), lowercase
+      house-style context, debounce 250 last; worker-updated publish deleted_
+- [x] configs/codemode-tag _birth reaction (parsing off + XML prompt +
+      debounce 250, one atomic batch), deploy-time #convertAgents sweep for
+      pre-existing agents, driver-handover + idle-wait machinery deleted;
+      interpreter now gates on a per-turn snapshot of the parsing flag
+      (platform stamp alone no longer distinguishes who owns the turn)_
+- [x] configs/with-voice _minimal reaction: lower the debounce, nothing else_
+- [x] Tests _agent-response-parsing.test.ts (renamed from headless test):
+      flag-off loop, driver shim, stub inertness; agent-processor.test.ts:
+      the birth-hold/organic-early-release spec + dead-worker degrade spec;
+      agent-defaults.test.ts: birth-config in/out; template test: birth
+      reaction incl. copied-event guard; defaults-store tests removed_
+- [x] format → lint:fix → knip → codegen → full suite _lint:fix regenerates
+      the template codegen; itx-api regenerated post-format_
+- [x] Push; close #2507 with a link here _closed as superseded_
 
 ## Proposed PR body
 
@@ -118,9 +131,12 @@ and the #2507 readiness-machinery approach (open draft, to be closed).
 > ```
 >
 > - `enableDefaultLlmResponseParsing` replaces `config.driver`; the
->   headless processor and contract are deleted (flag-off = old headless
->   semantics; `driver: "agent-headless"` still parses and maps to the flag
->   for existing streams).
+>   headless processor is reduced to a registered no-op stub (flag-off = old
+>   headless semantics; `driver: "agent-headless"` still parses and maps to
+>   the flag for existing streams).
+> - The 10s birth event is gated to brand-new streams by an existence
+>   probe: create() is get-or-create, and a late 10s event would overwrite
+>   the worker's lowered debounce on existing agents.
 > - The #2497 project birth-defaults store (`agents/birth-defaults` wishes)
 >   is deleted — the reactive path replaces it.
 > - codemode-tag's LLM dialect switches from ```ts fences to XML
@@ -135,3 +151,30 @@ and the #2507 readiness-machinery approach (open draft, to be closed).
 - 2026-08-19: branch created on root worktree; spec committed before
   implementation. Plannotator rounds recorded in
   `explainers.ignoreme/agent-birth-all-in-debounce-plan.html` (gitignored).
+- 2026-08-19: implementation in one pass. Judgment calls beyond the spec:
+  - **Newborn probe in create()** (the one piece of the spec that grew):
+    the plan said "explicit 10s event in the birth batch", but create() is
+    get-or-create — agents call `child.create()` routinely, and the batch's
+    revision-bumped events deliberately land on existing agents as
+    upgrades. An unconditional new event would therefore hit EXISTING
+    agents on their next re-create and overwrite the worker's lowered
+    debounce with 10s, permanently. A `getEvents({limit: 1})` existence
+    probe gates the event to brand-new streams; race-safe because
+    concurrent creates that both see an empty stream append identical
+    batches that dedupe on keys.
+  - **Driver shim instead of hard delete**: old `agent/configured` events
+    (and old seeded worker code still deployed in project repos) carry
+    `config.driver`. Rather than letting them fail strict schema and skip,
+    the configured payload tolerates the field and the fold maps
+    `agent-headless` → parsing off — existing converted agents keep exact
+    semantics with ~6 lines, marked for deletion later.
+  - **codemode-tag interpreter gate**: previously "stamped by the headless
+    slug" implied "converted stream". With one processor the stamp no
+    longer distinguishes, so the interpreter snapshots the agent's parsing
+    flag once per assistant turn — parsing on → the platform owns the
+    turn, skip (prevents double chat messages in the degraded-start
+    window).
+  - Deleted the project processor's generic defaults store entirely
+    (event + state.defaults): the agents key was its only consumer.
+  - Deleted two stray `*.ignoreme.ts` scratch files in apps/os that broke
+    typecheck (left over from an earlier debugging session).

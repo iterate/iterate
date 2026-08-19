@@ -38,14 +38,13 @@ export {
  * shared reduce (`reduceAgentEvent`, agent-prompt-fold.ts — also imported
  * off-runtime by lib/llm-request-replay.ts, so it stays transport-free); the
  * one in-memory edge is the turn loop telling the LLM component to run or
- * abort. A variant processor is the same wiring with an element swapped or
- * dropped — a different response format, or no codemode component at all
- * (the "headless" lane, where project code interprets assistant output).
+ * abort. The codemode component switches itself off when
+ * `config.enableDefaultLlmResponseParsing` is false — project code consumes
+ * the raw assistant output events and appends the consequences itself.
  *
- * Idempotency keys are minted through the host in the FIXED `agent/`
- * namespace, not the hosting contract's slug: a stream handed between the
- * classic processor and a variant dedupes every recorded consequence instead
- * of re-executing scripts under a fresh prefix.
+ * Idempotency keys are minted in the FIXED `agent/` namespace, so a
+ * userland interpreter appending the same recorded consequences dedupes
+ * against this processor instead of double-executing.
  */
 export class AgentProcessor extends StreamProcessor<AgentProcessorContract, AgentProcessorDeps> {
   readonly contract = AgentProcessorContract;
@@ -54,11 +53,6 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   });
 
   protected override processEvent(args: ProcessEventArgs<AgentProcessorContract>): undefined {
-    // Stand down entirely when another registered processor drives this
-    // stream (config.driver — hosted-processor subscriptions cannot be
-    // removed, so streams subscribed to both rely on this selection). The
-    // fold still runs above, so reads and a later hand-back stay coherent.
-    if (args.state.config.driver !== "agent") return;
     for (const component of this.#components) component.processEvent(args);
   }
 
@@ -90,7 +84,7 @@ function buildAgentComponents(
  * class's members are protected, so the adapter reaches them through a
  * scoped cast rather than widening them to public. `idempotencyKey` is
  * pinned to the `agent/` namespace on purpose; see the class doc. */
-export function agentComponentHost(processor: object): AgentHost {
+function agentComponentHost(processor: object): AgentHost {
   const p = processor as {
     deps: AgentProcessorDeps;
     stream: { readEvents: AgentHost["readEvents"] };

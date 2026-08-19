@@ -584,32 +584,15 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
     // work (stream-committed requested/started obligations whose OUTCOME
     // matters). An incarnation that dies owing either must be revived.
     const agentProcessor = registry.register(new AgentProcessor(agentArgs), { recovery: true });
-    // The headless variant (same wiring minus the codemode component; see
-    // agent-headless-processor.ts). Registered on every agent facet host,
-    // woken only on streams subscribed to its name — an agent runs under
-    // exactly ONE of the two, so shared `agent/` idempotency keys make a
-    // handover dedupe instead of double-executing.
-    const headlessProcessor = registry.register(new HeadlessAgentProcessor(agentArgs), {
-      recovery: true,
-    });
+    // Retired-slug stub (see agent-headless-processor.ts): accepts
+    // deliveries for streams still subscribed under "agent-headless" and
+    // does nothing — their "agent" subscription drives them. No recovery:
+    // the stub owes no work.
+    registry.register(new HeadlessAgentProcessor(agentArgs), { recovery: false });
     const agentReads = registry.reads(agentProcessor);
-    const headlessReads = registry.reads(headlessProcessor);
-    this.#getLiveState = (): AgentLiveState => {
-      // An agent runs under the classic OR the headless processor. After a
-      // handover the retired processor's fold stays FROZEN at its last
-      // transition, so precedence must go to the newer stamp — a
-      // classic-first fallback would mask every headless update behind the
-      // frozen classic fold on opted-in agents.
-      const classic = agentReads.currentState.runtimeChange;
-      const headless = headlessReads.currentState.runtimeChange;
-      const newer =
-        classic === undefined
-          ? headless
-          : headless === undefined || classic.sinceOffset >= headless.sinceOffset
-            ? classic
-            : headless;
-      return { runtimeChange: newer };
-    };
+    this.#getLiveState = (): AgentLiveState => ({
+      runtimeChange: agentReads.currentState.runtimeChange,
+    });
 
     // The Slack presentation processor — see the retired agent DO's block
     // comment. Its cross-processor `present()` wiring is split across sibling

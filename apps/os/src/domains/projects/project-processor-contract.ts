@@ -213,18 +213,6 @@ export const ProjectProcessorContract = defineProcessorContract({
       description:
         "True once the notification/created fact from the atomic project birth batch reduces.",
     }),
-    defaults: z
-      .record(z.string(), z.unknown())
-      .default({})
-      .meta({
-        description:
-          "Generic project-scoped facts, latest occurrence wins PER KEY: the raw value of the " +
-          "newest project/defaults-configured event for each key. The project stores these " +
-          "opaquely — schema, validation, and meaning belong to whichever domain reads a key " +
-          '(e.g. the agent creation door reads and validates "agents/birth-defaults"). A ' +
-          "malformed value therefore degrades at the read site, never to a stale predecessor: " +
-          "the raw latest always replaces the previous raw value.",
-      }),
   }),
   events: {
     "events.iterate.com/project/create-requested": {
@@ -283,24 +271,6 @@ export const ProjectProcessorContract = defineProcessorContract({
           .string()
           .min(1)
           .meta({ description: "The scheduler key whose heartbeat fired." }),
-      }),
-    },
-    "events.iterate.com/project/defaults-configured": {
-      description:
-        "A project-scoped fact, published as data: the newest occurrence PER KEY is folded " +
-        "into state.defaults. The project never interprets the value — the consuming domain " +
-        "owns the key's schema and validates at its read site (the agent creation door reads " +
-        '"agents/birth-defaults"; the next defaultable concern is a new key with zero ' +
-        "project-contract changes). Unknown keys are inert data.",
-      payloadSchema: z.object({
-        key: z
-          .string()
-          .trim()
-          .min(1)
-          .meta({ description: "Which fact this event sets; latest occurrence wins per key." }),
-        value: z.unknown().meta({
-          description: "Opaque to the project; schema belongs to the domain that reads the key.",
-        }),
       }),
     },
     "events.iterate.com/project/custom-domain-add-requested": {
@@ -534,7 +504,6 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/custom-domain-provision-failed",
     "events.iterate.com/project/custom-domain-remove-requested",
     "events.iterate.com/project/custom-domain-removed",
-    "events.iterate.com/project/defaults-configured",
     "events.iterate.com/project/create-requested",
     "events.iterate.com/project/created",
     "events.iterate.com/project/create-failed",

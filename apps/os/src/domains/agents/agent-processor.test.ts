@@ -259,6 +259,73 @@ describe("AgentProcessor turn lifecycle", () => {
     expect(h.state().pendingLlmRequestTrigger).toBeNull();
   });
 
+  it("the high birth debounce holds the first turn; the worker's lowered config releases it", async () => {
+    // The birth story: agents are born with a 10s debounce — the project's
+    // config worker's window to shape them before their first turn. The
+    // worker's `llmRequestDebounceMs: 250` append is the done-configuring
+    // signal: its delivery at head reschedules the pending sleep-then-append
+    // with the shorter window, which has long passed, so the request fires
+    // immediately — no sentinel event, no readiness machinery.
+    const h = makeAgentHarness();
+    await h.play(
+      [
+        "append",
+        ...NEW_AGENT_EVENTS,
+        {
+          type: "events.iterate.com/agent/configured",
+          payload: {
+            config: { enableDefaultLlmResponseParsing: true, llmRequestDebounceMs: 10_000 },
+          },
+        },
+        userMessage("hello?"),
+      ],
+      ["advanceTime", 2_000], // the worker reacting ~2s after birth…
+    );
+    expect(h.llm.calls).toHaveLength(0); // …finds the first turn still held
+    await h.play(
+      [
+        "append",
+        {
+          type: "events.iterate.com/agent/configured",
+          payload: { config: { llmRequestDebounceMs: 250 } },
+        },
+        {
+          type: "events.iterate.com/agents/context-added",
+          payload: { role: "system", key: "agent/system-prompt", content: "Worker-authored." },
+        },
+      ],
+      ["advanceTime", 300], // trigger+250ms already passed → fires right away
+    );
+    expect(h.llm.calls).toHaveLength(1);
+    const prompt = h.llm.calls[0]!.messages.map((message) => message.content).join("\n");
+    expect(prompt).toContain("Worker-authored.");
+    expect(prompt).toContain("hello?");
+  });
+
+  it("a dead worker degrades organically: the 10s window closes and platform defaults answer", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      [
+        "append",
+        ...NEW_AGENT_EVENTS,
+        {
+          type: "events.iterate.com/agent/configured",
+          payload: {
+            config: { enableDefaultLlmResponseParsing: true, llmRequestDebounceMs: 10_000 },
+          },
+        },
+        userMessage("anyone there?"),
+      ],
+      ["advanceTime", 9_000],
+    );
+    expect(h.llm.calls).toHaveLength(0); // still inside the window
+    await h.play(["advanceTime", 1_500]);
+    expect(h.llm.calls).toHaveLength(1); // window closed — degraded but coherent
+    expect(h.llm.calls[0]!.messages.map((message) => message.content).join("\n")).toContain(
+      "anyone there?",
+    );
+  });
+
   it("holds an early trigger until the canonical system prompt arrives", async () => {
     const h = makeAgentHarness();
     await h.play(
