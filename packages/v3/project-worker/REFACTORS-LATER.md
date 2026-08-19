@@ -14,3 +14,10 @@ fix stays small and reviewable. Revisit deliberately.
   change. Well-specified by the apps/os contract but it is new machinery in the log. Phase 5.
 - **Breaker enforcement placement (defect 7)**: moving the token count inside the commit
   transaction is a real semantics decision (pre-check vs post-dedupe), not a guard.
+
+- **Props derived from the mount, not stashed in FacetIdentity** (Phase A review): apps/os
+  stashes only the immutable coordinate and reads per-processor config live from the committed
+  catalog, so config can never go stale. We fold props into stored identity, which forces the
+  "props changed → rebuild" branch in all three configure bodies. Deriving props from the mount
+  per-op would delete the props field + the rebuild branch — but it needs a new parent door
+  (facet reads props from the parent's table), crossing the facet/parent seam. Design change.

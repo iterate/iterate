@@ -879,7 +879,14 @@ export class StreamDurableObject extends DurableObject<Env> {
     // CONFIGURE AT MATERIALIZATION — identity is derived ENTIRELY from the mount + this DO's
     // address, so enablement is ONE event-sourced fact. No configure-after-provide side-channel
     // that a raw provide or a log replay could skip; idempotent, so steady drives don't write.
-    await handle.configure(this.#identityFor(slug, entry.ref?.export, entry.props));
+    await handle.configure({
+      parentName: this.#address.name,
+      projectId: this.#address.projectId,
+      path: this.#address.path,
+      slug,
+      ...(entry.ref?.export ? { export: entry.ref.export } : {}),
+      ...(entry.props ? { props: entry.props } : {}),
+    });
     return handle;
   }
 
@@ -912,7 +919,8 @@ export class StreamDurableObject extends DurableObject<Env> {
         ...(props ? { props } : {}),
       },
     });
-    await this.#facet(slug);
+    await this.#facet(slug); // not for correctness (the mount's own drive configures) — makes an
+    // immediate post-enable snapshot synchronously ready (the drive is fire-and-forget).
     return { ok: true };
   }
 
@@ -1015,17 +1023,6 @@ export class StreamDurableObject extends DurableObject<Env> {
     request: Request,
   ): Promise<Response> {
     return ((await this.#statefulFacet(ref)) as Fetcher).fetch(request);
-  }
-
-  #identityFor(slug: string, exportName?: string, props?: Record<string, unknown>): FacetIdentity {
-    return {
-      parentName: this.#address.name,
-      projectId: this.#address.projectId,
-      path: this.#address.path,
-      slug,
-      ...(exportName ? { export: exportName } : {}),
-      ...(props ? { props } : {}),
-    };
   }
 
   // ── dispatch (ONE path: the routing table — the INLINE core reduce, zero distance) ──
