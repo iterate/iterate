@@ -13,5 +13,8 @@ export default defineConfig({
     // one worker: each file boots its own workerd; parallel boots thrash the port + CPU
     pool: "forks",
     poolOptions: { forks: { singleFork: true } },
+    // Each harness boot reruns the build hook (build-sdk + capnweb-validate mirror); parallel
+    // files race on .wrangler/validate (ENOTEMPTY). Run files sequentially.
+    fileParallelism: false,
   },
 });

@@ -155,7 +155,14 @@ class Parser {
       const key = q === "'" || q === '"' ? this.#string(q) : this.#word();
       this.#ws();
       this.#expect(":");
-      out[key] = this.#value();
+      // defineProperty stores a "__proto__" key as an own data property instead of invoking
+      // the prototype setter — closes the payload-driven prototype-pollution vector.
+      Object.defineProperty(out, key, {
+        value: this.#value(),
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      });
       this.#ws();
       if (this.#peek() === ",") {
         this.#i++;

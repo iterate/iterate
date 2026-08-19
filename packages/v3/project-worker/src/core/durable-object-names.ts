@@ -9,6 +9,10 @@
 // belongs to — the basis of isolation.
 
 const DURABLE_OBJECT_HOST_SUFFIX = ".iterate";
+// The projectId is the kv/secret prefix AND a loader-cacheKey component — a ":" (or worse) in it
+// collapses the isolation wall (prj_x + key "a:b" would address the same cell as project prj_x:a
+// + key "b"). Gate it at the ONE place every name is parsed.
+const PROJECT_ID = /^[A-Za-z0-9_-]+$/;
 
 /** A parsed DO address. `name` is its own canonical string form — parse once, carry both
  *  halves together (no separate re-stringify field at call sites). */
@@ -35,6 +39,10 @@ export const DurableObjectNameCodec = {
             projectId: name.slice(0, i),
             path: normalizePath(name.slice(i + DURABLE_OBJECT_HOST_SUFFIX.length)),
           };
+    if (!PROJECT_ID.test(parts.projectId))
+      throw new Error(
+        `invalid projectId ${JSON.stringify(parts.projectId)}: only [A-Za-z0-9_-] (a ":" would breach the kv/secret isolation wall)`,
+      );
     return { ...parts, name: DurableObjectNameCodec.stringify(parts) };
   },
 };

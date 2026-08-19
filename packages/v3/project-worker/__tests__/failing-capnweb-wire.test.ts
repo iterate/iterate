@@ -470,7 +470,8 @@ test("disposal: `using` on the /api session stub tears its connection down at sc
 //   by-path revoke that also pops whatever later shadowed the path). `using provision = await
 //   itx.provideCapability(...)` — the spelling the capnweb README teaches — silently leaks the
 //   mount + the parked connection + the relay until the whole session dies.
-test.fails("disposal: `using` on a CapabilityProvision auto-revokes its mount at scope exit", async () => {
+// FIXED (defect 23): CapabilityProvision now implements Symbol.dispose → revoke().
+test("disposal: `using` on a CapabilityProvision auto-revokes its mount at scope exit", async () => {
   const ctx = c("provdispose");
   const observer = await harness.itx(ctx);
   const w = wireSession(ctx);

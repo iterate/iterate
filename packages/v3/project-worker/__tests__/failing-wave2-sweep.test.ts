@@ -71,7 +71,8 @@ test.fails("projects whose ids nest under the ':' delimiter still get DISJOINT k
 
 // ═══════════ 2. secrets.set — success for a name the ONLY read path can never spell (S1) ═══════════
 
-test.fails("secrets.set rejects a name the egress substitution grammar cannot express", async () => {
+// FIXED (defect 39): secrets.set validates the name against the egress token charset.
+test("secrets.set rejects a name the egress substitution grammar cannot express", async () => {
   // BUG: built-ins.ts secrets.set stores `secret:${projectId}:${name}` for ANY name, but the
   //      store is WRITE-ONLY by design — "values come back out ONLY as {{secret:NAME}}
   //      substitution at the egress terminal" — and that terminal's token grammar is
@@ -96,7 +97,8 @@ test.fails("secrets.set rejects a name the egress substitution grammar cannot ex
 
 // ═══════════ 3. connected live-state lane — payload-less change event (S6) ═══════════
 
-test.fails("a payload-less live-state/changed event never rejects an append that already committed", async () => {
+// FIXED (defect 44): #deliverToConnectedSubscriptions guards the payload with ?.key.
+test("a payload-less live-state/changed event never rejects an append that already committed", async () => {
   // BUG: stream-durable-object.ts #deliverToConnectedSubscriptions (live-state branch) reads
   //      `(e.payload as { key?: string }).key` with no guard. `payload` is OPTIONAL on every
   //      event (core/events.ts eventInputShape), and any client may append the live-state type

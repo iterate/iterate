@@ -90,7 +90,9 @@ describe("parse ⇄ print — object literals", () => {
     }
   });
 
-  test.fails("a __proto__ key in a payload pollutes the parsed object's prototype", () => {
+  // FIXED (defect 4): #object stores keys via Object.defineProperty — a "__proto__" key is
+  // an own data property, never the prototype setter. Regression guard.
+  test("a __proto__ key in a payload is an own property, not prototype pollution", () => {
     // BUG: #object writes keys with `out[key] = value`. For key "__proto__" that invokes the
     //      prototype SETTER, not a data write. #ident/stepGet treat __proto__/constructor/prototype
     //      as reserved, but #object does NOT — the object-literal door is unguarded.

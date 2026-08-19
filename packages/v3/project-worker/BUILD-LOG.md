@@ -1589,3 +1589,26 @@ verified genuinely failing before marking; all three lanes run GREEN under fails
   their pipeline lowers in esbuild); the harness lane cannot boot the Worker Loader
   (allow_irrevocable_stub_storage needs a workerd --experimental knob TestHarnessOptions lacks)
   but POOL workerd accepts the flag.
+
+## Fix campaign Phase 0 — the no-brainers (10 defects, all guards/additions, zero regression)
+
+Every fix rejects previously-broken input or adds a missing method; no behavior that passed
+before changes. Fixed test.fails flipped to plain regression tests.
+
+- ☠ 38 cross-project charset breach: DurableObjectNameCodec.parse gates projectId to
+  [A-Za-z0-9_-] (a ":" collapsed the kv/secret wall). Closes U1's cacheKey seam at the root too.
+- ☠ 39 secret-name charset: secrets.set validates against the egress token grammar.
+- ☠ 34 forgeable revoke key: the public stream.append door fences platform-reserved
+  `capability-table/` idempotencyKeys (the apps/os internal-key fence).
+- ☠ 5+40 provide round-trip: provide() re-parses its own stored path+target strings and throws
+  loudly instead of returning a providedAtOffset for a mount reduce will silently drop.
+- ☠ 4 **proto** prototype pollution: #object stores keys via Object.defineProperty (own data
+  property, never the setter).
+- ⚠ 8 payload-less pause/breaker: CoreStreamProcessor.reduce defaults `event.payload ?? {}`.
+- ⚠ 44 payload-less live-state delivery: #deliverToConnectedSubscriptions guards with ?.key.
+- ⚠ 23 capnweb disposal: CapabilityProvision implements Symbol.dispose → revoke (the `using`
+  contract; was leaking mount+connection+relay).
+- ⚠ 41 config array-path validation: parseAppConfig round-trips both path forms through the
+  grammar (an array/[] path no longer boots a dead/rank-0 mount).
+  Harness lane serialized (fileParallelism:false) — parallel boots raced the build hook on
+  .wrangler/validate. Unit 128p/16xf/6todo, harness 76p/39xf/18todo, both green.

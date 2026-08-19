@@ -113,7 +113,8 @@ test.fails("an idempotent retry dedupes even when the breaker bucket is empty", 
   expect(replay.offset).toBe(orig.offset);
 });
 
-test.fails("a bare stream/paused event (no payload) actually pauses the stream", async () => {
+// FIXED (defect 8): CoreStreamProcessor.reduce defaults `event.payload ?? {}`.
+test("a bare stream/paused event (no payload) actually pauses the stream", async () => {
   // BUG: CoreStreamProcessor.reduce destructures `event.payload` without a fallback
   //   (`const { reason } = event.payload as {…}`). An append of `{ type: …/stream/paused }`
   //   with NO payload — which the input schema allows and the contract's payloadSchema defaults
@@ -132,7 +133,8 @@ test.fails("a bare stream/paused event (no payload) actually pauses the stream",
   expect(err.message).toContain("stream paused");
 });
 
-test.fails("a bare breaker-configured event (no payload) turns the breaker off", async () => {
+// FIXED (defect 8): payload defaulted; the documented empty-payload off-switch works.
+test("a bare breaker-configured event (no payload) turns the breaker off", async () => {
   // BUG: same undefined-destructure as the pause reduce — `const { capacity, refillPerSecond }
   //   = event.payload as {…}` throws when the payload is omitted entirely, so the documented
   //   off-switch ("an empty payload turns it off" — core-processor.ts) silently no-ops. Only

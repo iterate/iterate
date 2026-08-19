@@ -68,12 +68,12 @@ export class CoreStreamProcessor implements ReduceOnlyProcessor<CoreState> {
 
   reduce({ event, state }: ReduceArgs<CoreState>): CoreState | undefined {
     if (event.type === STREAM_PAUSED) {
-      const { reason } = event.payload as { reason?: string };
+      const { reason } = (event.payload ?? {}) as { reason?: string };
       return { ...state, paused: { reason: reason ?? "paused" } };
     }
     if (event.type === STREAM_RESUMED) return { ...state, paused: null };
     if (event.type === BREAKER_CONFIGURED) {
-      const { capacity, refillPerSecond } = event.payload as {
+      const { capacity, refillPerSecond } = (event.payload ?? {}) as {
         capacity?: number;
         refillPerSecond?: number;
       };

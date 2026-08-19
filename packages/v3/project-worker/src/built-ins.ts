@@ -173,13 +173,29 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     secrets: {
       set: async (name: string, value: string) => {
         if (!secretsKv) throw new Error("secrets: no SECRETS_KV bound");
+        // The name feeds `secret:${projectId}:${name}` AND is read back only through the egress
+        // token grammar — a ":" is both a cross-project write primitive and an unreadable value.
+        if (!/^[A-Za-z0-9._-]+$/.test(name))
+          throw new Error(`invalid secret name ${JSON.stringify(name)}: only [A-Za-z0-9._-]`);
         await secretsKv.put(`secret:${projectId}:${name}`, String(value));
         return { ok: true };
       },
     },
-    /** MY OWN stream — a deliberate, chosen surface (append/read), never the raw DO stub. */
+    /** MY OWN stream — a deliberate, chosen surface (append/read), never the raw DO stub.
+     *  The append door FENCES platform-reserved idempotencyKey namespaces: a public writer must
+     *  not be able to squat `capability-table/revoke:<n>` and make a later revoke conflict —
+     *  which would leave the capability unrevocable forever (the apps/os internal-key fence). */
     stream: {
-      append: (...e: unknown[]) => own().append(...e),
+      append: (...events: unknown[]) => {
+        for (const e of events) {
+          const key = (e as { idempotencyKey?: unknown }).idempotencyKey;
+          if (typeof key === "string" && key.startsWith("capability-table/"))
+            throw new Error(
+              `idempotencyKey ${JSON.stringify(key)} is in a platform-reserved namespace`,
+            );
+        }
+        return own().append(...events);
+      },
       read: (after?: number, limit?: number) => own().read(after, limit),
     },
     /** Sibling contexts, ROUTED: `contexts.get('/x').anything(...)` resolves through the

@@ -406,4 +406,10 @@ class CapabilityProvision extends RpcTarget {
     await this.#host.dropItxConnection({ connectionId: this.#connectionId });
     this.#relay.dispose();
   }
+  /** THE capnweb disposal contract: `using provision = await itx.provideCapability(...)` must
+   *  revoke the mount at scope exit. Without this, disposing the handle drops only the wire stub
+   *  and the mount + parked connection + relay leak until the whole session dies. */
+  [(Symbol as { dispose?: symbol }).dispose ?? Symbol.for("dispose")](): void {
+    void this.revoke().catch(() => undefined);
+  }
 }

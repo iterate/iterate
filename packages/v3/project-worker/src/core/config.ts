@@ -20,9 +20,17 @@ import {
   type Expression,
 } from "./expression.ts";
 
-const CapabilityPathInput = z
-  .union([z.string().transform((s) => parseCapabilityPath(s)), z.array(z.string())])
-  .pipe(z.custom<CapabilityPath>(() => true));
+// A path is dotted-string OR pre-split segments; EITHER way each segment must be a real
+// identifier (an array like ["itx.kv"] or [] would otherwise boot a dead or rank-0 default
+// mount that z.custom(() => true) waved through). Round-trip both forms through the grammar.
+const CapabilityPathInput = z.union([z.string(), z.array(z.string())]).transform((p, ctx) => {
+  try {
+    return parseCapabilityPath(Array.isArray(p) ? p.join(".") : p);
+  } catch (e) {
+    ctx.addIssue({ code: "custom", message: e instanceof Error ? e.message : String(e) });
+    return z.NEVER;
+  }
+});
 const ExpressionInput = z.union([z.string().transform((s) => parse(s)), ExpressionSchema]);
 
 const ConfigMountRow = z.object({

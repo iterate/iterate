@@ -207,6 +207,23 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
       throw new Error(
         `a provided capability's target must be rooted at "itx" (the built-ins are config-mount-only)`,
       );
+    // ROUND-TRIP THE STORED STRINGS NOW. The event stores strings; reduce re-parses them and
+    // SKIPS anything that won't parse (a bad object key, an exponent number) — which would make
+    // provide() report a providedAtOffset for a capability that silently never exists. Fail loud
+    // at the door instead: parse what we are about to store and demand it survives.
+    const pathString = path.join(".");
+    const targetString = print(target);
+    try {
+      if (
+        parseCapabilityPath(pathString).join(".") !== pathString ||
+        print(parse(targetString)) !== targetString
+      )
+        throw new Error("re-parse diverged");
+    } catch (cause) {
+      throw new Error(
+        `provide: capability ${JSON.stringify(pathString)} → ${JSON.stringify(targetString)} does not round-trip (${cause instanceof Error ? cause.message : cause}); it would be stored and then silently dropped`,
+      );
+    }
     const [event] = await this.stream.append(
       this.contract.buildEvent({
         type: "events.iterate.com/capability-table/capability-provided",

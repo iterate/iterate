@@ -725,7 +725,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         // dropped or reordered payload is a revision-chain mismatch the client door-heals).
         for (const e of committed) {
           if (e.type !== LIVE_STATE_CHANGED) continue;
-          if ((e.payload as { key?: string }).key !== row.liveState.key) continue;
+          if ((e.payload as { key?: string } | undefined)?.key !== row.liveState.key) continue;
           void this.#itxConnections
             .invokeConnection(record.stubKey, conn.path, [e.payload])
             .catch((err) =>
