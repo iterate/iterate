@@ -1547,3 +1547,45 @@ Owner directive: their build chain + their error/log patterns, lightweight, ~200
   prove_push's poison now stamps it and proves the fast halt.
 - Board 13/13 on the validated deploy. Total: errors 80 + logs 57 + config ~16 + migrations
   ≈ 210 lines, net of deletions ~140.
+
+## The bug hunt — seven agents, three test lanes, 41 documented failures (nothing fixed yet)
+
+Owner commission: as many FAILING tests as possible; mark, don't fix. Every `test.fails` was
+verified genuinely failing before marking; all three lanes run GREEN under fails-semantics.
+
+- **Lanes**: unit (vitest + capnweb-validate plugin) 119 pass / 11 expected-fail / 3 todo;
+  HARNESS (wrangler createTestHarness booting the real worker — **tests**/harness.ts) 51 pass /
+  30 expected-fail / 12 todo; POOL-WORKERS (@cloudflare/vitest-pool-workers, tests inside
+  workerd, cloudflare:test evictDurableObject) 4 pass. New files: **tests**/failing-_.test.ts,
+  src/\*\*/_.failing.test.ts, **workers-tests**/, vitest.workers.config.ts, wrangler.test.jsonc.
+- **HEADLINE PASS — hibernation at scale, in workerd**: 200 clients attach (stubs=200,
+  dormant), REAL eviction survives (sockets + attachments intact), 200/200 wake answers in
+  41ms cold via page→stub→invoke; a warm DO refuses eviction while stubs pin it (#6800,
+  faithfully). Also passing with pinned wire frames: pipelining of itx expressions on stubs
+  (one round trip, exact push/pull/resolve census), the ONE-DIRECTIONAL delivery invariant
+  (zero client-initiated frames under a 100-chunk flood, deliveries continue with outbound
+  artificially stalled), deep chaining (1 push), dup()/onRpcBroken per the docs.
+- **The 41 expected-fails, by family**: print↔parse asymmetry = SILENT AUTHORITY LOSS
+  (provide "succeeds", mount never exists: exponent numbers, -0, non-identifier object keys) +
+  **proto** object-key prototype pollution; commit-point mismatches (in-batch dedupe hit
+  REDUCED TWICE — breaks bit-identical rebuild; breaker taxes idempotent retries; payload-less
+  pause/breaker events silently no-op; read() past head fabricates scan proof); delivery lanes
+  (consumes ["*"] = silent black hole in BOTH lanes; ghost HALT audit fact on unsubscribe-
+  during-flight + orphaned progress; resume beyond head wedges the row); connections (dirty
+  deaths filed as CLEAN ends — the session-rule storm clause is UNREACHABLE, code 1000 on both
+  relay close paths; concurrent same-key connects never collapse; in-flight invoke on a killed
+  provider leaks an uncoded transport error); processor rules (version-bump refold can replay
+  the whole log WITH side effects if waitUntilProcessed touches first; refold swallows
+  in-flight pushes; nested blockProcessorWhile escapes the cursor hold; at-head stall on exact
+  500-multiples; named ephemerals dropped on non-contiguous pushes); capnweb disposal
+  (CapabilityProvision lacks Symbol.dispose — `using` leaks mount+connection+relay); the
+  NATURAL DOTTED SURFACE entirely missing (9 tests adapted from apps/os path-proxy, file:line
+  provenance; three miss vocabularies vs their one isPathMissMessage grammar); ROW CHUNKING
+  absent (6 tests pinning the apps/os contract: EVENT_CHUNK_SIZE 512KiB, event_chunks table,
+  offset-per-event, reassembly byte-identity; today 3MiB+ dies SQLITE_TOOBIG before even the
+  idempotency check).
+- **Toolchain discoveries**: vite 8 oxc does not lower the standard decorators capnweb-validate
+  emits — **workers-tests** lowers via an esbuild plugin pass (cloudflare-os never hits this;
+  their pipeline lowers in esbuild); the harness lane cannot boot the Worker Loader
+  (allow_irrevocable_stub_storage needs a workerd --experimental knob TestHarnessOptions lacks)
+  but POOL workerd accepts the flag.

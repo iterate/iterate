@@ -1,0 +1,40 @@
+{
+  // wrangler.test.jsonc — config for the @cloudflare/vitest-pool-workers lane ONLY
+  // (vitest.workers.config.ts; run with `pnpm test:workers`). wrangler.jsonc stays the deploy
+  // truth. The divergences, each deliberate and test-only:
+  //
+  //  1. "main" points at SRC, not the .wrangler/validate mirror: the pool imports the worker
+  //     through Vite (same isolate as the tests), where the capnweb-validate vite plugin
+  //     performs the identical @validateRpc rewrite in-test — the cloudflare-os wiring. The
+  //     mirror exists only for wrangler's own bundler (and would require running the build hook,
+  //     which the pool never does). No "build" block here for the same reason.
+  //  2. MIGRATIONS COLLAPSED to the one live class: fresh pool storage cannot replay prod's
+  //     rename chains (v6/v7 rename classes that never existed in a fresh namespace) — the same
+  //     collapse __tests__/harness.ts performs programmatically.
+  //  3. FALLBACK REBOUND to this worker's own DummyControlPlane (the SOLO topology from
+  //     wrangler.jsonc's own comment): the pool rewrites a service binding that names this
+  //     config's own worker name onto the runner worker itself, and src/worker.ts exports
+  //     DummyControlPlane — so no external control-plane worker is needed.
+  //
+  // KEPT identical on purpose: compatibility_date, the allow_irrevocable_stub_storage flag
+  // (miniflare 5.20260815 workerd accepts it), the LOADER worker-loader binding, the DO binding,
+  // and both KV bindings (ids are meaningless locally — miniflare keys namespaces by binding).
+  "name": "project-worker",
+  "main": "src/worker.ts",
+  "compatibility_flags": ["allow_irrevocable_stub_storage"],
+  "compatibility_date": "2026-07-01",
+  "worker_loaders": [{ "binding": "LOADER" }],
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
+  "durable_objects": {
+    "bindings": [{ "name": "CONTEXT", "class_name": "StreamDurableObject" }],
+  },
+  "migrations": [{ "tag": "test-1", "new_sqlite_classes": ["StreamDurableObject"] }],
+  "services": [
+    { "binding": "FALLBACK", "service": "project-worker", "entrypoint": "DummyControlPlane" },
+  ],
+  "kv_namespaces": [
+    { "binding": "SECRETS_KV", "id": "6df3b8c18a624d078d1a1da66f3251c0" },
+    { "binding": "ITX_KV", "id": "08df862920b04446b3503c22f9888b04" },
+  ],
+  "vars": {},
+}
