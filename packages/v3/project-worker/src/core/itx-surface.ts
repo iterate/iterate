@@ -24,7 +24,7 @@ import { validateRpc } from "capnweb-validate";
 import { RpcTarget } from "capnweb";
 import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
 import type { DeliveryPolicy } from "./events.ts";
-import { pathProxy, type Expression } from "./expression.ts";
+import type { Expression } from "./expression.ts";
 import { disposeStub, openStubPagerWebSocket } from "./hibernatable-rpc-stub.ts";
 import { canonicalName, DurableObjectNameCodec, normalizePath } from "./durable-object-names.ts";
 import type { StreamDurableObject } from "../stream-durable-object.ts";
@@ -126,26 +126,6 @@ async function startCapnwebCallbackRelay(
   };
 }
 
-/** THE DOTTED CLIENT SURFACE (the owner invariant: the client is JUST capnweb). Wrap an `Itx`
- *  so any UNKNOWN property is a capability-path root: `itx.slack.chat.postMessage(x)` accumulates
- *  the path server-side (capnweb ships it as one call message) and dispatches the terminal call
- *  through `invokeCapability` — no client SDK, no per-capability declaration. Real `Itx` methods,
- *  capnweb/RpcTarget internals, and symbols pass straight through. */
-function withDottedSurface(itx: Itx): Itx {
-  return new Proxy(itx, {
-    get(target, prop, receiver) {
-      if (typeof prop === "symbol" || prop === "then" || prop in target)
-        return Reflect.get(target, prop, receiver);
-      return (
-        pathProxy((segments, args) => target.invokeCapability({ path: segments, args })) as Record<
-          string,
-          unknown
-        >
-      )[prop];
-    },
-  });
-}
-
 /** `session` at `/api` (bound to one projectId). `get`/`connect` both yield an `Itx`. */
 @validateRpc()
 export class ProjectSession extends RpcTarget {
@@ -184,9 +164,9 @@ export class ProjectSession extends RpcTarget {
     return this;
   }
 
-  /** Pure addressing → the root context's itx (with the dotted client surface). */
+  /** Pure addressing → the root context's itx. */
   get(): Itx {
-    return withDottedSurface(new Itx(this.#root, this.#relays, this.#waitUntil));
+    return new Itx(this.#root, this.#relays, this.#waitUntil);
   }
 
   /** A context's stream DO by path (the root by default). */
@@ -219,7 +199,7 @@ export class ProjectSession extends RpcTarget {
         ),
       );
     }
-    return withDottedSurface(new Itx(host, this.#relays, this.#waitUntil));
+    return new Itx(host, this.#relays, this.#waitUntil);
   }
 }
 
