@@ -217,6 +217,36 @@ esp_err_t iterate_kit_stackchan_avatar_capture(
     uint16_t *width,
     uint16_t *height);
 
+/**
+ * The image overlay's staging surface: FACE_RENDER_PIXEL_COUNT host-order
+ * RGB565 pixels, PSRAM, allocated on first use and kept — like the
+ * screenshot's buffer, a board asked twice must not fail the second time
+ * because the heap moved. NULL means PSRAM could not supply it.
+ *
+ * SINGLE-WRITER DISCIPLINE, same shape as the menu overlay's atomic slot:
+ * write this surface only while NO show deadline is active, because the
+ * render task reads it exactly while one is. The fetch path upholds that by
+ * refusing a new image while one is still on the glass.
+ */
+uint16_t *iterate_kit_stackchan_avatar_image_staging(void);
+
+/**
+ * Publishes "the staged image owns the glass" for the next show_for_ms.
+ *
+ * A latest-state deadline, not a command queue: the render task compares it
+ * to now at its own 15 Hz, paints the staging surface instead of rendering
+ * the face while it is in the future, and simply lets the face return when
+ * it passes. Nothing to cancel, nothing to replay.
+ */
+void iterate_kit_stackchan_avatar_show_image(uint32_t show_for_ms);
+
+/**
+ * Image showings the render task watched expire — the "then the face came
+ * back" proof, counted at the deadline transition rather than promised at
+ * publish time.
+ */
+uint32_t iterate_kit_stackchan_avatar_image_shows_completed(void);
+
 #ifdef __cplusplus
 }
 #endif

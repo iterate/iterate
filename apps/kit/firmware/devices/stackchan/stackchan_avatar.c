@@ -258,6 +258,18 @@ struct stackchan_avatar_owner {
    * device owns, and the render task only ever needs the newest one.
    */
   volatile uint32_t menu_highlight_plus_one;
+  /*
+   * THE IMAGE OVERLAY, following the menu's latest-state pattern. The staging
+   * surface is a second 160x120 host-order RGB565 frame in PSRAM, written by
+   * the fetch task only while no deadline is active; while the deadline is in
+   * the future the render task copies it over the framebuffer instead of
+   * rendering the face. When it passes, the face simply returns.
+   */
+  uint16_t *image_staging; /* atomically published; NULL until first use */
+  volatile uint64_t image_visible_through_us;
+  volatile uint32_t image_shows_completed;
+  /* Render-task-local edge detector for the completed count. */
+  bool image_was_visible;
   bool face_button_baseline_established;
   volatile uint64_t speaker_status_active_through_us;
   volatile uint32_t started;
@@ -575,29 +587,57 @@ static bool prepare_avatar_frame_under_lock(
   owner.latest_pose.playout_samples = __atomic_load_n(
       &owner.metrics.physical_playout_sample_clock, __ATOMIC_RELAXED);
   face_render_key_from_pose(&owner.latest_pose, render_key);
-  const bool dozing = face_dozing_now();
-  if (dozing) face_doze_prepare_render_key(render_key);
-  if (!face_avatar_registry_render(
-          &owner.registry,
-          render_key,
-          owner.latest_pose.playout_samples,
-          owner.framebuffer,
-          FACE_RENDER_PIXEL_COUNT)) {
-    atomic_saturating_increment(&owner.metrics.render_failures);
-    return false;
-  }
-  if (dozing && !face_doze_apply_overlay(
-                     owner.framebuffer,
-                     FACE_RENDER_PIXEL_COUNT,
-                     owner.latest_pose.playout_samples)) {
+  {
     /*
-     * The doze sprite is part of the user-visible lifecycle contract. Failing
-     * closed here prevents a plausible awake-looking frame from replacing the
-     * last coherent display when buffer geometry and renderer assumptions
-     * diverge.
+     * A FETCHED IMAGE OWNS THE GLASS while its deadline is in the future:
+     * copy the staged picture over the framebuffer and skip the face render
+     * entirely — the menu overlay, the byte swap and the strip transfer
+     * below stay exactly the machinery the face uses. The completed count
+     * is an edge, noticed here at 15 Hz, because publish time can only
+     * promise an expiry and this task is the one that watches it happen.
      */
-    atomic_saturating_increment(&owner.metrics.render_failures);
-    return false;
+    uint16_t *const image =
+        __atomic_load_n(&owner.image_staging, __ATOMIC_ACQUIRE);
+    const bool image_visible = image != NULL &&
+        now_us_wide() < __atomic_load_n(
+            &owner.image_visible_through_us, __ATOMIC_ACQUIRE);
+    if (owner.image_was_visible && !image_visible) {
+      atomic_saturating_increment(&owner.image_shows_completed);
+    }
+    owner.image_was_visible = image_visible;
+    if (image_visible) {
+      /*
+       * Zero the key: `mouth_open_rendered_frames` counts mouths that
+       * reached the panel, and this frame's mouth did not.
+       */
+      memset(render_key, 0, sizeof(*render_key));
+      memcpy(owner.framebuffer, image, FACE_RENDER_FRAME_BYTES);
+    } else {
+      const bool dozing = face_dozing_now();
+      if (dozing) face_doze_prepare_render_key(render_key);
+      if (!face_avatar_registry_render(
+              &owner.registry,
+              render_key,
+              owner.latest_pose.playout_samples,
+              owner.framebuffer,
+              FACE_RENDER_PIXEL_COUNT)) {
+        atomic_saturating_increment(&owner.metrics.render_failures);
+        return false;
+      }
+      if (dozing && !face_doze_apply_overlay(
+                         owner.framebuffer,
+                         FACE_RENDER_PIXEL_COUNT,
+                         owner.latest_pose.playout_samples)) {
+        /*
+         * The doze sprite is part of the user-visible lifecycle contract.
+         * Failing closed here prevents a plausible awake-looking frame from
+         * replacing the last coherent display when buffer geometry and
+         * renderer assumptions diverge.
+         */
+        atomic_saturating_increment(&owner.metrics.render_failures);
+        return false;
+      }
+    }
   }
   {
     const uint32_t menu = __atomic_load_n(
@@ -1472,4 +1512,34 @@ esp_err_t iterate_kit_stackchan_avatar_fill(uint16_t colour) {
   }
   (void)xSemaphoreGive(owner.framebuffer_access);
   return status;
+}
+
+/*
+ * THE STAGED IMAGE, lazily bought and kept, in the same PSRAM pool as the
+ * source surface and for the same reason: a picture must never cost the
+ * internal DMA memory TLS and Wi-Fi live on. Allocation happens on the
+ * control-plane dispatch path (the only caller that can create it), so the
+ * publish below and the render task's read need only the pointer's
+ * acquire/release pairing.
+ */
+uint16_t *iterate_kit_stackchan_avatar_image_staging(void) {
+  uint16_t *image =
+      __atomic_load_n(&owner.image_staging, __ATOMIC_ACQUIRE);
+  if (image != NULL) return image;
+  image = heap_caps_malloc(
+      FACE_RENDER_FRAME_BYTES, STACKCHAN_AVATAR_SOURCE_CAPS);
+  if (image == NULL) return NULL;
+  __atomic_store_n(&owner.image_staging, image, __ATOMIC_RELEASE);
+  return image;
+}
+
+void iterate_kit_stackchan_avatar_show_image(uint32_t show_for_ms) {
+  __atomic_store_n(
+      &owner.image_visible_through_us,
+      now_us_wide() + (uint64_t)show_for_ms * 1000U,
+      __ATOMIC_RELEASE);
+}
+
+uint32_t iterate_kit_stackchan_avatar_image_shows_completed(void) {
+  return __atomic_load_n(&owner.image_shows_completed, __ATOMIC_RELAXED);
 }

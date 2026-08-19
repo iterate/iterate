@@ -6,6 +6,7 @@ idf_component_register(
     stackchan_avatar.c
     stackchan_body.c
     stackchan_camera.c
+    stackchan_image.c
     stackchan_modes.c
     core_s3_capture_reserve.c
   INCLUDE_DIRS include
@@ -26,10 +27,12 @@ idf_component_register(
     esp_driver_gpio
     esp_driver_uart
     esp_lcd
+    esp_http_client
     mbedtls
     nvs_flash
     espressif__esp-sr
     espressif__m5stack_core_s3
-    espressif__esp32-camera)
+    espressif__esp32-camera
+    espressif__esp_jpeg)
 
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wall -Wextra -Werror)

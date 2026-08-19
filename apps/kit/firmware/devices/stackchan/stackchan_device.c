@@ -51,6 +51,7 @@
 #include "stackchan_avatar.h"
 #include "stackchan_body.h"
 #include "stackchan_camera.h"
+#include "stackchan_image.h"
 #include "stackchan_modes.h"
 #include "stackchan_processor.h"
 
@@ -543,6 +544,57 @@ static enum capnweb_status screen_fill(
 }
 
 /*
+ * `screen.show({url, seconds})` — fetch a JPEG from the web and wear it
+ * full-screen for a while, then let the face return on its own.
+ *
+ * FIRE-AND-FORGET, like head.nod(): the reply resolves `true` as soon as the
+ * fetch task is ACCEPTED, because the fetch and decode run on a one-shot
+ * background task and a voice tool cannot wait on a download. Failures past
+ * acceptance land in the imageFetchFailures health counter and the console
+ * log; imageShowsCompleted is the render task's proof the face came back.
+ */
+static const char *const screen_show_path[] = {"screen", "show"};
+
+static enum capnweb_status screen_show(
+    void *context,
+    const struct capnweb_call *call,
+    struct capnweb_reply *reply) {
+  struct capnweb_value object = {0};
+  struct capnweb_value url_value = {0};
+  char url[512];
+  size_t url_length = 0U;
+  int64_t seconds = 0;
+  (void)context;
+  if (!iterate_kit_read_object_argument(call, &object) ||
+      !capnweb_value_object_get(&object, "url", &url_value) ||
+      capnweb_value_copy_string(&url_value, url, sizeof(url), &url_length) !=
+          CAPNWEB_OK ||
+      !iterate_kit_read_int_field(&object, "seconds", &seconds)) {
+    return capnweb_reply_set_error(
+        reply, "TypeError", "screen.show needs {url, seconds}");
+  }
+  if (seconds < 0) seconds = 0;
+  if (seconds > 300) seconds = 300;
+  switch (iterate_kit_stackchan_image_show(url, url_length, (uint32_t)seconds)) {
+    case ITERATE_KIT_OK:
+      return capnweb_reply_set_boolean(reply, true);
+    case ITERATE_KIT_INVALID_ARGUMENT:
+      return capnweb_reply_set_error(
+          reply,
+          "TypeError",
+          "screen.show needs an http(s) url under 512 bytes");
+    case ITERATE_KIT_BACKPRESSURE:
+      return capnweb_reply_set_error(
+          reply,
+          "Error",
+          "busy — an image is already being fetched or shown");
+    default:
+      return capnweb_reply_set_error(
+          reply, "Error", "not enough memory for an image right now");
+  }
+}
+
+/*
  * `face.set({face})` — the ONLY face changer this board has left. The side
  * button that used to cycle sprites opens conversations now, so a face
  * nobody can ask for by name is a face the robot no longer makes. The slug
@@ -659,6 +711,7 @@ static size_t modules(
     void *context, struct iterate_kit_module *out, size_t capacity) {
   static const struct iterate_kit_method board_methods[] = {
     {screen_fill_path, 2U, screen_fill},
+    {screen_show_path, 2U, screen_show},
     {face_set_path, 2U, face_set},
     {button_press_path, 2U, button_press},
     {touch_tap_path, 2U, touch_tap},
@@ -832,6 +885,16 @@ static size_t health(void *context, char *out, size_t capacity) {
       {"displayTransferFails", face_metrics.display_transfer_failures},
       {"displayTransferTimeouts", face_metrics.display_transfer_timeouts},
       {"faceDroppedFrames", face_metrics.mailbox_overwrites},
+      /*
+       * screen.show()'s asynchronous half. The RPC resolves at acceptance,
+       * so a fetch that later failed has nowhere else to say so: fetches
+       * minus failures minus completed is at most the one show in progress,
+       * and any other arithmetic here is the account of what went wrong.
+       */
+      {"imageFetches", iterate_kit_stackchan_image_fetches()},
+      {"imageFetchFailures", iterate_kit_stackchan_image_fetch_failures()},
+      {"imageShowsCompleted",
+       iterate_kit_stackchan_avatar_image_shows_completed()},
     };
     for (index = 0U; index < sizeof(fields) / sizeof(fields[0]); index++) {
       const int written = snprintf(
@@ -901,6 +964,8 @@ static const struct iterate_kit_board_facts facts = {
       "screen.take() and screen.readChunk({index}) do the same for what is on "
       "the panel right now, and screen.fill({colour}) paints it a flat RGB565 "
       "colour — the only way to tell a dark panel from a dark face. "
+      "screen.show({url, seconds}) fetches a JPEG url and shows it "
+      "full-screen for that long, then the face returns. "
       "Audio and lifecycle events share this stream connection.",
   /*
    * WHAT THE MODEL IS TOLD IT CAN DO. `children` stays empty because this is a
@@ -931,7 +996,9 @@ static const struct iterate_kit_board_facts facts = {
       "take(), so that call is the slow one and it is the call that reports a "
       "unit whose camera cannot start. screen.take() / screen.readChunk() do "
       "the same for the panel's current contents, and screen.fill({colour}) "
-      "paints it flat.\",\"children\":{}}",
+      "paints it flat. screen.show({url, seconds}) fetches a JPEG url and "
+      "shows it full-screen for that long, then the face returns."
+      "\",\"children\":{}}",
   .talk_hint = "speak whenever you like",
   .call_hint = "connection lost — press the side button to call",
   .speaker = {
