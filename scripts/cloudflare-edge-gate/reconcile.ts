@@ -208,14 +208,13 @@ function ruleMatches(current: Rule, desired: DesiredRule) {
 export async function verifyEdgeGateTraffic(target: EdgeGateTarget, fetcher = fetch) {
   for (const { smokeHostname } of target.zones) {
     const nonce = Date.now().toString(36);
-    const options = { redirect: "manual" as const, signal: AbortSignal.timeout(15_000) };
     for (const path of ["/.env", "/__edge-gate-smoke__.php"]) {
       let blocked: Response | undefined;
       for (let attempt = 1; attempt <= 15; attempt++) {
-        blocked = await fetcher(
-          `https://${smokeHostname}${path}?edge-gate-smoke=${nonce}`,
-          options,
-        );
+        blocked = await fetcher(`https://${smokeHostname}${path}?edge-gate-smoke=${nonce}`, {
+          redirect: "manual",
+          signal: AbortSignal.timeout(15_000),
+        });
         if (blocked.status === 403 && blocked.headers.get("cf-ray")) break;
         if (attempt < 15) await new Promise((resolve) => setTimeout(resolve, 2_000));
       }
@@ -227,7 +226,7 @@ export async function verifyEdgeGateTraffic(target: EdgeGateTarget, fetcher = fe
     }
     const control = await fetcher(
       `https://${smokeHostname}/__edge-gate-control__?edge-gate-smoke=${nonce}`,
-      options,
+      { redirect: "manual", signal: AbortSignal.timeout(15_000) },
     );
     if (control.status === 403) {
       throw new Error(`Edge-gate control unexpectedly returned 403 for ${smokeHostname}.`);
