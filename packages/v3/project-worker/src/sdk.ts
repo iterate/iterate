@@ -59,7 +59,9 @@ export function liveState<S>(
           ephemeral: true,
           payload: { key, from: rev - 1, to: rev, patch },
         }),
-      ).catch(() => {});
+      ).catch(() => {
+        /* lossy by contract — a dropped change payload is a revision-chain gap the client heals */
+      });
       return state;
     },
   };

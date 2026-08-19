@@ -29,6 +29,7 @@ import {
 } from "./core/processor.ts";
 import type { StreamEvent } from "./core/events.ts";
 import type { FacetProcessorArgs } from "./processor-facet.ts";
+import { reportIssue } from "./core/errors.ts";
 
 /** One absent-target subscription mount, as the reduce sees it (string-at-rest halves straight
  *  from the capability-provided payload). */
@@ -168,7 +169,7 @@ export class SubscriptionForwarderProcessor extends StreamProcessor<ForwarderSta
       // Rule 3 (runInBackground semantics, spelled directly): a droppable pump attempt whose
       // outcome is recoverable from the cursors at the next at-head pass.
       void this.pumpSubscriptionDeliveries().catch((e) =>
-        console.error("subscription-forwarder pump failed", e),
+        reportIssue("subscription-forwarder.pump", e),
       );
     return undefined;
   }
@@ -252,7 +253,7 @@ class SubscriptionDeliveryPump {
       rev: (progress?.rev ?? 0) + 1,
     });
     void this.#pumpRow(row).catch((e) =>
-      console.error(`subscription "${row.name}" pump after reset failed`, e),
+      reportIssue("subscription-forwarder.reset-pump", e, { subscriptionName: row.name }),
     );
   }
 
@@ -337,8 +338,18 @@ class SubscriptionDeliveryPump {
     if ((fresh?.rev ?? 0) !== (progress.rev ?? 0)) return;
     const attempt = progress.attempt + 1;
     const message = error instanceof Error ? error.message : String(error);
-    if (attempt >= (row.maxAttempts ?? 15)) {
-      const reason = `${attempt} delivery attempts failed (last: ${message})`;
+    // Honor stamped flags over an invented taxonomy (the core/errors.ts doctrine): an error
+    // carrying `retryable: false` (workerd stamps these; providers may too) will never succeed —
+    // burning the ladder on it just delays the halt by half an hour.
+    const neverRetryable =
+      typeof error === "object" &&
+      error !== null &&
+      "retryable" in error &&
+      (error as { retryable: unknown }).retryable === false;
+    if (neverRetryable || attempt >= (row.maxAttempts ?? 15)) {
+      const reason = neverRetryable
+        ? `delivery failed with retryable: false (${message})`
+        : `${attempt} delivery attempts failed (last: ${message})`;
       this.#deps.progress.put(row.providedAtOffset, {
         confirmedOffset: progress.confirmedOffset,
         attempt: 0,

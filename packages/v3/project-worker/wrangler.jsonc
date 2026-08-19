@@ -1,6 +1,13 @@
 {
   "name": "project-worker",
-  "main": "src/worker.ts",
+  // The build mechanism (cloudflare-os wiring, verbatim): wrangler's custom-build hook runs the
+  // capnweb-validate CLI, which mirrors src/ into .wrangler/validate with every @validateRpc()
+  // class rewritten to carry generated validators; wrangler then bundles the MIRROR.
+  "main": ".wrangler/validate/src/worker.ts",
+  "build": {
+    "command": "node build-sdk.mjs && pnpm exec capnweb-validate build --out .wrangler/validate",
+    "watch_dir": "src",
+  },
   "compatibility_flags": ["allow_irrevocable_stub_storage"],
   "compatibility_date": "2026-07-01",
   // Pure-play: NO nodejs_compat (workerd/miniflare/Raspberry-Pi portability). The runner is the lean half.

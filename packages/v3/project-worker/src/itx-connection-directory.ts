@@ -27,6 +27,7 @@ import {
   type RetainedCallbackInvoker,
 } from "./core/hibernatable-rpc-stub.ts";
 import type { StreamEvent, StreamEventInput } from "./core/events.ts";
+import { codedError, reportIssue } from "./core/errors.ts";
 
 /** The ItxConnectionSession record for one connectionKey (kv `connection-session:<key>`) — the
  *  session rule's working memory. The durable truth is the session facts on the stream; this
@@ -172,7 +173,7 @@ export class ItxConnectionDirectory {
     const record = this.#stubs.closed(ws);
     if (record)
       void this.#connectionClosed(record, code, reason).catch((e) =>
-        console.error("itx connection close handling failed", e),
+        reportIssue("itx-connections.close", e, { connectionId: record.stubKey }),
       );
   }
 
@@ -236,7 +237,7 @@ export class ItxConnectionDirectory {
   /** Invoke one connection's retained callback by connectionKey/connectionId. */
   invoke(key: string, segments: string[], args: unknown[]): Promise<unknown> {
     const record = this.find(key);
-    if (!record) throw new Error(`itx connection "${key}" is offline`);
+    if (!record) throw codedError("CONNECTION_OFFLINE", `itx connection "${key}" is offline`);
     return this.#stubs.invoke(record.stubKey, segments, args);
   }
 

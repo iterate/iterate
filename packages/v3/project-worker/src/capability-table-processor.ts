@@ -25,6 +25,7 @@
 
 import { z } from "zod";
 import { codedError } from "./core/errors.ts";
+import { createLogger } from "./core/logs.ts";
 import { defineProcessorContract, type DeliveryPolicy } from "./core/events.ts";
 import {
   apply,
@@ -39,6 +40,8 @@ import {
   type Match,
 } from "./core/expression.ts";
 import type { ProcessorStream, ReduceArgs, ReduceOnlyProcessor } from "./core/processor.ts";
+
+const tableLog = createLogger("capability-table");
 
 /** Per-instance facet-processor enablement policy — rides the mount event like `delivery`. */
 export type ProcessorPolicy = {
@@ -164,10 +167,11 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
       try {
         parsed = { path: parseCapabilityPath(path), target: parse(target) };
       } catch (error) {
-        console.error(
-          `capability-table: skipping malformed capability-provided at ${event.offset}`,
+        tableLog.warn("skipping malformed capability-provided", {
+          event: "capability-table.malformed-mount.skipped",
+          offset: event.offset,
           error,
-        );
+        });
         return undefined;
       }
       return {

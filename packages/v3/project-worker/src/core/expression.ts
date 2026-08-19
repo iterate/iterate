@@ -20,6 +20,7 @@
 // humans read in the log); `parse` runs once when a reduce rehydrates its table; `print`
 // canonicalizes programmatically built expressions into the stored string form at mount time.
 
+import { codedError } from "./errors.ts";
 import { z } from "zod";
 import { deeper } from "./events.ts";
 
@@ -356,7 +357,7 @@ async function walkSteps(
       const [method, ...args] = step;
       const fn = stepGet(value as object, method);
       if (typeof fn !== "function")
-        throw new Error(`${where}: ${JSON.stringify(method)} is not a method`);
+        throw codedError("NOT_A_METHOD", `${where}: ${JSON.stringify(method)} is not a method`);
       receiver = undefined;
       value = await Reflect.apply(fn, value, args);
     }

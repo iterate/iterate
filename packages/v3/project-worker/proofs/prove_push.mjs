@@ -53,8 +53,9 @@ const digested3 = await until("digest=3", async () => {
 });
 check(digested3 === "3", "stateless worker digested 3 marks via the forwarder", digested3);
 
-// 4. a poison mark: the batch fails, retries once (~1s backoff via the parent's alarm proxy —
-// facets have no alarms), then HALTS with an audit fact. No skip, no pinning: ONE policy.
+// 4. a poison mark: digest stamps `retryable: false` on its error, so the forwarder HALTS
+// IMMEDIATELY with an audit fact — no ladder burned on an error that can never succeed
+// (the stamped-flag doctrine from core/errors.ts). No skip, no pinning: ONE policy.
 const [poisoned] = await itx.invoke(
   `itx.stream.append({ type: 'mark', payload: { poison: true } })`,
 );
@@ -71,7 +72,7 @@ const tallyAfterHalt = await until(
 );
 check(
   tallyAfterHalt !== undefined,
-  "2 failed attempts → HALT left an audit fact on the stream",
+  "retryable: false → immediate HALT left an audit fact on the stream",
   JSON.stringify(tallyAfterHalt.state.counts),
 );
 const digestedStill3 = await itx.invokeCapability({ path: ["kv", "get"], args: ["digested"] });

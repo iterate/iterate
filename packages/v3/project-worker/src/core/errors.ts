@@ -14,7 +14,13 @@ type ErrorCode =
   | "NO_CAPABILITY_MATCH"
   | "IDEMPOTENCY_CONFLICT"
   | "STREAM_PAUSED"
-  | "STREAM_BREAKER_OPEN";
+  | "STREAM_BREAKER_OPEN"
+  | "CONNECTION_OFFLINE" // the named itx connection is not attached right now
+  | "NOT_A_METHOD" // the dotted path's terminal segment is not callable on the target
+  | "NO_FACET" // no facet-hosted processor is enabled under that slug
+  | "EPHEMERAL_IDEMPOTENCY_KEY"; // ephemeral + idempotencyKey is a contradiction, always rejected
+// (Boundary shape checks throw capnweb-validate's own TypeError with a precise path — that
+// library error IS the validation contract; no code of ours duplicates it.)
 
 /** A plain Error carrying `code` (+ optional `data`) as own enumerable properties. */
 export function codedError(code: ErrorCode, message: string, data?: unknown): Error {
@@ -26,4 +32,58 @@ export function errorCode(error: unknown): ErrorCode | undefined {
   return typeof error === "object" && error !== null && "code" in error
     ? ((error as { code: unknown }).code as ErrorCode)
     : undefined;
+}
+
+// reportIssue — the ONE exit for unexpected failures (cloudflare-os error-reporting.ts, minus
+// its private Reporter Worker): one bounded console.error line; query event="issue" in Workers
+// Logs. The Reporter seam stayed out on purpose — when one exists, check an optional env
+// binding HERE and waitUntil the dispatch; capture sites never change. Deliberately NO
+// cloudflare:workers import: this file rides the platform-neutral SDK bundle. Reporting must
+// never disturb the caller — armored end to end; worst case it prints nothing.
+
+// Bounds verbatim from cloudflare-os: hostile strings get clipped, never explode a log line.
+const MAX = { message: 1024, stack: 16_384, string: 256, attributeKeys: 32 } as const;
+type Scalar = string | number | boolean | null; // attribute values stay queryable scalars
+
+/** Bounded shape of a thrown value — reads name/message/stack, never walks arbitrary objects. */
+function serializeCaught(caught: unknown): { type: string; message?: string; stack?: string } {
+  try {
+    if (caught instanceof Error) {
+      return {
+        type: (caught.name || "Error").slice(0, MAX.string),
+        message: caught.message.slice(0, MAX.message),
+        ...(caught.stack ? { stack: caught.stack.slice(0, MAX.stack) } : {}),
+      };
+    }
+    if (typeof caught === "object" && caught !== null) return { type: "ObjectThrown" };
+    return { type: `${typeof caught}Thrown`, message: String(caught).slice(0, MAX.message) };
+  } catch {
+    return { type: "UninspectableThrown" };
+  }
+}
+
+/** Print ONE bounded console.error line for an unexpected failure; never throws. */
+export function reportIssue(
+  failureSite: string,
+  caught: unknown,
+  attributes?: Record<string, Scalar | undefined>,
+): void {
+  try {
+    const bounded: Record<string, Scalar> = {};
+    for (const [key, value] of Object.entries(attributes ?? {}).slice(0, MAX.attributeKeys)) {
+      if (value === undefined) continue;
+      bounded[key.slice(0, MAX.string)] =
+        typeof value === "string" ? value.slice(0, MAX.string) : value;
+    }
+    const code = errorCode(caught);
+    console.error({
+      ...bounded, // fixed keys spread last so an attribute can never shadow them
+      event: "issue",
+      failureSite: failureSite.slice(0, MAX.string),
+      ...(code === undefined ? {} : { code }),
+      error: serializeCaught(caught),
+    });
+  } catch {
+    // Reporting must never disturb the caller — swallow and move on.
+  }
 }

@@ -20,6 +20,7 @@
 // (`append`/`read`), and `fetch` (globalOutbound egress → the DO's secret-substituting
 // terminal).
 
+import { validateRpc } from "capnweb-validate";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type { Expression } from "./core/expression.ts";
 import type { StreamEvent, StreamEventInput } from "./core/events.ts";
@@ -29,6 +30,7 @@ interface Env {
   CONTEXT: DurableObjectNamespace<StreamDurableObject>;
 }
 
+@validateRpc()
 export class ItxEntrypoint extends WorkerEntrypoint<Env> {
   /** The owning context, re-resolved per call (never a retained stub — the back-channel rule). */
   #host(): DurableObjectStub<StreamDurableObject> {

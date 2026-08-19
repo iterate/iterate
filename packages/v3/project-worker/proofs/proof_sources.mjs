@@ -43,7 +43,10 @@ export class Keeper extends DurableObject {
 }`,
   "src/digest.js": `export default async (itx, events, window) => {
   const poison = events.find((e) => e.payload && e.payload.poison);
-  if (poison) throw new Error("digest: refusing poison at offset " + poison.offset);
+  if (poison)
+    throw Object.assign(new Error("digest: refusing poison at offset " + poison.offset), {
+      retryable: false, // the stamped-flag doctrine: never-retryable halts NOW, not in 30 min
+    });
   const n = Number((await itx.kv.get("digested")) ?? 0) + events.length;
   await itx.kv.put("digested", String(n));
   return n;

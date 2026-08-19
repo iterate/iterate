@@ -1743,6 +1743,9 @@ importers:
       capnweb:
         specifier: npm:@iterate-com/capnweb@0.10.0
         version: '@iterate-com/capnweb@0.10.0'
+      capnweb-validate:
+        specifier: 0.2.1
+        version: 0.2.1(@iterate-com/capnweb@0.10.0)(typescript@5.9.3)
       zod:
         specifier: ^4.1.5
         version: 4.3.6
@@ -8084,6 +8087,16 @@ packages:
 
   caniuse-lite@1.0.30001793:
     resolution: {integrity: sha512-iwSsYWaCOoh26cV8NwNRViHlrfUvYsHDfRVcbtmw0Kg6PJIZZXwMkj1442FYLBGkeUf1juAsU3DTfxW579mrPA==}
+
+  capnweb-validate@0.2.1:
+    resolution: {integrity: sha512-u9IG7JPYFemnyC5NwOwHi428wIlY3Pqbb0nrjjTNfdWRlZOKuQrmZJ9cel11O73b+MPdYWN6+FWR5IWzO7uEjw==}
+    hasBin: true
+    peerDependencies:
+      capnweb: '>=0.7.0'
+      typescript: '>=5.7.0'
+    peerDependenciesMeta:
+      capnweb:
+        optional: true
 
   captun@https://github.com/iterate/captun/releases/download/v0.0.3-websocket.6aa1207/captun-0.0.3.tgz:
     resolution: {tarball: https://github.com/iterate/captun/releases/download/v0.0.3-websocket.6aa1207/captun-0.0.3.tgz}
@@ -22024,6 +22037,13 @@ snapshots:
   camelcase@6.3.0: {}
 
   caniuse-lite@1.0.30001793: {}
+
+  capnweb-validate@0.2.1(@iterate-com/capnweb@0.10.0)(typescript@5.9.3):
+    dependencies:
+      typescript: 5.9.3
+      unplugin: 3.0.0
+    optionalDependencies:
+      capnweb: '@iterate-com/capnweb@0.10.0'
 
   captun@https://github.com/iterate/captun/releases/download/v0.0.3-websocket.6aa1207/captun-0.0.3.tgz(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(ws@8.19.0):
     dependencies:

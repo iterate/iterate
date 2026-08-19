@@ -4,8 +4,8 @@
 // that runs it are one object (the registry-of-N this replaced was bookkeeping for a
 // multi-tenancy that never occurred: every facet hosts exactly one processor).
 //
-// THIS FILE IS THE HEART OF THE USERSPACE SDK: its only runtime import is the dependency-free
-// diff in core/patch.ts (everything else is types) and it
+// THIS FILE IS THE HEART OF THE USERSPACE SDK: its only runtime imports are the dependency-free
+// diff in core/patch.ts and the platform-neutral error channel in core/errors.ts, and it
 // is bundled — together with the zod contract helper from core/events.ts and zod itself, via
 // src/sdk.ts — into every loaded processor isolate as `processor.js` (build-sdk.mjs). Userspace
 // authors write exactly what built-ins write: `defineProcessorContract` with real schemas
@@ -40,6 +40,7 @@
 
 import type { z } from "zod";
 import { diff } from "./patch.ts";
+import { reportIssue } from "./errors.ts";
 import type {
   StreamEvent as StreamEventT,
   StreamEventInput as StreamEventInputT,
@@ -411,10 +412,10 @@ export abstract class StreamProcessor<State> {
           next = this.reduce({ event, state });
         } catch (error) {
           // A malformed/hostile event must not wedge the reduce forever: record the skip, move on.
-          console.error(
-            `processor "${this.contract.slug}" reduce failed at offset ${event.offset}`,
-            error,
-          );
+          reportIssue("processor.reduce", error, {
+            slug: this.contract.slug,
+            offset: event.offset,
+          });
           next = undefined;
         }
         state = next ?? state;
@@ -431,7 +432,7 @@ export abstract class StreamProcessor<State> {
         },
         runInBackground: (work) => {
           void work().catch((error) =>
-            console.error(`processor "${this.contract.slug}" background work failed`, error),
+            reportIssue("processor.background", error, { slug: this.contract.slug }),
           );
         },
         delivery: { caughtUp },
@@ -492,7 +493,7 @@ export abstract class StreamProcessor<State> {
           });
         }
       } catch (error) {
-        console.error(`processor "${this.contract.slug}" live-state emission failed`, error);
+        reportIssue("processor.live-state-emit", error, { slug: this.contract.slug });
       }
     }
   }

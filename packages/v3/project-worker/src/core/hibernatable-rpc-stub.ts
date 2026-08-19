@@ -51,6 +51,10 @@ export function disposeStub(x: unknown): void {
   if (typeof f === "function") (f as () => void).call(x);
 }
 
+import { codedError } from "./errors.ts";
+import { createLogger } from "./logs.ts";
+
+const stubLog = createLogger("hibernatable-rpc-stub");
 const PAGE_TIMEOUT_MS = 10_000; // a paged edge worker has this long to hand back its stub
 
 type Hooks = {
@@ -148,9 +152,11 @@ export class HibernatableRpcStubManager {
   disposeRetainedStubs(): void {
     for (const [stubKey, retained] of this.#retained) {
       if (retained.inFlight > 0)
-        console.warn(
-          `hibernatable rpc stub ${stubKey}: disposing with ${retained.inFlight} in flight (idle quiesce)`,
-        );
+        stubLog.warn("disposing a stub with calls in flight (idle quiesce)", {
+          event: "stub.disposed-in-flight",
+          stubKey,
+          inFlight: retained.inFlight,
+        });
       this.#retained.delete(stubKey);
       disposeStub(retained.invoker);
     }
@@ -199,6 +205,8 @@ export class HibernatableRpcStubManager {
       const a = ws.deserializeAttachment() as HibernatableRpcStubRecord | null;
       return a && typeof a.stubKey === "string" ? a : undefined;
     } catch {
+      // A malformed attachment reads as "no attachment" — the socket is then invisible to the
+      // registry and dies at its next close; better than wedging every enumeration.
       return undefined;
     }
   }
@@ -208,7 +216,10 @@ export class HibernatableRpcStubManager {
     if (retained === undefined) {
       const ws = this.#socketFor(stubKey);
       if (ws === undefined)
-        throw new Error(`hibernatable rpc stub ${stubKey} offline (no pager websocket)`);
+        throw codedError(
+          "CONNECTION_OFFLINE",
+          `hibernatable rpc stub ${stubKey} offline (no pager websocket)`,
+        );
       let pending = this.#pagesPending.get(stubKey);
       if (pending === undefined) {
         let resolve!: () => void;
@@ -244,7 +255,9 @@ export class HibernatableRpcStubManager {
     if (pending) {
       clearTimeout(pending.timer);
       this.#pagesPending.delete(stubKey);
-      pending.reject(new Error(`hibernatable rpc stub ${stubKey} went offline`));
+      pending.reject(
+        codedError("CONNECTION_OFFLINE", `hibernatable rpc stub ${stubKey} went offline`),
+      );
     }
   }
 }

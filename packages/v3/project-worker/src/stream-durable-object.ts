@@ -23,17 +23,19 @@
 // `invokeCapability(callPath, args)` door remains as the degenerate string half of the codec
 // (loaded workers + the stateful runner speak it).
 
+import { validateRpc } from "capnweb-validate";
 import { DurableObject } from "cloudflare:workers";
 import { substituteHeaderSecrets } from "@v3/shared/egress";
 import { asModules, confinedWorker, versionedFacet } from "./core/agent-runtime.ts";
 import { parseAppConfig } from "./core/config.ts";
+import { createLogger } from "./core/logs.ts";
 import {
   breakerRemaining,
   CoreStreamProcessor,
   isCoreControl,
   type CoreState,
 } from "./core-processor.ts";
-import { codedError, errorCode } from "./core/errors.ts";
+import { codedError, errorCode, reportIssue } from "./core/errors.ts";
 import {
   idempotencyConflictMessage,
   sameIdempotentEvent,
@@ -239,7 +241,8 @@ class StreamEventLog {
       let nextOffset = scannedAfterOffset;
       for (const input of inputs) {
         if (input.ephemeral && input.idempotencyKey)
-          throw new Error(
+          throw codedError(
+            "EPHEMERAL_IDEMPOTENCY_KEY",
             "ephemeral events cannot carry an idempotencyKey — nothing idempotent about the unreplayable",
           );
         if (input.idempotencyKey) {
@@ -320,7 +323,9 @@ class StreamEventLog {
 const CAPABILITY_TABLE_SLUG = "capability-table";
 /** The core processor is stateless (pure reduce) — one module-level instance serves every DO. */
 const CORE_PROCESSOR = new CoreStreamProcessor();
+const streamLog = createLogger("stream-do");
 
+@validateRpc()
 export class StreamDurableObject extends DurableObject<Env> {
   /** WHO THIS DO IS — parsed ONCE from the unforgeable codec name; carries projectId, path
    *  AND its canonical string form (`.name`). A stream is only ever reached `getByName`; an
@@ -348,7 +353,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         if (!conn) continue;
         if (conn.key === connectionId || (keyFinal && conn.key === connectionKey))
           await this.revokeCapability({ providedAtOffset: m.providedAtOffset }).catch((e) =>
-            console.error(`auto-revoke of mount ${m.providedAtOffset} failed`, e),
+            reportIssue("stream-do.auto-revoke", e, { providedAtOffset: m.providedAtOffset }),
           );
       }
     },
@@ -419,7 +424,7 @@ export class StreamDurableObject extends DurableObject<Env> {
                   scannedThroughOffset: nextOffset,
                 }),
               )
-              .catch((e) => console.error(`facet "${slug}" drive failed`, e))
+              .catch((e) => reportIssue("stream-do.facet-drive", e, { slug }))
               .finally(() => {
                 this.#facetWorkInFlight--;
                 this.#noteActivity(); // a finished reduce earns a fresh quiet period
@@ -553,7 +558,10 @@ export class StreamDurableObject extends DurableObject<Env> {
     try {
       entry.state = entry.proc.reduce({ event: e, state: entry.state }) ?? entry.state;
     } catch (err) {
-      console.error(`inline "${entry.proc.contract.slug}" reduce failed at ${e.offset}`, err);
+      reportIssue("stream-do.inline-reduce", err, {
+        slug: entry.proc.contract.slug,
+        offset: e.offset,
+      });
     }
   }
 
@@ -607,7 +615,7 @@ export class StreamDurableObject extends DurableObject<Env> {
             f as unknown as { pumpSubscriptionDeliveries(): Promise<unknown> }
           ).pumpSubscriptionDeliveries(),
         )
-        .catch((e) => console.error("subscription-forwarder pump failed", e));
+        .catch((e) => reportIssue("stream-do.forwarder-pump", e));
     if (!this.#facetsResurrected) {
       // THE RESURRECTION PASS: a reduce interrupted by eviction, with no follow-up traffic,
       // would otherwise stall until the next append (the pump only fires on commits). The
@@ -624,7 +632,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         this.#facetEntries().map(({ slug }) =>
           this.#facet(slug)
             .then((f) => f.snapshot())
-            .catch((e) => console.error(`facet "${slug}" resurrection failed`, e)),
+            .catch((e) => reportIssue("stream-do.facet-resurrection", e, { slug })),
         ),
       );
       this.#lastActivityMs = idleSince;
@@ -750,7 +758,12 @@ export class StreamDurableObject extends DurableObject<Env> {
           } satisfies ScannedOffsetRange,
         ])
         .catch((err) =>
-          console.error(`subscription "${row.name}" delivery failed (client heals by pull)`, err),
+          // Survivable by design — the client sees the range gap and heals by pull.
+          streamLog.warn("event-batch delivery dropped", {
+            event: "delivery.event-batch.dropped",
+            subscriptionName: row.name,
+            error: err,
+          }),
         );
     }
   }
@@ -919,7 +932,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       return invokePath(view, path, args, `inline "${slug}"`);
     }
     if (!this.#facetEntries().some((e) => e.slug === slug))
-      throw new Error(`no facet "${slug}" enabled`);
+      throw codedError("NO_FACET", `no facet "${slug}" enabled`);
     // invokePath = stepGet + Reflect.apply with the receiver carried (the DataCloneError
     // learning lives on the helper — see core/expression.ts).
     return invokePath(await this.#facet(slug), path, args, `facet "${slug}"`);
@@ -1151,8 +1164,16 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   /** The page answer: the paged relay hands back a fresh RetainedCallbackInvoker stub, which
    *  stays warm until the idle quiesce disposes it (a page gets it back). */
-  activateItxConnection(input: { connectionId: string; invoker: RetainedCallbackInvoker }) {
-    return this.#itxConnections.activate(input);
+  activateItxConnection(input: {
+    connectionId: string;
+    /** A Workers-RPC stub — a callable Proxy on the wire; structural validation is impossible
+     *  by design, so it rides permissively and the directory types it at the seam. */
+    invoker: unknown;
+  }) {
+    return this.#itxConnections.activate({
+      connectionId: input.connectionId,
+      invoker: input.invoker as RetainedCallbackInvoker,
+    });
   }
   dropItxConnection(input: { connectionId: string }): { ok: true } {
     this.#itxConnections.drop(input.connectionId, "dropped");

@@ -1511,3 +1511,39 @@ consume offsets and are counted by "\*" reducers — the audit trail the kv regi
   remove it). The composed set stays: name codec, connection directory, alarm armer, event
   log, plus the stub manager under the directory.
 - Board spot-proven against the deployed refactor (crisp1, slack, push, livestate).
+
+## Errors, logs, validation — the cloudflare-os adoption (live-15)
+
+Owner directive: their build chain + their error/log patterns, lightweight, ~200 lines.
+
+- **THE BUILD MECHANISM (cloudflare-os wiring, verbatim)**: wrangler's custom-build hook runs
+  the capnweb-validate CLI, which mirrors src/ into .wrangler/validate with every
+  `@validateRpc()` class rewritten to carry validators GENERATED FROM THE TYPESCRIPT
+  SIGNATURES; wrangler bundles the mirror (`main` points there). The Vite plugin rides
+  vitest.config.ts so tests exercise transformed code. ~6 lines of config + 2 lines per class.
+- **BOUNDARY VALIDATION, live-proven**: ProjectSession/Itx/CapabilityProvision (the capnweb
+  boundary), StreamDurableObject (the Workers-RPC verbs incl. append's StreamEventInput[]),
+  and ItxEntrypoint are decorated. Malformed input now dies at the door with a precise path
+  ("Itx.invokeCapability[0].path: expected array, got string"). The dynamic-capability question
+  answered itself: the envelope is static, so validating ~6 doors validates the unbounded
+  system. WIRE TRUTH LEARNED THE HARD WAY: capnweb/Workers-RPC stubs arrive as CALLABLE
+  PROXIES (typeof "function") — structural validators reject them, so stub-typed params
+  (connect's capabilities, provideCapability's capability, activateItxConnection's invoker) are
+  validated permissively BY DESIGN and typed at the use-site seam.
+- **core/errors.ts extended (~80 lines)**: four new codes, each earned by an actual branching
+  caller (CONNECTION_OFFLINE, NOT_A_METHOD, NO_FACET, EPHEMERAL_IDEMPOTENCY_KEY), plus
+  reportIssue(failureSite, caught, attributes) — the cloudflare-os shape with its exact bounds
+  (1024/16384/256/32), minus the Reporter binding (a documented one-line seam) and minus
+  ambient cloudflare:workers (this file rides the platform-neutral SDK bundle).
+- **core/logs.ts NEW (57 lines)**: createLogger(namespace) — one structured console line per
+  call, `event:` dot.names, error→string+errorStack normalization, .with() children; ALS
+  context and level-gating deliberately dropped (no nodejs_compat; filtering belongs in the
+  Workers Logs query).
+- **15 console sites migrated**: unexpected-failure catches → reportIssue; survivable-by-design
+  drops (live-state/event-batch deliveries) → logger.warn with heal-path comments; the two
+  unannotated swallows annotated.
+- **retryable: false honored** (the stamped-flag doctrine, now enforced): the forwarder halts
+  IMMEDIATELY on a never-retryable delivery error instead of burning the 30-minute ladder —
+  prove_push's poison now stamps it and proves the fast halt.
+- Board 13/13 on the validated deploy. Total: errors 80 + logs 57 + config ~16 + migrations
+  ≈ 210 lines, net of deletions ~140.

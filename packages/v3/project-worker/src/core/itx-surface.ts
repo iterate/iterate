@@ -20,6 +20,7 @@
 // stub. The DO keeps that stub warm while traffic flows and disposes it at its idle quiesce (a page gets it
 // back). So the DO holds no stub while idle and hibernates with any number of clients attached.
 
+import { validateRpc } from "capnweb-validate";
 import { RpcTarget } from "capnweb";
 import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
 import type { DeliveryPolicy } from "./events.ts";
@@ -30,9 +31,13 @@ import type { StreamDurableObject } from "../stream-durable-object.ts";
 
 type ItxHostStub = DurableObjectStub<StreamDurableObject>;
 
-/** A retained provider stub (capnweb) from the client. `.dup()` keeps it past the connect/provide call; other
- *  keys are its (remote) methods, resolving back on the client. */
-type ProviderStub = { dup(): ProviderStub; [k: string]: unknown };
+/** A retained provider stub (capnweb) from the client. ON THE WIRE it is a callable stub
+ *  Proxy (`typeof === "function"` — capnweb pipelines property access through it), so a
+ *  structural validator can never inspect it: validated permissively BY DESIGN, typed at the
+ *  use sites (`.dup()` keeps it past the connect/provide call; other keys are its remote
+ *  methods, resolving back on the client). */
+type ProviderStub = unknown;
+type RetainedProviderStub = { dup(): RetainedProviderStub; [k: string]: unknown };
 
 /** A `.connect` input: which context to attach to (default the root), the client-chosen
  *  connectionKey (reconnects under the same key share an ItxConnectionSession), and the live
@@ -54,8 +59,8 @@ interface ProvideLiveInput {
  *  `invoke(capPath, args)` onto it (a DIRECT dotted dispatch — never `.apply`), so a call from the
  *  stream reaches the client's actual function over the capnweb WebSocket. */
 class RetainedCallbackInvoker extends WorkersRpcTarget {
-  #provider: ProviderStub;
-  constructor(provider: ProviderStub) {
+  #provider: RetainedProviderStub;
+  constructor(provider: RetainedProviderStub) {
     super();
     this.#provider = provider;
   }
@@ -82,7 +87,7 @@ interface CapnwebCallbackRelay {
  *  provider stub, open the stub pager WebSocket, answer every page with a fresh stub. */
 async function startCapnwebCallbackRelay(
   host: ItxHostStub,
-  provider: ProviderStub,
+  provider: RetainedProviderStub,
   connectionId: string,
   waitUntil: (p: Promise<unknown>) => void,
 ): Promise<CapnwebCallbackRelay> {
@@ -122,6 +127,7 @@ async function startCapnwebCallbackRelay(
 }
 
 /** `session` at `/api` (bound to one projectId). `get`/`connect` both yield an `Itx`. */
+@validateRpc()
 export class ProjectSession extends RpcTarget {
   readonly #hostNamespace: DurableObjectNamespace<StreamDurableObject>;
   readonly #projectId: string;
@@ -187,7 +193,7 @@ export class ProjectSession extends RpcTarget {
       this.#relays.add(
         await startCapnwebCallbackRelay(
           host,
-          opts.capabilities,
+          opts.capabilities as RetainedProviderStub,
           attached.connectionId,
           this.#waitUntil,
         ),
@@ -200,6 +206,7 @@ export class ProjectSession extends RpcTarget {
 /** The iterate context (`itx`). Dotted capability calls + the built-in collections forward to the DO over
  *  Workers RPC. capnweb terminates upstream in `/api`, so a client stub `itx.a.b(x)` never touches the DO's
  *  transport — it lands here and becomes `DO.invokeCapability("itx.a.b", [x])`. */
+@validateRpc()
 class Itx extends RpcTarget {
   readonly #host: ItxHostStub;
   readonly #relays: Set<CapnwebCallbackRelay>;
@@ -294,7 +301,7 @@ class Itx extends RpcTarget {
   async subscribe(
     input: DeliveryPolicy & {
       name?: string;
-      target: string | Expression | ((...args: never[]) => unknown) | object;
+      target: string | Expression | ProviderStub;
     },
   ): Promise<{ name: string; providedAtOffset: number }> {
     // SUBSCRIBING IS PROVIDING — pure edge sugar: a unique name (concurrent anonymous
@@ -305,8 +312,7 @@ class Itx extends RpcTarget {
     const target =
       typeof rawTarget === "function" ||
       (typeof rawTarget === "object" && !Array.isArray(rawTarget))
-        ? (await this.#parkAsTarget(rawTarget as unknown as ProviderStub, `subscriber ${name}`))
-            .target
+        ? (await this.#parkAsTarget(rawTarget as RetainedProviderStub, `subscriber ${name}`)).target
         : (rawTarget as string | Expression);
     const { providedAtOffset } = await this.#host.provideCapability({
       path: `itx.subscribers.${name}`,
@@ -325,7 +331,7 @@ class Itx extends RpcTarget {
    *  callback in a CapnwebCallbackRelay, and answer the target expression that names it. Every
    *  live thing enters the durable world through here. */
   async #parkAsTarget(
-    provider: ProviderStub,
+    provider: RetainedProviderStub,
     description: string,
   ): Promise<{ connectionId: string; relay: CapnwebCallbackRelay; target: string }> {
     const { connectionId } = await this.#host.attachItxConnection({ description });
@@ -352,7 +358,10 @@ class Itx extends RpcTarget {
   async provideCapability(input: ProvideLiveInput): Promise<CapabilityProvision> {
     if (input.type !== "live")
       throw new Error("itx.provideCapability here only mounts live capabilities");
-    const parked = await this.#parkAsTarget(input.capability, input.instructions ?? "");
+    const parked = await this.#parkAsTarget(
+      input.capability as RetainedProviderStub,
+      input.instructions ?? "",
+    );
     const { providedAtOffset } = await this.#host.provideCapability({
       path: ["itx", ...input.path],
       target: parked.target,
@@ -368,6 +377,7 @@ class Itx extends RpcTarget {
 }
 
 /** Ownership handle for one `itx.provideCapability()`. */
+@validateRpc()
 class CapabilityProvision extends RpcTarget {
   readonly #host: ItxHostStub;
   readonly #providedAtOffset: number;
