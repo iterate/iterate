@@ -1,6 +1,11 @@
 // core/itx-surface.ts — the client-facing capnweb surface + the stateless RELAY. This is the ONE place capnweb
 // terminates (the `/api` worker); it reaches the StreamDurableObject only over Workers RPC (the hard rule).
 //
+// INVARIANT (owner): THE CLIENT IS JUST CAPNWEB. Every class in this file is a SERVER-side
+// RpcTarget; what a client holds is a plain capnweb proxy of it. There is no client SDK and
+// none may be introduced — a client's whole dependency is the capnweb package. Anything that
+// would need client-side smarts belongs HERE, behind an RpcTarget method.
+//
 // A client dials `/api` and gets a `ProjectSession`:
 //   • `get()`     → the project `Itx` (the root context). Pure addressing.
 //   • `connect({ context?, connectionKey?, capabilities?, description? })` → the `Itx` of THAT context, PLUS an

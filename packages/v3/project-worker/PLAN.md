@@ -94,6 +94,15 @@ payloads (we send EVENT BATCHES and STATE CHANGE EVENTS; frame = WebSocket trans
 - Review pass 1: completeness vs the chat decisions. Review pass 2: tightness/no-junk/"would
   Kenton have endorsed this" + LAYERS.md rewritten to five layers + BUILD-LOG + memory + report.
 
+## Invariants (owner-ratified)
+
+THE CLIENT IS JUST CAPNWEB: the `itx` stub a client holds is a plain capnweb proxy of a
+server-side RpcTarget — there is NO client SDK, no wrapper library, and none may ever be
+introduced. A client's entire dependency list is `capnweb` itself: `newWebSocketRpcSession(url)`
+→ `session.authenticate().get()/.connect(...)`, and everything after that is capnweb's own
+proxy semantics (dotted calls, promise pipelining, RpcTarget callbacks). Anything that would
+need client-side smarts must instead live server-side behind an RpcTarget method.
+
 ## Deliberately NOT doing (owner-ratified)
 
 Outbound coalescing (decision closed: raw sends); presence-is-subscription (dissolved into
