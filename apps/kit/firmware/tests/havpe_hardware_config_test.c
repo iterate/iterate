@@ -43,25 +43,27 @@ static void preserves_the_first_party_codec_sequence(void) {
 }
 
 /*
- * The tap selection's measured history lives with the selection itself
- * (voice_pe_hardware_config.c): NS won an earlier campaign (0.982
- * matched-path similarity, three clean server-VAD starts), and was then
- * superseded by AEC with a FIXED gain after it — measured against the real
- * provider, the AEC tap's echo sits AT the room floor (+1.0 dB over it,
- * versus +25 dB at NS and +22 dB at AGC, where x.ai heard itself and
- * cancelled its own answer mid-count). This test does not re-litigate that
- * measurement; it pins that the pure hardware-policy module TRUTHFULLY
- * reports the stage the build selected (the compile-time default, which the
- * test build sets explicitly in CMakeLists), and that the command encoder
- * renders it mechanically. A physical regression changes one testable
- * contract here; the oracle for re-selection is `voicelab aec --stages` on
- * the board, not this file.
+ * THIS TEST IS THE ORACLE'S GUARD, AND IT HAS EARNED THE JOB TWICE. It
+ * asserts the NS tap because NS is the only stage a REAL CONVERSATION has
+ * ever endorsed: the corrected campaign measured 0.982 matched-path
+ * similarity, 0.901 under double-talk, three clean server-VAD starts and
+ * no speaker-echo turn. The AEC tap's bench windows look better and its
+ * conversations are worse — the recorded production run leaked the first
+ * short reply nearly unchanged, and on 2026-08-19 a stage-1 build that
+ * slipped past this very test (the assertion was "corrected" to match the
+ * drifted code instead of the code corrected to match it) reached a
+ * physical board and read echoRawPeak 8509 vs echoCleanPeak 8514
+ * mid-conversation: cancellation of nothing, heard as double talk. When
+ * this assertion disagrees with voice_pe_hardware_config.c, the FIX IS IN
+ * THE CONFIG, and the evidence standard for moving it is the board's own
+ * oracle (`voicelab aec --stages`, health's echoRawPeak/echoCleanPeak) on
+ * a live conversation — never a bench window, never this file.
  */
 static void selects_a_truthful_raw_and_server_vad_xmos_pair(void) {
   uint8_t command[4] = {0xffU, 0xffU, 0xffU, 0xffU};
   assert(
       iterate_kit_voice_pe_xmos_uplink_stage() ==
-      ITERATE_KIT_VOICE_PE_XMOS_STAGE_AEC);
+      ITERATE_KIT_VOICE_PE_XMOS_STAGE_NS);
   assert(
       iterate_kit_voice_pe_xmos_pipeline_command(
           0U,
@@ -71,7 +73,7 @@ static void selects_a_truthful_raw_and_server_vad_xmos_pair(void) {
   assert(command[0] == 241U);
   assert(command[1] == 0x30U);
   assert(command[2] == 1U);
-  assert(command[3] == 1U);
+  assert(command[3] == 3U);
 
   assert(
       iterate_kit_voice_pe_xmos_pipeline_command(

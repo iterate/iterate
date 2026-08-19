@@ -9,8 +9,20 @@
  * mirrored by the public enum below, so reject an out-of-range cache value at
  * compile time rather than sending an invented command to hardware.
  */
+/*
+ * NS (3), AND THE DRIFT TO 1 IS A CAUTIONARY TALE. The long comment below
+ * argues honestly for the AEC tap from bench windows — and a real
+ * conversation falsified it TWICE: first the production run it records
+ * ("the first short reply leaked through the AEC tap nearly unchanged"),
+ * and then again live on 2026-08-19, when a stage-1 build reached a
+ * physical board mid-conversation and the board's own oracle read
+ * echoRawPeak 8509 against echoCleanPeak 8514 — the "cancelled" uplink as
+ * loud as the raw microphone, and the listener heard nothing but double
+ * talk. The hardware-config test pins THIS number; the day it goes red
+ * against this file, the test is the side that is right.
+ */
 #ifndef ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE
-#define ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE 1
+#define ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE 3
 #endif
 
 #if ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE < 0 || \
