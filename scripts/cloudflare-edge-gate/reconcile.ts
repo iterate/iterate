@@ -53,6 +53,7 @@ export function compileScannerGateRule(entries: readonly ScannerPolicyEntry[] = 
   if (entries.length === 0) throw new Error("The scanner policy must not be empty.");
   const paths = new Set<string>();
   const extensions = new Set<string>();
+  const pathWildcards = new Set<string>();
   for (const entry of entries) {
     if (entry.extension !== undefined) {
       if (!/^[a-z0-9]+$/.test(entry.extension)) {
@@ -64,6 +65,23 @@ export function compileScannerGateRule(entries: readonly ScannerPolicyEntry[] = 
         throw new Error(`Duplicate scanner extension ${JSON.stringify(entry.extension)}.`);
       }
       extensions.add(entry.extension);
+      continue;
+    }
+    if (entry.pathWildcard !== undefined) {
+      if (!/^\*\/[a-z0-9._/*-]+$/.test(entry.pathWildcard) || entry.pathWildcard.includes("**")) {
+        throw new Error(
+          `Scanner path wildcard ${JSON.stringify(entry.pathWildcard)} must be a lowercase URI wildcard.`,
+        );
+      }
+      if (entry.pathWildcard.includes("/.well-known")) {
+        throw new Error(
+          `Scanner path wildcard ${JSON.stringify(entry.pathWildcard)} could break domain validation.`,
+        );
+      }
+      if (pathWildcards.has(entry.pathWildcard)) {
+        throw new Error(`Duplicate scanner path wildcard ${JSON.stringify(entry.pathWildcard)}.`);
+      }
+      pathWildcards.add(entry.pathWildcard);
       continue;
     }
     if (!/^\/[a-z0-9._/-]+$/.test(entry.path)) {
@@ -96,6 +114,11 @@ export function compileScannerGateRule(entries: readonly ScannerPolicyEntry[] = 
         .join(" ")}}`,
     );
   }
+  predicates.push(
+    ...[...pathWildcards]
+      .sort()
+      .map((wildcard) => `http.request.uri.path wildcard ${JSON.stringify(wildcard)}`),
+  );
   const expression = predicates.length === 1 ? predicates[0] : `(${predicates.join(" or ")})`;
   if (Buffer.byteLength(expression) > 4_096) {
     throw new Error("The scanner expression exceeds Cloudflare's 4096-byte limit.");
@@ -208,7 +231,7 @@ function ruleMatches(current: Rule, desired: DesiredRule) {
 export async function verifyEdgeGateTraffic(target: EdgeGateTarget, fetcher = fetch) {
   for (const { smokeHostname } of target.zones) {
     const nonce = Date.now().toString(36);
-    for (const path of ["/.env", "/__edge-gate-smoke__.php"]) {
+    for (const path of ["/.env", "/app/.env.production", "/__edge-gate-smoke__.php"]) {
       let blocked: Response | undefined;
       for (let attempt = 1; attempt <= 15; attempt++) {
         blocked = await fetcher(`https://${smokeHostname}${path}?edge-gate-smoke=${nonce}`, {

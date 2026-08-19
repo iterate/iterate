@@ -13,7 +13,7 @@ import {
 
 const phasePath = "/rulesets/phases/http_request_firewall_custom/entrypoint";
 const expression =
-  '(lower(http.request.uri.path) in {"/.aws/credentials" "/.ds_store" "/.env" "/.git/config" "/.git/head" "/.htpasswd" "/.ssh/id_rsa" "/.svn/entries" "/server-info" "/server-status"} or http.request.uri.path.extension in {"php"})';
+  '(lower(http.request.uri.path) in {"/.ds_store" "/.htpasswd" "/server-info" "/server-status"} or http.request.uri.path.extension in {"php"} or http.request.uri.path wildcard "*/.aws/*" or http.request.uri.path wildcard "*/.env" or http.request.uri.path wildcard "*/.env.*" or http.request.uri.path wildcard "*/.git" or http.request.uri.path wildcard "*/.git/*" or http.request.uri.path wildcard "*/.hg/*" or http.request.uri.path wildcard "*/.ssh/*" or http.request.uri.path wildcard "*/.svn/*")';
 const description = "Block reviewed source and secret disclosure probes before Workers";
 const preview: EdgeGateTarget = {
   envName: "preview_12",
@@ -32,7 +32,7 @@ const production: EdgeGateTarget = {
 };
 
 describe("policy compiler", () => {
-  it("sorts reviewed exact paths and extensions", () => {
+  it("sorts reviewed exact paths, extensions, and wildcards", () => {
     expect(compileScannerGateRule().expression).toBe(expression);
   });
 
@@ -42,6 +42,9 @@ describe("policy compiler", () => {
     ["duplicate", [entry("/.env"), entry("/.env")]],
     ["uppercase extension", [extension("PHP")]],
     ["duplicate extension", [extension("php"), extension("php")]],
+    ["uppercase wildcard", [wildcard("*/.ENV")]],
+    ["well-known wildcard", [wildcard("*/.well-known/*")]],
+    ["duplicate wildcard", [wildcard("*/.env"), wildcard("*/.env")]],
     ["empty", []],
     ["size limit", [entry(`/${"a".repeat(4_100)}`)]],
   ])("rejects %s policy mistakes", (_name, entries) => {
@@ -184,6 +187,14 @@ function entry(path: string): ScannerPolicyEntry {
 function extension(value: string): ScannerPolicyEntry {
   return {
     extension: value,
+    reason: "test",
+    evidence: { observedOn: "2026-08-17", productionInvocations: 1 },
+  };
+}
+
+function wildcard(value: string): ScannerPolicyEntry {
+  return {
+    pathWildcard: value,
     reason: "test",
     evidence: { observedOn: "2026-08-17", productionInvocations: 1 },
   };

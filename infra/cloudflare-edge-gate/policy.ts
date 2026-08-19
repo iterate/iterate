@@ -7,63 +7,77 @@ interface ScannerPolicyEvidence {
 }
 
 export type ScannerPolicyEntry = ScannerPolicyEvidence &
-  ({ path: string; extension?: undefined } | { extension: string; path?: undefined });
+  (
+    | { path: string; extension?: undefined; pathWildcard?: undefined }
+    | { extension: string; path?: undefined; pathWildcard?: undefined }
+    | { pathWildcard: string; extension?: undefined; path?: undefined }
+  );
 
 /** Reviewed request shapes that Iterate will never intentionally serve. */
 export const scannerPolicy = [
   {
-    path: "/.git/config",
-    reason: "A public Git configuration is a source-disclosure probe, not an Iterate route.",
-    evidence: { observedOn: "2026-08-18", productionInvocations: 853 },
+    pathWildcard: "*/.git",
+    reason: "A public Git metadata path is a source-disclosure probe, not an Iterate route.",
+    evidence: { observedOn: "2026-08-18", productionInvocations: 38 },
   },
   {
-    path: "/.git/head",
-    reason: "A public Git HEAD file is a source-disclosure probe, not an Iterate route.",
-    evidence: { observedOn: "2026-08-18", productionInvocations: 447 },
+    pathWildcard: "*/.git/*",
+    reason: "Public Git metadata files are source-disclosure probes, not Iterate routes.",
+    evidence: { observedOn: "2026-08-18", productionInvocations: 845 },
   },
   {
-    path: "/.env",
-    reason: "A public dotenv file is a secret-disclosure probe, not an Iterate route.",
-    evidence: { observedOn: "2026-08-18", productionInvocations: 850 },
+    pathWildcard: "*/.env",
+    reason: "Public dotenv files are secret-disclosure probes, not Iterate routes.",
+    evidence: { observedOn: "2026-08-18", productionInvocations: 5_944 },
   },
   {
-    path: "/.aws/credentials",
-    reason: "A public AWS credentials file is a secret-disclosure probe, not an Iterate route.",
-    evidence: { observedOn: "2026-08-18", productionInvocations: 362 },
+    pathWildcard: "*/.env.*",
+    reason: "Public environment-specific dotenv files are secret-disclosure probes.",
+    evidence: { observedOn: "2026-08-18", productionInvocations: 10_121 },
   },
   {
-    path: "/.ssh/id_rsa",
-    reason: "A public SSH private key is a secret-disclosure probe, not an Iterate route.",
-    evidence: { observedOn: "2026-08-18", productionInvocations: 188 },
+    pathWildcard: "*/.aws/*",
+    reason: "Public AWS metadata files are credential-disclosure probes, not Iterate routes.",
+    evidence: { observedOn: "2026-08-18", productionInvocations: 1_233 },
   },
   {
-    path: "/.svn/entries",
-    reason: "A public Subversion metadata file is a source-disclosure probe, not an Iterate route.",
-    evidence: { observedOn: "2026-08-18", productionInvocations: 172 },
+    pathWildcard: "*/.ssh/*",
+    reason: "Public SSH metadata files are credential-disclosure probes, not Iterate routes.",
+    evidence: { observedOn: "2026-08-18", productionInvocations: 596 },
+  },
+  {
+    pathWildcard: "*/.svn/*",
+    reason: "Public Subversion metadata files are source-disclosure probes, not Iterate routes.",
+    evidence: { observedOn: "2026-08-18", productionInvocations: 90 },
+  },
+  {
+    pathWildcard: "*/.hg/*",
+    reason: "Public Mercurial metadata files are source-disclosure probes, not Iterate routes.",
+    evidence: { observedOn: "2026-08-18", productionInvocations: 1 },
   },
   {
     path: "/.ds_store",
     reason: "A public macOS directory index is a disclosure probe, not an Iterate route.",
-    evidence: { observedOn: "2026-08-18", productionInvocations: 32 },
+    evidence: { observedOn: "2026-08-18", productionInvocations: 16 },
   },
   {
     path: "/.htpasswd",
     reason: "A public Apache password file is a credential probe, not an Iterate route.",
-    evidence: { observedOn: "2026-08-18", productionInvocations: 164 },
+    evidence: { observedOn: "2026-08-18", productionInvocations: 82 },
   },
   {
     path: "/server-status",
     reason: "An Apache status endpoint is a server probe, not an Iterate route.",
-    evidence: { observedOn: "2026-08-18", productionInvocations: 209 },
+    evidence: { observedOn: "2026-08-18", productionInvocations: 105 },
   },
   {
     path: "/server-info",
     reason: "An Apache configuration endpoint is a server probe, not an Iterate route.",
-    evidence: { observedOn: "2026-08-18", productionInvocations: 177 },
+    evidence: { observedOn: "2026-08-18", productionInvocations: 89 },
   },
   {
     extension: "php",
     reason: "Iterate runs Workers rather than PHP; this suffix is reserved for scanner traffic.",
-    evidence: { observedOn: "2026-08-18", productionInvocations: 106_702 },
+    evidence: { observedOn: "2026-08-18", productionInvocations: 53_348 },
   },
 ] as const satisfies readonly ScannerPolicyEntry[];
