@@ -149,6 +149,7 @@ import {
 } from "iterate/processors";
 import { z } from "zod";
 import { Pcm16Resampler } from "./pcm.ts";
+import { createVisemeTracker, firmwareVisemes } from "./viseme.ts";
 
 /* ========================================================================== */
 /* CONSTANTS                                                                  */
@@ -555,6 +556,14 @@ const VoiceState = z.object({
    * and the session gets `turn_detection: null` regardless.
    */
   turnDetection: z.looseObject({ type: z.string() }).nullable().default(null),
+  /**
+   * Classify the answer's audio into mouth shapes and publish the newest one
+   * in the runtime bag, where a face-rendering board's 10 Hz poll reads it.
+   * Certificate data because it is a fact about the CLIENT (does anything
+   * render a mouth?), and because on a 16 kHz-native provider the classifier
+   * costs the one delta decode the identity path otherwise never pays.
+   */
+  visemes: z.boolean().default(false),
   /** Tools the model may call — see {@link VoiceTool}. */
   tools: z.array(VoiceTool).default([]),
   call: z
@@ -615,7 +624,11 @@ export const VoiceAgent2Contract = defineProcessorContract({
   /* 7.0.0: the certificate can carry the provider's own `turn_detection`
    * object verbatim (`turnDetection`), so open-mic VAD is tuned per stream
    * instead of per deploy. Clean break as ever. */
-  version: "7.0.0",
+  /* 8.0.0: the face returns — `visemes` on the certificate classifies the
+   * answer's audio into mouth shapes and publishes the newest in the
+   * runtime bag, where the boards' existing 10 Hz poll has been reading
+   * nothing since v1. */
+  version: "8.0.0",
   description: "Runs a voice call in the stream's own Durable Object, one flush watermark deep.",
   stateSchema: VoiceState,
   events: {
@@ -638,6 +651,7 @@ export const VoiceAgent2Contract = defineProcessorContract({
         instructions: z.string().optional(),
         clientTakesTurns: z.boolean().optional(),
         turnDetection: z.looseObject({ type: z.string() }).optional(),
+        visemes: z.boolean().optional(),
         tools: z.array(VoiceTool).optional(),
       }),
     },
@@ -1057,6 +1071,19 @@ interface Dial {
    */
   truncates: boolean;
   /**
+   * The mouth-shape classifier, when the certificate says something renders
+   * a face; null costs nothing. Reset per answer — its playout clock is
+   * samples from THE ANSWER's first sample, the coordinate the firmware's
+   * viseme queue advances against played audio.
+   */
+  visemeTracker: ReturnType<typeof createVisemeTracker> | null;
+  /**
+   * Which answer of this dial is playing, 1-based — the `answer` half of
+   * the firmware's (answer, playoutSamples) coordinate, so a queued shape
+   * from a dead answer can never move the mouth during the next one.
+   */
+  answerNumber: number;
+  /**
    * Whether this dial's provider kills a streaming response itself at a
    * VAD onset — the PROVIDERS row's fact, carried here like `truncates`.
    * The speech_started arm branches on it: true (openai) means a
@@ -1134,6 +1161,8 @@ const freshDial = (
   micResampler: new Pcm16Resampler(16_000, provider.rate),
   spkResampler: new Pcm16Resampler(provider.rate, 16_000),
   truncates: provider.truncates,
+  visemeTracker: null,
+  answerNumber: 0,
   cancelsOnVadOnset: provider.cancelsOnVadOnset,
   pendingRepair: null,
   openToolCallIds: new Set(),
@@ -1252,6 +1281,21 @@ export class VoiceAgent2Processor extends StreamProcessor<
    * a Dial: the failed dial is already gone when the next caller asks. */
   #lastDialFailedAtFacetMs = 0;
   /**
+   * THE FACE IS A VALUE, NOT A STREAM: the newest mouth shape only, replaced
+   * in place, which is what a 10 Hz poll wants — the latest truth, never a
+   * backlog of positions the mouth has already left. Deliberately not
+   * durable: after a restart the mouth should be shut, not restored to
+   * whatever shape it held when the incarnation died. The firmware dedupes
+   * on `at`, so every fold stamps a fresh clock.
+   */
+  #face: {
+    answer: number;
+    playoutSamples: number;
+    viseme: number;
+    confidence: number;
+    at: number;
+  } | null = null;
+  /**
    * The mirror lane's outbox, drained by ONE background flush at a time.
    *
    * Every provider message and every client control used to be its own
@@ -1299,6 +1343,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
           instructions: event.payload.instructions ?? "",
           clientTakesTurns: event.payload.clientTakesTurns ?? false,
           turnDetection: event.payload.turnDetection ?? null,
+          visemes: event.payload.visemes ?? false,
           tools: event.payload.tools ?? [],
         };
 
@@ -1606,6 +1651,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
      * taken and the mic path queues for the whole handshake. The socket
      * arrives below; everything else the dial owns starts fresh here. */
     const dial = freshDial(conversationId, provider);
+    if (state.visemes) dial.visemeTracker = createVisemeTracker();
     this.#dial = dial;
     const dialStartedAtFacetMs = this.deps.nowAtFacetMs();
     /* THIS DIAL'S OWN IDENTITY, for keys that must not collide with the
@@ -1975,6 +2021,11 @@ export class VoiceAgent2Processor extends StreamProcessor<
              * held tail of a CANCELLED answer would smear its first
              * milliseconds. */
             dial.spkResampler.reset();
+            /* And a new mouth track: the playout clock back to zero, the
+             * answer number forward, so a queued shape from the dead answer
+             * can never move the mouth during this one. */
+            dial.answerNumber += 1;
+            dial.visemeTracker?.reset();
             if (followUp) {
               /* The follow-up this agent asked for: the previous answer's
                * spoken preamble is still draining — most of it UNPLAYED in
@@ -2044,12 +2095,21 @@ export class VoiceAgent2Processor extends StreamProcessor<
               for (let cut = 0; cut < grok.delta.length; cut += IDENTITY_SLICE_B64_CHARS) {
                 dial.speakerQueue.push(grok.delta.slice(cut, cut + IDENTITY_SLICE_B64_CHARS));
               }
+              /* The one decode the identity path ever pays, and only when a
+               * face is rendering — which is why `visemes` is certificate
+               * data rather than always-on. */
+              if (dial.visemeTracker !== null) {
+                this.#trackVisemes(dial, base64ToBytes(grok.delta));
+              }
             } else {
               /* The pipeline is 16 kHz from here to the speaker; a provider
                * that talks faster gets resampled at the door — and encoded
                * per cut HERE, at arrival, not on the pacer's clock. */
               const pcm16 = dial.spkResampler.push(base64ToBytes(grok.delta));
               dial.answer.receivedMs += pcm16.length / PCM16_BYTES_PER_MS;
+              /* The PCM the classifier reads is the PCM the speaker will
+               * play — free on this path, the resample already decoded it. */
+              if (dial.visemeTracker !== null) this.#trackVisemes(dial, pcm16);
               for (let cut = 0; cut < pcm16.length; cut += MAX_SPEAKER_PAYLOAD_BYTES) {
                 dial.speakerQueue.push(
                   bytesToBase64(
@@ -2088,6 +2148,11 @@ export class VoiceAgent2Processor extends StreamProcessor<
             if (dial.answer.phase === "cancelled") return;
             dial.answer.phase = "settled";
             dial.answer.endsWhenQueueDrains = true;
+            /* The mouth always closes with SIL at the end of its track. */
+            if (dial.visemeTracker !== null) {
+              const closing = dial.visemeTracker.end();
+              if (closing !== undefined) this.#foldFace(dial, closing);
+            }
             this.#sendSpeakerAudio(dial, append, runInBackground);
             return;
 
@@ -2504,6 +2569,56 @@ export class VoiceAgent2Processor extends StreamProcessor<
   }
 
   /**
+   * Fold the newest mouth shape into the face value, stamped with a fresh
+   * facet clock — the firmware dedupes identical polls on `at`, so the stamp
+   * is what makes a repeated shape at a new moment still a new fact.
+   */
+  #foldFace(
+    dial: Dial,
+    shape: { playoutSamples: number; viseme: number; confidence: number },
+  ): void {
+    this.#face = {
+      answer: dial.answerNumber,
+      playoutSamples: shape.playoutSamples,
+      viseme: shape.viseme,
+      confidence: shape.confidence,
+      at: this.deps.nowAtFacetMs(),
+    };
+  }
+
+  /**
+   * Classify a chunk of the answer's own 16 kHz PCM into mouth shapes and
+   * keep the newest. The tracker emits sparse CHANGES; a burst answer
+   * classifies far ahead of playback, and that is fine — the firmware's
+   * viseme queue holds shapes by (answer, playoutSamples) and advances them
+   * against audio actually played.
+   */
+  #trackVisemes(dial: Dial, pcm16: Uint8Array): void {
+    if (dial.visemeTracker === null) return;
+    const samples = new Int16Array(
+      pcm16.buffer,
+      pcm16.byteOffset,
+      Math.floor(pcm16.byteLength / 2),
+    );
+    const shapes = dial.visemeTracker.push(samples);
+    const latest = shapes.at(-1);
+    if (latest !== undefined) this.#foldFace(dial, latest);
+  }
+
+  /**
+   * What a face-rendering board's 10 Hz poll reads. The boards have been
+   * polling this the whole time — v2 simply had nothing to say until now.
+   */
+  override async getRuntimeState() {
+    return {
+      runtime: {
+        face: this.#face,
+        now: this.deps.nowAtFacetMs(),
+      },
+    };
+  }
+
+  /**
    * What the listener has HEARD of the answer, read off the pacer's own
    * schedule: everything handed to the device, minus what still sat unplayed
    * in its buffer — which a clear is about to throw away. The schedule
@@ -2676,6 +2791,16 @@ export class VoiceAgent2Processor extends StreamProcessor<
     cancel: boolean,
   ): void {
     dial.hangUpAfterAnswerDrains = null;
+    /* A barged answer's mouth shuts NOW — the shapes still queued belong to
+     * audio the clear just erased. */
+    if (dial.visemeTracker !== null) {
+      dial.visemeTracker.reset();
+      this.#foldFace(dial, {
+        playoutSamples: 0,
+        viseme: firmwareVisemes.SIL,
+        confidence: 0,
+      });
+    }
     /* Read BEFORE the repair moves a streaming answer to "cancelled". */
     const responseWasStreaming = dial.answer.phase === "streaming";
     this.#dropAnswerInFlight(dial, decidedAtFacetMs, append);
@@ -3124,6 +3249,8 @@ export interface SetupVoiceAgent2Options {
   /** The provider's own turn_detection object, verbatim, for open-mic VAD
    * tuning per stream. Omitted takes the measured defaults. */
   turnDetection?: Record<string, unknown> & { type: string };
+  /** Classify the answer into mouth shapes for a face-rendering client. */
+  visemes?: boolean;
   /** Tools the model may call: name/description/parameters go to the
    * provider; the itx expression is the run. No expression = hang_up. */
   tools?: z.input<typeof VoiceTool>[];

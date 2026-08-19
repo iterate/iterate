@@ -508,3 +508,26 @@ survives both providers: a provider-initiated created CONFIRMS the hold
 silently. Regression-pinned with grok's measured wire order; all live
 proofs green on both providers after the fix (note SEEN, openai "The
 last number I said out loud was 9", hang-up clean).
+
+**F20 (2026-08-19, the boards return): HAVPE and Waveshare live on v2,
+and the face comes back server-side (contract 8.0.0).** HAVPE: the
+morning's wrongly-"fixed" tap test was the oracle — a stage-1 build
+read echoRawPeak 8509 vs echoCleanPeak 8514 (cancelling nothing, pure
+double talk); the NS default returned (fdc9313ef), runtime-recovered
+via aec.setStage without a reflash, then boot-proven. Acoustic proof
+through real air (Mac `say` → board mic → OpenAI → board speaker): PASS
+
+- barge PASS, echo oracle 219/165, and the NEW input transcription
+  (gpt-live-transcribe on the openai session) heard the spoken prompt
+  VERBATIM while the board's own counting stayed out of the mic. The host
+  CLI also grew a true `--open-mic` posture (space does nothing, q hangs
+  up, call-end re-arms capture) so talk2's four modes all really work.
+  Waveshare: flashed clean, PTT acoustic proof PASS + barge PASS.
+  Visemes: `visemes` on the certificate runs viseme.ts at delta arrival
+  (free on the openai resample path; one gated decode on identity paths),
+  folds the newest shape into a face VALUE, and publishes it via
+  getRuntimeState — the bag the boards' 10 Hz poll has been reading since
+  v1. Hardware-proven the same hour: facePolls 0→29, faceUpdates 0→14
+  during a live answer — the AMOLED face lip-synced. Both boards carry
+  preview-3 blobs (offsets 0x510000/0x410000); a CI erase orphans them
+  until a re-blob (~2 min each on USB).

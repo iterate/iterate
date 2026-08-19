@@ -1506,6 +1506,105 @@ describe("a flush names a sequence number", () => {
  * (five per turn measured from echo residue), so what it may and may not
  * destroy depends on whether the provider is still generating.
  */
+describe("the face", () => {
+  /** An answer with real spectral shape, so the classifier has something to
+   * classify — silence classifies as SIL, which proves nothing moved. */
+  function voicedAudio(ms: number): string {
+    const samples = new Int16Array(ms * 16);
+    for (let index = 0; index < samples.length; index++) {
+      samples[index] = Math.round(
+        9_000 * Math.sin((2 * Math.PI * 220 * index) / 16_000) +
+          4_000 * Math.sin((2 * Math.PI * 700 * index) / 16_000),
+      );
+    }
+    return base64(new Uint8Array(samples.buffer));
+  }
+
+  async function faceOf(h: Harness) {
+    const state = (await h.processor().getRuntimeState()) as {
+      runtime: { face: { viseme: number; answer: number; at: number } | null };
+    };
+    return state.runtime.face;
+  }
+
+  it("a visemes certificate publishes mouth shapes in the runtime bag", async () => {
+    const h = makeHarness();
+    await h.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: {
+        providerBaseUrl: "https://fake.provider.test/v1/realtime",
+        clientTakesTurns: CLIENT_TAKES_TURNS,
+        visemes: true,
+      },
+    });
+    await h.append(micFrame(1));
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
+    expect(await faceOf(h)).toBeNull();
+
+    h.provider.responseCreated();
+    h.provider.push({
+      type: "response.output_audio.delta",
+      delta: voicedAudio(600),
+      item_id: "item_face",
+      content_index: 0,
+    });
+    await h.settle();
+    const face = await faceOf(h);
+    expect(face).not.toBeNull();
+    expect(face!.answer).toBe(1);
+    /* The mouth closes with SIL when the answer's track ends. */
+    h.provider.answerComplete();
+    await h.settle();
+    expect((await faceOf(h))!.viseme).toBe(14);
+  });
+
+  it("a barge shuts the mouth immediately", async () => {
+    const h = makeHarness();
+    await h.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: {
+        providerBaseUrl: "https://fake.provider.test/v1/realtime",
+        clientTakesTurns: CLIENT_TAKES_TURNS,
+        visemes: true,
+      },
+    });
+    await h.append(micFrame(1));
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
+    h.provider.responseCreated();
+    h.provider.push({
+      type: "response.output_audio.delta",
+      delta: voicedAudio(2_000),
+      item_id: "item_face",
+      content_index: 0,
+    });
+    await h.settle();
+
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    const face = await faceOf(h);
+    expect(face!.viseme).toBe(14);
+    expect(face!.answer).toBe(1);
+  });
+
+  it("without the certificate flag the bag stays empty and nothing classifies", async () => {
+    const h = makeHarness();
+    await callIsLive(h, CLIENT_TAKES_TURNS);
+    h.provider.responseCreated();
+    h.provider.push({
+      type: "response.output_audio.delta",
+      delta: voicedAudio(600),
+      item_id: "item_noface",
+      content_index: 0,
+    });
+    await h.settle();
+    expect(await faceOf(h)).toBeNull();
+  });
+});
+
 describe("the open-mic barge", () => {
   it("repairs the memory of a barged active response, and never sends cancel", async () => {
     /* An OPENAI call, because the destructive mid-stream arm is openai's:

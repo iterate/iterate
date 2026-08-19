@@ -112,6 +112,8 @@ export interface Talk2Options extends TalkOptions {
    * '{"type":"server_vad","threshold":0.5,"silence_duration_ms":300}'.
    */
   turnDetection?: string;
+  /** Classify the answer into mouth shapes for a face-rendering board. */
+  visemes?: boolean;
 }
 
 export async function talk2(options: Talk2Options = {}) {
@@ -192,6 +194,7 @@ export async function talk2(options: Talk2Options = {}) {
        * never replies.
        */
       clientTakesTurns: options.openMic !== true,
+      ...(options.visemes === true && { visemes: true }),
       ...(options.turnDetection !== undefined && {
         turnDetection: JSON.parse(options.turnDetection) as Record<string, unknown> & {
           type: string;
