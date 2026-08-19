@@ -142,6 +142,25 @@ Tests: \_\_tests\_\_/failing-ws-fetch-capability.test.ts (2 pass / 2 fails / 1 t
     append-during-delivery reentrancy (bounded + loud), waiter hygiene. Infra note: the validated
     relay does NOT strip undeclared fields — a deliberate strict-vs-passthrough decision is owed.
 
+## Family J — apps/os-mined contracts (wave 2: failing-appsos-mined tests, 10 parity locks + 3 fails)
+
+34. ☠ FORGEABLE REVOKE KEY: revoke appends under the deterministic idempotencyKey
+    `capability-table/revoke:<offset>` in an unreserved namespace — a public append can squat
+    it first; the real revoke then IDEMPOTENCY_CONFLICTs and the capability resolves FOREVER
+    (verified incl. mount survival). FIX: reserve a platform prefix at the append door
+    (reject public idempotencyKeys starting `capability-table/` — the apps/os
+    iterate-internal fence, ~3 lines).
+35. ⚠ caughtUp fires on batches provably BEHIND the shown head (processEventBatch's contiguous
+    branch hardcodes atHead=true). FIX: pass `range.scannedThroughOffset >=
+#pushedThroughOffset` (~1 line).
+36. ⚠ waitUntilProcessed parks its full timeout on a THROWING self-pull (the wake rejection is
+    swallowed by the chain's catch); rejects with the generic timeout message instead of the
+    read error. FIX: per-call catch on the fired wake() rejecting the specific waiter with the
+    underlying error (~3 lines).
+37. (parity boundary, no fix intended) configure-time receiver verification is deliberately
+    NOT given — same documented non-guarantee as apps/os guarantees-not-given.test.ts:344; the
+    test.fails pins the boundary.
+
 ## Infra findings (not defects in our code)
 
 - Harness lane can't boot the Worker Loader (workerd --experimental knob missing in
