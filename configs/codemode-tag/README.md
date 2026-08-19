@@ -19,24 +19,24 @@ return { abc: foo.bar }
 
 ## How it works
 
-The platform runs each agent under its **headless** processor — turn
-scheduling and the LLM call, with no response interpretation. `worker.ts`
-here is the interpreter:
+The platform births every agent with default response parsing ON and a HIGH
+debounce (10s) — that window exists exactly so a project's worker can shape
+the agent before its first turn. `worker.ts` here is the interpreter:
 
-1. On each agent's birth (and, after every config deploy, for every existing
-   agent), it hands the stream to the headless processor. Hosted-processor
-   subscriptions cannot be removed, so the handover is ADDITIVE: subscribe
-   the `agent-headless` name, then flip the agent's `config.driver` knob —
-   the platform guarantees exactly one of the two subscribed processors acts,
-   selected by that knob. Reversible by flipping the knob back.
-2. It supersedes each agent's keyed system-prompt slot with
-   `prompts/agent-system-prompt.md`, and injects `AGENTS.md` as standing
-   context, re-syncing both on every config-repo commit.
-3. On assistant output events (stamped by the headless processor), it parses
+1. On each agent's birth (`agent/created`), one atomic batch turns default
+   parsing off (`config.interpretResponses: false`), supersedes the keyed
+   system-prompt slot with `prompts/agent-system-prompt.md`, and lowers the
+   debounce to the ordinary 250ms — the done-configuring signal, which
+   releases a held first turn immediately.
+2. It injects `AGENTS.md` as standing context, and re-syncs both it and the
+   prompt on every config-repo commit.
+3. On assistant output events (stamped by the agent processor), it parses
    the tag (`codemode-format.ts`) and appends the consequences: the script
    request, the prose as a chat message (marked so it isn't mirrored back
    into history), the status as `agent/summary-updated`, or corrective
-   feedback for malformed/multiple tags.
+   feedback for malformed/multiple tags. It interprets only agents whose
+   parsing flag is off — with the flag on (a birth this worker was too slow
+   for), the platform's own parser owns the turn.
 4. On script settlements, it renders the result back as developer context —
    which is what triggers the agent's next turn.
 
@@ -51,17 +51,14 @@ rendering — is a commit to this repo. No platform deploy.**
   kills that turn (a new message starts fresh). If the experiment graduates,
   the promotion path is a real hosted stream processor (`createProcessorHost`)
   or platformizing the proven format.
-- First-turn race, mitigated: a new chat's first message reliably beats the
-  worker's birth handover, so the worker interrupts the racing classic turn
-  and lets the interrupt re-run it under the headless driver — first replies
-  arrive a beat slower but in the right format. The wider window is project
-  birth itself: until the config worker's FIRST deploy finishes, deliveries
-  to it are skipped (not retried), and the `project/worker-updated` sweep is
-  what converts any agents created in that window.
+- If this worker is down or slow past the 10s birth window, the agent
+  answers with the platform's fenced-ts defaults — coherent, just not the
+  codemode dialect — until the next deploy's `project/worker-updated` sweep
+  converts it.
 - Slash commands (`/example`, `/script`) are platform interpretation and are
-  inert here.
+  inert on converted agents.
 - Web agents only: slack/telegram/email agent paths are excluded from the
-  retarget and keep the classic fenced format.
+  conversion and keep the classic fenced format.
 
 ## Switching an existing project to this template
 
@@ -70,10 +67,7 @@ at creation; `cli config-repo reset` targets only the default template). The
 wholesale switch is a commit: overwrite `/repos/config` with this template's
 files (one multi-file workspace commit — delete what the old config had,
 write these). The commit auto-redeploys the project worker, whose
-`project/worker-updated` sweep then hands every existing agent to the
-headless driver and syncs the prompt. The driver flip waits for each agent to
-go idle (no open request, no running script, no pending trigger) and retries
-on settle events, so in-flight fenced turns genuinely finish under the old
-rules; the next turn speaks `<codemode>`. A message racing into the gap
-between the idle check and the flip commit can still double-dial one turn —
-accepted experiment caveat; a platform-side adopt guard would close it.
+`project/worker-updated` sweep appends the parsing-off + debounce config to
+every existing web agent and syncs the prompt behind it. A turn generated
+under the fenced prompt but parsed by the codemode parser gets corrective
+feedback and the loop recovers — accepted experiment caveat.
