@@ -473,3 +473,38 @@ last. grok: note only, per F17, and a bonus fact — grok ECHOES
 accepted session, so those knobs are honored there (its
 `interrupt_response`/`create_response` remain unprobed; the probe sent
 documented knobs only).
+
+**F19 (2026-08-19, the deep-cut pass): a second 51-agent adversarial
+review of the file as it stood after F15-F18, all 40 verified survivors
+landed in seven commits (cabd70c28…9e218d10e), and the live proofs
+caught the one thing the fleet got wrong.** The haul: Answer's two
+booleans became one three-state phase; PROVIDERS carries
+`cancelsOnVadOnset`; the three drifted barge sites are one #bargeAnswer
+(fixing the press-on-settled stale end-marker and the hang-up no
+open-mic barge could un-decide); a tool follow-up no longer wipes the
+device's unplayed preamble nor falsely confirms a held echo blip; the
+handshake got a deadline (the one wedge the idle backstop cannot see);
+dial failures share one exit behind a retry cooldown; a redelivered
+ptt-end cannot commit an empty buffer; the per-provider secret gate
+(fresh openai-only projects set up with zero xai secret — proven);
+conversationId lives on the Dial; the repair settles in one method; the
+identity-rate paths stop transcoding audio that never needed it (grok
+mic frames forwarded verbatim; burst answers carried as base64 string
+slices end to end); the mirror rides one FIFO drain; the probes share
+one instrument module; the suite dropped to 6 s from 29.
+
+**And the fleet's one wrong call, caught live (the wiretap earns its
+keep again):** the verified fix "response.created never confirms a held
+onset" rested on "both providers commit before creating — proven live",
+which was only ever proven on openai. Grok creates the reply BEFORE the
+turn's committed (measured: created .456, stopped .652, committed .708)
+— so the fix silently killed grok's barge repair; the note vanished and
+the model recalled counts nobody heard. Same wiretap also showed grok
+now CANCELS a streaming response server-side at a VAD onset (bare
+response.done, empty output, same instant as speech_started) — the
+"grok never cancels" lore is stale for this model. The rule that
+survives both providers: a provider-initiated created CONFIRMS the hold
+(repair before the answer swap); only our own follow-up drops it
+silently. Regression-pinned with grok's measured wire order; all live
+proofs green on both providers after the fix (note SEEN, openai "The
+last number I said out loud was 9", hang-up clean).
