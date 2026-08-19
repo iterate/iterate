@@ -43,33 +43,25 @@ static void preserves_the_first_party_codec_sequence(void) {
 }
 
 /*
- * The first production server-VAD run at the AGC tap transported audio
- * perfectly but then transcribed the device's own reply as a fresh user turn.
- * Its simultaneous NONE/AGC windows showed roughly 100x gain on both near-end
- * speech and far-end residue. Early NS/IC comparisons were underpowered and
- * let XMOS change DSP paths between the near-only and double-talk captures.
- * The corrected NS experiment measured its own matched-path room
- * repeatability: two Mac-only passes reached 0.982 similarity / -15.46 dB
- * residual, while double-talk still retained 0.901 similarity / -8.69 dB and
- * produced the exact intended Grok transcript. More importantly, the NS
- * production run produced exactly three server-VAD starts for three deliberate
- * utterances, including barge-in, and no speaker-echo turn. A later AEC-only
- * run looked better after a long deterministic warm-up but leaked the first
- * short real reply nearly unchanged: Grok transcribed its own exact words,
- * "How can I help?". That is an onset/convergence failure in the actual
- * conversational workload, not permission to weaken the oracle. Select the NS
- * tap because it is the only measured stable output which has simultaneously
- * preserved nearby speech and rejected reply onset.
- *
- * Keep this selection in the pure hardware-policy module rather than burying
- * an enum literal in the owner: a physical regression then changes one
- * testable contract, and the generic command encoder remains mechanism only.
+ * The tap selection's measured history lives with the selection itself
+ * (voice_pe_hardware_config.c): NS won an earlier campaign (0.982
+ * matched-path similarity, three clean server-VAD starts), and was then
+ * superseded by AEC with a FIXED gain after it — measured against the real
+ * provider, the AEC tap's echo sits AT the room floor (+1.0 dB over it,
+ * versus +25 dB at NS and +22 dB at AGC, where x.ai heard itself and
+ * cancelled its own answer mid-count). This test does not re-litigate that
+ * measurement; it pins that the pure hardware-policy module TRUTHFULLY
+ * reports the stage the build selected (the compile-time default, which the
+ * test build sets explicitly in CMakeLists), and that the command encoder
+ * renders it mechanically. A physical regression changes one testable
+ * contract here; the oracle for re-selection is `voicelab aec --stages` on
+ * the board, not this file.
  */
 static void selects_a_truthful_raw_and_server_vad_xmos_pair(void) {
   uint8_t command[4] = {0xffU, 0xffU, 0xffU, 0xffU};
   assert(
       iterate_kit_voice_pe_xmos_uplink_stage() ==
-      ITERATE_KIT_VOICE_PE_XMOS_STAGE_NS);
+      ITERATE_KIT_VOICE_PE_XMOS_STAGE_AEC);
   assert(
       iterate_kit_voice_pe_xmos_pipeline_command(
           0U,
@@ -79,7 +71,7 @@ static void selects_a_truthful_raw_and_server_vad_xmos_pair(void) {
   assert(command[0] == 241U);
   assert(command[1] == 0x30U);
   assert(command[2] == 1U);
-  assert(command[3] == 3U);
+  assert(command[3] == 1U);
 
   assert(
       iterate_kit_voice_pe_xmos_pipeline_command(
