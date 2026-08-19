@@ -5,7 +5,7 @@
 //
 // Division of labor (the increment-56 shape):
 //   • CONNECTED targets (`itx.connections.get(…)`) never come here — the parent fire-and-forgets
-//     batches down the delivery WebSocket from the commit path, keeping ZERO per-row state.
+//     batches over the paged-in hibernatable RPC stub from the commit path, ZERO per-row state.
 //   • ABSENT targets need what a socket gives connected ones for free — ordering, backpressure,
 //     at-least-once — so THIS processor holds a SubscriptionDeliveryProgress cursor per mount
 //     in its own facet storage and pumps: read a batch from the cursor, apply the consumes
