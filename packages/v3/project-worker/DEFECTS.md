@@ -197,6 +197,32 @@ Tests: \_\_tests\_\_/failing-ws-fetch-capability.test.ts (2 pass / 2 fails / 1 t
     mid-pump); disableProcessor abort()-fallback keeps storage. Passing pins: cold facet picks
     newest identity, egress substitution arithmetic, contexts path normalization + self-RPC.
 
+## Family L — bug-hunt sprawl round 2 (2026-08-19, against the fixed code)
+
+FINDING-B ⚠ (fix-induced, FIXED): CapabilityProvision.revoke() dropped its connection
+unconditionally, bypassing Phase-E's named-elsewhere reap → revoking via the handle killed a
+co-named connection. FIX: revokeCapability returns reapedConnectionId; the handle disposes ONLY
+when the reap actually closed its connection.
+46 ☠ (FIXED at the root): the defect-34 reserved-prefix fence was on the WRONG door (the stream
+built-in only) — contexts.get(path).append + env.ITX.append reached DO.append unfenced, so the
+forgeable revoke key was STILL exploitable. ROOT FIX: removed the guessable idempotencyKey from
+the internal revoke entirely (revoke-by-offset is idempotent through the reduce), deleting the
+fence and the whole squat class. Net negative.
+47 ⚠ (FIXED): typeless events ("" / " " type) committed — @validateRpc enforces TS `string`,
+not the contract's trim().min(1). FIX: a non-empty-type guard at DO.append (the one door).
+48 ⚠ (DEFERRED): forgeable provenance — `source` is a public typed field + excess keys ride the
+validated boundary (strictObject lost). Needs the public-vs-internal append distinction; note.
+49 ⚠ (DEFERRED): egress substitutes HEADERS only — a present secret in the URL/body forwards the
+literal {{secret}} placeholder (leaks the name). Substitute URL/body too, or fail loud.
+50 ⚠ (FIXED, the FR-1 twin of 17): #loadProgress dropped the persisted cursor when the state key
+was absent (an effect-only processor never writes state) → replayed its WHOLE effect history on
+every eviction/quiesce. FIX: accept the cursor whenever the version matches, materializing
+initialState() for absent state (a never-changed state equals initial). 1 line.
+Also noted (todo, unverified in-lane): connectionKey/connectionId shared find() namespace — a
+client reading a victim's connectionId then connect({connectionKey: '<id>'}) could drive
+onFinalClose auto-revoke against the victim's mount (intra-context). Structured-expression arg
+depth has no guard (benign now that jsonEqual is depth-free). 7 of 8 prior fixes probed SOUND.
+
 ## Infra findings (not defects in our code)
 
 - Harness lane can't boot the Worker Loader (workerd --experimental knob missing in

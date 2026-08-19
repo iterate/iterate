@@ -337,11 +337,11 @@ export abstract class StreamProcessor<State> {
       this.#progressKey(),
     );
     const state = this.#storage.get<State>(this.#stateKey());
-    if (
-      cursor &&
-      cursor.reducerVersion === this.contract.version &&
-      (state !== undefined || cursor.reducedThroughOffset === 0)
-    ) {
+    if (cursor && cursor.reducerVersion === this.contract.version) {
+      // Accept the persisted cursor whenever the version matches — an ABSENT state key means the
+      // reduce never changed state (a pure side-effect processor), which legitimately EQUALS
+      // initialState(); reusing the cursor stops it from re-firing its whole effect history on
+      // every eviction/quiesce (defect 50, the missing-state twin of defect 17).
       this.#progress = {
         reducerVersion: cursor.reducerVersion,
         reducedThroughOffset: cursor.reducedThroughOffset,

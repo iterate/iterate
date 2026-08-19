@@ -181,21 +181,9 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         return { ok: true };
       },
     },
-    /** MY OWN stream — a deliberate, chosen surface (append/read), never the raw DO stub.
-     *  The append door FENCES platform-reserved idempotencyKey namespaces: a public writer must
-     *  not be able to squat `capability-table/revoke:<n>` and make a later revoke conflict —
-     *  which would leave the capability unrevocable forever (the apps/os internal-key fence). */
+    /** MY OWN stream — a deliberate, chosen surface (append/read), never the raw DO stub. */
     stream: {
-      append: (...events: unknown[]) => {
-        for (const e of events) {
-          const key = (e as { idempotencyKey?: unknown }).idempotencyKey;
-          if (typeof key === "string" && key.startsWith("capability-table/"))
-            throw new Error(
-              `idempotencyKey ${JSON.stringify(key)} is in a platform-reserved namespace`,
-            );
-        }
-        return own().append(...events);
-      },
+      append: (...e: unknown[]) => own().append(...e),
       read: (after?: number, limit?: number) => own().read(after, limit),
     },
     /** Sibling contexts, ROUTED: `contexts.get('/x').anything(...)` resolves through the

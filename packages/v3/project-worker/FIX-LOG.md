@@ -43,3 +43,10 @@ REFACTORS-LATER.md instead, not here.
   in-flight offline coding) REVERTED + deferred as a cluster: they all need the capnweb
   onRpcBroken reason arg to tell graceful from ungraceful ends without message-sniffing
   (REFACTORS-LATER). Stale proofs fixed (enableProcessor ref uses `export`, not `className`).
+- Sprawl round 2 (live-21): Finding-B (handle.revoke bypassed the reap — now defers to
+  reapedConnectionId); defect 46 ☠ (forgeable revoke key was still live via contexts/env.ITX —
+  ROOT-FIXED by removing the guessable revoke key + deleting the fence); 47 (typeless-event
+  guard at DO.append); 50 (effect-only processor replayed effects on eviction — #loadProgress
+  reuses the cursor for absent state). 7/8 prior fixes probed SOUND by the regression hunter.
+  Deferred: 48 (forgeable source/excess-keys — needs public/internal append split), 49 (egress
+  URL/body substitution). New tests vendored: fix-regressions, boundary-egress, connections-deep.

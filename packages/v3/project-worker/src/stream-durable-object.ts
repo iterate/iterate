@@ -369,6 +369,12 @@ export class StreamDurableObject extends DurableObject<Env> {
    *  in whatever pushes deliver them; after a reboot their offsets survive as valid gaps), then
    *  every enabled facet processor is PUSHED the batch with its scanned-offset-range proof. */
   async append(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
+    // THE commit door every path funnels through (public stream/contexts/env.ITX + internal):
+    // an event must carry a non-blank type — the @validateRpc boundary checks the TS type
+    // `string` but not the contract's trim().min(1), so a "" or "   " type would commit typeless.
+    for (const input of inputs)
+      if (typeof input.type !== "string" || input.type.trim() === "")
+        throw new Error("append: every event needs a non-empty type");
     // THE CORE PROCESSOR SPEAKS FIRST (the apps/os shape): pause refuses every non-control
     // append; the token-bucket breaker meters durable growth. Control events always pass — a
     // paused or tripped stream must accept its own resume.
@@ -1071,7 +1077,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   async revokeCapability(input: {
     providedAtOffset?: number;
     path?: string | string[];
-  }): Promise<void> {
+  }): Promise<{ reapedConnectionId?: string }> {
     let providedAtOffset = input.providedAtOffset;
     if (providedAtOffset === undefined) {
       if (!input.path) throw new Error("revokeCapability: pass providedAtOffset or path");
@@ -1100,9 +1106,12 @@ export class StreamDurableObject extends DurableObject<Env> {
       const namedElsewhere = stillNamed.mounts.some(
         (m) => connectedTarget(m.target)?.key === conn.key,
       );
-      if (record && record.connectionKey === undefined && !namedElsewhere)
+      if (record && record.connectionKey === undefined && !namedElsewhere) {
         this.#itxConnections.drop(conn.key, "last naming mount revoked");
+        return { reapedConnectionId: record.stubKey };
+      }
     }
+    return {};
   }
 
   // ── native fetch: the stub pager door, the fetch lane, observability, egress ──

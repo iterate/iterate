@@ -103,8 +103,8 @@ export function sameIdempotentEvent(
   );
 }
 
-/** Structural deep-equal over plain JSON values — THE one deep-equal in this package (idempotency
- *  bodies here, literal-arg matching in core/expression.ts). Object key ORDER is insignificant. */
+/** Structural deep-equal over plain JSON values — the idempotency-body compare (order-
+ *  insensitive, unbudgeted: apps/os jsonValuesEqual). Object key ORDER is insignificant. */
 export function jsonEqual(a: unknown, b: unknown): boolean {
   // No depth budget (apps/os jsonValuesEqual): idempotency equality is decoupled from the
   // PARSER's depth limit, so a legitimately-deep payload the commit path accepted never throws

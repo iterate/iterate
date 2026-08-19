@@ -239,11 +239,15 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
   }
 
   async revoke(input: { providedAtOffset: number }): Promise<void> {
+    // No idempotencyKey: a deterministic one (`capability-table/revoke:<offset>`) was a public
+    // squat vector — an outside append under that key made the real revoke IDEMPOTENCY_CONFLICT
+    // and left the capability unrevocable forever (defect 34/46). Revoke-by-offset is already
+    // idempotent through the reduce (a second revoked event filters a mount that's already gone),
+    // so the key bought nothing but the attack surface.
     await this.stream.append(
       this.contract.buildEvent({
         type: "events.iterate.com/capability-table/capability-revoked",
         payload: { providedAtOffset: input.providedAtOffset },
-        idempotencyKey: `capability-table/revoke:${input.providedAtOffset}`,
       }),
     );
   }

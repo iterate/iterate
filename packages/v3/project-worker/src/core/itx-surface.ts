@@ -257,8 +257,8 @@ class Itx extends RpcTarget {
 
   /** Pop a mount off the shadow stack (what it shadowed is restored) — by identity, or by
    *  capability path (the newest winner at that exact path). */
-  revoke(input: { providedAtOffset?: number; path?: string | string[] }): Promise<void> {
-    return this.#host.revokeCapability(input);
+  async revoke(input: { providedAtOffset?: number; path?: string | string[] }): Promise<void> {
+    await this.#host.revokeCapability(input);
   }
 
   /** Enable a facet-hosted processor on this context's stream (the facet spine). With a `ref`
@@ -322,8 +322,8 @@ class Itx extends RpcTarget {
     return { name, providedAtOffset };
   }
 
-  unsubscribe(input: { name: string }): Promise<void> {
-    return this.#host.revokeCapability({ path: `itx.subscribers.${input.name}` });
+  async unsubscribe(input: { name: string }): Promise<void> {
+    await this.#host.revokeCapability({ path: `itx.subscribers.${input.name}` });
   }
 
   /** PARK + NAME, the edge's one two-step: attach an ANONYMOUS ItxConnection (the DO appends the
@@ -398,13 +398,18 @@ class CapabilityProvision extends RpcTarget {
     this.#relay = relay;
     this.#relays = relays;
   }
-  /** Pop exactly this mount off the shadow stack (whatever it shadowed is restored) + drop the
-   *  parked connection. */
+  /** Pop exactly this mount off the shadow stack (whatever it shadowed is restored). The DO's
+   *  reap is the SOLE authority on closing the parked connection — it keeps a connection alive
+   *  if a SECOND mount still names it — so tear down the edge relay ONLY when the reap actually
+   *  closed our connection (else another mount is still delivering to it). */
   async revoke(): Promise<void> {
-    this.#relays.delete(this.#relay);
-    await this.#host.revokeCapability({ providedAtOffset: this.#providedAtOffset });
-    await this.#host.dropItxConnection({ connectionId: this.#connectionId });
-    this.#relay.dispose();
+    const { reapedConnectionId } = await this.#host.revokeCapability({
+      providedAtOffset: this.#providedAtOffset,
+    });
+    if (reapedConnectionId === this.#connectionId) {
+      this.#relays.delete(this.#relay);
+      this.#relay.dispose();
+    }
   }
   /** THE capnweb disposal contract: `using provision = await itx.provideCapability(...)` must
    *  revoke the mount at scope exit. Without this, disposing the handle drops only the wire stub
