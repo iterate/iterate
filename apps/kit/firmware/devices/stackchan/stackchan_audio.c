@@ -36,6 +36,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "nvs.h"
+#include "nvs_flash.h"
 
 #include "core_s3_capture_reserve.h"
 #include "iterate/kit/platforms/core_s3_bsp_audio.h"
@@ -134,6 +136,36 @@ static esp_codec_dev_vol_map_t speaker_volume_map[] = {
   {.vol = 1, .db_value = -34.5F},
   {.vol = 100, .db_value = 15.0F},
 };
+
+/*
+ * The chosen loudness survives a power cycle, same store as the provider
+ * choice. This board brings its codec up before the radio, so like the mode
+ * reader it initialises NVS itself — idempotent and free when the transport
+ * does it again later.
+ */
+static uint8_t load_volume(void) {
+  nvs_handle_t handle;
+  uint8_t stored = SPEAKER_VOLUME_PERCENT;
+  (void)nvs_flash_init();
+  if (nvs_open("stackchan", NVS_READONLY, &handle) != ESP_OK) {
+    return SPEAKER_VOLUME_PERCENT;
+  }
+  if (nvs_get_u8(handle, "vol", &stored) != ESP_OK ||
+      stored > STACKCHAN_AUDIO_VOLUME_CEILING) {
+    stored = SPEAKER_VOLUME_PERCENT;
+  }
+  nvs_close(handle);
+  return stored;
+}
+
+static void store_volume(uint8_t percent) {
+  nvs_handle_t handle;
+  if (nvs_open("stackchan", NVS_READWRITE, &handle) != ESP_OK) return;
+  if (nvs_set_u8(handle, "vol", percent) == ESP_OK) {
+    (void)nvs_commit(handle);
+  }
+  nvs_close(handle);
+}
 
 /* Chunk meta stashed by the last successful seam read (single consumer). */
 static uint32_t last_chunk_sequence;
@@ -536,8 +568,12 @@ static esp_err_t initialize_codecs(void) {
    * not the same — masks 0|1 are the acoustic capsules, mask 2 the divider.
    * Datasheet: ES7210 Rev 21.0 R1B-R1E.
    */
+  /* The person's last chosen level, not the shipped default: half a dozen
+   * reflashes in one afternoon each silently snapped the board back to 60,
+   * which reads as "mega quiet" and not as "freshly booted". */
+  speaker_volume_percent = load_volume();
   if (esp_codec_dev_set_vol_curve(speaker, &curve) != ESP_CODEC_DEV_OK ||
-      esp_codec_dev_set_out_vol(speaker, SPEAKER_VOLUME_PERCENT) !=
+      esp_codec_dev_set_out_vol(speaker, (int)speaker_volume_percent) !=
           ESP_CODEC_DEV_OK ||
       esp_codec_dev_open(speaker, &speaker_format) != ESP_CODEC_DEV_OK ||
       esp_codec_dev_open(microphone, &microphone_format) !=
@@ -872,6 +908,7 @@ enum iterate_kit_status stackchan_audio_set_volume(
   if (esp_codec_dev_set_out_vol(speaker, (int)percent) != ESP_CODEC_DEV_OK) {
     return ITERATE_KIT_IO_ERROR;
   }
+  if (percent != speaker_volume_percent) store_volume(percent);
   speaker_volume_percent = percent;
   if (applied != NULL) *applied = percent;
   return ITERATE_KIT_OK;
