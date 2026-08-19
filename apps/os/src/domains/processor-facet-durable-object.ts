@@ -583,12 +583,6 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
     // work (stream-committed requested/started obligations whose OUTCOME
     // matters). An incarnation that dies owing either must be revived.
     const agentProcessor = registry.register(new AgentProcessor(agentArgs), { recovery: true });
-    // The retired "agent-headless" slug (the old two-processor selection) is
-    // deliberately NOT registered: every agent stream carries the "agent"
-    // subscription from birth, so the unified processor drives every stream
-    // the old one did. The few streams that opted into the headless handover
-    // still carry an "agent-headless" subscription whose deliveries now fail
-    // loudly — accepted; their agent still works through "agent".
     const agentReads = registry.reads(agentProcessor);
     this.#getLiveState = (): AgentLiveState => ({
       runtimeChange: agentReads.currentState.runtimeChange,
