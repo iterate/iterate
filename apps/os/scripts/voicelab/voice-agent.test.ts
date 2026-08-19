@@ -23,7 +23,7 @@ import {
   MAX_SPEAKER_PAYLOAD_BYTES,
   VoiceAgentContract,
   VoiceAgentProcessor,
-} from "./voice-agent.ts";
+} from "../../../../configs/voice-agent/voice-agent.ts";
 
 /* ========================================================================== */
 /* A PRETEND GROK                                                             */

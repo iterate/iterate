@@ -104,7 +104,7 @@ describe("installing the voice agent into a project's config repo", () => {
   it("sends the file on disk, not a stale copy of it", async () => {
     const committed = await committedFiles();
     const onDisk = fs.readFileSync(
-      new URL("./config-repo/voice-agent.ts", import.meta.url).pathname,
+      new URL("../../../../configs/voice-agent/voice-agent.ts", import.meta.url).pathname,
       "utf8",
     );
     expect(committed.get("voice-agent.ts")).toBe(onDisk);

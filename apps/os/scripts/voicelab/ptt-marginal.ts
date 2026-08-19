@@ -117,7 +117,7 @@ const DIRECT_PROVIDERS = {
  * Linear PCM16 resample over base64, for the direct socket.
  *
  * A COPY of the agent's resampler ON PURPOSE. Importing it was tried and
- * broke every CLI command: config-repo files are WORKER code (they import
+ * broke every CLI command: configs/voice-agent files are WORKER code (they import
  * `cloudflare:workers` transitively) and this is a Node script — the module
  * boundary between the two runtimes is real, and thirteen duplicated lines
  * are its fee. The test suite imports the agent's copy and pins both ends.

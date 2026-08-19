@@ -1,7 +1,7 @@
 // Put the voicelab guest worker into a project's config repo.
 //
-// The bridge is userspace code: `config-repo/voice-agent.ts` in this directory
-// is the server side of the voice pipe. It deliberately does not replace the
+// The bridge is userspace code: `configs/voice-agent/voice-agent.ts` at the
+// repository root is the server side of the voice pipe. It deliberately does not replace the
 // project's own worker.ts. Deploying used to be a paste into a REPL, which is how
 // a device ends up talking to a worker nobody can point at — so it is a
 // command, and it prints the commit it made.
@@ -14,7 +14,7 @@ import { withRpcResult } from "./rpc-ownership.ts";
 
 /** Options for `pnpm cli voicelab deploy`. */
 export interface DeployOptions extends VoicelabConnectOptions {
-  /** Worker source to commit. Defaults to this directory's config-repo/voice-agent.ts. */
+  /** Worker source to commit. Defaults to the repo-root configs/voice-agent/voice-agent.ts template. */
   file?: string;
   /** Commit message. */
   message?: string;
@@ -106,7 +106,9 @@ export async function installVoiceAgent(
   options: { file?: string; message?: string } = {},
 ): Promise<InstallResult> {
   const entryName = "voice-agent.ts";
-  const file = options.file ?? new URL(`./config-repo/${entryName}`, import.meta.url).pathname;
+  const file =
+    options.file ??
+    new URL(`../../../../configs/voice-agent/${entryName}`, import.meta.url).pathname;
   const changes = voiceAgentSources(file, entryName);
   const repo = (itx as { repo: ConfigRepo }).repo;
   const result = await withRpcResult(

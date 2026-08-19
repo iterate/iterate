@@ -28,11 +28,11 @@ import { fileURLToPath } from "node:url";
 import type { DynamicWorkerCapability } from "iterate/sdk";
 import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 
+import type VoiceAgentEntrypoint from "../../../../configs/voice-agent/voice-agent.ts";
 import { connectProject, resolveVoicelabBaseUrl, type VoicelabConnectOptions } from "./connect.ts";
 import { installVoiceAgent } from "./deploy.ts";
 import { discardRpcResult, withRpcResult } from "./rpc-ownership.ts";
 import { voiceAgentEntrypointRef } from "./voice-agent-ref.ts";
-import type VoiceAgentEntrypoint from "./config-repo/voice-agent.ts";
 
 /*
  * PRODUCTION, AND A PROJECT THAT EXISTS TOMORROW.

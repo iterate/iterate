@@ -47,7 +47,8 @@ and the half-duplex fence can be released. There is nothing else to implement
 and deliberately nothing else to get wrong.
 
 That is possible because **the server holds the answer**. The provider emits a
-ninety-second answer in a few seconds; `config-repo/speaker.ts` buffers it and
+ninety-second answer in a few seconds; the agent (now `configs/voice-agent/voice-agent.ts`
+at the repo root, which folded in the former `speaker.ts`) buffers it and
 releases it at playback rate, never running more than `leadMs` ahead of the
 listener. It is a pure reducer — no clock, no timer, no I/O — so the whole
 policy is unit-tested in `speaker.test.ts`, and `voice-agent.count-to-100.test.ts`
@@ -62,7 +63,7 @@ board permanently.
 
 ### Knobs, and what each is coupled to
 
-`DEFAULT_SPEAKER_LIMITS` in `config-repo/speaker.ts`. **None of these moves
+`DEFAULT_SPEAKER_LIMITS` in the agent (now `configs/voice-agent/voice-agent.ts`). **None of these moves
 alone** — each has a counterpart in the firmware, and the failure when they
 disagree is silent from the server's side.
 

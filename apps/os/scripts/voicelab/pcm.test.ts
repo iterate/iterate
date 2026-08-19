@@ -9,7 +9,7 @@
  * would be a tone at the phase rate).
  */
 import { describe, expect, it } from "vitest";
-import { Pcm16Resampler } from "./pcm.ts";
+import { Pcm16Resampler } from "../../../../configs/voice-agent/pcm.ts";
 
 /** A mono PCM16 sine, as the wire would carry it. */
 function sineBytes(freqHz: number, rateHz: number, ms: number, amplitude = 12_000): Uint8Array {

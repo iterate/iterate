@@ -6,8 +6,8 @@
  * pure: no sockets, no clock, no fixture, just inputs.
  */
 import { describe, expect, it } from "vitest";
-import { createFace } from "./face.ts";
-import { firmwareVisemes } from "./viseme.ts";
+import { createFace } from "../../../../configs/voice-agent/face.ts";
+import { firmwareVisemes } from "../../../../configs/voice-agent/viseme.ts";
 
 /** An answer with real spectral shape, so the classifier has something to
  * classify — silence classifies as SIL, which proves nothing moved. */
