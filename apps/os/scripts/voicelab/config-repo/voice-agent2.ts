@@ -126,9 +126,9 @@
  *   the provider socket's message listener, and its comment says why it cannot
  *   be a stream event like everything else.
  *
- * WHAT IT DELIBERATELY DOES NOT DO: no visemes, no head gestures, no tool
- * calling. Those are real features of the first cut and belong in their own
- * files, wired to the same events. This one runs a call. (There was a
+ * WHAT IT DELIBERATELY DOES NOT DO: no head gestures, and no mouth of its
+ * own — the face lives in face.ts as a pure mechanism this file only feeds
+ * from four thin call sites. This one runs a call. (There was a
  * `turn-timing` lane here once — four per-turn stamps for the latency
  * campaign; that campaign concluded and the subsystem was deleted whole
  * rather than half-moved. `grok-event` still carries every provider stamp an
@@ -149,7 +149,7 @@ import {
 } from "iterate/processors";
 import { z } from "zod";
 import { Pcm16Resampler } from "./pcm.ts";
-import { createVisemeTracker, firmwareVisemes } from "./viseme.ts";
+import { createFace } from "./face.ts";
 
 /* ========================================================================== */
 /* CONSTANTS                                                                  */
@@ -1071,18 +1071,13 @@ interface Dial {
    */
   truncates: boolean;
   /**
-   * The mouth-shape classifier, when the certificate says something renders
-   * a face; null costs nothing. Reset per answer — its playout clock is
-   * samples from THE ANSWER's first sample, the coordinate the firmware's
-   * viseme queue advances against played audio.
+   * The face, when the certificate says something renders one; null costs
+   * nothing. Per dial like the classifier it wraps — a re-dial is a new
+   * mouth with its answer count back at zero. The whole mouth lifecycle
+   * (tracker, answer numbering, the published value) lives in face.ts;
+   * this file only feeds it.
    */
-  visemeTracker: ReturnType<typeof createVisemeTracker> | null;
-  /**
-   * Which answer of this dial is playing, 1-based — the `answer` half of
-   * the firmware's (answer, playoutSamples) coordinate, so a queued shape
-   * from a dead answer can never move the mouth during the next one.
-   */
-  answerNumber: number;
+  face: ReturnType<typeof createFace> | null;
   /**
    * Whether this dial's provider kills a streaming response itself at a
    * VAD onset — the PROVIDERS row's fact, carried here like `truncates`.
@@ -1161,8 +1156,7 @@ const freshDial = (
   micResampler: new Pcm16Resampler(16_000, provider.rate),
   spkResampler: new Pcm16Resampler(provider.rate, 16_000),
   truncates: provider.truncates,
-  visemeTracker: null,
-  answerNumber: 0,
+  face: null,
   cancelsOnVadOnset: provider.cancelsOnVadOnset,
   pendingRepair: null,
   openToolCallIds: new Set(),
@@ -1280,21 +1274,6 @@ export class VoiceAgent2Processor extends StreamProcessor<
   /** When the last dial FAILED, for the retry cooldown. Class-level, not on
    * a Dial: the failed dial is already gone when the next caller asks. */
   #lastDialFailedAtFacetMs = 0;
-  /**
-   * THE FACE IS A VALUE, NOT A STREAM: the newest mouth shape only, replaced
-   * in place, which is what a 10 Hz poll wants — the latest truth, never a
-   * backlog of positions the mouth has already left. Deliberately not
-   * durable: after a restart the mouth should be shut, not restored to
-   * whatever shape it held when the incarnation died. The firmware dedupes
-   * on `at`, so every fold stamps a fresh clock.
-   */
-  #face: {
-    answer: number;
-    playoutSamples: number;
-    viseme: number;
-    confidence: number;
-    at: number;
-  } | null = null;
   /**
    * The mirror lane's outbox, drained by ONE background flush at a time.
    *
@@ -1670,7 +1649,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
      * taken and the mic path queues for the whole handshake. The socket
      * arrives below; everything else the dial owns starts fresh here. */
     const dial = freshDial(conversationId, provider);
-    if (state.visemes) dial.visemeTracker = createVisemeTracker();
+    if (state.visemes) dial.face = createFace();
     this.#dial = dial;
     const dialStartedAtFacetMs = this.deps.nowAtFacetMs();
     /* THIS DIAL'S OWN IDENTITY, for keys that must not collide with the
@@ -2040,11 +2019,8 @@ export class VoiceAgent2Processor extends StreamProcessor<
              * held tail of a CANCELLED answer would smear its first
              * milliseconds. */
             dial.spkResampler.reset();
-            /* And a new mouth track: the playout clock back to zero, the
-             * answer number forward, so a queued shape from the dead answer
-             * can never move the mouth during this one. */
-            dial.answerNumber += 1;
-            dial.visemeTracker?.reset();
+            /* And a new mouth track — face.ts owns why. */
+            dial.face?.answerStarted();
             if (followUp) {
               /* The follow-up this agent asked for: the previous answer's
                * spoken preamble is still draining — most of it UNPLAYED in
@@ -2117,8 +2093,8 @@ export class VoiceAgent2Processor extends StreamProcessor<
               /* The one decode the identity path ever pays, and only when a
                * face is rendering — which is why `visemes` is certificate
                * data rather than always-on. */
-              if (dial.visemeTracker !== null) {
-                this.#trackVisemes(dial, base64ToBytes(grok.delta));
+              if (dial.face !== null) {
+                dial.face.audio(base64ToBytes(grok.delta), receivedAtFacetMs);
               }
             } else {
               /* The pipeline is 16 kHz from here to the speaker; a provider
@@ -2128,7 +2104,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
               dial.answer.receivedMs += pcm16.length / PCM16_BYTES_PER_MS;
               /* The PCM the classifier reads is the PCM the speaker will
                * play — free on this path, the resample already decoded it. */
-              if (dial.visemeTracker !== null) this.#trackVisemes(dial, pcm16);
+              if (dial.face !== null) dial.face.audio(pcm16, receivedAtFacetMs);
               for (let cut = 0; cut < pcm16.length; cut += MAX_SPEAKER_PAYLOAD_BYTES) {
                 dial.speakerQueue.push(
                   bytesToBase64(
@@ -2168,10 +2144,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
             dial.answer.phase = "settled";
             dial.answer.endsWhenQueueDrains = true;
             /* The mouth always closes with SIL at the end of its track. */
-            if (dial.visemeTracker !== null) {
-              const closing = dial.visemeTracker.end();
-              if (closing !== undefined) this.#foldFace(dial, closing);
-            }
+            dial.face?.answerAudioDone(receivedAtFacetMs);
             this.#sendSpeakerAudio(dial, append, runInBackground);
             return;
 
@@ -2588,50 +2561,24 @@ export class VoiceAgent2Processor extends StreamProcessor<
   }
 
   /**
-   * Fold the newest mouth shape into the face value, stamped with a fresh
-   * facet clock — the firmware dedupes identical polls on `at`, so the stamp
-   * is what makes a repeated shape at a new moment still a new fact.
-   */
-  #foldFace(
-    dial: Dial,
-    shape: { playoutSamples: number; viseme: number; confidence: number },
-  ): void {
-    this.#face = {
-      answer: dial.answerNumber,
-      playoutSamples: shape.playoutSamples,
-      viseme: shape.viseme,
-      confidence: shape.confidence,
-      at: this.deps.nowAtFacetMs(),
-    };
-  }
-
-  /**
-   * Classify a chunk of the answer's own 16 kHz PCM into mouth shapes and
-   * keep the newest. The tracker emits sparse CHANGES; a burst answer
-   * classifies far ahead of playback, and that is fine — the firmware's
-   * viseme queue holds shapes by (answer, playoutSamples) and advances them
-   * against audio actually played.
-   */
-  #trackVisemes(dial: Dial, pcm16: Uint8Array): void {
-    if (dial.visemeTracker === null) return;
-    const samples = new Int16Array(
-      pcm16.buffer,
-      pcm16.byteOffset,
-      Math.floor(pcm16.byteLength / 2),
-    );
-    const shapes = dial.visemeTracker.push(samples);
-    const latest = shapes.at(-1);
-    if (latest !== undefined) this.#foldFace(dial, latest);
-  }
-
-  /**
    * What a face-rendering board's 10 Hz poll reads. The boards have been
    * polling this the whole time — v2 simply had nothing to say until now.
+   * The face rides the dial: a call that ended is a mouth that shut, and
+   * the firmware treats a missing face as nothing to render.
+   *
+   * A POLL, NOT A LIVESTATE SUBSCRIPTION, and not by preference: the value
+   * is exactly what liveState exists to diff, but a userspace facet's
+   * liveState node serves the runner's committed FOLD — `assembleLive` in
+   * the SDK's stream-processor-registry publishes `currentState`, and the
+   * `getLiveState` override that could project a runtime bag instead is a
+   * hook `StreamProcessorFacet.createHost` never exposes to userspace. The
+   * day that seam opens, `face.read()` is the value to put through it and
+   * this poll becomes the compatibility path.
    */
   override async getRuntimeState() {
     return {
       runtime: {
-        face: this.#face,
+        face: this.#dial?.face?.read() ?? null,
         now: this.deps.nowAtFacetMs(),
       },
     };
@@ -2810,16 +2757,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
     cancel: boolean,
   ): void {
     dial.hangUpAfterAnswerDrains = null;
-    /* A barged answer's mouth shuts NOW — the shapes still queued belong to
-     * audio the clear just erased. */
-    if (dial.visemeTracker !== null) {
-      dial.visemeTracker.reset();
-      this.#foldFace(dial, {
-        playoutSamples: 0,
-        viseme: firmwareVisemes.SIL,
-        confidence: 0,
-      });
-    }
+    dial.face?.barge(decidedAtFacetMs);
     /* Read BEFORE the repair moves a streaming answer to "cancelled". */
     const responseWasStreaming = dial.answer.phase === "streaming";
     this.#dropAnswerInFlight(dial, decidedAtFacetMs, append);
