@@ -33,6 +33,16 @@
  * panel. There is no local face control at all on this board, so a face
  * nobody can ask for by name is a face it never makes.
  */
+static const char *const button_press_path[] = {"button", "press"};
+
+static enum capnweb_status button_press(
+    void *context, const struct capnweb_call *call, struct capnweb_reply *reply) {
+  (void)context;
+  (void)call;
+  m5sticks3_board_inject_side_press();
+  return capnweb_reply_set_boolean(reply, true);
+}
+
 static const char *const face_set_path[] = {"face", "set"};
 
 static enum capnweb_status face_set(
@@ -64,6 +74,7 @@ static enum capnweb_status face_set(
 static size_t modules(
     void *context, struct iterate_kit_module *out, size_t capacity) {
   static const struct iterate_kit_method board_methods[] = {
+    {button_press_path, 2U, button_press},
     {face_set_path, 2U, face_set},
   };
   (void)context;

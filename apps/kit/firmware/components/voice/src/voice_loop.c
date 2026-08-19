@@ -676,6 +676,8 @@ EXT_RAM_BSS_ATTR static struct {
    * an answer to nothing. The host CLI never showed it only because its
    * dial is warm in about a second.
    */
+  /** The unwritten button audit, latest wins; see the resolution site. */
+  const char *pending_button_audit;
   bool dial_buffering;
   /* A push-to-talk dial buffered speech; the OPENING turn must not reset
    * the queue that holds it. Consumed at turn start, cleared with the call. */
@@ -2964,6 +2966,15 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
      * has to be resolved here and not in the board, now that the board can no
      * longer read what the intent currently is.
      */
+    /*
+     * THE AUDIT RIDES THE ONE RESOLUTION SITE, so a finger and an injected
+     * press write the same record. Latest-wins latch rather than a queue:
+     * two controls in one pass is already a person mashing, and the append
+     * below needs a READY session the press may predate.
+     */
+    if (runtime.intent.end_call) runtime.pending_button_audit = "end";
+    if (runtime.intent.start_call) runtime.pending_button_audit = "start";
+    if (runtime.intent.toggle_call) runtime.pending_button_audit = "toggle";
     if (runtime.intent.end_call) {
       runtime.view.wants_call = false;
       /*
@@ -3904,6 +3915,14 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
         ESP_LOGW(tag, "nothing has called this device in a while — re-registering");
         runtime.view.status = ("re-registering");
         iterate_kit_esp_idf_itx_transport_request_restart(&transport);
+      }
+
+      /* The pressed-button audit, owed since its press, sent when the
+       * session can carry it. */
+      if (runtime.pending_button_audit != NULL && outbox_free >= 3U) {
+        (void)iterate_kit_voicelab_note_button(
+            &runtime.voicelab, runtime.pending_button_audit);
+        runtime.pending_button_audit = NULL;
       }
 
       /* The microphone is only on the wire while the talk button is down. */

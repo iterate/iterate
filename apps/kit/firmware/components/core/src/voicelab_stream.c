@@ -1331,6 +1331,34 @@ void iterate_kit_voicelab_forget_call(struct iterate_kit_voicelab *voicelab) {
   voicelab->spk_seq_last = -1;
 }
 
+enum capnweb_status iterate_kit_voicelab_note_button(
+    struct iterate_kit_voicelab *voicelab, const char *control) {
+  int length;
+  if (voicelab == NULL) return CAPNWEB_E_INVALID_ARGUMENT;
+  if (voicelab->state != ITERATE_KIT_VOICELAB_READY) return CAPNWEB_E_STATE;
+  if (!json_literal_contents_are_safe(control)) {
+    return CAPNWEB_E_INVALID_ARGUMENT;
+  }
+  /* DURABLE, deliberately: the audit's whole point is that somebody can
+   * read it later, and a server that wants to react subscribes to it. */
+  length = snprintf(
+      voicelab->args_buffer,
+      sizeof(voicelab->args_buffer),
+      "[{\"type\":\"events.iterate.com/voice-agent/button-pressed\",\"payload\":{"
+      "\"control\":\"%s\"}}]",
+      control != NULL ? control : "press");
+  if (length < 0 || (size_t)length >= sizeof(voicelab->args_buffer)) {
+    return CAPNWEB_E_LIMIT;
+  }
+  return capnweb_session_call_oneway_path(
+      voicelab->options.session,
+      voicelab->stream_capability,
+      append_path,
+      1U,
+      voicelab->args_buffer,
+      (size_t)length);
+}
+
 enum capnweb_status iterate_kit_voicelab_end_call(
     struct iterate_kit_voicelab *voicelab, const char *reason) {
   int length;

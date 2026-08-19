@@ -29,6 +29,10 @@ bool m5sticks3_board_talk_held(void);
 /** One latched press of the side button (consumed on read). */
 bool m5sticks3_board_take_side_press(void);
 
+/** Inject a side-button press into the same pending latch the poller fills
+ * — one handler path for finger and capability alike. */
+void m5sticks3_board_inject_side_press(void);
+
 /* --- the 240x135 status screen -------------------------------------------- */
 
 enum m5sticks3_ui_state {

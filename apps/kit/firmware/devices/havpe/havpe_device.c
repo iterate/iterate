@@ -345,6 +345,16 @@ static uint8_t volume(void *context) {
  * microphone on both output channels — one raw, one cancelled — which needs a
  * knob rather than a rebuild.
  */
+static const char *const button_press_path[] = {"button", "press"};
+
+static enum capnweb_status button_press(
+    void *context, const struct capnweb_call *call, struct capnweb_reply *reply) {
+  (void)context;
+  (void)call;
+  havpe_button_inject_tap();
+  return capnweb_reply_set_boolean(reply, true);
+}
+
 static const char *const aec_set_stage_path[] = {"aec", "setStage"};
 
 static enum capnweb_status aec_set_stage(
@@ -379,6 +389,7 @@ static size_t modules(
     void *context, struct iterate_kit_module *out, size_t capacity) {
   static const struct iterate_kit_method methods[] = {
     {aec_set_stage_path, 2U, aec_set_stage},
+    {button_press_path, 2U, button_press},
   };
   (void)context;
   if (capacity < 1U) return 0U;

@@ -439,6 +439,12 @@ enum capnweb_status iterate_kit_voicelab_start_call(
  * confirms it. `reason` follows the same restricted JSON-string contract as
  * `greeting`; NULL becomes `hangup`.
  */
+/** Append the durable button audit: `button-pressed {control}`. Called from
+ * the loop's ONE intent-resolution site, so a physical press and an injected
+ * one are indistinguishable there — which is the requirement. */
+enum capnweb_status iterate_kit_voicelab_note_button(
+    struct iterate_kit_voicelab *voicelab, const char *control);
+
 enum capnweb_status iterate_kit_voicelab_end_call(
     struct iterate_kit_voicelab *voicelab, const char *reason);
 

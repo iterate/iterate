@@ -136,6 +136,12 @@ bool iterate_kit_stackchan_avatar_take_face_tap(bool *left_half);
  */
 bool iterate_kit_stackchan_avatar_take_side_button_tap(void);
 
+/** Inject the side-button tap / a face tap at panel x, into the SAME pending
+ * latches the physical sampler fills — one handler path for finger and
+ * capability alike. */
+void iterate_kit_stackchan_avatar_inject_side_button(void);
+void iterate_kit_stackchan_avatar_inject_face_tap(uint16_t x);
+
 /**
  * Show or hide the two-cell provider menu over the face.
  *

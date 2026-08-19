@@ -124,6 +124,10 @@ void waveshare_buttons_poll(void) {
       &buttons.lower_press_pending);
 }
 
+void waveshare_buttons_inject_upper(void) { buttons.upper_press_pending = true; }
+
+void waveshare_buttons_inject_lower(void) { buttons.lower_press_pending = true; }
+
 bool waveshare_buttons_take_upper_press(void) {
   const bool pressed = buttons.upper_press_pending;
   buttons.upper_press_pending = false;

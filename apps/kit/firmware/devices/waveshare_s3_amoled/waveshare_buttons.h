@@ -40,6 +40,11 @@ bool waveshare_buttons_init(void);
  */
 bool waveshare_buttons_take_upper_press(void);
 
+/** Inject an upper/lower press into the same pending latches the settle
+ * loop fills — one handler path for finger and capability alike. */
+void waveshare_buttons_inject_upper(void);
+void waveshare_buttons_inject_lower(void);
+
 /**
  * True while the UPPER button is held. This is the microphone.
  *

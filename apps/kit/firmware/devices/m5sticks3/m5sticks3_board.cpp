@@ -399,6 +399,8 @@ bool m5sticks3_board_talk_held(void) {
   return talk_held_level;
 }
 
+void m5sticks3_board_inject_side_press(void) { side_press_pending = true; }
+
 bool m5sticks3_board_take_side_press(void) {
   const bool pressed = side_press_pending;
   side_press_pending = false;

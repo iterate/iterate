@@ -21,6 +21,7 @@
 
 #include "iterate/kit/audio_processor.h"
 #include "iterate/kit/devices/waveshare_s3_amoled.h"
+#include "capnweb/capnweb.h"
 #include "iterate/kit/voice/loop.h"
 #include "iterate/kit/voice_device_profile.h"
 
@@ -42,6 +43,48 @@ static bool start(void *context, struct iterate_kit_board_audio *out) {
   out->codec = waveshare_audio_codec();
   out->processor = iterate_kit_audio_processor_passthrough();
   return true;
+}
+
+/*
+ * `button.press()` / `button.end()` — the two physical buttons, injectable.
+ * They set the same pending latches the fingers do, so the handler path is
+ * ONE path and the loop's button audit records both alike.
+ */
+static const char *const button_press_path[] = {"button", "press"};
+static const char *const button_end_path[] = {"button", "end"};
+
+static enum capnweb_status button_press(
+    void *context, const struct capnweb_call *call, struct capnweb_reply *reply) {
+  (void)context;
+  (void)call;
+  waveshare_buttons_inject_upper();
+  return capnweb_reply_set_boolean(reply, true);
+}
+
+static enum capnweb_status button_end(
+    void *context, const struct capnweb_call *call, struct capnweb_reply *reply) {
+  (void)context;
+  (void)call;
+  waveshare_buttons_inject_lower();
+  return capnweb_reply_set_boolean(reply, true);
+}
+
+static size_t modules(
+    void *context, struct iterate_kit_module *out, size_t capacity) {
+  static const struct iterate_kit_method board_methods[] = {
+    {button_press_path, 2U, button_press},
+    {button_end_path, 2U, button_end},
+  };
+  (void)context;
+  if (capacity < 1U) return 0U;
+  out[0] = (struct iterate_kit_module){
+    .methods = board_methods,
+    .method_count = sizeof(board_methods) / sizeof(board_methods[0]),
+    .context = NULL,
+    .close = NULL,
+    .session_ended = NULL,
+  };
+  return 1U;
 }
 
 static void present(
@@ -247,7 +290,7 @@ static const struct iterate_kit_board_ops ops = {
   .observe_playout = observe_playout,
   .observe_answer = observe_answer,
   /* Speaker, health, conversation control and push-to-talk are the loop's. */
-  .modules = NULL,
+  .modules = modules,
   .health = health,
 };
 

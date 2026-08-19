@@ -1223,6 +1223,22 @@ bool iterate_kit_stackchan_avatar_take_side_button_tap(void) {
   return take_pending(&owner.pending_side_button_taps);
 }
 
+/* The INJECTED gestures land in the same pending latches the physical
+ * sampler fills, so everything downstream — the session grammar, the menu,
+ * the audit — cannot tell a capability from a finger. That is the point. */
+void iterate_kit_stackchan_avatar_inject_side_button(void) {
+  atomic_saturating_increment(&owner.pending_side_button_taps);
+}
+
+void iterate_kit_stackchan_avatar_inject_face_tap(uint16_t x) {
+  __atomic_store_n(&owner.last_touch_x, (uint32_t)x, __ATOMIC_RELAXED);
+  __atomic_store_n(
+      &owner.last_face_tap_left,
+      (uint32_t)x < (uint32_t)(BSP_LCD_H_RES / 2U) ? 1U : 0U,
+      __ATOMIC_RELEASE);
+  atomic_saturating_increment(&owner.pending_face_taps);
+}
+
 void iterate_kit_stackchan_avatar_show_menu(uint8_t highlighted) {
   __atomic_store_n(
       &owner.menu_highlight_plus_one,

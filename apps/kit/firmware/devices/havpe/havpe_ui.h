@@ -124,6 +124,10 @@ bool havpe_button_take_tap(void);
  * release. Latched once per press. */
 bool havpe_button_take_end_hold(void);
 
+/** Inject a centre-button tap into the same pending latch the debouncer
+ * fills — one handler path for finger and capability alike. */
+void havpe_button_inject_tap(void);
+
 #ifdef __cplusplus
 }
 #endif

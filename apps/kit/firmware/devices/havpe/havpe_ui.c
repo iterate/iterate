@@ -496,6 +496,8 @@ void havpe_button_poll(void) {
   if (!button.debounced_pressed) button.end_hold_latched = false;
 }
 
+void havpe_button_inject_tap(void) { button.tap_pending = true; }
+
 bool havpe_button_take_end_hold(void) {
   const bool held = button.end_hold_pending;
   button.end_hold_pending = false;
