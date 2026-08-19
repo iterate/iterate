@@ -20,7 +20,7 @@ import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
 import type { DeliveryPolicy } from "./events.ts";
 import type { Expression } from "./expression.ts";
 import { disposeStub, openStubPagerWebSocket } from "./hibernatable-rpc-stub.ts";
-import { canonicalName, normalizePath, parseName, stringifyName } from "./names.ts";
+import { canonicalName, DurableObjectNameCodec, normalizePath } from "./durable-object-names.ts";
 import type { StreamDurableObject } from "../stream-durable-object.ts";
 
 type ItxHostStub = DurableObjectStub<StreamDurableObject>;
@@ -131,7 +131,7 @@ export class ProjectSession extends RpcTarget {
   ) {
     super();
     this.#hostNamespace = hostNamespace;
-    this.#projectId = parseName(canonicalName(projectId)).projectId;
+    this.#projectId = DurableObjectNameCodec.parse(projectId).projectId;
     this.#root = hostNamespace.getByName(canonicalName(projectId));
     this.#waitUntil = (p) => ctx.waitUntil(p);
   }
@@ -163,7 +163,9 @@ export class ProjectSession extends RpcTarget {
     const path = normalizePath(context ?? "/");
     return path === "/"
       ? this.#root
-      : this.#hostNamespace.getByName(stringifyName({ projectId: this.#projectId, path }));
+      : this.#hostNamespace.getByName(
+          DurableObjectNameCodec.stringify({ projectId: this.#projectId, path }),
+        );
   }
 
   /** Attach an ItxConnection to a context (the root by default) and return that context's itx.

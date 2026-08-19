@@ -5,7 +5,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { newWorkersRpcResponse } from "capnweb";
 import { StreamDurableObject } from "./stream-durable-object.ts";
-import { canonicalName } from "./core/names.ts";
+import { canonicalName } from "./core/durable-object-names.ts";
 import { ProjectSession } from "./core/itx-surface.ts";
 
 export { StreamDurableObject };

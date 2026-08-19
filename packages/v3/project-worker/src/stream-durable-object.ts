@@ -56,7 +56,7 @@ import {
   type HibernatableRpcStubRecord,
   type RetainedCallbackInvoker,
 } from "./core/hibernatable-rpc-stub.ts";
-import { parseName, stringifyName } from "./core/names.ts";
+import { DurableObjectNameCodec } from "./core/durable-object-names.ts";
 import { itxEntrypointFor } from "./itx-entrypoint.ts";
 import {
   CapabilityTableProcessor,
@@ -137,12 +137,54 @@ const ITX_CONNECTION_SESSION_ABSENCE_MS = 15 * 60_000;
  *  mount first appears). */
 const SUBSCRIPTION_FORWARDER_SLUG = "subscription-forwarder";
 
+function parseStreamDurableObjectName(name: string | undefined) {
+  if (!name)
+    throw new Error("StreamDurableObject must be addressed by name (reach it via getByName).");
+  return DurableObjectNameCodec.parse(name);
+}
+
+/** ONE alarm write per quiet-period start, never per append (an ephemeral flood arms once) —
+ *  the apps/os StreamAlarmArmer, mirrored. Memo-only: a fresh incarnation writes one redundant
+ *  setAlarm and an earlier stored alarm may be overwritten by a later target, which is safe
+ *  because every alarm() pass re-derives its obligations and re-arms. */
+class StreamAlarmArmer {
+  readonly #storage: { setAlarm(atMs: number): Promise<void> };
+  #armedForMs: number | null = null;
+
+  constructor(storage: { setAlarm(atMs: number): Promise<void> }) {
+    this.#storage = storage;
+  }
+
+  armNoLaterThan(atMs: number): void {
+    const previous = this.#armedForMs;
+    if (previous !== null && previous <= atMs) return;
+    this.#armedForMs = atMs;
+    try {
+      // Deliberately not awaited or caught: the native output gate owns the write and turns an
+      // asynchronous failure into an invocation failure.
+      void this.#storage.setAlarm(atMs);
+    } catch (cause) {
+      this.#armedForMs = previous;
+      throw new Error("stream alarm arming failed", { cause });
+    }
+  }
+
+  markFired(): void {
+    this.#armedForMs = null;
+  }
+}
+
 /** The capability host's slug — hosted INLINE (see the inline-core section below). */
 const CAPABILITY_TABLE_SLUG = "capability-table";
 /** The core processor is stateless (pure reduce) — one module-level instance serves every DO. */
 const CORE_PROCESSOR = new CoreStreamProcessor();
 
 export class StreamDurableObject extends DurableObject<Env> {
+  /** WHO THIS DO IS — parsed ONCE from the unforgeable codec name (the apps/os idiom). A
+   *  stream is only ever reached `getByName`; an id-addressed instance fails right here in the
+   *  constructor, before it can touch anything. */
+  readonly name = parseStreamDurableObjectName(this.ctx.id.name);
+  readonly #doName = DurableObjectNameCodec.stringify(this.name);
   // ── transport: every ItxConnection is a HIBERNATABLE RPC STUB (keyed by connectionId) ──
   #hibernatableRpcStubs = new HibernatableRpcStubManager({
     acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
@@ -152,6 +194,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    *  (the two-phase attach: RPC first — it mints connectedAtOffset — then the upgrade). In
    *  memory on purpose: if the DO dies in between, the upgrade 409s and the relay re-attaches. */
   #pendingConnectionRecords = new Map<string, Record<string, unknown>>();
+  readonly #alarmArmer = new StreamAlarmArmer(this.ctx.storage);
   incarnation = 0; // durable, bumped once per incarnation that WRITES — growth across idle ⇒ it hibernated
   #storageReady = false;
 
@@ -159,12 +202,12 @@ export class StreamDurableObject extends DurableObject<Env> {
   // backing storage (workerd auto-deletes empty objects, and a probed /state or typo'd ctx must
   // leave nothing behind — the Kenton PR #6101 doctrine). All writes funnel through #touch().
 
-  /** First write of this incarnation: name-check BEFORE anything persists, then the events
-   *  table + one incarnation bump (the hibernation tell — workless incarnations no longer
-   *  count, which is the point). Synchronous (the kv API), so append needs no boot barrier. */
+  /** First write of this incarnation: the events table + one incarnation bump (the
+   *  hibernation tell — workless incarnations no longer count, which is the point). The
+   *  name check already happened in the constructor (`readonly name` field). Synchronous
+   *  (the kv API), so append needs no boot barrier. */
   #touch(): void {
     if (this.#storageReady) return;
-    void this.#doName; // an id-addressed instance must fail before its first write
     this.ctx.storage.sql.exec(
       `CREATE TABLE IF NOT EXISTS events (
          offset INTEGER PRIMARY KEY,
@@ -175,19 +218,6 @@ export class StreamDurableObject extends DurableObject<Env> {
     this.incarnation = ((this.ctx.storage.kv.get("incarnation") as number | undefined) ?? 0) + 1;
     this.ctx.storage.kv.put("incarnation", this.incarnation);
     this.#storageReady = true;
-  }
-
-  /** This DO's codec name. A stream is only ever reached `getByName` — an id-addressed instance
-   *  has no identity and must fail before it writes anything. */
-  get #doName(): string {
-    const name = this.ctx.id.name;
-    if (!name) throw new Error("StreamDurableObject requires a named id (reach it via getByName)");
-    return name;
-  }
-
-  /** The context this DO is — parsed from its unforgeable codec name. */
-  get #name(): { projectId: string; path: string } {
-    return parseName(this.#doName);
   }
 
   // ── the event log (the commit point) ──
@@ -256,7 +286,7 @@ export class StreamDurableObject extends DurableObject<Env> {
               committed.push({
                 ...existing,
                 offset: Number(hit.offset),
-                path: this.#name.path,
+                path: this.name.path,
               } as StreamEvent);
               continue; // a dedupe hit consumes NO offset
             }
@@ -277,7 +307,7 @@ export class StreamDurableObject extends DurableObject<Env> {
             input.idempotencyKey ?? null,
           );
         }
-        committed.push({ ...body, offset: nextOffset, path: this.#name.path } as StreamEvent);
+        committed.push({ ...body, offset: nextOffset, path: this.name.path } as StreamEvent);
       }
       if (nextOffset > scannedAfterOffset) {
         this.ctx.storage.kv.put("maxAssignedOffset", nextOffset); // THE one deliberate write
@@ -361,7 +391,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   /** THE capability host, parent-constructed: same class, same contract, zero distance. */
   #capabilityTableProcessor(): CapabilityTableProcessor {
     if (this.#capabilityTableInstance) return this.#capabilityTableInstance;
-    const { projectId, path } = this.#name;
+    const { projectId, path } = this.name;
     const ownContext = {
       append: (...e: unknown[]) => this.append(...(e as StreamEventInput[])),
       read: (after?: number, limit?: number) => this.read(after, limit),
@@ -374,7 +404,9 @@ export class StreamDurableObject extends DurableObject<Env> {
       env: this.env,
       invoke: (call) => this.invoke(call),
       context: (p) =>
-        p === path ? ownContext : this.env.CONTEXT.getByName(stringifyName({ projectId, path: p })),
+        p === path
+          ? ownContext
+          : this.env.CONTEXT.getByName(DurableObjectNameCodec.stringify({ projectId, path: p })),
       // The connections + facets views are PARENT-LOCAL — the delivery WebSockets and facets
       // live here and can never move (workerd#6702: sockets never leave the parent).
       connections: {
@@ -489,7 +521,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       .map((r) => ({
         ...(JSON.parse(String(r.body)) as StreamEventInput & { createdAt: string }),
         offset: Number(r.offset),
-        path: this.#name.path,
+        path: this.name.path,
       }));
     // The scan-window proof: a FULL page is only contiguously known through its last row; a
     // short page proves the read scanned to the head (ephemeral holes and all).
@@ -505,24 +537,14 @@ export class StreamDurableObject extends DurableObject<Env> {
   #lastActivityMs = 0;
   #noteActivity(): void {
     this.#lastActivityMs = Date.now();
-    void this.#armAlarmNoLaterThan(this.#lastActivityMs + 60_000).catch(() => {});
-  }
-  /** ONE alarm write per quiet-period start, never per append (an ephemeral flood arms once).
-   *  The in-memory memo also kills the awaited getAlarm READ per append: staleness can only
-   *  cause one redundant read (alarm() clears it; eviction loses it), never a missed arm. */
-  #armedTargetMs?: number;
-  async #armAlarmNoLaterThan(target: number): Promise<void> {
-    if (this.#armedTargetMs !== undefined && this.#armedTargetMs <= target) return;
-    const current = await this.ctx.storage.getAlarm();
-    if (current === null || current > target) await this.ctx.storage.setAlarm(target);
-    this.#armedTargetMs = Math.min(target, current ?? target);
+    this.#alarmArmer.armNoLaterThan(this.#lastActivityMs + 60_000);
   }
   // In-memory on purpose: a fresh incarnation always runs one resurrection pass, and losing
   // the flag with an eviction is exactly the point.
   #facetsResurrected = false;
 
   async alarm(): Promise<void> {
-    this.#armedTargetMs = undefined; // this alarm FIRED — the memo no longer reflects storage
+    this.#alarmArmer.markFired();
     // Facets have no alarms (workerd#6810) — the parent proxies. The subscription-forwarder's
     // due retries pump here; it re-arms itself through armSubscriptionRetry when work remains.
     if (this.#facetEntries().some((e) => e.slug === SUBSCRIPTION_FORWARDER_SLUG))
@@ -572,7 +594,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       // actor awake, and a page always gets it back — dispose them with the idle facets.
       this.#hibernatableRpcStubs.disposeRetainedStubs();
     } else {
-      await this.#armAlarmNoLaterThan(this.#lastActivityMs + 60_000);
+      this.#alarmArmer.armNoLaterThan(this.#lastActivityMs + 60_000);
     }
   }
 
@@ -687,8 +709,8 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   /** The alarm proxy (facets have no alarms — workerd#6810): the forwarder reports its earliest
    *  nextAttemptAtMs and the parent's alarm pumps it when due. */
-  async armSubscriptionRetry(input: { atMs: number }): Promise<{ ok: true }> {
-    await this.#armAlarmNoLaterThan(input.atMs);
+  armSubscriptionRetry(input: { atMs: number }): { ok: true } {
+    this.#alarmArmer.armNoLaterThan(input.atMs);
     return { ok: true };
   }
 
@@ -841,8 +863,8 @@ export class StreamDurableObject extends DurableObject<Env> {
   #identityFor(slug: string, exportName?: string, props?: Record<string, unknown>): FacetIdentity {
     return {
       parentName: this.#doName,
-      projectId: this.#name.projectId,
-      path: this.#name.path,
+      projectId: this.name.projectId,
+      path: this.name.path,
       slug,
       ...(exportName ? { export: exportName } : {}),
       ...(props ? { props } : {}),
@@ -989,9 +1011,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     // EGRESS: substitute `{{secret:NAME}}` placeholders, then the FALLBACK terminal.
     const sub = await substituteHeaderSecrets(request, "project", (name) =>
-      this.env.SECRETS_KV
-        ? this.env.SECRETS_KV.get(`secret:${this.#name.projectId}:${name}`)
-        : null,
+      this.env.SECRETS_KV ? this.env.SECRETS_KV.get(`secret:${this.name.projectId}:${name}`) : null,
     );
     return this.env.FALLBACK.fetch(sub);
   }

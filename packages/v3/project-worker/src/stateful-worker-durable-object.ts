@@ -29,7 +29,7 @@ import { DurableObject } from "cloudflare:workers";
 import { confinedWorker, versionedFacet } from "./core/agent-runtime.ts";
 import { invokePath, type Expression } from "./core/expression.ts";
 import { hashSource } from "./core/hash.ts";
-import { stringifyName } from "./core/names.ts";
+import { DurableObjectNameCodec } from "./core/durable-object-names.ts";
 import { itxEntrypointFor } from "./itx-entrypoint.ts";
 import type { StreamDurableObject } from "./stream-durable-object.ts";
 
@@ -72,7 +72,7 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
       throw new Error(
         `stateful worker: runner name ${JSON.stringify(name)} is not {projectId}::{path}::{className}:{sourceHash} — reach this DO via the capability host, never by raw id`,
       );
-    return stringifyName({ projectId, path });
+    return DurableObjectNameCodec.stringify({ projectId, path });
   }
 
   /** A stub to the OWNING capability host (module resolution + the hosted class's env.ITX rides
