@@ -113,6 +113,35 @@ Tests: \_\_tests\_\_/failing-ws-fetch-capability.test.ts (2 pass / 2 fails / 1 t
     (prove_crisp1 passes live). FIX candidates: wrangler issue/patch for a flag knob; or the
     pool lane carries all loader coverage (it accepts the flag) — zero code, document it.
 
+## Family I — processor lifecycle (wave 2: **tests**/failing-lifecycle-races.test.ts)
+
+29. ⚠ Enable-vs-configure drive race: enableProcessor's own provide commit drives the fresh
+    facet BEFORE configure() runs — every enable logs "not configured" and drops that batch
+    (named ephemerals in the configure window are lost; durable heal only). FIX: subsumed by
+    30(a).
+30. ☠ THE HALF-ENABLED PROVIDE DOOR: #facetEntries derives enablement from any
+    itx.processors.<slug> mount (any provide can mint one — the validated relay passes the
+    undeclared `processor` field through), but the facet only works after the second,
+    NON-event-sourced leg (configure → facet kv). Provide-only = permanent per-commit error
+    storm that /state reports as healthy; rebuild-from-log replays mounts but not identity kv.
+    FIX (recommended, net ~0 lines): kill the side-channel — derive FacetIdentity entirely from
+    the mount + the parent's own address and configure IDEMPOTENTLY inside #facet() at every
+    materialization; delete enableProcessor's configure call; #facet(slug) throws NO_FACET for
+    unknown slugs (also stops silent resurrection of deleted facets). Fixes 29 + 30 + 32.
+31. ⚠ Unsubscribe leaks the parked anonymous transport (pager socket + retained stub +
+    registry record) until the whole session dies — verified 20/20 cycles. FIX: on revoke, if
+    the mount's target is itx.connections.get(id), the connection is anonymous, and no other
+    mount names it → close it (the exact mirror of onFinalClose auto-revoke, ~8 lines).
+32. ⚠ Warm facet keeps STALE props: configure() writes new identity kv but never drops the
+    memoized #processor — new props take effect only after a quiesce abort. FIX: configure()
+    invalidates #processor on identity change (~2 lines; 30(a) covers materialization time).
+33. ◇ Client Itx.enableProcessor cannot spell props (DO verb takes them; the client door
+    doesn't) — per-instance configuration unspellable except via broken door 30. FIX: add +
+    plumb the parameter (~2 lines).
+    Also pinned passing: 10-way provide/revoke races, double-enable lineage, disable-mid-drive,
+    append-during-delivery reentrancy (bounded + loud), waiter hygiene. Infra note: the validated
+    relay does NOT strip undeclared fields — a deliberate strict-vs-passthrough decision is owed.
+
 ## Infra findings (not defects in our code)
 
 - Harness lane can't boot the Worker Loader (workerd --experimental knob missing in
