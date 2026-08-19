@@ -77,9 +77,13 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       case "events.iterate.com/agent/created": {
         // The birth event on the agent's own stream (copies carry
         // source.copiedFrom and must not re-target the collection stream).
+        // ORDER MATTERS: the conversion batch ends with the lowered debounce
+        // — the done-configuring signal that releases the held first turn —
+        // so everything the first turn should see (AGENTS.md included) must
+        // land BEFORE it.
         if (event.source?.copiedFrom !== undefined) break;
-        await this.#configureNewbornAgent(event.path);
         await this.#syncAgentsMdContext([event.path]);
+        await this.#configureNewbornAgent(event.path);
         break;
       }
       case "events.iterate.com/project/worker-updated": {
