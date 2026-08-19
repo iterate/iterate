@@ -2119,21 +2119,17 @@ export class VoiceAgent2Processor extends StreamProcessor<
               for (let cut = 0; cut < grok.delta.length; cut += IDENTITY_SLICE_B64_CHARS) {
                 dial.speakerQueue.push(grok.delta.slice(cut, cut + IDENTITY_SLICE_B64_CHARS));
               }
-              /* The one decode the identity path ever pays, and only when a
-               * face is rendering — which is why `visemes` is certificate
-               * data rather than always-on. */
-              if (dial.face !== null) {
-                dial.face.audio(base64ToBytes(grok.delta), receivedAtFacetMs);
-              }
+              /* The FACE is deliberately not fed here: the whole answer can
+               * arrive in one burst, and a mouth folded at ingest races to
+               * the answer's final shape while the device spends seconds
+               * playing it — measured 6 shape changes across a six-second
+               * answer. The pacer feeds it at send time instead. */
             } else {
               /* The pipeline is 16 kHz from here to the speaker; a provider
                * that talks faster gets resampled at the door — and encoded
                * per cut HERE, at arrival, not on the pacer's clock. */
               const pcm16 = dial.spkResampler.push(base64ToBytes(grok.delta));
               dial.answer.receivedMs += pcm16.length / PCM16_BYTES_PER_MS;
-              /* The PCM the classifier reads is the PCM the speaker will
-               * play — free on this path, the resample already decoded it. */
-              if (dial.face !== null) dial.face.audio(pcm16, receivedAtFacetMs);
               for (let cut = 0; cut < pcm16.length; cut += MAX_SPEAKER_PAYLOAD_BYTES) {
                 dial.speakerQueue.push(
                   bytesToBase64(
@@ -2172,8 +2168,9 @@ export class VoiceAgent2Processor extends StreamProcessor<
             if (dial.answer.phase === "cancelled") return;
             dial.answer.phase = "settled";
             dial.answer.endsWhenQueueDrains = true;
-            /* The mouth always closes with SIL at the end of its track. */
-            dial.face?.answerAudioDone(receivedAtFacetMs);
+            /* The mouth's SIL rides the drain marker with the rest of the
+             * face track — closing it here, at ingest, shut the mouth
+             * seconds before the device finished speaking. */
             this.#sendSpeakerAudio(dial, append, runInBackground);
             return;
 
@@ -3001,6 +2998,19 @@ export class VoiceAgent2Processor extends StreamProcessor<
              * average send rate equals the play rate. */
             dial.deviceBufferEmptyAtFacetMs += frameBytes / PCM16_BYTES_PER_MS;
             dial.answer.sentMs += frameBytes / PCM16_BYTES_PER_MS;
+            /*
+             * THE FACE FOLDS AT SEND TIME, on the frame the device is about
+             * to play — the cadence the retired per-frame viseme lane had.
+             * Folded at ingest it raced a burst-delivered answer to its
+             * final shape and the mouth stood still for the playout; folded
+             * here it leads playout only by the device's small backlog. The
+             * decode is the one this lane pays for a face, and only when a
+             * face is rendering — which is why `visemes` is certificate
+             * data rather than always-on.
+             */
+            if (dial.face !== null) {
+              dial.face.audio(base64ToBytes(frame), nowAtFacetMs);
+            }
             const clearFirst = dial.clearSpeakerBufferBeforeNextFrame;
             dial.clearSpeakerBufferBeforeNextFrame = false;
             await append({
@@ -3028,6 +3038,9 @@ export class VoiceAgent2Processor extends StreamProcessor<
              * frozen heard-ms is stale: truncating a fully-heard answer to
              * it would damage the very memory the repair protects. */
             dial.tentativeOnset = null;
+            /* The mouth closes WITH the marker, not at the provider's done:
+             * SIL at ingest shut it seconds before the speech finished. */
+            dial.face?.answerAudioDone(this.deps.nowAtFacetMs());
             dial.lastDeviceSpeakerFrameSeq += 1;
             const clearFirst = dial.clearSpeakerBufferBeforeNextFrame;
             dial.clearSpeakerBufferBeforeNextFrame = false;
