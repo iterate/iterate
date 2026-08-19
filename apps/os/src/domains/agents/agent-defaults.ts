@@ -240,8 +240,9 @@ type AgentChannelFacts = z.infer<typeof AgentChannelFacts>;
 /**
  * The platform-default personality for one agent, as PLAIN KEYED EVENTS —
  * the implementation behind `itx.agents.get(path).getDefaultBirthEvents({kind})`,
- * and (kind `web`, coordinates omitted) the degraded-start batch the turn
- * loop appends when a project's config worker misses the readiness deadline.
+ * and (kind `web`, without directory project facts) the degraded-start batch
+ * the turn loop appends when a project's config worker misses the readiness
+ * deadline.
  *
  * Every event's idempotency key embeds a content hash, so the two callers
  * converge: a late worker appending the same default events after a degraded
@@ -253,14 +254,16 @@ type AgentChannelFacts = z.infer<typeof AgentChannelFacts>;
  */
 export function defaultAgentBirthEvents(input: {
   kind: AgentBirthKind;
-  /**
-   * The agent's own coordinates — the rpc service passes them (plus
-   * directory-derived project facts) and gets the boot-context item too; the
-   * degraded-start turn loop lacks them and gets personality-only events.
-   */
-  coordinates?: {
+  /** The agent's own coordinates, for the boot-context item. Both callers
+   * (the rpc service and the degraded-start turn loop) know them. */
+  coordinates: {
     agentPath: string;
     projectId: string;
+    /** Human-facing project facts, best-effort from the project directory —
+     * absent when the directory has no record yet (or the caller has no
+     * directory access, like the degraded start inside the stream's Durable
+     * Object). Absence degrades the boot context to an id-only project line;
+     * it must never block a birth. */
     project?: { name: string; slug: string; workerUrl?: string };
   };
   /** The agent/created birth certificate payload (channel facts for the
@@ -288,9 +291,7 @@ export function defaultAgentBirthEvents(input: {
     idempotencyKey: `agent/default-birth:model:${contentHash(model)}`,
     payload: { config: { llm: { model } } },
   });
-  const coordinates = input.coordinates;
-  if (coordinates === undefined) return [promptEvent, modelEvent];
-  const bootContent = agentBootContextContent(coordinates);
+  const bootContent = agentBootContextContent(input.coordinates);
   const bootContextEvent = AgentProcessorContract.buildEvent({
     // Per-agent boot context as a second durable system item: ids and paths
     // differ per agent but must survive history compaction. Facts and pointers
@@ -316,13 +317,10 @@ export function defaultAgentBirthEvents(input: {
  * mis-addressed personality. */
 function defaultSystemPromptForKind(input: {
   kind: AgentBirthKind;
-  coordinates?: { agentPath: string };
+  coordinates: { agentPath: string };
   birthCertificate?: Record<string, unknown>;
 }): string {
   switch (input.kind) {
-    case "web":
-    case "onboarding":
-      return DEFAULT_AGENT_SYSTEM_PROMPT;
     case "mcp":
       return MCP_AGENT_SYSTEM_PROMPT;
     case "email":
@@ -333,31 +331,35 @@ function defaultSystemPromptForKind(input: {
     }
     case "telegram": {
       const facts = parseChannelFacts(input.birthCertificate, "telegram");
-      if (input.coordinates === undefined) {
-        throw new Error("telegram default birth events need the agent's coordinates");
-      }
       return telegramAgentSystemPrompt({
         agentPath: input.coordinates.agentPath,
         chatId: facts.chatId ?? null,
         connection: facts.connection,
       });
     }
+    default:
+      // Compile-time exhaustiveness without a runtime cliff: adding a kind
+      // that should NOT get the default prompt fails this satisfies check;
+      // a kind that slips through anyway still gets a working web prompt.
+      input.kind satisfies "web" | "onboarding";
+      return DEFAULT_AGENT_SYSTEM_PROMPT;
   }
 }
 
 function parseChannelFacts<Kind extends AgentChannelFacts["type"]>(
   birthCertificate: Record<string, unknown> | undefined,
   kind: Kind,
-): Extract<AgentChannelFacts, { type: Kind }> {
-  const parsed = AgentChannelFacts.safeParse(birthCertificate?.channel);
-  if (!parsed.success || parsed.data.type !== kind) {
+): AgentChannelFacts & { type: Kind } {
+  const schemaWithKind = AgentChannelFacts.and(z.object({ type: z.literal(kind) }));
+  const parsed = schemaWithKind.safeParse(birthCertificate?.channel);
+  if (!parsed.success) {
     throw new Error(
-      `${kind} default birth events need channel facts in the birth certificate: ` +
-        `agent/created payload { channel: { type: ${JSON.stringify(kind)}, ... } }` +
-        (parsed.success ? ` (found ${JSON.stringify(parsed.data.type)})` : ""),
+      `agent/created of kind ${kind} had invalid channel facts ` +
+        `(expected payload { channel: { type: ${JSON.stringify(kind)}, ... } }): ` +
+        z.prettifyError(parsed.error),
     );
   }
-  return parsed.data as Extract<AgentChannelFacts, { type: Kind }>;
+  return parsed.data;
 }
 
 /** The boot-context system item's content: which project this is, where the

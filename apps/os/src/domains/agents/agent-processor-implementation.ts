@@ -24,17 +24,17 @@ export type { AgentProcessorDeps } from "./agent-host.ts";
  * asks; projects may vendor their own interpreter instead.
  *
  * Registered under the contract's own slug ("agent"). History: during the
- * birth-userland transition this processor briefly lived under a second slug ("agent-headless"),
- * "agent-headless", beside the (now deleted) classic interpreting processor;
+ * birth-userland transition this processor briefly lived under a second slug
+ * ("agent-headless"), beside the (now deleted) classic interpreting processor;
  * with one processor left, the split contract was dissolved and the slug
  * reclaimed. Idempotency keys mint in the fixed `agent/` namespace (via
- * `agentComponentHost`), shared with the interpretation service, so streams
+ * `#componentHost`), shared with the interpretation service, so streams
  * written by both converge on identical keys.
  */
 export class AgentProcessor extends StreamProcessor<AgentProcessorContract, AgentProcessorDeps> {
   readonly contract = AgentProcessorContract;
   readonly #components: AgentComponent[] = (() => {
-    const host = agentComponentHost(this);
+    const host = this.#componentHost();
     const llm = new AgentLlmRequest(host);
     return [new AgentTurnLoop(host, llm), llm];
   })();
@@ -46,31 +46,27 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   protected override reduce({ event, state }: ReduceArgs<AgentProcessorContract>) {
     return reduceAgentEvent({ event, state });
   }
-}
 
-/** Adapts a hosting StreamProcessor to the component host surface. Usable by
- * any agent-contract processor class — call it with `this` from a field
- * initializer. The base class's members are protected, so the adapter
- * reaches them through a scoped cast rather than widening them to public.
- * `idempotencyKey` is pinned to the `agent/` namespace on purpose: every
- * writer of this stream's recorded consequences (this processor, the
- * interpretation service, vendored userland interpreters) dedupes on
- * identical keys instead of re-executing under a fresh prefix. */
-function agentComponentHost(processor: object): AgentHost {
-  const p = processor as {
-    deps: AgentProcessorDeps;
-    stream: { readEvents: AgentHost["readEvents"] };
-    append: AgentHost["append"];
-  };
-  return {
-    deps: p.deps,
-    idempotencyKey: (suffix) => `agent/${suffix}`,
-    readEvents: (input) => p.stream.readEvents(input),
-    append: (...events) => p.append(...events),
-    now: () => p.deps.now?.() ?? Date.now(),
-    sleep: (ms) =>
-      p.deps.sleep === undefined
-        ? new Promise((resolve) => setTimeout(resolve, ms))
-        : p.deps.sleep(ms),
-  };
+  /** The component host surface over this processor's protected members.
+   * `idempotencyKey` is pinned to the `agent/` namespace on purpose: every
+   * writer of this stream's recorded consequences (this processor, the
+   * interpretation service, vendored userland interpreters) dedupes on
+   * identical keys instead of re-executing under a fresh prefix. */
+  #componentHost(): AgentHost {
+    if (this.projectId === null) {
+      throw new Error("agent streams are always project-scoped");
+    }
+    return {
+      deps: this.deps,
+      identity: { agentPath: this.path, projectId: this.projectId },
+      idempotencyKey: (suffix) => `agent/${suffix}`,
+      readEvents: (input) => this.stream.readEvents(input),
+      append: (...events) => this.append(...events),
+      now: () => this.deps.now?.() ?? Date.now(),
+      sleep: (ms) =>
+        this.deps.sleep === undefined
+          ? new Promise((resolve) => setTimeout(resolve, ms))
+          : this.deps.sleep(ms),
+    };
+  }
 }

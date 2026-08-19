@@ -142,12 +142,18 @@ describe("defaultAgentBirthEvents — the platform-default personality as plain 
     const first = defaultAgentBirthEvents({ kind: "web", coordinates });
     const again = defaultAgentBirthEvents({ kind: "web", coordinates });
     expect(again).toEqual(first);
-    // The degraded-start caller (no coordinates) produces a strict prefix
-    // with the SAME prompt/model keys — no boot context.
-    const degraded = defaultAgentBirthEvents({ kind: "web" });
-    expect(degraded.map((event) => event.idempotencyKey)).toEqual(
+    // The degraded-start caller knows the agent's identity but has no
+    // directory access: same prompt/model keys, and a boot context whose
+    // id-only content hashes to a DIFFERENT key — so a late worker's
+    // directory-informed boot context supersedes it instead of deduping.
+    const degraded = defaultAgentBirthEvents({
+      kind: "web",
+      coordinates: { agentPath: coordinates.agentPath, projectId: coordinates.projectId },
+    });
+    expect(degraded.slice(0, 2).map((event) => event.idempotencyKey)).toEqual(
       first.slice(0, 2).map((event) => event.idempotencyKey),
     );
+    expect(degraded).toHaveLength(3);
   });
 
   test("boot context names the project when directory facts are supplied — id-only without", () => {
@@ -218,7 +224,7 @@ describe("defaultAgentBirthEvents — the platform-default personality as plain 
 
   test("channel kinds are LOUD about missing channel facts — never a silently wrong personality", () => {
     expect(() => defaultAgentBirthEvents({ kind: "slack", coordinates })).toThrow(
-      /channel facts in the birth certificate/,
+      /invalid channel facts/,
     );
     expect(() =>
       defaultAgentBirthEvents({

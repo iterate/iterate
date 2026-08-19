@@ -39,7 +39,7 @@ export const AgentProcessorContract = defineProcessorContract({
     "offset-identified LLM turns, held until the project's config worker finalizes the " +
     "agent's birth (agent/birth-finalized, with a degraded-start deadline), run through the " +
     "Workers AI transport. Interprets nothing: response interpretation is a service the " +
-    "project's config worker invokes per event (itx.agents.get(path).interpretResponse).",
+    "project's config worker invokes per event (usually with itx.agents.get(path).interpretResponse).",
   stateSchema: z.object({
     birthCertificate: z
       .object({

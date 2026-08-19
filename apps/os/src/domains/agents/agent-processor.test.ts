@@ -19,7 +19,7 @@ import {
   AgentProcessorContract,
   type AgentContextAddedPayload,
 } from "./agent-processor-contract.ts";
-import { AgentProcessor, type AgentProcessorDeps } from "./agent-processor.ts";
+import { AgentProcessor, type AgentProcessorDeps } from "./agent-processor-implementation.ts";
 import {
   buildAgentCompactionRequestBody,
   contextWindowTokens,

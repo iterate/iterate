@@ -1,5 +1,5 @@
 // The agent's TURN LOOP component — one of the two parts composed into the
-// agent processor (see agent-processor.ts). It owns the
+// agent processor (see agent-processor-implementation.ts). It owns the
 // conversational loop: mirroring visible chat messages into history,
 // interrupting an in-flight turn on new input, the birth-readiness hold (and
 // its degraded-start deadline), and the whole at-head lifecycle — resume,
@@ -156,7 +156,13 @@ export class AgentTurnLoop implements AgentComponent {
         if (state.birthTimedOutAtOffset !== event.offset) break;
         blockProcessorWhile(() =>
           appendUnlessLostIdempotencyRace(append, [
-            ...defaultAgentBirthEvents({ kind: "web" }),
+            ...defaultAgentBirthEvents({
+              kind: "web",
+              // No directory access from inside the stream's Durable Object:
+              // the boot context degrades to its id-only project line, and a
+              // late worker's directory-informed version supersedes it.
+              coordinates: this.#host.identity,
+            }),
             {
               type: "events.iterate.com/agent/birth-finalized",
               payload: {},

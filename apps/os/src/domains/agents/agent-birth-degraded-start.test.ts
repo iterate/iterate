@@ -14,7 +14,7 @@ import { expect, it } from "vitest";
 import type { ConsumedInput } from "iterate/processors";
 import { makeProcessorHarness } from "iterate/processors/testing";
 import { DEFAULT_AGENT_SYSTEM_PROMPT } from "./agent-defaults.ts";
-import { AgentProcessor } from "./agent-processor.ts";
+import { AgentProcessor } from "./agent-processor-implementation.ts";
 import type { AgentProcessorContract } from "./agent-processor-contract.ts";
 import { AGENT_BIRTH_FINALIZE_DEADLINE_MS } from "./agent-turn-loop.ts";
 import type { WorkersAiMessage } from "./workers-ai-transport.ts";
