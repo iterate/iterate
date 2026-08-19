@@ -852,6 +852,18 @@ interface Answer {
   endsWhenQueueDrains: boolean;
 }
 
+/**
+ * A memory repair ready to send: the barged item's identity and the heard
+ * milliseconds both halves of the repair name. ONE shape for the dial's
+ * `pendingRepair` and for `#settleRepair`'s argument — they used to be the
+ * same three fields spelled twice.
+ */
+interface Repair {
+  itemId: string;
+  contentIndex: number;
+  audioEndMs: number;
+}
+
 /** The between-answers state: nothing playing, nothing owed. */
 const freshAnswer = (): Answer => ({
   itemId: null,
@@ -876,6 +888,16 @@ const freshAnswer = (): Answer => ({
  * cannot forget a field.
  */
 interface Dial {
+  /**
+   * The call this dial serves. A Dial belongs to exactly ONE conversation
+   * — a re-dial of the same call is a NEW Dial carrying the same id — so
+   * the id lives here, per this object's own doctrine ("everything scoped
+   * to the dial lives ON it"), instead of threading through every private
+   * method as a second argument naming a fact the first argument owns.
+   * The closure-captured copy survives only in the appends that outlive
+   * the dial: dial-failed, handshake-timeout, socket-closed, idle.
+   */
+  readonly conversationId: string;
   /** The provider's socket, or null while the dial is still in flight. */
   socket: WebSocket | null;
   /** True once the provider's handshake completed and audio may flow. */
@@ -1022,7 +1044,7 @@ interface Dial {
    * `response.done` arrives, then sent against a settled item — as a
    * truncate or, on a provider whose truncate is a silent no-op, a delete.
    */
-  pendingRepair: { itemId: string; contentIndex: number; audioEndMs: number } | null;
+  pendingRepair: Repair | null;
   /**
    * Tool calls issued by the model and not yet answered, by provider call_id.
    * Grok documents parallel calls as "all outputs, then ONE response.create";
@@ -1056,11 +1078,15 @@ interface Dial {
 }
 
 /** A dial just decided: no socket yet, nothing sent, a clear owed first. */
-const freshDial = (provider: {
-  rate: number;
-  truncates: boolean;
-  cancelsOnVadOnset: boolean;
-}): Dial => ({
+const freshDial = (
+  conversationId: string,
+  provider: {
+    rate: number;
+    truncates: boolean;
+    cancelsOnVadOnset: boolean;
+  },
+): Dial => ({
+  conversationId,
   socket: null,
   ready: false,
   speakerQueue: [],
@@ -1276,8 +1302,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
 
     /* The log has caught up with whichever append we were remembering for it;
      * both memories exist only to cover the gap, so both end here. */
-    if (state.call === null) {
-    } else {
+    if (state.call !== null) {
       this.#callRequested = false;
       this.#lastDeviceInputAtStreamMsMirror = state.call.lastDeviceInputAtStreamMs;
     }
@@ -1362,14 +1387,11 @@ export class VoiceAgent2Processor extends StreamProcessor<
         ) {
           this.#turnEndedDuringHandshake = true;
         }
-        if (state.call === null) {
-          if (this.#callRequested) {
-            /* Already asked. Hold this frame for the call that is coming. */
-            if (micPcm16 !== null && this.#micQueue.length < MAX_HELD_MIC_FRAMES) {
-              this.#micQueue.push(micPcm16);
-            }
-            return;
-          }
+        /* A buried call takes no further input. A NULL call passes — the
+         * `?.` makes this one gate serve both shapes, and the mint below is
+         * what handles the null. */
+        if (state.call?.endRequested != null) return;
+        if (state.call === null && !this.#callRequested) {
           /* ONLY SPEECH OPENS A CALL. The ephemeral lane drops and
            * re-delivers, so a lone ptt-end arrives here — and a call minted
            * for it would commit an EMPTY provider buffer: a provider error
@@ -1397,14 +1419,16 @@ export class VoiceAgent2Processor extends StreamProcessor<
            * Waiting for it to come back and be folded put a full stream round
            * trip in front of every first word — measured at 7.4 seconds on a
            * real session, against a provider handshake of 973 ms.
+           *
+           * And NO return: the frame that opened the call falls through to
+           * the one hold site below like every frame after it — the dial
+           * exists (created synchronously above) and is never ready yet, so
+           * the mic block holds it. "Hold the frame if room" used to be
+           * spelled three times in this case; this fall-through is what
+           * deleted two of the copies.
            */
           this.#openProviderConnection(conversationId, state, append, runInBackground);
-          if (micPcm16 !== null && this.#micQueue.length < MAX_HELD_MIC_FRAMES) {
-            this.#micQueue.push(micPcm16);
-          }
-          return;
         }
-        if (state.call.endRequested !== null) return;
 
         /*
          * THE BUTTON IS AN INTERRUPTION, and in push-to-talk it is the ONLY
@@ -1415,9 +1439,11 @@ export class VoiceAgent2Processor extends StreamProcessor<
          * the entire press and only stops when the NEXT answer begins.
          * #bargeAnswer carries the rest of the story; the press is its one
          * caller that also cancels — no provider VAD will ever cancel for a
-         * button.
+         * button. Guarded on the FOLD's call, not just the dial: the press
+         * that MINTED the call above barges nothing, same reachability as
+         * when the mint block still returned early.
          */
-        if (event.type === "events.iterate.com/voice-agent/ptt-start") {
+        if (event.type === "events.iterate.com/voice-agent/ptt-start" && state.call !== null) {
           const dial = this.#dial;
           /* No dial means nothing playing and nothing to cancel: a press on
            * a revived incarnation that has not re-dialled yet changes
@@ -1434,7 +1460,6 @@ export class VoiceAgent2Processor extends StreamProcessor<
             this.#bargeAnswer(
               dial,
               this.#heardMsFromSchedule(dial, nowAtFacetMs),
-              state.call.conversationId,
               nowAtFacetMs,
               append,
               true,
@@ -1518,7 +1543,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
     /* CREATED BEFORE THE AWAITED DIAL, so a second caller finds `#dial`
      * taken and the mic path queues for the whole handshake. The socket
      * arrives below; everything else the dial owns starts fresh here. */
-    const dial = freshDial(provider);
+    const dial = freshDial(conversationId, provider);
     this.#dial = dial;
     const dialStartedAtFacetMs = this.deps.nowAtFacetMs();
     /* THIS DIAL'S OWN IDENTITY, for keys that must not collide with the
@@ -1547,11 +1572,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
       if (socket === null) {
         this.#lastDialFailedAtFacetMs = this.deps.nowAtFacetMs();
         if (this.#dial === dial) this.#dial = null;
-        await append({
-          type: "events.iterate.com/voice-agent/conversation-end-requested",
-          idempotencyKey: this.idempotencyKey(`dial-failed:${conversationId}`),
-          payload: { conversationId, reason: failure },
-        });
+        await this.#requestEnd(conversationId, "dial-failed", failure, append);
         return;
       }
       if (this.#dial !== dial) {
@@ -1583,14 +1604,12 @@ export class VoiceAgent2Processor extends StreamProcessor<
         } catch {
           /* Already gone. */
         }
-        await append({
-          type: "events.iterate.com/voice-agent/conversation-end-requested",
-          idempotencyKey: this.idempotencyKey(`handshake-timeout:${conversationId}`),
-          payload: {
-            conversationId,
-            reason: `the provider handshake did not complete within ${HANDSHAKE_DEADLINE_MS}ms`,
-          },
-        });
+        await this.#requestEnd(
+          conversationId,
+          "handshake-timeout",
+          `the provider handshake did not complete within ${HANDSHAKE_DEADLINE_MS}ms`,
+          append,
+        );
       });
 
       /*
@@ -1629,13 +1648,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
         }
         const providerEventType = String(grok.type ?? "");
         const receivedAtFacetMs = this.deps.nowAtFacetMs();
-        this.#forwardProviderEvent(
-          grok,
-          providerEventType,
-          conversationId,
-          receivedAtFacetMs,
-          append,
-        );
+        this.#forwardProviderEvent(dial, grok, providerEventType, receivedAtFacetMs, append);
 
         switch (providerEventType) {
           case "session.created":
@@ -1756,7 +1769,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
              * too: a real turn's speech_stopped and committed arrive in the
              * same server tick, and the frozen number from the silence is
              * still the honest one. */
-            this.#confirmTentativeOnset(dial, conversationId, append);
+            this.#confirmTentativeOnset(dial, append);
             return;
 
           case "input_audio_buffer.speech_started":
@@ -1785,7 +1798,6 @@ export class VoiceAgent2Processor extends StreamProcessor<
               this.#bargeAnswer(
                 dial,
                 this.#heardMsFromSchedule(dial, receivedAtFacetMs),
-                conversationId,
                 receivedAtFacetMs,
                 append,
                 false,
@@ -1827,7 +1839,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
                 retracted: false,
               };
             }
-            this.#clearDeviceSpeaker(dial, conversationId, receivedAtFacetMs, append);
+            this.#clearDeviceSpeaker(dial, receivedAtFacetMs, append);
             dial.deviceBufferEmptyAtFacetMs = 0;
             return;
 
@@ -1841,7 +1853,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
              * confirm's own watermark. */
             if (dial.tentativeOnset !== null && !dial.tentativeOnset.retracted) {
               dial.tentativeOnset.retracted = true;
-              this.#sendSpeakerAudio(dial, conversationId, append, runInBackground);
+              this.#sendSpeakerAudio(dial, append, runInBackground);
             }
             return;
 
@@ -1882,12 +1894,12 @@ export class VoiceAgent2Processor extends StreamProcessor<
                * for you" off mid-word on every fast tool call. Kick the
                * pacer instead: a tail a hold may have parked resumes and
                * the new answer queues behind it. */
-              this.#sendSpeakerAudio(dial, conversationId, append, runInBackground);
+              this.#sendSpeakerAudio(dial, append, runInBackground);
             } else {
               /* Every other created follows a barge (whose clear makes this
                * a watermark no-op) or replaces an answer nobody defended:
                * a new answer is a flush of the old one. */
-              this.#dropAnswerInFlight(dial, conversationId, receivedAtFacetMs, append);
+              this.#dropAnswerInFlight(dial, receivedAtFacetMs, append);
             }
             return;
           }
@@ -1935,7 +1947,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
                 pcm16.subarray(cut, Math.min(cut + MAX_SPEAKER_PAYLOAD_BYTES, pcm16.length)),
               );
             }
-            this.#sendSpeakerAudio(dial, conversationId, append, runInBackground);
+            this.#sendSpeakerAudio(dial, append, runInBackground);
             return;
           }
 
@@ -1965,7 +1977,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
             if (dial.answer.phase === "cancelled") return;
             dial.answer.phase = "settled";
             dial.answer.endsWhenQueueDrains = true;
-            this.#sendSpeakerAudio(dial, conversationId, append, runInBackground);
+            this.#sendSpeakerAudio(dial, append, runInBackground);
             return;
 
           case "response.done": {
@@ -1982,18 +1994,10 @@ export class VoiceAgent2Processor extends StreamProcessor<
             const pending = dial.pendingRepair;
             if (pending !== null && dial.ready && dial.socket !== null) {
               dial.pendingRepair = null;
-              this.#sendRepair(
-                dial,
-                pending.itemId,
-                pending.contentIndex,
-                pending.audioEndMs,
-                conversationId,
-                append,
-              );
-              this.#sendHeardPrefixNote(dial, pending.audioEndMs, conversationId, append);
+              this.#settleRepair(dial, pending, append);
             }
             /* The floor is free; a hang-up waiting on the drain settles now. */
-            this.#sendSpeakerAudio(dial, conversationId, append, runInBackground);
+            this.#sendSpeakerAudio(dial, append, runInBackground);
             return;
           }
 
@@ -2016,7 +2020,6 @@ export class VoiceAgent2Processor extends StreamProcessor<
               grok.call_id,
               state.tools.find((tool) => tool.name === grok.name),
               modelArgs,
-              conversationId,
               append,
               runInBackground,
             );
@@ -2041,11 +2044,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
         if (this.#dial !== dial) return;
         this.#dial = null;
         this.runInBackground(() =>
-          append({
-            type: "events.iterate.com/voice-agent/conversation-end-requested",
-            idempotencyKey: this.idempotencyKey(`socket-closed:${conversationId}`),
-            payload: { conversationId, reason: "Grok's socket closed" },
-          }),
+          this.#requestEnd(conversationId, "socket-closed", "Grok's socket closed", append),
         );
       });
 
@@ -2113,14 +2112,12 @@ export class VoiceAgent2Processor extends StreamProcessor<
           this.runInBackground(idleTick);
           return;
         }
-        await append({
-          type: "events.iterate.com/voice-agent/conversation-end-requested",
-          idempotencyKey: this.idempotencyKey(`idle:${conversationId}`),
-          payload: {
-            conversationId,
-            reason: `no input from the device for ${IDLE_TIMEOUT_MS / 1000}s`,
-          },
-        });
+        await this.#requestEnd(
+          conversationId,
+          "idle",
+          `no input from the device for ${IDLE_TIMEOUT_MS / 1000}s`,
+          append,
+        );
       };
       this.runInBackground(idleTick);
     });
@@ -2143,9 +2140,9 @@ export class VoiceAgent2Processor extends StreamProcessor<
    * LENGTH: the shape of the answer stays visible and the bytes go once.
    */
   #forwardProviderEvent(
+    dial: Dial,
     grok: Record<string, unknown>,
     providerEventType: string,
-    conversationId: string,
     receivedAtFacetMs: number,
     append: ProcessEventArgs<VoiceAgent2Contract>["append"],
   ): void {
@@ -2161,7 +2158,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
     this.runInBackground(() =>
       append({
         type: "events.iterate.com/voice-agent/grok-event",
-        payload: { ...body, conversationId, receivedAtFacetMs },
+        payload: { ...body, conversationId: dial.conversationId, receivedAtFacetMs },
       }),
     );
   }
@@ -2194,6 +2191,27 @@ export class VoiceAgent2Processor extends StreamProcessor<
     dial.micSentSinceCommit = false;
   }
 
+  /**
+   * One obituary shape for every reason this processor decides a call is
+   * over — it was the identical append spelled out five times. The key
+   * class scopes the dedupe: a retried decision collides with itself and
+   * never with a different reason's. Each site keeps its own scheduling
+   * (the close listener cannot await; the rest do), which is why this
+   * returns the append's promise instead of hiding it.
+   */
+  async #requestEnd(
+    conversationId: string,
+    keyClass: "dial-failed" | "handshake-timeout" | "socket-closed" | "idle" | "hang-up",
+    reason: string,
+    append: ProcessEventArgs<VoiceAgent2Contract>["append"],
+  ): Promise<void> {
+    await append({
+      type: "events.iterate.com/voice-agent/conversation-end-requested",
+      idempotencyKey: this.idempotencyKey(`${keyClass}:${conversationId}`),
+      payload: { conversationId, reason },
+    });
+  }
+
   /* ----------------------------------------------------------------- lanes */
 
   /**
@@ -2207,7 +2225,6 @@ export class VoiceAgent2Processor extends StreamProcessor<
     callId: string,
     tool: z.infer<typeof VoiceTool> | undefined,
     modelArgs: unknown,
-    conversationId: string,
     append: ProcessEventArgs<VoiceAgent2Contract>["append"],
     runInBackground: ProcessEventArgs<VoiceAgent2Contract>["runInBackground"],
   ): void {
@@ -2285,7 +2302,6 @@ export class VoiceAgent2Processor extends StreamProcessor<
           type: "conversation.item.create",
           item: { type: "function_call_output", call_id: callId, output },
         },
-        conversationId,
         append,
       );
       /* ONE follow-up, only when the floor is free: all parallel outputs in
@@ -2302,7 +2318,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
          * preamble is usually still sitting unplayed there. See
          * `followUpResponsePending`. */
         dial.followUpResponsePending = true;
-        this.#sendControl(dial, { type: "response.create" }, conversationId, append);
+        this.#sendControl(dial, { type: "response.create" }, append);
       }
     });
   }
@@ -2315,7 +2331,6 @@ export class VoiceAgent2Processor extends StreamProcessor<
   #sendControl(
     dial: Dial,
     message: Record<string, unknown>,
-    conversationId: string,
     append: ProcessEventArgs<VoiceAgent2Contract>["append"],
   ): void {
     if (dial.socket === null) return;
@@ -2328,7 +2343,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
           ...rest,
           type: `client.${String(message.type)}`,
           ...(item === undefined ? {} : { itemSummary: JSON.stringify(item).slice(0, 300) }),
-          conversationId,
+          conversationId: dial.conversationId,
           receivedAtFacetMs: this.deps.nowAtFacetMs(),
         },
       }),
@@ -2363,77 +2378,106 @@ export class VoiceAgent2Processor extends StreamProcessor<
    *
    * TWO SHAPES, by the response's state:
    *
-   *   STREAMING — the truncate must WAIT. Sent beside the cancellation it
+   *   STREAMING — the settle must WAIT. Sent beside the cancellation it
    *   races the item's own finalization (observed live: the ack and the
    *   response's `done` shared a millisecond, and the model still
-   *   remembered the full count). So it is armed on the dial and settled at
-   *   the response's `response.done`; the answer moves to "cancelled" here
-   *   too, which is what deafens the residue. What this method deliberately
-   *   does NOT send is `response.cancel`: #bargeAnswer owns that decision,
-   *   and only the press ever says yes.
+   *   remembered the full count). So the repair is armed on the dial and
+   *   settled at the response's `response.done`; the answer moves to
+   *   "cancelled" here too, which is what deafens the residue. What this
+   *   method deliberately does NOT send is `response.cancel`: #bargeAnswer
+   *   owns that decision, and only the press ever says yes.
    *
-   *   SETTLED — truncate and note go immediately; nothing finalizes late.
+   *   SETTLED — the repair settles immediately; nothing finalizes late.
    */
   #repairBargedAnswerMemory(
     dial: Dial,
     heardMs: number,
-    conversationId: string,
     append: ProcessEventArgs<VoiceAgent2Contract>["append"],
   ): void {
     if (!dial.ready || dial.socket === null) return;
-    const wantsRepair = dial.answer.itemId !== null && heardMs + 25 < dial.answer.receivedMs;
+    /* One frame of slack (25 ms) so a fully-played answer is never
+     * "truncated" to its own length by rounding — see the method doc. */
+    const repair: Repair | null =
+      dial.answer.itemId !== null && heardMs + 25 < dial.answer.receivedMs
+        ? {
+            itemId: dial.answer.itemId,
+            contentIndex: dial.answer.contentIndex,
+            audioEndMs: heardMs,
+          }
+        : null;
+    if (repair !== null) dial.answer.itemId = null;
     if (dial.answer.phase === "streaming") {
       dial.answer.phase = "cancelled";
-      if (wantsRepair) {
-        dial.pendingRepair = {
-          itemId: dial.answer.itemId!,
-          contentIndex: dial.answer.contentIndex,
-          audioEndMs: heardMs,
-        };
-        dial.answer.itemId = null;
-      }
+      if (repair !== null) dial.pendingRepair = repair;
       return;
     }
-    if (wantsRepair) {
-      this.#sendRepair(
-        dial,
-        dial.answer.itemId!,
-        dial.answer.contentIndex,
-        heardMs,
-        conversationId,
-        append,
-      );
-      dial.answer.itemId = null;
-      this.#sendHeardPrefixNote(dial, heardMs, conversationId, append);
-    }
+    if (repair !== null) this.#settleRepair(dial, repair, append);
   }
 
   /**
-   * The wire half of fixing the model's memory of a barged item: truncate,
-   * where it works. Where it does not (grok — see the PROVIDERS table),
-   * NOTHING goes out and the heard-prefix note that always follows is the
-   * entire repair. Not for want of trying: truncate is a silent no-op
-   * there and delete answers "Item not found" for assistant items, so a
-   * verb here would only decorate every barge with a provider error.
+   * Send one repair, whole: the truncate where it works, then the note that
+   * is ALWAYS the recall half. Two verbs, one action — its two callers (the
+   * immediate settled-answer path and the deferred `response.done` settle)
+   * used to spell the pair separately, and a pair spelled twice is a pair
+   * that drifts.
+   *
+   * THE TRUNCATE, where it works: `conversation.item.truncate` at heard-ms
+   * trims the item's audio AND transcript. Where it does not (grok — see
+   * the PROVIDERS table), NOTHING goes out and the note is the entire
+   * repair. Not for want of trying: truncate is a silent no-op there and
+   * delete answers "Item not found" for assistant items, so a verb would
+   * only decorate every barge with a provider error.
+   *
+   * THE NOTE: truncation deletes the item's transcript wholesale, and a
+   * model asked "how far did you get" over audio-only memory swings to "I
+   * never started" (measured live). The note carries the heard PREFIX —
+   * the transcript segments that had arrived by heard-ms, consumed here so
+   * a second settle cannot repeat them — so recall becomes exact instead
+   * of confabulated in either direction. A system item: context, never
+   * speech.
    */
-  #sendRepair(
+  #settleRepair(
     dial: Dial,
-    itemId: string,
-    contentIndex: number,
-    audioEndMs: number,
-    conversationId: string,
+    repair: Repair,
     append: ProcessEventArgs<VoiceAgent2Contract>["append"],
   ): void {
-    if (!dial.truncates) return;
+    if (dial.truncates) {
+      this.#sendControl(
+        dial,
+        {
+          type: "conversation.item.truncate",
+          item_id: repair.itemId,
+          content_index: repair.contentIndex,
+          audio_end_ms: repair.audioEndMs,
+        },
+        append,
+      );
+    }
+    const segments = dial.answer.transcript;
+    dial.answer.transcript = [];
+    const heardPrefix = segments
+      .filter((segment) => segment.atAnswerAudioMs <= repair.audioEndMs)
+      .map((segment) => segment.text)
+      .join("")
+      .trim();
+    if (heardPrefix === "") return;
     this.#sendControl(
       dial,
       {
-        type: "conversation.item.truncate",
-        item_id: itemId,
-        content_index: contentIndex,
-        audio_end_ms: audioEndMs,
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "system",
+          content: [
+            {
+              type: "input_text",
+              text:
+                `The user interrupted your previous spoken reply. They heard only this much of it: ` +
+                `"${heardPrefix}". Nothing after that was heard.`,
+            },
+          ],
+        },
       },
-      conversationId,
       append,
     );
   }
@@ -2474,7 +2518,6 @@ export class VoiceAgent2Processor extends StreamProcessor<
   #bargeAnswer(
     dial: Dial,
     heardMs: number,
-    conversationId: string,
     decidedAtFacetMs: number,
     append: ProcessEventArgs<VoiceAgent2Contract>["append"],
     cancel: boolean,
@@ -2482,13 +2525,13 @@ export class VoiceAgent2Processor extends StreamProcessor<
     dial.hangUpAfterAnswerDrains = null;
     /* Read BEFORE the repair moves a streaming answer to "cancelled". */
     const responseWasStreaming = dial.answer.phase === "streaming";
-    this.#dropAnswerInFlight(dial, conversationId, decidedAtFacetMs, append);
+    this.#dropAnswerInFlight(dial, decidedAtFacetMs, append);
     /* An answer that died unheard must not mark an end: the drain marker
      * would tell the device a turn finished that the barge just erased. */
     dial.answer.endsWhenQueueDrains = false;
-    this.#repairBargedAnswerMemory(dial, heardMs, conversationId, append);
+    this.#repairBargedAnswerMemory(dial, heardMs, append);
     if (cancel && responseWasStreaming) {
-      this.#sendControl(dial, { type: "response.cancel" }, conversationId, append);
+      this.#sendControl(dial, { type: "response.cancel" }, append);
     }
   }
 
@@ -2506,60 +2549,12 @@ export class VoiceAgent2Processor extends StreamProcessor<
    */
   #confirmTentativeOnset(
     dial: Dial,
-    conversationId: string,
     append: ProcessEventArgs<VoiceAgent2Contract>["append"],
   ): void {
     const onset = dial.tentativeOnset;
     if (onset === null) return;
     dial.tentativeOnset = null;
-    this.#bargeAnswer(dial, onset.heardMs, conversationId, this.deps.nowAtFacetMs(), append, false);
-  }
-
-  /**
-   * Tell the model what the listener actually heard of its cut-off answer.
-   *
-   * Truncation deleted the item's transcript wholesale, and a model asked
-   * "how far did you get" over audio-only memory swings to "I never
-   * started" (measured live). The note carries the heard PREFIX — the
-   * transcript cut at the barge's heard/received ratio, rounded down to a
-   * word — so recall becomes exact instead of confabulated in either
-   * direction. A system item: context, never speech.
-   */
-  #sendHeardPrefixNote(
-    dial: Dial,
-    heardMs: number,
-    conversationId: string,
-    append: ProcessEventArgs<VoiceAgent2Contract>["append"],
-  ): void {
-    if (dial.socket === null || !dial.ready) return;
-    const segments = dial.answer.transcript;
-    dial.answer.transcript = [];
-    const heardPrefix = segments
-      .filter((segment) => segment.atAnswerAudioMs <= heardMs)
-      .map((segment) => segment.text)
-      .join("")
-      .trim();
-    if (heardPrefix === "") return;
-    this.#sendControl(
-      dial,
-      {
-        type: "conversation.item.create",
-        item: {
-          type: "message",
-          role: "system",
-          content: [
-            {
-              type: "input_text",
-              text:
-                `The user interrupted your previous spoken reply. They heard only this much of it: ` +
-                `"${heardPrefix}". Nothing after that was heard.`,
-            },
-          ],
-        },
-      },
-      conversationId,
-      append,
-    );
+    this.#bargeAnswer(dial, onset.heardMs, this.deps.nowAtFacetMs(), append, false);
   }
 
   /**
@@ -2588,13 +2583,12 @@ export class VoiceAgent2Processor extends StreamProcessor<
    */
   #dropAnswerInFlight(
     dial: Dial,
-    conversationId: string,
     decidedAtFacetMs: number,
     append: ProcessEventArgs<VoiceAgent2Contract>["append"],
   ): void {
     dial.speakerQueue = [];
     dial.deviceBufferEmptyAtFacetMs = 0;
-    this.#clearDeviceSpeaker(dial, conversationId, decidedAtFacetMs, append);
+    this.#clearDeviceSpeaker(dial, decidedAtFacetMs, append);
   }
 
   /**
@@ -2615,7 +2609,6 @@ export class VoiceAgent2Processor extends StreamProcessor<
    */
   #clearDeviceSpeaker(
     dial: Dial,
-    conversationId: string,
     decidedAtFacetMs: number,
     append: ProcessEventArgs<VoiceAgent2Contract>["append"],
   ): void {
@@ -2637,7 +2630,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
       append({
         type: "events.iterate.com/voice-agent/spk-frame",
         payload: {
-          conversationId,
+          conversationId: dial.conversationId,
           deviceSpeakerFrameSeq: clearFrameSeq,
           pcm: "",
           clearSpeakerBufferBeforeFrame: true,
@@ -2655,7 +2648,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
    * a sender that runs at the same rate can never make the backlog grow: the
    * board drains exactly as fast as we fill it. What it holds is therefore
    * bounded by the head start we deliberately give it —
-   * MAX_DEVICE_SPEAKER_BUFFER_BYTES, one constant, in the unit the board runs
+   * MAX_DEVICE_SPEAKER_BACKLOG_BYTES, one constant, in the unit the board runs
    * out of, chosen rather than estimated.
    *
    * WHAT THIS REPLACED, because the difference is the point. The first version
@@ -2673,7 +2666,6 @@ export class VoiceAgent2Processor extends StreamProcessor<
    */
   #sendSpeakerAudio(
     dial: Dial,
-    conversationId: string,
     append: ProcessEventArgs<VoiceAgent2Contract>["append"],
     runInBackground: ProcessEventArgs<VoiceAgent2Contract>["runInBackground"],
   ): void {
@@ -2746,7 +2738,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
             await append({
               type: "events.iterate.com/voice-agent/spk-frame",
               payload: {
-                conversationId,
+                conversationId: dial.conversationId,
                 deviceSpeakerFrameSeq: ++dial.lastDeviceSpeakerFrameSeq,
                 pcm: bytesToBase64(frame),
                 ...(clearFirst && { clearSpeakerBufferBeforeFrame: true }),
@@ -2774,7 +2766,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
             await append({
               type: "events.iterate.com/voice-agent/spk-frame",
               payload: {
-                conversationId,
+                conversationId: dial.conversationId,
                 deviceSpeakerFrameSeq: dial.lastDeviceSpeakerFrameSeq,
                 pcm: "",
                 ...(clearFirst && { clearSpeakerBufferBeforeFrame: true }),
@@ -2811,11 +2803,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
             const reason = dial.hangUpAfterAnswerDrains;
             if (reason !== null && dial.speakerQueue.length === 0) {
               dial.hangUpAfterAnswerDrains = null;
-              await append({
-                type: "events.iterate.com/voice-agent/conversation-end-requested",
-                idempotencyKey: this.idempotencyKey(`hang-up:${conversationId}`),
-                payload: { conversationId, reason },
-              });
+              await this.#requestEnd(dial.conversationId, "hang-up", reason, append);
             }
             continue;
           }
@@ -2845,6 +2833,21 @@ export class VoiceAgent2Processor extends StreamProcessor<
 /* FACET                                                                      */
 /* ========================================================================== */
 
+/**
+ * The credential follows the HOST, never the flag: a test seam pointing at
+ * a fake gets no secret at all, whichever provider it fakes. THE ONE COPY
+ * of the host→secret rule — the dial spends it and setup's gate demands it,
+ * so the two cannot disagree about which secret a stream actually needs.
+ * (Setup used to hard-require /secrets/xai whatever the provider: a fresh
+ * project with provider "openai" failed setup over a credential its dial
+ * would never send, and talk2 carried a workaround creating it.)
+ */
+function secretForHost(hostname: string): string | null {
+  if (hostname === "api.x.ai" || hostname.endsWith(".x.ai")) return XAI_SECRET;
+  if (hostname === "api.openai.com") return OPENAI_SECRET;
+  return null;
+}
+
 export async function dialProviderSocket(
   provider: VoiceProvider,
   baseUrl: string | null,
@@ -2853,14 +2856,8 @@ export async function dialProviderSocket(
   const target = new URL(baseUrl ?? PROVIDERS[provider].url);
   target.searchParams.set("model", model);
   const headers: Record<string, string> = { Upgrade: "websocket" };
-  /* The credential follows the HOST, never the flag: a test seam pointing at
-   * a fake gets no Authorization header at all, whichever provider it fakes. */
-  if (target.hostname === "api.x.ai" || target.hostname.endsWith(".x.ai")) {
-    headers.Authorization = `Bearer getSecret("${XAI_SECRET}")`;
-  }
-  if (target.hostname === "api.openai.com") {
-    headers.Authorization = `Bearer getSecret("${OPENAI_SECRET}")`;
-  }
+  const secret = secretForHost(target.hostname);
+  if (secret !== null) headers.Authorization = `Bearer getSecret("${secret}")`;
   const response = await fetch(target.toString(), { headers });
   /* `?? null` rather than `=== null`: a runtime with no WebSockets in it has no
    * such property at all, and `undefined === null` is false — which turned a
@@ -2947,8 +2944,8 @@ export interface SetupVoiceAgent2Options {
   /**
    * Dial THIS instead of x.ai, for a deterministic test.
    *
-   * NO CREDENTIAL FOLLOWS IT — see {@link dialProviderSocket}, where the rule is
-   * that a host which is not x.ai gets no Authorization header at all.
+   * NO CREDENTIAL FOLLOWS IT — see {@link secretForHost}: a host that is no
+   * known provider's gets no Authorization header and no setup gate.
    */
   providerBaseUrl?: string;
   /** Which realtime voice provider the birth certificate names. Default grok. */
@@ -2992,25 +2989,16 @@ export default class VoiceAgent2Entrypoint extends IterateWorkerEntrypoint {
    * call carries a cold build and a build failure surfaces in whatever the
    * caller happened to be doing. Having a call whose only job is to be the
    * first one means a caller can pay for the build deliberately.
+   *
+   * That is the WHOLE job, which the reachable projectId proves. It used to
+   * also report `xaiSecretReady` — a secrets.__describe round trip per poll
+   * that nothing anywhere gated on (talk2 destructured it and printed only
+   * the projectId), and the wrong secret besides for an openai stream.
+   * Setup is where the right secret is demanded, per provider.
    */
-  async health(): Promise<{ ok: true; projectId: string; xaiSecretReady: boolean }> {
+  async health(): Promise<{ ok: true; projectId: string }> {
     const project = await this.itx;
-    const projectId = await project.projectId;
-    const xaiSecret = project.secrets.get(XAI_SECRET);
-    try {
-      const secret = await xaiSecret.__describe();
-      try {
-        return {
-          ok: true,
-          projectId,
-          xaiSecretReady: secret.created === true && secret.hasMaterial === true,
-        };
-      } finally {
-        disposeRpcStub(secret, "health secret description result");
-      }
-    } finally {
-      disposeRpcStub(xaiSecret, "health secret");
-    }
+    return { ok: true, projectId: await project.projectId };
   }
 
   async setupVoiceAgent2(options: SetupVoiceAgent2Options = {}): Promise<SetupVoiceAgent2Result> {
@@ -3022,24 +3010,34 @@ export default class VoiceAgent2Entrypoint extends IterateWorkerEntrypoint {
     }
 
     const project = await this.itx;
-    const xaiSecret = project.secrets.get(XAI_SECRET);
-    let xaiReady = false;
-    try {
-      const description = await xaiSecret.__describe();
+    /* Demand exactly the secret the certificate's dial will spend — the one
+     * host→credential rule in secretForHost, shared with the dial itself. A
+     * providerBaseUrl seam resolves to no secret and gets no gate, matching
+     * "a test seam gets no credential". */
+    const dialTarget = new URL(
+      options.providerBaseUrl ?? PROVIDERS[options.provider ?? "grok"].url,
+    );
+    const secretPath = secretForHost(dialTarget.hostname);
+    if (secretPath !== null) {
+      const providerSecret = project.secrets.get(secretPath);
+      let secretReady = false;
       try {
-        xaiReady = description.created === true && description.hasMaterial === true;
+        const description = await providerSecret.__describe();
+        try {
+          secretReady = description.created === true && description.hasMaterial === true;
+        } finally {
+          disposeRpcStub(description, "setup secret description result");
+        }
       } finally {
-        disposeRpcStub(description, "setup secret description result");
+        disposeRpcStub(providerSecret, "setup secret");
       }
-    } finally {
-      disposeRpcStub(xaiSecret, "setup secret");
-    }
-    if (!xaiReady) {
-      throw new Error(
-        'voice-agent2 setup requires secret "/secrets/xai" with material. Create it with ' +
-          'await itx.secrets.get("/secrets/xai").create({ egress: { urls: ["https://api.x.ai"] }, ' +
-          'material: "<xAI API key>" }); then rerun. This agent never creates or copies credentials.',
-      );
+      if (!secretReady) {
+        throw new Error(
+          `voice-agent2 setup requires secret "${secretPath}" with material. Create it with ` +
+            `await itx.secrets.get("${secretPath}").create({ egress: { urls: ["${dialTarget.origin}"] }, ` +
+            `material: "<API key>" }); then rerun. This agent never creates or copies credentials.`,
+        );
+      }
     }
 
     const stream = project.streams.get(streamPath);
@@ -3054,30 +3052,25 @@ export default class VoiceAgent2Entrypoint extends IterateWorkerEntrypoint {
        * The configuration is an ordinary event. Which provider to dial and
        * what to say the model is are per-stream settings that must survive
        * the eviction a per-call argument would not, so they ride `configured`
-       * — keyed on content so a morning that alternates mock, real, mock,
-       * real applies each switch. The first cut keyed its config on content
-       * ALONE and by the second `real` the key was taken, nothing was
-       * appended, and the fold still named a tunnel that had closed an hour
-       * before.
+       * — keyed per SETUP RUN, so a morning that alternates mock, real,
+       * mock, real applies each switch. The first cut keyed its config on
+       * content ALONE and by the second `real` the key was taken, nothing
+       * was appended, and the fold still named a tunnel that had closed an
+       * hour before.
        */
-      const configPayload = {
-        ...(options.providerBaseUrl === undefined
-          ? {}
-          : { providerBaseUrl: options.providerBaseUrl }),
-        ...(options.provider === undefined ? {} : { provider: options.provider }),
-        ...(options.providerModel === undefined ? {} : { providerModel: options.providerModel }),
-        ...(options.providerVoice === undefined ? {} : { providerVoice: options.providerVoice }),
-        ...(options.instructions === undefined ? {} : { instructions: options.instructions }),
-        ...(options.clientTakesTurns === undefined
-          ? {}
-          : { clientTakesTurns: options.clientTakesTurns }),
-        ...(options.turnDetection === undefined ? {} : { turnDetection: options.turnDetection }),
-        ...(options.tools === undefined ? {} : { tools: options.tools }),
-      };
+      /* SetupVoiceAgent2Options IS the configured payload plus the two
+       * setup-only keys — the rest-destructure says so, where a lattice of
+       * eight conditional spreads used to. An explicitly-undefined value
+       * survives the rest but vanishes in JSON.stringify, at the content
+       * hash and on the wire alike, so the appended payload is
+       * byte-identical either way. */
+      const { streamPath: _streamPath, reinstall: _reinstall, ...configPayload } = options;
       /*
-       * ONE IDENTITY FOR THIS SETUP, so the configuration is re-applied when
-       * an earlier run already used its content key. The setup id is what
-       * makes this an OCCURRENCE rather than a value.
+       * ONE IDENTITY FOR THIS SETUP: the setup id makes every run an
+       * OCCURRENCE rather than a value, so the configuration is re-applied
+       * however often the same content recurs. (A content hash rode this
+       * key once, decoratively — the fresh setupId already made every key
+       * new; the subscription key below is where content-dedupe is real.)
        */
       const setupId = crypto.randomUUID();
       const subscriptionPayload = {
@@ -3102,7 +3095,7 @@ export default class VoiceAgent2Entrypoint extends IterateWorkerEntrypoint {
         },
         {
           type: "events.iterate.com/voice-agent/configured",
-          idempotencyKey: `voice-agent2/configured:${streamPath}:${contentHash(configPayload)}:setup:${setupId}`,
+          idempotencyKey: `voice-agent2/configured:${streamPath}:setup:${setupId}`,
           payload: configPayload,
         },
         {

@@ -65,7 +65,7 @@ const DEFAULT_INSTRUCTIONS =
 
 /** The RPC contract exported by voice-agent2.ts, which no generated client can carry. */
 interface VoiceAgent2Setup {
-  health(): Promise<{ ok: true; projectId: string; xaiSecretReady: boolean }>;
+  health(): Promise<{ ok: true; projectId: string }>;
   setupVoiceAgent2(options?: {
     streamPath?: string;
     providerBaseUrl?: string;
@@ -155,13 +155,14 @@ export async function talk2(options: Talk2Options = {}) {
       : `voice-agent2.ts already current (${install.commitOid.slice(0, 8)})`,
   );
 
-  // The xai secret is the agent's unconditional base requirement (setup's
-  // health check demands it whatever the provider); openai is additive. The
-  // old either/or here only ever worked because long-lived projects already
-  // carried both — a fresh project with --provider openai failed setup.
-  console.log(`xai secret ${await ensureXaiSecret(itx)}`);
-  if (options.provider === "openai") {
-    console.log(`openai secret ${await ensureOpenaiSecret(itx)}`);
+  /* Only the secret the chosen provider's dial will spend — setup's gate is
+   * per-provider now (secretForHost), and a baseUrl seam needs none at all. */
+  if (options.providerBaseUrl === undefined) {
+    console.log(
+      options.provider === "openai"
+        ? `openai secret ${await ensureOpenaiSecret(itx)}`
+        : `xai secret ${await ensureXaiSecret(itx)}`,
+    );
   }
 
   using voiceAgent = itx.workers.get(
@@ -364,15 +365,14 @@ function reportSpeakerContinuity(reportJson: string): void {
 /** Wait until the guest answers, retrying a cold build; re-throw the last error verbatim. */
 async function waitForVoiceAgent2(
   voiceAgent: DynamicWorkerCapability<VoiceAgent2Setup>,
-): Promise<{ ok: true; projectId: string; xaiSecretReady: boolean }> {
+): Promise<{ ok: true; projectId: string }> {
   const deadline = Date.now() + HEALTH_TIMEOUT_MS;
   let lastError: unknown;
   for (;;) {
     try {
-      return await withRpcResult(voiceAgent.health(), ({ ok, projectId, xaiSecretReady }) => ({
+      return await withRpcResult(voiceAgent.health(), ({ ok, projectId }) => ({
         ok,
         projectId,
-        xaiSecretReady,
       }));
     } catch (error) {
       lastError = error;
