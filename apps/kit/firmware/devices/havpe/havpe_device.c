@@ -216,25 +216,31 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
    */
   const bool tapped = havpe_button_take_tap();
   out->toggle_call = tapped;
-  if (tapped) {
-    havpe_audio_play_sound(
-        havpe_sound_chime_press, sizeof(havpe_sound_chime_press));
-  }
   /*
    * THE HOLD IS A TURN ONLY WHEN THE MODE SAYS SO. In the push-to-talk
    * modes the level is reported and the loop's turn machine does what it
    * does for every push-to-talk board; in the open-mic modes it stays
    * unreported exactly as before — there is no turn to hold, and a long
    * press must still not be a tap so leaning on the button cannot hang up.
-   * The hold chime marks the microphone OPENING, so it too is push-to-talk
-   * only: acknowledging a gesture that does nothing would teach it.
    */
   const bool held =
       havpe_mode_push_to_talk(mode_state.mode) && havpe_button_talk_held();
   out->talk_held = held;
-  if (held && !mode_state.talk_was_held) {
+  /*
+   * THE CHIME IS THE WAKE MOMENT, AND ONLY THAT. It plays for the press
+   * that OPENS a conversation — a tap, or the first push-to-talk hold when
+   * no call is up (which opens one by speaking) — the acknowledgement a
+   * wake word would earn. Every later press is quiet: a hold inside a live
+   * call is answered by the ring alone (a chime per turn is a metronome,
+   * not feedback), and the tap that ENDS a call already produces the most
+   * audible acknowledgement there is — silence.
+   */
+  const bool opensConversation =
+      !mode_state.call_active && !mode_state.wants_call &&
+      (tapped || (held && !mode_state.talk_was_held));
+  if (opensConversation) {
     havpe_audio_play_sound(
-        havpe_sound_chime_hold, sizeof(havpe_sound_chime_hold));
+        havpe_sound_chime_press, sizeof(havpe_sound_chime_press));
   }
   mode_state.talk_was_held = held;
 
