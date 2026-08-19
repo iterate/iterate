@@ -39,10 +39,9 @@ import { parseCodemodeResponse } from "./codemode-format.ts";
 // answers after ~10s with the platform's fenced-ts defaults — coherent,
 // just not the codemode dialect — until the next deploy's sweep converts it.
 
-/** Assistant output events stamped by the platform's LLM component carry the
- * agent contract's slug; "agent-headless" is the retired second slug old
- * events were stamped with. */
-const PLATFORM_AGENT_SLUGS = new Set(["agent", "agent-headless"]);
+/** Assistant output events stamped by the platform's LLM component carry
+ * the agent contract's slug. */
+const AGENT_PROCESSOR_SLUG = "agent";
 const SYSTEM_PROMPT_KEY = "agent/system-prompt";
 const SCRIPT_EXPIRY_MS = 10 * 60_000;
 const RESULT_HISTORY_LIMIT = 30_000;
@@ -296,7 +295,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     // Only interpret output the platform's LLM component produced: the stamp
     // means it authored this event for an accepted request. A raw member
     // append carries no platform stamp and must not gain an interpretation.
-    if (!PLATFORM_AGENT_SLUGS.has(event.source?.processor?.slug || "")) return;
+    if (event.source?.processor?.slug !== AGENT_PROCESSOR_SLUG) return;
     const payload = event.payload as {
       role?: string;
       content?: string;
