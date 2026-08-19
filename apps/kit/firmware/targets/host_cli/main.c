@@ -412,8 +412,8 @@ int main(int argc, char **argv)
    */
   cli_screen_enable(
       &runtime->screen,
-      runtime->options.push_to_talk && !runtime->options.sealed &&
-          isatty(fileno(stderr)) != 0);
+      (runtime->options.push_to_talk || runtime->options.open_mic) &&
+          !runtime->options.sealed && isatty(fileno(stderr)) != 0);
   cli_main_run_loop(runtime);
   cli_screen_finish(&runtime->screen);
   const bool audio_drained = cli_main_drain_audio(runtime);
@@ -908,12 +908,25 @@ static bool cli_main_init_keyboard(struct cli_runtime *runtime)
     runtime->finish_at_ms = runtime->started_ms +
         (uint64_t)(runtime->options.minutes * CLI_MAIN_MS_PER_MINUTE);
   }
-  if (!runtime->options.push_to_talk) return true;
+  if (!runtime->options.push_to_talk && !runtime->options.open_mic) return true;
   const enum cli_keyboard_status status =
       cli_keyboard_open(&runtime->keyboard);
   if (status == CLI_KEYBOARD_OK) {
-    cli_runtime_log(
-        "info", "hold SPACE to talk, release to send, q to hang up");
+    if (runtime->options.open_mic) {
+      /*
+       * A BOARD'S POSTURE: the microphone is simply on. Talk is requested
+       * once, here, and stays wanted — the server's VAD segments the turns
+       * from the continuous stream (it needs the silence BETWEEN utterances,
+       * which is exactly what a space-gated capture never sends). The
+       * keyboard stays open for q alone.
+       */
+      cli_runtime_log("info", "open mic: just talk; q hangs up");
+      (void)cli_main_request_talk(
+          runtime, true, ITERATE_KIT_DEVICE_EVENT_SOURCE_SYSTEM);
+    } else {
+      cli_runtime_log(
+          "info", "hold SPACE to talk, release to send, q to hang up");
+    }
     return true;
   }
   cli_runtime_log(
@@ -1242,6 +1255,14 @@ static void cli_main_on_control(
     runtime->flushing_turn = false;
     (void)cli_main_request_talk(
         runtime, false, ITERATE_KIT_DEVICE_EVENT_SOURCE_SYSTEM);
+    if (runtime->options.open_mic && !runtime->hanging_up) {
+      /* The call ended — the model hung up, or the server idled it out —
+       * but an open microphone outlives any one call: talking again should
+       * open the NEXT one, exactly as a board would. Only a q-hangup, which
+       * is the person ending the SESSION, leaves talk unrequested. */
+      (void)cli_main_request_talk(
+          runtime, true, ITERATE_KIT_DEVICE_EVENT_SOURCE_SYSTEM);
+    }
     cli_runtime_log("warn", "call ended");
   }
 }
@@ -2247,6 +2268,14 @@ static void cli_main_apply_key(
     uint64_t now_ms)
 {
   assert(runtime != NULL);
+  /* Open mic has no button: capture was latched on at startup and the only
+   * key with a meaning left is q. Space silently does nothing, because a
+   * space that MUTED would be a second turn-taking authority fighting the
+   * server's VAD. */
+  if (runtime->options.open_mic &&
+      (event == CLI_KEYBOARD_TALK_START || event == CLI_KEYBOARD_TALK_STOP)) {
+    return;
+  }
   switch (event) {
     case CLI_KEYBOARD_TALK_START:
       (void)cli_main_request_talk(
@@ -2319,7 +2348,7 @@ static void cli_main_poll_interactive(
         runtime, now_ms, ITERATE_KIT_DEVICE_EVENT_SOURCE_SYSTEM);
     return;
   }
-  if (!runtime->options.push_to_talk) return;
+  if (!runtime->options.push_to_talk && !runtime->options.open_mic) return;
   enum cli_keyboard_event event = CLI_KEYBOARD_NONE;
   if (cli_keyboard_poll(&runtime->keyboard, now_ms, &event) !=
       CLI_KEYBOARD_OK) return;
@@ -2347,6 +2376,10 @@ static void cli_main_enforce_talk_deadline(
     struct cli_runtime *runtime, uint64_t now_ms)
 {
   assert(runtime != NULL);
+  /* The fence bounds a STUCK BUTTON. An open microphone is not stuck — it is
+   * the design — and cutting its stream at thirty seconds would end capture
+   * for the rest of the process, since nothing re-requests it. */
+  if (runtime->options.open_mic) return;
   if (!runtime->talking || runtime->flushing_turn ||
       iterate_kit_voice_elapsed_ms(now_ms, runtime->turn_started_ms) <=
           ITERATE_KIT_VOICE_TURN_MAX_MS) return;

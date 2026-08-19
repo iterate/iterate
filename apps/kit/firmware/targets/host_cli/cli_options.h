@@ -134,6 +134,14 @@ struct cli_options {
   bool live_mic;
   /** Hold SPACE to talk, release to send, q to hang up. */
   bool push_to_talk;
+  /**
+   * Stream the microphone continuously — a board's posture on a Mac. The
+   * server's VAD owns the turns (it needs the silence BETWEEN utterances,
+   * which a space-gated capture never sends); SPACE does nothing, q still
+   * hangs up. The stream's certificate must be open-mic too, or the agent
+   * waits for a ptt-end that never comes.
+   */
+  bool open_mic;
   /** Skips TLS certificate verification. Off unless explicitly asked for. */
   bool insecure;
 };

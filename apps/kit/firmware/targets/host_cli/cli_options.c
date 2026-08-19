@@ -70,6 +70,7 @@ enum cli_options_field {
   CLI_OPTIONS_FIELD_LIVE_AUDIO,
   CLI_OPTIONS_FIELD_LIVE_MIC,
   CLI_OPTIONS_FIELD_PUSH_TO_TALK,
+  CLI_OPTIONS_FIELD_OPEN_MIC,
   CLI_OPTIONS_FIELD_INSECURE,
   CLI_OPTIONS_FIELD_HELP,
 };
@@ -129,6 +130,10 @@ static const struct cli_options_flag CLI_OPTIONS_FLAGS[] = {
    NULL,
    "  --push-to-talk        Hold SPACE to talk, release to send, q to hang "
    "up\n"},
+  {"--open-mic", CLI_OPTIONS_KIND_SWITCH, CLI_OPTIONS_FIELD_OPEN_MIC,
+   NULL,
+   "  --open-mic            Stream the microphone continuously; server VAD "
+   "takes the turns, q hangs up\n"},
   {"--minutes", CLI_OPTIONS_KIND_MINUTES, CLI_OPTIONS_FIELD_MINUTES,
    NULL,
    "  --minutes MINUTES     Wall-clock limit for an interactive session\n"},
@@ -485,6 +490,7 @@ static enum cli_options_status cli_options_apply(
     case CLI_OPTIONS_FIELD_LIVE_AUDIO: out->live_audio = true; break;
     case CLI_OPTIONS_FIELD_LIVE_MIC: out->live_mic = true; break;
     case CLI_OPTIONS_FIELD_PUSH_TO_TALK: out->push_to_talk = true; break;
+    case CLI_OPTIONS_FIELD_OPEN_MIC: out->open_mic = true; break;
     case CLI_OPTIONS_FIELD_INSECURE: out->insecure = true; break;
     case CLI_OPTIONS_FIELD_HELP: break;
     default: break;
@@ -641,6 +647,19 @@ static enum cli_options_status cli_options_check_combinations(
    * neither of them had. Picking one silently is worse than refusing: the
    * operator would spend the session wondering why their key does nothing.
    */
+  /* Three turn-taking postures, one microphone: a button, a schedule, or the
+   * server's VAD over a continuous stream. Any two together would fight over
+   * when capture starts and stops, so all pairs refuse. */
+  if (out->open_mic && out->push_to_talk) {
+    cli_options_note(
+        problem, problem_bytes, "--open-mic cannot run with --push-to-talk");
+    return CLI_OPTIONS_ERR_INCOMPATIBLE;
+  }
+  if (out->open_mic && out->converse_minutes > 0.0) {
+    cli_options_note(
+        problem, problem_bytes, "--open-mic cannot run with --converse");
+    return CLI_OPTIONS_ERR_INCOMPATIBLE;
+  }
   if (out->push_to_talk && out->converse_minutes > 0.0) {
     cli_options_note(
         problem, problem_bytes, "--push-to-talk cannot run with --converse");

@@ -426,12 +426,19 @@ export function resolveKitDir(explicit?: string): string {
  * report would describe a conversation neither of them had — so choosing one
  * is a branch rather than a set of flags that happen not to collide.
  */
-export function driverArgs(options: TalkOptions, minutes: number): string[] {
+export function driverArgs(
+  options: TalkOptions,
+  minutes: number,
+  /** Attended open mic: the C streams continuously and the server's VAD owns
+   * the turns. Off, the space bar owns them. Must match the stream's
+   * certificate, which is why talk2 passes its own --open-mic here. */
+  openMic = false,
+): string[] {
   if (options.converse === undefined) {
     return [
       ...(options.pretendSpeaker === undefined ? ["--live-audio"] : []),
       "--live-mic",
-      "--push-to-talk",
+      openMic ? "--open-mic" : "--push-to-talk",
       "--minutes",
       String(minutes),
     ];

@@ -264,7 +264,7 @@ export async function talk2(options: Talk2Options = {}) {
       `mac${stamp}`,
       "--stream-path",
       setup.streamPath,
-      ...driverArgs(options, minutes),
+      ...driverArgs(options, minutes, options.openMic === true),
       ...(options.pretendSpeaker === undefined
         ? []
         : ["--pretend-speaker", options.pretendSpeaker]),
