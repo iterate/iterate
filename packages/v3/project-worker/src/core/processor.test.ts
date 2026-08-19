@@ -1,6 +1,6 @@
 // Executable spec for the processor layer — each block names the concurrency rule it proves.
 // The in-memory stream mirrors the DO's commit semantics EXACTLY: one shared offset sequence
-// (ephemerals consume offsets but never land in the log), the scan-window proof on both pushes
+// (ephemerals consume offsets but never land in the log), the scanned-offset-range proof on both pushes
 // and reads, and a fire-and-forget push to every registered processor after each append.
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
@@ -54,10 +54,11 @@ function memoryStream(path = "/") {
       });
       pushed.push(...committed);
       if (maxAssigned > scannedAfterOffset) {
-        const window = { scannedAfterOffset, scannedThroughOffset: maxAssigned };
+        const scannedOffsetRange = { scannedAfterOffset, scannedThroughOffset: maxAssigned };
         // THE PUMP: fire-and-forget, exactly like the DO (an awaited push would deadlock a
         // processor that appends during its own batch).
-        for (const p of procs) void p.processEventBatch(committed, window).catch(() => {});
+        for (const p of procs)
+          void p.processEventBatch(committed, scannedOffsetRange).catch(() => {});
       }
       return committed;
     },
@@ -239,7 +240,7 @@ describe("the concurrency contract", () => {
     expect(order.slice(2).sort()).toEqual(["bg 1", "bg 2"]);
   });
 
-  test("rule 4 — one persist per pushed window, cursor advances only after", async () => {
+  test("rule 4 — one persist per pushed scannedOffsetRange, cursor advances only after", async () => {
     const { storage, processor, stream } = setup();
     const before = storage.writes;
     stream.append(
@@ -249,12 +250,12 @@ describe("the concurrency contract", () => {
     ) as StreamEvent[];
     await processor.wake();
     await settle();
-    // the whole 3-event window persists ONCE: cursor + state (2 writes). The milestone lands
-    // as its own window — cursor only, its fold didn't change state (1 write, no state blob).
+    // the whole 3-event scannedOffsetRange persists ONCE: cursor + state (2 writes). The milestone lands
+    // as its own scannedOffsetRange — cursor only, its reduce didn't change state (1 write, no state blob).
     expect(storage.writes - before).toBe(3);
   });
 
-  test("rule 5 — at-head pass fires exactly once when the window reaches the head", async () => {
+  test("rule 5 — at-head pass fires exactly once when the scannedOffsetRange reaches the head", async () => {
     const { processor, stream } = setup();
     stream.append({ type: "unrelated" }) as StreamEvent[]; // consumed by nobody
     await processor.wake();
@@ -269,7 +270,7 @@ describe("the concurrency contract", () => {
     expect(processor.trace.filter((t) => t === "start 1")).toHaveLength(1);
   });
 
-  test("a failing window persists nothing and the next wake retries it whole", async () => {
+  test("a failing scannedOffsetRange persists nothing and the next wake retries it whole", async () => {
     const mem = memoryStream();
     const storage = memoryStorage();
     let attempts = 0;
@@ -307,8 +308,8 @@ describe("the concurrency contract", () => {
   });
 });
 
-describe("the push door (scan windows)", () => {
-  test("a contiguous push folds WITHOUT reading the log (the fast path)", async () => {
+describe("the push door (scan scannedOffsetRanges)", () => {
+  test("a contiguous push reduces WITHOUT reading the log (the fast path)", async () => {
     const mem = setup();
     mem.tick();
     await settle();
@@ -328,7 +329,7 @@ describe("the push door (scan windows)", () => {
     expect(mem.reads).toBeGreaterThan(0); // repair read the gap
   });
 
-  test("a stale window (already behind the cursor) is a no-op", async () => {
+  test("a stale scannedOffsetRange (already behind the cursor) is a no-op", async () => {
     const { processor, tick } = setup();
     tick();
     await processor.wake();
@@ -369,7 +370,7 @@ describe("ephemeral events", () => {
     }
   }
 
-  test("shared offsets; named-type opt-in; '*' never sweeps; zero persists for ephemeral-only windows", async () => {
+  test("shared offsets; named-type opt-in; '*' never sweeps; zero persists for ephemeral-only scannedOffsetRanges", async () => {
     const mem = memoryStream();
     const ephStorage = memoryStorage();
     const starStorage = memoryStorage();
@@ -385,11 +386,11 @@ describe("ephemeral events", () => {
     mem.stream.append({ type: "chunk", ephemeral: true }) as StreamEvent[]; // offset 2, ephemeral
     mem.stream.append({ type: "chunk", ephemeral: true }) as StreamEvent[]; // offset 3
     await settle();
-    // the NAMED consumer folded both ephemerals in memory…
+    // the NAMED consumer reduced both ephemerals in memory…
     expect((await eph.snapshot()).state.seen).toEqual(["loud@1", "chunk@2", "chunk@3"]);
     // …the "*" consumer saw neither…
     expect((await star.snapshot()).state.seen).toEqual(["loud@1"]);
-    // …and the ephemeral-only windows persisted NOTHING for either.
+    // …and the ephemeral-only scannedOffsetRanges persisted NOTHING for either.
     expect(ephStorage.writes).toBe(ephWrites);
     expect(starStorage.writes).toBe(starWrites);
 
@@ -398,7 +399,7 @@ describe("ephemeral events", () => {
     expect((await star.snapshot()).state.seen).toEqual(["loud@1", "loud@4"]); // holes invisible
   });
 
-  test("a rebuilt fold omits ephemerals (never derive durable truth from one)", async () => {
+  test("a rebuilt reduce omits ephemerals (never derive durable truth from one)", async () => {
     const mem = memoryStream();
     const storage = memoryStorage();
     const a = new Eph({ stream: mem.stream, storage, path: "/", projectId: "p" });
@@ -408,11 +409,11 @@ describe("ephemeral events", () => {
     mem.stream.append({ type: "loud" }) as StreamEvent[];
     await settle();
     expect((await a.snapshot()).state.seen).toEqual(["loud@1", "chunk@2", "loud@3"]);
-    // a fresh incarnation over the same storage: the ephemeral is gone from the log — the fold
+    // a fresh incarnation over the same storage: the ephemeral is gone from the log — the reduce
     // regresses to durable truth only, and the offsets are simply gaps
     const b = new Eph({ stream: mem.stream, storage, path: "/", projectId: "p" });
     // (simulate: the last durable persist covered through offset 3; state includes chunk@2 only
-    //  because that window ALSO contained a durable event — the documented divergence rule)
+    //  because that scannedOffsetRange ALSO contained a durable event — the documented divergence rule)
     expect((await b.snapshot()).state.seen).toContain("loud@3");
   });
 });
@@ -444,13 +445,13 @@ describe("review round 1 regressions", () => {
   }, 5000);
 });
 
-describe("fold cache + refold", () => {
+describe("reduce cache + refold", () => {
   test("version bump refolds via reduce only — effects never re-run", async () => {
     const mem = memoryStream();
     const storage = memoryStorage();
     const make = (version: string, effects: string[]) => {
       const Contract = defineProcessorContract({
-        slug: "fold",
+        slug: "reduce",
         version,
         description: "",
         stateSchema: z.object({ n: z.number().default(0) }),
@@ -563,7 +564,7 @@ describe("live state (the delta patches on the wire)", () => {
   const changes = (mem: ReturnType<typeof memoryStream>) =>
     mem.pushed.filter((e) => e.type === "events.iterate.com/live-state/changed");
 
-  test("a fold that changes the projection emits ONE ephemeral change event carrying the patch", async () => {
+  test("a reduce that changes the projection emits ONE ephemeral change event carrying the patch", async () => {
     const mem = memoryStream();
     const p = new Tally({
       stream: mem.stream,
@@ -574,7 +575,7 @@ describe("live state (the delta patches on the wire)", () => {
     mem.procs.push(p);
     mem.stream.append({ type: "tick" }) as StreamEvent[];
     await settle();
-    expect(changes(mem)).toHaveLength(1); // ONE change event per changed window, not per event
+    expect(changes(mem)).toHaveLength(1); // ONE change event per changed scannedOffsetRange, not per event
     const [c] = changes(mem);
     expect(c.ephemeral).toBe(true);
     expect(c.payload).toMatchObject({
@@ -715,7 +716,7 @@ describe("live state emission failure is contained", () => {
     mem.procs.push(p);
     mem.stream.append({ type: "tick" }) as StreamEvent[];
     await settle();
-    // the fold committed and the read surface works — the failure was only the notification
+    // the reduce committed and the read surface works — the failure was only the notification
     await expect(p.snapshot()).resolves.toMatchObject({ state: { n: 1 } });
     expect(
       mem.pushed.filter((e) => e.type === "events.iterate.com/live-state/changed"),

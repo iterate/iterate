@@ -93,7 +93,10 @@ type FacetProcessorEntry = {
  *  SDK-injected runner.js): identity in, pushed windows in, reduce + barrier out. */
 type FacetProcessorHandle = {
   configure(identity: FacetIdentity): Promise<unknown> | unknown;
-  processEventBatch(events: StreamEvent[], window: ScannedOffsetRange): Promise<unknown> | unknown;
+  processEventBatch(
+    events: StreamEvent[],
+    scannedOffsetRange: ScannedOffsetRange,
+  ): Promise<unknown> | unknown;
   snapshot(): Promise<{ offset: number; state: unknown }>;
   waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<unknown>;
 };
@@ -245,7 +248,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   /** Commit events: idempotency-checked, offsets assigned from ONE shared sequence (ephemeral
    *  events consume offsets but never touch the log — their bodies exist only in this batch and
    *  in whatever pushes deliver them; after a reboot their offsets survive as valid gaps), then
-   *  every enabled facet processor is PUSHED the batch with its scan-window proof. */
+   *  every enabled facet processor is PUSHED the batch with its scanned-offset-range proof. */
   async append(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
     this.#touch();
     // THE CORE PROCESSOR SPEAKS FIRST (the apps/os shape): pause refuses every non-control
@@ -310,38 +313,38 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
       if (nextOffset > scannedAfterOffset) {
         this.ctx.storage.kv.put("maxAssignedOffset", nextOffset); // THE one deliberate write
-        // THE INLINE FOLDS run INSIDE the transaction: the routing table and the core state
+        // THE INLINE REDUCES run INSIDE the transaction: the routing table and the core state
         // are atomically exact as of the last committed event, always — the pump-races-the-
         // provide class is unspellable, not carefully avoided. (Reduce errors are caught per
         // event; a bad event skips, it never aborts the commit.)
-        this.#foldInline(committed, scannedAfterOffset, nextOffset);
+        this.#reduceInlineAtCommit(committed, scannedAfterOffset, nextOffset);
       }
       return { committed, nextOffset };
     });
     if (nextOffset > scannedAfterOffset) {
       this.#highestAssignedOffsetCache = nextOffset;
-      // THE PUMP: push the batch + window into every enabled facet processor (each an isolated
+      // THE PUMP: push the batch + scannedOffsetRange into every enabled facet processor (each an isolated
       // workerd facet with its own storage).
       // Fire-and-forget from append's view — an awaited drive would deadlock if a facet
       // processor APPENDS during its batch (append → this method → await the same facet's busy
       // chain), and the capability host DOES append (provide/revoke) — but SERIALIZED PER FACET:
       // without the chain, a slow loader materialization lets a later batch overtake an earlier
-      // one, and the earlier window is then judged a stale redelivery and its EPHEMERAL events
+      // one, and the earlier scannedOffsetRange is then judged a stale redelivery and its EPHEMERAL events
       // (undeliverable by repair, by design) are silently dropped. Reads stay correct because
       // every snapshot/invoke gap-repairs from the log. The push is what wakes an aborted facet.
       // Live-state change events never ride a drive: the platform rule makes them unconsumable
       // by every reduce, so delivering them is pure RPC waste (the voice flood). A batch that is
-      // ONLY live-state skips the drives; the next real drive's window then COVERS the skipped
+      // ONLY live-state skips the drives; the next real drive's scannedOffsetRange then COVERS the skipped
       // span (per-facet lastDeliveredThrough) so the facet's contiguity fast path holds — to a
       // reduce, a skipped live-state offset is exactly an ephemeral hole, which windows already
-      // express. Without the widened window, the skip broke contiguity and gap repair silently
+      // express. Without the widened scannedOffsetRange, the skip broke contiguity and gap repair silently
       // dropped deliverable named ephemerals between two live-state changes (proof-caught).
       const drivable = committed.filter((e) => e.type !== "events.iterate.com/live-state/changed");
       if (drivable.length > 0)
         for (const { slug } of this.#facetEntries()) {
           this.#facetWorkInFlight++;
-          const after = this.#driveWindows.get(slug) ?? scannedAfterOffset;
-          this.#driveWindows.set(slug, nextOffset);
+          const after = this.#driveDeliveredThrough.get(slug) ?? scannedAfterOffset;
+          this.#driveDeliveredThrough.set(slug, nextOffset);
           const prev = this.#driveChains.get(slug) ?? Promise.resolve();
           this.#driveChains.set(
             slug,
@@ -356,7 +359,7 @@ export class StreamDurableObject extends DurableObject<Env> {
               .catch((e) => console.error(`facet "${slug}" drive failed`, e))
               .finally(() => {
                 this.#facetWorkInFlight--;
-                this.#noteActivity(); // a finished reduce earns a fresh quiet window
+                this.#noteActivity(); // a finished reduce earns a fresh quiet scannedOffsetRange
               }),
           );
         }
@@ -370,9 +373,9 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   // Per-facet drive serialization + the in-flight count the quiesce alarm respects (aborting a
-  // facet MID-FOLD is exactly the stall the resurrection pass exists to heal — never cause it).
+  // facet mid-REDUCE is exactly the stall the resurrection pass exists to heal — never cause it).
   readonly #driveChains = new Map<string, Promise<unknown>>();
-  readonly #driveWindows = new Map<string, number>(); // per-facet lastDeliveredThrough (skipped spans ride the next window)
+  readonly #driveDeliveredThrough = new Map<string, number>(); // per-facet lastDeliveredThrough (skipped spans ride the next scannedOffsetRange)
   #facetWorkInFlight = 0;
 
   // ── THE INLINE CORE: reduce-only processors reduced synchronously at the commit point ──
@@ -491,8 +494,13 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
   }
 
-  /** Called INSIDE append's transaction: reduce every fresh durable event, checkpoint on change. */
-  #foldInline(committed: StreamEvent[], scannedAfterOffset: number, nextOffset: number): void {
+  /** Called INSIDE append's transaction: reduce every fresh durable event through each inline
+   *  processor, checkpoint on change. */
+  #reduceInlineAtCommit(
+    committed: StreamEvent[],
+    scannedAfterOffset: number,
+    nextOffset: number,
+  ): void {
     for (const def of this.#inlineDefs()) {
       const entry = this.#inline(def.slug); // caught up to the PRE-batch head (cache is old)
       const before = entry.state;
@@ -526,7 +534,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         offset: Number(r.offset),
         path: this.#address.path,
       }));
-    // The scan-window proof: a FULL page is only contiguously known through its last row; a
+    // The scanned-offset-range proof: a FULL page is only contiguously known through its last row; a
     // short page proves the read scanned to the head (ephemeral holes and all).
     const scannedThroughOffset =
       events.length === limit
@@ -843,7 +851,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (slug === CAPABILITY_TABLE_SLUG || slug === "core")
       throw new Error(`"${slug}" is an inline core processor — it cannot be disabled`);
     this.#driveChains.delete(slug);
-    this.#driveWindows.delete(slug); // a re-enable must not inherit a scanned range it never saw
+    this.#driveDeliveredThrough.delete(slug); // a re-enable must not inherit a scanned range it never saw
     await this.revokeCapability({ path: `itx.processors.${slug}` });
     const facets = this.ctx.facets as unknown as { delete?: (name: string) => void };
     if (typeof facets.delete === "function") facets.delete(`proc:${slug}`);
@@ -1095,7 +1103,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   webSocketMessage(): void {
-    // A stub pager WebSocket is DO→relay only — inbound frames carry nothing we act on.
+    // A stub pager WebSocket is DO→relay only — inbound payloads carry nothing we act on.
   }
   webSocketClose(ws: WebSocket, code: number, reason: string): void {
     const record = this.#hibernatableRpcStubs.closed(ws);

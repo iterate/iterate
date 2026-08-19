@@ -42,7 +42,7 @@ export function liveState<S>(
   let state = initial;
   // The revision chain is seeded from a per-incarnation EPOCH, not 0: a reborn holder's chain
   // must never re-use an old chain's numbers, or a client that missed the first post-rebirth
-  // frames would find `from` matching its held rev and apply a patch onto a diverged base —
+  // payloads would find `from` matching its held rev and apply a patch onto a diverged base —
   // silently, forever. With a fresh epoch every stale rev mismatches and re-reads the door.
   let rev = Date.now() * 4096 + Math.floor(Math.random() * 4096);
   return {

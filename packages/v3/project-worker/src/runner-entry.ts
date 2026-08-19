@@ -60,8 +60,8 @@ export class ProcessorFacetRunner extends DurableObject<RunnerEnv> {
     return this.#p;
   }
 
-  processEventBatch(events: StreamEvent[], window: ScannedOffsetRange): Promise<void> {
-    return this.#processor().processEventBatch(events, window);
+  processEventBatch(events: StreamEvent[], scannedOffsetRange: ScannedOffsetRange): Promise<void> {
+    return this.#processor().processEventBatch(events, scannedOffsetRange);
   }
   snapshot() {
     return this.#processor().snapshot();

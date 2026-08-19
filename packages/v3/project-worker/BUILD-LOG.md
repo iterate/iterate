@@ -1452,3 +1452,24 @@ consume offsets and are counted by "\*" reducers — the audit trail the kv regi
   PASS on live-14. One re-run needed: the known DO-class-lags-worker deploy race made five
   suites hit old-class DOs on the first pass.
 - Grammar diet (placeholders/substitute/$-escape) had already landed in increment 55.
+
+## Review pass (running) — vocabulary burn-down + two commissioned proof suites
+
+- **Banned-word sweep, code AND comments**: `window` → `scannedOffsetRange` everywhere
+  (including the SDK duck contract's parameter and `FacetProcessorHandle`), `#foldInline` →
+  `#reduceInlineAtCommit`, `#driveWindows` → `#driveDeliveredThrough`, fold/folded/folds →
+  reduce forms, "frames" → payloads/batches, "scan-window proof" → "scanned-offset-range
+  proof". Zero remaining hits for fold/frames/window/roster in src.
+- **prove_slack.mjs** (NEW, board suite 12): the Slack SDK bridge use case — a node script
+  connects over capnweb and provides an RpcTarget replaying dotted calls onto a
+  WebClient-shaped SDK instance; `itx.slack.chat.postMessage(...)` round-trips from a second
+  client, the expression door works, an alias mount (`itx.notify` ⇒
+  `itx.slack.chat.postMessage`) rides the same bridge, and provision.revoke() restores
+  default-deny.
+- **prove_ephemeralflood.mjs** (NEW, board suite 13): 500 ephemeral 256B chunks, batched
+  appends, one CONNECTED subscriber: **500/500 delivered, in order, p50 35ms / p95 45ms
+  end-to-end (node → commit → one-directional delivery → node), 545 ev/s sustained
+  (append-bound), 25 callback invocations for 500 events (20× batching), delivered
+  ScannedOffsetRanges chained with zero heal-pulls.** The ultra-low-latency invariant,
+  measured.
+- Board is now THIRTEEN suites, all green against the swept deploy.

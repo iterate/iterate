@@ -197,7 +197,7 @@ type SubscriptionDeliveryProgress = {
 
 /** Everything the pump needs, injected — no hidden reach back into the processor. */
 type SubscriptionDeliveryPumpDeps = {
-  /** Durable events after an offset, with the scan-window proof. */
+  /** Durable events after an offset, with the scanned-offset-range proof. */
   read(
     afterOffset: number,
     limit: number,

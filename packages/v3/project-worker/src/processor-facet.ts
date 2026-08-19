@@ -12,8 +12,8 @@
 //     parent-chosen env is impossible for a built-in class: it inherits the WORKER's env).
 //   • BACK-CHANNEL by NAME, never a live stub: the facet re-resolves `env.CONTEXT
 //     .getByName(parentName)` per use (stubs must not outlive their RPC turn).
-//   • DELIVERY via `processEventBatch(events, window)` — the parent pushes every commit with its
-//     scan-window proof; the base class reduces the fast path and gap-repairs from the log
+//   • DELIVERY via `processEventBatch(events, scannedOffsetRange)` — the parent pushes every commit with its
+//     scanned-offset-range proof; the base class reduces the fast path and gap-repairs from the log
 //     otherwise. No registry: the processor IS its own runner (core/processor.ts).
 //
 // Platform constraints carried deliberately: facets have NO alarms (workerd#6810 — the parent
@@ -117,10 +117,13 @@ export class ProcessorFacet extends DurableObject<Env> {
     return { ok: true };
   }
 
-  /** The parent pushes every commit here with its scan-window proof. Fire-and-forget from the
+  /** The parent pushes every commit here with its scanned-offset-range proof. Fire-and-forget from the
    *  parent's side; the base class serializes, reduces the fast path, gap-repairs otherwise. */
-  async processEventBatch(events: StreamEvent[], window: ScannedOffsetRange): Promise<void> {
-    await this.#p().processEventBatch(events, window);
+  async processEventBatch(
+    events: StreamEvent[],
+    scannedOffsetRange: ScannedOffsetRange,
+  ): Promise<void> {
+    await this.#p().processEventBatch(events, scannedOffsetRange);
   }
 
   /** Catch up from the parent's log, then report the reduce (offset + reduced state). */

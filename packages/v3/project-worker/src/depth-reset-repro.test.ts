@@ -70,14 +70,14 @@ test("contexts.get(own path) resets depth — the guard never fires (loop repro)
     builtIns: builtIns as unknown as Record<string, unknown>,
     configMounts: [{ path: parseCapabilityPath("itx.contexts"), target: parse("contexts") }],
   });
-  const fold = () =>
+  const reduceAll = () =>
     events.reduce(
       (st: ReturnType<typeof host.contract.initialState>, e: StreamEvent) =>
         host.reduce({ event: e, state: st }) ?? st,
       host.contract.initialState(),
     );
   host.resolveCurrent = async (call: Expression, depth = 0) =>
-    host.resolve(fold(), call, undefined, depth);
+    host.resolve(reduceAll(), call, undefined, depth);
 
   // The one-character topology typo from the claim: own path instead of a sibling's.
   await host.provide({ path: "itx.a", target: "itx.contexts.get('/').a" });

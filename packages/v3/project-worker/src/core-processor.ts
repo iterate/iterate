@@ -30,7 +30,7 @@ export const CoreContract = defineProcessorContract({
   slug: "core",
   version: "1.0.0",
   description:
-    "The stream's operational truth, folded inline at the commit point: append pause and the token-bucket circuit breaker.",
+    "The stream's operational truth, reduced inline at the commit point: append pause and the token-bucket circuit breaker.",
   stateSchema: z.object({
     paused: z.object({ reason: z.string() }).nullable().default(null),
     breaker: z

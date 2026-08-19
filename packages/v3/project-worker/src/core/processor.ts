@@ -23,14 +23,14 @@
 //      carries `delivery.caughtUp: true`; a batch that reaches the head without one gets a single
 //      extra `processEvent({ event: null, delivery: { caughtUp: true } })` call.
 //
-// DELIVERY IS PUSH-FIRST with a SCAN-WINDOW PROOF. The stream pushes
-// `processEventBatch(events, window)` after every commit; `window` proves the contiguous range
-// scanned (`scannedAfterOffset` exclusive → `scannedThroughOffset` inclusive), so ephemeral
+// DELIVERY IS PUSH-FIRST with a SCANNED-OFFSET-RANGE PROOF. The stream pushes
+// `processEventBatch(events, scannedOffsetRange)` after every commit — the proof of the
+// contiguous range scanned (`scannedAfterOffset` exclusive → `scannedThroughOffset` inclusive), so ephemeral
 // holes, consumes-filters, and reboot gaps are all the same non-event — the cursor advances on
-// the WINDOW, never by counting events. A non-contiguous push triggers GAP REPAIR: read durable
+// the RANGE, never by counting events. A non-contiguous push triggers GAP REPAIR: read durable
 // rows from the own cursor until the head. Ephemeral events ride pushes ONLY (reads are
 // durable-only; an ephemeral missed while a facet rebuilds is gone by design — nothing can
-// redeliver it) and NEVER trigger a progress persist: an ephemeral-only window advances the
+// redeliver it) and NEVER trigger a progress persist: an ephemeral-only range advances the
 // cursor in memory alone, so a pure-ephemeral flood costs this class ZERO storage writes.
 //
 // `reduce` is a PURE reduce (new object out, inputs immutable), cached per contract version;
@@ -66,7 +66,7 @@ export type ProcessorContract<State = unknown> = {
   initialState: () => State;
 };
 
-/** The stream a processor folds. `read` answers durable rows plus the scan-window proof:
+/** The stream a processor reduces. `read` answers durable rows plus the scanned-offset-range proof:
  *  `scannedThroughOffset` is how far the read is CONTIGUOUSLY known (the last row when a full
  *  page came back, the stream's highest assigned offset when the page ran short). */
 export type ProcessorStream = {
@@ -108,7 +108,7 @@ export type ProcessorSnapshot<State> = { offset: number; state: State };
 
 /** A REDUCE-ONLY processor: pure reduce, no effects — hostable at ZERO DISTANCE (inline at the
  *  parent's commit point) because it needs none of the async runner below. The entire runner
- *  apparatus — serial chain, cursors, scan windows, gap repair, resurrection — is the price of
+ *  apparatus — serial chain, cursors, scanned offset ranges, gap repair, resurrection — is the price of
  *  being AWAY from the commit point; a reduce that runs synchronously inside append pays none of
  *  it. Same `defineProcessorContract`, same `reduce({event, state})` signature; NOT having a
  *  `processEvent` is what qualifies a processor for inline hosting (the rule is the type).
@@ -204,24 +204,24 @@ export abstract class StreamProcessor<State> {
   // ── the drive doors ──
 
   /** THE push door: the stream (or hosting facet) hands the just-committed batch with its
-   *  window. Contiguous → reduce it directly (the fast path — no read); anything else → gap
+   *  scannedOffsetRange. Contiguous → reduce it directly (the fast path — no read); anything else → gap
    *  repair from the own cursor. Fire-and-forget safe: enqueues on the serial chain. */
-  processEventBatch(events: StreamEventT[], window: ScannedOffsetRange): Promise<void> {
+  processEventBatch(events: StreamEventT[], scannedOffsetRange: ScannedOffsetRange): Promise<void> {
     // Recorded SYNCHRONOUSLY: the head this processor has been SHOWN. Read verbs skip their
     // wake when the reduce has provably reached it — the fast path that deletes one parent read
     // RPC from every capability dispatch (and every level of alias nesting) once caught up.
     this.#pushedThroughOffset = Math.max(
       this.#pushedThroughOffset ?? 0,
-      window.scannedThroughOffset,
+      scannedOffsetRange.scannedThroughOffset,
     );
     return this.#enqueue(async () => {
       await this.#rereduceIfVersionChanged();
       const progress = this.#loadProgress();
-      if (window.scannedAfterOffset === progress.reducedThroughOffset) {
-        await this.#processBatch(events, window, true);
-      } else if (window.scannedThroughOffset > progress.reducedThroughOffset) {
+      if (scannedOffsetRange.scannedAfterOffset === progress.reducedThroughOffset) {
+        await this.#processBatch(events, scannedOffsetRange, true);
+      } else if (scannedOffsetRange.scannedThroughOffset > progress.reducedThroughOffset) {
         await this.#catchUpBody(); // gap (fresh incarnation, dropped push) — repair from the log
-      } // else: a stale redelivery — the window is already behind us; nothing to do
+      } // else: a stale redelivery — the scannedOffsetRange is already behind us; nothing to do
     });
   }
 
@@ -291,7 +291,7 @@ export abstract class StreamProcessor<State> {
     return `processor:${this.contract.slug}:state`;
   }
 
-  /** The persisted reduce is TWO keys: the tiny cursor record (written per durable window) and
+  /** The persisted reduce is TWO keys: the tiny cursor record (written per durable scannedOffsetRange) and
    *  the state blob (written only when the reduce actually changed it) — otherwise every enabled
    *  facet rewrote its ENTIRE state for every durable batch, consumed or not. Both writes land
    *  in one event-loop turn, so the storage write coalescer commits them together. */
@@ -349,9 +349,12 @@ export abstract class StreamProcessor<State> {
     for (;;) {
       const after = this.#loadProgress().reducedThroughOffset;
       const page = await this.stream.read(after, 500);
-      const window = { scannedAfterOffset: after, scannedThroughOffset: page.scannedThroughOffset };
+      const scannedOffsetRange = {
+        scannedAfterOffset: after,
+        scannedThroughOffset: page.scannedThroughOffset,
+      };
       if (page.scannedThroughOffset <= after) return;
-      await this.#processBatch(page.events, window, page.events.length < 500);
+      await this.#processBatch(page.events, scannedOffsetRange, page.events.length < 500);
       if (page.events.length < 500) return;
     }
   }
@@ -364,10 +367,10 @@ export abstract class StreamProcessor<State> {
     return this.contract.consumes.includes("*") || this.contract.consumes.includes(event.type);
   }
 
-  /** Rules 2–5 over one contiguous window. The caller established contiguity. */
+  /** Rules 2–5 over one contiguous scannedOffsetRange. The caller established contiguity. */
   async #processBatch(
     events: StreamEventT[],
-    window: ScannedOffsetRange,
+    scannedOffsetRange: ScannedOffsetRange,
     atHead: boolean,
   ): Promise<void> {
     const progress = this.#loadProgress();
@@ -447,12 +450,12 @@ export abstract class StreamProcessor<State> {
     // Rule 5: reached the head without a caught-up event → one eventless at-head pass.
     if (atHead && !caughtUpDelivered) await runOne(null, true);
 
-    // Rule 4: ONE persist per window, before the cursor advances — but NEVER for an
-    // ephemeral-only window (a pure-ephemeral flood costs zero writes; after eviction the
+    // Rule 4: ONE persist per scannedOffsetRange, before the cursor advances — but NEVER for an
+    // ephemeral-only scannedOffsetRange (a pure-ephemeral flood costs zero writes; after eviction the
     // cursor regresses only over events nobody can redeliver anyway).
     const next: ReduceProgress<State> = {
       reducerVersion: this.contract.version,
-      reducedThroughOffset: window.scannedThroughOffset,
+      reducedThroughOffset: scannedOffsetRange.scannedThroughOffset,
       state,
     };
     if (sawDurable) {
@@ -468,7 +471,7 @@ export abstract class StreamProcessor<State> {
       else this.#waiters.push(w);
     }
 
-    // LIVE STATE: if this window changed the PROJECTED shape, emit the delta — persist first,
+    // LIVE STATE: if this scannedOffsetRange changed the PROJECTED shape, emit the delta — persist first,
     // emit second, so a crash between the two loses only a notification (healed by the chain
     // mismatch on the next change), never state. The revision advances even if the append
     // fails, for the same reason: a hole in the chain is a re-seed, a lie in it is corruption.
@@ -480,7 +483,7 @@ export abstract class StreamProcessor<State> {
         const patch = diff(this.liveState(progress.state), this.liveState(state));
         if (patch) {
           const from = this.#liveStateRev ?? progress.reducedThroughOffset;
-          const to = window.scannedThroughOffset;
+          const to = scannedOffsetRange.scannedThroughOffset;
           this.#liveStateRev = to;
           await this.stream.append({
             type: LIVE_STATE_CHANGED,
