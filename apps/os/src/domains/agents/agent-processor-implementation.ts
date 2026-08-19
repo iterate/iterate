@@ -34,9 +34,10 @@ export {
  *   events and appends these same consequences itself.
  *
  * The parts communicate ONLY through events on the stream and the shared
- * reduce (`reduceAgentEvent`, agent-prompt-fold.ts — also imported
- * off-runtime by lib/llm-request-replay.ts, so it stays transport-free); the
- * one in-memory edge is the turn loop telling the LLM part to run or abort.
+ * reduce (`reduceAgentEvent`, agent-prompt-fold.ts — a transport-free
+ * module because the browser-side request inspector replays the same
+ * projection; see the note on `reduce` below); the one in-memory edge is
+ * the turn loop telling the LLM part to run or abort.
  *
  * Idempotency keys are minted in the FIXED `agent/` namespace, so a
  * userland interpreter appending the same recorded consequences dedupes
@@ -62,10 +63,11 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
 
   // Pure reduce. The one switch lives in the module-level `reduceAgentEvent`
   // (not inline here) because two OFF-RUNTIME readers run the exact same
-  // projection over raw stream events: prompt building (the request is a
-  // pure re-reduction pinned to the requested offset) and the UI's request
-  // inspector (lib/llm-request-replay.ts replays the wire messages from
-  // mirrored events via `reduceAgentEvents`).
+  // projection over raw stream events, via `buildAgentLlmRequestBody`
+  // (which re-reduces internally): prompt building (the request is a pure
+  // re-reduction pinned to the requested offset) and the UI's request
+  // inspector (lib/llm-request-replay.ts — a BROWSER import, which is also
+  // why the fold must stay in its own transport-free module).
   protected override reduce({ event, state }: ReduceArgs<AgentProcessorContract>) {
     return reduceAgentEvent({ event, state });
   }
