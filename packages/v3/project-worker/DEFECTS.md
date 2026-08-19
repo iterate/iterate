@@ -161,6 +161,42 @@ Tests: \_\_tests\_\_/failing-ws-fetch-capability.test.ts (2 pass / 2 fails / 1 t
     NOT given — same documented non-guarantee as apps/os guarantees-not-given.test.ts:344; the
     test.fails pins the boundary.
 
+## Family K — family-shaped sweep (wave 2: wave2-sweep tests, 11 fails)
+
+38. ☠ CROSS-PROJECT DATA BREACH via unvalidated projectId charset: a projectId containing ":"
+    collapses the prefixed-kv / secrets wall — `prj_x` + key `a:b` reads AND writes the same
+    cell as project `prj_x:a` + key `b` (verified cross-project READ of private data). Same
+    seam corrupts confinedWorker's loader cacheKey (U1: a second caller inherits the first
+    context's env.ITX/globalOutbound). ROOT FIX (retires 38 + U1 + the secrets-name vector):
+    reject projectIds/path segments outside `[A-Za-z0-9_-]` at DurableObjectNameCodec.parse
+    (~2 lines).
+39. ☠ secrets.set(name) accepts ":" → a cross-project secret WRITE primitive (secret:prj_a:b:c)
+    AND a colon name is unreadable forever (egress token grammar excludes ":"). FIX: validate
+    the secret name against the egress token charset at set() (~2 lines).
+40. ⚠ provide() with a malformed PATH (e.g. "itx.a b") returns providedAtOffset while reduce
+    drops it — the path-side twin of defect 5 (which only round-trips the TARGET). FIX:
+    parseCapabilityPath round-trip the path before appending, throw VALIDATION (~2 lines).
+41. ⚠ parseAppConfig array-form path (["itx.kv"], or [] as a stealth default route) boots a
+    silently-dead/over-broad mount — z.custom(()=>true) validates nothing. FIX: array branch
+    validates each segment against the identifier grammar, min length 1 (~2 lines).
+42. ⚠ enableProcessor("a.b") / ("a b") / ("no-such-builtin") all return {ok:true} then error
+    on every drive — dotted slug re-segments the mount, space throws, unknown slug storms. FIX:
+    validate slug as ONE path segment + (ref-less) check FACET_PROCESSORS at the verb (~2 lines).
+43. ⚠ kv.list truncates at 1000 keys silently (ignores list_complete/cursor) — page 1 is
+    presented as the whole store (S7 fabricated proof). FIX: loop list({prefix,cursor}) until
+    list_complete (~4 lines).
+44. ⚠ bare live-state/changed event (no payload) with a live-state subscriber: undefined
+    destructure throws AFTER commit, starving later rows in the delivery loop (S6, sibling of
+    defect 8). FIX: `(e.payload as {key?})?.key` in #deliverToConnectedSubscriptions (~1 char).
+45. ⚠ warm ProcessorFacet ignores re-configure (duplicate of 32, independently confirmed +
+    the userspace runner shares the memo). FIX: configure() invalidates #processor.
+    Also: H6 mount-only enablement = defect 30 confirmed from another angle (fix: configure at
+    materialization). Deferred TODOs (need defect-28 loader lane or 60s alarm cycles): egress
+    terminal leaks an unresolved {{secret}} name downstream (S4); quiesce resurrection clobbers
+    #lastActivityMs after its await; #facetWorkInFlight ignores forwarder pumps (quiesce can abort
+    mid-pump); disableProcessor abort()-fallback keeps storage. Passing pins: cold facet picks
+    newest identity, egress substitution arithmetic, contexts path normalization + self-RPC.
+
 ## Infra findings (not defects in our code)
 
 - Harness lane can't boot the Worker Loader (workerd --experimental knob missing in
