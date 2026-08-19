@@ -1673,6 +1673,42 @@ describe("the open-mic barge", () => {
     expect(h.provider.sentOfType("conversation.item.truncate")).toHaveLength(0);
   });
 
+  it("a provider-created reply confirms the hold BEFORE the answer swap — grok's wire order", async () => {
+    /* Measured live 2026-08-19 (wiretap, stream notecheck-074638): at a real
+     * grok barge the reply's `response.created` arrives at .456, the barged
+     * turn's `speech_stopped` at .652 and its `committed` at .708 — created
+     * FIRST. A created arm that only dropped the hold (waiting for the
+     * commit to confirm) erased the barged answer's identity and transcript
+     * in the swap, and the note never went out: the model recalled a count
+     * nobody heard. The provider's own created IS the confirmation. */
+    const h = makeHarness();
+    await callIsLive(h, GROK_LISTENS);
+    h.provider.responseCreated();
+    h.provider.answerAudio(400, "item_stream");
+    h.provider.answerTranscript("one two three");
+    h.provider.answerAudio(15_600, "item_stream");
+    await playOutEverything(h, 12_000);
+    expect(speakerMsDelivered(h)).toBeGreaterThan(0);
+
+    /* Grok cancels the streaming response server-side at the onset: a bare
+     * response.done with empty output, then the onset, in one breath. */
+    h.provider.push({ type: "response.done", response: { output: [] } });
+    h.provider.speechStarted();
+    await h.settle();
+
+    /* The reply's created lands BEFORE stopped/committed. */
+    h.provider.responseCreated();
+    h.provider.speechStopped();
+    h.provider.push({ type: "input_audio_buffer.committed" });
+    await h.settle();
+
+    /* The repair went out, built from the BARGED answer: the note carries
+     * its transcript, not the fresh reply's empty one. */
+    const notes = h.provider.sentOfType("conversation.item.create");
+    expect(notes).toHaveLength(1);
+    expect(JSON.stringify(notes[0])).toContain("one two three");
+  });
+
   it("holds the finished answer's tail through a false onset and resumes it", async () => {
     const h = makeHarness();
     await callIsLive(h, GROK_LISTENS);

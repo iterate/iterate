@@ -1934,23 +1934,33 @@ export class VoiceAgent2Processor extends StreamProcessor<
              * the per-answer state is replaced WHOLESALE, identity and
              * clocks included.
              *
-             * A STILL-HELD ONSET HERE IS NOT A CONFIRMATION. Both providers
-             * commit a real turn before creating its response (proven live:
-             * two turns detected and committed by VAD alone, on both), so
-             * every real turn confirmed at `committed` before its created
-             * arrives — a created that finds a live hold can only be one
-             * this agent asked for itself (the tool follow-up; push-to-talk
-             * has no VAD onsets). Nobody interrupted, so no repair note:
-             * this used to CONFIRM the hold, and a fast tool landing inside
-             * an echo blip discarded the held tail and told the model "the
-             * user interrupted your previous spoken reply" when the blip
-             * would have retracted milliseconds later. The hold is simply
-             * dropped — which unparks the pacer for the new answer and
-             * kills the stale frozen heard-ms before a later commit could
-             * misapply it to the fresh answer. */
-            dial.tentativeOnset = null;
+             * A STILL-HELD ONSET HERE: WHOSE CREATED IS THIS?
+             *
+             * OURS (`followUpResponsePending` — the tool follow-up;
+             * push-to-talk has no VAD onsets): nobody interrupted, so no
+             * repair note. Confirming here was a real bug — a fast tool
+             * landing inside an echo blip discarded the held tail and told
+             * the model "the user interrupted your previous spoken reply"
+             * when the blip would have retracted milliseconds later. The
+             * hold is simply dropped.
+             *
+             * THE PROVIDER'S: a real turn is beginning, and this created IS
+             * the confirmation — grok creates a turn's response BEFORE its
+             * `committed` arrives (measured live: created at .456, stopped
+             * at .652, committed at .708 of the same barge), so waiting for
+             * the commit confirms nothing: this arm's own swap would have
+             * erased the barged answer's identity and transcript first, and
+             * the note never went out — the model recalled a count nobody
+             * heard. Confirm NOW, before the swap, so the repair reads the
+             * old answer. OpenAI's order (committed first) still confirms
+             * at the committed arm; both arms share the no-op guard. */
             const followUp = dial.followUpResponsePending;
             dial.followUpResponsePending = false;
+            if (followUp) {
+              dial.tentativeOnset = null;
+            } else {
+              this.#confirmTentativeOnset(dial, append);
+            }
             dial.answer = freshAnswer();
             dial.answer.phase = "streaming";
             /* A new answer is a new signal; without this, the filter's
