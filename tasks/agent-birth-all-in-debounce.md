@@ -22,8 +22,8 @@ and the #2507 readiness-machinery approach (open draft, to be closed).
 - **Platform defaults ride the create batch, inline.** `create()` keeps
   appending the full default batch exactly as `agentCreationForPath` does
   today — plus an explicit `agent/configured` with
-  `{interpretResponses: true, llmRequestDebounceMs: 10_000}`.
-  The 10s is an explicit event, NOT a schema default: changing the schema
+  `{interpretResponses: true, llmRequestDebounceMs: 60_000}`.
+  The 60s is an explicit event, NOT a schema default: changing the schema
   default would retroactively slow every existing agent.
 - **All-in on debounce; no readiness machinery.** No birth-finalized, no
   deadline sleeper, no sentinels, no degraded-start offer. The project's
@@ -59,12 +59,12 @@ and the #2507 readiness-machinery approach (open draft, to be closed).
 
 ## Known consequences (accepted in review)
 
-- Dead worker + chatty user: every message re-anchors a fresh 10s window
+- Dead worker + chatty user: every message re-anchors a fresh 60s window
   (true debounce), so the first reply can be pushed out indefinitely.
   Organic failure; observability is a someday-problem.
 - **Existing projects** (seeded before this change): their worker.ts never
   lowers the debounce, so agents they create AFTER this deploys debounce at
-  10s per message until the project's config repo is updated. Existing
+  60s per message until the project's config repo is updated. Existing
   agents are untouched (no new birth event lands on them). FLAGGED for
   discussion before merge — the fix per project is a one-commit worker.ts
   update.
@@ -90,10 +90,10 @@ and the #2507 readiness-machinery approach (open draft, to be closed).
       through the "agent" subscription every stream carries from birth);
       liveState reads one fold_
 - [x] create(): explicit birth config event _`agent/birth-config:v1` —
-      parsing on, debounce 10s. NEWBORN-GATED: create() is get-or-create and
+      parsing on, debounce 60s. NEWBORN-GATED: create() is get-or-create and
       revision-bumped batch events deliberately land on existing agents as
       upgrades, so a `getEvents({limit: 1})` probe skips the event for
-      pre-existing streams (a late 10s event would overwrite the worker's
+      pre-existing streams (a late 60s event would overwrite the worker's
       lowered value). Integration routers pass highInitialDebounce: false —
       their agents carry explicit prompts at birth and keep 250ms_
 - [x] configs/default _#configureNewbornAgent on agent/created: forked-prompt
@@ -120,7 +120,7 @@ and the #2507 readiness-machinery approach (open draft, to be closed).
 > ## Agent birth: all-in on debounce
 >
 > New agents are born with platform defaults inline (as today) plus one new
-> explicit config event: response parsing ON, debounce **10s**. The
+> explicit config event: response parsing ON, debounce **60s**. The
 > project's config worker reacts to `agent/created` and appends overrides —
 > prompt supersessions, parsing off, its own dialect — and lowers the
 > debounce to 250ms as its "done configuring" signal, which releases any
@@ -143,8 +143,8 @@ and the #2507 readiness-machinery approach (open draft, to be closed).
 >   headless semantics). Old driver events fail strict schema and skip;
 >   leftover "agent-headless" subscriptions fail loudly — accepted, those
 >   agents work through their "agent" subscription.
-> - The 10s birth event is gated to brand-new streams by an existence
->   probe: create() is get-or-create, and a late 10s event would overwrite
+> - The 60s birth event is gated to brand-new streams by an existence
+>   probe: create() is get-or-create, and a late 60s event would overwrite
 >   the worker's lowered debounce on existing agents.
 > - The #2497 project birth-defaults store (`agents/birth-defaults` wishes)
 >   is deleted — the reactive path replaces it.
@@ -152,7 +152,7 @@ and the #2507 readiness-machinery approach (open draft, to be closed).
 >   `<codemode>` blocks, demonstrating full userland control of parsing.
 >
 > Known consequence: projects seeded before this change don't lower the
-> debounce; their newly-created agents wait 10s per message until the
+> debounce; their newly-created agents wait 60s per message until the
 > project commits an updated worker.ts.
 
 ## Implementation log
@@ -202,3 +202,8 @@ and the #2507 readiness-machinery approach (open draft, to be closed).
   events fail strict schema and skip; existing converted agents fall back
   to platform parsing until codemode-tag's deploy-time sweep appends the
   explicit flag. Same loud-failure stance as the stub deletion.
+- 2026-08-19 (preview review): `AGENT_INITIAL_DEBOUNCE_MS` bumped 10s → 60s
+  after a live preview birth hit the timeout on a first-ever worker build
+  (thread p1711/agents/web/2026-08-19t16-12-19-764z). Ridiculously generous
+  on purpose — a wrong-dialect first turn costs more than a slow one;
+  tighten once cold-build latency is optimised.

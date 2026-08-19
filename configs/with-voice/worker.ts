@@ -6,7 +6,7 @@ export default class VoiceProjectWorker extends IterateWorkerEntrypoint {
       event.type === "events.iterate.com/agent/created" &&
       event.source?.copiedFrom === undefined
     ) {
-      // The platform births agents with a high (10s) debounce — the window
+      // The platform births agents with a high (60s) debounce — the window
       // for this worker to configure them before their first turn. This
       // template keeps the platform defaults, so lowering the debounce back
       // to the ordinary 250ms is its whole birth reaction; doing so also

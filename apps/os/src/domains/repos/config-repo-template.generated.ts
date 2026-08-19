@@ -832,13 +832,13 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  /**\n" +
       "   * BIRTH CONFIGURATION — the pattern to copy to customize how agents in\n" +
       "   * this project are born. The platform births every agent with coherent\n" +
-      "   * defaults and a HIGH debounce (10s), which is this worker's window: it\n" +
+      "   * defaults and a HIGH debounce (60s), which is this worker's window: it\n" +
       "   * reacts to `agent/created` here, appends whatever should shape the agent\n" +
       "   * before its first turn (a superseding system prompt, standing context,\n" +
       "   * config), and finishes by lowering the debounce to the ordinary 250ms —\n" +
       "   * the done-configuring signal, which also releases a held first turn\n" +
       "   * immediately. If this worker is slow or broken, the agent still answers\n" +
-      "   * after ~10s with the platform defaults; keyed context supersession heals\n" +
+      "   * after ~60s with the platform defaults; keyed context supersession heals\n" +
       "   * later turns.\n" +
       "   *\n" +
       "   * The project's prompt lives in prompts/agent-system-prompt.md — edit and\n" +

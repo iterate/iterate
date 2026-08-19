@@ -110,13 +110,13 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   /**
    * BIRTH CONFIGURATION — the pattern to copy to customize how agents in
    * this project are born. The platform births every agent with coherent
-   * defaults and a HIGH debounce (10s), which is this worker's window: it
+   * defaults and a HIGH debounce (60s), which is this worker's window: it
    * reacts to `agent/created` here, appends whatever should shape the agent
    * before its first turn (a superseding system prompt, standing context,
    * config), and finishes by lowering the debounce to the ordinary 250ms —
    * the done-configuring signal, which also releases a held first turn
    * immediately. If this worker is slow or broken, the agent still answers
-   * after ~10s with the platform defaults; keyed context supersession heals
+   * after ~60s with the platform defaults; keyed context supersession heals
    * later turns.
    *
    * The project's prompt lives in prompts/agent-system-prompt.md — edit and

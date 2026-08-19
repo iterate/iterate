@@ -6,7 +6,7 @@ import { parseCodemodeResponse } from "./codemode-format.ts";
 // THE CODEMODE-TAG EXPERIMENT — this project's agents respond with markdown
 // plus one embedded <codemode status="..."> tag instead of a bare ```ts
 // fence, and THIS FILE is the interpreter. The platform births every agent
-// with default response parsing ON and a HIGH debounce (10s); this worker
+// with default response parsing ON and a HIGH debounce (60s); this worker
 // reacts to `agent/created`, turns default parsing OFF, supersedes the
 // system prompt with the codemode grammar, and lowers the debounce to the
 // ordinary 250ms — the done-configuring signal, which releases a held first
@@ -36,7 +36,7 @@ import { parseCodemodeResponse } from "./codemode-format.ts";
 // interpretation and therefore inert here. Slack/Telegram/email agents keep
 // default parsing untouched — the conversion below only fires for plain
 // `/agents/…` web agents. If this worker is down at a birth, the agent
-// answers after ~10s with the platform's fenced-ts defaults — coherent,
+// answers after ~60s with the platform's fenced-ts defaults — coherent,
 // just not the codemode dialect — until the next deploy's sweep converts it.
 
 /** Assistant output events stamped by the platform's LLM component carry
@@ -122,7 +122,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
 
   /**
    * THE OPT-IN, at birth: the platform births agents with default parsing ON
-   * and a high (10s) debounce — that window is exactly for this reaction.
+   * and a high (60s) debounce — that window is exactly for this reaction.
    * ONE atomic batch turns default parsing off, supersedes the platform's
    * keyed system-prompt slot with the codemode grammar, and lowers the
    * debounce to the ordinary 250ms (LAST on purpose: done configuring —

@@ -250,12 +250,14 @@ export type AgentCreateInput = z.input<
 >;
 
 /** The initial debounce for agents whose first turn should wait for the
- * project's config worker: long enough for a cold worker build plus the
- * `agent/created` delivery hop, short enough that a dead worker leaves a
- * usable (platform-default) agent. The worker lowers it to the ordinary
- * 250ms as its done-configuring signal, which also releases any held first
- * turn immediately — see llmRequestDebounceMs in the contract. */
-export const AGENT_INITIAL_DEBOUNCE_MS = 10_000;
+ * project's config worker. Deliberately RIDICULOUSLY generous: a first-ever
+ * worker build occasionally blew through 10s in preview, and a wrong-dialect
+ * first turn costs more than a slow one — a dead worker still leaves a
+ * usable (platform-default) agent after this window. The worker lowers it
+ * to the ordinary 250ms as its done-configuring signal, which also releases
+ * any held first turn immediately — see llmRequestDebounceMs in the
+ * contract. Tighten once cold-build latency is optimised. */
+export const AGENT_INITIAL_DEBOUNCE_MS = 60_000;
 
 const AGENT_BIRTH_CONFIG_REVISION = "1";
 

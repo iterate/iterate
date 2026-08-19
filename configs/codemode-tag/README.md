@@ -20,7 +20,7 @@ return { abc: foo.bar }
 ## How it works
 
 The platform births every agent with default response parsing ON and a HIGH
-debounce (10s) — that window exists exactly so a project's worker can shape
+debounce (60s) — that window exists exactly so a project's worker can shape
 the agent before its first turn. `worker.ts` here is the interpreter:
 
 1. On each agent's birth (`agent/created`), one atomic batch turns default
@@ -51,7 +51,7 @@ rendering — is a commit to this repo. No platform deploy.**
   kills that turn (a new message starts fresh). If the experiment graduates,
   the promotion path is a real hosted stream processor (`createProcessorHost`)
   or platformizing the proven format.
-- If this worker is down or slow past the 10s birth window, the agent
+- If this worker is down or slow past the 60s birth window, the agent
   answers with the platform's fenced-ts defaults — coherent, just not the
   codemode dialect — until the next deploy's `project/worker-updated` sweep
   converts it.

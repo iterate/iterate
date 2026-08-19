@@ -83,7 +83,7 @@ export const AgentProcessorContract = defineProcessorContract({
               "to coalesce a burst of context events that arrive together (a message plus its " +
               "attachments, a script result fan-in), short enough to be invisible next to LLM " +
               "latency. Anchored at the NEWEST uncovered trigger (each new input re-opens the " +
-              "window). Agents are born with this set high (10s) so the project's config " +
+              "window). Agents are born with this set high (60s) so the project's config " +
               "worker can react to agent/created and append its overrides before the first " +
               "turn; the worker lowers it to the ordinary 250ms as its done-configuring " +
               "signal, which also releases any held first turn immediately.",
