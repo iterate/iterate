@@ -19,7 +19,7 @@
 
 import { z } from "zod";
 import { codedError } from "./core/errors.ts";
-import { deeper, defineProcessorContract } from "./core/events.ts";
+import { deeper, defineProcessorContract, type DeliveryPolicy } from "./core/events.ts";
 import {
   apply,
   ExpressionSchema,
@@ -138,13 +138,7 @@ export class IterateContextStreamProcessor extends StreamProcessor<State> {
   async provide(input: {
     pattern: string | Expression;
     target: string | Expression;
-    delivery?: {
-      consumes?: string[];
-      onFailingEvent?: "halt" | "skip";
-      maxAttempts?: number;
-      start?: "beginning" | "now";
-      liveState?: { key: string };
-    };
+    delivery?: DeliveryPolicy;
   }): Promise<{ providedAtOffset: number }> {
     const pattern = toExpression(input.pattern);
     const target = toExpression(input.target);

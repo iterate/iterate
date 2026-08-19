@@ -18,6 +18,19 @@ export function deeper(depth: number, what: string): number {
   return depth + 1;
 }
 
+/** THE delivery policy — one spelling for every host of it (the subscribe inputs, the provide
+ *  payload, the projected PushRow). Rides the capability-provided event itself, so subscription
+ *  config is event-sourced, never silent kv. Event rows get the cursor + retry/skip/halt
+ *  ladder; `liveState` rows get neither — the key's change payloads are forwarded as they
+ *  commit and the CLIENT chains revisions through the producer's door. */
+export type DeliveryPolicy = {
+  consumes?: string[];
+  onFailingEvent?: "halt" | "skip";
+  maxAttempts?: number;
+  start?: "beginning" | "now";
+  liveState?: { key: string };
+};
+
 /** What `append` accepts: the event body, before the stream assigns its committed identity. */
 const eventInputShape = z.strictObject({
   /** Convention: `events.iterate.com/<domain>/<fact>`. */
@@ -131,10 +144,6 @@ export function defineProcessorContract<StateSchema extends z.ZodType>(contract:
     payload?: unknown;
     idempotencyKey?: string;
   }) => StreamEventInput;
-  /** Validate a committed event against the owned catalog (throws on unknown/malformed). */
-  parseEvent: (event: StreamEvent) => StreamEvent;
-  /** Validate an append input against the owned catalog (throws on unknown/malformed). */
-  parseEventInput: (event: StreamEventInput) => StreamEventInput;
 } {
   const initial = contract.stateSchema.safeParse({});
   if (!initial.success)
@@ -158,15 +167,5 @@ export function defineProcessorContract<StateSchema extends z.ZodType>(contract:
       payload: payloadOf(event.type, event.payload, "buildEvent") as Record<string, unknown>,
       ...(event.idempotencyKey ? { idempotencyKey: event.idempotencyKey } : {}),
     }),
-    parseEvent: (event) => {
-      const parsed = StreamEvent.parse(event);
-      payloadOf(parsed.type, parsed.payload, "parseEvent");
-      return parsed;
-    },
-    parseEventInput: (event) => {
-      const parsed = StreamEventInput.parse(event);
-      payloadOf(parsed.type, parsed.payload, "parseEventInput");
-      return parsed;
-    },
   };
 }

@@ -93,3 +93,37 @@ export function confinedWorker(
     globalOutbound: host,
   }));
 }
+
+/** Materialize (or restart on a source change) a durable facet hosting a LOADED class, keeping
+ *  its storage across restarts — the version-marker dance, stated once for both hosts (the
+ *  stream's userspace processors and the stateful runner). The deploy id is already in the
+ *  loader cacheKey (confinedWorker); the marker catches CONTENT changes within a deploy. */
+export function versionedFacet(
+  ctx: {
+    storage: { kv: { get(k: string): unknown; put(k: string, v: unknown): void } };
+    facets: {
+      get(name: string, cb: () => { class: DurableObjectClass }): unknown;
+      abort(name: string, reason: string): void;
+    };
+  },
+  opts: {
+    worker: { getDurableObjectClass(name: string): DurableObjectClass | undefined };
+    className: string;
+    facetName: string;
+    markerKey: string;
+    version: string;
+  },
+): unknown {
+  const klass = opts.worker.getDurableObjectClass(opts.className);
+  if (!klass) throw new Error(`loaded worker does not export class "${opts.className}"`);
+  const prev = ctx.storage.kv.get(opts.markerKey) as string | undefined;
+  if (prev !== undefined && prev !== opts.version) {
+    try {
+      ctx.facets.abort(opts.facetName, "source changed");
+    } catch {
+      /* facet not running */
+    }
+  }
+  if (prev !== opts.version) ctx.storage.kv.put(opts.markerKey, opts.version);
+  return ctx.facets.get(opts.facetName, () => ({ class: klass }));
+}

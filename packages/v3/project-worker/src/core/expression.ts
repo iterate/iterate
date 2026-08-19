@@ -559,6 +559,31 @@ async function walkSteps(
 }
 
 /**
+ * Dotted-path invocation over a LOCAL object graph — a facet stub, a hosted class, any dotted
+ * view: walk the intermediates receiver-preservingly, apply the terminal. ONE walk for every
+ * "call path X with args on this object" door (the parent's facetInvoke, the stateful runner);
+ * the hand-rolled copies it replaced were the drift class.
+ *
+ * ⚠️  THE DataCloneError LEARNING LIVES HERE — invoke facet/RPC-stub methods with
+ * `Reflect.apply(fn, receiver, args)`, NEVER `stub[m].apply(stub, args)`: reading `.apply` off
+ * an RPC stub's method proxy is a capnweb PIPELINED REMOTE PATH; calling it passes the stub as
+ * an argument, so workerd serializes it — and a Worker-Loader facet stub may never be
+ * serialized (`requireAllowsTransfer()` throws unconditionally) → `DataCloneError: Durable
+ * Object Facet stubs cannot be transferred between Workers`. walkSteps below does exactly the
+ * safe thing (stepGet + Reflect.apply, receiver carried); do not "simplify" it away. This one
+ * idiom cost a full investigation — see FACET-RPC-INVESTIGATION.md.
+ */
+export async function invokePath(
+  target: unknown,
+  path: string[],
+  args: unknown[],
+  where: string,
+): Promise<unknown> {
+  const steps = [...path.slice(0, -1), [path.at(-1)!, ...args]] as Expression;
+  return (await walkSteps({ value: target, receiver: undefined }, steps, where)).value;
+}
+
+/**
  * Walk a CONCRETE expression (no holes — `substitute` first) against named scope roots. The first
  * step names a root (`itx`, and `roots` for config-provenance expressions — evaluation for event
  * provenance simply does not have `roots` in scope: unspellable, not policed).

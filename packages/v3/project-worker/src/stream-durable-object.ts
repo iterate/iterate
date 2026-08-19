@@ -24,15 +24,16 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { substituteHeaderSecrets } from "@v3/shared/egress";
-import { confinedWorker } from "./core/agent-runtime.ts";
+import { confinedWorker, versionedFacet } from "./core/agent-runtime.ts";
 import { codedError } from "./core/errors.ts";
 import {
   idempotencyConflictMessage,
   sameIdempotentEvent,
+  type DeliveryPolicy,
   type StreamEvent,
   type StreamEventInput,
 } from "./core/events.ts";
-import { stepGet, toExpression, type Expression } from "./core/expression.ts";
+import { invokePath, toExpression, type Expression } from "./core/expression.ts";
 import { hashSource } from "./core/hash.ts";
 import { PAGER_HEADER } from "./core/hibernatable-pager.ts";
 import { HibernatableStubs, type Invoker, type Stub } from "./core/hibernatable-stub.ts";
@@ -77,16 +78,10 @@ type FacetProcessorHandle = {
  *  only because the post-commit fan-out is the hot path and must not RPC into the facet to
  *  learn who to notify). Same-name re-provides STACK (freeze-and-fork: the shadowed row's
  *  cursor freezes; revoke pops and it resumes exactly where it stopped; revoke = cursor GC). */
-type PushRow = {
+type PushRow = DeliveryPolicy & {
   name: string;
   providedAtOffset: number; // the row's identity AND its cursor key
-  consumes?: string[];
-  onFailingEvent: "halt" | "skip";
-  maxAttempts?: number;
-  start?: "beginning" | "now";
-  /** LIVE STATE row: no cursor, no ladder — the key's change events (which carry their own
-   *  delta patch) are forwarded as they commit; the CLIENT owns the revision chain. */
-  liveState?: { key: string };
+  onFailingEvent: "halt" | "skip"; // defaulted at projection time
 };
 /** The stream-held cursor + failure ladder state for one push row. */
 type PushCursor = {
@@ -125,7 +120,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     void this.#doName; // an id-addressed instance must fail before its first write
     this.ctx.storage.sql.exec(
       `CREATE TABLE IF NOT EXISTS events (
-         offset INTEGER PRIMARY KEY AUTOINCREMENT,
+         offset INTEGER PRIMARY KEY,
          body TEXT NOT NULL,
          idempotency_key TEXT UNIQUE
        )`,
@@ -153,15 +148,11 @@ export class StreamDurableObject extends DurableObject<Env> {
   /** The highest offset EVER ASSIGNED — including to ephemeral events whose bodies are gone.
    *  Backed by ONE tiny kv value (the deliberate write that makes a pure-ephemeral append cost
    *  exactly one storage write): offset REUSE after an incarnation dies is a data-corruption
-   *  class, because consumers key durable truth by offset. */
+   *  class, because consumers key durable truth by offset. The kv value is the ONE source —
+   *  append's transactionSync commits it with the sql rows atomically. */
   #maxAssignedCache?: number;
   #maxAssigned(): number {
-    if (this.#maxAssignedCache !== undefined) return this.#maxAssignedCache;
-    const kvHigh = (this.ctx.storage.kv.get("maxAssignedOffset") as number | undefined) ?? 0;
-    const sqlHigh = this.#eventsTableExists()
-      ? Number(this.ctx.storage.sql.exec("SELECT COALESCE(MAX(offset),0) AS m FROM events").one().m)
-      : 0;
-    this.#maxAssignedCache = Math.max(kvHigh, sqlHigh);
+    this.#maxAssignedCache ??= (this.ctx.storage.kv.get("maxAssignedOffset") as number) ?? 0;
     return this.#maxAssignedCache;
   }
 
@@ -301,7 +292,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       if (e.type === "events.iterate.com/capability-host/capability-provided") {
         const { pattern, delivery } = e.payload as {
           pattern: unknown[];
-          delivery?: Omit<PushRow, "name" | "providedAtOffset">;
+          delivery?: DeliveryPolicy;
         };
         if (
           Array.isArray(pattern) &&
@@ -375,16 +366,22 @@ export class StreamDurableObject extends DurableObject<Env> {
     this.#lastActivityMs = Date.now();
     void this.#armAlarmNoLaterThan(this.#lastActivityMs + 60_000).catch(() => {});
   }
-  /** ONE alarm write per quiet-period start, never per append (an ephemeral flood arms once). */
+  /** ONE alarm write per quiet-period start, never per append (an ephemeral flood arms once).
+   *  The in-memory memo also kills the awaited getAlarm READ per append: staleness can only
+   *  cause one redundant read (alarm() clears it; eviction loses it), never a missed arm. */
+  #armedTargetMs?: number;
   async #armAlarmNoLaterThan(target: number): Promise<void> {
+    if (this.#armedTargetMs !== undefined && this.#armedTargetMs <= target) return;
     const current = await this.ctx.storage.getAlarm();
     if (current === null || current > target) await this.ctx.storage.setAlarm(target);
+    this.#armedTargetMs = Math.min(target, current ?? target);
   }
   // In-memory on purpose: a fresh incarnation always runs one resurrection pass, and losing
   // the flag with an eviction is exactly the point.
   #facetsResurrected = false;
 
   async alarm(): Promise<void> {
+    this.#armedTargetMs = undefined; // this alarm FIRED — the memo no longer reflects storage
     this.#drivePushRows(); // retries whose backoff came due
     if (!this.#facetsResurrected) {
       // THE RESURRECTION PASS: a fold interrupted by eviction, with no follow-up traffic,
@@ -467,36 +464,21 @@ export class StreamDurableObject extends DurableObject<Env> {
    *  replayable, revocable/shadowable like every other mount. The projection in append() turns
    *  it into a pumped row; provide/revoke/shadow give subscription lifecycle for free
    *  (shadow a subscriber → its cursor freezes; revoke → it resumes where it stopped). */
-  async subscribe(input: {
-    name?: string;
-    target: string | Expression;
-    consumes?: string[];
-    onFailingEvent?: "halt" | "skip";
-    maxAttempts?: number;
-    start?: "beginning" | "now";
-    liveState?: { key: string };
-  }): Promise<{ name: string; providedAtOffset: number }> {
+  async subscribe(
+    input: DeliveryPolicy & { name?: string; target: string | Expression },
+  ): Promise<{ name: string; providedAtOffset: number }> {
     this.#touch();
-    const target = toExpression(input.target);
-    if (target[0] !== "itx")
-      throw new Error(
-        `subscribe: target must be an itx expression (got ${JSON.stringify(target[0])})`,
-      );
+    // (the target-root gate lives in ictx.provide — the one enforcement point)
     // A UNIQUE default name — two concurrent anonymous subscribes must never collide on the
     // same name and silently shadow each other (the max-offset default did exactly that).
     const name = input.name ?? `subscription:${crypto.randomUUID().slice(0, 8)}`;
+    const { name: _n, target, ...delivery } = input;
     const { providedAtOffset } = await (
       await this.#ictx()
     ).provide({
       pattern: ["itx", "subscribers", name],
-      target,
-      delivery: {
-        consumes: input.consumes,
-        onFailingEvent: input.onFailingEvent,
-        maxAttempts: input.maxAttempts,
-        start: input.start,
-        liveState: input.liveState,
-      },
+      target: toExpression(target),
+      delivery,
     });
     return { name, providedAtOffset };
   }
@@ -747,18 +729,13 @@ export class StreamDurableObject extends DurableObject<Env> {
       },
       itxEntrypointFor(this.ctx, this.#doName),
     );
-    const klass = worker.getDurableObjectClass("ProcessorFacetRunner");
-    if (!klass) throw new Error(`userspace processor "${slug}": runner class missing`);
-    // Abort + recreate the facet on a source change, KEEPING its storage — the stateful runner's
-    // version-marker pattern, keyed per slug.
-    const markerKey = `procfacet:${slug}:version`;
-    const prev = this.ctx.storage.kv.get(markerKey) as string | undefined;
-    if (prev !== undefined && prev !== version)
-      this.ctx.facets.abort(`proc:${slug}`, "source changed");
-    if (prev !== version) this.ctx.storage.kv.put(markerKey, version);
-    return this.ctx.facets.get(`proc:${slug}`, () => ({
-      class: klass,
-    })) as unknown as FacetProcessorHandle;
+    return versionedFacet(this.ctx, {
+      worker,
+      className: "ProcessorFacetRunner",
+      facetName: `proc:${slug}`,
+      markerKey: `procfacet:${slug}:version`,
+      version,
+    }) as FacetProcessorHandle;
   }
 
   /** Enable a facet-hosted processor on this stream (idempotent; identity configured durably).
@@ -806,19 +783,9 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (path.length === 0) throw new Error(`facet "${slug}": name a method`);
     if (slug !== ICTX_SLUG && !this.#facetEntries().some((e) => e.slug === slug))
       throw new Error(`no facet "${slug}" enabled`);
-    const facet = (await this.#facet(slug)) as unknown as object;
-    let receiver: unknown = facet;
-    for (let i = 0; i < path.length - 1; i++) {
-      receiver = await stepGet(receiver as object, path[i]);
-      if (receiver == null)
-        throw new Error(
-          `facet "${slug}": "${path.join(".")}" hit ${String(receiver)} at "${path[i]}"`,
-        );
-    }
-    const handler = stepGet(receiver as object, path[path.length - 1]);
-    if (typeof handler !== "function")
-      throw new Error(`facet "${slug}" has no method "${path.join(".")}"`);
-    return await Reflect.apply(handler, receiver, args);
+    // invokePath = stepGet + Reflect.apply with the receiver carried (the DataCloneError
+    // learning lives on the helper — see core/expression.ts).
+    return invokePath(await this.#facet(slug), path, args, `facet "${slug}"`);
   }
 
   #identityFor(slug: string, exportName?: string): FacetIdentity {
@@ -891,6 +858,8 @@ export class StreamDurableObject extends DurableObject<Env> {
           : ((this.ctx.storage.kv.get("incarnation") as number | undefined) ?? 0),
         facetProcessors: this.#facetEntries().map((e) => e.slug),
         pushSubscriptions: this.#activePushRows().map((r) => {
+          if (r.liveState)
+            return { name: r.name, providedAtOffset: r.providedAtOffset, liveState: r.liveState };
           const c = this.#pushCursor(r.providedAtOffset);
           return {
             name: r.name,

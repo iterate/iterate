@@ -249,8 +249,9 @@ describe("the concurrency contract", () => {
     ) as StreamEvent[];
     await processor.wake();
     await settle();
-    // one progress write for the whole 3-event window (+ the milestone lands as its own window)
-    expect(storage.writes - before).toBe(2);
+    // the whole 3-event window persists ONCE: cursor + state (2 writes). The milestone lands
+    // as its own window — cursor only, its fold didn't change state (1 write, no state blob).
+    expect(storage.writes - before).toBe(3);
   });
 
   test("rule 5 — at-head pass fires exactly once when the window reaches the head", async () => {

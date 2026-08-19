@@ -26,8 +26,8 @@
 // The `fetch` lane (WS/streaming, where a 101 can't ride RPC) forwards to the facet's own `fetch`.
 
 import { DurableObject } from "cloudflare:workers";
-import { confinedWorker } from "./core/agent-runtime.ts";
-import { stepGet, type Expression } from "./core/expression.ts";
+import { confinedWorker, versionedFacet } from "./core/agent-runtime.ts";
+import { invokePath, type Expression } from "./core/expression.ts";
 import { hashSource } from "./core/hash.ts";
 import { stringifyName } from "./core/names.ts";
 import { itxEntrypointFor } from "./iterate-context-entrypoint.ts";
@@ -98,13 +98,13 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
       modules,
       itxEntrypointFor(this.ctx, this.#hostName()),
     );
-    const klass = worker.getDurableObjectClass(className);
-    if (!klass) throw new Error(`stateful worker does not export class "${className}"`);
-    // Abort + recreate the facet on a source change (same storage) — apps/os's version-marker pattern.
-    const prev = this.ctx.storage.kv.get<string>(VERSION_KEY);
-    if (prev !== undefined && prev !== version) this.ctx.facets.abort(FACET_NAME, "source changed");
-    if (prev !== version) this.ctx.storage.kv.put(VERSION_KEY, version);
-    return this.ctx.facets.get(FACET_NAME, () => ({ class: klass })) as unknown as Fetcher;
+    return versionedFacet(this.ctx, {
+      worker,
+      className,
+      facetName: FACET_NAME,
+      markerKey: VERSION_KEY,
+      version,
+    }) as Fetcher;
   }
 
   /** RPC lane: resolve/restart the facet and call the method NATIVELY on it (apps/os `replayPath`). A DOTTED
@@ -112,34 +112,15 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
    *  result is plain data, so the facet stub never crosses back to the host. */
   async invokeCapability(input: StatefulInvoke): Promise<unknown> {
     const facet = this.#facet(await this.#loadModules(input.source), input.className);
-    // ═══════════════════════════════════════════════════════════════════════════════════════════════════
-    // ⚠️  GOTCHA — INVOKE FACET/RPC-STUB METHODS WITH Reflect.apply, *NEVER* `stub[m].apply(stub, args)`.
-    // Reading `.apply` (or ANY property) off an RPC stub's method proxy is a capnweb PIPELINED REMOTE PATH;
-    // calling it passes the facet stub as an argument, so workerd SERIALIZES the stub — and a Worker-Loader
-    // (dynamic-entrypoint) facet stub may NEVER be serialized (`requireAllowsTransfer()` throws
-    // unconditionally, workerd server.c++) → `DataCloneError: Durable Object Facet stubs cannot be
-    // transferred between Workers`. `Reflect.apply` invokes the function's [[Call]] directly (no property
-    // read, thisArg not serialized); a plain `await facet.increment(2)` is equally safe. This one idiom cost
-    // a full investigation (we wrongly blamed account entitlement) — see FACET-RPC-INVESTIGATION.md. DO NOT
-    // "simplify" this to `facet[input.method](...input.args)` captured into a variable and `.apply`-d.
-    // The SAME rule governs a DOTTED path: walk intermediates with awaited `Reflect.get(receiver, seg)` and
-    // apply ONLY the terminal — receiver-preserving, exactly apps/os `replayPath` (live-capability.ts).
-    // ═══════════════════════════════════════════════════════════════════════════════════════════════════
-    // `stepGet` (not bare Reflect.get) so the plain objects walked after the first await never
-    // expose Object.prototype inheritance — workerd filters the stub hop itself.
-    const path = input.method.split(".");
-    let receiver: unknown = facet;
-    for (let i = 0; i < path.length - 1; i++) {
-      receiver = await stepGet(receiver as object, path[i]);
-      if (receiver == null)
-        throw new Error(
-          `stateful worker: "${input.className}" path "${input.method}" hit ${String(receiver)} at "${path[i]}"`,
-        );
-    }
-    const handler = stepGet(receiver as object, path[path.length - 1]);
-    if (typeof handler !== "function")
-      throw new Error(`stateful worker: "${input.className}" has no method "${input.method}"`);
-    return await Reflect.apply(handler, receiver, input.args ?? []);
+    // invokePath = stepGet + Reflect.apply with the receiver carried. ⚠️ The DataCloneError
+    // learning (never `stub[m].apply` — the stub gets serialized and facet stubs can't be)
+    // lives ON THE HELPER — see core/expression.ts invokePath + FACET-RPC-INVESTIGATION.md.
+    return invokePath(
+      facet,
+      input.method.split("."),
+      input.args ?? [],
+      `stateful worker "${input.className}"`,
+    );
   }
 
   /** WS/streaming lane: forward the request to the facet's own `fetch`. The module + class ride in headers set

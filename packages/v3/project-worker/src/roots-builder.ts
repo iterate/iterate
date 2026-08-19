@@ -138,52 +138,43 @@ export function buildHostScope(deps: BuildRootsDeps): Record<string, unknown> {
   const repoPrefix = `${projectId}:repo:`;
   const own = () => deps.context(path);
 
-  const scope: Record<string, unknown> = {
-    whoami: () => ({ projectId, path }),
-    /** Project-prefixed KV — the raw namespace is shared; the prefix is the isolation. */
-    kv: {
-      get: (k: string) => {
-        if (!itxKv) throw new Error("kv: no ITX_KV bound");
-        return itxKv.get(kvPrefix + k);
-      },
+  /** One prefixed view over the shared namespace — the prefix IS the isolation. */
+  const prefixedKv = (prefix: string, what: string) => {
+    const kv = () => {
+      if (!itxKv) throw new Error(`${what}: no ITX_KV bound`);
+      return itxKv;
+    };
+    return {
+      get: (k: string) => kv().get(prefix + k),
       put: async (k: string, v: string) => {
-        if (!itxKv) throw new Error("kv: no ITX_KV bound");
-        await itxKv.put(kvPrefix + k, String(v));
+        await kv().put(prefix + k, String(v));
         return { ok: true };
       },
       delete: async (k: string) => {
-        if (!itxKv) throw new Error("kv: no ITX_KV bound");
-        await itxKv.delete(kvPrefix + k);
+        await kv().delete(prefix + k);
         return { ok: true };
       },
-      list: async (start = "") => {
-        if (!itxKv) throw new Error("kv: no ITX_KV bound");
-        return {
-          keys: (await itxKv.list({ prefix: kvPrefix + start })).keys.map((x) =>
-            x.name.slice(kvPrefix.length),
-          ),
-        };
-      },
+      keys: async (start = "") =>
+        (await kv().list({ prefix: prefix + start })).keys.map((x) => x.name.slice(prefix.length)),
+    };
+  };
+  const projectKv = prefixedKv(kvPrefix, "kv");
+  const repoKv = prefixedKv(repoPrefix, "repo");
+
+  const scope: Record<string, unknown> = {
+    whoami: () => ({ projectId, path }),
+    /** Project-prefixed KV. */
+    kv: {
+      get: projectKv.get,
+      put: projectKv.put,
+      delete: projectKv.delete,
+      list: async (start = "") => ({ keys: await projectKv.keys(start) }),
     },
     /** The project's file store (`repo:`-prefixed kv view) — where the config worker lives. */
     repo: {
-      get: (k: string) => {
-        if (!itxKv) throw new Error("repo: no ITX_KV bound");
-        return itxKv.get(repoPrefix + k);
-      },
-      put: async (k: string, v: string) => {
-        if (!itxKv) throw new Error("repo: no ITX_KV bound");
-        await itxKv.put(repoPrefix + k, String(v));
-        return { ok: true };
-      },
-      list: async () => {
-        if (!itxKv) throw new Error("repo: no ITX_KV bound");
-        return {
-          files: (await itxKv.list({ prefix: repoPrefix })).keys.map((x) =>
-            x.name.slice(repoPrefix.length),
-          ),
-        };
-      },
+      get: repoKv.get,
+      put: repoKv.put,
+      list: async () => ({ files: await repoKv.keys() }),
     },
     /** Write-only secret store. Values come back out ONLY as `{{secret:NAME}}` substitution at
      *  the egress terminal — never through a read here. */
@@ -222,13 +213,14 @@ export function buildHostScope(deps: BuildRootsDeps): Record<string, unknown> {
     clients: deps.clients,
     facets: deps.facets,
     workers,
-    /** The file store the source expressions read: demo files first, then THE REPO — put real
-     *  source with `itx.repo.put('/my.js', src)` and run it with
-     *  `itx.workers.get({ source: "itx.files.read('/my.js')" })`. (The smallest possible repo;
-     *  the apps/os repo DO grows from this seam.) */
+    /** The file store the source expressions read: THE REPO first, demo files as fallback —
+     *  put real source with `itx.repo.put('/my.js', src)` and run it with
+     *  `itx.workers.get({ source: "itx.files.read('/my.js')" })`. Repo wins on a path clash:
+     *  the demos are scaffolding and must never shadow a project's own file. (The smallest
+     *  possible repo; the apps/os repo DO grows from this seam.) */
     files: {
       read: async (p: string) => {
-        const content = HELLO_FILES[p] ?? (itxKv ? await itxKv.get(repoPrefix + p) : null);
+        const content = (itxKv ? await repoKv.get(p) : null) ?? HELLO_FILES[p] ?? null;
         if (content == null) throw new Error(`files: no file "${p}"`);
         return { "cap.js": content };
       },

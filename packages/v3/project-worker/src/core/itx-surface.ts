@@ -13,6 +13,7 @@
 
 import { RpcTarget } from "capnweb";
 import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
+import type { DeliveryPolicy } from "./events.ts";
 import type { Expression } from "./expression.ts";
 import { openPager, parsePage } from "./hibernatable-pager.ts";
 import { disposeStub } from "./hibernatable-stub.ts";
@@ -246,15 +247,12 @@ export class Itx extends RpcTarget {
    *  `liveState: {key}` for state mode: no cursor, no ladder — the target receives each of the
    *  key's change payloads `{key, from, to, patch}` as it commits; the CLIENT chains revisions
    *  (seed through the producer's own door, re-read it on any gap). */
-  async subscribe(input: {
-    name?: string;
-    target: string | Expression | ((...args: never[]) => unknown) | object;
-    consumes?: string[];
-    onFailingEvent?: "halt" | "skip";
-    maxAttempts?: number;
-    start?: "beginning" | "now";
-    liveState?: { key: string };
-  }): Promise<{ name: string; providedAtOffset: number }> {
+  async subscribe(
+    input: DeliveryPolicy & {
+      name?: string;
+      target: string | Expression | ((...args: never[]) => unknown) | object;
+    },
+  ): Promise<{ name: string; providedAtOffset: number }> {
     let target = input.target as string | Expression;
     if (
       typeof input.target === "function" ||
@@ -337,49 +335,15 @@ export class Client extends RpcTarget {
       ["call", input.path, input.args ?? []],
     ]) as Promise<unknown[]>;
   }
-  getConnection(connectionKey: string): ClientConnection {
-    return new ClientConnection(this.#host, connectionKey);
-  }
 }
 
-/** `itx.clients.get(path).getConnection(key)` — single-target. */
-export class ClientConnection extends RpcTarget {
-  readonly #host: ItxHostStub;
-  readonly #connectionKey: string;
-  constructor(host: ItxHostStub, connectionKey: string) {
-    super();
-    this.#host = host;
-    this.#connectionKey = connectionKey;
-  }
-  invokeCapability(input: { path: string[]; args?: unknown[] }): Promise<unknown> {
-    const last = input.path.at(-1);
-    if (last === undefined) throw new Error("invokeCapability: path must be non-empty");
-    return this.#host.invoke([
-      "itx",
-      "clients",
-      ["get", this.#connectionKey],
-      ...input.path.slice(0, -1),
-      [last, ...(input.args ?? [])],
-    ]);
-  }
-  close(): Promise<unknown> {
-    return this.#host.invoke([
-      "itx",
-      "clients",
-      ["close", this.#connectionKey],
-    ]) as Promise<unknown>;
-  }
-}
-
-/** Ownership handle for one `itx.provideCapability()`. `__leaseActive()` is relay-local — it NEVER wakes the DO
- *  (a watchdog can poll it without defeating hibernation). */
+/** Ownership handle for one `itx.provideCapability()`. */
 export class CapabilityProvision extends RpcTarget {
   readonly #host: ItxHostStub;
   readonly #providedAtOffset: number;
   readonly #socketId: string;
   readonly #relay: Relay;
   readonly #relays: Set<Relay>;
-  #active = true;
   constructor(
     host: ItxHostStub,
     providedAtOffset: number,
@@ -394,13 +358,9 @@ export class CapabilityProvision extends RpcTarget {
     this.#relay = relay;
     this.#relays = relays;
   }
-  __leaseActive(): boolean {
-    return this.#active;
-  }
   /** Pop exactly this mount off the shadow stack (whatever it shadowed is restored) + drop the
    *  parked stub. */
   async revoke(): Promise<void> {
-    this.#active = false;
     this.#relays.delete(this.#relay);
     await this.#host.revokeCapability({ providedAtOffset: this.#providedAtOffset });
     await this.#host.dropStub({ socketId: this.#socketId });

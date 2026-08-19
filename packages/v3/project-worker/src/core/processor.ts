@@ -129,6 +129,7 @@ export abstract class StreamProcessor<State> {
   // Rule 1: the serial chain.
   #chain: Promise<void> = Promise.resolve();
   #progress: Progress<State> | null = null; // in-memory cache of the persisted fold
+  #pushedHead?: number; // highest scannedThroughOffset ever SHOWN to us (see processEventBatch)
   #waiters: { offset: number; resolve: () => void }[] = [];
 
   constructor(args: {
@@ -168,7 +169,7 @@ export abstract class StreamProcessor<State> {
   async liveSnapshot(): Promise<{ rev: number; state: unknown }> {
     if (typeof this.liveState !== "function")
       throw new Error(`processor "${this.contract.slug}" defines no liveState projection`);
-    await this.wake();
+    if (!this.#caughtUp()) await this.wake();
     const progress = this.#loadProgress();
     this.#liveStateRev ??= progress.reducedThroughOffset;
     return { rev: this.#liveStateRev, state: this.liveState(progress.state) };
@@ -187,6 +188,10 @@ export abstract class StreamProcessor<State> {
    *  window. Contiguous → fold it directly (the fast path — no read); anything else → gap
    *  repair from the own cursor. Fire-and-forget safe: enqueues on the serial chain. */
   processEventBatch(events: StreamEventT[], window: ScanWindow): Promise<void> {
+    // Recorded SYNCHRONOUSLY: the head this processor has been SHOWN. Read verbs skip their
+    // wake when the fold has provably reached it — the fast path that deletes one parent read
+    // RPC from every capability dispatch (and every level of alias nesting) once caught up.
+    this.#pushedHead = Math.max(this.#pushedHead ?? 0, window.scannedThroughOffset);
     return this.#enqueue(async () => {
       await this.#refoldIfNeeded();
       const progress = this.#loadProgress();
@@ -207,9 +212,17 @@ export abstract class StreamProcessor<State> {
 
   /** Fold-and-effects caught up through the log, then the current snapshot. */
   async snapshot(): Promise<ProcessorSnapshot<State>> {
-    await this.wake();
+    if (!this.#caughtUp()) await this.wake();
     const progress = this.#loadProgress();
     return { offset: progress.reducedThroughOffset, state: progress.state };
+  }
+
+  /** Provably at the shown head → the read verbs skip their catch-up read entirely. */
+  #caughtUp(): boolean {
+    return (
+      this.#pushedHead !== undefined &&
+      this.#loadProgress().reducedThroughOffset >= this.#pushedHead
+    );
   }
 
   /** THE barrier verb (read-your-writes): resolves once processed AT LEAST through `offset`. */
@@ -252,13 +265,29 @@ export abstract class StreamProcessor<State> {
   #progressKey(): string {
     return `processor:${this.contract.slug}:progress`;
   }
+  #stateKey(): string {
+    return `processor:${this.contract.slug}:state`;
+  }
 
+  /** The persisted fold is TWO keys: the tiny cursor record (written per durable window) and
+   *  the state blob (written only when the fold actually changed it) — otherwise every enabled
+   *  facet rewrote its ENTIRE state for every durable batch, consumed or not. Both writes land
+   *  in one event-loop turn, so the storage write coalescer commits them together. */
   #loadProgress(): Progress<State> {
     if (this.#progress) return this.#progress;
-    const stored = this.#storage.get<Progress<State>>(this.#progressKey());
+    const cursor = this.#storage.get<{ reducerVersion: string; reducedThroughOffset: number }>(
+      this.#progressKey(),
+    );
+    const state = this.#storage.get<State>(this.#stateKey());
     this.#progress =
-      stored && stored.reducerVersion === this.contract.version
-        ? stored
+      cursor &&
+      cursor.reducerVersion === this.contract.version &&
+      (state !== undefined || cursor.reducedThroughOffset === 0)
+        ? {
+            reducerVersion: cursor.reducerVersion,
+            reducedThroughOffset: cursor.reducedThroughOffset,
+            state: state !== undefined ? state : this.contract.initialState(),
+          }
         : {
             reducerVersion: this.contract.version,
             reducedThroughOffset: 0,
@@ -270,7 +299,8 @@ export abstract class StreamProcessor<State> {
   /** Refold from 0 through `reduce` only (contract version changed). Durable rows only — never
    *  re-runs effects, and (by design) never sees dead ephemerals. */
   async #refoldIfNeeded(): Promise<void> {
-    const stored = this.#storage.get<Progress<State>>(this.#progressKey());
+    if (this.#progress) return; // version can't change within an incarnation — probe storage once
+    const stored = this.#storage.get<{ reducerVersion: string }>(this.#progressKey());
     if (!stored || stored.reducerVersion === this.contract.version) return;
     let state = this.contract.initialState();
     let after = 0;
@@ -283,7 +313,11 @@ export abstract class StreamProcessor<State> {
       if (page.events.length < 500) break;
     }
     this.#progress = { reducerVersion: this.contract.version, reducedThroughOffset: after, state };
-    this.#storage.put(this.#progressKey(), this.#progress);
+    this.#storage.put(this.#progressKey(), {
+      reducerVersion: this.contract.version,
+      reducedThroughOffset: after,
+    });
+    this.#storage.put(this.#stateKey(), state);
   }
 
   /** CURSOR-DRIVEN gap repair: read contiguously from the persisted cursor out of the log —
@@ -395,7 +429,13 @@ export abstract class StreamProcessor<State> {
       reducedThroughOffset: window.scannedThroughOffset,
       state,
     };
-    if (sawDurable) this.#storage.put(this.#progressKey(), next);
+    if (sawDurable) {
+      this.#storage.put(this.#progressKey(), {
+        reducerVersion: next.reducerVersion,
+        reducedThroughOffset: next.reducedThroughOffset,
+      });
+      if (state !== progress.state) this.#storage.put(this.#stateKey(), state);
+    }
     this.#progress = next;
     for (const w of this.#waiters.splice(0)) {
       if (next.reducedThroughOffset >= w.offset) w.resolve();

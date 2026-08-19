@@ -1280,3 +1280,41 @@ increment 51. Highlights, by blast radius:
 
 104 unit tests; full eight-suite live board ALL PASS on live-7
 (livestate/ephemeral/push/crisp1/userfacet/restore/facet1/edge).
+
+## Increment 51 (live-8): the simplification wave — one spelling per idea, hot paths paid once
+
+The re-derivation workflow's verdict (three designers + a cartographer, judged): the
+architecture is already at its fixed point on most axes — the dead weight was RE-SPELLINGS.
+This increment gives every duplicated idea exactly one home and deletes the grep-verified dead
+surface; net −187 lines with behavior pinned by the ten-suite live board.
+
+- **`invokePath` (core/expression.ts)** — the one dotted-walk applier (stepGet + Reflect.apply,
+  receiver carried). The parent's `facetInvoke` and the stateful runner's `invokeCapability`
+  hand walks collapse onto it; the DataCloneError learning banner now lives ONCE, on the
+  helper. (The Invoker's walk stays hand-rolled ON PURPOSE — its non-awaited property reads
+  are capnweb promise pipelining over the retained provider.)
+- **`versionedFacet` (core/agent-runtime.ts)** — the loader+version-marker dance (abort on
+  source change, keep storage) existed twice, byte-similar; now once, beside the cacheKey
+  dollar lever it belongs with.
+- **`DeliveryPolicy` (core/events.ts)** — the subscription delivery policy was spelled SIX
+  times (two subscribe inputs, provide's inline type, the zod schema, PushRow, the projection
+  cast). One exported type; subscribe now destructure-passes it through whole; the
+  add-a-field-miss-a-spelling drift class is unspellable. The duplicate target-root guard in
+  SDO.subscribe died (ictx.provide is the one enforcement point).
+- **Dead surface deleted** (grep-verified zero callers): `parseEvent`/`parseEventInput` off the
+  contract helper, `ClientConnection` + `Client.getConnection`, `__leaseActive`/`#active`.
+- **Hot paths pay once**: facet reads skip their parent catch-up RPC when provably at the
+  pushed head (`#pushedHead` — one read deleted from EVERY capability dispatch and each alias
+  hop, the system's hottest path); `#refoldIfNeeded` probes storage once per incarnation;
+  `#armAlarmNoLaterThan` memoizes the armed target (the awaited getAlarm read per append is
+  gone); the fold persist splits cursor from state blob (a non-consuming facet wrote its
+  ENTIRE state per durable batch — now a tiny cursor record, state only when changed);
+  `#maxAssigned` is kv-only (the SQL crosscheck was backcompat; transactionSync made kv+sql
+  atomic); the events table drops AUTOINCREMENT (offsets are always explicit — the
+  sqlite_sequence row write per durable append bought nothing).
+- **Repo files now WIN over the demo HELLO_FILES** on a path clash (a project writing
+  /chatroom.js to its own repo could never read it back); the kv/repo views share one
+  `prefixedKv`; `/state` stops inventing cursor fields for live-state rows.
+
+104 unit tests; ten-suite live board ALL PASS on live-8 (facetaddr's expected error text
+updated — the unified walk says "is not a method"; the refusal semantics are unchanged).
