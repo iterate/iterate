@@ -33,7 +33,6 @@ function(iterate_kit_add_core_test NAME SOURCE)
 endfunction()
 
 iterate_kit_add_core_test(iterate-kit-atomic-test atomic_test.c)
-iterate_kit_add_core_test(iterate-kit-barge-in-test barge_in_test.c)
 iterate_kit_add_core_test(iterate-kit-configuration-test configuration_test.c)
 iterate_kit_add_core_test(
   iterate-kit-conversation-launch-test conversation_launch_test.c)
@@ -202,18 +201,6 @@ if(APPLE)
     add_test(NAME ${NAME} COMMAND ${NAME})
   endfunction()
 
-  iterate_kit_add_cli_test(
-    iterate-kit-cli-delivery-fault-test
-    ../targets/host_cli/cli_delivery_fault.c
-    ../targets/host_cli/cli_fault_schedule.c
-    cli_delivery_fault_test.c)
-  iterate_kit_add_cli_test(
-    iterate-kit-cli-device-profile-test
-    ../targets/host_cli/cli_device_profile.c
-    cli_device_profile_test.c)
-  target_include_directories(
-    iterate-kit-cli-device-profile-test
-    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../platforms/darwin/include")
   add_executable(
     iterate-kit-darwin-audio-codec-test
     darwin_audio_codec_test.c)
@@ -257,10 +244,6 @@ if(APPLE)
     NAME iterate-kit-cli-device-controls-test
     COMMAND iterate-kit-cli-device-controls-test)
   iterate_kit_add_cli_test(
-    iterate-kit-cli-fault-schedule-test
-    ../targets/host_cli/cli_fault_schedule.c
-    cli_fault_schedule_test.c)
-  iterate_kit_add_cli_test(
     iterate-kit-cli-keyboard-test
     ../targets/host_cli/cli_keyboard.c
     cli_keyboard_test.c)
@@ -289,11 +272,6 @@ if(APPLE)
     iterate-kit-cli-speaker-test
     ../targets/host_cli/cli_speaker.c
     cli_speaker_test.c)
-  iterate_kit_add_cli_test(
-    iterate-kit-cli-virtual-clock-test
-    ../targets/host_cli/cli_fault_schedule.c
-    ../targets/host_cli/cli_virtual_clock.c
-    cli_virtual_clock_test.c)
   iterate_kit_add_cli_test(
     iterate-kit-cli-wav-test
     ../targets/host_cli/cli_wav.c

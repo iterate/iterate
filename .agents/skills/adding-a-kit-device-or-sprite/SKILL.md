@@ -26,7 +26,6 @@ It measures the duplication these instructions try not to add to.
 | Whether the device needs attention  | `iterate_kit_conversation_needs_attention` | nothing                             |
 | The word for the current state      | `iterate_kit_conversation_status_word`     | nothing                             |
 | When the face sleeps                | `iterate_kit_face_awake`                   | nothing                             |
-| Whether a barge-in is real          | `iterate_kit_barge_in_*`                   | feed it the mic peak                |
 | Playout identity / interrupt policy | `iterate_kit_playout_*`                    | nothing                             |
 | Wire framing, mu-law, base64        | `voicelab_stream.c`                        | nothing                             |
 
@@ -88,7 +87,7 @@ and all learned the hard way:
   multiplies the echo residual too. ×16 against −15 dB of cancellation hands
   the provider an echo _louder_ than the microphone heard.
 - **Do not send your own echo.** While the speaker is active, the uplink
-  carries silence unless `iterate_kit_barge_in_person_present` says somebody is
+  carries silence unless the loop's own barge machinery says somebody is
   actually talking. Otherwise the provider's VAD hears the device, decides it
   was interrupted, and cancels the answer it is generating.
 - **"Playing" must span the pauses inside an answer.** "One. Two. Three." is

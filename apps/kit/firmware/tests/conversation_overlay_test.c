@@ -39,33 +39,11 @@ static void every_light_has_a_socket(void) {
   }
 }
 
-/* A working device must not flicker, and a broken one must not sit still. */
-static void only_attention_states_breathe(void) {
-  struct iterate_kit_conversation_visual_state state = ready_state();
-  uint8_t lowest = 255U;
-  uint8_t highest = 0U;
-  assert(iterate_kit_conversation_attention_scale(&state, 0U) == 255U);
-  assert(iterate_kit_conversation_attention_scale(&state, 700U) == 255U);
-
-  state.network = ITERATE_KIT_NETWORK_CONNECTING;
-  for (uint32_t now_ms = 0U; now_ms < 4200U; now_ms += 17U) {
-    const uint8_t scale =
-        iterate_kit_conversation_attention_scale(&state, now_ms);
-    if (scale < lowest) lowest = scale;
-    if (scale > highest) highest = scale;
-    /* Never black: a ring that goes dark reads as a dead device. */
-    assert(scale >= 70U);
-  }
-  assert(highest > 240U);
-  assert(lowest < 100U);
-}
-
 /* NULL is a state too, and it is the worst one: say something. */
 static void an_absent_state_still_says_something(void) {
   struct iterate_kit_rgb8 pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT];
   bool lit = false;
   assert(iterate_kit_conversation_needs_attention(NULL));
-  assert(iterate_kit_conversation_status_word(NULL) != NULL);
   iterate_kit_conversation_lights_for_screen(NULL, 0U, pixels);
   for (uint32_t index = 0U;
        index < (uint32_t)ITERATE_KIT_CONVERSATION_LIGHT_COUNT;
@@ -75,22 +53,37 @@ static void an_absent_state_still_says_something(void) {
   assert(lit);
 }
 
-static void names_every_state_a_person_can_reach(void) {
-  struct iterate_kit_conversation_visual_state state = ready_state();
-  assert(strcmp(iterate_kit_conversation_status_word(&state), "ready") == 0);
-  state.conversation_active = true;
-  assert(strcmp(iterate_kit_conversation_status_word(&state), "in call") == 0);
-  state.microphone_listening = true;
-  assert(
-      strcmp(iterate_kit_conversation_status_word(&state), "listening") == 0);
-  state.speaker_peak = 4000U;
-  assert(strcmp(iterate_kit_conversation_status_word(&state), "speaking") == 0);
-  state.network = ITERATE_KIT_NETWORK_CONNECTING;
-  assert(
-      strcmp(iterate_kit_conversation_status_word(&state), "connecting") == 0);
-  state.media_failed = true;
-  assert(
-      strcmp(iterate_kit_conversation_status_word(&state), "audio fault") == 0);
+/*
+ * The equality gate is StackChan's repaint guard — the function whose misuse
+ * once caused the 1 Hz face blackout. It must move on every state a person
+ * can tell apart, and hold still within one.
+ */
+static void the_repaint_gate_separates_every_reachable_state(void) {
+  struct iterate_kit_conversation_visual_state a = ready_state();
+  struct iterate_kit_conversation_visual_state b = ready_state();
+  assert(iterate_kit_conversation_overlay_equal(&a, &b));
+
+  b.conversation_active = true;
+  assert(!iterate_kit_conversation_overlay_equal(&a, &b));
+  a.conversation_active = true;
+  assert(iterate_kit_conversation_overlay_equal(&a, &b));
+
+  b.microphone_listening = true;
+  assert(!iterate_kit_conversation_overlay_equal(&a, &b));
+  a.microphone_listening = true;
+
+  b.speaker_peak = 4000U;
+  assert(!iterate_kit_conversation_overlay_equal(&a, &b));
+  a.speaker_peak = 2000U; /* same light band (1024..4095): no repaint */
+  assert(iterate_kit_conversation_overlay_equal(&a, &b));
+
+  b.network = ITERATE_KIT_NETWORK_CONNECTING;
+  assert(!iterate_kit_conversation_overlay_equal(&a, &b));
+  a.network = ITERATE_KIT_NETWORK_CONNECTING;
+  assert(iterate_kit_conversation_overlay_equal(&a, &b));
+
+  b.media_failed = true;
+  assert(!iterate_kit_conversation_overlay_equal(&a, &b));
 }
 
 /*
@@ -160,9 +153,8 @@ static void connecting_walks_and_ready_holds_still(void) {
 int main(void) {
   connecting_walks_and_ready_holds_still();
   every_light_has_a_socket();
-  only_attention_states_breathe();
   an_absent_state_still_says_something();
-  names_every_state_a_person_can_reach();
+  the_repaint_gate_separates_every_reachable_state();
   the_face_sleeps_when_the_call_ends();
   a_momentary_drop_does_not_close_the_eyes();
   return 0;

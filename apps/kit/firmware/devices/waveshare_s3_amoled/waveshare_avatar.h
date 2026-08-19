@@ -166,31 +166,6 @@ void waveshare_avatar_set_call_active(bool active);
 bool waveshare_avatar_render(
     uint16_t *rgb565, size_t pixel_capacity, bool awake);
 
-/** 0-255 speaker loudness of the audio the DAC is playing now. */
-uint16_t waveshare_avatar_speaker_level(void);
-
-/**
- * Ask for a different face, from any task.
- *
- * A LATEST-ONLY REQUEST, not a selection. The renderer carries mouth-debounce
- * history and is owned by the LVGL task; changing the atlas underneath it from
- * the control-plane task would be a second writer on a structure built for one.
- * So this records what was asked for and the next render applies it — within one
- * visual tick, with several requests in that tick collapsing to the newest.
- *
- * Returns false for a slug no compiled face answers to, which is the only
- * failure: the caller learns immediately that the name was wrong rather than
- * being told "accepted" and seeing nothing change.
- */
-bool waveshare_avatar_request_slug(const char *slug);
-
-/** Move to the next compiled face, wrapping. Same latest-only handoff. */
-void waveshare_avatar_request_next(void);
-
-/** How many faces are compiled in, and the name of each, for listing them. */
-size_t waveshare_avatar_count(void);
-const char *waveshare_avatar_slug_at(size_t index);
-
 /** Which face is showing, for the menu and for `health()`. */
 const char *waveshare_avatar_slug(void);
 

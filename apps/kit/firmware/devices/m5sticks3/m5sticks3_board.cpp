@@ -450,14 +450,6 @@ void m5sticks3_ui_set_stream_ready(bool ready) {
   ui.dirty = true;
 }
 
-void m5sticks3_ui_request_call(bool wanted) {
-  ui.call_requested = wanted;
-}
-
-bool m5sticks3_ui_call_requested(void) {
-  return ui.call_requested;
-}
-
 uint32_t m5sticks3_board_face_frames(void) { return face.rendered; }
 uint32_t m5sticks3_board_face_failures(void) { return face.render_failures; }
 

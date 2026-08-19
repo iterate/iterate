@@ -59,14 +59,6 @@ void m5sticks3_ui_set_stream_ready(bool ready);
  */
 void m5sticks3_ui_set_fault(void);
 
-/**
- * The user's call INTENT, owned locally exactly like the Waveshare port:
- * the bridge ending a call clears the belief, never the intent, so transient
- * server-side call loss reconnects instead of waiting for another press.
- */
-void m5sticks3_ui_request_call(bool wanted);
-bool m5sticks3_ui_call_requested(void);
-
 /** Throttled repaint of whatever changed; call from the app loop only. */
 /**
  * Frames of the avatar actually pushed to the panel, and renders refused.

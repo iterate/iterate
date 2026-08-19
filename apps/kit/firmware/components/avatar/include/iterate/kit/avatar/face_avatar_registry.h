@@ -38,18 +38,12 @@ bool face_avatar_registry_select_slug(
     face_avatar_registry_t *registry,
     const char *slug,
     size_t slug_length);
-bool face_avatar_registry_next(face_avatar_registry_t *registry);
-
 size_t face_avatar_registry_count(void);
 size_t face_avatar_registry_current_index(
     const face_avatar_registry_t *registry);
 const char *face_avatar_registry_current_slug(
     const face_avatar_registry_t *registry);
-const char *face_avatar_registry_current_name(
-    const face_avatar_registry_t *registry);
 const char *face_avatar_registry_slug_at(size_t index);
-const char *face_avatar_registry_name_at(size_t index);
-
 bool face_avatar_registry_render(
     face_avatar_registry_t *registry,
     const face_render_key_t *render_key,

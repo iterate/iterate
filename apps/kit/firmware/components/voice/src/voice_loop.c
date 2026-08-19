@@ -4146,10 +4146,6 @@ void iterate_kit_voice_loop_run(
   }
 }
 
-const char *iterate_kit_voice_loop_stream_path(void) {
-  return stream_path;
-}
-
 void iterate_kit_voice_loop_set_stream_path(const char *path) {
   if (path == NULL || path[0] == '\0') return;
   if (strcmp(stream_path, path) == 0) return;

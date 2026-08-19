@@ -460,17 +460,6 @@ void iterate_kit_voice_loop_capture_step(void);
 void iterate_kit_voice_loop_playback_step(void);
 
 /**
- * The stream this device mounts, as a runtime value.
- *
- * It was a compile-time constant, which is exactly why "start a fresh
- * conversation" could not be expressed: one device, one stream, forever, and
- * every reboot resumed a context that might be days old. The path IS the
- * conversation's identity, so choosing it is choosing whether to continue or
- * begin.
- */
-const char *iterate_kit_voice_loop_stream_path(void);
-
-/**
  * Re-point the device at a different conversation stream.
  *
  * The other half of the getter above: the path IS the conversation's

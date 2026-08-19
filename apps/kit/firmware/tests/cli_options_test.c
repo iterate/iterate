@@ -124,27 +124,6 @@ static void a_person_and_a_driver_cannot_both_take_the_turns(void)
 }
 
 /*
- * A live microphone and a recorded one are both "the microphone". Preferring
- * one would make the other flag a no-op that looks like it worked, and the
- * operator would be listening for a recording that was never played.
- */
-static void the_microphone_is_the_room_or_a_file_and_not_both(void)
-{
-  struct cli_options options;
-  char problem[128];
-  char *both[] = {
-    (char *)"cli", (char *)"--live-mic", (char *)"--mic-wav",
-    (char *)"/tmp/x.wav"};
-  char *live_only[] = {(char *)"cli", (char *)"--live-mic"};
-
-  (void)unsetenv("ITERATE_KIT_MIC_WAV");
-  assert(parse(&options, problem, both, 4) == CLI_OPTIONS_ERR_INCOMPATIBLE);
-  assert(parse(&options, problem, live_only, 2) == CLI_OPTIONS_OK);
-  assert(options.live_mic);
-  assert(options.mic_wav == NULL);
-}
-
-/*
  * An interactive session's limit is its own field. Folded into --converse it
  * would start the unattended driver, which needs utterances nobody supplied,
  * and the session would refuse to start for a reason that made no sense.
@@ -165,20 +144,6 @@ static void an_interactive_limit_is_not_the_conversation_driver(void)
   char *bare[] = {(char *)"cli"};
   assert(parse(&options, problem, bare, 1) == CLI_OPTIONS_OK);
   assert(options.minutes == 0.0);
-}
-
-/* The converter model is off unless a rate was asked for. */
-static void the_speaker_is_a_file_until_somebody_paces_it(void)
-{
-  struct cli_options options;
-  char problem[128];
-  char *bare[] = {(char *)"cli"};
-  char *paced[] = {(char *)"cli", (char *)"--speaker-pace", (char *)"50"};
-
-  assert(parse(&options, problem, bare, 1) == CLI_OPTIONS_OK);
-  assert(options.speaker_pace_fps == 0U);
-  assert(parse(&options, problem, paced, 3) == CLI_OPTIONS_OK);
-  assert(options.speaker_pace_fps == 50U);
 }
 
 /* Numbers are checked, so a typo cannot become a silent zero-minute run. */
@@ -253,9 +218,7 @@ int main(void)
   the_environment_fills_only_what_the_flags_left();
   conversing_without_utterances_is_refused();
   a_person_and_a_driver_cannot_both_take_the_turns();
-  the_microphone_is_the_room_or_a_file_and_not_both();
   an_interactive_limit_is_not_the_conversation_driver();
-  the_speaker_is_a_file_until_somebody_paces_it();
   numbers_must_be_numbers();
   certificate_checking_is_on_unless_asked_otherwise();
   help_is_reported_rather_than_taken();

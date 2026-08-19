@@ -50,15 +50,6 @@ enum {
   ITERATE_KIT_OVERLAY_PULSE_PERIOD_MS = 1400,
 };
 
-/**
- * Names the state in the fewest words a person still understands.
- *
- * Lower case because two of the three screens render it beside prose; the
- * pixel renderer here upper-cases it, since its 5x5 alphabet has no
- * descenders. Never returns NULL: every state has something to say.
- */
-const char *iterate_kit_conversation_status_word(
-    const struct iterate_kit_conversation_visual_state *state);
 
 /**
  * Reports whether this state is one the person has to be told about.
@@ -70,17 +61,6 @@ const char *iterate_kit_conversation_status_word(
 bool iterate_kit_conversation_needs_attention(
     const struct iterate_kit_conversation_visual_state *state);
 
-/**
- * The breathing brightness, 0-255, for a surface that needs attention.
- *
- * A steady 255 whenever the device is ready, so a working device never
- * flickers. Otherwise a triangular breath, floored well above black: an LED
- * that reaches zero reads as a device that has died rather than one that is
- * trying. Adapters multiply their colours by this.
- */
-uint8_t iterate_kit_conversation_attention_scale(
-    const struct iterate_kit_conversation_visual_state *state,
-    uint32_t now_ms);
 
 /**
  * Reports whether two snapshots produce the same overlay.

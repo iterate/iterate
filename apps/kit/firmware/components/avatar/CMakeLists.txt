@@ -1,3 +1,10 @@
+if(NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/src/fspp_dot_matrix_oracle_cores3_fine_atlas.c")
+  message(FATAL_ERROR
+    "src/fspp_*_atlas.c and src/face_avatar_catalog_generated.inc are "
+    "generated, not committed - run "
+    "python3 apps/kit/firmware/tools/generate-atlases.py")
+endif()
+
 set(ITERATE_KIT_AVATAR_SOURCES
   src/face_animator.c
   src/face_avatar_registry.c

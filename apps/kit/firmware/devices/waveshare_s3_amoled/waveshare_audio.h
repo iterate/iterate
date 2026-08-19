@@ -138,15 +138,6 @@ enum iterate_kit_status waveshare_audio_set_volume(
     uint8_t percent, uint8_t *applied);
 uint8_t waveshare_audio_volume(void);
 
-/** The shared I2C0 bus (codec, PMIC, touch). NULL before init. */
-i2c_master_bus_handle_t waveshare_audio_i2c_bus(void);
-
-/** Log the ES8311's ADC-path registers (bring-up diagnostics). */
-void waveshare_audio_dump_registers(void);
-
-/** Log whether anything drives the I2S DIN pad (bring-up diagnostics). */
-void waveshare_audio_probe_din(void);
-
 #ifdef __cplusplus
 }
 #endif

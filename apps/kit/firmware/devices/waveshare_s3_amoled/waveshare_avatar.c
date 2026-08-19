@@ -478,43 +478,7 @@ bool waveshare_avatar_render(
   return true;
 }
 
-uint16_t waveshare_avatar_speaker_level(void) {
-  return face.pose.level;
-}
-
 /* --- faces ----------------------------------------------------------------- */
-
-bool waveshare_avatar_request_slug(const char *slug) {
-  size_t index;
-
-  if (!face.ready || slug == NULL) return false;
-  for (index = 0U; index < face_avatar_registry_count(); ++index) {
-    const char *const candidate = face_avatar_registry_slug_at(index);
-    if (candidate != NULL && strcmp(candidate, slug) == 0) {
-      face.requested_index = index;
-      face.request_epoch++;
-      return true;
-    }
-  }
-  return false;
-}
-
-void waveshare_avatar_request_next(void) {
-  if (!face.ready) return;
-  face.requested_index =
-      (face_avatar_registry_current_index(&face.registry) + 1U) %
-      face_avatar_registry_count();
-  face.request_epoch++;
-}
-
-size_t waveshare_avatar_count(void) {
-  return face_avatar_registry_count();
-}
-
-const char *waveshare_avatar_slug_at(size_t index) {
-  const char *const slug = face_avatar_registry_slug_at(index);
-  return slug == NULL ? "" : slug;
-}
 
 const char *waveshare_avatar_slug(void) {
   return face.ready ? face_avatar_registry_current_slug(&face.registry) : "";

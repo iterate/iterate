@@ -30,14 +30,6 @@ enum {
    * not one second. */
   CLI_MAIN_SINK_SYNC_INTERVAL_MS = 5000,
   CLI_MAIN_RESTART_REPLY_MS = 400,
-  CLI_MAIN_MS_PER_SECOND = 1000,
-  /*
-   * How long a schedule assumes a session lasts when nobody said. Episodes
-   * are scattered across this span, so a number far below the real run leaves
-   * the tail of it fault-free and a number far above it makes faults rare.
-   * An hour matches the longest run anybody has asked this rig for.
-   */
-  CLI_MAIN_DEFAULT_SESSION_MINUTES = 60,
   CLI_MAIN_NS_PER_MS = 1000000,
   CLI_MAIN_US_PER_SECOND = 1000000,
   CLI_MAIN_NS_PER_US = 1000,
@@ -182,7 +174,7 @@ static void cli_main_capture_recorded_frame(struct cli_runtime *runtime);
 static void cli_main_accept_capture_frame(
     struct cli_runtime *runtime, const int16_t *capture);
 
-/* Configures the modelled converter from --speaker-pace. */
+/* Configures the modelled converter; the CLI's speaker is unpaced. */
 static bool cli_main_init_converter(struct cli_runtime *runtime);
 
 /* Arms the session deadline and, for --push-to-talk, takes the terminal. */
@@ -283,19 +275,6 @@ static void cli_main_recycle_if_ready(
 static void cli_main_reexec_if_ready(
     struct cli_runtime *runtime, uint64_t now_ms);
 
-/* Points the process's one clock at the schedule. */
-static bool cli_main_arm_clock(struct cli_runtime *runtime);
-
-/* Draws this session's adversity and arms the clock with it. */
-static bool cli_main_init_harness(struct cli_runtime *runtime);
-
-/* Adopts a named board's bounded sizes. */
-static bool cli_main_init_profile(struct cli_runtime *runtime);
-
-/* Stops scheduling the loop for a scheduled stall. */
-static void cli_main_stall_if_scheduled(
-    struct cli_runtime *runtime, uint64_t now_ms);
-
 /* Sleeps one bounded cooperative loop interval. */
 static void cli_main_sleep(void);
 
@@ -303,50 +282,36 @@ static void cli_main_sleep(void);
 static void cli_main_run_loop(struct cli_runtime *runtime);
 
 /*
- * The process's one clock.
- *
- * A file-scope object rather than a runtime field because the existing seam —
- * `cli_runtime_now_ms(void *context)` — is called with a NULL context from
- * nine places, and threading a clock through every one of them would be a
- * large diff whose only effect is to say what this comment says: there is
- * exactly one clock, and every stamp in the process comes from it.
- *
- * Anchored to the host and undistorted until something configures otherwise,
- * so a rig with no schedule behaves exactly as it did before this existed.
- *
- * INITIALISED HERE, NOT IN main(). Logging takes a stamp while the command
- * line is still being parsed, so this must be usable before any setup code
- * runs; a zero-filled clock would have a rate of zero and trip an assertion
- * in the first line anybody logged. Anchoring at host zero makes session time
- * equal the host's own monotonic reading, which is byte-for-byte what this
- * function returned before the seam existed.
+ * The process's one clock: the host's monotonic reading, taken HERE and
+ * nowhere else, so every stamp in the process demonstrably comes from the
+ * same place. The `cli_runtime_now_ms(void *context)` seam survives because
+ * it is called with a NULL context from nine places; the deterministic tests
+ * do not go through it — they hand their subjects time directly, the way
+ * tests/cli_paced_sink_test.c drives cli_paced_sink_advance.
  */
-static struct cli_virtual_clock cli_main_clock = {
-    .mode = CLI_VIRTUAL_CLOCK_ANCHORED,
-    .rate = CLI_VIRTUAL_CLOCK_RATE_UNIT,
-    .skew_armed = true,
-};
-
-struct cli_virtual_clock *cli_runtime_clock(void)
+static uint64_t host_monotonic_us(void)
 {
-  return &cli_main_clock;
+  struct timespec now;
+  if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0U;
+  return (uint64_t)now.tv_sec * CLI_MAIN_US_PER_SECOND +
+      (uint64_t)now.tv_nsec / CLI_MAIN_NS_PER_US;
 }
 
 uint64_t cli_runtime_now_ms(void *context)
 {
   (void)context;
-  return cli_virtual_clock_now_ms(&cli_main_clock);
+  return host_monotonic_us() / 1000U;
 }
 
 int64_t cli_runtime_transport_now_us(void *context)
 {
   (void)context;
-  return (int64_t)cli_virtual_clock_now_us(&cli_main_clock);
+  return (int64_t)host_monotonic_us();
 }
 
 uint64_t cli_runtime_now_us(void)
 {
-  return cli_virtual_clock_now_us(&cli_main_clock);
+  return host_monotonic_us();
 }
 
 void cli_runtime_log(const char *level, const char *format, ...)
@@ -413,7 +378,7 @@ int main(int argc, char **argv)
   cli_screen_enable(
       &runtime->screen,
       (runtime->options.push_to_talk || runtime->options.open_mic) &&
-          !runtime->options.sealed && isatty(fileno(stderr)) != 0);
+          isatty(fileno(stderr)) != 0);
   cli_main_run_loop(runtime);
   cli_screen_finish(&runtime->screen);
   const bool audio_drained = cli_main_drain_audio(runtime);
@@ -599,11 +564,8 @@ static bool cli_main_init_transport(struct cli_runtime *runtime)
     .control_inbox = &runtime->control_inbox,
     .control_outbox = &runtime->control_outbox,
     .DANGEROUS_disable_certificate_verification = runtime->options.insecure,
-    /*
-     * The same clock everything else reads. Without this the loop's stamps
-     * were virtual while the transport's reconnect and handshake deadlines
-     * ran on the wall clock, so a sealed run was only mostly sealed.
-     */
+    /* The same clock everything else reads, so the transport's reconnect
+     * and handshake deadlines can never disagree with the loop's stamps. */
     .now_us = cli_runtime_transport_now_us,
     .now_us_context = NULL,
   };
@@ -628,11 +590,6 @@ static bool cli_main_init_audio(struct cli_runtime *runtime)
         "error", "cannot open speaker WAV: %s", runtime->options.speaker_wav);
     return false;
   }
-  /*
-   * Order matters. The profile decides the converter's rate and lead, and the
-   * harness decides what time itself will do, so both must be settled before
-   * anything samples a clock or offers a frame.
-   */
   if (runtime->options.mic_record != NULL &&
       cli_wav_sink_open(&runtime->mic_sink, runtime->options.mic_record) !=
           CLI_WAV_OK) {
@@ -640,8 +597,6 @@ static bool cli_main_init_audio(struct cli_runtime *runtime)
         "error", "cannot open microphone WAV: %s", runtime->options.mic_record);
     return false;
   }
-  if (!cli_main_init_profile(runtime)) return false;
-  if (!cli_main_init_harness(runtime)) return false;
   if (!cli_main_init_converter(runtime)) return false;
   /*
    * The pretend speaker is the SAME converter, pulled by this loop instead of
@@ -703,202 +658,17 @@ static struct iterate_kit_darwin_audio_codec_metrics cli_main_audio_metrics(
   return metrics;
 }
 
-/** Turn the command line's recipe knobs into a schedule recipe. */
-static struct cli_fault_recipe cli_main_recipe(
-    const struct cli_options *options, uint64_t session_ms)
-{
-  struct cli_fault_recipe recipe;
-  assert(options != NULL);
-  memset(&recipe, 0, sizeof(recipe));
-  recipe.session_ms = session_ms;
-  recipe.cpu_stalls_per_minute = options->cpu_stalls_per_minute;
-  recipe.cpu_stall_max_ms = options->cpu_stall_max_ms;
-  recipe.clock_skews_per_minute = options->clock_skews_per_minute;
-  recipe.clock_skew_max_ms = options->clock_skew_max_ms;
-  recipe.clock_jitter_ms = options->clock_jitter_ms;
-  recipe.wire_stalls_per_minute = options->wire_stalls_per_minute;
-  recipe.wire_stall_max_ms = options->wire_stall_max_ms;
-  recipe.wire_resets_per_session = options->wire_resets;
-  recipe.wire_throttle_fps = options->wire_throttle_fps;
-  recipe.frame_loss_one_in = options->frame_loss_one_in;
-  recipe.frame_duplicate_one_in = options->frame_duplicate_one_in;
-  recipe.frame_reorder_one_in = options->frame_reorder_one_in;
-  recipe.mic_short_one_in = options->mic_short_one_in;
-  recipe.mic_clip = options->mic_clip;
-  return recipe;
-}
-
-/** Read a schedule back from a file, so a failure can be replayed exactly. */
-static bool cli_main_load_schedule(
-    struct cli_fault_schedule *schedule, const char *path)
-{
-  enum cli_fault_schedule_status status;
-  FILE *file = fopen(path, "r");
-  assert(schedule != NULL && path != NULL);
-  if (file == NULL) {
-    cli_runtime_log("error", "cannot read schedule %s", path);
-    return false;
-  }
-  status = cli_fault_schedule_read_json(schedule, file);
-  (void)fclose(file);
-  if (status == CLI_FAULT_SCHEDULE_OK) return true;
-  cli_runtime_log(
-      "error", "schedule %s is %s", path,
-      cli_fault_schedule_status_name(status));
-  return false;
-}
-
-/** Write the schedule actually used, so it can be attached to a bug. */
-static void cli_main_save_schedule(
-    const struct cli_fault_schedule *schedule, const char *path)
-{
-  FILE *file;
-  assert(schedule != NULL && path != NULL);
-  file = fopen(path, "w");
-  if (file == NULL) {
-    cli_runtime_log("warn", "cannot write schedule %s", path);
-    return;
-  }
-  (void)cli_fault_schedule_write_json(schedule, file);
-  (void)fclose(file);
-}
-
-/**
- * Draw this session's adversity, then arm the clock with it.
- *
- * The seed is logged FIRST, before anything can fail, because a truncated log
- * from an overnight run must still carry the one number that reproduces it.
- * It is logged last as well, by the report, since that is where anybody looks.
- */
-static bool cli_main_init_harness(struct cli_runtime *runtime)
-{
-  const struct cli_options *options = &runtime->options;
-  uint64_t session_ms;
-  assert(runtime != NULL);
-
-  cli_fault_schedule_clear(&runtime->schedule);
-  session_ms = (uint64_t)((options->converse_minutes > 0.0
-                               ? options->converse_minutes
-                               : CLI_MAIN_DEFAULT_SESSION_MINUTES) *
-                          60000.0);
-  if (options->schedule_in != NULL) {
-    if (!cli_main_load_schedule(&runtime->schedule, options->schedule_in)) {
-      return false;
-    }
-  } else if (options->schedule_seed != 0U) {
-    const struct cli_fault_recipe recipe =
-        cli_main_recipe(options, session_ms);
-    const enum cli_fault_schedule_status status = cli_fault_schedule_generate(
-        &runtime->schedule, options->schedule_seed, &recipe);
-    if (status != CLI_FAULT_SCHEDULE_OK) {
-      cli_runtime_log(
-          "error", "cannot draw a schedule: %s",
-          cli_fault_schedule_status_name(status));
-      return false;
-    }
-  }
-  if (options->schedule_out != NULL) {
-    cli_main_save_schedule(&runtime->schedule, options->schedule_out);
-  }
-  if (!runtime->schedule.empty) {
-    cli_runtime_log(
-        "info", "schedule seed=%" PRIu64 " episodes=%zu sessionMs=%" PRIu64,
-        runtime->schedule.seed, runtime->schedule.episode_count,
-        runtime->schedule.session_ms);
-  }
-  runtime->stall_armed = true;
-  cli_delivery_fault_configure(
-      &runtime->delivery_fault,
-      runtime->schedule.empty ? NULL : &runtime->schedule);
-  return cli_main_arm_clock(runtime);
-}
-
-/** Point the process's one clock at the schedule, sealed or anchored. */
-static bool cli_main_arm_clock(struct cli_runtime *runtime)
-{
-  struct cli_virtual_clock *clock = cli_runtime_clock();
-  const struct cli_fault_schedule *schedule =
-      runtime->schedule.empty ? NULL : &runtime->schedule;
-  enum cli_virtual_clock_status status;
-  assert(runtime != NULL);
-
-  if (runtime->options.sealed) {
-    cli_runtime_log(
-        "info", "sealed: no host clock is read, so this seed replays exactly");
-    return cli_virtual_clock_seal(clock, schedule) == CLI_VIRTUAL_CLOCK_OK;
-  }
-  status = cli_virtual_clock_anchor(
-      clock, cli_virtual_clock_now_ms(clock), runtime->options.clock_rate,
-      schedule);
-  if (status == CLI_VIRTUAL_CLOCK_OK) return true;
-  cli_runtime_log(
-      "error", "--clock-rate %u is %s", runtime->options.clock_rate,
-      cli_virtual_clock_status_name(status));
-  return false;
-}
-
-/**
- * Adopt a board's bounded sizes, so "it works on the CLI" stops meaning "it
- * works at the host's sizes".
- */
-static bool cli_main_init_profile(struct cli_runtime *runtime)
-{
-  const struct cli_device_profile *profile = NULL;
-  assert(runtime != NULL);
-  if (runtime->options.device == NULL) {
-    runtime->profile = cli_device_profile_default();
-    return true;
-  }
-  if (cli_device_profile_find(runtime->options.device, &profile) !=
-      CLI_DEVICE_PROFILE_OK) {
-    size_t index;
-    cli_runtime_log("error", "no device named %s. Known:",
-                    runtime->options.device);
-    for (index = 0U; index < cli_device_profile_count(); index++) {
-      cli_runtime_log("error", "  %s", cli_device_profile_at(index)->name);
-    }
-    return false;
-  }
-  if (!cli_device_profile_check(profile)) {
-    cli_runtime_log("error", "device profile %s is incoherent", profile->name);
-    return false;
-  }
-  runtime->profile = profile;
-  cli_runtime_log("info", "device %s: %s", profile->name, profile->summary);
-  return true;
-}
-
 static bool cli_main_init_converter(struct cli_runtime *runtime)
 {
   assert(runtime != NULL);
   /*
-   * A device profile names the converter's true rate and lead, so wearing a
-   * board implies pacing at that board's rate: a rig claiming to be the
-   * Waveshare while its speaker accepts everything instantly is claiming the
-   * one thing the board never does.
+   * Unpaced: the CLI's speaker accepts every frame instantly, as it always
+   * has. The paced converter model survives in cli_paced_sink because the
+   * deterministic playback-loop tests drive it directly.
    */
-  const struct cli_paced_sink_config config = {
-    .frames_per_second = runtime->options.speaker_pace_fps != 0U
-                             ? runtime->options.speaker_pace_fps
-                             : (runtime->options.device != NULL
-                                    ? runtime->profile->capture_frames_per_second
-                                    : 0U),
-    .depth_frames = runtime->options.device != NULL
-                        ? runtime->profile->output_lead_frames
-                        : 0U,
-  };
-  if (cli_paced_sink_configure(&runtime->paced_sink, &config) !=
-      CLI_PACED_SINK_OK) {
-    cli_runtime_log(
-        "error", "--speaker-pace %u is not a rate any converter runs at",
-        runtime->options.speaker_pace_fps);
-    return false;
-  }
-  if (!cli_paced_sink_paced(&runtime->paced_sink)) return true;
-  cli_runtime_log(
-      "info", "speaker paced at %u frames/second, %u frames of lead",
-      runtime->paced_sink.frames_per_second, runtime->paced_sink.depth_frames);
-  return true;
+  const struct cli_paced_sink_config config = {0};
+  return cli_paced_sink_configure(&runtime->paced_sink, &config) ==
+      CLI_PACED_SINK_OK;
 }
 
 static bool cli_main_init_keyboard(struct cli_runtime *runtime)
@@ -956,17 +726,14 @@ static bool cli_main_init_input(struct cli_runtime *runtime)
   runtime->conversation.state = CLI_CONVERSATION_DISABLED;
   /* With a live microphone the source is the room, and it never runs out. */
   if (runtime->options.live_mic) return true;
-  const enum cli_wav_status status = cli_wav_source_open(
-      &runtime->source, runtime->options.mic_wav);
-  if (status == CLI_WAV_OK) {
-    if (runtime->options.mic_wav == NULL) {
-      cli_runtime_log(
-          "warn", "no microphone WAV; using bounded voiced test synthesis");
-    }
+  /* Without one, turns speak bounded voiced test synthesis; a scripted
+   * conversation supplies its own WAVs through --utterance-dir. */
+  if (cli_wav_source_open(&runtime->source, NULL) == CLI_WAV_OK) {
+    cli_runtime_log(
+        "warn", "no live microphone; using bounded voiced test synthesis");
     return true;
   }
-  cli_runtime_log("error", "invalid microphone WAV: %s",
-                  runtime->options.mic_wav);
+  cli_runtime_log("error", "cannot open the synthetic microphone source");
   return false;
 }
 
@@ -1080,12 +847,8 @@ static void cli_main_start_voicelab(struct cli_runtime *runtime)
 }
 
 /**
- * One frame that has survived the injector, from arrival to the speaker.
- *
- * Split from the callback so the schedule's lost, repeated and reordered
- * frames take EXACTLY this path — the overflow accounting, the underrun
- * observation, the turn's own census. An injector that fed a shortcut would
- * be testing a pipeline nobody ships.
+ * One arriving frame, from the wire to the speaker: the overflow accounting,
+ * the underrun observation, the turn's own census.
  *
  * There is no per-frame decision left to make. The sender paces the answer
  * and announces a replacing one with `drop`, which arrives as SPEECH_STARTED
@@ -1122,8 +885,6 @@ static void cli_main_on_speaker(
     void *context, const uint8_t *pcm, size_t length)
 {
   struct cli_runtime *runtime = context;
-  struct cli_delivery_fault_out out;
-  size_t slot;
   /*
    * ANY LENGTH, so long as it is whole samples. The speaker below is a byte
    * ring and splices chunks end to end, so the sender is free to hand over
@@ -1159,21 +920,7 @@ static void cli_main_on_speaker(
     runtime->turn_commit_to_audio_ms = (uint32_t)(now_ms - commit_ms);
     runtime->turn_released_ms = 0U;
   }
-  /*
-   * The schedule gets to lose, repeat or delay this frame before anything
-   * downstream sees it. With no schedule this delivers exactly once, so the
-   * unharnessed path is the path that has always run.
-   */
-  if (cli_delivery_fault_offer(
-          &runtime->delivery_fault, pcm, length, &out) !=
-      CLI_DELIVERY_FAULT_OK) {
-    ++runtime->speaker_bad_frames;
-    return;
-  }
-  for (slot = 0U; slot < out.count; slot++) {
-    cli_main_accept_speaker_frame(
-        runtime, out.frames[slot].pcm, out.frames[slot].bytes);
-  }
+  cli_main_accept_speaker_frame(runtime, pcm, length);
 }
 
 /*
@@ -1237,18 +984,6 @@ static void cli_main_on_control(
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ACCEPTED) {
     cli_runtime_log("info", "call accepted");
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ENDED) {
-    struct cli_delivery_fault_out tail;
-    size_t slot;
-    /*
-     * Give back anything the injector was holding. Frames held when a call
-     * ends would otherwise be audio that vanished with no counter to say so,
-     * and the next call would start with the previous one's speech in hand.
-     */
-    cli_delivery_fault_flush(&runtime->delivery_fault, &tail);
-    for (slot = 0U; slot < tail.count; slot++) {
-      cli_main_accept_speaker_frame(
-          runtime, tail.frames[slot].pcm, tail.frames[slot].bytes);
-    }
     cli_runtime_log("warn", "call ended by the bridge");
     runtime->answer_done = true;
     ++runtime->calls_lost;
@@ -1772,12 +1507,11 @@ static void cli_main_start_talk(
    */
   if (!runtime->wants_talk || runtime->talking ||
       outbox_free < CLI_MAIN_CALL_OUTBOX_SLOTS) return;
-  /* A recording has to be rewound for each turn; a room does not. */
+  /* The synthetic source has to be rewound for each turn; a room does not. */
   if (runtime->conversation.state == CLI_CONVERSATION_DISABLED &&
       !runtime->options.live_mic) {
-    if (cli_wav_source_open(&runtime->source, runtime->options.mic_wav) !=
-        CLI_WAV_OK) {
-      cli_runtime_log("error", "cannot rewind microphone WAV for new turn");
+    if (cli_wav_source_open(&runtime->source, NULL) != CLI_WAV_OK) {
+      cli_runtime_log("error", "cannot rewind the microphone source");
       (void)cli_main_request_talk(
           runtime, false, ITERATE_KIT_DEVICE_EVENT_SOURCE_SYSTEM);
       return;
@@ -2146,7 +1880,7 @@ static void cli_main_pulse(
       "submitted=%u conceal=%u under=%u ringMs=%u convUnder=%u "
       "convRefused=%u micIn=%u micLost=%u roomDrop=%u roomStarve=%u "
       "roomPlayed=%u roomMs=%u roomErr=%" PRId32 " micErr=%" PRId32
-      " injLost=%u injDup=%u injLate=%u seqGaps=%u/%u",
+      " seqGaps=%u/%u",
       runtime->loop_count, outbox->current_slots,
       ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOTS,
       runtime->transport.control_sender.messages_sent,
@@ -2174,14 +1908,6 @@ static void cli_main_pulse(
           (ITERATE_KIT_VOICE_FRAME_BYTES / ITERATE_KIT_VOICE_FRAME_MS),
       audio.playback_platform_error,
       audio.capture_platform_error,
-      /*
-       * What the harness DID, beside what happened. Without these a run that
-       * injected nothing and a run that injected everything read the same,
-       * and a clean result from a schedule that never fired would look like
-       * proof.
-       */
-      runtime->delivery_fault.dropped, runtime->delivery_fault.duplicated,
-      runtime->delivery_fault.reordered,
       /*
        * HOLES IN THE ANSWER, which no other counter on this line can see.
        *
@@ -2393,62 +2119,6 @@ static void cli_main_enforce_talk_deadline(
       runtime, false, ITERATE_KIT_DEVICE_EVENT_SOURCE_SYSTEM);
 }
 
-/**
- * Stop scheduling the loop for as long as the schedule says.
- *
- * THE DEVICE'S TASK IS PREEMPTED; THIS ONE IS NOT. Everything the loop
- * forgives during a stall — the playback clamp, the mic deadline, the four
- * frames of I2S lead that cover a short hiccup — is unreachable on a host
- * that always gets its turn. So a stall must be INJECTED to be tested, and a
- * rig that never injects one is testing a scheduler the board does not have.
- *
- * A real sleep, because the point is that everything else keeps moving while
- * this loop does not: the socket fills, the converter drains, and the gap is
- * one a listener would have heard. Skipping time instead would stall nothing.
- */
-static void cli_main_stall_if_scheduled(
-    struct cli_runtime *runtime, uint64_t now_ms)
-{
-  uint32_t magnitude = 0U;
-  uint64_t elapsed;
-  assert(runtime != NULL);
-  if (runtime->schedule.empty || runtime->options.sealed) return;
-  elapsed = iterate_kit_voice_elapsed_ms(now_ms, runtime->started_ms);
-  if (!cli_fault_schedule_active(
-          &runtime->schedule, CLI_FAULT_KIND_CPU_STALL, elapsed, &magnitude)) {
-    runtime->stall_armed = true;
-    return;
-  }
-  /* Once per episode: a stall re-entered every iteration would be a hang. */
-  if (!runtime->stall_armed) return;
-  runtime->stall_armed = false;
-  ++runtime->cpu_stalls_injected;
-  {
-    const struct cli_fault_episode *episode = NULL;
-    size_t index;
-    for (index = 0U; index < runtime->schedule.episode_count; index++) {
-      const struct cli_fault_episode *candidate =
-          &runtime->schedule.episodes[index];
-      if (candidate->kind != CLI_FAULT_KIND_CPU_STALL) continue;
-      if (elapsed < candidate->at_ms) break;
-      if (elapsed >= candidate->at_ms + candidate->duration_ms) continue;
-      episode = candidate;
-      break;
-    }
-    if (episode == NULL) return;
-    cli_runtime_log(
-        "warn", "cpu stall %ums (scheduled)", episode->duration_ms);
-    {
-      const struct timespec delay = {
-        .tv_sec = (time_t)(episode->duration_ms / CLI_MAIN_MS_PER_SECOND),
-        .tv_nsec = (long)(episode->duration_ms % CLI_MAIN_MS_PER_SECOND) *
-            CLI_MAIN_NS_PER_MS,
-      };
-      (void)nanosleep(&delay, NULL);
-    }
-  }
-}
-
 static void cli_main_sleep(void)
 {
   const struct timespec delay = {
@@ -2468,7 +2138,6 @@ static void cli_main_run_loop(struct cli_runtime *runtime)
         &runtime->transport, CLI_MAIN_TRANSPORT_POLL_EVENTS);
     cli_main_announce_states(runtime);
     cli_main_start_voicelab(runtime);
-    cli_main_stall_if_scheduled(runtime, now_ms);
     cli_main_poll_playback(runtime, now_ms);
     /*
      * The pretend speaker's converter runs on this loop rather than on

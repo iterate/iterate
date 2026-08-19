@@ -15,8 +15,13 @@ enum {
 #define CLI_OPTIONS_DEFAULT_NAME "host"
 #define CLI_OPTIONS_DEFAULT_SPEAKER_WAV "iterate-kit-playback.wav"
 #define CLI_OPTIONS_DEFAULT_REPORT_JSON "iterate-kit-report.json"
-/* Parts per thousand of real time; matches CLI_VIRTUAL_CLOCK_RATE_UNIT. */
-#define CLI_OPTIONS_DEFAULT_CLOCK_RATE 1000U
+
+/*
+ * The API key deliberately has NO FLAG. A secret on a command line is visible
+ * to every process on the machine, and the binary's one caller — talk.ts —
+ * has only ever supplied it through the environment.
+ */
+#define CLI_OPTIONS_API_KEY_ENVIRONMENT "ITERATE_PROJECT_API_KEY"
 
 /** What a flag does with the word after it. */
 enum cli_options_kind {
@@ -33,11 +38,9 @@ enum cli_options_kind {
 /** Which field a flag writes. Named so the table stays readable. */
 enum cli_options_field {
   CLI_OPTIONS_FIELD_PROJECT_ID,
-  CLI_OPTIONS_FIELD_API_KEY,
   CLI_OPTIONS_FIELD_OS_BASE_URL,
   CLI_OPTIONS_FIELD_STREAM_PATH,
   CLI_OPTIONS_FIELD_NAME,
-  CLI_OPTIONS_FIELD_MIC_WAV,
   CLI_OPTIONS_FIELD_UTTERANCE_DIR,
   CLI_OPTIONS_FIELD_SPEAKER_WAV,
   CLI_OPTIONS_FIELD_MIC_RECORD,
@@ -46,27 +49,6 @@ enum cli_options_field {
   CLI_OPTIONS_FIELD_CONVERSE,
   CLI_OPTIONS_FIELD_MINUTES,
   CLI_OPTIONS_FIELD_BACK_OFFICE_EVERY,
-  CLI_OPTIONS_FIELD_SPEAKER_PACE,
-  CLI_OPTIONS_FIELD_DEVICE,
-  CLI_OPTIONS_FIELD_SCHEDULE_OUT,
-  CLI_OPTIONS_FIELD_SCHEDULE_IN,
-  CLI_OPTIONS_FIELD_SCHEDULE_SEED,
-  CLI_OPTIONS_FIELD_CLOCK_RATE,
-  CLI_OPTIONS_FIELD_SEALED,
-  CLI_OPTIONS_FIELD_CPU_STALLS,
-  CLI_OPTIONS_FIELD_CPU_STALL_MS,
-  CLI_OPTIONS_FIELD_CLOCK_SKEWS,
-  CLI_OPTIONS_FIELD_CLOCK_SKEW_MS,
-  CLI_OPTIONS_FIELD_CLOCK_JITTER_MS,
-  CLI_OPTIONS_FIELD_WIRE_STALLS,
-  CLI_OPTIONS_FIELD_WIRE_STALL_MS,
-  CLI_OPTIONS_FIELD_WIRE_RESETS,
-  CLI_OPTIONS_FIELD_WIRE_THROTTLE,
-  CLI_OPTIONS_FIELD_FRAME_LOSS,
-  CLI_OPTIONS_FIELD_FRAME_DUPLICATE,
-  CLI_OPTIONS_FIELD_FRAME_REORDER,
-  CLI_OPTIONS_FIELD_MIC_SHORT,
-  CLI_OPTIONS_FIELD_MIC_CLIP,
   CLI_OPTIONS_FIELD_LIVE_AUDIO,
   CLI_OPTIONS_FIELD_LIVE_MIC,
   CLI_OPTIONS_FIELD_PUSH_TO_TALK,
@@ -97,9 +79,6 @@ static const struct cli_options_flag CLI_OPTIONS_FLAGS[] = {
   {"--project-id", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_PROJECT_ID,
    "ITERATE_PROJECT_ID",
    "  --project-id ID       Project id (ITERATE_PROJECT_ID)\n"},
-  {"--api-key", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_API_KEY,
-   "ITERATE_PROJECT_API_KEY",
-   "  --api-key KEY         Project API key (ITERATE_PROJECT_API_KEY)\n"},
   {"--os-base-url", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_OS_BASE_URL,
    "ITERATE_OS_BASE_URL",
    "  --os-base-url URL     OS origin, e.g. https://os.iterate.com "
@@ -112,10 +91,6 @@ static const struct cli_options_flag CLI_OPTIONS_FLAGS[] = {
    "ITERATE_KIT_CAPABILITY_NAME",
    "  --name NAME           Mount capability as kit.NAME "
    "(ITERATE_KIT_CAPABILITY_NAME; default host)\n"},
-  {"--mic-wav", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_MIC_WAV,
-   "ITERATE_KIT_MIC_WAV",
-   "  --mic-wav FILE        PCM16 mono 16 kHz source for remote PTT "
-   "(ITERATE_KIT_MIC_WAV)\n"},
   {"--speaker-wav", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_SPEAKER_WAV,
    NULL,
    "  --speaker-wav FILE    True played timeline, including concealed "
@@ -125,7 +100,7 @@ static const struct cli_options_flag CLI_OPTIONS_FLAGS[] = {
   {"--live-mic", CLI_OPTIONS_KIND_SWITCH, CLI_OPTIONS_FIELD_LIVE_MIC,
    NULL,
    "  --live-mic            Capture from this Mac's default input instead of "
-   "--mic-wav\n"},
+   "test synthesis\n"},
   {"--push-to-talk", CLI_OPTIONS_KIND_SWITCH, CLI_OPTIONS_FIELD_PUSH_TO_TALK,
    NULL,
    "  --push-to-talk        Hold SPACE to talk, release to send, q to hang "
@@ -147,73 +122,6 @@ static const struct cli_options_flag CLI_OPTIONS_FLAGS[] = {
    CLI_OPTIONS_FIELD_BACK_OFFICE_EVERY, NULL,
    "  --colleague-every N   Use the colleague-forcing utterance every "
    "Nth turn (0 disables)\n"},
-  {"--speaker-pace", CLI_OPTIONS_KIND_COUNT, CLI_OPTIONS_FIELD_SPEAKER_PACE,
-   NULL,
-   "  --speaker-pace FPS    Model a converter consuming FPS frames/second "
-   "(0 disables; 50 is the device)\n"},
-  {"--device", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_DEVICE, NULL,
-   "  --device NAME         Wear a board's bounded sizes "
-   "(host-ideal, waveshare-s3-amoled)\n"},
-  {"--schedule-seed", CLI_OPTIONS_KIND_COUNT, CLI_OPTIONS_FIELD_SCHEDULE_SEED,
-   NULL,
-   "  --schedule-seed N     Draw this session's faults from N (0 draws "
-   "none)\n"},
-  {"--schedule-out", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_SCHEDULE_OUT,
-   NULL,
-   "  --schedule-out FILE   Write the schedule used, to attach to a bug\n"},
-  {"--schedule-in", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_SCHEDULE_IN,
-   NULL,
-   "  --schedule-in FILE    Replay a schedule verbatim, ignoring the "
-   "recipe\n"},
-  {"--sealed", CLI_OPTIONS_KIND_SWITCH, CLI_OPTIONS_FIELD_SEALED, NULL,
-   "  --sealed              No host clock at all; a seed replays bit for "
-   "bit\n"},
-  {"--clock-rate", CLI_OPTIONS_KIND_COUNT, CLI_OPTIONS_FIELD_CLOCK_RATE, NULL,
-   "  --clock-rate N        Session ms per real ms, per thousand "
-   "(1000 is realtime)\n"},
-  {"--cpu-stalls-per-min", CLI_OPTIONS_KIND_COUNT,
-   CLI_OPTIONS_FIELD_CPU_STALLS, NULL,
-   "  --cpu-stalls-per-min N   Preempt the loop N times a minute\n"},
-  {"--cpu-stall-max-ms", CLI_OPTIONS_KIND_COUNT,
-   CLI_OPTIONS_FIELD_CPU_STALL_MS, NULL,
-   "  --cpu-stall-max-ms MS    Longest such stall\n"},
-  {"--clock-skews-per-min", CLI_OPTIONS_KIND_COUNT,
-   CLI_OPTIONS_FIELD_CLOCK_SKEWS, NULL,
-   "  --clock-skews-per-min N  Step the clock backwards N times a minute\n"},
-  {"--clock-skew-max-ms", CLI_OPTIONS_KIND_COUNT,
-   CLI_OPTIONS_FIELD_CLOCK_SKEW_MS, NULL,
-   "  --clock-skew-max-ms MS   Furthest such step\n"},
-  {"--clock-jitter-ms", CLI_OPTIONS_KIND_COUNT,
-   CLI_OPTIONS_FIELD_CLOCK_JITTER_MS, NULL,
-   "  --clock-jitter-ms MS     Wander stamps by up to MS either way\n"},
-  {"--wire-stalls-per-min", CLI_OPTIONS_KIND_COUNT,
-   CLI_OPTIONS_FIELD_WIRE_STALLS, NULL,
-   "  --wire-stalls-per-min N  Stop bytes moving N times a minute "
-   "(needs the proxy)\n"},
-  {"--wire-stall-max-ms", CLI_OPTIONS_KIND_COUNT,
-   CLI_OPTIONS_FIELD_WIRE_STALL_MS, NULL,
-   "  --wire-stall-max-ms MS   Longest such stall\n"},
-  {"--wire-resets", CLI_OPTIONS_KIND_COUNT, CLI_OPTIONS_FIELD_WIRE_RESETS,
-   NULL, "  --wire-resets N          Sever the connection N times\n"},
-  {"--wire-throttle-fps", CLI_OPTIONS_KIND_COUNT,
-   CLI_OPTIONS_FIELD_WIRE_THROTTLE, NULL,
-   "  --wire-throttle-fps FPS  Hold the downlink to FPS frames/second "
-   "(9 was measured)\n"},
-  {"--frame-loss-one-in", CLI_OPTIONS_KIND_COUNT,
-   CLI_OPTIONS_FIELD_FRAME_LOSS, NULL,
-   "  --frame-loss-one-in N    Drop one delivered frame in N\n"},
-  {"--frame-duplicate-one-in", CLI_OPTIONS_KIND_COUNT,
-   CLI_OPTIONS_FIELD_FRAME_DUPLICATE, NULL,
-   "  --frame-duplicate-one-in N  Deliver one frame in N twice\n"},
-  {"--frame-reorder-one-in", CLI_OPTIONS_KIND_COUNT,
-   CLI_OPTIONS_FIELD_FRAME_REORDER, NULL,
-   "  --frame-reorder-one-in N    Hold one frame in N back\n"},
-  {"--mic-short-one-in", CLI_OPTIONS_KIND_COUNT, CLI_OPTIONS_FIELD_MIC_SHORT,
-   NULL,
-   "  --mic-short-one-in N     Return a partial capture buffer one time in "
-   "N\n"},
-  {"--mic-clip", CLI_OPTIONS_KIND_SWITCH, CLI_OPTIONS_FIELD_MIC_CLIP, NULL,
-   "  --mic-clip               Drive capture to full scale\n"},
   {"--mic-record", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_MIC_RECORD, NULL,
    "  --mic-record FILE     Record what the microphone captured\n"},
   {"--pretend-speaker", CLI_OPTIONS_KIND_TEXT,
@@ -334,8 +242,9 @@ void cli_options_print_help(FILE *out)
   (void)fprintf(out, "Usage: iterate-kit-cli [options]\n\n");
   (void)fprintf(
       out,
-      "Runs the Iterate voice-device runtime on macOS with a selected bounded "
-      "resource profile. Flags override their environment variables.\n\n");
+      "Runs the Iterate voice-device runtime on macOS. Flags override their "
+      "environment variables; the project API key is environment-only "
+      "(ITERATE_PROJECT_API_KEY).\n\n");
   for (int index = 0; index < CLI_OPTIONS_FLAG_COUNT; ++index) {
     const struct cli_options_flag *flag = &CLI_OPTIONS_FLAGS[index];
     (void)fputs(flag->help_line, out);
@@ -432,11 +341,9 @@ static enum cli_options_status cli_options_apply(
   assert(out != NULL && flag != NULL);
   switch (flag->field) {
     case CLI_OPTIONS_FIELD_PROJECT_ID: out->project_id = value; break;
-    case CLI_OPTIONS_FIELD_API_KEY: out->project_api_key = value; break;
     case CLI_OPTIONS_FIELD_OS_BASE_URL: out->os_base_url = value; break;
     case CLI_OPTIONS_FIELD_STREAM_PATH: out->stream_path = value; break;
     case CLI_OPTIONS_FIELD_NAME: out->name = value; break;
-    case CLI_OPTIONS_FIELD_MIC_WAV: out->mic_wav = value; break;
     case CLI_OPTIONS_FIELD_UTTERANCE_DIR: out->utterance_dir = value; break;
     case CLI_OPTIONS_FIELD_SPEAKER_WAV: out->speaker_wav = value; break;
     case CLI_OPTIONS_FIELD_MIC_RECORD: out->mic_record = value; break;
@@ -450,43 +357,6 @@ static enum cli_options_status cli_options_apply(
       return cli_options_read_minutes(value, &out->minutes);
     case CLI_OPTIONS_FIELD_BACK_OFFICE_EVERY:
       return cli_options_read_count(value, &out->back_office_every);
-    case CLI_OPTIONS_FIELD_SPEAKER_PACE:
-      return cli_options_read_count(value, &out->speaker_pace_fps);
-    case CLI_OPTIONS_FIELD_DEVICE: out->device = value; break;
-    case CLI_OPTIONS_FIELD_SCHEDULE_OUT: out->schedule_out = value; break;
-    case CLI_OPTIONS_FIELD_SCHEDULE_IN: out->schedule_in = value; break;
-    case CLI_OPTIONS_FIELD_SCHEDULE_SEED:
-      return cli_options_read_count(value, &out->schedule_seed);
-    case CLI_OPTIONS_FIELD_CLOCK_RATE:
-      return cli_options_read_count(value, &out->clock_rate);
-    case CLI_OPTIONS_FIELD_CPU_STALLS:
-      return cli_options_read_count(value, &out->cpu_stalls_per_minute);
-    case CLI_OPTIONS_FIELD_CPU_STALL_MS:
-      return cli_options_read_count(value, &out->cpu_stall_max_ms);
-    case CLI_OPTIONS_FIELD_CLOCK_SKEWS:
-      return cli_options_read_count(value, &out->clock_skews_per_minute);
-    case CLI_OPTIONS_FIELD_CLOCK_SKEW_MS:
-      return cli_options_read_count(value, &out->clock_skew_max_ms);
-    case CLI_OPTIONS_FIELD_CLOCK_JITTER_MS:
-      return cli_options_read_count(value, &out->clock_jitter_ms);
-    case CLI_OPTIONS_FIELD_WIRE_STALLS:
-      return cli_options_read_count(value, &out->wire_stalls_per_minute);
-    case CLI_OPTIONS_FIELD_WIRE_STALL_MS:
-      return cli_options_read_count(value, &out->wire_stall_max_ms);
-    case CLI_OPTIONS_FIELD_WIRE_RESETS:
-      return cli_options_read_count(value, &out->wire_resets);
-    case CLI_OPTIONS_FIELD_WIRE_THROTTLE:
-      return cli_options_read_count(value, &out->wire_throttle_fps);
-    case CLI_OPTIONS_FIELD_FRAME_LOSS:
-      return cli_options_read_count(value, &out->frame_loss_one_in);
-    case CLI_OPTIONS_FIELD_FRAME_DUPLICATE:
-      return cli_options_read_count(value, &out->frame_duplicate_one_in);
-    case CLI_OPTIONS_FIELD_FRAME_REORDER:
-      return cli_options_read_count(value, &out->frame_reorder_one_in);
-    case CLI_OPTIONS_FIELD_MIC_SHORT:
-      return cli_options_read_count(value, &out->mic_short_one_in);
-    case CLI_OPTIONS_FIELD_MIC_CLIP: out->mic_clip = true; break;
-    case CLI_OPTIONS_FIELD_SEALED: out->sealed = true; break;
     case CLI_OPTIONS_FIELD_LIVE_AUDIO: out->live_audio = true; break;
     case CLI_OPTIONS_FIELD_LIVE_MIC: out->live_mic = true; break;
     case CLI_OPTIONS_FIELD_PUSH_TO_TALK: out->push_to_talk = true; break;
@@ -544,6 +414,11 @@ static void cli_options_fill_environment(struct cli_options *out)
     if (value == NULL || value[0] == '\0') continue;
     cli_options_fill_text(out, flag->field, value);
   }
+  /* Flagless by design; see CLI_OPTIONS_API_KEY_ENVIRONMENT. */
+  if (out->project_api_key == NULL) {
+    const char *key = getenv(CLI_OPTIONS_API_KEY_ENVIRONMENT);
+    if (key != NULL && key[0] != '\0') out->project_api_key = key;
+  }
 }
 
 static void cli_options_fill_text(
@@ -556,9 +431,6 @@ static void cli_options_fill_text(
     case CLI_OPTIONS_FIELD_PROJECT_ID:
       if (out->project_id == NULL) out->project_id = value;
       break;
-    case CLI_OPTIONS_FIELD_API_KEY:
-      if (out->project_api_key == NULL) out->project_api_key = value;
-      break;
     case CLI_OPTIONS_FIELD_OS_BASE_URL:
       if (out->os_base_url == NULL) out->os_base_url = value;
       break;
@@ -567,9 +439,6 @@ static void cli_options_fill_text(
       break;
     case CLI_OPTIONS_FIELD_NAME:
       if (out->name == NULL) out->name = value;
-      break;
-    case CLI_OPTIONS_FIELD_MIC_WAV:
-      if (out->mic_wav == NULL) out->mic_wav = value;
       break;
     default:
       break;
@@ -589,12 +458,6 @@ static void cli_options_fill_defaults(struct cli_options *out)
   if (out->report_json == NULL) {
     out->report_json = CLI_OPTIONS_DEFAULT_REPORT_JSON;
   }
-  /*
-   * Realtime unless somebody asked otherwise. A zero here would mean "time
-   * does not pass", and every deadline in the process would wait forever for
-   * a stamp that never moves — a hang with no message, from a flag nobody set.
-   */
-  if (out->clock_rate == 0U) out->clock_rate = CLI_OPTIONS_DEFAULT_CLOCK_RATE;
 }
 
 static enum cli_options_status cli_options_check(
@@ -622,7 +485,7 @@ static enum cli_options_status cli_options_check(
     return CLI_OPTIONS_ERR_REQUIRED;
   }
   if (out->project_api_key == NULL) {
-    cli_options_note(problem, problem_bytes, "--api-key");
+    cli_options_note(problem, problem_bytes, CLI_OPTIONS_API_KEY_ENVIRONMENT);
     return CLI_OPTIONS_ERR_REQUIRED;
   }
   if (out->os_base_url == NULL) {
@@ -663,16 +526,6 @@ static enum cli_options_status cli_options_check_combinations(
   if (out->push_to_talk && out->converse_minutes > 0.0) {
     cli_options_note(
         problem, problem_bytes, "--push-to-talk cannot run with --converse");
-    return CLI_OPTIONS_ERR_INCOMPATIBLE;
-  }
-  /*
-   * A live microphone and a recorded one are both "the microphone", and there
-   * is no useful reading of both. Preferring one would make the other flag a
-   * no-op that looks like it worked.
-   */
-  if (out->live_mic && out->mic_wav != NULL) {
-    cli_options_note(
-        problem, problem_bytes, "--live-mic cannot run with --mic-wav");
     return CLI_OPTIONS_ERR_INCOMPATIBLE;
   }
   return CLI_OPTIONS_OK;

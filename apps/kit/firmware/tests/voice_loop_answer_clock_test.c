@@ -27,7 +27,6 @@
 #include "esp_timer.h"
 
 #include "iterate/kit/audio_processor.h"
-#include "iterate/kit/barge_in.h"
 #include "iterate/kit/voice_device_profile.h"
 #include "iterate/kit/voicelab_stream.h"
 
@@ -404,7 +403,7 @@ static void the_first_answer_plays_whole(void) {
  *
  * THIS IS THE BUG. `drop` reaches the device as SPEECH_STARTED and its branch
  * did two unrelated things behind one gate: it threw the queue away, and it
- * restarted the answer's playout timeline. The gate — `iterate_kit_barge_in_
+ * restarted the answer's playout timeline. The gate — the deleted barge-in module's `iterate_kit_barge_in_
  * admit`, a 600 ms window on the local microphone — refused the whole branch on
  * every ordinary turn, because an answer's first chunk arrives one to two
  * seconds after anybody spoke. The next answer was then measured against the
@@ -420,7 +419,8 @@ static void a_later_answer_plays_whole_too(void) {
   const uint32_t answer_one_number = board.last_admitted_answer;
   const uint32_t written_before = frames_written;
 
-  assert(ITERATE_KIT_BARGE_IN_WINDOW_MS < 5000);
+  /* 5000 ms clears the deleted barge-in module's 600 ms evidence window
+   * with room; the surviving bound below is the one that still moves. */
   assert(ITERATE_KIT_VOICE_SPEAKER_LAG_CATCHUP_MS < 5000);
   iterate_kit_fake_esp_idf_advance_ms(5000U);
   playback(); /* the device notices it is dry and settles back to priming */

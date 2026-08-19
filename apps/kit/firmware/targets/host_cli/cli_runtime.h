@@ -46,10 +46,6 @@
 #include "cli_paced_sink.h"
 #include "cli_screen.h"
 #include "cli_speaker.h"
-#include "cli_delivery_fault.h"
-#include "cli_device_profile.h"
-#include "cli_fault_schedule.h"
-#include "cli_virtual_clock.h"
 #include "cli_wav.h"
 #include "iterate/kit/audio_processor.h"
 #include "iterate/kit/configuration.h"
@@ -95,8 +91,6 @@ struct cli_runtime {
   uint32_t frame_sequence;
   struct cli_microphone microphone;
   struct cli_speaker speaker;
-  /* Loses, repeats and delays arriving frames per the schedule. */
-  struct cli_delivery_fault delivery_fault;
   struct iterate_kit_voice_playback_clock playback_clock;
   struct cli_wav_source source;
   struct cli_wav_sink sink;
@@ -124,14 +118,6 @@ struct cli_runtime {
   uint64_t call_established_at_ms;
   /* Models the converter's clock; unpaced by default. See cli_paced_sink.h. */
   struct cli_paced_sink paced_sink;
-  /* This session's adversity, drawn in full before the first frame moves. */
-  struct cli_fault_schedule schedule;
-  /* Which board the rig is wearing; never NULL after startup. */
-  const struct cli_device_profile *profile;
-  /* CPU stall episodes actually served, for the report. */
-  uint32_t cpu_stalls_injected;
-  /** Whether the CPU stall episode now running has yet to fire. */
-  bool stall_armed;
   struct cli_conversation conversation;
   /** Wall-clock end of an interactive session; 0 means no limit was asked. */
   uint64_t finish_at_ms;
@@ -220,12 +206,6 @@ struct cli_runtime {
   uint32_t calls_lost;
   bool mounted_once;
 };
-
-/**
- * The process's one clock, for the few sites that must configure it rather
- * than merely read it. Reading is what cli_runtime_now_ms is for.
- */
-struct cli_virtual_clock *cli_runtime_clock(void);
 
 /** The transport's clock hook, so its deadlines share the process's clock. */
 int64_t cli_runtime_transport_now_us(void *context);

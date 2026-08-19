@@ -126,16 +126,6 @@ bool face_avatar_registry_select_slug(
     return false;
 }
 
-bool face_avatar_registry_next(face_avatar_registry_t *registry)
-{
-    if (registry == NULL ||
-        (!registry->ready && !face_avatar_registry_init(registry))) {
-        return false;
-    }
-    return face_avatar_registry_select(
-        registry, (registry->current + 1U) % avatar_count());
-}
-
 size_t face_avatar_registry_count(void)
 {
     return avatar_count();
@@ -157,22 +147,9 @@ const char *face_avatar_registry_current_slug(
         : NULL;
 }
 
-const char *face_avatar_registry_current_name(
-    const face_avatar_registry_t *registry)
-{
-    return registry != NULL && registry->ready
-        ? GENERATED_AVATARS[registry->current].name
-        : NULL;
-}
-
 const char *face_avatar_registry_slug_at(size_t index)
 {
     return index < avatar_count() ? GENERATED_AVATARS[index].slug : NULL;
-}
-
-const char *face_avatar_registry_name_at(size_t index)
-{
-    return index < avatar_count() ? GENERATED_AVATARS[index].name : NULL;
 }
 
 bool face_avatar_registry_render(

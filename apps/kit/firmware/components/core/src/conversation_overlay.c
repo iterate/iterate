@@ -6,22 +6,25 @@ static uint8_t scale_channel(uint8_t channel, uint8_t scale) {
   return (uint8_t)(((uint32_t)channel * (uint32_t)scale) / 255U);
 }
 
-const char *iterate_kit_conversation_status_word(
+/*
+ * The seven-way classification the equality gate compares. It used to
+ * return display STRINGS ("connecting", "in call") that no screen has
+ * rendered since every board grew its own panel renderer; the classes
+ * survive because overlay_equal is StackChan's repaint gate — the
+ * function whose misuse once caused the 1 Hz face blackout. Order
+ * matters and mirrors the light renderer's: a broken speaker while the
+ * network is fine is still a device that cannot hold a conversation.
+ */
+static uint8_t overlay_class(
     const struct iterate_kit_conversation_visual_state *state) {
-  if (state == NULL) return "starting";
-  /*
-   * Order matters and mirrors the light renderer's: a broken speaker while
-   * the network is fine is still a device that cannot hold a conversation,
-   * and hiding that behind a cheerful "ready" is how a dead board looked
-   * healthy until somebody tried to talk to it.
-   */
-  if (state->media_failed) return "audio fault";
-  if (state->network == ITERATE_KIT_NETWORK_CONNECTING) return "connecting";
-  if (!state->media_ready) return "connecting";
-  if (!state->conversation_active) return "ready";
-  if (state->speaker_peak >= 256U) return "speaking";
-  if (state->microphone_listening) return "listening";
-  return "in call";
+  if (state == NULL) return 0U;
+  if (state->media_failed) return 1U;
+  if (state->network == ITERATE_KIT_NETWORK_CONNECTING) return 2U;
+  if (!state->media_ready) return 2U;
+  if (!state->conversation_active) return 3U;
+  if (state->speaker_peak >= 256U) return 4U;
+  if (state->microphone_listening) return 5U;
+  return 6U;
 }
 
 bool iterate_kit_conversation_needs_attention(
@@ -34,30 +37,10 @@ bool iterate_kit_conversation_needs_attention(
 bool iterate_kit_conversation_overlay_equal(
     const struct iterate_kit_conversation_visual_state *left,
     const struct iterate_kit_conversation_visual_state *right) {
-  /*
-   * Pointer comparison on the words is exact, not a shortcut: every branch of
-   * the selector returns one of a fixed set of string literals, so two states
-   * that say the same thing return the identical pointer.
-   */
-  return iterate_kit_conversation_status_word(left) ==
-      iterate_kit_conversation_status_word(right) &&
+  return overlay_class(left) == overlay_class(right) &&
       iterate_kit_conversation_lights_equal(left, right);
 }
 
-uint8_t iterate_kit_conversation_attention_scale(
-    const struct iterate_kit_conversation_visual_state *state,
-    uint32_t now_ms) {
-  enum { FLOOR = 70U, CEILING = 255U, SPAN = CEILING - FLOOR };
-  if (!iterate_kit_conversation_needs_attention(state)) return 255U;
-  {
-    const uint32_t phase = now_ms % (uint32_t)ITERATE_KIT_OVERLAY_PULSE_PERIOD_MS;
-    const uint32_t half = (uint32_t)ITERATE_KIT_OVERLAY_PULSE_PERIOD_MS / 2U;
-    /* Triangular rather than sinusoidal: no floating point, no table, and at
-     * this period the difference is not visible on an LED. */
-    const uint32_t rising = phase < half ? phase : (uint32_t)ITERATE_KIT_OVERLAY_PULSE_PERIOD_MS - phase;
-    return (uint8_t)(FLOOR + (rising * (uint32_t)SPAN) / half);
-  }
-}
 
 enum {
   /* One lap of the twelve positions, in milliseconds. */

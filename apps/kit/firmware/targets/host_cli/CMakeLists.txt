@@ -2,9 +2,6 @@ add_executable(iterate-kit-cli
   cli_capabilities.c
   cli_conversation.c
   cli_device_controls.c
-  cli_delivery_fault.c
-  cli_device_profile.c
-  cli_fault_schedule.c
   cli_keyboard.c
   cli_microphone.c
   cli_options.c
@@ -12,7 +9,6 @@ add_executable(iterate-kit-cli
   cli_report.c
   cli_screen.c
   cli_speaker.c
-  cli_virtual_clock.c
   cli_wav.c
   main.c)
 
