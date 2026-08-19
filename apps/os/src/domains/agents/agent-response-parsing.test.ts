@@ -5,7 +5,7 @@
 // the whole userland loop by playing the worker's part by hand: the platform
 // half (turns, mirror rules) and the userland half (script request, prose
 // delivery, status, settlement rendering) meet on the public event
-// vocabulary. Also here: the deprecated `driver` shim.
+// vocabulary.
 
 import { expect, it } from "vitest";
 import type { ConsumedInput } from "iterate/processors";
@@ -140,37 +140,6 @@ it("a plain sendMessage (no llmRequestOffset) still mirrors into assistant histo
       content: "The assistant sent this visible web-chat message: sent by a script",
     },
   });
-});
-
-it("the deprecated driver knob maps onto the parsing flag; an explicit flag wins", async () => {
-  const h = makeAgentHarness();
-  await h.play(["append", { type: "events.iterate.com/agent/created", payload: {} }]);
-  expect(h.state().config.interpretResponses).toBe(true);
-
-  // Old seeded worker code appends driver flips; they land as flag flips.
-  await h.play([
-    "append",
-    {
-      type: "events.iterate.com/agent/configured",
-      payload: { config: { driver: "agent-headless" } },
-    },
-  ]);
-  expect(h.state().config.interpretResponses).toBe(false);
-  await h.play([
-    "append",
-    { type: "events.iterate.com/agent/configured", payload: { config: { driver: "agent" } } },
-  ]);
-  expect(h.state().config.interpretResponses).toBe(true);
-
-  // Both in one payload: the explicit flag wins over the deprecated knob.
-  await h.play([
-    "append",
-    {
-      type: "events.iterate.com/agent/configured",
-      payload: { config: { driver: "agent", interpretResponses: false } },
-    },
-  ]);
-  expect(h.state().config.interpretResponses).toBe(false);
 });
 
 // -----------------------------------------------------------------------------

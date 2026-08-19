@@ -2698,7 +2698,6 @@ export type AgentEventInput =
           scriptResultHistoryLimit?: number | undefined;
           compactionTriggerFraction?: number | undefined;
           interpretResponses?: boolean | undefined;
-          driver?: "agent" | "agent-headless" | undefined;
         };
       }
     >

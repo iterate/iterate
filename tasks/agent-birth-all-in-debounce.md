@@ -37,11 +37,13 @@ and the #2507 readiness-machinery approach (open draft, to be closed).
   `interpretResponses` (schema default `true`). Flag-off
   semantics = exactly today's agent-headless: turn loop + LLM request run,
   nothing platform-side parses assistant output. `HeadlessAgentProcessor`
-  and its contract are deleted; `config.driver` is deprecated — the payload
-  still tolerates it and the fold maps `driver: "agent-headless"` to
-  `interpretResponses: false`, so existing headless agents and
-  old seeded worker code keep exact semantics (shim, delete later). The
-  `"agent-headless"` slug is NOT re-registered (review decision): leftover
+  and its contract are deleted, and (review decision, superseding the
+  original shim plan) `config.driver` is deleted OUTRIGHT: old
+  driver-bearing `agent/configured` events fail the strict payload schema
+  and skip; old seeded worker code appending driver flips fails loudly.
+  Existing converted agents fall back to platform parsing until
+  codemode-tag's deploy-time sweep appends the explicit flag. The
+  `"agent-headless"` slug is NOT re-registered either: leftover
   subscriptions under that name fail loudly, which is fine — those agents
   work through the "agent" subscription every stream carries from birth.
 - **Userland customizes reactively** in `worker.ts processEvent` on
@@ -75,10 +77,11 @@ and the #2507 readiness-machinery approach (open draft, to be closed).
       `AgentBirthDefaultsValue` in sdk.ts, and the project processor's
       generic defaults store (`project/defaults-configured` + state.defaults
       — agents was its only consumer)_
-- [x] Contract: `interpretResponses` + driver deprecation
-      _v6.0.0; fold shim in agent-prompt-fold.ts maps driver→flag, explicit
-      flag wins; stale "measured from FIRST trigger" debounce description
-      fixed in passing (the fold anchors to the NEWEST trigger)_
+- [x] Contract: `interpretResponses`, driver deleted _v6.0.0; the driver→flag
+      fold shim was built, then deleted in review — old driver events now
+      fail strict schema and skip; stale "measured from FIRST trigger"
+      debounce description fixed in passing (the fold anchors to the NEWEST
+      trigger)_
 - [x] Merge headless into `AgentProcessor` _flag gate lives at the
       composition point in AgentProcessor.processEvent (review round:
       originally inside AgentCodemode); agent-headless-processor.ts deleted
@@ -103,7 +106,8 @@ and the #2507 readiness-machinery approach (open draft, to be closed).
       (platform stamp alone no longer distinguishes who owns the turn)_
 - [x] configs/with-voice _minimal reaction: lower the debounce, nothing else_
 - [x] Tests _agent-response-parsing.test.ts (renamed from headless test):
-      flag-off loop, driver shim, stub inertness; agent-processor.test.ts:
+      the flag-off userland loop (the driver-shim and stub-inertness specs
+      were deleted with their subjects); agent-processor.test.ts:
       the birth-hold/organic-early-release spec + dead-worker degrade spec;
       agent-defaults.test.ts: birth-config in/out; template test: birth
       reaction incl. copied-event guard; defaults-store tests removed_
@@ -134,11 +138,11 @@ and the #2507 readiness-machinery approach (open draft, to be closed).
 >   );
 > ```
 >
-> - `interpretResponses` replaces `config.driver`; the
->   headless processor and its slug are deleted (flag-off = old headless
->   semantics; `driver: "agent-headless"` still parses and maps to the flag
->   for existing streams; leftover "agent-headless" subscriptions fail
->   loudly — accepted, those agents work through their "agent" subscription).
+> - `interpretResponses` replaces `config.driver`; the headless processor,
+>   its slug, and the driver knob are deleted outright (flag-off = old
+>   headless semantics). Old driver events fail strict schema and skip;
+>   leftover "agent-headless" subscriptions fail loudly — accepted, those
+>   agents work through their "agent" subscription.
 > - The 10s birth event is gated to brand-new streams by an existence
 >   probe: create() is get-or-create, and a late 10s event would overwrite
 >   the worker's lowered debounce on existing agents.
@@ -193,3 +197,8 @@ and the #2507 readiness-machinery approach (open draft, to be closed).
   cast became a private `#makeHost()` method; the injected
   `AgentResponseFormat` (only ever fencedTs) is now a direct import in
   agent-codemode.ts — agent-response-format.ts stays as the dialect module.
+- 2026-08-19 (review round): the driver shim reversed — `config.driver` is
+  deleted outright (payload field, fold mapping, shim test). Old driver
+  events fail strict schema and skip; existing converted agents fall back
+  to platform parsing until codemode-tag's deploy-time sweep appends the
+  explicit flag. Same loud-failure stance as the stub deletion.

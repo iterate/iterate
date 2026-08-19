@@ -67,26 +67,16 @@ function reduceAgentEventCore(input: {
     case "events.iterate.com/agent/created":
       if (state.birthCertificate !== null) return state;
       return { ...state, birthCertificate: { createdAtOffset: event.offset } };
-    case "events.iterate.com/agent/configured": {
+    case "events.iterate.com/agent/configured":
       // Deep-merge the patch (omitted keys keep their values), then
       // re-validate against the complete config schema — the framework's
-      // standard config recipe (mergeProcessorConfig). The deprecated
-      // `driver` knob (the retired two-processor selection) translates to
-      // the parsing flag so old streams and old seeded worker code keep
-      // their exact semantics; an explicit flag in the same payload wins.
-      const { driver, ...patch } = event.payload.config;
+      // standard config recipe (mergeProcessorConfig).
       return {
         ...state,
         config: AgentProcessorContract.stateSchema.shape.config.parse(
-          mergeProcessorConfig(state.config, {
-            ...(driver !== undefined && {
-              interpretResponses: driver === "agent",
-            }),
-            ...patch,
-          }),
+          mergeProcessorConfig(state.config, event.payload.config),
         ),
       };
-    }
     case "events.iterate.com/agents/context-added": {
       const payload = event.payload;
       // COMPACTION — the one structural rewrite of the reduced conversation.

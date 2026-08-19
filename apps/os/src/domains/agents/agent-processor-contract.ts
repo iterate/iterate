@@ -378,12 +378,6 @@ export const AgentProcessorContract = defineProcessorContract({
             scriptResultHistoryLimit: z.number().int().positive().optional(),
             compactionTriggerFraction: z.number().positive().max(1).optional(),
             interpretResponses: z.boolean().optional(),
-            // DEPRECATED shim: the retired two-processor selection knob. Old
-            // streams and old seeded worker code still append it; the fold
-            // maps "agent-headless" to interpretResponses: false
-            // and it never reaches state. Delete once no deployed config repo
-            // appends driver events.
-            driver: z.enum(["agent", "agent-headless"]).optional(),
           })
           .strict()
           .meta({ description: "Partial patch, deep-merged into the current config." }),
