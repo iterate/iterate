@@ -4,12 +4,15 @@ idf_component_register(
     reset_reason.c
     restart_note.c
     itx_transport.c
+    system_update.c
     websocket_connection.c
   INCLUDE_DIRS include
   REQUIRES
+    app_update
     core
     esp_app_format
     esp_event
+    esp_http_client
     esp_netif
     esp_partition
     esp-tls

@@ -7,6 +7,7 @@
 #include "iterate/kit/platforms/esp_idf_configuration.h"
 #include "iterate/kit/platforms/esp_idf_reset_reason.h"
 #include "iterate/kit/platforms/esp_idf_restart_note.h"
+#include "iterate/kit/platforms/esp_idf_system_update.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -142,6 +143,19 @@ void iterate_kit_esp_restart_with_note(const char *why) {
 
 const char *iterate_kit_esp_last_restart_note(void) {
   return platform.restart_note;
+}
+
+/*
+ * ACCEPTED, NOT DOWNLOADED: the host has no OTA slots and no radio. The loop
+ * under test only needs the driver to exist so system.update mounts; what an
+ * update DOES is the device's integration proof, not this harness's.
+ */
+enum iterate_kit_status iterate_kit_esp_idf_system_update_begin(
+    void *context, const char *url, const char *sha256_hex) {
+  (void)context;
+  (void)url;
+  (void)sha256_hex;
+  return ITERATE_KIT_OK;
 }
 
 /* --- the transport -------------------------------------------------------- */

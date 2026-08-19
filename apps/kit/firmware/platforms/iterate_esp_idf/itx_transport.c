@@ -7,6 +7,7 @@
 #include "esp_app_desc.h"
 #include "esp_cpu.h"
 #include "esp_mac.h"
+#include "esp_ota_ops.h"
 #include "esp_task_wdt.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
@@ -1528,6 +1529,20 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
           &transport->ready_socket_generation,
           socket_generation);
       transport->state = ITERATE_KIT_ESP_IDF_ITX_READY;
+      {
+        /*
+         * READY is also the OTA acceptance test: a freshly updated image
+         * boots PENDING_VERIFY, and a client whose one job is the connection
+         * proves itself by mounting. Marking here — not at app start — means
+         * an image that boots but cannot reach /api rolls back on the next
+         * watchdog reset instead of stranding the board.
+         */
+        static bool app_marked_valid;
+        if (!app_marked_valid) {
+          app_marked_valid = true;
+          (void)esp_ota_mark_app_valid_cancel_rollback();
+        }
+      }
       return ITERATE_KIT_OK;
     case ITERATE_KIT_ITX_CONNECTION_FAILED:
       transport->mount_deadline_us = 0;

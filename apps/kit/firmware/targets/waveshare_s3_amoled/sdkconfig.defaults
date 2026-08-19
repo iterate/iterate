@@ -160,3 +160,4 @@ CONFIG_LWIP_TCP_OOSEQ_MAX_PBUFS=12
 # a safe home for them. This affects the audio WebSocket's TLS as well, which is
 # why the long conversation soak is the check on it.
 CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y

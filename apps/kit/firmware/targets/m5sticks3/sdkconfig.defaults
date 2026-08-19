@@ -71,3 +71,4 @@ CONFIG_LWIP_TCP_OOSEQ_MAX_PBUFS=12
 # in-content buffer against a fragmented internal heap fails ssl_setup and
 # looks exactly like a network fault.
 CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y

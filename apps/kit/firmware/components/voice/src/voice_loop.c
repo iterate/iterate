@@ -59,7 +59,9 @@
 #include "iterate/kit/conversation_launch.h"
 #include "iterate/kit/retry_gate.h"
 #include "iterate/kit/platforms/esp_idf_reset_reason.h"
+#include "iterate/kit/capabilities/system_update.h"
 #include "iterate/kit/platforms/esp_idf_restart_note.h"
+#include "iterate/kit/platforms/esp_idf_system_update.h"
 #include "iterate/kit/mount_watchdog.h"
 #include "iterate/kit/capabilities/conversation.h"
 #include "iterate/kit/capabilities/health.h"
@@ -1987,13 +1989,14 @@ static size_t render_health(void *context, char *out, size_t capacity);
 
 static bool initialise_connection(void) {
   /*
-   * Four shared (push-to-talk, conversation control, speaker, health) plus
-   * whatever the board has of its own: an AEC stage, servos, a camera, a screen
-   * to fill. The busiest board mounts seven.
+   * Five shared (push-to-talk, conversation control, speaker, health,
+   * system.update) plus whatever the board has of its own: an AEC stage,
+   * servos, a camera, a screen to fill. The busiest board mounts eight.
    */
   static struct iterate_kit_module modules[12];
   static struct iterate_kit_speaker speaker;
   static struct iterate_kit_health health;
+  static struct iterate_kit_system_update system_update;
   size_t module_count = 0U;
   struct iterate_kit_itx_connection_options options;
   struct iterate_kit_esp_idf_itx_transport_options transport_options;
@@ -2060,6 +2063,21 @@ static bool initialise_connection(void) {
             runtime.stats_buffer,
             sizeof(runtime.stats_buffer)) == ITERATE_KIT_OK) {
       modules[module_count++] = iterate_kit_health_module(&health);
+    }
+  }
+  /*
+   * OTA as a capability: the server names a url and a digest, the device
+   * fetches, verifies, and reboots into it. Until this, every deploy meant a
+   * serial cable on somebody's desk.
+   */
+  {
+    const struct iterate_kit_system_update_driver driver = {
+      .context = NULL,
+      .begin = iterate_kit_esp_idf_system_update_begin,
+    };
+    if (iterate_kit_system_update_init(&system_update, &driver) ==
+        ITERATE_KIT_OK) {
+      modules[module_count++] = iterate_kit_system_update_module(&system_update);
     }
   }
   /*
