@@ -736,11 +736,15 @@ export class StreamDurableObject extends DurableObject<Env> {
       );
     if (!this.#facetEntries().some((e) => e.slug === SUBSCRIPTION_FORWARDER_SLUG))
       throw new Error("no subscription-forwarder enabled (nothing to resume)");
-    await (
-      (await this.#facet(SUBSCRIPTION_FORWARDER_SLUG)) as unknown as {
-        resumeSubscription(i: { name: string; afterOffset?: number }): Promise<{ ok: true }>;
-      }
-    ).resumeSubscription(input);
+    // Recovery RIDES THE LOG: a durable subscription-resumed fact, consumed by the forwarder
+    // like any other event (auditable, ordered by the drive chain — no side-channel verb).
+    await this.append({
+      type: "events.iterate.com/stream/subscription-resumed",
+      payload: {
+        name: input.name,
+        ...(input.afterOffset !== undefined ? { afterOffset: input.afterOffset } : {}),
+      },
+    });
     return { ok: true };
   }
 

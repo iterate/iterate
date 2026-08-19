@@ -138,20 +138,14 @@ export class ProcessorFacet extends DurableObject<Env> {
     return this.#p().waitUntilProcessed(input);
   }
 
-  // Forwarder-only doors, duck-typed through the generic facet shell (the parent's alarm and
-  // resumeSubscription reach the subscription-forwarder through these; any other processor
-  // answers with a loud error).
+  // The one forwarder-only door, duck-typed through the generic facet shell: the parent's
+  // alarm pumps due retries (facets have no alarms — workerd#6810). Everything else the
+  // forwarder does rides ordinary events.
   pumpSubscriptionDeliveries(): Promise<unknown> {
-    return this.#processorVerb("pumpSubscriptionDeliveries", []);
-  }
-  resumeSubscription(input: { name: string; afterOffset?: number }): Promise<unknown> {
-    return this.#processorVerb("resumeSubscription", [input]);
-  }
-  #processorVerb(method: string, args: unknown[]): Promise<unknown> {
-    const p = this.#p() as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
-    if (typeof p[method] !== "function")
-      throw new Error(`processor "${this.#p().contract.slug}" has no ${method}()`);
-    return p[method](...args);
+    const p = this.#p() as unknown as { pumpSubscriptionDeliveries?: () => Promise<unknown> };
+    if (typeof p.pumpSubscriptionDeliveries !== "function")
+      throw new Error(`processor "${this.#p().contract.slug}" has no pumpSubscriptionDeliveries()`);
+    return p.pumpSubscriptionDeliveries();
   }
 
   /** Rehydrate from the durable identity (every incarnation — facets restart independently,
