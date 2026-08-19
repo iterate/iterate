@@ -420,6 +420,29 @@ iterate_kit_add_havpe_pure_test(
   havpe_modes_test.c
   ../devices/havpe/havpe_modes.c)
 
+# StackChan's menu and side button: the two-stream mode table (a wire
+# contract like the HAVPE's), the face-tap provider menu, and the same
+# wake/converse/idle session grammar with its single end-chime edge.
+function(iterate_kit_add_stackchan_pure_test NAME)
+  add_executable(${NAME} ${ARGN})
+  target_include_directories(${NAME} PRIVATE
+    ../devices/stackchan
+    ../components/core/include)
+  target_compile_features(${NAME} PRIVATE c_std_99)
+  target_compile_options(${NAME} PRIVATE
+    -UNDEBUG
+    -Wall
+    -Wextra
+    -Werror
+    -Wpedantic)
+  add_test(NAME ${NAME} COMMAND ${NAME})
+endfunction()
+
+iterate_kit_add_stackchan_pure_test(
+  iterate-kit-stackchan-modes-test
+  stackchan_modes_test.c
+  ../devices/stackchan/stackchan_modes.c)
+
 # StackChan's adopted pure DSP primitives (components/audio): the AEC cadence
 # bridge, reference scaler, uplink selector, and near high-pass, each with the
 # donor's host tests. They link the audio component, not core.

@@ -161,6 +161,34 @@ static uint32_t last_rx_queue_overflows;
 static stackchan_audio_playout_observer_fn playout_observer;
 static void *playout_observer_context;
 
+/*
+ * The local sound slot: one flash-resident chime or announcement, drained
+ * by the I/O task's edge composer AHEAD of the staged response audio, so it
+ * starts within one 8 ms edge and PREEMPTS rather than mixes. A second
+ * request replaces the first mid-note. Same contract as the HAVPE's.
+ */
+static portMUX_TYPE sound_lock = portMUX_INITIALIZER_UNLOCKED;
+static const uint8_t *sound_pcm; /* NULL when idle; guarded by sound_lock */
+static uint32_t sound_bytes;
+static uint32_t sound_cursor;
+/*
+ * Sound-sourced DMA edges not yet completed, so the ISR tap can hold the
+ * MOUTH still while a chime plays: the robot's own interface noises are not
+ * speech, and a face that lip-syncs "call ended" looks like it is saying
+ * it. DMA completes in write order, so a counter is an exact FIFO tag —
+ * each sound edge's completion consumes one count and skips the observer.
+ */
+static volatile uint32_t sound_edges_in_flight;
+
+void stackchan_audio_play_sound(const uint8_t *pcm, uint32_t bytes) {
+  if (pcm == NULL || bytes < sizeof(int16_t)) return;
+  portENTER_CRITICAL(&sound_lock);
+  sound_pcm = pcm;
+  sound_bytes = bytes & ~1U; /* whole PCM16 samples only */
+  sound_cursor = 0U;
+  portEXIT_CRITICAL(&sound_lock);
+}
+
 /* --- the shared codec seam ------------------------------------------------ */
 
 static enum iterate_kit_status codec_read(
@@ -336,6 +364,20 @@ static bool IRAM_ATTR i2s_tap(
     void *user_data) {
   (void)user_data;
   if (transmit) {
+    /* A completed local-sound edge keeps the mouth still; see the counter. */
+    uint32_t sound_edges = __atomic_load_n(
+        &sound_edges_in_flight, __ATOMIC_ACQUIRE);
+    while (sound_edges != 0U) {
+      if (__atomic_compare_exchange_n(
+              &sound_edges_in_flight,
+              &sound_edges,
+              sound_edges - 1U,
+              false,
+              __ATOMIC_ACQ_REL,
+              __ATOMIC_ACQUIRE)) {
+        return false;
+      }
+    }
     /* The mouth animates audio the hardware actually played. */
     if (playout_observer != NULL && pcm != NULL &&
         bytes == STACKCHAN_AUDIO_CHUNK_SAMPLES * sizeof(int16_t)) {
@@ -556,7 +598,37 @@ static void io_task_main(void *argument) {
        * the codec clock ride it.
        */
       size_t filled = 0U;
-      while (filled < STACKCHAN_AUDIO_CHUNK_SAMPLES) {
+      bool from_sound = false;
+      /*
+       * A local sound outranks the mailbox. The slice bounds are taken
+       * under the lock and the flash copy happens outside it; if the app
+       * task replaces the sound mid-slice, this edge finishes from the
+       * superseded PCM and the next one starts the new sound, which is the
+       * preemption behaving as specified.
+       */
+      {
+        const uint8_t *sound = NULL;
+        uint32_t sound_offset = 0U;
+        uint32_t sound_take = 0U;
+        portENTER_CRITICAL(&sound_lock);
+        if (sound_pcm != NULL) {
+          const uint32_t remaining = sound_bytes - sound_cursor;
+          sound = sound_pcm;
+          sound_offset = sound_cursor;
+          sound_take = remaining < sizeof(playback_dma)
+              ? remaining
+              : (uint32_t)sizeof(playback_dma);
+          sound_cursor += sound_take;
+          if (sound_cursor >= sound_bytes) sound_pcm = NULL;
+        }
+        portEXIT_CRITICAL(&sound_lock);
+        if (sound != NULL) {
+          memcpy(playback_dma, sound + sound_offset, sound_take);
+          filled = sound_take / sizeof(int16_t);
+          from_sound = true;
+        }
+      }
+      while (!from_sound && filled < STACKCHAN_AUDIO_CHUNK_SAMPLES) {
         if (staging_offset >= staging.sample_count) {
           if (xQueueReceive(playback_mailbox, &staging, 0) != pdTRUE) {
             break;
@@ -575,7 +647,9 @@ static void io_task_main(void *argument) {
       }
       const bool content = filled > 0U;
       if (filled < STACKCHAN_AUDIO_CHUNK_SAMPLES) {
-        if (content) {
+        /* A sound's short last edge is the note ending, not a splice into
+         * speech; only staged response audio may move this instrument. */
+        if (content && !from_sound) {
           ++playback_partial_chunks;
         }
         memset(
@@ -604,11 +678,18 @@ static void io_task_main(void *argument) {
       if (content) {
         stackchan_audio_reserve_write(CHUNK_MS);
       }
+      /* Tagged before the write so the edge's own completion finds it. */
+      if (from_sound) {
+        __atomic_add_fetch(&sound_edges_in_flight, 1U, __ATOMIC_ACQ_REL);
+      }
       if (esp_codec_dev_write(
               speaker, playback_dma, (int)sizeof(playback_dma)) ==
           ESP_CODEC_DEV_OK) {
         consecutive_write_errors = 0U;
       } else {
+        if (from_sound) {
+          __atomic_sub_fetch(&sound_edges_in_flight, 1U, __ATOMIC_ACQ_REL);
+        }
         if (content) {
           stackchan_audio_rollback_write(CHUNK_MS);
         }

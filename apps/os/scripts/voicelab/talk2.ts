@@ -114,6 +114,14 @@ export interface Talk2Options extends TalkOptions {
   turnDetection?: string;
   /** Classify the answer into mouth shapes for a face-rendering board. */
   visemes?: boolean;
+  /**
+   * Extra tools for the birth certificate, as a JSON array of
+   * `{name, description, parameters?, expression}` entries — appended after
+   * the `--hang-up` base tool. Each `expression` is the itx walk the fold
+   * validates and the tool runner applies, e.g.
+   * `["clients",["get","/clients/stackchan"],"capabilities","face","set"]`.
+   */
+  tools?: string;
 }
 
 export async function talk2(options: Talk2Options = {}) {
@@ -200,17 +208,30 @@ export async function talk2(options: Talk2Options = {}) {
           type: string;
         },
       }),
-      ...(options.hangUp === true && {
-        tools: [
-          {
-            name: "hang_up",
-            description:
-              "End this call when the user says goodbye or the conversation is clearly " +
-              "over. Say a short goodbye BEFORE calling this; the call ends after you " +
-              "finish speaking.",
-          },
-        ],
-      }),
+      ...(() => {
+        const tools = [
+          ...(options.hangUp === true
+            ? [
+                {
+                  name: "hang_up",
+                  description:
+                    "End this call when the user says goodbye or the conversation is " +
+                    "clearly over. Say a short goodbye BEFORE calling this; the call " +
+                    "ends after you finish speaking.",
+                },
+              ]
+            : []),
+          ...(options.tools === undefined
+            ? []
+            : (JSON.parse(options.tools) as {
+                name: string;
+                description: string;
+                parameters?: Record<string, unknown>;
+                expression?: (string | [string, ...unknown[]])[];
+              }[])),
+        ];
+        return tools.length > 0 ? { tools } : {};
+      })(),
       ...(options.provider === undefined ? {} : { provider: options.provider }),
       ...(options.providerModel === undefined ? {} : { providerModel: options.providerModel }),
       ...(options.providerVoice === undefined ? {} : { providerVoice: options.providerVoice }),

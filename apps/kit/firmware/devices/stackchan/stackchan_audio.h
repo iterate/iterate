@@ -89,6 +89,16 @@ typedef bool (*stackchan_audio_playout_observer_fn)(
 void stackchan_audio_set_playout_observer(
     stackchan_audio_playout_observer_fn observer, void *context);
 
+/**
+ * Play a short flash-resident sound: 16 kHz mono PCM16LE, drained by the
+ * I/O task's edge composer AHEAD of staged response audio, so it starts
+ * within one 8 ms edge. It PREEMPTS rather than mixes — a second call
+ * replaces the first mid-note — and `pcm` must outlive the playback. The
+ * speaker plays it, so the canceller's divider reference carries it and the
+ * microphone does not hear the robot's own chimes.
+ */
+void stackchan_audio_play_sound(const uint8_t *pcm, uint32_t bytes);
+
 /** Telemetry counters for the health surface. */
 uint32_t stackchan_audio_capture_overruns(void);
 uint32_t stackchan_audio_capture_driver_failures(void);

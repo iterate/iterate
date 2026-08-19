@@ -3,9 +3,11 @@
  *
  * The program it runs is components/voice/src/voice_loop.c, and it is the same
  * program the other three run. What is left here is the hardware: a face on a
- * 320x240 panel with a status rail, a touch screen that is the only control,
- * a head on two servos, a camera, and — the one structural novelty — a
- * SOFTWARE echo canceller with three different frame sizes behind it.
+ * 320x240 panel, a touch screen that opens the provider menu, a PMIC side
+ * button that speaks the session grammar (stackchan_modes.c — wake with a
+ * chime, every end says "call ended"), a head on two servos, a camera, and —
+ * the one structural novelty — a SOFTWARE echo canceller with three
+ * different frame sizes behind it.
  *
  * THE CADENCES ARE THE INTERESTING PART. The codec completes 8 ms DMA chunks,
  * esp-sr's VOIP engine is fixed at 16 ms and fails closed if told otherwise,
@@ -33,6 +35,8 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "nvs.h"
+#include "nvs_flash.h"
 
 #include "iterate/kit/capabilities/arguments.h"
 #include "iterate/kit/capabilities/camera.h"
@@ -47,7 +51,11 @@
 #include "stackchan_avatar.h"
 #include "stackchan_body.h"
 #include "stackchan_camera.h"
+#include "stackchan_modes.h"
 #include "stackchan_processor.h"
+
+/* The baked chimes and provider announcements; see assets/make-sounds.py. */
+#include "assets/stackchan_sounds_generated.inc"
 
 static const char tag[] = "iterate-stackchan";
 
@@ -77,6 +85,119 @@ static bool body_shown_valid;
 static uint64_t last_body_write_ms;
 static uint64_t last_present_ms;
 
+/*
+ * The provider choice, the menu that changes it, and the session the side
+ * button speaks. The loop's two facts are mirrored here because `poll`
+ * classifies the session before the pass's view exists.
+ */
+static struct {
+  struct stackchan_menu menu;
+  struct stackchan_session session;
+  uint8_t mode;
+  bool call_active;
+  bool wants_call;
+} mode_state;
+
+/*
+ * The chosen provider survives a power cycle. This board brings its codec up
+ * BEFORE the radio, so unlike the HAVPE it cannot lean on the transport
+ * having mounted NVS already — load_mode initialises the store itself, which
+ * is idempotent and free when the transport does it again later.
+ */
+#define STACKCHAN_NVS_NAMESPACE "stackchan"
+#define STACKCHAN_NVS_MODE_KEY "mode"
+
+static uint8_t load_mode(void) {
+  nvs_handle_t handle;
+  uint8_t stored = STACKCHAN_MODE_OPENAI;
+  (void)nvs_flash_init();
+  if (nvs_open(STACKCHAN_NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) {
+    return STACKCHAN_MODE_OPENAI;
+  }
+  if (nvs_get_u8(handle, STACKCHAN_NVS_MODE_KEY, &stored) != ESP_OK ||
+      stored >= STACKCHAN_MODE_COUNT) {
+    stored = STACKCHAN_MODE_OPENAI;
+  }
+  nvs_close(handle);
+  return stored;
+}
+
+static void store_mode(uint8_t mode) {
+  nvs_handle_t handle;
+  if (nvs_open(STACKCHAN_NVS_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK) {
+    return;
+  }
+  if (nvs_set_u8(handle, STACKCHAN_NVS_MODE_KEY, mode) == ESP_OK) {
+    (void)nvs_commit(handle);
+  }
+  nvs_close(handle);
+}
+
+/*
+ * Point the loop at the mode's stream. `settled=false` is the silent boot
+ * restore; `settled=true` is a menu pick, which persists only a CHANGE and
+ * always announces — the person asked which provider this is, and the
+ * announcement is the answer. No turn policy moves here: both of this
+ * board's modes are server-VAD full duplex behind its own canceller.
+ */
+static void adopt_mode(uint8_t mode, bool settled) {
+  iterate_kit_voice_loop_set_stream_path(stackchan_mode_stream_path(mode));
+  if (settled) {
+    if (mode != mode_state.mode) store_mode(mode);
+    stackchan_audio_play_sound(
+        stackchan_mode_sounds[mode].pcm, stackchan_mode_sounds[mode].bytes);
+  }
+  mode_state.mode = mode;
+}
+
+/*
+ * THE HEAD GESTURES, stepped from `poll` on the app task: a gesture is a
+ * short fixed itinerary of on-servo moves, and the loop's own cadence is the
+ * timer — no task, no esp_timer chain, nothing to race the servo UART. Each
+ * step's dwell covers the on-servo move time plus a settle so the next move
+ * starts from a still head. The sequences are the v1 voice agent's, degrees
+ * and speeds unchanged.
+ */
+struct head_step {
+  int16_t yaw_degrees;
+  int16_t pitch_degrees;
+  uint16_t move_ms;
+  uint16_t dwell_ms;
+};
+
+static const struct head_step nod_steps[] = {
+  {0, 24, 260, 350}, {0, 0, 260, 350}, {0, 24, 260, 350}, {0, 0, 260, 350},
+};
+static const struct head_step shake_steps[] = {
+  {-26, 0, 240, 400}, {26, 0, 240, 400}, {-26, 0, 240, 400}, {0, 0, 240, 400},
+};
+
+static struct {
+  const struct head_step *steps; /* NULL when idle */
+  size_t count;
+  size_t index;
+  uint64_t next_at_ms;
+} gesture;
+
+static void head_gesture_begin(const struct head_step *steps, size_t count) {
+  gesture.steps = steps;
+  gesture.count = count;
+  gesture.index = 0U;
+  gesture.next_at_ms = 0U;
+}
+
+static void head_gesture_step(uint64_t now_ms) {
+  if (body == NULL || gesture.steps == NULL) return;
+  if (now_ms < gesture.next_at_ms) return;
+  {
+    const struct head_step *step = &gesture.steps[gesture.index];
+    (void)iterate_kit_stackchan_body_move_head(
+        body, step->yaw_degrees, step->pitch_degrees, step->move_ms);
+    gesture.next_at_ms = now_ms + step->dwell_ms;
+  }
+  if (++gesture.index >= gesture.count) gesture.steps = NULL;
+}
+
 static bool start(void *context, struct iterate_kit_board_audio *out) {
   (void)context;
   /*
@@ -98,6 +219,8 @@ static bool start(void *context, struct iterate_kit_board_audio *out) {
   /* The mouth animates audio the hardware actually played. */
   stackchan_audio_set_playout_observer(
       iterate_kit_stackchan_avatar_observe_playout, NULL);
+  /* The silent boot restore: dial whichever provider NVS remembers. */
+  adopt_mode(load_mode(), false);
   out->codec = stackchan_audio_codec();
   out->processor = stackchan_processor();
   return true;
@@ -147,6 +270,10 @@ static void present(
     return;
   }
   last_present_ms = now;
+  /* `poll` classifies the session before this pass's view exists, so the
+   * grammar reads last pass's facts — one poll of lag, invisible at 5 ms. */
+  mode_state.call_active = view->call_active;
+  mode_state.wants_call = view->wants_call;
   visual = (struct iterate_kit_conversation_visual_state){
     .network = view->link_ready ? ITERATE_KIT_NETWORK_CONNECTED
                                 : ITERATE_KIT_NETWORK_CONNECTING,
@@ -154,7 +281,13 @@ static void present(
         view->api_ready, view->stream_ready, view->call_active),
     .has_wifi_rssi = false,
     .wifi_rssi_dbm = 0,
-    .conversation_active = view->call_active,
+    /*
+     * A session in play, not just a call: the wake press must open the
+     * robot's eyes while the dial is still in flight, or the chime answers
+     * a face that sleeps through its own wake — and the body LEDs lighting
+     * during the dial is the working feedback the ring boards already give.
+     */
+    .conversation_active = view->call_active || view->wants_call,
     .media_ready = view->link_ready,
     .media_failed = view->fault,
     .microphone_listening = view->listening,
@@ -202,13 +335,57 @@ static void present(
 }
 
 static void poll(void *context, struct iterate_kit_voice_intent *out) {
+  const uint64_t now = (uint64_t)(esp_timer_get_time() / 1000);
   (void)context;
+  head_gesture_step(now);
   /*
-   * ONE CONTROL, AND IT IS THE WHOLE SCREEN. A coherent tap anywhere toggles
-   * whether a call is wanted; the loop resolves the toggle against the intent
-   * it holds, because this board cannot say start and end apart.
+   * THE SIDE BUTTON IS THE CALL, THE FACE IS THE MENU. The PMIC button
+   * speaks the session grammar — wake with a chime, tap again to end, and
+   * every end path says "call ended" through the machine's one exit edge.
+   * A tap on the glass opens the provider menu instead of toggling the
+   * call, which is the swap this board asked for: conversations on the
+   * button people can feel, choices on the screen people can read.
    */
-  out->toggle_call = iterate_kit_stackchan_avatar_take_call_touch_tap();
+  {
+    const struct stackchan_session_poll session_poll = {
+      .tap = iterate_kit_stackchan_avatar_take_side_button_tap(),
+      .wants_call = mode_state.wants_call,
+      .call_active = mode_state.call_active,
+    };
+    struct stackchan_session_actions actions;
+    stackchan_session_step(&mode_state.session, &session_poll, &actions);
+    /* End before wake: play_sound replaces rather than mixes, so if one
+     * poll carries both edges the newer intent wins. */
+    if (actions.end_chime) {
+      stackchan_audio_play_sound(
+          stackchan_sound_chime_ended, sizeof(stackchan_sound_chime_ended));
+    }
+    if (actions.wake_chime) {
+      stackchan_audio_play_sound(
+          stackchan_sound_chime_press, sizeof(stackchan_sound_chime_press));
+    }
+    out->start_call = actions.start_call;
+    out->end_call = actions.end_call;
+  }
+  {
+    bool left = false;
+    const bool tap = iterate_kit_stackchan_avatar_take_face_tap(&left);
+    const struct stackchan_menu_poll menu_poll = {
+      .tap = tap,
+      .tap_left_half = left,
+      .call_in_play = mode_state.call_active || mode_state.wants_call,
+      .now_ms = now,
+    };
+    uint8_t pick = STACKCHAN_MENU_NO_PICK;
+    const bool visible =
+        stackchan_menu_step(&mode_state.menu, &menu_poll, &pick);
+    if (pick != STACKCHAN_MENU_NO_PICK) adopt_mode(pick, true);
+    if (visible) {
+      iterate_kit_stackchan_avatar_show_menu(mode_state.mode);
+    } else {
+      iterate_kit_stackchan_avatar_hide_menu();
+    }
+  }
 }
 
 static void phase(void *context, enum iterate_kit_voice_phase phase_value) {
@@ -366,15 +543,95 @@ static enum capnweb_status screen_fill(
 }
 
 /*
- * The four this board has that no other does: a head, a camera, its own
- * screen as an image source, and the fill. Conversation control, the speaker
- * and health are the loop's, and push-to-talk is not mounted at all because
- * this board's turns are the provider's.
+ * `face.set({face})` — the ONLY face changer this board has left. The side
+ * button that used to cycle sprites opens conversations now, so a face
+ * nobody can ask for by name is a face the robot no longer makes. The slug
+ * is validated against the compiled catalogue by the avatar itself.
+ */
+static const char *const face_set_path[] = {"face", "set"};
+
+static enum capnweb_status face_set(
+    void *context,
+    const struct capnweb_call *call,
+    struct capnweb_reply *reply) {
+  struct capnweb_value object = {0};
+  struct capnweb_value slug = {0};
+  char buffer[48];
+  size_t length = 0U;
+  (void)context;
+  if (!iterate_kit_read_object_argument(call, &object) ||
+      !capnweb_value_object_get(&object, "face", &slug) ||
+      capnweb_value_copy_string(&slug, buffer, sizeof(buffer), &length) !=
+          CAPNWEB_OK) {
+    return capnweb_reply_set_error(
+        reply, "TypeError", "face.set needs {face} as a catalogue slug");
+  }
+  if (iterate_kit_stackchan_avatar_request_sprite_set(buffer, length) !=
+      ESP_OK) {
+    return capnweb_reply_set_error(
+        reply,
+        "Error",
+        "unknown face — the catalogue is dot-matrix-oracle, furnace-imp, "
+        "karakuri-brass, moonscope, starbyte");
+  }
+  return capnweb_reply_set_boolean(reply, true);
+}
+
+/*
+ * `head.nod()` / `head.shake()` — the two gestures as single calls, because
+ * a voice tool ends at ONE function: the model cannot conduct a four-move
+ * itinerary over the wire, so the itinerary lives here and the tool just
+ * names it. A gesture already in flight is replaced, newest intent wins.
+ */
+static const char *const head_nod_path[] = {"head", "nod"};
+static const char *const head_shake_path[] = {"head", "shake"};
+
+static enum capnweb_status head_gesture_call(
+    struct capnweb_reply *reply,
+    const struct head_step *steps,
+    size_t count) {
+  if (body == NULL) {
+    return capnweb_reply_set_error(
+        reply, "Error", "the body MCU is absent, so the head cannot move");
+  }
+  head_gesture_begin(steps, count);
+  return capnweb_reply_set_boolean(reply, true);
+}
+
+static enum capnweb_status head_nod(
+    void *context,
+    const struct capnweb_call *call,
+    struct capnweb_reply *reply) {
+  (void)context;
+  (void)call;
+  return head_gesture_call(
+      reply, nod_steps, sizeof(nod_steps) / sizeof(nod_steps[0]));
+}
+
+static enum capnweb_status head_shake(
+    void *context,
+    const struct capnweb_call *call,
+    struct capnweb_reply *reply) {
+  (void)context;
+  (void)call;
+  return head_gesture_call(
+      reply, shake_steps, sizeof(shake_steps) / sizeof(shake_steps[0]));
+}
+
+/*
+ * What this board has that no other does: a head (raw moves and the two
+ * named gestures), a camera, its own screen as an image source, the fill,
+ * and a face that can be asked for by name. Conversation control, the
+ * speaker and health are the loop's, and push-to-talk is not mounted at all
+ * because this board's turns are the provider's.
  */
 static size_t modules(
     void *context, struct iterate_kit_module *out, size_t capacity) {
-  static const struct iterate_kit_method screen_fill_methods[] = {
+  static const struct iterate_kit_method board_methods[] = {
     {screen_fill_path, 2U, screen_fill},
+    {face_set_path, 2U, face_set},
+    {head_nod_path, 2U, head_nod},
+    {head_shake_path, 2U, head_shake},
   };
   static struct iterate_kit_servos servos;
   static struct iterate_kit_camera camera;
@@ -441,8 +698,8 @@ static size_t modules(
     }
   }
   out[count++] = (struct iterate_kit_module){
-    .methods = screen_fill_methods,
-    .method_count = sizeof(screen_fill_methods) / sizeof(screen_fill_methods[0]),
+    .methods = board_methods,
+    .method_count = sizeof(board_methods) / sizeof(board_methods[0]),
     .context = NULL,
     .close = NULL,
     .session_ended = NULL,
@@ -587,8 +844,11 @@ static const struct iterate_kit_board_facts facts = {
   .greeting = "Hi, I am your Iterate device. What can I do for you?",
   .instructions =
       "StackChan: a small desk robot with a face, a moving head and a camera. "
-      "Touching its screen starts and ends the call, and its microphone stays "
-      "OPEN throughout — it cancels its own speaker, so it can be interrupted. "
+      "Its SIDE BUTTON starts and ends the call — with a chime on wake and a "
+      "spoken \"call ended\" on every end — and its microphone stays OPEN "
+      "throughout: it cancels its own speaker, so it can be interrupted. "
+      "Tapping its face opens a two-cell provider menu (Grok left, OpenAI "
+      "right); the choice is announced and survives reboots. "
       "conversation.start() and conversation.end() begin and end a call. "
       "health() returns this device's full diagnostics — start there when it "
       "seems unwell. "
@@ -597,7 +857,10 @@ static const struct iterate_kit_board_facts facts = {
       "it back. Both answer {percent,ceiling}. "
       "servos.move({yawDegrees,pitchDegrees,speed}) turns its head: yaw -128 "
       "to 128, pitch 0 to 90, speed up to 1000. Returning to 0,0 is looking "
-      "straight ahead. "
+      "straight ahead. head.nod() nods yes and head.shake() shakes no — one "
+      "call each, the itinerary is the board's. "
+      "face.set({face}) changes which face it wears; the catalogue is "
+      "dot-matrix-oracle, furnace-imp, karakuri-brass, moonscope, starbyte. "
       "camera.take() photographs what it can see and returns "
       "{width,height,contentType,bytes,chunkSize,chunks}; "
       "camera.readChunk({index}) then returns each piece in order, because one "
@@ -619,7 +882,10 @@ static const struct iterate_kit_board_facts facts = {
       "{\"instructions\":\"StackChan voice robot. "
       "conversation.start() / conversation.end() begin and end a call. "
       "servos.move({yawDegrees,pitchDegrees,speed}) turns its head; yaw "
-      "-128..128, pitch 0..90, speed up to 1000. "
+      "-128..128, pitch 0..90, speed up to 1000. head.nod() nods yes and "
+      "head.shake() shakes no, one call each. "
+      "face.set({face}) changes which face it wears; the catalogue is "
+      "dot-matrix-oracle, furnace-imp, karakuri-brass, moonscope, starbyte. "
       "speaker.setVolume({percent}) sets how loud it plays, 0-100; it clamps "
       "to a ceiling this board has a measured reason for and answers with "
       "{percent,ceiling}, which speaker.volume() also returns. "
@@ -635,7 +901,7 @@ static const struct iterate_kit_board_facts facts = {
       "the same for the panel's current contents, and screen.fill({colour}) "
       "paints it flat.\",\"children\":{}}",
   .talk_hint = "speak whenever you like",
-  .call_hint = "connection lost — touch the screen to call",
+  .call_hint = "connection lost — press the side button to call",
   .speaker = {
     .context = NULL,
     .set_volume = set_volume,

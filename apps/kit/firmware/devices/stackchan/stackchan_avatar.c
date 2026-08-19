@@ -139,7 +139,6 @@ _Static_assert(
     BSP_LCD_H_RES == STACKCHAN_AVATAR_SCALED_WIDTH &&
         BSP_LCD_V_RES == STACKCHAN_AVATAR_SCALED_HEIGHT,
     "StackChan exact 2x output must cover the complete physical LCD");
-#define STACKCHAN_STATUS_RAIL_WIDTH 13U
 static const char *const TAG = "iterate-stackchan-avatar";
 
 struct stackchan_avatar_frame {
@@ -244,8 +243,21 @@ struct stackchan_avatar_owner {
    * could make an RPC burst visible as delayed UI work beside realtime audio.
    */
   volatile uint32_t pending_avatar_index_plus_one;
-  volatile uint32_t pending_face_button_steps;
-  volatile uint32_t pending_call_touch_taps;
+  volatile uint32_t pending_side_button_taps;
+  /*
+   * Completed face taps, with the half of the panel the LAST one pressed.
+   * Two taps between device polls collapse onto the newest zone, which for
+   * a 20 ms sampler and a human finger is a distinction without a case.
+   */
+  volatile uint32_t pending_face_taps;
+  volatile uint32_t last_face_tap_left;
+  volatile uint32_t last_touch_x;
+  /*
+   * Zero hides the provider menu; otherwise highlighted cell + 1. A
+   * latest-only atomic slot like the avatar request: the menu is state the
+   * device owns, and the render task only ever needs the newest one.
+   */
+  volatile uint32_t menu_highlight_plus_one;
   bool face_button_baseline_established;
   volatile uint64_t speaker_status_active_through_us;
   volatile uint32_t started;
@@ -428,31 +440,103 @@ static void swap_rgb565_bytes_for_panel(void) {
 }
 
 /*
- * The status surface is no longer this file's invention. It used to be three
- * hand-picked capital letters over the avatar's eye, drawn from a sixteen-
- * glyph alphabet that lived here, meaning this board said "NET" where the
- * ring on the next desk glowed white and the Stick printed prose. The shared
- * overlay draws the same twelve lights and the same words on every screen;
- * all this adapter still owns is the one fact only it can know.
+ * THE PROVIDER MENU, drawn over the face for the moment it is open.
+ *
+ * Two cells, left and right — the same halves the touch hit-test uses, one
+ * comparison on either side, so the drawing and the picking cannot
+ * disagree. The labels come from a nine-glyph 5x7 alphabet: exactly the
+ * letters GROK and OPENAI spend, because a menu with two words does not
+ * need a font, it needs those two words.
  */
-static struct iterate_kit_conversation_visual_state status_with_physical_speaker(
-    void) {
-  struct iterate_kit_conversation_visual_state status = owner.latest_status;
-  /*
-   * Physical speaker completion owns mouth amplitude, so it also owns the
-   * speaker sector.  The control loop intentionally publishes zero here: a
-   * WebSocket packet or provider event is not proof that sound reached I2S.
-   */
-  const bool speaker_active = status.conversation_active &&
-      status.media_ready &&
-      now_us_wide() < __atomic_load_n(
-          &owner.speaker_status_active_through_us, __ATOMIC_ACQUIRE);
-  status.speaker_peak = speaker_active
-      ? (owner.latest_pose.level < 256U
-            ? 256U
-            : owner.latest_pose.level)
-      : 0U;
-  return status;
+enum {
+  MENU_CELL_TOP = 34U,
+  MENU_CELL_BOTTOM = 86U,
+  MENU_CELL_INSET = 2U,     /* from the panel edge and from the midline */
+  MENU_GLYPH_SCALE = 2U,    /* 5x7 source glyphs, so 20x28 on the panel */
+};
+
+/* Rows top-down, bit 4 = leftmost column. */
+static const uint8_t menu_glyphs[9][7] = {
+  /* G */ {0x0e, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0e},
+  /* R */ {0x1e, 0x11, 0x11, 0x1e, 0x14, 0x12, 0x11},
+  /* O */ {0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e},
+  /* K */ {0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11},
+  /* P */ {0x1e, 0x11, 0x11, 0x1e, 0x10, 0x10, 0x10},
+  /* E */ {0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x1f},
+  /* N */ {0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11},
+  /* A */ {0x0e, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11},
+  /* I */ {0x0e, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0e},
+};
+
+enum { MENU_G, MENU_R, MENU_O, MENU_K, MENU_P, MENU_E, MENU_N, MENU_A, MENU_I };
+static const uint8_t menu_word_grok[] = {MENU_G, MENU_R, MENU_O, MENU_K};
+static const uint8_t menu_word_openai[] = {
+  MENU_O, MENU_P, MENU_E, MENU_N, MENU_A, MENU_I};
+
+static void menu_fill_rect(
+    uint32_t left, uint32_t top, uint32_t right, uint32_t bottom,
+    uint16_t colour) {
+  for (uint32_t y = top; y < bottom && y < FACE_RENDER_HEIGHT; ++y) {
+    uint16_t *row = owner.framebuffer + (size_t)y * FACE_RENDER_WIDTH;
+    for (uint32_t x = left; x < right && x < FACE_RENDER_WIDTH; ++x) {
+      row[x] = colour;
+    }
+  }
+}
+
+static void menu_draw_word(
+    const uint8_t *word, size_t length, uint32_t centre_x, uint32_t centre_y,
+    uint16_t colour) {
+  const uint32_t advance = 5U * MENU_GLYPH_SCALE + MENU_GLYPH_SCALE;
+  const uint32_t width = (uint32_t)length * advance - MENU_GLYPH_SCALE;
+  uint32_t pen_x = centre_x - width / 2U;
+  const uint32_t pen_y = centre_y - (7U * MENU_GLYPH_SCALE) / 2U;
+  for (size_t index = 0U; index < length; ++index) {
+    const uint8_t *rows = menu_glyphs[word[index]];
+    for (uint32_t gy = 0U; gy < 7U; ++gy) {
+      for (uint32_t gx = 0U; gx < 5U; ++gx) {
+        if ((rows[gy] & (0x10U >> gx)) == 0U) continue;
+        menu_fill_rect(
+            pen_x + gx * MENU_GLYPH_SCALE,
+            pen_y + gy * MENU_GLYPH_SCALE,
+            pen_x + (gx + 1U) * MENU_GLYPH_SCALE,
+            pen_y + (gy + 1U) * MENU_GLYPH_SCALE,
+            colour);
+      }
+    }
+    pen_x += advance;
+  }
+}
+
+/* Analyzer task only, before the byte swap: host-order RGB565. */
+static void menu_draw_overlay(uint8_t highlighted) {
+  const uint32_t midline = FACE_RENDER_WIDTH / 2U;
+  for (uint8_t cell = 0U; cell < 2U; ++cell) {
+    const uint32_t left =
+        cell == 0U ? MENU_CELL_INSET : midline + MENU_CELL_INSET;
+    const uint32_t right =
+        cell == 0U ? midline - MENU_CELL_INSET
+                   : FACE_RENDER_WIDTH - MENU_CELL_INSET;
+    const bool bright = cell == highlighted;
+    /* Border first, fill inside it: 1 source pixel = 2 panel pixels. */
+    menu_fill_rect(
+        left, MENU_CELL_TOP, right, MENU_CELL_BOTTOM,
+        bright ? 0xffffU : 0x8410U);
+    menu_fill_rect(
+        left + 1U, MENU_CELL_TOP + 1U, right - 1U, MENU_CELL_BOTTOM - 1U,
+        bright ? 0x2104U : 0x18e3U);
+    if (cell == 0U) {
+      menu_draw_word(
+          menu_word_grok, sizeof(menu_word_grok),
+          (left + right) / 2U, (MENU_CELL_TOP + MENU_CELL_BOTTOM) / 2U,
+          bright ? 0xffffU : 0x8410U);
+    } else {
+      menu_draw_word(
+          menu_word_openai, sizeof(menu_word_openai),
+          (left + right) / 2U, (MENU_CELL_TOP + MENU_CELL_BOTTOM) / 2U,
+          bright ? 0xffffU : 0x8410U);
+    }
+  }
 }
 
 /* Analyzer task only (prepare_avatar_frame_under_lock), so no lock. */
@@ -514,6 +598,11 @@ static bool prepare_avatar_frame_under_lock(
      */
     atomic_saturating_increment(&owner.metrics.render_failures);
     return false;
+  }
+  {
+    const uint32_t menu = __atomic_load_n(
+        &owner.menu_highlight_plus_one, __ATOMIC_ACQUIRE);
+    if (menu != 0U) menu_draw_overlay((uint8_t)(menu - 1U));
   }
   swap_rgb565_bytes_for_panel();
   *render_cpu_us = saturating_elapsed_us(now_us_wide(), started_at_us);
@@ -705,13 +794,32 @@ static void sample_physical_controls(void) {
     /*
      * A failed I2C read is not a release. Omitting the sample preserves the
      * last coherent level; feeding false into the edge detector would turn a
-     * transient bus fault into an unintended call toggle.
+     * transient bus fault into an unintended tap.
      */
     atomic_saturating_increment(&owner.metrics.touch_read_failures);
-  } else if (iterate_kit_touch_tap_update(
-                 &owner.touch_tap, touch_point_count != 0U)) {
-    atomic_saturating_increment(&owner.metrics.touch_taps);
-    atomic_saturating_increment(&owner.pending_call_touch_taps);
+  } else {
+    /*
+     * The finger's place is only reported while it is DOWN, so the half a
+     * completed tap chose has to be remembered from the press: by the
+     * release sample that completes the tap, the controller has nothing
+     * left to say about where it was.
+     */
+    if (touch_point_count != 0U) {
+      __atomic_store_n(
+          &owner.last_touch_x, (uint32_t)touch_point.x, __ATOMIC_RELAXED);
+    }
+    if (iterate_kit_touch_tap_update(
+            &owner.touch_tap, touch_point_count != 0U)) {
+      atomic_saturating_increment(&owner.metrics.touch_taps);
+      __atomic_store_n(
+          &owner.last_face_tap_left,
+          __atomic_load_n(&owner.last_touch_x, __ATOMIC_RELAXED) <
+                  (uint32_t)(BSP_LCD_H_RES / 2U)
+              ? 1U
+              : 0U,
+          __ATOMIC_RELEASE);
+      atomic_saturating_increment(&owner.pending_face_taps);
+    }
   }
 
   atomic_saturating_increment(&owner.metrics.face_button_samples);
@@ -739,13 +847,14 @@ static void sample_physical_controls(void) {
     }
   } else if (power_events == BSP_POWER_BUTTON_EVENT_SHORT_PRESS) {
     /*
-     * Face changes are rendered by the analyzer owner, not this I2C task. A
-     * step count preserves two quick clicks without introducing a registry
-     * lock or making this low-rate input path wait behind LCD DMA.
+     * The side button is the CALL control now — wake a session, end a
+     * session — consumed by the device's poll through the session grammar.
+     * Face changes moved to the far end's set_face tool; the button that
+     * used to cycle sprites opens conversations instead.
      */
     atomic_saturating_increment(
         &owner.metrics.face_button_short_clicks);
-    atomic_saturating_increment(&owner.pending_face_button_steps);
+    atomic_saturating_increment(&owner.pending_side_button_taps);
   } else if (power_events != BSP_POWER_BUTTON_EVENT_NONE) {
     /*
      * AXP2101 owns the long-hold hard-power policy. Recording the event but
@@ -836,22 +945,6 @@ static void analyzer_task_main(void *context) {
        * failure now means internal registry corruption, so disable rendering
        * rather than acknowledging further phantom visual changes.
        */
-      if (!select_avatar_index(requested_index)) {
-        rendering_enabled = false;
-      } else {
-        next_render_at_us = 0U;
-      }
-    }
-
-    const uint32_t face_steps = __atomic_exchange_n(
-        &owner.pending_face_button_steps, 0U, __ATOMIC_ACQ_REL);
-    if (rendering_enabled && face_steps != 0U) {
-      const size_t avatar_count = face_avatar_registry_count();
-      const size_t current_index = (size_t)__atomic_load_n(
-          &owner.metrics.current_avatar_index, __ATOMIC_ACQUIRE);
-      const size_t requested_index =
-          (current_index + (size_t)(face_steps % avatar_count)) %
-          avatar_count;
       if (!select_avatar_index(requested_index)) {
         rendering_enabled = false;
       } else {
@@ -1099,15 +1192,15 @@ esp_err_t iterate_kit_stackchan_avatar_request_status(
   return ESP_OK;
 }
 
-bool iterate_kit_stackchan_avatar_take_call_touch_tap(void) {
+/* CAS-decrement one pending count so a quick pair cannot collapse. */
+static bool take_pending(volatile uint32_t *pending) {
   if (__atomic_load_n(&owner.ready, __ATOMIC_ACQUIRE) == 0U) {
     return false;
   }
-  uint32_t current = __atomic_load_n(
-      &owner.pending_call_touch_taps, __ATOMIC_ACQUIRE);
+  uint32_t current = __atomic_load_n(pending, __ATOMIC_ACQUIRE);
   while (current != 0U) {
     if (__atomic_compare_exchange_n(
-            &owner.pending_call_touch_taps,
+            pending,
             &current,
             current - 1U,
             false,
@@ -1117,6 +1210,28 @@ bool iterate_kit_stackchan_avatar_take_call_touch_tap(void) {
     }
   }
   return false;
+}
+
+bool iterate_kit_stackchan_avatar_take_face_tap(bool *left_half) {
+  if (!take_pending(&owner.pending_face_taps)) return false;
+  *left_half =
+      __atomic_load_n(&owner.last_face_tap_left, __ATOMIC_ACQUIRE) != 0U;
+  return true;
+}
+
+bool iterate_kit_stackchan_avatar_take_side_button_tap(void) {
+  return take_pending(&owner.pending_side_button_taps);
+}
+
+void iterate_kit_stackchan_avatar_show_menu(uint8_t highlighted) {
+  __atomic_store_n(
+      &owner.menu_highlight_plus_one,
+      (uint32_t)highlighted + 1U,
+      __ATOMIC_RELEASE);
+}
+
+void iterate_kit_stackchan_avatar_hide_menu(void) {
+  __atomic_store_n(&owner.menu_highlight_plus_one, 0U, __ATOMIC_RELEASE);
 }
 
 bool IRAM_ATTR iterate_kit_stackchan_avatar_observe_playout(

@@ -117,14 +117,35 @@ esp_err_t iterate_kit_stackchan_avatar_request_status(
 uint32_t iterate_kit_stackchan_avatar_speaker_status_peak(void);
 
 /**
- * Consumes one whole-screen tap, if one is pending.
+ * Consumes one completed face tap, if one is pending.
  *
- * Coordinates are deliberately absent: every coherent press/release anywhere
- * on the panel means start/end call. The dedicated input owner counts taps so
- * a quick start/end pair cannot collapse into one latest-state update. This
+ * `*left_half` reports which half of the panel the tap pressed — the only
+ * coordinate the provider menu needs, remembered from the press because the
+ * release sample carries no position. The dedicated input owner counts taps
+ * so a quick pair cannot collapse into one latest-state update. This
  * consumer is constant-time and never touches the shared I2C bus.
  */
-bool iterate_kit_stackchan_avatar_take_call_touch_tap(void);
+bool iterate_kit_stackchan_avatar_take_face_tap(bool *left_half);
+
+/**
+ * Consumes one PMIC side-button tap, if one is pending.
+ *
+ * The side button is the CALL control — the session grammar's wake and end —
+ * not the face changer it used to be; faces move by the far end's set_face
+ * tool now. Long presses never arrive here: the AXP2101 owns hard power-off.
+ */
+bool iterate_kit_stackchan_avatar_take_side_button_tap(void);
+
+/**
+ * Show or hide the two-cell provider menu over the face.
+ *
+ * `highlighted` is 0 for the left cell (Grok), 1 for the right (OpenAI) —
+ * the same halves the tap hit-test reports, so drawing and picking cannot
+ * disagree. Latest-state atomics like the sprite request: the render owner
+ * reads the newest value at its own 15 Hz and never waits for the caller.
+ */
+void iterate_kit_stackchan_avatar_show_menu(uint8_t highlighted);
+void iterate_kit_stackchan_avatar_hide_menu(void);
 
 /**
  * Accepts one 128-sample frame which has completed speaker DMA.
