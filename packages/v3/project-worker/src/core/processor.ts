@@ -233,7 +233,10 @@ export abstract class StreamProcessor<State> {
       await this.#rereduceIfVersionChanged();
       const progress = this.#loadProgress();
       if (scannedOffsetRange.scannedAfterOffset === progress.reducedThroughOffset) {
-        await this.#processBatch(events, scannedOffsetRange, true);
+        // atHead only if a LATER push hasn't already shown us a higher head (two enqueued
+        // back-to-back must not each fire caughtUp — only the one reaching the shown head).
+        const atHead = scannedOffsetRange.scannedThroughOffset >= (this.#pushedThroughOffset ?? 0);
+        await this.#processBatch(events, scannedOffsetRange, atHead);
       } else if (scannedOffsetRange.scannedThroughOffset > progress.reducedThroughOffset) {
         await this.#catchUpBody(); // gap (fresh incarnation, dropped push) — repair from the log
       } // else: a stale redelivery — the scannedOffsetRange is already behind us; nothing to do
@@ -284,7 +287,25 @@ export abstract class StreamProcessor<State> {
         );
       }, timeoutMs);
       this.#waiters.push(waiter);
-      void this.wake();
+      void this.wake()
+        .then(() => {
+          // The offset may have been reached by the wake's own catch-up OR by a version refold
+          // (which sets progress without a #processBatch that resolves waiters). Re-check here.
+          const i = this.#waiters.indexOf(waiter);
+          if (i !== -1 && this.#loadProgress().reducedThroughOffset >= offset) {
+            this.#waiters.splice(i, 1);
+            waiter.resolve();
+          }
+        })
+        // A rejecting self-pull (read threw) rejects THIS waiter promptly with the real error,
+        // not a park-until-timeout with a generic message.
+        .catch((error) => {
+          const i = this.#waiters.indexOf(waiter);
+          if (i === -1) return; // already resolved/timed-out
+          this.#waiters.splice(i, 1);
+          clearTimeout(timer);
+          reject(error instanceof Error ? error : new Error(String(error)));
+        });
     });
   }
 
@@ -316,43 +337,58 @@ export abstract class StreamProcessor<State> {
       this.#progressKey(),
     );
     const state = this.#storage.get<State>(this.#stateKey());
-    this.#progress =
+    if (
       cursor &&
       cursor.reducerVersion === this.contract.version &&
       (state !== undefined || cursor.reducedThroughOffset === 0)
-        ? {
-            reducerVersion: cursor.reducerVersion,
-            reducedThroughOffset: cursor.reducedThroughOffset,
-            state: state !== undefined ? state : this.contract.initialState(),
-          }
-        : {
-            reducerVersion: this.contract.version,
-            reducedThroughOffset: 0,
-            state: this.contract.initialState(),
-          };
-    return this.#progress;
+    ) {
+      this.#progress = {
+        reducerVersion: cursor.reducerVersion,
+        reducedThroughOffset: cursor.reducedThroughOffset,
+        state: state !== undefined ? state : this.contract.initialState(),
+      };
+      return this.#progress;
+    }
+    // A VERSION MISMATCH (or missing state) returns the fresh fallback WITHOUT caching it: the
+    // refold in #rereduceIfVersionChanged bails if #progress is already set, so caching here
+    // would skip the refold and replay the whole log WITH side effects (defect 17).
+    return {
+      reducerVersion: this.contract.version,
+      reducedThroughOffset: 0,
+      state: this.contract.initialState(),
+    };
   }
 
   /** Re-reduce from offset 0 (the contract version changed). Durable rows only — never re-runs
    *  effects, and (by design) never sees dead ephemerals. */
   async #rereduceIfVersionChanged(): Promise<void> {
     if (this.#progress) return; // version can't change within an incarnation — probe storage once
-    const stored = this.#storage.get<{ reducerVersion: string }>(this.#progressKey());
+    const stored = this.#storage.get<{ reducerVersion: string; reducedThroughOffset: number }>(
+      this.#progressKey(),
+    );
     if (!stored || stored.reducerVersion === this.contract.version) return;
+    // Rebuild ONLY through the offset the OLD cursor covered (reduce-only, no effects). Events
+    // past it are the job of the normal flow that follows — refolding to the live head instead
+    // would judge an already-queued in-flight push stale and swallow its effects (defect 18).
+    const target = stored.reducedThroughOffset;
     let state = this.contract.initialState();
     let after = 0;
-    for (;;) {
+    while (after < target) {
       const page = await this.stream.read(after, 500);
       for (const event of page.events) {
-        if (this.#consumes(event)) state = this.reduce({ event, state }) ?? state;
+        if (event.offset > target) break;
+        if (consumesEvent(this.contract.consumes, event))
+          state = this.reduce({ event, state }) ?? state;
       }
-      after = page.scannedThroughOffset;
+      const scannedTo = Math.min(page.scannedThroughOffset, target);
+      if (scannedTo <= after) break;
+      after = scannedTo;
       if (page.events.length < 500) break;
     }
-    this.#progress = { reducerVersion: this.contract.version, reducedThroughOffset: after, state };
+    this.#progress = { reducerVersion: this.contract.version, reducedThroughOffset: target, state };
     this.#storage.put(this.#progressKey(), {
       reducerVersion: this.contract.version,
-      reducedThroughOffset: after,
+      reducedThroughOffset: target,
     });
     this.#storage.put(this.#stateKey(), state);
   }
@@ -372,12 +408,6 @@ export abstract class StreamProcessor<State> {
       await this.#processBatch(page.events, scannedOffsetRange, page.events.length < 500);
       if (page.events.length < 500) return;
     }
-  }
-
-  /** `"*"` covers every durable event; an ephemeral event must be NAMED to be consumed —
-   *  except LIVE_STATE_CHANGED, which nothing may consume, ever (the loop guard). */
-  #consumes(event: StreamEventT): boolean {
-    return consumesEvent(this.contract.consumes, event);
   }
 
   /** Rules 2–5 over one contiguous scannedOffsetRange. The caller established contiguity. */
@@ -455,7 +485,7 @@ export abstract class StreamProcessor<State> {
 
     const sawDurable = events.some((e) => !e.ephemeral);
     const consumable = events.filter(
-      (e) => this.#consumes(e) && e.offset > progress.reducedThroughOffset, // redelivery dedupe
+      (e) => consumesEvent(this.contract.consumes, e) && e.offset > progress.reducedThroughOffset,
     );
     for (let i = 0; i < consumable.length; i++) {
       await runOne(consumable[i], atHead && i === consumable.length - 1);

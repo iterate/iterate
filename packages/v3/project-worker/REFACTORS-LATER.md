@@ -21,3 +21,12 @@ fix stays small and reviewable. Revisit deliberately.
   "props changed → rebuild" branch in all three configure bodies. Deriving props from the mount
   per-op would delete the props field + the rebuild branch — but it needs a new parent door
   (facet reads props from the parent's table), crossing the facet/parent seam. Design change.
+
+- **Forwarder: unify onto apps/os's single ownership-token + level-triggered orphan GC** (Phase
+  B review): replace the two-signal rev/fresh-deleted scheme with one #deliveryStillMatches-style
+  token. Blocked on giving the facet progress store key enumeration (list()) so run() can sweep
+  progress records with no active mount. Real layering change.
+- **Runner concurrency/gap-repair defects deferred from Phase C (6, 19, 20, 21, 22)**: in-batch
+  dedupe double-reduce (event log), nested blockProcessorWhile escaping the hold, at-head stall
+  on exact 500-multiples, named ephemerals dropped on a non-contiguous push, deep-payload
+  idempotent-retry depth. Each is subtle enough to want its own focused session + soak.

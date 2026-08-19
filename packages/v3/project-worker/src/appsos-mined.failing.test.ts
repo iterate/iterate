@@ -62,7 +62,7 @@ class CaughtUpProbe extends StreamProcessor<{ n: number }> {
 // ─────────────────────────────── PROCESSOR BASE CLASS ───────────────────────────────
 
 describe("StreamProcessor delivery.caughtUp is tied to the SHOWN head", () => {
-  test.fails("two contiguous pushes where the first does NOT reach the shown head fire caughtUp exactly ONCE", async () => {
+  test("FIXED (defect 35): two contiguous pushes — only the one reaching the shown head fires caughtUp", async () => {
     // BUG: processEventBatch records the highest scannedThroughOffset it has ever been SHOWN
     //   (#pushedThroughOffset), yet the contiguous branch calls #processBatch(events, range,
     //   /*atHead*/ true) — hardcoded true — so EVERY contiguous push fires delivery.caughtUp,
@@ -113,7 +113,7 @@ describe("StreamProcessor delivery.caughtUp is tied to the SHOWN head", () => {
 });
 
 describe("StreamProcessor.waitUntilProcessed fails fast on a failed self-pull", () => {
-  test.fails("a self-pull that THROWS rejects with the read failure, not the generic timeout", async () => {
+  test("FIXED (defect 36): a self-pull that THROWS rejects with the read failure, not the generic timeout", async () => {
     // BUG: waitUntilProcessed registers a waiter and fires `void this.wake()`; wake enqueues
     //   #catchUpBody on the serial chain, whose failure is swallowed by #enqueue's
     //   `.catch(() => {})` (a failed batch must not wedge the chain). The waiter is never told,

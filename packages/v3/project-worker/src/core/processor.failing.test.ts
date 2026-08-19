@@ -413,7 +413,7 @@ const makeVersioned = (
 };
 
 describe("version bump re-reduce", () => {
-  test.fails("BUG: a push in flight on a bumped incarnation loses the NEW event's processEvent forever", async () => {
+  test("FIXED (defect 18): a push in flight on a bumped incarnation keeps the NEW event's processEvent", async () => {
     // BUG: #rereduceIfVersionChanged refolds all the way to the CURRENT head (including events
     //      no incarnation ever processed), then the pushed range is judged a stale redelivery
     //      (`scannedThroughOffset > progress.reducedThroughOffset` is false) and skipped.
@@ -443,7 +443,7 @@ describe("version bump re-reduce", () => {
     expect(effects).toContain("effect 3"); // …but its side effects must have run too
   });
 
-  test.fails("BUG: waitUntilProcessed before the first chain slot DISABLES the reduce-only refold — old side effects re-run", async () => {
+  test("FIXED (defect 17): waitUntilProcessed before the first chain slot keeps the refold reduce-only", async () => {
     // BUG: waitUntilProcessed's fast-path check calls #loadProgress(), which CACHES the
     //      version-mismatch fallback ({version: new, offset: 0, state: initial}) into
     //      #progress; #rereduceIfVersionChanged's `if (this.#progress) return` then skips the

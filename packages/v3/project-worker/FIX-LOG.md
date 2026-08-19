@@ -27,3 +27,12 @@ REFACTORS-LATER.md instead, not here.
   RpcTarget) then `.double()` on it, and that Row's own getter→fn, both work (invokePath walks
   where the stub lives). `itx.workers.get({source}).run(args)` IS the string-eval thin wrapper
   over the loader. No gap found; no thin `itx.run`/`itx.eval` alias exists (buffet option).
+- Phase C (live-19): the runner, carefully. #loadProgress no longer caches the version-mismatch
+  fallback, so #rereduceIfVersionChanged still fires — a version bump re-reduces reduce-ONLY, no
+  side-effect replay regardless of which verb touches first (17, ☠); the refold rebuilds only
+  through the OLD cursor's offset so an in-flight push isn't judged stale (18); waitUntilProcessed
+  resolves waiters reached by the refold AND rejects promptly on a throwing self-pull (36);
+  caughtUp fires only for the batch reaching the shown head (35). Phase B review cook-down:
+  inlined #consumes. 4 tests flipped. DEFERRED (need a soak — noted): 6 in-batch dedupe
+  double-reduce, 19 nested blockers, 20 at-head 500-multiple, 21 non-contiguous ephemerals, 22
+  deep-payload dedupe.
