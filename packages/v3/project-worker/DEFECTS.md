@@ -92,6 +92,27 @@ ProjectSession) (~4 lines).
     idempotency over reassembled bodies. Est +60/-10 lines in StreamEventLog. NOT a no-brainer
     but well-specified by the extracted contract.
 
+## Family H — WebSocket fetch through a live capability (verdict: hop-by-hop, 2026-08-19)
+
+Tests: \_\_tests\_\_/failing-ws-fetch-capability.test.ts (2 pass / 2 fails / 1 todo)
+
+26. PINNED WORKING: live-capability HTTP fetch end to end — eyeball → /cap → DO fetch lane →
+    connections alias → invoker → relay → capnweb → Node provider's fetch() and back (201 +
+    body + headers intact). Also pinned: an UPGRADE Request reaches the provider with its
+    Upgrade header intact, and provider throws ride back as the fetch lane's 500.
+27. ⚠ The 101 ANSWER is impossible from a Node provider: no WebSocketPair; undici Response
+    rejects status 101. NOT our bug — but the platform half (would OUR lane forward a genuine
+    101 from a live capability?) is untestable until defect 28 is fixed or capnweb serializes
+    WebSocket-in-Response. FIX options: (a) document Node providers as HTTP-fetch-only and
+    route WS-serving capabilities through loaded workers (works in prod — prove_crisp1); (b) a
+    relay-side upgrade adapter: the RELAY (workerd!) mints the WebSocketPair and bridges frames
+    to the provider over capnweb callbacks (+~40 lines, real design work — NOT a no-brainer).
+28. ⚠ HARNESS-LANE BUG: the loaded-worker lane is dead under createTestHarness — workerd
+    rejects the experimental allow_irrevocable_stub_storage flag on DYNAMIC loader children
+    without --experimental, and TestHarnessOptions has no passthrough. Production fine
+    (prove_crisp1 passes live). FIX candidates: wrangler issue/patch for a flag knob; or the
+    pool lane carries all loader coverage (it accepts the flag) — zero code, document it.
+
 ## Infra findings (not defects in our code)
 
 - Harness lane can't boot the Worker Loader (workerd --experimental knob missing in
