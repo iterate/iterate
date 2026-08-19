@@ -44,6 +44,7 @@ import {
   type TalkOptions,
 } from "./talk.ts";
 import { voiceAgent2EntrypointRef } from "./voice-agent2-ref.ts";
+import type VoiceAgent2Entrypoint from "./config-repo/voice-agent2.ts";
 
 const DEFAULT_PROJECT = "voice-test";
 const DEFAULT_MINUTES = 30;
@@ -63,27 +64,15 @@ const DEFAULT_INSTRUCTIONS =
   "You are Iterate, a voice assistant on a small speaker. Keep replies short and " +
   "natural. When asked to count, count steadily and do not stop early.";
 
-/** The RPC contract exported by voice-agent2.ts, which no generated client can carry. */
-interface VoiceAgent2Setup {
-  health(): Promise<{ ok: true; projectId: string }>;
-  setupVoiceAgent2(options?: {
-    streamPath?: string;
-    providerBaseUrl?: string;
-    provider?: "grok" | "openai";
-    providerModel?: string;
-    providerVoice?: string;
-    instructions?: string;
-    clientTakesTurns?: boolean;
-    turnDetection?: Record<string, unknown> & { type: string };
-    tools?: {
-      name: string;
-      description: string;
-      parameters?: Record<string, unknown>;
-      expression?: (string | [string, ...unknown[]])[];
-    }[];
-    reinstall?: boolean;
-  }): Promise<{ streamPath: string; warmMs: number }>;
-}
+/**
+ * The RPC contract exported by voice-agent2.ts, which no generated client can
+ * carry — picked off the REAL entrypoint class rather than hand-mirrored, so
+ * there are zero fields to drift, ever. The import is `type`-only, which is
+ * what lets it cross the worker/node boundary: type imports are erased by tsx
+ * before any resolution (proven both ways), where a VALUE import from
+ * config-repo dies at load with ERR_UNSUPPORTED_ESM_URL_SCHEME (F4).
+ */
+type VoiceAgent2Setup = Pick<VoiceAgent2Entrypoint, "health" | "setupVoiceAgent2">;
 
 /** Options for `pnpm cli voicelab talk2`. Same surface as `talk`, plus v2's own. */
 export interface Talk2Options extends TalkOptions {

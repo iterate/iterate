@@ -3,16 +3,19 @@
 //   doppler run --config preview_3 -- pnpm cli voicelab vad-duplex \
 //     --project voice-test --stream-path /agents/voice2/vad-1
 //
-// The stream must be set up OPEN-MIC (talk2 --open-mic --setup-only), ideally
-// with a certificate `turnDetection` so the echo assertion below proves the
-// configurability end to end.
+// The stream must be set up OPEN-MIC (talk2 --open-mic --setup-only). Pass
+// --turn-detection with the SAME JSON the certificate carries and the CONFIG
+// leg below proves the object was honored, not merely echoed.
 //
 // WHAT THIS PROVES, and each item is read off the wire rather than assumed:
 //
-//   1. CONFIG — the provider's `session.updated` (mirrored verbatim on the
-//      grok-event lane) echoes back the ACCEPTED session, and its
-//      `turn_detection` is the certificate's object — proven not just sent
-//      but honored.
+//   1. CONFIG — only when --turn-detection names the expected object: the
+//      provider's `session.updated` echo (mirrored verbatim on the
+//      grok-event lane) must contain every key of it. Without the flag the
+//      echo is still printed but the verdict does NOT claim CONFIG — a bare
+//      "some turn_detection came back" passes on the provider's own default
+//      and on a certificate silently ignored, which is a proof that cannot
+//      fail.
 //   2. SERVER VAD OWNS THE TURNS — a spoken request followed by nothing but
 //      silence draws an answer. No ptt-start, no ptt-end, no commit from
 //      this driver: the provider's VAD hears the silence and answers.
@@ -26,13 +29,20 @@
 //      the heard-prefix note both appear.
 //   5. THE REPLY — the interjection itself is answered, which closes the
 //      loop: detected, committed, and responded to by VAD alone.
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 
-import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
+import { type VoicelabConnectOptions } from "./connect.ts";
+import {
+  deliveredMsOf,
+  FRAME_BYTES,
+  FRAME_MS,
+  openStream,
+  sleep,
+  synthesizeFrames,
+} from "./probe-audio.ts";
 
 /** Options for `pnpm cli voicelab vad-duplex`. */
 export interface VadDuplexOptions extends VoicelabConnectOptions {
@@ -40,53 +50,25 @@ export interface VadDuplexOptions extends VoicelabConnectOptions {
   streamPath: string;
   /** Barge once this much of the answer has been DELIVERED to the device. */
   bargeAfterMs?: number;
+  /**
+   * The turn_detection object the stream's certificate is EXPECTED to carry,
+   * as JSON — the same spelling talk2 takes. When present, the CONFIG leg
+   * deep-compares every key of it against the session.updated echo (a
+   * subset compare, because openai fills defaults like create_response into
+   * the echo). Absent, the echo is printed but CONFIG is not claimed.
+   */
+  turnDetection?: string;
 }
 
-const FRAME_MS = 20;
-const PCM16_BYTES_PER_MS = 32;
-const FRAME_BYTES = FRAME_MS * PCM16_BYTES_PER_MS;
+/** What an open microphone in a quiet room is: 20 ms of silence, forever. */
 const SILENCE_FRAME = Buffer.alloc(FRAME_BYTES).toString("base64");
-
-/** Synthesize one utterance to PCM16 mono 16 kHz frames. */
-function synthesizeFrames(dir: string, name: string, text: string): string[] {
-  const aiff = path.join(dir, `${name}.aiff`);
-  const wav = path.join(dir, `${name}.wav`);
-  for (const [command, args] of [
-    ["say", ["-o", aiff, text]],
-    ["afconvert", ["-f", "WAVE", "-d", "LEI16@16000", "-c", "1", aiff, wav]],
-  ] as const) {
-    const result = spawnSync(command, args);
-    if (result.status !== 0) {
-      throw new Error(`${command} failed: ${String(result.stderr).slice(0, 200)}`);
-    }
-  }
-  const bytes = readFileSync(wav);
-  let offset = 12;
-  while (offset + 8 <= bytes.length) {
-    const id = bytes.toString("ascii", offset, offset + 4);
-    const size = bytes.readUInt32LE(offset + 4);
-    if (id === "data") {
-      const pcm = bytes.subarray(offset + 8, offset + 8 + size);
-      const frames: string[] = [];
-      for (let cut = 0; cut + FRAME_BYTES <= pcm.length; cut += FRAME_BYTES) {
-        frames.push(pcm.subarray(cut, cut + FRAME_BYTES).toString("base64"));
-      }
-      return frames;
-    }
-    offset += 8 + size + (size % 2);
-  }
-  throw new Error(`no data chunk in ${wav}`);
-}
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-interface StreamHandle {
-  openConnection(input: unknown): Promise<unknown>;
-  append(...events: unknown[]): Promise<unknown>;
-}
 
 export async function vadDuplex(options: VadDuplexOptions): Promise<void> {
   const bargeAfterMs = options.bargeAfterMs ?? 12_000;
+  const expectedTurnDetection =
+    options.turnDetection === undefined
+      ? null
+      : (JSON.parse(options.turnDetection) as Record<string, unknown>);
   const dir = mkdtempSync(path.join(tmpdir(), "vad-duplex-"));
   const request = synthesizeFrames(
     dir,
@@ -100,10 +82,7 @@ export async function vadDuplex(options: VadDuplexOptions): Promise<void> {
   );
   rmSync(dir, { recursive: true, force: true });
 
-  const itx = await connectProject(options);
-  const stream = (itx as unknown as { streams: { get(path: string): StreamHandle } }).streams.get(
-    options.streamPath,
-  );
+  const stream = await openStream(options);
 
   /* Everything asserted below is collected from the wire by this listener. */
   let sessionTurnDetection: unknown;
@@ -137,20 +116,16 @@ export async function vadDuplex(options: VadDuplexOptions): Promise<void> {
             }
           }
           if (pcm !== "") {
-            answerDeliveredMs +=
-              (Math.floor(pcm.length / 4) * 3 -
-                (pcm.endsWith("==") ? 2 : pcm.endsWith("=") ? 1 : 0)) /
-              PCM16_BYTES_PER_MS;
+            answerDeliveredMs += deliveredMsOf(pcm);
           }
           continue;
         }
         const inner = (payload.event ?? payload) as Record<string, unknown>;
         const type = String(inner.type ?? "");
         if (type === "session.updated") {
-          /* The provider echoes the WHOLE accepted session here — reading
-           * turn_detection out of it proves the certificate's object was
-           * honored, not merely sent. Shape differs per provider (openai
-           * nests under audio.input; grok mirrors flat), so try both. */
+          /* The provider echoes the WHOLE accepted session here. Shape
+           * differs per provider (openai nests under audio.input; grok
+           * mirrors flat), so try both. */
           const session = (inner.session ?? {}) as {
             turn_detection?: unknown;
             audio?: { input?: { turn_detection?: unknown } };
@@ -255,16 +230,32 @@ export async function vadDuplex(options: VadDuplexOptions): Promise<void> {
    * note are required only when the provider repairs on the wire at all —
    * grok does not (see F17 in the pressure log), so their absence there is
    * the documented expectation, not a failure of THIS machinery.
+   *
+   * CONFIG is judged only against an EXPECTED object (--turn-detection):
+   * every key of it must deep-equal the echo's, subset-wise, because the
+   * provider fills its own defaults into the echo. A bare "some object was
+   * echoed" is vacuous — the agent sends a default turn_detection whenever
+   * the certificate carries none, so ANY dial echoes one.
    */
-  const configProven = sessionTurnDetection !== undefined && sessionTurnDetection !== null;
+  const echoed = (sessionTurnDetection ?? null) as Record<string, unknown> | null;
+  const configProven =
+    expectedTurnDetection === null
+      ? null
+      : echoed !== null &&
+        Object.entries(expectedTurnDetection).every(
+          ([key, value]) => JSON.stringify(echoed[key]) === JSON.stringify(value),
+        );
   const vadProven = committedCount >= 2 && responsesCreated >= 2;
   const duplexProven = clearsSeen >= 1 && clearLagMs !== null && clearLagMs < 5_000;
   const answered = repliesAfterBarge >= 1;
-  if (configProven && vadProven && duplexProven && answered) {
-    console.log(`\n  PASS: VAD took both turns, the mic never stopped, and the barge landed.`);
+  if ((configProven ?? true) && vadProven && duplexProven && answered) {
+    console.log(
+      `\n  PASS: VAD took both turns, the mic never stopped, and the barge landed.` +
+        (configProven === true ? ` The certificate's turn_detection was honored.` : ``),
+    );
   } else {
     console.log(
-      `\n  FAIL: config=${String(configProven)} vad=${String(vadProven)} duplex=${String(duplexProven)} answered=${String(answered)}`,
+      `\n  FAIL: ${configProven === null ? "" : `config=${String(configProven)} `}vad=${String(vadProven)} duplex=${String(duplexProven)} answered=${String(answered)}`,
     );
     process.exitCode = 1;
   }

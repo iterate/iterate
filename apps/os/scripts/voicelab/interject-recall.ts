@@ -19,12 +19,12 @@
 //     --project voice-test --stream-path /agents/voice2/<set-up-stream>
 //
 // The stream must already carry the agent (voicelab talk2 --setup-only).
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
+import { type VoicelabConnectOptions } from "./connect.ts";
+import { deliveredMsOf, FRAME_MS, openStream, sleep, synthesizeFrames } from "./probe-audio.ts";
 
 /** Options for the interject-recall end-to-end check. */
 export interface InterjectRecallOptions extends VoicelabConnectOptions {
@@ -41,45 +41,6 @@ export interface InterjectRecallOptions extends VoicelabConnectOptions {
    */
   bargeAfterMs?: number;
 }
-
-const FRAME_MS = 20;
-const PCM16_BYTES_PER_MS = 32;
-const FRAME_BYTES = FRAME_MS * PCM16_BYTES_PER_MS;
-
-/** Synthesize one utterance to PCM16 mono 16 kHz WAV and return its frames. */
-function synthesizeFrames(dir: string, name: string, text: string): string[] {
-  const aiff = path.join(dir, `${name}.aiff`);
-  const wav = path.join(dir, `${name}.wav`);
-  for (const [command, args] of [
-    ["say", ["-o", aiff, text]],
-    ["afconvert", ["-f", "WAVE", "-d", "LEI16@16000", "-c", "1", aiff, wav]],
-  ] as const) {
-    const result = spawnSync(command, args);
-    if (result.status !== 0) {
-      throw new Error(`${command} failed: ${String(result.stderr).slice(0, 200)}`);
-    }
-  }
-  const bytes = readFileSync(wav);
-  /* Minimal RIFF walk to the data chunk — afconvert's layout, not a general
-   * WAV parser. */
-  let offset = 12;
-  while (offset + 8 <= bytes.length) {
-    const id = bytes.toString("ascii", offset, offset + 4);
-    const size = bytes.readUInt32LE(offset + 4);
-    if (id === "data") {
-      const pcm = bytes.subarray(offset + 8, offset + 8 + size);
-      const frames: string[] = [];
-      for (let cut = 0; cut + FRAME_BYTES <= pcm.length; cut += FRAME_BYTES) {
-        frames.push(pcm.subarray(cut, cut + FRAME_BYTES).toString("base64"));
-      }
-      return frames;
-    }
-    offset += 8 + size + (size % 2);
-  }
-  throw new Error(`no data chunk in ${wav}`);
-}
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * The largest count the reply mentions, in digits ("26") or words
@@ -153,10 +114,7 @@ export async function interjectRecall(options: InterjectRecallOptions): Promise<
   );
   rmSync(dir, { recursive: true, force: true });
 
-  const itx = await connectProject(options);
-  const stream = (itx as unknown as { streams: { get(path: string): StreamHandle } }).streams.get(
-    options.streamPath,
-  );
+  const stream = await openStream(options);
 
   let deliveredMs = 0;
   let responsesCreated = 0;
@@ -177,10 +135,7 @@ export async function interjectRecall(options: InterjectRecallOptions): Promise<
         if (event.type === "events.iterate.com/voice-agent/spk-frame") {
           const pcm = typeof payload.pcm === "string" ? payload.pcm : "";
           if (pcm !== "") {
-            deliveredMs +=
-              (Math.floor(pcm.length / 4) * 3 -
-                (pcm.endsWith("==") ? 2 : pcm.endsWith("=") ? 1 : 0)) /
-              PCM16_BYTES_PER_MS;
+            deliveredMs += deliveredMsOf(pcm);
           }
           continue;
         }
@@ -307,15 +262,4 @@ export async function interjectRecall(options: InterjectRecallOptions): Promise<
     return;
   }
   console.log("  PASS: the reply owns the interruption");
-}
-
-interface StreamHandle {
-  openConnection(options: {
-    connectionKey: string;
-    eventTypes: string[];
-    processEventBatch: (batch: { events?: { type: string; payload?: unknown }[] }) => void;
-  }): Promise<unknown>;
-  append(
-    ...events: { type: string; ephemeral?: true; payload: Record<string, unknown> }[]
-  ): Promise<unknown>;
 }

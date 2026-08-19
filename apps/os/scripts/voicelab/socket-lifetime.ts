@@ -24,6 +24,8 @@
 import process from "node:process";
 import WebSocket from "ws";
 import { newWebSocketRpcSession } from "capnweb";
+/* Type-only, so this standalone tsx script pulls no runtime code along. */
+import type { StreamHandle } from "./probe-audio.ts";
 
 const mode = process.argv[2] ?? "silent";
 const base = process.env.APP_CONFIG_BASE_URL ?? "https://os.iterate-preview-3.com";
@@ -141,13 +143,4 @@ if (mode === "silent" || mode === "ping") {
   }
 } else {
   throw new Error(`unknown mode ${mode}`);
-}
-
-interface StreamHandle {
-  openConnection(options: {
-    connectionKey: string;
-    eventTypes: string[];
-    processEventBatch: (batch: { events?: { type: string }[] }) => void;
-  }): Promise<unknown>;
-  append(event: { type: string; payload: Record<string, unknown> }): Promise<unknown>;
 }

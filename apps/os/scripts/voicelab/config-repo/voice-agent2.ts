@@ -304,8 +304,10 @@ const IDENTITY_SLICE_B64_CHARS = (IDENTITY_SLICE_BYTES / 3) * 4;
 /** 16 kHz mono PCM16: two bytes per sample, sixteen samples per millisecond. */
 const PCM16_BYTES_PER_MS = 32;
 
-/** No input from the device for this long and the call is over. */
-const IDLE_TIMEOUT_MS = 60_000;
+/** No input from the device for this long and the call is over. Exported
+ * for the tests that drive it — a re-declared copy passes silently the day
+ * the two diverge, and this value has already moved once. */
+export const IDLE_TIMEOUT_MS = 60_000;
 
 /**
  * The idle stamp advances in steps of this, not per frame.

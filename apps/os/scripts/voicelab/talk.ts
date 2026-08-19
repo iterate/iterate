@@ -28,6 +28,7 @@ import { connectProject, resolveVoicelabBaseUrl, type VoicelabConnectOptions } f
 import { installVoiceAgent } from "./deploy.ts";
 import { discardRpcResult, withRpcResult } from "./rpc-ownership.ts";
 import { voiceAgentEntrypointRef } from "./voice-agent-ref.ts";
+import type VoiceAgentEntrypoint from "./config-repo/voice-agent.ts";
 
 /*
  * PRODUCTION, AND A PROJECT THAT EXISTS TOMORROW.
@@ -109,16 +110,13 @@ export interface TalkOptions extends Partial<VoicelabConnectOptions> {
   pretendSpeaker?: string;
 }
 
-interface VoiceAgentSetup {
-  health(): Promise<{ ok: true; projectId: string; xaiSecretReady: boolean }>;
-  setupVoiceAgent(options?: { streamPath?: string }): Promise<{
-    streamPath: string;
-    created: string[];
-    alreadyThere: string[];
-    /** The processor's own acknowledgement that it is awake and sees the brief. */
-    warm: { ok: boolean; ms: number };
-  }>;
-}
+/**
+ * v1's RPC contract, picked off the real entrypoint class — the same
+ * zero-drift treatment as talk2's. Type imports cross the worker/node
+ * boundary (erased by tsx before resolution); value imports never do (F4,
+ * ERR_UNSUPPORTED_ESM_URL_SCHEME).
+ */
+type VoiceAgentSetup = Pick<VoiceAgentEntrypoint, "health" | "setupVoiceAgent">;
 
 /**
  * How long to keep waiting for the guest worker to build.

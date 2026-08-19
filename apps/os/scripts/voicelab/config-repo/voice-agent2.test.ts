@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeProcessorHarness } from "iterate/processors/testing";
 import {
   dialProviderSocket,
+  IDLE_TIMEOUT_MS,
   MAX_DEVICE_SPEAKER_BACKLOG_BYTES,
   MAX_SPEAKER_PAYLOAD_BYTES,
   VoiceAgent2Contract,
@@ -52,7 +53,6 @@ const SPEAKER_FRAME_MS = MAX_SPEAKER_PAYLOAD_BYTES / PCM16_BYTES_PER_MS;
 /* IMPORTED, not re-declared: a copy under a "must match" comment passes
  * silently the day the two diverge. */
 const MAX_DEVICE_SPEAKER_BUFFER_MS = MAX_DEVICE_SPEAKER_BACKLOG_BYTES / PCM16_BYTES_PER_MS;
-const IDLE_TIMEOUT_MS = 60_000;
 
 /**
  * The pretend provider, and the pretend socket it speaks over.
