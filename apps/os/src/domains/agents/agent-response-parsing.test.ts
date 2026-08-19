@@ -5,16 +5,11 @@
 // the whole userland loop by playing the worker's part by hand: the platform
 // half (turns, mirror rules) and the userland half (script request, prose
 // delivery, status, settlement rendering) meet on the public event
-// vocabulary. Also here: the deprecated `driver` shim and the retired
-// "agent-headless" stub.
+// vocabulary. Also here: the deprecated `driver` shim.
 
 import { expect, it } from "vitest";
 import type { ConsumedInput } from "iterate/processors";
 import { makeProcessorHarness } from "iterate/processors/testing";
-import {
-  HeadlessAgentProcessor,
-  type HeadlessAgentProcessorContract,
-} from "./agent-headless-processor.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
 import type { AgentProcessorContract } from "./agent-processor-contract.ts";
 import type { WorkersAiMessage } from "./workers-ai-transport.ts";
@@ -176,24 +171,6 @@ it("the deprecated driver knob maps onto the parsing flag; an explicit flag wins
     },
   ]);
   expect(h.state().config.enableDefaultLlmResponseParsing).toBe(false);
-});
-
-it("the retired agent-headless stub accepts deliveries and does nothing", async () => {
-  // Streams that opted into the old headless handover still carry an
-  // "agent-headless" subscription; the stub exists so those deliveries
-  // resolve instead of erroring. The unified processor (their "agent"
-  // subscription) does the actual work.
-  const llm = makeScriptedLlm();
-  const h = makeProcessorHarness<HeadlessAgentProcessorContract>({
-    createProcessor: (deps) => new HeadlessAgentProcessor({ ...deps, callLlm: llm.transport }),
-    path: "/agents/legacy-headless",
-  });
-  await h.play(
-    ["append", ...PARSING_OFF_AGENT_EVENTS, userMessage("anyone home?")],
-    ["advanceTime", 60_000],
-  );
-  expect(llm.calls).toHaveLength(0);
-  expect(h.events("events.iterate.com/agent/llm-request-requested")).toHaveLength(0);
 });
 
 // -----------------------------------------------------------------------------

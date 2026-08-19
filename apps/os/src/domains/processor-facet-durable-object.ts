@@ -42,7 +42,6 @@ import { facetProcessorFamilyForPath } from "./processor-facet-families.ts";
 import type { CapabilityDescription } from "./itx/describe.ts";
 import { DurableObjectNameCodec } from "./durable-object-names.ts";
 import { AgentProcessor } from "./agents/agent-processor-implementation.ts";
-import { HeadlessAgentProcessor } from "./agents/agent-headless-processor.ts";
 import {
   type AgentFileAttachment,
   type AgentLiveState,
@@ -584,11 +583,12 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
     // work (stream-committed requested/started obligations whose OUTCOME
     // matters). An incarnation that dies owing either must be revived.
     const agentProcessor = registry.register(new AgentProcessor(agentArgs), { recovery: true });
-    // Retired-slug stub (see agent-headless-processor.ts): accepts
-    // deliveries for streams still subscribed under "agent-headless" and
-    // does nothing — their "agent" subscription drives them. No recovery:
-    // the stub owes no work.
-    registry.register(new HeadlessAgentProcessor(agentArgs), { recovery: false });
+    // The retired "agent-headless" slug (the old two-processor selection) is
+    // deliberately NOT registered: every agent stream carries the "agent"
+    // subscription from birth, so the unified processor drives every stream
+    // the old one did. The few streams that opted into the headless handover
+    // still carry an "agent-headless" subscription whose deliveries now fail
+    // loudly — accepted; their agent still works through "agent".
     const agentReads = registry.reads(agentProcessor);
     this.#getLiveState = (): AgentLiveState => ({
       runtimeChange: agentReads.currentState.runtimeChange,

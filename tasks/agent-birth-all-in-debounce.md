@@ -41,8 +41,9 @@ and the #2507 readiness-machinery approach (open draft, to be closed).
   still tolerates it and the fold maps `driver: "agent-headless"` to
   `enableDefaultLlmResponseParsing: false`, so existing headless agents and
   old seeded worker code keep exact semantics (shim, delete later). The
-  `"agent-headless"` subscription name stays registered as an alias so
-  existing streams keep waking.
+  `"agent-headless"` slug is NOT re-registered (review decision): leftover
+  subscriptions under that name fail loudly, which is fine — those agents
+  work through the "agent" subscription every stream carries from birth.
 - **Userland customizes reactively** in `worker.ts processEvent` on
   `agent/created` — no new subscription machinery; the parser rides the same
   worker feed that delivers `agent/created`. Templates:
@@ -79,9 +80,11 @@ and the #2507 readiness-machinery approach (open draft, to be closed).
       flag wins; stale "measured from FIRST trigger" debounce description
       fixed in passing (the fold anchors to the NEWEST trigger)_
 - [x] Merge headless into `AgentProcessor` _flag gate lives at the top of
-      AgentCodemode.processEvent; agent-headless-processor.ts is now a
-      registered no-op stub (subscriptions can't be removed, so old streams'
-      "agent-headless" deliveries must resolve); liveState reads one fold_
+      AgentCodemode.processEvent; agent-headless-processor.ts deleted
+      outright (review decision: no stub — old streams' "agent-headless"
+      subscription deliveries fail loudly, accepted; their agents still work
+      through the "agent" subscription every stream carries from birth);
+      liveState reads one fold_
 - [x] create(): explicit birth config event _`agent/birth-config:v1` —
       parsing on, debounce 10s. NEWBORN-GATED: create() is get-or-create and
       revision-bumped batch events deliberately land on existing agents as
@@ -131,9 +134,10 @@ and the #2507 readiness-machinery approach (open draft, to be closed).
 > ```
 >
 > - `enableDefaultLlmResponseParsing` replaces `config.driver`; the
->   headless processor is reduced to a registered no-op stub (flag-off = old
->   headless semantics; `driver: "agent-headless"` still parses and maps to
->   the flag for existing streams).
+>   headless processor and its slug are deleted (flag-off = old headless
+>   semantics; `driver: "agent-headless"` still parses and maps to the flag
+>   for existing streams; leftover "agent-headless" subscriptions fail
+>   loudly — accepted, those agents work through their "agent" subscription).
 > - The 10s birth event is gated to brand-new streams by an existence
 >   probe: create() is get-or-create, and a late 10s event would overwrite
 >   the worker's lowered debounce on existing agents.
