@@ -116,7 +116,7 @@ test("connected lane: consumes naming an ephemeral type opts in; the consumes-le
   expect(dflt.types()).not.toContain("chunk");
 });
 
-test.fails("BUG: consumes ['*'] delivers NOTHING on the connected lane", async () => {
+test("FIXED (defect 10): consumes ['*'] delivers every durable event on the connected lane", async () => {
   // BUG: #deliverToConnectedSubscriptions filters with `row.consumes.includes(e.type)` — the
   //   "*" wildcard is treated as a literal type name and matches nothing.
   // EXPECTED: the lane's own comment says the consumes filter is "the processor consumes rule,
@@ -191,7 +191,7 @@ test("connected lane: a throwing subscriber callback never hurts the producer an
 
 // ─────────────────────────────── FORWARDER LANE ───────────────────────────────
 
-test.fails("BUG: consumes ['*'] delivers NOTHING on the forwarder lane either", async () => {
+test("FIXED (defect 11): consumes ['*'] delivers every durable event on the forwarder lane", async () => {
   // BUG: the pump filters with `page.events.filter((e) => row.consumes!.includes(e.type))`
   //   (subscription-forwarder-processor.ts) — "*" is a literal there too; every page is
   //   "everything filtered", the cursor silently confirms through and nothing ever delivers.
@@ -263,7 +263,7 @@ test("forwarder: resume while HEALTHY redelivers exactly the events after afterO
   expect(c.invocations[before].range.scannedAfterOffset).toBe(m1.offset);
 });
 
-test.fails("BUG: resume with afterOffset beyond head wedges the row — later events never deliver", async () => {
+test("FIXED (defect 13): resume with afterOffset beyond head is clamped — later events deliver", async () => {
   // BUG: pump.reset stores afterOffset verbatim; #pumpRow then reads read(cursor) whose
   //   scannedThroughOffset is max(afterOffset, head) — with cursor > head that is always ==
   //   cursor, so `page.scannedThroughOffset <= progress.confirmedOffset` reports caught-up
@@ -287,7 +287,7 @@ test.fails("BUG: resume with afterOffset beyond head wedges the row — later ev
   await until("the event after the resume delivers", () => c.offsets().includes(m2.offset), 5_000);
 });
 
-test.fails("BUG: unsubscribe during an in-flight delivery resurrects the dead row's cursor and appends a spurious halt", async () => {
+test("FIXED (defect 12): unsubscribe during an in-flight delivery leaves no ghost halt", async () => {
   // BUG: pump.forget (revoke) deletes the row's SubscriptionDeliveryProgress, but the CAS in
   //   #pumpRow compares `(fresh?.rev ?? 0) !== (progress.rev ?? 0)` — a DELETED record (fresh
   //   = undefined) and a never-reset one (rev undefined) both coerce to 0, so the in-flight

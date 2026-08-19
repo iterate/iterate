@@ -154,7 +154,7 @@ test("a bare breaker-configured event (no payload) turns the breaker off", async
   expect(after.offset).toBeGreaterThan(0);
 });
 
-test.fails("read(afterOffset beyond head) never claims a scan of unassigned offsets", async () => {
+test("read(afterOffset beyond head) never claims a scan of unassigned offsets", async () => {
   // BUG: read's short-page arm computes `Math.max(afterOffset, highestAssignedOffset())` — for
   //   an afterOffset BEYOND the head it answers scannedThroughOffset = afterOffset, a "proof"
   //   of having scanned offsets nobody has assigned yet (the virgin-table branch has the same

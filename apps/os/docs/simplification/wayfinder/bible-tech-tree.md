@@ -31,6 +31,7 @@ flowchart TD
     BI["built-ins (kv, …)"]
     PROV["provide / invoke / revoke<br/>your own verbs; a plain stored table"]
     RUN["run code in the context<br/>confined; plain fetch just works"]
+    CODECAP["capabilities AS code<br/>code mounts · stateful workers whose<br/>RPC methods ARE the capability —<br/>and it… just works"]
     EGRESS["the egress door<br/>all outbound fetch, one door"]
     SECRETS["secrets + substitution<br/>callers make authed requests,<br/>never see the key"]
     MCP1["the MCP server<br/>any coding agent drives the context"]
@@ -73,6 +74,7 @@ flowchart TD
   CTX --> BI
   CTX --> PROV
   PROV --> RUN
+  RUN --> CODECAP
   RUN --> EGRESS
   EGRESS --> SECRETS
   RUN --> MCP1
@@ -138,22 +140,27 @@ deliberate and stated up front. No streams anywhere in this block.
 4. **Run code in the context** — a mount that RUNS; confined isolate holding only
    `env.ITX`; plain `fetch` just works (planted — paid off next). _(link-out: Worker
    Loader)_
-5. **The egress door** — every outbound `fetch` from confined code goes through ONE door.
+5. **Capabilities AS code** — provide a capability whose implementation IS dynamic worker
+   code (a `code` mount). Then go further: provide **stateful** dynamic worker code — a
+   class whose RPC methods become the capability's methods (`itx.counter.add(1)`) — and
+   it… **just works**. (Grounded: the clean room's `code` + `stateful` mounts, native
+   facet-method RPC.)
+6. **The egress door** — every outbound `fetch` from confined code goes through ONE door.
    Gap: you want scripts to call third parties — but controlled.
-6. **Secrets + substitution** — `{{secret:…}}` placeholders substituted at the door,
+7. **Secrets + substitution** — `{{secret:…}}` placeholders substituted at the door,
    headers-only; the script (or agent) makes authenticated requests and **can never see
    the key**. Secrets only become relevant once egress exists — the dependency is real.
-7. **The MCP server** — the context exposed so ANY coding agent can drive it. Gap: "as
+8. **The MCP server** — the context exposed so ANY coding agent can drive it. Gap: "as
    soon as somebody can run a script against the context — what if that somebody is an AI
    agent?"
-8. **⭐ THE EXECUTOR MOMENT** — the block's payoff sprint: _an MCP server any coding agent
+9. **⭐ THE EXECUTOR MOMENT** — the block's payoff sprint: _an MCP server any coding agent
    can use to make authenticated egress requests._ A real, usable product with nothing but
    the context.
-9. **HTTP ingress** — a browser tab loads something served BY the context; your app at a
-   hostname.
-10. **The repo** — the code lives IN the context (`repo.put` → run it); reveal: **config is
+10. **HTTP ingress** — a browser tab loads something served BY the context; your app at a
+    hostname.
+11. **The repo** — the code lives IN the context (`repo.put` → run it); reveal: **config is
     a web server, not a settings file**.
-11. **⭐ THE VOICE PAYOFF** — plug a plug-and-play realtime voice platform (OpenAI's
+12. **⭐ THE VOICE PAYOFF** — plug a plug-and-play realtime voice platform (OpenAI's
     realtime API + MCP support, or Grok's) into our wide-open MCP server: a **voice agent
     takes actions in our system on our behalf**. The Waitrose example: "add milk to my
     trolley" → real search, real basket, authenticated egress — and the voice agent never

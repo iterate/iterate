@@ -28,6 +28,7 @@ import {
   type ScannedOffsetRange,
 } from "./core/processor.ts";
 import type { StreamEvent } from "./core/events.ts";
+import { consumesEvent } from "./core/processor.ts";
 import type { FacetProcessorArgs } from "./processor-facet.ts";
 import { reportIssue } from "./core/errors.ts";
 
@@ -282,9 +283,7 @@ class SubscriptionDeliveryPump {
           scannedAfterOffset: progress.confirmedOffset,
           scannedThroughOffset: page.scannedThroughOffset,
         };
-        const events = row.consumes
-          ? page.events.filter((e) => row.consumes!.includes(e.type))
-          : page.events;
+        const events = page.events.filter((e) => consumesEvent(row.consumes, e));
         if (events.length === 0) {
           // everything in the range was filtered — confirm through it, no call
           this.#deps.progress.put(row.providedAtOffset, {
@@ -310,7 +309,10 @@ class SubscriptionDeliveryPump {
           // delivering, the reset cursor wins (the delivered batch may redeliver — exactly what
           // a replay request asks for).
           const fresh = this.#deps.progress.get(row.providedAtOffset);
-          if ((fresh?.rev ?? 0) !== (progress.rev ?? 0)) continue;
+          // Revoked mid-delivery → forget() deleted the record; abandon (never re-mint it, which
+          // would resurrect the row and try to deliver the revoke fact itself — the ghost halt).
+          if (fresh === undefined) return;
+          if ((fresh.rev ?? 0) !== (progress.rev ?? 0)) continue;
           this.#deps.progress.put(row.providedAtOffset, {
             confirmedOffset: scannedOffsetRange.scannedThroughOffset,
             attempt: 0,
@@ -334,8 +336,9 @@ class SubscriptionDeliveryPump {
     error: unknown,
   ): Promise<void> {
     // The same CAS as the success path: a reset (or revoke) mid-delivery wins over the failure.
+    // A DELETED record means the row was revoked — abandon silently, NO spurious halt audit fact.
     const fresh = this.#deps.progress.get(row.providedAtOffset);
-    if ((fresh?.rev ?? 0) !== (progress.rev ?? 0)) return;
+    if (fresh === undefined || (fresh.rev ?? 0) !== (progress.rev ?? 0)) return;
     const attempt = progress.attempt + 1;
     const message = error instanceof Error ? error.message : String(error);
     // Honor stamped flags over an invented taxonomy (the core/errors.ts doctrine): an error

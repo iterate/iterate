@@ -128,6 +128,20 @@ export type ReduceOnlyProcessor<State> = {
  *  `from` matches the held rev, re-read the door on any mismatch — never replay these events. */
 export const LIVE_STATE_CHANGED = "events.iterate.com/live-state/changed";
 
+/** THE ONE consumes rule — the reduce, both delivery lanes (connected + forwarder), and the
+ *  inline core all call this; there is no second copy to drift. `consumes` undefined = every
+ *  durable event (a subscriber's default). "*" = every durable event. A NAMED type opts that
+ *  type in, INCLUDING ephemerals ("*" NEVER sweeps ephemerals). LIVE_STATE_CHANGED is never
+ *  consumable (the loop guard). */
+export function consumesEvent(
+  consumes: readonly string[] | undefined,
+  event: { type: string; ephemeral?: boolean },
+): boolean {
+  if (event.type === LIVE_STATE_CHANGED) return false;
+  if (event.ephemeral) return consumes?.includes(event.type) ?? false;
+  return consumes === undefined || consumes.includes("*") || consumes.includes(event.type);
+}
+
 type ReduceProgress<State> = {
   reducerVersion: string;
   reducedThroughOffset: number;
@@ -363,9 +377,7 @@ export abstract class StreamProcessor<State> {
   /** `"*"` covers every durable event; an ephemeral event must be NAMED to be consumed —
    *  except LIVE_STATE_CHANGED, which nothing may consume, ever (the loop guard). */
   #consumes(event: StreamEventT): boolean {
-    if (event.type === LIVE_STATE_CHANGED) return false;
-    if (event.ephemeral) return this.contract.consumes.includes(event.type);
-    return this.contract.consumes.includes("*") || this.contract.consumes.includes(event.type);
+    return consumesEvent(this.contract.consumes, event);
   }
 
   /** Rules 2–5 over one contiguous scannedOffsetRange. The caller established contiguity. */

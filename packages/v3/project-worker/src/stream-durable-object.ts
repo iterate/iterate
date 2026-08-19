@@ -62,6 +62,7 @@ import {
   type ProcessorPolicy,
 } from "./capability-table-processor.ts";
 import {
+  consumesEvent,
   LIVE_STATE_CHANGED,
   type ReduceOnlyProcessor,
   type ScannedOffsetRange,
@@ -296,7 +297,7 @@ class StreamEventLog {
       this.#storage.sql
         .exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'events'")
         .toArray().length > 0;
-    if (!tableExists) return { events: [], scannedThroughOffset: afterOffset };
+    if (!tableExists) return { events: [], scannedThroughOffset: this.highestAssignedOffset() };
     const events = this.#storage.sql
       .exec(
         "SELECT offset, body FROM events WHERE offset > ? ORDER BY offset LIMIT ?",
@@ -310,11 +311,11 @@ class StreamEventLog {
         path: this.#path,
       }));
     // The scanned-offset-range proof: a FULL page is only contiguously known through its last
-    // row; a short page proves the read scanned to the head (ephemeral holes and all).
+    // row; a short page proves the read scanned to the HEAD (ephemeral holes and all). Never
+    // beyond the head — a beyond-head afterOffset must not fabricate a scan of unassigned
+    // offsets (which would let a bad cursor skip everything later assigned there).
     const scannedThroughOffset =
-      events.length === limit
-        ? events[events.length - 1].offset
-        : Math.max(afterOffset, this.highestAssignedOffset());
+      events.length === limit ? events[events.length - 1].offset : this.highestAssignedOffset();
     return { events, scannedThroughOffset };
   }
 }
@@ -553,8 +554,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     entry: { proc: ReduceOnlyProcessor<unknown>; state: unknown },
     e: StreamEvent,
   ): void {
-    const consumes = entry.proc.contract.consumes;
-    if (!(consumes.includes("*") || consumes.includes(e.type))) return;
+    if (!consumesEvent(entry.proc.contract.consumes, e)) return;
     try {
       entry.state = entry.proc.reduce({ event: e, state: entry.state }) ?? entry.state;
     } catch (err) {
@@ -740,11 +740,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       // Event mode: the consumes filter, applied statelessly outbound. Default = every durable
       // event; naming types opts into ephemerals too (the processor consumes rule, mirrored).
       // LIVE_STATE_CHANGED never rides the event lane (the platform rule).
-      const events = committed.filter(
-        (e) =>
-          e.type !== LIVE_STATE_CHANGED &&
-          (row.consumes ? row.consumes.includes(e.type) : !e.ephemeral),
-      );
+      const events = committed.filter((e) => consumesEvent(row.consumes, e));
       if (events.length === 0) continue; // the skipped span rides the next delivered range
       const deliveredAfter =
         this.#subscriptionDeliveredThrough.get(row.providedAtOffset) ?? scannedAfterOffset;
@@ -800,12 +796,17 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (!this.#facetEntries().some((e) => e.slug === SUBSCRIPTION_FORWARDER_SLUG))
       throw new Error("no subscription-forwarder enabled (nothing to resume)");
     // Recovery RIDES THE LOG: a durable subscription-resumed fact, consumed by the forwarder
-    // like any other event (auditable, ordered by the drive chain — no side-channel verb).
+    // like any other event (auditable, ordered by the drive chain — no side-channel verb). A
+    // beyond-head afterOffset is CLAMPED to the head so an operator fat-finger can't park the
+    // cursor past reality and wedge the row forever.
+    const head = this.#eventLog.highestAssignedOffset();
     await this.append({
       type: "events.iterate.com/stream/subscription-resumed",
       payload: {
         name: input.name,
-        ...(input.afterOffset !== undefined ? { afterOffset: input.afterOffset } : {}),
+        ...(input.afterOffset !== undefined
+          ? { afterOffset: Math.min(input.afterOffset, head) }
+          : {}),
       },
     });
     return { ok: true };

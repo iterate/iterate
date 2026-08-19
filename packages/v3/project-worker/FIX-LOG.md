@@ -15,3 +15,8 @@ REFACTORS-LATER.md instead, not here.
   the slug + built-in registry and drops its separate configure. Retires 29, 30, 32, 42, 45,
   H6. Both facet kinds' configure is idempotent (JSON-equal short-circuit + memo drop). 6 tests
   flipped to regression guards.
+- Phase B (live-18): delivery correctness. ONE consumesEvent(consumes, event) exported from
+  processor.ts — the reduce, both delivery lanes, and the inline core all call it; 2 divergent
+  filter copies DELETED (the consumes ['*'] black hole, 10+11). read() short-page proof is the
+  HEAD, never a beyond-head afterOffset (9); resumeSubscription clamps afterOffset to head (13);
+  forwarder CAS treats a deleted progress record as ABANDON, no ghost halt (12). 5 tests flipped.
