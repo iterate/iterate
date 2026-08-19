@@ -181,10 +181,27 @@ export type VoiceProvider = "grok" | "openai";
  * on grok there is NO wire verb that repairs a barged answer's memory;
  * the heard-prefix note is the entire repair, and "how far did I get"
  * recall stays wrong there until xAI fixes either verb.
+ *
+ * `cancelsOnVadOnset`: whether the provider kills a STREAMING response
+ * ITSELF the moment its VAD detects speech. On openai it does —
+ * server_vad's `interrupt_response`, pinned true in our session.update —
+ * so a mid-stream onset there means the tail is dead for certain. On grok
+ * NOTHING cancels server-side: its turn_detection has no
+ * `interrupt_response`, and a client `response.cancel` drew an error every
+ * time a VAD-triggered one was tried. The barge machinery branches on this
+ * fact: an onset on a provider that cancelled server-side is destructive;
+ * on one that did not, it is only ever a tentative hold.
  */
 const PROVIDERS: Record<
   VoiceProvider,
-  { url: string; model: string; voice: string; rate: number; truncates: boolean }
+  {
+    url: string;
+    model: string;
+    voice: string;
+    rate: number;
+    truncates: boolean;
+    cancelsOnVadOnset: boolean;
+  }
 > = {
   grok: {
     url: "https://api.x.ai/v1/realtime",
@@ -192,6 +209,7 @@ const PROVIDERS: Record<
     voice: "eve",
     rate: 16_000,
     truncates: false,
+    cancelsOnVadOnset: false,
   },
   openai: {
     url: "https://api.openai.com/v1/realtime",
@@ -202,6 +220,7 @@ const PROVIDERS: Record<
     voice: "marin",
     rate: 24_000,
     truncates: true,
+    cancelsOnVadOnset: true,
   },
 };
 
@@ -290,6 +309,32 @@ const IDLE_STAMP_STEP_MS = 5_000;
 
 /** How often the idle countdown looks at the facet clock. */
 const IDLE_TICK_MS = 5_000;
+
+/**
+ * How long after a dial failure before anything may dial again.
+ *
+ * Without it, a provider outage against an open-mic board is unbounded
+ * churn: dial fails, the ended obituary folds, and the very next of the
+ * board's fifty frames a second mints a NEW conversation and dials again —
+ * call-started/end-requested/ended appended forever at fold-round-trip
+ * cadence. Five seconds turns an outage into a dozen tidy attempts a
+ * minute; the press after recovery still connects in one.
+ */
+const DIAL_RETRY_COOLDOWN_MS = 5_000;
+
+/**
+ * How long the provider gets from socket adoption to `session.updated`.
+ *
+ * Nothing else bounds this gap, and an open-mic call that never becomes
+ * ready is SILENT FOREVER: mic frames keep the idle stamp fresh, so the
+ * sixty-second backstop can never fire — the one wedge the idle deadline
+ * cannot see. The concrete way in is a certificate `turnDetection` carrying
+ * keys the provider chokes on without an error event (the certificate is
+ * loose by design). Measured handshakes run ~1-1.4 s; fifteen seconds is
+ * generous to a slow provider and still ends the wedge while somebody is
+ * standing there.
+ */
+const HANDSHAKE_DEADLINE_MS = 15_000;
 
 /**
  * A tool that hangs must still be answered: the model hears "took too long"
@@ -762,27 +807,41 @@ interface Answer {
    */
   transcript: { atAnswerAudioMs: number; text: string }[];
   /**
-   * A response is streaming right now (between `response.created` and its
-   * `response.output_audio.done`) — the precondition for `response.cancel`
-   * meaning anything. Without the gate, every ordinary press (no answer
-   * playing, which is most of them) would draw a "nothing to cancel" error
-   * event from the provider.
-   */
-  responseActive: boolean;
-  /**
-   * A barge cancelled the active response; its remaining deltas are dead.
+   * Where the answer is in its life — one field, three states, where two
+   * booleans used to leave the fourth combination representable.
    *
-   * `response.cancel` is asynchronous — audio of the cancelled answer keeps
-   * arriving until the provider processes it — and the queue-emptying in
-   * #dropAnswerInFlight only discards what has ALREADY arrived. Without this
-   * flag the residue refills the queue and the dead answer audibly resumes:
-   * measured 2026-08-18 on gpt-realtime, "count to a hundred" counted right
-   * through a barge, because openai streams near real time (grok bursts the
-   * whole answer up front, which is why the same gap never sounded on grok).
-   * Cleared by the next `response.created`, the first event that can only
-   * belong to a LIVE answer.
+   *   "streaming"  between `response.created` and the response finishing —
+   *                the precondition for `response.cancel` meaning anything.
+   *                Without the gate, every ordinary press (no answer
+   *                playing, which is most of them) would draw a "nothing to
+   *                cancel" error event from the provider.
+   *
+   *   "cancelled"  a barge killed the active response; its remaining audio
+   *                and tool calls are dead. The cancellation is asynchronous
+   *                — residue keeps arriving until the provider processes it
+   *                — and the queue-emptying in #dropAnswerInFlight only
+   *                discards what has ALREADY arrived. Without this state the
+   *                residue refills the queue and the dead answer audibly
+   *                resumes: measured 2026-08-18 on gpt-realtime, "count to a
+   *                hundred" counted right through a barge, because openai
+   *                streams near real time (grok bursts the whole answer up
+   *                front, which is why the same gap never sounded on grok).
+   *                Cancelled OUTLIVES the response's own `done` — the tool
+   *                follow-up gate reads exactly that — and only the next
+   *                `response.created`, the first event that can only belong
+   *                to a LIVE answer, ends it.
+   *
+   *   "settled"    nothing streaming and no residue owed: the between-answers
+   *                state, and what `response.done` leaves behind when nobody
+   *                barged.
+   *
+   * TRANSCRIPT DELTAS ACCUMULATE IN EVERY PHASE, deliberately: the
+   * transcriber lags the audio by seconds (measured 28 characters against
+   * 17 s of received audio at a cancel), so the residue transcript arriving
+   * post-cancel is exactly what feeds the heard-prefix note when the pending
+   * repair settles at `response.done`.
    */
-  dropDeltasUntilResponseCreated: boolean;
+  phase: "streaming" | "cancelled" | "settled";
   /**
    * The provider has finished this answer; say so once the queue is empty.
    *
@@ -800,8 +859,7 @@ const freshAnswer = (): Answer => ({
   receivedMs: 0,
   sentMs: 0,
   transcript: [],
-  responseActive: false,
-  dropDeltasUntilResponseCreated: false,
+  phase: "settled",
   endsWhenQueueDrains: false,
 });
 
@@ -876,20 +934,37 @@ interface Dial {
    */
   sending: boolean;
   /**
+   * Audio has been sent to the provider since the last commit — the gate
+   * that keeps a redelivered ptt-end from committing an EMPTY buffer (the
+   * ephemeral lane redelivers by design), which drew a provider error and,
+   * sometimes, an unprompted second answer spoken from bare context.
+   */
+  micSentSinceCommit: boolean;
+  /**
    * A tentative VAD onset holding the floor, or null.
    *
-   * SET ONLY WHEN NOTHING IS GENERATING, which is grok's shape: whole
-   * answers burst up front, so by the time `speech_started` fires the
-   * unsent tail — up to ~36 s of a long answer against the device's ≤4 s
-   * lead — exists ONLY in `speakerQueue`. And the onset is TENTATIVE:
-   * five per turn were measured from echo residue, each retracting as a
-   * `speech_stopped` with no commit behind it. So the onset silences the
-   * DEVICE (the numbered clear — the interrupt still feels instant) but
-   * keeps the queue and pauses the pacer until there is a verdict:
+   * SET WHENEVER THE PROVIDER DID NOT CANCEL SERVER-SIDE — grok always
+   * (no `interrupt_response`, and a client cancel drew an error every
+   * time it was tried), openai only once generation has settled
+   * (mid-stream, its pinned `interrupt_response` already killed the
+   * response at the onset, so the tail is dead for certain and the
+   * destructive arm takes it — see `cancelsOnVadOnset`). The tail this
+   * hold protects — up to ~36 s of a burst answer against the device's
+   * ≤4 s lead — exists ONLY in `speakerQueue`, and on grok it may still
+   * be GROWING: mid-burst deltas keep arriving and keep queueing behind
+   * the pause, which is exactly what the hold wants. And the onset is
+   * TENTATIVE: five per turn were measured from echo residue, each
+   * retracting as a `speech_stopped` with no commit behind it. So the
+   * onset silences the DEVICE (the numbered clear — the interrupt still
+   * feels instant) but keeps the queue and pauses the pacer until there
+   * is a verdict:
    *
-   *   CONFIRMS: `input_audio_buffer.committed` or `response.created` — a
-   *   turn really happened. The tail is discarded and the memory repair
-   *   runs with `heardMs`.
+   *   CONFIRMS: `input_audio_buffer.committed` — a turn really happened.
+   *   The tail is discarded and the memory repair runs with `heardMs`.
+   *   (`response.created` is deliberately NOT a confirmation: a real
+   *   turn's committed precedes its created on both providers, so a
+   *   created that finds a live hold can only be one this agent asked
+   *   for itself — see that arm.)
    *
    *   RETRACTS: `speech_stopped` with no commit — residue. The tail
    *   resumes. What a false onset costs now is the HOLE: the device's
@@ -926,6 +1001,16 @@ interface Dial {
    */
   truncates: boolean;
   /**
+   * Whether this dial's provider kills a streaming response itself at a
+   * VAD onset — the PROVIDERS row's fact, carried here like `truncates`.
+   * The speech_started arm branches on it: true (openai) means a
+   * mid-stream onset is destructive for certain; false (grok) means even
+   * a mid-burst onset only ever takes the tentative hold, because nothing
+   * cancelled the answer anywhere and destroying it turns every echo blip
+   * back into the counting bug.
+   */
+  cancelsOnVadOnset: boolean;
+  /**
    * A memory repair that must wait for the cancelled response to FINALIZE.
    *
    * Sent back-to-back with `response.cancel`, the truncate races the
@@ -946,6 +1031,21 @@ interface Dial {
    */
   openToolCallIds: Set<string>;
   /**
+   * The next `response.created` is one this agent asked for itself — the
+   * tool follow-up #runTool sends — not the answer to a user turn.
+   *
+   * Consumed at `response.created`, where it decides ONE thing: whether
+   * the wholesale answer swap also wipes the queue and the device. A
+   * follow-up legitimately begins while the previous answer's spoken
+   * preamble ("let me check the weather for you", handed over whole
+   * inside the pacer's ≤4 s lead) still sits UNPLAYED in the device's
+   * buffer, and the unconditional wipe cut it off mid-word — every fast
+   * tool call with a spoken preamble, on both providers. Every OTHER
+   * path into `response.created` had a barge clear the device first, so
+   * the wipe stays for those.
+   */
+  followUpResponsePending: boolean;
+  /**
    * The model decided the call is over; settle at the drain point, after the
    * goodbye PLAYS. v1's instant version was measured cutting "Goodbye!"
    * mid-word. Runtime on purpose: evicted, the 60s idle deadline backstops.
@@ -956,7 +1056,11 @@ interface Dial {
 }
 
 /** A dial just decided: no socket yet, nothing sent, a clear owed first. */
-const freshDial = (provider: { rate: number; truncates: boolean }): Dial => ({
+const freshDial = (provider: {
+  rate: number;
+  truncates: boolean;
+  cancelsOnVadOnset: boolean;
+}): Dial => ({
   socket: null,
   ready: false,
   speakerQueue: [],
@@ -965,12 +1069,15 @@ const freshDial = (provider: { rate: number; truncates: boolean }): Dial => ({
   clearSpeakerBufferBeforeNextFrame: true,
   deviceBufferEmptyAtFacetMs: 0,
   sending: false,
+  micSentSinceCommit: false,
   tentativeOnset: null,
   micResampler: new Pcm16Resampler(16_000, provider.rate),
   spkResampler: new Pcm16Resampler(provider.rate, 16_000),
   truncates: provider.truncates,
+  cancelsOnVadOnset: provider.cancelsOnVadOnset,
   pendingRepair: null,
   openToolCallIds: new Set(),
+  followUpResponsePending: false,
   hangUpAfterAnswerDrains: null,
   answer: freshAnswer(),
 });
@@ -1077,6 +1184,9 @@ export class VoiceAgent2Processor extends StreamProcessor<
    * Written only from `state`.
    */
   #lastDeviceInputAtStreamMsMirror = 0;
+  /** When the last dial FAILED, for the retry cooldown. Class-level, not on
+   * a Dial: the failed dial is already gone when the next caller asks. */
+  #lastDialFailedAtFacetMs = 0;
 
   /* ------------------------------------------------------------------ fold */
 
@@ -1301,17 +1411,11 @@ export class VoiceAgent2Processor extends StreamProcessor<
          * one anybody sends. `turn_detection` is null when the client owns its
          * turns, so the provider never reports speech starting and the two
          * provider events that used to be the whole of barge-in cannot fire.
-         * Without this line the dead answer keeps streaming to the speaker for
+         * Without this arm the dead answer keeps streaming to the speaker for
          * the entire press and only stops when the NEXT answer begins.
-         *
-         * Dropping what arrived is half the interruption; the other half is
-         * telling the provider to STOP GENERATING. `response.cancel` ends the
-         * active response (both providers speak it — one API is a clone of
-         * the other), which is also what frees the provider to accept the
-         * commit this press is about to produce. Until the cancel lands, the
-         * dead answer's residue keeps arriving — the answer's
-         * `dropDeltasUntilResponseCreated` is what keeps it out of the
-         * speaker queue.
+         * #bargeAnswer carries the rest of the story; the press is its one
+         * caller that also cancels — no provider VAD will ever cancel for a
+         * button.
          */
         if (event.type === "events.iterate.com/voice-agent/ptt-start") {
           const dial = this.#dial;
@@ -1319,56 +1423,29 @@ export class VoiceAgent2Processor extends StreamProcessor<
            * a revived incarnation that has not re-dialled yet changes
            * nothing until the caught-up pass opens the connection. */
           if (dial !== null) {
-            /* A press UN-DECIDES a pending hang-up: the user talked past the
-             * goodbye. The model already heard "hanging up" as its tool
-             * output; the transcript shows what happened next — the truth. */
-            dial.hangUpAfterAnswerDrains = null;
-            /* Heard-ms must be read BEFORE the drop zeroes the pacer's
-             * schedule: sent audio minus what still sat in the device's buffer
-             * when the clear threw it away. (A `spkBufferedMs` device stamp
-             * was read here as the preferred source — the device is the
-             * authority on what it played, and the schedule models the WORST
-             * CASE lead — but no device or CLI ever produced the field, so
-             * the read was a branch that had never once run. Deleted; if a
-             * device grows the stamp, declare it in the ptt-start contract
-             * and take it as the authority again.) */
+            /* Heard-ms is read BEFORE the barge zeroes the pacer's schedule.
+             * (A `spkBufferedMs` device stamp was read here as the preferred
+             * source — the device is the authority on what it played, and the
+             * schedule models the WORST CASE lead — but no device or CLI ever
+             * produced the field, so the read was a branch that had never
+             * once run. Deleted; if a device grows the stamp, declare it in
+             * the ptt-start contract and take it as the authority again.) */
             const nowAtFacetMs = this.deps.nowAtFacetMs();
-            const heardMs = this.#heardMsFromSchedule(dial, nowAtFacetMs);
-            this.#dropAnswerInFlight(dial, state.call.conversationId, nowAtFacetMs, append);
-            if (dial.ready && dial.socket !== null) {
-              const responseWasActive = dial.answer.responseActive;
-              this.#repairBargedAnswerMemory(dial, heardMs, state.call.conversationId, append);
-              /* THE PRESS OWNS CANCELLATION, and it is the ONLY barge arm
-               * that sends it: turn_detection is null in push-to-talk, so no
-               * provider VAD will ever cancel for a button. The
-               * speech_started arm must NOT send this — OpenAI's server_vad
-               * `interrupt_response` (pinned true in our session.update) has
-               * already cancelled server-side at the onset, and grok drew an
-               * error every time a VAD-triggered cancel was tried. */
-              if (responseWasActive) {
-                this.#sendControl(
-                  dial,
-                  { type: "response.cancel" },
-                  state.call.conversationId,
-                  append,
-                );
-              }
-            }
+            this.#bargeAnswer(
+              dial,
+              this.#heardMsFromSchedule(dial, nowAtFacetMs),
+              state.call.conversationId,
+              nowAtFacetMs,
+              append,
+              true,
+            );
           }
         }
 
         if (micPcm16 !== null) {
           const dial = this.#dial;
           if (dial !== null && dial.ready && dial.socket !== null) {
-            /* Held frames resample at the flush; live ones resample here.
-             * The queue itself stays 16 kHz so a re-dial to a DIFFERENT
-             * provider never replays audio at the wrong rate. */
-            dial.socket.send(
-              JSON.stringify({
-                type: "input_audio_buffer.append",
-                audio: bytesToBase64(dial.micResampler.push(micPcm16)),
-              }),
-            );
+            this.#sendMicAudio(dial, dial.socket, micPcm16);
           } else if (this.#micQueue.length < MAX_HELD_MIC_FRAMES) {
             this.#micQueue.push(micPcm16);
           }
@@ -1382,7 +1459,12 @@ export class VoiceAgent2Processor extends StreamProcessor<
          * dial-not-ready deliveries that reach this line. */
         if (event.type === "events.iterate.com/voice-agent/ptt-end" && state.clientTakesTurns) {
           const dial = this.#dial;
-          if (dial !== null && dial.ready && dial.socket !== null) this.#askForAnswer(dial.socket);
+          /* Only a turn that carried AUDIO commits — the ephemeral lane
+           * redelivers, and a duplicate ptt-end against an empty provider
+           * buffer drew an error plus, sometimes, an unprompted answer. */
+          if (dial !== null && dial.ready && dial.socket !== null && dial.micSentSinceCommit) {
+            this.#askForAnswer(dial);
+          }
         }
         return;
       }
@@ -1394,15 +1476,12 @@ export class VoiceAgent2Processor extends StreamProcessor<
        * that an earlier incarnation died owing. An arm here was the same
        * action twice behind one idempotency key. */
 
-      case "events.iterate.com/voice-agent/conversation-ended":
-        /* NAMED, like every other arm. Without the check, a redelivered
-         * obituary for a call that ended ten minutes ago hangs up the one
-         * happening now — and silently, because the close listener's own fence
-         * swallows the socket close that follows. */
-        if (state.call !== null && state.call.conversationId === event.payload.conversationId) {
-          this.#hangUp();
-        }
-        return;
+      /* And NO conversation-ended arm either: reduce nulls `state.call` for
+       * a matching obituary before delivery reaches this switch, so the
+       * guard `state.call.conversationId === payload.conversationId` was
+       * false in every reachable case — matching: already nulled; stale: a
+       * different id. The socket is closed by the end-requested caught-up
+       * pass, which runs while the fold still names the call. */
 
       default:
         return;
@@ -1432,6 +1511,9 @@ export class VoiceAgent2Processor extends StreamProcessor<
     runInBackground: ProcessEventArgs<VoiceAgent2Contract>["runInBackground"],
   ): void {
     if (this.#dial !== null) return;
+    /* The one choke point both callers share, so a dead provider cannot be
+     * re-dialled at frame cadence — see DIAL_RETRY_COOLDOWN_MS. */
+    if (this.deps.nowAtFacetMs() - this.#lastDialFailedAtFacetMs < DIAL_RETRY_COOLDOWN_MS) return;
     const provider = PROVIDERS[state.provider];
     /* CREATED BEFORE THE AWAITED DIAL, so a second caller finds `#dial`
      * taken and the mic path queues for the whole handshake. The socket
@@ -1448,8 +1530,11 @@ export class VoiceAgent2Processor extends StreamProcessor<
       /* A dial can REJECT (DNS, TLS), not just refuse — and an uncaught
        * throw here was measured as sixty seconds of dead air: the runner
        * logs it, nothing appends, nothing re-dials, and the user's whole
-       * held sentence waits out the idle deadline. A throw IS a refusal. */
-      let socket: WebSocket | null;
+       * held sentence waits out the idle deadline. A throw IS a refusal,
+       * and both failures share one exit: same key, same teardown, only
+       * the reason differs. */
+      let socket: WebSocket | null = null;
+      let failure = "the provider refused the connection";
       try {
         socket = await this.deps.dialProvider(
           state.provider,
@@ -1457,23 +1542,15 @@ export class VoiceAgent2Processor extends StreamProcessor<
           state.providerModel ?? provider.model,
         );
       } catch (error) {
-        if (this.#dial === dial) this.#dial = null;
-        await append({
-          type: "events.iterate.com/voice-agent/conversation-end-requested",
-          idempotencyKey: this.idempotencyKey(`dial-failed:${conversationId}`),
-          payload: {
-            conversationId,
-            reason: `the provider dial failed: ${String(error).slice(0, 200)}`,
-          },
-        });
-        return;
+        failure = `the provider dial failed: ${String(error).slice(0, 200)}`;
       }
       if (socket === null) {
+        this.#lastDialFailedAtFacetMs = this.deps.nowAtFacetMs();
         if (this.#dial === dial) this.#dial = null;
         await append({
           type: "events.iterate.com/voice-agent/conversation-end-requested",
           idempotencyKey: this.idempotencyKey(`dial-failed:${conversationId}`),
-          payload: { conversationId, reason: "Grok refused the connection" },
+          payload: { conversationId, reason: failure },
         });
         return;
       }
@@ -1488,6 +1565,33 @@ export class VoiceAgent2Processor extends StreamProcessor<
         return;
       }
       dial.socket = socket;
+
+      /*
+       * THE HANDSHAKE GETS A DEADLINE, because the idle backstop cannot see
+       * this wedge: an open-mic board's frames keep the idle stamp fresh
+       * while the un-ready dial holds them, so a session.update the provider
+       * never answers is a call that is silent FOREVER with nothing logged.
+       * Nulling #dial first fences the close listener out; the obituary
+       * says what actually happened.
+       */
+      this.runInBackground(async () => {
+        await this.deps.sleep(HANDSHAKE_DEADLINE_MS);
+        if (this.#dial !== dial || dial.ready) return;
+        this.#dial = null;
+        try {
+          socket.close();
+        } catch {
+          /* Already gone. */
+        }
+        await append({
+          type: "events.iterate.com/voice-agent/conversation-end-requested",
+          idempotencyKey: this.idempotencyKey(`handshake-timeout:${conversationId}`),
+          payload: {
+            conversationId,
+            reason: `the provider handshake did not complete within ${HANDSHAKE_DEADLINE_MS}ms`,
+          },
+        });
+      });
 
       /*
        * THE THIRD SWITCH, AND WHY IT IS NOT A STREAM EVENT.
@@ -1610,12 +1714,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
             dial.ready = true;
             const heldMicFrames = this.#micQueue.length;
             for (const held of this.#micQueue) {
-              socket.send(
-                JSON.stringify({
-                  type: "input_audio_buffer.append",
-                  audio: bytesToBase64(dial.micResampler.push(held)),
-                }),
-              );
+              this.#sendMicAudio(dial, socket, held);
             }
             this.#micQueue = [];
             /*
@@ -1625,8 +1724,12 @@ export class VoiceAgent2Processor extends StreamProcessor<
              * buffer and waits, for ever, for an instruction that was thrown
              * away sixty seconds earlier.
              */
-            if (this.#turnEndedDuringHandshake && state.clientTakesTurns) {
-              this.#askForAnswer(socket);
+            if (
+              this.#turnEndedDuringHandshake &&
+              state.clientTakesTurns &&
+              dial.micSentSinceCommit
+            ) {
+              this.#askForAnswer(dial);
             }
             this.#turnEndedDuringHandshake = false;
             this.runInBackground(() =>
@@ -1663,42 +1766,49 @@ export class VoiceAgent2Processor extends StreamProcessor<
              * produces — and it is TENTATIVE: five per turn were measured
              * from echo residue, each retracting as a `speech_stopped` with
              * no commit behind it. Which story it opens depends on whether
-             * the provider is still generating.
+             * the provider CANCELLED anything at this onset.
              */
-            if (dial.answer.responseActive) {
+            if (dial.answer.phase === "streaming" && dial.cancelsOnVadOnset) {
               /*
-               * STILL GENERATING (openai streams near real time): the answer
-               * in flight dies exactly as a press kills it — queue, device
-               * clear, memory repair — with ONE deliberate omission: no
-               * `response.cancel`. OpenAI's server_vad `interrupt_response`
-               * (pinned true in our session.update) means the provider
-               * already cancelled this response server-side at this very
-               * onset — a client cancel on top is a second owner of one
-               * cancellation. And grok drew an error every time a
-               * VAD-triggered cancel was tried. The
-               * barged response still finalizes with a `response.done`,
-               * which is where the pending truncate settles.
+               * STILL GENERATING, AND THE PROVIDER KILLED IT SERVER-SIDE at
+               * this very onset (openai's server_vad `interrupt_response`,
+               * pinned true in our session.update): the tail is dead for
+               * certain, so the answer dies exactly as a press kills it —
+               * with cancel:false, because a client cancel on top of the
+               * server's is a second owner of one cancellation. The barged
+               * response still finalizes with a `response.done`, which is
+               * where the pending repair settles.
                *
-               * Heard-ms is read BEFORE the drop zeroes the pacer's
+               * Heard-ms is read BEFORE the barge zeroes the pacer's
                * schedule, same as the press.
                */
-              const heardMs = this.#heardMsFromSchedule(dial, receivedAtFacetMs);
-              this.#dropAnswerInFlight(dial, conversationId, receivedAtFacetMs, append);
-              this.#repairBargedAnswerMemory(dial, heardMs, conversationId, append);
+              this.#bargeAnswer(
+                dial,
+                this.#heardMsFromSchedule(dial, receivedAtFacetMs),
+                conversationId,
+                receivedAtFacetMs,
+                append,
+                false,
+              );
               return;
             }
             /*
-             * GENERATION ALREADY FINISHED (grok bursts whole answers up
-             * front): the unsent tail — up to ~36 s against the device's
-             * ≤4 s lead — lives ONLY in the local queue, and emptying it on
-             * a tentative onset was the counting bug in a second form: the
-             * header's "one flush and four no-ops" was true of the DEVICE's
-             * buffer and false of this one. So the device is silenced NOW
-             * (the numbered clear — the interrupt still feels instant), the
-             * schedule is zeroed to say so, and the queue WAITS:
+             * EVERYTHING ELSE HOLDS. Either generation already finished
+             * (grok bursts whole answers up front, so the unsent tail — up
+             * to ~36 s against the device's ≤4 s lead — lives ONLY in the
+             * local queue), or the provider is one that cancels NOTHING at
+             * an onset (grok mid-burst: no interrupt_response, and a client
+             * cancel drew an error every time — deltas keep arriving and
+             * keep queueing behind this pause, which is exactly what the
+             * hold wants). Emptying the queue on a tentative onset was the
+             * counting bug in a second form: the header's "one flush and
+             * four no-ops" was true of the DEVICE's buffer and false of
+             * this one. So the device is silenced NOW (the numbered clear —
+             * the interrupt still feels instant), the schedule is zeroed to
+             * say so, and the queue WAITS:
              *
-             *   CONFIRMS: `input_audio_buffer.committed` or
-             *   `response.created` — discard the tail, repair the memory.
+             *   CONFIRMS: `input_audio_buffer.committed` — discard the
+             *   tail, repair the memory.
              *
              *   RETRACTS: `speech_stopped` with no commit — the tail
              *   resumes. The false onset costs the HOLE where the device's
@@ -1735,22 +1845,52 @@ export class VoiceAgent2Processor extends StreamProcessor<
             }
             return;
 
-          case "response.created":
+          case "response.created": {
             /* A created event can only belong to a LIVE answer, so it is
              * what ends a barge's residue-discard window — and it is where
              * the per-answer state is replaced WHOLESALE, identity and
-             * clocks included. It also CONFIRMS a tentative onset, and must
-             * do that FIRST: the repair reads the OLD answer's identity and
-             * transcript, which the wholesale swap is about to erase. */
-            this.#confirmTentativeOnset(dial, conversationId, append);
+             * clocks included.
+             *
+             * A STILL-HELD ONSET HERE IS NOT A CONFIRMATION. Both providers
+             * commit a real turn before creating its response (proven live:
+             * two turns detected and committed by VAD alone, on both), so
+             * every real turn confirmed at `committed` before its created
+             * arrives — a created that finds a live hold can only be one
+             * this agent asked for itself (the tool follow-up; push-to-talk
+             * has no VAD onsets). Nobody interrupted, so no repair note:
+             * this used to CONFIRM the hold, and a fast tool landing inside
+             * an echo blip discarded the held tail and told the model "the
+             * user interrupted your previous spoken reply" when the blip
+             * would have retracted milliseconds later. The hold is simply
+             * dropped — which unparks the pacer for the new answer and
+             * kills the stale frozen heard-ms before a later commit could
+             * misapply it to the fresh answer. */
+            dial.tentativeOnset = null;
+            const followUp = dial.followUpResponsePending;
+            dial.followUpResponsePending = false;
             dial.answer = freshAnswer();
-            dial.answer.responseActive = true;
+            dial.answer.phase = "streaming";
             /* A new answer is a new signal; without this, the filter's
              * held tail of a CANCELLED answer would smear its first
              * milliseconds. */
             dial.spkResampler.reset();
-            this.#dropAnswerInFlight(dial, conversationId, receivedAtFacetMs, append);
+            if (followUp) {
+              /* The follow-up this agent asked for: the previous answer's
+               * spoken preamble is still draining — most of it UNPLAYED in
+               * the device's buffer inside the ≤4 s lead — and no barge
+               * cleared it, so wiping here cut "let me check the weather
+               * for you" off mid-word on every fast tool call. Kick the
+               * pacer instead: a tail a hold may have parked resumes and
+               * the new answer queues behind it. */
+              this.#sendSpeakerAudio(dial, conversationId, append, runInBackground);
+            } else {
+              /* Every other created follows a barge (whose clear makes this
+               * a watermark no-op) or replaces an answer nobody defended:
+               * a new answer is a flush of the old one. */
+              this.#dropAnswerInFlight(dial, conversationId, receivedAtFacetMs, append);
+            }
             return;
+          }
 
           case "response.output_audio_transcript.delta":
             /* Tagged with the answer-audio position it ARRIVED at: the two
@@ -1771,7 +1911,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
           case "response.output_audio.delta": {
             if (typeof grok.delta !== "string") return;
             /* Residue of a cancelled answer: dead on arrival. */
-            if (dial.answer.dropDeltasUntilResponseCreated) return;
+            if (dial.answer.phase === "cancelled") return;
             /*
              * CUT ONLY TO FIT THE DEVICE'S RECEIVE BUFFER. A delta is audio
              * of no particular length — measured against the real provider,
@@ -1822,8 +1962,8 @@ export class VoiceAgent2Processor extends StreamProcessor<
             /* The cancelled answer's own done is residue like its deltas:
              * marking end-of-answer for audio nobody heard would tell the
              * device a turn finished that the press already erased. */
-            if (dial.answer.dropDeltasUntilResponseCreated) return;
-            dial.answer.responseActive = false;
+            if (dial.answer.phase === "cancelled") return;
+            dial.answer.phase = "settled";
             dial.answer.endsWhenQueueDrains = true;
             this.#sendSpeakerAudio(dial, conversationId, append, runInBackground);
             return;
@@ -1831,8 +1971,11 @@ export class VoiceAgent2Processor extends StreamProcessor<
           case "response.done": {
             /* Every response ends here, audio or not — a pure function-call
              * response never sends output_audio.done, so without this the
-             * NEXT press would cancel a response that no longer exists. */
-            dial.answer.responseActive = false;
+             * NEXT press would cancel a response that no longer exists. A
+             * CANCELLED answer stays cancelled: its residue window closes
+             * only at the next `response.created`, and the tool follow-up
+             * gate reads exactly that. */
+            if (dial.answer.phase === "streaming") dial.answer.phase = "settled";
             /* The barged response is now FINAL — whether a press cancelled
              * it or the provider's own VAD did — so the deferred repair
              * can no longer race the item's own finalization. */
@@ -1858,7 +2001,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
             /* Residue discipline, same as audio: a cancelled response's tool
              * call is an intent the user erased, and running it anyway is the
              * barge failing at the worst altitude — a side effect. */
-            if (dial.answer.dropDeltasUntilResponseCreated) return;
+            if (dial.answer.phase === "cancelled") return;
             if (typeof grok.call_id !== "string") return;
             /* Unparseable arguments go through raw; the capability decides
              * what that means. */
@@ -2024,13 +2167,31 @@ export class VoiceAgent2Processor extends StreamProcessor<
   }
 
   /**
+   * One resample-at-send rule for both mic paths — live frames and the
+   * held-flush at session.updated — because the encoding is the kind of
+   * thing that gets fixed in one of two sites. Also the one place the
+   * commit gate learns audio exists to commit.
+   */
+  #sendMicAudio(dial: Dial, socket: WebSocket, pcm16: Uint8Array): void {
+    socket.send(
+      JSON.stringify({
+        type: "input_audio_buffer.append",
+        audio: bytesToBase64(dial.micResampler.push(pcm16)),
+      }),
+    );
+    dial.micSentSinceCommit = true;
+  }
+
+  /**
    * Commit the captured turn and ask for an answer — the two sends that a
    * client owning its own turns pays for, kept together so neither can be
-   * forgotten alone.
+   * forgotten alone. Consumes the commit gate: the next ptt-end needs new
+   * audio behind it.
    */
-  #askForAnswer(socket: WebSocket): void {
-    socket.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
-    socket.send(JSON.stringify({ type: "response.create" }));
+  #askForAnswer(dial: Dial): void {
+    dial.socket?.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+    dial.socket?.send(JSON.stringify({ type: "response.create" }));
+    dial.micSentSinceCommit = false;
   }
 
   /* ----------------------------------------------------------------- lanes */
@@ -2128,15 +2289,19 @@ export class VoiceAgent2Processor extends StreamProcessor<
         append,
       );
       /* ONE follow-up, only when the floor is free: all parallel outputs in
-       * (grok's documented contract), no response talking, no barge residue
-       * pending — the press owns the floor it took. hang_up asks for nothing:
-       * it is something the assistant DID, not something to talk about. */
+       * (grok's documented contract), the answer settled — neither still
+       * talking nor inside a barge's residue window, because the press owns
+       * the floor it took. hang_up asks for nothing: it is something the
+       * assistant DID, not something to talk about. */
       if (
         tool?.expression !== undefined &&
         dial.openToolCallIds.size === 0 &&
-        !dial.answer.responseActive &&
-        !dial.answer.dropDeltasUntilResponseCreated
+        dial.answer.phase === "settled"
       ) {
+        /* The created this draws must not wipe the device — the spoken
+         * preamble is usually still sitting unplayed there. See
+         * `followUpResponsePending`. */
+        dial.followUpResponsePending = true;
         this.#sendControl(dial, { type: "response.create" }, conversationId, append);
       }
     });
@@ -2198,17 +2363,14 @@ export class VoiceAgent2Processor extends StreamProcessor<
    *
    * TWO SHAPES, by the response's state:
    *
-   *   ACTIVE — the truncate must WAIT. Sent beside the cancellation it
+   *   STREAMING — the truncate must WAIT. Sent beside the cancellation it
    *   races the item's own finalization (observed live: the ack and the
    *   response's `done` shared a millisecond, and the model still
    *   remembered the full count). So it is armed on the dial and settled at
-   *   the response's `response.done`, note included; the residue gate
-   *   closes here too. What this method deliberately does NOT send is
-   *   `response.cancel`: the press arm owns that (no provider cancels for a
-   *   button), and the VAD arm must never send it — OpenAI's
-   *   `interrupt_response` (pinned true in our session.update) already
-   *   cancelled server-side at the onset, and grok errored on every
-   *   VAD-triggered cancel tried.
+   *   the response's `response.done`; the answer moves to "cancelled" here
+   *   too, which is what deafens the residue. What this method deliberately
+   *   does NOT send is `response.cancel`: #bargeAnswer owns that decision,
+   *   and only the press ever says yes.
    *
    *   SETTLED — truncate and note go immediately; nothing finalizes late.
    */
@@ -2220,9 +2382,8 @@ export class VoiceAgent2Processor extends StreamProcessor<
   ): void {
     if (!dial.ready || dial.socket === null) return;
     const wantsRepair = dial.answer.itemId !== null && heardMs + 25 < dial.answer.receivedMs;
-    if (dial.answer.responseActive) {
-      dial.answer.responseActive = false;
-      dial.answer.dropDeltasUntilResponseCreated = true;
+    if (dial.answer.phase === "streaming") {
+      dial.answer.phase = "cancelled";
       if (wantsRepair) {
         dial.pendingRepair = {
           itemId: dial.answer.itemId!,
@@ -2278,14 +2439,70 @@ export class VoiceAgent2Processor extends StreamProcessor<
   }
 
   /**
-   * A tentative onset proved itself: a turn was committed, or a new answer
-   * began. The retained tail dies now and the memory repair runs with the
-   * heard-ms frozen at the onset's clear. No-op when nothing is held, which
-   * is every commit outside a barge — so both confirming arms call this
-   * unconditionally. The device needs no second clear (it was silenced at
-   * the onset), except when a retraction let frames slip out in the
-   * stopped-to-committed gap — and then #dropAnswerInFlight's watermark
-   * sends exactly one.
+   * THE FLOOR CHANGED HANDS: kill the answer everywhere, then repair the
+   * model's memory of it.
+   *
+   * One method because its three callers — the button, a VAD onset on a
+   * provider that cancelled server-side, and a confirmed tentative onset —
+   * used to be three hand-copied sites, and the copies drifted into two
+   * real bugs. None of them reset `endsWhenQueueDrains`, so a press on a
+   * SETTLED answer mid-drain left the pacer to mark the end of an answer
+   * the press had just erased (the exact stale marker the Answer docstring
+   * records as a prior bug class). And neither VAD path un-decided a
+   * pending hang-up, so an open-mic listener — whose ONLY barge is VAD —
+   * talked past the goodbye, got the follow-up answered, and the call hung
+   * up anyway. Every barge now does both by construction: taking the floor
+   * back IS un-deciding the hang-up ("the user talked past the goodbye" —
+   * the model already heard "hanging up" as its tool output; the
+   * transcript shows what happened next, the truth).
+   *
+   * `heardMs` is the CALLER's, read before this method zeroes the pacer's
+   * schedule: sent audio minus what still sat unplayed in the device's
+   * buffer when the clear threw it away. A confirmed onset passes the
+   * number frozen at its clear.
+   *
+   * `cancel` — whether to also tell the provider to STOP GENERATING. Only
+   * the press says true: turn_detection is null in push-to-talk, so no
+   * provider VAD will ever cancel for a button. The VAD callers say false
+   * — OpenAI's server_vad `interrupt_response` (pinned true in our
+   * session.update) already cancelled server-side at the onset, and grok
+   * drew an error every time a VAD-triggered cancel was tried. Gated on a
+   * STREAMING answer either way: without the gate every ordinary press (no
+   * answer playing, which is most of them) drew a "nothing to cancel"
+   * error from the provider.
+   */
+  #bargeAnswer(
+    dial: Dial,
+    heardMs: number,
+    conversationId: string,
+    decidedAtFacetMs: number,
+    append: ProcessEventArgs<VoiceAgent2Contract>["append"],
+    cancel: boolean,
+  ): void {
+    dial.hangUpAfterAnswerDrains = null;
+    /* Read BEFORE the repair moves a streaming answer to "cancelled". */
+    const responseWasStreaming = dial.answer.phase === "streaming";
+    this.#dropAnswerInFlight(dial, conversationId, decidedAtFacetMs, append);
+    /* An answer that died unheard must not mark an end: the drain marker
+     * would tell the device a turn finished that the barge just erased. */
+    dial.answer.endsWhenQueueDrains = false;
+    this.#repairBargedAnswerMemory(dial, heardMs, conversationId, append);
+    if (cancel && responseWasStreaming) {
+      this.#sendControl(dial, { type: "response.cancel" }, conversationId, append);
+    }
+  }
+
+  /**
+   * A tentative onset proved itself: a turn was committed — the ONE
+   * confirming arm is `input_audio_buffer.committed`; `response.created`
+   * deliberately is not one, see that arm. The retained tail dies now and
+   * the memory repair runs with the heard-ms frozen at the onset's clear,
+   * via #bargeAnswer — so a confirmed turn also un-decides a pending
+   * hang-up, because it IS the user taking the floor back. No-op when
+   * nothing is held, which is every commit outside a barge. The device
+   * needs no second clear (it was silenced at the onset), except when a
+   * retraction let frames slip out in the stopped-to-committed gap — and
+   * then #dropAnswerInFlight's watermark sends exactly one.
    */
   #confirmTentativeOnset(
     dial: Dial,
@@ -2295,11 +2512,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
     const onset = dial.tentativeOnset;
     if (onset === null) return;
     dial.tentativeOnset = null;
-    this.#dropAnswerInFlight(dial, conversationId, this.deps.nowAtFacetMs(), append);
-    /* An answer that died unheard must not mark an end: the drain marker
-     * would tell the device a turn finished that the onset just erased. */
-    dial.answer.endsWhenQueueDrains = false;
-    this.#repairBargedAnswerMemory(dial, onset.heardMs, conversationId, append);
+    this.#bargeAnswer(dial, onset.heardMs, conversationId, this.deps.nowAtFacetMs(), append, false);
   }
 
   /**
@@ -2577,13 +2790,24 @@ export class VoiceAgent2Processor extends StreamProcessor<
            * the pacer's own deadline says when it finishes PLAYING. Sleep that
            * off, re-check (a press during playout un-decides it), then one
            * atomic append; the ordinary end-requested machinery does the rest.
-           * A hang-up behind a still-ACTIVE response is not settleable yet —
+           * A hang-up behind a still-STREAMING response is not settleable yet —
            * `response.done` re-triggers the pacer and it settles then. */
-          if (dial.hangUpAfterAnswerDrains !== null && !dial.answer.responseActive) {
+          if (dial.hangUpAfterAnswerDrains !== null && dial.answer.phase !== "streaming") {
             await this.deps.sleep(
               Math.max(0, dial.deviceBufferEmptyAtFacetMs - this.deps.nowAtFacetMs()),
             );
             if (this.#dial !== dial) return;
+            /* A LISTENER ANSWERING THE GOODBYE lands exactly here: the
+             * playout sleep is the goodbye's last device-lead seconds, the
+             * likeliest place to talk past it, and settling before the
+             * onset's committed can arrive would hang up mid-user-turn. An
+             * UNRETRACTED hold sends the settle back to the top, where the
+             * pause gate parks the pacer — the confirm un-decides the
+             * hang-up (#bargeAnswer) and a retraction resumes, re-runs this
+             * branch, and settles it. Unretracted holds ONLY: the onset
+             * zeroed the schedule, so continuing for a retracted-but-held
+             * one too would spin this loop through sleep(0) for ever. */
+            if (dial.tentativeOnset !== null && !dial.tentativeOnset.retracted) continue;
             const reason = dial.hangUpAfterAnswerDrains;
             if (reason !== null && dial.speakerQueue.length === 0) {
               dial.hangUpAfterAnswerDrains = null;

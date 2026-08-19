@@ -1178,16 +1178,25 @@ describe("a flush names a sequence number", () => {
   });
 
   /*
-   * UPDATED for the tentative-onset policy: the queued tail is destroyed on
-   * an onset only while the response is still GENERATING — the provider
-   * itself cancelled it server-side, so the tail is dead for certain. An
-   * onset after generation finished (grok's burst shape) HOLDS the tail
-   * instead of destroying it; that policy is pinned in "the open-mic barge"
-   * below.
+   * UPDATED for the provider-cancellation policy: the queued tail is
+   * destroyed on an onset only when the provider CANCELLED the response
+   * server-side at that onset — openai's server_vad `interrupt_response`,
+   * which is why this test pins the openai provider. So the tail is dead
+   * for certain and holding it would resume an answer the provider already
+   * killed. On grok NOTHING cancels at an onset (no interrupt_response; a
+   * client cancel drew an error every time), so even a mid-burst onset
+   * HOLDS the tail; that policy is pinned in "the open-mic barge" below.
    */
   it("drops the queued tail of the answer that was interrupted mid-generation", async () => {
     const h = makeHarness();
-    await callIsLive(h);
+    await h.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: { providerBaseUrl: "https://fake.provider.test/v1/realtime", provider: "openai" },
+    });
+    await h.append(micFrame(1));
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
     h.provider.responseCreated();
     h.provider.answerAudio(8_000);
     await playOutEverything(h, 600);
@@ -1196,7 +1205,9 @@ describe("a flush names a sequence number", () => {
     h.provider.speechStarted();
     await h.settle();
     /* Time passes with nothing new generated. A lane that had merely stopped
-     * being topped up would keep playing out the eight seconds it holds. */
+     * being topped up would keep playing out the seconds it holds — and a
+     * RETRACTION must resume nothing, because the answer is dead server-side. */
+    h.provider.speechStopped();
     await playOutEverything(h, 4_000);
     expect(speakerMsDelivered(h)).toBe(deliveredBeforeBarge);
   });
@@ -1366,6 +1377,28 @@ describe("a flush names a sequence number", () => {
     expect(h.provider.sentOfType("response.cancel")).toHaveLength(0);
   });
 
+  it("a redelivered ptt-end with no new audio commits nothing", async () => {
+    /* The ephemeral lane redelivers by design; a duplicate ptt-end against
+     * an empty provider buffer drew input_audio_buffer_commit_empty and,
+     * sometimes, an unprompted second answer spoken from bare context. Only
+     * a turn that carried audio since the last commit may ask. */
+    const h = makeHarness();
+    await callIsLive(h, CLIENT_TAKES_TURNS);
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-end", payload: {} });
+    await h.settle();
+    const commitsAfterFirstEnd = h.provider.sentOfType("input_audio_buffer.commit").length;
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-end", payload: {} });
+    await h.settle();
+    expect(h.provider.sentOfType("input_audio_buffer.commit")).toHaveLength(commitsAfterFirstEnd);
+    /* New audio re-arms the gate. */
+    await h.append(micFrame(2));
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-end", payload: {} });
+    await h.settle();
+    expect(h.provider.sentOfType("input_audio_buffer.commit")).toHaveLength(
+      commitsAfterFirstEnd + 1,
+    );
+  });
+
   /** A button held down while nothing is playing costs one comparison. */
   it("says nothing when the floor was already free", async () => {
     const h = makeHarness();
@@ -1403,8 +1436,20 @@ describe("a flush names a sequence number", () => {
  */
 describe("the open-mic barge", () => {
   it("repairs the memory of a barged active response, and never sends cancel", async () => {
+    /* An OPENAI call, because the destructive mid-stream arm is openai's:
+     * its server_vad `interrupt_response` (pinned true in the session)
+     * cancelled the response server-side at the onset, so the tail is dead
+     * for certain. Grok's mid-burst onset takes the hold instead — pinned
+     * below. */
     const h = makeHarness();
-    await callIsLive(h, GROK_LISTENS);
+    await h.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: { providerBaseUrl: "https://fake.provider.test/v1/realtime", provider: "openai" },
+    });
+    await h.append(micFrame(1));
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
     h.provider.responseCreated();
     h.provider.answerAudio(400, "item_vad");
     h.provider.answerTranscript("one two three four five");
@@ -1416,11 +1461,11 @@ describe("the open-mic barge", () => {
     h.provider.speechStarted();
     await h.settle();
     /*
-     * NO `response.cancel` from this arm, ever: OpenAI's server_vad
-     * `interrupt_response` is pinned true in the session — the provider cancelled this
+     * NO `response.cancel` from this arm, ever: the provider cancelled this
      * response server-side at the very onset, and a client cancel on top is
-     * a second owner of one cancellation. On grok a VAD-triggered cancel
-     * drew an error every time it was tried.
+     * a second owner of one cancellation. (On grok a VAD-triggered cancel
+     * drew an error every time it was tried — and this arm never runs
+     * there.)
      */
     expect(h.provider.sentOfType("response.cancel")).toHaveLength(0);
     /* And not yet: repairing an item its own response is still finalizing
@@ -1430,19 +1475,130 @@ describe("the open-mic barge", () => {
     /* The provider finalizes the barged response on its own. */
     h.provider.answerComplete();
     await h.settle();
-    /* No wire verb on grok — truncate is swallowed, delete is refused for
-     * assistant items (see PROVIDERS); the note carries the whole repair. */
-    expect(h.provider.sentOfType("conversation.item.delete")).toHaveLength(0);
-    expect(h.provider.sentOfType("conversation.item.truncate")).toHaveLength(0);
-
-    /* The note restores the heard prefix so recall has SOMETHING exact to
-     * ground on, even though the item itself cannot be touched. */
+    /* On openai the truncate WORKS, so the settled repair is the verb plus
+     * the note — the item trimmed to the heard milliseconds, the note
+     * restoring the heard prefix the truncation deleted. */
+    const truncations = h.provider.sentOfType("conversation.item.truncate");
+    expect(truncations).toHaveLength(1);
+    expect(truncations[0]).toMatchObject({ item_id: "item_vad", content_index: 0 });
     const notes = h.provider.sentOfType("conversation.item.create");
     expect(notes).toHaveLength(1);
     expect(JSON.stringify(notes[0])).toContain("heard only this much");
     expect(JSON.stringify(notes[0])).toContain("one");
     /* Still none — the finalization did not sneak one out. */
     expect(h.provider.sentOfType("response.cancel")).toHaveLength(0);
+  });
+
+  /*
+   * THE BURST-WINDOW BLIP, grok's worst case: `speech_started` lands while
+   * the burst is STILL STREAMING — several seconds of a long answer, exactly
+   * when the board's speaker is loudest and echo residue likeliest. Grok
+   * cancelled nothing server-side (no interrupt_response; a client cancel
+   * errors), so destroying the answer here was the counting bug resurrected
+   * inside the burst window: the answer died after ~1.5 s, the user sat in
+   * silence, and a note told the model it was interrupted when nobody spoke.
+   */
+  it("holds a mid-burst onset on grok and resumes the still-growing tail", async () => {
+    const h = makeHarness();
+    await callIsLive(h, GROK_LISTENS);
+    h.provider.responseCreated();
+    h.provider.answerAudio(8_000);
+    await playOutEverything(h, 600);
+    const deliveredAtOnset = speakerMsDelivered(h);
+    expect(deliveredAtOnset).toBeGreaterThan(0);
+    expect(deliveredAtOnset).toBeLessThan(8_000);
+
+    /* The blip, mid-generation. NO answerComplete has arrived. */
+    h.provider.speechStarted();
+    await h.settle();
+    /* The burst continues into the hold: deltas keep queueing behind the
+     * pause, which is exactly what the hold wants. */
+    h.provider.answerAudio(1_000);
+    await playOutEverything(h, 2_000);
+    expect(speakerMsDelivered(h)).toBe(deliveredAtOnset);
+
+    /* The retraction: quiet again, no commit — echo residue. Everything
+     * resumes, the late deltas included. */
+    h.provider.speechStopped();
+    h.provider.answerComplete();
+    await playOutEverything(h, 12_000);
+    expect(speakerMsDelivered(h)).toBe(9_000);
+    /* Nobody cancelled and nobody's memory was touched. */
+    expect(h.provider.sentOfType("response.cancel")).toHaveLength(0);
+    expect(h.provider.sentOfType("conversation.item.truncate")).toHaveLength(0);
+    expect(h.provider.sentOfType("conversation.item.create")).toHaveLength(0);
+  });
+
+  it("a committed mid-burst barge on grok discards the tail and repairs at response.done", async () => {
+    const h = makeHarness();
+    await callIsLive(h, GROK_LISTENS);
+    h.provider.responseCreated();
+    h.provider.answerAudio(400);
+    h.provider.answerTranscript("one two three");
+    h.provider.answerAudio(7_600);
+    await playOutEverything(h, 600);
+    const deliveredAtOnset = speakerMsDelivered(h);
+
+    h.provider.speechStarted();
+    await h.settle();
+    /* A real turn: stopped and committed in the same server tick. The
+     * confirm discards the held tail with the heard-ms frozen at the
+     * onset's clear. */
+    h.provider.speechStopped();
+    h.provider.push({ type: "input_audio_buffer.committed" });
+    await h.settle();
+    /* The rest of the burst is residue now: dead on arrival. */
+    h.provider.answerAudio(2_000);
+    h.provider.answerComplete();
+    await playOutEverything(h, 4_000);
+    expect(speakerMsDelivered(h) - deliveredAtOnset).toBeLessThanOrEqual(SPEAKER_FRAME_MS);
+    /* An answer that died unheard marks no end. */
+    expect(speakerFrames(h).filter((frame) => frame.lastFrameOfAnswer === true)).toHaveLength(0);
+    /* The repair settles at response.done — on grok, note only, no verb,
+     * and never a cancel. */
+    const notes = h.provider.sentOfType("conversation.item.create");
+    expect(notes).toHaveLength(1);
+    expect(JSON.stringify(notes[0])).toContain("heard only this much");
+    expect(h.provider.sentOfType("conversation.item.truncate")).toHaveLength(0);
+    expect(h.provider.sentOfType("response.cancel")).toHaveLength(0);
+  });
+
+  it("a response.created that finds a live hold settles it with no repair", async () => {
+    /* A created that finds a live hold can only be one this agent asked
+     * for itself — every real turn's committed precedes its created — so
+     * nobody interrupted and there is nothing to repair. The old
+     * confirm-on-created here fabricated "the user interrupted your
+     * previous spoken reply" out of an echo blip. */
+    const h = makeHarness();
+    await callIsLive(h, GROK_LISTENS);
+    h.provider.responseCreated();
+    h.provider.answerAudio(8_000, "item_held");
+    h.provider.answerTranscript("one two three");
+    h.provider.answerComplete();
+    await playOutEverything(h, 600);
+    h.provider.speechStarted();
+    await h.settle();
+    const deliveredAtOnset = speakerMsDelivered(h);
+
+    /* An unrelated created lands while the hold is open (this one was not
+     * asked for by a tool, so it also flushes the old tail — a new answer
+     * is a flush of the old one). */
+    h.provider.responseCreated();
+    h.provider.answerAudio(1_000);
+    h.provider.answerComplete();
+    await playOutEverything(h, 4_000);
+    /* No note, no truncate — and the pacer is unparked: the new answer
+     * plays. */
+    expect(h.provider.sentOfType("conversation.item.create")).toHaveLength(0);
+    expect(h.provider.sentOfType("conversation.item.truncate")).toHaveLength(0);
+    expect(speakerMsDelivered(h)).toBe(deliveredAtOnset + 1_000);
+
+    /* A commit arriving later finds nothing to confirm: the stale frozen
+     * heard-ms died with the hold and cannot touch the fresh answer. */
+    h.provider.push({ type: "input_audio_buffer.committed" });
+    await h.settle();
+    expect(h.provider.sentOfType("conversation.item.create")).toHaveLength(0);
+    expect(h.provider.sentOfType("conversation.item.truncate")).toHaveLength(0);
   });
 
   it("holds the finished answer's tail through a false onset and resumes it", async () => {
