@@ -16,7 +16,7 @@ export {
   type ProcessorStream,
   type ProcessEventArgs,
   type ReduceArgs,
-  type ScanWindow,
+  type ScannedOffsetRange,
 } from "./core/processor.ts";
 export {
   defineProcessorContract,

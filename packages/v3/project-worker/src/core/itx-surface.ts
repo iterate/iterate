@@ -15,8 +15,8 @@ import { RpcTarget } from "capnweb";
 import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
 import type { DeliveryPolicy } from "./events.ts";
 import type { Expression } from "./expression.ts";
-import { openPager, parsePage } from "./hibernatable-pager.ts";
-import { disposeStub } from "./hibernatable-stub.ts";
+import { openDeliveryWebSocket, parseDeliveryMessage } from "./delivery-websocket.ts";
+import { disposeStub } from "./itx-connection-registry.ts";
 import { canonicalName } from "./names.ts";
 import type { StreamDurableObject } from "../stream-durable-object.ts";
 
@@ -40,9 +40,10 @@ export interface ProvideLiveInput {
   instructions?: string;
 }
 
-/** The short Workers-RPC leg the DO calls during a burst: forwards `invoke(capPath, args)` onto the retained
- *  capnweb provider (a DIRECT dotted dispatch, like a facet call — never `.apply`), so it reaches the client. */
-class Invoker extends WorkersRpcTarget {
+/** The per-burst borrowed Workers-RPC leg: wraps the RETAINED CAPNWEB CALLBACK STUB and forwards
+ *  `invoke(capPath, args)` onto it (a DIRECT dotted dispatch — never `.apply`), so a call from the
+ *  stream reaches the client's actual function over the capnweb WebSocket. */
+class RetainedCallbackInvoker extends WorkersRpcTarget {
   #provider: ProviderStub;
   constructor(provider: ProviderStub) {
     super();
@@ -58,21 +59,24 @@ class Invoker extends WorkersRpcTarget {
   }
 }
 
-/** One retained provider + its Pager. Answers "wake" Pages with a fresh Invoker leg into the DO. */
-interface Relay {
+/** One CAPNWEB CALLBACK RELAY: the retained capnweb callback stub + the hibernatable delivery
+ *  WebSocket into one stream DO + per-burst RetainedCallbackInvoker legs on demand. One relay per
+ *  (client thing, stream) pair; a client's capnweb WebSocket carries many. */
+interface CapnwebCallbackRelay {
   socketId: string;
   dispose(): void;
 }
 
-/** Start a relay: dup the provider, open a Pager to the DO, and wire "wake" → hand the DO a short Invoker. */
-async function startRelay(
+/** Start a relay: dup the provider stub, open the delivery WebSocket to the stream DO, and wire
+ *  "wake" messages → hand the DO a short RetainedCallbackInvoker leg. */
+async function startCapnwebCallbackRelay(
   host: ItxHostStub,
   provider: ProviderStub,
   socketId: string,
   waitUntil: (p: Promise<unknown>) => void,
-): Promise<Relay> {
+): Promise<CapnwebCallbackRelay> {
   const retained = provider.dup();
-  const pager = await openPager(host, socketId);
+  const pager = await openDeliveryWebSocket(host, socketId);
   const disposeRetained = () => disposeStub(retained);
   // The library's own death signal: the client's capnweb session broke → the retained provider
   // can never answer again. Close the pager NOW so the DO reaps the parked stub immediately —
@@ -85,10 +89,12 @@ async function startRelay(
     }
   });
   pager.addEventListener("message", (event: MessageEvent) => {
-    const page = parsePage(event.data);
+    const page = parseDeliveryMessage(event.data);
     if (!page) return; // not a Page — a "wake" is the only page there is
     waitUntil(
-      host.activateStub({ socketId, invoker: new Invoker(retained) }).catch(() => undefined), // a stale wake (nobody waiting) returns undefined; offline throws — ignore
+      host
+        .activateStub({ socketId, invoker: new RetainedCallbackInvoker(retained) })
+        .catch(() => undefined), // a stale wake (nobody waiting) returns undefined; offline throws — ignore
     );
   });
   pager.addEventListener("close", disposeRetained);
@@ -108,7 +114,7 @@ async function startRelay(
 /** `session` at `/api` (bound to one projectId). `get`/`connect` both yield the project `Itx`. */
 export class ProjectSession extends RpcTarget {
   readonly #host: ItxHostStub;
-  readonly #relays = new Set<Relay>(); // held for the session so the retained providers + Pagers aren't GC'd
+  readonly #relays = new Set<CapnwebCallbackRelay>(); // held for the session so the retained providers + Pagers aren't GC'd
   readonly #waitUntil: (p: Promise<unknown>) => void;
 
   constructor(
@@ -131,7 +137,7 @@ export class ProjectSession extends RpcTarget {
 
   /** THE introduction door (the `authenticate()` pattern: the only way to get an authenticated
    *  session is to be handed one by a gate that checked something). Deliberately a NO-OP today —
-   *  the clean room's `?ctx=` front door is designation-without-introduction scaffolding, and
+   *  the clean room's `?ctx=` front door is designation-without-introduction scafreducing, and
    *  this method is where the real check lands without changing any caller: clients already go
    *  `session.authenticate(credentials).get()` / `.connect(...)`. */
   authenticate(_credentials?: unknown): ProjectSession {
@@ -148,7 +154,12 @@ export class ProjectSession extends RpcTarget {
     if (opts.capabilities) {
       const socketId = crypto.randomUUID();
       const connectionKey = opts.connectionKey ?? socketId;
-      const relay = await startRelay(this.#host, opts.capabilities, socketId, this.#waitUntil);
+      const relay = await startCapnwebCallbackRelay(
+        this.#host,
+        opts.capabilities,
+        socketId,
+        this.#waitUntil,
+      );
       this.#relays.add(relay);
       await this.#host.parkClient({
         socketId,
@@ -166,10 +177,14 @@ export class ProjectSession extends RpcTarget {
  *  transport — it lands here and becomes `DO.invokeCapability("itx.a.b", [x])`. */
 export class Itx extends RpcTarget {
   readonly #host: ItxHostStub;
-  readonly #relays: Set<Relay>;
+  readonly #relays: Set<CapnwebCallbackRelay>;
   readonly #waitUntil: (p: Promise<unknown>) => void;
 
-  constructor(host: ItxHostStub, relays: Set<Relay>, waitUntil: (p: Promise<unknown>) => void) {
+  constructor(
+    host: ItxHostStub,
+    relays: Set<CapnwebCallbackRelay>,
+    waitUntil: (p: Promise<unknown>) => void,
+  ) {
     super();
     this.#host = host;
     this.#relays = relays;
@@ -193,11 +208,13 @@ export class Itx extends RpcTarget {
     return new ClientCollection(this.#host);
   }
 
-  /** Mount an EXPRESSION capability (either codec half; event provenance — `roots` targets are
-   *  rejected by the host). Returns the mount's identity for `revoke`. */
+  /** Mount a capability: bind a capability path to a target expression (string half preferred —
+   *  it is what the event stores). Event provenance — built-in targets are config-mount-only.
+   *  Returns the mount's identity for `revoke`. */
   provide(input: {
-    pattern: string | Expression;
+    path: string | string[];
     target: string | Expression;
+    delivery?: DeliveryPolicy;
   }): Promise<{ providedAtOffset: number }> {
     return this.#host.provideCapability(input);
   }
@@ -211,8 +228,9 @@ export class Itx extends RpcTarget {
     return this.#host.fetch(new Request(request, { headers }));
   }
 
-  /** Pop exactly that mount off the shadow stack (what it shadowed is restored). */
-  revoke(input: { providedAtOffset: number }): Promise<void> {
+  /** Pop a mount off the shadow stack (what it shadowed is restored) — by identity, or by
+   *  capability path (the newest winner at that exact path). */
+  revoke(input: { providedAtOffset?: number; path?: string | string[] }): Promise<void> {
     return this.#host.revokeCapability(input);
   }
 
@@ -230,7 +248,7 @@ export class Itx extends RpcTarget {
     return this.#host.disableProcessor(slug);
   }
 
-  /** A facet processor's fold — sugar over the facet ADDRESS (`itx.facets.get(slug).snapshot()`
+  /** A facet processor's reduce — sugar over the facet ADDRESS (`itx.facets.get(slug).snapshot()`
    *  through the routing table; aliasable and shadowable like any other capability). */
   facetSnapshot(slug: string): Promise<{ offset: number; state: unknown }> {
     return this.#host.invoke(["itx", "facets", ["get", slug], ["snapshot"]]) as Promise<{
@@ -253,27 +271,41 @@ export class Itx extends RpcTarget {
       target: string | Expression | ((...args: never[]) => unknown) | object;
     },
   ): Promise<{ name: string; providedAtOffset: number }> {
-    let target = input.target as string | Expression;
-    if (
-      typeof input.target === "function" ||
-      (typeof input.target === "object" && !Array.isArray(input.target))
-    ) {
-      const socketId = crypto.randomUUID();
-      const relay = await startRelay(
-        this.#host,
-        input.target as unknown as ProviderStub,
-        socketId,
-        this.#waitUntil,
-      );
-      this.#relays.add(relay);
-      await this.#host.parkCapability({ socketId, description: `subscriber ${input.name ?? ""}` });
-      target = ["itx", "clients", ["get", socketId]];
-    }
-    return this.#host.subscribe({ ...input, target });
+    // SUBSCRIBING IS PROVIDING — pure edge sugar: a unique name (concurrent anonymous
+    // subscribes must never shadow each other), park if the target is a live callback, then
+    // ONE ordinary mount at itx.subscribers.<name> with the delivery policy riding the event.
+    const name = input.name ?? `sub-${crypto.randomUUID().slice(0, 8)}`;
+    const { name: _n, target: rawTarget, ...delivery } = input;
+    const target =
+      typeof rawTarget === "function" ||
+      (typeof rawTarget === "object" && !Array.isArray(rawTarget))
+        ? (await this.#parkAsTarget(rawTarget as unknown as ProviderStub, `subscriber ${name}`))
+            .target
+        : (rawTarget as string | Expression);
+    const { providedAtOffset } = await this.#host.provideCapability({
+      path: `itx.subscribers.${name}`,
+      target,
+      delivery,
+    });
+    return { name, providedAtOffset };
   }
 
-  unsubscribe(input: { name: string }): Promise<{ ok: true }> {
-    return this.#host.unsubscribe(input);
+  unsubscribe(input: { name: string }): Promise<void> {
+    return this.#host.revokeCapability({ path: `itx.subscribers.${input.name}` });
+  }
+
+  /** PARK + NAME, the edge's one two-step: retain the live capnweb callback in a
+   *  CapnwebCallbackRelay (its delivery WebSocket parks on the stream DO), and answer the
+   *  target expression that names it. Every live thing enters the durable world through here. */
+  async #parkAsTarget(
+    provider: ProviderStub,
+    description: string,
+  ): Promise<{ socketId: string; relay: CapnwebCallbackRelay; target: string }> {
+    const socketId = crypto.randomUUID();
+    const relay = await startCapnwebCallbackRelay(this.#host, provider, socketId, this.#waitUntil);
+    this.#relays.add(relay);
+    await this.#host.parkCapability({ socketId, description });
+    return { socketId, relay, target: `itx.clients.get('${socketId}')` };
   }
 
   /** Recovery from HALT (or an operator cursor seek). */
@@ -287,15 +319,18 @@ export class Itx extends RpcTarget {
   async provideCapability(input: ProvideLiveInput): Promise<CapabilityProvision> {
     if (input.type !== "live")
       throw new Error("itx.provideCapability here only mounts live capabilities");
-    const socketId = crypto.randomUUID();
-    const relay = await startRelay(this.#host, input.capability, socketId, this.#waitUntil);
-    this.#relays.add(relay);
-    await this.#host.parkCapability({ socketId, description: input.instructions });
+    const parked = await this.#parkAsTarget(input.capability, input.instructions ?? "");
     const { providedAtOffset } = await this.#host.provideCapability({
-      pattern: ["itx", ...input.path],
-      target: ["itx", "clients", ["get", socketId]],
+      path: ["itx", ...input.path],
+      target: parked.target,
     });
-    return new CapabilityProvision(this.#host, providedAtOffset, socketId, relay, this.#relays);
+    return new CapabilityProvision(
+      this.#host,
+      providedAtOffset,
+      parked.socketId,
+      parked.relay,
+      this.#relays,
+    );
   }
 }
 
@@ -342,14 +377,14 @@ export class CapabilityProvision extends RpcTarget {
   readonly #host: ItxHostStub;
   readonly #providedAtOffset: number;
   readonly #socketId: string;
-  readonly #relay: Relay;
-  readonly #relays: Set<Relay>;
+  readonly #relay: CapnwebCallbackRelay;
+  readonly #relays: Set<CapnwebCallbackRelay>;
   constructor(
     host: ItxHostStub,
     providedAtOffset: number,
     socketId: string,
-    relay: Relay,
-    relays: Set<Relay>,
+    relay: CapnwebCallbackRelay,
+    relays: Set<CapnwebCallbackRelay>,
   ) {
     super();
     this.#host = host;

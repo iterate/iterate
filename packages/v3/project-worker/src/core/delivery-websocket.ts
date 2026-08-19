@@ -7,7 +7,7 @@
 // one invocation burst, which the DO silently drops at quiescence. So the DO holds a live reference only while
 // a call is in flight, and hibernates in between (the 1000-idle-devices property).
 
-export const PAGER_HEADER = "x-itx-pager";
+export const DELIVERY_WEBSOCKET_HEADER = "x-itx-pager";
 const PAGER_TAG = "itx-pager";
 
 /** The one-way DO→relay message over a Pager. Best-effort prompt; the record on the socket is the source of truth. */
@@ -18,7 +18,7 @@ export type Page = { type: "wake" };
  *  there is nothing else to reconcile. `socketId` is always present. */
 export type PagerRecord = { socketId: string; [k: string]: unknown };
 
-export function parsePage(data: unknown): Page | undefined {
+export function parseDeliveryMessage(data: unknown): Page | undefined {
   if (typeof data !== "string") return undefined;
   try {
     const p = JSON.parse(data) as Page;
@@ -33,9 +33,9 @@ export function acceptPager(
   request: Request,
   hooks: { acceptWebSocket(ws: WebSocket, tags: string[]): void },
 ): Response {
-  const socketId = request.headers.get(PAGER_HEADER);
+  const socketId = request.headers.get(DELIVERY_WEBSOCKET_HEADER);
   if ((request.headers.get("Upgrade") ?? "").toLowerCase() !== "websocket" || !socketId)
-    return new Response(`pager: expected a websocket upgrade with ${PAGER_HEADER}\n`, {
+    return new Response(`pager: expected a websocket upgrade with ${DELIVERY_WEBSOCKET_HEADER}\n`, {
       status: 400,
     });
   const pair = new WebSocketPair();
@@ -86,12 +86,12 @@ export function sendPage(ws: WebSocket, page: Page): void {
 }
 
 /** Relay side: open a Pager to a DO (via its stub's `fetch`) and accept the returned socket. */
-export async function openPager(
+export async function openDeliveryWebSocket(
   stub: { fetch(url: string, init?: RequestInit): Promise<Response> },
   socketId: string,
 ): Promise<WebSocket> {
   const r = await stub.fetch("https://pager.internal/", {
-    headers: { Upgrade: "websocket", [PAGER_HEADER]: socketId },
+    headers: { Upgrade: "websocket", [DELIVERY_WEBSOCKET_HEADER]: socketId },
   });
   if (!r.webSocket) throw new Error(`pager upgrade returned ${r.status} without a WebSocket`);
   r.webSocket.accept();

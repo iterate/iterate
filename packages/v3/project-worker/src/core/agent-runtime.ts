@@ -86,9 +86,14 @@ export function confinedWorker(
     // handle back — every chain member needs the flag (see iterate-context-entrypoint.ts).
     compatibilityFlags: ["allow_irrevocable_stub_storage"],
     mainModule,
-    // The SDK rides EVERY confined isolate (like itx.js): any loaded class — stateful mini-app
-    // or facet processor — can `import { liveState, StreamProcessor } from "./processor.js"`.
-    modules: { "itx.js": ITX_SURFACE_MODULE, "processor.js": PROCESSOR_SDK_MODULE, ...modules },
+    // itx.js rides every confined isolate; the processor SDK (base class + zod, ~330KB) rides
+    // ONLY where a processor class can exist — stateless code caps never import it, and the
+    // dead module source was pure isolate weight for them.
+    modules: {
+      "itx.js": ITX_SURFACE_MODULE,
+      ...(key.kind === "code" ? {} : { "processor.js": PROCESSOR_SDK_MODULE }),
+      ...modules,
+    },
     env: { ITX: host },
     globalOutbound: host,
   }));

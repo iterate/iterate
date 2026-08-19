@@ -7,7 +7,7 @@
 // dropping it the moment the call drains. Between calls the DO holds nothing but hibernatable sockets, so it
 // hibernates while any number of providers stay connected.
 //
-// `HibernatableStubs` is the DO-side set of them, and it is provider-AGNOSTIC: a stub is just `{ socketId }` plus
+// `ItxConnectionRegistry` is the DO-side set of them, and it is provider-AGNOSTIC: a stub is just `{ socketId }` plus
 // opaque meta the caller stamps (a capability path, a client connection, …). The caller reads that meta back via
 // `all()` and decides what to invoke. The only durable state is the socket attachment, which survives
 // hibernation — so a fresh DO incarnation reads its stubs straight back from the sockets, nothing to reconcile.
@@ -19,7 +19,7 @@ import {
   pagerSockets,
   sendPage,
   stampPager,
-} from "./hibernatable-pager.ts";
+} from "./delivery-websocket.ts";
 
 /** The short Workers-RPC leg the relay hands the DO on "wake": it forwards one invocation burst to the provider. */
 export type Invoker = {
@@ -45,7 +45,7 @@ export function disposeStub(x: unknown): void {
 
 const ATTACH_TIMEOUT_MS = 10_000; // a woken relay has this long to hand back its short leg before we give up
 
-export class HibernatableStubs {
+export class ItxConnectionRegistry {
   readonly #hooks: Hooks;
   // In-memory, mid-call ONLY: a live leg exists during a burst; a wake is pending until the relay attaches. Both
   // empty ⇒ the DO holds no stub ⇒ it hibernates (the surviving Pager sockets carry every parked stub).

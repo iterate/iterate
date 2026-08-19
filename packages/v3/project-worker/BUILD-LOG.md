@@ -1391,3 +1391,46 @@ away from the commit point; a fold that runs AT it needs none of them.
   (pause refuses with reason, control passes, breaker admits exactly 3 then trips, ~2.6s
   refill admits exactly one more, breaker-off restores, /state shows the core fold) + the
   full ten-suite board ALL PASS.
+
+## Increment 55 (live-12): the language wave — one vocabulary, strings at rest, everything is a mount
+
+The first of the three plan-of-record waves (PLAN.md). Fully qualified, breadcrumb-leaving
+identifiers throughout (the owner's naming doctrine, now enforced in code):
+
+- **The capability table**: `capability-table-processor.ts` / `CapabilityTableProcessor` /
+  `CapabilityTable` / `CapabilityMount` — the words iterate-context, ictx, capability-host,
+  host-scope, roots, and seed are GONE from the codebase. `built-ins.ts` (`buildBuiltIns`,
+  `BuiltInsEnv`) holds the expression roots; config mounts come from APP_CONFIG
+  (`configMounts`, `DEFAULT_CONFIG_MOUNTS`). Transport: `CapnwebCallbackRelay`,
+  `RetainedCallbackInvoker`, `delivery-websocket.ts`, `ItxConnectionRegistry`,
+  `ItxEntrypoint`. `ScannedOffsetRange` (never "window"), `ReduceProgress`,
+  `#highestAssignedOffset`, `#pushedThroughOffset`. "Fold" is retired for reduce/reduced
+  (`#rereduceIfVersionChanged`).
+- **STRING AT REST**: mount events store `{ path: "itx.chat", target:
+"itx.clients.get('abc')" }` — the log reads like what a human wrote; reduce parses ONCE into
+  the structured in-memory table; `print` earns its keep canonicalizing programmatic
+  expressions at mount time. Contract v2.0.0 (clean break; tables rebuild from the log).
+- **THE GRAMMAR DIET** (merged in from wave 3 — same files): all five placeholder forms,
+  `substitute`, the must-use rule, and the `$`-escape are DELETED (grep-verified zero users
+  outside their own tests; the substitute region had shipped two codec bugs). Patterns are now
+  CAPABILITY PATHS — plain dotted segments (`parseCapabilityPath`); matching is
+  longest-path-prefix, final segment may consume boundary args, ties → newest; argument-shaping
+  belongs in a code capability (the file's own doctrine, now enforced by absence). Kebab-case
+  slugs are legal path segments (the identifier grammar gained non-leading hyphens);
+  anonymous subscriptions are named `sub-<uuid8>`.
+- **EVERYTHING IS A MOUNT**: processor enablement became a mount at `itx.processors.<slug>`
+  with a processor policy `{ source?, export?, props? }` riding the event — the
+  facet-processors kv registry is dead, enablement is event-sourced/auditable/shadowable, and
+  `itx.processors.<slug>.snapshot()` resolves as ordinary addressing. **Per-instance `props`**
+  land in `FacetIdentity` and the `StreamProcessor` constructor (event-sourced instance
+  config; re-enable with new props = shadow). subscribe/unsubscribe left the DO for the edge
+  (pure sugar over provide/revoke-by-path); `revokeCapability` gained revoke-by-path; the
+  edge's park+mount two-step is ONE helper (`#parkAsTarget`).
+- Also: the processor SDK (~330KB) is injected only where a processor class can exist
+  (procfacet/stateful kinds — stateless code caps stop carrying it); the dead
+  facetClientsView/facetAddressView exports died; event namespace moved to
+  `events.iterate.com/capability-table/*`.
+
+89 unit tests (the deleted placeholder machinery took its ~20 tests with it); eleven-suite
+live board ALL PASS on live-12 (proofs updated: provide speaks `path`, enablement mounts
+consume offsets and are counted by "\*" reducers — the audit trail the kv registry never had).

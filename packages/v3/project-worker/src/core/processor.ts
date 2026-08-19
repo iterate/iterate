@@ -33,9 +33,9 @@
 // redeliver it) and NEVER trigger a progress persist: an ephemeral-only window advances the
 // cursor in memory alone, so a pure-ephemeral flood costs this class ZERO storage writes.
 //
-// `reduce` is a PURE fold (new object out, inputs immutable), cached per contract version;
-// bumping `contract.version` refolds from offset 0 through `reduce` only (never re-running
-// side effects) — and a refold reads durable rows only, which is why durable product truth must
+// `reduce` is a PURE reduce (new object out, inputs immutable), cached per contract version;
+// bumping `contract.version` re-reduces from offset 0 through `reduce` only (never re-running
+// side effects) — and a re-reduce reads durable rows only, which is why durable product truth must
 // never be derived from an ephemeral event.
 
 import type { z } from "zod";
@@ -54,7 +54,7 @@ export type EventDefinition = {
 
 export type ProcessorContract<State = unknown> = {
   slug: string;
-  /** Bumping this refolds state from offset 0 (reduce only — side effects never re-run). */
+  /** Bumping this re-reduces state from offset 0 (reduce only — side effects never re-run). */
   version: string;
   description?: string;
   /** What it reacts to: type strings, or "*" for every DURABLE event. Ephemeral events are
@@ -84,7 +84,7 @@ export type ProcessorStorage = {
 };
 
 /** The contiguity proof a delivery carries: (scannedAfterOffset, scannedThroughOffset]. */
-export type ScanWindow = { scannedAfterOffset: number; scannedThroughOffset: number };
+export type ScannedOffsetRange = { scannedAfterOffset: number; scannedThroughOffset: number };
 
 export type ReduceArgs<State> = { event: StreamEventT; state: State };
 
@@ -104,13 +104,13 @@ export type ProcessEventArgs<State> = {
 
 export type ProcessorSnapshot<State> = { offset: number; state: State };
 
-/** A REDUCE-ONLY processor: pure fold, no effects — hostable at ZERO DISTANCE (inline at the
+/** A REDUCE-ONLY processor: pure reduce, no effects — hostable at ZERO DISTANCE (inline at the
  *  parent's commit point) because it needs none of the async runner below. The entire runner
  *  apparatus — serial chain, cursors, scan windows, gap repair, resurrection — is the price of
- *  being AWAY from the commit point; a fold that runs synchronously inside append pays none of
+ *  being AWAY from the commit point; a reduce that runs synchronously inside append pays none of
  *  it. Same `defineProcessorContract`, same `reduce({event, state})` signature; NOT having a
  *  `processEvent` is what qualifies a processor for inline hosting (the rule is the type).
- *  Inline folds see DURABLE events only — their checkpoint must be rebuildable from the log. */
+ *  Inline reduces see DURABLE events only — their checkpoint must be rebuildable from the log. */
 export type ReduceOnlyProcessor<State> = {
   contract: ProcessorContract<State>;
   reduce(args: ReduceArgs<State>): State | null | undefined;
@@ -120,12 +120,12 @@ export type ReduceOnlyProcessor<State> = {
  *  patch itself rides the event (LiveView-style), chained by producer-owned revisions (`from` =
  *  the previous emission's `to`). HARD RULE: no processor can ever consume it (#consumes
  *  refuses it before contracts are even consulted), so state-change notifications can never
- *  feed a fold — the feedback-loop class is unspellable, not merely discouraged. The CLIENT
+ *  feed a reduce — the feedback-loop class is unspellable, not merely discouraged. The CLIENT
  *  owns the chain: seed through the producer's door ({rev, state}), apply a payload whose
  *  `from` matches the held rev, re-read the door on any mismatch — never replay these events. */
 export const LIVE_STATE_CHANGED = "events.iterate.com/live-state/changed";
 
-type Progress<State> = {
+type ReduceProgress<State> = {
   reducerVersion: string;
   reducedThroughOffset: number;
   state: State;
@@ -136,12 +136,13 @@ export abstract class StreamProcessor<State> {
   protected readonly stream: ProcessorStream;
   protected readonly path: string;
   protected readonly projectId: string;
+  protected readonly props: Record<string, unknown>;
   readonly #storage: ProcessorStorage;
 
   // Rule 1: the serial chain.
   #chain: Promise<void> = Promise.resolve();
-  #progress: Progress<State> | null = null; // in-memory cache of the persisted fold
-  #pushedHead?: number; // highest scannedThroughOffset ever SHOWN to us (see processEventBatch)
+  #progress: ReduceProgress<State> | null = null; // in-memory cache of the persisted reduce progress
+  #pushedThroughOffset?: number; // highest scannedThroughOffset ever SHOWN to us (see processEventBatch)
   #waiters: { offset: number; resolve: () => void }[] = [];
 
   constructor(args: {
@@ -149,14 +150,18 @@ export abstract class StreamProcessor<State> {
     storage: ProcessorStorage;
     path: string;
     projectId: string;
+    /** Per-instance configuration from the enablement mount (event-sourced; re-enabling with
+     *  different props shadows the old configuration). */
+    props?: Record<string, unknown>;
   }) {
     this.stream = args.stream;
     this.#storage = args.storage;
     this.path = args.path;
     this.projectId = args.projectId;
+    this.props = args.props ?? {};
   }
 
-  /** Pure fold. Return the NEXT state (a new object) — or null/undefined to keep the current. */
+  /** Pure reduce. Return the NEXT state (a new object) — or null/undefined to keep the current. */
   protected reduce(_args: ReduceArgs<State>): State | null | undefined {
     return undefined;
   }
@@ -164,13 +169,13 @@ export abstract class StreamProcessor<State> {
   /** Side-effect hook. Synchronous by design: register async work via the two helpers. */
   protected processEvent(_args: ProcessEventArgs<State>): undefined {}
 
-  /** OPTIONAL live-state projection: define it and every batch whose fold CHANGED the projected
+  /** OPTIONAL live-state projection: define it and every batch whose reduce CHANGED the projected
    *  shape emits ONE change event carrying the delta patch (key = the contract slug). Redact/
    *  trim here — this is the shape clients see, and the shape the diffs are computed over. */
   liveState?(state: State): unknown;
 
   // The live-state revision chain, in-memory ON PURPOSE: minted at the first liveSnapshot of an
-  // incarnation (from the fold cursor — monotonic across incarnations), advanced to `to` on
+  // incarnation (from the reduce cursor — monotonic across incarnations), advanced to `to` on
   // every emission. Losing it with an eviction just breaks the chain, and a broken chain is the
   // subscriber-side signal to re-seed — never a correctness hazard.
   #liveStateRev?: number;
@@ -197,15 +202,18 @@ export abstract class StreamProcessor<State> {
   // ── the drive doors ──
 
   /** THE push door: the stream (or hosting facet) hands the just-committed batch with its
-   *  window. Contiguous → fold it directly (the fast path — no read); anything else → gap
+   *  window. Contiguous → reduce it directly (the fast path — no read); anything else → gap
    *  repair from the own cursor. Fire-and-forget safe: enqueues on the serial chain. */
-  processEventBatch(events: StreamEventT[], window: ScanWindow): Promise<void> {
+  processEventBatch(events: StreamEventT[], window: ScannedOffsetRange): Promise<void> {
     // Recorded SYNCHRONOUSLY: the head this processor has been SHOWN. Read verbs skip their
-    // wake when the fold has provably reached it — the fast path that deletes one parent read
+    // wake when the reduce has provably reached it — the fast path that deletes one parent read
     // RPC from every capability dispatch (and every level of alias nesting) once caught up.
-    this.#pushedHead = Math.max(this.#pushedHead ?? 0, window.scannedThroughOffset);
+    this.#pushedThroughOffset = Math.max(
+      this.#pushedThroughOffset ?? 0,
+      window.scannedThroughOffset,
+    );
     return this.#enqueue(async () => {
-      await this.#refoldIfNeeded();
+      await this.#rereduceIfVersionChanged();
       const progress = this.#loadProgress();
       if (window.scannedAfterOffset === progress.reducedThroughOffset) {
         await this.#processBatch(events, window, true);
@@ -232,8 +240,8 @@ export abstract class StreamProcessor<State> {
   /** Provably at the shown head → the read verbs skip their catch-up read entirely. */
   #caughtUp(): boolean {
     return (
-      this.#pushedHead !== undefined &&
-      this.#loadProgress().reducedThroughOffset >= this.#pushedHead
+      this.#pushedThroughOffset !== undefined &&
+      this.#loadProgress().reducedThroughOffset >= this.#pushedThroughOffset
     );
   }
 
@@ -281,11 +289,11 @@ export abstract class StreamProcessor<State> {
     return `processor:${this.contract.slug}:state`;
   }
 
-  /** The persisted fold is TWO keys: the tiny cursor record (written per durable window) and
-   *  the state blob (written only when the fold actually changed it) — otherwise every enabled
+  /** The persisted reduce is TWO keys: the tiny cursor record (written per durable window) and
+   *  the state blob (written only when the reduce actually changed it) — otherwise every enabled
    *  facet rewrote its ENTIRE state for every durable batch, consumed or not. Both writes land
    *  in one event-loop turn, so the storage write coalescer commits them together. */
-  #loadProgress(): Progress<State> {
+  #loadProgress(): ReduceProgress<State> {
     if (this.#progress) return this.#progress;
     const cursor = this.#storage.get<{ reducerVersion: string; reducedThroughOffset: number }>(
       this.#progressKey(),
@@ -308,9 +316,9 @@ export abstract class StreamProcessor<State> {
     return this.#progress;
   }
 
-  /** Refold from 0 through `reduce` only (contract version changed). Durable rows only — never
-   *  re-runs effects, and (by design) never sees dead ephemerals. */
-  async #refoldIfNeeded(): Promise<void> {
+  /** Re-reduce from offset 0 (the contract version changed). Durable rows only — never re-runs
+   *  effects, and (by design) never sees dead ephemerals. */
+  async #rereduceIfVersionChanged(): Promise<void> {
     if (this.#progress) return; // version can't change within an incarnation — probe storage once
     const stored = this.#storage.get<{ reducerVersion: string }>(this.#progressKey());
     if (!stored || stored.reducerVersion === this.contract.version) return;
@@ -335,7 +343,7 @@ export abstract class StreamProcessor<State> {
   /** CURSOR-DRIVEN gap repair: read contiguously from the persisted cursor out of the log —
    *  a failed batch, a missed push, or a fresh incarnation can never skip a durable event. */
   async #catchUpBody(): Promise<void> {
-    await this.#refoldIfNeeded();
+    await this.#rereduceIfVersionChanged();
     for (;;) {
       const after = this.#loadProgress().reducedThroughOffset;
       const page = await this.stream.read(after, 500);
@@ -355,7 +363,11 @@ export abstract class StreamProcessor<State> {
   }
 
   /** Rules 2–5 over one contiguous window. The caller established contiguity. */
-  async #processBatch(events: StreamEventT[], window: ScanWindow, atHead: boolean): Promise<void> {
+  async #processBatch(
+    events: StreamEventT[],
+    window: ScannedOffsetRange,
+    atHead: boolean,
+  ): Promise<void> {
     const progress = this.#loadProgress();
     let { state } = progress;
     let caughtUpDelivered = false;
@@ -393,7 +405,7 @@ export abstract class StreamProcessor<State> {
         try {
           next = this.reduce({ event, state });
         } catch (error) {
-          // A malformed/hostile event must not wedge the fold forever: record the skip, move on.
+          // A malformed/hostile event must not wedge the reduce forever: record the skip, move on.
           console.error(
             `processor "${this.contract.slug}" reduce failed at offset ${event.offset}`,
             error,
@@ -436,7 +448,7 @@ export abstract class StreamProcessor<State> {
     // Rule 4: ONE persist per window, before the cursor advances — but NEVER for an
     // ephemeral-only window (a pure-ephemeral flood costs zero writes; after eviction the
     // cursor regresses only over events nobody can redeliver anyway).
-    const next: Progress<State> = {
+    const next: ReduceProgress<State> = {
       reducerVersion: this.contract.version,
       reducedThroughOffset: window.scannedThroughOffset,
       state,
@@ -458,7 +470,7 @@ export abstract class StreamProcessor<State> {
     // emit second, so a crash between the two loses only a notification (healed by the chain
     // mismatch on the next change), never state. The revision advances even if the append
     // fails, for the same reason: a hole in the chain is a re-seed, a lie in it is corruption.
-    // The WHOLE block is guarded — the fold above already committed, so a projection/diff
+    // The WHOLE block is guarded — the reduce above already committed, so a projection/diff
     // failure (an unserializable value in state, a throwing projection) must degrade to a lost
     // notification, never to a rejected batch that snapshot()/waitUntilProcessed callers see.
     if (typeof this.liveState === "function" && state !== progress.state) {

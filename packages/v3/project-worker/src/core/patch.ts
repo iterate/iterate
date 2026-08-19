@@ -1,5 +1,5 @@
 // patch.ts — the LiveView-style delta that rides every live-state change event. `diff` runs at
-// the PRODUCER (the processor's fold, the mini-app helper's set) where old and new value are
+// the PRODUCER (the processor's reduce, the mini-app helper's set) where old and new value are
 // both in hand; the stream forwards the ops verbatim; only CLIENTS apply them. The format is an
 // RFC 6902 subset (add / replace / remove, JSON-Pointer paths) so any off-the-shelf json-patch
 // library applies our frames — we invent no wire format, we just never emit the exotic ops.

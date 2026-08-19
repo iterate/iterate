@@ -13,7 +13,7 @@
 //   • BACK-CHANNEL by NAME, never a live stub: the facet re-resolves `env.CONTEXT
 //     .getByName(parentName)` per use (stubs must not outlive their RPC turn).
 //   • DELIVERY via `processEventBatch(events, window)` — the parent pushes every commit with its
-//     scan-window proof; the base class folds the fast path and gap-repairs from the log
+//     scan-window proof; the base class reduces the fast path and gap-repairs from the log
 //     otherwise. No registry: the processor IS its own runner (core/processor.ts).
 //
 // Platform constraints carried deliberately: facets have NO alarms (workerd#6810 — the parent
@@ -32,11 +32,11 @@ import {
   type ProcessorStorage,
   type ProcessorStream,
   type ReduceArgs,
-  type ScanWindow,
+  type ScannedOffsetRange,
 } from "./core/processor.ts";
-import type { RootsEnv } from "./roots-builder.ts";
+import type { BuiltInsEnv } from "./built-ins.ts";
 
-interface Env extends RootsEnv {
+interface Env extends BuiltInsEnv {
   APP_CONFIG?: string;
 }
 
@@ -48,10 +48,12 @@ export type FacetIdentity = {
   path: string;
   slug: string;
   export?: string;
+  /** Per-instance configuration from the enablement mount, handed to the constructor. */
+  props?: Record<string, unknown>;
 };
 
 // ── the demo built-in facet processor: tally events by type ──
-// Proves the whole spine (configure → push → fold → snapshot-through-parent) with the smallest
+// Proves the whole spine (configure → push → reduce → snapshot-through-parent) with the smallest
 // possible processor.
 const TallyContract = defineProcessorContract({
   slug: "tally",
@@ -77,6 +79,7 @@ type FacetProcessorArgs = {
   path: string;
   projectId: string;
   identity: FacetIdentity;
+  props?: Record<string, unknown>;
 };
 
 /** Built-in facet-hosted processors by slug. (Loader-loaded userspace classes ride the same
@@ -101,12 +104,12 @@ export class ProcessorFacet extends DurableObject<Env> {
   }
 
   /** The parent pushes every commit here with its scan-window proof. Fire-and-forget from the
-   *  parent's side; the base class serializes, folds the fast path, gap-repairs otherwise. */
-  async processEventBatch(events: StreamEvent[], window: ScanWindow): Promise<void> {
+   *  parent's side; the base class serializes, reduces the fast path, gap-repairs otherwise. */
+  async processEventBatch(events: StreamEvent[], window: ScannedOffsetRange): Promise<void> {
     await this.#p().processEventBatch(events, window);
   }
 
-  /** Catch up from the parent's log, then report the fold (offset + reduced state). */
+  /** Catch up from the parent's log, then report the reduce (offset + reduced state). */
   snapshot(): Promise<ProcessorSnapshot<unknown>> {
     return this.#p().snapshot();
   }
@@ -116,7 +119,7 @@ export class ProcessorFacet extends DurableObject<Env> {
     return this.#p().liveSnapshot();
   }
 
-  /** The barrier verb, forwarded (read-your-writes for whatever builds on this fold). */
+  /** The barrier verb, forwarded (read-your-writes for whatever builds on this reduce). */
   waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void> {
     return this.#p().waitUntilProcessed(input);
   }
@@ -146,6 +149,7 @@ export class ProcessorFacet extends DurableObject<Env> {
       path: identity.path,
       projectId: identity.projectId,
       identity,
+      props: identity.props,
     });
     return this.#processor;
   }

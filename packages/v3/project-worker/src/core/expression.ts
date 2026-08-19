@@ -1,73 +1,58 @@
-// core/expression.ts — THE expression codec: capability calls and capability mounts as data.
+// core/expression.ts — THE expression codec: capability calls and capability-mount targets as
+// data, plus the capability-path matcher.
 //
-// One grammar does three jobs:
-//   1. a CALL      — "invoke this":  itx.streams.get('/logs').append({ type: 'hi' })
-//   2. a PATTERN   — the left side of a mount row: what calls it claims (may contain holes)
-//   3. a TARGET    — the right side of a mount row: what to run instead (holes reference caller args)
+// Two grammars, deliberately unequal:
+//   1. an EXPRESSION — a call written down: itx.streams.get('/logs').append({ type: 'hi' }).
+//      The op-set is get + call and NEVER grows (Cap'n Proto kept pipelining to one op for 13
+//      years; anything smarter belongs in the project's config worker as real code, mounted
+//      plainly). An expression is a persisted NAME for a callable, never captured authority:
+//      every evaluation re-derives authority from the scope it is handed, so deleting a stored
+//      expression IS revocation (apps/os's load-bearing rule, kept).
+//   2. a CAPABILITY PATH — the left side of a capability mount: a plain dotted path
+//      ("itx.subscribers.foo"). Matching is longest-path-prefix; the path's FINAL segment may
+//      consume a call's arguments (they become the boundary args); everything after the matched
+//      capability reference is the REMAINDER, replayed on the evaluated target. There are no
+//      placeholders, captures, or argument-unification in patterns — that generality had zero
+//      users and shipped two codec bugs before it was deleted (increment 55); argument-shaping
+//      belongs in a code capability.
 //
-// The op-set is get + call + hole, and NEVER grows (Cap'n Proto kept pipelining to one op for 13
-// years; anything smarter belongs in the project's config worker as real code, mounted plainly).
-// An expression is a persisted NAME for a capability, never captured authority: every evaluation
-// re-derives authority from the scope roots it is handed, so deleting a stored expression IS
-// revocation (apps/os's load-bearing rule, kept).
-//
-// TWO INTERCHANGEABLE HALVES (it is a two-way codec):
-//   string     "itx.openai.chat({ model: 'grok-4', messages: ? })"      ← what humans write
-//   structured ["itx", "openai", ["chat", { model: "grok-4", messages: { "?": 0 } }]]
-// `parse` and `print` round-trip; the structured half is canonical for storage (structurally
-// diffable, no re-parsing in folds); the string half is the authoring surface (config, CLI, docs).
-//
-// HOLES (explicit, never tacit — the Hack-pipes verdict: mark the hole, fail early):
-//   ?        positional  → { "?": n }        (auto-numbered left-to-right by the parser)
-//   ?0 ?1    ordinal     → { "?": 0 }        (repeatable)
-//   ?name    capture     → { "?": "name" }   (pattern side binds it; target side references it)
-//   ...?     rest        → { "...": true }   in a call-arg position: splice remaining caller args
-//   ...?     spread      → { "...": 0 }      in an object position: shallow-merge caller arg n
-//                                            under the frozen keys (frozen wins — the mount is
-//                                            the authority)
-//   { "$": v }           literal escape: v verbatim (only needed by PROGRAMMATIC writers whose
-//                                        data could collide with the tagged shapes above; in the
-//                                        string half holes are syntax and can never collide)
-//
-// MATCHING (the routing table's resolver): a pattern claims a call by binding a prefix of its
-// steps. Literals bind harder than holes; longer bound prefixes beat shorter; the table breaks
-// exact ties by recency (the shadow stack). The unmatched tail of the call is the REMAINDER,
-// replayed on the evaluated target — which is how a bare default route `itx ⇒ itx.cd('/')`
-// forwards a whole missed call with zero special machinery.
+// STRING AT REST, STRUCTURED IN MEMORY: event payloads and config store the STRING half (what
+// humans read in the log); `parse` runs once when a reduce rehydrates its table; `print`
+// canonicalizes programmatically built expressions into the stored string form at mount time.
 
 import { z } from "zod";
-import { deeper, jsonEqual } from "./events.ts";
+import { deeper } from "./events.ts";
 
 /** One step: a property read (string) or a call (`[method, ...args]`). Args are plain JSON. */
 export type Step = string | [method: string, ...args: unknown[]];
 export type Expression = Step[];
 
-/** THE structured half as a wire schema — persisted mount rows and APP_CONFIG seeds validate
- *  against this one spelling (two spellings would eventually disagree). */
+/** The structured half as a wire schema — reduced-state checkpoints validate against this one
+ *  spelling (events store the STRING half). */
 export const ExpressionSchema = z.array(
   z.union([z.string(), z.tuple([z.string()]).rest(z.unknown())]),
 ) as z.ZodType<Expression>;
 
-/** A hole/spread/escape marker inside an arg tree (see the header table). */
-type Hole = { "?": number | string } | { "...": true | number } | { $: unknown };
+/** A capability path — the left side of a mount. Plain dotted segments, no calls, no args. */
+export type CapabilityPath = string[];
+
+/** Parse a capability path ("itx.subscribers.foo") — the string must be dotted names only. */
+export function parseCapabilityPath(source: string): CapabilityPath {
+  const expr = parse(source);
+  if (!expr.every((step): step is string => typeof step === "string"))
+    throw new Error(
+      `a capability path is dotted names only — ${JSON.stringify(source)} contains a call`,
+    );
+  return expr;
+}
 
 const isPlainObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
-/** Classify a tagged value — THE one detector every hole walk must share (match, substitute,
- *  the must-use rule): a walker with its own idea of a hole will eventually disagree with
- *  `substitute` about what `$` escapes. */
-export const holeKind = (v: unknown): "arg" | "rest" | "literal" | null => {
-  if (!isPlainObject(v) || Object.keys(v).length !== 1) return null;
-  if ("?" in v) return "arg";
-  if ("..." in v) return "rest";
-  if ("$" in v) return "literal";
-  return null;
-};
 
 // ─────────────────────────────────────────────── parse ───────────────────────────────────────────────
 // The string half: dotted identifier segments; call parens with JSON5-ish literals (single or
-// double quoted strings, numbers, true/false/null, objects, arrays); the hole tokens above.
-// Hand-rolled recursive descent — no dependencies (this package is pure-play).
+// double quoted strings, numbers, true/false/null, objects, arrays). Hand-rolled recursive
+// descent — no dependencies (this package is pure-play).
 
 export function parse(source: string): Expression {
   const p = new Parser(source);
@@ -79,7 +64,6 @@ export function parse(source: string): Expression {
 class Parser {
   #s: string;
   #i = 0;
-  #autoArg = 0; // `?` holes are auto-numbered left-to-right across the whole expression
 
   constructor(s: string) {
     this.#s = s;
@@ -128,7 +112,7 @@ class Parser {
 
   #depth = 0;
 
-  /** One JSON5-ish value, which may itself be (or contain) a hole. */
+  /** One JSON5-ish value. */
   #value(): unknown {
     this.#depth = deeper(this.#depth, "parse");
     try {
@@ -141,14 +125,6 @@ class Parser {
   #valueBody(): unknown {
     this.#ws();
     const c = this.#peek();
-    if (c === "?") return this.#hole();
-    if (c === ".") {
-      // `...?` — rest (in call args) / spread (in objects); optionally `...?2`
-      this.#expect("...");
-      this.#expect("?");
-      const n = this.#number();
-      return n === null ? { "...": true } : { "...": n };
-    }
     if (c === "'" || c === '"') return this.#string(c);
     if (c === "{") return this.#object();
     if (c === "[") return this.#array();
@@ -164,15 +140,6 @@ class Parser {
     throw this.#err(`unexpected value ${JSON.stringify(word || c)}`);
   }
 
-  #hole(): Hole {
-    this.#expect("?");
-    const n = this.#number();
-    if (n !== null) return { "?": n }; // ?0 ordinal
-    const name = this.#word();
-    if (name) return { "?": name }; // ?name capture
-    return { "?": this.#autoArg++ }; // ? positional (auto-numbered)
-  }
-
   #object(): Record<string, unknown> {
     this.#expect("{");
     const out: Record<string, unknown> = {};
@@ -183,18 +150,11 @@ class Parser {
     }
     for (;;) {
       this.#ws();
-      if (this.#peek() === ".") {
-        // `...?` spread entry — stored under the reserved "..." key
-        this.#expect("...");
-        this.#expect("?");
-        out["..."] = this.#number() ?? 0;
-      } else {
-        const q = this.#peek();
-        const key = q === "'" || q === '"' ? this.#string(q) : this.#word();
-        this.#ws();
-        this.#expect(":");
-        out[key] = this.#value();
-      }
+      const q = this.#peek();
+      const key = q === "'" || q === '"' ? this.#string(q) : this.#word();
+      this.#ws();
+      this.#expect(":");
+      out[key] = this.#value();
       this.#ws();
       if (this.#peek() === ",") {
         this.#i++;
@@ -256,7 +216,10 @@ class Parser {
   }
 
   #word(): string {
-    const m = /^[A-Za-z_$][A-Za-z0-9_$]*/.exec(this.#s.slice(this.#i));
+    // Hyphens are legal in non-leading position: kebab-case slugs ("capability-table",
+    // "user-tally") are path segments throughout the platform, and this grammar has no binary
+    // minus to collide with (a number's minus is consumed by the value branch first).
+    const m = /^[A-Za-z_$][A-Za-z0-9_$-]*/.exec(this.#s.slice(this.#i));
     if (!m) return "";
     this.#i += m[0].length;
     return m[0];
@@ -292,7 +255,9 @@ export function toExpression(input: string | Expression): Expression {
 
 // ─────────────────────────────────────────────── print ───────────────────────────────────────────────
 
-/** Canonical string form (single quotes, minimal spacing). `parse(print(e))` round-trips. */
+/** Canonical string form (single quotes, minimal spacing) — THE stored form: `print` runs at
+ *  mount time to canonicalize programmatically built expressions into what the event carries.
+ *  `parse(print(e))` round-trips. */
 export function print(expr: Expression): string {
   return expr
     .map((step, i) => {
@@ -305,203 +270,44 @@ export function print(expr: Expression): string {
 }
 
 function printValue(v: unknown): string {
-  switch (holeKind(v)) {
-    case "arg":
-      return `?${(v as { "?": number | string })["?"]}`;
-    case "rest": {
-      const n = (v as { "...": true | number })["..."];
-      return n === true ? "...?" : `...?${n}`;
-    }
-    // NO "literal" arm on purpose: a $-escape must PRINT as `{ $: ... }` (the plain-object
-    // branch below), which re-parses to the identical tag. Unwrapping it here turned frozen
-    // data back into a live hole on the round trip — the exact inversion $ exists to prevent.
-  }
   if (typeof v === "string") return `'${v.replaceAll("\\", "\\\\").replaceAll("'", "\\'")}'`;
   if (Array.isArray(v)) return `[${v.map(printValue).join(", ")}]`;
   if (isPlainObject(v))
     return `{ ${Object.entries(v)
-      .map(([k, val]) => (k === "..." ? printValue({ "...": val }) : `${k}: ${printValue(val)}`))
+      .map(([k, val]) => `${k}: ${printValue(val)}`)
       .join(", ")} }`;
   return JSON.stringify(v);
 }
 
 // ─────────────────────────────────────────────── match ───────────────────────────────────────────────
 
-/** A successful claim of `call` by `pattern`. */
+/** A successful claim of `call` by a capability path. */
 export type Match = {
-  /** THE WHOLE RANKING RULE: the longest matching prefix wins; ties go to the newest mount.
-   *  This is that prefix's length — literal args decide only WHETHER a pattern matches, never
-   *  how well (element-by-element, like apps/os matching an array of strings). */
-  matchedSteps: number;
-  /** Values bound by `?name` captures in the pattern (at most ONE call step may bind). */
-  captures: Record<string, unknown>;
-  /** The call's invocation args at the boundary, when the matched call step carried args the
-   *  pattern did not consume (pattern `itx.grok` vs call `itx.grok({...})`). */
+  /** THE WHOLE RANKING RULE: the longest matching path wins; ties go to the newest mount. */
+  matchedSegments: number;
+  /** The call's invocation args at the boundary, when the FINAL path segment matched a call
+   *  step (path `itx.grok` vs call `itx.grok({...})`) — applied to the evaluated target. */
   boundaryArgs?: unknown[];
   /** The call's unmatched tail, replayed on the evaluated target. */
   remainder: Expression;
 };
 
-/**
- * Try to claim `call` with `pattern`. Rules:
- *  - a string pattern step matches a string call step of the same name, or — at the FINAL pattern
- *    step only — a call step of the same method (consuming the name; the args become boundaryArgs);
- *  - a call pattern step `[m, ...pargs]` matches a call step `[m, ...cargs]` by unifying args:
- *    literals must deep-equal, `?`-holes bind anything (captures record it), `...?` binds the rest;
- *    without a rest hole the arities must be equal;
- *  Mid-path calls are ordinary steps (`itx.streams.get('/logs').append` is a 4-step pattern).
- */
-export function match(pattern: Expression, call: Expression): Match | null {
-  const captures: Record<string, unknown> = {};
+/** Try to claim `call` with a capability path: each segment matches a string step of the same
+ *  name, or — FINAL segment only — a call step of the same method (its args become the
+ *  boundary args). */
+export function match(path: readonly string[], call: Expression): Match | null {
   let boundaryArgs: unknown[] | undefined;
-
-  for (let i = 0; i < pattern.length; i++) {
-    const p = pattern[i];
+  for (let i = 0; i < path.length; i++) {
     const c = call[i];
-    if (c === undefined) return null; // pattern longer than call
-    if (typeof p === "string") {
-      if (typeof c === "string") {
-        if (p !== c) return null;
-      } else {
-        if (c[0] !== p || i !== pattern.length - 1) return null; // name-only consume: final step only
-        boundaryArgs = c.slice(1);
-      }
+    if (c === undefined) return null; // path longer than the call
+    if (typeof c === "string") {
+      if (c !== path[i]) return null;
     } else {
-      if (typeof c === "string" || c[0] !== p[0]) return null;
-      const pargs = p.slice(1);
-      const cargs = c.slice(1);
-      const rest = pargs.findIndex((a) => holeKind(a) === "rest");
-      if (rest === -1 && pargs.length !== cargs.length) return null;
-      if (rest !== -1 && cargs.length < rest) return null;
-      const n = rest === -1 ? pargs.length : rest;
-      for (let j = 0; j < n; j++) {
-        const kind = holeKind(pargs[j]);
-        if (kind === "arg") {
-          const h = (pargs[j] as { "?": number | string })["?"];
-          if (typeof h === "string") captures[h] = cargs[j];
-        } else if (!jsonEqual(unliteral(pargs[j]), cargs[j])) return null;
-      }
+      if (c[0] !== path[i] || i !== path.length - 1) return null; // call consume: final segment only
+      boundaryArgs = c.slice(1);
     }
   }
-  return {
-    matchedSteps: pattern.length,
-    captures,
-    boundaryArgs,
-    remainder: call.slice(pattern.length),
-  };
-}
-
-const unliteral = (v: unknown): unknown =>
-  holeKind(v) === "literal" ? (v as { $: unknown }).$ : v;
-
-// ────────────────────────────────────────────── substitute ──────────────────────────────────────────────
-
-/**
- * Make a target expression concrete: replace every hole with the caller's values. Returns the
- * substituted steps plus `spentArgs` — did substitution CONSUME the caller's args? (Numeric
- * holes, rest splices, and object spreads spend; named captures and `$`-escapes do not.) The
- * flag is computed by the same walk that does the work, so it can never drift from it — the
- * standalone walker it replaced is the drift class that shipped two codec bugs.
- *  - `{ "?": n }`      → args[n]           (missing → undefined, like JS)
- *  - `{ "?": "name" }` → captures[name]    (unbound capture → registration bug, throws)
- *  - `{ "...": n }` in a call-arg list     → splice args from n (`...?2` = args.slice(2))
- *  - `{ "...": true }` in a call-arg list  → ALL the args; a LOUD error when the list also has
- *                                            numeric holes — say `...?n` (explicit, never
- *                                            inferred: the inferred splice start shipped a bug)
- *  - `{ "...": n }` in an object           → shallow-merge args[n] (must be an object) under the
- *                                            frozen keys — FROZEN WINS
- *  - `{ "$": v }`      → v verbatim
- */
-export function substitute(
-  target: Expression,
-  ctx: { args: unknown[]; captures: Record<string, unknown> },
-): { steps: Expression; spentArgs: boolean } {
-  const spent = { flag: false };
-  const steps = target.map((step) =>
-    typeof step === "string"
-      ? step
-      : ([step[0], ...substituteArgList(step.slice(1), ctx, spent)] as Step),
-  );
-  return { steps, spentArgs: spent.flag };
-}
-
-function substituteArgList(
-  list: unknown[],
-  ctx: { args: unknown[]; captures: Record<string, unknown> },
-  spent: { flag: boolean },
-): unknown[] {
-  // Detect numeric holes ANYWHERE in the list (nested too) — bare `...?` beside one is the
-  // ambiguity that shipped the increment-26 double-splice bug; it now demands explicit `...?n`.
-  let hasNumericHole = false;
-  const scan = (v: unknown, depth: number): void => {
-    if (typeof v !== "object" || v === null) return;
-    const kind = holeKind(v);
-    if (kind === "arg") {
-      if (typeof (v as { "?": number | string })["?"] === "number") hasNumericHole = true;
-      return;
-    }
-    if (kind === "literal" || kind === "rest") return;
-    for (const inner of Object.values(v)) scan(inner, deeper(depth, "hole scan"));
-  };
-  for (const v of list) scan(v, 0);
-  const out: unknown[] = [];
-  for (const v of list) {
-    const restOf = holeKind(v) === "rest" ? (v as { "...": true | number })["..."] : undefined;
-    if (restOf === true) {
-      if (hasNumericHole)
-        throw new Error(
-          "bare ...? beside numeric holes is ambiguous — say ...?n (splice from arg n)",
-        );
-      spent.flag = true;
-      out.push(...ctx.args);
-    } else if (typeof restOf === "number") {
-      spent.flag = true;
-      out.push(...ctx.args.slice(restOf));
-    } else out.push(substituteValue(v, ctx, spent));
-  }
-  return out;
-}
-
-function substituteValue(
-  v: unknown,
-  ctx: { args: unknown[]; captures: Record<string, unknown> },
-  spent: { flag: boolean },
-  depth = 0,
-): unknown {
-  switch (holeKind(v)) {
-    case "arg": {
-      const h = (v as { "?": number | string })["?"];
-      if (typeof h === "number") {
-        spent.flag = true;
-        return ctx.args[h];
-      }
-      if (!(h in ctx.captures)) throw new Error(`unbound capture "?${h}" — pattern never bound it`);
-      return ctx.captures[h];
-    }
-    case "literal":
-      return (v as { $: unknown }).$;
-    case "rest":
-      break; // object-spread handled below; bare rest outside a call list is meaningless
-  }
-  if (Array.isArray(v))
-    return v.map((x) => substituteValue(x, ctx, spent, deeper(depth, "substitute")));
-  if (isPlainObject(v)) {
-    const spreadArg = "..." in v && Object.keys(v).length >= 1 ? (v["..."] as number) : undefined;
-    const out: Record<string, unknown> = {};
-    if (spreadArg !== undefined) {
-      const src = ctx.args[spreadArg];
-      if (!isPlainObject(src))
-        throw new Error(`...?${spreadArg} spread: caller arg is not an object`);
-      spent.flag = true;
-      Object.assign(out, src);
-    }
-    for (const [k, val] of Object.entries(v)) {
-      if (k === "...") continue;
-      out[k] = substituteValue(val, ctx, spent, deeper(depth, "substitute")); // frozen keys overwrite spread — frozen wins
-    }
-    return out;
-  }
-  return v;
+  return { matchedSegments: path.length, boundaryArgs, remainder: call.slice(path.length) };
 }
 
 // ─────────────────────────────────────────────── evaluate ───────────────────────────────────────────────
@@ -569,7 +375,7 @@ async function walkSteps(
  * an RPC stub's method proxy is a capnweb PIPELINED REMOTE PATH; calling it passes the stub as
  * an argument, so workerd serializes it — and a Worker-Loader facet stub may never be
  * serialized (`requireAllowsTransfer()` throws unconditionally) → `DataCloneError: Durable
- * Object Facet stubs cannot be transferred between Workers`. walkSteps below does exactly the
+ * Object Facet stubs cannot be transferred between Workers`. walkSteps above does exactly the
  * safe thing (stepGet + Reflect.apply, receiver carried); do not "simplify" it away. This one
  * idiom cost a full investigation — see FACET-RPC-INVESTIGATION.md.
  */
@@ -584,9 +390,9 @@ export async function invokePath(
 }
 
 /**
- * Walk a CONCRETE expression (no holes — `substitute` first) against named scope roots. The first
- * step names a root (`itx`, and `roots` for config-provenance expressions — evaluation for event
- * provenance simply does not have `roots` in scope: unspellable, not policed).
+ * Walk a CONCRETE expression against named scope roots. The first step names a root (`itx`,
+ * and the built-ins for config-provenance targets — evaluation for event provenance simply
+ * does not have the built-ins in scope: unspellable, not policed).
  */
 export async function evaluate(
   scope: Record<string, unknown>,
@@ -601,10 +407,10 @@ export async function evaluate(
 }
 
 /**
- * Finish a matched call: evaluate the (already substituted) target, then replay the remainder on
- * the result. Boundary args (caller invoked at the mount itself) apply the evaluated value as a
- * function on its carried receiver — and if it is not callable that is a LOUD error (never the
- * silent arg-drop apps/os shipped).
+ * Finish a matched call: evaluate the target, apply the boundary args (caller invoked at the
+ * mount itself) on the carried receiver, then replay the remainder on the result. A
+ * non-callable target receiving boundary args is a LOUD error (never the silent arg-drop
+ * apps/os shipped).
  */
 export async function apply(
   scope: Record<string, unknown>,
@@ -612,15 +418,14 @@ export async function apply(
   m: Pick<Match, "boundaryArgs" | "remainder">,
   /** Runtime values applied to the FINAL value (after the remainder walk) on its carried
    *  receiver — the fetch lane hands the live Request in here, since a Request is not
-   *  expression data and must never pass through `substitute`'s JSON walk. */
+   *  expression data. */
   extraArgs?: unknown[],
 ): Promise<unknown> {
   let { value, receiver } = await evaluate(scope, target);
   if (m.boundaryArgs) {
     if (typeof value !== "function")
       throw new Error(
-        `mount target is not callable but the call passed ${m.boundaryArgs.length} arg(s) — ` +
-          `did the target forget a hole (?) for them?`,
+        `mount target is not callable but the call passed ${m.boundaryArgs.length} arg(s)`,
       );
     value = await Reflect.apply(value, receiver, m.boundaryArgs);
   }
@@ -638,9 +443,9 @@ export async function apply(
 /** The dotted surface as a runtime Proxy — the programmatic write-half of the codec: property
  *  gets accumulate path segments, calling hands `(segments, args)` to `call`. `then`/symbol
  *  probes return undefined so a proxy is never mistaken for a thenable mid-await. ONE builder
- *  for every dotted view (the itx scope symbol, the facet clients view, the stateful-worker
- *  proxy) — they differed only in what the terminal apply dispatches to. Calling the BARE root
- *  is a loud error (mirroring the parser), so `call` always receives ≥1 segment. */
+ *  for every dotted view. Calling the BARE root is a loud error (mirroring the parser), so
+ *  `call` always receives ≥1 segment — except a PROVIDER proxy (allowRootCall), where a parked
+ *  bare callback IS the callable. */
 export function pathProxy(
   call: (segments: string[], args: unknown[]) => unknown,
   opts?: { allowRootCall?: boolean },
@@ -650,8 +455,6 @@ export function pathProxy(
       get: (_t, p) =>
         p === "then" || typeof p === "symbol" ? undefined : build([...segments, p as string]),
       apply: (_t, _this, args) => {
-        // The SCOPE symbol refuses bare calls (increment 33); a PROVIDER proxy allows them —
-        // a parked bare callback IS the callable (live-state watchers, subscription targets).
         if (segments.length === 0 && !opts?.allowRootCall)
           throw new Error("cannot call the scope symbol itself — name a capability first");
         return call(segments, args as unknown[]);

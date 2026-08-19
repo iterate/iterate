@@ -30,7 +30,7 @@ import { confinedWorker, versionedFacet } from "./core/agent-runtime.ts";
 import { invokePath, type Expression } from "./core/expression.ts";
 import { hashSource } from "./core/hash.ts";
 import { stringifyName } from "./core/names.ts";
-import { itxEntrypointFor } from "./iterate-context-entrypoint.ts";
+import { itxEntrypointFor } from "./itx-entrypoint.ts";
 import type { StreamDurableObject } from "./stream-durable-object.ts";
 
 const FACET_NAME = "target";
@@ -76,7 +76,7 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
   }
 
   /** A stub to the OWNING capability host (module resolution + the hosted class's env.ITX rides
-   *  the interposition entrypoint instead — see iterate-context-entrypoint.ts). */
+   *  the interposition entrypoint instead — see itx-entrypoint.ts). */
   #hostStub(): DurableObjectStub<StreamDurableObject> {
     return this.env.CONTEXT.getByName(this.#hostName());
   }

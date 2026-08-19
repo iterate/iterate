@@ -57,7 +57,7 @@ const eventInputShape = z.strictObject({
   /** Same key + same body = dedupe (the existing event is returned); different body = loud error. */
   idempotencyKey: z.string().trim().min(1).optional(),
   /** An EPHEMERAL event rides the stream to live subscribers but is NEVER persisted: it consumes
-   *  an offset (which survives as a valid gap), triggers zero fold/cursor writes, and its body is
+   *  an offset (which survives as a valid gap), triggers zero reduce/cursor writes, and its body is
    *  gone the moment the incarnation ends — it cannot be redelivered by anyone. `ephemeral: false`
    *  is a loud input error, not a synonym for durable. */
   ephemeral: z.literal(true).optional(),

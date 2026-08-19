@@ -4,15 +4,15 @@
 // its state is the stream's own operational truth — whether appends are PAUSED, and the
 // token-bucket CIRCUIT BREAKER metering durable log growth. Control is ORDINARY EVENTS (pause/
 // resume/reconfigure are appends — auditable, replayable, revocable like everything else);
-// enforcement is the parent reading this fold at the commit point. No verbs, no machinery:
+// enforcement is the parent reading this reduce at the commit point. No verbs, no machinery:
 //
 //   itx.stream.append({ type: 'events.iterate.com/stream/paused',  payload: { reason } })
 //   itx.stream.append({ type: 'events.iterate.com/stream/resumed' })
 //   itx.stream.append({ type: 'events.iterate.com/stream/breaker-configured',
 //                       payload: { capacity: 100, refillPerSecond: 1 } })   // omit → breaker OFF
 //
-// TIME RIDES THE EVENTS: the fold refills the bucket from each counted event's own createdAt
-// (a pure fold may never consult the clock), so the checkpoint rebuilds bit-identically from
+// TIME RIDES THE EVENTS: the reduce refills the bucket from each counted event's own createdAt
+// (a pure reduce may never consult the clock), so the checkpoint rebuilds bit-identically from
 // the log. Only the parent's ENFORCEMENT (breakerRemaining below) uses the current time.
 // Control events are exempt from pause and never spend a token — a tripped or paused stream
 // must always accept its own resume.
@@ -83,7 +83,7 @@ export class CoreStreamProcessor implements ReduceOnlyProcessor<CoreState> {
         breaker: { capacity, refillPerSecond, tokens: capacity, lastAtMs: eventMs(event) },
       };
     }
-    // Every other durable event spends one token — refilled from EVENT time, so the fold stays
+    // Every other durable event spends one token — refilled from EVENT time, so the reduce stays
     // pure and the checkpoint rebuilds identically from the log.
     if (state.breaker) {
       const at = eventMs(event);

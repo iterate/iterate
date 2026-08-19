@@ -1,13 +1,11 @@
-// roots-builder.ts — THE HOST SCOPE: a plain record whose KEYS are the expression roots that
-// exist ONLY for config-provenance targets (the provenance gate is a scope-KEY-SET decision —
-// seeds resolve against { ...hostScope, itx }, event mounts against { itx } alone; nothing is
-// policed, the keys are simply absent). There is no Roots object anymore: the RpcTarget shell
-// was vestigial since increment 28 (it never crossed a hop; the tests faked it with literals),
-// and deleting the object deleted its naming debate. Seed targets now read `kv`, `stream`,
+// built-ins.ts — THE BUILT-INS: a plain record whose KEYS are the expression roots that exist
+// ONLY for config-provenance targets (the provenance gate is a scope-KEY-SET decision — config
+// mounts resolve against { ...builtIns, itx }, event mounts against { itx } alone; nothing is
+// policed, the keys are simply absent). Config-mount targets read `kv`, `stream`,
 // `contexts.get('/x')`, `bindings.get('FALLBACK')` — the vocabulary, unbundled.
 
 import { CODE_CAP_RUNNER, confinedWorker } from "./core/agent-runtime.ts";
-import { itxEntrypointFor } from "./iterate-context-entrypoint.ts";
+import { itxEntrypointFor } from "./itx-entrypoint.ts";
 import { pathProxy, toExpression, type Expression } from "./core/expression.ts";
 import { hashSource } from "./core/hash.ts";
 
@@ -39,25 +37,25 @@ import type { StatefulWorkerDurableObject } from "./stateful-worker-durable-obje
 import type { StreamDurableObject } from "./stream-durable-object.ts";
 
 /** The bindings roots-building needs — present in BOTH hosts (the worker env). */
-export interface RootsEnv {
+export interface BuiltInsEnv {
   CONTEXT: DurableObjectNamespace<StreamDurableObject>;
   STATEFUL_WORKER: DurableObjectNamespace<StatefulWorkerDurableObject>;
   LOADER: WorkerLoader;
   ITX_KV?: KVNamespace;
   SECRETS_KV?: KVNamespace;
-  /** Deploy identity — folded into loader cacheKeys so a redeploy mints fresh isolates. */
+  /** Deploy identity — reduced into loader cacheKeys so a redeploy mints fresh isolates. */
   CF_VERSION_METADATA?: { id: string };
   /** The shell this context's egress + `itx.os` bottom out at (a whole control plane). */
   FALLBACK: Fetcher & { invokeCapability(callPath: string, args?: unknown[]): Promise<unknown> };
 }
 
 /** What the hosting side injects: identity, bindings, and the three host-specific seams. */
-export interface BuildRootsDeps {
+export interface BuildBuiltInsDeps {
   projectId: string;
   path: string;
   /** The codec name of the context these roots belong to (loader cache keys, self-stubs). */
   contextName: string;
-  env: RootsEnv;
+  env: BuiltInsEnv;
   /** Resolve one call through THIS context's dispatch (dynamic-worker module loading). */
   invoke: (call: Expression) => Promise<unknown>;
   /** A context stream by path — same-isolate closures for the own path parent-side; by-name
@@ -69,7 +67,7 @@ export interface BuildRootsDeps {
   /** The parked-stub registry view (host-specific: in-DO closures or the parent facade). */
   clients: ClientsView;
   facets: FacetsView;
-  /** The ctx whose `exports` mints the IterateContextEntrypoint loopback (the loaded-worker
+  /** The ctx whose `exports` mints the ItxEntrypoint loopback (the loaded-worker
    *  host — see iterate-context-entrypoint.ts for why it is never a raw getByName stub). */
   hostCtx: unknown;
 }
@@ -77,7 +75,7 @@ export interface BuildRootsDeps {
 /** Assemble the host scope for one context. Every entry closes over the context's identity —
  *  PRE-SCOPED, not policed: cross-project access is unspellable by construction. The builder
  *  must never register `itx` (asserted below — the resolver's recursion symbol always wins). */
-export function buildHostScope(deps: BuildRootsDeps): Record<string, unknown> {
+export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> {
   const { projectId, path, contextName, env } = deps;
 
   const loadModules = async (source: Expression): Promise<Record<string, string>> =>
@@ -216,7 +214,7 @@ export function buildHostScope(deps: BuildRootsDeps): Record<string, unknown> {
     /** The file store the source expressions read: THE REPO first, demo files as fallback —
      *  put real source with `itx.repo.put('/my.js', src)` and run it with
      *  `itx.workers.get({ source: "itx.files.read('/my.js')" })`. Repo wins on a path clash:
-     *  the demos are scaffolding and must never shadow a project's own file. (The smallest
+     *  the demos are scafreducing and must never shadow a project's own file. (The smallest
      *  possible repo; the apps/os repo DO grows from this seam.) */
     files: {
       read: async (p: string) => {
@@ -235,32 +233,4 @@ export function buildHostScope(deps: BuildRootsDeps): Record<string, unknown> {
   };
   if (Object.hasOwn(scope, "itx")) throw new Error("host scope must never register 'itx'");
   return scope;
-}
-
-/** The facet address as the resolver sees it: `facets.get(slug).anyMethod(...)` rides ONE
- *  generic parent door (`facetInvoke`) — the walk stays parent-side because facet stubs are
- *  non-transferable. Same thin-wrapper shape as the clients view. */
-export function facetAddressView(parent: () => DurableObjectStub<StreamDurableObject>): FacetsView {
-  return {
-    get: (slug) => pathProxy((segments, args) => parent().facetInvoke(slug, segments, args)),
-  };
-}
-
-/** The clients view as the FACET sees it: thin RPC wrappers over the parent's stub facade
- *  (stubInvoke/stubFanOut/stubList/stubConnections/stubClose). The parent is resolved BY NAME
- *  per call — never a retained stub (the back-channel rule). Promise-valued reads are fine:
- *  expression evaluation awaits every step. */
-export function facetClientsView(
-  parent: () => DurableObjectStub<StreamDurableObject>,
-): ClientsView {
-  return {
-    get: (key) =>
-      pathProxy((segments, args) => parent().stubInvoke(key, segments, args), {
-        allowRootCall: true,
-      }),
-    at: (path) => ({ call: (method, args) => parent().stubFanOut(path, method, args) }),
-    list: () => parent().stubList(),
-    connections: (path) => parent().stubConnections(path),
-    close: (key) => parent().stubClose(key),
-  };
 }

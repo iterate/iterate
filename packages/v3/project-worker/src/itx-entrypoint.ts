@@ -1,6 +1,6 @@
-// iterate-context-entrypoint.ts — THE INTERPOSITION POINT between loaded userspace code and
+// itx-entrypoint.ts — THE INTERPOSITION POINT between loaded userspace code and
 // the platform. Every confined dynamic worker's whole world (`env.ITX` + `globalOutbound`) is
-// a stub of THIS entrypoint, minted via `ctx.exports.IterateContextEntrypoint({ props:
+// a stub of THIS entrypoint, minted via `ctx.exports.ItxEntrypoint({ props:
 // { contextName } })` — never a raw `env.CONTEXT.getByName` DO stub. Why (owner's call,
 // 2026-08-18, "get ahead of that"):
 //
@@ -29,12 +29,12 @@ interface Env {
   CONTEXT: DurableObjectNamespace<StreamDurableObject>;
 }
 
-export class IterateContextEntrypoint extends WorkerEntrypoint<Env> {
+export class ItxEntrypoint extends WorkerEntrypoint<Env> {
   /** The owning context, re-resolved per call (never a retained stub — the back-channel rule). */
   #host(): DurableObjectStub<StreamDurableObject> {
     const props = (this.ctx as unknown as { props?: { contextName?: string } }).props;
     if (!props?.contextName)
-      throw new Error("IterateContextEntrypoint requires props.contextName (mint via ctx.exports)");
+      throw new Error("ItxEntrypoint requires props.contextName (mint via ctx.exports)");
     return this.env.CONTEXT.getByName(props.contextName);
   }
 
@@ -68,10 +68,10 @@ export class IterateContextEntrypoint extends WorkerEntrypoint<Env> {
  *  ExecutionContext, DO state, facet state — all expose the worker's export table). */
 export function itxEntrypointFor(hostCtx: unknown, contextName: string): Fetcher {
   const exports = (hostCtx as { exports?: Record<string, unknown> }).exports;
-  const make = exports?.IterateContextEntrypoint as
+  const make = exports?.ItxEntrypoint as
     | ((opts: { props: { contextName: string } }) => Fetcher)
     | undefined;
   if (typeof make !== "function")
-    throw new Error("IterateContextEntrypoint loopback unavailable on ctx.exports");
+    throw new Error("ItxEntrypoint loopback unavailable on ctx.exports");
   return make({ props: { contextName } });
 }

@@ -1,13 +1,13 @@
-// The jam's worked examples as executable spec. Each block names the example it proves.
+// Executable spec for the expression codec + the capability-path matcher.
 import { describe, expect, test } from "vitest";
 import {
   apply,
   evaluate,
   match,
   parse,
+  parseCapabilityPath,
   pathProxy,
   print,
-  substitute,
   toExpression,
   type Expression,
 } from "./expression.ts";
@@ -17,20 +17,12 @@ import {
 describe("parse ⇄ print", () => {
   const cases: [string, Expression][] = [
     ["itx.kv", ["itx", "kv"]],
-    ["roots.kv", ["roots", "kv"]],
     ["itx.streams.get('/logs')", ["itx", "streams", ["get", "/logs"]]],
-    ["roots.binding('CONTROL_PLANE')", ["roots", ["binding", "CONTROL_PLANE"]]],
     ["itx.cd('/')", ["itx", ["cd", "/"]]],
-    [
-      "itx.openai.chat({ model: 'grok-4', messages: ?0 })",
-      ["itx", "openai", ["chat", { model: "grok-4", messages: { "?": 0 } }]],
-    ],
-    ["itx.agents.get(?name)", ["itx", "agents", ["get", { "?": "name" }]]],
     ["itx.clients.get('robot-arm-1')", ["itx", "clients", ["get", "robot-arm-1"]]],
-    ["itx.worker.slackDigest(...?)", ["itx", "worker", ["slackDigest", { "...": true }]]],
     [
-      "itx.openai.chat({ ...?, model: 'grok-4' })",
-      ["itx", "openai", ["chat", { "...": 0, model: "grok-4" }]],
+      "itx.openai.chat({ model: 'grok-4', messages: ['hi'] })",
+      ["itx", "openai", ["chat", { model: "grok-4", messages: ["hi"] }]],
     ],
     [
       "itx.math.add(1, 2.5, true, null, [1, 'a'])",
@@ -40,13 +32,9 @@ describe("parse ⇄ print", () => {
   for (const [s, e] of cases) {
     test(s, () => {
       expect(parse(s)).toEqual(e);
-      expect(parse(print(e))).toEqual(e); // canonical round-trip
+      expect(parse(print(e))).toEqual(e); // canonical round-trip — print IS the stored form
     });
   }
-
-  test("`?` auto-numbers left-to-right across the expression", () => {
-    expect(parse("itx.f(?, ?)")).toEqual(["itx", ["f", { "?": 0 }, { "?": 1 }]]);
-  });
 
   test("double quotes, escapes, whitespace", () => {
     expect(parse(`itx.kv.put( "a'b" , 'c\\'d' )`)).toEqual(["itx", "kv", ["put", "a'b", "c'd"]]);
@@ -60,9 +48,20 @@ describe("parse ⇄ print", () => {
     expect(() => parse("itx.kv extra")).toThrow(/trailing/);
   });
 
+  test("placeholder syntax is GONE from the grammar (the increment-55 diet)", () => {
+    expect(() => parse("itx.f(?)")).toThrow(/unexpected value/);
+    expect(() => parse("itx.f(?0)")).toThrow(/unexpected value/);
+    expect(() => parse("itx.f(...?)")).toThrow(/unexpected value/);
+  });
+
   test("toExpression accepts either half", () => {
     expect(toExpression("itx.kv")).toEqual(["itx", "kv"]);
     expect(toExpression(["itx", "kv"])).toEqual(["itx", "kv"]);
+  });
+
+  test("parseCapabilityPath: dotted names only — a call is a loud error", () => {
+    expect(parseCapabilityPath("itx.subscribers.foo")).toEqual(["itx", "subscribers", "foo"]);
+    expect(() => parseCapabilityPath("itx.streams.get('/logs')")).toThrow(/dotted names only/);
   });
 
   test("inherited built-ins are not capability surface (the RPC exposure doctrine)", async () => {
@@ -86,19 +85,6 @@ describe("parse ⇄ print", () => {
   test("the depth budget: absurd nesting is a loud error, never a stack overflow", () => {
     const deep = "[".repeat(70) + "]".repeat(70);
     expect(() => parse(`itx.f(${deep})`)).toThrow(/nesting exceeds/);
-    let nested: unknown = { "?": 0 };
-    for (let i = 0; i < 70; i++) nested = { a: nested };
-    expect(() => substitute(["itx", ["f", nested]], { args: [1], captures: {} })).toThrow(
-      /nesting exceeds/,
-    );
-  });
-
-  test("$-escapes survive the print⇄parse round trip (frozen data never becomes a live hole)", () => {
-    const escaped: Expression = ["itx", ["f", { $: { "?": 0 } }]];
-    expect(print(escaped)).toBe("itx.f({ $: ?0 })");
-    expect(parse(print(escaped))).toEqual(escaped);
-    const nested: Expression = ["itx", ["f", { $: { $: 1 } }]];
-    expect(parse(print(nested))).toEqual(nested);
   });
 
   test("bare call on the scope symbol is a loud error — both halves", () => {
@@ -108,9 +94,9 @@ describe("parse ⇄ print", () => {
   });
 });
 
-// ───────────────────────────── matching (table-based) ─────────────────────────────
-// THE RULE, whole: element by element from the start; longest matching prefix wins; ties go to
-// the newest mount. Literal args decide only WHETHER a step matches, never how well.
+// ───────────────────────────── capability-path matching ─────────────────────────────
+// THE RULE, whole: segment by segment from the start; the longest matching path wins; ties go
+// to the newest mount. The FINAL segment may consume a call step's args (the boundary args).
 
 describe("match", () => {
   test.each([
@@ -118,167 +104,48 @@ describe("match", () => {
       "plain alias: remainder replays",
       "itx.db",
       "itx.db.get('x')",
-      { steps: 2, remainder: [["get", "x"]] },
+      { segments: 2, remainder: [["get", "x"]] },
     ],
     [
-      "boundary args: pattern name, call invokes",
+      "boundary args: path name, call invokes",
       "itx.grok",
       "itx.grok({ messages: [] })",
-      { steps: 2, boundaryArgs: [{ messages: [] }], remainder: [] },
-    ],
-    [
-      "capture binds mid-path",
-      "itx.agents.get(?name)",
-      "itx.agents.get('blah').ask('hi')",
-      { steps: 3, captures: { name: "blah" }, remainder: [["ask", "hi"]] },
-    ],
-    [
-      "mid-path LITERAL call is an ordinary step",
-      "itx.streams.get('/bla').append",
-      "itx.streams.get('/bla').append({ type: 'x' })",
-      { steps: 4, boundaryArgs: [{ type: "x" }], remainder: [] },
+      { segments: 2, boundaryArgs: [{ messages: [] }], remainder: [] },
     ],
     [
       "bare default route claims everything",
       "itx",
       "itx.some.thing.deep('x')",
-      { steps: 1, remainder: ["some", "thing", ["deep", "x"]] },
+      { segments: 1, remainder: ["some", "thing", ["deep", "x"]] },
     ],
     [
-      "rest hole accepts extra args",
-      "itx.f(?x, ...?)",
-      "itx.f(1, 2, 3)",
-      { steps: 2, remainder: [] },
+      "deep path, call at the boundary",
+      "itx.subscribers.foo",
+      "itx.subscribers.foo('batch')",
+      { segments: 3, boundaryArgs: ["batch"], remainder: [] },
     ],
-  ])("%s", (_label, pattern, call, expected) => {
-    const m = match(parse(pattern as string), parse(call as string))!;
+  ])("%s", (_label, path, call, expected) => {
+    const m = match(parseCapabilityPath(path as string), parse(call as string))!;
     expect(m).not.toBeNull();
-    const e = expected as {
-      steps: number;
-      captures?: object;
-      boundaryArgs?: unknown[];
-      remainder: unknown[];
-    };
-    expect(m.matchedSteps).toBe(e.steps);
-    if (e.captures) expect(m.captures).toEqual(e.captures);
+    const e = expected as { segments: number; boundaryArgs?: unknown[]; remainder: unknown[] };
+    expect(m.matchedSegments).toBe(e.segments);
     if (e.boundaryArgs) expect(m.boundaryArgs).toEqual(e.boundaryArgs);
     expect(m.remainder).toEqual(e.remainder);
   });
 
   test.each([
-    ["literal arg mismatch", "itx.f('a')", "itx.f('b')"],
-    ["method mismatch", "itx.f()", "itx.g()"],
-    ["name-only consume is FINAL-step only", "itx.a.b", "itx.a('x').b"],
-    ["no rest hole → exact arg count", "itx.f(?x)", "itx.f(1, 2)"],
-    ["pattern longer than call", "itx.a.b.c", "itx.a.b"],
-  ])("rejects: %s", (_label, pattern, call) => {
-    expect(match(parse(pattern as string), parse(call as string))).toBeNull();
+    ["name mismatch", "itx.f", "itx.g()"],
+    ["call consume is FINAL-segment only", "itx.a.b", "itx.a('x').b"],
+    ["path longer than call", "itx.a.b.c", "itx.a.b"],
+  ])("rejects: %s", (_label, path, call) => {
+    expect(match(parseCapabilityPath(path as string), parse(call as string))).toBeNull();
   });
 
-  test.each([
-    [
-      "longer prefix beats shorter",
-      "itx.clients.get('robot-arm-1')",
-      "itx.clients",
-      "itx.clients.get('robot-arm-1').ping()",
-    ],
-    [
-      "a binding call step counts like any other step",
-      "itx.agents.get(?name)",
-      "itx.agents",
-      "itx.agents.get('bob').ask('hi')",
-    ],
-  ])("ranking: %s", (_label, winner, loser, call) => {
-    const w = match(parse(winner as string), parse(call as string))!;
-    const l = match(parse(loser as string), parse(call as string))!;
-    expect(w.matchedSteps).toBeGreaterThan(l.matchedSteps);
-  });
-
-  test("equal-length literal and hole patterns TIE — recency decides (the documented change)", () => {
-    const call = parse("itx.clients.get('robot-arm-1')");
-    const literal = match(parse("itx.clients.get('robot-arm-1')"), call)!;
-    const holed = match(parse("itx.clients.get(?k)"), call)!;
-    expect(literal.matchedSteps).toBe(holed.matchedSteps);
-  });
-});
-
-// ───────────────────────────── substitution ─────────────────────────────
-
-describe("substitute (table-based)", () => {
-  test.each([
-    [
-      "frozen model, caller messages fill the hole",
-      "itx.openai.chat({ model: 'grok-4', messages: ?0 })",
-      [["msg!"]],
-      {},
-      ["itx", "openai", ["chat", { model: "grok-4", messages: ["msg!"] }]],
-      true,
-    ],
-    [
-      "capture referenced on the target side (does NOT spend)",
-      "itx.cd('/agents', ?name)",
-      [],
-      { name: "blah" },
-      ["itx", ["cd", "/agents", "blah"]],
-      false,
-    ],
-    ["bare rest = ALL the args", "itx.f(...?)", [1, 2, 3], {}, ["itx", ["f", 1, 2, 3]], true],
-    [
-      "explicit rest ...?1 = args.slice(1)",
-      "itx.f(?0, ...?1)",
-      [1, 2, 3],
-      {},
-      ["itx", ["f", 1, 2, 3]],
-      true,
-    ],
-    [
-      "hole-free target spends nothing",
-      "itx.kv.get('a')",
-      ["ignored"],
-      {},
-      ["itx", "kv", ["get", "a"]],
-      false,
-    ],
-  ])("%s", (_label, target, args, captures, expectedSteps, expectedSpent) => {
-    const { steps, spentArgs } = substitute(parse(target as string), {
-      args: args as unknown[],
-      captures: captures as Record<string, unknown>,
-    });
-    expect(steps).toEqual(expectedSteps);
-    expect(spentArgs).toBe(expectedSpent);
-  });
-
-  test("bare ...? beside numeric holes is a LOUD error (explicit, never inferred)", () => {
-    expect(() => substitute(parse("itx.f(?0, ...?)"), { args: [1, 2], captures: {} })).toThrow(
-      /say \.\.\.\?n/,
-    );
-    // nested numeric holes count too — the shape the old inference got wrong
-    expect(() =>
-      substitute(parse("itx.f({ a: ?0 }, ...?)"), { args: [1, 2], captures: {} }),
-    ).toThrow(/say \.\.\.\?n/);
-  });
-
-  test("spread-merge: FROZEN WINS on collision (and spends)", () => {
-    const { steps, spentArgs } = substitute(parse("itx.openai.chat({ ...?, model: 'grok-4' })"), {
-      args: [{ model: "evil", temperature: 0.5 }],
-      captures: {},
-    });
-    const [, , chat] = steps as [string, string, [string, Record<string, unknown>]];
-    expect(chat[1]).toEqual({ model: "grok-4", temperature: 0.5 });
-    expect(spentArgs).toBe(true);
-  });
-
-  test("$ literal escape passes tagged-looking data through verbatim (and does NOT spend)", () => {
-    const target: Expression = ["itx", ["f", { $: { "?": 0 } }]];
-    const { steps, spentArgs } = substitute(target, { args: ["ignored"], captures: {} });
-    expect(steps).toEqual(["itx", ["f", { "?": 0 }]]);
-    expect(spentArgs).toBe(false);
-  });
-
-  test("unbound capture throws loudly", () => {
-    expect(() => substitute(parse("itx.f(?nope)"), { args: [], captures: {} })).toThrow(
-      /unbound capture/,
-    );
+  test("ranking: the longer path wins", () => {
+    const call = parse("itx.clients.abc.ping()");
+    const long = match(parseCapabilityPath("itx.clients.abc"), call)!;
+    const short = match(parseCapabilityPath("itx.clients"), call)!;
+    expect(long.matchedSegments).toBeGreaterThan(short.matchedSegments);
   });
 });
 
@@ -289,7 +156,7 @@ const scope = () => {
   const kvStore = new Map<string, string>();
   return {
     log,
-    roots: {
+    builtins: {
       kv: {
         get: (k: string) => kvStore.get(k),
         put: (k: string, v: string) => (kvStore.set(k, v), { ok: true }),
@@ -315,7 +182,7 @@ const scope = () => {
 };
 
 describe("evaluate/apply", () => {
-  test("ex 12 — pipelined chain: call → await stub → call again", async () => {
+  test("pipelined chain: call → await stub → call again", async () => {
     const s = scope();
     const { value } = await evaluate(
       s,
@@ -324,45 +191,43 @@ describe("evaluate/apply", () => {
     expect(value).toBe(42);
   });
 
-  test("ex 1+5 end-to-end — alias mount, remainder replays on the live stub", async () => {
+  test("alias mount end to end — remainder replays on the live stub", async () => {
     const s = scope();
-    const pattern = parse("itx.robot");
-    const target = parse("itx.clients.get('robot-arm-1')");
-    const call = parse("itx.robot.arm.move(10)");
-    const m = match(pattern, call)!;
-    const result = await apply(s, substitute(target, { args: [], captures: m.captures }).steps, m);
+    const m = match(parseCapabilityPath("itx.robot"), parse("itx.robot.arm.move(10)"))!;
+    const result = await apply(s, parse("itx.clients.get('robot-arm-1')"), m);
     expect(result).toBe("moved");
     expect(s.log).toEqual(["move 10 @robot-arm-1"]);
   });
 
-  test("ex 3 end-to-end — boundary args flow through holes", async () => {
+  test("boundary args apply the evaluated target as a call", async () => {
     const s = scope();
-    const m = match(parse("itx.grok"), parse("itx.grok({ messages: ['hi'] })"))!;
-    const target = substitute(parse("itx.openai.chat({ model: 'grok-4', ...? })"), {
-      args: m.boundaryArgs!,
-      captures: m.captures,
-    });
-    const result = await apply(s, target.steps, { ...m, boundaryArgs: undefined });
+    const m = match(
+      parseCapabilityPath("itx.grok"),
+      parse("itx.grok({ model: 'grok-4', messages: ['hi'] })"),
+    )!;
+    const result = await apply(s, parse("itx.openai.chat"), m);
     expect(result).toBe("chat(grok-4)");
   });
 
   test("boundary args on a non-callable target error LOUDLY (no silent drop)", async () => {
     const s = scope();
-    const m = match(parse("itx.db"), parse("itx.db('oops')"))!;
-    await expect(apply(s, parse("roots.kv"), m)).rejects.toThrow(/not callable/);
+    const m = match(parseCapabilityPath("itx.db"), parse("itx.db('oops')"))!;
+    await expect(apply(s, parse("builtins.kv"), m)).rejects.toThrow(/not callable/);
   });
 
   test("boundary args on a method-valued target apply on the carried receiver", async () => {
     const s = scope();
-    const m = match(parse("itx.log"), parse("itx.log({ type: 'hi' })"))!;
+    const m = match(parseCapabilityPath("itx.log"), parse("itx.log({ type: 'hi' })"))!;
     const result = await apply(s, parse("itx.append"), m);
     expect(result).toEqual({ offset: 1 });
     expect(s.log).toEqual([`append {"type":"hi"}`]);
   });
 
-  test("roots is only reachable when in scope (provenance gate)", async () => {
+  test("the built-ins are only reachable when in scope (the provenance gate)", async () => {
     const s = scope();
-    const eventScope = { itx: s.itx }; // event provenance: no `roots` symbol at all
-    await expect(evaluate(eventScope, parse("roots.kv.get('x')"))).rejects.toThrow(/not in scope/);
+    const eventScope = { itx: s.itx }; // event provenance: no built-in keys at all
+    await expect(evaluate(eventScope, parse("builtins.kv.get('x')"))).rejects.toThrow(
+      /not in scope/,
+    );
   });
 });

@@ -1,6 +1,6 @@
 // stream-durable-object.ts — THE STREAM: one DO per `{projectId, path}` (codec-named
 // `{projectId}.iterate{path}`). The stream is the parent — LOG + SOCKETS + DOORS only; the
-// ITERATE CONTEXT (the routing table, iterate-context-stream-processor.ts) is a facet-hosted
+// CAPABILITY TABLE (capability-table-processor.ts) is an inline reduce-only processor at its
 // PROCESSOR on it (processor-facet.ts), one among many:
 //
 //   • the EVENT LOG — SQLite append/read, monotonic offsets, idempotency at the commit point;
@@ -18,7 +18,7 @@
 //
 // PURE WORKERS-RPC: capnweb never terminates here (hard rule) — the stateless `/api` worker
 // relays. Dispatch is ONE path: parse → route the table → substitute → evaluate → replay — all
-// of it inside the iterate-context facet; this class only delegates. The dotted
+// of it against the inline capability table; this class only delegates. The dotted
 // `invokeCapability(callPath, args)` door remains as the degenerate string half of the codec
 // (loaded workers + the stateful runner speak it).
 
@@ -40,26 +40,34 @@ import {
   type StreamEvent,
   type StreamEventInput,
 } from "./core/events.ts";
-import { invokePath, parse, pathProxy, toExpression, type Expression } from "./core/expression.ts";
-import { hashSource } from "./core/hash.ts";
-import { PAGER_HEADER } from "./core/hibernatable-pager.ts";
-import { HibernatableStubs, type Invoker, type Stub } from "./core/hibernatable-stub.ts";
-import { parseName, stringifyName } from "./core/names.ts";
-import { itxEntrypointFor } from "./iterate-context-entrypoint.ts";
 import {
-  IterateContextStreamProcessor,
-  type IctxState,
-} from "./iterate-context-stream-processor.ts";
-import type { ReduceOnlyProcessor, ScanWindow } from "./core/processor.ts";
-import type { RootsEnv } from "./roots-builder.ts";
+  invokePath,
+  parse,
+  pathProxy,
+  print,
+  toExpression,
+  type Expression,
+} from "./core/expression.ts";
+import { hashSource } from "./core/hash.ts";
+import { DELIVERY_WEBSOCKET_HEADER } from "./core/delivery-websocket.ts";
+import { ItxConnectionRegistry, type Invoker, type Stub } from "./core/itx-connection-registry.ts";
+import { parseName, stringifyName } from "./core/names.ts";
+import { itxEntrypointFor } from "./itx-entrypoint.ts";
+import {
+  CapabilityTableProcessor,
+  type CapabilityTable,
+  type ProcessorPolicy,
+} from "./capability-table-processor.ts";
+import type { ReduceOnlyProcessor, ScannedOffsetRange } from "./core/processor.ts";
+import type { BuiltInsEnv } from "./built-ins.ts";
 import { PROCESSOR_RUNNER_MODULE } from "./generated/processor-runner.ts";
 import { PROCESSOR_SDK_MODULE } from "./generated/processor-sdk.ts";
-import { buildHostScope } from "./roots-builder.ts";
+import { buildBuiltIns } from "./built-ins.ts";
 import type { FacetIdentity } from "./processor-facet.ts";
 
-// The parent hosts the INLINE CORE (host scope + routing table + core fold), so it needs the
+// The parent hosts the INLINE CORE (host scope + routing table + core reduce), so it needs the
 // full roots env the facet used to inherit, plus the config seeds.
-interface Env extends RootsEnv {
+interface Env extends BuiltInsEnv {
   APP_CONFIG?: string;
 }
 
@@ -68,13 +76,15 @@ interface Env extends RootsEnv {
 type FacetProcessorEntry = {
   slug: string;
   ref?: { source: Expression; export: string };
+  /** Per-instance configuration from the enablement mount, handed to the constructor. */
+  props?: Record<string, unknown>;
 };
 
 /** The duck-typed contract BOTH facet kinds satisfy (the built-in ProcessorFacet and the
- *  SDK-injected runner.js): identity in, pushed windows in, fold + barrier out. */
+ *  SDK-injected runner.js): identity in, pushed windows in, reduce + barrier out. */
 type FacetProcessorHandle = {
   configure(identity: FacetIdentity): Promise<unknown> | unknown;
-  processEventBatch(events: StreamEvent[], window: ScanWindow): Promise<unknown> | unknown;
+  processEventBatch(events: StreamEvent[], window: ScannedOffsetRange): Promise<unknown> | unknown;
   snapshot(): Promise<{ offset: number; state: unknown }>;
   waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<unknown>;
 };
@@ -120,13 +130,13 @@ type PushCursor = {
 };
 
 /** The capability host's slug — hosted INLINE (see the inline-core section below). */
-const ICTX_SLUG = "iterate-context";
+const CAPABILITY_TABLE_SLUG = "capability-table";
 /** The core processor is stateless (pure reduce) — one module-level instance serves every DO. */
 const CORE_PROCESSOR = new CoreStreamProcessor();
 
 export class StreamDurableObject extends DurableObject<Env> {
   // ── transport: the parked-stub registry over this DO's hibernatable sockets ──
-  #stubs = new HibernatableStubs({
+  #stubs = new ItxConnectionRegistry({
     acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
     getWebSockets: (tag) => this.ctx.getWebSockets(tag),
   });
@@ -175,10 +185,11 @@ export class StreamDurableObject extends DurableObject<Env> {
    *  exactly one storage write): offset REUSE after an incarnation dies is a data-corruption
    *  class, because consumers key durable truth by offset. The kv value is the ONE source —
    *  append's transactionSync commits it with the sql rows atomically. */
-  #maxAssignedCache?: number;
-  #maxAssigned(): number {
-    this.#maxAssignedCache ??= (this.ctx.storage.kv.get("maxAssignedOffset") as number) ?? 0;
-    return this.#maxAssignedCache;
+  #highestAssignedOffsetCache?: number;
+  #highestAssignedOffset(): number {
+    this.#highestAssignedOffsetCache ??=
+      (this.ctx.storage.kv.get("maxAssignedOffset") as number) ?? 0;
+    return this.#highestAssignedOffsetCache;
   }
 
   #eventsTableExists(): boolean {
@@ -214,7 +225,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     // — an idempotency conflict after earlier inserts — must never leave rows above the recorded
     // max offset, which the next append would re-assign (one offset, two identities). The cache
     // is assigned only AFTER the transaction returns; a throw leaves it untouched and true.
-    const scannedAfterOffset = this.#maxAssigned();
+    const scannedAfterOffset = this.#highestAssignedOffset();
     const { committed, nextOffset } = this.ctx.storage.transactionSync(() => {
       const committed: StreamEvent[] = [];
       let nextOffset = scannedAfterOffset;
@@ -267,9 +278,9 @@ export class StreamDurableObject extends DurableObject<Env> {
       return { committed, nextOffset };
     });
     if (nextOffset > scannedAfterOffset) {
-      this.#maxAssignedCache = nextOffset;
+      this.#highestAssignedOffsetCache = nextOffset;
       // THE PUMP: push the batch + window into every enabled facet processor (each an isolated
-      // workerd facet with its own storage — including the iterate-context capability host).
+      // workerd facet with its own storage).
       // Fire-and-forget from append's view — an awaited drive would deadlock if a facet
       // processor APPENDS during its batch (append → this method → await the same facet's busy
       // chain), and the capability host DOES append (provide/revoke) — but SERIALIZED PER FACET:
@@ -278,10 +289,10 @@ export class StreamDurableObject extends DurableObject<Env> {
       // (undeliverable by repair, by design) are silently dropped. Reads stay correct because
       // every snapshot/invoke gap-repairs from the log. The push is what wakes an aborted facet.
       // Live-state change events never ride a drive: the platform rule makes them unconsumable
-      // by every fold, so delivering them is pure RPC waste (the voice flood). A batch that is
+      // by every reduce, so delivering them is pure RPC waste (the voice flood). A batch that is
       // ONLY live-state skips the drives; the next real drive's window then COVERS the skipped
       // span (per-facet lastDeliveredThrough) so the facet's contiguity fast path holds — to a
-      // fold, a skipped live-state offset is exactly an ephemeral hole, which windows already
+      // reduce, a skipped live-state offset is exactly an ephemeral hole, which windows already
       // express. Without the widened window, the skip broke contiguity and gap repair silently
       // dropped deliverable named ephemerals between two live-state changes (proof-caught).
       const drivable = committed.filter((e) => e.type !== "events.iterate.com/live-state/changed");
@@ -304,7 +315,7 @@ export class StreamDurableObject extends DurableObject<Env> {
               .catch((e) => console.error(`facet "${slug}" drive failed`, e))
               .finally(() => {
                 this.#facetWorkInFlight--;
-                this.#noteActivity(); // a finished fold earns a fresh quiet window
+                this.#noteActivity(); // a finished reduce earns a fresh quiet window
               }),
           );
         }
@@ -324,28 +335,28 @@ export class StreamDurableObject extends DurableObject<Env> {
   #driveWindows = new Map<string, number>(); // per-facet lastDeliveredThrough (skipped spans ride the next window)
   #facetWorkInFlight = 0;
 
-  // ── THE INLINE CORE: reduce-only processors folded synchronously at the commit point ──
+  // ── THE INLINE CORE: reduce-only processors reduced synchronously at the commit point ──
   // The runner apparatus (chain, cursors, gap repair, resurrection) is the price of being AWAY
-  // from the commit point; these folds run AT it and pay none of it. Checkpoint = one versioned
+  // from the commit point; these reduces run AT it and pay none of it. Checkpoint = one versioned
   // kv value per slug, committed atomically with the batch; rebuild = replay the durable log
-  // (version skew, eviction, first contact — all the same path). Inline folds see DURABLE
+  // (version skew, eviction, first contact — all the same path). Inline reduces see DURABLE
   // events only, so the checkpoint always rebuilds bit-identically.
   #inlineCache = new Map<
     string,
     { proc: ReduceOnlyProcessor<unknown>; state: unknown; throughOffset: number }
   >();
-  #ictxInstance?: IterateContextStreamProcessor;
+  #capabilityTableInstance?: CapabilityTableProcessor;
 
   /** THE capability host, parent-constructed: same class, same contract, zero distance. */
-  #ictxProcessor(): IterateContextStreamProcessor {
-    if (this.#ictxInstance) return this.#ictxInstance;
+  #capabilityTableProcessor(): CapabilityTableProcessor {
+    if (this.#capabilityTableInstance) return this.#capabilityTableInstance;
     const { projectId, path } = this.#name;
     const ownContext = {
       append: (...e: unknown[]) => this.append(...(e as StreamEventInput[])),
       read: (after?: number, limit?: number) => this.read(after, limit),
       invoke: (call: unknown) => this.invoke(call as Expression),
     };
-    const hostScope = buildHostScope({
+    const builtIns = buildBuiltIns({
       projectId,
       path,
       contextName: this.#doName,
@@ -369,23 +380,26 @@ export class StreamDurableObject extends DurableObject<Env> {
       },
       hostCtx: this.ctx,
     });
-    const proc = new IterateContextStreamProcessor({
+    const proc = new CapabilityTableProcessor({
       stream: {
         append: (...events) => this.append(...events),
         read: (after, limit) => Promise.resolve(this.read(after, limit)),
       },
-      seeds: parseAppConfig(this.env.APP_CONFIG).seeds,
-      hostScope,
+      configMounts: parseAppConfig(this.env.APP_CONFIG).configMounts,
+      builtIns,
     });
     proc.resolveCurrent = (call, depth) => this.invoke(call, depth);
-    this.#ictxInstance = proc;
+    this.#capabilityTableInstance = proc;
     return proc;
   }
 
   #inlineDefs(): { slug: string; proc: ReduceOnlyProcessor<unknown> }[] {
     return [
       { slug: "core", proc: CORE_PROCESSOR as ReduceOnlyProcessor<unknown> },
-      { slug: ICTX_SLUG, proc: this.#ictxProcessor() as ReduceOnlyProcessor<unknown> },
+      {
+        slug: CAPABILITY_TABLE_SLUG,
+        proc: this.#capabilityTableProcessor() as ReduceOnlyProcessor<unknown>,
+      },
     ];
   }
 
@@ -408,7 +422,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           : { proc: def.proc, state: def.proc.contract.initialState(), throughOffset: 0 };
       this.#inlineCache.set(slug, entry);
     }
-    const head = this.#maxAssigned();
+    const head = this.#highestAssignedOffset();
     while (entry.throughOffset < head) {
       const page = this.read(entry.throughOffset, 500);
       for (const e of page.events) if (e.offset <= head) this.#reduceInline(entry, e);
@@ -431,7 +445,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
   }
 
-  /** Called INSIDE append's transaction: fold every fresh durable event, checkpoint on change. */
+  /** Called INSIDE append's transaction: reduce every fresh durable event, checkpoint on change. */
   #foldInline(committed: StreamEvent[], scannedAfterOffset: number, nextOffset: number): void {
     for (const def of this.#inlineDefs()) {
       const entry = this.#inline(def.slug); // caught up to the PRE-batch head (cache is old)
@@ -471,7 +485,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     const scannedThroughOffset =
       events.length === limit
         ? events[events.length - 1].offset
-        : Math.max(afterOffset, this.#maxAssigned());
+        : Math.max(afterOffset, this.#highestAssignedOffset());
     return { events, scannedThroughOffset };
   }
 
@@ -500,7 +514,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     this.#armedTargetMs = undefined; // this alarm FIRED — the memo no longer reflects storage
     this.#drivePushRows(); // retries whose backoff came due
     if (!this.#facetsResurrected) {
-      // THE RESURRECTION PASS: a fold interrupted by eviction, with no follow-up traffic,
+      // THE RESURRECTION PASS: a reduce interrupted by eviction, with no follow-up traffic,
       // would otherwise stall until the next append (the pump only fires on commits). The
       // first alarm of each incarnation asks every facet for a snapshot — which IS its
       // catch-up: a behind facet gap-repairs from its own durable cursor, a caught-up one
@@ -525,7 +539,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       // converting quiet time into billed duration. Abort every facet once the stream has been
       // quiet — their cursors are durable in their OWN storage and delivery is cursor-driven,
       // so nothing is lost (replies are output-gated; abort keeps storage; rebuild ~50-700ms).
-      // Never while a drive/fold is in flight: aborting mid-fold is the stall the resurrection
+      // Never while a drive/reduce is in flight: aborting mid-reduce is the stall the resurrection
       // pass exists to heal.
       for (const { slug } of this.#facetEntries()) {
         try {
@@ -555,21 +569,15 @@ export class StreamDurableObject extends DurableObject<Env> {
   // HALT (audited, resumable) — the apps/os shape, one mode instead of three kinds.
 
   #pushInFlight = new Set<number>();
-  /** DERIVED from the routing table (the one fold): subscriber mounts ARE the push rows. */
+  /** DERIVED from the routing table (the one reduce): subscriber mounts ARE the push rows. */
   #pushRows(): PushRow[] {
-    const state = this.#inline(ICTX_SLUG).state as IctxState;
+    const state = this.#inline(CAPABILITY_TABLE_SLUG).state as CapabilityTable;
     const rows: PushRow[] = [];
     for (const m of state.mounts) {
-      const pat = m.pattern;
-      if (
-        pat.length === 3 &&
-        pat[0] === "itx" &&
-        pat[1] === "subscribers" &&
-        typeof pat[2] === "string"
-      ) {
+      if (m.path.length === 3 && m.path[0] === "itx" && m.path[1] === "subscribers") {
         const delivery = (m.delivery ?? {}) as DeliveryPolicy;
         rows.push({
-          name: pat[2],
+          name: m.path[2],
           providedAtOffset: m.providedAtOffset,
           ...delivery,
           onFailingEvent: delivery.onFailingEvent ?? "halt",
@@ -594,35 +602,6 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
   #putPushCursor(offset: number, cursor: PushCursor): void {
     this.ctx.storage.kv.put(`push-cursor:${offset}`, cursor);
-  }
-
-  /** SUBSCRIBING IS PROVIDING: sugar that appends the ordinary capability-provided event at
-   *  `itx.subscribers.<name>` with the delivery policy riding the SAME event — auditable,
-   *  replayable, revocable/shadowable like every other mount. The projection in append() turns
-   *  it into a pumped row; provide/revoke/shadow give subscription lifecycle for free
-   *  (shadow a subscriber → its cursor freezes; revoke → it resumes where it stopped). */
-  async subscribe(
-    input: DeliveryPolicy & { name?: string; target: string | Expression },
-  ): Promise<{ name: string; providedAtOffset: number }> {
-    this.#touch();
-    // (the target-root gate lives in ictx.provide — the one enforcement point)
-    // A UNIQUE default name — two concurrent anonymous subscribes must never collide on the
-    // same name and silently shadow each other (the max-offset default did exactly that).
-    const name = input.name ?? `subscription:${crypto.randomUUID().slice(0, 8)}`;
-    const { name: _n, target, ...delivery } = input;
-    const { providedAtOffset } = await this.#ictxProcessor().provide({
-      pattern: ["itx", "subscribers", name],
-      target: toExpression(target),
-      delivery,
-    });
-    return { name, providedAtOffset };
-  }
-
-  /** Revoke the name's WINNING subscription mount (sugar over revokeCapability). */
-  async unsubscribe(input: { name: string }): Promise<{ ok: true }> {
-    const winner = this.#activePushRows().find((r) => r.name === input.name);
-    if (winner) await this.revokeCapability({ providedAtOffset: winner.providedAtOffset });
-    return { ok: true };
   }
 
   /** THE cursor-surgery verb (the irreducible residue of a subscription beyond its mount):
@@ -714,12 +693,12 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   /** THE delivery leg: the canonical parked-callback target (itx.clients.get(sid)) rides the
    *  parent's own stubInvoke — zero hops, zero table routing (delivery is "by row identity,
-   *  never the table"). Any other target substitutes + applies against the inline fold. */
+   *  never the table"). Any other target substitutes + applies against the inline reduce. */
   #deliverToRow(row: PushRow, args: unknown[]): Promise<unknown> {
     const key = parkedKey(row.target);
     if (key !== undefined) return this.stubInvoke(key, [], args);
-    const state = this.#inline(ICTX_SLUG).state as IctxState;
-    return this.#ictxProcessor().deliverTo(state, row.providedAtOffset, args);
+    const state = this.#inline(CAPABILITY_TABLE_SLUG).state as CapabilityTable;
+    return this.#capabilityTableProcessor().deliverTo(state, row.providedAtOffset, args);
   }
 
   /** One in-flight delivery per row; loop until caught up. Never called from the commit path
@@ -735,7 +714,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           return;
         let cursor = this.#pushCursor(row.providedAtOffset);
         if (!cursor) {
-          // Minted LAZILY on first pump — rows are derived from the fold, nothing mints them.
+          // Minted LAZILY on first pump — rows are derived from the reduce, nothing mints them.
           cursor = {
             confirmedOffset: row.start === "beginning" ? 0 : row.providedAtOffset,
             attempt: 0,
@@ -888,10 +867,25 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   // ── facet-hosted processors (built-ins via processor-facet.ts; userspace via the LOADER) ──
 
+  /** DERIVED from the capability table: processor mounts (path itx.processors.<slug>) ARE the
+   *  registry — enablement is event-sourced like every other attachment; the facet-processors
+   *  kv registry is dead. Newest same-slug mount wins (re-enable with new props = shadow). */
   #facetEntries(): FacetProcessorEntry[] {
-    const entries =
-      (this.ctx.storage.kv.get("facet-processors") as FacetProcessorEntry[] | undefined) ?? [];
-    return entries.filter((e) => e.slug !== ICTX_SLUG); // pre-inline deployments listed it here
+    const state = this.#inline(CAPABILITY_TABLE_SLUG).state as CapabilityTable;
+    const bySlug = new Map<string, FacetProcessorEntry>();
+    for (const m of state.mounts) {
+      if (m.path.length === 3 && m.path[0] === "itx" && m.path[1] === "processors") {
+        const policy = (m.processor ?? {}) as ProcessorPolicy;
+        bySlug.set(m.path[2], {
+          slug: m.path[2],
+          ...(policy.source
+            ? { ref: { source: parse(policy.source), export: policy.export ?? "default" } }
+            : {}),
+          ...(policy.props ? { props: policy.props } : {}),
+        });
+      }
+    }
+    return [...bySlug.values()];
   }
 
   /** Materialize (or reuse) the facet hosting `slug`. A stored `ref` means USERSPACE: the
@@ -938,32 +932,36 @@ export class StreamDurableObject extends DurableObject<Env> {
   async enableProcessor(
     slug: string,
     ref?: { source: string | Expression; export: string },
+    props?: Record<string, unknown>,
   ): Promise<{ ok: true }> {
     this.#touch();
-    if (slug === ICTX_SLUG || slug === "core")
+    if (slug === CAPABILITY_TABLE_SLUG || slug === "core")
       throw new Error(`"${slug}" is an inline core processor — it is always on, never a facet`);
-    const entry: FacetProcessorEntry = ref
-      ? { slug, ref: { source: toExpression(ref.source), export: ref.export } }
-      : { slug };
-    const others = this.#facetEntries().filter((e) => e.slug !== slug);
-    this.ctx.storage.kv.put("facet-processors", [...others, entry]);
-    await (await this.#facet(slug)).configure(this.#identityFor(slug, ref?.export));
+    // Enablement IS a mount: the processor policy rides the same capability-provided event
+    // (event-sourced, auditable, shadowable); the target makes itx.processors.<slug>.snapshot()
+    // resolve through the ordinary facet-address view.
+    await this.#capabilityTableProcessor().provide({
+      path: `itx.processors.${slug}`,
+      target: `itx.facets.get('${slug}')`,
+      processor: {
+        ...(ref ? { source: print(toExpression(ref.source)), export: ref.export } : {}),
+        ...(props ? { props } : {}),
+      },
+    });
+    await (await this.#facet(slug)).configure(this.#identityFor(slug, ref?.export, props));
     return { ok: true };
   }
 
   /** Disable a facet processor: remove its row and DELETE its facet — storage included (the
-   *  fold is derived state, rebuildable from the log by re-enabling; the missing off-switch
+   *  reduce is derived state, rebuildable from the log by re-enabling; the missing off-switch
    *  the hunt flagged: before this, a misbehaving userspace processor burned a loader
    *  materialization + error log on EVERY commit with no remedy but hand-editing kv). */
-  disableProcessor(slug: string): { ok: true } {
-    if (slug === ICTX_SLUG || slug === "core")
+  async disableProcessor(slug: string): Promise<{ ok: true }> {
+    if (slug === CAPABILITY_TABLE_SLUG || slug === "core")
       throw new Error(`"${slug}" is an inline core processor — it cannot be disabled`);
     this.#driveChains.delete(slug);
-    this.#driveWindows.delete(slug); // a re-enable must not inherit a window it never saw
-    this.ctx.storage.kv.put(
-      "facet-processors",
-      this.#facetEntries().filter((e) => e.slug !== slug),
-    );
+    this.#driveWindows.delete(slug); // a re-enable must not inherit a scanned range it never saw
+    await this.revokeCapability({ path: `itx.processors.${slug}` });
     const facets = this.ctx.facets as unknown as { delete?: (name: string) => void };
     if (typeof facets.delete === "function") facets.delete(`proc:${slug}`);
     else this.ctx.facets.abort(`proc:${slug}`, "disabled");
@@ -979,7 +977,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (path.length === 0) throw new Error(`facet "${slug}": name a method`);
     // INLINE processors answer at the same address — always at head, so the barrier verb is
     // trivially satisfied and snapshot needs no catch-up.
-    if (slug === ICTX_SLUG || slug === "core") {
+    if (slug === CAPABILITY_TABLE_SLUG || slug === "core") {
       const entry = this.#inline(slug);
       const view = {
         snapshot: () => ({ offset: entry.throughOffset, state: entry.state }),
@@ -994,23 +992,24 @@ export class StreamDurableObject extends DurableObject<Env> {
     return invokePath(await this.#facet(slug), path, args, `facet "${slug}"`);
   }
 
-  #identityFor(slug: string, exportName?: string): FacetIdentity {
+  #identityFor(slug: string, exportName?: string, props?: Record<string, unknown>): FacetIdentity {
     return {
       parentName: this.#doName,
       projectId: this.#name.projectId,
       path: this.#name.path,
       slug,
       ...(exportName ? { export: exportName } : {}),
+      ...(props ? { props } : {}),
     };
   }
 
-  // ── dispatch (ONE path: the routing table — the INLINE core fold, zero distance) ──
+  // ── dispatch (ONE path: the routing table — the INLINE core reduce, zero distance) ──
 
   /** Resolve + run one call (either codec half) against the current table. */
   async invoke(call: string | Expression, depth = 0): Promise<unknown> {
     this.#noteActivity();
-    const state = this.#inline(ICTX_SLUG).state as IctxState;
-    return this.#ictxProcessor().resolve(state, toExpression(call), undefined, depth);
+    const state = this.#inline(CAPABILITY_TABLE_SLUG).state as CapabilityTable;
+    return this.#capabilityTableProcessor().resolve(state, toExpression(call), undefined, depth);
   }
 
   /** The dotted door — the degenerate string half. Loaded workers' `itx.js` + the runner speak
@@ -1021,20 +1020,38 @@ export class StreamDurableObject extends DurableObject<Env> {
     return this.invoke([...segments.slice(0, -1), [last, ...args]] as Expression);
   }
 
-  /** Mount a capability (event provenance — `roots` targets are rejected). */
+  /** Mount a capability (event provenance — built-in targets are config-mount-only). */
   async provideCapability(input: {
-    pattern: string | Expression;
+    path: string | string[];
     target: string | Expression;
+    delivery?: DeliveryPolicy;
+    processor?: ProcessorPolicy;
   }): Promise<{ providedAtOffset: number }> {
     this.#touch();
-    return this.#ictxProcessor().provide(input);
+    return this.#capabilityTableProcessor().provide(input);
   }
 
-  async revokeCapability(input: { providedAtOffset: number }): Promise<void> {
-    await this.#ictxProcessor().revoke(input);
+  /** Revoke by the mount's identity — or by its capability path (pops the newest winner at
+   *  that exact path; what it shadowed is restored). */
+  async revokeCapability(input: {
+    providedAtOffset?: number;
+    path?: string | string[];
+  }): Promise<void> {
+    let providedAtOffset = input.providedAtOffset;
+    if (providedAtOffset === undefined) {
+      if (!input.path) throw new Error("revokeCapability: pass providedAtOffset or path");
+      const pathString = typeof input.path === "string" ? input.path : input.path.join(".");
+      const table = this.#inline(CAPABILITY_TABLE_SLUG).state as CapabilityTable;
+      const winner = table.mounts
+        .filter((m) => m.path.join(".") === pathString)
+        .sort((a, b) => b.providedAtOffset - a.providedAtOffset)[0];
+      if (!winner) throw new Error(`no mount at path ${JSON.stringify(pathString)}`);
+      providedAtOffset = winner.providedAtOffset;
+    }
+    await this.#capabilityTableProcessor().revoke({ providedAtOffset });
     // Revoke doubles as GC for the delivery machinery keyed by the mount's identity.
-    this.ctx.storage.kv.delete(`push-cursor:${input.providedAtOffset}`);
-    this.#liveStatePending.delete(input.providedAtOffset);
+    this.ctx.storage.kv.delete(`push-cursor:${providedAtOffset}`);
+    this.#liveStatePending.delete(providedAtOffset);
   }
 
   // ── native fetch: the pager door, the fetch lane, observability, egress ──
@@ -1043,9 +1060,9 @@ export class StreamDurableObject extends DurableObject<Env> {
     const url = new URL(request.url);
 
     // A relay opens its hibernatable Pager (the DO→relay back-channel; no pin).
-    if (request.headers.get(PAGER_HEADER)) return this.#stubs.accept(request);
+    if (request.headers.get(DELIVERY_WEBSOCKET_HEADER)) return this.#stubs.accept(request);
 
-    // THE FETCH LANE: `x-itx-cap` resolves against the inline fold right here — a 101 flows
+    // THE FETCH LANE: `x-itx-cap` resolves against the inline reduce right here — a 101 flows
     // back out natively (no facet tunnel needed at all).
     const capHeader = request.headers.get("x-itx-cap");
     if (capHeader) {
@@ -1053,8 +1070,8 @@ export class StreamDurableObject extends DurableObject<Env> {
         const expr = capHeader.trimStart().startsWith("[")
           ? (JSON.parse(capHeader) as Expression)
           : parse(capHeader.startsWith("itx") ? capHeader : `itx.${capHeader}`);
-        const state = this.#inline(ICTX_SLUG).state as IctxState;
-        const result = await this.#ictxProcessor().resolveFetch(state, expr, request);
+        const state = this.#inline(CAPABILITY_TABLE_SLUG).state as CapabilityTable;
+        const result = await this.#capabilityTableProcessor().resolveFetch(state, expr, request);
         if (result instanceof Response) return result;
         return new Response(`fetch lane: ${JSON.stringify(result)}\n`);
       } catch (error) {
@@ -1164,7 +1181,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   // ONE registry, two access verbs: `stubInvoke` single-target (throws when offline);
   // `stubFanOut` per client path (allSettled — a dead connection drops out of the results).
   // The facet-hosted capability host builds its `itx.clients` view as thin RPC wrappers over
-  // exactly these five methods (roots-builder.ts facetClientsView).
+  // exactly these five methods (the parent-local connections view).
 
   #findStub(key: string): Stub {
     const s = this.#stubs.all().find((x) => x.connectionKey === key || x.socketId === key);

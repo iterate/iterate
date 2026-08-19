@@ -4,8 +4,8 @@
 //   • roots-builder.ts line 219: `sibling.invoke(["itx", ...])` — NO depth argument;
 //   • stream-durable-object.ts line 745 / processor-facet.ts line 174: `invoke(call, depth = 0)`.
 import { expect, test } from "vitest";
-import { parse, pathProxy, type Expression } from "./core/expression.ts";
-import { IterateContextStreamProcessor } from "./iterate-context-stream-processor.ts";
+import { parse, parseCapabilityPath, pathProxy, type Expression } from "./core/expression.ts";
+import { CapabilityTableProcessor } from "./capability-table-processor.ts";
 import { type ProcessorStream } from "./core/processor.ts";
 import { type StreamEvent, type StreamEventInput } from "./core/events.ts";
 
@@ -51,7 +51,7 @@ test("contexts.get(own path) resets depth — the guard never fires (loop repro)
   };
 
   // VERBATIM shape of roots-builder.ts `contexts` root (lines 206-221), minus append/read.
-  const hostScope = {
+  const builtIns = {
     contexts: {
       get: (_siblingPath: string) =>
         pathProxy((segments, args) => {
@@ -65,10 +65,10 @@ test("contexts.get(own path) resets depth — the guard never fires (loop repro)
     },
   };
 
-  const host = new IterateContextStreamProcessor({
+  const host = new CapabilityTableProcessor({
     stream,
-    hostScope: hostScope as unknown as Record<string, unknown>,
-    seeds: [{ pattern: parse("itx.contexts"), target: parse("contexts") }],
+    builtIns: builtIns as unknown as Record<string, unknown>,
+    configMounts: [{ path: parseCapabilityPath("itx.contexts"), target: parse("contexts") }],
   });
   const fold = () =>
     events.reduce(
@@ -80,7 +80,7 @@ test("contexts.get(own path) resets depth — the guard never fires (loop repro)
     host.resolve(fold(), call, undefined, depth);
 
   // The one-character topology typo from the claim: own path instead of a sibling's.
-  await host.provide({ pattern: "itx.a", target: "itx.contexts.get('/').a" });
+  await host.provide({ path: "itx.a", target: "itx.contexts.get('/').a" });
 
   // If the depth guard worked across the hop this rejects with /depth 32/; instead it loops
   // until the tripwire (200 hops) fires.

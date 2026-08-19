@@ -1,6 +1,6 @@
 // hello-files.ts — the v1 "file reader" behind `itx.files.read` — provides hello modules (no
 // repo/bundler yet). A real repo-read-at-a-ref later slots in behind the SAME capability + source
-// expressions. Its own module so BOTH hosts of the iterate-context processor (the Stream DO and
+// expressions. Its own module so BOTH hosts of the capability-table processor (the Stream DO and
 // the built-in ProcessorFacet) import it without a cycle.
 
 export const HELLO_FILES: Record<string, string> = {
@@ -86,7 +86,7 @@ export class Chunky extends StreamProcessor {
   liveState(state) { return { chunks: state.chunks, marks: state.marks }; }
 }`,
   // A userspace stream processor ON THE SDK: same contract helper, same schemas, same base
-  // class as built-ins — the five rules, the cursor, refold and the read verbs all come free.
+  // class as built-ins — the five rules, the cursor, re-reduce-on-version-bump and the read verbs all come free.
   "/user-tally.js": `import { StreamProcessor, defineProcessorContract, z } from "./processor.js";
 const contract = defineProcessorContract({
   slug: "user-tally",
