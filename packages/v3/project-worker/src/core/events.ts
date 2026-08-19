@@ -19,13 +19,21 @@ export function deeper(depth: number, what: string): number {
 }
 
 /** THE delivery policy — one spelling for every host of it (the subscribe inputs, the provide
- *  payload, the projected PushRow). Rides the capability-provided event itself, so subscription
- *  config is event-sourced, never silent kv. Event rows get the cursor + retry/skip/halt
- *  ladder; `liveState` rows get neither — the key's change payloads are forwarded as they
- *  commit and the CLIENT chains revisions through the producer's door. */
+ *  payload). Rides the capability-provided event itself, so subscription config is
+ *  event-sourced, never silent kv. How a subscription mount is SERVED depends only on its
+ *  target's shape:
+ *    • CONNECTED target (`itx.connections.get(…)`): fire-and-forget event batches down the
+ *      delivery WebSocket — no acks, no server cursor, no retries (the client heals by pull);
+ *      `maxAttempts`/`start` are meaningless here and ignored.
+ *    • ABSENT target (a webhook, an itx expression): the subscription-forwarder facet holds a
+ *      cursor per target and applies the ONE failure policy — bounded retries then HALT with an
+ *      audit event; `maxAttempts` bounds the ladder (default 15), `start` places the first
+ *      cursor.
+ *  `liveState` rows get neither cursor nor ladder — the key's change payloads are forwarded as
+ *  they commit and the CLIENT chains revisions through the producer's door (connected targets
+ *  only; an absent target has no chain to keep, so it re-seeds through the door instead). */
 export type DeliveryPolicy = {
   consumes?: string[];
-  onFailingEvent?: "halt" | "skip";
   maxAttempts?: number;
   start?: "beginning" | "now";
   liveState?: { key: string };

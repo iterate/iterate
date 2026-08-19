@@ -35,6 +35,7 @@ import {
   type ScannedOffsetRange,
 } from "./core/processor.ts";
 import type { BuiltInsEnv } from "./built-ins.ts";
+import { SubscriptionForwarderProcessor } from "./subscription-forwarder-processor.ts";
 
 interface Env extends BuiltInsEnv {
   APP_CONFIG?: string;
@@ -72,14 +73,26 @@ class TallyProcessor extends StreamProcessor<{ counts: Record<string, number> }>
   }
 }
 
-/** What a built-in facet-processor factory receives: the stream + storage + identity. */
-type FacetProcessorArgs = {
+/** What a built-in facet-processor factory receives: the stream + storage + identity, plus the
+ *  parent stream DO's facet-facing doors (by name per use — never a retained stub). */
+export type FacetProcessorArgs = {
   stream: ProcessorStream;
   storage: ProcessorStorage;
   path: string;
   projectId: string;
   identity: FacetIdentity;
   props?: Record<string, unknown>;
+  parent: () => {
+    /** Deliver a batch to a subscription mount BY ROW IDENTITY (never by name through the
+     *  table) — the subscription-forwarder's delivery leg. */
+    deliverToSubscriptionMount(input: {
+      providedAtOffset: number;
+      args: unknown[];
+    }): Promise<unknown>;
+    /** The alarm proxy: facets have no alarms (workerd#6810) — the parent arms and calls
+     *  pumpSubscriptionDeliveries back when the retry comes due. */
+    armSubscriptionRetry(input: { atMs: number }): Promise<{ ok: true }>;
+  };
 };
 
 /** Built-in facet-hosted processors by slug. (Loader-loaded userspace classes ride the same
@@ -91,6 +104,7 @@ const FACET_PROCESSORS: Record<
   (args: FacetProcessorArgs) => StreamProcessor<any>
 > = {
   tally: (args) => new TallyProcessor(args),
+  "subscription-forwarder": (args) => new SubscriptionForwarderProcessor(args),
 };
 
 export class ProcessorFacet extends DurableObject<Env> {
@@ -124,6 +138,22 @@ export class ProcessorFacet extends DurableObject<Env> {
     return this.#p().waitUntilProcessed(input);
   }
 
+  // Forwarder-only doors, duck-typed through the generic facet shell (the parent's alarm and
+  // resumeSubscription reach the subscription-forwarder through these; any other processor
+  // answers with a loud error).
+  pumpSubscriptionDeliveries(): Promise<unknown> {
+    return this.#processorVerb("pumpSubscriptionDeliveries", []);
+  }
+  resumeSubscription(input: { name: string; afterOffset?: number }): Promise<unknown> {
+    return this.#processorVerb("resumeSubscription", [input]);
+  }
+  #processorVerb(method: string, args: unknown[]): Promise<unknown> {
+    const p = this.#p() as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+    if (typeof p[method] !== "function")
+      throw new Error(`processor "${this.#p().contract.slug}" has no ${method}()`);
+    return p[method](...args);
+  }
+
   /** Rehydrate from the durable identity (every incarnation — facets restart independently,
    *  and the parent's quiesce alarm aborts idle facets on purpose). */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -142,6 +172,7 @@ export class ProcessorFacet extends DurableObject<Env> {
     const storage: ProcessorStorage = {
       get: <T>(k: string) => this.ctx.storage.kv.get(k) as T | undefined,
       put: (k: string, v: unknown) => this.ctx.storage.kv.put(k, v),
+      delete: (k: string) => void this.ctx.storage.kv.delete(k),
     };
     this.#processor = make({
       stream,
@@ -150,6 +181,7 @@ export class ProcessorFacet extends DurableObject<Env> {
       projectId: identity.projectId,
       identity,
       props: identity.props,
+      parent: () => parent(),
     });
     return this.#processor;
   }

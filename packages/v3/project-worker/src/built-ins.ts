@@ -9,15 +9,18 @@ import { itxEntrypointFor } from "./itx-entrypoint.ts";
 import { pathProxy, toExpression, type Expression } from "./core/expression.ts";
 import { hashSource } from "./core/hash.ts";
 
-/** The parked-stub registry view (clients + live capabilities — one registry). */
-export type ClientsView = {
-  /** Single-target: a method proxy over one parked stub (wake → leg → invoke). Deep dots walk. */
+/** The `connections` view every context has: the ItxConnectionRegistry, surfaced. One entry per
+ *  attached ItxConnection (client callbacks and parked live capabilities — one registry). */
+export type ConnectionsView = {
+  /** One connection by connectionKey or connectionId: a method proxy over its retained callback
+   *  (wake → RetainedCallbackInvoker leg → invoke). Deep dots walk; throws when offline. */
   get(key: string): unknown;
-  /** Fan-out over every connection at a client path (allSettled; dead connections drop out). */
-  at(path: string): { call(method: string[], args: unknown[]): Promise<unknown[]> };
-  /** Promise-valued when the view is RPC-backed (the facet host) — evaluation awaits every step. */
+  /** Fan out one (dotted) method call over EVERY connection attached to this context
+   *  (allSettled; a dead connection drops out of the results). */
+  each(method: string, ...args: unknown[]): Promise<unknown[]>;
+  /** The currently connected clients of this context. */
   list(): unknown[] | Promise<unknown[]>;
-  connections(path: string): unknown[] | Promise<unknown[]>;
+  /** Close a connection's delivery WebSocket (idempotent — unknown keys are a no-op). */
   close(key: string): { ok: true } | Promise<{ ok: true }>;
 };
 
@@ -64,8 +67,8 @@ export interface BuildBuiltInsDeps {
     append(...e: unknown[]): unknown;
     read(after?: number, limit?: number): unknown;
   };
-  /** The parked-stub registry view (host-specific: in-DO closures or the parent facade). */
-  clients: ClientsView;
+  /** The connections view (parent-local closures over the ItxConnectionRegistry). */
+  connections: ConnectionsView;
   facets: FacetsView;
   /** The ctx whose `exports` mints the ItxEntrypoint loopback (the loaded-worker
    *  host — see iterate-context-entrypoint.ts for why it is never a raw getByName stub). */
@@ -208,7 +211,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           return sibling.invoke(["itx", ...segments.slice(0, -1), [last, ...args]]);
         }),
     },
-    clients: deps.clients,
+    connections: deps.connections,
     facets: deps.facets,
     workers,
     /** The file store the source expressions read: THE REPO first, demo files as fallback —

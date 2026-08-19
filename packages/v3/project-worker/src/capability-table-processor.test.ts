@@ -51,20 +51,20 @@ function memoryStream(path = "/") {
 /** A tiny fake built-ins record — enough physical layer to route into. */
 const fakeBuiltIns = () => {
   const kv = new Map<string, string>();
-  const clients = new Map<string, Record<string, (...a: unknown[]) => unknown>>();
+  const connections = new Map<string, Record<string, (...a: unknown[]) => unknown>>();
   const openaiCalls: unknown[] = [];
   return {
     kv: {
       get: (k: string) => kv.get(k) ?? null,
       put: (k: string, v: string) => (kv.set(k, v), { ok: true }),
     },
-    clients: { get: (key: string) => clients.get(key) ?? throwOffline(key) },
+    connections: { get: (key: string) => connections.get(key) ?? throwOffline(key) },
     whoami: () => ({ projectId: "prj_t", path: "/" }),
     openai: { chat: (o: { model: string }) => (openaiCalls.push(o), `chat:${o.model}`) },
     openaiCalls,
     _connect: (key: string, cap: Record<string, (...a: unknown[]) => unknown>) =>
-      clients.set(key, cap),
-    _disconnect: (key: string) => clients.delete(key),
+      connections.set(key, cap),
+    _disconnect: (key: string) => connections.delete(key),
   };
 };
 const throwOffline = (key: string): never => {
@@ -81,7 +81,7 @@ const setup = (extraConfigMounts: [string, string][] = []) => {
       ...[
         ["itx.whoami", "whoami"],
         ["itx.kv", "kv"],
-        ["itx.clients", "clients"],
+        ["itx.connections", "connections"],
         ["itx.openai", "openai"],
       ],
       ...extraConfigMounts,
@@ -158,18 +158,24 @@ describe("event mounts + the shadow stack", () => {
 
   test("STRING AT REST: the mount event stores the string halves verbatim", async () => {
     const { host, events } = setup();
-    await host.provide({ path: "itx.db", target: ["itx", "clients", ["get", "tab-1"]] });
+    await host.provide({ path: "itx.db", target: ["itx", "connections", ["get", "tab-1"]] });
     const payload = events.at(-1)!.payload as { path: string; target: string };
     expect(payload.path).toBe("itx.db"); // human-readable in the log
-    expect(payload.target).toBe("itx.clients.get('tab-1')"); // print-canonicalized
+    expect(payload.target).toBe("itx.connections.get('tab-1')"); // print-canonicalized
   });
 
   test("shadowing: newest same-path mount wins; revoke-by-offset restores what's beneath", async () => {
     const { host, invoke, builtIns } = setup();
     builtIns._connect("tab-1", { hello: () => "from tab-1" });
     builtIns._connect("tab-2", { hello: () => "from tab-2" });
-    const first = await host.provide({ path: "itx.greeter", target: "itx.clients.get('tab-1')" });
-    const second = await host.provide({ path: "itx.greeter", target: "itx.clients.get('tab-2')" });
+    const first = await host.provide({
+      path: "itx.greeter",
+      target: "itx.connections.get('tab-1')",
+    });
+    const second = await host.provide({
+      path: "itx.greeter",
+      target: "itx.connections.get('tab-2')",
+    });
     expect(await invoke("itx.greeter.hello()")).toBe("from tab-2"); // newest wins
     await host.revoke({ providedAtOffset: second.providedAtOffset });
     expect(await invoke("itx.greeter.hello()")).toBe("from tab-1"); // restored, not lost
@@ -190,7 +196,7 @@ describe("event mounts + the shadow stack", () => {
     builtIns._connect("platform", {
       anything: (...a: unknown[]) => (osCalls.push(`anything(${a.join(",")})`), "handled upstream"),
     });
-    await host.provide({ path: "itx", target: "itx.clients.get('platform')" });
+    await host.provide({ path: "itx", target: "itx.connections.get('platform')" });
     expect(await invoke("itx.anything('x')")).toBe("handled upstream");
     expect(osCalls).toEqual(["anything(x)"]);
     // config mounts still win over the default route for what they claim (more specific)
@@ -209,12 +215,12 @@ describe("event mounts + the shadow stack", () => {
     );
   });
 
-  test("live-capability desugar shape: provide = park + mount into clients", async () => {
+  test("live-capability desugar shape: provide = attach connection + mount alias", async () => {
     const { host, invoke, builtIns } = setup();
     builtIns._connect("conn-42", { move: (n: unknown) => `moved ${n}` });
     const provision = await host.provide({
       path: "itx.robot",
-      target: "itx.clients.get('conn-42')",
+      target: "itx.connections.get('conn-42')",
     });
     expect(await invoke("itx.robot.move(10)")).toBe("moved 10");
     // socket death = the registry entry vanishes → calls fail; revoke pops the mount
@@ -228,7 +234,7 @@ describe("event mounts + the shadow stack", () => {
     const { host, reduceAll } = setup();
     await host.provide({
       path: "itx.subscribers.watcher",
-      target: "itx.clients.get('conn-1')",
+      target: "itx.connections.get('conn-1')",
       delivery: { consumes: ["mark"], liveState: undefined },
     });
     await host.provide({

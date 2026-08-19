@@ -12,26 +12,26 @@ payloads (we send EVENT BATCHES and STATE CHANGE EVENTS; frame = WebSocket trans
 "roster" (say THE CURRENTLY CONNECTED CLIENTS), "window" (say ScannedOffsetRange), bare
 "socket" (qualify which one), "hole" (placeholders — and they die in increment 57 anyway).
 
-| Concept                                                                          | Identifier(s)                                                                                                                     |
-| -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| The routing table (an inline processor's reduced state)                          | `CapabilityTableProcessor`, state `CapabilityTable`, file `capability-table-processor.ts`, slug `"capability-table"`              |
-| One row: binds a capability reference to an expression                           | `CapabilityMount` (field `mounts`); events `events.iterate.com/capability-table/capability-provided` / `capability-revoked`       |
-| The prefix-matching part of a call (may take arguments)                          | capability reference (prose; `Match.matchedSegments`)                                                                             |
-| A call written down as data — STORED AS ITS STRING FORM                          | expression; `parse` at rehydration, `print` canonicalizes programmatic mounts                                                     |
-| The scanned contiguous offset range proof                                        | `ScannedOffsetRange` (fields scannedAfterOffset/scannedThroughOffset unchanged)                                                   |
-| A reducer's persisted progress                                                   | `ReduceProgress` { reducerVersion, reducedThroughOffset } + state blob                                                            |
-| The stream's operational truth (pause + breaker)                                 | `CoreStreamProcessor` (apps/os mirror name), slug `"core"`                                                                        |
-| The expression roots record                                                      | the BUILT-INS: `built-ins.ts`, `buildBuiltIns`, `BuiltInsEnv` (roots/host-scope words die)                                        |
-| Config-provenance mounts                                                         | config mounts (`configMounts`)                                                                                                    |
-| A client's logical attachment into one itx                                       | `ItxConnection` (`connectionKey` client-chosen, scoped per context)                                                               |
-| One connected episode (the history level, durable facts)                         | `ItxConnectionSession`; events `connection-session-started` / `connection-session-ended`                                          |
-| One transport incarnation (client ↔ stateless worker)                            | the capnweb WebSocket (ephemeral facts `connection-opened` / `connection-closed`)                                                 |
-| Its identity                                                                     | `connectedAtOffset` (offset of the ephemeral connection-opened fact; socketId DIES; the relay stops minting UUIDs)                |
-| Retained stub + wake/delivery WebSocket + per-burst invoker, per stream attached | `CapnwebCallbackRelay` (file keeps its own name)                                                                                  |
-| The DO-held hibernatable WebSocket to the stateless worker                       | the DELIVERY WebSocket (`delivery-websocket.ts`, was hibernatable-pager); carries event batches DO→client one-directionally in 56 |
-| The per-burst Workers-RPC leg wrapping the retained stub                         | `RetainedCallbackInvoker`                                                                                                         |
-| The DO-side registry of connections + their delivery WebSockets                  | `ItxConnectionRegistry` (was HibernatableStubs)                                                                                   |
-| Per-absent-target delivery progress (forwarder-internal)                         | `SubscriptionDeliveryProgress` { confirmedOffset, attempt, nextAttemptAtMs, halted }                                              |
+| Concept                                                                             | Identifier(s)                                                                                                                    |
+| ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| The routing table (an inline processor's reduced state)                             | `CapabilityTableProcessor`, state `CapabilityTable`, file `capability-table-processor.ts`, slug `"capability-table"`             |
+| One row: binds a capability reference to an expression                              | `CapabilityMount` (field `mounts`); events `events.iterate.com/capability-table/capability-provided` / `capability-revoked`      |
+| The prefix-matching part of a call (may take arguments)                             | capability reference (prose; `Match.matchedSegments`)                                                                            |
+| A call written down as data — STORED AS ITS STRING FORM                             | expression; `parse` at rehydration, `print` canonicalizes programmatic mounts                                                    |
+| The scanned contiguous offset range proof                                           | `ScannedOffsetRange` (fields scannedAfterOffset/scannedThroughOffset unchanged)                                                  |
+| A reducer's persisted progress                                                      | `ReduceProgress` { reducerVersion, reducedThroughOffset } + state blob                                                           |
+| The stream's operational truth (pause + breaker)                                    | `CoreStreamProcessor` (apps/os mirror name), slug `"core"`                                                                       |
+| The expression roots record                                                         | the BUILT-INS: `built-ins.ts`, `buildBuiltIns`, `BuiltInsEnv` (roots/host-scope words die)                                       |
+| Config-provenance mounts                                                            | config mounts (`configMounts`)                                                                                                   |
+| A client's logical attachment into one itx                                          | `ItxConnection` (`connectionKey` client-chosen, scoped per context)                                                              |
+| One connected episode (the history level, durable facts)                            | `ItxConnectionSession`; events `connection-session-started` / `connection-session-ended`                                         |
+| One transport incarnation (client ↔ stateless worker)                               | the capnweb WebSocket (ephemeral facts `connection-opened` / `connection-closed`)                                                |
+| Its identity                                                                        | `connectedAtOffset` (offset of the ephemeral connection-opened fact; socketId DIES; the relay stops minting UUIDs)               |
+| Retained stub + stub pager WebSocket + page-answered invoker, per stream attached   | `CapnwebCallbackRelay` (file keeps its own name)                                                                                 |
+| The DO-callable client reference that survives hibernation (owner correction 08-19) | the HIBERNATABLE RPC STUB — `HibernatableRpcStubManager` in `core/hibernatable-rpc-stub.ts`; keyed by connectionId               |
+| The DO-held WebSocket that PAGES the stateless edge worker                          | the STUB PAGER WEBSOCKET (`x-itx-stub-pager`); carries EXACTLY one message, `{type: "page"}` — everything else rides Workers RPC |
+| The Workers-RPC stub the paged edge hands back (wraps the retained capnweb stub)    | `RetainedCallbackInvoker` — kept WARM while traffic flows, disposed at the 60s quiesce alarm (a page gets it back)               |
+| Per-absent-target delivery progress (forwarder-internal)                            | `SubscriptionDeliveryProgress` { confirmedOffset, attempt, nextAttemptAtMs, halted }                                             |
 
 ## End-state architecture (what increments 55-57 build toward)
 
@@ -42,13 +42,14 @@ payloads (we send EVENT BATCHES and STATE CHANGE EVENTS; frame = WebSocket trans
    PROCESSORS (processor policy { source?, export?, props? } at pattern itx.processors.<slug>) —
    the facet-processors kv registry dies; props are per-instance, event-sourced, handed to the
    processor constructor.
-3. DELIVERY, connected clients: one-directional fire-and-forget push of
-   { events, scannedOffsetRange } batches down each watcher's delivery WebSocket — contents
-   included, consumes filter applied statelessly outbound, NO acks, NO server cursor, NO retry
-   ladder, NO watchdogs, NO outbound coalescing (owner decision — the socket buffer is the only
-   queue; overflow closes; the client heals by reconnect + pull). Client holds its own offset,
-   checks contiguity, and heals gaps with read(afterOffset). Live state: unchanged LiveView
-   delta push (state change events, revision-chained, door-healed) — same fire-and-forget path.
+3. DELIVERY, connected clients (corrected 08-19, owner): one-directional fire-and-forget
+   `invoke(path, [events, scannedOffsetRange])` on the PAGED-IN RetainedCallbackInvoker stub —
+   Workers RPC, the SAME lane as request/response calls; the WebSocket protocol is ONLY
+   `{type: "page"}` ("I ought to have your stub — send it"). Consumes filter applied statelessly
+   outbound, NO acks awaited, NO server cursor, NO retry ladder. The stub stays WARM while
+   traffic flows (steady state = one page, then pure RPC) and is disposed by the 60s quiesce
+   alarm. Client holds its own offset, checks the delivered ranges chain, heals gaps with
+   read(afterOffset). Live state: the same fire-and-forget invoke per change payload.
 4. DELIVERY, absent targets (webhooks, itx expressions with no live socket): ONE built-in facet
    processor `subscription-forwarder` — reduces the capability-table events into its own view of
    absent-target subscription mounts, keeps SubscriptionDeliveryProgress per target in its own

@@ -45,7 +45,7 @@ export const DEFAULT_CONFIG_MOUNTS: { path: string; target: string }[] = [
   { path: "itx.stream", target: "stream" },
   /** Sibling contexts, ROUTED — each is a whole context, not just a log. */
   { path: "itx.contexts", target: "contexts" },
-  { path: "itx.clients", target: "clients" },
+  { path: "itx.connections", target: "connections" },
   { path: "itx.facets", target: "facets" },
   { path: "itx.workers", target: "workers" },
   { path: "itx.files", target: "files" },

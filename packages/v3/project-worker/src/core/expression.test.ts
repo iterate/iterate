@@ -19,7 +19,7 @@ describe("parse ⇄ print", () => {
     ["itx.kv", ["itx", "kv"]],
     ["itx.streams.get('/logs')", ["itx", "streams", ["get", "/logs"]]],
     ["itx.cd('/')", ["itx", ["cd", "/"]]],
-    ["itx.clients.get('robot-arm-1')", ["itx", "clients", ["get", "robot-arm-1"]]],
+    ["itx.connections.get('robot-arm-1')", ["itx", "connections", ["get", "robot-arm-1"]]],
     [
       "itx.openai.chat({ model: 'grok-4', messages: ['hi'] })",
       ["itx", "openai", ["chat", { model: "grok-4", messages: ["hi"] }]],
@@ -142,9 +142,9 @@ describe("match", () => {
   });
 
   test("ranking: the longer path wins", () => {
-    const call = parse("itx.clients.abc.ping()");
-    const long = match(parseCapabilityPath("itx.clients.abc"), call)!;
-    const short = match(parseCapabilityPath("itx.clients"), call)!;
+    const call = parse("itx.connections.abc.ping()");
+    const long = match(parseCapabilityPath("itx.connections.abc"), call)!;
+    const short = match(parseCapabilityPath("itx.connections"), call)!;
     expect(long.matchedSegments).toBeGreaterThan(short.matchedSegments);
   });
 });
@@ -166,7 +166,7 @@ const scope = () => {
       openai: {
         chat: (o: { model: string; messages?: unknown[] }) => `chat(${o.model})`,
       },
-      clients: {
+      connections: {
         get: (key: string) => ({
           ping: () => `pong:${key}`,
           arm: { move: (n: number) => (log.push(`move ${n} @${key}`), "moved") },
@@ -194,7 +194,7 @@ describe("evaluate/apply", () => {
   test("alias mount end to end — remainder replays on the live stub", async () => {
     const s = scope();
     const m = match(parseCapabilityPath("itx.robot"), parse("itx.robot.arm.move(10)"))!;
-    const result = await apply(s, parse("itx.clients.get('robot-arm-1')"), m);
+    const result = await apply(s, parse("itx.connections.get('robot-arm-1')"), m);
     expect(result).toBe("moved");
     expect(s.log).toEqual(["move 10 @robot-arm-1"]);
   });

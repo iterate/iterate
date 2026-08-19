@@ -30,7 +30,7 @@ export class DummyControlPlane extends WorkerEntrypoint {
 }
 
 // Bumped every deploy so a smoke test can wait for THIS build to propagate (workers.dev lags ~1-2min/colo).
-const CODE_VERSION = "live-12";
+const CODE_VERSION = "live-13";
 
 /** The context host DO for a request's `?ctx=` (defaults to `prj_demo`). The DO does the real work. */
 function host(env: Env, url: URL) {

@@ -7,14 +7,15 @@
 //   • the PROCESSORS — every enabled one a workerd FACET driven after each commit (built-ins by
 //     slug, userspace classes via the Worker Loader); the capability host (whose reduced state
 //     is the routing table) is the built-in first member, lazily enabled on first use;
-//   • the TRANSPORT — every hibernatable socket: relays park client/capability stubs behind
-//     Pagers (core/hibernatable-stub.ts) so ANY number of connected providers leave this DO
-//     free to hibernate; a live leg is borrowed per call burst only. The stub FACADE
-//     (stubInvoke/stubFanOut/stubList/stubConnections/stubClose) is how the facet-hosted
-//     capability host reaches the sockets — they can never move off the parent;
-//   • the FETCH DOOR — the one place a 101 can enter: `x-itx-pager` accepts a Pager,
-//     `x-itx-cap` forwards NATIVELY to the capability-host facet's fetch, anything else is
-//     EGRESS (secret placeholder substitution → the FALLBACK terminal).
+//   • the TRANSPORT — every hibernatable socket: each attached ItxConnection is a delivery
+//     WebSocket from the stateless relay (core/itx-connection-registry.ts), so ANY number of
+//     connected clients leave this DO free to hibernate. OUT is one-directional fire-and-forget
+//     delivery (event batches + state changes); IN borrows a short RetainedCallbackInvoker leg
+//     per wake burst. Connection identity = connectedAtOffset (the offset of the ephemeral
+//     connection-opened fact); the SESSION RULE files durable ItxConnectionSession history;
+//   • the FETCH DOOR — the one place a 101 can enter: `x-itx-delivery-websocket` accepts a
+//     delivery WebSocket, `x-itx-cap` resolves the fetch lane, anything else is EGRESS (secret
+//     placeholder substitution → the FALLBACK terminal).
 //
 // PURE WORKERS-RPC: capnweb never terminates here (hard rule) — the stateless `/api` worker
 // relays. Dispatch is ONE path: parse → route the table → substitute → evaluate → replay — all
@@ -49,8 +50,12 @@ import {
   type Expression,
 } from "./core/expression.ts";
 import { hashSource } from "./core/hash.ts";
-import { DELIVERY_WEBSOCKET_HEADER } from "./core/delivery-websocket.ts";
-import { ItxConnectionRegistry, type Invoker, type Stub } from "./core/itx-connection-registry.ts";
+import {
+  HibernatableRpcStubManager,
+  STUB_PAGER_WEBSOCKET_HEADER,
+  type HibernatableRpcStubRecord,
+  type RetainedCallbackInvoker,
+} from "./core/hibernatable-rpc-stub.ts";
 import { parseName, stringifyName } from "./core/names.ts";
 import { itxEntrypointFor } from "./itx-entrypoint.ts";
 import {
@@ -58,7 +63,11 @@ import {
   type CapabilityTable,
   type ProcessorPolicy,
 } from "./capability-table-processor.ts";
-import type { ReduceOnlyProcessor, ScannedOffsetRange } from "./core/processor.ts";
+import {
+  LIVE_STATE_CHANGED,
+  type ReduceOnlyProcessor,
+  type ScannedOffsetRange,
+} from "./core/processor.ts";
 import type { BuiltInsEnv } from "./built-ins.ts";
 import { PROCESSOR_RUNNER_MODULE } from "./generated/processor-runner.ts";
 import { PROCESSOR_SDK_MODULE } from "./generated/processor-sdk.ts";
@@ -89,45 +98,44 @@ type FacetProcessorHandle = {
   waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<unknown>;
 };
 
-/** ONE DERIVED push-subscription row — a PROJECTION of the capability-provided/-revoked events
- *  at pattern `itx.subscribers.<name>` (subscription config is EVENT-SOURCED; this index exists
- *  only because the post-commit fan-out is the hot path and must not RPC into the facet to
- *  learn who to notify). Same-name re-provides STACK (freeze-and-fork: the shadowed row's
- *  cursor freezes; revoke pops and it resumes exactly where it stopped; revoke = cursor GC). */
-type PushRow = DeliveryPolicy & {
+/** ONE DERIVED subscription-mount row — a PROJECTION of the capability-provided/-revoked events
+ *  at capability path `itx.subscribers.<name>` (subscription config is EVENT-SOURCED; this index
+ *  exists only because the post-commit fan-out is the hot path and must not RPC anywhere to
+ *  learn who to notify). CONNECTED targets are served right here (fire-and-forget batches down
+ *  the delivery WebSocket); ABSENT targets are served by the subscription-forwarder facet, which
+ *  keeps its own projection of the same events. */
+type SubscriptionMount = DeliveryPolicy & {
   name: string;
-  providedAtOffset: number; // the row's identity AND its cursor key
-  onFailingEvent: "halt" | "skip"; // defaulted at projection time
-  /** The mount's target, carried into the projection so the CANONICAL parked-callback shape
-   *  (itx.clients.get(sid)) delivers via the parent's own stubInvoke — zero facet hops. Any
-   *  other target keeps the facet lane (deliverSubscription: substitute + apply). */
+  providedAtOffset: number; // the row's identity
   target?: Expression;
 };
 
-/** The one short-circuitable target shape: exactly `itx.clients.get('<key>')`. */
-const parkedKey = (t?: Expression): string | undefined =>
-  t &&
-  t.length === 3 &&
-  t[0] === "itx" &&
-  t[1] === "clients" &&
-  Array.isArray(t[2]) &&
-  t[2].length === 2 &&
-  t[2][0] === "get" &&
-  typeof t[2][1] === "string"
-    ? t[2][1]
-    : undefined;
-/** The stream-held cursor + failure ladder state for one push row. */
-type PushCursor = {
-  confirmedOffset: number;
-  attempt: number; // consecutive failures of the CURRENT batch
-  skipsSinceSuccess: number;
-  pinned?: boolean; // after a failure: batch size 1 (isolate-or-progress)
-  nextAttemptAtMs?: number;
-  halted?: { reason: string };
-  /** Surgery generation: resumeSubscription bumps it; an in-flight pump that read the OLD
-   *  cursor must not clobber the surgical one (compare-and-swap before every pump write). */
-  rev?: number;
+/** Match a CONNECTED target: `itx.connections.get('<key>')` plus an optional trailing dotted
+ *  path (which callable on the retained callback receives the delivery; `[]` = the callback IS
+ *  the function). Anything else is an ABSENT target — the forwarder's lane. */
+const connectedTarget = (t?: Expression): { key: string; path: string[] } | undefined => {
+  if (!t || t.length < 3 || t[0] !== "itx" || t[1] !== "connections") return undefined;
+  const call = t[2];
+  if (!Array.isArray(call) || call.length !== 2 || call[0] !== "get" || typeof call[1] !== "string")
+    return undefined;
+  const path: string[] = [];
+  for (const step of t.slice(3)) {
+    if (typeof step !== "string") return undefined;
+    path.push(step);
+  }
+  return { key: call[1], path };
 };
+
+/** The ItxConnectionSession record for one connectionKey (kv `connection-session:<key>`) — the
+ *  session rule's working memory. The durable truth is the connection-session-started/-ended
+ *  facts on the stream; this record only carries what deciding the rule needs. */
+type ItxConnectionSessionRecord = { sessionStartedAtOffset: number; lastActiveMs: number };
+/** The session rule's T: two capnweb WebSockets under one connectionKey belong to the same
+ *  ItxConnectionSession unless separated by a clean end or ≥ this much absence. */
+const ITX_CONNECTION_SESSION_ABSENCE_MS = 15 * 60_000;
+/** The subscription-forwarder facet's slug (auto-enabled when an absent-target subscription
+ *  mount first appears). */
+const SUBSCRIPTION_FORWARDER_SLUG = "subscription-forwarder";
 
 /** The capability host's slug — hosted INLINE (see the inline-core section below). */
 const CAPABILITY_TABLE_SLUG = "capability-table";
@@ -135,11 +143,15 @@ const CAPABILITY_TABLE_SLUG = "capability-table";
 const CORE_PROCESSOR = new CoreStreamProcessor();
 
 export class StreamDurableObject extends DurableObject<Env> {
-  // ── transport: the parked-stub registry over this DO's hibernatable sockets ──
-  #stubs = new ItxConnectionRegistry({
+  // ── transport: every ItxConnection is a HIBERNATABLE RPC STUB (keyed by connectionId) ──
+  #hibernatableRpcStubs = new HibernatableRpcStubManager({
     acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
     getWebSockets: (tag) => this.ctx.getWebSockets(tag),
   });
+  /** Records handed to `attachItxConnection`, waiting for their stub pager WebSocket to arrive
+   *  (the two-phase attach: RPC first — it mints connectedAtOffset — then the upgrade). In
+   *  memory on purpose: if the DO dies in between, the upgrade 409s and the relay re-attaches. */
+  #pendingConnectionRecords = new Map<string, Record<string, unknown>>();
   incarnation = 0; // durable, bumped once per incarnation that WRITES — growth across idle ⇒ it hibernated
   #storageReady = false;
 
@@ -319,11 +331,10 @@ export class StreamDurableObject extends DurableObject<Env> {
               }),
           );
         }
-      // Push rows read DURABLE rows themselves — a pure-ephemeral batch has nothing for them,
-      // and driving them anyway bought a cursor kv write per row per append (the flood bill).
-      if (committed.some((e) => !e.ephemeral && e.offset > scannedAfterOffset))
-        this.#drivePushRows(); // never awaited
-      this.#forwardLiveState(committed); // patch frames onto state rows — never awaited
+      // CONNECTED subscription mounts get the batch pushed one-directionally, right now, from
+      // the commit path — a synchronous fire-and-forget WebSocket send, no RPC, no await.
+      // (ABSENT targets ride the subscription-forwarder facet, which is one of the drives above.)
+      this.#deliverToConnectedSubscriptions(committed, scannedAfterOffset, nextOffset);
     }
     this.#noteActivity();
     return committed;
@@ -364,16 +375,16 @@ export class StreamDurableObject extends DurableObject<Env> {
       invoke: (call) => this.invoke(call),
       context: (p) =>
         p === path ? ownContext : this.env.CONTEXT.getByName(stringifyName({ projectId, path: p })),
-      // The clients + facets views are PARENT-LOCAL — the sockets and facets live here.
-      clients: {
+      // The connections + facets views are PARENT-LOCAL — the delivery WebSockets and facets
+      // live here and can never move (workerd#6702: sockets never leave the parent).
+      connections: {
         get: (key) =>
-          pathProxy((segments, args) => this.stubInvoke(key, segments, args), {
+          pathProxy((segments, args) => this.#connectionInvoke(key, segments, args), {
             allowRootCall: true,
           }),
-        at: (p) => ({ call: (method, args) => this.stubFanOut(p, method, args) }),
-        list: () => this.stubList(),
-        connections: (p) => this.stubConnections(p),
-        close: (key) => this.stubClose(key),
+        each: (method, ...args) => this.#connectionFanOut(String(method).split("."), args),
+        list: () => this.#currentlyConnected(),
+        close: (key) => this.#connectionClose(key),
       },
       facets: {
         get: (slug) => pathProxy((segments, args) => this.facetInvoke(slug, segments, args)),
@@ -512,7 +523,16 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   async alarm(): Promise<void> {
     this.#armedTargetMs = undefined; // this alarm FIRED — the memo no longer reflects storage
-    this.#drivePushRows(); // retries whose backoff came due
+    // Facets have no alarms (workerd#6810) — the parent proxies. The subscription-forwarder's
+    // due retries pump here; it re-arms itself through armSubscriptionRetry when work remains.
+    if (this.#facetEntries().some((e) => e.slug === SUBSCRIPTION_FORWARDER_SLUG))
+      void this.#facet(SUBSCRIPTION_FORWARDER_SLUG)
+        .then((f) =>
+          (
+            f as unknown as { pumpSubscriptionDeliveries(): Promise<unknown> }
+          ).pumpSubscriptionDeliveries(),
+        )
+        .catch((e) => console.error("subscription-forwarder pump failed", e));
     if (!this.#facetsResurrected) {
       // THE RESURRECTION PASS: a reduce interrupted by eviction, with no follow-up traffic,
       // would otherwise stall until the next append (the pump only fires on commits). The
@@ -548,321 +568,147 @@ export class StreamDurableObject extends DurableObject<Env> {
           /* facet not running — already quiesced */
         }
       }
+      // Same doctrine for the paged-in RetainedCallbackInvoker stubs: retaining one pins this
+      // actor awake, and a page always gets it back — dispose them with the idle facets.
+      this.#hibernatableRpcStubs.disposeRetainedStubs();
     } else {
       await this.#armAlarmNoLaterThan(this.#lastActivityMs + 60_000);
     }
-    // keep the earliest pending push retry armed (the arms above may be later)
-    const dues = this.#activePushRows()
-      .map((r) => this.#pushCursor(r.providedAtOffset)?.nextAttemptAtMs)
-      .filter((t): t is number => typeof t === "number");
-    if (dues.length) await this.#armAlarmNoLaterThan(Math.min(...dues));
   }
 
-  // ── PUSH SUBSCRIPTIONS: the stream-held cursor + the retry/skip/halt ladder ──
-  // For consumers that CANNOT hold a cursor (a webhook, the stateless `processEvent`-style
-  // worker). The row's `target` is a path expression; the sender turns its terminal segment
-  // into the call `(events, window)` per batch, and the AWAITED call resolving IS the ack.
-  // Push rows never see ephemeral events (reads are durable-only); their cursor still advances
-  // over ephemeral offsets via scan windows. There is no dead-letter queue on purpose: the
-  // ladder is bounded retries (1s·2^n, cap 30min, ±20% jitter, 15 attempts) → poison isolation
-  // (`onFailingEvent: "skip"`: pin the batch to 1, three failures → skip + audit event) →
-  // HALT (audited, resumable) — the apps/os shape, one mode instead of three kinds.
+  // ── SUBSCRIPTION DELIVERY, connected lane: one-directional, from the commit path ──
+  // A CONNECTED subscription mount (target itx.connections.get(…)) is served by raw
+  // fire-and-forget sends down the connection's delivery WebSocket: the filtered batch plus the
+  // GLOBAL ScannedOffsetRange. No acks, no server cursor, no retry ladder, no watchdogs, no
+  // outbound coalescing (owner decision — the socket buffer is the only queue; overflow closes
+  // the socket and the close IS the heal signal). The CLIENT owns its offset: delivered ranges
+  // chain (each scannedAfterOffset === the last scannedThroughOffset), so a gap is one
+  // comparison and heals with read(afterOffset). ABSENT targets are the subscription-forwarder
+  // facet's lane (cursor + the one bounded-retry-then-halt policy) — see
+  // subscription-forwarder-processor.ts.
 
-  #pushInFlight = new Set<number>();
-  /** DERIVED from the routing table (the one reduce): subscriber mounts ARE the push rows. */
-  #pushRows(): PushRow[] {
+  /** DERIVED from the capability table (the one reduce): subscriber mounts ARE the rows. */
+  #subscriptionMounts(): SubscriptionMount[] {
     const state = this.#inline(CAPABILITY_TABLE_SLUG).state as CapabilityTable;
-    const rows: PushRow[] = [];
+    const rows: SubscriptionMount[] = [];
     for (const m of state.mounts) {
-      if (m.path.length === 3 && m.path[0] === "itx" && m.path[1] === "subscribers") {
-        const delivery = (m.delivery ?? {}) as DeliveryPolicy;
+      if (m.path.length === 3 && m.path[0] === "itx" && m.path[1] === "subscribers")
         rows.push({
           name: m.path[2],
           providedAtOffset: m.providedAtOffset,
-          ...delivery,
-          onFailingEvent: delivery.onFailingEvent ?? "halt",
+          ...((m.delivery ?? {}) as DeliveryPolicy),
           target: m.target,
         });
-      }
     }
     return rows;
   }
-  /** The pumped rows: per name, the NEWEST provide wins (the shadow stack, projected).
-   *  Shadowed rows keep their cursors — frozen until a revoke restores them. */
-  #activePushRows(): PushRow[] {
-    const byName = new Map<string, PushRow>();
-    for (const r of this.#pushRows()) {
+  /** The served rows: per name, the NEWEST provide wins (the shadow stack, projected). */
+  #activeSubscriptionMounts(): SubscriptionMount[] {
+    const byName = new Map<string, SubscriptionMount>();
+    for (const r of this.#subscriptionMounts()) {
       const cur = byName.get(r.name);
       if (!cur || r.providedAtOffset > cur.providedAtOffset) byName.set(r.name, r);
     }
     return [...byName.values()];
   }
-  #pushCursor(offset: number): PushCursor | undefined {
-    return this.ctx.storage.kv.get(`push-cursor:${offset}`) as PushCursor | undefined;
-  }
-  #putPushCursor(offset: number, cursor: PushCursor): void {
-    this.ctx.storage.kv.put(`push-cursor:${offset}`, cursor);
+
+  /** Per-row deliveredThroughOffset, IN MEMORY only: lets a row whose consumes filter skipped
+   *  whole batches receive the skipped span inside its next delivered ScannedOffsetRange (so the
+   *  client's contiguity check holds without empty-batch sends). Losing it (eviction) just makes
+   *  one delivered range start late — the client sees a gap once and pulls once. */
+  #subscriptionDeliveredThrough = new Map<number, number>();
+
+  #deliverToConnectedSubscriptions(
+    committed: StreamEvent[],
+    scannedAfterOffset: number,
+    nextOffset: number,
+  ): void {
+    for (const row of this.#activeSubscriptionMounts()) {
+      const conn = connectedTarget(row.target);
+      if (!conn) continue; // absent target — the forwarder's lane
+      const record = this.#findConnection(conn.key);
+      if (!record) continue; // closing race — auto-revoke is on its way
+      if (row.liveState) {
+        // State mode: forward each committed change payload for the watched key, raw (no
+        // in-flight tracking, no latest-wins queue — the owner's no-coalescing decision; a
+        // dropped or reordered payload is a revision-chain mismatch the client door-heals).
+        for (const e of committed) {
+          if (e.type !== LIVE_STATE_CHANGED) continue;
+          if ((e.payload as { key?: string }).key !== row.liveState.key) continue;
+          void this.#hibernatableRpcStubs
+            .invoke(record.stubKey, conn.path, [e.payload])
+            .catch((err) =>
+              console.error(
+                `live-state "${row.name}" delivery failed (client re-seeds on gap)`,
+                err,
+              ),
+            );
+        }
+        continue;
+      }
+      // Event mode: the consumes filter, applied statelessly outbound. Default = every durable
+      // event; naming types opts into ephemerals too (the processor consumes rule, mirrored).
+      // LIVE_STATE_CHANGED never rides the event lane (the platform rule).
+      const events = committed.filter(
+        (e) =>
+          e.type !== LIVE_STATE_CHANGED &&
+          (row.consumes ? row.consumes.includes(e.type) : !e.ephemeral),
+      );
+      if (events.length === 0) continue; // the skipped span rides the next delivered range
+      const deliveredAfter =
+        this.#subscriptionDeliveredThrough.get(row.providedAtOffset) ?? scannedAfterOffset;
+      this.#subscriptionDeliveredThrough.set(row.providedAtOffset, nextOffset);
+      void this.#hibernatableRpcStubs
+        .invoke(record.stubKey, conn.path, [
+          events,
+          {
+            scannedAfterOffset: Math.min(deliveredAfter, scannedAfterOffset),
+            scannedThroughOffset: nextOffset,
+          } satisfies ScannedOffsetRange,
+        ])
+        .catch((err) =>
+          console.error(`subscription "${row.name}" delivery failed (client heals by pull)`, err),
+        );
+    }
   }
 
-  /** THE cursor-surgery verb (the irreducible residue of a subscription beyond its mount):
-   *  clear the failure state, optionally move the cursor, kick the pump. */
-  resumeSubscription(input: { name: string; afterOffset?: number }): { ok: true } {
-    const winner = this.#activePushRows().find((r) => r.name === input.name);
-    if (!winner) throw new Error(`no push subscription "${input.name}"`);
-    if (winner.liveState)
-      throw new Error(
-        `"${input.name}" is a live-state subscription — it has no cursor to move (re-read the producer's door instead)`,
-      );
-    const cursor = this.#pushCursor(winner.providedAtOffset);
-    this.#putPushCursor(winner.providedAtOffset, {
-      confirmedOffset: input.afterOffset ?? cursor?.confirmedOffset ?? winner.providedAtOffset,
-      attempt: 0,
-      skipsSinceSuccess: 0,
-      rev: (cursor?.rev ?? 0) + 1, // the surgery generation — in-flight pump writes lose to this
-    });
-    this.#drivePushRows();
+  // ── the forwarder's parent doors (absent-target delivery lives in the facet) ──
+
+  /** Deliver BY ROW IDENTITY — never by name through the table (a broad default route must not
+   *  intercept deliveries). The subscription-forwarder calls this per batch; substitution +
+   *  apply run against the inline reduce. */
+  deliverToSubscriptionMount(input: {
+    providedAtOffset: number;
+    args: unknown[];
+  }): Promise<unknown> {
+    const state = this.#inline(CAPABILITY_TABLE_SLUG).state as CapabilityTable;
+    return this.#capabilityTableProcessor().deliverTo(state, input.providedAtOffset, input.args);
+  }
+
+  /** The alarm proxy (facets have no alarms — workerd#6810): the forwarder reports its earliest
+   *  nextAttemptAtMs and the parent's alarm pumps it when due. */
+  async armSubscriptionRetry(input: { atMs: number }): Promise<{ ok: true }> {
+    await this.#armAlarmNoLaterThan(input.atMs);
     return { ok: true };
   }
 
-  #drivePushRows(): void {
-    for (const row of this.#activePushRows())
-      if (!row.liveState)
-        void this.#pumpPush(row).catch((e) => console.error(`push "${row.name}" pump failed`, e));
-  }
-
-  // ── LIVE STATE (the third delivery mode): cursorless, ladderless, LiveView-style ──
-  // The change event carries its own delta (`{key, from, to, patch}` — see LIVE_STATE_CHANGED
-  // in core/processor.ts) on a producer-owned revision chain, so the stream is a PURE
-  // FORWARDER: it pushes each committed change payload at every row watching the key and keeps
-  // NO per-row state — the CLIENT owns the chain (seed through the producer's door, apply a
-  // patch when `from` matches the held rev, re-read the door on any mismatch). Deliveries are
-  // fire-and-forget and NOT mutually ordered; a reordered or dropped frame is just a chain
-  // mismatch at the client, which is the same one recovery path as everything else.
-  // Latest-wins backpressure: ONE delivery in flight per row, ONE pending payload per row. A
-  // chatty producer with a slow subscriber must never grow an unbounded queue of stale deltas —
-  // dropped intermediate frames ARE the designed path (the client sees a chain mismatch and
-  // re-reads the door, receiving the freshest state in one hop instead of replaying history).
-  #liveStateInFlight = new Set<number>();
-  #liveStatePending = new Map<number, unknown>();
-
-  #forwardLiveState(committed: StreamEvent[]): void {
-    let rows: PushRow[] | undefined; // read once per batch, not once per change event
-    for (const e of committed) {
-      if (e.type !== "events.iterate.com/live-state/changed") continue;
-      const { key } = e.payload as { key: string };
-      for (const row of (rows ??= this.#activePushRows())) {
-        if (row.liveState?.key !== key) continue;
-        this.#liveStatePending.set(row.providedAtOffset, e.payload); // latest wins
-        void this.#pumpLiveState(row).catch((err) =>
-          console.error(`live-state "${row.name}" pump failed`, err),
-        );
+  /** Recovery from a forwarder HALT (or an operator cursor seek) — proxied to the facet, which
+   *  owns every absent-target cursor. Connected targets have no server cursor to move. */
+  async resumeSubscription(input: { name: string; afterOffset?: number }): Promise<{ ok: true }> {
+    const row = this.#activeSubscriptionMounts().find((r) => r.name === input.name);
+    if (!row) throw new Error(`no subscription "${input.name}"`);
+    if (connectedTarget(row.target))
+      throw new Error(
+        `"${input.name}" delivers one-directionally to a connected client — there is no server cursor; the client heals itself with read(afterOffset)`,
+      );
+    if (!this.#facetEntries().some((e) => e.slug === SUBSCRIPTION_FORWARDER_SLUG))
+      throw new Error("no subscription-forwarder enabled (nothing to resume)");
+    await (
+      (await this.#facet(SUBSCRIPTION_FORWARDER_SLUG)) as unknown as {
+        resumeSubscription(i: { name: string; afterOffset?: number }): Promise<{ ok: true }>;
       }
-    }
-  }
-
-  async #pumpLiveState(row: PushRow): Promise<void> {
-    if (this.#liveStateInFlight.has(row.providedAtOffset)) return;
-    this.#liveStateInFlight.add(row.providedAtOffset);
-    try {
-      for (;;) {
-        const payload = this.#liveStatePending.get(row.providedAtOffset);
-        if (payload === undefined) return;
-        this.#liveStatePending.delete(row.providedAtOffset);
-        let watchdog: ReturnType<typeof setTimeout> | undefined;
-        try {
-          await Promise.race([
-            this.#deliverToRow(row, [payload]),
-            new Promise((_, reject) => {
-              watchdog = setTimeout(
-                () => reject(new Error(`live-state "${row.name}": delivery timed out after 20s`)),
-                20_000,
-              );
-            }),
-          ]);
-        } catch (err) {
-          // A dropped frame is a chain gap at the client — the one recovery path heals it.
-          console.error(`live-state "${row.name}" forward failed (client re-seeds on gap)`, err);
-        } finally {
-          if (watchdog !== undefined) clearTimeout(watchdog);
-        }
-      }
-    } finally {
-      this.#liveStateInFlight.delete(row.providedAtOffset);
-    }
-  }
-
-  /** THE delivery leg: the canonical parked-callback target (itx.clients.get(sid)) rides the
-   *  parent's own stubInvoke — zero hops, zero table routing (delivery is "by row identity,
-   *  never the table"). Any other target substitutes + applies against the inline reduce. */
-  #deliverToRow(row: PushRow, args: unknown[]): Promise<unknown> {
-    const key = parkedKey(row.target);
-    if (key !== undefined) return this.stubInvoke(key, [], args);
-    const state = this.#inline(CAPABILITY_TABLE_SLUG).state as CapabilityTable;
-    return this.#capabilityTableProcessor().deliverTo(state, row.providedAtOffset, args);
-  }
-
-  /** One in-flight delivery per row; loop until caught up. Never called from the commit path
-   *  with an await — the commit never blocks on a subscriber. */
-  async #pumpPush(row: PushRow): Promise<void> {
-    if (this.#pushInFlight.has(row.providedAtOffset)) return;
-    this.#pushInFlight.add(row.providedAtOffset);
-    try {
-      for (;;) {
-        // Shadowed mid-flight → the cursor freezes NOW, not when the pump happens to drain
-        // (the shadow's whole meaning is that the OLD target stops receiving).
-        if (!this.#activePushRows().some((r) => r.providedAtOffset === row.providedAtOffset))
-          return;
-        let cursor = this.#pushCursor(row.providedAtOffset);
-        if (!cursor) {
-          // Minted LAZILY on first pump — rows are derived from the reduce, nothing mints them.
-          cursor = {
-            confirmedOffset: row.start === "beginning" ? 0 : row.providedAtOffset,
-            attempt: 0,
-            skipsSinceSuccess: 0,
-          };
-          this.#putPushCursor(row.providedAtOffset, cursor);
-        }
-        if (cursor.halted) return;
-        if (cursor.nextAttemptAtMs && Date.now() < cursor.nextAttemptAtMs) {
-          void this.#armAlarmNoLaterThan(cursor.nextAttemptAtMs).catch(() => {});
-          return;
-        }
-        const page = this.read(cursor.confirmedOffset, cursor.pinned ? 1 : 100);
-        if (page.scannedThroughOffset <= cursor.confirmedOffset) return; // caught up
-        const window = {
-          scannedAfterOffset: cursor.confirmedOffset,
-          scannedThroughOffset: page.scannedThroughOffset,
-        };
-        const events = row.consumes
-          ? page.events.filter((e) => row.consumes!.includes(e.type))
-          : page.events;
-        if (events.length === 0) {
-          // everything in the window was filtered — confirm through it, no call
-          this.#putPushCursor(row.providedAtOffset, {
-            ...cursor,
-            confirmedOffset: window.scannedThroughOffset,
-          });
-          continue;
-        }
-        // Delivery BY ROW IDENTITY — never by name through the table (a broad default route
-        // must not intercept deliveries). Awaited resolve IS the ack. The watchdog timer is
-        // CLEARED on the happy path: a leaked 20s timer per delivery pins the DO out of
-        // hibernation — quiet time converted into billed duration.
-        let watchdog: ReturnType<typeof setTimeout> | undefined;
-        try {
-          await Promise.race([
-            this.#deliverToRow(row, [events, window]),
-            new Promise((_, reject) => {
-              watchdog = setTimeout(
-                () => reject(new Error(`push "${row.name}": delivery timed out after 20s`)),
-                20_000,
-              );
-            }),
-          ]);
-          // Compare-and-swap on the surgery generation: if resumeSubscription rewrote the
-          // cursor while we were delivering, the surgical cursor wins (the delivered batch may
-          // redeliver — exactly what a replay request asks for). A revoked row's cursor is
-          // GONE — writing would resurrect a kv row revoke already GC'd.
-          const fresh = this.#pushCursor(row.providedAtOffset);
-          if (!fresh || (fresh.rev ?? 0) !== (cursor.rev ?? 0)) continue;
-          // A clean delivery resets the WHOLE ladder — including the skip counter, so
-          // "3 consecutive skips" really means consecutive.
-          this.#putPushCursor(row.providedAtOffset, {
-            confirmedOffset: window.scannedThroughOffset,
-            attempt: 0,
-            skipsSinceSuccess: 0,
-            rev: cursor.rev,
-          });
-        } catch (error) {
-          await this.#onPushFailure(row, cursor, events, error);
-          return;
-        } finally {
-          if (watchdog !== undefined) clearTimeout(watchdog);
-        }
-      }
-    } finally {
-      this.#pushInFlight.delete(row.providedAtOffset);
-    }
-  }
-
-  /** ONE ladder, then ONE policy decision — never interleaved. Every failure retries with
-   *  backoff (pinned to a single event after the first, so a poison event is isolated from its
-   *  batch); only when the 15 attempts are EXHAUSTED does `onFailingEvent` speak: "halt" stops
-   *  the subscription; "skip" drops exactly that one event (with an audit fact) and moves on —
-   *  and three consecutive skips (no clean delivery between) still halt. A target outage and a
-   *  poison event therefore ride the same, predictable ladder. */
-  async #onPushFailure(
-    row: PushRow,
-    cursor: PushCursor,
-    events: StreamEvent[],
-    error: unknown,
-  ): Promise<void> {
-    // The same CAS as the success path: surgery or revoke mid-delivery wins over the failure.
-    const fresh = this.#pushCursor(row.providedAtOffset);
-    if (!fresh || (fresh.rev ?? 0) !== (cursor.rev ?? 0)) return;
-    const attempt = cursor.attempt + 1;
-    const message = error instanceof Error ? error.message : String(error);
-    const backoffFrom = (n: number) =>
-      Math.round(Math.min(1000 * 2 ** (n - 1), 1_800_000) * (0.8 + Math.random() * 0.4));
-    if (attempt < (row.maxAttempts ?? 15)) {
-      const jittered = backoffFrom(attempt);
-      this.#putPushCursor(row.providedAtOffset, {
-        ...cursor,
-        attempt,
-        pinned: true, // isolate-or-progress: every retry runs with batch size 1
-        nextAttemptAtMs: Date.now() + jittered,
-      });
-      void this.#armAlarmNoLaterThan(Date.now() + jittered).catch(() => {});
-      return;
-    }
-    // Retries exhausted. A skip policy can only name ONE event — if exhaustion landed on an
-    // un-isolated batch (maxAttempts:1 skips the ladder's pinning), pin and go once more so
-    // the policy speaks about a single event instead of silently degrading into a halt.
-    if (row.onFailingEvent === "skip" && events.length > 1) {
-      const jittered = backoffFrom(attempt);
-      this.#putPushCursor(row.providedAtOffset, {
-        ...cursor,
-        attempt,
-        pinned: true,
-        nextAttemptAtMs: Date.now() + jittered,
-      });
-      void this.#armAlarmNoLaterThan(Date.now() + jittered).catch(() => {});
-      return;
-    }
-    // Now, and only now, consult the policy.
-    if (row.onFailingEvent === "skip" && events.length === 1) {
-      const skips = cursor.skipsSinceSuccess + 1;
-      if (skips >= 3) return this.#haltPush(row, `3 consecutive skips (last error: ${message})`);
-      await this.append({
-        type: "events.iterate.com/stream/subscription-event-skipped",
-        payload: { name: row.name, offset: events[0].offset, error: message },
-      });
-      this.#putPushCursor(row.providedAtOffset, {
-        confirmedOffset: events[0].offset,
-        attempt: 0,
-        skipsSinceSuccess: skips,
-        rev: cursor.rev,
-      });
-      void this.#armAlarmNoLaterThan(Date.now()).catch(() => {}); // resume past the skip
-      return;
-    }
-    return this.#haltPush(row, `${attempt} delivery attempts failed (last: ${message})`);
-  }
-
-  async #haltPush(row: PushRow, reason: string): Promise<void> {
-    const cursor = this.#pushCursor(row.providedAtOffset);
-    if (cursor)
-      this.#putPushCursor(row.providedAtOffset, {
-        confirmedOffset: cursor.confirmedOffset,
-        attempt: 0,
-        skipsSinceSuccess: cursor.skipsSinceSuccess,
-        halted: { reason },
-        rev: cursor.rev,
-      });
-    await this.append({
-      type: "events.iterate.com/stream/subscription-delivery-halted",
-      payload: { name: row.name, reason },
-    });
+    ).resumeSubscription(input);
+    return { ok: true };
   }
 
   // ── facet-hosted processors (built-ins via processor-facet.ts; userspace via the LOADER) ──
@@ -1020,7 +866,11 @@ export class StreamDurableObject extends DurableObject<Env> {
     return this.invoke([...segments.slice(0, -1), [last, ...args]] as Expression);
   }
 
-  /** Mount a capability (event provenance — built-in targets are config-mount-only). */
+  /** Mount a capability (event provenance — built-in targets are config-mount-only). A
+   *  subscription mount with an ABSENT target auto-enables the subscription-forwarder facet
+   *  FIRST, so the mount's own commit already drives the forwarder. liveState demands a
+   *  CONNECTED target: an absent target holds no revision chain, so a dropped payload could
+   *  never be noticed — reject at the door, not at delivery time. */
   async provideCapability(input: {
     path: string | string[];
     target: string | Expression;
@@ -1028,6 +878,15 @@ export class StreamDurableObject extends DurableObject<Env> {
     processor?: ProcessorPolicy;
   }): Promise<{ providedAtOffset: number }> {
     this.#touch();
+    const pathString = typeof input.path === "string" ? input.path : input.path.join(".");
+    if (pathString.startsWith("itx.subscribers.") && !connectedTarget(toExpression(input.target))) {
+      if (input.delivery?.liveState)
+        throw new Error(
+          "a live-state subscription needs a CONNECTED target (itx.connections.get(…)) — an absent target has no revision chain to keep",
+        );
+      if (!this.#facetEntries().some((e) => e.slug === SUBSCRIPTION_FORWARDER_SLUG))
+        await this.enableProcessor(SUBSCRIPTION_FORWARDER_SLUG);
+    }
     return this.#capabilityTableProcessor().provide(input);
   }
 
@@ -1049,18 +908,33 @@ export class StreamDurableObject extends DurableObject<Env> {
       providedAtOffset = winner.providedAtOffset;
     }
     await this.#capabilityTableProcessor().revoke({ providedAtOffset });
-    // Revoke doubles as GC for the delivery machinery keyed by the mount's identity.
-    this.ctx.storage.kv.delete(`push-cursor:${providedAtOffset}`);
-    this.#liveStatePending.delete(providedAtOffset);
+    // Revoke doubles as GC for the delivered-through watermark keyed by the mount's identity.
+    // (The forwarder GCs its own SubscriptionDeliveryProgress on the revoked event.)
+    this.#subscriptionDeliveredThrough.delete(providedAtOffset);
   }
 
-  // ── native fetch: the pager door, the fetch lane, observability, egress ──
+  // ── native fetch: the stub pager door, the fetch lane, observability, egress ──
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
-    // A relay opens its hibernatable Pager (the DO→relay back-channel; no pin).
-    if (request.headers.get(DELIVERY_WEBSOCKET_HEADER)) return this.#stubs.accept(request);
+    // A relay opens an ItxConnection's stub pager WebSocket (attach RPC first — it minted the
+    // connectionId; an unknown id 409s so a relay that outlived a DO restart re-attaches).
+    const pagingConnectionId = request.headers.get(STUB_PAGER_WEBSOCKET_HEADER);
+    if (pagingConnectionId !== null) {
+      const record = this.#pendingConnectionRecords.get(pagingConnectionId);
+      if (!record)
+        return new Response(
+          `unknown itx connection ${pagingConnectionId} (attachItxConnection first)\n`,
+          { status: 409 },
+        );
+      const response = this.#hibernatableRpcStubs.fetch(request)!;
+      if (response.status === 101) {
+        this.#pendingConnectionRecords.delete(pagingConnectionId);
+        this.#hibernatableRpcStubs.attach(pagingConnectionId, record);
+      }
+      return response;
+    }
 
     // THE FETCH LANE: `x-itx-cap` resolves against the inline reduce right here — a 101 flows
     // back out natively (no facet tunnel needed at all).
@@ -1082,7 +956,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
     }
 
-    // Observability: incarnation (the hibernation tell) + the stub registry's live state.
+    // Observability: incarnation (the hibernation tell) + the connection registry's live state.
     // Read-only on purpose — probing /state must never be the write that mints storage.
     if (url.pathname === "/state")
       return Response.json({
@@ -1101,20 +975,16 @@ export class StreamDurableObject extends DurableObject<Env> {
             },
           };
         })(),
-        pushSubscriptions: this.#activePushRows().map((r) => {
-          if (r.liveState)
-            return { name: r.name, providedAtOffset: r.providedAtOffset, liveState: r.liveState };
-          const c = this.#pushCursor(r.providedAtOffset);
-          return {
-            name: r.name,
-            providedAtOffset: r.providedAtOffset,
-            confirmedOffset: c?.confirmedOffset ?? 0,
-            attempt: c?.attempt ?? 0,
-            skipsSinceSuccess: c?.skipsSinceSuccess ?? 0,
-            ...(c?.halted ? { halted: c.halted.reason } : {}),
-          };
-        }),
-        ...this.#stubs.state(),
+        subscriptionMounts: this.#activeSubscriptionMounts().map((r) => ({
+          name: r.name,
+          providedAtOffset: r.providedAtOffset,
+          lane: connectedTarget(r.target)
+            ? r.liveState
+              ? "connected-live-state"
+              : "connected"
+            : "forwarder",
+        })),
+        ...this.#hibernatableRpcStubs.state(),
       });
 
     // EGRESS: substitute `{{secret:NAME}}` placeholders, then the FALLBACK terminal.
@@ -1127,117 +997,223 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   webSocketMessage(): void {
-    // A Pager is DO→relay only — inbound frames carry nothing we act on.
+    // A stub pager WebSocket is DO→relay only — inbound frames carry nothing we act on.
   }
-  webSocketClose(ws: WebSocket): void {
-    this.#stubs.closed(ws); // relay gone → its parked stubs vanish with the socket
+  webSocketClose(ws: WebSocket, code: number, reason: string): void {
+    const record = this.#hibernatableRpcStubs.closed(ws);
+    if (record)
+      void this.#itxConnectionClosed(record, code, reason).catch((e) =>
+        console.error("itx connection close handling failed", e),
+      );
   }
   webSocketError(ws: WebSocket): void {
-    this.#stubs.closed(ws);
+    const record = this.#hibernatableRpcStubs.closed(ws);
+    if (record)
+      void this.#itxConnectionClosed(record, 1006, "transport error").catch((e) =>
+        console.error("itx connection close handling failed", e),
+      );
   }
 
-  // ── relay-facing transport RPC (the edge parks/activates/drops stubs) ──
+  // ── the ItxConnection lifecycle (attach → facts → close → auto-revoke) ──
 
-  /** Park a live capability's stub; the caller then mounts `itx.clients.get(socketId)` at its
-   *  pattern (provide = park + alias — the R13 desugar, done BY the edge in two calls). */
-  parkCapability(input: { socketId: string; description?: string }): { ok: true } {
-    this.#touch(); // a park is real project use (durable socket attachments follow)
-    this.#stubs.park(input.socketId, { description: input.description });
-    return { ok: true };
-  }
-  /** Park a `.connect` client connection (reconnect under the same key replaces its predecessor). */
-  parkClient(input: {
-    socketId: string;
-    path: string;
-    connectionKey: string;
+  /** Attach an ItxConnection (the relay calls this BEFORE opening the delivery WebSocket).
+   *  Appends the ephemeral connection-opened fact — its offset IS the connection's identity
+   *  (`connectionId` = String(connectedAtOffset); no synthetic socket ids). With a
+   *  `connectionKey` the SESSION RULE files the durable ItxConnectionSession facts: a reconnect
+   *  within T of a non-clean end continues the running session (a crash-loop storm is ONE
+   *  session and ONE durable fact); otherwise the stale session is settled ("ended no later
+   *  than…") and a new one starts. Anonymous attaches (no key — parked live callbacks,
+   *  subscriber callbacks) file no session history: their durable trace is the capability mount
+   *  that names them. */
+  async attachItxConnection(input: {
+    connectionKey?: string;
     description?: string;
-  }): { ok: true; connectionKey: string } {
-    this.#touch(); // a park is real project use (durable socket attachments follow)
-    for (const s of this.#stubs.all())
-      if (
-        s.clientPath === input.path &&
-        s.connectionKey === input.connectionKey &&
-        s.socketId !== input.socketId
-      )
-        this.#stubs.drop(s.socketId, "replaced");
-    this.#stubs.park(input.socketId, {
-      clientPath: input.path,
-      connectionKey: input.connectionKey,
-      description: input.description,
+  }): Promise<{ connectionId: string; connectionKey?: string }> {
+    this.#touch();
+    let sessionStartedAtOffset: number | undefined;
+    if (input.connectionKey) {
+      // Reconnect under the same key replaces the predecessor transport (same logical client).
+      for (const r of this.#hibernatableRpcStubs.all())
+        if (r.connectionKey === input.connectionKey)
+          this.#hibernatableRpcStubs.drop(r.stubKey, "replaced");
+      const sessionKey = `connection-session:${input.connectionKey}`;
+      const session = this.ctx.storage.kv.get(sessionKey) as ItxConnectionSessionRecord | undefined;
+      if (session && Date.now() - session.lastActiveMs < ITX_CONNECTION_SESSION_ABSENCE_MS) {
+        sessionStartedAtOffset = session.sessionStartedAtOffset; // the same session continues
+      } else {
+        const facts: StreamEventInput[] = [];
+        if (session)
+          // A dirty death ended nothing at the time — settle it now, bounded by what we know.
+          facts.push({
+            type: "events.iterate.com/itx-connection/connection-session-ended",
+            payload: {
+              connectionKey: input.connectionKey,
+              sessionStartedAtOffset: session.sessionStartedAtOffset,
+              endedNoLaterThan: new Date(
+                session.lastActiveMs + ITX_CONNECTION_SESSION_ABSENCE_MS,
+              ).toISOString(),
+            },
+          });
+        facts.push({
+          type: "events.iterate.com/itx-connection/connection-session-started",
+          payload: {
+            connectionKey: input.connectionKey,
+            ...(input.description ? { description: input.description } : {}),
+          },
+        });
+        const committed = await this.append(...facts);
+        sessionStartedAtOffset = committed[committed.length - 1].offset;
+      }
+      this.ctx.storage.kv.put(sessionKey, {
+        sessionStartedAtOffset,
+        lastActiveMs: Date.now(),
+      } satisfies ItxConnectionSessionRecord);
+    }
+    const [opened] = await this.append({
+      type: "events.iterate.com/itx-connection/connection-opened",
+      ephemeral: true,
+      payload: {
+        ...(input.connectionKey ? { connectionKey: input.connectionKey } : {}),
+        ...(input.description ? { description: input.description } : {}),
+        ...(sessionStartedAtOffset !== undefined ? { sessionStartedAtOffset } : {}),
+      },
+    });
+    const connectionId = String(opened.offset);
+    this.#pendingConnectionRecords.set(connectionId, {
+      ...(input.connectionKey ? { connectionKey: input.connectionKey } : {}),
+      ...(input.description ? { description: input.description } : {}),
+      ...(sessionStartedAtOffset !== undefined ? { sessionStartedAtOffset } : {}),
       openedAt: new Date().toISOString(),
     });
-    return { ok: true, connectionKey: input.connectionKey };
+    return {
+      connectionId,
+      ...(input.connectionKey ? { connectionKey: input.connectionKey } : {}),
+    };
   }
-  /** Wake handshake: the woken relay lends its short Workers-RPC leg for one burst. */
-  activateStub(input: { socketId: string; invoker: Invoker }) {
-    return this.#stubs.activate(input);
+
+  /** The page answer: the paged relay hands back a fresh RetainedCallbackInvoker stub, which
+   *  stays warm until the idle quiesce disposes it (a page gets it back). */
+  activateItxConnection(input: { connectionId: string; invoker: RetainedCallbackInvoker }) {
+    return this.#hibernatableRpcStubs.activate({
+      stubKey: input.connectionId,
+      invoker: input.invoker,
+    });
   }
-  dropStub(input: { socketId: string }): { ok: true } {
-    this.#stubs.drop(input.socketId, "dropped");
+  dropItxConnection(input: { connectionId: string }): { ok: true } {
+    this.#hibernatableRpcStubs.drop(input.connectionId, "dropped");
     return { ok: true };
   }
 
-  // ── the stub-registry FACADE (the clients view; sockets live HERE and can never move) ──
-  // ONE registry, two access verbs: `stubInvoke` single-target (throws when offline);
-  // `stubFanOut` per client path (allSettled — a dead connection drops out of the results).
-  // The facet-hosted capability host builds its `itx.clients` view as thin RPC wrappers over
-  // exactly these five methods (the parent-local connections view).
-
-  #findStub(key: string): Stub {
-    const s = this.#stubs.all().find((x) => x.connectionKey === key || x.socketId === key);
-    if (!s) throw new Error(`client "${key}" is offline`);
-    return s;
-  }
-
-  /** Invoke one parked stub by connectionKey/socketId (wake → borrowed leg → invoke). */
-  stubInvoke(key: string, segments: string[], args: unknown[]): Promise<unknown> {
-    return this.#stubs.invoke(this.#findStub(key).socketId, segments, args);
-  }
-
-  /** Fan out one method call over every open connection at a client path. */
-  async stubFanOut(path: string, method: string[], args: unknown[]): Promise<unknown[]> {
-    const settled = await Promise.allSettled(
-      this.#stubs
+  /** A delivery WebSocket closed: the ephemeral connection-closed fact, the auto-revoke of
+   *  every mount targeting the dead connection, and — for keyed connections whose close was
+   *  CLEAN and final (no replacement transport) — the durable session end. */
+  async #itxConnectionClosed(
+    record: HibernatableRpcStubRecord,
+    code: number,
+    reason: string,
+  ): Promise<void> {
+    const connectionId = record.stubKey; // the stub key IS the connectionId (connectedAtOffset)
+    const connectionKey = record.connectionKey as string | undefined;
+    // "replaced" is the SAME logical connection changing transports — never a key-final close.
+    const keyFinal =
+      typeof connectionKey === "string" &&
+      reason !== "replaced" &&
+      !this.#hibernatableRpcStubs
         .all()
-        .filter((s) => s.clientPath === path)
-        .map((s) => this.#stubs.invoke(s.socketId, method, args)),
+        .some((r) => r.connectionKey === connectionKey && r.stubKey !== connectionId);
+    const facts: StreamEventInput[] = [
+      {
+        type: "events.iterate.com/itx-connection/connection-closed",
+        ephemeral: true,
+        payload: {
+          connectionId,
+          ...(connectionKey !== undefined ? { connectionKey } : {}),
+          code,
+          reason,
+        },
+      },
+    ];
+    if (keyFinal) {
+      const sessionKey = `connection-session:${connectionKey}`;
+      const session = this.ctx.storage.kv.get(sessionKey) as ItxConnectionSessionRecord | undefined;
+      if (session) {
+        if (code === 1000) {
+          // A clean, final end closes the session NOW — the next attach starts a fresh one.
+          facts.push({
+            type: "events.iterate.com/itx-connection/connection-session-ended",
+            payload: {
+              connectionKey,
+              sessionStartedAtOffset: session.sessionStartedAtOffset,
+            },
+          });
+          this.ctx.storage.kv.delete(sessionKey);
+        } else {
+          // A dirty death ends nothing yet — stamp the absence clock; the next attach (or ≥T of
+          // absence) settles it ("ended no later than…").
+          this.ctx.storage.kv.put(sessionKey, {
+            ...session,
+            lastActiveMs: Date.now(),
+          } satisfies ItxConnectionSessionRecord);
+        }
+      }
+    }
+    await this.append(...facts);
+    // AUTO-REVOKE: a mount whose target names the dead connection can never deliver again.
+    // (By connectionId always; by connectionKey only when no replacement transport carries it.)
+    const table = this.#inline(CAPABILITY_TABLE_SLUG).state as CapabilityTable;
+    for (const m of table.mounts) {
+      const conn = connectedTarget(m.target);
+      if (!conn) continue;
+      if (conn.key === connectionId || (keyFinal && conn.key === connectionKey))
+        await this.revokeCapability({ providedAtOffset: m.providedAtOffset }).catch((e) =>
+          console.error(`auto-revoke of mount ${m.providedAtOffset} failed`, e),
+        );
+    }
+  }
+
+  // ── the connections view (delivery WebSockets live HERE and can never move — workerd#6702) ──
+
+  #findConnection(key: string): HibernatableRpcStubRecord | undefined {
+    return this.#hibernatableRpcStubs
+      .all()
+      .find((r) => r.connectionKey === key || r.stubKey === key);
+  }
+
+  /** Invoke one connection's retained callback by connectionKey/connectionId (wake → borrowed
+   *  RetainedCallbackInvoker leg → invoke). */
+  #connectionInvoke(key: string, segments: string[], args: unknown[]): Promise<unknown> {
+    const record = this.#findConnection(key);
+    if (!record) throw new Error(`itx connection "${key}" is offline`);
+    return this.#hibernatableRpcStubs.invoke(record.stubKey, segments, args);
+  }
+
+  /** Fan out one dotted method call over EVERY connection attached to this context
+   *  (allSettled — a dead connection drops out of the results). */
+  async #connectionFanOut(method: string[], args: unknown[]): Promise<unknown[]> {
+    const settled = await Promise.allSettled(
+      this.#hibernatableRpcStubs
+        .all()
+        .map((r) => this.#hibernatableRpcStubs.invoke(r.stubKey, method, args)),
     );
     return settled
       .filter((r): r is PromiseFulfilledResult<unknown> => r.status === "fulfilled")
       .map((r) => r.value);
   }
 
-  /** The client roster, grouped by path. */
-  stubList(): { path: string; description: unknown; connections: number }[] {
-    const byPath = new Map<string, Stub[]>();
-    for (const s of this.#stubs.all())
-      if (typeof s.clientPath === "string")
-        byPath.set(s.clientPath, [...(byPath.get(s.clientPath) ?? []), s]);
-    return [...byPath.entries()].map(([p, list]) => ({
-      path: p,
-      description: list.at(-1)?.description ?? null,
-      connections: list.length,
+  /** The currently connected clients of this context. */
+  #currentlyConnected(): Record<string, unknown>[] {
+    return this.#hibernatableRpcStubs.all().map((r) => ({
+      connectionId: r.stubKey,
+      ...(r.connectionKey !== undefined ? { connectionKey: r.connectionKey } : {}),
+      ...(r.description !== undefined ? { description: r.description } : {}),
+      ...(r.openedAt !== undefined ? { openedAt: r.openedAt } : {}),
     }));
   }
 
-  /** Every open connection at a client path. */
-  stubConnections(
-    path: string,
-  ): { connectionKey: unknown; description: unknown; openedAt: unknown }[] {
-    return this.#stubs
-      .all()
-      .filter((s) => s.clientPath === path)
-      .map((s) => ({
-        connectionKey: s.connectionKey,
-        description: s.description,
-        openedAt: s.openedAt,
-      }));
-  }
-
-  /** Kick a connection by connectionKey/socketId (idempotent — unknown keys are a no-op). */
-  stubClose(key: string): { ok: true } {
-    const s = this.#stubs.all().find((x) => x.connectionKey === key || x.socketId === key);
-    if (s) this.#stubs.drop(s.socketId, "kicked");
+  /** Kick a connection by connectionKey/connectionId (idempotent — unknown keys are a no-op). */
+  #connectionClose(key: string): { ok: true } {
+    const record = this.#findConnection(key);
+    if (record) this.#hibernatableRpcStubs.drop(record.stubKey, "kicked");
     return { ok: true };
   }
 }

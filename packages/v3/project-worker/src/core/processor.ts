@@ -81,6 +81,8 @@ export type ProcessorStream = {
 export type ProcessorStorage = {
   get<T>(key: string): T | undefined;
   put(key: string, value: unknown): void;
+  /** Optional (older hosts may lack it): GC a key outright. */
+  delete?(key: string): void;
 };
 
 /** The contiguity proof a delivery carries: (scannedAfterOffset, scannedThroughOffset]. */

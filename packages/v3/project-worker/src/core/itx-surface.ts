@@ -2,22 +2,25 @@
 // terminates (the `/api` worker); it reaches the StreamDurableObject only over Workers RPC (the hard rule).
 //
 // A client dials `/api` and gets a `ProjectSession`:
-//   • `get()`     → the project `Itx` (the iterate-context stub). Pure addressing.
-//   • `connect({ path, description, capabilities?, connectionKey? })` → the `Itx`, PLUS presence: the client is
-//     registered at `path`, and its live `capabilities` are provided (fanned out via `itx.clients`). "get +
-//     presence." Every connected client provides capabilities by connecting; `itx.provideCapability` adds more.
+//   • `get()`     → the project `Itx` (the root context). Pure addressing.
+//   • `connect({ context?, connectionKey?, capabilities?, description? })` → the `Itx` of THAT context, PLUS an
+//     ItxConnection: the client's live `capabilities` callback is retained here and the connection is attached to
+//     the context's stream (an ephemeral connection-opened fact names it; the session rule files the durable
+//     ItxConnectionSession history). Tabs/devices are connections; a context IS the client (/clients/browser).
 //
-// DON'T-PIN: the client's `capabilities` stub is retained HERE, in this stateless worker (the relay). The relay
-// opens a Hibernatable Pager to the DO and records only `{ socketId }`. On a "wake" Page it hands the DO a short
-// Invoker leg for one burst; the DO drops it at quiescence. So the DO holds no stub and hibernates while idle.
+// DON'T-PIN: the retained capnweb callback stub lives HERE, in this stateless worker (the relay). The relay
+// opens a STUB PAGER WebSocket to the DO (core/hibernatable-rpc-stub.ts); the DO records only the connection's
+// identity on it. When the DO wants the client — event-batch delivery, state changes, request/response calls,
+// all the same lane — it PAGES this worker, which answers over Workers RPC with a fresh RetainedCallbackInvoker
+// stub. The DO keeps that stub warm while traffic flows and disposes it at its idle quiesce (a page gets it
+// back). So the DO holds no stub while idle and hibernates with any number of clients attached.
 
 import { RpcTarget } from "capnweb";
 import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
 import type { DeliveryPolicy } from "./events.ts";
 import type { Expression } from "./expression.ts";
-import { openDeliveryWebSocket, parseDeliveryMessage } from "./delivery-websocket.ts";
-import { disposeStub } from "./itx-connection-registry.ts";
-import { canonicalName } from "./names.ts";
+import { disposeStub, openStubPagerWebSocket } from "./hibernatable-rpc-stub.ts";
+import { canonicalName, normalizePath, parseName, stringifyName } from "./names.ts";
 import type { StreamDurableObject } from "../stream-durable-object.ts";
 
 type ItxHostStub = DurableObjectStub<StreamDurableObject>;
@@ -26,12 +29,14 @@ type ItxHostStub = DurableObjectStub<StreamDurableObject>;
  *  keys are its (remote) methods, resolving back on the client. */
 type ProviderStub = { dup(): ProviderStub; [k: string]: unknown };
 
-/** A live `.connect` / `provideCapability` input (the capnweb `capabilities`/`capability` half). */
+/** A `.connect` input: which context to attach to (default the root), the client-chosen
+ *  connectionKey (reconnects under the same key share an ItxConnectionSession), and the live
+ *  `capabilities` callback the connection offers. */
 export interface ConnectOpts {
-  path: string;
+  context?: string;
+  connectionKey?: string;
   description?: string;
   capabilities?: ProviderStub;
-  connectionKey?: string;
 }
 export interface ProvideLiveInput {
   type: "live";
@@ -59,50 +64,50 @@ class RetainedCallbackInvoker extends WorkersRpcTarget {
   }
 }
 
-/** One CAPNWEB CALLBACK RELAY: the retained capnweb callback stub + the hibernatable delivery
- *  WebSocket into one stream DO + per-burst RetainedCallbackInvoker legs on demand. One relay per
- *  (client thing, stream) pair; a client's capnweb WebSocket carries many. */
+/** One CAPNWEB CALLBACK RELAY: the retained capnweb callback stub + the stub pager WebSocket
+ *  into one stream DO + a fresh RetainedCallbackInvoker per page. One relay per
+ *  (ItxConnection, stream) pair; a client's capnweb WebSocket carries many. */
 interface CapnwebCallbackRelay {
-  socketId: string;
+  connectionId: string;
   dispose(): void;
 }
 
-/** Start a relay: dup the provider stub, open the delivery WebSocket to the stream DO, and wire
- *  "wake" messages → hand the DO a short RetainedCallbackInvoker leg. */
+/** Start a relay for an ALREADY-ATTACHED connection (the DO minted `connectionId` =
+ *  String(connectedAtOffset) when it appended the ephemeral connection-opened fact): dup the
+ *  provider stub, open the stub pager WebSocket, answer every page with a fresh stub. */
 async function startCapnwebCallbackRelay(
   host: ItxHostStub,
   provider: ProviderStub,
-  socketId: string,
+  connectionId: string,
   waitUntil: (p: Promise<unknown>) => void,
 ): Promise<CapnwebCallbackRelay> {
   const retained = provider.dup();
-  const pager = await openDeliveryWebSocket(host, socketId);
+  const pagerWebSocket = await openStubPagerWebSocket(host, connectionId, () => {
+    // The page answer: re-mint the Workers-RPC stub around the retained capnweb callback and
+    // hand it to the DO, which keeps it warm until its idle quiesce.
+    waitUntil(
+      host
+        .activateItxConnection({ connectionId, invoker: new RetainedCallbackInvoker(retained) })
+        .catch(() => undefined), // a stale page (nobody waiting) returns undefined; offline throws — ignore
+    );
+  });
   const disposeRetained = () => disposeStub(retained);
-  // The library's own death signal: the client's capnweb session broke → the retained provider
-  // can never answer again. Close the pager NOW so the DO reaps the parked stub immediately —
-  // without this the roster lies until an invoke hits the 10s attach timeout.
+  // The library's own death signal: the client's capnweb session broke → the retained callback
+  // can never answer again. Close the pager WebSocket NOW so the DO reaps the connection
+  // immediately — without this the currently-connected list lies until a page times out (10s).
   (retained as { onRpcBroken?: (cb: () => void) => void }).onRpcBroken?.(() => {
     try {
-      pager.close(1000, "provider session broke");
+      pagerWebSocket.close(1000, "provider session broke");
     } catch {
       /* already closing */
     }
   });
-  pager.addEventListener("message", (event: MessageEvent) => {
-    const page = parseDeliveryMessage(event.data);
-    if (!page) return; // not a Page — a "wake" is the only page there is
-    waitUntil(
-      host
-        .activateStub({ socketId, invoker: new RetainedCallbackInvoker(retained) })
-        .catch(() => undefined), // a stale wake (nobody waiting) returns undefined; offline throws — ignore
-    );
-  });
-  pager.addEventListener("close", disposeRetained);
+  pagerWebSocket.addEventListener("close", disposeRetained);
   return {
-    socketId,
+    connectionId,
     dispose: () => {
       try {
-        pager.close(1000, "relay disposed");
+        pagerWebSocket.close(1000, "relay disposed");
       } catch {
         /* already closing */
       }
@@ -111,10 +116,12 @@ async function startCapnwebCallbackRelay(
   };
 }
 
-/** `session` at `/api` (bound to one projectId). `get`/`connect` both yield the project `Itx`. */
+/** `session` at `/api` (bound to one projectId). `get`/`connect` both yield an `Itx`. */
 export class ProjectSession extends RpcTarget {
-  readonly #host: ItxHostStub;
-  readonly #relays = new Set<CapnwebCallbackRelay>(); // held for the session so the retained providers + Pagers aren't GC'd
+  readonly #hostNamespace: DurableObjectNamespace<StreamDurableObject>;
+  readonly #projectId: string;
+  readonly #root: ItxHostStub;
+  readonly #relays = new Set<CapnwebCallbackRelay>(); // held for the session so the retained callbacks + delivery WebSockets aren't GC'd
   readonly #waitUntil: (p: Promise<unknown>) => void;
 
   constructor(
@@ -123,12 +130,14 @@ export class ProjectSession extends RpcTarget {
     ctx: ExecutionContext,
   ) {
     super();
-    this.#host = hostNamespace.getByName(canonicalName(projectId));
+    this.#hostNamespace = hostNamespace;
+    this.#projectId = parseName(canonicalName(projectId)).projectId;
+    this.#root = hostNamespace.getByName(canonicalName(projectId));
     this.#waitUntil = (p) => ctx.waitUntil(p);
   }
 
   /** capnweb invokes this when the client's /api session ends: tear every relay down so the
-   *  DO-side parked stubs die with their session instead of lying in the roster. */
+   *  DO-side connections die with their session instead of lying in the connected list. */
   // Symbol.dispose referenced defensively (lib target predates it) — same trick as disposeStub.
   [(Symbol as { dispose?: symbol }).dispose ?? Symbol.for("dispose")](): void {
     for (const relay of this.#relays) relay.dispose();
@@ -137,38 +146,47 @@ export class ProjectSession extends RpcTarget {
 
   /** THE introduction door (the `authenticate()` pattern: the only way to get an authenticated
    *  session is to be handed one by a gate that checked something). Deliberately a NO-OP today —
-   *  the clean room's `?ctx=` front door is designation-without-introduction scafreducing, and
+   *  the clean room's `?ctx=` front door is designation-without-introduction scaffolding, and
    *  this method is where the real check lands without changing any caller: clients already go
    *  `session.authenticate(credentials).get()` / `.connect(...)`. */
   authenticate(_credentials?: unknown): ProjectSession {
     return this;
   }
 
-  /** Pure addressing → the iterate-context stub. */
+  /** Pure addressing → the root context's itx. */
   get(): Itx {
-    return new Itx(this.#host, this.#relays, this.#waitUntil);
+    return new Itx(this.#root, this.#relays, this.#waitUntil);
   }
 
-  /** get + presence: register a CLIENT at `path` carrying live `capabilities`, then return the itx. */
-  async connect(opts: ConnectOpts): Promise<Itx> {
+  /** A context's stream DO by path (the root by default). */
+  #contextHost(context?: string): ItxHostStub {
+    const path = normalizePath(context ?? "/");
+    return path === "/"
+      ? this.#root
+      : this.#hostNamespace.getByName(stringifyName({ projectId: this.#projectId, path }));
+  }
+
+  /** Attach an ItxConnection to a context (the root by default) and return that context's itx.
+   *  With `capabilities`, the callback is retained relay-side and the connection is addressable
+   *  through the context's `connections` view (`itx.connections.get(connectionKey)`,
+   *  `.each(...)` fan-out). Without, this is pure addressing into the named context. */
+  async connect(opts: ConnectOpts = {}): Promise<Itx> {
+    const host = this.#contextHost(opts.context);
     if (opts.capabilities) {
-      const socketId = crypto.randomUUID();
-      const connectionKey = opts.connectionKey ?? socketId;
-      const relay = await startCapnwebCallbackRelay(
-        this.#host,
-        opts.capabilities,
-        socketId,
-        this.#waitUntil,
-      );
-      this.#relays.add(relay);
-      await this.#host.parkClient({
-        socketId,
-        path: opts.path,
-        connectionKey,
+      const attached = await host.attachItxConnection({
+        connectionKey: opts.connectionKey,
         description: opts.description,
       });
+      this.#relays.add(
+        await startCapnwebCallbackRelay(
+          host,
+          opts.capabilities,
+          attached.connectionId,
+          this.#waitUntil,
+        ),
+      );
     }
-    return new Itx(this.#host, this.#relays, this.#waitUntil);
+    return new Itx(host, this.#relays, this.#waitUntil);
   }
 }
 
@@ -201,11 +219,6 @@ export class Itx extends RpcTarget {
    *  all (`itx.streams.get('/').append({...})`), which the dotted sugar above cannot spell. */
   invoke(call: string | Expression): Promise<unknown> {
     return this.#host.invoke(call);
-  }
-
-  /** The client roster + fan-out door. */
-  get clients(): ClientCollection {
-    return new ClientCollection(this.#host);
   }
 
   /** Mount a capability: bind a capability path to a target expression (string half preferred —
@@ -257,14 +270,20 @@ export class Itx extends RpcTarget {
     }>;
   }
 
-  /** Subscribe — a PUSH subscription (stream-held cursor + retry/skip/halt): the stream calls
-   *  `target`'s terminal path segment with `(events, window)` per durable batch — for consumers
-   *  that cannot hold a cursor (webhooks, stateless `processEvent`-style workers). `target` may
-   *  be an itx expression — or a LIVE CALLBACK (any capnweb function/RpcTarget): the sugar
-   *  parks it via the ordinary live-capability machinery and targets the parked stub. Add
-   *  `liveState: {key}` for state mode: no cursor, no ladder — the target receives each of the
-   *  key's change payloads `{key, from, to, patch}` as it commits; the CLIENT chains revisions
-   *  (seed through the producer's own door, re-read it on any gap). */
+  /** Subscribe — sugar for a subscription mount at `itx.subscribers.<name>`. How it is SERVED
+   *  depends only on the target's shape (see DeliveryPolicy in core/events.ts):
+   *    • a LIVE CALLBACK (any capnweb function/RpcTarget): parked as an anonymous ItxConnection,
+   *      then delivered ONE-DIRECTIONALLY — the stream fire-and-forgets each committed batch as
+   *      `(events, scannedOffsetRange)` down the delivery WebSocket, no acks, no server cursor.
+   *      The CLIENT owns its offset: check the ranges chain, heal any gap with read(afterOffset).
+   *    • an ABSENT target (an itx expression — a webhook, a stateless worker): the
+   *      subscription-forwarder facet holds a cursor per target, calls the target's terminal
+   *      path with `(events, scannedOffsetRange)` per batch (the awaited call IS the ack), and
+   *      applies the one bounded-retry-then-halt policy.
+   *  Add `liveState: {key}` for state mode: the target receives each of the key's change
+   *  payloads `{key, from, to, patch}` as it commits; the CLIENT chains revisions (seed through
+   *  the producer's door, re-read it on any gap). Live callbacks only — an absent target has no
+   *  chain to keep. */
   async subscribe(
     input: DeliveryPolicy & {
       name?: string;
@@ -294,28 +313,35 @@ export class Itx extends RpcTarget {
     return this.#host.revokeCapability({ path: `itx.subscribers.${input.name}` });
   }
 
-  /** PARK + NAME, the edge's one two-step: retain the live capnweb callback in a
-   *  CapnwebCallbackRelay (its delivery WebSocket parks on the stream DO), and answer the
-   *  target expression that names it. Every live thing enters the durable world through here. */
+  /** PARK + NAME, the edge's one two-step: attach an ANONYMOUS ItxConnection (the DO appends the
+   *  ephemeral connection-opened fact whose offset IS the connectionId), retain the live capnweb
+   *  callback in a CapnwebCallbackRelay, and answer the target expression that names it. Every
+   *  live thing enters the durable world through here. */
   async #parkAsTarget(
     provider: ProviderStub,
     description: string,
-  ): Promise<{ socketId: string; relay: CapnwebCallbackRelay; target: string }> {
-    const socketId = crypto.randomUUID();
-    const relay = await startCapnwebCallbackRelay(this.#host, provider, socketId, this.#waitUntil);
+  ): Promise<{ connectionId: string; relay: CapnwebCallbackRelay; target: string }> {
+    const { connectionId } = await this.#host.attachItxConnection({ description });
+    const relay = await startCapnwebCallbackRelay(
+      this.#host,
+      provider,
+      connectionId,
+      this.#waitUntil,
+    );
     this.#relays.add(relay);
-    await this.#host.parkCapability({ socketId, description });
-    return { socketId, relay, target: `itx.clients.get('${socketId}')` };
+    return { connectionId, relay, target: `itx.connections.get('${connectionId}')` };
   }
 
-  /** Recovery from HALT (or an operator cursor seek). */
+  /** Recovery from a forwarder HALT (or an operator cursor seek) — absent targets only;
+   *  connected targets have no server cursor to move. */
   resumeSubscription(input: { name: string; afterOffset?: number }): Promise<{ ok: true }> {
     return this.#host.resumeSubscription(input);
   }
 
-  /** Provide an ADDITIONAL live capability (beyond the ones a client provides by connecting).
-   *  The R13 desugar, done here in two calls: PARK the stub (transport), then MOUNT the alias
-   *  `pattern ⇒ itx.clients.get(socketId)` (an ordinary routing-table row, shadowable/revocable). */
+  /** Provide an ADDITIONAL live capability (beyond the connections view every attached client
+   *  already appears in): PARK the stub as an anonymous ItxConnection (transport), then MOUNT
+   *  the alias `path ⇒ itx.connections.get(connectionId)` (an ordinary capability-table row,
+   *  shadowable/revocable, auto-revoked when the connection closes). */
   async provideCapability(input: ProvideLiveInput): Promise<CapabilityProvision> {
     if (input.type !== "live")
       throw new Error("itx.provideCapability here only mounts live capabilities");
@@ -327,48 +353,10 @@ export class Itx extends RpcTarget {
     return new CapabilityProvision(
       this.#host,
       providedAtOffset,
-      parked.socketId,
+      parked.connectionId,
       parked.relay,
       this.#relays,
     );
-  }
-}
-
-/** `itx.clients`. */
-export class ClientCollection extends RpcTarget {
-  readonly #host: ItxHostStub;
-  constructor(host: ItxHostStub) {
-    super();
-    this.#host = host;
-  }
-  get(path: string): Client {
-    return new Client(this.#host, path);
-  }
-  list(): Promise<unknown[]> {
-    return this.#host.invoke(["itx", "clients", ["list"]]) as Promise<unknown[]>;
-  }
-}
-
-/** `itx.clients.get(path)`. `.capabilities.a.b(x)` is client-side sugar for `invokeCapability({path,args})`. */
-export class Client extends RpcTarget {
-  readonly #host: ItxHostStub;
-  readonly #path: string;
-  constructor(host: ItxHostStub, path: string) {
-    super();
-    this.#host = host;
-    this.#path = path;
-  }
-  connections(): Promise<unknown[]> {
-    return this.#host.invoke(["itx", "clients", ["connections", this.#path]]) as Promise<unknown[]>;
-  }
-  /** FAN OUT over every open connection at this path (allSettled; `[]` if none). */
-  invokeCapability(input: { path: string[]; args?: unknown[] }): Promise<unknown[]> {
-    return this.#host.invoke([
-      "itx",
-      "clients",
-      ["at", this.#path],
-      ["call", input.path, input.args ?? []],
-    ]) as Promise<unknown[]>;
   }
 }
 
@@ -376,29 +364,29 @@ export class Client extends RpcTarget {
 export class CapabilityProvision extends RpcTarget {
   readonly #host: ItxHostStub;
   readonly #providedAtOffset: number;
-  readonly #socketId: string;
+  readonly #connectionId: string;
   readonly #relay: CapnwebCallbackRelay;
   readonly #relays: Set<CapnwebCallbackRelay>;
   constructor(
     host: ItxHostStub,
     providedAtOffset: number,
-    socketId: string,
+    connectionId: string,
     relay: CapnwebCallbackRelay,
     relays: Set<CapnwebCallbackRelay>,
   ) {
     super();
     this.#host = host;
     this.#providedAtOffset = providedAtOffset;
-    this.#socketId = socketId;
+    this.#connectionId = connectionId;
     this.#relay = relay;
     this.#relays = relays;
   }
   /** Pop exactly this mount off the shadow stack (whatever it shadowed is restored) + drop the
-   *  parked stub. */
+   *  parked connection. */
   async revoke(): Promise<void> {
     this.#relays.delete(this.#relay);
     await this.#host.revokeCapability({ providedAtOffset: this.#providedAtOffset });
-    await this.#host.dropStub({ socketId: this.#socketId });
+    await this.#host.dropItxConnection({ connectionId: this.#connectionId });
     this.#relay.dispose();
   }
 }
