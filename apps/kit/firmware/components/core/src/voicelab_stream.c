@@ -1294,7 +1294,10 @@ enum capnweb_status iterate_kit_voicelab_start_call(
   length = snprintf(
       voicelab->args_buffer,
       sizeof(voicelab->args_buffer),
-      "[{\"type\":\"events.iterate.com/voice-agent/ptt-start\",\"ephemeral\":true,"
+      /* DURABLE, deliberately: the opening press must survive the Durable
+       * Object reset that first touch of an idle stream provokes, so the
+       * rebuilt facet's catch-up can mint the call the reset swallowed. */
+      "[{\"type\":\"events.iterate.com/voice-agent/ptt-start\","
       "\"payload\":{\"t\":%" PRIu64 "%s%s%s}}]",
       voicelab->options.now_ms(voicelab->options.clock_context),
       voicelab->options.client_path != NULL ? ",\"client\":\"" : "",
@@ -1419,9 +1422,12 @@ enum capnweb_status iterate_kit_voicelab_mark_turn(
        * a call — so a device that has never called before needs no separate
        * request, and one already on a call needs no special case.
        */
-      "[{\"type\":\"events.iterate.com/voice-agent/%s\",\"ephemeral\":true,"
+      /* ptt-start durable (it can open a call and must outlive a DO reset);
+       * ptt-end stays ephemeral (losing it costs a turn, not a call). */
+      "[{\"type\":\"events.iterate.com/voice-agent/%s\"%s,"
       "\"payload\":{\"t\":%" PRIu64 "}}]",
       turn == ITERATE_KIT_VOICELAB_TURN_START ? "ptt-start" : "ptt-end",
+      turn == ITERATE_KIT_VOICELAB_TURN_START ? "" : ",\"ephemeral\":true",
       voicelab->options.now_ms(voicelab->options.clock_context));
   if (length < 0 || (size_t)length >= sizeof(voicelab->args_buffer)) {
     return CAPNWEB_E_LIMIT;
