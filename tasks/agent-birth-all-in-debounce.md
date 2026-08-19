@@ -207,3 +207,11 @@ and the #2507 readiness-machinery approach (open draft, to be closed).
   (thread p1711/agents/web/2026-08-19t16-12-19-764z). Ridiculously generous
   on purpose — a wrong-dialect first turn costs more than a slow one;
   tighten once cold-build latency is optimised.
+- 2026-08-19 (preview review): newborn-probe bug found live (preview p1743:
+  wrong-format reply at ~2s). The probe counted ANY event, but probing an
+  unborn path materializes the stream DO, whose bookkeeping events
+  (stream/created, platform subscriptions) can commit before the read
+  returns — the probe raced its own side effect, concluded "preexisting",
+  and skipped the birth config entirely (debounce 250, parsing on → the
+  worker lost by 165ms). Fixed: the probe filters to agent/created, the one
+  event that means "agent exists".

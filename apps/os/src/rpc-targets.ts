@@ -5027,13 +5027,24 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     const workspaceReady = workspace.create({});
     // Newborn probe: the high-initial-debounce birth config (the window in
     // which the project's config worker customizes this agent before its
-    // first turn) belongs to BRAND-NEW streams only. create() is
+    // first turn) belongs to BRAND-NEW agents only. create() is
     // get-or-create and revision-bumped batch events deliberately land on
     // existing agents as upgrades — but a late high-debounce event would
     // overwrite the worker's lowered value, so it needs this existence
-    // gate. Race-safe: concurrent creates that both read an empty stream
-    // append identical batches, which dedupe on their idempotency keys.
-    const preexisting = (await this.stream.getEvents({ limit: 1 })).length > 0;
+    // gate. The probe looks for agent/created SPECIFICALLY: probing an
+    // unborn path materializes the stream DO, whose own bookkeeping events
+    // (stream/created, platform subscriptions) can commit before the read
+    // returns — an unfiltered any-events probe raced its own side effect
+    // and skipped the birth config (preview p1743, 2026-08-19). Race-safe:
+    // concurrent creates that both see no created event append identical
+    // batches, which dedupe on their idempotency keys.
+    const preexisting =
+      (
+        await this.stream.getEvents({
+          eventTypes: ["events.iterate.com/agent/created"],
+          limit: 1,
+        })
+      ).length > 0;
     const creation = agentCreationForPath({
       agentPath: this.#path,
       projectId: this.#props.projectId,
