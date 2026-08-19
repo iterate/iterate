@@ -190,9 +190,16 @@ export async function boards(options: BoardsOptions) {
         eventTypes: ["events.iterate.com/voice-agent/grok-event"],
         processEventBatch: (batch: { events?: { payload?: unknown }[] }) => {
           for (const event of batch.events ?? []) {
-            const inner = (
-              event.payload as { event?: { type?: string; delta?: string; transcript?: string } }
-            )?.event;
+            /* v2 mirrors provider events FLAT on the payload; the bridge era
+             * nested them under `.event`. Read both so this instrument keeps
+             * working across the tracks. */
+            const payload = (event.payload ?? {}) as {
+              event?: { type?: string; delta?: string; transcript?: string };
+              type?: string;
+              delta?: string;
+              transcript?: string;
+            };
+            const inner = payload.event ?? payload;
             if (inner?.type === "response.output_audio_transcript.delta") {
               saidBack += inner.delta ?? "";
             }

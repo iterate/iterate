@@ -1772,6 +1772,14 @@ export class VoiceAgent2Processor extends StreamProcessor<
                        * OpenAI-only: grok's docs are silent on it. */
                       ...(state.provider === "openai" && {
                         noise_reduction: { type: "far_field" },
+                        /* The user's side of the conversation, transcribed
+                         * by the provider and mirrored to the lane like
+                         * every other provider event. Until this, the
+                         * durable record held everything the MODEL said and
+                         * nothing anybody said TO it — and the acoustic
+                         * board proof had no way to show the provider heard
+                         * the words that were spoken through air. */
+                        transcription: { model: "gpt-live-transcribe" },
                       }),
                     },
                     output: {
