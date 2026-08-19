@@ -77,6 +77,9 @@ static struct {
   /* Volume percent or mode index, depending on the overlay kind. */
   uint8_t overlay_value;
   int64_t overlay_until_us;
+  /* The adopted mode, whose quadrant is the idle ring. HAVPE_MODE_COUNT
+   * until the composition's restore sets it. */
+  uint8_t mode;
   bool link_ready;
   /*
    * The two rungs beneath a call, kept apart from `link_ready` on purpose.
@@ -87,7 +90,6 @@ static struct {
    */
   bool api_ready;
   bool stream_ready;
-  bool call_requested;
   /* Unrecoverable start-up fault; see havpe_ui_set_fault. */
   bool fault;
   bool dirty;
@@ -203,6 +205,7 @@ bool havpe_ui_init(void) {
   }
 
   ui.state = HAVPE_UI_CONNECTING;
+  ui.mode = HAVPE_MODE_COUNT;
   ui.dirty = true;
   havpe_ui_tick();
   return true;
@@ -294,6 +297,12 @@ void havpe_ui_show_mode(uint8_t mode) {
   ui.dirty = true;
 }
 
+void havpe_ui_set_mode(uint8_t mode) {
+  if (mode >= HAVPE_MODE_COUNT || ui.mode == mode) return;
+  ui.mode = mode;
+  ui.dirty = true;
+}
+
 int havpe_ui_take_dial(void) {
   const int steps = dial.steps;
   dial.steps = 0;
@@ -324,20 +333,22 @@ void havpe_ui_set_stream_ready(bool ready) {
   ui.dirty = true;
 }
 
-void havpe_ui_request_call(bool wanted) {
-  ui.call_requested = wanted;
-}
-
-bool havpe_ui_call_requested(void) {
-  return ui.call_requested;
-}
-
 /*
- * The two dial overlays. Both are the WHITE of no particular sector — the
- * shared grammar's colours all mean something, and a level meter borrowing
- * the network's green would say the network moved — and they are told apart
- * by shape: the volume fills from pixel zero, a mode lights one quadrant.
+ * The dial overlays and the idle quadrant. All are the WHITE of no particular
+ * sector — the shared grammar's colours all mean something, and a level meter
+ * borrowing the network's green would say the network moved — and they are
+ * told apart by shape and brightness: the volume fills from pixel zero, a
+ * mode lights one quadrant, bright for the second a gesture owns the ring and
+ * dim for the idle steady state.
  */
+enum {
+  /* Plainly lit for the one-second overlay a finger just asked for... */
+  MODE_QUADRANT_BRIGHT = 64,
+  /* ...and barely lit for the hours it is merely a fact. 8 of 255 is visible
+   * on an exposed WS2812 and reads as a state, not an event. */
+  MODE_QUADRANT_DIM = 8,
+};
+
 static void render_volume(struct iterate_kit_rgb8 pixels[LED_COUNT]) {
   const int lit =
       ((int)ui.overlay_value * LED_COUNT + 50) / 100;
@@ -353,11 +364,12 @@ static void render_volume(struct iterate_kit_rgb8 pixels[LED_COUNT]) {
   }
 }
 
-static void render_mode(struct iterate_kit_rgb8 pixels[LED_COUNT]) {
-  const int first = (int)ui.overlay_value * 3;
+static void render_quadrant(
+    struct iterate_kit_rgb8 pixels[LED_COUNT], uint8_t mode, uint8_t level) {
+  const int first = (int)mode * 3;
   for (int index = 0; index < LED_COUNT; ++index) {
     pixels[index] = index >= first && index < first + 3
-        ? (struct iterate_kit_rgb8){64U, 64U, 64U}
+        ? (struct iterate_kit_rgb8){level, level, level}
         : (struct iterate_kit_rgb8){0U, 0U, 0U};
   }
 }
@@ -400,7 +412,17 @@ void havpe_ui_tick(void) {
     if (ui.overlay == OVERLAY_VOLUME) {
       render_volume(pixels);
     } else if (ui.overlay == OVERLAY_MODE) {
-      render_mode(pixels);
+      render_quadrant(pixels, ui.overlay_value, MODE_QUADRANT_BRIGHT);
+    } else if (!breathing && !ui.wants_call && !ui.call_active &&
+               ui.mode < HAVPE_MODE_COUNT) {
+      /*
+       * IDLE HAS A FACE. No session and nothing wrong: the ring shows the
+       * adopted mode's quadrant, dim — the microphone is sending nothing,
+       * and the one fact worth a glance is which posture the next press
+       * will take. The session states own every other frame: waking is the
+       * amber comet (breathing above), a live call is the shared lights.
+       */
+      render_quadrant(pixels, ui.mode, MODE_QUADRANT_DIM);
     } else {
       iterate_kit_conversation_lights_animate(
           &state, (uint32_t)(now_us / 1000), pixels);

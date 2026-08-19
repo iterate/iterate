@@ -1144,25 +1144,26 @@ static void on_control(
      */
     (void)abandon_speaker_audio();
     /*
-     * The BELIEF ends here; the INTENT does not.
-     *
-     * This used to clear the call request too, on the reasoning that the
-     * button should agree with reality. But the bridge ends a call for
-     * reasons that have nothing to do with what the person wants — the
-     * provider closing its socket, an eviction, an idle timeout — and
-     * clearing the request turned every one of those into "your call is
-     * over, press the button again". Measured: the provider closed at 296s
-     * into an hour-long soak and the device sat there for the remaining 55
-     * minutes with wantsCall false, answering RPCs, waiting to be pressed.
-     *
-     * Intent is owned locally and only a person changes it: hanging up sets
-     * it false BEFORE announcing the end, so the bridge's echo arrives to a
-     * device that already agrees. Anything else is a call to reopen.
+     * AND THE SESSION ENDS WITH IT. The intent used to survive this event on
+     * the reasoning that only a person changes intent, so any bridge-side end
+     * was a call to reopen — and the launch ladder obliged on the next pass.
+     * That doctrine turned every ANNOUNCED end into a resurrection: measured
+     * 2026-08-19, the model's hang_up tool ended a call at 12:53:25 and its
+     * successor was up within the same second, which makes hanging up
+     * impossible on a board whose microphone rides the call, and turns the
+     * bridge's own 60 s idle timeout into a metronome. A conversation the far
+     * end declares over IS over: the latch clears, the microphone gate closes
+     * behind it (SERVER_VAD talk rides call_active; push-to-talk requires the
+     * latch), and the next call takes a new wake press. A call lost WITHOUT
+     * this event — the liveness forget, a connection recycle — still
+     * relaunches, because there the person still wants the session they
+     * opened; this arm is only ever the far end saying goodbye.
      */
+    runtime.view.wants_call = (false);
     runtime.view.call_active = (false);
     /* Envelope mouth returns for whatever local life the face has next. */
     runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_IDLE;
-    runtime.view.status = (runtime.view.wants_call ? "reconnecting" : "call ended");
+    runtime.view.status = ("call ended");
   }
 }
 

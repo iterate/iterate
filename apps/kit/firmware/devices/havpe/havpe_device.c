@@ -47,10 +47,11 @@
 #include "havpe_ui.h"
 
 /*
- * The baked UI sounds: two button chimes (the official Home Assistant Voice
- * PE assets) and four mode announcements, all 16 kHz mono PCM16LE in
- * .rodata. Included here because the COMPOSITION decides what a gesture
- * sounds like; the audio driver only knows how to play PCM it is handed.
+ * The baked UI sounds: the wake chime (the official Home Assistant Voice PE
+ * press asset), the "call ended" announcement, and four mode announcements,
+ * all 16 kHz mono PCM16LE in .rodata. Included here because the COMPOSITION
+ * decides what a gesture sounds like; the audio driver only knows how to
+ * play PCM it is handed.
  */
 #include "assets/havpe_sounds_generated.inc"
 
@@ -64,19 +65,19 @@ enum {
 };
 
 /*
- * The dial's composition state. The wheel arithmetic itself is pure and
- * host-tested (havpe_modes.c); what lives here is the wiring — which gesture
- * reaches which seam — plus mirrors of the two view facts the routing needs,
- * because `poll` runs before the pass's view exists.
+ * The dial's and the session's composition state. The wheel arithmetic and
+ * the session grammar are pure and host-tested (havpe_modes.c); what lives
+ * here is the wiring — which gesture reaches which seam — plus mirrors of
+ * the two view facts both machines need, because `poll` runs before the
+ * pass's view exists.
  */
 static struct {
   struct havpe_mode_wheel wheel;
+  struct havpe_session session;
   /** The adopted mode: announced, dialled, persisted. */
   uint8_t mode;
   bool call_active;
   bool wants_call;
-  /** Last reported hold level, for the hold chime's edge. */
-  bool talk_was_held;
 } mode_state;
 
 /*
@@ -132,6 +133,9 @@ static void adopt_mode(uint8_t mode, bool settled) {
         havpe_mode_sounds[mode].pcm, havpe_mode_sounds[mode].bytes);
   }
   mode_state.mode = mode;
+  /* The idle ring's dim quadrant follows the adopted mode, so which posture
+   * the next press takes is glanceable before the press. */
+  havpe_ui_set_mode(mode);
 }
 
 /*
@@ -186,8 +190,8 @@ static void present(
   /* The press's own acknowledgement: the ring chases from wants_call, not
    * from the call the far end takes seconds to accept. */
   havpe_ui_set_wants_call(view->wants_call);
-  /* Mirrored for `poll`, which routes the dial before this pass's view
-   * exists and must not re-point the stream under a call. */
+  /* Mirrored for `poll`, which classifies the session and routes the dial
+   * before this pass's view exists. */
   mode_state.call_active = view->call_active;
   mode_state.wants_call = view->wants_call;
   havpe_ui_set_api_ready(view->api_ready);
@@ -208,41 +212,40 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
   (void)context;
   havpe_button_poll();
   /*
-   * ONE BUTTON, ONE INTENT. A tap toggles whether a call is wanted, and the
-   * loop resolves the toggle against the intent it holds. The chime is the
-   * other half of the same acknowledgement the ring's chase gives: a press
-   * used to be answered by nothing until the far end accepted the call,
-   * which reads as a broken button for exactly as long as a dial takes.
+   * THE BUTTON MEANS WHAT THE SESSION SAYS IT MEANS. Classification (tap
+   * against hold) is the ui's; meaning is the session grammar's — the state
+   * table in havpe_modes.h, host-tested. This wires the machine's answers
+   * to their seams: the two intent edges the loop resolves, the talk level
+   * for its turn machine, the wake chime (the acknowledgement a wake word
+   * would earn), the "call ended" announcement on every session's exit, and
+   * the mode-reminder flash for the bare tap a push-to-talk mode refuses to
+   * wake on. Every other press is answered by the ring alone.
    */
-  const bool tapped = havpe_button_take_tap();
-  out->toggle_call = tapped;
-  /*
-   * THE HOLD IS A TURN ONLY WHEN THE MODE SAYS SO. In the push-to-talk
-   * modes the level is reported and the loop's turn machine does what it
-   * does for every push-to-talk board; in the open-mic modes it stays
-   * unreported exactly as before — there is no turn to hold, and a long
-   * press must still not be a tap so leaning on the button cannot hang up.
-   */
-  const bool held =
-      havpe_mode_push_to_talk(mode_state.mode) && havpe_button_talk_held();
-  out->talk_held = held;
-  /*
-   * THE CHIME IS THE WAKE MOMENT, AND ONLY THAT. It plays for the press
-   * that OPENS a conversation — a tap, or the first push-to-talk hold when
-   * no call is up (which opens one by speaking) — the acknowledgement a
-   * wake word would earn. Every later press is quiet: a hold inside a live
-   * call is answered by the ring alone (a chime per turn is a metronome,
-   * not feedback), and the tap that ENDS a call already produces the most
-   * audible acknowledgement there is — silence.
-   */
-  const bool opensConversation =
-      !mode_state.call_active && !mode_state.wants_call &&
-      (tapped || (held && !mode_state.talk_was_held));
-  if (opensConversation) {
-    havpe_audio_play_sound(
-        havpe_sound_chime_press, sizeof(havpe_sound_chime_press));
+  {
+    struct havpe_session_actions actions;
+    const struct havpe_session_poll gestures = {
+      .tap = havpe_button_take_tap(),
+      .held = havpe_button_talk_held(),
+      .wants_call = mode_state.wants_call,
+      .call_active = mode_state.call_active,
+      .push_to_talk = havpe_mode_push_to_talk(mode_state.mode),
+    };
+    havpe_session_step(&mode_state.session, &gestures, &actions);
+    out->start_call = actions.start_call;
+    out->end_call = actions.end_call;
+    out->talk_held = actions.talk_held;
+    /* End before wake: play_sound replaces, so if one poll carries both
+     * edges the newer intent — the wake — is the one heard. */
+    if (actions.end_chime) {
+      havpe_audio_play_sound(
+          havpe_sound_chime_ended, sizeof(havpe_sound_chime_ended));
+    }
+    if (actions.wake_chime) {
+      havpe_audio_play_sound(
+          havpe_sound_chime_press, sizeof(havpe_sound_chime_press));
+    }
+    if (actions.mode_flash) havpe_ui_show_mode(mode_state.mode);
   }
-  mode_state.talk_was_held = held;
 
   /*
    * THE DIAL IS TWO KNOBS, split by whether a call is in play: volume while
@@ -478,14 +481,20 @@ static const struct iterate_kit_board_facts facts = {
   .greeting = "Hi, I am your Iterate device. What can I do for you?",
   .instructions =
       "Home Assistant Voice Preview Edition: a voice endpoint with no screen — "
-      "a twelve-LED ring is its only local feedback. A tap on the centre "
-      "button starts and ends the call. The rotary dial around it adjusts "
-      "volume during a call; outside one it cycles four conversation modes "
-      "(grok or openai, each push-to-talk or open-mic), announces the choice "
-      "aloud, and keeps it across reboots. In the open-mic modes the "
+      "a twelve-LED ring is its only local feedback. A press on the centre "
+      "button WAKES it into a call (chime); a tap during the call ends it, and "
+      "an ended call — hang-up, tap, or idle timeout — says 'call ended' and "
+      "leaves it silent, sending no microphone audio, until the next press. "
+      "The rotary dial "
+      "around it adjusts volume during a call; outside one it cycles four "
+      "conversation modes (grok or openai, each push-to-talk or open-mic), "
+      "announces the choice aloud, and keeps it across reboots. When idle the "
+      "ring dimly shows the mode's quadrant. In the open-mic modes the "
       "microphone stays OPEN for the whole call — hardware echo cancellation "
-      "in an XMOS DSP makes interruption safe — and in the push-to-talk modes "
-      "it streams only while the centre button is held. "
+      "in an XMOS DSP makes interruption safe. In the push-to-talk modes the "
+      "first hold is the wake — chime and talk in one gesture — the microphone "
+      "streams only while the button is held, and a bare tap with no call up "
+      "only flashes the current mode. "
       "conversation.start() and conversation.end() begin and end a call. "
       "health() returns this device's full diagnostics — start there when it "
       "seems unwell. "
@@ -505,8 +514,9 @@ static const struct iterate_kit_board_facts facts = {
    */
   .peer_description =
       "{\"instructions\":\"Home Assistant Voice PE voice endpoint. It has no "
-      "screen: its LED ring is the only local feedback. A short tap on the "
-      "centre button starts and ends the call. "
+      "screen: its LED ring is the only local feedback. A press on the centre "
+      "button wakes it into a call; a tap during the call ends it, and an "
+      "ended call leaves it silent until the next press. "
       "conversation.start() / conversation.end() begin and end a call. "
       "aec.setStage({channel,stage}) moves an XMOS output tap — stage 0 is the "
       "raw microphone, 1 AEC, 2 AEC+IC, 3 AEC+IC+NS, 4 with AGC — and health() "
