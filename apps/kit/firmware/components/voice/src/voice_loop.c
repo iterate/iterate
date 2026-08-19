@@ -3913,6 +3913,36 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
         const size_t needed =
             runtime.flushing_turn ? 1U : (size_t)MIC_FRAMES_PER_APPEND;
         /*
+         * A MICROPHONE THAT CANNOT DRAIN INTO A LIVE CALL IS A DEAD LANE,
+         * and the device is the only one who can tell: the appends are
+         * one-way, so nothing upstream ever refuses them — they just
+         * vanish. Measured 2026-08-19 16:07 after a DO storage reset: the
+         * call dialled fine, capture ran, the queue filled and rolled
+         * (micDropped 217), and the person's opening sentence aged out of
+         * the 5 s buffer during the ~60 s the watchdog took to notice.
+         * Half a queue with no headroom for three seconds is not
+         * backpressure, it is the jam — restart the transport now.
+         */
+        {
+          static uint64_t drain_jammed_since;
+          const bool jammed = runtime.talking &&
+              runtime.voicelab.call_active &&
+              queued >= (size_t)(MIC_QUEUE_DEPTH / 2) &&
+              outbox_free < (size_t)MIC_OUTBOX_RESERVE;
+          if (!jammed) {
+            drain_jammed_since = 0U;
+          } else if (drain_jammed_since == 0U) {
+            drain_jammed_since = now;
+          } else if (
+              iterate_kit_voice_elapsed_ms(now, drain_jammed_since) > 3000U) {
+            ESP_LOGW(
+                tag, "mic backlog with no outbox drain — restarting transport");
+            runtime.view.status = ("re-registering");
+            iterate_kit_esp_idf_itx_transport_request_restart(&transport);
+            drain_jammed_since = 0U;
+          }
+        }
+        /*
          * The window paces the uplink at exactly capture rate, so any
          * backlog is permanent — four of ten turns in one call hit the
          * flush deadline with audio still queued ("tail dropped"). When a
