@@ -36,3 +36,10 @@ REFACTORS-LATER.md instead, not here.
   inlined #consumes. 4 tests flipped. DEFERRED (need a soak — noted): 6 in-batch dedupe
   double-reduce, 19 nested blockers, 20 at-head 500-multiple, 21 non-contiguous ephemerals, 22
   deep-payload dedupe.
+- Phase E (live-20): connections. unsubscribe now closes the anonymous parked ItxConnection whose
+  last naming mount was revoked — mirror of onFinalClose (31, the transport leak). Defect 22
+  (jsonEqual decoupled from the parser depth budget — apps/os shape, order-insensitive,
+  unbudgeted) landed alongside. Defects 14/15/16 (clean-vs-dirty close code, concurrent same-key,
+  in-flight offline coding) REVERTED + deferred as a cluster: they all need the capnweb
+  onRpcBroken reason arg to tell graceful from ungraceful ends without message-sniffing
+  (REFACTORS-LATER). Stale proofs fixed (enableProcessor ref uses `export`, not `className`).

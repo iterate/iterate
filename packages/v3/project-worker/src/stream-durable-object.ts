@@ -1083,10 +1083,26 @@ export class StreamDurableObject extends DurableObject<Env> {
       if (!winner) throw new Error(`no mount at path ${JSON.stringify(pathString)}`);
       providedAtOffset = winner.providedAtOffset;
     }
+    // Capture the target BEFORE revoking so we can reap a now-unreferenced parked connection.
+    const table = this.#inline(CAPABILITY_TABLE_SLUG).state as CapabilityTable;
+    const revoked = table.mounts.find((m) => m.providedAtOffset === providedAtOffset);
     await this.#capabilityTableProcessor().revoke({ providedAtOffset });
     // Revoke doubles as GC for the delivered-through watermark keyed by the mount's identity.
     // (The forwarder GCs its own SubscriptionDeliveryProgress on the revoked event.)
     this.#subscriptionDeliveredThrough.delete(providedAtOffset);
+    // The mirror of onFinalClose: an ANONYMOUS parked connection whose LAST naming mount just
+    // went away has no durable trace left, so close its transport instead of leaking the pager
+    // socket + retained stub for the session's life (the unsubscribe leak).
+    const conn = connectedTarget(revoked?.target);
+    if (conn) {
+      const record = this.#itxConnections.find(conn.key);
+      const stillNamed = this.#inline(CAPABILITY_TABLE_SLUG).state as CapabilityTable;
+      const namedElsewhere = stillNamed.mounts.some(
+        (m) => connectedTarget(m.target)?.key === conn.key,
+      );
+      if (record && record.connectionKey === undefined && !namedElsewhere)
+        this.#itxConnections.drop(conn.key, "last naming mount revoked");
+    }
   }
 
   // ── native fetch: the stub pager door, the fetch lane, observability, egress ──

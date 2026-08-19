@@ -105,10 +105,13 @@ export function sameIdempotentEvent(
 
 /** Structural deep-equal over plain JSON values — THE one deep-equal in this package (idempotency
  *  bodies here, literal-arg matching in core/expression.ts). Object key ORDER is insignificant. */
-export function jsonEqual(a: unknown, b: unknown, depth = 0): boolean {
+export function jsonEqual(a: unknown, b: unknown): boolean {
+  // No depth budget (apps/os jsonValuesEqual): idempotency equality is decoupled from the
+  // PARSER's depth limit, so a legitimately-deep payload the commit path accepted never throws
+  // here. JSON values are acyclic, so unbounded recursion is safe.
   if (Object.is(a, b)) return true;
   if (Array.isArray(a) && Array.isArray(b))
-    return a.length === b.length && a.every((x, i) => jsonEqual(x, b[i], deeper(depth, "equal")));
+    return a.length === b.length && a.every((x, i) => jsonEqual(x, b[i]));
   if (
     typeof a === "object" &&
     a !== null &&
@@ -121,11 +124,7 @@ export function jsonEqual(a: unknown, b: unknown, depth = 0): boolean {
     return (
       ka.length === Object.keys(b as object).length &&
       ka.every((k) =>
-        jsonEqual(
-          (a as Record<string, unknown>)[k],
-          (b as Record<string, unknown>)[k],
-          deeper(depth, "equal"),
-        ),
+        jsonEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]),
       )
     );
   }

@@ -30,3 +30,10 @@ fix stays small and reviewable. Revisit deliberately.
   dedupe double-reduce (event log), nested blockProcessorWhile escaping the hold, at-head stall
   on exact 500-multiples, named ephemerals dropped on a non-contiguous push, deep-payload
   idempotent-retry depth. Each is subtle enough to want its own focused session + soak.
+
+- **Connection close: clean-vs-dirty needs the onRpcBroken error arg (defect 14, 15)**: closing
+  the pager with 1011 in onRpcBroken regressed the clean-close test — a client ws.close() fires
+  onRpcBroken but is arguably a clean end, so dispose-vs-onRpcBroken does NOT map to clean-vs-
+  dirty. The real signal is the close/abort reason capnweb passes to onRpcBroken(cb) (currently
+  ignored). Deferred: thread that reason through so the directory files graceful vs ungraceful
+  ends correctly; concurrent-same-key reconcile (15) rides the same pending-attach work; in-flight-invoke offline coding (16) needs the same reason signal to tell a transport death from a provider app-error without message-sniffing.

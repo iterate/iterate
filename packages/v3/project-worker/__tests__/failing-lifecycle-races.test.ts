@@ -396,7 +396,7 @@ test("churn 20×: no ghost deliveries; the connection registry returns to baseli
   );
 });
 
-test.fails("BUG: unsubscribe leaves the live callback's parked ItxConnection attached until the SESSION dies", async () => {
+test("FIXED (defect 31): unsubscribe closes the live callback's parked ItxConnection", async () => {
   // BUG: Itx.subscribe with a live callback parks an anonymous ItxConnection (#parkAsTarget:
   //   attach + relay + pager WebSocket) but returns only {name, providedAtOffset}; unsubscribe
   //   revokes just the MOUNT (revokeCapability by path). Nothing drops the parked connection or

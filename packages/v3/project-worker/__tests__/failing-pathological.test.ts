@@ -62,7 +62,7 @@ test("string-half expressions: 58-deep parses and round-trips; 70-deep fails LOU
   ).rejects.toThrow(/64 levels/);
 });
 
-test.fails("BUG: idempotent RETRY of a 64-deep payload throws the dedupe walk's depth error instead of deduping", async () => {
+test("FIXED (defect 22): idempotent RETRY of a 64-deep payload dedupes's depth error instead of deduping", async () => {
   // BUG: the COMMIT path never deep-walks a payload (the 64-deep round trip above passes),
   //      but the DEDUPE path does — StreamEventLog.append → sameIdempotentEvent → jsonEqual,
   //      whose recursion spends the shared 64-level budget on the payload the log already
