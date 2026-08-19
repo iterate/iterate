@@ -136,7 +136,7 @@ test("a payload-less live-state/changed event never rejects an append that alrea
 
 // ═══════════ 4+5. enableProcessor — success receipts for processors that can never run (S1) ═══════════
 
-test.fails("enableProcessor rejects a slug the mount grammar re-segments (a dotted slug)", async () => {
+test("enableProcessor rejects a slug the mount grammar re-segments (a dotted slug)", async () => {
   // BUG: enableProcessor(slug) builds the mount path by string interpolation
   //      (`itx.processors.${slug}`) — a dotted slug ("a.b") parses into FOUR segments, so the
   //      committed mount is itx.processors.a.b, which #facetEntries (path.length === 3) never
@@ -158,7 +158,7 @@ test.fails("enableProcessor rejects a slug the mount grammar re-segments (a dott
   ).rejects.toThrow(); // ← resolves {ok: true}; the orphan facet proc:a.b is configured and dead
 });
 
-test.fails("enableProcessor rejects a slug that names NO built-in (and carries no source ref)", async () => {
+test("enableProcessor rejects a slug that names NO built-in (and carries no source ref)", async () => {
   // BUG: enableProcessor(slug) with no ref never checks the slug against the built-in facet map
   //      (FACET_PROCESSORS in processor-facet.ts: tally, subscription-forwarder). The mount
   //      commits, the ProcessorFacet materializes and stores its identity, and {ok: true} comes
@@ -181,7 +181,7 @@ test.fails("enableProcessor rejects a slug that names NO built-in (and carries n
 
 // ═══════════ 6. the two enablement doors diverge — mounts are NOT the whole registry (S5) ═══════════
 
-test.fails("a processor enabled by its MOUNT alone (the documented event-sourced door) serves snapshot", async () => {
+test("a processor enabled by its MOUNT alone (the documented event-sourced door) serves snapshot", async () => {
   // BUG: stream-durable-object.ts documents "enablement IS a mount ... the mounts ARE the
   //      registry" (#facetEntries), and the capability-provided payload schema carries the
   //      processor policy for exactly this door. But only the enableProcessor VERB calls

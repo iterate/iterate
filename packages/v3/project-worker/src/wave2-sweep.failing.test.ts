@@ -229,7 +229,7 @@ const makeFacetHarness = () => {
   return { facet: new (ProcessorFacet as any)(ctx, env), kv };
 };
 
-test.fails("re-configure of a WARM facet takes effect — the next call serves the NEW identity/props", async () => {
+test("FIXED (defect 45): re-configure of a WARM facet takes effect — the next call serves the NEW identity/props", async () => {
   // BUG: ProcessorFacet.configure() writes the identity durably (kv "identity") but never
   //      clears the memoized `#processor` — #p() returns the instance built from the OLD
   //      identity for as long as the facet stays warm (processor-facet.ts configure()/#p()).

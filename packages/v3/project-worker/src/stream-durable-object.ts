@@ -70,7 +70,7 @@ import type { BuiltInsEnv } from "./built-ins.ts";
 import { PROCESSOR_RUNNER_MODULE } from "./generated/processor-runner.ts";
 import { PROCESSOR_SDK_MODULE } from "./generated/processor-sdk.ts";
 import { buildBuiltIns } from "./built-ins.ts";
-import type { FacetIdentity } from "./processor-facet.ts";
+import { BUILT_IN_PROCESSOR_SLUGS, type FacetIdentity } from "./processor-facet.ts";
 
 // The parent hosts the INLINE CORE (host scope + routing table + core reduce), so it needs the
 // full roots env the facet used to inherit, plus the config seeds.
@@ -841,34 +841,45 @@ export class StreamDurableObject extends DurableObject<Env> {
    *  the same duck contract: configure / processEventBatch / snapshot / waitUntilProcessed.
    *  NEVER retain the returned handle (#6800: re-`get` per burst; the quiesce alarm aborts). */
   async #facet(slug: string): Promise<FacetProcessorHandle> {
-    const ref = this.#facetEntries().find((e) => e.slug === slug)?.ref;
-    if (!ref) {
+    // A facet exists iff its mount does — no silent resurrection of a disabled slug, and the
+    // half-enabled-provide door is closed: a slug with no entry throws instead of materializing
+    // an unconfigured facet that storms every drive.
+    const entry = this.#facetEntries().find((e) => e.slug === slug);
+    if (!entry) throw codedError("NO_FACET", `no facet processor "${slug}" enabled`);
+    let handle: FacetProcessorHandle;
+    if (!entry.ref) {
       const exports = (this.ctx as unknown as { exports: Record<string, unknown> }).exports;
-      return this.ctx.facets.get(`proc:${slug}`, () => ({
+      handle = this.ctx.facets.get(`proc:${slug}`, () => ({
         class: exports.ProcessorFacet as DurableObjectClass,
       })) as unknown as FacetProcessorHandle;
+    } else {
+      const userModules = asModules(await this.invoke(entry.ref.source), `processor "${slug}"`);
+      const version = hashSource(JSON.stringify(userModules));
+      const worker = confinedWorker(
+        this.env,
+        // Deploy id rides the minted key (the stale-isolate/DataCloneError family).
+        { kind: "procfacet", owner: `${this.#address.name}:${slug}`, contentHash: version },
+        "runner.js",
+        {
+          ...userModules,
+          "processor.js": PROCESSOR_SDK_MODULE,
+          "runner.js": PROCESSOR_RUNNER_MODULE,
+        },
+        itxEntrypointFor(this.ctx, this.#address.name),
+      );
+      handle = versionedFacet(this.ctx, {
+        worker,
+        className: "ProcessorFacetRunner",
+        facetName: `proc:${slug}`,
+        markerKey: `procfacet:${slug}:version`,
+        version,
+      }) as FacetProcessorHandle;
     }
-    const userModules = asModules(await this.invoke(ref.source), `processor "${slug}"`);
-    const version = hashSource(JSON.stringify(userModules));
-    const worker = confinedWorker(
-      this.env,
-      // Deploy id rides the minted key (the stale-isolate/DataCloneError family).
-      { kind: "procfacet", owner: `${this.#address.name}:${slug}`, contentHash: version },
-      "runner.js",
-      {
-        ...userModules,
-        "processor.js": PROCESSOR_SDK_MODULE,
-        "runner.js": PROCESSOR_RUNNER_MODULE,
-      },
-      itxEntrypointFor(this.ctx, this.#address.name),
-    );
-    return versionedFacet(this.ctx, {
-      worker,
-      className: "ProcessorFacetRunner",
-      facetName: `proc:${slug}`,
-      markerKey: `procfacet:${slug}:version`,
-      version,
-    }) as FacetProcessorHandle;
+    // CONFIGURE AT MATERIALIZATION — identity is derived ENTIRELY from the mount + this DO's
+    // address, so enablement is ONE event-sourced fact. No configure-after-provide side-channel
+    // that a raw provide or a log replay could skip; idempotent, so steady drives don't write.
+    await handle.configure(this.#identityFor(slug, entry.ref?.export, entry.props));
+    return handle;
   }
 
   /** Enable a facet-hosted processor on this stream (idempotent; identity configured durably).
@@ -883,9 +894,15 @@ export class StreamDurableObject extends DurableObject<Env> {
     this.#eventLog.touch();
     if (slug === CAPABILITY_TABLE_SLUG || slug === "core")
       throw new Error(`"${slug}" is an inline core processor — it is always on, never a facet`);
-    // Enablement IS a mount: the processor policy rides the same capability-provided event
-    // (event-sourced, auditable, shadowable); the target makes itx.processors.<slug>.snapshot()
-    // resolve through the ordinary facet-address view.
+    if (!/^[A-Za-z0-9_-]+$/.test(slug))
+      throw new Error(`invalid processor slug ${JSON.stringify(slug)}: one segment, [A-Za-z0-9_-]`);
+    if (!ref && !BUILT_IN_PROCESSOR_SLUGS.has(slug))
+      throw new Error(
+        `no built-in processor ${JSON.stringify(slug)} (pass a ref for userspace code)`,
+      );
+    // Enablement IS a mount: the processor policy rides the capability-provided event
+    // (event-sourced, auditable, shadowable). #facet configures at materialization from that
+    // mount alone — the warm-up here just makes an immediate snapshot ready.
     await this.#capabilityTableProcessor().provide({
       path: `itx.processors.${slug}`,
       target: `itx.facets.get('${slug}')`,
@@ -894,7 +911,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         ...(props ? { props } : {}),
       },
     });
-    await (await this.#facet(slug)).configure(this.#identityFor(slug, ref?.export, props));
+    await this.#facet(slug);
     return { ok: true };
   }
 

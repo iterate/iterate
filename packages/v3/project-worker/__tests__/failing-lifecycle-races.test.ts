@@ -155,7 +155,7 @@ test("enableProcessor('tally') from two sessions concurrently: one effective lin
   expect(snap.state.counts.seen).toBe(3);
 });
 
-test.fails("BUG: every enableProcessor drives the enablement commit into the facet BEFORE configure() lands", async () => {
+test("FIXED (defect 29): every enableProcessor drives the enablement commit into the facet BEFORE configure() lands", async () => {
   // BUG: enableProcessor first awaits provide() — whose append synchronously queues the drive
   //   chain for the just-mounted slug (#facetEntries already lists it: the inline reduce ran
   //   inside the commit) — and only THEN calls configure(). The drive's processEventBatch
@@ -187,7 +187,7 @@ test.fails("BUG: every enableProcessor drives the enablement commit into the fac
   expect(countMatches(logsText(), /not configured/g) - before).toBe(0);
 });
 
-test.fails("BUG: a processor mount through the ordinary provide door is HALF-ENABLED — /state lists it, every commit errors, snapshot throws", async () => {
+test("FIXED (defect 30): a processor mount through the ordinary provide door is HALF-ENABLED — /state lists it, every commit errors, snapshot throws", async () => {
   // BUG: #facetEntries derives enablement purely from mounts at itx.processors.<slug> — which
   //   ANY provide can mint (verified: Itx.provide passes even the UNDECLARED `processor` field
   //   through capnweb-validate untouched; a raw appended capability-provided event works too).

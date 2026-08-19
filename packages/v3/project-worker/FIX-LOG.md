@@ -9,3 +9,9 @@ REFACTORS-LATER.md instead, not here.
 - Test cook-down: three vitest configs → ONE (vitest.config.ts, `test.projects`: unit/harness/
   workers); `pnpm test` runs all three; `pnpm test:unit` is the fast inner loop. Deleted
   vitest.harness.config.ts + vitest.workers.config.ts + their scripts.
+- Phase A (live-17): half-enabled-provide door killed. #facet() configures at materialization
+  from the mount alone (identity derived entirely from the mount + DO address), idempotent;
+  #facet throws NO_FACET for unknown slugs (no silent resurrection); enableProcessor validates
+  the slug + built-in registry and drops its separate configure. Retires 29, 30, 32, 42, 45,
+  H6. Both facet kinds' configure is idempotent (JSON-equal short-circuit + memo drop). 6 tests
+  flipped to regression guards.

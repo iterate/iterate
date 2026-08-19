@@ -107,13 +107,22 @@ const FACET_PROCESSORS: Record<
   "subscription-forwarder": (args) => new SubscriptionForwarderProcessor(args),
 };
 
+/** The built-in facet-processor slugs — enableProcessor validates ref-less enables against
+ *  this so an unknown slug fails loud at the door instead of storming every drive. */
+export const BUILT_IN_PROCESSOR_SLUGS = new Set(Object.keys(FACET_PROCESSORS));
+
 export class ProcessorFacet extends DurableObject<Env> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   #processor?: StreamProcessor<any>;
 
-  /** First contact: the parent hands the facet its identity. Durable — survives facet restarts. */
+  /** The parent hands the facet its identity at EVERY materialization (see #facet in the DO):
+   *  idempotent — a write + memo-drop ONLY when the identity actually changed, so re-enabling
+   *  with new props takes effect on the warm instance while steady drives cost one kv read. */
   configure(identity: FacetIdentity): { ok: true } {
+    const stored = this.ctx.storage.kv.get("identity");
+    if (JSON.stringify(stored) === JSON.stringify(identity)) return { ok: true };
     this.ctx.storage.kv.put("identity", identity);
+    this.#processor = undefined; // identity/props changed → rebuild
     return { ok: true };
   }
 

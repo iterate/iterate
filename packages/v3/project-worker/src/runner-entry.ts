@@ -31,7 +31,10 @@ export class ProcessorFacetRunner extends DurableObject<RunnerEnv> {
   #p?: StreamProcessor<any>;
 
   configure(identity: FacetIdentity): { ok: true } {
+    const stored = this.ctx.storage.kv.get("identity");
+    if (JSON.stringify(stored) === JSON.stringify(identity)) return { ok: true };
     this.ctx.storage.kv.put("identity", identity);
+    this.#p = undefined; // identity/props changed → rebuild
     return { ok: true };
   }
 
