@@ -113,10 +113,18 @@ export class IterateContextStreamProcessor extends StreamProcessor<State> {
     this.#hostScope = args.hostScope;
   }
 
-  // The routing table is pure fold — no side effects, so no processEvent needed.
+  // The routing table is pure fold — no side effects, so no processEvent needed. Ephemeral
+  // capability events are IGNORED (they would vanish from any refold, leaving this fold and
+  // the parent's projection disagreeing forever); a malformed payload is SKIPPED loudly — one
+  // bad hand-appended event must not wedge every later resolve with a matcher throw.
   protected override reduce({ event, state }: ReduceArgs<State>): State | undefined {
+    if (event.ephemeral) return undefined;
     if (event.type === "events.iterate.com/capability-host/capability-provided") {
       const { pattern, target } = event.payload as { pattern: Expression; target: Expression };
+      if (!Array.isArray(pattern) || !Array.isArray(target)) {
+        console.error(`iterate-context: skipping malformed capability-provided at ${event.offset}`);
+        return undefined;
+      }
       return { mounts: [...state.mounts, { pattern, target, providedAtOffset: event.offset }] };
     }
     if (event.type === "events.iterate.com/capability-host/capability-revoked") {
@@ -145,6 +153,16 @@ export class IterateContextStreamProcessor extends StreamProcessor<State> {
         `a provided capability's target must be rooted at "itx" (host-scope roots are config-seed-only)`,
       );
     assertMustUse(pattern, target);
+    // A subscription target is invoked by ROW IDENTITY with no pattern match — a named capture
+    // in it has nothing to bind and every delivery would throw straight into the halt ladder.
+    if (pattern[0] === "itx" && pattern[1] === "subscribers") {
+      const named = new Set<string>();
+      walkNamedHoles(target, (h) => named.add(h));
+      if (named.size)
+        throw new Error(
+          `a subscription target cannot use named captures (?${[...named][0]}) — deliveries bind no pattern`,
+        );
+    }
     const [event] = await this.stream.append(
       this.contract.buildEvent({
         type: "events.iterate.com/capability-host/capability-provided",

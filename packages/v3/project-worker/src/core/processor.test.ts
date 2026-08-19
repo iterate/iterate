@@ -683,3 +683,41 @@ describe("live state (the delta patches on the wire)", () => {
     expect((await sneaky.snapshot()).state.seen).toBe(1); // the tick — NOT the change event
   });
 });
+
+describe("live state emission failure is contained", () => {
+  test("a throwing/unserializable projection loses the notification, never the batch", async () => {
+    const contract = defineProcessorContract({
+      slug: "biggie",
+      version: "1.0.0",
+      description: "keeps a BigInt in state — the projection cannot serialize",
+      stateSchema: z.object({ n: z.number().default(0) }),
+      events: {},
+      consumes: ["tick"],
+      emits: [],
+    });
+    class Biggie extends StreamProcessor<z.infer<typeof contract.stateSchema>> {
+      contract = contract;
+      reduce({ state }: ReduceArgs<z.infer<typeof contract.stateSchema>>) {
+        return { n: state.n + 1 };
+      }
+      liveState() {
+        return { big: 10n }; // JSON.stringify throws TypeError on BigInt
+      }
+    }
+    const mem = memoryStream();
+    const p = new Biggie({
+      stream: mem.stream,
+      storage: memoryStorage(),
+      path: "/",
+      projectId: "p",
+    });
+    mem.procs.push(p);
+    mem.stream.append({ type: "tick" }) as StreamEvent[];
+    await settle();
+    // the fold committed and the read surface works — the failure was only the notification
+    await expect(p.snapshot()).resolves.toMatchObject({ state: { n: 1 } });
+    expect(
+      mem.pushed.filter((e) => e.type === "events.iterate.com/live-state/changed"),
+    ).toHaveLength(0);
+  });
+});

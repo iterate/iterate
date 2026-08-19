@@ -217,22 +217,23 @@ export abstract class StreamProcessor<State> {
     const { offset, timeoutMs = 10_000 } = input;
     return new Promise<void>((resolve, reject) => {
       if (this.#loadProgress().reducedThroughOffset >= offset) return resolve();
-      const timer = setTimeout(
-        () =>
-          reject(
-            new Error(
-              `processor "${this.contract.slug}" did not reach offset ${offset} in ${timeoutMs}ms`,
-            ),
-          ),
-        timeoutMs,
-      );
-      this.#waiters.push({
+      const waiter = {
         offset,
         resolve: () => {
           clearTimeout(timer);
           resolve();
         },
-      });
+      };
+      const timer = setTimeout(() => {
+        // A timed-out waiter LEAVES the list — otherwise every later batch re-scans it forever.
+        this.#waiters.splice(this.#waiters.indexOf(waiter), 1);
+        reject(
+          new Error(
+            `processor "${this.contract.slug}" did not reach offset ${offset} in ${timeoutMs}ms`,
+          ),
+        );
+      }, timeoutMs);
+      this.#waiters.push(waiter);
       void this.wake();
     });
   }
@@ -405,21 +406,24 @@ export abstract class StreamProcessor<State> {
     // emit second, so a crash between the two loses only a notification (healed by the chain
     // mismatch on the next change), never state. The revision advances even if the append
     // fails, for the same reason: a hole in the chain is a re-seed, a lie in it is corruption.
+    // The WHOLE block is guarded — the fold above already committed, so a projection/diff
+    // failure (an unserializable value in state, a throwing projection) must degrade to a lost
+    // notification, never to a rejected batch that snapshot()/waitUntilProcessed callers see.
     if (typeof this.liveState === "function" && state !== progress.state) {
-      const patch = diff(this.liveState(progress.state), this.liveState(state));
-      if (patch) {
-        const from = this.#liveStateRev ?? progress.reducedThroughOffset;
-        const to = window.scannedThroughOffset;
-        this.#liveStateRev = to;
-        try {
+      try {
+        const patch = diff(this.liveState(progress.state), this.liveState(state));
+        if (patch) {
+          const from = this.#liveStateRev ?? progress.reducedThroughOffset;
+          const to = window.scannedThroughOffset;
+          this.#liveStateRev = to;
           await this.stream.append({
             type: LIVE_STATE_CHANGED,
             ephemeral: true,
             payload: { key: this.contract.slug, from, to, patch },
           });
-        } catch (error) {
-          console.error(`processor "${this.contract.slug}" live-state emission failed`, error);
         }
+      } catch (error) {
+        console.error(`processor "${this.contract.slug}" live-state emission failed`, error);
       }
     }
   }

@@ -1231,3 +1231,52 @@ owner's version deletes. The flush engine AND the forwarder's bookkeeping are go
   `liveSnapshot()` door; loop guard holds. Regression: push/ephemeral/crisp1/userfacet ALL
   PASS (ephemeral proof's pinned absolute offsets re-anchored to the shared-sequence
   invariant — change events now interleave).
+
+## Increment 50 (live-7): the adversarial-review fix wave — 19 confirmed bugs closed
+
+Two overnight review workflows (7-lens bug hunt, 82 agents; 4-angle re-derivation) confirmed 37
+findings against increment 49. Every confirmed BUG is fixed here; the simplification wave is
+increment 51. Highlights, by blast radius:
+
+- **append is ATOMIC** (`transactionSync` around sql + the maxAssignedOffset kv write): a
+  mid-batch idempotency conflict used to leave inserted rows above the recorded max — the next
+  append then re-assigned a used offset (one offset, two identities) or wedged on the PK.
+- **Idempotency dedupe hits and ephemeral capability events no longer fold into the push-row
+  projection** — a deduped re-append of a provided event resurrected a REVOKED subscription;
+  ephemeral provided/revoked events made the parent projection and the facet's mounts fold
+  disagree forever (the facet fold now skips ephemerals too, and skips malformed payloads
+  loudly instead of letting one hand-appended event wedge every later resolve).
+- **Facet drives are serialized per facet** (in-memory promise chains): a slow loader
+  materialization let a later batch overtake an earlier one, which was then judged a stale
+  redelivery and its NAMED EPHEMERAL events silently dropped. Live-state change events never
+  ride a drive at all now (nothing may consume them — the voice-flood RPC waste); the next
+  real drive's window COVERS the skipped span per-facet, so fold contiguity holds (the naive
+  skip broke it and the proof suite caught the dropped chunks immediately).
+- **A pure-ephemeral append no longer buys a cursor kv write per event-subscription row** —
+  push rows only pump when a durable event actually committed. With the drive-skip above, the
+  50Hz voice flood now costs what the design always claimed: ONE kv write per append.
+- **The push pump can no longer fight its operators**: a shadowed row's cursor freezes at the
+  next loop iteration (not when the pump drains); every pump write compare-and-swaps on a
+  cursor surgery generation (`rev`), so `resumeSubscription` mid-delivery wins and a revoked
+  row's GC'd cursor is never resurrected; the 20s delivery watchdog is CLEARED on the happy
+  path (every delivered batch used to pin the DO 20 extra billed seconds); `maxAttempts: 1`
+  with `onFailingEvent: "skip"` pins to one event instead of silently degrading into a halt;
+  concurrent anonymous subscribes mint unique names instead of shadowing each other.
+- **The quiesce alarm respects work**: it never aborts while a drive/fold is in flight (the
+  abort-mid-fold stall the resurrection pass exists to heal), and the resurrection pass is
+  awaited WITHOUT counting as activity — it used to re-materialize every facet exactly when
+  the stream went quiet and buy them a second 60s of billed idle (~120s tail → ~60s).
+- **Live-state emission is contained**: a throwing/unserializable projection (BigInt state,
+  toJSON → undefined) landed AFTER the persist and rejected the whole batch for
+  snapshot()/waitUntilProcessed callers, then went silent forever — now it degrades to the
+  documented lost-notification (+ unit test). The SDK helper's revision chain seeds from a
+  per-incarnation EPOCH: a reborn holder restarting at 0 could hand a stale client a `from`
+  matching its held rev and corrupt its doc silently — now every stale rev mismatches and
+  re-reads the door (prove_livestate re-anchored to relative revs).
+- Small but real: `read(after, 0)` no longer crashes (userspace-reachable); timed-out
+  `waitUntilProcessed` waiters leave the list; subscription targets with named captures are
+  rejected at provide time (they could never deliver); `#forwardLiveState` reads the row table
+  once per batch; `disableProcessor` clears its drive bookkeeping.
+
+104 unit tests; full eight-suite live board ALL PASS on live-7
+(livestate/ephemeral/push/crisp1/userfacet/restore/facet1/edge).

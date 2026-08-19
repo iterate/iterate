@@ -37,7 +37,12 @@ const equal = (a: unknown, b: unknown): boolean => {
  *  the wire will carry: undefined-valued keys vanish, Dates become their ISO strings, array
  *  holes become null. Diffing what you didn't normalize is how a Date change goes silent. */
 export function diff(a: unknown, b: unknown): PatchOp[] | undefined {
-  const json = (v: unknown) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
+  // stringify can itself return undefined (a bare function, toJSON() → undefined) — parse
+  // would then throw SyntaxError('"undefined" is not valid JSON'); treat those as absent.
+  const json = (v: unknown) => {
+    const s = JSON.stringify(v);
+    return s === undefined ? undefined : (JSON.parse(s) as unknown);
+  };
   return walk(json(a), json(b), "");
 }
 

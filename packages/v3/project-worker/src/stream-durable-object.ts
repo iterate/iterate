@@ -96,6 +96,9 @@ type PushCursor = {
   pinned?: boolean; // after a failure: batch size 1 (isolate-or-progress)
   nextAttemptAtMs?: number;
   halted?: { reason: string };
+  /** Surgery generation: resumeSubscription bumps it; an in-flight pump that read the OLD
+   *  cursor must not clobber the surgical one (compare-and-swap before every pump write). */
+  rev?: number;
 };
 
 /** The capability host's slug — the one facet processor this class itself depends on. */
@@ -177,75 +180,124 @@ export class StreamDurableObject extends DurableObject<Env> {
    *  every enabled facet processor is PUSHED the batch with its scan-window proof. */
   async append(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
     this.#touch();
-    const committed: StreamEvent[] = [];
+    // The mutation is ATOMIC (transactionSync rolls back sql AND kv together): a mid-batch throw
+    // — an idempotency conflict after earlier inserts — must never leave rows above the recorded
+    // max offset, which the next append would re-assign (one offset, two identities). The cache
+    // is assigned only AFTER the transaction returns; a throw leaves it untouched and true.
     const scannedAfterOffset = this.#maxAssigned();
-    let nextOffset = scannedAfterOffset;
-    for (const input of inputs) {
-      if (input.ephemeral && input.idempotencyKey)
-        throw new Error(
-          "ephemeral events cannot carry an idempotencyKey — nothing idempotent about the unreplayable",
-        );
-      if (input.idempotencyKey) {
-        const hit = this.ctx.storage.sql
-          .exec("SELECT offset, body FROM events WHERE idempotency_key = ?", input.idempotencyKey)
-          .toArray()[0];
-        if (hit) {
-          const existing = JSON.parse(String(hit.body)) as StreamEventInput;
-          if (sameIdempotentEvent(existing, input)) {
-            committed.push({
-              ...existing,
-              offset: Number(hit.offset),
-              path: this.#name.path,
-            } as StreamEvent);
-            continue; // a dedupe hit consumes NO offset
+    const { committed, nextOffset } = this.ctx.storage.transactionSync(() => {
+      const committed: StreamEvent[] = [];
+      let nextOffset = scannedAfterOffset;
+      for (const input of inputs) {
+        if (input.ephemeral && input.idempotencyKey)
+          throw new Error(
+            "ephemeral events cannot carry an idempotencyKey — nothing idempotent about the unreplayable",
+          );
+        if (input.idempotencyKey) {
+          const hit = this.ctx.storage.sql
+            .exec("SELECT offset, body FROM events WHERE idempotency_key = ?", input.idempotencyKey)
+            .toArray()[0];
+          if (hit) {
+            const existing = JSON.parse(String(hit.body)) as StreamEventInput;
+            if (sameIdempotentEvent(existing, input)) {
+              committed.push({
+                ...existing,
+                offset: Number(hit.offset),
+                path: this.#name.path,
+              } as StreamEvent);
+              continue; // a dedupe hit consumes NO offset
+            }
+            throw codedError(
+              "IDEMPOTENCY_CONFLICT",
+              idempotencyConflictMessage(input.idempotencyKey, Number(hit.offset)),
+              { existingOffset: Number(hit.offset) },
+            );
           }
-          throw codedError(
-            "IDEMPOTENCY_CONFLICT",
-            idempotencyConflictMessage(input.idempotencyKey, Number(hit.offset)),
-            { existingOffset: Number(hit.offset) },
+        }
+        nextOffset += 1;
+        const body = { ...input, createdAt: new Date().toISOString() };
+        if (!input.ephemeral) {
+          this.ctx.storage.sql.exec(
+            "INSERT INTO events (offset, body, idempotency_key) VALUES (?, ?, ?)",
+            nextOffset,
+            JSON.stringify(body),
+            input.idempotencyKey ?? null,
           );
         }
+        committed.push({ ...body, offset: nextOffset, path: this.#name.path } as StreamEvent);
       }
-      nextOffset += 1;
-      const body = { ...input, createdAt: new Date().toISOString() };
-      if (!input.ephemeral) {
-        this.ctx.storage.sql.exec(
-          "INSERT INTO events (offset, body, idempotency_key) VALUES (?, ?, ?)",
-          nextOffset,
-          JSON.stringify(body),
-          input.idempotencyKey ?? null,
-        );
-      }
-      committed.push({ ...body, offset: nextOffset, path: this.#name.path } as StreamEvent);
-    }
+      if (nextOffset > scannedAfterOffset) this.ctx.storage.kv.put("maxAssignedOffset", nextOffset); // THE one deliberate write
+      return { committed, nextOffset };
+    });
     if (nextOffset > scannedAfterOffset) {
-      this.ctx.storage.kv.put("maxAssignedOffset", nextOffset); // THE one deliberate write
       this.#maxAssignedCache = nextOffset;
-      const window = { scannedAfterOffset, scannedThroughOffset: nextOffset };
       // THE PUMP: push the batch + window into every enabled facet processor (each an isolated
       // workerd facet with its own storage — including the iterate-context capability host).
-      // Fire-and-forget ON PURPOSE: an awaited drive would deadlock if a facet processor
-      // APPENDS during its batch (append → this method → await the same facet's busy chain) —
-      // and the capability host DOES append (provide/revoke). Reads stay correct because every
-      // snapshot/invoke gap-repairs from the log; only ephemeral bodies are unrepairable, by
-      // design. The push itself is what wakes an aborted facet.
-      for (const { slug } of this.#facetEntries())
-        void this.#facet(slug)
-          .then((f) => f.processEventBatch(committed, window))
-          .catch((e) => console.error(`facet "${slug}" drive failed`, e));
-      this.#foldSubscriptionProjection(committed); // parent sees every body at the commit point
-      this.#drivePushRows(); // push rows read durable rows themselves — also never awaited
+      // Fire-and-forget from append's view — an awaited drive would deadlock if a facet
+      // processor APPENDS during its batch (append → this method → await the same facet's busy
+      // chain), and the capability host DOES append (provide/revoke) — but SERIALIZED PER FACET:
+      // without the chain, a slow loader materialization lets a later batch overtake an earlier
+      // one, and the earlier window is then judged a stale redelivery and its EPHEMERAL events
+      // (undeliverable by repair, by design) are silently dropped. Reads stay correct because
+      // every snapshot/invoke gap-repairs from the log. The push is what wakes an aborted facet.
+      // Live-state change events never ride a drive: the platform rule makes them unconsumable
+      // by every fold, so delivering them is pure RPC waste (the voice flood). A batch that is
+      // ONLY live-state skips the drives; the next real drive's window then COVERS the skipped
+      // span (per-facet lastDeliveredThrough) so the facet's contiguity fast path holds — to a
+      // fold, a skipped live-state offset is exactly an ephemeral hole, which windows already
+      // express. Without the widened window, the skip broke contiguity and gap repair silently
+      // dropped deliverable named ephemerals between two live-state changes (proof-caught).
+      const drivable = committed.filter((e) => e.type !== "events.iterate.com/live-state/changed");
+      if (drivable.length > 0)
+        for (const { slug } of this.#facetEntries()) {
+          this.#facetWorkInFlight++;
+          const after = this.#driveWindows.get(slug) ?? scannedAfterOffset;
+          this.#driveWindows.set(slug, nextOffset);
+          const prev = this.#driveChains.get(slug) ?? Promise.resolve();
+          this.#driveChains.set(
+            slug,
+            prev
+              .then(() => this.#facet(slug))
+              .then((f) =>
+                f.processEventBatch(drivable, {
+                  scannedAfterOffset: after,
+                  scannedThroughOffset: nextOffset,
+                }),
+              )
+              .catch((e) => console.error(`facet "${slug}" drive failed`, e))
+              .finally(() => {
+                this.#facetWorkInFlight--;
+                this.#noteActivity(); // a finished fold earns a fresh quiet window
+              }),
+          );
+        }
+      this.#foldSubscriptionProjection(committed, scannedAfterOffset);
+      // Push rows read DURABLE rows themselves — a pure-ephemeral batch has nothing for them,
+      // and driving them anyway bought a cursor kv write per row per append (the flood bill).
+      if (committed.some((e) => !e.ephemeral && e.offset > scannedAfterOffset))
+        this.#drivePushRows(); // never awaited
       this.#forwardLiveState(committed); // patch frames onto state rows — never awaited
     }
     this.#noteActivity();
     return committed;
   }
 
+  // Per-facet drive serialization + the in-flight count the quiesce alarm respects (aborting a
+  // facet MID-FOLD is exactly the stall the resurrection pass exists to heal — never cause it).
+  #driveChains = new Map<string, Promise<unknown>>();
+  #driveWindows = new Map<string, number>(); // per-facet lastDeliveredThrough (skipped spans ride the next window)
+  #facetWorkInFlight = 0;
+
   /** Fold the subscription PROJECTION inline: exact `itx.subscribers.<name>` provided/revoked
    *  events maintain the derived index + cursors. No facet round trip, no cache staleness —
-   *  the parent is the commit point and sees every event body as it lands. */
-  #foldSubscriptionProjection(committed: StreamEvent[]): void {
+   *  the parent is the commit point and sees every event body as it lands. Two skips keep this
+   *  fold and the facet's mounts fold IN AGREEMENT forever: idempotency dedupe hits replay OLD
+   *  offsets (already folded at their original commit — re-folding one resurrects a revoked
+   *  row), and ephemeral capability events are invisible to any refold (folding them live here
+   *  would mint rows the facet's rebuilt table denies). */
+  #foldSubscriptionProjection(committed: StreamEvent[], scannedAfterOffset: number): void {
     for (const e of committed) {
+      if (e.offset <= scannedAfterOffset || e.ephemeral) continue;
       if (e.type === "events.iterate.com/capability-host/capability-provided") {
         const { pattern, delivery } = e.payload as {
           pattern: unknown[];
@@ -292,6 +344,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   read(afterOffset = 0, limit = 500): { events: StreamEvent[]; scannedThroughOffset: number } {
+    limit = Math.max(1, limit); // limit 0 crashed the full-page check (userspace-reachable)
     // A virgin stream has no events table (and reading must not create one — see #touch).
     if (!this.#eventsTableExists()) return { events: [], scannedThroughOffset: afterOffset };
     const events = this.ctx.storage.sql
@@ -338,21 +391,29 @@ export class StreamDurableObject extends DurableObject<Env> {
       // would otherwise stall until the next append (the pump only fires on commits). The
       // first alarm of each incarnation asks every facet for a snapshot — which IS its
       // catch-up: a behind facet gap-repairs from its own durable cursor, a caught-up one
-      // no-ops. Quiesce/abort waits for a later pass so it can never race a fold it revived.
+      // no-ops. The pass is AWAITED and does not count as activity — otherwise it would
+      // re-materialize every facet exactly when the stream went quiet and then buy them a
+      // second 60s of billed idle before the quiesce below could fire.
+      // (State rows need no resurrection: the stream holds no live-state delivery state — a
+      // dropped forward surfaces as a chain gap at the client, which re-reads the door.)
       this.#facetsResurrected = true;
-      for (const { slug } of this.#facetEntries())
-        void this.#facet(slug)
-          .then((f) => f.snapshot())
-          .catch((e) => console.error(`facet "${slug}" resurrection failed`, e));
-      // (State rows need no resurrection pass: the stream holds no live-state delivery state
-      // at all — a change whose forward died with the incarnation surfaces as a chain gap at
-      // the client on the NEXT change, and the client re-reads the producer's door.)
-      await this.#armAlarmNoLaterThan(Date.now() + 60_000);
-    } else if (Date.now() - this.#lastActivityMs >= 60_000) {
+      const idleSince = this.#lastActivityMs;
+      await Promise.allSettled(
+        this.#facetEntries().map(({ slug }) =>
+          this.#facet(slug)
+            .then((f) => f.snapshot())
+            .catch((e) => console.error(`facet "${slug}" resurrection failed`, e)),
+        ),
+      );
+      this.#lastActivityMs = idleSince;
+    }
+    if (Date.now() - this.#lastActivityMs >= 60_000 && this.#facetWorkInFlight === 0) {
       // workerd #6800: a live facet client holds this actor idle-but-non-hibernatable,
       // converting quiet time into billed duration. Abort every facet once the stream has been
       // quiet — their cursors are durable in their OWN storage and delivery is cursor-driven,
       // so nothing is lost (replies are output-gated; abort keeps storage; rebuild ~50-700ms).
+      // Never while a drive/fold is in flight: aborting mid-fold is the stall the resurrection
+      // pass exists to heal.
       for (const { slug } of this.#facetEntries()) {
         try {
           this.ctx.facets.abort(`proc:${slug}`, "idle quiesce");
@@ -421,7 +482,9 @@ export class StreamDurableObject extends DurableObject<Env> {
       throw new Error(
         `subscribe: target must be an itx expression (got ${JSON.stringify(target[0])})`,
       );
-    const name = input.name ?? `subscription:${this.#maxAssigned()}`;
+    // A UNIQUE default name — two concurrent anonymous subscribes must never collide on the
+    // same name and silently shadow each other (the max-offset default did exactly that).
+    const name = input.name ?? `subscription:${crypto.randomUUID().slice(0, 8)}`;
     const { providedAtOffset } = await (
       await this.#ictx()
     ).provide({
@@ -459,6 +522,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       confirmedOffset: input.afterOffset ?? cursor?.confirmedOffset ?? winner.providedAtOffset,
       attempt: 0,
       skipsSinceSuccess: 0,
+      rev: (cursor?.rev ?? 0) + 1, // the surgery generation — in-flight pump writes lose to this
     });
     this.#drivePushRows();
     return { ok: true };
@@ -479,10 +543,11 @@ export class StreamDurableObject extends DurableObject<Env> {
   // fire-and-forget and NOT mutually ordered; a reordered or dropped frame is just a chain
   // mismatch at the client, which is the same one recovery path as everything else.
   #forwardLiveState(committed: StreamEvent[]): void {
+    let rows: PushRow[] | undefined; // read once per batch, not once per change event
     for (const e of committed) {
       if (e.type !== "events.iterate.com/live-state/changed") continue;
       const { key } = e.payload as { key: string };
-      for (const row of this.#activePushRows()) {
+      for (const row of (rows ??= this.#activePushRows())) {
         if (row.liveState?.key !== key) continue;
         void this.#ictx()
           .then((f) => f.deliverSubscription(row.providedAtOffset, [e.payload]))
@@ -500,6 +565,10 @@ export class StreamDurableObject extends DurableObject<Env> {
     this.#pushInFlight.add(row.providedAtOffset);
     try {
       for (;;) {
+        // Shadowed mid-flight → the cursor freezes NOW, not when the pump happens to drain
+        // (the shadow's whole meaning is that the OLD target stops receiving).
+        if (!this.#activePushRows().some((r) => r.providedAtOffset === row.providedAtOffset))
+          return;
         const cursor = this.#pushCursor(row.providedAtOffset);
         if (!cursor || cursor.halted) return;
         if (cursor.nextAttemptAtMs && Date.now() < cursor.nextAttemptAtMs) {
@@ -523,28 +592,40 @@ export class StreamDurableObject extends DurableObject<Env> {
           });
           continue;
         }
+        // Delivery BY ROW IDENTITY through the ictx facet — never by name through the table
+        // (a broad default route must not intercept deliveries). Awaited resolve IS the ack.
+        // The watchdog timer is CLEARED on the happy path: a leaked 20s timer per delivery
+        // pins the DO out of hibernation — quiet time converted into billed duration.
+        let watchdog: ReturnType<typeof setTimeout> | undefined;
         try {
-          // Delivery BY ROW IDENTITY through the ictx facet — never by name through the table
-          // (a broad default route must not intercept deliveries). Awaited resolve IS the ack.
           await Promise.race([
             (await this.#ictx()).deliverSubscription(row.providedAtOffset, [events, window]),
-            new Promise((_, reject) =>
-              setTimeout(
+            new Promise((_, reject) => {
+              watchdog = setTimeout(
                 () => reject(new Error(`push "${row.name}": delivery timed out after 20s`)),
                 20_000,
-              ),
-            ),
+              );
+            }),
           ]);
+          // Compare-and-swap on the surgery generation: if resumeSubscription rewrote the
+          // cursor while we were delivering, the surgical cursor wins (the delivered batch may
+          // redeliver — exactly what a replay request asks for). A revoked row's cursor is
+          // GONE — writing would resurrect a kv row revoke already GC'd.
+          const fresh = this.#pushCursor(row.providedAtOffset);
+          if (!fresh || (fresh.rev ?? 0) !== (cursor.rev ?? 0)) continue;
           // A clean delivery resets the WHOLE ladder — including the skip counter, so
           // "3 consecutive skips" really means consecutive.
           this.#putPushCursor(row.providedAtOffset, {
             confirmedOffset: window.scannedThroughOffset,
             attempt: 0,
             skipsSinceSuccess: 0,
+            rev: cursor.rev,
           });
         } catch (error) {
           await this.#onPushFailure(row, cursor, events, error);
           return;
+        } finally {
+          if (watchdog !== undefined) clearTimeout(watchdog);
         }
       }
     } finally {
@@ -564,11 +645,15 @@ export class StreamDurableObject extends DurableObject<Env> {
     events: StreamEvent[],
     error: unknown,
   ): Promise<void> {
+    // The same CAS as the success path: surgery or revoke mid-delivery wins over the failure.
+    const fresh = this.#pushCursor(row.providedAtOffset);
+    if (!fresh || (fresh.rev ?? 0) !== (cursor.rev ?? 0)) return;
     const attempt = cursor.attempt + 1;
     const message = error instanceof Error ? error.message : String(error);
+    const backoffFrom = (n: number) =>
+      Math.round(Math.min(1000 * 2 ** (n - 1), 1_800_000) * (0.8 + Math.random() * 0.4));
     if (attempt < (row.maxAttempts ?? 15)) {
-      const backoff = Math.min(1000 * 2 ** (attempt - 1), 1_800_000);
-      const jittered = Math.round(backoff * (0.8 + Math.random() * 0.4));
+      const jittered = backoffFrom(attempt);
       this.#putPushCursor(row.providedAtOffset, {
         ...cursor,
         attempt,
@@ -578,7 +663,21 @@ export class StreamDurableObject extends DurableObject<Env> {
       void this.#armAlarmNoLaterThan(Date.now() + jittered).catch(() => {});
       return;
     }
-    // Retries exhausted — now, and only now, consult the policy.
+    // Retries exhausted. A skip policy can only name ONE event — if exhaustion landed on an
+    // un-isolated batch (maxAttempts:1 skips the ladder's pinning), pin and go once more so
+    // the policy speaks about a single event instead of silently degrading into a halt.
+    if (row.onFailingEvent === "skip" && events.length > 1) {
+      const jittered = backoffFrom(attempt);
+      this.#putPushCursor(row.providedAtOffset, {
+        ...cursor,
+        attempt,
+        pinned: true,
+        nextAttemptAtMs: Date.now() + jittered,
+      });
+      void this.#armAlarmNoLaterThan(Date.now() + jittered).catch(() => {});
+      return;
+    }
+    // Now, and only now, consult the policy.
     if (row.onFailingEvent === "skip" && events.length === 1) {
       const skips = cursor.skipsSinceSuccess + 1;
       if (skips >= 3) return this.#haltPush(row, `3 consecutive skips (last error: ${message})`);
@@ -590,6 +689,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         confirmedOffset: events[0].offset,
         attempt: 0,
         skipsSinceSuccess: skips,
+        rev: cursor.rev,
       });
       void this.#armAlarmNoLaterThan(Date.now()).catch(() => {}); // resume past the skip
       return;
@@ -605,6 +705,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         attempt: 0,
         skipsSinceSuccess: cursor.skipsSinceSuccess,
         halted: { reason },
+        rev: cursor.rev,
       });
     await this.append({
       type: "events.iterate.com/stream/subscription-delivery-halted",
@@ -625,7 +726,6 @@ export class StreamDurableObject extends DurableObject<Env> {
    *  the same duck contract: configure / processEventBatch / snapshot / waitUntilProcessed.
    *  NEVER retain the returned handle (#6800: re-`get` per burst; the quiesce alarm aborts). */
   async #facet(slug: string): Promise<FacetProcessorHandle> {
-    this.#noteActivity();
     const ref = this.#facetEntries().find((e) => e.slug === slug)?.ref;
     if (!ref) {
       const exports = (this.ctx as unknown as { exports: Record<string, unknown> }).exports;
@@ -685,6 +785,8 @@ export class StreamDurableObject extends DurableObject<Env> {
    *  materialization + error log on EVERY commit with no remedy but hand-editing kv). */
   disableProcessor(slug: string): { ok: true } {
     if (slug === ICTX_SLUG) throw new Error("the iterate-context processor cannot be disabled");
+    this.#driveChains.delete(slug);
+    this.#driveWindows.delete(slug); // a re-enable must not inherit a window it never saw
     this.ctx.storage.kv.put(
       "facet-processors",
       this.#facetEntries().filter((e) => e.slug !== slug),
@@ -700,6 +802,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    *  the terminal. `roots.facets` (and via one seed, `itx.facets`) rides this to reach ANY
    *  method a facet's durable object exposes — a facet hosts an object; processor is a role. */
   async facetInvoke(slug: string, path: string[], args: unknown[]): Promise<unknown> {
+    this.#noteActivity(); // (was in #facet — moved out so the resurrection pass stays idle-neutral)
     if (path.length === 0) throw new Error(`facet "${slug}": name a method`);
     if (slug !== ICTX_SLUG && !this.#facetEntries().some((e) => e.slug === slug))
       throw new Error(`no facet "${slug}" enabled`);
@@ -732,6 +835,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    *  facet processor (so every commit drives it too); the durable marker keeps the enable to
    *  once, not once per call. */
   async #ictx(): Promise<ProcessorFacet> {
+    this.#noteActivity();
     if (!this.ctx.storage.kv.get("ictx:enabled")) {
       await this.enableProcessor(ICTX_SLUG);
       this.ctx.storage.kv.put("ictx:enabled", true);
