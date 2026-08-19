@@ -45,7 +45,7 @@ export default class CodeCap extends WorkerEntrypoint {
 `;
 
 // (The STATEFUL dynamic-worker wrapper `statefulDoRunner` was removed: with native facet RPC
-// (Reflect.apply in StatefulWorkerDurableObject.invokeCapability), the runner loads the user's
+// (Reflect.apply via invokePath), the stream DO loads the user's
 // `DurableObject` class DIRECTLY and calls its methods — no `__HostedActor` fetch-tunnel wrapper.)
 
 /** Load a confined dynamic worker — THE one loader wiring (stateless code caps, userspace facet
@@ -53,7 +53,7 @@ export default class CodeCap extends WorkerEntrypoint {
  *  (the dotted surface above) is always injected, and the worker's WHOLE world — `env.ITX` and
  *  every global fetch — is its owning context, so sibling calls and egress route through the
  *  host's dispatch with no second path. Callers version their `cacheKey` themselves (content
- *  hash + deploy id — see the stale-isolate learning in stateful-worker-durable-object.ts).
+ *  hash + deploy id — see the stale-isolate learning on versionedFacet below).
  *
  *  ═══════════════════════════════════════════════════════════════════════════════════════════
  *  ⚠️  THE cacheKey IS A DOLLAR AMOUNT — one of the most cost-sensitive levers in the system.
@@ -103,6 +103,16 @@ export function confinedWorker(
  *  its storage across restarts — the version-marker dance, stated once for both hosts (the
  *  stream's userspace processors and the stateful runner). The deploy id is already in the
  *  loader cacheKey (confinedWorker); the marker catches CONTENT changes within a deploy. */
+/** A source expression may evaluate to a modules record ({ name: code }) or to ONE module
+ *  string (plain kv — increment 57 killed the files root); normalize to the loader's shape.
+ *  Anything else is a loud error, not an empty worker. */
+export function asModules(result: unknown, what: string): Record<string, string> {
+  if (typeof result === "string") return { "cap.js": result };
+  if (result && typeof result === "object" && !Array.isArray(result))
+    return result as Record<string, string>;
+  throw new Error(`${what}: source expression produced no module code`);
+}
+
 export function versionedFacet(
   ctx: {
     storage: { kv: { get(k: string): unknown; put(k: string, v: unknown): void } };

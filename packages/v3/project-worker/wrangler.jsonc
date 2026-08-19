@@ -14,18 +14,13 @@
   // survives redeploys — so a facet built from an isolate minted by a PRIOR deployment can't be
   // called from the new parent ("Durable Object Facet stubs cannot be transferred between Workers").
   // apps/os folds workerVersion(env)=CF_VERSION_METADATA.id into its loader cacheKey to prevent
-  // exactly this; the clean room mirrors that (see stateful-worker-durable-object.ts #facet).
+  // exactly this; the clean room does the same (see confinedWorker in core/agent-runtime.ts).
   "version_metadata": { "binding": "CF_VERSION_METADATA" },
 
   // THE context DO: one per {projectId, path}, codec-named — the stream, the routing table, and
   // every hibernatable socket in one addressable parent.
   "durable_objects": {
-    "bindings": [
-      { "name": "CONTEXT", "class_name": "StreamDurableObject" },
-      // The dedicated stateful-dynamic-worker runner (apps/os StatefulWorkerDurableObject). One instance per
-      // stateful capability, each hosting the user's DO class as a facet.
-      { "name": "STATEFUL_WORKER", "class_name": "StatefulWorkerDurableObject" },
-    ],
+    "bindings": [{ "name": "CONTEXT", "class_name": "StreamDurableObject" }],
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["ItxDurableObject"] },
@@ -46,6 +41,8 @@
       "tag": "v7",
       "renamed_classes": [{ "from": "IterateContextDurableObject", "to": "StreamDurableObject" }],
     },
+    // Increment 57: stateful loaded classes are FACETS of the stream; the dedicated runner dies.
+    { "tag": "v8", "deleted_classes": ["StatefulWorkerDurableObject"] },
   ],
 
   // The DO's fallback (target-core §4.4). SELF-HOST/HOSTED: a service binding to the real control-plane shell

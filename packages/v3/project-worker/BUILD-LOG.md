@@ -1434,3 +1434,21 @@ identifiers throughout (the owner's naming doctrine, now enforced in code):
 89 unit tests (the deleted placeholder machinery took its ~20 tests with it); eleven-suite
 live board ALL PASS on live-12 (proofs updated: provide speaks `path`, enablement mounts
 consume offsets and are counted by "\*" reducers — the audit trail the kv registry never had).
+
+## Increment 57 — topology: the stateful runner dies, source is plain kv (live-14)
+
+- **StatefulWorkerDurableObject DELETED** (migration v8): stateful loaded classes are now
+  FACETS of their stream — same confinedWorker + versionedFacet as userspace processors, facet
+  identity keyed on the source EXPRESSION, restart-on-content-change via the version marker.
+  The `{projectId}::{path}::{className}:{hash}` name codec and the x-itx-source/x-itx-class
+  header protocol die with it; a 101 flows DO→facet natively. Idle stateful facets are aborted
+  by the same quiesce alarm (in-memory name set); a BUSY one pins its stream — the accepted
+  trade. One DO namespace remains.
+- **files/repo roots + hello-files DELETED**: source is plain kv (`itx.kv.get('src/x.js')`).
+  `asModules` (core/agent-runtime.ts) normalizes a source expression's result — a modules
+  record passes through, ONE string becomes `{"cap.js": source}`, anything else errors loudly.
+  A future real repo mounts at itx.files as an ordinary capability.
+- Proofs seed their own sources (scratchpad proof_sources.mjs + seedSources); board 11/11 ALL
+  PASS on live-14. One re-run needed: the known DO-class-lags-worker deploy race made five
+  suites hit old-class DOs on the first pass.
+- Grammar diet (placeholders/substitute/$-escape) had already landed in increment 55.

@@ -48,8 +48,6 @@ export const DEFAULT_CONFIG_MOUNTS: { path: string; target: string }[] = [
   { path: "itx.connections", target: "connections" },
   { path: "itx.facets", target: "facets" },
   { path: "itx.workers", target: "workers" },
-  { path: "itx.files", target: "files" },
-  { path: "itx.repo", target: "repo" },
   { path: "itx.os", target: "bindings.get('FALLBACK')" },
 ];
 

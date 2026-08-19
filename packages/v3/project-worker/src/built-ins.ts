@@ -4,7 +4,7 @@
 // policed, the keys are simply absent). Config-mount targets read `kv`, `stream`,
 // `contexts.get('/x')`, `bindings.get('FALLBACK')` — the vocabulary, unbundled.
 
-import { CODE_CAP_RUNNER, confinedWorker } from "./core/agent-runtime.ts";
+import { asModules, CODE_CAP_RUNNER, confinedWorker } from "./core/agent-runtime.ts";
 import { itxEntrypointFor } from "./itx-entrypoint.ts";
 import { pathProxy, toExpression, type Expression } from "./core/expression.ts";
 import { hashSource } from "./core/hash.ts";
@@ -35,14 +35,11 @@ export type FacetsView = {
 export type WorkersView = {
   get(ref: { source: unknown; className?: string; type?: string }): unknown;
 };
-import { HELLO_FILES } from "./hello-files.ts";
-import type { StatefulWorkerDurableObject } from "./stateful-worker-durable-object.ts";
 import type { StreamDurableObject } from "./stream-durable-object.ts";
 
 /** The bindings roots-building needs — present in BOTH hosts (the worker env). */
 export interface BuiltInsEnv {
   CONTEXT: DurableObjectNamespace<StreamDurableObject>;
-  STATEFUL_WORKER: DurableObjectNamespace<StatefulWorkerDurableObject>;
   LOADER: WorkerLoader;
   ITX_KV?: KVNamespace;
   SECRETS_KV?: KVNamespace;
@@ -67,9 +64,19 @@ export interface BuildBuiltInsDeps {
     append(...e: unknown[]): unknown;
     read(after?: number, limit?: number): unknown;
   };
-  /** The connections view (parent-local closures over the ItxConnectionRegistry). */
+  /** The connections view (parent-local closures over the HibernatableRpcStubManager). */
   connections: ConnectionsView;
   facets: FacetsView;
+  /** Host a stateful loaded class as a FACET of this stream (the dedicated runner DO died in
+   *  increment 57 — accepted trade: a busy stateful worker pins its stream). */
+  statefulWorkers: {
+    invoke(
+      ref: { source: Expression; className: string },
+      segments: string[],
+      args: unknown[],
+    ): Promise<unknown>;
+    fetch(ref: { source: Expression; className: string }, request: Request): Promise<Response>;
+  };
   /** The ctx whose `exports` mints the ItxEntrypoint loopback (the loaded-worker
    *  host — see iterate-context-entrypoint.ts for why it is never a raw getByName stub). */
   hostCtx: unknown;
@@ -82,7 +89,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   const { projectId, path, contextName, env } = deps;
 
   const loadModules = async (source: Expression): Promise<Record<string, string>> =>
-    (await deps.invoke(source)) as Record<string, string>;
+    asModules(await deps.invoke(source), "workers.get");
 
   /** RUN CODE IN THIS CONTEXT — the fundamental context operation (owner: "one of the key,
    *  key, key APIs"). `workers.get({source, className?})`: `className` present → the class is
@@ -116,27 +123,18 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           fetch: async (request: Request) => (await worker()).getEntrypoint().fetch(request),
         };
       }
-      // Durable class: a method proxy onto the dedicated runner DO (deep dots ride the wire
-      // joined, the runner walks segments). A top-level `.fetch` forwards natively (101s pass).
-      const runner = env.STATEFUL_WORKER.getByName(
-        `${projectId}::${path}::${className}:${hashSource(JSON.stringify(source))}`,
-      );
+      // Durable class: a FACET of this stream — a method proxy that walks deep dots natively;
+      // a top-level `.fetch` forwards to the facet's own fetch (101s pass, no header protocol).
       return pathProxy((segments, args) => {
-        if (segments.length === 1 && segments[0] === "fetch") {
-          const request = args[0] as Request;
-          const headers = new Headers(request.headers);
-          headers.set("x-itx-source", JSON.stringify(source));
-          headers.set("x-itx-class", className);
-          return runner.fetch(new Request(request, { headers }));
-        }
-        return runner.invokeCapability({ source, className, method: segments.join("."), args });
+        if (segments.length === 1 && segments[0] === "fetch")
+          return deps.statefulWorkers.fetch({ source, className }, args[0] as Request);
+        return deps.statefulWorkers.invoke({ source, className }, segments, args);
       });
     },
   };
 
   const { itxKv, secretsKv } = { itxKv: env.ITX_KV, secretsKv: env.SECRETS_KV };
   const kvPrefix = `${projectId}:`;
-  const repoPrefix = `${projectId}:repo:`;
   const own = () => deps.context(path);
 
   /** One prefixed view over the shared namespace — the prefix IS the isolation. */
@@ -160,7 +158,6 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     };
   };
   const projectKv = prefixedKv(kvPrefix, "kv");
-  const repoKv = prefixedKv(repoPrefix, "repo");
 
   const scope: Record<string, unknown> = {
     whoami: () => ({ projectId, path }),
@@ -170,12 +167,6 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       put: projectKv.put,
       delete: projectKv.delete,
       list: async (start = "") => ({ keys: await projectKv.keys(start) }),
-    },
-    /** The project's file store (`repo:`-prefixed kv view) — where the config worker lives. */
-    repo: {
-      get: repoKv.get,
-      put: repoKv.put,
-      list: async () => ({ files: await repoKv.keys() }),
     },
     /** Write-only secret store. Values come back out ONLY as `{{secret:NAME}}` substitution at
      *  the egress terminal — never through a read here. */
@@ -214,18 +205,6 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     connections: deps.connections,
     facets: deps.facets,
     workers,
-    /** The file store the source expressions read: THE REPO first, demo files as fallback —
-     *  put real source with `itx.repo.put('/my.js', src)` and run it with
-     *  `itx.workers.get({ source: "itx.files.read('/my.js')" })`. Repo wins on a path clash:
-     *  the demos are scafreducing and must never shadow a project's own file. (The smallest
-     *  possible repo; the apps/os repo DO grows from this seam.) */
-    files: {
-      read: async (p: string) => {
-        const content = (itxKv ? await repoKv.get(p) : null) ?? HELLO_FILES[p] ?? null;
-        if (content == null) throw new Error(`files: no file "${p}"`);
-        return { "cap.js": content };
-      },
-    },
     /** The forker door: any wrangler service binding, referenced by name from a config seed. */
     bindings: {
       get: (name: string) => {

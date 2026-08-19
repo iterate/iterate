@@ -25,7 +25,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { substituteHeaderSecrets } from "@v3/shared/egress";
-import { confinedWorker, versionedFacet } from "./core/agent-runtime.ts";
+import { asModules, confinedWorker, versionedFacet } from "./core/agent-runtime.ts";
 import { parseAppConfig } from "./core/config.ts";
 import {
   breakerRemaining,
@@ -420,6 +420,10 @@ export class StreamDurableObject extends DurableObject<Env> {
       facets: {
         get: (slug) => pathProxy((segments, args) => this.facetInvoke(slug, segments, args)),
       },
+      statefulWorkers: {
+        invoke: (ref, segments, args) => this.#statefulWorkerInvoke(ref, segments, args),
+        fetch: (ref, request) => this.#statefulWorkerFetch(ref, request),
+      },
       hostCtx: this.ctx,
     });
     const proc = new CapabilityTableProcessor({
@@ -589,6 +593,14 @@ export class StreamDurableObject extends DurableObject<Env> {
           /* facet not running — already quiesced */
         }
       }
+      for (const facetName of this.#statefulFacetNames) {
+        try {
+          this.ctx.facets.abort(facetName, "idle quiesce");
+        } catch {
+          /* facet not running — already quiesced */
+        }
+      }
+      this.#statefulFacetNames.clear();
       // Same doctrine for the paged-in RetainedCallbackInvoker stubs: retaining one pins this
       // actor awake, and a page always gets it back — dispose them with the idle facets.
       this.#hibernatableRpcStubs.disposeRetainedStubs();
@@ -769,7 +781,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         class: exports.ProcessorFacet as DurableObjectClass,
       })) as unknown as FacetProcessorHandle;
     }
-    const userModules = (await this.invoke(ref.source)) as Record<string, string>;
+    const userModules = asModules(await this.invoke(ref.source), `processor "${slug}"`);
     const version = hashSource(JSON.stringify(userModules));
     const worker = confinedWorker(
       this.env,
@@ -857,6 +869,67 @@ export class StreamDurableObject extends DurableObject<Env> {
     // invokePath = stepGet + Reflect.apply with the receiver carried (the DataCloneError
     // learning lives on the helper — see core/expression.ts).
     return invokePath(await this.#facet(slug), path, args, `facet "${slug}"`);
+  }
+
+  // ── stateful loaded classes: FACETS of this stream (the dedicated runner DO died in 57) ──
+
+  /** Names of stateful facets materialized THIS incarnation — the quiesce alarm aborts them
+   *  beside the idle processor facets (an IDLE stateful facet must never pin the stream; a
+   *  BUSY one does — the accepted trade of hosting them here). In memory on purpose: facets
+   *  die with the incarnation, and a fresh call re-materializes from durable facet storage. */
+  readonly #statefulFacetNames = new Set<string>();
+
+  /** Materialize (or reuse) the facet hosting a loaded `className`. Same confinedWorker +
+   *  versionedFacet as userspace processors; facet identity keys on the SOURCE EXPRESSION
+   *  (stable name), while versionedFacet restarts it when the resolved CONTENT changes. */
+  async #statefulFacet(ref: { source: Expression; className: string }): Promise<unknown> {
+    this.#noteActivity();
+    const modules = asModules(await this.invoke(ref.source), `stateful worker "${ref.className}"`);
+    const version = hashSource(JSON.stringify(modules));
+    const worker = confinedWorker(
+      this.env,
+      {
+        kind: "stateful",
+        owner: `${this.#address.name}:${ref.className}`,
+        contentHash: version,
+      },
+      "cap.js",
+      modules,
+      itxEntrypointFor(this.ctx, this.#address.name),
+    );
+    const facetName = `stateful:${ref.className}:${hashSource(JSON.stringify(ref.source))}`;
+    this.#statefulFacetNames.add(facetName);
+    return versionedFacet(this.ctx, {
+      worker,
+      className: ref.className,
+      facetName,
+      markerKey: `${facetName}:version`,
+      version,
+    });
+  }
+
+  /** RPC lane: a DOTTED method walks receiver-preservingly, terminal Reflect.apply — the
+   *  DataCloneError learning lives on invokePath (never `stub[m].apply`). */
+  async #statefulWorkerInvoke(
+    ref: { source: Expression; className: string },
+    segments: string[],
+    args: unknown[],
+  ): Promise<unknown> {
+    return invokePath(
+      await this.#statefulFacet(ref),
+      segments,
+      args,
+      `stateful worker "${ref.className}"`,
+    );
+  }
+
+  /** WS/streaming lane: the facet's own fetch — a 101 flows DO→facet natively (the old
+   *  x-itx-source/x-itx-class header protocol died with the runner DO). */
+  async #statefulWorkerFetch(
+    ref: { source: Expression; className: string },
+    request: Request,
+  ): Promise<Response> {
+    return ((await this.#statefulFacet(ref)) as Fetcher).fetch(request);
   }
 
   #identityFor(slug: string, exportName?: string, props?: Record<string, unknown>): FacetIdentity {
