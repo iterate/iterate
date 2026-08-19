@@ -64,7 +64,7 @@ describe("agentCreationForPath — the atomic core, and nothing else", () => {
     });
   });
 
-  test("arms the keeper and the narrow collection copy in the same batch", () => {
+  test("arms the agent processor and the narrow collection copy in the same batch", () => {
     const subscriptions = coreFor("/agents/demo").events.filter(
       (event) => event.type === "events.iterate.com/stream/subscription-configured",
     );

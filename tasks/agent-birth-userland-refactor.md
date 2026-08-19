@@ -10,7 +10,7 @@ blocked-by: ~~worker-delivery-obligations~~ (merged in #2506)
 
 Implementation complete; ALL CI lanes green including preview e2e
 (`720a5a7f0`). Landed: the whole decided model — worker-authored births with
-the finalize hold + degraded-start deadline, headless-only keeper,
+the finalize hold + degraded-start deadline, headless-only agent processor,
 `getDefaultBirthEvents` / `interpretResponse` itx services, router
 channel-facts migration, the same-change cleanup (defaults store, allowlist,
 prompt-pinning publish), all THREE templates rewritten (with-voice was
@@ -26,10 +26,10 @@ finalize → successful turn). Remaining: human review.
 - **Births are authored by the project's config worker**, reacting to
   `agent/created` in `processEvent` — for every agent, including the default
   template's. `create()` shrinks to an atomic core: `agent/created` + the
-  keeper subscription + capability host. No prompt, no wishes read, no
+  agent processor subscription + capability host. No prompt, no wishes read, no
   interpreter chosen.
 - **Inert until ready**: messages accumulate on the stream (storage is
-  free); the keeper holds the LLM send until `agent/birth-finalized` (new
+  free); the agent processor holds the LLM send until `agent/birth-finalized` (new
   agent-contract event, appended by the worker after its birth events) or a
   ~10s deadline (platform constant, deliberately not configurable — a
   configurable pre-birth deadline would need exactly the stored-wishes
@@ -68,7 +68,7 @@ finalize → successful turn). Remaining: human review.
       `agent/birth-timed-out`, `birthFinalizedAtOffset`/`birthTimedOutAtOffset`
       state, and deletes `config.driver`; `pnpm generate:itx-api` regenerated
       the SDK vocabulary (AgentEventInput carries both events)_
-- [x] Readiness hold in the keeper (generalize the existing
+- [x] Readiness hold in the agent processor (generalize the existing
       hold-until-prompt check in the turn loop): hold LLM send until
       finalize; deadline armed at first *held message* (not birth); expiry
       → degraded-start offer event + UI _agent-turn-loop.ts: the at-head
@@ -82,7 +82,7 @@ finalize → successful turn). Remaining: human review.
 - [x] Shrink `AgentRpcTarget.create()` (`apps/os/src/rpc-targets.ts`):
       core batch only; delete `agentBirthDefaultsForProject`
       _agentCreationForPath now emits only created + capability-host pair +
-      workspace capability + keeper (`agent-headless`) / collection
+      workspace capability + agent processor (`agent-headless`) / collection
       subscriptions + sibling; `agentBirthDefaultsForProject`, the defaults
       read, and the boot-facts/systemPromptPolicy params are gone_
 - [x] `itx.agents.getDefaultBirthEvents({kind})`: web/channel variants,
@@ -105,7 +105,7 @@ finalize → successful turn). Remaining: human review.
       Judgment calls in the implementation log below_
 - [x] Delete the classic processor + `config.driver`; keep slug
       `agent-headless` _agent-processor-implementation.ts and
-      agent-codemode.ts deleted; HeadlessAgentProcessor is the one keeper
+      agent-codemode.ts deleted; HeadlessAgentProcessor is the one agent processor
       (no driver gate); facet DO registers it alone_
 - [x] `configs/default/worker.ts`: author births (defaults + the one
       illustrative tweak — a system context item
@@ -181,14 +181,14 @@ finalize → successful turn). Remaining: human review.
 - Generic watchdog primitive; rollback-offer UX.
 - Logical vs physical stream paths (build only if the "unfixable" spec
   starts matching production).
-- ~~Renaming the `agent-headless` slug~~ — done in this change after all: the keeper reclaimed "agent" (see implementation log).
+- ~~Renaming the `agent-headless` slug~~ — done in this change after all: the agent processor reclaimed "agent" (see implementation log).
 
 ## Implementation log
 
 Judgment calls, per the audit rule ("service unless physically inseparable
 from the request lifecycle"; when unsure, keep mechanism in the core):
 
-- **Kept in the keeper (mechanism / physically inseparable):** the interrupt
+- **Kept in the agent processor (mechanism / physically inseparable):** the interrupt
   (abortInFlight reaches the in-memory in-flight attempt — impossible from a
   service), the at-head lifecycle (debounce/adopt/expire/breaker), the
   web-message-sent → assistant-history mirror (history integrity for
@@ -256,9 +256,9 @@ from the request lifecycle"; when unsure, keep mechanism in the core):
   is the per-agent renderable fact (event feed); `project/worker-update-failed`
   already journals at project level and renders in the project event feed.
   A styled banner + rollback offer is the follow-up the spec already lists.
-- **Keeper slug reclaimed: "agent"** (Misha's call, 2026-08-18; supersedes
-  "slug kept for now"). With one keeper left, the two-contracts-one-vocabulary
-  arrangement dissolved: `HeadlessAgentProcessorContract` deleted, the keeper
+- **Agent processor slug reclaimed: "agent"** (Misha's call, 2026-08-18; supersedes
+  "slug kept for now"). With one agent processor left, the two-contracts-one-vocabulary
+  arrangement dissolved: `HeadlessAgentProcessorContract` deleted, the agent processor
   registers under `AgentProcessorContract` itself (still v6.0.0 — the
   vocabulary didn't change, and 6.0.0 already exceeds the classic era's
   5.2.0, so stale "agent"-keyed progress refolds cleanly under the reclaimed
@@ -267,7 +267,7 @@ from the request lifecycle"; when unsure, keep mechanism in the core):
   `agent-processor-no-interpretation.test.ts`. "headless" survives only in
   history comments and headless-browser docs.
 - **Legacy streams after the slug reclaim**: classic-era streams (subscribed
-  "agent") resolve against the current keeper again — the no-migration risk
+  "agent") resolve against the current agent processor again — the no-migration risk
   shrinks to behavior: they have no `birth-finalized`, so their first NEW
   message waits out the 10s degraded start, which appends the platform-default
   personality as a superseding occurrence of their existing prompt slot, then
@@ -276,13 +276,13 @@ from the request lifecycle"; when unsure, keep mechanism in the core):
   malformed append). The RESIDUAL question is the short-lived
   "agent-headless"-subscribed streams (codemode-tag experiments and this
   branch's own pre-rename preview streams): that name now points at no
-  registered processor, so those streams' keeper never wakes again —
+  registered processor, so those streams' agent processor never wakes again —
   preview-only in practice, erased with the slot.
 - **Unit harness plays the worker**: agent-processor.test.ts auto-interprets
   every committed event after each step (exactly the default template's
   loop), so the classic lifecycle specs still read as real usage;
   agent-headless-processor.test.ts runs WITHOUT that loop to pin that the
-  keeper interprets nothing.
+  agent processor interprets nothing.
 
 ### Preview post-mortem (2026-08-18)
 
@@ -303,7 +303,7 @@ visible assistant message IS that script's web-message-sent). Fixed by
 migrating with-voice like the default template (defaults + finalize, no
 tweaks; per-event interpreter delegation). The sleeper-durability concern was
 tested anyway: an eviction between the held trigger and the deadline is
-revived by the recovery keepalive (the keeper registers with recovery), and
+revived by the recovery keepalive (the agent processor registers with recovery), and
 the revived at-head pass re-arms off the same trigger's atMs — pinned by the
 new eviction spec in agent-birth-degraded-start.test.ts, so no facet-alarm
 rearchitecture was needed.

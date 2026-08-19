@@ -1,4 +1,4 @@
-// The agent keeper WITHOUT any interpretation loop, driven through the
+// The agent processor WITHOUT any interpretation loop, driven through the
 // memory harness: turn loop
 // and LLM request run exactly as in the classic processor, but NOTHING
 // platform-side interprets assistant output — that is userland's job (the
@@ -21,7 +21,7 @@ const SCRIPT_REQUESTED = "events.iterate.com/capability-host/script-run-requeste
 const WEB_MESSAGE_SENT = "events.iterate.com/agents/web-message-sent";
 
 it("runs a full turn but interprets nothing: even a perfect ```ts script is left alone", async () => {
-  const h = makeKeeperHarness();
+  const h = makeAgentProcessorHarness();
   await h.play(
     ["append", ...NEW_AGENT_EVENTS, userMessage("run something")],
     ["advanceTime", 10_000],
@@ -44,7 +44,7 @@ it("runs a full turn but interprets nothing: even a perfect ```ts script is left
 });
 
 it("slash commands are inert without interpretation: no execution, no LLM turn (userland's job)", async () => {
-  const h = makeKeeperHarness();
+  const h = makeAgentProcessorHarness();
   await h.play(
     ["append", ...NEW_AGENT_EVENTS, userMessage("/example describe-project {}")],
     ["advanceTime", 60_000],
@@ -54,7 +54,7 @@ it("slash commands are inert without interpretation: no execution, no LLM turn (
 });
 
 it("the full userland loop: worker-appended consequences drive scripts, chat, and the next turn", async () => {
-  const h = makeKeeperHarness();
+  const h = makeAgentProcessorHarness();
   await h.play(
     ["append", ...NEW_AGENT_EVENTS, userMessage("look into it")],
     ["advanceTime", 10_000],
@@ -130,7 +130,7 @@ it("the full userland loop: worker-appended consequences drive scripts, chat, an
 });
 
 it("a plain sendMessage (no llmRequestOffset) still mirrors into assistant history", async () => {
-  const h = makeKeeperHarness();
+  const h = makeAgentProcessorHarness();
   await h.play([
     "append",
     ...NEW_AGENT_EVENTS,
@@ -145,7 +145,7 @@ it("a plain sendMessage (no llmRequestOffset) still mirrors into assistant histo
 });
 
 it("holds the first turn until the birth is finalized; the finalize releases it", async () => {
-  const h = makeKeeperHarness();
+  const h = makeAgentProcessorHarness();
   await h.play(
     [
       "append",
@@ -181,7 +181,7 @@ it("holds the first turn until the birth is finalized; the finalize releases it"
 });
 
 it("degraded start: a missed readiness deadline appends the visible timed-out fact, the default personality, and finalize", async () => {
-  const h = makeKeeperHarness();
+  const h = makeAgentProcessorHarness();
   await h.play([
     "append",
     { type: "events.iterate.com/agent/created", payload: {} },
@@ -200,7 +200,7 @@ it("degraded start: a missed readiness deadline appends the visible timed-out fa
 });
 
 it("an idle unborn agent waits forever for free: no deadline arms before the first held trigger", async () => {
-  const h = makeKeeperHarness();
+  const h = makeAgentProcessorHarness();
   await h.play(
     ["append", { type: "events.iterate.com/agent/created", payload: {} }],
     ["advanceTime", 24 * 60 * 60_000],
@@ -227,7 +227,7 @@ const NEW_AGENT_EVENTS = [
     payload: {
       role: "system",
       key: "agent/system-prompt",
-      content: "You are a helpful keeper test agent.",
+      content: "You are a helpful test agent.",
     },
   },
   { type: "events.iterate.com/agent/birth-finalized", payload: {} },
@@ -245,11 +245,11 @@ function userMessage(content: string): AgentEventInput {
   };
 }
 
-function makeKeeperHarness() {
+function makeAgentProcessorHarness() {
   const llm = makeScriptedLlm();
   const harness = makeProcessorHarness<AgentProcessorContract>({
     createProcessor: (deps) => new AgentProcessor({ ...deps, callLlm: llm.transport }),
-    path: "/agents/keeper-test",
+    path: "/agents/hold-test",
   });
   return { ...harness, llm };
 }

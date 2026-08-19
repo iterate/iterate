@@ -45,7 +45,7 @@ const RESULT_HISTORY_LIMIT = 30_000;
 /** Inline budget once the full copy is spilled — the inline copy is a map of
  * the data, not the data. */
 const RESULT_SPILL_PREVIEW_CHARS = 10_000;
-/** The platform keeper's processor slug — the stamp on assistant output it
+/** The platform agent processor's slug — the stamp on assistant output it
  * committed for an accepted request. */
 const KEEPER_PROCESSOR_SLUG = "agent";
 
@@ -270,7 +270,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
    * mirror skips it (the raw assistant text is already in history).
    */
   async #interpretAssistantResponse(event: StreamEvent): Promise<void> {
-    // Only interpret output the platform keeper produced: its stamp means
+    // Only interpret output the platform agent processor produced: its stamp means
     // the LLM component authored this event for an accepted request. A raw
     // member append carries no platform stamp and must never gain a path to
     // capability execution here.

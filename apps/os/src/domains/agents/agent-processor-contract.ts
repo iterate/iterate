@@ -35,7 +35,7 @@ export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
   version: "6.0.0",
   description:
-    "The one agent keeper: maintains model-visible history and schedules debounced " +
+    "The agent processor: maintains model-visible history and schedules debounced " +
     "offset-identified LLM turns, held until the project's config worker finalizes the " +
     "agent's birth (agent/birth-finalized, with a degraded-start deadline), run through the " +
     "Workers AI transport. Interprets nothing: response interpretation is a service the " +

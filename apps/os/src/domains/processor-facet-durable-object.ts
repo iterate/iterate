@@ -579,7 +579,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
         return { absolutePath };
       },
     };
-    // The one built-in agent keeper (agent-processor.ts). Registered WITH
+    // The one built-in agent processor (agent-processor.ts). Registered WITH
     // recovery: LLM turns are consequential `runInBackground` work
     // (stream-committed requested/started obligations whose OUTCOME
     // matters). An incarnation that dies owing either must be revived.

@@ -188,7 +188,7 @@ export const EMAIL_AGENT_SYSTEM_PROMPT = interpolatePromptTemplate(
  * Agents under `/agents/mcp/**` are inbound MCP session agents: one stream per
  * inbound MCP session. The ask_assistant MCP tool appends the caller's message
  * to the session stream and blocks until the agent's next chat reply, so the
- * reply door is the same itx.chat.sendMessage as web chat.
+ * replies go through the same itx.chat.sendMessage as web chat.
  */
 export const MCP_AGENT_SYSTEM_PROMPT = [
   DEFAULT_AGENT_SYSTEM_PROMPT,
@@ -376,10 +376,10 @@ function agentBootContextContent(coordinates: {
     `- Your agent stream path: ${agentPath} (your itx scope; your transcript lives here)`,
     `- Your workspace directory: ${agentWorkspacePath(agentPath)} — private scratch; relative workspace paths resolve there. Every project repo is mounted in your workspace at its own path.`,
     // One seed list, marked non-exhaustive, and ONE rule for choosing
-    // between the two write doors — the model was repeating this line
+    // between the two write methods — the model was repeating this line
     // verbatim to users as the repo's full contents.
     '- The project config repo is at "/repos/config" (itx.repo), seeded with worker.ts (the project worker + website), AGENTS.md, package.json, and more. On a brand-new project it may still be seeding on your first turn — if repo or worker calls say it is missing or not ready, retry shortly instead of treating that as fatal.',
-    '- Two write doors, one rule: itx.repo.commitFiles({ message, changes }) (repo-relative paths) for a small direct edit; your private workspace (itx.workspace — workspace paths like "/repos/config/worker.ts": readFile/writeFile/edit/glob) when you want to read and change several files before shipping ONE commit via itx.workspace.git.commit({ message, scope: "/repos/config" }). Both land straight on main and redeploy the project worker/website — no branches, no push.',
+    '- Two ways to write, one rule: itx.repo.commitFiles({ message, changes }) (repo-relative paths) for a small direct edit; your private workspace (itx.workspace — workspace paths like "/repos/config/worker.ts": readFile/writeFile/edit/glob) when you want to read and change several files before shipping ONE commit via itx.workspace.git.commit({ message, scope: "/repos/config" }). Both land straight on main and redeploy the project worker/website — no branches, no push.',
     "- Delegate explicitly: const child = itx.agents.get('researcher'); await child.create(); await child.message(task) — put everything the child needs in the message, then end your turn; its report arrives as your input.",
     // Deliberate reinforcement of the prompt's FIND WORKING CODE
     // section — repetition is the one thing small prompts buy back.
@@ -398,11 +398,11 @@ const AGENT_WORKSPACE_POLICY_REVISION = "3";
 /**
  * Build the complete creation batch for one agent stream — the atomic CORE
  * and nothing else: the `agent/created` birth certificate, the capability
- * host pair, the workspace capability, the keeper subscription (`agent`),
+ * host pair, the workspace capability, the agent processor subscription (`agent`),
  * the collection copy, and any explicitly named sibling.
  * No prompt, no model choice, no boot context: personality is authored by
  * the project's config worker reacting to `agent/created` (finalized with
- * `agent/birth-finalized`), and the keeper holds LLM triggers until it does.
+ * `agent/birth-finalized`), and the agent processor holds LLM triggers until it does.
  *
  * The created event's idempotency key is payload-free on purpose: a repeated
  * create with the identical payload dedupes and resolves, while a create over
@@ -456,7 +456,7 @@ export function agentCreationForPath<
         'To ship changes: await itx.workspace.git.commit({ message, scope: "/repos/<name>" }) — ONE repo\'s changes become a commit straight on ITS main branch (config-repo commits redeploy the project worker/website automatically; no branches, no push). scope is required whenever more than one repo is dirty. Deviate a mount via getConfig/configure (e.g. { policy: "read-only" } on reference clones).',
     },
   });
-  const keeperSubscription = buildFacetProcessorSubscriptionConfiguredEvent({
+  const processorSubscription = buildFacetProcessorSubscriptionConfiguredEvent({
     idempotencyKey: `stream/subscription-configured:${AgentProcessorContract.slug}`,
     name: AgentProcessorContract.slug,
   });
@@ -500,7 +500,7 @@ export function agentCreationForPath<
       capabilityHostBirthCertificate,
       ...siblingBirthCertificates,
       workspaceProvided,
-      keeperSubscription,
+      processorSubscription,
       capabilityHostSubscription,
       collectionSubscription,
       ...siblingSubscriptions,

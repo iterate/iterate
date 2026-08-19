@@ -40,7 +40,7 @@ type AgentEventInput = ConsumedInput<AgentProcessorContract>;
 const NEW_AGENT_EVENTS = [
   { type: "events.iterate.com/agent/created", payload: {} },
   // The config worker's birth job, in miniature: personality events followed
-  // by the finalize that releases the keeper's readiness hold.
+  // by the finalize that releases the processor's readiness hold.
   {
     type: "events.iterate.com/agent/configured",
     payload: { config: { llm: { model: "test-model" } } },
@@ -140,7 +140,7 @@ function makeScriptedLlm() {
  * event on an agent stream, so this harness interprets every committed event
  * once, in order, after each step, appending the consequences exactly as the
  * service does (race-tolerantly: replays dedupe on the shared keys). The
- * keeper itself interprets nothing — agent-processor-no-interpretation.test.ts pins
+ * processor itself interprets nothing — agent-processor-no-interpretation.test.ts pins
  * that by running WITHOUT this loop.
  */
 function makeAgentHarness(substrate?: HarnessSubstrate, extraDeps?: Partial<AgentProcessorDeps>) {

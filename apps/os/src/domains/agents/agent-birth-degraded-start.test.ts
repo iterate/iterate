@@ -24,7 +24,7 @@ const WORKER_PROMPT = "You are the codemode-tag agent. Respond in <codemode> tag
 it("the readiness deadline survives incarnation death: an eviction mid-hold still degrades and dispatches", async () => {
   // The deadline sleeper is a droppable runInBackground attempt, and the
   // held trigger is the LAST event that ever arrives on its own — so the
-  // recovery keepalive (the keeper registers with recovery) is what makes
+  // recovery keepalive (the agent processor registers with recovery) is what makes
   // the deadline durable: the alarm parked ahead of the in-flight sleep
   // revives a fresh incarnation, whose at-head pass re-arms the deadline
   // off the SAME held trigger's atMs (deterministic — already past, so it

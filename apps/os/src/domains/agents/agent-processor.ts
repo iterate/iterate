@@ -11,7 +11,7 @@ import { AgentTurnLoop } from "./agent-turn-loop.ts";
 export type { AgentProcessorDeps } from "./agent-host.ts";
 
 /**
- * The ONE agent processor — the keeper: the turn loop plus the LLM request
+ * The ONE agent processor: the turn loop plus the LLM request
  * component over the shared reduce (`reduceAgentEvent`,
  * agent-prompt-fold.ts — also imported off-runtime by
  * lib/llm-request-replay.ts, so it stays transport-free). It schedules
@@ -24,9 +24,9 @@ export type { AgentProcessorDeps } from "./agent-host.ts";
  * asks; projects may vendor their own interpreter instead.
  *
  * Registered under the contract's own slug ("agent"). History: during the
- * birth-userland transition this keeper briefly lived under a second slug,
+ * birth-userland transition this processor briefly lived under a second slug ("agent-headless"),
  * "agent-headless", beside the (now deleted) classic interpreting processor;
- * with one keeper left, the split contract was dissolved and the slug
+ * with one processor left, the split contract was dissolved and the slug
  * reclaimed. Idempotency keys mint in the fixed `agent/` namespace (via
  * `agentComponentHost`), shared with the interpretation service, so streams
  * written by both converge on identical keys.
@@ -53,7 +53,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
  * initializer. The base class's members are protected, so the adapter
  * reaches them through a scoped cast rather than widening them to public.
  * `idempotencyKey` is pinned to the `agent/` namespace on purpose: every
- * writer of this stream's recorded consequences (this keeper, the
+ * writer of this stream's recorded consequences (this processor, the
  * interpretation service, vendored userland interpreters) dedupes on
  * identical keys instead of re-executing under a fresh prefix. */
 function agentComponentHost(processor: object): AgentHost {

@@ -4802,7 +4802,7 @@ function agentProcessorRelay(input: {
 }): ProcessorRelayRpcTarget<AgentProcessorState> {
   return facetProcessorRelay<AgentProcessorState>({
     auth: input.auth,
-    // The keeper IS the vocabulary's contract: one slug for registration,
+    // The registered processor IS the vocabulary's contract: one slug for registration,
     // subscriptions, and dials alike.
     contract: AgentProcessorContract,
     path: input.path,

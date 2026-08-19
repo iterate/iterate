@@ -19,19 +19,19 @@ return { abc: foo.bar }
 
 ## How it works
 
-The platform's one agent keeper does turn scheduling and the LLM call and
+The platform's one agent processor does turn scheduling and the LLM call and
 interprets nothing; every project's config worker authors its agents' births
 and decides what responses mean. `worker.ts` here is both:
 
 1. On each agent's birth (`agent/created`), it appends the platform's default
    birth events (`itx.agents.get(path).getDefaultBirthEvents({ kind })`),
    supersedes the prompt slot with `prompts/agent-system-prompt.md` for WEB
-   agents, and appends `agent/birth-finalized` — the keeper holds the
+   agents, and appends `agent/birth-finalized` — the agent processor holds the
    agent's first turn until that finalize (with a ~10s platform deadline
    behind it).
 2. It injects `AGENTS.md` as standing context and re-syncs it — and the
    codemode prompt — on every config-repo commit.
-3. On web agents' assistant output events (stamped by the keeper), it parses
+3. On web agents' assistant output events (stamped by the agent processor), it parses
    the tag (`codemode-format.ts`) and appends the consequences: the script
    request, the prose as a chat message (marked so it isn't mirrored back
    into history), the status as `agent/summary-updated`, or corrective
