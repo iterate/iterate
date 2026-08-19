@@ -1492,3 +1492,22 @@ consume offsets and are counted by "\*" reducers — the audit trail the kv regi
   stub" (the socket only pages — saying otherwise was increment-56-draft residue), and the
   regex-sweep artifacts in append's drive comments were hand-fixed.
 - Board 13/13 against the deployed refactor.
+
+## Review pass (closing) — ItxConnectionDirectory + the composition verdicts
+
+- **ItxConnectionDirectory extracted** (src/itx-connection-directory.ts): the domain layer over
+  the hibernatable RPC stubs — identity-from-the-log, THE SESSION RULE, the connection facts,
+  the pending-attach gate (partial fetch), and the views (invoke/fanOut/currentlyConnected/
+  close). Deps fully injected ({hooks, kv, append, onFinalClose}); auto-revoke stays in the DO
+  (it needs the capability table) as the onFinalClose hook. The DO's webSocketClose is one
+  line; its lifecycle section is three delegating RPC verbs. stream-durable-object.ts:
+  1358 → 1161 lines, and its top now reads #address / #itxConnections / #alarmArmer /
+  #eventLog.
+- **Composition verdicts** (the no-junk test, ruled): FacetProcessorHost — REJECTED for now
+  (the facet spine's seam is genuinely wide: env + ctx.facets + ctx.exports + invoke +
+  identity + activity + quiesce interplay ⇒ seven injected closures to move ~200 lines; a
+  helper that wide is the abstraction fighting the class, not helping it). InlineReducerHost —
+  REJECTED (~60 lines living beside their only caller; extraction would add surface, not
+  remove it). The composed set stays: name codec, connection directory, alarm armer, event
+  log, plus the stub manager under the directory.
+- Board spot-proven against the deployed refactor (crisp1, slack, push, livestate).

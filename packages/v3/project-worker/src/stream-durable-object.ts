@@ -50,12 +50,8 @@ import {
   type Expression,
 } from "./core/expression.ts";
 import { hashSource } from "./core/hash.ts";
-import {
-  HibernatableRpcStubManager,
-  STUB_PAGER_WEBSOCKET_HEADER,
-  type HibernatableRpcStubRecord,
-  type RetainedCallbackInvoker,
-} from "./core/hibernatable-rpc-stub.ts";
+import { ItxConnectionDirectory } from "./itx-connection-directory.ts";
+import type { RetainedCallbackInvoker } from "./core/hibernatable-rpc-stub.ts";
 import { DurableObjectNameCodec } from "./core/durable-object-names.ts";
 import { itxEntrypointFor } from "./itx-entrypoint.ts";
 import {
@@ -129,13 +125,6 @@ const connectedTarget = (t?: Expression): { key: string; path: string[] } | unde
   return { key: call[1], path };
 };
 
-/** The ItxConnectionSession record for one connectionKey (kv `connection-session:<key>`) — the
- *  session rule's working memory. The durable truth is the connection-session-started/-ended
- *  facts on the stream; this record only carries what deciding the rule needs. */
-type ItxConnectionSessionRecord = { sessionStartedAtOffset: number; lastActiveMs: number };
-/** The session rule's T: two capnweb WebSockets under one connectionKey belong to the same
- *  ItxConnectionSession unless separated by a clean end or ≥ this much absence. */
-const ITX_CONNECTION_SESSION_ABSENCE_MS = 15 * 60_000;
 /** The subscription-forwarder facet's slug (auto-enabled when an absent-target subscription
  *  mount first appears). */
 const SUBSCRIPTION_FORWARDER_SLUG = "subscription-forwarder";
@@ -337,15 +326,33 @@ export class StreamDurableObject extends DurableObject<Env> {
    *  AND its canonical string form (`.name`). A stream is only ever reached `getByName`; an
    *  id-addressed instance fails right here in the constructor, before it can touch anything. */
   readonly #address = parseStreamDurableObjectName(this.ctx.id.name);
-  // ── transport: every ItxConnection is a HIBERNATABLE RPC STUB (keyed by connectionId) ──
-  readonly #hibernatableRpcStubs = new HibernatableRpcStubManager({
-    acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
-    getWebSockets: (tag) => this.ctx.getWebSockets(tag),
+  /** Every ItxConnection: identity from the log, the session rule, the views — the domain
+   *  layer over the hibernatable RPC stubs (see itx-connection-directory.ts). */
+  readonly #itxConnections = new ItxConnectionDirectory({
+    hooks: {
+      acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
+      getWebSockets: (tag) => this.ctx.getWebSockets(tag),
+    },
+    kv: {
+      get: (k) => this.ctx.storage.kv.get(k),
+      put: (k, v) => this.ctx.storage.kv.put(k, v),
+      delete: (k) => void this.ctx.storage.kv.delete(k),
+    },
+    append: (...facts) => this.append(...facts),
+    // AUTO-REVOKE: a mount whose target names the dead connection can never deliver again
+    // (by connectionId always; by connectionKey only when no replacement transport carries it).
+    onFinalClose: async ({ connectionId, connectionKey, keyFinal }) => {
+      const table = this.#inline(CAPABILITY_TABLE_SLUG).state as CapabilityTable;
+      for (const m of table.mounts) {
+        const conn = connectedTarget(m.target);
+        if (!conn) continue;
+        if (conn.key === connectionId || (keyFinal && conn.key === connectionKey))
+          await this.revokeCapability({ providedAtOffset: m.providedAtOffset }).catch((e) =>
+            console.error(`auto-revoke of mount ${m.providedAtOffset} failed`, e),
+          );
+      }
+    },
   });
-  /** Records handed to `attachItxConnection`, waiting for their stub pager WebSocket to arrive
-   *  (the two-phase attach: RPC first — it mints connectedAtOffset — then the upgrade). In
-   *  memory on purpose: if the DO dies in between, the upgrade 409s and the relay re-attaches. */
-  readonly #pendingConnectionRecords = new Map<string, Record<string, unknown>>();
   readonly #alarmArmer = new StreamAlarmArmer(this.ctx.storage);
   /** THE COMMIT POINT — see StreamEventLog above. The name check already happened in the
    *  constructor (`#address`); the log itself is storage-lazy. */
@@ -469,12 +476,12 @@ export class StreamDurableObject extends DurableObject<Env> {
       // live here and can never move (workerd#6702: sockets never leave the parent).
       connections: {
         get: (key) =>
-          pathProxy((segments, args) => this.#connectionInvoke(key, segments, args), {
+          pathProxy((segments, args) => this.#itxConnections.invoke(key, segments, args), {
             allowRootCall: true,
           }),
-        each: (method, ...args) => this.#connectionFanOut(String(method).split("."), args),
-        list: () => this.#currentlyConnected(),
-        close: (key) => this.#connectionClose(key),
+        each: (method, ...args) => this.#itxConnections.fanOut(String(method).split("."), args),
+        list: () => this.#itxConnections.currentlyConnected(),
+        close: (key) => this.#itxConnections.close(key),
       },
       facets: {
         get: (slug) => pathProxy((segments, args) => this.facetInvoke(slug, segments, args)),
@@ -646,7 +653,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       this.#statefulFacetNames.clear();
       // Same doctrine for the paged-in RetainedCallbackInvoker stubs: retaining one pins this
       // actor awake, and a page always gets it back — dispose them with the idle facets.
-      this.#hibernatableRpcStubs.disposeRetainedStubs();
+      this.#itxConnections.disposeRetainedStubs();
     } else {
       this.#alarmArmer.armNoLaterThan(this.#lastActivityMs + 60_000);
     }
@@ -702,7 +709,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     for (const row of this.#activeSubscriptionMounts()) {
       const conn = connectedTarget(row.target);
       if (!conn) continue; // absent target — the forwarder's lane
-      const record = this.#findConnection(conn.key);
+      const record = this.#itxConnections.find(conn.key);
       if (!record) continue; // closing race — auto-revoke is on its way
       if (row.liveState) {
         // State mode: forward each committed change payload for the watched key, raw (no
@@ -711,8 +718,8 @@ export class StreamDurableObject extends DurableObject<Env> {
         for (const e of committed) {
           if (e.type !== LIVE_STATE_CHANGED) continue;
           if ((e.payload as { key?: string }).key !== row.liveState.key) continue;
-          void this.#hibernatableRpcStubs
-            .invoke(record.stubKey, conn.path, [e.payload])
+          void this.#itxConnections
+            .invokeConnection(record.stubKey, conn.path, [e.payload])
             .catch((err) =>
               console.error(
                 `live-state "${row.name}" delivery failed (client re-seeds on gap)`,
@@ -734,8 +741,8 @@ export class StreamDurableObject extends DurableObject<Env> {
       const deliveredAfter =
         this.#subscriptionDeliveredThrough.get(row.providedAtOffset) ?? scannedAfterOffset;
       this.#subscriptionDeliveredThrough.set(row.providedAtOffset, nextOffset);
-      void this.#hibernatableRpcStubs
-        .invoke(record.stubKey, conn.path, [
+      void this.#itxConnections
+        .invokeConnection(record.stubKey, conn.path, [
           events,
           {
             scannedAfterOffset: Math.min(deliveredAfter, scannedAfterOffset),
@@ -1059,23 +1066,10 @@ export class StreamDurableObject extends DurableObject<Env> {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
-    // A relay opens an ItxConnection's stub pager WebSocket (attach RPC first — it minted the
-    // connectionId; an unknown id 409s so a relay that outlived a DO restart re-attaches).
-    const pagingConnectionId = request.headers.get(STUB_PAGER_WEBSOCKET_HEADER);
-    if (pagingConnectionId !== null) {
-      const record = this.#pendingConnectionRecords.get(pagingConnectionId);
-      if (!record)
-        return new Response(
-          `unknown itx connection ${pagingConnectionId} (attachItxConnection first)\n`,
-          { status: 409 },
-        );
-      const response = this.#hibernatableRpcStubs.fetch(request)!;
-      if (response.status === 101) {
-        this.#pendingConnectionRecords.delete(pagingConnectionId);
-        this.#hibernatableRpcStubs.attach(pagingConnectionId, record);
-      }
-      return response;
-    }
+    // A relay opens an ItxConnection's stub pager WebSocket (partial fetch — the directory
+    // owns the attach gate; undefined means "not this door's request").
+    const pagerResponse = this.#itxConnections.fetch(request);
+    if (pagerResponse) return pagerResponse;
 
     // THE FETCH LANE: `x-itx-cap` resolves against the inline reduce right here — a 101 flows
     // back out natively (no facet tunnel needed at all).
@@ -1123,7 +1117,7 @@ export class StreamDurableObject extends DurableObject<Env> {
               : "connected"
             : "forwarder",
         })),
-        ...this.#hibernatableRpcStubs.state(),
+        ...this.#itxConnections.state(),
       });
 
     // EGRESS: substitute `{{secret:NAME}}` placeholders, then the FALLBACK terminal.
@@ -1139,220 +1133,29 @@ export class StreamDurableObject extends DurableObject<Env> {
     // A stub pager WebSocket is DO→relay only — inbound payloads carry nothing we act on.
   }
   webSocketClose(ws: WebSocket, code: number, reason: string): void {
-    const record = this.#hibernatableRpcStubs.closed(ws);
-    if (record)
-      void this.#itxConnectionClosed(record, code, reason).catch((e) =>
-        console.error("itx connection close handling failed", e),
-      );
+    this.#itxConnections.closed(ws, code, reason);
   }
   webSocketError(ws: WebSocket): void {
-    const record = this.#hibernatableRpcStubs.closed(ws);
-    if (record)
-      void this.#itxConnectionClosed(record, 1006, "transport error").catch((e) =>
-        console.error("itx connection close handling failed", e),
-      );
+    this.#itxConnections.closed(ws, 1006, "transport error");
   }
 
-  // ── the ItxConnection lifecycle (attach → facts → close → auto-revoke) ──
+  // ── the ItxConnection RPC verbs (the directory owns the lifecycle — see
+  // itx-connection-directory.ts; these are the relay-facing doors) ──
 
-  /** Attach an ItxConnection (the relay calls this BEFORE opening the stub pager WebSocket).
-   *  Appends the ephemeral connection-opened fact — its offset IS the connection's identity
-   *  (`connectionId` = String(connectedAtOffset); no synthetic socket ids). With a
-   *  `connectionKey` the SESSION RULE files the durable ItxConnectionSession facts: a reconnect
-   *  within T of a non-clean end continues the running session (a crash-loop storm is ONE
-   *  session and ONE durable fact); otherwise the stale session is settled ("ended no later
-   *  than…") and a new one starts. Anonymous attaches (no key — parked live callbacks,
-   *  subscriber callbacks) file no session history: their durable trace is the capability mount
-   *  that names them. */
-  async attachItxConnection(input: {
+  attachItxConnection(input: {
     connectionKey?: string;
     description?: string;
   }): Promise<{ connectionId: string; connectionKey?: string }> {
-    this.#eventLog.touch();
-    let sessionStartedAtOffset: number | undefined;
-    if (input.connectionKey) {
-      // Reconnect under the same key replaces the predecessor transport (same logical client).
-      for (const r of this.#hibernatableRpcStubs.all())
-        if (r.connectionKey === input.connectionKey)
-          this.#hibernatableRpcStubs.drop(r.stubKey, "replaced");
-      const sessionKey = `connection-session:${input.connectionKey}`;
-      const session = this.ctx.storage.kv.get(sessionKey) as ItxConnectionSessionRecord | undefined;
-      if (session && Date.now() - session.lastActiveMs < ITX_CONNECTION_SESSION_ABSENCE_MS) {
-        sessionStartedAtOffset = session.sessionStartedAtOffset; // the same session continues
-      } else {
-        const facts: StreamEventInput[] = [];
-        if (session)
-          // A dirty death ended nothing at the time — settle it now, bounded by what we know.
-          facts.push({
-            type: "events.iterate.com/itx-connection/connection-session-ended",
-            payload: {
-              connectionKey: input.connectionKey,
-              sessionStartedAtOffset: session.sessionStartedAtOffset,
-              endedNoLaterThan: new Date(
-                session.lastActiveMs + ITX_CONNECTION_SESSION_ABSENCE_MS,
-              ).toISOString(),
-            },
-          });
-        facts.push({
-          type: "events.iterate.com/itx-connection/connection-session-started",
-          payload: {
-            connectionKey: input.connectionKey,
-            ...(input.description ? { description: input.description } : {}),
-          },
-        });
-        const committed = await this.append(...facts);
-        sessionStartedAtOffset = committed[committed.length - 1].offset;
-      }
-      this.ctx.storage.kv.put(sessionKey, {
-        sessionStartedAtOffset,
-        lastActiveMs: Date.now(),
-      } satisfies ItxConnectionSessionRecord);
-    }
-    const [opened] = await this.append({
-      type: "events.iterate.com/itx-connection/connection-opened",
-      ephemeral: true,
-      payload: {
-        ...(input.connectionKey ? { connectionKey: input.connectionKey } : {}),
-        ...(input.description ? { description: input.description } : {}),
-        ...(sessionStartedAtOffset !== undefined ? { sessionStartedAtOffset } : {}),
-      },
-    });
-    const connectionId = String(opened.offset);
-    this.#pendingConnectionRecords.set(connectionId, {
-      ...(input.connectionKey ? { connectionKey: input.connectionKey } : {}),
-      ...(input.description ? { description: input.description } : {}),
-      ...(sessionStartedAtOffset !== undefined ? { sessionStartedAtOffset } : {}),
-      openedAt: new Date().toISOString(),
-    });
-    return {
-      connectionId,
-      ...(input.connectionKey ? { connectionKey: input.connectionKey } : {}),
-    };
+    return this.#itxConnections.attach(input);
   }
 
   /** The page answer: the paged relay hands back a fresh RetainedCallbackInvoker stub, which
    *  stays warm until the idle quiesce disposes it (a page gets it back). */
   activateItxConnection(input: { connectionId: string; invoker: RetainedCallbackInvoker }) {
-    return this.#hibernatableRpcStubs.activate({
-      stubKey: input.connectionId,
-      invoker: input.invoker,
-    });
+    return this.#itxConnections.activate(input);
   }
   dropItxConnection(input: { connectionId: string }): { ok: true } {
-    this.#hibernatableRpcStubs.drop(input.connectionId, "dropped");
-    return { ok: true };
-  }
-
-  /** A stub pager WebSocket closed: the ephemeral connection-closed fact, the auto-revoke of
-   *  every mount targeting the dead connection, and — for keyed connections whose close was
-   *  CLEAN and final (no replacement transport) — the durable session end. */
-  async #itxConnectionClosed(
-    record: HibernatableRpcStubRecord,
-    code: number,
-    reason: string,
-  ): Promise<void> {
-    const connectionId = record.stubKey; // the stub key IS the connectionId (connectedAtOffset)
-    const connectionKey = record.connectionKey as string | undefined;
-    // "replaced" is the SAME logical connection changing transports — never a key-final close.
-    const keyFinal =
-      typeof connectionKey === "string" &&
-      reason !== "replaced" &&
-      !this.#hibernatableRpcStubs
-        .all()
-        .some((r) => r.connectionKey === connectionKey && r.stubKey !== connectionId);
-    const facts: StreamEventInput[] = [
-      {
-        type: "events.iterate.com/itx-connection/connection-closed",
-        ephemeral: true,
-        payload: {
-          connectionId,
-          ...(connectionKey !== undefined ? { connectionKey } : {}),
-          code,
-          reason,
-        },
-      },
-    ];
-    if (keyFinal) {
-      const sessionKey = `connection-session:${connectionKey}`;
-      const session = this.ctx.storage.kv.get(sessionKey) as ItxConnectionSessionRecord | undefined;
-      if (session) {
-        if (code === 1000) {
-          // A clean, final end closes the session NOW — the next attach starts a fresh one.
-          facts.push({
-            type: "events.iterate.com/itx-connection/connection-session-ended",
-            payload: {
-              connectionKey,
-              sessionStartedAtOffset: session.sessionStartedAtOffset,
-            },
-          });
-          this.ctx.storage.kv.delete(sessionKey);
-        } else {
-          // A dirty death ends nothing yet — stamp the absence clock; the next attach (or ≥T of
-          // absence) settles it ("ended no later than…").
-          this.ctx.storage.kv.put(sessionKey, {
-            ...session,
-            lastActiveMs: Date.now(),
-          } satisfies ItxConnectionSessionRecord);
-        }
-      }
-    }
-    await this.append(...facts);
-    // AUTO-REVOKE: a mount whose target names the dead connection can never deliver again.
-    // (By connectionId always; by connectionKey only when no replacement transport carries it.)
-    const table = this.#inline(CAPABILITY_TABLE_SLUG).state as CapabilityTable;
-    for (const m of table.mounts) {
-      const conn = connectedTarget(m.target);
-      if (!conn) continue;
-      if (conn.key === connectionId || (keyFinal && conn.key === connectionKey))
-        await this.revokeCapability({ providedAtOffset: m.providedAtOffset }).catch((e) =>
-          console.error(`auto-revoke of mount ${m.providedAtOffset} failed`, e),
-        );
-    }
-  }
-
-  // ── the connections view (pager sockets live HERE and can never move — workerd#6702) ──
-
-  #findConnection(key: string): HibernatableRpcStubRecord | undefined {
-    return this.#hibernatableRpcStubs
-      .all()
-      .find((r) => r.connectionKey === key || r.stubKey === key);
-  }
-
-  /** Invoke one connection's retained callback by connectionKey/connectionId (wake → borrowed
-   *  RetainedCallbackInvoker leg → invoke). */
-  #connectionInvoke(key: string, segments: string[], args: unknown[]): Promise<unknown> {
-    const record = this.#findConnection(key);
-    if (!record) throw new Error(`itx connection "${key}" is offline`);
-    return this.#hibernatableRpcStubs.invoke(record.stubKey, segments, args);
-  }
-
-  /** Fan out one dotted method call over EVERY connection attached to this context
-   *  (allSettled — a dead connection drops out of the results). */
-  async #connectionFanOut(method: string[], args: unknown[]): Promise<unknown[]> {
-    const settled = await Promise.allSettled(
-      this.#hibernatableRpcStubs
-        .all()
-        .map((r) => this.#hibernatableRpcStubs.invoke(r.stubKey, method, args)),
-    );
-    return settled
-      .filter((r): r is PromiseFulfilledResult<unknown> => r.status === "fulfilled")
-      .map((r) => r.value);
-  }
-
-  /** The currently connected clients of this context. */
-  #currentlyConnected(): Record<string, unknown>[] {
-    return this.#hibernatableRpcStubs.all().map((r) => ({
-      connectionId: r.stubKey,
-      ...(r.connectionKey !== undefined ? { connectionKey: r.connectionKey } : {}),
-      ...(r.description !== undefined ? { description: r.description } : {}),
-      ...(r.openedAt !== undefined ? { openedAt: r.openedAt } : {}),
-    }));
-  }
-
-  /** Kick a connection by connectionKey/connectionId (idempotent — unknown keys are a no-op). */
-  #connectionClose(key: string): { ok: true } {
-    const record = this.#findConnection(key);
-    if (record) this.#hibernatableRpcStubs.drop(record.stubKey, "kicked");
+    this.#itxConnections.drop(input.connectionId, "dropped");
     return { ok: true };
   }
 }
