@@ -1,3 +1,9 @@
+if(NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/assets/stackchan_sounds_generated.inc")
+  message(FATAL_ERROR
+    "assets/stackchan_sounds_generated.inc is generated, not committed - run "
+    "apps/kit/firmware/tools/generate-sounds.sh (needs OPENAI_API_KEY)")
+endif()
+
 idf_component_register(
   SRCS
     stackchan_device.c
