@@ -323,12 +323,24 @@ async function callIsLive(h: Harness, clientTakesTurns = GROK_LISTENS): Promise<
  * Let the paced drain loop run until it has nothing left to hand over.
  *
  * The lane deliberately holds audio back, so a test that wants to see a whole
- * answer has to spend the time the listener would have spent hearing it.
+ * answer has to spend the time the listener would have spent hearing it — but
+ * not at 100 ms per step: the harness cascades nested timers and background
+ * closures across one big advance (the idle test drives a 70 s tick chain
+ * with a single advanceTime), so coarse 1 s steps buy the same playout at a
+ * tenth of the settle cycles. `Math.min` keeps totals EXACT — a 600 ms
+ * playout still spends exactly 600, which the frozen heard-ms pins depend on.
  */
 async function playOutEverything(h: Harness, ms: number): Promise<void> {
-  for (let spent = 0; spent < ms; spent += SPEAKER_FRAME_MS) {
-    await h.advanceTime(SPEAKER_FRAME_MS);
+  /* Settle FIRST: the pacer's opening burst must anchor before the clock
+   * moves, or a coarse first jump lands the burst at its far edge and a
+   * press "600ms in" finds nothing heard (the pacer's anti-credit clamp
+   * eats the lead). */
+  await h.settle();
+  for (let spent = 0; spent < ms; ) {
+    const step = Math.min(1_000, ms - spent);
+    await h.advanceTime(step);
     await h.settle();
+    spent += step;
   }
 }
 
@@ -948,6 +960,93 @@ describe("tools on the birth certificate", () => {
     await playOutEverything(h, 400);
     expect(eventsOfType(h, "conversation-ended")).toHaveLength(0);
   });
+
+  it("a tool finishing after its call ended answers nobody", async () => {
+    /* The identity fence in #runTool's closure is the ONLY thing between a
+     * slow tool's completion and a function_call_output written into the
+     * wrong session — nothing ever nulls dial.socket, so without the fence
+     * the debt lands on the dead socket and the follow-up on nobody's
+     * question. Staged with end-plus-new-call rather than h.crash(),
+     * because the fence lives per-instance: a crash orphans the old
+     * instance whose #dial still points at the old dial, and the fence
+     * would pass vacuously. */
+    const h = makeHarness();
+    let release!: (value: unknown) => void;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    h.projectRoot.current = { slow: () => gate };
+    const conversationId = await callWithTools(h, [
+      { name: "slow", description: "Slow.", expression: ["slow"] },
+    ]);
+    h.provider.push({
+      type: "response.function_call_arguments.done",
+      call_id: "call_slow_1",
+      name: "slow",
+      arguments: "{}",
+    });
+    await h.settle();
+
+    /* The call ends while the tool is still running… */
+    await h.append({
+      type: "events.iterate.com/voice-agent/conversation-end-requested",
+      payload: { conversationId, reason: "goodbye" },
+    });
+    await h.settle();
+    /* …and a NEW call opens on a fresh socket. */
+    await h.append(micFrame(50));
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
+    const followUpsBefore = h.provider.sentOfType("response.create").length;
+
+    release({ done: true });
+    await h.settle();
+    /* The completion reaches a dead dial and is dropped whole: no output on
+     * ANY socket — the dead one still records sends, which is exactly what
+     * catches a broken fence — and no follow-up on the new one. */
+    for (const socket of h.sockets) {
+      const outputs = socket
+        .sentOfType("conversation.item.create")
+        .map((message) => message.item as { type: string })
+        .filter((item) => item.type === "function_call_output");
+      expect(outputs).toHaveLength(0);
+    }
+    expect(h.provider.sentOfType("response.create")).toHaveLength(followUpsBefore);
+  });
+
+  it("a tool finishing after a barge answers the debt but asks for nothing", async () => {
+    /* A tool that STARTED before the press completes after it: the side
+     * effect happened, so the debt is real and the output must go out — but
+     * the press owns the floor it took, so no follow-up response.create.
+     * Unpinned until now: a future edit could silently start talking over
+     * the user's press. */
+    const h = makeHarness();
+    let release!: (value: unknown) => void;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    h.projectRoot.current = { slow: () => gate };
+    await callWithTools(h, [{ name: "slow", description: "Slow.", expression: ["slow"] }]);
+    h.provider.responseCreated();
+    h.provider.answerAudio(200);
+    h.provider.push({
+      type: "response.function_call_arguments.done",
+      call_id: "call_slow_2",
+      name: "slow",
+      arguments: "{}",
+    });
+    await h.settle();
+
+    /* The press barges mid-run: response cancelled, residue window open. */
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+
+    release({ done: true });
+    await h.settle();
+    expect(toolOutputs(h)).toHaveLength(1);
+    expect(h.provider.sentOfType("response.create")).toHaveLength(0);
+  });
 });
 
 /* ========================================================================== */
@@ -1047,21 +1146,12 @@ describe("the speaker lane", () => {
     );
   });
 
-  it("tells the device nothing about the answer ending", async () => {
-    /* A device that plays what arrives needs no end marker: its speaker goes
-     * quiet when nothing more comes. The flag used to cost a completion flag,
-     * a rule for attaching it, and a bug on answers shorter than the head
-     * start. Nothing in the payload should have come back. */
-    const h = makeHarness();
-    await callIsLive(h);
-    h.provider.answerAudio(1_000);
-    h.provider.answerComplete();
-    await playOutEverything(h, 3_000);
-    expect(speakerMsDelivered(h)).toBe(1_000);
-    for (const frame of speakerFrames(h)) {
-      expect(Object.keys(frame)).not.toContain("last");
-    }
-  });
+  /* (A "tells the device nothing about the answer ending" test sat here,
+   * left over from the deleted no-marker design: its prose contradicted the
+   * restored lastFrameOfAnswer pin above, and its negative assertion looked
+   * for a literal "last" key nothing ever produced — a check that could not
+   * fail. The marker behavior is pinned at "numbers the end-of-answer
+   * marker"; the delivery total at "delivers every millisecond". ) */
 
   it("never asks the device to hold more than the byte budget", async () => {
     /*
@@ -1091,26 +1181,10 @@ describe("the speaker lane", () => {
     /* And the budget is actually being used — a pacer that dribbled would pass
      * the bound above while sounding terrible on a jittery network. */
     expect(worstOutstandingBytes).toBeGreaterThan(MAX_DEVICE_SPEAKER_BACKLOG_BYTES / 2);
-  });
-
-  it("sends at the rate the audio plays, so the backlog cannot grow", async () => {
-    /* THE ONE INVARIANT KEEPING THE DEVICE'S BUFFER SAFE. Grok hands over
-     * thirty seconds in a single burst; at no point may the device have been
-     * given more than the head start beyond what it has had time to play. */
-    const h = makeHarness();
-    await callIsLive(h);
-    h.provider.answerAudio(30_000);
-    let elapsedMs = 0;
-    for (let tick = 0; tick < 40; tick++) {
-      await h.advanceTime(SPEAKER_FRAME_MS);
-      await h.settle();
-      elapsedMs += SPEAKER_FRAME_MS;
-      expect(speakerMsDelivered(h) - elapsedMs).toBeLessThanOrEqual(
-        MAX_DEVICE_SPEAKER_BUFFER_MS + SPEAKER_FRAME_MS,
-      );
-    }
     /* And it really is still sending — a pacer that had stalled would also
-     * pass the bound above. */
+     * pass both bounds above. (Two further tests asserted the same drain
+     * inequality per tick in MILLISECONDS — the byte bound divided by 32,
+     * over fewer ticks; strict subsets of this one, deleted whole.) */
     expect(speakerMsDelivered(h)).toBeGreaterThan(elapsedMs);
   });
 });
@@ -1164,8 +1238,12 @@ describe("a flush names a sequence number", () => {
 
     h.provider.speechStarted();
     await h.settle();
-    const clear = speakerClears(h)[0]!;
-    /* The clear frame's own number sits above everything it cancels. */
+    /* Exactly ONE clear, riding a frame of its own: empty, numbered, and
+     * above everything it cancels — so a device ordering by sequence number
+     * cannot apply it to the wrong audio however late it arrives. */
+    const clears = speakerClears(h);
+    expect(clears).toHaveLength(1);
+    const clear = clears[0]!;
     expect(clear.deviceSpeakerFrameSeq).toBeGreaterThan(mintedBefore);
 
     /* Everything the device is sent from now on is beyond the watermark, so
@@ -1353,7 +1431,7 @@ describe("a flush names a sequence number", () => {
     expect(h.provider.sentOfType("response.cancel")).toHaveLength(0);
   });
 
-  it("sends no repair when the press finds nothing playing", async () => {
+  it("sends no repair and no cancel when the press finds nothing playing", async () => {
     const h = makeHarness();
     await callIsLive(h, CLIENT_TAKES_TURNS);
     h.provider.responseCreated();
@@ -1363,20 +1441,11 @@ describe("a flush names a sequence number", () => {
 
     await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
     await h.settle();
+    /* Fully played: nothing to repair — no note, no truncate — and nothing
+     * generating to cancel. Three zeros, two distinct guards (the heard-ms
+     * slack test and the was-streaming snapshot), one staging. */
     expect(h.provider.sentOfType("conversation.item.create")).toHaveLength(0);
     expect(h.provider.sentOfType("conversation.item.truncate")).toHaveLength(0);
-  });
-
-  it("sends no cancel for a press when nothing is generating", async () => {
-    const h = makeHarness();
-    await callIsLive(h, CLIENT_TAKES_TURNS);
-    h.provider.responseCreated();
-    h.provider.answerAudio(400);
-    h.provider.answerComplete();
-    await playOutEverything(h, 2_000);
-
-    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
-    await h.settle();
     expect(h.provider.sentOfType("response.cancel")).toHaveLength(0);
   });
 
@@ -1803,6 +1872,26 @@ describe("ending a call", () => {
     expect(h.state().call).toBeNull();
   });
 
+  it("the idle tick chain dies with its call", async () => {
+    /* The dial-identity fence at the top of each tick is the ONLY thing
+     * that kills the self-rescheduling chain when the call ends — #hangUp
+     * nulls #dial but cannot reach the pending sleep. A fence-less chain
+     * keeps running with its captured closure and, because the "goodbye"
+     * path never used the `idle:` idempotency key, appends a SECOND
+     * end-requested with reason "no input" for a call already buried. */
+    const h = makeHarness();
+    const conversationId = await callIsLive(h);
+    await h.append({
+      type: "events.iterate.com/voice-agent/conversation-end-requested",
+      payload: { conversationId, reason: "the person said goodbye" },
+    });
+    await h.settle();
+    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
+    await h.settle();
+    expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(1);
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
+  });
+
   it("writes the provider's error where somebody can read it", async () => {
     const h = makeHarness();
     await callIsLive(h);
@@ -1858,27 +1947,9 @@ describe("eviction", () => {
 /* ========================================================================== */
 
 describe("what the device is told", () => {
-  it("carries the clear on a numbered frame, not on a lane of its own", async () => {
-    const h = makeHarness();
-    await callIsLive(h);
-    h.provider.answerAudio(2_000);
-    await playOutEverything(h, 600);
-    const highestBefore = Math.max(...speakerFrames(h).map((frame) => frame.deviceSpeakerFrameSeq));
-
-    h.provider.speechStarted();
-    await h.settle();
-
-    /* The instruction is a frame: empty, numbered, and above everything it
-     * cancels — so a device ordering by sequence number cannot apply it to the
-     * wrong audio however late it arrives. (The session's first frame carries a
-     * clear too, for a different reason; the barge's own is the empty one.) */
-    const barge = speakerFrames(h).filter(
-      (frame) => frame.clearSpeakerBufferBeforeFrame === true && frame.pcm === "",
-    );
-    expect(barge).toHaveLength(1);
-    expect(barge[0]!.deviceSpeakerFrameSeq).toBeGreaterThan(highestBefore);
-  });
-
+  /* (The clear-rides-a-numbered-frame claim is pinned by "flushes through
+   * the highest frame minted at that moment" — a test here staged the same
+   * construction and asserted a subset of it.) */
   it("clears once at the start of a session and never again unprompted", async () => {
     /* The first frame of a fresh socket empties whatever the board was holding
      * from a session that is gone. After that, an uninterrupted answer must not
@@ -1893,24 +1964,6 @@ describe("what the device is told", () => {
     expect(
       frames.slice(1).filter((frame) => frame.clearSpeakerBufferBeforeFrame === true),
     ).toHaveLength(0);
-  });
-
-  it("never hands over a frame the device did not ask to be able to hold", async () => {
-    /* The pacing claim, stated as the device would feel it: at no instant is
-     * the unplayed audio it has been given more than the lead plus the frame
-     * that crossed it. */
-    const h = makeHarness();
-    await callIsLive(h);
-    h.provider.answerAudio(20_000);
-    let played = 0;
-    for (let tick = 0; tick < 20; tick++) {
-      await h.advanceTime(SPEAKER_FRAME_MS);
-      await h.settle();
-      played += SPEAKER_FRAME_MS;
-      expect(speakerMsDelivered(h) - played).toBeLessThanOrEqual(
-        MAX_DEVICE_SPEAKER_BUFFER_MS + SPEAKER_FRAME_MS,
-      );
-    }
   });
 });
 
