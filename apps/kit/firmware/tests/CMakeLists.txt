@@ -412,8 +412,9 @@ iterate_kit_add_havpe_pure_test(
   havpe_pcm_format_test.c
   ../devices/havpe/voice_pe_pcm_format.c)
 
-# The dial: mode table (a wire contract with four provisioned streams), the
-# polled quadrature decoder, and the spin-then-settle wheel policy.
+# The dial and the button: mode table (a wire contract with four provisioned
+# streams), the polled quadrature decoder, the spin-then-settle wheel policy,
+# and the wake/converse/idle session grammar.
 iterate_kit_add_havpe_pure_test(
   iterate-kit-havpe-modes-test
   havpe_modes_test.c

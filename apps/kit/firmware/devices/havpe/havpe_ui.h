@@ -57,10 +57,6 @@ void havpe_ui_set_microphone_peak(uint32_t peak);
  */
 void havpe_ui_set_fault(void);
 
-/** The user's call INTENT, owned locally (see the Waveshare port). */
-void havpe_ui_request_call(bool wanted);
-bool havpe_ui_call_requested(void);
-
 /**
  * Mirror of the loop's call intent, so the ring answers the press ITSELF.
  *
@@ -83,6 +79,17 @@ void havpe_ui_show_volume(uint8_t percent);
 void havpe_ui_show_mode(uint8_t mode);
 
 /**
+ * The adopted mode, for the idle ring.
+ *
+ * While no session is up and the link is healthy, the ring shows this mode's
+ * quadrant dimly — the glanceable answer to "which posture will the next
+ * press take", which is the fact whose absence produced a tap in an
+ * unsuspected push-to-talk mode and two calls nobody could talk to. Dim on
+ * purpose: idle is a state, not a light show.
+ */
+void havpe_ui_set_mode(uint8_t mode);
+
+/**
  * Dial counts accumulated since the last take; either sign, consumed on read.
  *
  * Sampled inside the tick at the app-loop cadence (~5 ms) because quadrature
@@ -97,23 +104,19 @@ void havpe_ui_tick(void);
 /* --- the center button ------------------------------------------------------
  *
  * GPIO0, active low, and a boot strap: input only, and the device must never
- * restart while it is held low (that enters the ROM downloader). One button
- * carries both intents with a deliberate product grammar:
- *
- *   hold past the tap threshold  -> push-to-talk (turn runs while held)
- *   short tap                    -> toggle the call
- *
- * The tap threshold trades ~250 ms of push-to-talk onset for one-button call
- * control; a person's press-then-speak lead ordinarily covers it. Poll every
- * app-loop pass; edges are classified here so the composition sees only the
- * two intents.
+ * restart while it is held low (that enters the ROM downloader). This module
+ * only CLASSIFIES the gesture — a press past the threshold is a hold, a
+ * shorter release a tap; what either MEANS in which state is the session
+ * grammar's table in havpe_modes.h. The threshold trades ~250 ms of hold
+ * onset for the one-button grammar; a person's press-then-speak lead
+ * ordinarily covers it. Poll every app-loop pass.
  */
 void havpe_button_poll(void);
 
-/** Level: the press has been held past the tap threshold (talk wanted). */
+/** Level: the press has been held past the tap threshold. */
 bool havpe_button_talk_held(void);
 
-/** One completed short tap (consumed on read): toggle the call. */
+/** One completed short tap (consumed on read). */
 bool havpe_button_take_tap(void);
 
 #ifdef __cplusplus

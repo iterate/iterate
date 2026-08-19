@@ -2,10 +2,11 @@
 """Bake the HAVPE UI sounds into a C include.
 
 The board has no filesystem and no downloader: a sound it cannot address as
-an array in flash is a sound it does not have. Sources: the two button
-chimes are the official Home Assistant Voice PE assets (ESPHome project,
-Apache-2.0), converted to this pipeline's 16 kHz mono PCM16; the four mode
-announcements are macOS `say` renders. Regenerate with:
+an array in flash is a sound it does not have. Sources: the wake chime is
+the official Home Assistant Voice PE press asset (ESPHome project,
+Apache-2.0), converted to this pipeline's 16 kHz mono PCM16; the end-of-call
+announcement and the four mode announcements are macOS `say` renders.
+Regenerate with:
 
   python3 make-sounds.py <dir-with-wavs>  > havpe_sounds_generated.inc
 """
@@ -13,7 +14,7 @@ import struct, sys, pathlib
 
 NAMES = [
     ("chime_press", "center_button_press.wav"),
-    ("chime_hold", "center_button_long_press.wav"),
+    ("chime_ended", "call_ended.wav"),
     ("mode_grok_ptt", "mode1.wav"),
     ("mode_grok_vad", "mode2.wav"),
     ("mode_openai_ptt", "mode3.wav"),

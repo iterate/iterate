@@ -914,13 +914,14 @@ static bool cli_main_init_keyboard(struct cli_runtime *runtime)
   if (status == CLI_KEYBOARD_OK) {
     if (runtime->options.open_mic) {
       /*
-       * A BOARD'S POSTURE: the microphone is simply on. Talk is requested
-       * once, here, and stays wanted — the server's VAD segments the turns
-       * from the continuous stream (it needs the silence BETWEEN utterances,
-       * which is exactly what a space-gated capture never sends). The
-       * keyboard stays open for q alone.
+       * A BOARD'S POSTURE: launching the run is the wake press, so talk is
+       * requested once, here, and stays wanted for the session — the
+       * server's VAD segments the turns from the continuous stream (it
+       * needs the silence BETWEEN utterances, which is exactly what a
+       * space-gated capture never sends). When the session ends — hang-up,
+       * idle — the microphone gates and SPACE is the next wake press.
        */
-      cli_runtime_log("info", "open mic: just talk; q hangs up");
+      cli_runtime_log("info", "open mic: just talk; SPACE re-wakes, q quits");
       (void)cli_main_request_talk(
           runtime, true, ITERATE_KIT_DEVICE_EVENT_SOURCE_SYSTEM);
     } else {
@@ -1256,12 +1257,15 @@ static void cli_main_on_control(
     (void)cli_main_request_talk(
         runtime, false, ITERATE_KIT_DEVICE_EVENT_SOURCE_SYSTEM);
     if (runtime->options.open_mic && !runtime->hanging_up) {
-      /* The call ended — the model hung up, or the server idled it out —
-       * but an open microphone outlives any one call: talking again should
-       * open the NEXT one, exactly as a board would. Only a q-hangup, which
-       * is the person ending the SESSION, leaves talk unrequested. */
-      (void)cli_main_request_talk(
-          runtime, true, ITERATE_KIT_DEVICE_EVENT_SOURCE_SYSTEM);
+      /*
+       * AND THE SESSION ENDS WITH IT — the board grammar. This used to
+       * re-request talk on the theory that an open microphone outlives any
+       * one call, so the model's hang_up was answered by the very next
+       * microphone frame opening a successor in the same second, and an
+       * idle-timeout end resurrected whenever anyone in the room was
+       * talking. The microphone now stays gated until the next wake press.
+       */
+      cli_runtime_log("info", "call over — SPACE wakes the next one, q quits");
     }
     cli_runtime_log("warn", "call ended");
   }
@@ -2268,12 +2272,14 @@ static void cli_main_apply_key(
     uint64_t now_ms)
 {
   assert(runtime != NULL);
-  /* Open mic has no button: capture was latched on at startup and the only
-   * key with a meaning left is q. Space silently does nothing, because a
-   * space that MUTED would be a second turn-taking authority fighting the
-   * server's VAD. */
+  /* Open mic has no turn button: releasing SPACE must not mute a latched
+   * session — a space that MUTED would be a second turn-taking authority
+   * fighting the server's VAD — and while the session is live a press means
+   * nothing either. A press with NOTHING latched is the wake: the same
+   * press-to-wake the board grammar gives an ended session. */
   if (runtime->options.open_mic &&
-      (event == CLI_KEYBOARD_TALK_START || event == CLI_KEYBOARD_TALK_STOP)) {
+      (event == CLI_KEYBOARD_TALK_STOP ||
+       (event == CLI_KEYBOARD_TALK_START && runtime->wants_talk))) {
     return;
   }
   switch (event) {

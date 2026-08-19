@@ -9,14 +9,15 @@ extern "C" {
 #endif
 
 /*
- * The dial's four conversation modes, and the wheel arithmetic behind them.
+ * The dial's four conversation modes, the wheel arithmetic behind them, and
+ * the session grammar the centre button speaks.
  *
  * Pure C99 with no hardware includes, like voice_pe_hardware_config: the mode
  * table is a WIRE CONTRACT — each entry names a stream whose far end is
- * already configured for exactly that provider and turn policy — so the table
- * and the decoder stay host-testable, and a drifted path or a miscounted
- * detent is a failing literal test rather than a board that dials a provider
- * expecting turns nobody marks.
+ * already configured for exactly that provider and turn policy — so the table,
+ * the decoder and the session machine stay host-testable, and a drifted path,
+ * a miscounted detent or a press that means the wrong thing is a failing host
+ * test rather than a board that dials a provider expecting turns nobody marks.
  */
 
 /**
@@ -124,6 +125,85 @@ void havpe_mode_wheel_cancel(struct havpe_mode_wheel *wheel);
  */
 bool havpe_mode_wheel_take_settled(
     struct havpe_mode_wheel *wheel, uint64_t now_ms, uint8_t *mode);
+
+/* --- the session -----------------------------------------------------------
+ *
+ * THE OFFICIAL FIRMWARE'S GRAMMAR: WAKE, CONVERSE, IDLE. A press wakes the
+ * device into a session; the session ends by model hang-up, button, or idle
+ * timeout; an ended session is SILENT — no microphone frame leaves — until
+ * the next wake press. It replaced a latch that re-armed on every call end:
+ * the hang_up tool's end at 12:53:25 (2026-08-19) was answered by a fresh
+ * call within the same second, so hanging up was impossible in open mic.
+ *
+ *   IDLE     ring: the mode's quadrant, dim.  mic: silent.
+ *            tap:  open-mic wakes (chime); push-to-talk flashes the mode —
+ *                  opening a session a tap cannot talk to is the two-press
+ *                  jank this table bans.
+ *            hold: push-to-talk wakes — chime and talk in ONE gesture;
+ *                  open-mic nothing.
+ *   WAKING   ring: the amber working comet.  mic: push-to-talk while held.
+ *            tap ends the session; a push-to-talk hold keeps talking.
+ *   IN_CALL  ring: the shared lights.  mic: open-mic the whole session,
+ *            push-to-talk while held.  tap ends; an open-mic hold is
+ *            nothing, so leaning cannot hang up.
+ *   ENDING   ring: the lights draining.  mic: silent.  presses: nothing —
+ *            the teardown is already on the wire.
+ *
+ * SOUNDS: the wake press chimes (chime_press), every session's return to
+ * IDLE says "call ended" (chime_ended) — every end path flows through that
+ * one edge, so no end can forget the sound — and every other press is
+ * answered by the ring alone.
+ *
+ * Derived each poll from the loop's two published facts, never stored: a
+ * second latch could disagree with the loop's, a classifier cannot. Holding
+ * is a LEVEL the button owns (`talk_held`), not a fifth state.
+ */
+
+enum havpe_session_state {
+  HAVPE_SESSION_IDLE = 0,
+  HAVPE_SESSION_WAKING,
+  HAVPE_SESSION_IN_CALL,
+  HAVPE_SESSION_ENDING,
+};
+
+/** Which row of the table applies, from the loop's two mirrored facts. */
+enum havpe_session_state havpe_session_classify(
+    bool wants_call, bool call_active);
+
+/** The machine's memory: the hold level for its rising edge, and whether
+ * the last poll was in a session, for the exit-to-idle edge. */
+struct havpe_session {
+  bool was_held;
+  bool was_in_session;
+};
+
+/** One control poll's worth of facts, gestures already classified. */
+struct havpe_session_poll {
+  bool tap;          /**< A completed short tap (edge). */
+  bool held;         /**< The hold level, raw; the machine applies posture. */
+  bool wants_call;   /**< The loop's intent, mirrored by the last present. */
+  bool call_active;  /**< The loop's call fact, likewise. */
+  bool push_to_talk; /**< The adopted mode's posture. */
+};
+
+/** What this pass must do about it. Edges, except the `talk_held` level. */
+struct havpe_session_actions {
+  bool start_call;
+  bool end_call;
+  bool wake_chime;   /**< Plays only for the press that OPENS a session. */
+  /** "Call ended", once per session, on its return to IDLE — whatever
+   * ended it: tap, model hang-up, idle timeout, a dead session. */
+  bool end_chime;
+  bool mode_flash;   /**< A push-to-talk bare tap: remind, open nothing. */
+  /** The hold, reported only where the table says it means talk, so a hold
+   * outside a session can never become one by an edge. */
+  bool talk_held;
+};
+
+void havpe_session_step(
+    struct havpe_session *session,
+    const struct havpe_session_poll *poll,
+    struct havpe_session_actions *out);
 
 #ifdef __cplusplus
 }
