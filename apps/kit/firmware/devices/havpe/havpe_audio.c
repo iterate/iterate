@@ -336,6 +336,40 @@ bool havpe_audio_speaker_is_playing(void) {
 }
 
 
+/* --- local sounds ---------------------------------------------------------- */
+
+/*
+ * THE BOARD'S OWN VOICE: chimes and mode announcements, straight from flash.
+ *
+ * Everything else this speaker plays arrives over the stream, paced by the
+ * server, seconds after the gesture that asked for it — which is exactly the
+ * problem these solve: a press that answers within a frame instead of after a
+ * dial. So they bypass the stream entirely and cut in at the last seam before
+ * the DAC, where the playback hardware task drains them BEFORE it looks at
+ * the mailbox. Preemption, not mixing, on purpose: a chime stepping on the
+ * first milliseconds of an answer is acceptable and a mixer is not simpler
+ * than this. The stream's frames are not lost — the depth-one mailbox holds
+ * one and the portable playback task absorbs the rest as backpressure it
+ * already knows how to wait out.
+ *
+ * Allocation-free: the PCM lives in .rodata (flash), the cursor walks it in
+ * 20 ms slices, and the lock is held only to move three words — the flash
+ * read itself happens outside the critical section.
+ */
+static portMUX_TYPE sound_lock = portMUX_INITIALIZER_UNLOCKED;
+static const uint8_t *sound_pcm; /* NULL when idle; guarded by sound_lock */
+static uint32_t sound_bytes;
+static uint32_t sound_cursor;
+
+void havpe_audio_play_sound(const uint8_t *pcm, uint32_t bytes) {
+  if (pcm == NULL || bytes < 2U) return;
+  portENTER_CRITICAL(&sound_lock);
+  sound_pcm = pcm;
+  sound_bytes = bytes & ~1U; /* whole PCM16 samples only */
+  sound_cursor = 0U;
+  portEXIT_CRITICAL(&sound_lock);
+}
+
 /* --- hardware tasks -------------------------------------------------------- */
 
 /*
@@ -472,7 +506,39 @@ static void playback_hardware_task(void *argument) {
   static struct iterate_kit_voice_pe_playback_resampler resampler;
   (void)argument;
   for (;;) {
-    if (xQueueReceive(playback_mailbox, &frame, portMAX_DELAY) != pdTRUE) {
+    /*
+     * A local sound outranks the mailbox — see the note at `sound_pcm`. The
+     * slice bounds are taken under the lock and the flash copy happens
+     * outside it; if the app task replaces the sound mid-slice, this frame
+     * finishes from the superseded PCM and the next one starts the new
+     * sound, which is the preemption behaving as specified.
+     */
+    const uint8_t *sound = NULL;
+    uint32_t sound_offset = 0U;
+    uint32_t sound_take = 0U;
+    portENTER_CRITICAL(&sound_lock);
+    if (sound_pcm != NULL) {
+      const uint32_t remaining = sound_bytes - sound_cursor;
+      sound = sound_pcm;
+      sound_offset = sound_cursor;
+      sound_take = remaining < sizeof(frame.samples)
+          ? remaining
+          : (uint32_t)sizeof(frame.samples);
+      sound_cursor += sound_take;
+      if (sound_cursor >= sound_bytes) sound_pcm = NULL;
+    }
+    portEXIT_CRITICAL(&sound_lock);
+    if (sound != NULL) {
+      memcpy(frame.samples, sound + sound_offset, sound_take);
+      frame.sample_count = sound_take / sizeof(frame.samples[0]);
+    } else if (
+        /*
+         * One frame period instead of portMAX_DELAY, so a chime requested
+         * while the stream is silent starts within 20 ms. An idle wake that
+         * finds neither sound nor frame costs one queue peek.
+         */
+        xQueueReceive(playback_mailbox, &frame, pdMS_TO_TICKS(20)) !=
+        pdTRUE) {
       continue;
     }
     size_t words_written = 0U;

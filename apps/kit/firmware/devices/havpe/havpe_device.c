@@ -33,6 +33,9 @@
  */
 #include <stdio.h>
 
+#include "esp_timer.h"
+#include "nvs.h"
+
 #include "iterate/kit/audio_processor.h"
 #include "iterate/kit/capabilities/arguments.h"
 #include "iterate/kit/devices/havpe.h"
@@ -40,7 +43,96 @@
 #include "iterate/kit/voice_device_profile.h"
 
 #include "havpe_audio.h"
+#include "havpe_modes.h"
 #include "havpe_ui.h"
+
+/*
+ * The baked UI sounds: two button chimes (the official Home Assistant Voice
+ * PE assets) and four mode announcements, all 16 kHz mono PCM16LE in
+ * .rodata. Included here because the COMPOSITION decides what a gesture
+ * sounds like; the audio driver only knows how to play PCM it is handed.
+ */
+#include "assets/havpe_sounds_generated.inc"
+
+enum {
+  /*
+   * One dial count moves the volume 5 percent — the official firmware's
+   * `volume_increment: 0.05`, kept so the wheel feels like the same wheel
+   * under either firmware.
+   */
+  DIAL_VOLUME_STEP_PERCENT = 5,
+};
+
+/*
+ * The dial's composition state. The wheel arithmetic itself is pure and
+ * host-tested (havpe_modes.c); what lives here is the wiring — which gesture
+ * reaches which seam — plus mirrors of the two view facts the routing needs,
+ * because `poll` runs before the pass's view exists.
+ */
+static struct {
+  struct havpe_mode_wheel wheel;
+  /** The adopted mode: announced, dialled, persisted. */
+  uint8_t mode;
+  bool call_active;
+  bool wants_call;
+  /** Last reported hold level, for the hold chime's edge. */
+  bool talk_was_held;
+} mode_state;
+
+/*
+ * The one durable byte this board keeps: which mode the dial last settled
+ * on. NVS rather than the provisioning partition because the mode is the
+ * USER'S state, not the fleet's — reflashing a config must not reset a
+ * person's chosen assistant. The namespace is initialised by the transport
+ * (which this board starts before its codec), so both helpers may assume a
+ * mounted NVS and fail soft to the factory default when anything refuses.
+ */
+static const char mode_nvs_namespace[] = "havpe";
+static const char mode_nvs_key[] = "mode";
+
+static uint8_t load_mode(void) {
+  nvs_handle_t handle;
+  uint8_t mode = HAVPE_MODE_OPENAI_OPEN_MIC;
+  if (nvs_open(mode_nvs_namespace, NVS_READONLY, &handle) == ESP_OK) {
+    uint8_t stored = 0U;
+    if (nvs_get_u8(handle, mode_nvs_key, &stored) == ESP_OK &&
+        stored < HAVPE_MODE_COUNT) {
+      mode = stored;
+    }
+    nvs_close(handle);
+  }
+  return mode;
+}
+
+static void store_mode(uint8_t mode) {
+  nvs_handle_t handle;
+  if (nvs_open(mode_nvs_namespace, NVS_READWRITE, &handle) != ESP_OK) return;
+  (void)nvs_set_u8(handle, mode_nvs_key, mode);
+  (void)nvs_commit(handle);
+  nvs_close(handle);
+}
+
+/*
+ * Make `mode` the board's effective mode: point the loop at its stream,
+ * match the microphone posture to what that stream's far end expects, and —
+ * for a settle rather than the boot restore — say its name out loud and
+ * remember it. Path and posture move TOGETHER, always, which is the whole
+ * reason the pair lives in one function: the mode table guarantees they
+ * agree and this is the only caller of either setter.
+ */
+static void adopt_mode(uint8_t mode, bool settled) {
+  iterate_kit_voice_loop_set_stream_path(havpe_mode_stream_path(mode));
+  iterate_kit_voice_loop_set_turns(
+      havpe_mode_push_to_talk(mode)
+          ? ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK
+          : ITERATE_KIT_VOICE_TURNS_SERVER_VAD);
+  if (settled) {
+    if (mode != mode_state.mode) store_mode(mode);
+    havpe_audio_play_sound(
+        havpe_mode_sounds[mode].pcm, havpe_mode_sounds[mode].bytes);
+  }
+  mode_state.mode = mode;
+}
 
 /*
  * THE RING FIRST, THEN THE CODEC, AND THE RADIO BETWEEN THEM.
@@ -63,6 +155,17 @@ static bool start(void *context, struct iterate_kit_board_audio *out) {
   (void)context;
   if (!havpe_ui_init()) return false;
   if (!havpe_audio_init()) return false;
+  /*
+   * RESTORE THE DIAL, silently. `radio_before_codec` means the transport —
+   * and with it nvs_flash_init — has already run by the time this board
+   * starts, and the first stream mount is still seconds of Wi-Fi and TLS
+   * away, so adopting here re-points the loop before it has anything to
+   * re-point away from. No announcement: a reboot keeping your setting is
+   * not news.
+   */
+  mode_state.mode = load_mode();
+  havpe_mode_wheel_init(&mode_state.wheel, mode_state.mode);
+  adopt_mode(mode_state.mode, false);
   out->codec = havpe_audio_codec();
   /*
    * PASSTHROUGH, because the cancellation already happened. What arrives at
@@ -80,6 +183,13 @@ static void present(
   havpe_ui_set_state((enum havpe_ui_state)view->screen);
   havpe_ui_set_status(view->status == NULL ? "" : view->status);
   havpe_ui_set_call_active(view->call_active);
+  /* The press's own acknowledgement: the ring chases from wants_call, not
+   * from the call the far end takes seconds to accept. */
+  havpe_ui_set_wants_call(view->wants_call);
+  /* Mirrored for `poll`, which routes the dial before this pass's view
+   * exists and must not re-point the stream under a call. */
+  mode_state.call_active = view->call_active;
+  mode_state.wants_call = view->wants_call;
   havpe_ui_set_api_ready(view->api_ready);
   havpe_ui_set_stream_ready(view->stream_ready);
   havpe_ui_set_link_ready(view->link_ready);
@@ -99,14 +209,79 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
   havpe_button_poll();
   /*
    * ONE BUTTON, ONE INTENT. A tap toggles whether a call is wanted, and the
-   * loop resolves the toggle against the intent it holds.
-   *
-   * The HOLD gesture is still classified by the poller and deliberately not
-   * reported: with the microphone open for the whole call there is no turn to
-   * hold. What matters is that a long press is still NOT a tap, so leaning on
-   * the button cannot hang up.
+   * loop resolves the toggle against the intent it holds. The chime is the
+   * other half of the same acknowledgement the ring's chase gives: a press
+   * used to be answered by nothing until the far end accepted the call,
+   * which reads as a broken button for exactly as long as a dial takes.
    */
-  out->toggle_call = havpe_button_take_tap();
+  const bool tapped = havpe_button_take_tap();
+  out->toggle_call = tapped;
+  if (tapped) {
+    havpe_audio_play_sound(
+        havpe_sound_chime_press, sizeof(havpe_sound_chime_press));
+  }
+  /*
+   * THE HOLD IS A TURN ONLY WHEN THE MODE SAYS SO. In the push-to-talk
+   * modes the level is reported and the loop's turn machine does what it
+   * does for every push-to-talk board; in the open-mic modes it stays
+   * unreported exactly as before — there is no turn to hold, and a long
+   * press must still not be a tap so leaning on the button cannot hang up.
+   * The hold chime marks the microphone OPENING, so it too is push-to-talk
+   * only: acknowledging a gesture that does nothing would teach it.
+   */
+  const bool held =
+      havpe_mode_push_to_talk(mode_state.mode) && havpe_button_talk_held();
+  out->talk_held = held;
+  if (held && !mode_state.talk_was_held) {
+    havpe_audio_play_sound(
+        havpe_sound_chime_hold, sizeof(havpe_sound_chime_hold));
+  }
+  mode_state.talk_was_held = held;
+
+  /*
+   * THE DIAL IS TWO KNOBS, split by whether a call is in play: volume while
+   * one is (the only thing a wheel should do mid-conversation, and what the
+   * official firmware's wheel does), mode selection while none is. The
+   * in-play test includes wants_call so a spin cannot re-point the stream
+   * underneath a call being placed — and a spin still unsettled when a call
+   * starts is cancelled outright, because adopting it minutes later when
+   * the call ends would be a complete surprise.
+   */
+  const uint64_t now = (uint64_t)(esp_timer_get_time() / 1000);
+  const bool call_in_play = mode_state.call_active || mode_state.wants_call;
+  if (call_in_play) havpe_mode_wheel_cancel(&mode_state.wheel);
+  const int steps = havpe_ui_take_dial();
+  if (steps != 0) {
+    if (call_in_play) {
+      /*
+       * Through the SAME seam speaker.setVolume uses, so the wheel, the
+       * capability and health() can never disagree about what the volume
+       * is — and the driver's measured 0 dB ceiling clamps the wheel
+       * exactly as it clamps the RPC.
+       */
+      int target =
+          (int)havpe_audio_volume() + steps * DIAL_VOLUME_STEP_PERCENT;
+      if (target < 0) target = 0;
+      if (target > 100) target = 100;
+      uint8_t applied = 0U;
+      if (havpe_audio_set_volume((uint8_t)target, &applied) ==
+          ITERATE_KIT_OK) {
+        havpe_ui_show_volume(applied);
+      }
+    } else {
+      havpe_mode_wheel_turn(&mode_state.wheel, steps, now);
+      havpe_ui_show_mode(mode_state.wheel.shown);
+    }
+  }
+  {
+    uint8_t settled = 0U;
+    if (havpe_mode_wheel_take_settled(&mode_state.wheel, now, &settled)) {
+      adopt_mode(settled, true);
+      /* Re-arm the quadrant for the announcement's opening, so the eye and
+       * the ear agree about which mode just won. */
+      havpe_ui_show_mode(settled);
+    }
+  }
 }
 
 static void phase(void *context, enum iterate_kit_voice_phase phase_value) {
@@ -242,6 +417,13 @@ static size_t health(void *context, char *out, size_t capacity) {
     /* Driver-level DMA overflows: the slave buses' own loss signals. */
     {"captureQueueOverflows", havpe_audio_capture_queue_overflows()},
     {"playbackQueueOverflows", havpe_audio_playback_queue_overflows()},
+    /*
+     * WHERE THE DIAL SITS, 1-4 in the spoken order (grok ptt, grok open-mic,
+     * openai ptt, openai open-mic). The adopted stream already shows as
+     * `conversation` in the shared document; this is the posture half of the
+     * same fact, readable without ears on a board whose console reboots it.
+     */
+    {"dialMode", (uint32_t)mode_state.mode + 1U},
   };
   size_t used = 0U;
   size_t index;
@@ -278,6 +460,12 @@ static const struct iterate_kit_board_ops ops = {
 };
 
 static const struct iterate_kit_board_facts facts = {
+  /*
+   * The factory default is the dial's mode 4 (openai open-mic), and the two
+   * spellings must stay equal: this one seeds the loop before `start` runs,
+   * and havpe_modes.c is what the dial adopts afterwards. The host test pins
+   * the table's copy as a literal.
+   */
   .stream_path = "/agents/voice/home-assistant-voice-preview-edition",
   .client_path = "/clients/home-assistant-voice-preview-edition",
   .conversation_id = "havpedev",
@@ -285,9 +473,13 @@ static const struct iterate_kit_board_facts facts = {
   .instructions =
       "Home Assistant Voice Preview Edition: a voice endpoint with no screen — "
       "a twelve-LED ring is its only local feedback. A tap on the centre "
-      "button starts and ends the call. Its microphone stays OPEN throughout: "
-      "it has hardware echo cancellation in an XMOS DSP, so it can be "
-      "interrupted and there is no push-to-talk. "
+      "button starts and ends the call. The rotary dial around it adjusts "
+      "volume during a call; outside one it cycles four conversation modes "
+      "(grok or openai, each push-to-talk or open-mic), announces the choice "
+      "aloud, and keeps it across reboots. In the open-mic modes the "
+      "microphone stays OPEN for the whole call — hardware echo cancellation "
+      "in an XMOS DSP makes interruption safe — and in the push-to-talk modes "
+      "it streams only while the centre button is held. "
       "conversation.start() and conversation.end() begin and end a call. "
       "health() returns this device's full diagnostics — start there when it "
       "seems unwell. "
@@ -314,9 +506,12 @@ static const struct iterate_kit_board_facts facts = {
       "raw microphone, 1 AEC, 2 AEC+IC, 3 AEC+IC+NS, 4 with AGC — and health() "
       "reports echoRawPeak and echoCleanPeak accumulated while the speaker was "
       "running, which is how this board's cancellation is measured. "
-      "There is no push-to-talk: this board has hardware echo cancellation in "
-      "its XMOS DSP, so its microphone is open for the whole call and the "
-      "provider's server VAD decides when you have finished speaking. "
+      "Its rotary dial selects between four conversation modes when no call "
+      "is up (health() reports the current one as dialMode, 1-4). In the "
+      "open-mic modes the microphone is open for the whole call — hardware "
+      "echo cancellation in the XMOS DSP makes that safe — and the provider's "
+      "server VAD decides when you have finished speaking; in the "
+      "push-to-talk modes it streams only while the centre button is held. "
       "speaker.setVolume({percent}) sets how loud it plays, 0-100; it clamps "
       "to a ceiling this board has a measured reason for and answers with "
       "{percent,ceiling}, which speaker.volume() also returns. "
@@ -325,9 +520,13 @@ static const struct iterate_kit_board_facts facts = {
   /*
    * THE TURN POLICY, SAID OUT LOUD. This read "hold the button to talk" on a
    * board that had stopped implementing push-to-talk months earlier — the
-   * sentence is not decoration, it is the policy, and it was lying.
+   * sentence is not decoration, it is the policy, and it was lying. The
+   * policy is the dial's now, so the sentence covers both settings rather
+   * than lying about half of them.
    */
-  .talk_hint = "speak whenever you like",
+  .talk_hint =
+      "speak whenever you like — or hold the centre button in a "
+      "push-to-talk mode",
   .call_hint = "connection lost — press the centre button to call",
   .speaker = {
     .context = NULL,
@@ -355,6 +554,15 @@ static const struct iterate_kit_board_facts facts = {
   /*
    * The provider's, because the XMOS makes it safe. Requesting the manual
    * default here produced an accepted call and a deaf assistant.
+   *
+   * THE FACTORY DEFAULT, NOT THE WHOLE TRUTH: the dial re-selects the
+   * effective posture at runtime through iterate_kit_voice_loop_set_turns,
+   * always in the same breath as the mode's stream path (see adopt_mode),
+   * so the board's microphone gate and the far end's turn expectations move
+   * together. What this compile-time fact still decides is the capability
+   * surface — pushToTalk is never MOUNTED on this board, because the peer is
+   * described once and cannot follow a dial; the button is the only
+   * push-to-talk this board offers.
    */
   .turns = ITERATE_KIT_VOICE_TURNS_SERVER_VAD,
   /*

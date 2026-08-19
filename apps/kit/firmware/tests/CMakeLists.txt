@@ -412,6 +412,13 @@ iterate_kit_add_havpe_pure_test(
   havpe_pcm_format_test.c
   ../devices/havpe/voice_pe_pcm_format.c)
 
+# The dial: mode table (a wire contract with four provisioned streams), the
+# polled quadrature decoder, and the spin-then-settle wheel policy.
+iterate_kit_add_havpe_pure_test(
+  iterate-kit-havpe-modes-test
+  havpe_modes_test.c
+  ../devices/havpe/havpe_modes.c)
+
 # StackChan's adopted pure DSP primitives (components/audio): the AEC cadence
 # bridge, reference scaler, uplink selector, and near high-pass, each with the
 # donor's host tests. They link the audio component, not core.

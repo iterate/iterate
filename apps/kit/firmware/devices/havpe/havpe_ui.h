@@ -61,6 +61,36 @@ void havpe_ui_set_fault(void);
 void havpe_ui_request_call(bool wanted);
 bool havpe_ui_call_requested(void);
 
+/**
+ * Mirror of the loop's call intent, so the ring answers the press ITSELF.
+ *
+ * While a call is wanted but not yet active the ring shows the shared amber
+ * "working on it" comet — the press acknowledged within a frame instead of
+ * after the seconds the far end takes to accept. The moment call_active
+ * flips, the view owns the ring again.
+ */
+void havpe_ui_set_wants_call(bool wanted);
+
+/**
+ * Borrow the ring for ~1 s of direct dial feedback.
+ *
+ * Volume is N of 12 pixels lit (the official firmware's own display for this
+ * gesture, red single pixel at zero); a mode is its lit quadrant of three.
+ * Each call re-arms the dwell, so feedback follows the finger; when it
+ * lapses, the state animation returns untouched.
+ */
+void havpe_ui_show_volume(uint8_t percent);
+void havpe_ui_show_mode(uint8_t mode);
+
+/**
+ * Dial counts accumulated since the last take; either sign, consumed on read.
+ *
+ * Sampled inside the tick at the app-loop cadence (~5 ms) because quadrature
+ * decays with sampling rate; drained by the composition at the 25 ms control
+ * poll. Both run on the app task.
+ */
+int havpe_ui_take_dial(void);
+
 /** Throttled ring refresh; call from the app loop only. */
 void havpe_ui_tick(void);
 

@@ -336,6 +336,21 @@ EXT_RAM_BSS_ATTR static uint8_t
 static char stream_path[96];
 
 /*
+ * The turn policy this loop is CURRENTLY running, seeded from the board's
+ * `facts->turns`.
+ *
+ * Runtime for the same reason the path above is: one board's dial re-selects
+ * its conversation among streams whose far ends take turns differently, and
+ * the posture has to follow the path — a push-to-talk board on a server-VAD
+ * stream is a mic that only opens under a button the provider never asks for,
+ * and the reverse commits turns the server's VAD owns. Only the two per-pass
+ * reads below honour this; the push-to-talk MODULE stays decided by the
+ * compile-time fact, because the capability surface is described to the peer
+ * once at mount and cannot follow a dial that turns afterwards.
+ */
+static enum iterate_kit_voice_turns turn_policy;
+
+/*
  * pdMS_TO_TICKS() truncates, so any wait shorter than one tick becomes zero —
  * and vTaskDelay(0) yields without blocking, which turns a short sleep into a
  * busy spin that can starve the idle task and trip the watchdog. Always wait
@@ -2646,6 +2661,7 @@ bool iterate_kit_voice_loop_init(
   runtime.board_context = context;
   (void)snprintf(
       stream_path, sizeof(stream_path), "%s", facts->stream_path);
+  turn_policy = facts->turns;
   iterate_kit_voice_playback_clock_init(&runtime.playout_clock);
   /*
    * The app task is the sole consumer of the control inbox and therefore the
@@ -3431,7 +3447,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
        * turn, so the conjunct stays.
        */
       const bool wants_talk =
-          runtime.facts->turns == ITERATE_KIT_VOICE_TURNS_SERVER_VAD
+          turn_policy == ITERATE_KIT_VOICE_TURNS_SERVER_VAD
           ? runtime.voicelab.call_active
           : (wants_call &&
              (runtime.intent.talk_held || runtime.remote_talk));
@@ -3645,7 +3661,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
        * and nothing else.
        */
       const bool marks_turns =
-          runtime.facts->turns == ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK;
+          turn_policy == ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK;
       if (!marks_turns) {
         /*
          * The microphone rides the call, so this is one edge, not two, and it
@@ -3970,4 +3986,28 @@ void iterate_kit_voice_loop_run(
 
 const char *iterate_kit_voice_loop_stream_path(void) {
   return stream_path;
+}
+
+void iterate_kit_voice_loop_set_stream_path(const char *path) {
+  if (path == NULL || path[0] == '\0') return;
+  if (strcmp(stream_path, path) == 0) return;
+  (void)snprintf(stream_path, sizeof(stream_path), "%s", path);
+  /*
+   * The path is read once per mount — `streams.get(stream_path)` — so a
+   * voicelab that is already up is holding the OLD conversation. Close it and
+   * zero the generation: the standing remount arm sees the generations
+   * disagree and rebuilds on the same connection at the new path within a
+   * pass, exactly as the failed-with-a-ready-connection branch already does.
+   * Before the first mount both conditions are already false and this is
+   * nothing but the copy above.
+   */
+  if (runtime.voicelab.state != ITERATE_KIT_VOICELAB_IDLE &&
+      runtime.voicelab.state != ITERATE_KIT_VOICELAB_CLOSED) {
+    (void)iterate_kit_voicelab_close(&runtime.voicelab);
+  }
+  runtime.voicelab_generation = 0U;
+}
+
+void iterate_kit_voice_loop_set_turns(enum iterate_kit_voice_turns turns) {
+  turn_policy = turns;
 }

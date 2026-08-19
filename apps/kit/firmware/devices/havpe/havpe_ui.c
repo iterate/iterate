@@ -22,6 +22,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "havpe_modes.h"
 #include "iterate/kit/conversation_lights.h"
 #include "iterate/kit/conversation_overlay.h"
 #include "led_strip.h"
@@ -38,14 +39,44 @@ enum {
   BUTTON_DEBOUNCE_MS = 30,
   /* Shorter is a tap (call toggle); longer is push-to-talk. */
   BUTTON_TAP_THRESHOLD_MS = 250,
+  /* The rotary ring around the top face: same pins and quadrature grain as
+   * the official firmware's `dial` (pin_a GPIO16, pin_b GPIO18,
+   * resolution 2). */
+  DIAL_A_GPIO = 16,
+  DIAL_B_GPIO = 18,
   /* 20 Hz ceiling on ring refreshes. */
   RING_REFRESH_MIN_US = 50000,
+  /* How long a dial gesture owns the ring before the state animation
+   * returns — the official firmware's own 1 s "Volume Display" dwell. */
+  OVERLAY_HOLD_US = 1000000,
+};
+
+/*
+ * What the dial has borrowed the ring for. The overlay outranks the state
+ * animation for OVERLAY_HOLD_US after the last gesture, because feedback that
+ * arrives after the finger has left is decoration, not feedback.
+ */
+enum ring_overlay {
+  OVERLAY_NONE = 0,
+  /* N of 12 pixels lit: the volume, exactly as the official firmware. */
+  OVERLAY_VOLUME,
+  /* One lit quadrant of 3: which of the four modes the wheel shows. */
+  OVERLAY_MODE,
 };
 
 static struct {
   led_strip_handle_t strip;
   enum havpe_ui_state state;
   bool call_active;
+  /*
+   * INTENT, mirrored so the ring can say "trying" from the press itself —
+   * see ring_state() for what wanting an inactive call does to the snapshot.
+   */
+  bool wants_call;
+  enum ring_overlay overlay;
+  /* Volume percent or mode index, depending on the overlay kind. */
+  uint8_t overlay_value;
+  int64_t overlay_until_us;
   bool link_ready;
   /*
    * The two rungs beneath a call, kept apart from `link_ready` on purpose.
@@ -85,6 +116,19 @@ static struct {
   bool talk_latched;
   bool tap_pending;
 } button;
+
+/*
+ * The dial, sampled by the tick rather than the control poll on purpose: the
+ * tick runs every app-loop pass (~5 ms) while controls are polled at a human
+ * 25 ms, and a quadrature decoder is the one input here that decays with the
+ * sampling rate — each missed intermediate state is a lost count. Counts
+ * accumulate here and the composition drains them at its own cadence. Both
+ * run on the app task, which is why a plain int is enough.
+ */
+static struct {
+  struct havpe_dial_decoder decoder;
+  int steps;
+} dial;
 
 static uint64_t now_ms(void) {
   return (uint64_t)(esp_timer_get_time() / 1000);
@@ -136,6 +180,28 @@ bool havpe_ui_init(void) {
     return false;
   }
 
+  {
+    /* Internal pull-ups, harmless if the board provides its own: a floating
+     * quadrature pin reads as an endlessly spinning dial. */
+    const gpio_config_t dial_config = {
+      .pin_bit_mask = (1ULL << DIAL_A_GPIO) | (1ULL << DIAL_B_GPIO),
+      .mode = GPIO_MODE_INPUT,
+      .pull_up_en = GPIO_PULLUP_ENABLE,
+      .pull_down_en = GPIO_PULLDOWN_DISABLE,
+      .intr_type = GPIO_INTR_DISABLE,
+    };
+    if (gpio_config(&dial_config) != ESP_OK) {
+      ESP_LOGE(tag, "dial configuration failed");
+      return false;
+    }
+    /* Seed from the live levels so the first sample is never a phantom
+     * transition out of an assumed 00. */
+    havpe_dial_decoder_init(
+        &dial.decoder,
+        gpio_get_level(DIAL_A_GPIO) != 0,
+        gpio_get_level(DIAL_B_GPIO) != 0);
+  }
+
   ui.state = HAVPE_UI_CONNECTING;
   ui.dirty = true;
   havpe_ui_tick();
@@ -149,7 +215,7 @@ bool havpe_ui_init(void) {
  * knows already reaches a person some other way.
  */
 static struct iterate_kit_conversation_visual_state ring_state(void) {
-  const struct iterate_kit_conversation_visual_state state = {
+  struct iterate_kit_conversation_visual_state state = {
     .network = ui.link_ready ? ITERATE_KIT_NETWORK_CONNECTED
                              : ITERATE_KIT_NETWORK_CONNECTING,
     .reach =
@@ -169,6 +235,17 @@ static struct iterate_kit_conversation_visual_state ring_state(void) {
     .speaker_peak = ui.state == HAVPE_UI_SPEAKING ? 4096U : 0U,
     .restart_armed = false,
   };
+  /*
+   * A PRESS THAT IS NOT YET A CALL MUST LOOK LIKE THE DEVICE WORKING ON IT.
+   * The tap used to be answered by nothing at all until the far end accepted
+   * the call seconds later — a still ring under a pressed button reads as a
+   * dead button. The fleet has exactly ONE "working on it" animation, the
+   * amber comet, and `needs_attention` is its trigger; so for as long as the
+   * intent is ahead of the call the snapshot says not-ready on purpose, and
+   * the instant call_active flips the view owns the ring again. This also
+   * keeps the tick breathing, which is what repaints the chase.
+   */
+  if (ui.wants_call && !ui.call_active) state.media_ready = false;
   return state;
 }
 
@@ -194,6 +271,33 @@ void havpe_ui_set_call_active(bool active) {
   if (ui.call_active == active) return;
   ui.call_active = active;
   ui.dirty = true;
+}
+
+void havpe_ui_set_wants_call(bool wanted) {
+  if (ui.wants_call == wanted) return;
+  ui.wants_call = wanted;
+  ui.dirty = true;
+}
+
+void havpe_ui_show_volume(uint8_t percent) {
+  ui.overlay = OVERLAY_VOLUME;
+  ui.overlay_value = percent > 100U ? 100U : percent;
+  ui.overlay_until_us = esp_timer_get_time() + OVERLAY_HOLD_US;
+  ui.dirty = true;
+}
+
+void havpe_ui_show_mode(uint8_t mode) {
+  if (mode >= HAVPE_MODE_COUNT) return;
+  ui.overlay = OVERLAY_MODE;
+  ui.overlay_value = mode;
+  ui.overlay_until_us = esp_timer_get_time() + OVERLAY_HOLD_US;
+  ui.dirty = true;
+}
+
+int havpe_ui_take_dial(void) {
+  const int steps = dial.steps;
+  dial.steps = 0;
+  return steps;
 }
 
 void havpe_ui_set_fault(void) {
@@ -228,9 +332,51 @@ bool havpe_ui_call_requested(void) {
   return ui.call_requested;
 }
 
+/*
+ * The two dial overlays. Both are the WHITE of no particular sector — the
+ * shared grammar's colours all mean something, and a level meter borrowing
+ * the network's green would say the network moved — and they are told apart
+ * by shape: the volume fills from pixel zero, a mode lights one quadrant.
+ */
+static void render_volume(struct iterate_kit_rgb8 pixels[LED_COUNT]) {
+  const int lit =
+      ((int)ui.overlay_value * LED_COUNT + 50) / 100;
+  for (int index = 0; index < LED_COUNT; ++index) {
+    pixels[index] = index < lit
+        ? (struct iterate_kit_rgb8){64U, 64U, 64U}
+        : (struct iterate_kit_rgb8){0U, 0U, 0U};
+  }
+  /* Silence is a state, not an absence: one red pixel, as the official
+   * firmware's volume display marks a muted speaker. */
+  if (ui.overlay_value == 0U) {
+    pixels[0] = (struct iterate_kit_rgb8){255U, 64U, 48U};
+  }
+}
+
+static void render_mode(struct iterate_kit_rgb8 pixels[LED_COUNT]) {
+  const int first = (int)ui.overlay_value * 3;
+  for (int index = 0; index < LED_COUNT; ++index) {
+    pixels[index] = index >= first && index < first + 3
+        ? (struct iterate_kit_rgb8){64U, 64U, 64U}
+        : (struct iterate_kit_rgb8){0U, 0U, 0U};
+  }
+}
+
 void havpe_ui_tick(void) {
   if (ui.strip == NULL) return;
   const int64_t now_us = esp_timer_get_time();
+  /* The dial is sampled here, every pass, whatever the ring is doing —
+   * see the note at the `dial` struct for why not the 25 ms control poll. */
+  dial.steps += havpe_dial_decoder_step(
+      &dial.decoder,
+      gpio_get_level(DIAL_A_GPIO) != 0,
+      gpio_get_level(DIAL_B_GPIO) != 0);
+  if (ui.overlay != OVERLAY_NONE && now_us >= ui.overlay_until_us) {
+    /* The gesture's second is up; repaint whatever the state animation
+     * would have shown. */
+    ui.overlay = OVERLAY_NONE;
+    ui.dirty = true;
+  }
   const struct iterate_kit_conversation_visual_state state = ring_state();
   /*
    * A DEVICE THAT IS NOT READY MUST NOT LOOK LIKE A STILL PHOTOGRAPH. While
@@ -247,10 +393,18 @@ void havpe_ui_tick(void) {
     /*
      * ONE CALL, and it is the same one the screens make for their status
      * rail. Everything this ring knows about what device state looks like
-     * lives on the other side of it.
+     * lives on the other side of it — except the two dial overlays, which
+     * borrow the ring for one second of direct feedback and then give it
+     * back.
      */
-    iterate_kit_conversation_lights_animate(
-        &state, (uint32_t)(now_us / 1000), pixels);
+    if (ui.overlay == OVERLAY_VOLUME) {
+      render_volume(pixels);
+    } else if (ui.overlay == OVERLAY_MODE) {
+      render_mode(pixels);
+    } else {
+      iterate_kit_conversation_lights_animate(
+          &state, (uint32_t)(now_us / 1000), pixels);
+    }
     /*
      * `shown` starts black, so "equal to what is shown" is a lie until the
      * first successful refresh — and any state whose colour happened to be

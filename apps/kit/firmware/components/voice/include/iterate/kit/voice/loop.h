@@ -470,6 +470,32 @@ void iterate_kit_voice_loop_playback_step(void);
  */
 const char *iterate_kit_voice_loop_stream_path(void);
 
+/**
+ * Re-point the device at a different conversation stream.
+ *
+ * The other half of the getter above: the path IS the conversation's
+ * identity, so writing it is how a board changes conversations. A mounted
+ * stream is closed and remounted at the new path on the same connection;
+ * before the first mount this only replaces the seed. Boards call it from
+ * the app task with NO CALL WANTED — re-pointing underneath a call being
+ * placed would strand the call — and health() reports the adopted path as
+ * `conversation`, which is how a change is verified on a board whose console
+ * port reboots it.
+ */
+void iterate_kit_voice_loop_set_stream_path(const char *path);
+
+/**
+ * Re-select the turn policy at runtime, overriding `facts->turns`.
+ *
+ * For the board whose dial chooses among streams whose far ends take turns
+ * differently: posture must follow the path or the two halves of the call
+ * disagree about who closes a turn. Takes effect on the next pass. It moves
+ * only the per-pass policy — the microphone gate and the turn markers — not
+ * the capability surface: whether pushToTalk is MOUNTED stays a compile-time
+ * fact, because the peer was described once at mount.
+ */
+void iterate_kit_voice_loop_set_turns(enum iterate_kit_voice_turns turns);
+
 #ifdef __cplusplus
 }
 #endif

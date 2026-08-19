@@ -2,6 +2,7 @@ idf_component_register(
   SRCS
     havpe_device.c
     havpe_audio.c
+    havpe_modes.c
     havpe_ui.c
     voice_pe_hardware_config.c
     voice_pe_pcm_format.c

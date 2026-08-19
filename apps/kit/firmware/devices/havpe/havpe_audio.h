@@ -86,6 +86,18 @@ uint32_t havpe_audio_starve_events(void);
 bool havpe_audio_speaker_is_playing(void);
 
 /**
+ * Play a flash-resident 16 kHz mono PCM16LE sound through the speaker, now.
+ *
+ * The board's local voice — button chimes, mode announcements — with none of
+ * the stream's latency: the playback hardware task drains this BEFORE the
+ * paced mailbox, so it starts within one frame period. It PREEMPTS rather
+ * than mixes; whatever the stream delivers meanwhile waits as backpressure.
+ * A second call replaces the first mid-note. `pcm` must stay valid for the
+ * whole playback, which the generated .rodata arrays trivially are.
+ */
+void havpe_audio_play_sound(const uint8_t *pcm, uint32_t bytes);
+
+/**
  * The echo-cancellation oracle, sampled every 20 ms frame.
  *
  * `raw` is the microphone before any XMOS processing and `clean` is the same
