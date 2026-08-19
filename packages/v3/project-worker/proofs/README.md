@@ -9,6 +9,6 @@ node_modules):
     for p in proofs/prove_*.mjs; do node $p & done; wait   # the whole board (hibernates are SLOW)
 
 The thirteen-suite board: crisp1 push livestate ephemeral core userfacet restore facet1 edge
-rich facetaddr slack ephemeralflood. Extras: hibernate/hibernate3 (multi-minute holds),
+rich facetaddr slack ephemeralflood worker_cap. Extras: hibernate/hibernate3 (multi-minute holds),
 fetchdoor. `proof_sources.mjs` holds the demo module sources each suite seeds into plain kv
 (`DURABLE=1 node proofs/prove_ephemeralflood.mjs` floods durable events instead of ephemeral).

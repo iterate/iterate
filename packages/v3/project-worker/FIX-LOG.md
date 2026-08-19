@@ -20,3 +20,10 @@ REFACTORS-LATER.md instead, not here.
   filter copies DELETED (the consumes ['*'] black hole, 10+11). read() short-page proof is the
   HEAD, never a beyond-head afterOffset (9); resumeSubscription clamps afterOffset to head (13);
   forwarder CAS treats a deleted progress record as ABANDON, no ghost halt (12). 5 tests flipped.
+- Verified (not a fix), live-18: DYNAMIC WORKER CODE AS A CAPABILITY works end to end
+  (proofs/proof_worker_cap.mjs, 6/6). provide({target: "itx.workers.get({source, className?})"})
+  mounts stateless run() and stateful DO-class capabilities; deep dotted RPC resolves in ONE
+  shot INCLUDING pipelined nested RpcTargets — a class method returning `new Row()` (an
+  RpcTarget) then `.double()` on it, and that Row's own getter→fn, both work (invokePath walks
+  where the stub lives). `itx.workers.get({source}).run(args)` IS the string-eval thin wrapper
+  over the loader. No gap found; no thin `itx.run`/`itx.eval` alias exists (buffet option).
