@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { envs } from "../../envs.ts";
-import type { ScannerPathPolicyEntry } from "../../infra/cloudflare-edge-gate/policy.ts";
+import type { ScannerPolicyEntry } from "../../infra/cloudflare-edge-gate/policy.ts";
 import { CloudflareApiError } from "../lib/env-context.ts";
 import {
   compileScannerGateRule,
@@ -12,7 +12,8 @@ import {
 } from "./reconcile.ts";
 
 const phasePath = "/rulesets/phases/http_request_firewall_custom/entrypoint";
-const expression = 'lower(http.request.uri.path) in {"/.env" "/.git/config" "/.git/head"}';
+const expression =
+  '(lower(http.request.uri.path) in {"/.aws/credentials" "/.ds_store" "/.env" "/.git/config" "/.git/head" "/.htpasswd" "/.ssh/id_rsa" "/.svn/entries" "/server-info" "/server-status"} or http.request.uri.path.extension in {"php"})';
 const description = "Block reviewed source and secret disclosure probes before Workers";
 const preview: EdgeGateTarget = {
   envName: "preview_12",
@@ -31,7 +32,7 @@ const production: EdgeGateTarget = {
 };
 
 describe("policy compiler", () => {
-  it("sorts reviewed exact paths", () => {
+  it("sorts reviewed exact paths and extensions", () => {
     expect(compileScannerGateRule().expression).toBe(expression);
   });
 
@@ -39,6 +40,8 @@ describe("policy compiler", () => {
     ["uppercase", [entry("/WP-ADMIN")]],
     ["well-known", [entry("/.well-known/acme-challenge")]],
     ["duplicate", [entry("/.env"), entry("/.env")]],
+    ["uppercase extension", [extension("PHP")]],
+    ["duplicate extension", [extension("php"), extension("php")]],
     ["empty", []],
     ["size limit", [entry(`/${"a".repeat(4_100)}`)]],
   ])("rejects %s policy mistakes", (_name, entries) => {
@@ -174,8 +177,16 @@ function blockRule() {
   };
 }
 
-function entry(path: string): ScannerPathPolicyEntry {
+function entry(path: string): ScannerPolicyEntry {
   return { path, reason: "test", evidence: { observedOn: "2026-08-17", productionInvocations: 1 } };
+}
+
+function extension(value: string): ScannerPolicyEntry {
+  return {
+    extension: value,
+    reason: "test",
+    evidence: { observedOn: "2026-08-17", productionInvocations: 1 },
+  };
 }
 
 function withoutId<T extends { id: string }>(value: T) {

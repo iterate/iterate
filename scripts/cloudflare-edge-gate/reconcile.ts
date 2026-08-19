@@ -1,8 +1,8 @@
 import { z } from "zod";
 
 import type { DeployedEnv } from "../../envs.ts";
-import type { ScannerPathPolicyEntry } from "../../infra/cloudflare-edge-gate/policy.ts";
-import { scannerPathPolicy } from "../../infra/cloudflare-edge-gate/policy.ts";
+import type { ScannerPolicyEntry } from "../../infra/cloudflare-edge-gate/policy.ts";
+import { scannerPolicy } from "../../infra/cloudflare-edge-gate/policy.ts";
 import { CloudflareApiError } from "../lib/env-context.ts";
 
 const phase = "http_request_firewall_custom";
@@ -49,27 +49,56 @@ export function resolveEdgeGateTarget(envName: string, environment: DeployedEnv)
   return { envName, accountId: environment.cloudflareAccountId, zones };
 }
 
-export function compileScannerGateRule(
-  entries: readonly ScannerPathPolicyEntry[] = scannerPathPolicy,
-) {
-  if (entries.length === 0) throw new Error("The scanner path policy must not be empty.");
+export function compileScannerGateRule(entries: readonly ScannerPolicyEntry[] = scannerPolicy) {
+  if (entries.length === 0) throw new Error("The scanner policy must not be empty.");
   const paths = new Set<string>();
-  for (const { path } of entries) {
-    if (!/^\/[a-z0-9._/-]+$/.test(path)) {
-      throw new Error(`Scanner path ${JSON.stringify(path)} must be an exact, lowercase URI path.`);
+  const extensions = new Set<string>();
+  for (const entry of entries) {
+    if (entry.extension !== undefined) {
+      if (!/^[a-z0-9]+$/.test(entry.extension)) {
+        throw new Error(
+          `Scanner extension ${JSON.stringify(entry.extension)} must be lowercase alphanumeric.`,
+        );
+      }
+      if (extensions.has(entry.extension)) {
+        throw new Error(`Duplicate scanner extension ${JSON.stringify(entry.extension)}.`);
+      }
+      extensions.add(entry.extension);
+      continue;
     }
-    if (path === "/.well-known" || path.startsWith("/.well-known/")) {
-      throw new Error(`Scanner path ${JSON.stringify(path)} could break domain validation.`);
+    if (!/^\/[a-z0-9._/-]+$/.test(entry.path)) {
+      throw new Error(
+        `Scanner path ${JSON.stringify(entry.path)} must be an exact, lowercase URI path.`,
+      );
     }
-    if (paths.has(path)) throw new Error(`Duplicate scanner path ${JSON.stringify(path)}.`);
-    paths.add(path);
+    if (entry.path === "/.well-known" || entry.path.startsWith("/.well-known/")) {
+      throw new Error(`Scanner path ${JSON.stringify(entry.path)} could break domain validation.`);
+    }
+    if (paths.has(entry.path)) {
+      throw new Error(`Duplicate scanner path ${JSON.stringify(entry.path)}.`);
+    }
+    paths.add(entry.path);
   }
-  const expression = `lower(http.request.uri.path) in {${[...paths]
-    .sort()
-    .map((path) => JSON.stringify(path))
-    .join(" ")}}`;
+  const predicates = [];
+  if (paths.size > 0) {
+    predicates.push(
+      `lower(http.request.uri.path) in {${[...paths]
+        .sort()
+        .map((path) => JSON.stringify(path))
+        .join(" ")}}`,
+    );
+  }
+  if (extensions.size > 0) {
+    predicates.push(
+      `http.request.uri.path.extension in {${[...extensions]
+        .sort()
+        .map((extension) => JSON.stringify(extension))
+        .join(" ")}}`,
+    );
+  }
+  const expression = predicates.length === 1 ? predicates[0] : `(${predicates.join(" or ")})`;
   if (Buffer.byteLength(expression) > 4_096) {
-    throw new Error("The scanner path expression exceeds Cloudflare's 4096-byte limit.");
+    throw new Error("The scanner expression exceeds Cloudflare's 4096-byte limit.");
   }
   return {
     action: "block" as const,
@@ -180,12 +209,21 @@ export async function verifyEdgeGateTraffic(target: EdgeGateTarget, fetcher = fe
   for (const { smokeHostname } of target.zones) {
     const nonce = Date.now().toString(36);
     const options = { redirect: "manual" as const, signal: AbortSignal.timeout(15_000) };
-    const blocked = await fetcher(
-      `https://${smokeHostname}/.env?edge-gate-smoke=${nonce}`,
-      options,
-    );
-    if (blocked.status !== 403 || !blocked.headers.get("cf-ray")) {
-      throw new Error(`Expected Cloudflare 403 for ${smokeHostname}/.env, got ${blocked.status}.`);
+    for (const path of ["/.env", "/__edge-gate-smoke__.php"]) {
+      let blocked: Response | undefined;
+      for (let attempt = 1; attempt <= 15; attempt++) {
+        blocked = await fetcher(
+          `https://${smokeHostname}${path}?edge-gate-smoke=${nonce}`,
+          options,
+        );
+        if (blocked.status === 403 && blocked.headers.get("cf-ray")) break;
+        if (attempt < 15) await new Promise((resolve) => setTimeout(resolve, 2_000));
+      }
+      if (!blocked || blocked.status !== 403 || !blocked.headers.get("cf-ray")) {
+        throw new Error(
+          `Expected Cloudflare 403 for ${smokeHostname}${path} after propagation, got ${blocked?.status}.`,
+        );
+      }
     }
     const control = await fetcher(
       `https://${smokeHostname}/__edge-gate-control__?edge-gate-smoke=${nonce}`,

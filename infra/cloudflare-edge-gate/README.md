@@ -5,8 +5,11 @@ Worker; [`scripts/cloudflare-edge-gate`](../../scripts/cloudflare-edge-gate) rec
 
 ## Policy workflow
 
-Edit `policy.ts`, preserving evidence and a reason. Unsafe or duplicate paths,
-`/.well-known`, and oversized expressions fail validation. Discovery never adds blocks.
+Edit `policy.ts` to add an exact `path` or an `extension`, preserving production evidence
+and a reason. Unsafe or duplicate values, `/.well-known`, and oversized expressions fail
+validation. Extensions are platform-wide route constraints: `php` is safe because Iterate
+runs Workers, not PHP. External discovery lists remain candidate sources and are never
+imported without review.
 
 ```sh
 pnpm edge-gate plan --env preview_12
@@ -14,8 +17,7 @@ pnpm edge-gate apply --env preview_12
 pnpm edge-gate verify --env preview_12
 ```
 
-It preserves unrelated zone rules, reads back zero drift after apply, and smoke-checks
-blocked and control paths. Production applies only on `main`; previews require local apply.
-The first pull request needs one `depot ci run --org 0p91s0lz49 --workflow
-.depot/workflows/cloudflare-edge-gate.yml`; Depot discovers later automatic triggers from
-`main`. There is no teardown command; removal is a separate destructive operation.
+It preserves unrelated zone rules, reads back zero drift after apply, and smoke-checks an
+exact path, an extension, and a control path. Production applies only on `main`; previews
+require local apply. There is no teardown command; removal is a separate destructive
+operation.
