@@ -9,6 +9,7 @@ import { dirname, resolve } from "node:path";
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
 import { createSemaphoreClient } from "../../apps/semaphore/src/contract.ts";
+import { CONFIG_REPO_TEMPLATE_CATALOG } from "../../apps/os/src/domains/repos/config-repo-template-catalog.generated.ts";
 import {
   authEnvs,
   docsEnvs,
@@ -3019,7 +3020,14 @@ function renderCloudflarePreviewPullRequestBody(
  * click on this link is the only interaction. The deploy also visits this
  * URL once (seedPreviewTestLogin) so the user+project already exist.
  */
-function previewLoginUrl(lease: CloudflarePreviewSlotDisplay, pullRequestNumber: number) {
+function previewLoginUrl(
+  lease: CloudflarePreviewSlotDisplay,
+  pullRequestNumber: number,
+  // Optional post-login destination on the os app (a same-origin path like
+  // `/new-project?template=codemode-tag`) — rides the relying-party login's
+  // own `return_to`, so one click lands signed-in on that page.
+  osReturnToPath?: string,
+) {
   let authBaseUrl: string;
   let osBaseUrl: string;
   try {
@@ -3030,11 +3038,33 @@ function previewLoginUrl(lease: CloudflarePreviewSlotDisplay, pullRequestNumber:
     // retired slot) — drop the link rather than failing the whole render.
     return null;
   }
+  const osLogin = new URL("/api/iterate-auth/login", osBaseUrl);
+  if (osReturnToPath) osLogin.searchParams.set("return_to", osReturnToPath);
   const url = new URL("/test-login", authBaseUrl);
   url.searchParams.set("email", `pr${pullRequestNumber}+test@nustom.com`);
   url.searchParams.set("project", `pr${pullRequestNumber}`);
-  url.searchParams.set("return_to", new URL("/api/iterate-auth/login", osBaseUrl).toString());
+  url.searchParams.set("return_to", osLogin.toString());
   return url.toString();
+}
+
+/**
+ * One quick-launch link per config template: sign in (test-login) and land
+ * straight on `/new-project` with that template preselected via its
+ * `?template=` search param. Rendered inside the slot details so anyone can
+ * spin up a project from any template in one click.
+ */
+function previewQuickLaunchLine(lease: CloudflarePreviewSlotDisplay, pullRequestNumber: number) {
+  const links = CONFIG_REPO_TEMPLATE_CATALOG.map(({ label, path }) => {
+    const shortName = path.replace(/^configs\//, "");
+    const url = previewLoginUrl(
+      lease,
+      pullRequestNumber,
+      `/new-project?template=${encodeURIComponent(shortName)}`,
+    );
+    return url === null ? null : `[${label} ↗](${url})`;
+  }).filter(Boolean);
+  if (links.length === 0) return null;
+  return `New project from template: ${links.join(" · ")}`;
 }
 
 function renderCloudflarePreviewSection(state: CloudflarePreviewState, pullRequestNumber: number) {
@@ -3063,6 +3093,9 @@ function renderCloudflarePreviewSection(state: CloudflarePreviewState, pullReque
       summary: state.environmentConfigLease
         ? `Slot: ${state.environmentConfigLease.slug} | Doppler config: ${state.environmentConfigLease.dopplerConfig}`
         : "No preview slot recorded.",
+      quickLaunch: state.environmentConfigLease
+        ? previewQuickLaunchLine(state.environmentConfigLease, pullRequestNumber)
+        : null,
       table,
     }),
     failureDetails || null,
@@ -3071,11 +3104,16 @@ function renderCloudflarePreviewSection(state: CloudflarePreviewState, pullReque
     .join("\n\n");
 }
 
-function renderPreviewAppTableDetails(input: { summary: string; table: string | null }) {
+function renderPreviewAppTableDetails(input: {
+  summary: string;
+  quickLaunch: string | null;
+  table: string | null;
+}) {
   return [
     "<details>",
     `<summary>${escapeHtml(input.summary)}</summary>`,
     "",
+    ...(input.quickLaunch ? [input.quickLaunch, ""] : []),
     input.table || "No preview apps recorded.",
     "",
     "</details>",

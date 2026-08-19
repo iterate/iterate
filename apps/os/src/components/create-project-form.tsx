@@ -52,9 +52,13 @@ const CreateProjectInput = z.object({
 
 export function CreateProjectForm({
   configRepoTemplates,
+  defaultTemplate,
   onPendingChange,
 }: {
   configRepoTemplates: Array<{ label: string; reference: string }>;
+  /** Preselects the template dropdown (a reference from configRepoTemplates);
+   * the route resolves it from the `?template=` search param. */
+  defaultTemplate?: string;
   /** Fired when create submit starts/ends so a host sheet can block dismiss. */
   onPendingChange?: (pending: boolean) => void;
 }) {
@@ -122,7 +126,7 @@ export function CreateProjectForm({
     defaultValues: {
       slug: "",
       organizationSlug: organizations[0]?.slug ?? "",
-      configRepoTemplate: configRepoTemplates[0]?.reference ?? "",
+      configRepoTemplate: defaultTemplate || configRepoTemplates[0]?.reference || "",
     },
     validators: {
       onChange: CreateProjectInput,
