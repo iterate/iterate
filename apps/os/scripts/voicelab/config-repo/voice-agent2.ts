@@ -1608,12 +1608,31 @@ export class VoiceAgent2Processor extends StreamProcessor<
        * that an earlier incarnation died owing. An arm here was the same
        * action twice behind one idempotency key. */
 
-      /* And NO conversation-ended arm either: reduce nulls `state.call` for
-       * a matching obituary before delivery reaches this switch, so the
-       * guard `state.call.conversationId === payload.conversationId` was
-       * false in every reachable case — matching: already nulled; stale: a
-       * different id. The socket is closed by the end-requested caught-up
-       * pass, which runs while the fold still names the call. */
+      case "events.iterate.com/voice-agent/conversation-ended": {
+        /*
+         * THE ARM THAT WAS DELETED AS DEAD, AND WHY IT IS BACK. Reduce nulls
+         * `state.call` before delivery reaches this switch, so a guard on
+         * STATE was indeed unreachable — but the guard was never the point.
+         * A DEVICE-appended obituary (the hang-up button) takes this path
+         * without any end-requested ever existing, so the caught-up
+         * settlement never runs, and deleting this arm left the DIAL alive:
+         * a zombie provider socket squatting `#dial`, blocking every new
+         * dial until the 60 s idle tick finally killed it. Measured on
+         * HAVPE 2026-08-19 — a button end at :56:25, the zombie idled out
+         * at :01:32, and every press in between was deaf. The fence is the
+         * DIAL's own conversation, which a stale obituary cannot name.
+         *
+         * And the device is silenced NOW: a call that ends mid-answer
+         * leaves up to the pacer's whole lead buffered in the ring, and
+         * "the call is over" must not sound like four more seconds of it.
+         */
+        const dial = this.#dial;
+        if (dial !== null && dial.conversationId === event.payload.conversationId) {
+          this.#clearDeviceSpeaker(dial, this.deps.nowAtFacetMs(), append);
+          this.#hangUp();
+        }
+        return;
+      }
 
       default:
         return;

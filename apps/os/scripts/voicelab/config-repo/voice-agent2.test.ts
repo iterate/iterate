@@ -1919,6 +1919,53 @@ describe("the open-mic barge", () => {
 /* ========================================================================== */
 
 describe("ending a call", () => {
+  it("a device-appended obituary silences the speaker and frees the dial NOW", async () => {
+    /* The hang-up button appends conversation-ended directly — no
+     * end-requested ever exists, so the caught-up settlement never runs.
+     * Measured on HAVPE: without this arm the zombie dial squatted until
+     * the 60s idle tick and every press in between was deaf, while the
+     * ring played out four more seconds of a call that was over. */
+    const h = makeHarness();
+    const conversationId = await callIsLive(h, GROK_LISTENS);
+    h.provider.responseCreated();
+    h.provider.answerAudio(8_000);
+    await playOutEverything(h, 600);
+    const clearsBefore = speakerClears(h).length;
+    const socketsBefore = h.sockets.length;
+
+    await h.append({
+      type: "events.iterate.com/voice-agent/conversation-ended",
+      payload: { conversationId, reason: "button" },
+    });
+    await h.settle();
+    /* The device is silenced immediately — the buffered lead dies with the
+     * call — and the provider socket is gone. */
+    expect(speakerClears(h).length).toBe(clearsBefore + 1);
+    expect(h.provider.closed).toBe(true);
+
+    /* And the next press is NOT deaf: speech dials a fresh provider
+     * socket at once instead of waiting out a zombie's idle deadline. */
+    await h.append(micFrame(2));
+    await h.settle();
+    expect(h.sockets.length).toBe(socketsBefore + 1);
+  });
+
+  it("a stale obituary for a dead call cannot touch the live one", async () => {
+    const h = makeHarness();
+    await callIsLive(h, GROK_LISTENS);
+    h.provider.responseCreated();
+    h.provider.answerAudio(2_000);
+    await playOutEverything(h, 200);
+    const socketsBefore = h.sockets.length;
+    await h.append({
+      type: "events.iterate.com/voice-agent/conversation-ended",
+      payload: { conversationId: "conv_from_last_week", reason: "button" },
+    });
+    await h.settle();
+    expect(h.provider.closed).toBe(false);
+    expect(h.sockets.length).toBe(socketsBefore);
+  });
+
   it("ends after a minute with no input from the device", async () => {
     const h = makeHarness();
     await callIsLive(h);
