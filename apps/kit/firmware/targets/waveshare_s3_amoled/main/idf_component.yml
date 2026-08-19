@@ -4,7 +4,9 @@ dependencies:
     path: c
     version: aee32b391063c4f5baf0aec852f38851eeeed1d9
   # The board's own BSP: SH8601 QSPI panel, FT3168 touch behind its TCA9554
-  # expander, and esp_lvgl_port's LVGL task and lock.
+  # expander. Its manifest also drags in esp_lvgl_port + LVGL, but nothing
+  # here calls them any more (the UI draws with esp_lcd directly), so the
+  # linker garbage-collects the whole ~278 KB archive out of the image.
   waveshare/esp32_s3_touch_amoled_1_8: "~1.1"
   espressif/esp_codec_dev: "~1.5.6"
   idf: ">=5.4"

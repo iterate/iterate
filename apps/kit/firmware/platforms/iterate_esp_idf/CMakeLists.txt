@@ -8,6 +8,7 @@ idf_component_register(
   INCLUDE_DIRS include
   REQUIRES
     core
+    esp_app_format
     esp_event
     esp_netif
     esp_partition

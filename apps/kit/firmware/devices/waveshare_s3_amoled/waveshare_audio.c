@@ -19,9 +19,9 @@
  *  - PGA remains 24 dB. At 30 dB measured speech clipped; the old 36 dB note
  *    described a VAD workaround rather than a safe capture level.
  *
- * Diagnostics kept for the next bring-up: waveshare_audio_dump_registers()
- * (ADC-path registers after open) and waveshare_audio_probe_din() (is
- * anything driving the data line). Note when reading captured audio off the
+ * The bring-up diagnostics this file once carried (register dumps, a DIN
+ * probe) were deleted once the board proved out; git history has them if a
+ * future bring-up needs the pattern. Note when reading captured audio off the
  * stream: 640 PCM bytes base64-encode to 854 characters, which is NOT a
  * multiple of 4 — decode each frame separately. Concatenating the strings
  * first misaligns every frame after the first and yields convincing

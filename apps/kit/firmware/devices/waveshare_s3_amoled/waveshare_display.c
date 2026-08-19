@@ -1,10 +1,18 @@
 /*
- * The intentionally small Waveshare UI: one shared face and two status lines.
+ * The intentionally small Waveshare UI: one shared face and twelve lights.
  *
  * The old reference target also contained a menu, screenshots, image download,
  * touch, recording and remote styling. None is required to hold a voice
  * conversation, and each kept network or storage work next to the audio loop.
  * This module therefore owns only the product state a person needs in hand.
+ *
+ * It draws with esp_lcd directly. It used to hold LVGL for exactly two
+ * canvases and a flush pipeline; that cost 278 KB of flash, a 24 KB private
+ * heap in internal RAM, and a port task on core 1 — the audio core — waking
+ * a thousand times a second. Two rectangles a second do not need a UI
+ * runtime: the face and the light strip are pushed as bounded strips from a
+ * 100 ms task pinned to core 0, the same pattern StackChan's renderer
+ * proved.
  */
 #include "waveshare_display.h"
 
@@ -14,6 +22,8 @@
 
 #include "bsp/esp-bsp.h"
 #include "esp_heap_caps.h"
+#include "esp_lcd_panel_io.h"
+#include "esp_lcd_panel_ops.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -21,7 +31,6 @@
 #include "freertos/task.h"
 #include "iterate/kit/conversation_overlay.h"
 #include "iterate/kit/face_wake.h"
-#include "lvgl.h"
 #include "waveshare_avatar.h"
 
 static const char tag[] = "waveshare-ui";
@@ -33,6 +42,8 @@ enum {
   CARD_SOURCE_HEIGHT = FACE_RENDER_HEIGHT,
   FACE_WIDTH = FACE_RENDER_WIDTH * FACE_SCALE,
   FACE_HEIGHT = CARD_SOURCE_HEIGHT * FACE_SCALE,
+  FACE_LEFT = (DISPLAY_WIDTH - FACE_WIDTH) / 2,
+  FACE_TOP = (DISPLAY_HEIGHT - FACE_HEIGHT) / 2,
   /*
    * The status lights live at the BOTTOM OF THE PANEL, not under the chin.
    * Drawn into the face card they were glued to it and moved with it, which
@@ -47,9 +58,11 @@ enum {
    * with it.
    */
   LIGHTS_HEIGHT = 10,
-  LIGHTS_MARGIN = 0,
+  LIGHTS_TOP = DISPLAY_HEIGHT - LIGHTS_HEIGHT,
   STATUS_CAPACITY = 64,
   REFRESH_PERIOD_MS = 100,
+  /* One bounded DMA strip, sized like the old flush buffer: 20 full rows. */
+  STRIP_ROWS = 20,
 };
 
 _Static_assert(FACE_WIDTH <= DISPLAY_WIDTH, "face must fit panel width");
@@ -73,12 +86,17 @@ static struct {
   bool fault;
 } ui;
 
-static lv_obj_t *face_canvas;
+static esp_lcd_panel_handle_t panel;
+static esp_lcd_panel_io_handle_t panel_io;
+/* Given by the trans-done ISR; taken before the strip buffer is rewritten. */
+static SemaphoreHandle_t strip_free;
+static uint16_t *strip_pixels;
+/* Panel-endian (byte-swapped) pixel stores; strips memcpy straight out. */
 static uint16_t *face_pixels;
 static uint16_t *face_frame;
 static uint16_t *face_shown;
-static lv_obj_t *lights_canvas;
 static uint16_t *lights_pixels;
+static uint16_t *lights_shown;
 
 static uint64_t now_ms(void) {
   return (uint64_t)(esp_timer_get_time() / 1000);
@@ -88,7 +106,7 @@ static uint64_t now_ms(void) {
  * ONE PUBLICATION, UNDER ONE LOCK.
  *
  * The loop hands over the complete view once per pass; the renderer reads this
- * snapshot on LVGL's own timer. Copying it wholesale is both simpler and
+ * snapshot on its own timer. Copying it wholesale is both simpler and
  * cheaper than the nine lock round trips the setters cost, and it removes the
  * class of bug where one setter erased what another had just published.
  */
@@ -110,7 +128,7 @@ void waveshare_display_present(const struct iterate_kit_voice_view *view) {
   xSemaphoreGive(ui.lock);
 }
 
-/* The shared snapshot: this panel's labels and the twelve-light rail must
+/* The shared snapshot: this panel's picture and the twelve-light rail must
  * agree, and both must agree with the ring on the other board. */
 static struct iterate_kit_conversation_visual_state face_status(void) {
   struct iterate_kit_conversation_visual_state status = {0};
@@ -129,13 +147,54 @@ static struct iterate_kit_conversation_visual_state face_status(void) {
   return status;
 }
 
+static bool strip_done(
+    esp_lcd_panel_io_handle_t io,
+    esp_lcd_panel_io_event_data_t *event,
+    void *context) {
+  BaseType_t woke = pdFALSE;
+  (void)io;
+  (void)event;
+  (void)context;
+  xSemaphoreGiveFromISR(strip_free, &woke);
+  return woke == pdTRUE;
+}
+
 /*
- * NOTHING LEFT TO WRITE. The lights say connected or not, the banner says it
- * in words when it matters, and the face says whether a conversation is
- * happening. A status line under all three was a third copy of one fact —
- * "connecting" appearing in three places at once, none of which a person read
- * as more trustworthy than the others. Status strings still reach the console
- * log, where somebody debugging actually reads them.
+ * Push one row-major, already panel-endian region in bounded strips. The
+ * semaphore is taken BEFORE the strip buffer is rewritten, so the copy can
+ * never race the DMA that is still reading the previous strip.
+ */
+static void push_region(
+    int32_t left,
+    int32_t top,
+    int32_t width,
+    int32_t height,
+    const uint16_t *pixels) {
+  int32_t row = 0;
+  while (row < height) {
+    int32_t rows = height - row;
+    if (rows > STRIP_ROWS) rows = STRIP_ROWS;
+    xSemaphoreTake(strip_free, portMAX_DELAY);
+    memcpy(
+        strip_pixels,
+        &pixels[(size_t)row * width],
+        (size_t)rows * width * sizeof(*pixels));
+    if (esp_lcd_panel_draw_bitmap(
+            panel, left, top + row, left + width, top + row + rows,
+            strip_pixels) != ESP_OK) {
+      /* The transfer never started, so the ISR will never give it back. */
+      xSemaphoreGive(strip_free);
+      return;
+    }
+    row += rows;
+  }
+}
+
+/*
+ * NOTHING LEFT TO WRITE. The lights say connected or not, and the face says
+ * whether a conversation is happening. A status line under both was a third
+ * copy of one fact. Status strings still reach the console log, where
+ * somebody debugging actually reads them.
  */
 static void refresh_face(void) {
   int32_t source_y;
@@ -163,8 +222,10 @@ static void refresh_face(void) {
     int32_t source_x;
     int32_t repeat;
     for (source_x = 0; source_x < FACE_RENDER_WIDTH; ++source_x) {
+      /* Swapped once here, at scale time: the panel wants big-endian 565. */
+      const uint16_t colour = __builtin_bswap16(input[source_x]);
       for (repeat = 0; repeat < FACE_SCALE; ++repeat) {
-        output[source_x * FACE_SCALE + repeat] = input[source_x];
+        output[source_x * FACE_SCALE + repeat] = colour;
       }
     }
     for (repeat = 1; repeat < FACE_SCALE; ++repeat) {
@@ -174,7 +235,7 @@ static void refresh_face(void) {
           (size_t)FACE_WIDTH * sizeof(*output));
     }
   }
-  lv_obj_invalidate(face_canvas);
+  push_region(FACE_LEFT, FACE_TOP, FACE_WIDTH, FACE_HEIGHT, face_pixels);
 }
 
 /*
@@ -189,21 +250,21 @@ static void refresh_lights(void) {
   const int32_t mark_width = pitch - 6;
   const int32_t mark_height = LIGHTS_HEIGHT / 2;
   const int32_t left = (pitch - mark_width) / 2;
+  const size_t strip_bytes =
+      (size_t)LIGHTS_WIDTH * LIGHTS_HEIGHT * sizeof(*lights_pixels);
   int32_t index;
 
-  if (lights_pixels == NULL) return;
+  if (lights_pixels == NULL || lights_shown == NULL) return;
   iterate_kit_conversation_lights_for_screen(
       &status, (uint32_t)now_ms(), lights);
-  memset(
-      lights_pixels, 0, (size_t)LIGHTS_WIDTH * LIGHTS_HEIGHT *
-                            sizeof(*lights_pixels));
+  memset(lights_pixels, 0, strip_bytes);
   for (index = 0; index < (int32_t)ITERATE_KIT_CONVERSATION_LIGHT_COUNT;
        ++index) {
-    const uint16_t colour = (uint16_t)(
+    const uint16_t colour = __builtin_bswap16((uint16_t)(
         ((lights[index].red & 0xF8U) << 8) |
-        ((lights[index].green & 0xFCU) << 3) | (lights[index].blue >> 3));
+        ((lights[index].green & 0xFCU) << 3) | (lights[index].blue >> 3)));
     int32_t row;
-    /* Flush with the bottom: the last rows of the canvas, nothing under them. */
+    /* Flush with the bottom: the last rows of the strip, nothing under them. */
     for (row = LIGHTS_HEIGHT - mark_height; row < LIGHTS_HEIGHT; ++row) {
       uint16_t *const out =
           &lights_pixels[(size_t)row * LIGHTS_WIDTH + index * pitch + left];
@@ -211,19 +272,27 @@ static void refresh_lights(void) {
       for (column = 0; column < mark_width; ++column) out[column] = colour;
     }
   }
-  lv_obj_invalidate(lights_canvas);
+  if (memcmp(lights_pixels, lights_shown, strip_bytes) == 0) return;
+  memcpy(lights_shown, lights_pixels, strip_bytes);
+  push_region(0, LIGHTS_TOP, LIGHTS_WIDTH, LIGHTS_HEIGHT, lights_pixels);
 }
 
-static void refresh_timer(lv_timer_t *timer) {
-  (void)timer;
-  refresh_face();
-  refresh_lights();
+static void ui_task(void *context) {
+  (void)context;
+  for (;;) {
+    vTaskDelay(pdMS_TO_TICKS(REFRESH_PERIOD_MS));
+    refresh_face();
+    refresh_lights();
+  }
 }
 
 /*
  * Waveshare's examples pulse TCA9554 EXIO0/1/2/6 before panel creation. The
  * board BSP leaves BSP_LCD_RST disconnected, so omitting this source-derived
- * sequence leaves even the vendor LVGL demo black.
+ * sequence leaves even the vendor LVGL demo black. (esp-brookesia's board
+ * description for this same board lists the output set as 0/1/2/7, not 6 —
+ * two vendor sources disagree; this set is the one proven on our board, so
+ * check both pins before blaming the panel in a future bring-up.)
  */
 static bool release_board_resets(void) {
   const uint32_t pins = IO_EXPANDER_PIN_NUM_0 | IO_EXPANDER_PIN_NUM_1 |
@@ -241,61 +310,38 @@ static bool release_board_resets(void) {
 }
 
 static bool start_panel(void) {
-  esp_lcd_panel_handle_t panel = NULL;
-  esp_lcd_panel_io_handle_t panel_io = NULL;
   const bsp_display_config_t panel_config = {0};
-  const lvgl_port_cfg_t port_config = {
-    .task_priority = 2,
-    .task_stack = 8192,
-    .task_affinity = 1,
-    .task_max_sleep_ms = 500,
-    .timer_period_ms = 5,
+  const esp_lcd_panel_io_callbacks_t callbacks = {
+    .on_color_trans_done = strip_done,
   };
-  lvgl_port_display_cfg_t display_config;
-
-  if (bsp_display_new(&panel_config, &panel, &panel_io) != ESP_OK ||
-      lvgl_port_init(&port_config) != ESP_OK) {
+  if (bsp_display_new(&panel_config, &panel, &panel_io) != ESP_OK) {
     return false;
   }
-  memset(&display_config, 0, sizeof(display_config));
-  display_config.io_handle = panel_io;
-  display_config.panel_handle = panel;
-  display_config.buffer_size = BSP_LCD_H_RES * 20;
-  display_config.hres = BSP_LCD_H_RES;
-  display_config.vres = BSP_LCD_V_RES;
-  display_config.color_format = LV_COLOR_FORMAT_RGB565;
-  display_config.flags.buff_dma = true;
-  display_config.flags.swap_bytes = true;
-  if (lvgl_port_add_disp(&display_config) == NULL) return false;
+  if (esp_lcd_panel_io_register_event_callbacks(
+          panel_io, &callbacks, NULL) != ESP_OK) {
+    return false;
+  }
   return bsp_display_brightness_set(90) == ESP_OK;
 }
 
-static void build_ui(void) {
-  lv_obj_t *screen = lv_screen_active();
-  lv_obj_set_style_bg_color(screen, lv_color_black(), 0);
-  lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
-  lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
-
-  if (lights_pixels != NULL) {
-    lights_canvas = lv_canvas_create(screen);
-    lv_canvas_set_buffer(
-        lights_canvas, lights_pixels, LIGHTS_WIDTH, LIGHTS_HEIGHT,
-        LV_COLOR_FORMAT_RGB565);
-    lv_obj_align(lights_canvas, LV_ALIGN_BOTTOM_MID, 0, -LIGHTS_MARGIN);
+/* The whole panel painted black once, through the same bounded strip. */
+static void clear_panel(void) {
+  int32_t row = 0;
+  while (row < DISPLAY_HEIGHT) {
+    int32_t rows = DISPLAY_HEIGHT - row;
+    if (rows > STRIP_ROWS) rows = STRIP_ROWS;
+    xSemaphoreTake(strip_free, portMAX_DELAY);
+    memset(
+        strip_pixels, 0,
+        (size_t)rows * DISPLAY_WIDTH * sizeof(*strip_pixels));
+    if (esp_lcd_panel_draw_bitmap(
+            panel, 0, row, DISPLAY_WIDTH, row + rows, strip_pixels) !=
+        ESP_OK) {
+      xSemaphoreGive(strip_free);
+      return;
+    }
+    row += rows;
   }
-  if (face_pixels != NULL) {
-    face_canvas = lv_canvas_create(screen);
-    lv_canvas_set_buffer(
-        face_canvas, face_pixels, FACE_WIDTH, FACE_HEIGHT,
-        LV_COLOR_FORMAT_RGB565);
-    /*
-     * Centred, now that nothing sits under it. The 54-pixel top offset was
-     * making room for two text labels that no longer exist — the lights and
-     * the banner say what they said, inside the card itself.
-     */
-    lv_obj_align(face_canvas, LV_ALIGN_CENTER, 0, 0);
-  }
-
 }
 
 bool waveshare_display_init(void) {
@@ -304,14 +350,26 @@ bool waveshare_display_init(void) {
   ui.state = ITERATE_KIT_VOICE_SCREEN_CONNECTING;
   (void)snprintf(ui.status, sizeof(ui.status), "starting");
 
+  strip_free = xSemaphoreCreateBinary();
+  if (strip_free == NULL) return false;
+  xSemaphoreGive(strip_free);
+  strip_pixels = heap_caps_malloc(
+      (size_t)DISPLAY_WIDTH * STRIP_ROWS * sizeof(*strip_pixels),
+      MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+  if (strip_pixels == NULL) return false;
+
   /* Display first is a correctness condition, not cosmetic ordering. */
   if (!release_board_resets() || !start_panel()) {
     ESP_LOGE(tag, "panel bring-up failed");
     return false;
   }
+  clear_panel();
 
   lights_pixels = heap_caps_calloc(
       (size_t)LIGHTS_WIDTH * LIGHTS_HEIGHT, sizeof(*lights_pixels),
+      MALLOC_CAP_SPIRAM);
+  lights_shown = heap_caps_calloc(
+      (size_t)LIGHTS_WIDTH * LIGHTS_HEIGHT, sizeof(*lights_shown),
       MALLOC_CAP_SPIRAM);
   face_pixels = heap_caps_calloc(
       (size_t)FACE_WIDTH * FACE_HEIGHT, sizeof(*face_pixels), MALLOC_CAP_SPIRAM);
@@ -323,6 +381,7 @@ bool waveshare_display_init(void) {
       (size_t)FACE_RENDER_WIDTH * CARD_SOURCE_HEIGHT * sizeof(*face_shown),
       MALLOC_CAP_SPIRAM);
   if (face_pixels == NULL || face_frame == NULL || face_shown == NULL ||
+      lights_pixels == NULL || lights_shown == NULL ||
       !waveshare_avatar_init()) {
     ESP_LOGE(tag, "avatar allocation or initialization failed");
     return false;
@@ -332,10 +391,16 @@ bool waveshare_display_init(void) {
       0xff,
       (size_t)FACE_RENDER_WIDTH * CARD_SOURCE_HEIGHT * sizeof(*face_shown));
 
-  if (!bsp_display_lock(0)) return false;
-  build_ui();
-  (void)lv_timer_create(refresh_timer, REFRESH_PERIOD_MS, NULL);
-  bsp_display_unlock();
+  /*
+   * Core 0, away from the 20 ms I2S deadline. The LVGL port this replaces
+   * ran its flush task on core 1 at a millisecond cadence; two bounded
+   * pushes every 100 ms do not belong next to the audio clock.
+   */
+  if (xTaskCreatePinnedToCore(
+          ui_task, "waveshare-ui", 4096, NULL, 2, NULL, 0) != pdPASS) {
+    ESP_LOGE(tag, "ui task creation failed");
+    return false;
+  }
   ESP_LOGI(tag, "minimal Iterate UI ready");
   return true;
 }

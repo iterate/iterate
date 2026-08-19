@@ -272,6 +272,13 @@ struct iterate_kit_esp_idf_itx_transport {
    * pressure from growing a heap queue.
    */
   char websocket_url[ITERATE_KIT_ITX_WEBSOCKET_URL_CAPACITY];
+  /*
+   * Fleet-forensics headers on the upgrade request (MAC, firmware version,
+   * Wi-Fi RSSI). Rewritten by the network task before every open so the RSSI
+   * is the one this handshake actually rode in on; the connection borrows the
+   * pointer once at prepare().
+   */
+  char websocket_headers[160];
   uint8_t websocket_receive_storage[
       ITERATE_KIT_ESP_IDF_CONTROL_MESSAGE_CAPACITY];
   uint8_t websocket_transmit_storage[

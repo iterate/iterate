@@ -4,10 +4,15 @@
 #include <limits.h>
 #include <string.h>
 
+#include "esp_app_desc.h"
 #include "esp_cpu.h"
+#include "esp_mac.h"
+#include "esp_task_wdt.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "nvs_flash.h"
+
+#include <stdio.h>
 
 /*
  * ESP-IDF scheduler for the device's single A1 Cap'n Web connection.
@@ -701,6 +706,32 @@ static void send_control_messages(
   }
 }
 
+/*
+ * Fleet forensics on the upgrade request itself: which radio conditions and
+ * which build dialed. Written before every open so RSSI is this handshake's,
+ * not boot's; the server reads them before the first Cap'n Web frame exists.
+ * Failure here must never block dialing — a blank header beats no socket.
+ */
+static void refresh_handshake_headers(
+    struct iterate_kit_esp_idf_itx_transport *transport) {
+  uint8_t mac[6] = {0};
+  wifi_ap_record_t ap_info;
+  int rssi = 0;
+  (void)esp_efuse_mac_get_default(mac);
+  if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
+    rssi = ap_info.rssi;
+  }
+  (void)snprintf(
+      transport->websocket_headers,
+      sizeof(transport->websocket_headers),
+      "X-Iterate-Mac: %02x:%02x:%02x:%02x:%02x:%02x\r\n"
+      "X-Iterate-Fw: %s\r\n"
+      "X-Wifi-Rssi: %d\r\n",
+      mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+      esp_app_get_description()->version,
+      rssi);
+}
+
 static void stop_websocket(
     struct iterate_kit_esp_idf_itx_transport *transport,
     bool *websocket_open) {
@@ -739,6 +770,13 @@ static void network_task(void *context) {
       WEBSOCKET_RETRY_INITIAL_MS,
       WEBSOCKET_RETRY_MAX_MS);
   atomic_store_u32(&transport->network_task_running, 1U);
+  /*
+   * Subscribe to the task watchdog so a wedged transport becomes a classified
+   * task-watchdog reset instead of a silently dead socket. The one blocking
+   * operation in a pass — the ten-second open handshake — fits inside the
+   * configured 20 s budget with the same headroom the voice loop relies on.
+   */
+  (void)esp_task_wdt_add(NULL);
 
   /*
    * One pass is intentionally bounded: consume published flags, make at most
@@ -747,6 +785,7 @@ static void network_task(void *context) {
    * wake per event; the 20 ms timed poll closes that liveness gap.
    */
   while (atomic_load_u32(&transport->network_task_running)) {
+    (void)esp_task_wdt_reset();
     TickType_t wait_ticks = pdMS_TO_TICKS(NETWORK_TASK_POLL_MS);
     int64_t now_us;
     bool wifi_connected;
@@ -859,6 +898,7 @@ static void network_task(void *context) {
       }
       atomic_saturating_increment(
           &transport->websocket_start_attempts);
+      refresh_handshake_headers(transport);
       status =
           iterate_kit_esp_idf_websocket_connection_open(
               &transport->websocket,
@@ -924,6 +964,7 @@ static void network_task(void *context) {
 
   stop_websocket(transport, &websocket_started);
   discard_control_outbox(transport);
+  (void)esp_task_wdt_delete(NULL);
   /*
    * Publish exited only after the task has stopped socket I/O and released its
    * final ring ownership. stop() may then destroy shared ESP-IDF resources
@@ -991,7 +1032,7 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_prepare(
          * the ESP lower transport.
          */
         .subprotocol = NULL,
-        .headers = NULL,
+        .headers = transport->websocket_headers,
         .receive_storage =
             transport->websocket_receive_storage,
         .receive_storage_capacity =
