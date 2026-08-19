@@ -942,6 +942,91 @@ describe("tools on the birth certificate", () => {
     expect(h.provider.sentOfType("response.create")).toHaveLength(0);
   });
 
+  it("note_to_self mints the conversation's colleague and reads its reply back", async () => {
+    const h = makeHarness();
+    const gotten: string[] = [];
+    const created: string[] = [];
+    const briefs: { type: string; payload: { role?: string; content?: string } }[] = [];
+    const asked: string[] = [];
+    let resolveReply!: (reply: { payload: { message: string } }) => void;
+    h.projectRoot.current = {
+      agents: {
+        get(path: string) {
+          gotten.push(path);
+          return {
+            create: async () => {
+              created.push(path);
+            },
+            append: async (event: (typeof briefs)[number]) => {
+              briefs.push(event);
+            },
+            ask: async ({ message }: { message: string }) => {
+              asked.push(message);
+              return new Promise((resolve) => {
+                resolveReply = resolve;
+              });
+            },
+          };
+        },
+      },
+    };
+    await h.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: {
+        providerBaseUrl: "https://fake.provider.test/v1/realtime",
+        clientTakesTurns: CLIENT_TAKES_TURNS,
+        colleague: true,
+      },
+    });
+    await h.append(micFrame(1));
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
+    const conversationId = (
+      eventsOfType(h, "call-started")[0]!.payload as { conversationId: string }
+    ).conversationId;
+
+    /* The certificate had no tools; the colleague flag alone arms the one
+     * injected tool and the fast-half framing. */
+    const update = h.provider.sentOfType("session.update")[0] as {
+      session: { instructions?: string; tools?: { name: string }[] };
+    };
+    expect(update.session.tools!.map((tool) => tool.name)).toEqual(["note_to_self"]);
+    expect(update.session.instructions).toContain("fast half");
+
+    h.provider.push({
+      type: "response.function_call_arguments.done",
+      call_id: "call_9",
+      name: "note_to_self",
+      arguments: JSON.stringify({ note: "look up the March invoice" }),
+    });
+    await h.settle();
+    /* The debt settles NOW; the model keeps the floor. */
+    expect(toolOutputs(h)[0]!.output).toContain("noted");
+    /* One colleague, on ITS OWN fresh agent stream named for the call. */
+    expect(gotten[0]).toBe(`/agents/voice-notes/${conversationId}`);
+    expect(created).toEqual([`/agents/voice-notes/${conversationId}`]);
+    /* Born briefed, as a system context item that triggers no turn. */
+    expect(briefs[0]!.type).toBe("events.iterate.com/agents/context-added");
+    expect(briefs[0]!.payload.role).toBe("system");
+    expect(briefs[0]!.payload.content).toContain("careful, thinking half");
+    expect(asked).toEqual(["look up the March invoice"]);
+
+    /* The reply lands mid-call: injected as a bracketed note, and the
+     * model is nudged to speak because the floor is free. */
+    resolveReply({ payload: { message: "The March invoice was never sent." } });
+    await h.settle();
+    const items = h.provider.sentOfType("conversation.item.create") as {
+      item: { type: string; content?: { text: string }[] };
+    }[];
+    const note = items.find((entry) => entry.item.type === "message");
+    expect(note).toBeDefined();
+    expect(note!.item.content![0]!.text).toBe(
+      "[note from your thinking half] The March invoice was never sent.",
+    );
+    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
+  });
+
   it("a press during the goodbye un-decides the hang-up", async () => {
     const h = makeHarness();
     await callWithTools(h, [HANG_UP]);

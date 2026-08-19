@@ -115,6 +115,12 @@ export interface Talk2Options extends TalkOptions {
   /** Classify the answer into mouth shapes for a face-rendering board. */
   visemes?: boolean;
   /**
+   * Thinking fast and slow: arm `note_to_self`, which mints a colleague
+   * agent on a fresh `/agents/voice-notes/<conversationId>` stream per
+   * conversation and reads its chat replies back into the call.
+   */
+  colleague?: boolean;
+  /**
    * Extra tools for the birth certificate, as a JSON array of
    * `{name, description, parameters?, expression}` entries — appended after
    * the `--hang-up` base tool. Each `expression` is the itx walk the fold
@@ -203,6 +209,7 @@ export async function talk2(options: Talk2Options = {}) {
        */
       clientTakesTurns: options.openMic !== true,
       ...(options.visemes === true && { visemes: true }),
+      ...(options.colleague === true && { colleague: true }),
       ...(options.turnDetection !== undefined && {
         turnDetection: JSON.parse(options.turnDetection) as Record<string, unknown> & {
           type: string;

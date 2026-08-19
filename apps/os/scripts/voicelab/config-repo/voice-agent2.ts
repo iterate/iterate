@@ -365,6 +365,90 @@ const TOOL_RUN_DEADLINE_MS = 10_000;
  */
 const TOOL_OUTPUT_MAX_CHARS = 4_000;
 
+/* ===========================================================================
+ * THINKING, FAST AND SLOW — the v1 back-office framing on v2 plumbing.
+ *
+ * The voice model is a mouth, a pair of ears and about 200ms of judgement;
+ * anything that needs reading a repo, calling a tool chain, or being RIGHT
+ * belongs to a text model with no clock on it. `note_to_self` is the seam:
+ * the note goes as a user message to a full agent minted on its own fresh
+ * `/agents/voice-notes/<conversationId>` stream — one colleague per
+ * conversation, its memory born and discarded with the call — and the
+ * agent's chat reply is read back into the live session as a bracketed
+ * note. No new event types: the reply rides `ask()`, so the subscription
+ * is untouched and an evicted incarnation merely loses replies in flight.
+ * ======================================================================== */
+
+/** How long a note waits for the careful half. Generous: agent first turns
+ * are measured in tens of seconds, and nothing is blocked on it. */
+const NOTE_REPLY_DEADLINE_MS = 180_000;
+
+/** The tool itself, injected when the certificate says `colleague` — never
+ * part of `state.tools`, so no certificate can shadow or redefine it. */
+const NOTE_TO_SELF_TOOL: z.infer<typeof VoiceTool> = {
+  name: "note_to_self",
+  description:
+    "Write a note to your careful, thinking half — a slower you with tools, files and time. " +
+    "Use it for anything that needs looking up, working out, or doing properly. Keep talking " +
+    "after you send it; the answer arrives later as a bracketed note, out of order or not at " +
+    "all, and until it does you speak from what you already know.",
+  parameters: {
+    type: "object",
+    properties: {
+      note: {
+        type: "string",
+        description: "The note, in plain language: what you need and why.",
+      },
+    },
+    required: ["note"],
+  },
+};
+
+/**
+ * What the fast half is told about the arrangement. Adapted from v1's three
+ * load-bearing paragraphs: without the keep-talking instruction a voice
+ * model handed an asynchronous tool goes silent waiting, which sounds
+ * exactly like a dropped call; without the colleague framing it treats the
+ * first note that arrives as the answer to whatever it asked last; and
+ * without being told it is not the judge of its own limits, it declines.
+ */
+const FAST_HALF_INSTRUCTIONS = [
+  "You are the fast half of one assistant: a mouth and ears with quick judgement. Your",
+  "careful half — the same assistant, thinking properly, with tools and time — is reached",
+  "through note_to_self. Anything that needs looking up, working out, remembering, or doing",
+  "properly: send a note, say you are on it, and keep the conversation going. Never go",
+  "silent waiting for a reply, and never refuse a request because a voice cannot do it —",
+  "your careful half usually can, so the honest answer is 'let me look into that', plus a note.",
+  "",
+  "Notes come back as bracketed messages, late, out of order, or not at all. They are your",
+  "own thoughts arriving, so present them as your own — never mention notes, halves, or",
+  "colleagues to the person. If a reply contradicts something you already said, correct",
+  "yourself plainly.",
+].join("\n");
+
+/**
+ * What the careful half is told at birth, as a system context item under a
+ * stable key. Trimmed from v1's BACK_OFFICE_BRIEF: the activity narration
+ * and the speechPolicy plumbing are gone because v0's only return lane is
+ * the chat reply, which is exactly what `ask()` resolves with.
+ */
+const COLLEAGUE_BRIEF = [
+  "You are the careful, thinking half of ONE assistant. The other half is a voice talking",
+  "to a person out loud, and your chat replies here are read back to it mid-conversation",
+  "and spoken as its own words. You are not a separate person, and the person must never",
+  "learn otherwise: write in the assistant's own first person — 'I checked the calendar and",
+  "Thursday is free' — never 'tell them that…', never anything that implies a second party.",
+  "",
+  "Notes arrive from the voice as messages. Reply when you have something worth saying: an",
+  "answer, a partial answer while you keep working, a correction, or a question back.",
+  "A slow careful reply beats a fast wrong one, and silence is always an option.",
+  "",
+  "Everything you send will be READ OUT LOUD, so write to be spoken: two or three",
+  "sentences of plain language, no lists, no URLs, no code. Lead with the point. Work with",
+  "your tools as much as you like — but the words that reach the person are only ever your",
+  "chat reply.",
+].join("\n");
+
 /**
  * How many microphone frames may be held while Grok completes its handshake.
  *
@@ -564,6 +648,15 @@ const VoiceState = z.object({
    * costs the one delta decode the identity path otherwise never pays.
    */
   visemes: z.boolean().default(false),
+  /**
+   * Thinking, fast and slow. The voice model is a mouth, a pair of ears and
+   * about 200ms of judgement; with this on it gets a `note_to_self` tool
+   * that writes to the careful half — a full LLM agent minted on its own
+   * fresh `/agents/voice-notes/<conversationId>` stream, one per
+   * conversation, whose chat replies are read back into the call as
+   * bracketed notes. The v1 back-office framing, on v2 plumbing.
+   */
+  colleague: z.boolean().default(false),
   /** Tools the model may call — see {@link VoiceTool}. */
   tools: z.array(VoiceTool).default([]),
   call: z
@@ -628,7 +721,10 @@ export const VoiceAgent2Contract = defineProcessorContract({
    * answer's audio into mouth shapes and publishes the newest in the
    * runtime bag, where the boards' existing 10 Hz poll has been reading
    * nothing since v1. */
-  version: "8.0.0",
+  /* 9.0.0: thinking fast and slow returns — `colleague` on the certificate
+   * arms `note_to_self`, which mints a fresh agent stream per conversation
+   * and reads its chat replies back into the call. Clean break as ever. */
+  version: "9.0.0",
   description: "Runs a voice call in the stream's own Durable Object, one flush watermark deep.",
   stateSchema: VoiceState,
   events: {
@@ -652,6 +748,7 @@ export const VoiceAgent2Contract = defineProcessorContract({
         clientTakesTurns: z.boolean().optional(),
         turnDetection: z.looseObject({ type: z.string() }).optional(),
         visemes: z.boolean().optional(),
+        colleague: z.boolean().optional(),
         tools: z.array(VoiceTool).optional(),
       }),
     },
@@ -1331,6 +1428,7 @@ export class VoiceAgent2Processor extends StreamProcessor<
           clientTakesTurns: event.payload.clientTakesTurns ?? false,
           turnDetection: event.payload.turnDetection ?? null,
           visemes: event.payload.visemes ?? false,
+          colleague: event.payload.colleague ?? false,
           tools: event.payload.tools ?? [],
         };
 
@@ -1794,18 +1892,25 @@ export class VoiceAgent2Processor extends StreamProcessor<
                 type: "session.update",
                 session: {
                   type: "realtime",
-                  ...(state.instructions === "" ? {} : { instructions: state.instructions }),
+                  ...((state.instructions !== "" || state.colleague) && {
+                    instructions: [
+                      ...(state.instructions === "" ? [] : [state.instructions]),
+                      ...(state.colleague ? [FAST_HALF_INSTRUCTIONS] : []),
+                    ].join("\n\n"),
+                  }),
                   /* The certificate's tools, declared verbatim; the GA shape
                    * both providers speak. The expression never touches the
                    * wire — the provider knows names, we know what they do. */
-                  ...(state.tools.length > 0 && {
+                  ...((state.tools.length > 0 || state.colleague) && {
                     tool_choice: "auto",
-                    tools: state.tools.map(({ name, description, parameters }) => ({
-                      type: "function",
-                      name,
-                      description,
-                      parameters: parameters ?? { type: "object", properties: {} },
-                    })),
+                    tools: [...state.tools, ...(state.colleague ? [NOTE_TO_SELF_TOOL] : [])].map(
+                      ({ name, description, parameters }) => ({
+                        type: "function",
+                        name,
+                        description,
+                        parameters: parameters ?? { type: "object", properties: {} },
+                      }),
+                    ),
                   }),
                   audio: {
                     input: {
@@ -2212,7 +2317,11 @@ export class VoiceAgent2Processor extends StreamProcessor<
             this.#runTool(
               dial,
               grok.call_id,
-              state.tools.find((tool) => tool.name === grok.name),
+              /* The injected tool resolves here, not from the certificate, so
+               * no certificate can shadow it with an expression of its own. */
+              state.colleague && grok.name === NOTE_TO_SELF_TOOL.name
+                ? NOTE_TO_SELF_TOOL
+                : state.tools.find((tool) => tool.name === grok.name),
               modelArgs,
               append,
               runInBackground,
@@ -2471,6 +2580,19 @@ export class VoiceAgent2Processor extends StreamProcessor<
       let output: string;
       if (tool === undefined) {
         output = JSON.stringify({ error: "no such tool" });
+      } else if (tool.name === NOTE_TO_SELF_TOOL.name && tool.expression === undefined) {
+        /* The note is FIRE-AND-FORGET from the tool's point of view: the
+         * output settles now so the model keeps talking, and the reply —
+         * if one ever comes — arrives later as a bracketed note. */
+        const note =
+          typeof (modelArgs as { note?: unknown })?.note === "string"
+            ? ((modelArgs as { note: string }).note ?? "")
+            : String(modelArgs ?? "");
+        this.#noteToColleague(dial, note, append, runInBackground);
+        output = JSON.stringify({
+          status:
+            "noted — the reply arrives later as a bracketed note; keep the conversation going",
+        });
       } else if (tool.expression === undefined) {
         /* THE BASE CASE, NOT A REGISTRY: hanging up is one atomic append of
          * conversation-end-requested, deferred to the drain point so the
@@ -2557,6 +2679,94 @@ export class VoiceAgent2Processor extends StreamProcessor<
          * `followUpResponsePending`. */
         dial.followUpResponsePending = true;
         this.#sendControl(dial, { type: "response.create" }, append);
+      }
+    });
+  }
+
+  /**
+   * Conversations whose colleague has been born and briefed by THIS
+   * incarnation — an RPC saver, not the truth: both the create and the brief
+   * dedupe server-side by idempotency key, so a rebuilt incarnation that
+   * re-runs them pays two no-op round trips and nothing else.
+   */
+  #colleagueBriefed = new Set<string>();
+
+  /**
+   * THE SLOW HALF. Mint the conversation's colleague (a full agent on its
+   * own fresh `/agents/voice-notes/<conversationId>` stream), brief it once,
+   * send the note as an ordinary user message, and read its chat reply back
+   * into the live session as a bracketed system item. Fire-and-forget from
+   * the caller's side; the reply races nothing and loses nothing if it never
+   * comes — silence is always an option. An eviction mid-ask loses that one
+   * reply, which is the price of needing no new event types at all.
+   */
+  #noteToColleague(
+    dial: Dial,
+    note: string,
+    append: ProcessEventArgs<VoiceAgent2Contract>["append"],
+    runInBackground: ProcessEventArgs<VoiceAgent2Contract>["runInBackground"],
+  ): void {
+    runInBackground(async () => {
+      try {
+        const reply = await this.deps.withProject(async (project) => {
+          const agent = (
+            project as {
+              agents: {
+                get(path: string): {
+                  create(payload?: object): Promise<unknown>;
+                  append(event: {
+                    type: string;
+                    idempotencyKey: string;
+                    payload: object;
+                  }): Promise<unknown>;
+                  ask(input: { message: string; timeoutMs?: number }): Promise<{
+                    payload?: { message?: unknown };
+                  }>;
+                };
+              };
+            }
+          ).agents.get(`/agents/voice-notes/${dial.conversationId}`);
+          if (!this.#colleagueBriefed.has(dial.conversationId)) {
+            await agent.create({});
+            await agent.append({
+              type: "events.iterate.com/agents/context-added",
+              idempotencyKey: this.idempotencyKey(`colleague-brief:${dial.conversationId}`),
+              payload: {
+                content: COLLEAGUE_BRIEF,
+                key: "voice-agent2/colleague-brief",
+                llmRequestPolicy: { behaviour: "dont-trigger-request" },
+                role: "system",
+              },
+            });
+            this.#colleagueBriefed.add(dial.conversationId);
+          }
+          return await agent.ask({ message: note, timeoutMs: NOTE_REPLY_DEADLINE_MS });
+        });
+        const text = reply?.payload?.message;
+        if (typeof text !== "string" || text.length === 0) return;
+        /* The fence every provider-lane completion wears. */
+        if (this.#dial !== dial) return;
+        this.#sendControl(
+          dial,
+          {
+            type: "conversation.item.create",
+            item: {
+              type: "message",
+              role: "system",
+              content: [{ type: "input_text", text: `[note from your thinking half] ${text}` }],
+            },
+          },
+          append,
+        );
+        /* Same floor discipline as a tool follow-up: speak the note only
+         * when nothing else holds the floor; otherwise it waits in context
+         * for the model's next turn, which is what a note is. */
+        if (dial.openToolCallIds.size === 0 && dial.answer.phase === "settled") {
+          dial.followUpResponsePending = true;
+          this.#sendControl(dial, { type: "response.create" }, append);
+        }
+      } catch {
+        /* A lost note reply is a colleague who did not write back. */
       }
     });
   }
