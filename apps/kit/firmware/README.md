@@ -1,5 +1,31 @@
 # Iterate Kit firmware
 
+## What a client is
+
+A client does exactly four things, and nothing else:
+
+1. **Maintain the connection** — one WebSocket to `/api`, kept alive with the
+   transport's full correctness grammar (generations, session-scoped
+   discards, mount deadlines, backoff).
+2. **Render state onto the local output surfaces** — screen, lights, sound,
+   vibration, servos. State is both local (mic input amplitude, whether
+   `/api` is connected, haptic/audio-visual button feedback) and remote (the
+   live state of the agent stream).
+3. **Respond to physical IO** — button presses, mic input, touch. Every
+   physical input is also exposed as a remote-triggerable capability, and
+   every actuation — physical or injected — appends a stream event, so the
+   server can both cause and audit it.
+4. **Provide device capabilities to Cap'n Web** — face.set, screen.show,
+   servo moves, volume, camera, restart: whatever this body can do, offered
+   as callable capabilities.
+
+Everything under those four is a _driver_: XMOS bring-up, AEC, mic and
+speaker buffers are the same class of code as a panel driver — hardware
+truth behind a clean seam, never policy. Conversation logic, turn-taking
+doctrine, and anything resembling "what should happen next" lives on the
+server; if a piece of device code is not one of the four responsibilities
+or a driver serving them, it is in the wrong repo.
+
 Firmware is split at two ownership boundaries:
 
 - `components/core` owns the control plane and must not include the audio
