@@ -1,194 +1,170 @@
-import { z } from "zod";
 import {
   isSafeConfigRepoTemplatePath,
   type ConfigRepoTemplateReference,
 } from "../../lib/config-repo-template-reference.ts";
+import {
+  demuxFetchResponse,
+  encodeFetchRequest,
+  encodeLsRefsRequest,
+  parseCommit,
+  parseLsRefs,
+  parsePack,
+  parseTree,
+  type RawGitObject,
+} from "./git-wire.ts";
 import { RetryableRepoCreationError } from "./utils.ts";
 
-const DOWNLOAD_CONCURRENCY = 8;
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_FILE_COUNT = 500;
-const MAX_GITHUB_API_RESPONSE_BYTES = 10 * 1024 * 1024;
+const MAX_GITHUB_RESPONSE_BYTES = 12 * 1024 * 1024;
 const MAX_TEMPLATE_BYTES = 10 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 15_000;
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
 
-const CommitResponse = z.object({
-  commit: z.object({ tree: z.object({ sha: z.string().regex(SHA_PATTERN) }) }),
-  sha: z.string().regex(SHA_PATTERN),
-});
-
-const TreeResponse = z.object({
-  tree: z.array(
-    z.object({
-      mode: z.string(),
-      path: z.string(),
-      size: z.number().int().nonnegative().optional(),
-      type: z.enum(["blob", "commit", "tree"]),
-    }),
-  ),
-  truncated: z.boolean(),
-});
-
 type GithubFetch = (url: string, init: RequestInit) => Promise<Response>;
 
 /**
- * Copy a public GitHub repository folder into the same text-file structure as
- * the generated default config template. GitHub is used only to enumerate and
- * read a coherent snapshot; no repository or source history is cloned.
+ * Copy a public GitHub repository folder without GitHub credentials. The Git
+ * smart-HTTP protocol gives us the exact ref's tree graph in one blobless
+ * request, then every selected file in one batch request. That keeps the
+ * source immutable without REST/raw request fan-out or its anonymous quota.
  */
 export async function downloadPublicGithubTemplate(
   reference: ConfigRepoTemplateReference,
   githubFetch: GithubFetch = globalThis.fetch,
 ): Promise<Array<{ content: string; path: string }>> {
   const repository = `${encodeURIComponent(reference.owner)}/${encodeURIComponent(reference.repo)}`;
-  const requestedRef = encodeURIComponent(reference.ref ?? "HEAD");
-  const commit = await fetchGithubJson(
+  const endpoint = `https://github.com/${repository}.git/git-upload-pack`;
+  const requestedRef = reference.ref ?? "HEAD";
+  const commitOid = SHA_PATTERN.test(requestedRef)
+    ? requestedRef
+    : await resolveGithubRef(githubFetch, endpoint, requestedRef);
+  const graph = await fetchGithubObjects(
     githubFetch,
-    `https://api.github.com/repos/${repository}/commits/${requestedRef}`,
-    CommitResponse,
+    endpoint,
+    encodeFetchRequest({ deepen: 1, filter: "blob:none", wants: [commitOid] }),
+    { maxObjectBytes: MAX_TEMPLATE_BYTES, maxTotalObjectBytes: MAX_TEMPLATE_BYTES },
   );
-  const tree = await fetchGithubJson(
-    githubFetch,
-    `https://api.github.com/repos/${repository}/git/trees/${commit.commit.tree.sha}?recursive=1`,
-    TreeResponse,
-  );
-
-  if (tree.truncated) {
-    throw new Error("The GitHub repository tree is too large to copy as a config template.");
+  const objectsByOid = new Map(graph.map((object) => [object.oid, object]));
+  const commit = objectsByOid.get(commitOid);
+  if (commit?.type !== "commit") {
+    throw new Error("GitHub did not return the requested template commit.");
   }
 
-  const prefix = reference.path === undefined ? "" : `${reference.path}/`;
-  if (
-    reference.path !== undefined &&
-    !tree.tree.some((entry) => entry.type === "tree" && entry.path === reference.path)
-  ) {
-    throw new Error(`Config template folder ${JSON.stringify(reference.path)} was not found.`);
+  let selectedTree = requireTree(objectsByOid, parseCommit(commit.payload).tree);
+  for (const segment of reference.path?.split("/") ?? []) {
+    const entry = parseTree(selectedTree.payload).find((candidate) => candidate.name === segment);
+    if (entry?.mode !== "40000") {
+      throw new Error(`Config template folder ${JSON.stringify(reference.path)} was not found.`);
+    }
+    selectedTree = requireTree(objectsByOid, entry.oid);
   }
 
-  const selectedEntries = tree.tree.filter(
-    (entry) => prefix === "" || entry.path.startsWith(prefix),
-  );
-  const unsupportedEntry = selectedEntries.find(
-    (entry) =>
-      entry.type === "commit" ||
-      (entry.type === "blob" && entry.mode !== "100644" && entry.mode !== "100755"),
-  );
-  if (unsupportedEntry !== undefined) {
-    throw new Error(
-      `Config templates cannot contain submodules or symbolic links (${unsupportedEntry.path}).`,
-    );
-  }
-
-  const files: Array<{ path: string; size: number | undefined; sourcePath: string }> = [];
-  for (const entry of selectedEntries) {
-    if (entry.type !== "blob") continue;
-    files.push({
-      path: prefix === "" ? entry.path : entry.path.slice(prefix.length),
-      size: entry.size,
-      sourcePath: entry.path,
-    });
+  const files: Array<{ oid: string; path: string }> = [];
+  const pending = [{ path: "", tree: selectedTree }];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === undefined) break;
+    for (const entry of parseTree(current.tree.payload)) {
+      const path = current.path === "" ? entry.name : `${current.path}/${entry.name}`;
+      if (entry.mode === "40000") {
+        pending.push({ path, tree: requireTree(objectsByOid, entry.oid) });
+        continue;
+      }
+      if (entry.mode !== "100644" && entry.mode !== "100755") {
+        throw new Error(`Config templates cannot contain submodules or symbolic links (${path}).`);
+      }
+      if (!isSafeConfigRepoTemplatePath(path)) {
+        throw new Error(
+          `The selected config template contains an unsafe path: ${JSON.stringify(path)}.`,
+        );
+      }
+      files.push({ oid: entry.oid, path });
+      if (files.length > MAX_FILE_COUNT) {
+        throw new Error(`The selected config template contains more than ${MAX_FILE_COUNT} files.`);
+      }
+    }
   }
   files.sort((left, right) => left.path.localeCompare(right.path));
+  if (files.length === 0) throw new Error("The selected config template contains no files.");
 
-  if (files.length === 0) {
-    throw new Error("The selected config template contains no files.");
-  }
-  if (files.length > MAX_FILE_COUNT) {
-    throw new Error(`The selected config template contains more than ${MAX_FILE_COUNT} files.`);
-  }
-
-  let reportedTotalBytes = 0;
-  for (const file of files) {
-    if (!isSafeConfigRepoTemplatePath(file.path)) {
-      throw new Error(
-        `The selected config template contains an unsafe path: ${JSON.stringify(file.path)}.`,
-      );
+  const blobs = await fetchGithubObjects(
+    githubFetch,
+    endpoint,
+    encodeFetchRequest({ wants: [...new Set(files.map((file) => file.oid))] }),
+    { maxObjectBytes: MAX_FILE_BYTES, maxTotalObjectBytes: MAX_TEMPLATE_BYTES },
+  );
+  const blobsByOid = new Map(blobs.map((object) => [object.oid, object]));
+  return files.map((file) => {
+    const blob = blobsByOid.get(file.oid);
+    if (blob?.type !== "blob") {
+      throw new Error(`GitHub did not return template file ${JSON.stringify(file.path)}.`);
     }
-    if (file.size === undefined) {
-      throw new Error(
-        `GitHub did not report the size of template file ${JSON.stringify(file.sourcePath)}.`,
-      );
+    let content: string;
+    try {
+      content = new TextDecoder("utf-8", { fatal: true }).decode(blob.payload);
+    } catch (error) {
+      throw new Error(`Config template file ${JSON.stringify(file.path)} is not UTF-8 text.`, {
+        cause: error,
+      });
     }
-    if (file.size > MAX_FILE_BYTES) {
-      throw new Error(
-        `Template file ${JSON.stringify(file.sourcePath)} exceeds ${MAX_FILE_BYTES} bytes.`,
-      );
-    }
-    reportedTotalBytes += file.size;
-  }
-  if (reportedTotalBytes > MAX_TEMPLATE_BYTES) {
-    throw new Error(`The selected config template exceeds ${MAX_TEMPLATE_BYTES} bytes.`);
-  }
-
-  const downloaded: Array<{ content: string; path: string }> = [];
-  let downloadedBytes = 0;
-  for (let index = 0; index < files.length; index += DOWNLOAD_CONCURRENCY) {
-    downloaded.push(
-      ...(await Promise.all(
-        files.slice(index, index + DOWNLOAD_CONCURRENCY).map(async (file) => {
-          const rawPath = file.sourcePath.split("/").map(encodeURIComponent).join("/");
-          const bytes = await fetchGithub(
-            githubFetch,
-            `https://raw.githubusercontent.com/${repository}/${commit.sha}/${rawPath}`,
-            MAX_FILE_BYTES,
-          );
-          downloadedBytes += bytes.byteLength;
-          if (downloadedBytes > MAX_TEMPLATE_BYTES) {
-            throw new Error(`The selected config template exceeds ${MAX_TEMPLATE_BYTES} bytes.`);
-          }
-          let content: string;
-          try {
-            content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-          } catch (error) {
-            throw new Error(
-              `Config template file ${JSON.stringify(file.sourcePath)} is not UTF-8 text.`,
-              { cause: error },
-            );
-          }
-          return { content, path: file.path };
-        }),
-      )),
-    );
-  }
-  return downloaded;
+    return { content, path: file.path };
+  });
 }
 
-async function fetchGithubJson<T>(
+async function resolveGithubRef(
   githubFetch: GithubFetch,
-  url: string,
-  schema: z.ZodType<T>,
-): Promise<T> {
-  const responseBytes = await fetchGithub(githubFetch, url, MAX_GITHUB_API_RESPONSE_BYTES);
-  const responseText = new TextDecoder().decode(responseBytes);
-  let body: unknown;
-  try {
-    body = JSON.parse(responseText);
-  } catch (error) {
-    throw new Error("GitHub returned an invalid API response.", { cause: error });
+  endpoint: string,
+  requestedRef: string,
+): Promise<string> {
+  const prefixes = requestedRef.startsWith("refs/")
+    ? [requestedRef]
+    : requestedRef === "HEAD"
+      ? ["HEAD"]
+      : [`refs/heads/${requestedRef}`, `refs/tags/${requestedRef}`, `refs/${requestedRef}`];
+  const body = await fetchGithub(githubFetch, endpoint, encodeLsRefsRequest({ prefixes }));
+  const refs = parseLsRefs(body);
+  const match = prefixes.map((prefix) => refs.find((entry) => entry.name === prefix)).find(Boolean);
+  if (!match) throw new Error(`GitHub ref ${JSON.stringify(requestedRef)} was not found.`);
+  return match.peeledOid ?? match.oid;
+}
+
+function requireTree(objectsByOid: Map<string, RawGitObject>, oid: string): RawGitObject {
+  const object = objectsByOid.get(oid);
+  if (object?.type !== "tree") {
+    throw new Error("GitHub returned an incomplete template tree.");
   }
-  const parsed = schema.safeParse(body);
-  if (!parsed.success) {
-    throw new Error("GitHub returned an invalid API response.", {
-      cause: parsed.error,
-    });
-  }
-  return parsed.data;
+  return object;
+}
+
+async function fetchGithubObjects(
+  githubFetch: GithubFetch,
+  endpoint: string,
+  request: Uint8Array,
+  limits: { maxObjectBytes: number; maxTotalObjectBytes: number },
+): Promise<RawGitObject[]> {
+  const response = await fetchGithub(githubFetch, endpoint, request);
+  return parsePack(demuxFetchResponse(response).pack, limits);
 }
 
 async function fetchGithub(
   githubFetch: GithubFetch,
-  url: string,
-  maximumBytes: number,
+  endpoint: string,
+  request: Uint8Array,
 ): Promise<Uint8Array> {
   let response: Response;
   try {
-    response = await githubFetch(url, {
+    response = await githubFetch(endpoint, {
+      // Workers fetch accepts a Uint8Array body; BodyInit's lib.dom type is
+      // narrower because Uint8Array may have a SharedArrayBuffer backing.
+      body: request as BodyInit,
       headers: {
-        Accept: "application/vnd.github+json",
-        "User-Agent": "iterate-os",
-        "X-GitHub-Api-Version": "2022-11-28",
+        Accept: "application/x-git-upload-pack-result",
+        "Content-Type": "application/x-git-upload-pack-request",
+        "Git-Protocol": "version=2",
+        "User-Agent": "git/2.45.0 (iterate-config-template)",
       },
+      method: "POST",
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
   } catch (error) {
@@ -226,9 +202,9 @@ async function fetchGithub(
     }
     if (result.done) break;
     totalBytes += result.value.byteLength;
-    if (totalBytes > maximumBytes) {
+    if (totalBytes > MAX_GITHUB_RESPONSE_BYTES) {
       await reader.cancel().catch(() => undefined);
-      throw new Error(`GitHub returned more than ${maximumBytes} bytes for one response.`);
+      throw new Error(`GitHub returned more than ${MAX_GITHUB_RESPONSE_BYTES} bytes.`);
     }
     chunks.push(result.value);
   }

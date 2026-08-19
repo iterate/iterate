@@ -55,3 +55,35 @@ exports.projectRepoTemplateFiles = ({ meta }) => {
     "];",
   ].join("\n");
 };
+
+/**
+ * Every direct configs/* child is a complete project config repository. Keep
+ * the create-project UI's catalog derived from those real directories so a
+ * template added on a PR appears in that PR's deployed preview without a
+ * second hand-maintained registry.
+ */
+exports.projectRepoTemplateCatalog = ({ meta }) => {
+  const configsDir = path.resolve(path.dirname(meta.filename), "../../../../../configs");
+  const templateNames = fs
+    .readdirSync(configsDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+    .map((entry) => entry.name)
+    .sort();
+  const invalidName = templateNames.find((name) => !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name));
+  if (invalidName !== undefined) {
+    throw new Error(`config template directory must be lowercase kebab-case: ${invalidName}`);
+  }
+  const defaultIndex = templateNames.indexOf("default");
+  if (defaultIndex === -1) throw new Error("configs/default is missing");
+  templateNames.splice(defaultIndex, 1);
+  templateNames.unshift("default");
+
+  return [
+    "export const CONFIG_REPO_TEMPLATE_CATALOG = [",
+    ...templateNames.map((name) => {
+      const label = name.charAt(0).toUpperCase() + name.slice(1).replaceAll("-", " ");
+      return `  { label: ${JSON.stringify(label)}, path: ${JSON.stringify(`configs/${name}`)} },`;
+    }),
+    "] as const;",
+  ].join("\n");
+};

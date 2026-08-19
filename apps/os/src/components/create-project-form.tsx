@@ -37,8 +37,8 @@ const CreateProjectInput = z.object({
   configRepoTemplate: z
     .string()
     .trim()
+    .min(1, "Project template is required")
     .superRefine((value, context) => {
-      if (value.length === 0) return;
       try {
         parseConfigRepoTemplateReference(value);
       } catch (error) {
@@ -51,11 +51,13 @@ const CreateProjectInput = z.object({
 });
 
 export function CreateProjectForm({
+  configRepoTemplates,
   onPendingChange,
 }: {
+  configRepoTemplates: Array<{ label: string; reference: string }>;
   /** Fired when create submit starts/ends so a host sheet can block dismiss. */
   onPendingChange?: (pending: boolean) => void;
-} = {}) {
+}) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { refresh, session } = useAuthClient();
@@ -118,9 +120,9 @@ export function CreateProjectForm({
 
   const form = useForm({
     defaultValues: {
-      configRepoTemplate: "",
       slug: "",
       organizationSlug: organizations[0]?.slug ?? "",
+      configRepoTemplate: configRepoTemplates[0]?.reference ?? "",
     },
     validators: {
       onChange: CreateProjectInput,
@@ -129,7 +131,7 @@ export function CreateProjectForm({
     onSubmit: async ({ value }) => {
       const parsed = CreateProjectInput.parse(value);
       await createProject.mutateAsync({
-        ...(parsed.configRepoTemplate && { configRepoTemplate: parsed.configRepoTemplate }),
+        configRepoTemplate: parsed.configRepoTemplate,
         slug: parsed.slug,
         organizationSlug: parsed.organizationSlug,
       });
@@ -209,19 +211,24 @@ export function CreateProjectForm({
 
             return (
               <Field data-invalid={isInvalid}>
-                <FieldLabel htmlFor={field.name}>Config template (optional)</FieldLabel>
-                <Input
-                  id={field.name}
-                  name={field.name}
-                  placeholder="github:iterate/iterate#main&path:configs/with-voice"
+                <FieldLabel htmlFor={field.name}>Project template</FieldLabel>
+                <Select
                   value={field.state.value}
-                  onBlur={field.handleBlur}
-                  onChange={(event) => field.handleChange(event.target.value)}
-                  aria-invalid={isInvalid}
-                />
+                  onValueChange={(value) => field.handleChange(value ?? "")}
+                >
+                  <SelectTrigger id={field.name} aria-invalid={isInvalid}>
+                    <SelectValue placeholder="Select a project template" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {configRepoTemplates.map((template) => (
+                      <SelectItem key={template.reference} value={template.reference}>
+                        {template.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <FieldDescription>
-                  Public GitHub reference. Iterate copies one pinned snapshot; it does not stay
-                  linked.
+                  Built-in templates use the files from this deployed OS revision.
                 </FieldDescription>
                 {isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
               </Field>

@@ -235,14 +235,17 @@ describe("protocol v2 requests", () => {
     const body = new TextDecoder().decode(encodeLsRefsRequest({ prefixes: ["refs/heads/"] }));
     expect(body).toBe("0014command=ls-refs\n00010009peel\n001bref-prefix refs/heads/\n0000");
     const oid = "35ea948eecf93a339a72ffed25fdbf51836fbfea";
+    const peeledOid = "55ea948eecf93a339a72ffed25fdbf51836fbfea";
     const response = pktConcat([
       pktLine(`${oid} HEAD symref-target:refs/heads/main`),
       pktLine(`${oid} refs/heads/main`),
+      pktLine(`${oid} refs/tags/v1 peeled:${peeledOid}`),
       text.encode("0000"),
     ]);
     expect(parseLsRefs(response)).toEqual([
       { name: "HEAD", oid, symrefTarget: "refs/heads/main" },
       { name: "refs/heads/main", oid },
+      { name: "refs/tags/v1", oid, peeledOid },
     ]);
   });
 });
