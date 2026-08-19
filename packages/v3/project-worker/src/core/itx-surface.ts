@@ -37,13 +37,13 @@ type ProviderStub = { dup(): ProviderStub; [k: string]: unknown };
 /** A `.connect` input: which context to attach to (default the root), the client-chosen
  *  connectionKey (reconnects under the same key share an ItxConnectionSession), and the live
  *  `capabilities` callback the connection offers. */
-export interface ConnectOpts {
+interface ConnectOpts {
   context?: string;
   connectionKey?: string;
   description?: string;
   capabilities?: ProviderStub;
 }
-export interface ProvideLiveInput {
+interface ProvideLiveInput {
   type: "live";
   path: string[];
   capability: ProviderStub;
@@ -126,7 +126,7 @@ export class ProjectSession extends RpcTarget {
   readonly #hostNamespace: DurableObjectNamespace<StreamDurableObject>;
   readonly #projectId: string;
   readonly #root: ItxHostStub;
-  readonly #relays = new Set<CapnwebCallbackRelay>(); // held for the session so the retained callbacks + delivery WebSockets aren't GC'd
+  readonly #relays = new Set<CapnwebCallbackRelay>(); // held for the session so the retained callbacks + pager sockets aren't GC'd
   readonly #waitUntil: (p: Promise<unknown>) => void;
 
   constructor(
@@ -200,7 +200,7 @@ export class ProjectSession extends RpcTarget {
 /** The iterate context (`itx`). Dotted capability calls + the built-in collections forward to the DO over
  *  Workers RPC. capnweb terminates upstream in `/api`, so a client stub `itx.a.b(x)` never touches the DO's
  *  transport — it lands here and becomes `DO.invokeCapability("itx.a.b", [x])`. */
-export class Itx extends RpcTarget {
+class Itx extends RpcTarget {
   readonly #host: ItxHostStub;
   readonly #relays: Set<CapnwebCallbackRelay>;
   readonly #waitUntil: (p: Promise<unknown>) => void;
@@ -281,7 +281,7 @@ export class Itx extends RpcTarget {
    *  depends only on the target's shape (see DeliveryPolicy in core/events.ts):
    *    • a LIVE CALLBACK (any capnweb function/RpcTarget): parked as an anonymous ItxConnection,
    *      then delivered ONE-DIRECTIONALLY — the stream fire-and-forgets each committed batch as
-   *      `(events, scannedOffsetRange)` down the delivery WebSocket, no acks, no server cursor.
+   *      `(events, scannedOffsetRange)` over the paged-in stub, no acks, no server cursor.
    *      The CLIENT owns its offset: check the ranges chain, heal any gap with read(afterOffset).
    *    • an ABSENT target (an itx expression — a webhook, a stateless worker): the
    *      subscription-forwarder facet holds a cursor per target, calls the target's terminal
@@ -368,7 +368,7 @@ export class Itx extends RpcTarget {
 }
 
 /** Ownership handle for one `itx.provideCapability()`. */
-export class CapabilityProvision extends RpcTarget {
+class CapabilityProvision extends RpcTarget {
   readonly #host: ItxHostStub;
   readonly #providedAtOffset: number;
   readonly #connectionId: string;

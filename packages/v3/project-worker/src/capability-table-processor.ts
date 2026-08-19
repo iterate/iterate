@@ -52,7 +52,7 @@ export type ProcessorPolicy = {
   props?: Record<string, unknown>;
 };
 
-export const CapabilityTableContract = defineProcessorContract({
+const CapabilityTableContract = defineProcessorContract({
   slug: "capability-table",
   version: "2.0.0",
   description:
@@ -120,7 +120,7 @@ export const CapabilityTableContract = defineProcessorContract({
 
 export type CapabilityTable = z.infer<typeof CapabilityTableContract.stateSchema>;
 type State = CapabilityTable;
-export type CapabilityMount = State["mounts"][number];
+type CapabilityMount = State["mounts"][number];
 
 /** The capability table as a REDUCE-ONLY processor: pure reduce (the table) + the resolver
  *  methods the parent calls against that reduced state. Hosted INLINE at the parent's commit

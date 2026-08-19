@@ -26,7 +26,7 @@ export const STREAM_RESUMED = "events.iterate.com/stream/resumed";
 export const BREAKER_CONFIGURED = "events.iterate.com/stream/breaker-configured";
 const CONTROL_TYPES = new Set([STREAM_PAUSED, STREAM_RESUMED, BREAKER_CONFIGURED]);
 
-export const CoreContract = defineProcessorContract({
+const CoreContract = defineProcessorContract({
   slug: "core",
   version: "1.0.0",
   description:

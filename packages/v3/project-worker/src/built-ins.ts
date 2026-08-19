@@ -11,7 +11,7 @@ import { hashSource } from "./core/hash.ts";
 
 /** The `connections` view every context has: the ItxConnectionRegistry, surfaced. One entry per
  *  attached ItxConnection (client callbacks and parked live capabilities — one registry). */
-export type ConnectionsView = {
+type ConnectionsView = {
   /** One connection by connectionKey or connectionId: a method proxy over its retained callback
    *  (wake → RetainedCallbackInvoker leg → invoke). Deep dots walk; throws when offline. */
   get(key: string): unknown;
@@ -20,19 +20,19 @@ export type ConnectionsView = {
   each(method: string, ...args: unknown[]): Promise<unknown[]>;
   /** The currently connected clients of this context. */
   list(): unknown[] | Promise<unknown[]>;
-  /** Close a connection's delivery WebSocket (idempotent — unknown keys are a no-op). */
+  /** Close a connection's stub pager WebSocket (idempotent — unknown keys are a no-op). */
   close(key: string): { ok: true } | Promise<{ ok: true }>;
 };
 
 /** `facets.get(slug)` → a dotted method proxy over ONE enabled facet — ANY method its durable
  *  object exposes (facet stubs are non-transferable, so the walk happens parent-side). */
-export type FacetsView = {
+type FacetsView = {
   get(slug: string): unknown;
 };
 
 /** Run code in this context — THE fundamental context operation. `className` present = host
  *  that exported class durably; absent = run the default export in a fresh confined isolate. */
-export type WorkersView = {
+type WorkersView = {
   get(ref: { source: unknown; className?: string; type?: string }): unknown;
 };
 import type { StreamDurableObject } from "./stream-durable-object.ts";
@@ -50,7 +50,7 @@ export interface BuiltInsEnv {
 }
 
 /** What the hosting side injects: identity, bindings, and the three host-specific seams. */
-export interface BuildBuiltInsDeps {
+interface BuildBuiltInsDeps {
   projectId: string;
   path: string;
   /** The codec name of the context these roots belong to (loader cache keys, self-stubs). */

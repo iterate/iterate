@@ -12,7 +12,7 @@ const DURABLE_OBJECT_HOST_SUFFIX = ".iterate";
 
 /** A parsed DO address. `name` is its own canonical string form — parse once, carry both
  *  halves together (no separate re-stringify field at call sites). */
-export type DurableObjectAddress = { projectId: string; path: string; name: string };
+type DurableObjectAddress = { projectId: string; path: string; name: string };
 
 /** Normalize a path to leading-slash form (`""` → `"/"`, `"x"` → `"/x"`). */
 export function normalizePath(path: string): string {

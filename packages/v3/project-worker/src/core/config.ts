@@ -30,10 +30,10 @@ const ConfigMountRow = z.object({
   target: ExpressionInput,
 });
 
-export const AppConfig = z.object({
+const AppConfig = z.object({
   configMounts: z.array(ConfigMountRow).default([]),
 });
-export type AppConfig = z.infer<typeof AppConfig>;
+type AppConfig = z.infer<typeof AppConfig>;
 
 /** The solo/dev config-mount set: every platform built-in, no default route (misses are
  *  errors). */

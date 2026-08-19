@@ -13,8 +13,8 @@
 //     delivery (event batches + state changes); IN borrows a short RetainedCallbackInvoker leg
 //     per wake burst. Connection identity = connectedAtOffset (the offset of the ephemeral
 //     connection-opened fact); the SESSION RULE files durable ItxConnectionSession history;
-//   • the FETCH DOOR — the one place a 101 can enter: `x-itx-delivery-websocket` accepts a
-//     delivery WebSocket, `x-itx-cap` resolves the fetch lane, anything else is EGRESS (secret
+//   • the FETCH DOOR — the one place a 101 can enter: `x-itx-stub-pager` accepts a stub pager
+//     WebSocket, `x-itx-cap` resolves the fetch lane, anything else is EGRESS (secret
 //     placeholder substitution → the FALLBACK terminal).
 //
 // PURE WORKERS-RPC: capnweb never terminates here (hard rule) — the stateless `/api` worker
@@ -105,7 +105,7 @@ type FacetProcessorHandle = {
  *  at capability path `itx.subscribers.<name>` (subscription config is EVENT-SOURCED; this index
  *  exists only because the post-commit fan-out is the hot path and must not RPC anywhere to
  *  learn who to notify). CONNECTED targets are served right here (fire-and-forget batches down
- *  the delivery WebSocket); ABSENT targets are served by the subscription-forwarder facet, which
+ *  the paged-in stub); ABSENT targets are served by the subscription-forwarder facet, which
  *  keeps its own projection of the same events. */
 type SubscriptionMount = DeliveryPolicy & {
   name: string;
@@ -177,6 +177,156 @@ class StreamAlarmArmer {
   }
 }
 
+/** THE EVENT LOG — the commit point, isolated (the apps/os StreamEventLog, adapted): SQLite
+ *  rows + ONE kv high-water mark, idempotency at the door, offsets assigned from one shared
+ *  sequence (ephemeral events consume offsets, never rows — after a reboot their offsets
+ *  survive as valid gaps). Deliberately storage-lazy: a log that never writes must never mint
+ *  backing storage (workerd auto-deletes empty objects; a probed /state or typo'd ctx must
+ *  leave nothing behind — the Kenton PR #6101 doctrine). */
+class StreamEventLog {
+  readonly #storage: DurableObjectStorage;
+  readonly #path: string;
+  #incarnation = 0; // durable, bumped once per incarnation that WRITES — growth across idle ⇒ it hibernated
+  #storageReady = false;
+  /** The highest offset EVER ASSIGNED — including to ephemeral events whose bodies are gone.
+   *  Backed by ONE tiny kv value (the deliberate write that makes a pure-ephemeral append cost
+   *  exactly one storage write): offset REUSE after an incarnation dies is a data-corruption
+   *  class, because consumers key durable truth by offset. The kv value is the ONE source —
+   *  append's transactionSync commits it with the sql rows atomically. */
+  #highestAssignedOffsetCache?: number;
+
+  constructor(storage: DurableObjectStorage, path: string) {
+    this.#storage = storage;
+    this.#path = path;
+  }
+
+  /** First write of this incarnation: the events table + one incarnation bump (the hibernation
+   *  tell — workless incarnations don't count, which is the point). Synchronous (the kv API),
+   *  so append needs no boot barrier. */
+  touch(): void {
+    if (this.#storageReady) return;
+    this.#storage.sql.exec(
+      `CREATE TABLE IF NOT EXISTS events (
+         offset INTEGER PRIMARY KEY,
+         body TEXT NOT NULL,
+         idempotency_key TEXT UNIQUE
+       )`,
+    );
+    this.#incarnation = ((this.#storage.kv.get("incarnation") as number | undefined) ?? 0) + 1;
+    this.#storage.kv.put("incarnation", this.#incarnation);
+    this.#storageReady = true;
+  }
+
+  /** Read-only (never the write that mints storage — /state probes ride this). */
+  currentIncarnation(): number {
+    return this.#storageReady
+      ? this.#incarnation
+      : ((this.#storage.kv.get("incarnation") as number | undefined) ?? 0);
+  }
+
+  highestAssignedOffset(): number {
+    this.#highestAssignedOffsetCache ??= (this.#storage.kv.get("maxAssignedOffset") as number) ?? 0;
+    return this.#highestAssignedOffsetCache;
+  }
+
+  /** Commit a batch ATOMICALLY (transactionSync rolls back sql AND kv together): a mid-batch
+   *  throw — an idempotency conflict after earlier inserts — must never leave rows above the
+   *  recorded max offset, which the next append would re-assign (one offset, two identities).
+   *  `reduceAtCommit` runs INSIDE the transaction (the inline processors' checkpoint commits
+   *  with the batch). The offset cache is assigned only AFTER the transaction returns; a throw
+   *  leaves it untouched and true. */
+  append(
+    inputs: StreamEventInput[],
+    reduceAtCommit: (
+      committed: StreamEvent[],
+      scannedAfterOffset: number,
+      nextOffset: number,
+    ) => void,
+  ): { committed: StreamEvent[]; scannedAfterOffset: number; nextOffset: number } {
+    this.touch();
+    const scannedAfterOffset = this.highestAssignedOffset();
+    const { committed, nextOffset } = this.#storage.transactionSync(() => {
+      const committed: StreamEvent[] = [];
+      let nextOffset = scannedAfterOffset;
+      for (const input of inputs) {
+        if (input.ephemeral && input.idempotencyKey)
+          throw new Error(
+            "ephemeral events cannot carry an idempotencyKey — nothing idempotent about the unreplayable",
+          );
+        if (input.idempotencyKey) {
+          const hit = this.#storage.sql
+            .exec("SELECT offset, body FROM events WHERE idempotency_key = ?", input.idempotencyKey)
+            .toArray()[0];
+          if (hit) {
+            const existing = JSON.parse(String(hit.body)) as StreamEventInput;
+            if (sameIdempotentEvent(existing, input)) {
+              committed.push({
+                ...existing,
+                offset: Number(hit.offset),
+                path: this.#path,
+              } as StreamEvent);
+              continue; // a dedupe hit consumes NO offset
+            }
+            throw codedError(
+              "IDEMPOTENCY_CONFLICT",
+              idempotencyConflictMessage(input.idempotencyKey, Number(hit.offset)),
+              { existingOffset: Number(hit.offset) },
+            );
+          }
+        }
+        nextOffset += 1;
+        const body = { ...input, createdAt: new Date().toISOString() };
+        if (!input.ephemeral) {
+          this.#storage.sql.exec(
+            "INSERT INTO events (offset, body, idempotency_key) VALUES (?, ?, ?)",
+            nextOffset,
+            JSON.stringify(body),
+            input.idempotencyKey ?? null,
+          );
+        }
+        committed.push({ ...body, offset: nextOffset, path: this.#path } as StreamEvent);
+      }
+      if (nextOffset > scannedAfterOffset) {
+        this.#storage.kv.put("maxAssignedOffset", nextOffset); // THE one deliberate write
+        reduceAtCommit(committed, scannedAfterOffset, nextOffset);
+      }
+      return { committed, nextOffset };
+    });
+    if (nextOffset > scannedAfterOffset) this.#highestAssignedOffsetCache = nextOffset;
+    return { committed, scannedAfterOffset, nextOffset };
+  }
+
+  read(afterOffset = 0, limit = 500): { events: StreamEvent[]; scannedThroughOffset: number } {
+    limit = Math.max(1, limit); // limit 0 crashed the full-page check (userspace-reachable)
+    // A virgin stream has no events table (and reading must not create one — see touch()).
+    const tableExists =
+      this.#storageReady ||
+      this.#storage.sql
+        .exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'events'")
+        .toArray().length > 0;
+    if (!tableExists) return { events: [], scannedThroughOffset: afterOffset };
+    const events = this.#storage.sql
+      .exec(
+        "SELECT offset, body FROM events WHERE offset > ? ORDER BY offset LIMIT ?",
+        afterOffset,
+        limit,
+      )
+      .toArray()
+      .map((r) => ({
+        ...(JSON.parse(String(r.body)) as StreamEventInput & { createdAt: string }),
+        offset: Number(r.offset),
+        path: this.#path,
+      }));
+    // The scanned-offset-range proof: a FULL page is only contiguously known through its last
+    // row; a short page proves the read scanned to the head (ephemeral holes and all).
+    const scannedThroughOffset =
+      events.length === limit
+        ? events[events.length - 1].offset
+        : Math.max(afterOffset, this.highestAssignedOffset());
+    return { events, scannedThroughOffset };
+  }
+}
+
 /** The capability host's slug — hosted INLINE (see the inline-core section below). */
 const CAPABILITY_TABLE_SLUG = "capability-table";
 /** The core processor is stateless (pure reduce) — one module-level instance serves every DO. */
@@ -197,60 +347,15 @@ export class StreamDurableObject extends DurableObject<Env> {
    *  memory on purpose: if the DO dies in between, the upgrade 409s and the relay re-attaches. */
   readonly #pendingConnectionRecords = new Map<string, Record<string, unknown>>();
   readonly #alarmArmer = new StreamAlarmArmer(this.ctx.storage);
-  #incarnation = 0; // durable, bumped once per incarnation that WRITES — growth across idle ⇒ it hibernated
-  #storageReady = false;
-
-  // The constructor deliberately touches NO storage: a DO that never writes must never mint
-  // backing storage (workerd auto-deletes empty objects, and a probed /state or typo'd ctx must
-  // leave nothing behind — the Kenton PR #6101 doctrine). All writes funnel through #touch().
-
-  /** First write of this incarnation: the events table + one incarnation bump (the
-   *  hibernation tell — workless incarnations no longer count, which is the point). The
-   *  name check already happened in the constructor (`readonly name` field). Synchronous
-   *  (the kv API), so append needs no boot barrier. */
-  #touch(): void {
-    if (this.#storageReady) return;
-    this.ctx.storage.sql.exec(
-      `CREATE TABLE IF NOT EXISTS events (
-         offset INTEGER PRIMARY KEY,
-         body TEXT NOT NULL,
-         idempotency_key TEXT UNIQUE
-       )`,
-    );
-    this.#incarnation = ((this.ctx.storage.kv.get("incarnation") as number | undefined) ?? 0) + 1;
-    this.ctx.storage.kv.put("incarnation", this.#incarnation);
-    this.#storageReady = true;
-  }
-
-  // ── the event log (the commit point) ──
-
-  /** The highest offset EVER ASSIGNED — including to ephemeral events whose bodies are gone.
-   *  Backed by ONE tiny kv value (the deliberate write that makes a pure-ephemeral append cost
-   *  exactly one storage write): offset REUSE after an incarnation dies is a data-corruption
-   *  class, because consumers key durable truth by offset. The kv value is the ONE source —
-   *  append's transactionSync commits it with the sql rows atomically. */
-  #highestAssignedOffsetCache?: number;
-  #highestAssignedOffset(): number {
-    this.#highestAssignedOffsetCache ??=
-      (this.ctx.storage.kv.get("maxAssignedOffset") as number) ?? 0;
-    return this.#highestAssignedOffsetCache;
-  }
-
-  #eventsTableExists(): boolean {
-    return (
-      this.#storageReady ||
-      this.ctx.storage.sql
-        .exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'events'")
-        .toArray().length > 0
-    );
-  }
+  /** THE COMMIT POINT — see StreamEventLog above. The name check already happened in the
+   *  constructor (`#address`); the log itself is storage-lazy. */
+  readonly #eventLog = new StreamEventLog(this.ctx.storage, this.#address.path);
 
   /** Commit events: idempotency-checked, offsets assigned from ONE shared sequence (ephemeral
    *  events consume offsets but never touch the log — their bodies exist only in this batch and
    *  in whatever pushes deliver them; after a reboot their offsets survive as valid gaps), then
    *  every enabled facet processor is PUSHED the batch with its scanned-offset-range proof. */
   async append(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
-    this.#touch();
     // THE CORE PROCESSOR SPEAKS FIRST (the apps/os shape): pause refuses every non-control
     // append; the token-bucket breaker meters durable growth. Control events always pass — a
     // paused or tripped stream must accept its own resume.
@@ -265,79 +370,30 @@ export class StreamDurableObject extends DurableObject<Env> {
           `stream circuit breaker open — ${counted} durable event(s) exceed the bucket`,
         );
     }
-    // The mutation is ATOMIC (transactionSync rolls back sql AND kv together): a mid-batch throw
-    // — an idempotency conflict after earlier inserts — must never leave rows above the recorded
-    // max offset, which the next append would re-assign (one offset, two identities). The cache
-    // is assigned only AFTER the transaction returns; a throw leaves it untouched and true.
-    const scannedAfterOffset = this.#highestAssignedOffset();
-    const { committed, nextOffset } = this.ctx.storage.transactionSync(() => {
-      const committed: StreamEvent[] = [];
-      let nextOffset = scannedAfterOffset;
-      for (const input of inputs) {
-        if (input.ephemeral && input.idempotencyKey)
-          throw new Error(
-            "ephemeral events cannot carry an idempotencyKey — nothing idempotent about the unreplayable",
-          );
-        if (input.idempotencyKey) {
-          const hit = this.ctx.storage.sql
-            .exec("SELECT offset, body FROM events WHERE idempotency_key = ?", input.idempotencyKey)
-            .toArray()[0];
-          if (hit) {
-            const existing = JSON.parse(String(hit.body)) as StreamEventInput;
-            if (sameIdempotentEvent(existing, input)) {
-              committed.push({
-                ...existing,
-                offset: Number(hit.offset),
-                path: this.#address.path,
-              } as StreamEvent);
-              continue; // a dedupe hit consumes NO offset
-            }
-            throw codedError(
-              "IDEMPOTENCY_CONFLICT",
-              idempotencyConflictMessage(input.idempotencyKey, Number(hit.offset)),
-              { existingOffset: Number(hit.offset) },
-            );
-          }
-        }
-        nextOffset += 1;
-        const body = { ...input, createdAt: new Date().toISOString() };
-        if (!input.ephemeral) {
-          this.ctx.storage.sql.exec(
-            "INSERT INTO events (offset, body, idempotency_key) VALUES (?, ?, ?)",
-            nextOffset,
-            JSON.stringify(body),
-            input.idempotencyKey ?? null,
-          );
-        }
-        committed.push({ ...body, offset: nextOffset, path: this.#address.path } as StreamEvent);
-      }
-      if (nextOffset > scannedAfterOffset) {
-        this.ctx.storage.kv.put("maxAssignedOffset", nextOffset); // THE one deliberate write
-        // THE INLINE REDUCES run INSIDE the transaction: the routing table and the core state
-        // are atomically exact as of the last committed event, always — the pump-races-the-
-        // provide class is unspellable, not carefully avoided. (Reduce errors are caught per
-        // event; a bad event skips, it never aborts the commit.)
-        this.#reduceInlineAtCommit(committed, scannedAfterOffset, nextOffset);
-      }
-      return { committed, nextOffset };
-    });
+    // THE INLINE REDUCES run INSIDE the log's transaction: the routing table and the core
+    // state are atomically exact as of the last committed event, always — the pump-races-the-
+    // provide class is unspellable, not carefully avoided. (Reduce errors are caught per
+    // event; a bad event skips, it never aborts the commit.)
+    const { committed, scannedAfterOffset, nextOffset } = this.#eventLog.append(
+      inputs,
+      (justCommitted, after, next) => this.#reduceInlineAtCommit(justCommitted, after, next),
+    );
     if (nextOffset > scannedAfterOffset) {
-      this.#highestAssignedOffsetCache = nextOffset;
-      // THE PUMP: push the batch + scannedOffsetRange into every enabled facet processor (each an isolated
+      // THE PUMP: push the batch + its scanned offset range into every facet processor (each an isolated
       // workerd facet with its own storage).
       // Fire-and-forget from append's view — an awaited drive would deadlock if a facet
       // processor APPENDS during its batch (append → this method → await the same facet's busy
       // chain), and the capability host DOES append (provide/revoke) — but SERIALIZED PER FACET:
       // without the chain, a slow loader materialization lets a later batch overtake an earlier
-      // one, and the earlier scannedOffsetRange is then judged a stale redelivery and its EPHEMERAL events
+      // one, and the earlier range is then judged a stale redelivery and its EPHEMERAL events
       // (undeliverable by repair, by design) are silently dropped. Reads stay correct because
       // every snapshot/invoke gap-repairs from the log. The push is what wakes an aborted facet.
       // Live-state change events never ride a drive: the platform rule makes them unconsumable
       // by every reduce, so delivering them is pure RPC waste (the voice flood). A batch that is
-      // ONLY live-state skips the drives; the next real drive's scannedOffsetRange then COVERS the skipped
+      // ONLY live-state skips the drives; the next real drive's range then COVERS the skipped
       // span (per-facet lastDeliveredThrough) so the facet's contiguity fast path holds — to a
-      // reduce, a skipped live-state offset is exactly an ephemeral hole, which windows already
-      // express. Without the widened scannedOffsetRange, the skip broke contiguity and gap repair silently
+      // reduce, a skipped live-state offset is exactly an ephemeral hole, which ranges already
+      // express. Without the widened range, the skip broke contiguity and gap repair silently
       // dropped deliverable named ephemerals between two live-state changes (proof-caught).
       const drivable = committed.filter((e) => e.type !== "events.iterate.com/live-state/changed");
       if (drivable.length > 0)
@@ -359,7 +415,7 @@ export class StreamDurableObject extends DurableObject<Env> {
               .catch((e) => console.error(`facet "${slug}" drive failed`, e))
               .finally(() => {
                 this.#facetWorkInFlight--;
-                this.#noteActivity(); // a finished reduce earns a fresh quiet scannedOffsetRange
+                this.#noteActivity(); // a finished reduce earns a fresh quiet period
               }),
           );
         }
@@ -375,7 +431,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   // Per-facet drive serialization + the in-flight count the quiesce alarm respects (aborting a
   // facet mid-REDUCE is exactly the stall the resurrection pass exists to heal — never cause it).
   readonly #driveChains = new Map<string, Promise<unknown>>();
-  readonly #driveDeliveredThrough = new Map<string, number>(); // per-facet lastDeliveredThrough (skipped spans ride the next scannedOffsetRange)
+  readonly #driveDeliveredThrough = new Map<string, number>(); // per-facet lastDeliveredThrough (skipped spans ride the next range)
   #facetWorkInFlight = 0;
 
   // ── THE INLINE CORE: reduce-only processors reduced synchronously at the commit point ──
@@ -409,7 +465,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         p === path
           ? ownContext
           : this.env.CONTEXT.getByName(DurableObjectNameCodec.stringify({ projectId, path: p })),
-      // The connections + facets views are PARENT-LOCAL — the delivery WebSockets and facets
+      // The connections + facets views are PARENT-LOCAL — the pager sockets and facets
       // live here and can never move (workerd#6702: sockets never leave the parent).
       connections: {
         get: (key) =>
@@ -471,7 +527,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           : { proc: def.proc, state: def.proc.contract.initialState(), throughOffset: 0 };
       this.#inlineCache.set(slug, entry);
     }
-    const head = this.#highestAssignedOffset();
+    const head = this.#eventLog.highestAssignedOffset();
     while (entry.throughOffset < head) {
       const page = this.read(entry.throughOffset, 500);
       for (const e of page.events) if (e.offset <= head) this.#reduceInline(entry, e);
@@ -519,28 +575,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   read(afterOffset = 0, limit = 500): { events: StreamEvent[]; scannedThroughOffset: number } {
-    limit = Math.max(1, limit); // limit 0 crashed the full-page check (userspace-reachable)
-    // A virgin stream has no events table (and reading must not create one — see #touch).
-    if (!this.#eventsTableExists()) return { events: [], scannedThroughOffset: afterOffset };
-    const events = this.ctx.storage.sql
-      .exec(
-        "SELECT offset, body FROM events WHERE offset > ? ORDER BY offset LIMIT ?",
-        afterOffset,
-        limit,
-      )
-      .toArray()
-      .map((r) => ({
-        ...(JSON.parse(String(r.body)) as StreamEventInput & { createdAt: string }),
-        offset: Number(r.offset),
-        path: this.#address.path,
-      }));
-    // The scanned-offset-range proof: a FULL page is only contiguously known through its last row; a
-    // short page proves the read scanned to the head (ephemeral holes and all).
-    const scannedThroughOffset =
-      events.length === limit
-        ? events[events.length - 1].offset
-        : Math.max(afterOffset, this.#highestAssignedOffset());
-    return { events, scannedThroughOffset };
+    return this.#eventLog.read(afterOffset, limit);
   }
 
   // ── the #6800 quiesce: idle facets un-pinned so this actor can hibernate ──
@@ -619,7 +654,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   // ── SUBSCRIPTION DELIVERY, connected lane: one-directional, from the commit path ──
   // A CONNECTED subscription mount (target itx.connections.get(…)) is served by raw
-  // fire-and-forget sends down the connection's delivery WebSocket: the filtered batch plus the
+  // fire-and-forget invokes on the connection's paged-in stub: the filtered batch plus the
   // GLOBAL ScannedOffsetRange. No acks, no server cursor, no retry ladder, no watchdogs, no
   // outbound coalescing (owner decision — the socket buffer is the only queue; overflow closes
   // the socket and the close IS the heal signal). The CLIENT owns its offset: delivered ranges
@@ -825,7 +860,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     ref?: { source: string | Expression; export: string },
     props?: Record<string, unknown>,
   ): Promise<{ ok: true }> {
-    this.#touch();
+    this.#eventLog.touch();
     if (slug === CAPABILITY_TABLE_SLUG || slug === "core")
       throw new Error(`"${slug}" is an inline core processor — it is always on, never a facet`);
     // Enablement IS a mount: the processor policy rides the same capability-provided event
@@ -983,7 +1018,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     delivery?: DeliveryPolicy;
     processor?: ProcessorPolicy;
   }): Promise<{ providedAtOffset: number }> {
-    this.#touch();
+    this.#eventLog.touch();
     const pathString = typeof input.path === "string" ? input.path : input.path.join(".");
     if (pathString.startsWith("itx.subscribers.") && !connectedTarget(toExpression(input.target))) {
       if (input.delivery?.liveState)
@@ -1066,9 +1101,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     // Read-only on purpose — probing /state must never be the write that mints storage.
     if (url.pathname === "/state")
       return Response.json({
-        incarnation: this.#storageReady
-          ? this.#incarnation
-          : ((this.ctx.storage.kv.get("incarnation") as number | undefined) ?? 0),
+        incarnation: this.#eventLog.currentIncarnation(),
         facetProcessors: this.#facetEntries().map((e) => e.slug),
         core: (() => {
           const cs = this.#inline("core").state as CoreState;
@@ -1122,7 +1155,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   // ── the ItxConnection lifecycle (attach → facts → close → auto-revoke) ──
 
-  /** Attach an ItxConnection (the relay calls this BEFORE opening the delivery WebSocket).
+  /** Attach an ItxConnection (the relay calls this BEFORE opening the stub pager WebSocket).
    *  Appends the ephemeral connection-opened fact — its offset IS the connection's identity
    *  (`connectionId` = String(connectedAtOffset); no synthetic socket ids). With a
    *  `connectionKey` the SESSION RULE files the durable ItxConnectionSession facts: a reconnect
@@ -1135,7 +1168,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     connectionKey?: string;
     description?: string;
   }): Promise<{ connectionId: string; connectionKey?: string }> {
-    this.#touch();
+    this.#eventLog.touch();
     let sessionStartedAtOffset: number | undefined;
     if (input.connectionKey) {
       // Reconnect under the same key replaces the predecessor transport (same logical client).
@@ -1210,7 +1243,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     return { ok: true };
   }
 
-  /** A delivery WebSocket closed: the ephemeral connection-closed fact, the auto-revoke of
+  /** A stub pager WebSocket closed: the ephemeral connection-closed fact, the auto-revoke of
    *  every mount targeting the dead connection, and — for keyed connections whose close was
    *  CLEAN and final (no replacement transport) — the durable session end. */
   async #itxConnectionClosed(
@@ -1277,7 +1310,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
   }
 
-  // ── the connections view (delivery WebSockets live HERE and can never move — workerd#6702) ──
+  // ── the connections view (pager sockets live HERE and can never move — workerd#6702) ──
 
   #findConnection(key: string): HibernatableRpcStubRecord | undefined {
     return this.#hibernatableRpcStubs

@@ -30,7 +30,7 @@ const STUB_PAGER_WEBSOCKET_TAG = "itx-stub-pager-websocket";
 
 /** The ONE message the stub pager WebSocket ever carries (DO → edge): "I ought to have your
  *  RPC stub but I don't — send it." Everything else rides Workers RPC on the paged-in stub. */
-export type StubPageMessage = { type: "page" };
+type StubPageMessage = { type: "page" };
 
 /** The Workers-RPC stub the paged edge worker hands back: it forwards `invoke(path, args)`
  *  onto the retained capnweb callback (a DIRECT dotted dispatch — never `.apply`). */

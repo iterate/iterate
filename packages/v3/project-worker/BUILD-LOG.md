@@ -1474,3 +1474,21 @@ consume offsets and are counted by "\*" reducers — the audit trail the kv regi
   chained with zero heal-pulls, every seq exactly once.** The ultra-low-latency invariant,
   measured — and no acks anywhere on the delivery path.
 - Board is now THIRTEEN suites, all green against the swept deploy.
+
+## Review pass (continued) — tightness: StreamEventLog + dead-export cull + wording
+
+- **StreamEventLog extracted** (the apps/os name, adapted): the commit point is its own
+  composed class beside StreamAlarmArmer — touch/incarnation, the offset high-water mark, the
+  idempotency check, the atomic transactionSync append (with `reduceAtCommit` running INSIDE
+  the transaction), and `read` with the scanned-offset-range proof. The DO's `append` is now
+  enforcement → `#eventLog.append(inputs, reduceAtCommit)` → drives + connected delivery; its
+  `read` is one delegating line. Top of the class reads: #address, #hibernatableRpcStubs,
+  #pendingConnectionRecords, #alarmArmer, #eventLog.
+- **Dead-export cull**: 20 in-file-only symbols un-exported (AppConfig, BuildBuiltInsDeps,
+  the view types, CapabilityMount, CapabilityTableContract, the itx-surface RpcTarget classes,
+  CoreContract, DurableObjectAddress, ErrorCode, MAX_VALUE_DEPTH, Step, StubPageMessage,
+  ITX_SURFACE_MODULE, …). Public surface = what other files actually import.
+- **Wording**: the last "delivery WebSocket" phrasings became "stub pager WebSocket"/"paged-in
+  stub" (the socket only pages — saying otherwise was increment-56-draft residue), and the
+  regex-sweep artifacts in append's drive comments were hand-fixed.
+- Board 13/13 against the deployed refactor.

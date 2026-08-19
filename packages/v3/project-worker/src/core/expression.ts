@@ -24,7 +24,7 @@ import { z } from "zod";
 import { deeper } from "./events.ts";
 
 /** One step: a property read (string) or a call (`[method, ...args]`). Args are plain JSON. */
-export type Step = string | [method: string, ...args: unknown[]];
+type Step = string | [method: string, ...args: unknown[]];
 export type Expression = Step[];
 
 /** The structured half as a wire schema — reduced-state checkpoints validate against this one

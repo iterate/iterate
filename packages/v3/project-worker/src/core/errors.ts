@@ -10,7 +10,7 @@
 // own-property channel; honor them rather than inventing a retry taxonomy.
 
 /** The stable machine-readable codes — SCREAMING_SNAKE, defined once, both ends import this. */
-export type ErrorCode =
+type ErrorCode =
   | "NO_CAPABILITY_MATCH"
   | "IDEMPOTENCY_CONFLICT"
   | "STREAM_PAUSED"

@@ -6,7 +6,7 @@
 // (it never crosses a wire, so the workerd#6873 brand-check doesn't apply). Promise-pipelining of chained
 // calls is a later refinement — today each call is one round trip to the host.
 
-export const ITX_SURFACE_MODULE = /* js */ `
+const ITX_SURFACE_MODULE = /* js */ `
 export function itxFromStub(stub) {
   const build = (parts) =>
     new Proxy(function () {}, {

@@ -11,7 +11,7 @@ import type { EventDefinition, ProcessorContract } from "./processor.ts";
  *  custom serializers), so the only exposure is stack exhaustion from deeply-nested-but-acyclic
  *  input — and per the receiver-side-limits rule the budget must never reset at argument
  *  boundaries. 64 is far beyond any honest expression. */
-export const MAX_VALUE_DEPTH = 64;
+const MAX_VALUE_DEPTH = 64;
 export function deeper(depth: number, what: string): number {
   if (depth >= MAX_VALUE_DEPTH)
     throw new Error(`${what}: value nesting exceeds ${MAX_VALUE_DEPTH} levels`);
@@ -22,8 +22,9 @@ export function deeper(depth: number, what: string): number {
  *  payload). Rides the capability-provided event itself, so subscription config is
  *  event-sourced, never silent kv. How a subscription mount is SERVED depends only on its
  *  target's shape:
- *    • CONNECTED target (`itx.connections.get(…)`): fire-and-forget event batches down the
- *      delivery WebSocket — no acks, no server cursor, no retries (the client heals by pull);
+ *    • CONNECTED target (`itx.connections.get(…)`): fire-and-forget event batches over the
+ *      paged-in hibernatable RPC stub — no acks, no server cursor, no retries (the client
+ *      heals by pull);
  *      `maxAttempts`/`start` are meaningless here and ignored.
  *    • ABSENT target (a webhook, an itx expression): the subscription-forwarder facet holds a
  *      cursor per target and applies the ONE failure policy — bounded retries then HALT with an
