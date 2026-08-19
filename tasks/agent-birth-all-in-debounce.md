@@ -215,3 +215,8 @@ and the #2507 readiness-machinery approach (open draft, to be closed).
   and skipped the birth config entirely (debounce 250, parsing on → the
   worker lost by 165ms). Fixed: the probe filters to agent/created, the one
   event that means "agent exists".
+- 2026-08-19 (preview review): codemode-tag birth-reaction ordering fix —
+  the AGENTS.md sync ran AFTER the conversion batch whose last event lowers
+  the debounce (the release), so first turns raced AGENTS.md and its
+  application looked inconsistent across agents (preview p1759). Sync now
+  runs first, release stays last — matching the default template's order.
