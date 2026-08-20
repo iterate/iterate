@@ -20,7 +20,7 @@ const itx = await session.authenticate().get();
 await seedSources(itx, ["chunky"]);
 
 // 1. enable the userspace ephemeral consumer + the built-in "*" tally
-await itx.enableProcessor("chunky", { source: "itx.kv.get('src/chunky.js')", export: "Chunky" });
+await itx.enableProcessor("chunky", { source: "itx.kv.get('src/chunky.js')", className: "Chunky" });
 await itx.enableProcessor("tally");
 
 // 2. durable mark, three ephemeral chunks, another durable mark — all through the table

@@ -391,7 +391,7 @@ test.fails("BUG: 50 userspace processors — the loader lane cannot materialize 
 
   const enableT0 = performance.now();
   for (let i = 0; i < 50; i++) {
-    await itx.enableProcessor(`fan${i}`, { source: "itx.kv.get('procsrc')", export: "default" });
+    await itx.enableProcessor(`fan${i}`, { source: "itx.kv.get('procsrc')", className: "default" });
   }
   const enableMs = performance.now() - enableT0;
   // eslint-disable-next-line no-console

@@ -166,3 +166,39 @@ log ("drive this facet with commits") rather than a separate code path. Then `en
 becomes either thin sugar over `workers.get({source, className}) + append(drive-fact)`, or nothing at
 all. Awaiting Jonas' steer on naming (`itx.load` vs keep `workers.get`) and whether the sugar survives
 before touching the loader kinds / pump.
+
+## Executing the collapse — what's SAFE vs what would erase a real distinction
+
+Went to do the collapse. Reading the actual seams changed the plan on ONE point, honestly:
+
+- **The loader kinds are NOT redundant — do NOT merge them.** `code`/`procfacet`/`stateful` load
+  genuinely DIFFERENT module sets (`code` = no SDK, stateless `run`/`fetch`; `procfacet` = SDK +
+  `runner.js` adapter so the author writes a `StreamProcessor` reduce, commit-driven; `stateful` =
+  a raw DO class loaded directly, call-driven). The kind is also the **cacheKey namespace**, which
+  `wave2-sweep.failing.test.ts:47` proves is a live **authority boundary** with an OPEN collision
+  defect on the `stateful` lane (unescaped `:` in `${context}:${className}`). Merging kinds there
+  erases a real authoring/drive distinction ON a security-sensitive, already-vulnerable seam — the
+  wrong place to save a concept. So my earlier "merge procfacet→stateful" was wrong; corrected here.
+- **The REAL redundancy was the ref WORD + the framing** — and that's the safe, high-value fix.
+
+### Increment — unify the processor ref word `export` → `className` (DONE, green)
+
+The processor ref was `{ source, export }` while a stateful `itx.workers.get` takes
+`{ source, className }` — two words for "which exported class to instantiate." Unified on
+`className` (matches `workers.get` + apps/os). Renamed at every site: `Itx.enableProcessor` +
+`StreamDurableObject.enableProcessor` signatures, `FacetProcessorEntry.ref`, `ProcessorPolicy`, the
+capability-provided event's zod schema, `FacetIdentity`, and `runner-entry.ts`
+(`identity.className ?? "default"`, rebuilt into `generated/processor-runner.ts`). `enableProcessor`
+docstrings now state the relationship plainly: **enabling a processor == loading a class as a facet
+(the same `{source, className}` ref `workers.get` takes) + appending the `itx.processors.<slug>`
+mount the commit pump drives** — no second "enablement" concept. The one difference from
+`workers.get({source, className})`: a processor's class extends `StreamProcessor` (behind the
+`runner.js` adapter) and is commit-driven; a `workers.get` class is a raw DO you call directly.
+
+Concrete evidence this removed real inconsistency: the live proofs already used `className` for
+`workers.get` (hibernate/restore/livestate targets) but `export` for `enableProcessor`
+(userfacet/ephemeral/livestate:162). Now ALL use one word — updated those three proofs too.
+
+No regression: typecheck clean; suite **279 passed / 37 xf / 2 skip / 31 todo** (identical to the
+post-undo baseline — the userspace-processor path is Worker-Loader-only, so it's the live proofs, not
+the harness, that exercise the rename end to end). Live proof next.

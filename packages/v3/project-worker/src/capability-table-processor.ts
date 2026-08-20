@@ -48,8 +48,11 @@ export type ProcessorPolicy = {
   /** Userspace source expression (string half), resolved to modules at materialization.
    *  Absent = a built-in facet class named by the mount's slug. */
   source?: string;
-  /** Which export of the userspace modules is the StreamProcessor subclass. */
-  export?: string;
+  /** Which exported class of the userspace modules is the StreamProcessor subclass — the SAME
+   *  `className` a stateful `itx.workers.get({ source, className })` names, unified deliberately:
+   *  enabling a processor is loading a class as a facet, plus driving it with this stream's
+   *  commits. Defaults to the module's default export. */
+  className?: string;
   /** Per-instance configuration, handed to the processor's constructor. Event-sourced:
    *  re-enabling with different props SHADOWS the old configuration. */
   props?: Record<string, unknown>;
@@ -99,7 +102,7 @@ const CapabilityTableContract = defineProcessorContract({
         processor: z
           .object({
             source: z.string().optional(),
-            export: z.string().optional(),
+            className: z.string().optional(),
             props: z.record(z.string(), z.unknown()).optional(),
           })
           .optional(),

@@ -83,7 +83,7 @@ interface Env extends BuiltInsEnv {
  *  source expression resolved to modules + which export is the StreamProcessor subclass). */
 type FacetProcessorEntry = {
   slug: string;
-  ref?: { source: Expression; export: string };
+  ref?: { source: Expression; className: string };
   /** Per-instance configuration from the enablement mount, handed to the constructor. */
   props?: Record<string, unknown>;
 };
@@ -828,7 +828,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         bySlug.set(m.path[2], {
           slug: m.path[2],
           ...(policy.source
-            ? { ref: { source: parse(policy.source), export: policy.export ?? "default" } }
+            ? { ref: { source: parse(policy.source), className: policy.className ?? "default" } }
             : {}),
           ...(policy.props ? { props: policy.props } : {}),
         });
@@ -886,19 +886,26 @@ export class StreamDurableObject extends DurableObject<Env> {
       projectId: this.#address.projectId,
       path: this.#address.path,
       slug,
-      ...(entry.ref?.export ? { export: entry.ref.export } : {}),
+      ...(entry.ref?.className ? { className: entry.ref.className } : {}),
       ...(entry.props ? { props: entry.props } : {}),
     });
     return handle;
   }
 
   /** Enable a facet-hosted processor on this stream (idempotent; identity configured durably).
-   *  With a `ref` the processor is USERSPACE code: `source` (an expression resolved to modules)
-   *  + which `export` is the StreamProcessor subclass — stored durably so every incarnation
-   *  rebuilds the same facet. */
+   *
+   *  SUGAR, deliberately: enabling a processor is just LOADING A CLASS AS A FACET (the exact
+   *  `{ source, className }` ref `itx.workers.get` takes — `source` an expression resolved to
+   *  modules, `className` the exported StreamProcessor subclass) PLUS one appended fact — the
+   *  mount at `itx.processors.<slug>` — that tells this stream's commit pump to DRIVE it. The
+   *  only difference from a stateful `workers.get({ source, className })`: a processor's class
+   *  extends `StreamProcessor` (loaded behind the `runner.js` adapter, so the author writes a
+   *  reduce, never a DurableObject) and is driven by commits, where a `workers.get` class is a
+   *  raw DO you call directly. So `enableProcessor` == append that mount; there is no second,
+   *  separate "enablement" concept. */
   async enableProcessor(
     slug: string,
-    ref?: { source: string | Expression; export: string },
+    ref?: { source: string | Expression; className: string },
     props?: Record<string, unknown>,
   ): Promise<{ ok: true }> {
     this.#eventLog.touch();
@@ -917,7 +924,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       path: `itx.processors.${slug}`,
       target: `itx.facets.get('${slug}')`,
       processor: {
-        ...(ref ? { source: print(toExpression(ref.source)), export: ref.export } : {}),
+        ...(ref ? { source: print(toExpression(ref.source)), className: ref.className } : {}),
         ...(props ? { props } : {}),
       },
     });

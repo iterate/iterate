@@ -42,13 +42,14 @@ interface Env extends BuiltInsEnv {
 }
 
 /** The identity a facet is configured with — plain data, durable in the facet's own kv.
- *  `export` names the userspace module export for loader-hosted processors (runner.js). */
+ *  `className` names the userspace exported StreamProcessor subclass for loader-hosted
+ *  processors (runner.js) — the same word `itx.workers.get({ source, className })` uses. */
 export type FacetIdentity = {
   parentName: string;
   projectId: string;
   path: string;
   slug: string;
-  export?: string;
+  className?: string;
   /** Per-instance configuration from the enablement mount, handed to the constructor. */
   props?: Record<string, unknown>;
 };

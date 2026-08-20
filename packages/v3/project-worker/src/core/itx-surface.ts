@@ -259,12 +259,13 @@ class Itx extends RpcTarget {
     await this.#host.revokeCapability(input);
   }
 
-  /** Enable a facet-hosted processor on this context's stream (the facet spine). With a `ref`
-   *  the processor is USERSPACE code loaded through the Worker Loader (duck-typed contract:
-   *  configure / deliver / snapshot). */
+  /** Enable a facet-hosted processor on this context's stream. Sugar for "load a class as a
+   *  facet + drive it with commits": `ref` is the SAME `{ source, className }` shape
+   *  `itx.workers.get` takes (userspace code through the Worker Loader), and enabling appends the
+   *  `itx.processors.<slug>` mount the pump drives. Ref-less enables a built-in processor by slug. */
   enableProcessor(
     slug: string,
-    ref?: { source: string | Expression; export: string },
+    ref?: { source: string | Expression; className: string },
   ): Promise<{ ok: true }> {
     return this.#host.enableProcessor(slug, ref);
   }

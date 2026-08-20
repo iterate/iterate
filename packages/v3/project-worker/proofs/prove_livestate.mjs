@@ -159,7 +159,7 @@ check(
 );
 
 // ── processor flavor: chunky's fold, door = liveSnapshot() ──
-await itx.enableProcessor("chunky", { source: "itx.kv.get('src/chunky.js')", export: "Chunky" });
+await itx.enableProcessor("chunky", { source: "itx.kv.get('src/chunky.js')", className: "Chunky" });
 const proc = liveClient(async () =>
   JSON.parse(JSON.stringify(await itx.invoke("itx.facets.get('chunky').liveSnapshot()"))),
 );

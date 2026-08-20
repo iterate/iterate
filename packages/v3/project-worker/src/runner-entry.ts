@@ -43,10 +43,10 @@ export class ProcessorFacetRunner extends DurableObject<RunnerEnv> {
     if (this.#p) return this.#p;
     const identity = this.ctx.storage.kv.get("identity") as FacetIdentity | undefined;
     if (!identity) throw new Error("processor runner: not configured (call configure() first)");
-    const exportName = identity.export ?? "default";
-    const C = (user as Record<string, unknown>)[exportName];
+    const className = identity.className ?? "default";
+    const C = (user as Record<string, unknown>)[className];
     if (typeof C !== "function")
-      throw new Error(`processor runner: no processor export ${JSON.stringify(exportName)}`);
+      throw new Error(`processor runner: no exported class ${JSON.stringify(className)}`);
     this.#p = new (C as new (args: unknown) => StreamProcessor<unknown>)({
       stream: {
         append: (...events: StreamEventInput[]) => this.env.ITX.append(...events),

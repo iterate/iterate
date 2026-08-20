@@ -22,7 +22,7 @@ await seedSources(itx, ["user-tally"]);
 // and the BUILT-IN tally alongside it
 await itx.enableProcessor("user-tally", {
   source: "itx.kv.get('src/user-tally.js')",
-  export: "UserTally",
+  className: "UserTally",
 });
 await itx.enableProcessor("tally");
 
