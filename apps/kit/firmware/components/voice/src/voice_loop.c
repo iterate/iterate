@@ -1770,9 +1770,26 @@ static enum iterate_kit_status bridge_copy_egress(
    * here would be one memcpy and 640 bytes of .bss to say the same thing.
    */
   if (xQueueSend(runtime.mic_queue, samples, 0) != pdTRUE) {
-    /* Freshest wins: discard the OLDEST frame, keep this one. Stale
-     * speech after a network hiccup is worse than a gap — and it is the
-     * only way a backlog can never delay what the customer says next. */
+    /*
+     * FULL, and which end to sacrifice depends on what the queue is doing.
+     *
+     * DIALLING: keep the OLDEST. The queue is the dial buffer, nothing
+     * leaves it until the call is accepted, and the start of what somebody
+     * said is what makes the rest of it intelligible — the same rule the
+     * far end applies to its own held-frame cap. Latest-wins here was
+     * measured on a real press: a 7.5 s cold dial against 5.12 s of queue
+     * evicted the person's whole opening sentence and delivered the room
+     * noise that followed it (/agents/voice/stackchan, conversation-accepted
+     * handshakeTookMs 7489, 2026-08-20).
+     *
+     * IN A CALL: freshest wins — discard the OLDEST frame, keep this one.
+     * Stale speech after a network hiccup is worse than a gap, and it is
+     * the only way a backlog can never delay what the customer says next.
+     */
+    if (runtime.dial_buffering) {
+      ++runtime.mic_frames_dropped;
+      return ITERATE_KIT_OK;
+    }
     struct mic_frame discarded;
     (void)xQueueReceive(runtime.mic_queue, &discarded, 0);
     (void)xQueueSend(runtime.mic_queue, samples, 0);

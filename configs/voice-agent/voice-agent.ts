@@ -305,6 +305,23 @@ const IDENTITY_SLICE_B64_CHARS = (IDENTITY_SLICE_BYTES / 3) * 4;
 /** 16 kHz mono PCM16: two bytes per sample, sixteen samples per millisecond. */
 const PCM16_BYTES_PER_MS = 32;
 
+/**
+ * How far the board's speaker cone runs behind the pacer's schedule. The
+ * schedule starts a frame's clock the moment it is handed to the stream;
+ * the cone plays it later by delivery latency, the ~90 ms I2S DMA ring,
+ * and the player's start-up fill. NOT the naive 300 ms prefill sum: the
+ * bridge bursts an answer's opening at wire speed ("reached as fast as
+ * the wire allows", voice_loop.c on SPEAKER_PREFILL_BYTES), so the
+ * prefill contributes only its fill-time at burst rate — tens of ms.
+ * Calibrated with the interject-recall probe against its 3/s count
+ * cadence: recall must land within one counted number of the interrupt
+ * without undershooting. #heardMsFromSchedule subtracts it, because
+ * everything downstream of that method ("what did the listener hear")
+ * means the cone, not the hand-over: uncorrected, post-barge recall ran
+ * a consistent +2-3 counted numbers ahead of where the interrupt landed.
+ */
+const DEVICE_START_LAG_MS = 150;
+
 /** No input from the device for this long and the call is over. Exported
  * for the tests that drive it — a re-declared copy passes silently the day
  * the two diverge, and this value has already moved once. */
@@ -1116,6 +1133,20 @@ interface Dial {
    */
   micSentSinceCommit: boolean;
   /**
+   * Total mic audio HANDED TO THE PROVIDER this dial, in milliseconds —
+   * counted off the device's own 16 kHz base64 at the one send site
+   * (#sendMicAudio), BEFORE any resample, because duration survives a
+   * resample and the count must share a clock with openai's
+   * `audio_start_ms` ("milliseconds from the start of all audio written
+   * to the buffer during the session"). One dial IS one provider
+   * session, so per-dial accumulation mirrors that clock exactly. Read
+   * at a VAD onset: `micSentMs - audio_start_ms` is how much audio left
+   * the mic AFTER the user actually started talking — detection lag the
+   * heard-ms freeze must backdate, or the schedule counts audio played
+   * over the user's own speech as heard.
+   */
+  micSentMs: number;
+  /**
    * A tentative VAD onset holding the floor, or null.
    *
    * SET WHENEVER THE PROVIDER DID NOT CANCEL SERVER-SIDE — grok always
@@ -1257,6 +1288,7 @@ const freshDial = (
   deviceBufferEmptyAtFacetMs: 0,
   sending: false,
   micSentSinceCommit: false,
+  micSentMs: 0,
   tentativeOnset: null,
   micResampler: new Pcm16Resampler(16_000, provider.rate),
   spkResampler: new Pcm16Resampler(provider.rate, 16_000),
@@ -2056,7 +2088,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
             this.#confirmTentativeOnset(dial, append);
             return;
 
-          case "input_audio_buffer.speech_started":
+          case "input_audio_buffer.speech_started": {
             /*
              * THE BOARDS' ONLY BARGE. An open microphone has no button, so
              * this onset is the one interruption an open-mic client ever
@@ -2064,7 +2096,23 @@ export class VoiceAgentProcessor extends StreamProcessor<
              * from echo residue, each retracting as a `speech_stopped` with
              * no commit behind it. Which story it opens depends on whether
              * the provider CANCELLED anything at this onset.
+             *
+             * AND IT ARRIVES LATE. The event names where speech began —
+             * `audio_start_ms`, openai's position in the session's mic
+             * audio, prefix padding already backdated; grok's carries no
+             * such field, so its lag reads zero — and `micSentMs` is how
+             * much mic audio had been sent when the event landed. The
+             * difference is audio captured AFTER the user started talking:
+             * detection time during which the schedule kept advancing and
+             * the speaker kept playing over the user's own speech. Nothing
+             * played over the user was heard, so BOTH freeze sites below
+             * backdate their heard-ms by it (measured 0.6-1.1 s — 2-3
+             * counted numbers of recall error on their own).
              */
+            const onsetLagMs =
+              typeof grok.audio_start_ms === "number"
+                ? Math.max(0, dial.micSentMs - grok.audio_start_ms)
+                : 0;
             if (dial.answer.phase === "streaming" && dial.cancelsOnVadOnset) {
               /*
                * STILL GENERATING, AND THE PROVIDER KILLED IT SERVER-SIDE at
@@ -2081,7 +2129,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
                */
               this.#bargeAnswer(
                 dial,
-                this.#heardMsFromSchedule(dial, receivedAtFacetMs),
+                Math.max(
+                  0,
+                  Math.floor(this.#heardMsFromSchedule(dial, receivedAtFacetMs) - onsetLagMs),
+                ),
                 receivedAtFacetMs,
                 append,
                 false,
@@ -2118,14 +2169,23 @@ export class VoiceAgentProcessor extends StreamProcessor<
              * since.
              */
             if (dial.tentativeOnset === null || dial.tentativeOnset.retracted) {
-              dial.tentativeOnset = {
-                heardMs: this.#heardMsFromSchedule(dial, receivedAtFacetMs),
-                retracted: false,
-              };
+              const heardMs = Math.max(
+                0,
+                Math.floor(this.#heardMsFromSchedule(dial, receivedAtFacetMs) - onsetLagMs),
+              );
+              dial.tentativeOnset = { heardMs, retracted: false };
+              /* The clear below throws the device's unplayed lead away, and
+               * a retraction never resends it — the HOLE above. Left alone,
+               * that lead stays inside `sentMs` and every later heard-ms of
+               * this answer counts it as played. Rolled back to the frozen
+               * number, a resumed tail re-earns the start lag its restart
+               * really pays: the firmware re-prefills after a clear. */
+              dial.answer.sentMs = heardMs;
             }
             this.#clearDeviceSpeaker(dial, receivedAtFacetMs, append);
             dial.deviceBufferEmptyAtFacetMs = 0;
             return;
+          }
 
           case "input_audio_buffer.speech_stopped":
             /* The retraction half of a tentative onset: the room went quiet
@@ -2551,6 +2611,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
       }),
     );
     dial.micSentSinceCommit = true;
+    /* Counted on the INCOMING b64 — the pipeline's 16 kHz — after the send,
+     * so a frame the resampler throws on was never counted: the provider
+     * never received it either. See `micSentMs` for why not the wire's rate. */
+    dial.micSentMs += base64ByteLength(b64) / PCM16_BYTES_PER_MS;
   }
 
   /**
@@ -2850,13 +2914,15 @@ export class VoiceAgentProcessor extends StreamProcessor<
   /**
    * What the listener has HEARD of the answer, read off the pacer's own
    * schedule: everything handed to the device, minus what still sat unplayed
-   * in its buffer — which a clear is about to throw away. The schedule
-   * models the WORST-CASE lead, so this can only understate; the floor at
-   * zero covers an answer that never started.
+   * in its buffer — which a clear is about to throw away — minus the fixed
+   * lag between the hand-over and the cone (DEVICE_START_LAG_MS: delivery,
+   * DMA ring, start-up fill — audio a clear kills before it ever plays). The
+   * schedule models the WORST-CASE lead, so this can only understate; the
+   * floor at zero covers an answer that never started.
    */
   #heardMsFromSchedule(dial: Dial, nowAtFacetMs: number): number {
     const unplayedMs = Math.max(0, dial.deviceBufferEmptyAtFacetMs - nowAtFacetMs);
-    return Math.max(0, Math.floor(dial.answer.sentMs - unplayedMs));
+    return Math.max(0, Math.floor(dial.answer.sentMs - unplayedMs - DEVICE_START_LAG_MS));
   }
 
   /**
@@ -2899,7 +2965,13 @@ export class VoiceAgentProcessor extends StreamProcessor<
         ? {
             itemId: dial.answer.itemId,
             contentIndex: dial.answer.contentIndex,
-            audioEndMs: heardMs,
+            /* WHOLE milliseconds, floored ONCE where the number becomes the
+             * repair: the provider rejects a fractional audio_end_ms
+             * ("expected an integer" — seen live when the onset-lag
+             * subtraction went fractional), and the note's prefix filter
+             * reads this same field, so truncate and note cannot disagree
+             * about the boundary. */
+            audioEndMs: Math.floor(heardMs),
           }
         : null;
     if (repair !== null) dial.answer.itemId = null;
@@ -3706,3 +3778,4 @@ export class VoiceAgentFacet extends StreamProcessorFacet {
     });
   }
 }
+// probe4 1787207396
