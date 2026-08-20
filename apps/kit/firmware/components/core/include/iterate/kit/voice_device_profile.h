@@ -325,49 +325,14 @@ enum {
   ITERATE_KIT_VOICE_REMOUNT_RETRY_MS = 2000,
   ITERATE_KIT_VOICE_REMOUNT_RETRY_MAX_MS = 30000,
   /*
-   * How long an IDLE device may hold a mount nobody is answering before it
-   * replaces the session.
-   *
-   * Every other watchdog here needs a call in progress. So a device whose
-   * capability has gone offline server-side while its TCP connection stays
-   * perfectly healthy is watched by nothing at all: it loops, it reports
-   * itself ready, and every RPC to it fails with "capability is offline"
-   * until somebody power-cycles it.
-   *
-   * Measured: after eighteen turns the soak's calls ended, the capability
-   * went offline, and the device sat there for minutes — rx and played both
-   * frozen at 8468, conceal 0, gaps 0, entirely healthy and entirely
-   * unreachable.
-   *
-   * THREE MINUTES WAS WRONG, and the sentence that justified it was too: it
-   * said "a mounted device exchanges a ping every five [seconds]", so silence
-   * on this counter would mean something real. But that ping was OUTBOUND —
-   * the device appended it — while this watchdog counts dispatches served TO
-   * the device. On an idle board nothing is served, so the counter never
-   * moves and the watchdog fires on a schedule, forever, on a device that is
-   * working perfectly. (The ping itself is gone now; the reasoning error it
-   * illustrates is why this paragraph stays.)
-   *
-   * What it does when it fires is not cheap either: it replaces the whole
-   * transport — TLS, socket, session and mount. Measured on an idle M5StickS3,
-   * seven of them in twenty-six minutes. From across the room that is a device
-   * that "just randomly disconnects and reconnects", because it is.
-   *
-   * BACK TO THREE MINUTES, having tried fifteen and measured the cost.
-   *
-   * Lengthening it stopped the flap and revealed what the flap had been hiding:
-   * this is the ONLY thing that re-establishes a mount the platform has
-   * dropped. Measured the same night — all four boards mounted, ran ~11
-   * minutes, and lost their mounts together. Four independent devices failing
-   * simultaneously is one shared cause and it is server-side; with a fifteen
-   * minute interval they simply stayed dead for longer.
-   *
-   * So the flap is real and this constant is not the fix for it. Until the
-   * server-side mount loss is understood, a device that recovers in three
-   * minutes beats a tidier one that does not recover for fifteen. The proper
-   * answer remains a re-registration that does not drop the socket.
+   * THE IDLE REMOUNT CONSTANT WAS HERE (180s). It restarted the whole
+   * transport after any three quiet minutes, because the platform once
+   * dropped mounts silently and this clock was the only recovery. It was
+   * also the fleet's dominant Durable Object churn — one incarnation per
+   * board per cycle. Deleted 2026-08-20 to measure how long a mount actually
+   * lives without it; if the silent drop still exists, the fix is a
+   * re-registration that does not drop the socket, not a metronome.
    */
-  ITERATE_KIT_VOICE_IDLE_REMOUNT_MS = 180000,
 };
 
 /**

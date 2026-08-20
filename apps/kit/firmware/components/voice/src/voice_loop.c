@@ -62,7 +62,6 @@
 #include "iterate/kit/capabilities/system_update.h"
 #include "iterate/kit/platforms/esp_idf_restart_note.h"
 #include "iterate/kit/platforms/esp_idf_system_update.h"
-#include "iterate/kit/mount_watchdog.h"
 #include "iterate/kit/capabilities/conversation.h"
 #include "iterate/kit/capabilities/health.h"
 #include "iterate/kit/capabilities/push_to_talk.h"
@@ -638,7 +637,6 @@ EXT_RAM_BSS_ATTR static struct {
   uint32_t speaker_margin_min_ms;
   uint32_t speaker_writes;
   uint32_t speaker_bad_frames;
-  struct iterate_kit_mount_watchdog mount_watchdog;
   /* Connections replaced because nothing was being delivered on them. */
   uint32_t downlink_recycles;
   /* How many of those in a row have not yet produced a batch. */
@@ -2337,9 +2335,7 @@ static size_t health_json(char *out, size_t capacity) {
     {"connGeneration", runtime.voicelab.connection_generation},
     /* Hop liveness only — never application delivery credit. */
     {"wsPongs", metrics.websocket_pongs_received},
-    {"idleRemounts", runtime.mount_watchdog.remounts},
-    /* Inbound capability dispatches served. This is the liveness proof the idle
-     * watchdog keys on — telemetry publishing does not move it. */
+    /* Inbound capability dispatches served — the reachability proof. */
     {"servedDispatches", iterate_kit_peer_served_dispatches(&runtime.peer)},
     {"bridgeAgeMs",
      runtime.voicelab.last_bridge_ms == 0U
@@ -3918,22 +3914,15 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
       }
 
       /*
-       * One shared answer to "has anything called me lately", tested on the
-       * host. See mount_watchdog.h for why a device cannot tell an
-       * unreachable mount from a quiet afternoon.
+       * THE 180-SECOND REMOUNT WATCHDOG WAS HERE, restarting the transport
+       * after any three quiet minutes because the platform once dropped
+       * mounts silently. Measured 2026-08-20: that metronome was the fleet's
+       * dominant Durable Object churn — one incarnation per board per cycle,
+       * ~480/day/stream — and the platform faults it papered over have their
+       * own reactive answers now (the voicelab-FAILED remount and the
+       * mic-jam restart below, both keyed on evidence instead of a clock).
+       * A quiet afternoon is allowed to be quiet.
        */
-      if (iterate_kit_mount_watchdog_due(
-              &runtime.mount_watchdog,
-              iterate_kit_peer_served_dispatches(&runtime.peer),
-              /* A call UP or a start in flight — NOT merely wanted. See
-               * mount_watchdog.h: wanting a call this device cannot start is
-               * the symptom of a lost mount, not a reason to keep it. */
-              runtime.voicelab.call_active || runtime.voicelab.call_pending,
-              now)) {
-        ESP_LOGW(tag, "nothing has called this device in a while — re-registering");
-        runtime.view.status = ("re-registering");
-        iterate_kit_esp_idf_itx_transport_request_restart(&transport);
-      }
 
       /* The pressed-button audit, owed since its press, sent when the
        * session can carry it. */

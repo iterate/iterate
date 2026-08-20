@@ -6,7 +6,6 @@ set(ITERATE_KIT_CORE_SOURCES
   src/device_events.c
   src/face_wake.c
   src/itx_connection.c
-  src/mount_watchdog.c
   src/itx_mount.c
   src/itx_outbox_sender.c
   src/peer.c
