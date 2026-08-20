@@ -2921,6 +2921,22 @@ export class VoiceAgentProcessor extends StreamProcessor<
    * floor at zero covers an answer that never started.
    */
   #heardMsFromSchedule(dial: Dial, nowAtFacetMs: number): number {
+    /* A SCHEDULE THAT RAN OUT LONGER THAN THE START LAG AGO HAS NO CONE
+     * STILL MOVING: everything handed over has played, whole, so heard-ms
+     * is `sentMs` itself and the subtractions below have nothing to
+     * correct. Without this arm the lag subtraction manufactured an
+     * interruption out of every press that FOLLOWED a completed answer —
+     * the device had been silent for seconds and the model was still sent
+     * a truncate slicing the answer's last 150 ms off plus a false "the
+     * user interrupted, they heard only this much" note, on every ordinary
+     * turn (measured on the wire against a fully-played reply). The lag
+     * models a cut through audio STILL PLAYING; it must never shorten an
+     * answer the room heard end. An answer barged before anything was
+     * handed over still repairs honestly here: its `sentMs` is zero, which
+     * is exactly what was heard. */
+    if (nowAtFacetMs - dial.deviceBufferEmptyAtFacetMs >= DEVICE_START_LAG_MS) {
+      return Math.max(0, Math.floor(dial.answer.sentMs));
+    }
     const unplayedMs = Math.max(0, dial.deviceBufferEmptyAtFacetMs - nowAtFacetMs);
     return Math.max(0, Math.floor(dial.answer.sentMs - unplayedMs - DEVICE_START_LAG_MS));
   }
@@ -3156,6 +3172,19 @@ export class VoiceAgentProcessor extends StreamProcessor<
     dial.speakerQueue = [];
     dial.deviceBufferEmptyAtFacetMs = 0;
     this.#clearDeviceSpeaker(dial, decidedAtFacetMs, append);
+    /* AND THE NEXT REAL FRAME SAYS IT AGAIN. The clear above is one empty
+     * frame on a lane that documents its own drops; lose that single append
+     * and nothing ever re-asserts the flush — the device plays the dead
+     * answer's whole buffered tail behind the barge ("it kept counting").
+     * Every frame after this line belongs to a REPLACING answer, so the
+     * first one carries the clear too, which is the firmware's own doctrine
+     * for the signal: the drop rides the first chunk of the answer that
+     * replaces the one it kills, and cannot be lost without losing the
+     * replacement itself. NOT armed by #clearDeviceSpeaker, because its
+     * other caller — a tentative onset — holds a tail that may RESUME, and
+     * a resumed frame carrying a clear would flush the silence the hold
+     * just bought. */
+    dial.clearSpeakerBufferBeforeNextFrame = true;
   }
 
   /**
