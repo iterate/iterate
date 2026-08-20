@@ -1612,3 +1612,21 @@ before changes. Fixed test.fails flipped to plain regression tests.
   grammar (an array/[] path no longer boots a dead/rank-0 mount).
   Harness lane serialized (fileParallelism:false) — parallel boots raced the build hook on
   .wrangler/validate. Unit 128p/16xf/6todo, harness 76p/39xf/18todo, both green.
+
+## 2026-08-20 — dotted surface landed, then capnweb-validate REMOVED
+
+- Natural dotted client surface (defect 24): prototype HOP on `Itx` (`src/core/dotted-path-proxy.ts`,
+  ported from apps/os) — `itx.slack.chat.postMessage(...)` etc. as plain property access. Live-proven
+  on project-worker.iterate.workers.dev (prove_slack.mjs writes the dotted spelling now, ALL PASS).
+- capnweb-validate RIPPED OUT (Jonas: "we dont need it for now"). It is a method ALLOW-LIST
+  (`wrapServerTarget`) — fundamentally incompatible with an OPEN dotted surface, and apps/os uses
+  none. Removed: the 5 `@validateRpc()` decorators + imports; the `capnwebValidate()` +
+  `lowerStandardDecoratorsWithEsbuild()` vite plugins (no more standard-decorator lowering — the
+  esbuild pre-pass existed ONLY for validate's rewritten decorators); the `.wrangler/validate` build
+  mirror; `main` → `src/worker.ts`; build hook → `node build-sdk.mjs`; the package dependency.
+  `worker.ts` already served `/api` with plain capnweb `newWorkersRpcResponse`, so the runtime
+  entrypoint never changed — validation lived only in `@validateRpc()`'s in-place method wrapping.
+- Cost (accepted): no boundary arg-validation. The append door keeps its one runtime typeless guard
+  (now the sole input check); coarse TS-type policing (ephemeral:false loud-error, forged `source`,
+  excess keys) lapses. Restoring any of it = a runtime `StreamEventInput.parse()` at the append door.
+- Lanes green: unit exit 0; full run 278 passed / 37 xfail / 2 skip / 31 todo; typecheck clean.

@@ -66,3 +66,15 @@ REFACTORS-LATER.md instead, not here.
   diagnoses in failing-dotted-surface.test.ts): mid-chain connections.get(id).method() pipelining
   (DO returns a NonPipelinable pathProxy; needs capnweb-pipelining bridged across /api→DO) and the
   isPathMissMessage miss-grammar (capability-table replay vocabulary). 41→37 expected-fail.
+- capnweb-validate REMOVED (2026-08-20, "we dont need it for now"): ripped the whole boundary-
+  validation layer + its build machinery. Deleted @validateRpc() decorators + imports (itx-surface,
+  itx-entrypoint, stream-durable-object); the capnwebValidate() + lowerStandardDecoratorsWithEsbuild()
+  vite plugins (vitest.config.ts back to 2 imports, no esbuild lowering); the .wrangler/validate
+  mirror; wrangler.jsonc main → src/worker.ts + build → `node build-sdk.mjs`; the package dep.
+  Reverted the defect-24 opaque-stub workaround — get()/connect() return a plain Itx again and the
+  prototype hop dispatches natively (no allow-list to dodge). worker.ts already used plain capnweb
+  newWorkersRpcResponse, so the /api runtime path was untouched. COST (accepted): no boundary arg-
+  validation; the append door keeps its ONE runtime typeless guard (now sole check), everything else
+  the TS type policed coarsely (ephemeral:false loud-error, forged source, excess keys) lapses —
+  three parity-lock tests updated (1 → test.todo, 2 characterized to the runtime-guard message).
+  All lanes green: 278 passed / 37 xfail / 2 skip / 31 todo; typecheck clean.

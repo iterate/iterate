@@ -3,11 +3,9 @@
   // (vitest.workers.config.ts; run with `pnpm test:workers`). wrangler.jsonc stays the deploy
   // truth. The divergences, each deliberate and test-only:
   //
-  //  1. "main" points at SRC, not the .wrangler/validate mirror: the pool imports the worker
-  //     through Vite (same isolate as the tests), where the capnweb-validate vite plugin
-  //     performs the identical @validateRpc rewrite in-test — the cloudflare-os wiring. The
-  //     mirror exists only for wrangler's own bundler (and would require running the build hook,
-  //     which the pool never does). No "build" block here for the same reason.
+  //  1. "main" points at SRC and there is no "build" block: the pool imports the worker through
+  //     Vite (same isolate as the tests). The generated SDK bundle (src/generated/*) is produced
+  //     by `node build-sdk.mjs`, which the test script runs before vitest.
   //  2. MIGRATIONS COLLAPSED to the one live class: fresh pool storage cannot replay prod's
   //     rename chains (v6/v7 rename classes that never existed in a fresh namespace) — the same
   //     collapse __tests__/harness.ts performs programmatically.

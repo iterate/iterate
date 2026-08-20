@@ -87,10 +87,11 @@ ProjectSession) (~4 lines).
 Fallback` + `createInvokeCapabilityPathProxy` into `src/core/dotted-path-proxy.ts` (prototype
     HOP, not an instance Proxy — workerd#6873), installed on `Itx`. The real blocker was NOT the
     hop: capnweb-validate's `wrapServerTarget` is an ALLOW-LIST that refuses every undeclared method
-    before the hop is reached (apps/os uses NO validate, which is why its surface works). Fixed by
-    returning `Itx` as an opaque UNKNOWN-SURFACE stub (`RpcStub<unknown>` → `v.stub`, not
-    `stubOf`) from `get()`/`connect()`, which skips the allow-list wrap while `@validateRpc()` still
-    arg-validates Itx's declared methods in place. PROVEN: `itx.whoami()`, `itx.kv.put/get`,
+    before the hop is reached (apps/os uses NO validate, which is why its surface works). First
+    worked around by returning `Itx` as an opaque UNKNOWN-SURFACE stub — but then (2026-08-20)
+    **capnweb-validate was REMOVED from the package entirely** (Jonas: "we dont need it for now"),
+    so the workaround was reverted: `get()`/`connect()` return a plain `Itx` and the hop dispatches
+    natively, no allow-list to dodge. PROVEN: `itx.whoami()`, `itx.kv.put/get`,
     `itx.stream.append`, `itx.slack.chat.postMessage` all pass end-to-end (4 tests flipped) + 14
     unit tests. **Still deferred (2 clusters, precise diagnoses in the test file):** (a) mid-chain
     `connections.get(id).method()` — the DO returns a `pathProxy` (Proxy-over-function =
@@ -219,8 +220,8 @@ built-in only) — contexts.get(path).append + env.ITX.append reached DO.append 
 forgeable revoke key was STILL exploitable. ROOT FIX: removed the guessable idempotencyKey from
 the internal revoke entirely (revoke-by-offset is idempotent through the reduce), deleting the
 fence and the whole squat class. Net negative.
-47 ⚠ (FIXED): typeless events ("" / " " type) committed — @validateRpc enforces TS `string`,
-not the contract's trim().min(1). FIX: a non-empty-type guard at DO.append (the one door).
+47 ⚠ (FIXED): typeless events ("" / " " type) could commit. FIX: a non-empty-type runtime guard
+at DO.append (the one door) — now the SOLE input check after capnweb-validate was removed.
 48 ⚠ (DEFERRED): forgeable provenance — `source` is a public typed field + excess keys ride the
 validated boundary (strictObject lost). Needs the public-vs-internal append distinction; note.
 49 ⚠ (DEFERRED): egress substitutes HEADERS only — a present secret in the URL/body forwards the

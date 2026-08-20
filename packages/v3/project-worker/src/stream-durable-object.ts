@@ -23,7 +23,6 @@
 // `invokeCapability(callPath, args)` door remains as the degenerate string half of the codec
 // (loaded workers + the stateful runner speak it).
 
-import { validateRpc } from "capnweb-validate";
 import { DurableObject } from "cloudflare:workers";
 import { substituteHeaderSecrets } from "@v3/shared/egress";
 import { asModules, confinedWorker, versionedFacet } from "./core/agent-runtime.ts";
@@ -326,7 +325,6 @@ const CAPABILITY_TABLE_SLUG = "capability-table";
 const CORE_PROCESSOR = new CoreStreamProcessor();
 const streamLog = createLogger("stream-do");
 
-@validateRpc()
 export class StreamDurableObject extends DurableObject<Env> {
   /** WHO THIS DO IS — parsed ONCE from the unforgeable codec name; carries projectId, path
    *  AND its canonical string form (`.name`). A stream is only ever reached `getByName`; an
@@ -370,8 +368,9 @@ export class StreamDurableObject extends DurableObject<Env> {
    *  every enabled facet processor is PUSHED the batch with its scanned-offset-range proof. */
   async append(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
     // THE commit door every path funnels through (public stream/contexts/env.ITX + internal):
-    // an event must carry a non-blank type — the @validateRpc boundary checks the TS type
-    // `string` but not the contract's trim().min(1), so a "" or "   " type would commit typeless.
+    // an event must carry a non-blank type. This runtime guard is now the SOLE enforcement (no
+    // capnweb-validate boundary) — it covers both the missing/non-string case and the contract's
+    // trim().min(1), so a "" or "   " type is rejected loudly instead of committing typeless.
     for (const input of inputs)
       if (typeof input.type !== "string" || input.type.trim() === "")
         throw new Error("append: every event needs a non-empty type");

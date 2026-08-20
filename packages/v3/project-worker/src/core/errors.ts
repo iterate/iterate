@@ -19,8 +19,8 @@ type ErrorCode =
   | "NOT_A_METHOD" // the dotted path's terminal segment is not callable on the target
   | "NO_FACET" // no facet-hosted processor is enabled under that slug
   | "EPHEMERAL_IDEMPOTENCY_KEY"; // ephemeral + idempotencyKey is a contradiction, always rejected
-// (Boundary shape checks throw capnweb-validate's own TypeError with a precise path — that
-// library error IS the validation contract; no code of ours duplicates it.)
+// (There is no separate boundary-validation library: the append door's own runtime guards
+// throw plain Errors; a client is JUST capnweb, so malformed args surface as ordinary errors.)
 
 /** A plain Error carrying `code` (+ optional `data`) as own enumerable properties. */
 export function codedError(code: ErrorCode, message: string, data?: unknown): Error {

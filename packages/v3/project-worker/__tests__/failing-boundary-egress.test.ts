@@ -1,4 +1,4 @@
-// __tests__/failing-boundary-egress.test.ts — BUG HUNT WAVE 3, harness lane: the capnweb-validate
+// __tests__/failing-boundary-egress.test.ts — BUG HUNT WAVE 3, harness lane: the append input
 // BOUNDARY + the egress/secrets paths, against the REAL worker (wrangler createTestHarness —
 // capnweb over WebSocket at /api, local KV + Durable Objects). Every test asserts CORRECT
 // behavior; a `test.fails` documents a genuine, VERIFIED divergence (BUG/EXPECTED/ACTUAL/WHY);
@@ -11,10 +11,11 @@
 //     (failing-appsos-mined.test.ts:90) only exercises the fenced `stream.append` door; this file
 //     proves the SAME ☠ authority loss is still reachable through `itx.contexts.get(path).append`
 //     (own context AND siblings), which reach DO.append directly and bypass the fence.
-//   • THE ENVELOPE BOUNDARY IS TS-TYPE-ONLY — @validateRpc validates the TypeScript type of
-//     StreamEventInput, so it catches TS-type violations (numeric `type`, `ephemeral: false`) but
-//     NOT the zod refinements the schema promises (`type` min-length/trim) nor its `strictObject`
-//     excess-key rejection, and it lets a client STAMP `source` (runner-only provenance).
+//   • THE ENVELOPE BOUNDARY IS A SINGLE RUNTIME GUARD — capnweb-validate was removed (2026-08-20),
+//     so the only append-input check is StreamDurableObject.append's typeless guard (non-string /
+//     blank `type` → loud reject). None of the zod refinements the schema promises (`type`
+//     min-length/trim beyond blank, `ephemeral` literal true, `strictObject` excess-key rejection,
+//     runner-only `source`) are enforced at the door — a runtime StreamEventInput.parse() would.
 //
 // Run: pnpm exec vitest run --project harness __tests__/failing-boundary-egress.test.ts
 
@@ -108,8 +109,9 @@ test("FIXED (defect 46): a capability cannot be pinned unrevocable by squatting 
 test.fails("DO.append rejects a public reserved-namespace idempotencyKey on a SIBLING context too", async () => {
   // BUG: the same missing fence, second angle — `itx.contexts.get('/agents/bot').append(...)`
   //   reaches the SIBLING stream DO's append (env.CONTEXT.getByName(...).append over Workers RPC).
-  //   @validateRpc guards DO.append's TYPES only; the reserved-key check is a runtime string test
-  //   that lives solely in the `stream` built-in, so the sibling append accepts the reserved key.
+  //   DO.append has no input type-check at all (validate removed); the reserved-key check is a
+  //   runtime string test that lives solely in the `stream` built-in, so the sibling append
+  //   accepts the reserved key.
   // EXPECTED: no public append — on any context — may carry a `capability-table/` idempotencyKey.
   // ACTUAL (verified): the event lands on the sibling's log (offset 1, path "/agents/bot"),
   //   pre-poisoning the sibling's future revoke:99 exactly as in the own-context case.
@@ -125,27 +127,28 @@ test.fails("DO.append rejects a public reserved-namespace idempotencyKey on a SI
   expect(err.message).toMatch(/platform-reserved|reserved namespace/i);
 });
 
-// ═══════════════════ 2. THE ENVELOPE BOUNDARY — @validateRpc is TS-type-only ═══════════════════
+// ═══════════════════ 2. THE ENVELOPE BOUNDARY — runtime guard only (validate removed) ═══════════════════
 
-test("PARITY LOCK: @validateRpc rejects TS-TYPE envelope violations (numeric type, ephemeral:false)", async () => {
-  // The boundary DOES fire (even on the built-in `stream` mount's internal DO.append call): a
-  // numeric `type` fails the `string` validator, and `ephemeral: false` fails the `true` literal
-  // union — "capnweb-validate: at StreamDurableObject.append[0]...". This lock frames the two
-  // fails below as a REFINEMENT gap (zod rules the TS type doesn't carry), not a dead boundary.
+test("boundary: the runtime typeless guard still rejects a non-string type; ephemeral:false now commits (no TS-type boundary)", async () => {
+  // capnweb-validate was removed (2026-08-20): there is no TS-type allow-list on the RPC boundary
+  // anymore. What remains is the ONE explicit runtime guard in StreamDurableObject.append — a
+  // non-string / blank `type` is rejected loudly. Everything the TS type used to police coarsely
+  // (ephemeral: literal `true`, etc.) is no longer checked here; an envelope refinement would be a
+  // runtime StreamEventInput.parse() at the door (see the two test.fails below for that consolidation).
   const itx = await harness.itx("prj_be_typed");
-  expect((await rejection(streamAppend(itx, { type: 12345 }))).message).toMatch(
-    /expected string, got number/i,
-  );
-  expect((await rejection(streamAppend(itx, { type: "x", ephemeral: false }))).message).toMatch(
-    /ephemeral|expected union/i,
-  );
+  // a numeric type is still refused — the typeless guard checks typeof, not just emptiness.
+  expect((await rejection(streamAppend(itx, { type: 12345 }))).message).toMatch(/non-empty type/i);
+  // ephemeral: false is NO LONGER a loud error — with no boundary type-check it commits as a
+  // plain (non-ephemeral) durable event. Accepted coarse-grained loss of removing validate.
+  const [committed] = await streamAppend(itx, { type: "eph-false", ephemeral: false });
+  expect(committed.type).toBe("eph-false");
 });
 
 test.fails("stream.append rejects an empty event type (StreamEventInput.type is z.string().trim().min(1))", async () => {
-  // BUG: core/events.ts declares `type: z.string().trim().min(1)`, but @validateRpc validates the
-  //   INFERRED TS type (`string`), and no code path runs `StreamEventInput.parse()` on the append
-  //   hot path (neither built-ins `stream.append` nor DO.append parses). So the `.min(1)`/`.trim()`
-  //   guarantee is lost at the RPC boundary.
+  // BUG: core/events.ts declares `type: z.string().trim().min(1)`, but no code path runs
+  //   `StreamEventInput.parse()` on the append hot path (the runtime guard rejects a fully blank
+  //   type, but the schema's full `.min(1)`/`.trim()` contract — and every other refinement — is
+  //   not enforced at the boundary; capnweb-validate, which policed the coarse TS type, was removed).
   // EXPECTED: `stream.append({ type: "" })` is rejected — an empty/whitespace type is a loud input
   //   error, per the schema the envelope advertises.
   // ACTUAL (verified): the event commits with `type: ""` and is readable back from the log.
@@ -161,8 +164,8 @@ test.fails("stream.append rejects an empty event type (StreamEventInput.type is 
 
 test.fails("stream.append does not let a client STAMP a forged processor provenance (source is runner-only)", async () => {
   // BUG: `source` (StreamEventInput.source — "Provenance: which processor (while processing what)
-  //   appended this. Stamped by the runner.") is a PUBLIC typed field, so @validateRpc admits a
-  //   client-supplied value, and nothing on the append path strips it. The runner overwrites
+  //   appended this. Stamped by the runner.") is a PUBLIC typed field, and nothing on the append
+  //   path strips a client-supplied value (no boundary parse — validate removed). The runner overwrites
   //   `input.source` only for PROCESSOR-emitted events (core/processor.ts:431); a direct client
   //   append has no runner, so the forged provenance is stored verbatim.
   // EXPECTED: a client cannot author `source` — a plain `stream.append` produces an event whose

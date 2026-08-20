@@ -1,11 +1,10 @@
 {
   "name": "project-worker",
-  // The build mechanism (cloudflare-os wiring, verbatim): wrangler's custom-build hook runs the
-  // capnweb-validate CLI, which mirrors src/ into .wrangler/validate with every @validateRpc()
-  // class rewritten to carry generated validators; wrangler then bundles the MIRROR.
-  "main": ".wrangler/validate/src/worker.ts",
+  // The build hook regenerates the bundled processor SDK (src/generated/*) before wrangler
+  // bundles src directly. (capnweb-validate was removed — no mirror, no decorators.)
+  "main": "src/worker.ts",
   "build": {
-    "command": "node build-sdk.mjs && pnpm exec capnweb-validate build --out .wrangler/validate",
+    "command": "node build-sdk.mjs",
     "watch_dir": "src",
   },
   "compatibility_flags": ["allow_irrevocable_stub_storage"],

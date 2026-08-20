@@ -68,22 +68,15 @@ function collector() {
 
 // ─────────────────────────────── EVENT INPUT ENVELOPE ───────────────────────────────
 
-test("ephemeral: false is a LOUD input error, never a silent synonym for durable", async () => {
-  // PARITY LOCK: apps/os pins this on the envelope itself — `ephemeral: z.literal(true)` with
-  //   the note "`ephemeral: false` is a loud input error, not a silent synonym for omitting the
-  //   flag" (packages/iterate/src/processors/schemas.ts, the ephemeral field doc; mirrored
-  //   verbatim in our core/events.ts:71; apps/os proves the envelope-knows-the-key contract in
-  //   stream-processor.test.ts:431 "accepts ephemeral: true …").
-  //   The clean room HONORS it: capnweb-validate on StreamDurableObject.append validates the
-  //   StreamEventInput[] args in-process (the @validateRpc() boundary fires even on the built-in
-  //   `stream` mount's internal append), and the TS type `ephemeral?: true` is a union that
-  //   rejects the boolean `false` — "capnweb-validate: at StreamDurableObject.append[0].ephemeral:
-  //   expected union, got boolean". A run marked this PASS, so it stays a plain regression lock.
-  const itx = await harness.itx("prj_am_ephfalse");
-  await expect(
-    append(itx, { type: "not-really-ephemeral", ephemeral: false, payload: { n: 1 } }),
-  ).rejects.toThrow(/ephemeral/i);
-});
+// WAS a PARITY LOCK (apps/os pins `ephemeral: z.literal(true)` — "`ephemeral: false` is a loud
+// input error, not a silent synonym for omitting the flag"). The clean room enforced it ONLY via
+// capnweb-validate's TS-type boundary, which was removed 2026-08-20. Nothing on the append path now
+// rejects the boolean `false` — it commits as a plain durable event. Restoring the guarantee is a
+// runtime StreamEventInput.parse() at the append door (the same one guard that would also reject an
+// empty type and strip a forged source — see failing-boundary-egress.test.ts).
+test.todo(
+  "ephemeral: false should be a LOUD input error — needs a runtime envelope parse now that capnweb-validate is removed",
+);
 
 // ─────────────────────────── PLATFORM-AUTHORED IDEMPOTENCY KEYS ───────────────────────────
 

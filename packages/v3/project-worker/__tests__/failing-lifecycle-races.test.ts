@@ -190,7 +190,7 @@ test("FIXED (defect 29): every enableProcessor drives the enablement commit into
 test("FIXED (defect 30): a processor mount through the ordinary provide door is HALF-ENABLED — /state lists it, every commit errors, snapshot throws", async () => {
   // BUG: #facetEntries derives enablement purely from mounts at itx.processors.<slug> — which
   //   ANY provide can mint (verified: Itx.provide passes even the UNDECLARED `processor` field
-  //   through capnweb-validate untouched; a raw appended capability-provided event works too).
+  //   untouched — there is no boundary schema; a raw appended capability-provided event works too).
   //   But a facet only functions after enableProcessor's SECOND, non-event-sourced leg:
   //   configure(), which stashes identity in the facet's own kv. provide alone creates the
   //   entry with no configure — a permanently broken enablement.
@@ -306,12 +306,12 @@ test("disable mid-drive: appends survive, no ongoing error storm, re-enable rebu
 
 test("reentrancy characterized: a forwarder delivery targeting itx.stream.append neither deadlocks nor runs away — the delivery call shape is refused and the row halts loudly", async () => {
   // deliverTo PERMITS the spelling (any absent itx expression is a legal target) and the
-  // delivery call is append(eventsArray, range) — whose first arg is an ARRAY, refused by the
-  // validated append ("capnweb-validate: at StreamDurableObject.append[0]: expected object,
-  // got array"). The ladder burns maxAttempts and HALTS with that reason on the audit fact.
-  // Bounded and loud — no deadlock, no runaway loop, no junk rows on the log. (If validation
-  // ever loosens, the re-appended junk would commit typeless and the consumes filter still
-  // terminates the loop — but this pin is the tripwire.)
+  // delivery call is append(eventsArray, range) — whose first arg is an ARRAY. append's runtime
+  // typeless guard refuses it (an array has no string `type` → "append: every event needs a
+  // non-empty type"). The ladder burns maxAttempts and HALTS with that reason on the audit fact.
+  // Bounded and loud — no deadlock, no runaway loop, no junk rows on the log. (This runtime guard
+  // is now the SOLE gate — capnweb-validate, which used to reject the array shape by TS type, was
+  // removed; the guard catches the same case with a different message.)
   const ctx = "prj_lr_reenter";
   const itx = await harness.itx(ctx);
   const ctrl = collector();
@@ -346,7 +346,7 @@ test("reentrancy characterized: a forwarder delivery targeting itx.stream.append
   const halts = events.filter((e) => e.type === HALTED && e.payload?.name === "reenter");
   expect(halts).toHaveLength(1); // exactly one loud audit fact
   expect(halts[0].payload.reason).toMatch(/2 delivery attempts failed/);
-  expect(halts[0].payload.reason).toMatch(/expected object, got array/); // the honest root cause
+  expect(halts[0].payload.reason).toMatch(/non-empty type/); // the honest root cause (typeless guard)
   expect(events.length).toBeLessThan(20); // bounded, whatever branch the platform takes
   await settle(500);
   expect(ctrl.offsets().filter((o) => o === seed.offset)).toHaveLength(1); // seed seen exactly once

@@ -1,6 +1,6 @@
 // __tests__/harness.ts — boots the REAL project-worker under wrangler's createTestHarness (the
 // cloudflare-os integration-tests pattern, adapted): the worker builds through its production
-// build hook (build-sdk + capnweb-validate mirror), runs in local workerd with local KV /
+// build hook (build-sdk), runs in local workerd with local KV /
 // Durable Objects / the Worker Loader, and tests speak to it exactly like production clients —
 // capnweb over WebSocket at /api. One patch: FALLBACK rebinds to this worker's own
 // DummyControlPlane entrypoint (the SOLO topology from wrangler.jsonc's own comment), so the

@@ -16,7 +16,6 @@
   "dependencies": {
     "@v3/shared": "workspace:*",
     "capnweb": "npm:@iterate-com/capnweb@^0.10.0",
-    "capnweb-validate": "0.2.1",
     "zod": "^4.1.5"
   },
   "devDependencies": {
