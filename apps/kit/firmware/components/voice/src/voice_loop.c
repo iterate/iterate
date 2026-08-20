@@ -680,7 +680,9 @@ EXT_RAM_BSS_ATTR static struct {
   const char *pending_button_audit;
   bool dial_buffering;
   /* A push-to-talk dial buffered speech; the OPENING turn must not reset
-   * the queue that holds it. Consumed at turn start, cleared with the call. */
+   * the queue that holds it. SURVIVES a release during the dial — the
+   * accepted call drains and commits it as the first turn. Consumed at
+   * turn start, cleared with the call. */
   bool dial_speech_queued;
   /*
    * A call that vanished WITHOUT its obituary holds the relaunch ladder
@@ -3787,15 +3789,27 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
           runtime.frame_sequence = 0U;
         }
         if (buffering && marks_turns) runtime.dial_speech_queued = true;
-        if (!buffering && runtime.dial_buffering &&
-            !runtime.voicelab.call_active) {
-          /*
-           * Released during the dial: the turn that would have carried this
-           * speech never opened, so it must not prepend itself to whatever
-           * the NEXT press says. Hold through the connect and it is kept.
-           */
-          runtime.dial_speech_queued = false;
-        }
+        /*
+         * RELEASED DURING THE DIAL: THE SPEECH IS KEPT. This used to clear
+         * `dial_speech_queued` on the release edge, on the doctrine that the
+         * turn which would have carried the speech never opened. Reversed
+         * 2026-08-20: from the moment the device starts listening, captured
+         * audio is a promise — press from sleep, say "count to forty",
+         * release, and a call that connects seconds later must answer those
+         * words as its FIRST turn (the host CLI has always behaved this
+         * way, because its dial is warm in a second). The queue holds
+         * exactly the press-to-release speech — capture stops queueing when
+         * `dial_buffering` falls — and the accept-side branch below the
+         * turn-open branch drains it and commits the turn. A NEW press
+         * still starts clean: the buffering rising edge above resets the
+         * queue, so the kept speech can never prepend itself to a later
+         * press's words — it is either carried by the call it dialled, or
+         * replaced at the next press, or dies with the call (CALL_ENDED
+         * clears the flag). The mint side keeps its own guard — a ptt-start
+         * older than 30 s never mints — but the launch ladder re-presses
+         * every 3 s, so a long dial still connects and still gets this
+         * speech.
+         */
         runtime.dial_buffering = buffering;
       }
       if (!marks_turns) {
@@ -3872,6 +3886,37 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
           runtime.view.listening = (true);
           runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_LISTENING;
           runtime.view.status = ("listening — release to send");
+        }
+      }
+      /*
+       * THE BUTTON CAME UP WHILE THE CALL WAS STILL DIALLING, and the words
+       * are already in the queue. The moment the accepted call can carry
+       * them, open the turn they were always going to be: publish the turn
+       * marker, mark the turn open, and let the release machinery directly
+       * below — which sees `talking && !wants_talk` on this very pass —
+       * flush the queue and send the commit exactly as it does for a live
+       * release. The marker mirrors the held-through-connect path, which
+       * also publishes a fresh ptt-start after CALL_ACCEPTED, so the far
+       * side sees the same wire shape either way. `dial_speech_queued` is
+       * consumed only once the marker is actually on the wire, so a full
+       * outbox retries next pass instead of losing the words. The launch
+       * ladder's 3 s re-press appends more durable ptt-starts while
+       * dialling, but they all land BEFORE call_active — this branch runs
+       * once per accepted call and owes exactly one commit.
+       */
+      if (marks_turns && !wants_talk && !runtime.talking &&
+          runtime.voicelab.call_active && runtime.dial_speech_queued &&
+          outbox_free >= 3U) {
+        /* A turn opening is a barge like any other; on a call this fresh the
+         * abandon is usually a no-op, but a greeting's first frames must not
+         * play under the person's own turn. */
+        (void)abandon_speaker_audio();
+        if (publish_turn_marker(ITERATE_KIT_VOICELAB_TURN_START)) {
+          runtime.dial_speech_queued = false;
+          runtime.talking = true;
+          runtime.turn_started_ms = now;
+          runtime.flushing_turn = false;
+          ESP_LOGI(tag, "turn start (dial speech, button already up)");
         }
       }
       /*

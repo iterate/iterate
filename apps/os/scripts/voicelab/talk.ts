@@ -159,6 +159,17 @@ export interface TalkOptions extends Partial<VoicelabConnectOptions> {
    * '{"type":"server_vad","threshold":0.5,"silence_duration_ms":300}'.
    */
   turnDetection?: string;
+  /**
+   * Deliberately change an existing stream's turn posture (clientTakesTurns).
+   *
+   * Without this, a reinstall whose posture differs from the stream's current
+   * certificate REFUSES. A posture flip is not a tweak: an open-mic board on a
+   * clientTakesTurns stream is never told a turn ended and goes silent, and a
+   * button board on an open-mic stream double-commits every turn. One silent
+   * flip — a `talk --setup-only` without `--open-mic` onto a board stream —
+   * took two boards down for hours on 2026-08-20.
+   */
+  flipTurnPosture?: boolean;
   /** Classify the answer into mouth shapes for a face-rendering board. */
   visemes?: boolean;
   /**
@@ -255,6 +266,10 @@ export async function talk(options: TalkOptions = {}) {
   if (!streamPath.startsWith("/")) {
     throw new Error(`stream path must be absolute; received ${JSON.stringify(streamPath)}`);
   }
+  await refuseSilentPostureFlip(itx, streamPath, {
+    intendedClientTakesTurns: options.openMic !== true,
+    flipTurnPosture: options.flipTurnPosture === true,
+  });
   const setup = await withRpcResult(
     voiceAgent.setupVoiceAgent({
       streamPath,
@@ -458,6 +473,92 @@ function reportSpeakerContinuity(reportJson: string): void {
   } else {
     console.log(`\n    ✗ this call lost audio. ${reportJson}`);
   }
+}
+
+/** The slice of a `voice-agent/configured` event this guard reads. */
+interface ConfiguredEventLike {
+  offset: number;
+  payload?: { clientTakesTurns?: boolean };
+}
+
+/**
+ * THE TURN POSTURE IS PART OF THE HARDWARE, NOT OF THE RUN.
+ *
+ * `clientTakesTurns` on the certificate must match what the physical client
+ * does: an open-mic board on a clientTakesTurns stream is never told its turn
+ * ended and the call goes silent; a push-to-talk client on an open-mic stream
+ * double-commits. Setup re-appends `configured` on every run, so a reinstall
+ * that forgets `--open-mic` silently flips a board stream's posture — which
+ * muted two boards for hours on 2026-08-20. So: if the stream already has a
+ * certificate and the posture would CHANGE, refuse loudly, naming both
+ * postures and the stream, unless `--flip-turn-posture` says it is on
+ * purpose. A stream with no `configured` yet is a fresh install and passes.
+ */
+export async function refuseSilentPostureFlip(
+  itx: unknown,
+  streamPath: string,
+  args: { intendedClientTakesTurns: boolean; flipTurnPosture: boolean },
+): Promise<void> {
+  const streams = (
+    itx as {
+      streams: {
+        get(path: string): {
+          getEvents(input: {
+            afterOffset: number;
+            eventTypes: string[];
+            limit: number;
+          }): Promise<ConfiguredEventLike[] | null>;
+        };
+      };
+    }
+  ).streams;
+  const stream = streams.get(streamPath);
+  let latest: ConfiguredEventLike | null = null;
+  try {
+    /* Filtered to `configured` only, so even a long-lived board stream is a
+     * page or two — and paged anyway, because "surely under 500" is how
+     * guards rot. */
+    let afterOffset = 0;
+    for (;;) {
+      const page =
+        (await stream.getEvents({
+          afterOffset,
+          eventTypes: ["events.iterate.com/voice-agent/configured"],
+          limit: 500,
+        })) ?? [];
+      if (page.length === 0) break;
+      latest = page[page.length - 1]!;
+      afterOffset = latest.offset;
+      if (page.length < 500) break;
+    }
+  } finally {
+    disposeIgnoredRpcResult(stream);
+  }
+  if (latest === null) return; /* fresh stream: nothing to preserve */
+  const current = latest.payload?.clientTakesTurns ?? false;
+  if (current === args.intendedClientTakesTurns) return;
+  if (args.flipTurnPosture) {
+    console.log(
+      `flipping turn posture of ${streamPath}: ${postureName(current)} -> ` +
+        `${postureName(args.intendedClientTakesTurns)} (--flip-turn-posture)`,
+    );
+    return;
+  }
+  throw new Error(
+    `refusing to reinstall ${streamPath}: its current certificate says ` +
+      `${postureName(current)}, and this install would write ` +
+      `${postureName(args.intendedClientTakesTurns)}. A silent posture flip mutes the ` +
+      `client that lives on this stream. Either match the stream (` +
+      `${current ? "drop" : "pass"} --open-mic), or pass --flip-turn-posture to ` +
+      `change the posture on purpose.`,
+  );
+}
+
+/** One posture, named the way the certificate and the failure both read. */
+function postureName(clientTakesTurns: boolean): string {
+  return clientTakesTurns
+    ? "clientTakesTurns=true (push-to-talk: the client segments turns)"
+    : "clientTakesTurns=false (open mic: server VAD owns the turns)";
 }
 
 /** Wait until the guest answers, retrying a cold build; re-throw the last error verbatim. */

@@ -21,7 +21,7 @@ static void the_mode_table_matches_the_provisioned_streams(void) {
   assert(
       strcmp(
           stackchan_mode_stream_path(STACKCHAN_MODE_OPENAI),
-          "/agents/voice/stackchan") == 0);
+          "/agents/voice/stackchan-2") == 0);
   assert(stackchan_mode_stream_path(STACKCHAN_MODE_COUNT) == NULL);
 }
 

@@ -17,7 +17,14 @@
  */
 
 enum {
-  FAKE_SENT_CAPACITY = 32,
+  /*
+   * 96, raised from 32: a scenario that drains a 20-frame dial buffer sends
+   * five mic appends plus markers on top of the ~28 messages a mounted
+   * session has already recorded, and a recorder that silently refuses the
+   * overflow (CAPNWEB_E_TRANSPORT below) makes the loop under test look
+   * like it stopped sending.
+   */
+  FAKE_SENT_CAPACITY = 96,
   FAKE_MESSAGE_CAPACITY = 4096,
 };
 

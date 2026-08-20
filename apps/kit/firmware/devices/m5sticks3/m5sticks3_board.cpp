@@ -117,11 +117,13 @@ struct FaceState {
 
 FaceState face;
 
-/* 15 Hz, matching the CoreS3, because the mouths are compared side by side
- * on one desk: at 12 the same envelope read as a worse robot. The audio
- * instruments (spkStarvedMs, micDropped) are the check that the extra SPI
- * stays affordable; they read zero at 12 and must stay zero here. */
-constexpr int64_t FACE_FRAME_INTERVAL_US = 66000;
+/* 30 Hz experiment (was 66000 = 15 Hz, matching the CoreS3): the mouths are
+ * compared side by side on one desk and smoother wins if the hardware
+ * sustains it. The audio instruments (spkStarvedMs, micDropped) are the
+ * check that the extra SPI stays affordable; they read zero at 15 and must
+ * stay zero here, along with render_failures — if any of them move, back
+ * off to 50000 (20 Hz) and re-measure. */
+constexpr int64_t FACE_FRAME_INTERVAL_US = 33000;
 
 bool face_init(void) {
   if (!face_avatar_registry_init(&face.registry)) return false;

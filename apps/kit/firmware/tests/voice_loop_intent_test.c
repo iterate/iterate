@@ -54,19 +54,30 @@ static const struct iterate_kit_audio_codec_properties codec_properties = {
   .output_gain_ceiling_centi_db = 0,
 };
 
+/*
+ * How many 20 ms frames the "microphone" still owes. Zero — the default —
+ * is a silent board, which is what every scenario but the dial-speech one
+ * wants; see speak_frames.
+ */
+static size_t capture_frames_pending;
+
 static enum iterate_kit_status codec_read(
     void *context,
     int16_t *capture,
     int16_t *reference,
     size_t capacity_samples,
     size_t *sample_count) {
+  size_t index;
   (void)context;
-  (void)capture;
   (void)reference;
-  (void)capacity_samples;
-  (void)sample_count;
-  /* Silent by default; a capture test would give the board its own op. */
-  return ITERATE_KIT_UNAVAILABLE;
+  if (capture_frames_pending == 0U) {
+    /* Silent by default; the dial-speech test arms frames explicitly. */
+    return ITERATE_KIT_UNAVAILABLE;
+  }
+  --capture_frames_pending;
+  for (index = 0U; index < capacity_samples; ++index) capture[index] = 1000;
+  *sample_count = capacity_samples;
+  return ITERATE_KIT_OK;
 }
 
 static enum iterate_kit_status codec_write(
@@ -266,6 +277,63 @@ static void run_ms(uint32_t milliseconds) {
   for (elapsed = 0U; elapsed < milliseconds; elapsed += 50U) step();
 }
 
+/** Say something: `frames` 20 ms frames leave the codec and enter the loop. */
+static void speak_frames(size_t frames) {
+  capture_frames_pending = frames;
+  while (capture_frames_pending > 0U) iterate_kit_voice_loop_capture_step();
+}
+
+/** Did the device put `needle` on the wire anywhere after message `from`? */
+static bool sent_after_contains(size_t from, const char *needle) {
+  size_t index;
+  for (index = from; index < iterate_kit_fake_platform_sent_count(); ++index) {
+    if (strstr(iterate_kit_fake_platform_sent(index), needle) != NULL) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/*
+ * Deliver the call's acceptance, exactly as the stream delivers it — through
+ * the `processEventBatch` callback the loop itself exported, whose id is read
+ * out of the message the device SENT rather than assumed. The same shape
+ * `voice_loop_answer_clock_test.c` delivers, for the same reason.
+ */
+static void deliver_accepted(void) {
+  static char message[512];
+  struct iterate_kit_itx_connection *connection =
+      iterate_kit_fake_platform_connection();
+  const char *found = iterate_kit_fake_platform_find_sent("processEventBatch");
+  const char *field;
+  const char *marker;
+  long export_id;
+  assert(connection != NULL);
+  assert(found != NULL);
+  field = strstr(found, "\"processEventBatch\":");
+  assert(field != NULL);
+  marker = strstr(field, "[\"export\",");
+  assert(marker != NULL);
+  export_id = strtol(marker + strlen("[\"export\","), NULL, 10);
+  (void)snprintf(
+      message,
+      sizeof(message),
+      "[\"push\",[\"pipeline\",%ld,[],[{\"events\":[["
+      "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\","
+      "\"offset\":100,"
+      "\"payload\":{\"conversationId\":\"convdial\",\"handshakeTookMs\":2000}}"
+      "]],\"scannedThroughOffset\":100,\"state\":null}]]]",
+      export_id);
+  deliver(connection, message);
+  {
+    char release[64];
+    (void)snprintf(
+        release, sizeof(release), "[\"release\",%lld,1]",
+        (long long)next_inbound_call_id++);
+    deliver(connection, release);
+  }
+}
+
 /* --- the tests ------------------------------------------------------------ */
 
 /*
@@ -359,6 +427,53 @@ static void a_press_into_a_live_hop_asks_once(void) {
 }
 
 /*
+ * SPEECH RELEASED INTO THE DIAL IS THE FIRST TURN, NOT NOTHING.
+ *
+ * Press from sleep, say "count to forty", let go — and the call connects
+ * seconds later. The words were captured from the moment the device started
+ * listening, so the accepted call must carry them as its FIRST turn: drain
+ * the queue, commit, get an answer. The old doctrine cleared the dial buffer
+ * on a release the call had not caught up with yet, and a person who spoke
+ * into the dial and let go got a call that opened onto silence. Reverting
+ * the release-during-dial reversal in voice_loop.c fails the last three
+ * assertions here.
+ */
+static void released_dial_speech_becomes_the_first_turn(void) {
+  size_t after_release;
+  size_t after_accept;
+  quiescent();
+  /* Wait out the ladder, so the press below is a fresh dial. */
+  run_ms(ITERATE_KIT_LAUNCH_PLACE_RETRY_MS + 500U);
+
+  /* Press from sleep and speak into the dial: 400 ms of words. */
+  remote_call("pushToTalk", "start");
+  step();
+  speak_frames(20U);
+
+  /* Let go before anything answered. */
+  remote_call("pushToTalk", "stop");
+  step();
+  after_release = iterate_kit_fake_platform_sent_count();
+
+  /* Seconds pass with no call: the words are HELD — not sent, not dropped,
+   * and above all not committed into a call that does not exist. */
+  run_ms(2000U);
+  assert(!sent_after_contains(after_release, "mic-frame"));
+  assert(!sent_after_contains(after_release, "ptt-end"));
+
+  /* The call connects late, with the button long since up. */
+  after_accept = iterate_kit_fake_platform_sent_count();
+  deliver_accepted();
+  run_ms(1000U);
+
+  /* The buffered words opened a turn, drained into the call, and the turn
+   * committed — the provider now owes an answer to what was said. */
+  assert(sent_after_contains(after_accept, "ptt-start"));
+  assert(sent_after_contains(after_accept, "mic-frame"));
+  assert(sent_after_contains(after_accept, "ptt-end"));
+}
+
+/*
  * A PRESS INTO A HALF-OPEN SOCKET IS ANSWERED IN ~3 s, NOT 10.
  *
  * The hop stops answering: TCP still accepts every byte, the transport stays
@@ -410,6 +525,8 @@ int main(void) {
   /* From here on the device is mounted, so the launch ladder can run. */
   pump();
   a_press_into_a_live_hop_asks_once();
+  pump();
+  released_dial_speech_becomes_the_first_turn();
   pump();
   a_press_into_a_dead_hop_replaces_the_socket();
   return 0;
