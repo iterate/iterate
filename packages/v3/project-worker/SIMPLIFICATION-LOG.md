@@ -74,3 +74,22 @@ arg-callback bridge (browser/full-duplex only), celld, row chunking.
   **280 passed / 38 xf / 2 skip / 31 todo**; perf held (58824 ev/s, p50 9ms / p95 13ms, 50×) and
   the one-directional census is IDENTICAL (`{in:push 100, in:pull 100, out:resolve 100,
 in:release 100}` — zero outbound initiations).
+- **C-D (partial) — `print()` not string interpolation** in `#parkAsTarget`: the parked-connection
+  target is now `print(["itx","connections",["get",connectionId]])`, which quote-escapes the id
+  (injection-safe for non-numeric / off-platform ids). Canonical form identical for today's numeric
+  ids. Typecheck + connections/dotted/perf green.
+- **HONEST FINDINGS as I went to execute the rest** (recorded so we don't relitigate): several
+  roadmap items are entangled with _deliberate_ design, so they are NOT the clean wins they seemed:
+  - **Unguessable connectionId — SKIPPED.** It fights a documented doctrine: `connectionId =
+String(connectedAtOffset)` because "the log names every connection; no synthetic ids"
+    (`itx-connection-directory.ts:5-6`, Kenton-aligned). The guessable offset is defense-in-depth
+    only (the scope is the gate, not the id); overriding the doctrine for it is a net loss.
+  - **Typed Expression AST — a WASH, deferred.** The nested-array literals (`["itx","facets",
+["get",slug],["snapshot"]]`, 14 sites) are _compact_; `{root,steps}` objects are verbose at
+    construction. It's clarity-at-consumption vs verbosity-at-construction, plus match/walk hot-path
+    risk. Not a clear muddiness win; only worth it with a clean builder, and even then marginal.
+  - **Delete `boundaryArgs` — deferred.** It handles a real subtle case (`itx.notify(x)` — calling
+    a mounted capability directly with args, which `prove_slack` exercises). Deletable only by
+    unifying it with `runtimeArgs`; risks routing regression for −1 concept.
+    Remaining CLEAN win: **B2 — the `StreamSource` decouple** (removes the processor↔own-log coupling,
+    fights no doctrine, delivers the off-platform capability). Doing that next.

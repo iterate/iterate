@@ -23,7 +23,7 @@
 import { RpcTarget } from "capnweb";
 import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
 import type { DeliveryPolicy } from "./events.ts";
-import type { Expression } from "./expression.ts";
+import { print, type Expression } from "./expression.ts";
 import { disposeStub, openStubPagerWebSocket } from "./hibernatable-rpc-stub.ts";
 import { installPrototypeInvokeCapabilityFallback } from "./dotted-path-proxy.ts";
 import { canonicalName, DurableObjectNameCodec, normalizePath } from "./durable-object-names.ts";
@@ -340,7 +340,11 @@ class Itx extends RpcTarget {
       this.#waitUntil,
     );
     this.#relays.add(relay);
-    return { connectionId, relay, target: `itx.connections.get('${connectionId}')` };
+    // Build the target via print() of a structured expression, NOT string interpolation: print()
+    // quote-escapes the id, so this stays injection-safe when a connectionId is not a plain numeric
+    // offset (off-platform / future ids). Canonical form is identical for today's numeric ids.
+    const target = print(["itx", "connections", ["get", connectionId]]);
+    return { connectionId, relay, target };
   }
 
   /** Recovery from a forwarder HALT (or an operator cursor seek) — absent targets only;
