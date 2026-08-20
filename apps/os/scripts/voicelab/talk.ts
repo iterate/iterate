@@ -173,9 +173,12 @@ export interface TalkOptions extends Partial<VoicelabConnectOptions> {
   /** Classify the answer into mouth shapes for a face-rendering board. */
   visemes?: boolean;
   /**
-   * Thinking fast and slow: arm `note_to_self`, which mints a colleague
-   * agent on a fresh `/agents/voice-notes/<conversationId>` stream per
-   * conversation and reads its chat replies back into the call.
+   * Thinking fast and slow: `note_to_self` mints a colleague agent on a
+   * fresh `/agents/voice-notes/<conversationId>` stream per conversation
+   * and reads its chat replies back into the call.
+   *
+   * ON BY DEFAULT — every stream is born with its colleague; pass
+   * `--colleague false` to install one without.
    */
   colleague?: boolean;
   /**
@@ -287,7 +290,7 @@ export async function talk(options: TalkOptions = {}) {
        */
       clientTakesTurns: options.openMic !== true,
       ...(options.visemes === true && { visemes: true }),
-      ...(options.colleague === true && { colleague: true }),
+      colleague: options.colleague !== false,
       ...(options.turnDetection !== undefined && {
         turnDetection: JSON.parse(options.turnDetection) as Record<string, unknown> & {
           type: string;

@@ -672,8 +672,13 @@ const VoiceState = z.object({
    * fresh `/agents/voice-notes/<conversationId>` stream, one per
    * conversation, whose chat replies are read back into the call as
    * bracketed notes. The v1 back-office framing, on v2 plumbing.
+   *
+   * ON BY DEFAULT: a voice that cannot leave itself a note is a mouth with
+   * no desk, and every stream that shipped without the flag turned out to
+   * be a stream somebody expected to have it. Refusing takes an explicit
+   * `colleague: false` on the certificate.
    */
-  colleague: z.boolean().default(false),
+  colleague: z.boolean().default(true),
   /** Tools the model may call — see {@link VoiceTool}. */
   tools: z.array(VoiceTool).default([]),
   call: z
@@ -741,7 +746,11 @@ export const VoiceAgentContract = defineProcessorContract({
   /* 9.0.0: thinking fast and slow returns — `colleague` on the certificate
    * arms `note_to_self`, which mints a fresh agent stream per conversation
    * and reads its chat replies back into the call. Clean break as ever. */
-  version: "9.0.0",
+  /* 10.0.0: the colleague is the default — an absent `colleague` on
+   * `configured` now means ON. Every stream reinstalled without the flag
+   * turned out to be one somebody expected to have it; opting out takes an
+   * explicit `colleague: false`. Clean break as ever. */
+  version: "10.0.0",
   description: "Runs a voice call in the stream's own Durable Object, one flush watermark deep.",
   stateSchema: VoiceState,
   events: {
@@ -1472,7 +1481,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
           clientTakesTurns: event.payload.clientTakesTurns ?? false,
           turnDetection: event.payload.turnDetection ?? null,
           visemes: event.payload.visemes ?? false,
-          colleague: event.payload.colleague ?? false,
+          colleague: event.payload.colleague ?? true,
           tools: event.payload.tools ?? [],
         };
 
@@ -3603,6 +3612,10 @@ export interface SetupVoiceAgentOptions {
   turnDetection?: Record<string, unknown> & { type: string };
   /** Classify the answer into mouth shapes for a face-rendering client. */
   visemes?: boolean;
+  /** `note_to_self` mints a colleague agent per conversation and reads its
+   * chat replies back into the call. ON unless explicitly false — every
+   * stream is born with its colleague (contract 10.0.0). */
+  colleague?: boolean;
   /** Tools the model may call: name/description/parameters go to the
    * provider; the itx expression is the run. No expression = hang_up. */
   tools?: z.input<typeof VoiceTool>[];

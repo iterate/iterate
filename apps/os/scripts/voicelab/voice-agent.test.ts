@@ -799,15 +799,43 @@ describe("tools on the birth certificate", () => {
       };
     };
     expect(update.session.tool_choice).toBe("auto");
-    expect(update.session.tools!.map((tool) => tool.name)).toEqual(["hang_up", "add_note"]);
+    /* `note_to_self` rides along uninvited: the colleague is on by default
+     * (contract 10.0.0), so a certificate that names tools declares them
+     * PLUS the note. */
+    expect(update.session.tools!.map((tool) => tool.name)).toEqual([
+      "hang_up",
+      "add_note",
+      "note_to_self",
+    ]);
     /* A no-argument tool still declares an argument shape — the provider
      * requires one. */
     expect(update.session.tools![0]!.parameters).toEqual({ type: "object", properties: {} });
   });
 
-  it("declares nothing when the certificate has no tools", async () => {
+  it("a bare certificate still declares its colleague — the default is ON", async () => {
     const h = makeHarness();
     await callIsLive(h);
+    const update = h.provider.sentOfType("session.update")[0] as {
+      session: { tool_choice?: string; tools?: { name: string }[] };
+    };
+    expect(update.session.tools!.map((tool) => tool.name)).toEqual(["note_to_self"]);
+    expect(update.session.tool_choice).toBe("auto");
+  });
+
+  it("declares nothing when the certificate has no tools and refuses its colleague", async () => {
+    const h = makeHarness();
+    await h.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: {
+        providerBaseUrl: "https://fake.provider.test/v1/realtime",
+        clientTakesTurns: CLIENT_TAKES_TURNS,
+        colleague: false,
+      },
+    });
+    await h.append(micFrame(1));
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
     const update = h.provider.sentOfType("session.update")[0] as {
       session: Record<string, unknown>;
     };
