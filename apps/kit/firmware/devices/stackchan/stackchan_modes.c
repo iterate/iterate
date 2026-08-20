@@ -10,7 +10,7 @@
  */
 static const char *const mode_streams[STACKCHAN_MODE_COUNT] = {
   [STACKCHAN_MODE_GROK] = "/agents/voice/stackchan-grok",
-  [STACKCHAN_MODE_OPENAI] = "/agents/voice/stackchan",
+  [STACKCHAN_MODE_OPENAI] = "/agents/voice/stackchan-2",
 };
 
 const char *stackchan_mode_stream_path(uint8_t mode) {

@@ -940,7 +940,7 @@ static const struct iterate_kit_board_ops ops = {
 };
 
 static const struct iterate_kit_board_facts facts = {
-  .stream_path = "/agents/voice/stackchan",
+  .stream_path = "/agents/voice/stackchan-2",
   .client_path = "/clients/stackchan",
   .conversation_id = "scdev",
   .greeting = "Hi, I am your Iterate device. What can I do for you?",
