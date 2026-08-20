@@ -81,7 +81,12 @@ export async function ensureProjectExists(options: VoicelabConnectOptions): Prom
   using handle = session.projects.get(options.project);
   try {
     await handle.identity();
-  } catch {
+  } catch (error) {
+    /* Only the one refusal that MEANS absence mints a project. A transient
+     * directory, auth, or RPC failure on a live slug must surface as
+     * itself — not masquerade as first-run setup and try to create over a
+     * project that exists. */
+    if (!String(error).includes("does not exist")) throw error;
     console.log(`project ${options.project} does not exist here yet — creating it`);
     await handle.create({});
     console.log(`project ${options.project} created`);
