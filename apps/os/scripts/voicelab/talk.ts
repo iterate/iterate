@@ -29,7 +29,12 @@ import type { DynamicWorkerCapability } from "iterate/sdk";
 import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 
 import type VoiceAgentEntrypoint from "../../../../configs/voice-agent/voice-agent.ts";
-import { connectProject, resolveVoicelabBaseUrl, type VoicelabConnectOptions } from "./connect.ts";
+import {
+  connectProject,
+  ensureProjectExists,
+  resolveVoicelabBaseUrl,
+  type VoicelabConnectOptions,
+} from "./connect.ts";
 import { installVoiceAgent } from "./deploy.ts";
 import { discardRpcResult, withRpcResult } from "./rpc-ownership.ts";
 import { voiceAgentEntrypointRef } from "./voice-agent-ref.ts";
@@ -42,13 +47,18 @@ import { voiceAgentEntrypointRef } from "./voice-agent-ref.ts";
  * and by the time the stream was opened to find out why, `preview_3` answered
  * 503 to everything. Preview environments hold a roughly three-hour lease and
  * are then reclaimed — so the evidence for a bug found on one has a shelf life
- * shorter than the bug report. `voice-test` on production does not evaporate,
- * and a slug is something you can recognise in a prompt.
+ * shorter than the bug report. A production project does not evaporate, and a
+ * slug is something you can recognise in a prompt.
  *
- * `--project` and ITERATE_PROJECT still point this anywhere; the default is
- * about where an unattended answer lands, which should be the boring place.
+ * `iterate` because voice belongs on the project people already live in, not
+ * in a lab annex: a bare run should land where its colleague notes, its
+ * tools and its transcripts are part of the same working world. A missing
+ * slug is created on first run (ensureProjectExists), so the default works
+ * on a fresh environment too.
+ *
+ * `--project` and ITERATE_PROJECT still point this anywhere.
  */
-const DEFAULT_PROJECT = "voice-test";
+const DEFAULT_PROJECT = "iterate";
 const DEFAULT_MINUTES = 30;
 const XAI_SECRET = "/secrets/xai";
 /**
@@ -125,9 +135,10 @@ export interface TalkOptions extends Partial<VoicelabConnectOptions> {
   pretendSpeaker?: string;
   /** What the model is told it is. Defaults to a short assistant prompt. */
   instructions?: string;
-  /** Dial this instead of x.ai. Carries no credential. */
+  /** Dial this instead of the provider. Carries no credential. */
   providerBaseUrl?: string;
-  /** Which realtime voice provider the stream's birth certificate names. */
+  /** Which realtime voice provider the stream's birth certificate names.
+   * OPENAI unless you say otherwise — the fleet's default provider. */
   provider?: "grok" | "openai";
   /** Model and voice overrides for that provider. */
   providerModel?: string;
@@ -136,7 +147,8 @@ export interface TalkOptions extends Partial<VoicelabConnectOptions> {
   reinstall?: boolean;
   /**
    * Offer the model a hang_up tool: say goodbye, end the call — the baseline
-   * proof the tool lane works end to end.
+   * proof the tool lane works end to end. ON BY DEFAULT — every stream is
+   * born able to end its own call; pass `--hang-up false` to withhold it.
    */
   hangUp?: boolean;
   /**
@@ -230,6 +242,9 @@ export async function talk(options: TalkOptions = {}) {
 
   const connection = { baseUrl: options.baseUrl, project };
   const baseUrl = resolveVoicelabBaseUrl(connection);
+  /* First run on a fresh environment: the default slug is a project that
+   * does not exist yet, and a bare `talk` provisions its own home. */
+  await ensureProjectExists(connection);
   using itx = await connectProject(connection);
 
   /* Install the guest BEFORE calling into it: `setupVoiceAgent` lives inside
@@ -248,9 +263,9 @@ export async function talk(options: TalkOptions = {}) {
    * per-provider (secretForHost), and a baseUrl seam needs none at all. */
   if (options.providerBaseUrl === undefined) {
     console.log(
-      options.provider === "openai"
-        ? `openai secret ${await ensureOpenaiSecret(itx)}`
-        : `xai secret ${await ensureXaiSecret(itx)}`,
+      options.provider === "grok"
+        ? `xai secret ${await ensureXaiSecret(itx)}`
+        : `openai secret ${await ensureOpenaiSecret(itx)}`,
     );
   }
 
@@ -298,7 +313,7 @@ export async function talk(options: TalkOptions = {}) {
       }),
       ...(() => {
         const tools = [
-          ...(options.hangUp === true
+          ...(options.hangUp !== false
             ? [
                 {
                   name: "hang_up",

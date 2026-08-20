@@ -65,6 +65,35 @@ export async function connectProject(
 }
 
 /**
+ * Make the named project exist before anything scopes into it.
+ *
+ * A bare `talk` run's first act on a fresh environment: the default slug
+ * does not resolve yet, and "get set up on a new project" is the first-run
+ * experience, not an error. Addressing an unknown slug is side-effect free,
+ * so probing with identity() risks nothing; create() waits for the
+ * bootstrap saga, so the caller may connect the moment this returns.
+ */
+export async function ensureProjectExists(options: VoicelabConnectOptions): Promise<void> {
+  const baseUrl = resolveVoicelabBaseUrl(options);
+  const secret = process.env.APP_CONFIG_ADMIN_API_SECRET?.trim() ?? "";
+  if (!secret) throw new Error("APP_CONFIG_ADMIN_API_SECRET is required.");
+  using session = await connectItxReady({ auth: { type: "admin-secret", secret }, baseUrl });
+  using handle = session.projects.get(options.project);
+  try {
+    await handle.identity();
+  } catch (error) {
+    /* Only the one refusal that MEANS absence mints a project. A transient
+     * directory, auth, or RPC failure on a live slug must surface as
+     * itself — not masquerade as first-run setup and try to create over a
+     * project that exists. */
+    if (!String(error).includes("does not exist")) throw error;
+    console.log(`project ${options.project} does not exist here yet — creating it`);
+    await handle.create({});
+    console.log(`project ${options.project} created`);
+  }
+}
+
+/**
  * Where a board lives now that devices connect as CLIENTS.
  *
  * Firmware calls `projects.connect` with this path and its capabilities in one

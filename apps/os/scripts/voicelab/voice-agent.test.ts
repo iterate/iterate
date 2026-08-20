@@ -309,7 +309,11 @@ function micFrame(deviceMicFrameSeq: number) {
 async function callIsLive(h: Harness, clientTakesTurns = GROK_LISTENS): Promise<string> {
   await h.append({
     type: "events.iterate.com/voice-agent/configured",
-    payload: { providerBaseUrl: "https://fake.provider.test/v1/realtime", clientTakesTurns },
+    payload: {
+      providerBaseUrl: "https://fake.provider.test/v1/realtime",
+      provider: "grok",
+      clientTakesTurns,
+    },
   });
   await h.append(micFrame(1));
   await h.settle();
@@ -470,7 +474,7 @@ describe("opening a call", () => {
     const h = makeHarness();
     await h.append({
       type: "events.iterate.com/voice-agent/configured",
-      payload: { providerBaseUrl: "https://fake.provider.test/v1/realtime" },
+      payload: { providerBaseUrl: "https://fake.provider.test/v1/realtime", provider: "grok" },
     });
     const pcmBytes = 320;
     const devicePcm = base64(new Uint8Array(pcmBytes));
@@ -685,6 +689,7 @@ describe("the openai provider", () => {
       type: "events.iterate.com/voice-agent/configured",
       payload: {
         providerBaseUrl: "https://fake.provider.test/v1/realtime",
+        provider: "grok",
         clientTakesTurns: true,
         turnDetection: { type: "server_vad", threshold: 0.2 },
       },
@@ -761,6 +766,7 @@ describe("tools on the birth certificate", () => {
       type: "events.iterate.com/voice-agent/configured",
       payload: {
         providerBaseUrl: "https://fake.provider.test/v1/realtime",
+        provider: "grok",
         clientTakesTurns: CLIENT_TAKES_TURNS,
         tools,
       },
@@ -828,6 +834,7 @@ describe("tools on the birth certificate", () => {
       type: "events.iterate.com/voice-agent/configured",
       payload: {
         providerBaseUrl: "https://fake.provider.test/v1/realtime",
+        provider: "grok",
         clientTakesTurns: CLIENT_TAKES_TURNS,
         colleague: false,
       },
@@ -1002,6 +1009,7 @@ describe("tools on the birth certificate", () => {
       type: "events.iterate.com/voice-agent/configured",
       payload: {
         providerBaseUrl: "https://fake.provider.test/v1/realtime",
+        provider: "grok",
         clientTakesTurns: CLIENT_TAKES_TURNS,
         colleague: true,
       },
@@ -1677,6 +1685,7 @@ describe("the face", () => {
       type: "events.iterate.com/voice-agent/configured",
       payload: {
         providerBaseUrl: "https://fake.provider.test/v1/realtime",
+        provider: "grok",
         clientTakesTurns: CLIENT_TAKES_TURNS,
         visemes: true,
       },
@@ -1710,6 +1719,7 @@ describe("the face", () => {
       type: "events.iterate.com/voice-agent/configured",
       payload: {
         providerBaseUrl: "https://fake.provider.test/v1/realtime",
+        provider: "grok",
         clientTakesTurns: CLIENT_TAKES_TURNS,
         visemes: true,
       },

@@ -51,6 +51,15 @@ const ECHO_PATH = "version-echo.js";
  * a scheduler yield; marker write plus abort plus storage sync plus
  * `this.ctx.abort()`); neither worked, and both were reverted rather than
  * shipped on hope.
+ *
+ * AND ONE FALSE ALARM, so the next reader checks before celebrating: on
+ * 2026-08-20 this pin flipped red in a preview run and the `.fails` was
+ * briefly deleted — but that run's probe showed the after-commit answer on a
+ * NEW bootId. The facet had coincidentally recycled between the commit and
+ * the poll, and a restarted facet legitimately builds the new source; the
+ * very next run was back to 16 same-boot polls on the old key. Before
+ * believing this bug fixed, check the probe: the claim is only about a
+ * SAME-BOOT facet, and only same-boot evidence refutes it.
  */
 test.fails(
   "a userspace facet rebuilds on a source commit and only on a source commit",
