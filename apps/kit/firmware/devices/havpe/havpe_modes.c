@@ -150,6 +150,9 @@ void havpe_session_step(
    * an end to forget its sound.
    */
   out->end_chime = session->was_in_session && state == HAVPE_SESSION_IDLE;
+  if (!session->was_in_session && state != HAVPE_SESSION_IDLE) {
+    session->session_since_ms = poll->now_ms;
+  }
   session->was_in_session = state != HAVPE_SESSION_IDLE;
   /*
    * The talk LEVEL is reported only where the table says a hold means talk.
@@ -180,15 +183,23 @@ void havpe_session_step(
       /*
        * ENDING IS DELIBERATE, AND THE GESTURE DIFFERS BY POSTURE. In
        * push-to-talk a hold is a turn, so the tap is the end — unambiguous
-       * there. In open mic the tap turned out to be a hair trigger: any
-       * reflexive press the instant a call opened said "call ended" to a
-       * person who meant nothing by it — and so did the first hold cut,
-       * because an ordinary press crosses the 250 ms talk threshold without
-       * meaning anything either. So open mic ends on the DELIBERATE hold:
-       * the 800 ms latch the button fires while still pressed. A bare tap
-       * mid-call is nothing at all.
+       * there. In open mic the tap was once a hair trigger: any reflexive
+       * press the instant a call opened said "call ended" to a person who
+       * meant nothing by it. Hold-only ending fixed that and created the
+       * opposite complaint — the tap is the gesture a person actually tries
+       * on a one-button device, and a call it cannot end reads as a broken
+       * button. So open mic takes the tap AFTER a short grace (the hair
+       * trigger lived entirely in the first moments) and keeps the 800 ms
+       * hold as the always-works gesture.
        */
-      if (poll->push_to_talk ? poll->tap : poll->end_hold) out->end_call = true;
+      if (poll->push_to_talk
+              ? poll->tap
+              : (poll->end_hold ||
+                 (poll->tap &&
+                  poll->now_ms - session->session_since_ms >=
+                      (uint64_t)HAVPE_SESSION_TAP_END_GRACE_MS))) {
+        out->end_call = true;
+      }
       out->talk_held = poll->push_to_talk && poll->held;
       break;
     case HAVPE_SESSION_ENDING:

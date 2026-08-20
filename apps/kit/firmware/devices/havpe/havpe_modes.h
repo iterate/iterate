@@ -175,17 +175,26 @@ enum havpe_session_state havpe_session_classify(
 struct havpe_session {
   bool was_held;
   bool was_in_session;
+  /** When the session left IDLE, for the open-mic tap-end grace. */
+  uint64_t session_since_ms;
 };
+
+/** Open mic ignores a tap this soon after the session opened: the reflexive
+ * press right behind a wake used to say "call ended" to a person who meant
+ * nothing by it. Past the grace, the tap is the end — the gesture a person
+ * actually tries on a one-button device. */
+#define HAVPE_SESSION_TAP_END_GRACE_MS 2000
 
 /** One control poll's worth of facts, gestures already classified. */
 struct havpe_session_poll {
   bool tap;          /**< A completed short tap (edge). */
   bool held;         /**< The hold level, raw; the machine applies posture. */
-  /** The 800 ms deliberate-end latch (edge); open mic's hang-up gesture. */
+  /** The 800 ms deliberate-end latch (edge); still an open-mic hang-up. */
   bool end_hold;
   bool wants_call;   /**< The loop's intent, mirrored by the last present. */
   bool call_active;  /**< The loop's call fact, likewise. */
   bool push_to_talk; /**< The adopted mode's posture. */
+  uint64_t now_ms;   /**< Monotonic, for the tap-end grace. */
 };
 
 /** What this pass must do about it. Edges, except the `talk_held` level. */

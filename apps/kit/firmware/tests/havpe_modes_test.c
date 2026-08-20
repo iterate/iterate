@@ -154,8 +154,9 @@ static void settling_in_place_still_answers(void) {
 /* --- the session grammar --------------------------------------------------- */
 
 /* One poll of the machine, spelled as the facts a pass carries. */
-static struct havpe_session_actions drive(
+static struct havpe_session_actions drive_at(
     struct havpe_session *session,
+    uint64_t now_ms,
     bool tap, bool held, bool wants_call, bool call_active, bool ptt) {
   struct havpe_session_actions actions;
   const struct havpe_session_poll poll = {
@@ -164,9 +165,16 @@ static struct havpe_session_actions drive(
     .wants_call = wants_call,
     .call_active = call_active,
     .push_to_talk = ptt,
+    .now_ms = now_ms,
   };
   havpe_session_step(session, &poll, &actions);
   return actions;
+}
+
+static struct havpe_session_actions drive(
+    struct havpe_session *session,
+    bool tap, bool held, bool wants_call, bool call_active, bool ptt) {
+  return drive_at(session, 0U, tap, held, wants_call, call_active, ptt);
 }
 
 static bool quiet(const struct havpe_session_actions *actions) {
@@ -191,19 +199,35 @@ static void a_tap_wakes_an_open_mic_idle_and_a_hold_ends_it(void) {
   assert(actions.start_call && actions.wake_chime);
   assert(!actions.end_call && !actions.mode_flash && !actions.talk_held);
   /*
-   * THE MID-CALL TAP IS NOTHING: any reflexive press the instant a call
-   * opened used to say "call ended" to a person who meant nothing by it.
+   * THE REFLEXIVE TAP IS STILL NOTHING: a press inside the grace window —
+   * the instant the call opened — used to say "call ended" to a person who
+   * meant nothing by it.
    */
-  actions = drive(&session, true, false, true, false, false);
+  actions = drive_at(&session, 500U, true, false, true, false, false);
   assert(!actions.end_call && !actions.start_call && !actions.wake_chime);
-  actions = drive(&session, true, false, true, true, false);
+  actions = drive_at(&session, 900U, true, false, true, true, false);
   assert(!actions.end_call && !actions.start_call && !actions.wake_chime);
   /* An ordinary press crossing the 250 ms talk threshold is still nothing:
    * the hold level alone must not hang up. */
-  actions = drive(&session, false, true, true, true, false);
+  actions = drive_at(&session, 1200U, false, true, true, true, false);
   assert(!actions.end_call && !actions.talk_held && !actions.start_call);
-  /* Ending is deliberate: the 800 ms latch, fired while still pressed. */
+  /*
+   * PAST THE GRACE, THE TAP IS THE END — the gesture a person actually
+   * tries on a one-button device. (The 800 ms hold still works too; a
+   * fresh session below proves it ends even inside the grace.)
+   */
+  /* The grace runs from the poll that first showed the session (t=500). */
+  actions = drive_at(
+      &session, 500U + (uint64_t)HAVPE_SESSION_TAP_END_GRACE_MS + 100U,
+      true, false, true, true, false);
+  assert(actions.end_call && !actions.start_call && !actions.wake_chime);
+  /* The deliberate 800 ms hold still ends a session, even inside the
+   * grace: a fresh wake, then the latch. */
   {
+    struct havpe_session fresh = {0};
+    struct havpe_session_actions a2 =
+        drive_at(&fresh, 10U, true, false, false, false, false);
+    assert(a2.start_call);
     const struct havpe_session_poll poll = {
       .tap = false,
       .held = true,
@@ -211,10 +235,11 @@ static void a_tap_wakes_an_open_mic_idle_and_a_hold_ends_it(void) {
       .wants_call = true,
       .call_active = true,
       .push_to_talk = false,
+      .now_ms = 900U,
     };
-    havpe_session_step(&session, &poll, &actions);
+    havpe_session_step(&fresh, &poll, &a2);
+    assert(a2.end_call && !a2.start_call);
   }
-  assert(actions.end_call && !actions.start_call && !actions.wake_chime);
   /* ...and the return to idle says "call ended", exactly once. */
   actions = drive(&session, false, false, false, false, false);
   assert(actions.end_chime && !actions.start_call && !actions.wake_chime);

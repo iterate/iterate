@@ -230,6 +230,7 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
       .wants_call = mode_state.wants_call,
       .call_active = mode_state.call_active,
       .push_to_talk = havpe_mode_push_to_talk(mode_state.mode),
+      .now_ms = (uint64_t)(esp_timer_get_time() / 1000),
     };
     havpe_session_step(&mode_state.session, &gestures, &actions);
     out->start_call = actions.start_call;
