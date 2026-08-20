@@ -26,7 +26,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
 import { defineProcessorContract, type StreamEvent } from "./core/events.ts";
-import { toExpression } from "./core/expression.ts";
 import {
   StreamProcessor,
   type ProcessorSnapshot,
@@ -52,11 +51,6 @@ export type FacetIdentity = {
   export?: string;
   /** Per-instance configuration from the enablement mount, handed to the constructor. */
   props?: Record<string, unknown>;
-  /** The STREAM this processor reduces, as a sturdy-ref itx-expression (`itx.contexts.get('/pi')`,
-   *  a live-provided stream capability, …). Absent = the own parent log (the default). Present =
-   *  a FOREIGN source: the processor reduces another context's (or an off-platform box's) stream,
-   *  reading it by restoring the ref through the parent's `invoke`. See `#p()`. */
-  sourceStream?: string;
 };
 
 // ── the demo built-in facet processor: tally events by type ──
@@ -177,25 +171,10 @@ export class ProcessorFacet extends DurableObject<Env> {
     if (!make) throw new Error(`ProcessorFacet: no built-in processor "${identity.slug}"`);
     // The back-channel: the parent BY NAME, re-resolved per call — never a retained stub.
     const parent = () => this.env.CONTEXT.getByName(identity.parentName);
-    // The SOURCE the processor reduces. Default = the own parent log. A FOREIGN source
-    // (identity.sourceStream) reduces ANOTHER context's / an off-platform box's stream: read/append
-    // by restoring the ref through the parent's `invoke` (contexts.get('/x').read — the existing
-    // cross-DO read; zero new transport). Reads/appends stay off the parent's own log entirely.
-    const sourceExpr = identity.sourceStream ? toExpression(identity.sourceStream) : undefined;
-    const stream: ProcessorStream = sourceExpr
-      ? {
-          read: (after = 0, limit = 500) =>
-            parent().invoke([...sourceExpr, ["read", after, limit]]) as Promise<{
-              events: StreamEvent[];
-              scannedThroughOffset: number;
-            }>,
-          append: (...events) =>
-            parent().invoke([...sourceExpr, ["append", ...events]]) as Promise<StreamEvent[]>,
-        }
-      : {
-          append: (...events) => parent().append(...events),
-          read: (after, limit) => parent().read(after, limit),
-        };
+    const stream: ProcessorStream = {
+      append: (...events) => parent().append(...events),
+      read: (after, limit) => parent().read(after, limit),
+    };
     const storage: ProcessorStorage = {
       get: <T>(k: string) => this.ctx.storage.kv.get(k) as T | undefined,
       put: (k: string, v: unknown) => this.ctx.storage.kv.put(k, v),

@@ -262,14 +262,11 @@ class Itx extends RpcTarget {
   /** Enable a facet-hosted processor on this context's stream (the facet spine). With a `ref`
    *  the processor is USERSPACE code loaded through the Worker Loader (duck-typed contract:
    *  configure / deliver / snapshot). */
-  /** With `options.sourceStream` (a sturdy-ref itx-expression), the processor reduces a FOREIGN
-   *  stream — another context's, or an off-platform box's — instead of this context's own log. */
   enableProcessor(
     slug: string,
     ref?: { source: string | Expression; export: string },
-    options?: { props?: Record<string, unknown>; sourceStream?: string | Expression },
   ): Promise<{ ok: true }> {
-    return this.#host.enableProcessor(slug, ref, options?.props, options?.sourceStream);
+    return this.#host.enableProcessor(slug, ref);
   }
 
   disableProcessor(slug: string): Promise<{ ok: true }> {

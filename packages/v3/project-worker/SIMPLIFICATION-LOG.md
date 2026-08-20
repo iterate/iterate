@@ -116,33 +116,53 @@ muddiness the pass could cleanly remove has been removed. The **off-platform str
 well-scoped ADDITIVE feature (foreign `ProcessorStream` + enablement wiring + cross-DO push), sitting
 on a codebase that (pleasingly) is already factored for it — the next focused build, not a cleanup.
 
-## Off-platform feature — a processor that reduces a FOREIGN stream (DONE, end-to-end)
+## UNDO — the foreign-source/`sourceStream` feature is reverted (2026-08-20)
 
-Built the additive feature (Jonas: "crack on"). A facet processor can now reduce a stream that lives
-ELSEWHERE — another context, or an off-platform box — keeping only the derived state, never the raw
-firehose. Reuses existing machinery (the injected `ProcessorStream` + the cross-DO read); the only
-new transport is _none_.
+Jonas: "this is dumb — which bits can we undo? I'm happy to not have any streams on my Raspberry Pi
+for now if we can reduce complexity." Done. Reverted both feature commits (`b70284800` the feature,
+`c3745018a` the live proof) and deleted the BYO-stream exploration artifacts
+(`proofs/prove_byo_stream.mjs`, `__tests__/failing-byo-context.test.ts`). `sourceStream` is gone from
+the whole tree — `Itx.enableProcessor`, `ProcessorPolicy`, the capability-provided event schema,
+`FacetIdentity`, `ProcessorFacet.#p()`, and the pump skip all back to their pre-feature shape.
+Typecheck clean; suite **279 passed / 37 xf / 2 skip / 31 todo** (the 38→37 xf is the removed
+`failing-byo-context` expected-fail — the feature's own paths are simply gone). Zero regression.
 
-- **`sourceStream` (a sturdy-ref itx-expression) threaded** through: `Itx.enableProcessor(slug, ref,
-{ sourceStream })` → `ProcessorPolicy.sourceStream` (canonicalized via `print()`, not interpolated)
-  → the capability-provided event schema (added `sourceStream` — it was being STRIPPED by the strict
-  `z.object`, the bug that made the first run reduce the OWN log) → `FacetProcessorEntry` → the
-  `FacetIdentity` at configure → `ProcessorFacet.#p()`.
-- **`ProcessorFacet.#p()`**: when `identity.sourceStream` is set, the `ProcessorStream` reads/appends
-  the FOREIGN stream by RESTORING the ref through `parent().invoke([...sourceExpr, ["read"/"append",…]])`
-  — i.e. `contexts.get('/x').read(...)`, the cross-DO read that already existed. Absent = the own log.
-- **The commit pump SKIPS a foreign-source facet** (`if (sourceStream) continue`): its events come
-  from elsewhere, so pushing THIS DO's commits at it would fold the wrong events. It catches up from
-  the foreign stream on snapshot/wake instead.
-- **Legible end-to-end test** `__tests__/foreign-source-processor.test.ts`: appends sensor events to a
-  SIBLING context `/sensors` (the same `contexts.get` addressing a Pi would use), enables `tally` on
-  the ROOT pointed at `/sensors`, and proves the tally counts the SIBLING's events (`{motion:2,temp:1}`)
-  while the root's OWN log stays empty of them. The raw snapshot shows offset 3 = the foreign stream's
-  offset. Same mechanism for a real Pi: point `sourceStream` at `itx.homeassistant` (a provided live
-  stream) instead of `contexts.get('/sensors')`.
-- **PROVEN LIVE** (`proofs/prove_foreign_source.mjs`, version ca0d2fbf): a box provides `itx.sensors` (a real Stream), a CF context enables `tally` with `sourceStream: "itx.sensors"`, and the tally reduces the box's events (`{motion:2,temp:1}`) while the firehose stays on the box — the edge log only holds the derived tally. Live perf held (5450 ev/s, p50 209ms) + slack ALL PASS.
-- **Follow-on (flagged):** today the foreign-source processor is PULL (catches up on snapshot). Real-
-  time delivery = the foreign stream PUSHES new events to it (a subscription from the foreign stream
-  targeting the processor's wake), reusing the connected/forwarder lane. Additive, not yet wired.
-- No regression: typecheck clean; full suite **281 passed / 38 xf / 2 skip / 31 todo**; perf held
-  (66667 ev/s, p50 7ms / p95 11ms, 50×); one-directional wire census IDENTICAL.
+## The REAL finding behind "enableProcessor is dumb" (the layering already exists)
+
+Jonas' target layering — _a context with capabilities; run arbitrary code in it; that code is a
+stateless worker, or a durable class under a runner, or a facet; addressed via `itx.load(ref)` where
+ref is inline/repo/callback + cache-key + stateful-vs-stateless_ — **already exists** as
+`itx.workers.get({ source, className? })` (`built-ins.ts:100-133`):
+
+- ONE loader, `confinedWorker(env, {kind, owner, contentHash}, …)` (`core/agent-runtime.ts:75-100`),
+  keyed on DEPLOY (not a per-invocation nonce — the $7.8k apps/os gotcha, avoided here by design).
+- `source` is an itx-`Expression` that evaluates to module code — so "inline code" (a literal),
+  "point at repo" (an expr that calls a fetch cap), "callback" (an expr resolved through `invoke`)
+  are all just different `source` expressions. The polymorphism Jonas wants is the Expression
+  indirection, already there.
+- `className` ABSENT → stateless confined worker (`run(...args)`/`fetch`, kind `code`).
+- `className` PRESENT → the class hosted as a FACET of this stream (kind `stateful`), the "durable
+  object under a runner" case.
+
+So `itx.load` ≈ `itx.workers.get`. The naming differs; the shape is exactly Jonas' vision.
+
+**Where enableProcessor is genuinely the odd one out** (Jonas is right):
+
+1. It is ALREADY event-sourced sugar. `enableProcessor(slug, ref, props)` (`stream-durable-object.ts:899`)
+   just calls `capabilityTableProcessor().provide({ path:'itx.processors.<slug>',
+target:"itx.facets.get('<slug>')", processor:{source,export,props} })` — i.e. it APPENDS A MOUNT
+   EVENT and warms a snapshot. "We'd normally just append events that mean the processor runs in a
+   facet" — that is literally what it does.
+2. But it duplicates the load path instead of reusing it. A userspace processor loads through a
+   SEPARATE loader kind `procfacet` (`:864`) with a SEPARATE ref shape `{source, export}`, while a
+   stateful worker loads through kind `stateful` (`:987`) with ref `{source, className}` — **same
+   `confinedWorker` + `versionedFacet`, two names for "load a class as a facet."** The only real
+   distinguisher is: a processor is DRIVEN BY THE COMMIT PUMP (a reduce) and registers a mount at
+   `itx.processors.<slug>`; a stateful worker is called directly.
+
+**The clean collapse (proposed, not yet done):** unify `{source, export}` and `{source, className}`
+into one ref, merge loader kinds `procfacet`→`stateful`, and make "is a processor" = a fact in the
+log ("drive this facet with commits") rather than a separate code path. Then `enableProcessor`
+becomes either thin sugar over `workers.get({source, className}) + append(drive-fact)`, or nothing at
+all. Awaiting Jonas' steer on naming (`itx.load` vs keep `workers.get`) and whether the sugar survives
+before touching the loader kinds / pump.
