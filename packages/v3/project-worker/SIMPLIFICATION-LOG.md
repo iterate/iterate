@@ -201,4 +201,34 @@ Concrete evidence this removed real inconsistency: the live proofs already used 
 
 No regression: typecheck clean; suite **279 passed / 37 xf / 2 skip / 31 todo** (identical to the
 post-undo baseline — the userspace-processor path is Worker-Loader-only, so it's the live proofs, not
-the harness, that exercise the rename end to end). Live proof next.
+the harness, that exercise the rename end to end).
+
+### Live proof (deploy `c4bd6cff`) — the rename works end to end, no regression
+
+Deployed and ran the proofs that exercise the `className` rename through the real Worker Loader:
+
+- **`prove_userfacet.mjs` — ALL PASS.** A userspace processor enabled with `{ source, className:
+"UserTally" }` loads through the loader and reduces side-by-side with the built-in `tally`. This is
+  the full thread proven live: `enableProcessor` → provide (event schema `className`) →
+  `#facetEntries` (`policy.className`) → configure (`FacetIdentity.className`) → runner
+  (`identity.className` export lookup).
+- **`prove_ephemeral.mjs` — ALL PASS.** Second userspace path (`chunky`, `className: "Chunky"`).
+- **`prove_ephemeralflood.mjs` — ALL PASS, perf HELD.** 2000-event flood: p50 **213ms** / p95 365ms,
+  **5168 ev/s**, **40 invocations for 2000 events** (50× batching), zero dup / zero loss / zero pulls.
+  Baseline was 5479 ev/s / p50 203ms / 40 invocations — within noise. No throughput/latency/frames
+  regression.
+- **`prove_slack.mjs` — ALL PASS.** The mounted-capability direct-call lane (dotted spelling, alias
+  mount `itx.notify`, `boundaryArgs`, revoke/default-deny) intact — delivery direction unchanged.
+
+## Where this landed (honest summary of the collapse)
+
+Jonas' "enableProcessor is dumb" was right, and the fix is now in: enabling a processor is spelled and
+documented as **loading a class as a facet (the same `{source, className}` ref `itx.workers.get`
+takes) + appending the one mount the commit pump drives** — no separate "enablement" vocabulary, one
+ref word across the whole surface. What I deliberately did NOT do, with evidence: merge the loader
+kinds. They are not redundant (different module sets: stateless-no-SDK / SDK+runner-adapter /
+raw-DO-direct) and the kind is a cacheKey **authority-boundary** namespace with an OPEN collision
+defect on the `stateful` lane (`wave2-sweep.failing.test.ts`). Reducing that concept would mean first
+fixing a security defect (escape/length-prefix the owner seam) — a separate, security-touching effort
+outside "reduce complexity." The clean, safe simplification has been made; the rest is honestly
+documented, not papered over.
