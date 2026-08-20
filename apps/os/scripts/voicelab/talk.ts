@@ -47,13 +47,18 @@ import { voiceAgentEntrypointRef } from "./voice-agent-ref.ts";
  * and by the time the stream was opened to find out why, `preview_3` answered
  * 503 to everything. Preview environments hold a roughly three-hour lease and
  * are then reclaimed — so the evidence for a bug found on one has a shelf life
- * shorter than the bug report. `voice-test` on production does not evaporate,
- * and a slug is something you can recognise in a prompt.
+ * shorter than the bug report. A production project does not evaporate, and a
+ * slug is something you can recognise in a prompt.
  *
- * `--project` and ITERATE_PROJECT still point this anywhere; the default is
- * about where an unattended answer lands, which should be the boring place.
+ * `iterate` because voice belongs on the project people already live in, not
+ * in a lab annex: a bare run should land where its colleague notes, its
+ * tools and its transcripts are part of the same working world. A missing
+ * slug is created on first run (ensureProjectExists), so the default works
+ * on a fresh environment too.
+ *
+ * `--project` and ITERATE_PROJECT still point this anywhere.
  */
-const DEFAULT_PROJECT = "voice-test";
+const DEFAULT_PROJECT = "iterate";
 const DEFAULT_MINUTES = 30;
 const XAI_SECRET = "/secrets/xai";
 /**
