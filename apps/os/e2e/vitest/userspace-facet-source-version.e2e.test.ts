@@ -30,19 +30,38 @@ const PROBE_PATH = "version-probe.js";
 const ECHO_PATH = "version-echo.js";
 
 /*
- * This stood as `test.fails` — the running-facet-never-rebuilds pin — from
- * the day it was written until 2026-08-20, when the alert it carried fired:
- * the preview run for PR #2509 saw a running facet pick up a source commit
- * on its FIRST post-commit poll (new build key, new revision, new boot id),
- * exactly the behaviour two shipped-and-reverted fixes never achieved. The
- * healing arrived from the platform underneath (`ctx.facets` abort/reuse
- * semantics — the reproduction was 5/5 against workerd's old behaviour, and
- * nothing in this repo changed between the failing run and the passing one),
- * so per this pin's own doctrine the `.fails` is deleted rather than the
- * assertion weakened. If this test starts failing again, the platform took
- * the fix back — treat it as an incident, not a flake.
+ * DELIBERATELY `test.fails`, in the sense `guarantees-not-given.test.ts` uses
+ * it: the second half of this contract is BROKEN today, so the test passes
+ * while the bug exists and starts failing the moment somebody fixes it. That
+ * is the alert to delete `.fails`, not a reason to weaken the assertion.
+ *
+ * What is broken, reproduced 5/5 against a real deployment: a RUNNING
+ * userspace facet never picks up a source commit. `resolveWorkerSource` sees
+ * the new revision immediately — a stateless echo worker on the same repo
+ * moves build keys at once — while the facet answers 15-172 consecutive
+ * deliveries over 45s from the same boot id, on the same old key, running the
+ * old code. One `stream.kill()` and it comes back rebuilt.
+ *
+ * `ctx.facets.get` reuses a running facet and ignores the startup class, and
+ * `ctx.facets.abort` does not make it let go within the parent's incarnation.
+ * For a stream that never hibernates — and an open outbound WebSocket blocks
+ * hibernation, which is exactly what a live voice call holds — "the life of
+ * the incarnation" is indefinite, so a config-repo commit silently does
+ * nothing. Two fixes were deployed and measured against this test (abort plus
+ * a scheduler yield; marker write plus abort plus storage sync plus
+ * `this.ctx.abort()`); neither worked, and both were reverted rather than
+ * shipped on hope.
+ *
+ * AND ONE FALSE ALARM, so the next reader checks before celebrating: on
+ * 2026-08-20 this pin flipped red in a preview run and the `.fails` was
+ * briefly deleted — but that run's probe showed the after-commit answer on a
+ * NEW bootId. The facet had coincidentally recycled between the commit and
+ * the poll, and a restarted facet legitimately builds the new source; the
+ * very next run was back to 16 same-boot polls on the old key. Before
+ * believing this bug fixed, check the probe: the claim is only about a
+ * SAME-BOOT facet, and only same-boot evidence refutes it.
  */
-test(
+test.fails(
   "a userspace facet rebuilds on a source commit and only on a source commit",
   // Ceiling for two cold facet builds plus four ping round-trips across two
   // kills. The expected run is ~40-90s.
