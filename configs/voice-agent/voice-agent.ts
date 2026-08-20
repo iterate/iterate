@@ -1022,6 +1022,14 @@ interface Answer {
    * where the answer is always knowable.
    */
   endsWhenQueueDrains: boolean;
+  /**
+   * Facet clock at this answer's `response.created` — 0 until one arrives.
+   * What the button arm compares a press's `createdAt` against: an
+   * interruption is a press stamped AFTER the answer it means to stop
+   * began, and everything earlier is the dial's own opening retry echoing
+   * back through the delivery lane (see the ptt-start barge guard).
+   */
+  startedAtFacetMs: number;
 }
 
 /**
@@ -1045,6 +1053,7 @@ const freshAnswer = (): Answer => ({
   transcript: [],
   phase: "settled",
   endsWhenQueueDrains: false,
+  startedAtFacetMs: 0,
 });
 
 /**
@@ -1737,7 +1746,30 @@ export class VoiceAgentProcessor extends StreamProcessor<
           /* No dial means nothing playing and nothing to cancel: a press on
            * a revived incarnation that has not re-dialled yet changes
            * nothing until the caught-up pass opens the connection. */
-          if (dial !== null) {
+          /* AND NOT THE DIAL'S OWN ECHO. The device re-presses every 3s
+           * while it still wants the call (the durable-press retry that
+           * survives a cold Durable Object), and those presses are stamped
+           * BEFORE any answer existed. The delivery lane hands them over
+           * seconds late — measured on the HA Voice PE: every long answer
+           * died at "1, 2," on a bare clear with no provider event in
+           * sight, because the call's own opening retry landed here and
+           * barged the answer it had minted, `response.cancel` and all. An
+           * interruption is a press stamped AFTER the answer it means to
+           * stop began — every observed retry predates its answer's
+           * `response.created` by the handshake it was still retrying
+           * (400ms at the tightest, seconds normally). The 250ms guard
+           * band absorbs stream-vs-facet wall-clock skew without eating a
+           * press stamped at the answer's own tick, and a press with no
+           * readable stamp or no dated answer stays an interruption,
+           * because a human's press must never be the one that gets
+           * dropped. */
+          const pressedAtStreamMs = Date.parse(event.createdAt);
+          const answerStartedAtFacetMs = dial?.answer.startedAtFacetMs ?? 0;
+          const pressIsOpeningEcho =
+            Number.isFinite(pressedAtStreamMs) &&
+            answerStartedAtFacetMs > 0 &&
+            pressedAtStreamMs < answerStartedAtFacetMs - 250;
+          if (dial !== null && !pressIsOpeningEcho) {
             /* Heard-ms is read BEFORE the barge zeroes the pacer's schedule.
              * (A `spkBufferedMs` device stamp was read here as the preferred
              * source — the device is the authority on what it played, and the
@@ -2258,6 +2290,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
             }
             dial.answer = freshAnswer();
             dial.answer.phase = "streaming";
+            dial.answer.startedAtFacetMs = receivedAtFacetMs;
             /* A new answer is a new signal; without this, the filter's
              * held tail of a CANCELLED answer would smear its first
              * milliseconds. */

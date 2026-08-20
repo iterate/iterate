@@ -1442,6 +1442,37 @@ describe("a flush names a sequence number", () => {
   });
 
   /*
+   * THE DIAL'S OWN ECHO IS NOT AN INTERRUPTION. The device re-presses every
+   * 3s while it still wants the call, and the delivery lane can hand one of
+   * those presses to the facet SECONDS later — mid-answer. Measured on the
+   * HA Voice PE (2026-08-20): every long answer died at "1, 2," on a bare
+   * clear with no provider event in sight, because the call's own opening
+   * retry arrived late and barged the answer it had minted, cancel and all.
+   * A press stamped before the answer began must barge nothing.
+   */
+  it("the dial's own opening retry, delivered mid-answer, barges nothing", async () => {
+    const h = makeHarness();
+    await callIsLive(h, CLIENT_TAKES_TURNS);
+    /* The want-retry: committed (and stamped) now, delivered only when the
+     * runner next drives — which this test arranges to be mid-answer. */
+    await h.stream.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    /* The answer begins two virtual seconds after that stamp. */
+    h.clock.now += 2_000;
+    h.provider.responseCreated();
+    h.provider.answerAudio(8_000);
+    /* Driving playout is what delivers the stale press — mid-answer. */
+    await playOutEverything(h, 600);
+    const deliveredBefore = speakerMsDelivered(h);
+    expect(deliveredBefore).toBeGreaterThan(0);
+    await h.settle();
+    await playOutEverything(h, 1_000);
+    /* No barge: no bare clear frame, no response.cancel, audio still moving. */
+    expect(speakerClears(h)).toHaveLength(0);
+    expect(h.provider.sentOfType("response.cancel")).toHaveLength(0);
+    expect(speakerMsDelivered(h)).toBeGreaterThan(deliveredBefore);
+  });
+
+  /*
    * THE HALF THE QUEUE-DROP CANNOT DO. Emptying the queue kills what already
    * arrived; a provider that streams near real time (gpt-realtime) has barely
    * anything queued and keeps generating — measured 2026-08-18, "count to a
