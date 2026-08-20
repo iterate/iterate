@@ -81,22 +81,31 @@ const provision = await bridgeItx.provideCapability({
 const clientSession = newWebSocketRpcSession(`wss://${BASE}/api?ctx=${CTX}`);
 const itx = await clientSession.authenticate().get();
 
-// 1. the dotted SDK surface, replayed end to end (deep path: slack → chat → postMessage)
-const posted = await itx.invokeCapability({
-  path: ["slack", "chat", "postMessage"],
-  args: [{ channel: "#general", text: "hello from itx" }],
-});
+// 1. THE HEADLINE (this file's line-5 promise): the NATURAL DOTTED spelling every client writes
+//    — plain property access on the capnweb stub — replayed end to end (slack → chat →
+//    postMessage). This is the prototype-hop dotted surface (core/dotted-path-proxy.ts): unknown
+//    segments accumulate into ONE invokeCapability dispatch. No client SDK, just capnweb.
+const posted = await itx.slack.chat.postMessage({ channel: "#general", text: "hello from itx" });
 check(
   posted?.ok === true && posted?.ts === "1755.000100" && posted?.channel === "#general",
-  "itx.slack.chat.postMessage replays onto the SDK and answers",
+  "itx.slack.chat.postMessage(...) — the NATURAL DOTTED spelling — replays onto the SDK",
   JSON.stringify(posted),
 );
 check(
   sdkCalls.some(([m, o]) => m === "chat.postMessage" && o.text === "hello from itx"),
-  "the bridge-side SDK instance received the exact call",
-  JSON.stringify(sdkCalls[0]),
+  "the bridge-side SDK instance received the exact dotted call",
+  JSON.stringify(sdkCalls.at(-1)),
 );
-
+// 1b. the SAME call via the explicit door (the desugared form the dotted spelling compiles to)
+const postedExplicit = await itx.invokeCapability({
+  path: ["slack", "chat", "postMessage"],
+  args: [{ channel: "#general", text: "via explicit door" }],
+});
+check(
+  postedExplicit?.ok === true && postedExplicit?.channel === "#general",
+  "itx.invokeCapability({path,args}) — the explicit door — answers identically",
+  JSON.stringify(postedExplicit),
+);
 // 2. the same thing through the GENERIC expression door (the string half)
 const listed = await itx.invoke(`itx.slack.conversations.list({ limit: 10 })`);
 check(
