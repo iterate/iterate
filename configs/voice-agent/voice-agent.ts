@@ -616,7 +616,7 @@ const VoiceState = z.object({
   /** Dial this instead of x.ai. Test seam; carries no credential. */
   providerBaseUrl: z.string().nullable().default(null),
   /** Which realtime voice provider this stream's calls dial. */
-  provider: z.enum(["grok", "openai"]).default("grok"),
+  provider: z.enum(["grok", "openai"]).default("openai"),
   /** Model and voice overrides; null takes the provider's default. */
   providerModel: z.string().nullable().default(null),
   providerVoice: z.string().nullable().default(null),
@@ -750,7 +750,11 @@ export const VoiceAgentContract = defineProcessorContract({
    * `configured` now means ON. Every stream reinstalled without the flag
    * turned out to be one somebody expected to have it; opting out takes an
    * explicit `colleague: false`. Clean break as ever. */
-  version: "10.0.0",
+  /* 11.0.0: openai is the default provider — an absent `provider` on
+   * `configured` now means openai. Grok's realtime lane has been down for
+   * days and every stream anyone actually talks to names openai; the
+   * default should be the provider that answers. Clean break as ever. */
+  version: "11.0.0",
   description: "Runs a voice call in the stream's own Durable Object, one flush watermark deep.",
   stateSchema: VoiceState,
   events: {
@@ -1483,7 +1487,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
         return {
           ...state,
           providerBaseUrl: event.payload.providerBaseUrl ?? null,
-          provider: event.payload.provider ?? "grok",
+          provider: event.payload.provider ?? "openai",
           providerModel: event.payload.providerModel ?? null,
           providerVoice: event.payload.providerVoice ?? null,
           instructions: event.payload.instructions ?? "",
@@ -3697,7 +3701,7 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
      * providerBaseUrl seam resolves to no secret and gets no gate, matching
      * "a test seam gets no credential". */
     const dialTarget = new URL(
-      options.providerBaseUrl ?? PROVIDERS[options.provider ?? "grok"].url,
+      options.providerBaseUrl ?? PROVIDERS[options.provider ?? "openai"].url,
     );
     const secretPath = secretForHost(dialTarget.hostname);
     if (secretPath !== null) {

@@ -29,7 +29,12 @@ import type { DynamicWorkerCapability } from "iterate/sdk";
 import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 
 import type VoiceAgentEntrypoint from "../../../../configs/voice-agent/voice-agent.ts";
-import { connectProject, resolveVoicelabBaseUrl, type VoicelabConnectOptions } from "./connect.ts";
+import {
+  connectProject,
+  ensureProjectExists,
+  resolveVoicelabBaseUrl,
+  type VoicelabConnectOptions,
+} from "./connect.ts";
 import { installVoiceAgent } from "./deploy.ts";
 import { discardRpcResult, withRpcResult } from "./rpc-ownership.ts";
 import { voiceAgentEntrypointRef } from "./voice-agent-ref.ts";
@@ -125,9 +130,10 @@ export interface TalkOptions extends Partial<VoicelabConnectOptions> {
   pretendSpeaker?: string;
   /** What the model is told it is. Defaults to a short assistant prompt. */
   instructions?: string;
-  /** Dial this instead of x.ai. Carries no credential. */
+  /** Dial this instead of the provider. Carries no credential. */
   providerBaseUrl?: string;
-  /** Which realtime voice provider the stream's birth certificate names. */
+  /** Which realtime voice provider the stream's birth certificate names.
+   * OPENAI unless you say otherwise — the fleet's default provider. */
   provider?: "grok" | "openai";
   /** Model and voice overrides for that provider. */
   providerModel?: string;
@@ -136,7 +142,8 @@ export interface TalkOptions extends Partial<VoicelabConnectOptions> {
   reinstall?: boolean;
   /**
    * Offer the model a hang_up tool: say goodbye, end the call — the baseline
-   * proof the tool lane works end to end.
+   * proof the tool lane works end to end. ON BY DEFAULT — every stream is
+   * born able to end its own call; pass `--hang-up false` to withhold it.
    */
   hangUp?: boolean;
   /**
@@ -230,6 +237,9 @@ export async function talk(options: TalkOptions = {}) {
 
   const connection = { baseUrl: options.baseUrl, project };
   const baseUrl = resolveVoicelabBaseUrl(connection);
+  /* First run on a fresh environment: the default slug is a project that
+   * does not exist yet, and a bare `talk` provisions its own home. */
+  await ensureProjectExists(connection);
   using itx = await connectProject(connection);
 
   /* Install the guest BEFORE calling into it: `setupVoiceAgent` lives inside
@@ -248,9 +258,9 @@ export async function talk(options: TalkOptions = {}) {
    * per-provider (secretForHost), and a baseUrl seam needs none at all. */
   if (options.providerBaseUrl === undefined) {
     console.log(
-      options.provider === "openai"
-        ? `openai secret ${await ensureOpenaiSecret(itx)}`
-        : `xai secret ${await ensureXaiSecret(itx)}`,
+      options.provider === "grok"
+        ? `xai secret ${await ensureXaiSecret(itx)}`
+        : `openai secret ${await ensureOpenaiSecret(itx)}`,
     );
   }
 
@@ -298,7 +308,7 @@ export async function talk(options: TalkOptions = {}) {
       }),
       ...(() => {
         const tools = [
-          ...(options.hangUp === true
+          ...(options.hangUp !== false
             ? [
                 {
                   name: "hang_up",
