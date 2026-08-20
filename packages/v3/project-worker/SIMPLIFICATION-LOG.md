@@ -93,3 +93,25 @@ String(connectedAtOffset)` because "the log names every connection; no synthetic
     unifying it with `runtimeArgs`; risks routing regression for −1 concept.
     Remaining CLEAN win: **B2 — the `StreamSource` decouple** (removes the processor↔own-log coupling,
     fights no doctrine, delivers the off-platform capability). Doing that next.
+- **B2 finding — the decouple is ALREADY DONE.** The processor base class already takes its source
+  as an injected parameter: `protected readonly stream: ProcessorStream` from `constructor(args: {
+stream: ProcessorStream })` (`core/processor.ts:153,165-174`), and reads/appends through
+  `this.stream` (`:377,402,446,531`). `ProcessorStream` (`{ append, read }`, `:73-79`) is the same
+  concept as `core/stream.ts`'s `Stream` (its event types are literally `StreamEvent`/`StreamEventInput`
+  import-aliased, `:45-46`), and its `append: Promise<…> | …` union DELIBERATELY spans a sync local
+  source and an async foreign one. So "make the source a parameter (local vs foreign)" is not a
+  refactor to do — it exists. Nothing to simplify here; forcing a `Stream`/`ProcessorStream` merge
+  would only remove the deliberate sync-or-async flexibility. **What remains for off-platform is an
+  ADDITIVE FEATURE** (construct a foreign `ProcessorStream` + wire it through enablement + cross-DO
+  push), not a muddiness reduction — a separate, sizeable effort, flagged as the clear next step.
+
+## Where this pass landed (honest summary)
+
+The CLEAN simplifications available were: **Clean-up #1 (the gross seam, dissolved — the big win)**
+and **the print() hygiene**. Both done, verified, committed, zero regression. On going to execute
+the rest, each turned out to be entangled with _deliberate_ design or already-implemented:
+unguessable-id fights the "log names connections" doctrine; the typed AST is a wash + hot-path risk;
+`boundaryArgs` guards a real direct-call case; the processor-source decouple already exists. So the
+muddiness the pass could cleanly remove has been removed. The **off-platform stream** is now a
+well-scoped ADDITIVE feature (foreign `ProcessorStream` + enablement wiring + cross-DO push), sitting
+on a codebase that (pleasingly) is already factored for it — the next focused build, not a cleanup.
