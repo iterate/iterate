@@ -195,7 +195,7 @@ test("explicit door: deep slack replay through a live bridge works today", async
 // WHY IT MATTERS: this spelling is the ONE calling convention every apps/os client, agent
 //   prompt, and doc teaches; without the fallback the clean room's dotted door exists only
 //   server-side (invokeCapability), and every ported client breaks on its first call.
-test.fails("root dotted call: await itx.whoami() falls back to the capability table", async () => {
+test("root dotted call: await itx.whoami() falls back to the capability table", async () => {
   const itx = await harness.itx(c("who"));
   const who = await itx.whoami();
   expect(who).toMatchObject({ projectId: c("who"), path: "/" });
@@ -211,7 +211,7 @@ test.fails("root dotted call: await itx.whoami() falls back to the capability ta
 //   JS property miss on the server, uncoded ({ remote: true } only).
 // WHY IT MATTERS: depth-2 built-ins (kv, stream, secrets) are the bread-and-butter calls; the
 //   error also violates core/errors.ts (nothing machine-readable rides it).
-test.fails("depth-2 dotted: itx.kv.put('k','v') then itx.kv.get('k') round trips", async () => {
+test("depth-2 dotted: itx.kv.put('k','v') then itx.kv.get('k') round trips", async () => {
   const itx = await harness.itx(c("kv"));
   expect(await itx.kv.put("k", "v")).toMatchObject({ ok: true });
   expect(await itx.kv.get("k")).toBe("v");
@@ -225,7 +225,7 @@ test.fails("depth-2 dotted: itx.kv.put('k','v') then itx.kv.get('k') round trips
 // WHY IT MATTERS: built-ins.ts's own comment sells `stream` as "the commonest write is
 //   dotted-door spellable" — true only from inside loaded workers (itx.js), false for the
 //   capnweb client the platform tells everyone is the whole SDK.
-test.fails("dotted write, explicit read: itx.stream.append lands in the ONE log", async () => {
+test("dotted write, explicit read: itx.stream.append lands in the ONE log", async () => {
   const itx = await harness.itx(c("stream"));
   const [committed] = await itx.stream.append({ type: "mark", payload: { n: 1 } });
   expect(committed.offset).toBeGreaterThanOrEqual(1);
@@ -233,17 +233,28 @@ test.fails("dotted write, explicit read: itx.stream.append lands in the ONE log"
   expect(page.events.some((e: any) => e.type === "mark")).toBe(true);
 });
 
-// BUG: a mid-chain CALL (`get('b')`) then a method on its result cannot be spelled dotted —
-//   `connections` is undefined on the Itx RpcTarget so the chain dies at its first segment.
-// EXPECTED (apps/os/src/domains/itx/utils.ts:283-312 — the whole point of the prototype hop is
-//   that `x.get(p).method()` chains pipeline; live guard
+// BUG (post-hop, the DEEP one): the prototype-hop dotted surface now LANDS (whoami/kv/stream/
+//   slack all pass) — but a mid-path CALL that returns a HANDLE you then call a method on cannot
+//   pipeline. `itx.connections.get('b')` bottoms out at ONE invokeCapability({path:["connections",
+//   "get"],args:["b"]}); the DO answers with a `pathProxy` (core/expression.ts — a
+//   Proxy-over-function). That crosses DO→/api over Workers RPC, where workerd's pipeline
+//   classifier brand-checks it and a JS Proxy can never pass (NonPipelinable; cloudflare/workerd
+//   #6873 — the SAME reason utils.ts uses a prototype hop, not an instance Proxy). So capnweb
+//   cannot attach `.hello()` to it.
+// EXPECTED (apps/os/src/domains/itx/utils.ts:283-312; live guard
 //   apps/os/e2e/vitest/agent-handle-pipelining.itx.e2e.test.ts): the dotted chain answers
-//   "hello-from-b", same as the string door `itx.invoke("itx.connections.get('b').hello()")`
-//   which this rig proves working FIRST.
-// ACTUAL: rejects with TypeError: Cannot read properties of undefined (reading 'get').
-// WHY IT MATTERS: connections is the addressing scheme for every live client capability; if
-//   the natural spelling only works as a string expression, clients must string-format
-//   arguments (quoting/escaping by hand) for the single most common deep call.
+//   "hello-from-b", same as the string door `itx.invoke("itx.connections.get('b').hello()")` which
+//   this rig proves working FIRST — and which is the WORKING spelling today (mid-path args can't
+//   ride a single invokeCapability path anyway; that is what `invoke` is for).
+// ACTUAL: rejects with `TypeError: The RPC receiver does not implement the method "hello".`
+//   (capnweb serialize.ts) — the hop delivered `connections.get('b')`, but the returned handle is
+//   not a pipelinable RpcTarget.
+// WHY STILL FAILING / WHAT IT NEEDS (DO-side, separate session): the connections view must return
+//   a GENUINE RpcTarget (prototype-hop installed, invokerFor → #itxConnections.invoke(key,path,
+//   args)) instead of a pathProxy, AND capnweb must pipeline that method across the /api→DO Workers
+//   -RPC boundary to the client relay (2 hops). The clean room's hard rule "capnweb terminates only
+//   at /api" is exactly what makes this a capnweb-pipelining-over-Workers-RPC bridging job, not a
+//   surface fix. Deferred with a working alternative (the `invoke` expression door).
 test.fails("mid-chain call: itx.connections.get('b').hello() answers from a live connection", async () => {
   const itx = await connectedRig(c("conn"), "b");
   expect(await itx.connections.get("b").hello()).toBe("hello-from-b");
@@ -260,7 +271,7 @@ test.fails("mid-chain call: itx.connections.get('b').hello() answers from a live
 // WHY IT MATTERS: "every other client of the project then just speaks
 //   itx.slack.chat.postMessage(...)" is prove_slack.mjs's OWN promise (line 5) — today that
 //   sentence is only true for callers willing to hand-build { path, args }.
-test.fails("slack-style deep SDK replay: itx.slack.chat.postMessage({...})", async () => {
+test("slack-style deep SDK replay: itx.slack.chat.postMessage({...})", async () => {
   const { itx, sdkCalls } = await slackRig(c("slack"));
   const posted: any = await itx.slack.chat.postMessage({ channel: "#dotted", text: "sugar" });
   expect(posted).toMatchObject({ ok: true, channel: "#dotted" });
@@ -275,13 +286,15 @@ test.fails("slack-style deep SDK replay: itx.slack.chat.postMessage({...})", asy
 //   rejection names the FULL attempted path in the miss grammar — "Capability path
 //   api.postMessage hit undefined." — so isPathMissMessage(msg) matches and an error
 //   normalizer can answer with the surface's calling convention.
-// ACTUAL: TypeError: Cannot read properties of undefined (reading 'api') — the walk died on
-//   `slack` being undefined on the Itx RpcTarget (the natural dotted surface is missing), so
-//   the miss doesn't even name the segment the caller got wrong.
+// ACTUAL (post-hop — a SEPARATE cluster from the surface): the dotted path now REACHES the
+//   capability table (the hop landed), so `itx.slack.api.postMessage(...)` dispatches
+//   invokeCapability({path:["slack","api","postMessage"]}) and rejects at the bridge — but the
+//   rejection is a raw replay error, not the isPathMissMessage grammar naming the full attempted
+//   path. This is capability-table-REPLAY vocabulary (apps/os/src/itx/path-proxy.ts replayPathCall
+//   + isPathMissMessage), independent of the client surface hop.
 // WHY IT MATTERS: the miss message is the surface's error-repair loop — apps/os's
 //   normalizeSlackError turns exactly this grammar into "here is the call grammar; use
-//   itx.integrations.list()"; without it a caller (human or agent) gets a JS internals error
-//   pointing at the wrong segment.
+//   itx.integrations.list()"; without it a caller (human or agent) gets a raw error.
 test.fails("a dotted mid-path miss NAMES the full attempted path in the miss grammar", async () => {
   const { itx } = await slackRig(c("miss"));
   const err = await rejectionOf(
@@ -334,6 +347,9 @@ test.fails("a leaf miss through the EXPLICIT door keeps the same miss grammar", 
 // WHY IT MATTERS: real client code parks chain nodes in variables, logs them, and awaits them
 //   mid-chain (apps/os pinned this after `await stub` bugs turned every await into a dispatch);
 //   a surface where mid-chain awaits throw forces callers into single-expression gymnastics.
+// POST-HOP: the hop lands `itx.connections.get("b9")` as a dispatcher, but this asserts
+// `node.hello()` too — same DO-side mid-chain deferral as above (the connection handle must be a
+// pipelinable RpcTarget). The await-safety half (then stays absent) already holds via the hop.
 test.fails("an unawaited dotted chain is await-safe: awaiting mid-chain yields a live handle", async () => {
   const itx = await connectedRig(c("await"), "b9");
   const node = itx.connections.get("b9"); // unawaited dotted chain — no call yet
@@ -368,6 +384,9 @@ test("awaiting the root itx stub again neither hangs nor dispatches (then-safety
 // WHY IT MATTERS: apps/os learned this twice — a truthy-Promise `asymmetricMatch` made vitest
 //   equalities SPURIOUSLY PASS, and stringify of a logged mount fired live invokes at depth ≥ 1
 //   after the first hop-level fix.
+// POST-HOP: the stringify-safety half now holds (the hop's path proxies block toJSON — proven in
+// core/dotted-path-proxy.test.ts), but this also asserts `node.hello()` — same DO-side mid-chain
+// deferral (the connection handle must be a pipelinable RpcTarget).
 test.fails("JSON.stringify of a dangling chain node must not dispatch, and the node stays live", async () => {
   const itx = await connectedRig(c("json"), "rec");
   const node = itx.connections.get("rec"); // a dangling dispatcher (a logged handle, a report object)

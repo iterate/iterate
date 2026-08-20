@@ -55,3 +55,14 @@ REFACTORS-LATER.md instead, not here.
   idle-neutral since #noteActivity moved out of #facet) → no more wrongful facet abort /
   immediate-fire alarm loop. 5 pool-lane regression locks vendored. 1b/3 (forwarder pump
   uncounted / quiesce doesn't re-arm) DEFERRED with exact fixes — unforceable in-lane.
+- Dotted client surface (defect 24, live-23): LANDED for single-dispatch calls. New
+  src/core/dotted-path-proxy.ts (ported apps/os installPrototypeInvokeCapabilityFallback +
+  createInvokeCapabilityPathProxy — a prototype HOP, not an instance Proxy: workerd#6873) +
+  14 unit tests. The real blocker was capnweb-validate's wrapServerTarget allow-list (apps/os
+  uses NO validate); fixed by returning Itx as an opaque UNKNOWN-SURFACE stub (RpcStub<unknown>
+  → v.stub, not stubOf) from get()/connect(), which skips the allow-list wrap while @validateRpc()
+  still arg-validates Itx's declared methods in place. PROVEN end-to-end: itx.whoami / itx.kv /
+  itx.stream.append / itx.slack.chat.postMessage (4 test.fails → test). Deferred (precise
+  diagnoses in failing-dotted-surface.test.ts): mid-chain connections.get(id).method() pipelining
+  (DO returns a NonPipelinable pathProxy; needs capnweb-pipelining bridged across /api→DO) and the
+  isPathMissMessage miss-grammar (capability-table replay vocabulary). 41→37 expected-fail.

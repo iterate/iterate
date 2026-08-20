@@ -21,11 +21,12 @@
 // back). So the DO holds no stub while idle and hibernates with any number of clients attached.
 
 import { validateRpc } from "capnweb-validate";
-import { RpcTarget } from "capnweb";
+import { RpcTarget, type RpcStub } from "capnweb";
 import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
 import type { DeliveryPolicy } from "./events.ts";
 import type { Expression } from "./expression.ts";
 import { disposeStub, openStubPagerWebSocket } from "./hibernatable-rpc-stub.ts";
+import { installPrototypeInvokeCapabilityFallback } from "./dotted-path-proxy.ts";
 import { canonicalName, DurableObjectNameCodec, normalizePath } from "./durable-object-names.ts";
 import type { StreamDurableObject } from "../stream-durable-object.ts";
 
@@ -38,6 +39,17 @@ type ItxHostStub = DurableObjectStub<StreamDurableObject>;
  *  methods, resolving back on the client). */
 type ProviderStub = unknown;
 type RetainedProviderStub = { dup(): RetainedProviderStub; [k: string]: unknown };
+
+/** What `get()`/`connect()` hand back over the wire. The itx surface is an OPEN capability
+ *  namespace — declared methods (invoke / provide / subscribe / …) coexisting with arbitrary
+ *  dotted capability paths — so it crosses as an UNKNOWN-SURFACE STUB (capnweb `RpcStub<unknown>`):
+ *  capnweb-validate leaves it un-allow-listed (its `isUnknownSurfaceStub`), which is the ONLY way
+ *  the prototype-hop dotted fallback can dispatch (an enumerated `stubOf` allow-list refuses every
+ *  undeclared method BEFORE the hop is reached). `Itx`'s OWN declared methods are still
+ *  arg-validated in place by its `@validateRpc()` — that wrapping is independent of the return
+ *  shape — so this trades ONLY the boundary allow-list, not method validation. See
+ *  core/dotted-path-proxy.ts. */
+type ItxStub = RpcStub<unknown>;
 
 /** A `.connect` input: which context to attach to (default the root), the client-chosen
  *  connectionKey (reconnects under the same key share an ItxConnectionSession), and the live
@@ -164,9 +176,9 @@ export class ProjectSession extends RpcTarget {
     return this;
   }
 
-  /** Pure addressing → the root context's itx. */
-  get(): Itx {
-    return new Itx(this.#root, this.#relays, this.#waitUntil);
+  /** Pure addressing → the root context's itx (an open-surface stub — see ItxStub). */
+  get(): ItxStub {
+    return new Itx(this.#root, this.#relays, this.#waitUntil) as unknown as ItxStub;
   }
 
   /** A context's stream DO by path (the root by default). */
@@ -183,7 +195,7 @@ export class ProjectSession extends RpcTarget {
    *  With `capabilities`, the callback is retained relay-side and the connection is addressable
    *  through the context's `connections` view (`itx.connections.get(connectionKey)`,
    *  `.each(...)` fan-out). Without, this is pure addressing into the named context. */
-  async connect(opts: ConnectOpts = {}): Promise<Itx> {
+  async connect(opts: ConnectOpts = {}): Promise<ItxStub> {
     const host = this.#contextHost(opts.context);
     if (opts.capabilities) {
       const attached = await host.attachItxConnection({
@@ -199,7 +211,7 @@ export class ProjectSession extends RpcTarget {
         ),
       );
     }
-    return new Itx(host, this.#relays, this.#waitUntil);
+    return new Itx(host, this.#relays, this.#waitUntil) as unknown as ItxStub;
   }
 }
 
@@ -375,6 +387,15 @@ class Itx extends RpcTarget {
     );
   }
 }
+
+// THE NATURAL DOTTED SURFACE. Insert the dynamic-capability fallback into `Itx.prototype`'s chain
+// so an unknown segment (`itx.slack`, `itx.kv`, `itx.connections`) becomes an accumulated
+// invokeCapability dispatch, while the declared methods above (invoke / provide / subscribe / …)
+// always win. The default invokerFor is the instance itself — `Itx.invokeCapability({ path, args })`
+// is exactly the door the path proxy calls. Must run AFTER the class + its @validateRpc() decorator
+// (which is why it lives here, not inside the body). See core/dotted-path-proxy.ts for the workerd
+// brand-check reason this is a prototype hop and not a Proxy AROUND the instance.
+installPrototypeInvokeCapabilityFallback(Itx);
 
 /** Ownership handle for one `itx.provideCapability()`. */
 @validateRpc()

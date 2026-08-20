@@ -82,11 +82,22 @@ ProjectSession) (~4 lines).
 
 ## Family G — missing parity features ◇ (not bugs; owner-commissioned)
 
-24. Natural dotted client surface (9 tests, apps/os path-proxy parity): server-side fallback on
-    Itx (+ returned stubs): unknown property → pathProxy accumulating segments, terminal call →
-    invokeCapability; unify the three miss vocabularies into one path-miss grammar
-    (isPathMissMessage-style, adapted not copied). Est +40 lines, reuses core/expression
-    pathProxy. NOT a no-brainer (design: which names are reserved on Itx).
+24. Natural dotted client surface (9 tests, apps/os path-proxy parity). **LANDED for the
+    single-dispatch cases** (2026-08-20, live-23): ported apps/os's `installPrototypeInvokeCapability
+Fallback` + `createInvokeCapabilityPathProxy` into `src/core/dotted-path-proxy.ts` (prototype
+    HOP, not an instance Proxy — workerd#6873), installed on `Itx`. The real blocker was NOT the
+    hop: capnweb-validate's `wrapServerTarget` is an ALLOW-LIST that refuses every undeclared method
+    before the hop is reached (apps/os uses NO validate, which is why its surface works). Fixed by
+    returning `Itx` as an opaque UNKNOWN-SURFACE stub (`RpcStub<unknown>` → `v.stub`, not
+    `stubOf`) from `get()`/`connect()`, which skips the allow-list wrap while `@validateRpc()` still
+    arg-validates Itx's declared methods in place. PROVEN: `itx.whoami()`, `itx.kv.put/get`,
+    `itx.stream.append`, `itx.slack.chat.postMessage` all pass end-to-end (4 tests flipped) + 14
+    unit tests. **Still deferred (2 clusters, precise diagnoses in the test file):** (a) mid-chain
+    `connections.get(id).method()` — the DO returns a `pathProxy` (Proxy-over-function =
+    NonPipelinable over Workers RPC); needs the connections view to return a genuine hopped
+    RpcTarget AND capnweb-pipelining bridged across the /api→DO boundary; working alternative today
+    is the `invoke` expression door. (b) the isPathMissMessage miss-grammar — capability-table
+    REPLAY vocabulary, independent of the surface.
 25. Row chunking for arbitrary-size payloads (6 tests, apps/os EVENT_CHUNK_SIZE contract):
     event_chunks table, 512KiB JS-side split, offset-per-event, reassembly validation,
     idempotency over reassembled bodies. Est +60/-10 lines in StreamEventLog. NOT a no-brainer

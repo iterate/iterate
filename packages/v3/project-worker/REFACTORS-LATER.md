@@ -8,10 +8,21 @@ fix stays small and reviewable. Revisit deliberately.
   move their coverage into the deterministic harness lane. Changes what "the board" means.
 - **The facet spine density** (LAYERS.md layer 4): the ~200 lines where workerd #6702/#6800/
   #6810 choose the shape. Revisit if workerd ships facet alarms or hibernatable outbound stubs.
-- **Dotted client surface (defect 24)**: adding the path-proxy fallback to Itx is a surface
-  expansion (reserved-name policy on Itx) — design, not a guard. Parity feature, phase 5.
-- **Row chunking (defect 25)**: StreamEventLog gains an event_chunks table — a storage-schema
-  change. Well-specified by the apps/os contract but it is new machinery in the log. Phase 5.
+- **Dotted client surface (defect 24)**: LANDED for single-dispatch calls (2026-08-20 — hop in
+  core/dotted-path-proxy.ts + opaque unknown-surface stub return; see DEFECTS.md 24). Two
+  DEFERRED remnants, both deeper than a surface change: (1) **mid-chain `x.get(id).method()`
+  pipelining** — the connections view returns a `pathProxy` (NonPipelinable over Workers RPC);
+  needs a genuine hopped RpcTarget + capnweb-pipelining bridged across the /api→DO boundary. This
+  is an intended consequence of the "capnweb terminates only at /api" rule; working alternative is
+  the `invoke` expression door. (2) **isPathMissMessage miss-grammar** — unifying the capability-
+  table REPLAY error vocabulary (server-side, not the surface).
+- **Row chunking (defect 25)**: StreamEventLog gains an `event_chunks` table — a storage-schema
+  change. Fully specced by the apps/os contract (EVENT_CHUNK_SIZE=512KiB, JS-side split,
+  offset-per-event, streaming-TextDecoder reassembly, contiguity check, no group_concat). Owner
+  wants this DONE. ~90–130 LOC, one file, on the existing raw-`exec` path. SEPARATE (optional,
+  rejected-for-now) question: adopt sqlfu (mmkal's typed-SQLite adapter, already vendored) across
+  our SQLite — LOW value for one table today + fights storage-laziness (`migrate()` writes on
+  boot); revisit only if the SQLite surface grows.
 - **Breaker enforcement placement (defect 7)**: moving the token count inside the commit
   transaction is a real semantics decision (pre-check vs post-dedupe), not a guard.
 
