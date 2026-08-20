@@ -140,6 +140,7 @@ new transport is _none_.
   while the root's OWN log stays empty of them. The raw snapshot shows offset 3 = the foreign stream's
   offset. Same mechanism for a real Pi: point `sourceStream` at `itx.homeassistant` (a provided live
   stream) instead of `contexts.get('/sensors')`.
+- **PROVEN LIVE** (`proofs/prove_foreign_source.mjs`, version ca0d2fbf): a box provides `itx.sensors` (a real Stream), a CF context enables `tally` with `sourceStream: "itx.sensors"`, and the tally reduces the box's events (`{motion:2,temp:1}`) while the firehose stays on the box — the edge log only holds the derived tally. Live perf held (5450 ev/s, p50 209ms) + slack ALL PASS.
 - **Follow-on (flagged):** today the foreign-source processor is PULL (catches up on snapshot). Real-
   time delivery = the foreign stream PUSHES new events to it (a subscription from the foreign stream
   targeting the processor's wake), reusing the connected/forwarder lane. Additive, not yet wired.
