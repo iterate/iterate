@@ -1413,7 +1413,11 @@ export class VoiceAgentProcessor extends StreamProcessor<
    * A MIRROR, never a second source of truth: the idle loop runs between
    * deliveries and has no way to read the fold, and closing over a stamp would
    * miss a call kept alive by frames that arrived after it started waiting.
-   * Written only from `state`.
+   * Written from `state`, plus ONE stamp at the mint: the fold's own
+   * `call-started` arm counts opening a call as the device's initial input,
+   * and the idle countdown now arms at that same moment — before the log has
+   * delivered `call-started` back — so the mint writes the stamp the first
+   * tick would otherwise read as zero.
    */
   #lastDeviceInputAtStreamMsMirror = 0;
   /** When the last dial FAILED, for the retry cooldown. Class-level, not on
@@ -1667,6 +1671,15 @@ export class VoiceAgentProcessor extends StreamProcessor<
           }
           const conversationId = `conv_${crypto.randomUUID()}`;
           this.#callRequested = true;
+          /* THE IDLE DEADLINE ARMS AT MINT: opening a call IS the device's
+           * initial input (the fold's call-started arm says the same), and
+           * the countdown starts against this stamp — not against the first
+           * mic frame, which a call whose provider dies straight away never
+           * receives. `max` so a mint can never walk a fresher stamp back. */
+          this.#lastDeviceInputAtStreamMsMirror = Math.max(
+            this.#lastDeviceInputAtStreamMsMirror,
+            this.deps.nowAtFacetMs(),
+          );
           /* The one append the whole call hangs off: if it silently fails,
            * #callRequested can never clear (its only clear needs the fold
            * this append produces) and the incarnation is deaf until
@@ -2437,80 +2450,92 @@ export class VoiceAgentProcessor extends StreamProcessor<
           this.#requestEnd(conversationId, "socket-closed", "Grok's socket closed", append),
         );
       });
-
-      /*
-       * THE IDLE COUNTDOWN, in the same closure as the socket it will end —
-       * a SELF-RESCHEDULING TICK CHAIN, not a loop. One background closure
-       * that settles only when the call ends is indistinguishable from a
-       * wedge to the facet keepalive's busy-refire detector: after ~15 quiet
-       * minutes of a perfectly healthy call it would cross the detector's
-       * threshold, spend spurious revival passes against a live incarnation,
-       * and decay the alarm cadence toward its plateau — so a REAL eviction
-       * during a long call would get its revival hours late. Each tick is
-       * its own settling closure instead: one check, then hand the chain to
-       * a fresh closure, so the keepalive sees progress every five seconds.
-       * The chain dies naturally when the dial-identity fence fails.
-       *
-       * It compares two stamps from DIFFERENT clocks — the facet's now and
-       * the stream's commit — which is only sound because both are wall-clock
-       * milliseconds from Cloudflare's own clock and the deadline is a
-       * minute. Anything tighter than that would need a single clock.
-       */
-      const idleTick = async (): Promise<void> => {
-        await this.deps.sleep(IDLE_TICK_MS);
-        if (this.#dial !== dial) return;
-        const nowAtFacetMs = this.deps.nowAtFacetMs();
-        /*
-         * IDLE SINCE THE LAST THING THAT HAPPENED, whichever end it happened
-         * at — and the second half of that is why this is a max rather than
-         * a skip.
-         *
-         * The durable stamp only records the DEVICE's input, because that is
-         * the only side leaving events, and a listener hearing out a
-         * ninety-second answer sends nothing. Merely refusing to hang up
-         * WHILE speaking is not enough: the stamp goes on ageing behind the
-         * answer, so the moment the queue drains the clock is already past
-         * the deadline and the call dies one tick later. Measured — a 64s
-         * answer, then `conversation-ended` 1.1s after it finished, between
-         * turns, with the listener about to speak.
-         *
-         * Finishing an answer is an event on this call as much as hearing one
-         * is. `deviceBufferEmptyAtFacetMs` is when the device runs dry, so
-         * while it is in the future this end is still talking, and once it
-         * passes it is the moment this end stopped. Both readings are what
-         * the deadline wants.
-         *
-         * In-memory ON PURPOSE: after an eviction there is no answer in
-         * flight and nothing was said, so a revived incarnation falls back to
-         * the durable stamp alone and the deadline still bites. Moving THAT
-         * into memory is the thing that once let a keepalive restart the
-         * minute for ever.
-         */
-        const lastActivityAtFacetMs = Math.max(
-          this.#lastDeviceInputAtStreamMsMirror,
-          dial.deviceBufferEmptyAtFacetMs,
-        );
-        if (nowAtFacetMs - lastActivityAtFacetMs < IDLE_TIMEOUT_MS) {
-          this.runInBackground(idleTick);
-          return;
-        }
-        /* Still holding audio it has not handed over yet: not idle by any
-         * reading, whatever the clocks say. A queue held for a tentative
-         * onset does not count — an onset nobody ever settles (a board that
-         * died mid-blip) would otherwise wedge the deadline open for ever. */
-        if (dial.speakerQueue.length > 0 && dial.tentativeOnset === null) {
-          this.runInBackground(idleTick);
-          return;
-        }
-        await this.#requestEnd(
-          conversationId,
-          "idle",
-          `no input from the device for ${IDLE_TIMEOUT_MS / 1000}s`,
-          append,
-        );
-      };
-      this.runInBackground(idleTick);
     });
+
+    /*
+     * THE IDLE COUNTDOWN ARMS THE MOMENT THE DIAL IS DECIDED — at the mint
+     * or the caught-up re-dial, NOT once a socket has been adopted. It used
+     * to arm after the awaited dial handed its socket over, which left a
+     * whole class of call with no countdown at all: a dial that never
+     * resolves, or a socket that died without ever firing its close event,
+     * kept `#dial` occupied with nothing armed to bury the call — the fold
+     * said a call was up, so every later press was swallowed by "a call is
+     * already up" for ever (the stackchan ghost, 2026-08-20: a call whose
+     * provider socket died just after accept squatted for six minutes of
+     * 3-second press retries until a manual zombie-cleanup). The mint stamps
+     * the idle mirror, so call-started time counts as the device's initial
+     * input and a call that never hears its device dies at the same 60s.
+     *
+     * A SELF-RESCHEDULING TICK CHAIN, not a loop. One background closure
+     * that settles only when the call ends is indistinguishable from a
+     * wedge to the facet keepalive's busy-refire detector: after ~15 quiet
+     * minutes of a perfectly healthy call it would cross the detector's
+     * threshold, spend spurious revival passes against a live incarnation,
+     * and decay the alarm cadence toward its plateau — so a REAL eviction
+     * during a long call would get its revival hours late. Each tick is
+     * its own settling closure instead: one check, then hand the chain to
+     * a fresh closure, so the keepalive sees progress every five seconds.
+     * The chain dies naturally when the dial-identity fence fails.
+     *
+     * It compares two stamps from DIFFERENT clocks — the facet's now and
+     * the stream's commit — which is only sound because both are wall-clock
+     * milliseconds from Cloudflare's own clock and the deadline is a
+     * minute. Anything tighter than that would need a single clock.
+     */
+    const idleTick = async (): Promise<void> => {
+      await this.deps.sleep(IDLE_TICK_MS);
+      if (this.#dial !== dial) return;
+      const nowAtFacetMs = this.deps.nowAtFacetMs();
+      /*
+       * IDLE SINCE THE LAST THING THAT HAPPENED, whichever end it happened
+       * at — and the second half of that is why this is a max rather than
+       * a skip.
+       *
+       * The durable stamp only records the DEVICE's input, because that is
+       * the only side leaving events, and a listener hearing out a
+       * ninety-second answer sends nothing. Merely refusing to hang up
+       * WHILE speaking is not enough: the stamp goes on ageing behind the
+       * answer, so the moment the queue drains the clock is already past
+       * the deadline and the call dies one tick later. Measured — a 64s
+       * answer, then `conversation-ended` 1.1s after it finished, between
+       * turns, with the listener about to speak.
+       *
+       * Finishing an answer is an event on this call as much as hearing one
+       * is. `deviceBufferEmptyAtFacetMs` is when the device runs dry, so
+       * while it is in the future this end is still talking, and once it
+       * passes it is the moment this end stopped. Both readings are what
+       * the deadline wants.
+       *
+       * In-memory ON PURPOSE: after an eviction there is no answer in
+       * flight and nothing was said, so a revived incarnation falls back to
+       * the durable stamp alone and the deadline still bites. Moving THAT
+       * into memory is the thing that once let a keepalive restart the
+       * minute for ever.
+       */
+      const lastActivityAtFacetMs = Math.max(
+        this.#lastDeviceInputAtStreamMsMirror,
+        dial.deviceBufferEmptyAtFacetMs,
+      );
+      if (nowAtFacetMs - lastActivityAtFacetMs < IDLE_TIMEOUT_MS) {
+        this.runInBackground(idleTick);
+        return;
+      }
+      /* Still holding audio it has not handed over yet: not idle by any
+       * reading, whatever the clocks say. A queue held for a tentative
+       * onset does not count — an onset nobody ever settles (a board that
+       * died mid-blip) would otherwise wedge the deadline open for ever. */
+      if (dial.speakerQueue.length > 0 && dial.tentativeOnset === null) {
+        this.runInBackground(idleTick);
+        return;
+      }
+      await this.#requestEnd(
+        conversationId,
+        "idle",
+        `no input from the device for ${IDLE_TIMEOUT_MS / 1000}s`,
+        append,
+      );
+    };
+    this.runInBackground(idleTick);
   }
 
   /**

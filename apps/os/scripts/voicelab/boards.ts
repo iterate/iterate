@@ -185,6 +185,7 @@ export async function boards(options: BoardsOptions) {
       record.streamPath = streamPath;
       let heardUs = "";
       let saidBack = "";
+      let responsesCreated = 0;
       const connection = await itx.streams.get(streamPath).openConnection({
         connectionKey: `boards-${board.name}-${askedAt}`,
         eventTypes: ["events.iterate.com/voice-agent/grok-event"],
@@ -200,11 +201,19 @@ export async function boards(options: BoardsOptions) {
               transcript?: string;
             };
             const inner = payload.event ?? payload;
+            /* One count per answer the model began — the barge check below
+             * reads it, because a new response is the one edge the barge's
+             * own clear frame cannot fake. */
+            if (inner?.type === "response.created") responsesCreated += 1;
             if (inner?.type === "response.output_audio_transcript.delta") {
               saidBack += inner.delta ?? "";
             }
-            if (inner?.type?.includes("input_audio_transcription")) {
-              heardUs += inner.transcript ?? inner.delta ?? "";
+            /* The provider streams the user's transcription TWICE — every
+             * delta, then the completed whole. Summing both wrote every
+             * utterance into the evidence twice; the completed event alone
+             * is each utterance exactly once, one line per turn. */
+            if (inner?.type?.endsWith("input_audio_transcription.completed")) {
+              heardUs += (heardUs === "" ? "" : "\n") + (inner.transcript ?? "");
             }
           }
         },
@@ -237,6 +246,13 @@ export async function boards(options: BoardsOptions) {
           await sleep(1000);
         }
         console.error(`  ${JSON.stringify(record.after)}`);
+        /* The transcription lane lags the audio it describes: the answer
+         * starts a second or two before the provider finishes transcribing
+         * the question that provoked it. Reading the evidence the instant
+         * audio moves reads as a device that heard nothing. */
+        for (let grace = 0; grace < 8 && heardUs.length === 0; grace++) {
+          await sleep(500);
+        }
         record.deviceHeard = heardUs.trim();
         record.deviceSaid = saidBack.trim();
         const matched =
@@ -269,20 +285,51 @@ export async function boards(options: BoardsOptions) {
           const during = await healthWithRetry(kit);
           const startsBefore = Number(during.spkAnswerStarts ?? 0);
           const supersededBefore = Number(during.spkSupersededMidplay ?? 0);
+          const writesBefore = Number(during.spkWrites ?? 0);
+          const saidBefore = saidBack.length;
+          const heardBefore = heardUs.length;
+          const responsesBefore = responsesCreated;
 
           if (board.pushToTalk) await kit.pushToTalk.start();
           await run("say", ["-r", "170", "Stop. Say the word pineapple instead."]);
           if (board.pushToTalk) await kit.pushToTalk.stop();
 
+          /*
+           * A REAL SECOND ANSWER, not the barge's own echo. The interruption
+           * itself sends an empty clear frame, and the firmware counts every
+           * clear-marked frame as an answer start (voice_loop.c increments
+           * answers_started in the flush funnel) — so a single
+           * spkAnswerStarts increment is this harness reacting to its own
+           * barge, and hanging up on it cut the call before the second
+           * answer ever played. A real answer means the model spoke again:
+           * a NEW response whose transcript grew, or — on a stream with no
+           * transcription — a second answer start past the barge's own
+           * clear, with new audio frames behind it.
+           */
           let answeredAgain = false;
           let superseded = 0;
           for (let attempt = 0; attempt < 30; attempt++) {
             const health = await healthWithRetry(kit);
             superseded = Number(health.spkSupersededMidplay ?? 0) - supersededBefore;
-            if (Number(health.spkAnswerStarts ?? 0) > startsBefore) {
+            const starts = Number(health.spkAnswerStarts ?? 0);
+            const writes = Number(health.spkWrites ?? 0);
+            const spokeAgain = responsesCreated > responsesBefore && saidBack.length > saidBefore;
+            const playedAgain = starts >= startsBefore + 2 && writes > writesBefore;
+            if (spokeAgain || playedAgain) {
               answeredAgain = true;
               break;
             }
+            await sleep(1000);
+          }
+          /*
+           * HOLD THE HANG-UP for the evidence still in flight: the barge
+           * utterance's own transcription completes seconds after its
+           * commit, and the second answer's transcript is still streaming.
+           * The connection is open through this wait on purpose —
+           * deviceHeard used to be frozen before the barge was even spoken,
+           * so the barge utterance could never appear in the evidence.
+           */
+          for (let grace = 0; grace < 10 && heardUs.length <= heardBefore; grace++) {
             await sleep(1000);
           }
           /*
@@ -317,6 +364,10 @@ export async function boards(options: BoardsOptions) {
             `  barge: superseded+${String(superseded)} ` +
               `answeredAgain=${String(answeredAgain)} — ${record.barge.verdict}`,
           );
+          /* Both refreshed: the collector ran through the barge window, so
+           * the evidence carries the barge utterance and the second answer,
+           * not a snapshot from before either existed. */
+          record.deviceHeard = heardUs.trim();
           record.deviceSaid = saidBack.trim();
         }
       } finally {

@@ -1969,11 +1969,18 @@ describe("the open-mic barge", () => {
     const truncations = h.provider.sentOfType("conversation.item.truncate");
     expect(truncations).toHaveLength(1);
     expect(truncations[0]).toMatchObject({ item_id: "item_burst", content_index: 0 });
-    /* Frozen: 600 ms had been heard when the clear fired. Recomputed at the
-     * commit it would claim 4,600 — everything ever handed over, none of the
-     * cleared buffer subtracted — which is exactly the lie the freeze
-     * prevents. */
-    expect(truncations[0]!.audio_end_ms).toBe(600);
+    /* Frozen: 600 ms had been HANDED OVER when the clear fired, and the
+     * cone runs DEVICE_START_LAG_MS (150) behind the schedule — delivery,
+     * DMA ring, start-up fill — so what the listener actually heard at the
+     * silence is 450. The subtraction applies because the schedule was
+     * still mid-answer at the freeze; a schedule that has sat empty past
+     * the lag returns its sent figure whole instead (pinned by "sends no
+     * repair and no cancel when the press finds nothing playing" — a
+     * fully-played answer must never be truncated by its own start lag).
+     * Recomputed at the commit this would claim 4,600 — everything ever
+     * handed over, none of the cleared buffer subtracted — which is
+     * exactly the lie the freeze prevents. */
+    expect(truncations[0]!.audio_end_ms).toBe(450);
     const notes = h.provider.sentOfType("conversation.item.create");
     expect(notes).toHaveLength(1);
     expect(JSON.stringify(notes[0])).toContain("heard only this much");
@@ -2072,6 +2079,40 @@ describe("ending a call", () => {
     expect((requested[0]!.payload as { reason: string }).reason).toContain("no input");
     expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
     expect(h.state().call).toBeNull();
+  });
+
+  /*
+   * THE GHOST CALL: a call whose provider never materialises — a dial that
+   * never resolves, or a socket that dies without ever firing its close
+   * event — used to have NO deadline at all: the countdown armed only after
+   * a socket was adopted, so the fold said a call was up for ever and every
+   * later press was swallowed by "a call is already up" (measured live
+   * 2026-08-20: six minutes of 3-second press retries into a black hole,
+   * ended only by a manual zombie-cleanup). The deadline arms AT MINT now,
+   * and call-started time counts as the device's initial input.
+   */
+  it("buries a call whose dial never resolves at the same idle deadline", async () => {
+    const h = makeHarness();
+    /* A dial that HANGS: the fetch never settles, so no socket is ever
+     * adopted, no handshake deadline arms, and no close event can fire. */
+    vi.stubGlobal("fetch", () => new Promise(() => {}));
+    await h.append({ type: "events.iterate.com/voice-agent/created", payload: {} });
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    expect(eventsOfType(h, "call-started")).toHaveLength(1);
+
+    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
+    await h.settle();
+    const requested = eventsOfType(h, "conversation-end-requested");
+    expect(requested).toHaveLength(1);
+    expect((requested[0]!.payload as { reason: string }).reason).toContain("no input");
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
+    expect(h.state().call).toBeNull();
+
+    /* And the next press is not deaf: it mints a fresh call. */
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    expect(eventsOfType(h, "call-started")).toHaveLength(2);
   });
 
   /*
