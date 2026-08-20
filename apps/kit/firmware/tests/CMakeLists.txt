@@ -65,6 +65,11 @@ iterate_kit_add_core_test(iterate-kit-device-events-test device_events_test.c)
 iterate_kit_add_core_test(iterate-kit-itx-connection-test itx_connection_test.c)
 iterate_kit_add_core_test(iterate-kit-itx-mount-test itx_mount_test.c)
 iterate_kit_add_core_test(iterate-kit-retry-gate-test retry_gate_test.c)
+# The one session grammar all four boards drive: both postures, the tap-end
+# grace, hold-is-the-wake, the single end-chime edge, and ENDING absorbing
+# every control. Board tests keep only their gesture wiring.
+iterate_kit_add_core_test(
+  iterate-kit-session-grammar-test session_grammar_test.c)
 iterate_kit_add_core_test(iterate-kit-spsc-ring-test spsc_ring_test.c)
 iterate_kit_add_core_test(iterate-kit-touch-tap-test touch_tap_test.c)
 iterate_kit_add_core_test(
@@ -227,15 +232,15 @@ iterate_kit_add_havpe_pure_test(
 iterate_kit_add_havpe_pure_test(iterate-kit-havpe-pcm-format-test
   havpe_pcm_format_test.c ../devices/havpe/voice_pe_pcm_format.c)
 
-# The dial and the button: mode table (a wire contract with four provisioned
-# streams), the polled quadrature decoder, the spin-then-settle wheel policy,
-# and the wake/converse/idle session grammar.
+# The dial: mode table (a wire contract with four provisioned streams), the
+# polled quadrature decoder, and the spin-then-settle wheel policy. What the
+# centre button MEANS is the shared session grammar's test above.
 iterate_kit_add_havpe_pure_test(iterate-kit-havpe-modes-test
   havpe_modes_test.c ../devices/havpe/havpe_modes.c)
 
-# StackChan's menu and side button: the two-stream mode table (a wire
-# contract like the HAVPE's), the face-tap provider menu, and the same
-# wake/converse/idle session grammar with its single end-chime edge.
+# StackChan's menu: the two-stream mode table (a wire contract like the
+# HAVPE's) and the face-tap provider menu. What the side button MEANS is the
+# shared session grammar's test above.
 function(iterate_kit_add_stackchan_pure_test NAME)
   iterate_kit_add_test(${NAME} ${ARGN}
     INCLUDES ../devices/stackchan ../components/core/include)

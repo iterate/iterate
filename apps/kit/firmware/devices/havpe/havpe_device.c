@@ -39,6 +39,7 @@
 #include "iterate/kit/audio_processor.h"
 #include "iterate/kit/capabilities/arguments.h"
 #include "iterate/kit/devices/havpe.h"
+#include "iterate/kit/session_grammar.h"
 #include "iterate/kit/voice/loop.h"
 #include "iterate/kit/voice_device_profile.h"
 
@@ -65,15 +66,15 @@ enum {
 };
 
 /*
- * The dial's and the session's composition state. The wheel arithmetic and
- * the session grammar are pure and host-tested (havpe_modes.c); what lives
- * here is the wiring — which gesture reaches which seam — plus mirrors of
- * the two view facts both machines need, because `poll` runs before the
- * pass's view exists.
+ * The dial's and the session's composition state. The wheel arithmetic
+ * (havpe_modes.c) and the session grammar (components/core's shared machine)
+ * are pure and host-tested; what lives here is the wiring — which gesture
+ * reaches which seam — plus mirrors of the two view facts both machines
+ * need, because `poll` runs before the pass's view exists.
  */
 static struct {
   struct havpe_mode_wheel wheel;
-  struct havpe_session session;
+  struct iterate_kit_session session;
   /** The adopted mode: announced, dialled, persisted. */
   uint8_t mode;
   bool call_active;
@@ -213,26 +214,31 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
   havpe_button_poll();
   /*
    * THE BUTTON MEANS WHAT THE SESSION SAYS IT MEANS. Classification (tap
-   * against hold) is the ui's; meaning is the session grammar's — the state
-   * table in havpe_modes.h, host-tested. This wires the machine's answers
-   * to their seams: the two intent edges the loop resolves, the talk level
-   * for its turn machine, the wake chime (the acknowledgement a wake word
-   * would earn), the "call ended" announcement on every session's exit, and
-   * the mode-reminder flash for the bare tap a push-to-talk mode refuses to
-   * wake on. Every other press is answered by the ring alone.
+   * against hold) is the ui's; meaning is the shared session grammar's —
+   * the state table in iterate/kit/session_grammar.h, host-tested. This
+   * wires the machine's answers to their seams: the two intent edges the
+   * loop resolves, the talk level for its turn machine, the wake chime (the
+   * acknowledgement a wake word would earn), the "call ended" announcement
+   * on every session's exit, and the mode-reminder flash for the bare tap a
+   * push-to-talk mode refuses to wake on. Every other press is answered by
+   * the ring alone. The posture is the dial's to pick each poll; the centre
+   * button doubles as the talk hold, so a bare tap never wakes push-to-talk
+   * (`tap_wakes` false) while the tap stays the in-session end.
    */
   {
-    struct havpe_session_actions actions;
-    const struct havpe_session_poll gestures = {
+    struct iterate_kit_session_actions actions;
+    const struct iterate_kit_session_poll gestures = {
       .tap = havpe_button_take_tap(),
       .held = havpe_button_talk_held(),
       .end_hold = havpe_button_take_end_hold(),
       .wants_call = mode_state.wants_call,
       .call_active = mode_state.call_active,
       .push_to_talk = havpe_mode_push_to_talk(mode_state.mode),
+      .tap_wakes = false,
+      .tap_ends = true,
       .now_ms = (uint64_t)(esp_timer_get_time() / 1000),
     };
-    havpe_session_step(&mode_state.session, &gestures, &actions);
+    iterate_kit_session_step(&mode_state.session, &gestures, &actions);
     out->start_call = actions.start_call;
     out->end_call = actions.end_call;
     out->talk_held = actions.talk_held;

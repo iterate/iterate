@@ -2991,11 +2991,10 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
     /*
      * INTENT IS THE LOOP'S, and this is the only place a control changes it.
      *
-     * Three of the four boards have ONE control and expressed a call toggle;
-     * one has two and expressed separate edges. Both arrive here, and the
-     * toggle is resolved against the intent the loop holds — which is why it
-     * has to be resolved here and not in the board, now that the board can no
-     * longer read what the intent currently is.
+     * What arrives is the pair of explicit edges every board's shared
+     * session grammar resolved its gestures into — a raw press never gets
+     * this far, so there is no toggle left to disambiguate against the
+     * intent the loop holds.
      */
     /*
      * THE AUDIT RIDES THE ONE RESOLUTION SITE, so a finger and an injected
@@ -3005,7 +3004,6 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
      */
     if (runtime.intent.end_call) runtime.pending_button_audit = "end";
     if (runtime.intent.start_call) runtime.pending_button_audit = "start";
-    if (runtime.intent.toggle_call) runtime.pending_button_audit = "toggle";
     if (runtime.intent.end_call) {
       runtime.view.wants_call = false;
       /*
@@ -3021,36 +3019,28 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
       runtime.view.wants_call = true;
       ESP_LOGI(tag, "control: starting call");
     }
-    if (runtime.intent.toggle_call) {
-      runtime.view.wants_call = !runtime.view.wants_call;
-      if (!runtime.view.wants_call) (void)abandon_speaker_audio();
-      ESP_LOGI(
-          tag, "control: %s call",
-          runtime.view.wants_call ? "starting" : "ending");
-    }
     runtime.intent.start_call = false;
     runtime.intent.end_call = false;
-    runtime.intent.toggle_call = false;
     {
       static bool talk_down;
       if (runtime.intent.talk_held != talk_down) {
         talk_down = runtime.intent.talk_held;
         /*
          * ...AND A FINGER ON THE TALK BUTTON OPENS THE CALL TOO, for the same
-         * reason `pushToTalk.start()` does: one verb. The Waveshare already got
-         * this by accident — its upper button is BOTH `start_call` and
-         * `talk_held`, so a press there was always a call — while the M5Stick
-         * put talk on the front button and the call on the side, and holding
-         * front alone did precisely nothing. Two boards with one program must
-         * not answer the same gesture differently.
+         * reason `pushToTalk.start()` does: one verb. The shared session
+         * grammar already mints `start_call` for the hold that wakes a
+         * push-to-talk board and reports the level only where the table says
+         * holding means talking, so this edge restates a claim the board has
+         * already made — kept because it is the loop's own spelling of the
+         * one-verb rule, the same claim `ptt-start` makes over the wire.
          *
          * THE RISING EDGE, not the level. `talk_held` stays true for as long as
          * the button is down, so raising on the level would re-open a call the
          * person had just ended with their other hand and there would be no way
          * to hang up without letting go first.
          *
-         * Placed after the explicit start/end/toggle above so that within one
-         * pass the specific instruction wins over this implicit one.
+         * Placed after the explicit start/end above so that within one pass
+         * the specific instruction wins over this implicit one.
          */
         if (talk_down) runtime.view.wants_call = true;
         ESP_LOGI(

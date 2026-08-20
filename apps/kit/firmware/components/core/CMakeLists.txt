@@ -10,6 +10,7 @@ set(ITERATE_KIT_CORE_SOURCES
   src/itx_outbox_sender.c
   src/peer.c
   src/retry_gate.c
+  src/session_grammar.c
   src/spsc_ring.c
   src/touch_tap.c
   src/voice_playback_clock.c

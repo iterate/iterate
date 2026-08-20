@@ -19,9 +19,12 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "esp_timer.h"
+
 #include "iterate/kit/audio_processor.h"
 #include "iterate/kit/devices/waveshare_s3_amoled.h"
 #include "capnweb/capnweb.h"
+#include "iterate/kit/session_grammar.h"
 #include "iterate/kit/voice/loop.h"
 #include "iterate/kit/voice_device_profile.h"
 
@@ -29,6 +32,19 @@
 #include "waveshare_avatar.h"
 #include "waveshare_buttons.h"
 #include "waveshare_display.h"
+
+/*
+ * The session the two buttons speak, and mirrors of the loop's two view
+ * facts the grammar classifies against, because `poll` runs before the
+ * pass's view exists. The machine is components/core's shared session
+ * grammar; this file only wires gestures to it and its answers to the
+ * loop's intent seams.
+ */
+static struct {
+  struct iterate_kit_session session;
+  bool call_active;
+  bool wants_call;
+} session_state;
 
 static bool start(void *context, struct iterate_kit_board_audio *out) {
   (void)context;
@@ -90,6 +106,10 @@ static size_t modules(
 static void present(
     void *context, const struct iterate_kit_voice_view *view) {
   (void)context;
+  /* Mirrored for `poll`, which classifies the session before this pass's
+   * view exists — one poll of lag, invisible at the loop's cadence. */
+  session_state.call_active = view->call_active;
+  session_state.wants_call = view->wants_call;
   waveshare_display_present(view);
   /*
    * Let the face's delay line drain on this task, which is the only one that
@@ -108,13 +128,36 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
   (void)context;
   waveshare_buttons_poll();
   /*
-   * TWO BUTTONS, SO TWO EDGES. The other three boards have one control and
-   * report a toggle; this one can say start and end separately, and the upper
-   * button doubles as the microphone.
+   * THE BUTTONS MEAN WHAT THE SESSION SAYS THEY MEAN — the shared grammar
+   * in iterate/kit/session_grammar.h, push-to-talk posture. The upper
+   * button is both the call control and the talk hold: its press edge wakes
+   * from idle (`tap_wakes` — which is also what keeps the injected
+   * button.press() a wake, since injection raises only the edge, never the
+   * level) and its level is the microphone, but the press must NOT end the
+   * session (`tap_ends` false) or every turn would begin by hanging up. The
+   * lower button is the dedicated end (`end_press`), the one gesture whose
+   * only meaning is hang up. This board bakes no sounds, so the grammar's
+   * chime edges go unrendered rather than unraised. What the machine fixes
+   * over the raw edges: an upper hold begun during the teardown no longer
+   * reopens the call the lower button just ended (ENDING absorbs it), and
+   * an idle lower press no longer minted a phantom end.
    */
-  out->end_call = waveshare_buttons_take_lower_press();
-  out->start_call = waveshare_buttons_take_upper_press();
-  out->talk_held = waveshare_buttons_upper_held();
+  struct iterate_kit_session_actions actions;
+  const struct iterate_kit_session_poll gestures = {
+    .tap = waveshare_buttons_take_upper_press(),
+    .held = waveshare_buttons_upper_held(),
+    .end_press = waveshare_buttons_take_lower_press(),
+    .wants_call = session_state.wants_call,
+    .call_active = session_state.call_active,
+    .push_to_talk = true,
+    .tap_wakes = true,
+    .tap_ends = false,
+    .now_ms = (uint64_t)(esp_timer_get_time() / 1000),
+  };
+  iterate_kit_session_step(&session_state.session, &gestures, &actions);
+  out->start_call = actions.start_call;
+  out->end_call = actions.end_call;
+  out->talk_held = actions.talk_held;
 }
 
 static void phase(void *context, enum iterate_kit_voice_phase phase_value) {

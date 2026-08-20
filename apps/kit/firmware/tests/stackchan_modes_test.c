@@ -25,94 +25,9 @@ static void the_mode_table_matches_the_provisioned_streams(void) {
   assert(stackchan_mode_stream_path(STACKCHAN_MODE_COUNT) == NULL);
 }
 
-static void the_state_is_the_loops_two_facts(void) {
-  assert(stackchan_session_classify(false, false) == STACKCHAN_SESSION_IDLE);
-  assert(stackchan_session_classify(true, false) == STACKCHAN_SESSION_WAKING);
-  assert(stackchan_session_classify(true, true) == STACKCHAN_SESSION_IN_CALL);
-  assert(stackchan_session_classify(false, true) == STACKCHAN_SESSION_ENDING);
-}
-
-/* One poll: build the facts, step the machine, hand back the actions. */
-static struct stackchan_session_actions drive(
-    struct stackchan_session *session,
-    bool tap,
-    bool wants_call,
-    bool call_active) {
-  const struct stackchan_session_poll poll = {
-    .tap = tap,
-    .wants_call = wants_call,
-    .call_active = call_active,
-  };
-  struct stackchan_session_actions actions;
-  stackchan_session_step(session, &poll, &actions);
-  return actions;
-}
-
-static void quiet(const struct stackchan_session_actions *actions) {
-  assert(!actions->start_call);
-  assert(!actions->end_call);
-  assert(!actions->wake_chime);
-  assert(!actions->end_chime);
-}
-
-static void a_tap_wakes_idle_and_a_tap_ends_the_session(void) {
-  struct stackchan_session session = {0};
-  /* Idle, no press: nothing. */
-  struct stackchan_session_actions actions = drive(&session, false, false, false);
-  quiet(&actions);
-  /* The wake press: start and chime together. */
-  actions = drive(&session, true, false, false);
-  assert(actions.start_call);
-  assert(actions.wake_chime);
-  assert(!actions.end_call);
-  assert(!actions.end_chime);
-  /* Waking, tap ends. */
-  actions = drive(&session, true, true, false);
-  assert(actions.end_call);
-  assert(!actions.start_call);
-  /* In-call, tap ends too. */
-  session.was_in_session = false;
-  actions = drive(&session, false, true, true);
-  quiet(&actions);
-  actions = drive(&session, true, true, true);
-  assert(actions.end_call);
-  assert(!actions.wake_chime);
-}
-
-/*
- * Every end path arrives at IDLE, and the chime rides that one edge — so a
- * tap end, a model hang-up and a dead session all sound identical and none
- * of them can forget the sound. Exactly once per session.
- */
-static void every_end_says_call_ended_once(void) {
-  struct stackchan_session session = {0};
-  (void)drive(&session, true, false, false);       /* wake */
-  (void)drive(&session, false, true, true);        /* in call */
-  /* The loop's facts collapse — however that happened. */
-  struct stackchan_session_actions actions = drive(&session, false, false, false);
-  assert(actions.end_chime);
-  assert(!actions.start_call);
-  /* Idle again: the chime does not repeat. */
-  actions = drive(&session, false, false, false);
-  quiet(&actions);
-}
-
-static void an_end_tap_and_the_next_wake_are_separate_presses(void) {
-  struct stackchan_session session = {0};
-  (void)drive(&session, true, false, false);       /* wake */
-  (void)drive(&session, false, true, true);        /* in call */
-  struct stackchan_session_actions actions = drive(&session, true, true, true);
-  assert(actions.end_call);
-  /* Teardown in flight: presses are inert. */
-  actions = drive(&session, true, false, true);
-  quiet(&actions);
-  /* Arrived at idle: the end chime, then the next tap is a fresh wake. */
-  actions = drive(&session, false, false, false);
-  assert(actions.end_chime);
-  actions = drive(&session, true, false, false);
-  assert(actions.start_call);
-  assert(actions.wake_chime);
-}
+/* What the side button MEANS in which state is the shared session
+ * grammar's — tests/session_grammar_test.c, `open_mic` posture. This file
+ * keeps the parts that are this board's alone. */
 
 /* One menu poll. */
 static bool menu_drive(
@@ -197,10 +112,6 @@ static void picking_in_place_still_answers(void) {
 
 int main(void) {
   the_mode_table_matches_the_provisioned_streams();
-  the_state_is_the_loops_two_facts();
-  a_tap_wakes_idle_and_a_tap_ends_the_session();
-  every_end_says_call_ended_once();
-  an_end_tap_and_the_next_wake_are_separate_presses();
   a_tap_opens_and_the_next_tap_picks_the_half();
   an_ignored_menu_dismisses_itself();
   a_call_closes_the_menu_and_eats_the_tap();

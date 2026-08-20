@@ -19,14 +19,30 @@
  */
 #include <stdio.h>
 
+#include "esp_timer.h"
+
 #include "iterate/kit/audio_processor.h"
 #include "iterate/kit/capabilities/arguments.h"
 #include "iterate/kit/devices/m5sticks3.h"
+#include "iterate/kit/session_grammar.h"
 #include "iterate/kit/voice/loop.h"
 #include "iterate/kit/voice_device_profile.h"
 
 #include "m5sticks3_audio.h"
 #include "m5sticks3_board.h"
+
+/*
+ * The session the two buttons speak, and mirrors of the loop's two view
+ * facts the grammar classifies against, because `poll` runs before the
+ * pass's view exists. The machine is components/core's shared session
+ * grammar; this file only wires gestures to it and its answers to the
+ * loop's intent seams.
+ */
+static struct {
+  struct iterate_kit_session session;
+  bool call_active;
+  bool wants_call;
+} session_state;
 
 /*
  * `face.set({face})` — the same catalogue the CoreS3 wears, on the small
@@ -112,6 +128,10 @@ static void present(
   m5sticks3_ui_set_state((enum m5sticks3_ui_state)view->screen);
   m5sticks3_ui_set_status(view->status == NULL ? "" : view->status);
   m5sticks3_ui_set_call_active(view->call_active);
+  /* Mirrored for `poll`, which classifies the session before this pass's
+   * view exists — one poll of lag, invisible at the loop's cadence. */
+  session_state.call_active = view->call_active;
+  session_state.wants_call = view->wants_call;
   m5sticks3_ui_set_api_ready(view->api_ready);
   m5sticks3_ui_set_stream_ready(view->stream_ready);
   m5sticks3_ui_set_link_ready(view->link_ready);
@@ -123,11 +143,32 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
   (void)context;
   m5sticks3_board_poll();
   /*
-   * ONE BUTTON, ONE INTENT. The side button cannot say start and end apart, so
-   * it reports a toggle and the loop resolves it against the intent it holds.
+   * THE BUTTONS MEAN WHAT THE SESSION SAYS THEY MEAN — the shared grammar
+   * in iterate/kit/session_grammar.h, push-to-talk posture. The side button
+   * is the call control, its own button rather than the talk hold, so a
+   * bare press WAKES from idle (`tap_wakes`) and ends the session it is in;
+   * the front button is the talk hold, and holding it from idle is a wake
+   * too — chime-less on this board, which bakes no sounds, so the grammar's
+   * chime edges go unrendered rather than unraised. What the machine fixes
+   * over the old raw toggle: a press or a front-hold during the teardown no
+   * longer reopens the call it just ended (ENDING absorbs both), and a
+   * session the far end hangs up stays ended under a still-held button.
    */
-  out->toggle_call = m5sticks3_board_take_side_press();
-  out->talk_held = m5sticks3_board_talk_held();
+  struct iterate_kit_session_actions actions;
+  const struct iterate_kit_session_poll gestures = {
+    .tap = m5sticks3_board_take_side_press(),
+    .held = m5sticks3_board_talk_held(),
+    .wants_call = session_state.wants_call,
+    .call_active = session_state.call_active,
+    .push_to_talk = true,
+    .tap_wakes = true,
+    .tap_ends = true,
+    .now_ms = (uint64_t)(esp_timer_get_time() / 1000),
+  };
+  iterate_kit_session_step(&session_state.session, &gestures, &actions);
+  out->start_call = actions.start_call;
+  out->end_call = actions.end_call;
+  out->talk_held = actions.talk_held;
 }
 
 static void phase(void *context, enum iterate_kit_voice_phase phase_value) {

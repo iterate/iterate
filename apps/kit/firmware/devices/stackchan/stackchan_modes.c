@@ -1,6 +1,6 @@
 #include "stackchan_modes.h"
 
-#include <string.h>
+#include <stddef.h>
 
 /*
  * The wire contract: each row is a stream whose far end is already
@@ -16,48 +16,6 @@ static const char *const mode_streams[STACKCHAN_MODE_COUNT] = {
 const char *stackchan_mode_stream_path(uint8_t mode) {
   if (mode >= STACKCHAN_MODE_COUNT) return NULL;
   return mode_streams[mode];
-}
-
-enum stackchan_session_state stackchan_session_classify(
-    bool wants_call, bool call_active) {
-  if (wants_call) {
-    return call_active ? STACKCHAN_SESSION_IN_CALL : STACKCHAN_SESSION_WAKING;
-  }
-  return call_active ? STACKCHAN_SESSION_ENDING : STACKCHAN_SESSION_IDLE;
-}
-
-void stackchan_session_step(
-    struct stackchan_session *session,
-    const struct stackchan_session_poll *poll,
-    struct stackchan_session_actions *out) {
-  const enum stackchan_session_state state =
-      stackchan_session_classify(poll->wants_call, poll->call_active);
-  memset(out, 0, sizeof(*out));
-  /*
-   * The one edge every end path flows through: last poll was in a session,
-   * this one is idle. Tap, model hang-up, idle timeout, dead session — they
-   * all arrive here, so none of them can forget the sound.
-   */
-  out->end_chime = session->was_in_session && state == STACKCHAN_SESSION_IDLE;
-  /* ENDING still arms the chime: the session is not over until the facts
-   * say idle, and clearing here would swallow the sound of any teardown a
-   * poll happened to witness in flight. */
-  session->was_in_session = state != STACKCHAN_SESSION_IDLE;
-  switch (state) {
-    case STACKCHAN_SESSION_IDLE:
-      if (poll->tap) {
-        out->start_call = true;
-        out->wake_chime = true;
-      }
-      break;
-    case STACKCHAN_SESSION_WAKING:
-    case STACKCHAN_SESSION_IN_CALL:
-      if (poll->tap) out->end_call = true;
-      break;
-    case STACKCHAN_SESSION_ENDING:
-      /* The teardown is already on the wire; presses mean nothing. */
-      break;
-  }
 }
 
 bool stackchan_menu_step(

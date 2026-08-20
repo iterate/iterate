@@ -106,22 +106,20 @@ struct iterate_kit_voice_view {
   bool fault;
 };
 
-/** What the board's physical controls are asking for. */
+/**
+ * What the board's physical controls are asking for: the explicit edges the
+ * shared session grammar (iterate/kit/session_grammar.h) resolved this poll's
+ * gestures into. Every board drives that one machine, so what arrives here is
+ * already a MEANING — a raw press never reaches the loop, and a board cannot
+ * answer the same gesture differently from its siblings by construction.
+ */
 struct iterate_kit_voice_intent {
-  /** An edge, consumed by the board on read. Two-button boards. */
+  /** An edge: open a session. */
   bool start_call;
-  /** An edge, consumed by the board on read. Two-button boards. */
+  /** An edge: end the session. */
   bool end_call;
-  /**
-   * An edge that flips whatever the intent currently is.
-   *
-   * Three of the four boards have ONE control — a side button, a tap, a touch —
-   * and a board with one button cannot express start and end separately. It
-   * also cannot read the current intent any more, now that the loop owns it, so
-   * the toggle has to be the loop's to resolve.
-   */
-  bool toggle_call;
-  /** A level: the talk control is down right now. Push-to-talk boards. */
+  /** A level: the talk control is down right now, in a state where the
+   * grammar says holding means talking. Push-to-talk boards. */
   bool talk_held;
 };
 

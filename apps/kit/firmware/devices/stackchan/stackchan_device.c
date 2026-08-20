@@ -44,6 +44,7 @@
 #include "iterate/kit/conversation_lights.h"
 #include "iterate/kit/conversation_overlay.h"
 #include "iterate/kit/devices/stackchan.h"
+#include "iterate/kit/session_grammar.h"
 #include "iterate/kit/voice/loop.h"
 #include "iterate/kit/voice_device_profile.h"
 
@@ -93,7 +94,7 @@ static uint64_t last_present_ms;
  */
 static struct {
   struct stackchan_menu menu;
-  struct stackchan_session session;
+  struct iterate_kit_session session;
   uint8_t mode;
   bool call_active;
   bool wants_call;
@@ -341,20 +342,26 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
   head_gesture_step(now);
   /*
    * THE SIDE BUTTON IS THE CALL, THE FACE IS THE MENU. The PMIC button
-   * speaks the session grammar — wake with a chime, tap again to end, and
-   * every end path says "call ended" through the machine's one exit edge.
-   * A tap on the glass opens the provider menu instead of toggling the
-   * call, which is the swap this board asked for: conversations on the
-   * button people can feel, choices on the screen people can read.
+   * speaks the shared session grammar — wake with a chime, tap again to
+   * end (after the open-mic grace: the reflexive press right behind a wake
+   * means nothing), and every end path says "call ended" through the
+   * machine's one exit edge. A tap on the glass opens the provider menu
+   * instead of toggling the call, which is the swap this board asked for:
+   * conversations on the button people can feel, choices on the screen
+   * people can read. Open-mic posture, and no hold anywhere: the PMIC owns
+   * the long press as hardware power-off, so a press is only ever a tap.
    */
   {
-    const struct stackchan_session_poll session_poll = {
+    const struct iterate_kit_session_poll session_poll = {
       .tap = iterate_kit_stackchan_avatar_take_side_button_tap(),
       .wants_call = mode_state.wants_call,
       .call_active = mode_state.call_active,
+      .push_to_talk = false,
+      .tap_ends = true,
+      .now_ms = now,
     };
-    struct stackchan_session_actions actions;
-    stackchan_session_step(&mode_state.session, &session_poll, &actions);
+    struct iterate_kit_session_actions actions;
+    iterate_kit_session_step(&mode_state.session, &session_poll, &actions);
     /* End before wake: play_sound replaces rather than mixes, so if one
      * poll carries both edges the newer intent wins. */
     if (actions.end_chime) {
