@@ -47,3 +47,15 @@ arg-callback bridge (browser/full-duplex only), celld, row chunking.
 - _(baseline)_ committed the BYO-stream artifacts from the design jam: `proofs/prove_byo_stream.mjs`
   (append/read off-platform works live) + `__tests__/failing-byo-context.test.ts` (the live-feed
   callback gap, `test.fails`), plus this log.
+- **PIVOT (Jonas): "so gross — we want clean and elegant."** A first attempt at B1 (naming the
+  `contexts.get` seam with an `IterateContextHandle` full of `unknown` returns + `as unknown as`
+  casts) just papered over the mud. Reverted it. Dispatched a greenfield ideation (a fork with our
+  full discussion) to design the clean target layering → `LAYERING-IDEATION.md`; will refactor
+  toward that instead of incrementally naming the mud. Order below is now: land the ideation's
+  target design, then execute it in clean increments.
+- **Perf guard added** (`__tests__/throughput-latency-guard.test.ts`): the fast in-harness twin of
+  `prove_ephemeralflood.mjs` — floods 1000 ephemeral chunks through the real capnweb→/api→DO→
+  one-directional-delivery path and prints the numbers, so a throughput/latency/batching regression
+  shows in seconds without a deploy. **In-harness baseline: append 62500 ev/s | end-to-end 62500
+  ev/s | p50 8ms / p95 12ms / max 12ms | 50× batching | 0 loss.** (Local workerd ≫ live; the guard
+  is the printed line compared across runs, plus the hard invariants.)
