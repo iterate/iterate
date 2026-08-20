@@ -2304,13 +2304,19 @@ static size_t health_json(char *out, size_t capacity) {
      * A CHUNK THE DEVICE COULD NOT DECODE, which is now the only way audio
      * can fail to reach the speaker before it is queued.
      *
-     * `spkSeqGaps`, `spkIgnoredCall`, `spkIgnoredStale` and `spkIgnoredDup`
-     * stood here and are gone with the classifier that produced them: the
-     * sender paces the answer and no frame carries a call, an answer or a
-     * position any more, so there is no numbering to find a hole in and
-     * nothing for the device to refuse.
+     * The old classifier's `spkIgnoredCall`/`spkIgnoredStale`/`spkIgnoredDup`
+     * are gone with the classifier: the sender paces the answer and no frame
+     * carries a call or an answer any more, so there is nothing for the
+     * device to refuse. Numbering, though, RETURNED with
+     * `deviceSpeakerFrameSeq` — the flush that names a sequence number needs
+     * one — and the stream layer counts its holes. Published here because a
+     * lost-chunk question asked over RPC had no witness: a whole evening's
+     * barge diagnosis (2026-08-20) stalled on exactly that.
      */
     {"spkDecodeFailures", runtime.voicelab.spk_decode_failures},
+    {"spkSeqGaps", runtime.voicelab.spk_seq_gaps},
+    {"spkSeqMissing", runtime.voicelab.spk_seq_missing},
+    {"spkSeqRegressions", runtime.voicelab.spk_seq_regressions},
     {"spkDiscarded",
      atomic_load_explicit(
          &runtime.speaker_discarded_frames, memory_order_relaxed)},
@@ -3907,16 +3913,29 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
       if (marks_turns && !wants_talk && !runtime.talking &&
           runtime.voicelab.call_active && runtime.dial_speech_queued &&
           outbox_free >= 3U) {
-        /* A turn opening is a barge like any other; on a call this fresh the
-         * abandon is usually a no-op, but a greeting's first frames must not
-         * play under the person's own turn. */
-        (void)abandon_speaker_audio();
-        if (publish_turn_marker(ITERATE_KIT_VOICELAB_TURN_START)) {
+        if (uxQueueMessagesWaiting(runtime.mic_queue) == 0U) {
+          /*
+           * A PROMISE WITH NO WORDS IN IT IS CONSUMED SILENTLY. The flag is
+           * raised from intent — wanting the call while it dialled — but on
+           * a board whose microphone only owns its pins behind the capture
+           * fence (the stick), a dial can end with nothing captured. Opening
+           * a turn here committed an EMPTY ptt-end and asked the provider to
+           * answer silence — worse than the pre-buffering behaviour, which
+           * simply stayed quiet until the next real press.
+           */
           runtime.dial_speech_queued = false;
-          runtime.talking = true;
-          runtime.turn_started_ms = now;
-          runtime.flushing_turn = false;
-          ESP_LOGI(tag, "turn start (dial speech, button already up)");
+        } else {
+          /* A turn opening is a barge like any other; on a call this fresh
+           * the abandon is usually a no-op, but a greeting's first frames
+           * must not play under the person's own turn. */
+          (void)abandon_speaker_audio();
+          if (publish_turn_marker(ITERATE_KIT_VOICELAB_TURN_START)) {
+            runtime.dial_speech_queued = false;
+            runtime.talking = true;
+            runtime.turn_started_ms = now;
+            runtime.flushing_turn = false;
+            ESP_LOGI(tag, "turn start (dial speech, button already up)");
+          }
         }
       }
       /*

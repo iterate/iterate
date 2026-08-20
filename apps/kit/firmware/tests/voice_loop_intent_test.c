@@ -474,6 +474,38 @@ static void released_dial_speech_becomes_the_first_turn(void) {
 }
 
 /*
+ * A PROMISE WITH NO WORDS IN IT COMMITS NOTHING. `dial_speech_queued` is
+ * raised from intent — wanting the call while it dialled — but on a board
+ * whose microphone only owns its pins behind the capture fence, the dial can
+ * end with an empty queue. The accept path once opened a turn anyway and
+ * committed an empty ptt-end, asking the provider to answer silence; now the
+ * empty promise is consumed silently and the call waits for a real press.
+ */
+static void a_silent_dial_release_commits_no_turn(void) {
+  size_t after_accept;
+  quiescent();
+  run_ms(ITERATE_KIT_LAUNCH_PLACE_RETRY_MS + 500U);
+
+  /* Press from sleep, HOLD — long enough to be a hold, not a tap — and let
+   * go without a single captured frame, the stick's fence-closed dial. */
+  remote_call("pushToTalk", "start");
+  run_ms(400U);
+  remote_call("pushToTalk", "stop");
+  step();
+
+  /* Seconds pass with no call, exactly like the spoken sibling above. */
+  run_ms(2000U);
+
+  after_accept = iterate_kit_fake_platform_sent_count();
+  deliver_accepted();
+  run_ms(2000U);
+
+  /* No turn opened on the empty queue: no commit, no mic audio. */
+  assert(!sent_after_contains(after_accept, "ptt-end"));
+  assert(!sent_after_contains(after_accept, "mic-frame"));
+}
+
+/*
  * A PRESS INTO A HALF-OPEN SOCKET IS ANSWERED IN ~3 s, NOT 10.
  *
  * The hop stops answering: TCP still accepts every byte, the transport stays
@@ -527,6 +559,7 @@ int main(void) {
   a_press_into_a_live_hop_asks_once();
   pump();
   released_dial_speech_becomes_the_first_turn();
+  a_silent_dial_release_commits_no_turn();
   pump();
   a_press_into_a_dead_hop_replaces_the_socket();
   return 0;

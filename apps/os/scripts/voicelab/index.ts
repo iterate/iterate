@@ -11,7 +11,6 @@ export { matrix } from "./matrix.ts";
 export { reveal } from "./reveal.ts";
 export { reliability } from "./reliability.ts";
 export { talk } from "./talk.ts";
-export { pttMarginal } from "./ptt-marginal.ts";
 export { interjectRecall } from "./interject-recall.ts";
 export { vadDuplex } from "./vad-duplex.ts";
 export { timeline } from "./timeline.ts";
