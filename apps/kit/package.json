@@ -12,8 +12,12 @@
     "ensure-resources": "tsx ./scripts/ensure-resources.ts",
     "firmware:sync": "tsx ./scripts/sync-firmware-assets.ts",
     "gen:wrangler": "tsx ./scripts/generate-wrangler-config.ts",
-    "test": "vitest run --config vitest.config.ts --reporter=default --reporter=../../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
-    "typecheck": "pnpm gen:wrangler && tsc --noEmit"
+    "test": "vitest run --config vitest.config.ts --reporter=default --reporter=../../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts && pnpm firmware:test:host",
+    "firmware:configure": "python3 firmware/tools/generate-atlases.py && cmake -S firmware -B firmware/.build/host -DCMAKE_BUILD_TYPE=Debug -DITERATE_KIT_SANITIZE=ON",
+    "firmware:build:host": "pnpm firmware:configure && cmake --build firmware/.build/host --parallel",
+    "firmware:test:host": "pnpm firmware:build:host && ctest --test-dir firmware/.build/host --output-on-failure",
+    "typecheck": "pnpm gen:wrangler && tsc --noEmit",
+    "voice": "tsx ./clients/voice-cli.ts"
   },
   "dependencies": {
     "@iterate-com/ui": "workspace:*",
@@ -38,6 +42,7 @@
     "typescript": "^5.9.3",
     "vite": "^8.0.16",
     "vitest": "^4.1.7",
-    "wrangler": "catalog:cloudflare"
+    "wrangler": "catalog:cloudflare",
+    "@cloudflare/workers-types": "catalog:cloudflare"
   }
 }

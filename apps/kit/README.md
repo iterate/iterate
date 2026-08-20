@@ -50,15 +50,32 @@ to the Kit Worker.
 
 The raw `iterate-kit/v1` partition is:
 
-| Offset   | Value                            |
-| -------- | -------------------------------- |
-| `0..7`   | ASCII `ITERKIT1`                 |
-| `8..11`  | little-endian JSON byte length   |
-| `12..15` | little-endian CRC-32 of the JSON |
-| `16..`   | UTF-8 JSON, padded with `0xff`   |
+| Offset   | Value                               |
+| -------- | ----------------------------------- |
+| `0..7`   | ASCII `ITERKIT1`                    |
+| `8..11`  | little-endian payload byte length   |
+| `12..15` | little-endian CRC-32 of the payload |
+| `16..`   | TLV fields, padded with `0xff`      |
 
-The JSON contains Wi-Fi SSID/password and Iterate `baseUrl`, project slug, and
-Project API key. OS resolves the immutable slug to its stable project ID before
+The payload is **not JSON** — it is a flat run of `u8 tag | u16 LE length |
+bytes`, because the firmware parses it before it has a JSON reader and a
+mismatch here is unrecoverable in the field. The flasher wrote JSON while the
+firmware read TLV once, and the symptom was a board that flashed perfectly and
+never joined a network.
+
+| Tag | Field                         |
+| --- | ----------------------------- |
+| 1   | Wi-Fi SSID                    |
+| 2   | Wi-Fi password (may be empty) |
+| 3   | Iterate base URL              |
+| 4   | project slug                  |
+| 5   | Project API key               |
+| 6   | device id (optional)          |
+| 7   | kit mount path (optional)     |
+
+Tag 2 is the one field whose value may be zero-length — an open network still
+has a password field, it is simply empty — and every other required tag must
+carry bytes. OS resolves the immutable slug to its stable project ID before
 checking the key revealed from `/secrets/project-api-key`, so the setup flow
 does not expose internal project identity.
 

@@ -245,12 +245,14 @@ export function loadResolvedWorker({
   // Loader isolates capture loopback RPC bindings minted by whoever loaded
   // them first; using those from a mismatched lifetime fails with "Unable to
   // deserialize cloned data due to invalid or unsupported version". The
-  // request-scoped lanes load under the bare identity below and recover from
-  // that skew reactively (see DynamicWorkerRunner's loaderScope: the retry
-  // supplies a recovery nonce); Durable Object hosts pass a per-runner nonce
-  // so an incarnation's facet isolate is never reused by its successor. Build
-  // artifacts remain content-addressed and shared. The deployment id keeps
-  // identities easy to attribute and guarantees separation across a rollout.
+  // request-scoped lanes AND the stream facet lane load under the bare
+  // identity below and recover from that skew reactively (see
+  // DynamicWorkerRunner's loaderScope: the retry, and the stream DO's
+  // facet-call recovery, supply a recovery nonce). Reuse across DO
+  // incarnations is sanctioned: the baked env is loopback stubs with
+  // serializable props, valid for the deployment's life. Build artifacts
+  // remain content-addressed and shared. The deployment id keeps identities
+  // easy to attribute and guarantees separation across a rollout.
   const loaderIdentity = [
     "worker-loader",
     env.WORKER_SELF,

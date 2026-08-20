@@ -45,11 +45,13 @@ function makeDurableObject(overrides: Record<string, unknown> = {}) {
 function relayOver(
   durableObject: ReturnType<typeof makeDurableObject>,
   waitUntil: (promise: Promise<unknown>) => void = () => undefined,
+  onPagerLost?: () => void,
 ) {
   return new CapabilityProviderPagerRelay({
     env: { STREAM: { getByName: () => durableObject } } as never,
     scope: { path: "/", projectId: "project" },
     waitUntil,
+    ...(onPagerLost === undefined ? {} : { onPagerLost }),
   });
 }
 
@@ -167,6 +169,47 @@ describe("CapabilityProviderPagerRelay", () => {
     expect(first.isActive()).toBe(false);
     expect(second.isActive()).toBe(false);
     expect(durableObject.revokeCapability).not.toHaveBeenCalled();
+  });
+
+  it("reports a far-side Pager loss exactly once, so the session owner can tear down", async () => {
+    const pager = new FakePager();
+    dialPager.mockResolvedValue(pager);
+    const background: Promise<unknown>[] = [];
+    const onPagerLost = vi.fn();
+    const relay = relayOver(
+      makeDurableObject(),
+      (promise) => background.push(promise),
+      onPagerLost,
+    );
+    await relay.provide({ capability: {}, path: ["first"], type: "live" });
+    await relay.provide({ capability: {}, path: ["second"], type: "live" });
+
+    pager.disconnect();
+    await Promise.all(background);
+
+    expect(onPagerLost).toHaveBeenCalledTimes(1);
+  });
+
+  it("never reports Pager loss for its own deliberate closes", async () => {
+    const pager = new FakePager();
+    dialPager.mockResolvedValue(pager);
+    const background: Promise<unknown>[] = [];
+    const onPagerLost = vi.fn();
+    const relay = relayOver(
+      makeDurableObject(),
+      (promise) => background.push(promise),
+      onPagerLost,
+    );
+    const only = await relay.provide({ capability: {}, path: ["only"], type: "live" });
+
+    // Revoking the final mount closes the Pager from OUR side...
+    await only.revoke({ path: only.path, providedAtOffset: only.providedAtOffset });
+    expect(pager.closed).toEqual([{ code: 1000, reason: "no live capability mounts" }]);
+    // ...and even when that close comes back as an event, it is not a loss.
+    pager.disconnect();
+    await Promise.all(background);
+
+    expect(onPagerLost).not.toHaveBeenCalled();
   });
 
   it("rolls back only the mount whose activation fails", async () => {

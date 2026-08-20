@@ -1,0 +1,11 @@
+# 16 MiB flash (Home Assistant Voice Preview Edition). Offsets match the
+# donor firmware exactly so the ITERKIT1 provisioning blob at 0x510000 on
+# the physical unit survives a plain app flash. The stock HA image keeps its
+# app at 0x10000 too.
+# Name,     Type, SubType, Offset,   Size,     Flags
+nvs,        data, nvs,     0x9000,   0x6000,
+phy_init,   data, phy,     0xf000,   0x1000,
+ota_0,      app,  ota_0,   0x10000,  0x500000,
+iterate_kit, 0x40, 0x00,   0x510000, 0x1000,
+otadata,    data, ota,     0x511000, 0x2000,
+ota_1,      app,  ota_1,   0x520000, 0x500000,

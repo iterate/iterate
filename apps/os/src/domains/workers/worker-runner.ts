@@ -31,6 +31,13 @@ export type DynamicWorkerTraceRole = "project_config" | "run_script" | "schedule
 const WORKERS_RPC_CLONE_VERSION_ERROR =
   "Unable to deserialize cloned data due to invalid or unsupported version.";
 
+/** True when an error is workerd's clone-version skew — a loader isolate
+ * outliving the bindings it captured. The one error class where retiring the
+ * shared isolate (a recovery nonce) and retrying is the correct response. */
+export function isWorkerRpcCloneVersionError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes(WORKERS_RPC_CLONE_VERSION_ERROR);
+}
+
 // Recovery nonce for the shared-scope lanes in this parent isolate. Undefined
 // in steady state ON PURPOSE: shared-scope loads then ride the bare loader
 // identity, so parent isolates coming and going mint NO new billable Dynamic
@@ -151,11 +158,14 @@ export class DynamicWorkerRunner {
   async loadStatefulClass<T extends DurableObjectClass = DurableObjectClass>(
     ref: StatefulDynamicWorkerRef,
     buildBudgetMs?: number,
+    /** Supplied only by a caller that just classified a clone-version skew on
+     * this class's isolate; retires the shared identity for the rebuild. */
+    freshInstanceNonce?: string,
   ): Promise<
     | { klass: T; ok: true; resolved: ResolvedWorkerSource }
     | { failure: WorkerBuildFailure; ok: false }
   > {
-    const loaded = await this.#load(ref, "cached", buildBudgetMs);
+    const loaded = await this.#load(ref, "cached", buildBudgetMs, freshInstanceNonce);
     if (!loaded.ok) return loaded;
     return {
       klass: this.#durableObjectClass<T>(ref, loaded.worker),

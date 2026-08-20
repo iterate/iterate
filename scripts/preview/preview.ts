@@ -5682,6 +5682,21 @@ async function selectPreviewAppsForPullRequest(input: {
       `selecting apps by diff ${compareBaseSha.slice(0, 7)}...${input.pullRequestHeadSha.slice(0, 7)} (${compared.changedFilenames.length} changed files)`,
     );
 
+    // GitHub's compare response caps its file list at 300, and the list is
+    // ordered — so on a large diff the tail is simply absent, and absence here
+    // reads as "that app did not change". Observed: a 386-file branch whose
+    // firmware paths sort before `apps/os/**` consumed the whole cap, OS was
+    // never selected, nothing deployed, and the e2e lane then had no recorded
+    // deployment to test and failed the PR. The container-rollout decision
+    // already refuses to trust a capped comparison; app selection must refuse
+    // the same way, and the only safe refusal is the whole fleet.
+    if (compared.changedFilenames.length >= 300) {
+      logPreview(
+        "the comparison hit GitHub's 300-file response cap, so an omitted file cannot be proven irrelevant — deploying ALL preview apps",
+      );
+      return Object.values(cloudflarePreviewApps);
+    }
+
     const sharedPathHit = compared.changedFilenames.find((filename) =>
       matchesPreviewPath(filename, cloudflarePreviewSharedPaths),
     );

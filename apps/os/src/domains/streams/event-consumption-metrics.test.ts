@@ -22,28 +22,73 @@ describe("EventConsumptionMetrics", () => {
     });
   });
 
-  it("closes the consume-own-append loop when ingest passes the committed offset", () => {
+  it("closes the consume-own-append loop when the batch carrying the offset is ingested", () => {
     const metrics = new EventConsumptionMetrics(T0);
     metrics.noteAppendCommitted({ maxCommittedOffset: 10, t0: T0, atMs: T0 + 40 });
     expect(metrics.report().appendRoundTripMs).toMatchObject({ last: 40, samples: 1 });
     // Ingest through offset 9: the loop is still open.
     metrics.noteBatchIngested({
       ingestedThroughOffset: 9,
-      eventCount: 3,
+      ingestedOffsets: [7, 8, 9],
       ingestStartedAtMs: T0 + 60,
       atMs: T0 + 65,
     });
     expect(metrics.report().consumeOwnAppendMs).toBeNull();
-    // Ingest through offset 12 closes it: sample spans call-start → ingest-done.
+    // The batch that CARRIES offset 10 closes it: call-start → ingest-done.
     metrics.noteBatchIngested({
       ingestedThroughOffset: 12,
-      eventCount: 2,
+      ingestedOffsets: [10, 12],
       ingestStartedAtMs: T0 + 80,
       atMs: T0 + 90,
     });
     expect(metrics.report().consumeOwnAppendMs).toMatchObject({ last: 90, samples: 1 });
     expect(metrics.report()).toMatchObject({ batchesIngested: 2, eventsIngested: 5 });
     expect(metrics.report().ingestMs).toMatchObject({ last: 10, samples: 2 });
+  });
+
+  /*
+   * THE MEASUREMENT ARTEFACT THIS RULE EXISTS TO KILL, measured live on a
+   * voice facet: `consumeOwnAppendMs` read p50 8.7s / p95 12s while
+   * `appendRoundTripMs` read 24ms. Every one of those samples was an append
+   * of a type the processor does not consume — a speaker frame — retired by
+   * the acknowledgement cursor sweeping past it when the person spoke again.
+   * The number was the gap between two sentences.
+   */
+  it("never times an own append the cursor swept past without delivering it", () => {
+    const metrics = new EventConsumptionMetrics(T0);
+    metrics.noteAppendCommitted({ maxCommittedOffset: 10, t0: T0, atMs: T0 + 24 });
+    // Nine seconds later an unrelated event arrives at a higher offset. The
+    // filtered subscription skipped offset 10 durably; it is never coming.
+    metrics.noteBatchIngested({
+      ingestedThroughOffset: 40,
+      ingestedOffsets: [40],
+      ingestStartedAtMs: T0 + 9_000,
+      atMs: T0 + 9_001,
+    });
+    expect(metrics.report().consumeOwnAppendMs).toBeNull();
+    // …and the dead correlation is gone, so no LATER batch can revive it.
+    metrics.noteBatchIngested({
+      ingestedThroughOffset: 99,
+      ingestedOffsets: [99],
+      ingestStartedAtMs: T0 + 20_000,
+      atMs: T0 + 20_001,
+    });
+    expect(metrics.report().consumeOwnAppendMs).toBeNull();
+    // The round trip was always honest, and stays reported.
+    expect(metrics.report().appendRoundTripMs).toMatchObject({ last: 24, samples: 1 });
+  });
+
+  it("does not open a correlation for an append with nothing this host consumes", () => {
+    const metrics = new EventConsumptionMetrics(T0);
+    metrics.noteAppendCommitted({ maxCommittedOffset: null, t0: T0, atMs: T0 + 24 });
+    metrics.noteBatchIngested({
+      ingestedThroughOffset: 40,
+      ingestedOffsets: [40],
+      ingestStartedAtMs: T0 + 9_000,
+      atMs: T0 + 9_001,
+    });
+    expect(metrics.report().consumeOwnAppendMs).toBeNull();
+    expect(metrics.report().appendRoundTripMs).toMatchObject({ last: 24, samples: 1 });
   });
 
   it("one catch-up ingest settles several pending appends; reconnect clears them", () => {
@@ -53,7 +98,7 @@ describe("EventConsumptionMetrics", () => {
     metrics.noteAppendCommitted({ maxCommittedOffset: 20, t0: T0 + 40, atMs: T0 + 50 });
     metrics.noteBatchIngested({
       ingestedThroughOffset: 10,
-      eventCount: 10,
+      ingestedOffsets: [5, 8, 10],
       ingestStartedAtMs: T0 + 99,
       atMs: T0 + 100,
     });
@@ -63,7 +108,7 @@ describe("EventConsumptionMetrics", () => {
     metrics.clearPendingAppends();
     metrics.noteBatchIngested({
       ingestedThroughOffset: 25,
-      eventCount: 5,
+      ingestedOffsets: [20, 25],
       ingestStartedAtMs: T0 + 200,
       atMs: T0 + 201,
     });
@@ -76,7 +121,7 @@ describe("EventConsumptionMetrics", () => {
     // host ingests offset 7 before its own append call returns.
     metrics.noteBatchIngested({
       ingestedThroughOffset: 7,
-      eventCount: 1,
+      ingestedOffsets: [7],
       ingestStartedAtMs: T0 + 20,
       atMs: T0 + 30,
     });
@@ -86,7 +131,7 @@ describe("EventConsumptionMetrics", () => {
     // Nothing left pending to mis-settle against a later unrelated batch.
     metrics.noteBatchIngested({
       ingestedThroughOffset: 100,
-      eventCount: 1,
+      ingestedOffsets: [100],
       ingestStartedAtMs: T0 + 900,
       atMs: T0 + 901,
     });
@@ -95,12 +140,14 @@ describe("EventConsumptionMetrics", () => {
 
   it("caps pending own-append correlations, dropping oldest first", () => {
     const metrics = new EventConsumptionMetrics(T0);
+    const offsets: number[] = [];
     for (let index = 0; index < 20; index += 1) {
       metrics.noteAppendCommitted({ maxCommittedOffset: index + 1, t0: T0, atMs: T0 + 1 });
+      offsets.push(index + 1);
     }
     metrics.noteBatchIngested({
       ingestedThroughOffset: 100,
-      eventCount: 1,
+      ingestedOffsets: offsets,
       ingestStartedAtMs: T0 + 5,
       atMs: T0 + 6,
     });
@@ -119,7 +166,7 @@ describe("EventConsumptionMetrics", () => {
     metrics.noteBatchIngested({
       ingestedThroughOffset: 1,
       newestEventCreatedAtMs: T0,
-      eventCount: 1,
+      ingestedOffsets: [1],
       ingestStartedAtMs: T0 + 599,
       atMs: T0 + 600,
     });
@@ -131,7 +178,7 @@ describe("EventConsumptionMetrics", () => {
     metrics.noteBatchIngested({
       ingestedThroughOffset: 1,
       newestEventCreatedAtMs: T0,
-      eventCount: 1,
+      ingestedOffsets: [1],
       ingestStartedAtMs: T0 + 40,
       atMs: T0 + 50,
     });
@@ -142,7 +189,7 @@ describe("EventConsumptionMetrics", () => {
     const metrics = new EventConsumptionMetrics(T0);
     metrics.noteBatchIngested({
       ingestedThroughOffset: 0,
-      eventCount: 0,
+      ingestedOffsets: [],
       ingestStartedAtMs: T0,
       atMs: T0 + 1,
     });

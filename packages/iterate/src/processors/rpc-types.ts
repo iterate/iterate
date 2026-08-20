@@ -532,11 +532,20 @@ export type GetProcessorRuntimeState = () => ProcessorRuntimeState | Promise<Pro
  * (replaced, delivery failure, or explicit close); it rejects when the stream's
  * Durable Object incarnation is gone. Either non-`true` outcome means the
  * owner should open another connection.
+ *
+ * CAUTION ON THE DATA PROPERTIES BELOW. A handle obtained across the worker
+ * relay was measured NOT to materialize `streamMaxOffset` as a number — it is
+ * present inside the Stream DO and can arrive undefined to a remote consumer.
+ * Prefer the delivery batches for offsets: every connection receives an initial
+ * (possibly empty) batch immediately on open, carrying `streamMaxOffset` and
+ * `scannedThroughOffset`, and those are the values to seed a resume cursor
+ * from. A consumer that advances its cursor from the handle can silently
+ * resume at zero.
  */
 export type StreamConnectionHandle = Disposable & {
   /** Stable identity of this live connection. */
   connectionKey: ConnectionKey;
-  /** The stream's max offset when the connection opened. */
+  /** The stream's max offset when the connection opened. See the caution above. */
   streamMaxOffset: number;
   ping(): boolean | Promise<boolean>;
   /** Close this connection; safe to call more than once. */

@@ -3,5 +3,6 @@
 .github/workflows/* linguist-generated=true
 **/routeTree.gen.ts linguist-generated=true
 apps/os/src/domains/repos/config-repo-template.generated.ts linguist-generated=true
+apps/os/scripts/voicelab/config-repo/viseme-model.generated.ts linguist-generated=true
 apps/os/src/itx/examples.generated.ts linguist-generated=true
 **/stream-repros/*.events.json linguist-generated=true

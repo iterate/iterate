@@ -1,0 +1,187 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "fspp/atlas_manifest.schema.json",
+  "title": "FSPP per-target atlas manifest",
+  "description": "Browser/WASM-facing description of one compiled target atlas: exactly the data the emitted face_sprite_atlas_t C tables encode, plus provenance and validation evidence. A JS consumer can decode blob_base64 with the documented PackBits dialect and render the identical asset.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "id",
+    "target",
+    "format",
+    "palette",
+    "cells",
+    "blob_base64",
+    "mouth_arrays",
+    "banks",
+    "viseme_map",
+    "c_symbol"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "generator": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" }
+      }
+    },
+    "id": { "type": "string" },
+    "display_name": { "type": "string" },
+    "license": { "type": "string" },
+    "target": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "framing": { "enum": ["face_fill", "stage"] },
+        "canvas": { "type": "array", "items": { "type": "integer" } },
+        "scale": { "type": "integer" },
+        "margin": { "type": "integer" },
+        "display_pixels": { "type": "array", "items": { "type": "integer" } },
+        "max_flash_bytes": { "type": "integer" }
+      }
+    },
+    "format": {
+      "type": "object",
+      "description": "Always the FSPR v2 face_sprite_atlas_t container: 8-bit palette indices, RGB565 palette, raw or PackBits cell streams (control <128: literal run of control+1 bytes; >128: repeat next byte 257-control times; ==128: no-op).",
+      "properties": {
+        "container": { "const": "face_sprite_atlas_t" },
+        "magic": { "const": "FSPR" },
+        "version": { "const": 2 },
+        "transparent_index": { "const": 0 }
+      }
+    },
+    "ir": {
+      "type": "object",
+      "description": "The renderer IR contract this atlas serves: the stable 12-byte face_keyframe_t prefix, the 40-byte face_render_key_t, the 16 kHz sample clock, and the viseme-set ids used by viseme_map.",
+      "properties": {
+        "keyframe_bytes": { "const": 12 },
+        "render_key_bytes": { "const": 40 },
+        "render_key_schema_version": { "const": 2 },
+        "sample_clock_hz": { "const": 16000 },
+        "viseme_sets": { "type": "object" }
+      }
+    },
+    "background_565": { "type": "integer" },
+    "palette": {
+      "type": "object",
+      "properties": {
+        "transparent_index": { "const": 0 },
+        "rgb888": { "type": "array", "items": { "type": "string" } },
+        "rgb565": { "type": "array", "items": { "type": "integer" } },
+        "merged_after_565": {
+          "type": "array",
+          "description": "(kept_index, dropped_index) pairs merged by RGB565 truncation."
+        },
+        "variants": {
+          "type": "array",
+          "description": "Index-preserving palette/background remaps that share the same cells and compressed blob.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "display_name": { "type": "string" },
+              "background_rgb888": { "type": "string" },
+              "background_rgb565": { "type": "integer" },
+              "rgb888": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "rgb565": {
+                "type": "array",
+                "items": { "type": "integer" }
+              },
+              "c_symbol": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "cells": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "index": { "type": "integer" },
+          "names": { "type": "array", "items": { "type": "string" } },
+          "width": { "type": "integer" },
+          "height": { "type": "integer" },
+          "offset_x": { "type": "integer" },
+          "offset_y": { "type": "integer" },
+          "encoding": { "enum": ["raw", "packbits"] },
+          "blob_offset": { "type": "integer" },
+          "blob_length": { "type": "integer" },
+          "raw_sha256": { "type": "string" }
+        }
+      }
+    },
+    "blob_base64": { "type": "string" },
+    "blob_sha256": { "type": "string" },
+    "mouth_slots": {
+      "type": "array",
+      "description": "23 entries; borrowed_from records build-time role fallbacks so every viseme lands on authored pixels.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "slot": { "type": "integer" },
+          "name": { "type": "string" },
+          "role": { "type": "string" },
+          "authored": { "type": "boolean" },
+          "borrowed_from": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "mouth_arrays": {
+      "type": "array",
+      "items": { "type": "array", "items": { "type": "integer" } }
+    },
+    "fallback_slots": {
+      "type": "array",
+      "description": "role -> slot table (9 entries) emitted into the atlas."
+    },
+    "banks": {
+      "type": "array",
+      "description": "Bank 0 is the neutral fallback; targets are action-space coordinates matched by the player's weighted L1 metric.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "slug": { "type": "string" },
+          "target": { "type": "object" },
+          "base_cell": { "type": "integer" },
+          "overlay_cell": { "type": "integer" },
+          "mouth": { "type": "object" },
+          "eye_left": { "type": "object" },
+          "eye_right": { "type": "object" }
+        }
+      }
+    },
+    "viseme_map": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "set": { "type": "string" },
+          "set_id": { "type": "integer" },
+          "viseme": { "type": "integer" },
+          "slot": { "type": "integer" },
+          "role": { "type": "string" }
+        }
+      }
+    },
+    "flags": { "type": "array", "items": { "type": "string" } },
+    "c_symbol": { "type": "string" },
+    "stats": { "type": "object" },
+    "notes": { "type": "array", "items": { "type": "string" } },
+    "provenance": {
+      "type": "object",
+      "description": "Spec/sheet content hashes, detected pitch, background, erase and mouth-mode decisions; enough to reproduce or audit the build."
+    },
+    "validation": {
+      "type": "object",
+      "properties": {
+        "status": { "enum": ["pass", "warn", "fail"] },
+        "gates": { "type": "array" }
+      }
+    }
+  }
+}

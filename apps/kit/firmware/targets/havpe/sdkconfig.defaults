@@ -1,0 +1,65 @@
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_ESP_MAIN_TASK_AFFINITY_CPU0=y
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_UART_DEFAULT=n
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_BOOT_INIT=y
+# 80 MHz octal PSRAM is the donor-proven configuration for THIS board
+# (unlike the Waveshare, where 80 MHz broke TLS signature verification).
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_DEFAULT_LEVEL=3
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK=y
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
+CONFIG_FREERTOS_RUN_TIME_COUNTER_TYPE_U64=y
+CONFIG_FREERTOS_RUN_TIME_STATS_USING_ESP_TIMER=y
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+
+# Required by the atomics the telemetry uses once .bss rides PSRAM.
+CONFIG_STDATOMIC_S32C1I_SPIRAM_WORKAROUND=y
+
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
+
+# Keep internal DMA memory available for Wi-Fi and the I2S drivers.
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=98304
+
+# 1ms ticks: pdMS_TO_TICKS() of anything under 10ms rounds to ZERO at the
+# 100Hz default, and vTaskDelay(0) busy-spins.
+CONFIG_FREERTOS_HZ=1000
+
+# The I2S ISRs must not be deferred by a flash/cache stall — doubly so on
+# slave buses whose master (the XMOS) keeps clocking regardless.
+CONFIG_I2S_ISR_IRAM_SAFE=y
+CONFIG_GDMA_ISR_IRAM_SAFE=y
+# Pin lwIP to the network core; the audio tasks own core 1.
+CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0=y
+
+# Hardware watchdog on the app task: every software self-heal runs ON that
+# task, so none of them can fire when it is the thing that is stuck.
+CONFIG_ESP_TASK_WDT_EN=y
+CONFIG_ESP_TASK_WDT_INIT=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=20
+CONFIG_ESP_TASK_WDT_PANIC=y
+
+# The microphone does not fit in a 5760-byte socket (see the Waveshare
+# port's measured history): room for six ~5.2 KiB mic appends in flight.
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=32768
+CONFIG_LWIP_TCP_WND_DEFAULT=32768
+
+# The receive mailbox sized for that window (window/MSS + 2 per IDF's rule).
+CONFIG_LWIP_TCP_RECVMBOX_SIZE=24
+
+# Recover from a single loss without discarding the burst behind it.
+CONFIG_LWIP_TCP_SACK_OUT=y
+CONFIG_LWIP_TCP_OOSEQ_MAX_PBUFS=12
+
+# TLS record buffers come from PSRAM, not the internal heap.
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y

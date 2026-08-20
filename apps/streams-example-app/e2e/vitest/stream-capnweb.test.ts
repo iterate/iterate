@@ -436,23 +436,23 @@ describe("stream capnweb protocol", () => {
     using first = await stream.stream.openConnection({
       processEventBatch: (batch) => callbackA.processEventBatch(batch),
     });
-    using second = await stream.stream.openConnection({
+    // Held only to keep the second connection open; keys are read from
+    // runtime state below.
+    using _second = await stream.stream.openConnection({
       processEventBatch: (batch) => callbackB.processEventBatch(batch),
     });
 
-    const firstKey = await first.connectionKey;
-    const secondKey = await second.connectionKey;
-    expect(firstKey).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
-    expect(secondKey).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
-    expect(firstKey).not.toBe(secondKey);
-
+    // The handle is a pure capability (no data properties cross the wire);
+    // the server-assigned keys are observable in runtime state.
     const runtime = await stream.stream.runtimeState();
-    expect(runtime.runtime.connections[firstKey]).toMatchObject({
-      kind: "session",
-    });
-    expect(runtime.runtime.connections[secondKey]).toMatchObject({
-      kind: "session",
-    });
+    const sessionKeys = Object.entries(runtime.runtime.connections)
+      .filter(([, connection]) => connection.kind === "session")
+      .map(([key]) => key);
+    expect(sessionKeys).toHaveLength(2);
+    for (const key of sessionKeys) {
+      expect(key).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+    }
+    expect(sessionKeys[0]).not.toBe(sessionKeys[1]);
 
     const [appended] = await stream.stream.append({
       type: "test.stream.capnweb-anon-sub",

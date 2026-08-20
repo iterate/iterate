@@ -1,0 +1,374 @@
+/*
+ * M5StickS3 — what makes this board this board.
+ *
+ * The program it runs is components/voice/src/voice_loop.c, and it is the same
+ * program the other three run. What is left here is the hardware: a 240x135
+ * status screen, two buttons, an ES8311, and the one structural novelty this
+ * board has — the HALF-DUPLEX FENCE.
+ *
+ * THE FENCE IS PHYSICS, NOT POLICY. The microphone is the same codec's ADC
+ * driven on I2S1, sharing MCLK/BCLK/WS (GPIO 18/17/15) with the I2S0 speaker
+ * path — two masters on one set of pins. Capture therefore requires DELETING
+ * the playback channel, so the microphone cannot run while the speaker does
+ * even if the firmware wanted it to. On a board with no AEC that is the whole
+ * echo story, and it is why turns here are push-to-talk.
+ *
+ * The loop owns the SEQUENCING of that fence (marker on the wire -> speaker
+ * queue empty -> pins), because the ordering is a correctness argument rather
+ * than a driver detail. This file owns only the asking and the answering.
+ */
+#include <stdio.h>
+
+#include "esp_timer.h"
+
+#include "iterate/kit/audio_processor.h"
+#include "iterate/kit/capabilities/arguments.h"
+#include "iterate/kit/devices/m5sticks3.h"
+#include "iterate/kit/session_grammar.h"
+#include "iterate/kit/voice/loop.h"
+#include "iterate/kit/voice_device_profile.h"
+
+#include "m5sticks3_audio.h"
+#include "m5sticks3_board.h"
+
+/*
+ * The baked UI sounds: the wake chime (the official Home Assistant Voice PE
+ * press asset) and the "call ended" announcement, 16 kHz mono PCM16LE in
+ * .rodata. Included here because the COMPOSITION decides what a gesture
+ * sounds like; the audio driver only knows how to play PCM it is handed.
+ */
+#include "assets/m5sticks3_sounds_generated.inc"
+
+/*
+ * The session the two buttons speak, and mirrors of the loop's two view
+ * facts the grammar classifies against, because `poll` runs before the
+ * pass's view exists. The machine is components/core's shared session
+ * grammar; this file only wires gestures to it and its answers to the
+ * loop's intent seams.
+ */
+static struct {
+  struct iterate_kit_session session;
+  bool call_active;
+  bool wants_call;
+} session_state;
+
+/*
+ * `face.set({face})` — the same catalogue the CoreS3 wears, on the small
+ * panel. There is no local face control at all on this board, so a face
+ * nobody can ask for by name is a face it never makes.
+ */
+static const char *const button_press_path[] = {"button", "press"};
+
+static enum capnweb_status button_press(
+    void *context, const struct capnweb_call *call, struct capnweb_reply *reply) {
+  (void)context;
+  (void)call;
+  m5sticks3_board_inject_side_press();
+  return capnweb_reply_set_boolean(reply, true);
+}
+
+static const char *const face_set_path[] = {"face", "set"};
+
+static enum capnweb_status face_set(
+    void *context,
+    const struct capnweb_call *call,
+    struct capnweb_reply *reply) {
+  struct capnweb_value object = {0};
+  struct capnweb_value slug = {0};
+  char buffer[48];
+  size_t length = 0U;
+  (void)context;
+  if (!iterate_kit_read_object_argument(call, &object) ||
+      !capnweb_value_object_get(&object, "face", &slug) ||
+      capnweb_value_copy_string(&slug, buffer, sizeof(buffer), &length) !=
+          CAPNWEB_OK) {
+    return capnweb_reply_set_error(
+        reply, "TypeError", "face.set needs {face} as a catalogue slug");
+  }
+  if (!m5sticks3_board_request_face(buffer, length)) {
+    return capnweb_reply_set_error(
+        reply,
+        "Error",
+        "unknown face — the catalogue is dot-matrix-oracle, furnace-imp, "
+        "karakuri-brass, moonscope, starbyte");
+  }
+  return capnweb_reply_set_boolean(reply, true);
+}
+
+static size_t modules(
+    void *context, struct iterate_kit_module *out, size_t capacity) {
+  static const struct iterate_kit_method board_methods[] = {
+    {button_press_path, 2U, button_press},
+    {face_set_path, 2U, face_set},
+  };
+  (void)context;
+  if (capacity < 1U) return 0U;
+  out[0] = (struct iterate_kit_module){
+    .methods = board_methods,
+    .method_count = sizeof(board_methods) / sizeof(board_methods[0]),
+    .context = NULL,
+    .close = NULL,
+    .session_ended = NULL,
+  };
+  return 1U;
+}
+
+static bool start(void *context, struct iterate_kit_board_audio *out) {
+  (void)context;
+  /* M5Unified first, and it fails closed on board identity: a wrong image
+   * must not drive another board's pins. */
+  if (!m5sticks3_board_init()) return false;
+  if (!m5sticks3_audio_init()) return false;
+  out->codec = m5sticks3_audio_codec();
+  out->processor = iterate_kit_audio_processor_passthrough();
+  return true;
+}
+
+static void present(
+    void *context, const struct iterate_kit_voice_view *view) {
+  (void)context;
+  /*
+   * The setters already compare before marking dirty, so writing all of them
+   * every pass costs six compares and repaints nothing. `tick` is the throttled
+   * repaint, and this panel is pumped by its caller — there is no LVGL timer
+   * behind it — which is why `present` is also the pump.
+   */
+  m5sticks3_ui_set_state((enum m5sticks3_ui_state)view->screen);
+  m5sticks3_ui_set_status(view->status == NULL ? "" : view->status);
+  m5sticks3_ui_set_call_active(view->call_active);
+  /* Mirrored for `poll`, which classifies the session before this pass's
+   * view exists — one poll of lag, invisible at the loop's cadence. */
+  session_state.call_active = view->call_active;
+  session_state.wants_call = view->wants_call;
+  m5sticks3_ui_set_api_ready(view->api_ready);
+  m5sticks3_ui_set_stream_ready(view->stream_ready);
+  m5sticks3_ui_set_link_ready(view->link_ready);
+  if (view->fault) m5sticks3_ui_set_fault();
+  m5sticks3_ui_tick();
+}
+
+static void poll(void *context, struct iterate_kit_voice_intent *out) {
+  (void)context;
+  m5sticks3_board_poll();
+  /*
+   * THE BUTTONS MEAN WHAT THE SESSION SAYS THEY MEAN — the shared grammar
+   * in iterate/kit/session_grammar.h, push-to-talk posture. The side button
+   * is the call control, its own button rather than the talk hold, so a
+   * bare press WAKES from idle (`tap_wakes`) and ends the session it is in;
+   * the front button is the talk hold, and holding it from idle is a wake
+   * too. The grammar's chime edges render through the baked sounds — the
+   * wake chime and "call ended" — except where the half-duplex fence makes
+   * a render physically impossible: a wake by front-hold hands the pins to
+   * the microphone in the same breath, so play_sound drops that chime and
+   * the hold stays chime-less. What the machine fixes over the old raw
+   * toggle: a press or a front-hold during the teardown no longer reopens
+   * the call it just ended (ENDING absorbs both), and a session the far end
+   * hangs up stays ended under a still-held button.
+   */
+  struct iterate_kit_session_actions actions;
+  const struct iterate_kit_session_poll gestures = {
+    .tap = m5sticks3_board_take_side_press(),
+    .held = m5sticks3_board_talk_held(),
+    .wants_call = session_state.wants_call,
+    .call_active = session_state.call_active,
+    .push_to_talk = true,
+    .tap_wakes = true,
+    .tap_ends = true,
+    .now_ms = (uint64_t)(esp_timer_get_time() / 1000),
+  };
+  iterate_kit_session_step(&session_state.session, &gestures, &actions);
+  out->start_call = actions.start_call;
+  out->end_call = actions.end_call;
+  out->talk_held = actions.talk_held;
+  /* End before wake: play_sound replaces, so if one poll carries both
+   * edges the newer intent — the wake — is the one heard. */
+  if (actions.end_chime) {
+    m5sticks3_audio_play_sound(
+        m5sticks3_sound_chime_ended, sizeof(m5sticks3_sound_chime_ended));
+  }
+  if (actions.wake_chime) {
+    m5sticks3_audio_play_sound(
+        m5sticks3_sound_chime_press, sizeof(m5sticks3_sound_chime_press));
+  }
+}
+
+static void phase(void *context, enum iterate_kit_voice_phase phase_value) {
+  (void)context;
+  switch (phase_value) {
+    case ITERATE_KIT_VOICE_PHASE_ARRIVED:
+      m5sticks3_audio_amplifier(true);
+      break;
+    case ITERATE_KIT_VOICE_PHASE_FEEDING:
+      m5sticks3_audio_watch(true);
+      break;
+    case ITERATE_KIT_VOICE_PHASE_WAITING:
+      m5sticks3_audio_watch(false);
+      break;
+    case ITERATE_KIT_VOICE_PHASE_DRAINING:
+      m5sticks3_audio_draining();
+      m5sticks3_audio_watch(false);
+      break;
+    case ITERATE_KIT_VOICE_PHASE_FLUSHED:
+      /* Disarm before declaring: the other order records the device's own
+       * intentional cut as listener-visible starvation. */
+      m5sticks3_audio_watch(false);
+      m5sticks3_audio_note_flush();
+      break;
+    case ITERATE_KIT_VOICE_PHASE_QUIET:
+      /*
+       * Not while the board's own voice is mid-word: the idle powerdown fires
+       * 1.5 s after the last stream write, which is exactly when "call ended"
+       * is playing. QUIET is re-raised every idle pass, so the amplifier
+       * still drops on the first pass after the sound finishes.
+       */
+      if (!m5sticks3_audio_sound_active()) m5sticks3_audio_amplifier(false);
+      break;
+  }
+}
+
+static void capture_fence(void *context, bool microphone_owns_pins) {
+  (void)context;
+  m5sticks3_audio_set_capture(microphone_owns_pins);
+}
+
+static bool playout_fenced_out(void *context) {
+  (void)context;
+  /* Either the microphone holds the pins, or the handover is still in flight. */
+  return m5sticks3_audio_capturing() || m5sticks3_audio_mode_switching();
+}
+
+static enum iterate_kit_status set_volume(
+    void *context, uint8_t percent, uint8_t *applied) {
+  (void)context;
+  return m5sticks3_audio_set_volume(percent, applied);
+}
+
+static uint8_t volume(void *context) {
+  (void)context;
+  return m5sticks3_audio_volume();
+}
+
+static size_t health(void *context, char *out, size_t capacity) {
+  struct field {
+    const char *name;
+    uint32_t value;
+  };
+  const struct field fields[] = {
+    {"codecCaptureOverruns", m5sticks3_audio_capture_overruns()},
+    {"codecCaptureFailures", m5sticks3_audio_capture_driver_failures()},
+    {"codecPlaybackFailures", m5sticks3_audio_playback_driver_failures()},
+    /* The task-side starvation measure: ms the ring was empty, and how often. */
+    {"spkStarvedMs", m5sticks3_audio_starved_ms()},
+    {"spkStarveEvents", m5sticks3_audio_starve_events()},
+    /* The half-duplex fence, this board's one structural novelty. */
+    {"audioModeSwitches", m5sticks3_audio_mode_switches()},
+    /*
+     * The face, counted rather than eyeballed. A face is the one part of this
+     * device a person judges by eye, which makes it the easiest thing to
+     * believe is working when it is not.
+     */
+    {"faceFrames", m5sticks3_board_face_frames()},
+    {"faceFailures", m5sticks3_board_face_failures()},
+  };
+  size_t used = 0U;
+  size_t index;
+  (void)context;
+  for (index = 0U; index < sizeof(fields) / sizeof(fields[0]); index++) {
+    const int written = snprintf(
+        out + used,
+        capacity - used,
+        ",\"%s\":%u",
+        fields[index].name,
+        (unsigned int)fields[index].value);
+    if (written <= 0 || (size_t)written >= capacity - used) return 0U;
+    used += (size_t)written;
+  }
+  return used;
+}
+
+static const struct iterate_kit_board_ops ops = {
+  .start = start,
+  .present = present,
+  .poll = poll,
+  .phase = phase,
+  .capture_meta = NULL,
+  /* Providing this pair is how this board declares itself half duplex. */
+  .capture_fence = capture_fence,
+  .playout_fenced_out = playout_fenced_out,
+  /*
+   * The mouth is fed by the AUDIO layer, not from here: the playback task
+   * hands each mono frame it wrote to the board's envelope animator, so the
+   * face animates audio the hardware actually accepted.
+   */
+  .observe_playout = NULL,
+  .observe_answer = NULL,
+  .modules = modules,
+  .health = health,
+};
+
+static const struct iterate_kit_board_facts facts = {
+  .stream_path = "/agents/voice/m5stick-s3",
+  .client_path = "/clients/m5stick-s3",
+  .conversation_id = "stickdev",
+  .greeting = "Hi, I am your Iterate device. What can I do for you?",
+  .instructions =
+      "M5StickS3: a small voice endpoint with a text status screen. "
+      "The front button is push-to-talk; the side button starts and ends a "
+      "call. pushToTalk.start() is the whole gesture: it opens a call if none "
+      "is up and holds the microphone open, exactly as holding the front "
+      "button does; pushToTalk.stop() commits the turn and asks for an answer. "
+      "It has no echo cancellation and its microphone and speaker share pins, "
+      "so it only listens while talk is held. "
+      "conversation.start() opens a call WITHOUT holding the microphone, for "
+      "when you want it to greet you first; conversation.end() hangs up. "
+      "face.set({face}) changes which animated face it wears; the catalogue "
+      "is dot-matrix-oracle, furnace-imp, karakuri-brass, moonscope, "
+      "starbyte. "
+      "health() returns this device's full diagnostics — start there when it "
+      "seems unwell. "
+      "speaker.setVolume({percent}) sets how loud it plays, 0-100; "
+      "speaker.volume() reads it back. Both answer {percent,ceiling}. "
+      "Audio and lifecycle events share this stream connection.",
+  .peer_description =
+      "{\"instructions\":\"M5StickS3 voice endpoint. "
+      "pushToTalk.start() opens a call and holds the microphone open the way "
+      "the front button does, and pushToTalk.stop() commits the turn; "
+      "conversation.start() opens a call without holding the microphone and "
+      "conversation.end() hangs up. face.set({face}) changes which animated "
+      "face it wears; the catalogue is dot-matrix-oracle, furnace-imp, "
+      "karakuri-brass, moonscope, starbyte. speaker.setVolume({percent}) sets "
+      "how loud it plays, 0-100, and answers {percent,ceiling}, which "
+      "speaker.volume() also returns. health() returns this device's full "
+      "diagnostics document.\",\"children\":{}}",
+  .talk_hint = "hold the front button to talk",
+  .call_hint = "connection lost — press side to call",
+  .speaker = {
+    .context = NULL,
+    .set_volume = set_volume,
+    .volume = volume,
+    /*
+     * 100 means this capability advertises no clamp, not that the board plays
+     * at full scale: the ceiling here is a brownout limit and lives inside the
+     * driver, where 100 is -18 dB rather than 0. See m5sticks3_audio.h.
+     */
+    .ceiling = 100,
+  },
+  /*
+   * Two thirds of the 120 ms I2S DMA ring (6 descriptors x 320 frames at
+   * 16 kHz), so a late frame is absorbed by the hardware cushion rather than
+   * concealed, while the remaining third still bounds how long the playback
+   * step can sit before the ring genuinely empties.
+   */
+  .speaker_dry_wait_ms = 80,
+  .processing_frame_samples = ITERATE_KIT_VOICE_FRAME_SAMPLES,
+  /* This codec hands over one whole 20 ms frame per read, so the bridge's
+   * three cadences are all 320 and it degenerates to a pass-through. */
+  .capture_chunk_samples = ITERATE_KIT_VOICE_FRAME_SAMPLES,
+  .capture_stack_bytes = 4096,
+  .turns = ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK,
+  .radio_before_codec = false,
+};
+
+void iterate_kit_m5sticks3_run(void) {
+  iterate_kit_voice_loop_run(&ops, &facts, NULL);
+}

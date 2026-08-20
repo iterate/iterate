@@ -1,3 +1,6 @@
 
 # Local alchemy-era dev artifacts (contain local dev secrets); never commit.
 .alchemy/
+
+# Synthesised by `pnpm cli voicelab utterances` — reproducible, so not stored.
+scripts/voicelab/utterances/

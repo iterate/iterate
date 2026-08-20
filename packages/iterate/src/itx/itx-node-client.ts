@@ -19,6 +19,16 @@ type ConnectItxBaseInput = {
   headers?: Record<string, string>;
   /** Observe every decoded ws frame (e.g. the e2e suite's frame recorder). */
   onWebSocketMessage?: (message: ItxWebSocketMessage) => void;
+  /**
+   * Observe the underlying socket closing, however it closes.
+   *
+   * A client whose job is to stay connected (a device, a long-lived agent)
+   * reconnects from HERE — the moment the transport dies — not lazily when
+   * its next call fails. The hook is a passive observer: this client stays
+   * vanilla capnweb and never reconnects, pings, or retries by itself; the
+   * consumer owns that loop.
+   */
+  onWebSocketClose?: (close: { code: number; reason: string }) => void;
 };
 
 type ConnectItxAuthenticatedInput = ConnectItxBaseInput & {
@@ -77,11 +87,16 @@ function createSocket(
   url: string,
   headers?: Record<string, string>,
   onWebSocketMessage?: (message: ItxWebSocketMessage) => void,
+  onWebSocketClose?: (close: { code: number; reason: string }) => void,
 ): WebSocket {
   // 15s: cold deployments answer the upgrade only after the worker chain has
   // loaded, but #1601's route-healing + the preview slot warmup mean the first
   // upgrade lands in a few seconds — 15s is headroom, not a hang budget.
   const socket = new WebSocket(url, { handshakeTimeout: 15_000, headers });
+
+  if (onWebSocketClose) {
+    socket.once("close", (code, reason) => onWebSocketClose({ code, reason: reason.toString() }));
+  }
 
   if (onWebSocketMessage) {
     const start = Date.now();
@@ -186,6 +201,7 @@ function createItxSocket(
     apiWebSocketUrl(input.baseUrl).toString(),
     input.headers,
     input.onWebSocketMessage,
+    input.onWebSocketClose,
   );
 }
 
