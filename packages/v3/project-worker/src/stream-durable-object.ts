@@ -86,6 +86,10 @@ type FacetProcessorEntry = {
   ref?: { source: Expression; export: string };
   /** Per-instance configuration from the enablement mount, handed to the constructor. */
   props?: Record<string, unknown>;
+  /** A FOREIGN stream this processor reduces (a sturdy-ref itx-expression). Absent = own log.
+   *  A foreign-source facet is NOT driven by this DO's commit pump (its events live elsewhere) —
+   *  it catches up from the foreign stream on snapshot/wake. */
+  sourceStream?: string;
 };
 
 /** The duck-typed contract BOTH facet kinds satisfy (the built-in ProcessorFacet and the
@@ -416,7 +420,10 @@ export class StreamDurableObject extends DurableObject<Env> {
       // dropped deliverable named ephemerals between two live-state changes (proof-caught).
       const drivable = committed.filter((e) => e.type !== "events.iterate.com/live-state/changed");
       if (drivable.length > 0)
-        for (const { slug } of this.#facetEntries()) {
+        for (const { slug, sourceStream } of this.#facetEntries()) {
+          // A FOREIGN-source facet reduces another stream, not THIS log — never push our commits at
+          // it (that would fold the wrong events). It catches up from its foreign stream instead.
+          if (sourceStream) continue;
           this.#facetWorkInFlight++;
           const after = this.#driveDeliveredThrough.get(slug) ?? scannedAfterOffset;
           this.#driveDeliveredThrough.set(slug, nextOffset);
@@ -831,6 +838,7 @@ export class StreamDurableObject extends DurableObject<Env> {
             ? { ref: { source: parse(policy.source), export: policy.export ?? "default" } }
             : {}),
           ...(policy.props ? { props: policy.props } : {}),
+          ...(policy.sourceStream ? { sourceStream: policy.sourceStream } : {}),
         });
       }
     }
@@ -888,6 +896,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       slug,
       ...(entry.ref?.export ? { export: entry.ref.export } : {}),
       ...(entry.props ? { props: entry.props } : {}),
+      ...(entry.sourceStream ? { sourceStream: entry.sourceStream } : {}),
     });
     return handle;
   }
@@ -900,6 +909,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     slug: string,
     ref?: { source: string | Expression; export: string },
     props?: Record<string, unknown>,
+    sourceStream?: string | Expression,
   ): Promise<{ ok: true }> {
     this.#eventLog.touch();
     if (slug === CAPABILITY_TABLE_SLUG || slug === "core")
@@ -919,6 +929,9 @@ export class StreamDurableObject extends DurableObject<Env> {
       processor: {
         ...(ref ? { source: print(toExpression(ref.source)), export: ref.export } : {}),
         ...(props ? { props } : {}),
+        // The foreign stream to reduce (a sturdy ref), canonicalized via print() — never
+        // interpolated. Absent = the own log. A foreign-source facet is skipped by the pump below.
+        ...(sourceStream ? { sourceStream: print(toExpression(sourceStream)) } : {}),
       },
     });
     await this.#facet(slug); // not for correctness (the mount's own drive configures) — makes an

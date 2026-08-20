@@ -53,6 +53,9 @@ export type ProcessorPolicy = {
   /** Per-instance configuration, handed to the processor's constructor. Event-sourced:
    *  re-enabling with different props SHADOWS the old configuration. */
   props?: Record<string, unknown>;
+  /** The STREAM this processor reduces, as a sturdy-ref itx-expression. Absent = the own parent
+   *  log. Present = a FOREIGN source (another context's / an off-platform box's stream). */
+  sourceStream?: string;
 };
 
 const CapabilityTableContract = defineProcessorContract({
@@ -101,6 +104,8 @@ const CapabilityTableContract = defineProcessorContract({
             source: z.string().optional(),
             export: z.string().optional(),
             props: z.record(z.string(), z.unknown()).optional(),
+            /** A FOREIGN stream this processor reduces (a sturdy-ref itx-expression). */
+            sourceStream: z.string().optional(),
           })
           .optional(),
       }),

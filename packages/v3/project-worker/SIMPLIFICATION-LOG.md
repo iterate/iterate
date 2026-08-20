@@ -115,3 +115,33 @@ unguessable-id fights the "log names connections" doctrine; the typed AST is a w
 muddiness the pass could cleanly remove has been removed. The **off-platform stream** is now a
 well-scoped ADDITIVE feature (foreign `ProcessorStream` + enablement wiring + cross-DO push), sitting
 on a codebase that (pleasingly) is already factored for it — the next focused build, not a cleanup.
+
+## Off-platform feature — a processor that reduces a FOREIGN stream (DONE, end-to-end)
+
+Built the additive feature (Jonas: "crack on"). A facet processor can now reduce a stream that lives
+ELSEWHERE — another context, or an off-platform box — keeping only the derived state, never the raw
+firehose. Reuses existing machinery (the injected `ProcessorStream` + the cross-DO read); the only
+new transport is _none_.
+
+- **`sourceStream` (a sturdy-ref itx-expression) threaded** through: `Itx.enableProcessor(slug, ref,
+{ sourceStream })` → `ProcessorPolicy.sourceStream` (canonicalized via `print()`, not interpolated)
+  → the capability-provided event schema (added `sourceStream` — it was being STRIPPED by the strict
+  `z.object`, the bug that made the first run reduce the OWN log) → `FacetProcessorEntry` → the
+  `FacetIdentity` at configure → `ProcessorFacet.#p()`.
+- **`ProcessorFacet.#p()`**: when `identity.sourceStream` is set, the `ProcessorStream` reads/appends
+  the FOREIGN stream by RESTORING the ref through `parent().invoke([...sourceExpr, ["read"/"append",…]])`
+  — i.e. `contexts.get('/x').read(...)`, the cross-DO read that already existed. Absent = the own log.
+- **The commit pump SKIPS a foreign-source facet** (`if (sourceStream) continue`): its events come
+  from elsewhere, so pushing THIS DO's commits at it would fold the wrong events. It catches up from
+  the foreign stream on snapshot/wake instead.
+- **Legible end-to-end test** `__tests__/foreign-source-processor.test.ts`: appends sensor events to a
+  SIBLING context `/sensors` (the same `contexts.get` addressing a Pi would use), enables `tally` on
+  the ROOT pointed at `/sensors`, and proves the tally counts the SIBLING's events (`{motion:2,temp:1}`)
+  while the root's OWN log stays empty of them. The raw snapshot shows offset 3 = the foreign stream's
+  offset. Same mechanism for a real Pi: point `sourceStream` at `itx.homeassistant` (a provided live
+  stream) instead of `contexts.get('/sensors')`.
+- **Follow-on (flagged):** today the foreign-source processor is PULL (catches up on snapshot). Real-
+  time delivery = the foreign stream PUSHES new events to it (a subscription from the foreign stream
+  targeting the processor's wake), reusing the connected/forwarder lane. Additive, not yet wired.
+- No regression: typecheck clean; full suite **281 passed / 38 xf / 2 skip / 31 todo**; perf held
+  (66667 ev/s, p50 7ms / p95 11ms, 50×); one-directional wire census IDENTICAL.
