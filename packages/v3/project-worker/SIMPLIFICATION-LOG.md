@@ -59,3 +59,18 @@ arg-callback bridge (browser/full-duplex only), celld, row chunking.
   shows in seconds without a deploy. **In-harness baseline: append 62500 ev/s | end-to-end 62500
   ev/s | p50 8ms / p95 12ms / max 12ms | 50× batching | 0 loss.** (Local workerd ≫ live; the guard
   is the printed line compared across runs, plus the hard invariants.)
+- **Greenfield ideation landed** → `LAYERING-IDEATION.md` (the north star): 5 layers (EventLog →
+  Stream → Context; Processor = reduce over a Stream _source_; SturdyRefTransport = pager/relay).
+  Top-3 clean-ups: (1) real-typed uniform-async `Stream`/`Context` interfaces, (2) typed
+  Expression AST + delete `boundaryArgs`, (3) `StreamSource` as a processor param.
+- **Clean-up #1 DONE — the gross seam, fixed properly** (not named, _dissolved_). New
+  `src/core/stream.ts`: `Stream` (append/read) + `Context extends Stream` (+ invoke) +
+  `localContext(self)`, all **uniform-async and typed with the REAL event types**
+  (`StreamEventInput`/`StreamEvent`/`StreamPage`). Because the arg/return types are real (not
+  `unknown[]`), the contravariance that forced `as unknown as` vanishes: a `DurableObjectStub`, the
+  own-path adapter, and a Pi RpcTarget all satisfy `Context` with **zero casts**. Deleted: the
+  inline `ownContext` literal (→ `localContext(this)`), the `deps.context` `{append;read}` +
+  re-cast, and both `as unknown as` casts in `contexts.get`. Typecheck clean; full suite
+  **280 passed / 38 xf / 2 skip / 31 todo**; perf held (58824 ev/s, p50 9ms / p95 13ms, 50×) and
+  the one-directional census is IDENTICAL (`{in:push 100, in:pull 100, out:resolve 100,
+in:release 100}` — zero outbound initiations).

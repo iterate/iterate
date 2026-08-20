@@ -51,6 +51,7 @@ import {
   type Expression,
 } from "./core/expression.ts";
 import { hashSource } from "./core/hash.ts";
+import { localContext } from "./core/stream.ts";
 import { ItxConnectionDirectory } from "./itx-connection-directory.ts";
 import type { RetainedCallbackInvoker } from "./core/hibernatable-rpc-stub.ts";
 import { DurableObjectNameCodec } from "./core/durable-object-names.ts";
@@ -468,11 +469,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   #capabilityTableProcessor(): CapabilityTableProcessor {
     if (this.#capabilityTableInstance) return this.#capabilityTableInstance;
     const { projectId, path } = this.#address;
-    const ownContext = {
-      append: (...e: unknown[]) => this.append(...(e as StreamEventInput[])),
-      read: (after?: number, limit?: number) => this.read(after, limit),
-      invoke: (call: unknown) => this.invoke(call as Expression),
-    };
+    const ownContext = localContext(this); // the own DO as a uniform-async Context (core/stream.ts)
     const builtIns = buildBuiltIns({
       projectId,
       path,

@@ -7,6 +7,8 @@
 import { asModules, CODE_CAP_RUNNER, confinedWorker } from "./core/agent-runtime.ts";
 import { itxEntrypointFor } from "./itx-entrypoint.ts";
 import { pathProxy, toExpression, type Expression } from "./core/expression.ts";
+import type { Context } from "./core/stream.ts";
+import type { StreamEventInput } from "./core/events.ts";
 import { hashSource } from "./core/hash.ts";
 
 /** The `connections` view every context has: the ItxConnectionRegistry, surfaced. One entry per
@@ -58,12 +60,9 @@ interface BuildBuiltInsDeps {
   env: BuiltInsEnv;
   /** Resolve one call through THIS context's dispatch (dynamic-worker module loading). */
   invoke: (call: Expression) => Promise<unknown>;
-  /** A context stream by path — same-isolate closures for the own path parent-side; by-name
-   *  stubs facet-side (the parent IS the own stream). */
-  context: (path: string) => {
-    append(...e: unknown[]): unknown;
-    read(after?: number, limit?: number): unknown;
-  };
+  /** A context stream by path — the own-path parent adapter same-isolate, by-name DO stubs
+   *  facet-side. Both satisfy Context (uniform-async, real-typed — see core/stream.ts). */
+  context: (path: string) => Context;
   /** The connections view (parent-local closures over the HibernatableRpcStubManager). */
   connections: ConnectionsView;
   facets: FacetsView;
@@ -183,7 +182,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     },
     /** MY OWN stream — a deliberate, chosen surface (append/read), never the raw DO stub. */
     stream: {
-      append: (...e: unknown[]) => own().append(...e),
+      append: (...e: StreamEventInput[]) => own().append(...e),
       read: (after?: number, limit?: number) => own().read(after, limit),
     },
     /** Sibling contexts, ROUTED: `contexts.get('/x').anything(...)` resolves through the
@@ -193,14 +192,10 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     contexts: {
       get: (siblingPath: string) =>
         pathProxy((segments, args) => {
-          const sibling = deps.context(siblingPath) as unknown as {
-            append(...e: unknown[]): unknown;
-            read(a?: number, l?: number): unknown;
-            invoke(call: unknown): Promise<unknown>;
-          };
+          const sibling = deps.context(siblingPath); // a Context — no cast (real-typed seam)
           if (segments.length === 1 && (segments[0] === "append" || segments[0] === "read"))
             return segments[0] === "append"
-              ? sibling.append(...args)
+              ? sibling.append(...(args as StreamEventInput[]))
               : sibling.read(...(args as [number?, number?]));
           const last = segments[segments.length - 1] as string;
           return sibling.invoke(["itx", ...segments.slice(0, -1), [last, ...args]]);
