@@ -51,6 +51,28 @@ uint32_t waveshare_audio_playback_driver_failures(void);
 void waveshare_audio_amplifier(bool on);
 
 /**
+ * Play a flash-resident 16 kHz mono PCM16LE sound through the speaker, now.
+ *
+ * The board's local voice — the wake chime and "call ended" — with none of
+ * the stream's latency: the playback hardware task drains this BEFORE the
+ * paced queue, so it starts within one frame period (plus the amplifier
+ * settle when it was down, which this call raises itself so a chime from
+ * idle is audible). It PREEMPTS rather than mixes; whatever the stream
+ * delivers meanwhile waits as backpressure. A second call replaces the first
+ * mid-note. `pcm` must stay valid for the whole playback, which the
+ * generated .rodata arrays trivially are.
+ */
+void waveshare_audio_play_sound(const uint8_t *pcm, uint32_t bytes);
+
+/**
+ * True while a local sound is playing or its tail may still be in the DMA
+ * ring. The PHASE_QUIET amplifier cut consults this so an idle-powerdown
+ * pass cannot behead a chime; QUIET is re-raised every idle pass, so the
+ * amplifier still drops promptly once the sound is done.
+ */
+bool waveshare_audio_sound_active(void);
+
+/**
  * DMA buffers the hardware sent with nothing in them.
  *
  * The one starvation measure taken from the hardware rather than inferred

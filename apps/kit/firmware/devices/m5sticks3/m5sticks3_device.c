@@ -32,6 +32,14 @@
 #include "m5sticks3_board.h"
 
 /*
+ * The baked UI sounds: the wake chime (the official Home Assistant Voice PE
+ * press asset) and the "call ended" announcement, 16 kHz mono PCM16LE in
+ * .rodata. Included here because the COMPOSITION decides what a gesture
+ * sounds like; the audio driver only knows how to play PCM it is handed.
+ */
+#include "assets/m5sticks3_sounds_generated.inc"
+
+/*
  * The session the two buttons speak, and mirrors of the loop's two view
  * facts the grammar classifies against, because `poll` runs before the
  * pass's view exists. The machine is components/core's shared session
@@ -148,11 +156,14 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
    * is the call control, its own button rather than the talk hold, so a
    * bare press WAKES from idle (`tap_wakes`) and ends the session it is in;
    * the front button is the talk hold, and holding it from idle is a wake
-   * too — chime-less on this board, which bakes no sounds, so the grammar's
-   * chime edges go unrendered rather than unraised. What the machine fixes
-   * over the old raw toggle: a press or a front-hold during the teardown no
-   * longer reopens the call it just ended (ENDING absorbs both), and a
-   * session the far end hangs up stays ended under a still-held button.
+   * too. The grammar's chime edges render through the baked sounds — the
+   * wake chime and "call ended" — except where the half-duplex fence makes
+   * a render physically impossible: a wake by front-hold hands the pins to
+   * the microphone in the same breath, so play_sound drops that chime and
+   * the hold stays chime-less. What the machine fixes over the old raw
+   * toggle: a press or a front-hold during the teardown no longer reopens
+   * the call it just ended (ENDING absorbs both), and a session the far end
+   * hangs up stays ended under a still-held button.
    */
   struct iterate_kit_session_actions actions;
   const struct iterate_kit_session_poll gestures = {
@@ -169,6 +180,16 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
   out->start_call = actions.start_call;
   out->end_call = actions.end_call;
   out->talk_held = actions.talk_held;
+  /* End before wake: play_sound replaces, so if one poll carries both
+   * edges the newer intent — the wake — is the one heard. */
+  if (actions.end_chime) {
+    m5sticks3_audio_play_sound(
+        m5sticks3_sound_chime_ended, sizeof(m5sticks3_sound_chime_ended));
+  }
+  if (actions.wake_chime) {
+    m5sticks3_audio_play_sound(
+        m5sticks3_sound_chime_press, sizeof(m5sticks3_sound_chime_press));
+  }
 }
 
 static void phase(void *context, enum iterate_kit_voice_phase phase_value) {
@@ -194,7 +215,13 @@ static void phase(void *context, enum iterate_kit_voice_phase phase_value) {
       m5sticks3_audio_note_flush();
       break;
     case ITERATE_KIT_VOICE_PHASE_QUIET:
-      m5sticks3_audio_amplifier(false);
+      /*
+       * Not while the board's own voice is mid-word: the idle powerdown fires
+       * 1.5 s after the last stream write, which is exactly when "call ended"
+       * is playing. QUIET is re-raised every idle pass, so the amplifier
+       * still drops on the first pass after the sound finishes.
+       */
+      if (!m5sticks3_audio_sound_active()) m5sticks3_audio_amplifier(false);
       break;
   }
 }

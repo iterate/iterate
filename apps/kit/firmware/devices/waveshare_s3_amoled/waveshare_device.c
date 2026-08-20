@@ -34,6 +34,16 @@
 #include "waveshare_display.h"
 
 /*
+ * The baked UI sounds: the wake chime (the official Home Assistant Voice PE
+ * press asset, trimmed to its audible body — see assets/make-sounds.py for
+ * why an open microphone with no AEC makes the full ring a cost) and the
+ * "call ended" announcement, 16 kHz mono PCM16LE in .rodata. Included here
+ * because the COMPOSITION decides what a gesture sounds like; the audio
+ * driver only knows how to play PCM it is handed.
+ */
+#include "assets/waveshare_sounds_generated.inc"
+
+/*
  * The session the two buttons speak, and mirrors of the loop's two view
  * facts the grammar classifies against, because `poll` runs before the
  * pass's view exists. The machine is components/core's shared session
@@ -136,11 +146,13 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
    * level) and its level is the microphone, but the press must NOT end the
    * session (`tap_ends` false) or every turn would begin by hanging up. The
    * lower button is the dedicated end (`end_press`), the one gesture whose
-   * only meaning is hang up. This board bakes no sounds, so the grammar's
-   * chime edges go unrendered rather than unraised. What the machine fixes
-   * over the raw edges: an upper hold begun during the teardown no longer
-   * reopens the call the lower button just ended (ENDING absorbs it), and
-   * an idle lower press no longer minted a phantom end.
+   * only meaning is hang up. The grammar's chime edges render through the
+   * baked sounds: the wake chime (trimmed — the wake gesture opens the
+   * microphone on a board with no AEC, see assets/make-sounds.py) and the
+   * "call ended" announcement on every session's exit. What the machine
+   * fixes over the raw edges: an upper hold begun during the teardown no
+   * longer reopens the call the lower button just ended (ENDING absorbs
+   * it), and an idle lower press no longer minted a phantom end.
    */
   struct iterate_kit_session_actions actions;
   const struct iterate_kit_session_poll gestures = {
@@ -158,6 +170,16 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
   out->start_call = actions.start_call;
   out->end_call = actions.end_call;
   out->talk_held = actions.talk_held;
+  /* End before wake: play_sound replaces, so if one poll carries both
+   * edges the newer intent — the wake — is the one heard. */
+  if (actions.end_chime) {
+    waveshare_audio_play_sound(
+        waveshare_sound_chime_ended, sizeof(waveshare_sound_chime_ended));
+  }
+  if (actions.wake_chime) {
+    waveshare_audio_play_sound(
+        waveshare_sound_chime_press, sizeof(waveshare_sound_chime_press));
+  }
 }
 
 static void phase(void *context, enum iterate_kit_voice_phase phase_value) {
@@ -187,7 +209,13 @@ static void phase(void *context, enum iterate_kit_voice_phase phase_value) {
       waveshare_audio_note_flush();
       break;
     case ITERATE_KIT_VOICE_PHASE_QUIET:
-      waveshare_audio_amplifier(false);
+      /*
+       * Not while the board's own voice is mid-word: the idle powerdown fires
+       * 1.5 s after the last stream write, which is exactly when "call ended"
+       * is playing. QUIET is re-raised every idle pass, so the amplifier
+       * still drops on the first pass after the sound finishes.
+       */
+      if (!waveshare_audio_sound_active()) waveshare_audio_amplifier(false);
       break;
   }
 }

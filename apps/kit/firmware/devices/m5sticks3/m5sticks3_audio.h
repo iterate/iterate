@@ -67,6 +67,30 @@ void m5sticks3_audio_set_capture(bool capture);
 /** True once the microphone actually owns the hardware. */
 bool m5sticks3_audio_capturing(void);
 
+/**
+ * Play a flash-resident 16 kHz mono PCM16LE sound through the speaker, now.
+ *
+ * The board's local voice — the wake chime and "call ended" — with none of
+ * the stream's latency: the playback hardware task drains this BEFORE the
+ * paced mailbox, so it starts within one frame period. It PREEMPTS rather
+ * than mixes; whatever the stream delivers meanwhile waits as backpressure.
+ * A second call replaces the first mid-note. The half-duplex fence outranks
+ * it both ways: a sound requested while the microphone owns or is taking the
+ * pins is DROPPED (there is no speaker to play through), and a fence
+ * crossing mid-note drops the remainder. Raises the amplifier itself, so a
+ * chime from idle is audible. `pcm` must stay valid for the whole playback,
+ * which the generated .rodata arrays trivially are.
+ */
+void m5sticks3_audio_play_sound(const uint8_t *pcm, uint32_t bytes);
+
+/**
+ * True while a local sound is playing or its tail may still be in the DMA
+ * ring. The PHASE_QUIET amplifier cut consults this so an idle-powerdown
+ * pass cannot behead a chime; QUIET is re-raised every idle pass, so the
+ * amplifier still drops promptly once the sound is done.
+ */
+bool m5sticks3_audio_sound_active(void);
+
 /** True while the fence is moving in either direction. */
 bool m5sticks3_audio_mode_switching(void);
 

@@ -246,6 +246,52 @@ const struct iterate_kit_audio_codec_ops codec_ops = {
   codec_write,
 };
 
+/* --- local sounds --------------------------------------------------------- */
+
+/*
+ * THE BOARD'S OWN VOICE: the wake chime and "call ended", straight from flash.
+ *
+ * Everything else this speaker plays arrives over the stream, seconds after
+ * the gesture that asked for it — which is exactly the problem these solve: a
+ * press that answers within a frame instead of after a dial. So they bypass
+ * the stream entirely and cut in at the last seam before the DAC, where the
+ * playback hardware task drains them BEFORE it looks at the mailbox.
+ * Preemption, not mixing, on purpose: a chime stepping on the first
+ * milliseconds of an answer is acceptable and a mixer is not simpler than
+ * this. The stream's frames are not lost — the depth-one mailbox holds one
+ * and the portable playback task absorbs the rest as backpressure it already
+ * knows how to wait out.
+ *
+ * The half-duplex fence outranks the sound: while the microphone owns or is
+ * taking the pins there is no playback channel to play through, so a sound is
+ * DROPPED at that boundary (see play_sound and the fence branch below), never
+ * deferred to a moment when it would acknowledge nothing.
+ *
+ * Allocation-free: the PCM lives in .rodata (flash), the cursor walks it in
+ * 20 ms slices, and the lock is held only to move a few words — the flash
+ * read itself happens outside the critical section.
+ */
+portMUX_TYPE sound_lock = portMUX_INITIALIZER_UNLOCKED;
+const uint8_t *sound_pcm; /* nullptr when idle; guarded by sound_lock */
+uint32_t sound_bytes;
+uint32_t sound_cursor;
+/*
+ * Until when the amplifier must be left up for a local sound. The loop
+ * re-raises PHASE_QUIET on every idle pass and this board answers it by
+ * cutting the amplifier — which, ungated, beheads a chime played from idle.
+ * A conservative absolute deadline (clip length plus one DMA ring) is enough:
+ * QUIET keeps arriving, so the amp drops on the first pass after it expires.
+ */
+int64_t sound_amp_hold_until_us;
+
+/* The fence is taking the pins: whatever was chiming is over, not pending. */
+void drop_pending_sound(void) {
+  portENTER_CRITICAL(&sound_lock);
+  sound_pcm = nullptr;
+  sound_amp_hold_until_us = 0;
+  portEXIT_CRITICAL(&sound_lock);
+}
+
 const struct iterate_kit_audio_codec_properties codec_properties = {
   /* capture_sample_rate_hz = */ M5STICKS3_AUDIO_SAMPLE_RATE_HZ,
   /* playback_sample_rate_hz = */ M5STICKS3_AUDIO_SAMPLE_RATE_HZ,
@@ -386,14 +432,44 @@ void playback_hardware_task(void *argument) {
     const Stage now_stage = current_stage();
     if (now_stage == Stage::playback) {
       if (capture_wanted.load(std::memory_order_acquire)) {
-        /* Fence to capture: quiet first, then give the pins away. */
+        /* Fence to capture: quiet first, then give the pins away. A pending
+         * sound goes with the channel — dropped, not deferred, because a
+         * chime played back seconds later acknowledges nothing. */
+        drop_pending_sound();
         (void)amplifier_set(false);
         release_playback_channel();
         mode_switches.fetch_add(1U, std::memory_order_relaxed);
         publish_stage(Stage::micHandoff);
         continue;
       }
-      if (xQueueReceive(
+      /*
+       * A local sound outranks the mailbox — see the note at `sound_pcm`. The
+       * slice bounds are taken under the lock and the flash copy happens
+       * outside it; if the app task replaces the sound mid-slice, this frame
+       * finishes from the superseded PCM and the next one starts the new
+       * sound, which is the preemption behaving as specified.
+       */
+      const uint8_t *sound = nullptr;
+      uint32_t sound_offset = 0U;
+      uint32_t sound_take = 0U;
+      portENTER_CRITICAL(&sound_lock);
+      if (sound_pcm != nullptr) {
+        const uint32_t remaining = sound_bytes - sound_cursor;
+        sound = sound_pcm;
+        sound_offset = sound_cursor;
+        sound_take = remaining < sizeof(frame.samples)
+            ? remaining
+            : static_cast<uint32_t>(sizeof(frame.samples));
+        sound_cursor += sound_take;
+        if (sound_cursor >= sound_bytes) sound_pcm = nullptr;
+      }
+      portEXIT_CRITICAL(&sound_lock);
+      const bool from_sound = sound != nullptr;
+      if (from_sound) {
+        memcpy(frame.samples, sound + sound_offset, sound_take);
+        frame.sample_count = sound_take / sizeof(frame.samples[0]);
+      } else if (
+          xQueueReceive(
               playback_mailbox, &frame, pdMS_TO_TICKS(DMA_DESCRIPTOR_MS)) !=
           pdTRUE) {
         /*
@@ -432,6 +508,12 @@ void playback_hardware_task(void *argument) {
               1000U) != ESP_OK) {
         m5sticks3_audio_rollback_write(frame_ms);
         playback_driver_failures.fetch_add(1U, std::memory_order_relaxed);
+      } else if (from_sound) {
+        /* MOUTH still while a chime plays: the board's own interface noises
+         * are not speech, and a face mouthing its ding reads as a glitch.
+         * Silence, not nothing — the envelope must keep decaying. */
+        static const int16_t silence[M5STICKS3_AUDIO_FRAME_SAMPLES] = {0};
+        m5sticks3_board_observe_playout(silence, frame.sample_count);
       } else {
         /* The mouth animates audio the hardware actually accepted — the
          * mono frame, not the stereo expansion the amplifier eats. */
@@ -635,6 +717,48 @@ struct iterate_kit_audio_codec m5sticks3_audio_codec(void) {
 
 void m5sticks3_audio_set_capture(bool capture) {
   capture_wanted.store(capture, std::memory_order_release);
+}
+
+void m5sticks3_audio_play_sound(const uint8_t *pcm, uint32_t bytes) {
+  if (pcm == nullptr || bytes < 2U) return;
+  /*
+   * DROPPED, NOT DEFERRED, while the microphone owns or is taking the pins:
+   * the half-duplex fence deletes the playback channel, so there is nothing
+   * to play through — the same physics that mutes call audio during a talk
+   * hold. A wake by front-hold is therefore chime-less on this board, and a
+   * sound parked until the fence returns would play seconds after the
+   * gesture it acknowledges, which is worse than silence.
+   */
+  if (capture_wanted.load(std::memory_order_acquire) ||
+      current_stage() != Stage::playback) {
+    return;
+  }
+  /*
+   * The chime must be audible from idle: the amplifier is normally raised
+   * when an answer's audio arrives and dropped after 1.5 s of quiet, so a
+   * gesture's acknowledgement usually finds it down. No settle wait needed —
+   * this latch has none (see the note at m5sticks3_audio_amplifier).
+   */
+  m5sticks3_audio_amplifier(true);
+  const int64_t hold_us =
+      static_cast<int64_t>(bytes / 2U) * 1000000 /
+          M5STICKS3_AUDIO_SAMPLE_RATE_HZ +
+      static_cast<int64_t>(DMA_RING_MS) * 1000;
+  portENTER_CRITICAL(&sound_lock);
+  sound_pcm = pcm;
+  sound_bytes = bytes & ~1U; /* whole PCM16 samples only */
+  sound_cursor = 0U;
+  sound_amp_hold_until_us = esp_timer_get_time() + hold_us;
+  portEXIT_CRITICAL(&sound_lock);
+}
+
+bool m5sticks3_audio_sound_active(void) {
+  bool active;
+  portENTER_CRITICAL(&sound_lock);
+  active = sound_pcm != nullptr ||
+      esp_timer_get_time() < sound_amp_hold_until_us;
+  portEXIT_CRITICAL(&sound_lock);
+  return active;
 }
 
 bool m5sticks3_audio_capturing(void) {

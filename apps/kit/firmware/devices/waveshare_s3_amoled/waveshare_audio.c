@@ -155,6 +155,70 @@ static const struct iterate_kit_audio_codec_properties codec_properties = {
   .output_gain_ceiling_centi_db = 0,
 };
 
+/* --- local sounds ---------------------------------------------------------- */
+
+/*
+ * THE BOARD'S OWN VOICE: the wake chime and "call ended", straight from flash.
+ *
+ * Everything else this speaker plays arrives over the stream, seconds after
+ * the gesture that asked for it — which is exactly the problem these solve: a
+ * press that answers within a frame instead of after a dial. So they bypass
+ * the stream entirely and cut in at the last seam before the DAC, where the
+ * playback hardware task drains them BEFORE it looks at the queue.
+ * Preemption, not mixing, on purpose: a chime stepping on the first
+ * milliseconds of an answer is acceptable and a mixer is not simpler than
+ * this. The stream's frames are not lost — the depth-one queue holds one and
+ * the portable playback task absorbs the rest as backpressure it already
+ * knows how to wait out.
+ *
+ * Allocation-free: the PCM lives in .rodata (flash), the cursor walks it in
+ * 20 ms slices, and the lock is held only to move a few words — the flash
+ * read itself happens outside the critical section.
+ */
+static portMUX_TYPE sound_lock = portMUX_INITIALIZER_UNLOCKED;
+static const uint8_t *sound_pcm; /* NULL when idle; guarded by sound_lock */
+static uint32_t sound_bytes;
+static uint32_t sound_cursor;
+/*
+ * Until when the amplifier must be left up for a local sound. The loop
+ * re-raises PHASE_QUIET on every idle pass and this board answers it by
+ * cutting the amplifier — which, ungated, beheads a chime played from idle.
+ * A conservative absolute deadline (settle plus clip length plus one DMA
+ * ring) is enough: QUIET keeps arriving, so the amp drops on the first pass
+ * after it expires.
+ */
+static int64_t sound_amp_hold_until_us;
+
+void waveshare_audio_play_sound(const uint8_t *pcm, uint32_t bytes) {
+  if (pcm == NULL || bytes < 2U) return;
+  /*
+   * The chime must be audible from idle: the amplifier is normally raised
+   * when an answer's audio arrives and dropped after 1.5 s of quiet, so a
+   * gesture's acknowledgement usually finds it down. The settle deadline the
+   * amplifier stamps is honoured by the playback task before its first
+   * write, so the chime's opening is not eaten the way "banana" once was.
+   */
+  waveshare_audio_amplifier(true);
+  const int64_t hold_us =
+      (int64_t)(bytes / 2U) * 1000000 / WAVESHARE_AUDIO_SAMPLE_RATE_HZ +
+      (int64_t)(AMPLIFIER_SETTLE_MS + DMA_RING_MS) * 1000;
+  portENTER_CRITICAL(&sound_lock);
+  sound_pcm = pcm;
+  sound_bytes = bytes & ~1U; /* whole PCM16 samples only */
+  sound_cursor = 0U;
+  sound_amp_hold_until_us = esp_timer_get_time() + hold_us;
+  portEXIT_CRITICAL(&sound_lock);
+}
+
+bool waveshare_audio_sound_active(void) {
+  bool active;
+  portENTER_CRITICAL(&sound_lock);
+  active = sound_pcm != NULL ||
+      esp_timer_get_time() < sound_amp_hold_until_us;
+  portEXIT_CRITICAL(&sound_lock);
+  return active;
+}
+
 /*
  * ONLY THESE TASKS CALL THE BLOCKING ESP CODEC DRIVER.
  *
@@ -185,9 +249,11 @@ static void capture_hardware_task(void *argument) {
 }
 
 /*
- * When the amplifier can be trusted to reproduce a sample. Written by the
- * receive path, read by the playback task; a single aligned 64-bit stamp on a
- * board where only one writer ever sets it.
+ * When the amplifier can be trusted to reproduce a sample. Written wherever
+ * the amplifier is raised (the receive path when an answer's audio arrives,
+ * the poll task when a local chime asks for it), read by the playback task; a
+ * single aligned 64-bit stamp whose rare concurrent writers store the same
+ * "now plus settle" value.
  */
 static volatile int64_t amplifier_settled_at_us;
 
@@ -195,7 +261,38 @@ static void playback_hardware_task(void *argument) {
   struct audio_frame frame;
   (void)argument;
   for (;;) {
-    if (xQueueReceive(playback_queue, &frame, portMAX_DELAY) != pdTRUE) {
+    /*
+     * A local sound outranks the queue — see the note at `sound_pcm`. The
+     * slice bounds are taken under the lock and the flash copy happens
+     * outside it; if the app task replaces the sound mid-slice, this frame
+     * finishes from the superseded PCM and the next one starts the new
+     * sound, which is the preemption behaving as specified.
+     */
+    const uint8_t *sound = NULL;
+    uint32_t sound_offset = 0U;
+    uint32_t sound_take = 0U;
+    portENTER_CRITICAL(&sound_lock);
+    if (sound_pcm != NULL) {
+      const uint32_t remaining = sound_bytes - sound_cursor;
+      sound = sound_pcm;
+      sound_offset = sound_cursor;
+      sound_take = remaining < sizeof(frame.samples)
+          ? remaining
+          : (uint32_t)sizeof(frame.samples);
+      sound_cursor += sound_take;
+      if (sound_cursor >= sound_bytes) sound_pcm = NULL;
+    }
+    portEXIT_CRITICAL(&sound_lock);
+    if (sound != NULL) {
+      memcpy(frame.samples, sound + sound_offset, sound_take);
+      frame.sample_count = sound_take / sizeof(frame.samples[0]);
+    } else if (
+        /*
+         * One frame period instead of portMAX_DELAY, so a chime requested
+         * while the stream is silent starts within 20 ms. An idle wake that
+         * finds neither sound nor frame costs one queue peek.
+         */
+        xQueueReceive(playback_queue, &frame, pdMS_TO_TICKS(20)) != pdTRUE) {
       continue;
     }
     const uint32_t frame_ms = (uint32_t)(
