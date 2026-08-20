@@ -40,6 +40,24 @@ def trim_wake(pcm):
         samples[j] = samples[j] * (WAKE_FADE_SAMPLES - 1 - i) // WAKE_FADE_SAMPLES
     return struct.pack("<%dh" % len(samples), *samples)
 
+# LOUDER THAN SPEECH ON PURPOSE. The chime and "call ended" are feedback, not
+# conversation: they must land at the volume a person set for answers even
+# though the source WAV is mastered quiet. x2.5 with hard clipping measured
+# audible-but-not-harsh on this speaker; the saturation guard keeps a hot
+# source from wrapping.
+GAIN_NUMERATOR = 5
+GAIN_DENOMINATOR = 2
+
+def apply_gain(pcm):
+    import struct as _s
+    samples = _s.unpack("<%dh" % (len(pcm) // 2), pcm)
+    scaled = []
+    for sample in samples:
+        boosted = sample * GAIN_NUMERATOR // GAIN_DENOMINATOR
+        scaled.append(max(-32768, min(32767, boosted)))
+    return _s.pack("<%dh" % len(scaled), *scaled)
+
+
 def pcm_of(path):
     raw = path.read_bytes()
     offset = 12
@@ -57,6 +75,7 @@ for cname, fname in NAMES:
     pcm = pcm_of(src / fname)
     if cname == "chime_press":
         pcm = trim_wake(pcm)
+    pcm = apply_gain(pcm)
     print(f"static const uint8_t waveshare_sound_{cname}[] = {{")
     for i in range(0, len(pcm), 24):
         print("  " + ",".join(str(b) for b in pcm[i:i+24]) + ",")
