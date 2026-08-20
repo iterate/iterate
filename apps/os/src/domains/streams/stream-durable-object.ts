@@ -55,7 +55,7 @@ import {
   parseLiveStatePagerLaneTag,
 } from "../live-state-pager.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
-import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
+import { DynamicWorkerRunner, isWorkerRpcCloneVersionError } from "../workers/worker-runner.ts";
 import { isWorkerBuildInProgressError } from "../workers/worker-loader.ts";
 import { isWorkerBuildFailedError, WorkerBuildFailedError } from "../workers/artifact-store.ts";
 import { RepoNotSeededError } from "../repos/utils.ts";
@@ -439,6 +439,11 @@ function createSubscriptionReceiverCalls(deps: {
   createAuthorityRoot(): unknown;
   /** Dial (create/configure if needed) the processor facet named after the subscription. */
   dialProcessorFacet(name: string): Promise<ProcessorFacetStub>;
+  /** Dial + one call, healing clone-version skew by rebuilding the facet once. */
+  callProcessorFacet<T>(
+    name: string,
+    invoke: (facet: ProcessorFacetStub) => Promise<T>,
+  ): Promise<T>;
   copyToStream(path: string, batch: StreamDeliveryBatch): Promise<CopyReceipt>;
   onHostedDeliveryError(
     name: string,
@@ -475,8 +480,9 @@ function createSubscriptionReceiverCalls(deps: {
         // in-process parent→facet dial, no itx expression involved. The facet's
         // wakeStreamProcessor returns the standard wake response, so everything
         // downstream (retention, batching, watchdog) is shared.
-        const facet = await deps.dialProcessorFacet(request.name);
-        value = await facet.wakeStreamProcessor(request);
+        value = await deps.callProcessorFacet(request.name, (facet) =>
+          facet.wakeStreamProcessor(request),
+        );
       } else {
         // wake-processor: the schema requires an expression here.
         ({ value } = await evaluateItxExpression(
@@ -949,6 +955,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         exports: this.ctx.exports,
         createAuthorityRoot: () => this.#createEventDeliveryAuthorityRoot(),
         dialProcessorFacet: (name) => this.#dialProcessorFacet(name),
+        callProcessorFacet: (name, invoke) => this.#callProcessorFacet(name, invoke),
         copyToStream: (path, batch) => this.#streamStub(path).receiveCopiedEvents(batch),
         onHostedDeliveryError: (name, error, expectedDelivery) =>
           this.#eventSender.connections.onHostedDeliveryError(name, error, expectedDelivery),
@@ -1065,8 +1072,9 @@ export class StreamDurableObject extends DurableObject<Env> {
       let state: Record<string, unknown> = {};
       let chain: Promise<void> = Promise.resolve();
       const pull = async () => {
-        const facet = await this.#dialProcessorFacet(name);
-        state = await (await facet.liveState()).get();
+        state = await this.#callProcessorFacet(name, async (facet) =>
+          (await facet.liveState()).get(),
+        );
       };
       const tag = liveStatePagerLaneTag(name);
       lane = new LiveStatePagers({
@@ -1295,6 +1303,39 @@ export class StreamDurableObject extends DurableObject<Env> {
    * facade dial can create a facet for a name the catalog does not place
    * under facet placement.
    */
+  /**
+   * Dial a facet and run one call against it, healing clone-version skew.
+   *
+   * The facet's isolate is shared across DO incarnations (see
+   * `#workerRunnerForFacets`); the one way that reuse can go wrong is
+   * workerd's clone-version skew, where the isolate outlived the bindings it
+   * captured. That error is terminal for the isolate but not for the stream:
+   * abort the facet, retire the shared identity behind a recovery nonce, and
+   * redo the call once against the rebuild. A second failure propagates —
+   * this must never become a loop.
+   */
+  async #callProcessorFacet<T>(
+    name: string,
+    invoke: (facet: ProcessorFacetStub) => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await invoke(await this.#dialProcessorFacet(name));
+    } catch (error) {
+      if (!isWorkerRpcCloneVersionError(error)) throw error;
+      console.warn("stream facet clone-version skew; retiring the isolate and rebuilding", {
+        name,
+      });
+      this.ctx.facets.abort(name, `clone-version skew for ${name}`);
+      this.#configuredProcessorFacets.delete(name);
+      this.#facetRecoveryNonce = crypto.randomUUID();
+      return await invoke(await this.#dialProcessorFacet(name));
+    }
+  }
+
+  /** Set only by clone-skew recovery; consumed by every later userspace facet
+   * load in this incarnation so none of them return to the stale identity. */
+  #facetRecoveryNonce: string | undefined;
+
   async #dialProcessorFacet(name: string): Promise<ProcessorFacetStub> {
     const receiver = this.#requireHostedProcessorSubscription(name);
     if (receiver.action !== "facet-processor") {
@@ -1302,7 +1343,11 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
     const resolved =
       receiver.source.kind === "userspace"
-        ? await this.#loadUserspaceFacetClass(name, receiver.source.worker)
+        ? await this.#loadUserspaceFacetClass(
+            name,
+            receiver.source.worker,
+            this.#facetRecoveryNonce,
+          )
         : this.#builtinFacetClass();
     // Rebuild the facet whenever its resolved class changed: ctx.facets.get
     // reuses an existing facet and IGNORES a new startup class, so a source
@@ -1374,16 +1419,24 @@ export class StreamDurableObject extends DurableObject<Env> {
     return { class: facetClass, version: "builtin" };
   }
 
-  /** Lazily built loader for userspace facet sources; one per incarnation so
-   * loaded isolates are keyed by a stable instance nonce (no per-dial isolate
-   * accumulation). The scope is this stream's own `{ projectId, path }`, so the
-   * loaded facet's `env.ITX` answers as this stream's scope — how it dials the
-   * alarm proxy and stream handle back. */
+  /** Lazily built loader for userspace facet sources. Shared scope: the
+   * loader identity already carries this stream's scopePath plus the content
+   * hash plus the deployment version, so successive DO incarnations reuse one
+   * warm isolate — the cloudflare-os keying (`${host}.${codeVersion}`), and
+   * the same bare-identity billing discipline the request lanes ride. Safe
+   * because the baked env (`env.ITX`, globalOutbound) is loopback stubs with
+   * serializable props, valid across incarnations for the deployment's life;
+   * the one residual failure — clone-version skew — is classified at the
+   * facet call sites, which retire the isolate and rebuild once. The scope is
+   * this stream's own `{ projectId, path }`, so the loaded facet's `env.ITX`
+   * answers as this stream's scope — how it dials the alarm proxy and stream
+   * handle back. */
   #facetWorkerRunner: DynamicWorkerRunner | undefined;
   #workerRunnerForFacets(projectId: string): DynamicWorkerRunner {
     return (this.#facetWorkerRunner ??= new DynamicWorkerRunner({
       streamContext: { kind: "scope", scopePath: this.name.path },
       exports: this.ctx.exports,
+      loaderScope: "shared",
       projectId,
       scopePath: this.name.path,
     }));
@@ -1396,12 +1449,17 @@ export class StreamDurableObject extends DurableObject<Env> {
   async #loadUserspaceFacetClass(
     name: string,
     ref: StatefulDynamicWorkerRef,
+    freshInstanceNonce?: string,
   ): Promise<{ class: DurableObjectClass; version: string }> {
     const projectId = this.name.projectId;
     if (projectId === null) {
       throw new Error(`userspace facet "${name}" requires a project stream`);
     }
-    const loaded = await this.#workerRunnerForFacets(projectId).loadStatefulClass(ref);
+    const loaded = await this.#workerRunnerForFacets(projectId).loadStatefulClass(
+      ref,
+      undefined,
+      freshInstanceNonce,
+    );
     if (!loaded.ok) throw new WorkerBuildFailedError(loaded.failure);
     return {
       class: loaded.klass,
@@ -1482,8 +1540,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     for (const facet of facetNames) {
       this.#runInBackground(async () => {
         try {
-          const stub = await this.#dialProcessorFacet(facet);
-          await stub.handleAlarm(info);
+          await this.#callProcessorFacet(facet, (stub) => stub.handleAlarm(info));
           this.#facetAlarmFailures.delete(facet);
         } catch (error) {
           const failures = (this.#facetAlarmFailures.get(facet) ?? 0) + 1;
@@ -1803,10 +1860,11 @@ export class StreamDurableObject extends DurableObject<Env> {
     const receiver = entry?.configuration.receiver;
     if (receiver?.action !== "facet-processor") return;
     this.#runInBackground(async () => {
-      const facet = await this.#dialProcessorFacet("slack-agent");
-      disposeAcknowledgedRpcResult(
-        await facet.presentAgentRuntimeTransition(args),
-        "present-agent-runtime-transition",
+      await this.#callProcessorFacet("slack-agent", async (facet) =>
+        disposeAcknowledgedRpcResult(
+          await facet.presentAgentRuntimeTransition(args),
+          "present-agent-runtime-transition",
+        ),
       );
     });
   }
