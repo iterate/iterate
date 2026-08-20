@@ -220,3 +220,11 @@ and the #2507 readiness-machinery approach (open draft, to be closed).
   the debounce (the release), so first turns raced AGENTS.md and its
   application looked inconsistent across agents (preview p1759). Sync now
   runs first, release stays last — matching the default template's order.
+- 2026-08-20 (preview review): configs/** added to the preview workflow
+  trigger paths and the OS app's affected-paths. Template seeding pins
+  github references to the DEPLOYED revision's SHA, so a template-only
+  change (like the AGENTS.md ordering fix) was unreachable on preview: the
+  deploy said "nothing to deploy" and new projects kept seeding the old
+  pinned template (observed on p0936). The one red check on the previous
+  head was an unrelated slack-agent e2e flake (model reply omitted the
+  slack call; same code passed the suite on the prior run).

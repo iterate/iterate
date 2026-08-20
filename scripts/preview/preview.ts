@@ -2144,6 +2144,13 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     previewTestRolloutGate: "inside-suite",
     paths: [
       "apps/os/**",
+      // New-project template seeding pins github references to the DEPLOYED
+      // revision's SHA (configRepoTemplateOptionsForDeployment), so a
+      // template content change is unreachable on a preview until the OS
+      // app redeploys and moves its pin. (The default template is also
+      // embedded in the OS build via config-repo-template.generated.ts, but
+      // the other templates seed straight from GitHub at the pinned SHA.)
+      "configs/**",
       // The root Playwright suite is part of OS preview e2e. A test or
       // harness-only change must produce fresh evidence instead of inheriting
       // the previous head's result.
