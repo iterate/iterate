@@ -842,14 +842,37 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "   * later turns.\n" +
       "   *\n" +
       "   * The project's prompt lives in prompts/agent-system-prompt.md — edit and\n" +
-      "   * commit to change it for agents born after the commit; no platform\n" +
-      "   * deploy. (Until you fork the file it is byte-identical to the platform's\n" +
-      "   * embedded copy, so the read-compare below appends nothing.)\n" +
+      "   * commit to change it for web agents born after the commit; no platform\n" +
+      "   * deploy.\n" +
       "   */\n" +
       "  async #configureNewbornAgent(agentPath: string): Promise<void> {\n" +
       "    const itx = this.itx;\n" +
-      "    const agent = itx.agents.get(agentPath);\n" +
-      "    const file = await itx.repo.readFile({ path: \"prompts/agent-system-prompt.md\" });\n" +
+      "    // Channel agents (slack/telegram/email) and MCP session agents are born\n" +
+      "    // with their OWN system prompt in the same keyed slot; superseding it\n" +
+      "    // with this repo's web-chat prompt would silently strip their channel\n" +
+      "    // instructions (a slack agent that forgets to reply on slack). They keep\n" +
+      "    // the platform's prompt and personality — only the release below\n" +
+      "    // applies to them.\n" +
+      "    const channelAgent = /^\\/agents\\/(slack|telegram|email|mcp)\\//.test(agentPath);\n" +
+      "    const shaping = channelAgent ? [] : await this.#webAgentShaping();\n" +
+      "    await itx.agents.get(agentPath).append(...shaping, {\n" +
+      "      // LAST on purpose: done configuring — the ordinary debounce replaces\n" +
+      "      // the platform's high birth value and releases a held first turn.\n" +
+      "      type: \"events.iterate.com/agent/configured\",\n" +
+      "      idempotencyKey: \"iterate/config/agent-birth-configured:v1\",\n" +
+      "      payload: { config: { llmRequestDebounceMs: 250 } },\n" +
+      "    });\n" +
+      "  }\n" +
+      "\n" +
+      "  /** This repo's personality for web-chat agents: the prompt file and an\n" +
+      "   * illustrative standing tweak. The prompt is appended UNCONDITIONALLY\n" +
+      "   * rather than read-compared against the agent's current slot — a\n" +
+      "   * snapshot at this moment may predate the processor reducing the birth\n" +
+      "   * batch, and an unforked file is byte-identical to the platform's slot,\n" +
+      "   * so the append lands in the same uncovered keyed slot and replaces in\n" +
+      "   * place: free when unforked, a supersession when forked. */\n" +
+      "  async #webAgentShaping() {\n" +
+      "    const file = await this.itx.repo.readFile({ path: \"prompts/agent-system-prompt.md\" });\n" +
       "    // Best-effort size guard (~4 chars/token): the platform's own default\n" +
       "    // prompt is budget-tested at ~4.3k tokens; warn well before a fork's\n" +
       "    // edits silently double every request's cost.\n" +
@@ -859,52 +882,47 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "          \"it rides every LLM request of every agent — consider trimming.\",\n" +
       "      );\n" +
       "    }\n" +
-      "    if (file !== null) {\n" +
-      "      // The platform's embedded copy is newline-stripped; the same\n" +
-      "      // normalization keeps \"unforked file\" an exact match below.\n" +
-      "      const content = file.content.replace(/\\n$/, \"\");\n" +
-      "      const snapshot = await agent.processor.snapshot();\n" +
-      "      const slot = snapshot.state.contextItems.findLast(\n" +
-      "        (item) => item.payload.key === \"agent/system-prompt\",\n" +
-      "      );\n" +
-      "      if (slot !== undefined && slot.payload.content !== content) {\n" +
-      "        const digest = await crypto.subtle.digest(\"SHA-256\", new TextEncoder().encode(content));\n" +
-      "        const hash = [...new Uint8Array(digest).slice(0, 8)]\n" +
-      "          .map((byte) => byte.toString(16).padStart(2, \"0\"))\n" +
-      "          .join(\"\");\n" +
-      "        await agent.append({\n" +
-      "          type: \"events.iterate.com/agents/context-added\",\n" +
-      "          idempotencyKey: `iterate/config/agent-system-prompt:${hash}:after-${slot.offset}`,\n" +
-      "          payload: {\n" +
-      "            content,\n" +
-      "            key: \"agent/system-prompt\",\n" +
-      "            llmRequestPolicy: { behaviour: \"dont-trigger-request\" },\n" +
-      "            role: \"system\",\n" +
-      "          },\n" +
-      "        });\n" +
-      "      }\n" +
-      "    }\n" +
-      "    await agent.append(\n" +
+      "    // The platform's embedded copy is newline-stripped; the same\n" +
+      "    // normalization keeps \"unforked file\" byte-identical.\n" +
+      "    const content = file === null ? null : file.content.replace(/\\n$/, \"\");\n" +
+      "    const hash =\n" +
+      "      content === null\n" +
+      "        ? null\n" +
+      "        : [\n" +
+      "            ...new Uint8Array(\n" +
+      "              await crypto.subtle.digest(\"SHA-256\", new TextEncoder().encode(content)),\n" +
+      "            ).slice(0, 8),\n" +
+      "          ]\n" +
+      "            .map((byte) => byte.toString(16).padStart(2, \"0\"))\n" +
+      "            .join(\"\");\n" +
+      "    return [\n" +
+      "      ...(content === null\n" +
+      "        ? []\n" +
+      "        : [\n" +
+      "            {\n" +
+      "              type: \"events.iterate.com/agents/context-added\" as const,\n" +
+      "              idempotencyKey: `iterate/config/agent-system-prompt:${hash}`,\n" +
+      "              payload: {\n" +
+      "                content,\n" +
+      "                key: \"agent/system-prompt\",\n" +
+      "                llmRequestPolicy: { behaviour: \"dont-trigger-request\" as const },\n" +
+      "                role: \"system\" as const,\n" +
+      "              },\n" +
+      "            },\n" +
+      "          ]),\n" +
       "      {\n" +
       "        // An illustrative standing tweak — replace or delete freely; it\n" +
       "        // exists to show the shape of project-authored agent personality.\n" +
-      "        type: \"events.iterate.com/agents/context-added\",\n" +
+      "        type: \"events.iterate.com/agents/context-added\" as const,\n" +
       "        idempotencyKey: \"iterate/config/house-style:v1\",\n" +
       "        payload: {\n" +
       "          content: \"House style: write all responses in all-lowercase.\",\n" +
       "          key: \"config/house-style\",\n" +
-      "          llmRequestPolicy: { behaviour: \"dont-trigger-request\" },\n" +
-      "          role: \"system\",\n" +
+      "          llmRequestPolicy: { behaviour: \"dont-trigger-request\" as const },\n" +
+      "          role: \"system\" as const,\n" +
       "        },\n" +
       "      },\n" +
-      "      {\n" +
-      "        // LAST on purpose: done configuring — the ordinary debounce replaces\n" +
-      "        // the platform's high birth value and releases a held first turn.\n" +
-      "        type: \"events.iterate.com/agent/configured\",\n" +
-      "        idempotencyKey: \"iterate/config/agent-birth-configured:v1\",\n" +
-      "        payload: { config: { llmRequestDebounceMs: 250 } },\n" +
-      "      },\n" +
-      "    );\n" +
+      "    ];\n" +
       "  }\n" +
       "\n" +
       "  // The base class delivers committed events on ANY stream here at least once and in\n" +

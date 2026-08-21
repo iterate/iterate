@@ -294,14 +294,10 @@ test("project lifecycle cases directly install and handle the default heartbeat"
 test("the birth reaction shapes each newborn and lowers the debounce as its last word", async () => {
   const makeReactionWorker = (promptFileContent: string) => {
     const append = vi.fn(async (...events: unknown[]) => events);
-    const snapshot = vi.fn(async () => ({
-      state: {
-        contextItems: [
-          // The platform's embedded prompt slot, newline-stripped at birth.
-          { offset: 5, payload: { key: "agent/system-prompt", content: "PROMPT TEXT" } },
-        ],
-      },
-    }));
+    // AGENTS.md sync reads the agent's slot; the birth shaping deliberately
+    // does NOT (a snapshot this early may predate the fold reducing the
+    // birth batch).
+    const snapshot = vi.fn(async () => ({ state: { contextItems: [] } }));
     const project = {
       repo: {
         readFile: vi.fn(async (input: { path: string }) => {
@@ -324,45 +320,54 @@ test("the birth reaction shapes each newborn and lowers the debounce as its last
     return { worker, append, project };
   };
 
-  // Unforked prompt file (byte-identical to the platform's embedded copy):
-  // no supersession — just the AGENTS.md sync, the house style, and the
-  // debounce lowered LAST (the done-configuring signal).
-  const unforked = makeReactionWorker("PROMPT TEXT\n");
-  await deliver(unforked.worker, {
+  // A web agent: AGENTS.md, then ONE atomic batch — the repo's prompt
+  // (appended unconditionally: unforked content replaces the platform's
+  // identical slot in place, forked content supersedes it), the house
+  // style, and the debounce lowered LAST (the done-configuring signal).
+  const web = makeReactionWorker("FORKED PROMPT\n");
+  await deliver(web.worker, {
     type: "events.iterate.com/agent/created",
     path: "/agents/demo",
     payload: {},
   });
-  expect(unforked.project.agents.get).toHaveBeenCalledWith("/agents/demo");
-  const unforkedEvents = unforked.append.mock.calls.flat() as {
+  expect(web.project.agents.get).toHaveBeenCalledWith("/agents/demo");
+  const webEvents = web.append.mock.calls.flat() as {
     type: string;
     payload: Record<string, unknown>;
   }[];
-  expect(unforkedEvents.map((event) => event.payload.key || event.type)).toEqual([
+  expect(webEvents.map((event) => event.payload.key || event.type)).toEqual([
     "config/agents-md",
+    "agent/system-prompt",
     "config/house-style",
     "events.iterate.com/agent/configured",
   ]);
-  expect(unforkedEvents.at(-1)).toMatchObject({
+  expect(webEvents.find((event) => event.payload.key === "agent/system-prompt")).toMatchObject({
+    payload: { content: "FORKED PROMPT", role: "system" },
+  });
+  expect(webEvents.at(-1)).toMatchObject({
     type: "events.iterate.com/agent/configured",
     idempotencyKey: "iterate/config/agent-birth-configured:v1",
     payload: { config: { llmRequestDebounceMs: 250 } },
   });
 
-  // Forked prompt file: the repo's version supersedes the platform slot.
-  const forked = makeReactionWorker("FORKED PROMPT\n");
-  await deliver(forked.worker, {
+  // A channel agent is born with its OWN prompt in the same keyed slot
+  // (slack/telegram/email routers, MCP sessions): the repo's web-chat
+  // prompt and personality must NOT clobber it — only the release applies.
+  // (A slack agent that lost its slack prompt stopped replying on slack.)
+  const slack = makeReactionWorker("FORKED PROMPT\n");
+  await deliver(slack.worker, {
     type: "events.iterate.com/agent/created",
-    path: "/agents/demo",
+    path: "/agents/slack/main/C123/ts-99",
     payload: {},
   });
-  const forkedEvents = forked.append.mock.calls.flat() as {
+  const slackEvents = slack.append.mock.calls.flat() as {
     type: string;
     payload: Record<string, unknown>;
   }[];
-  expect(forkedEvents.find((event) => event.payload.key === "agent/system-prompt")).toMatchObject({
-    payload: { content: "FORKED PROMPT", role: "system" },
-  });
+  expect(slackEvents.map((event) => event.payload.key || event.type)).toEqual([
+    "config/agents-md",
+    "events.iterate.com/agent/configured",
+  ]);
 
   // Copies to the collection stream never re-trigger the reaction.
   const copied = makeReactionWorker("PROMPT TEXT\n");

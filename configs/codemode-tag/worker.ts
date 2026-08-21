@@ -141,35 +141,44 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     const file = await itx.repo.readFile({ path: "prompts/agent-system-prompt.md" });
     // A missing prompt file leaves the platform prompt AND platform parsing
     // standing — this experiment degrades to fenced-ts, never to an agent
-    // taught a grammar nobody interprets.
-    if (file === null) return;
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(file.content));
-    const hash = [...new Uint8Array(digest).slice(0, 8)]
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("");
+    // taught a grammar nobody interprets. The release still happens: a
+    // degraded agent must not also keep the 60s birth debounce.
+    const conversion =
+      file === null
+        ? []
+        : await (async () => {
+            const digest = await crypto.subtle.digest(
+              "SHA-256",
+              new TextEncoder().encode(file.content),
+            );
+            const hash = [...new Uint8Array(digest).slice(0, 8)]
+              .map((byte) => byte.toString(16).padStart(2, "0"))
+              .join("");
+            return [
+              {
+                type: "events.iterate.com/agent/configured" as const,
+                idempotencyKey: "codemode-tag/birth-parsing-off:v1",
+                payload: { config: { interpretResponses: false } },
+              },
+              {
+                type: "events.iterate.com/agents/context-added" as const,
+                idempotencyKey: `codemode-tag/birth-prompt:${hash}`,
+                payload: {
+                  content: file.content,
+                  key: SYSTEM_PROMPT_KEY,
+                  llmRequestPolicy: { behaviour: "dont-trigger-request" as const },
+                  role: "system" as const,
+                },
+              },
+            ];
+          })();
     await this.#appendUnlessAlreadyRecorded(() =>
-      itx.agents.get(agentPath).append(
-        {
-          type: "events.iterate.com/agent/configured",
-          idempotencyKey: "codemode-tag/birth-parsing-off:v1",
-          payload: { config: { interpretResponses: false } },
-        },
-        {
-          type: "events.iterate.com/agents/context-added",
-          idempotencyKey: `codemode-tag/birth-prompt:${hash}`,
-          payload: {
-            content: file.content,
-            key: SYSTEM_PROMPT_KEY,
-            llmRequestPolicy: { behaviour: "dont-trigger-request" },
-            role: "system",
-          },
-        },
-        {
-          type: "events.iterate.com/agent/configured",
-          idempotencyKey: "codemode-tag/birth-debounce:v1",
-          payload: { config: { llmRequestDebounceMs: 250 } },
-        },
-      ),
+      itx.agents.get(agentPath).append(...conversion, {
+        // LAST on purpose: done configuring — releases a held first turn.
+        type: "events.iterate.com/agent/configured",
+        idempotencyKey: "codemode-tag/birth-debounce:v1",
+        payload: { config: { llmRequestDebounceMs: 250 } },
+      }),
     );
   }
 

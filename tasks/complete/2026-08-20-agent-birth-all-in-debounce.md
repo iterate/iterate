@@ -245,3 +245,13 @@ and the #2507 readiness-machinery approach (open draft, to be closed).
   its defaults publish is inert, driver appends are rejected, and the gate
   never matches — its waiter flow breaks until migrated to
   `interpretResponses` + a reactive birth, which can only land post-deploy.
+- 2026-08-21 (review round): default template birth reaction reworked —
+  (1) channel/MCP agents (`/agents/(slack|telegram|email|mcp)/`) no longer
+  get the repo prompt or house-style: the read-compare superseded a slack
+  agent's slack prompt with the generic web prompt whenever it found the
+  slot (content differs by construction), racing the first turn — the
+  likely cause of the intermittent slack-agent e2e (2/6 runs); (2) the
+  prompt is now appended unconditionally instead of read-compared, so no
+  snapshot can predate the fold (bugbot); unforked content replaces the
+  identical platform slot in place, free. codemode-tag: a missing prompt
+  file no longer skips the debounce release (bugbot).
