@@ -239,12 +239,9 @@ and the #2507 readiness-machinery approach (open draft, to be closed).
   voice-test 75104c9, voice-fresh f952ecb, eval-…403947 16ada83,
   eval-…249689 1aa12a9, jeeves 7f4b7c1, garple be512df, lispwoso 4a176f7,
   misha ed2856c, iterate 3f04ffe.
-  **restaurant NOT migrated**: it is built on the deleted mechanisms
-  (publishes `agents/birth-defaults` with `driver: "agent-headless"` + a
-  waiter debounce, gates its prompt sync on `config.driver`). After deploy
-  its defaults publish is inert, driver appends are rejected, and the gate
-  never matches — its waiter flow breaks until migrated to
-  `interpretResponses` + a reactive birth, which can only land post-deploy.
+  **restaurant** was built on the deleted mechanisms (birth-defaults +
+  `driver: "agent-headless"` gating) and would have broken on deploy; it was
+  deleted from the directory instead of migrated (2026-08-21).
 - 2026-08-21 (review round): default template birth reaction reworked —
   (1) channel/MCP agents (`/agents/(slack|telegram|email|mcp)/`) no longer
   get the repo prompt or house-style: the read-compare superseded a slack
