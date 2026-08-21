@@ -83,6 +83,8 @@ export type AgentComponent = {
 
 export type AgentHost = {
   deps: AgentProcessorDeps;
+  /** The home stream's identity — agent streams are always project-scoped. */
+  identity: { agentPath: string; projectId: string };
   /**
    * Mints `agent/<suffix>` — the FIXED namespace, deliberately NOT derived
    * from the hosting contract's slug: a stream handed from the classic

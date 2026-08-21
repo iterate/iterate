@@ -2,6 +2,42 @@ import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
 
 export default class VoiceProjectWorker extends IterateWorkerEntrypoint {
   protected override async processEvent(event: StreamEvent): Promise<void> {
+    switch (event.type) {
+      case "events.iterate.com/agent/created": {
+        // THE BIRTH JOB — this project authors every agent's personality
+        // (the platform creates only the core, then holds the first turn
+        // until agent/birth-finalized). This template takes the platform
+        // defaults verbatim; see the default template for layering project
+        // tweaks on top. Copies carry source.copiedFrom and are not births.
+        if (event.source?.copiedFrom !== undefined) break;
+        const agent = this.itx.agents.get(event.path);
+        await agent.append(
+          ...(await agent.getDefaultBirthEvents({ kind: birthKindForAgentPath(event.path) })),
+          {
+            type: "events.iterate.com/agent/birth-finalized",
+            idempotencyKey: "iterate/config/birth-finalized:v1",
+            payload: {},
+          },
+        );
+        return;
+      }
+      case "events.iterate.com/agents/context-added":
+      case "events.iterate.com/capability-host/script-run-settled":
+      case "events.iterate.com/capability-host/preamble-set":
+      case "events.iterate.com/capability-host/preamble-removed":
+      case "events.iterate.com/stream/error-occurred": {
+        // THE INTERPRETATION JOB — the platform never decides what an
+        // agent's output means; this project delegates to the platform's
+        // classic interpreter per event (```ts script extraction, slash
+        // commands, script-result rendering). Irrelevant events interpret
+        // to nothing; repeats converge on idempotency keys.
+        if (!event.path.startsWith("/agents/")) return;
+        await this.itx.agents.get(event.path).interpretResponse(event);
+        return;
+      }
+      default:
+        break;
+    }
     if (event.type !== "events.iterate.com/project/created" || event.path !== "/") return;
 
     const instructions = await this.itx.repo.readFile({ path: "ONBOARDING.md" });
@@ -129,4 +165,18 @@ export default class VoiceProjectWorker extends IterateWorkerEntrypoint {
       { headers: { "content-type": "text/html; charset=utf-8" } },
     );
   }
+}
+
+/** Which platform-default personality an agent path gets. This template only
+ * creates the onboarding agent itself; the rest is future-proofing for
+ * user-created and routed agents. */
+function birthKindForAgentPath(
+  agentPath: string,
+): "web" | "onboarding" | "mcp" | "slack" | "telegram" | "email" {
+  if (agentPath === "/agents/onboarding") return "onboarding";
+  if (agentPath.startsWith("/agents/mcp/")) return "mcp";
+  if (agentPath.startsWith("/agents/slack/")) return "slack";
+  if (agentPath.startsWith("/agents/telegram/")) return "telegram";
+  if (agentPath.startsWith("/agents/email/")) return "email";
+  return "web";
 }

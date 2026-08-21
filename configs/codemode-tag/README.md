@@ -1,8 +1,8 @@
 # codemode-tag project configuration
 
 The `<codemode>` response-format experiment, implemented entirely in this
-repo. Agents in a project born from this template respond with markdown plus
-one embedded tag instead of a bare ```ts fence:
+repo. Web agents in a project born from this template respond with markdown
+plus one embedded tag instead of a bare ```ts fence:
 
 ```
 Good question! Let me look into it.
@@ -19,26 +19,31 @@ return { abc: foo.bar }
 
 ## How it works
 
-The platform runs each agent under its **headless** processor — turn
-scheduling and the LLM call, with no response interpretation. `worker.ts`
-here is the interpreter:
+The platform's one agent processor does turn scheduling and the LLM call and
+interprets nothing; every project's config worker authors its agents' births
+and decides what responses mean. `worker.ts` here is both:
 
-1. On each agent's birth (and, after every config deploy, for every existing
-   agent), it hands the stream to the headless processor. Hosted-processor
-   subscriptions cannot be removed, so the handover is ADDITIVE: subscribe
-   the `agent-headless` name, then flip the agent's `config.driver` knob —
-   the platform guarantees exactly one of the two subscribed processors acts,
-   selected by that knob. Reversible by flipping the knob back.
-2. It supersedes each agent's keyed system-prompt slot with
-   `prompts/agent-system-prompt.md`, and injects `AGENTS.md` as standing
-   context, re-syncing both on every config-repo commit.
-3. On assistant output events (stamped by the headless processor), it parses
+1. On each agent's birth (`agent/created`), it appends the platform's default
+   birth events (`itx.agents.get(path).getDefaultBirthEvents({ kind })`),
+   supersedes the prompt slot with `prompts/agent-system-prompt.md` for WEB
+   agents, and appends `agent/birth-finalized` — the agent processor holds the
+   agent's first turn until that finalize (with a ~10s platform deadline
+   behind it).
+2. It injects `AGENTS.md` as standing context and re-syncs it — and the
+   codemode prompt — on every config-repo commit.
+3. On web agents' assistant output events (stamped by the agent processor), it parses
    the tag (`codemode-format.ts`) and appends the consequences: the script
    request, the prose as a chat message (marked so it isn't mirrored back
    into history), the status as `agent/summary-updated`, or corrective
-   feedback for malformed/multiple tags.
-4. On script settlements, it renders the result back as developer context —
-   which is what triggers the agent's next turn.
+   feedback for malformed/multiple tags. This is the VENDORED-interpreter
+   path — the platform's `interpretResponse` service is deliberately not
+   consulted for web agents; pinning a format means owning its interpreter.
+4. On web agents' script settlements, it renders the result back as
+   developer context — which is what triggers the agent's next turn.
+5. Integration agents (slack/telegram/email), MCP sessions, and onboarding
+   keep the platform-default personalities and delegate to the platform
+   interpreter (`itx.agents.get(path).interpretResponse(event)`) — the
+   codemode grammar is a web experiment.
 
 Everything is public stream events any project member could append; no
 platform privileges are involved. **Iterating on the format — prompt, grammar,
@@ -46,22 +51,12 @@ rendering — is a commit to this repo. No platform deploy.**
 
 ## Known limits
 
-- Delivery to the config worker is observation-grade: an event the handler
-  fails on is skipped, not retried forever, so a dropped delivery quietly
-  kills that turn (a new message starts fresh). If the experiment graduates,
-  the promotion path is a real hosted stream processor (`createProcessorHost`)
-  or platformizing the proven format.
-- First-turn race, mitigated: a new chat's first message reliably beats the
-  worker's birth handover, so the worker interrupts the racing classic turn
-  and lets the interrupt re-run it under the headless driver — first replies
-  arrive a beat slower but in the right format. The wider window is project
-  birth itself: until the config worker's FIRST deploy finishes, deliveries
-  to it are skipped (not retried), and the `project/worker-updated` sweep is
-  what converts any agents created in that window.
 - Slash commands (`/example`, `/script`) are platform interpretation and are
-  inert here.
-- Web agents only: slack/telegram/email agent paths are excluded from the
-  retarget and keep the classic fenced format.
+  inert on web agents here.
+- Stream errors are not transcribed into web agents' model context (the
+  platform interpreter does that for the delegated agents).
+- Idempotency keys mirror the platform interpreter's (`agent/` namespace), so
+  historical streams interpreted by both converge instead of double-executing.
 
 ## Switching an existing project to this template
 
@@ -69,11 +64,7 @@ There is no first-class "re-template" door yet (`configRepoTemplate` applies
 at creation; `cli config-repo reset` targets only the default template). The
 wholesale switch is a commit: overwrite `/repos/config` with this template's
 files (one multi-file workspace commit — delete what the old config had,
-write these). The commit auto-redeploys the project worker, whose
-`project/worker-updated` sweep then hands every existing agent to the
-headless driver and syncs the prompt. The driver flip waits for each agent to
-go idle (no open request, no running script, no pending trigger) and retries
-on settle events, so in-flight fenced turns genuinely finish under the old
-rules; the next turn speaks `<codemode>`. A message racing into the gap
-between the idle check and the flip commit can still double-dial one turn —
-accepted experiment caveat; a platform-side adopt guard would close it.
+write these). The commit auto-redeploys the project worker; existing agents
+keep their current personalities until the next config-repo commit's prompt
+sync supersedes their prompt slots, and new agents are born straight into
+the codemode format.

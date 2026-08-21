@@ -46,7 +46,11 @@ import type {
   StreamConnectionHandle,
   WakeableStreamProcessorRpc,
 } from "iterate/processors";
-import { jsonValuesEqual, StreamReceiverUnavailableError } from "iterate/processors";
+import {
+  isIdempotencyConflict,
+  jsonValuesEqual,
+  StreamReceiverUnavailableError,
+} from "iterate/processors";
 import {
   disposeIgnoredRpcResult,
   LiveState,
@@ -425,13 +429,13 @@ import {
 } from "./domains/email/email-processor-contract.ts";
 import { EmailAgentProcessorContract } from "./domains/email/email-agent-processor-contract.ts";
 import {
-  AGENT_BIRTH_DEFAULTS_KEY,
-  AgentBirthDefaults,
   agentCollectionCreationEvents,
   agentCreationForPath,
-  validateAgentBirthEvents,
+  AgentBirthKind,
+  defaultAgentBirthEvents,
   type AgentCreateInput,
 } from "./domains/agents/agent-defaults.ts";
+import { interpretAgentEvent } from "./domains/agents/agent-response-interpreter.ts";
 import { ChatReplyNotifyProcessorContract } from "./domains/notifications/chat-reply-notify-contract.ts";
 import { repoCreationEvents, type RepoCreateInput } from "./domains/repos/repo-defaults.ts";
 import { CapabilityHostProcessorContract } from "./domains/capability-host/capability-host-processor-contract.ts";
@@ -2192,59 +2196,6 @@ class ClientsRpcTarget extends IterateRpcTarget<"Clients"> {
  * bases normalize). Absent (id-only boot line) when the directory has no
  * record yet — never a birth blocker.
  */
-/**
- * The project's agent birth defaults, read from the generic per-key defaults
- * store on the project processor's fold (`state.defaults` — raw latest value
- * per key; the project holds it opaquely). THIS is where the agents domain
- * interprets its key: schema parse plus the agent-vocabulary/allowlist check,
- * both at the read site so the project contract never learns what an agent
- * is. Absent, malformed, non-matching, or unreadable → no defaults — a
- * broken or missing defaults declaration must degrade to platform-default
- * births, never break agent creation (and never fall back to a stale
- * predecessor: the raw latest is all the fold keeps).
- */
-async function agentBirthDefaultsForProject(props: {
-  agentPath: string;
-  auth: ItxAuth;
-  projectId: string;
-}): Promise<{ defaults?: AgentBirthDefaults }> {
-  try {
-    const { state } = await facetProcessorRelay<ProjectProcessorState>({
-      auth: props.auth,
-      name: ProjectProcessorContract.slug,
-      path: "/",
-      projectId: props.projectId,
-    }).snapshot();
-    const raw = state.defaults[AGENT_BIRTH_DEFAULTS_KEY];
-    if (raw === undefined) return {};
-    const parsed = AgentBirthDefaults.safeParse(raw);
-    if (!parsed.success) {
-      console.warn("[agent] ignoring malformed agent birth defaults; using platform defaults", {
-        error: parsed.error.message,
-        projectId: props.projectId,
-      });
-      return {};
-    }
-    const check = validateAgentBirthEvents(parsed.data.birthEvents);
-    if (!check.ok) {
-      console.warn("[agent] ignoring invalid agent birth defaults; using platform defaults", {
-        error: check.error,
-        projectId: props.projectId,
-      });
-      return {};
-    }
-    const pathPrefix = parsed.data.matches?.pathPrefix;
-    if (pathPrefix !== undefined && !props.agentPath.startsWith(pathPrefix)) return {};
-    return { defaults: parsed.data };
-  } catch (error) {
-    console.warn("[agent] agent birth defaults read failed; using platform defaults", {
-      error: String(error),
-      projectId: props.projectId,
-    });
-    return {};
-  }
-}
-
 async function agentBootProjectFacts(
   projectId: string,
 ): Promise<{ project?: { name: string; slug: string; workerUrl?: string } }> {
@@ -4853,6 +4804,8 @@ function agentProcessorRelay(input: {
 }): ProcessorRelayRpcTarget<AgentProcessorState> {
   return facetProcessorRelay<AgentProcessorState>({
     auth: input.auth,
+    // The registered processor IS the vocabulary's contract: one slug for registration,
+    // subscriptions, and dials alike.
     contract: AgentProcessorContract,
     path: input.path,
     projectId: input.projectId,
@@ -5086,12 +5039,6 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       agentPath: this.#path,
       projectId: this.#props.projectId,
       ...(payload === undefined ? {} : { payload }),
-      ...(await agentBootProjectFacts(this.#props.projectId)),
-      // Project-level birth defaults (driver, prompt, extra processor
-      // subscriptions) apply to every agent born through this generic door;
-      // integration routers use their own creation calls with explicit
-      // policies and never pick these up.
-      ...(await agentBirthDefaultsForProject({ ...this.#props, agentPath: this.#path })),
       // Plain chat threads (mobile + web — everything born through this
       // generic door) get the chat-reply push producer as their sibling.
       // Integration threads (Slack/Telegram/Email) are born elsewhere with
@@ -5153,6 +5100,97 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       workspaceReady,
     ]);
     return this;
+  }
+
+  /**
+   * The platform-default personality for this agent, as PLAIN KEYED EVENTS —
+   * ready to append (plus your own tweaks, plus `agent/birth-finalized`) from
+   * a config worker's `agent/created` handler. `kind` selects the variant:
+   * "web"/"onboarding" (default web-chat prompt), "mcp" (ask_assistant reply
+   * contract), or the channel kinds "slack"/"telegram"/"email", whose prompts
+   * interpolate the channel facts an integration router recorded in this
+   * agent's birth certificate. Returns the keyed system prompt, the default
+   * model config, and the boot-context item. Idempotency keys embed content
+   * hashes, so appending the same events twice dedupes and appending edited
+   * ones supersedes the same logical slots. Nothing here appends — the caller
+   * stays the author of its agent's birth.
+   */
+  async getDefaultBirthEvents(input: { kind: AgentBirthKind }): Promise<AgentEventInput[]> {
+    await this.#assertCreated();
+    const kind = AgentBirthKind.parse(input.kind);
+    const { state } = await this.processor.snapshot();
+    const createdAtOffset = state.birthCertificate?.createdAtOffset;
+    const createdEvent =
+      createdAtOffset === undefined
+        ? undefined
+        : await this.stream.getEvent({ offset: createdAtOffset });
+    const birthCertificate =
+      createdEvent !== undefined &&
+      typeof createdEvent.payload === "object" &&
+      createdEvent.payload !== null
+        ? (createdEvent.payload as Record<string, unknown>)
+        : undefined;
+    const { project } = await agentBootProjectFacts(this.#props.projectId);
+    return defaultAgentBirthEvents({
+      kind,
+      coordinates: {
+        agentPath: this.#path,
+        projectId: this.#props.projectId,
+        ...(project === undefined ? {} : { project }),
+      },
+      ...(birthCertificate === undefined ? {} : { birthCertificate }),
+    });
+  }
+
+  /**
+   * Interpret ONE committed event on this agent's stream and append its
+   * consequences — the platform-implemented interpretation service. The
+   * platform never calls this on its own: a config worker that wants classic
+   * behavior calls it per delivered event (assistant `agents/context-added`
+   * outputs, `capability-host/script-run-settled`, preamble changes,
+   * `stream/error-occurred`, and slash-command user messages); a project that
+   * wants a different response grammar vendors its own interpreter instead.
+   * Pass the delivered event itself — only its `offset` is used; the
+   * committed event is re-read from the stream, so the caller's copy is never
+   * trusted. Consequences carry deterministic `agent/`-namespace idempotency
+   * keys: repeated interpretation (redelivered handlers, retries) converges
+   * instead of double-executing. Returns the committed consequence events
+   * (empty when the event means nothing).
+   */
+  async interpretResponse(event: { offset: number }): Promise<StreamEvent[]> {
+    await this.#assertCreated();
+    const committed = await this.stream.getEvent({ offset: event.offset });
+    if (committed === undefined) {
+      throw new Error(`no committed event at offset ${event.offset} on ${this.#path}`);
+    }
+    const { state } = await this.processor.snapshot();
+    const appends = await interpretAgentEvent({
+      event: committed,
+      state,
+      deps: {
+        writeWorkspaceFile: async ({ content, path: filePath }) => {
+          const workspacePath = agentWorkspacePath(this.#path);
+          const absolutePath = `${workspacePath}/${filePath}`;
+          await env.WORKSPACE_V2.getByName(
+            DurableObjectNameCodec.stringify({
+              path: workspacePath,
+              projectId: this.#props.projectId,
+            }),
+          ).writeFile(absolutePath, content);
+          return { absolutePath };
+        },
+      },
+    });
+    if (appends.length === 0) return [];
+    // Race-tolerant: an idempotency conflict means another interpretation of
+    // the same event (a redelivered worker handler, a concurrent retry)
+    // already recorded these consequences — losing that race is success.
+    try {
+      return await this.stream.append(...appends);
+    } catch (error) {
+      if (!isIdempotencyConflict(error)) throw error;
+      return [];
+    }
   }
 
   /**

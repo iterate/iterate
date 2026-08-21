@@ -3,11 +3,7 @@ import { GithubAiLinter } from "iterate/starter-apps/github-ai-linter";
 import { GuestbookApp } from "iterate/starter-apps/guestbook";
 import { MediaApp } from "iterate/starter-apps/media";
 import { NotesApp } from "iterate/starter-apps/notes";
-import {
-  IterateWorkerEntrypoint,
-  type AgentBirthDefaultsValue,
-  type StreamEvent,
-} from "iterate/sdk";
+import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
 import { TodoApp } from "iterate/starter-apps/todo";
 
 // An iterate project is, in the abstract, just a fetch function.
@@ -112,63 +108,43 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   }
 
   /**
-   * THE PROJECT'S PROMPT, published as data: the project root's generic
-   * defaults store (`project/defaults-configured`, latest occurrence wins
-   * per key) holds this repo's birth events under the "agents/birth-defaults"
-   * key, and the platform's agent-creation door folds them into every agent
-   * birth batch — so agents in this project are BORN with this repo's
-   * prompts/agent-system-prompt.md as their system prompt. Edit that file
-   * and commit to change it — the content-hash key re-publishes and the
-   * newest event wins; no platform deploy. Deleting the file publishes an
-   * EMPTY list, which restores the platform's embedded fallback prompt
-   * (identical text until you fork the file). Rough token budget: prompts
-   * ride every LLM request, so a much larger file mostly buys latency and
-   * cost — keep it lean.
+   * THE BIRTH JOB — this project authors every agent's personality. The
+   * platform's create() commits only the mechanism (the agent core); it then
+   * HOLDS the agent's first turn until this handler appends the personality
+   * and declares the birth finalized. Start from the platform defaults
+   * (`getDefaultBirthEvents` — prompt, model, boot context; the channel
+   * kinds interpolate the facts the router recorded in the birth
+   * certificate), layer this project's own tweaks, then finalize. Every
+   * event here is idempotency-keyed, so a redelivered agent/created converges
+   * instead of conflicting. Miss the platform's ~10s deadline (e.g. during
+   * this worker's first build) and the agent starts degraded on the bare
+   * platform defaults — visibly, via agent/birth-timed-out.
    */
-  async #publishAgentBirthDefaults(): Promise<void> {
-    const itx = this.itx;
-    const file = await itx.repo.readFile({ path: "prompts/agent-system-prompt.md" });
-    const birthEvents: AgentBirthDefaultsValue["birthEvents"] =
-      file === null
-        ? []
-        : [
-            {
-              type: "events.iterate.com/agents/context-added",
-              payload: {
-                // The platform's embedded copy of this file is newline-stripped;
-                // publishing the same normalization keeps "unchanged file" a
-                // byte-identical no-op.
-                content: file.content.replace(/\n$/, ""),
-                key: "agent/system-prompt",
-                role: "system",
-              },
-            },
-          ];
-    // Best-effort size guard (~4 chars/token): the platform's own default
-    // prompt is budget-tested at ~4.3k tokens; warn well before a fork's
-    // edits silently double every request's cost.
-    if (file !== null && file.content.length > 6_000 * 4) {
-      console.warn(
-        `prompts/agent-system-prompt.md is ~${Math.round(file.content.length / 4)} tokens; ` +
-          "it rides every LLM request of every agent — consider trimming.",
-      );
-    }
-    const encoded = new TextEncoder().encode(JSON.stringify(birthEvents));
-    const digest = await crypto.subtle.digest("SHA-256", encoded);
-    const hash = [...new Uint8Array(digest).slice(0, 8)]
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("");
-    await itx.streams.get("/").append({
-      type: "events.iterate.com/project/defaults-configured",
-      // New prefix on purpose: the stream rejects same-key-different-body
-      // appends, so the generic event must not reuse the legacy
-      // `iterate/config/agent-birth-defaults:` keys.
-      idempotencyKey: `iterate/config/defaults:agents/birth-defaults:${hash}`,
-      payload: {
-        key: "agents/birth-defaults",
-        value: { birthEvents } satisfies AgentBirthDefaultsValue,
+  async #authorAgentBirth(agentPath: string): Promise<void> {
+    const agent = this.itx.agents.get(agentPath);
+    const defaults = await agent.getDefaultBirthEvents({ kind: birthKindForAgentPath(agentPath) });
+    await agent.append(
+      ...defaults,
+      {
+        // The one illustrative project tweak — living documentation of how a
+        // config repo shapes its agents: a standing keyed context item. Edit
+        // or delete it freely; the key is the logical slot, the versioned
+        // idempotency key the occurrence.
+        type: "events.iterate.com/agents/context-added",
+        idempotencyKey: "iterate/config/house-style:v1",
+        payload: {
+          role: "system",
+          key: "config/house-style",
+          content: "all responses should be in all-lowercase",
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
+        },
       },
-    });
+      {
+        type: "events.iterate.com/agent/birth-finalized",
+        idempotencyKey: "iterate/config/birth-finalized:v1",
+        payload: {},
+      },
+    );
   }
 
   // The base class delivers committed events on ANY stream here at least once and in
@@ -240,7 +216,26 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         // The birth event on the agent's own stream (copies carry
         // source.copiedFrom and must not re-target the collection stream).
         if (event.source?.copiedFrom !== undefined) break;
+        await this.#authorAgentBirth(event.path);
         await this.#syncAgentsMdContext([event.path]);
+        break;
+      }
+      case "events.iterate.com/capability-host/script-run-settled":
+      case "events.iterate.com/capability-host/preamble-set":
+      case "events.iterate.com/capability-host/preamble-removed":
+      case "events.iterate.com/stream/error-occurred":
+      case "events.iterate.com/agents/context-added": {
+        // THE INTERPRETATION JOB — the platform never decides what an
+        // agent's output MEANS; this project does, per event. Delegating to
+        // the platform's interpreter keeps classic behavior (```ts script
+        // extraction, slash commands, script-result rendering, error
+        // transcription) and live-updates with the platform; a project
+        // wanting its own response grammar vendors its own interpreter
+        // instead (see the codemode-tag template). Safe to call on every
+        // event here: irrelevant ones interpret to nothing, and repeated
+        // calls converge on idempotency keys.
+        if (!event.path.startsWith("/agents/")) break;
+        await this.itx.agents.get(event.path).interpretResponse(event);
         break;
       }
       case "events.iterate.com/repo/commit-completed": {
@@ -281,9 +276,6 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
             });
           }`,
         });
-        // Any commit MAY have changed the prompt file; unchanged content
-        // dedupes on the content-hash key.
-        await this.#publishAgentBirthDefaults();
         break;
       }
       default:
@@ -333,4 +325,18 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       { headers: { "content-type": "text/html; charset=utf-8" } },
     );
   }
+}
+
+/** Which platform-default personality an agent path gets: the integration
+ * routers park their agents under well-known prefixes, and the onboarding
+ * agent is the one this worker creates itself on project/created. */
+function birthKindForAgentPath(
+  agentPath: string,
+): "web" | "onboarding" | "mcp" | "slack" | "telegram" | "email" {
+  if (agentPath === "/agents/onboarding") return "onboarding";
+  if (agentPath.startsWith("/agents/mcp/")) return "mcp";
+  if (agentPath.startsWith("/agents/slack/")) return "slack";
+  if (agentPath.startsWith("/agents/telegram/")) return "telegram";
+  if (agentPath.startsWith("/agents/email/")) return "email";
+  return "web";
 }

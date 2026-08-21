@@ -130,18 +130,16 @@ describe("SlackProcessor (webhook router)", () => {
     expect(
       routed.filter((event) => event.type === "events.iterate.com/stream/subscription-configured"),
     ).toHaveLength(4);
+    // The core carries NO personality: the config worker authors the Slack
+    // prompt from the channel facts the birth certificate records
+    // (getDefaultBirthEvents({ kind: "slack" }) interpolates the connection).
+    expect(routed.some((event) => event.type === "events.iterate.com/agents/context-added")).toBe(
+      false,
+    );
     expect(
-      routed.find(
-        (event) =>
-          event.type === "events.iterate.com/agents/context-added" &&
-          (event.payload as { key?: string }).key === "agent/system-prompt",
-      ),
-    ).toMatchObject({
-      payload: {
-        content: slackAgentSystemPrompt(CONNECTION),
-        key: "agent/system-prompt",
-        role: "system",
-      },
+      routed.find((event) => event.type === "events.iterate.com/agent/created")?.payload,
+    ).toEqual({
+      channel: { type: "slack", connection: CONNECTION, channelId: "C123", threadTs: "111.222" },
     });
     expect(routed.slice(-2).map((event) => event.type)).toEqual([
       "events.iterate.com/slack/thread-route-configured",

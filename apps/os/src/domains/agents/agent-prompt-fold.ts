@@ -40,7 +40,7 @@ export function reduceAgentEvent(input: {
   state: AgentProcessorState;
 }): AgentProcessorState {
   const state = reduceAgentEventCore(input);
-  const runtime: AgentRuntime = deriveAgentRuntime(state, "agent/system-prompt");
+  const runtime: AgentRuntime = deriveAgentRuntime(state);
   // Genesis zero stays absent. Every later count change is significant,
   // including changes which retain the same compact display state.
   const changed =
@@ -67,6 +67,21 @@ function reduceAgentEventCore(input: {
     case "events.iterate.com/agent/created":
       if (state.birthCertificate !== null) return state;
       return { ...state, birthCertificate: { createdAtOffset: event.offset } };
+    case "events.iterate.com/agent/birth-finalized":
+      // First finalize wins; a late degraded-start finalize (or a worker
+      // retry) is a harmless stream fact.
+      if (state.birthFinalizedAtOffset !== undefined) return state;
+      return { ...state, birthFinalizedAtOffset: event.offset };
+    case "events.iterate.com/agent/birth-timed-out":
+      // Applies only while the birth is still unfinalized: the platform's
+      // deadline sleeper appends this unconditionally after its best-effort
+      // freshness check, and THIS guard is what makes a worker finalize that
+      // beat it to the stream win — the stale timed-out fact reduces to
+      // nothing and no degraded personality is appended off it.
+      if (state.birthFinalizedAtOffset !== undefined || state.birthTimedOutAtOffset !== undefined) {
+        return state;
+      }
+      return { ...state, birthTimedOutAtOffset: event.offset };
     case "events.iterate.com/agent/configured":
       // Deep-merge the patch (omitted keys keep their values), then
       // re-validate against the complete config schema — the framework's
@@ -273,10 +288,12 @@ function reduceAgentEventCore(input: {
               },
       };
     case "events.iterate.com/capability-host/script-run-requested": {
-      const source = event.source?.processor;
-      if (source?.slug !== AgentProcessorContract.slug || source.stream.path !== event.path) {
-        return state;
-      }
+      // Script requests reach this stream from the interpretation service
+      // (itx.agents.get(path).interpretResponse — an ordinary rpc append, no
+      // processor stamp) or from a project's own vendored interpreter. The
+      // agent-lane executionId prefixes are the membership rule; the active
+      // set is presentation bookkeeping (runningScripts), and the render gate
+      // lives in the interpreter's own settlement handling.
       if (
         !event.payload.executionId.startsWith("agent-output:") &&
         !event.payload.executionId.startsWith(SLASH_COMMAND_EXECUTION_PREFIX)
@@ -348,10 +365,10 @@ function contextTriggerSource(payload: AgentContextAddedPayload): "external" | "
   if (payload.role === "system" || payload.role === "assistant") return null;
   if (payload.llmRequestPolicy.behaviour === "dont-trigger-request") return null;
   if (payload.role === "user") {
-    // A resolving slash command runs deterministically (the processor's
-    // event handler appends the script request from the SAME pure resolver)
-    // — the model's turn comes later, driven by the script result's context
-    // append.
+    // A resolving slash command is a side-band action, not conversation: the
+    // interpretation service (asked by the project's config worker) runs it
+    // as a script from the SAME pure resolver — the model's turn comes
+    // later, driven by the script result's context append.
     return resolveSlashCommand(payload.content) === null ? "external" : null;
   }
   const actorType = payload.actor?.type;

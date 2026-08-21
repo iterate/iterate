@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { ConsumedInput, StreamEvent, StreamEventInput } from "iterate/processors";
-import { KEEPALIVE_ALARM_LEAD_MS } from "iterate/processors";
+import { isIdempotencyConflict, KEEPALIVE_ALARM_LEAD_MS } from "iterate/processors";
 import {
   makeMemoryProgressStore,
   makeProcessorHarness,
@@ -19,13 +19,13 @@ import {
   AgentProcessorContract,
   type AgentContextAddedPayload,
 } from "./agent-processor-contract.ts";
+import { AgentProcessor, type AgentProcessorDeps } from "./agent-processor-implementation.ts";
 import {
-  AgentProcessor,
   buildAgentCompactionRequestBody,
   contextWindowTokens,
   prepareAgentLlmMessages,
-  type AgentProcessorDeps,
-} from "./agent-processor-implementation.ts";
+} from "./agent-llm-request.ts";
+import { interpretAgentEvent, type AgentInterpreterDeps } from "./agent-response-interpreter.ts";
 import { buildAgentLlmRequestBody, projectContextAdded } from "./agent-prompt-fold.ts";
 import type { WorkersAiMessage } from "./workers-ai-transport.ts";
 
@@ -39,6 +39,8 @@ type AgentEventInput = ConsumedInput<AgentProcessorContract>;
 
 const NEW_AGENT_EVENTS = [
   { type: "events.iterate.com/agent/created", payload: {} },
+  // The config worker's birth job, in miniature: personality events followed
+  // by the finalize that releases the processor's readiness hold.
   {
     type: "events.iterate.com/agent/configured",
     payload: { config: { llm: { model: "test-model" } } },
@@ -51,6 +53,7 @@ const NEW_AGENT_EVENTS = [
       content: "You are a helpful test agent.",
     },
   },
+  { type: "events.iterate.com/agent/birth-finalized", payload: {} },
 ] satisfies AgentEventInput[];
 
 function userMessage(
@@ -130,7 +133,16 @@ function makeScriptedLlm() {
   };
 }
 
-/** The generic harness plus the agent's scripted LLM, wired in createProcessor. */
+/**
+ * The generic harness plus the agent's scripted LLM — and the CONFIG
+ * WORKER'S PART, played automatically: in production the default template
+ * calls `itx.agents.get(path).interpretResponse(event)` for every delivered
+ * event on an agent stream, so this harness interprets every committed event
+ * once, in order, after each step, appending the consequences exactly as the
+ * service does (race-tolerantly: replays dedupe on the shared keys). The
+ * processor itself interprets nothing — agent-processor-no-interpretation.test.ts pins
+ * that by running WITHOUT this loop.
+ */
 function makeAgentHarness(substrate?: HarnessSubstrate, extraDeps?: Partial<AgentProcessorDeps>) {
   const llm = makeScriptedLlm();
   const harness = makeProcessorHarness<AgentProcessorContract>({
@@ -139,7 +151,40 @@ function makeAgentHarness(substrate?: HarnessSubstrate, extraDeps?: Partial<Agen
     path: "/agents/test",
     ...(substrate === undefined ? {} : { substrate }),
   });
-  return { ...harness, llm };
+  const interpreterDeps: AgentInterpreterDeps =
+    extraDeps?.writeWorkspaceFile === undefined
+      ? {}
+      : { writeWorkspaceFile: extraDeps.writeWorkspaceFile };
+  let interpretedThrough = 0;
+  const interpretNewEvents = async () => {
+    for (;;) {
+      const next = harness.events().find((event) => event.offset > interpretedThrough);
+      if (next === undefined) return;
+      interpretedThrough = next.offset;
+      const appends = await interpretAgentEvent({
+        event: next,
+        state: harness.state(),
+        deps: interpreterDeps,
+      });
+      if (appends.length === 0) continue;
+      try {
+        await harness.stream.append(...(appends as StreamEventInput[]));
+      } catch (error) {
+        // Another interpretation of the same event already recorded these
+        // consequences (the replay suite re-runs the whole journal) — losing
+        // the idempotency race is success, exactly as in the rpc service.
+        if (!isIdempotencyConflict(error)) throw error;
+      }
+      await harness.settle();
+    }
+  };
+  const play: (typeof harness)["play"] = async (...steps) => {
+    for (const step of steps) {
+      await harness.play(step);
+      await interpretNewEvents();
+    }
+  };
+  return { ...harness, interpret: interpretNewEvents, llm, play };
 }
 
 const REQUESTED = "events.iterate.com/agent/llm-request-requested";
@@ -259,7 +304,7 @@ describe("AgentProcessor turn lifecycle", () => {
     expect(h.state().pendingLlmRequestTrigger).toBeNull();
   });
 
-  it("holds an early trigger until the canonical system prompt arrives", async () => {
+  it("holds an early trigger until the config worker finalizes the birth", async () => {
     const h = makeAgentHarness();
     await h.play(
       [
@@ -267,15 +312,17 @@ describe("AgentProcessor turn lifecycle", () => {
         { type: "events.iterate.com/agent/created", payload: {} },
         userMessage("am I early?"),
       ],
-      ["advanceTime", 60_000],
+      // Inside the readiness deadline: the trigger stays parked, nothing
+      // dials — not even a prompt-less turn.
+      ["advanceTime", 5_000],
     );
-    // No system-prompt slot yet: the trigger stays parked, nothing dials.
     expect(h.events(REQUESTED)).toHaveLength(0);
     expect(h.llm.calls).toHaveLength(0);
     expect(h.state().pendingLlmRequestTrigger).not.toBeNull();
 
-    // The system prompt's own delivery re-runs the pass over the SAME
-    // pending trigger — the early message gets its turn.
+    // The worker's birth batch lands (personality + finalize); the finalize's
+    // own delivery re-runs the pass over the SAME pending trigger — the early
+    // message gets its turn, on the authored personality.
     await h.play(
       [
         "append",
@@ -283,11 +330,15 @@ describe("AgentProcessor turn lifecycle", () => {
           type: CONTEXT_ADDED,
           payload: { role: "system", key: "agent/system-prompt", content: "Now configured." },
         },
+        { type: "events.iterate.com/agent/birth-finalized", payload: {} },
       ],
       ["advanceTime", 10_000],
     );
     expect(h.llm.calls).toHaveLength(1);
     expect(h.llm.calls[0]!.messages.map((m) => m.content).join("\n")).toContain("am I early?");
+    expect(h.llm.calls[0]!.messages.map((m) => m.content).join("\n")).toContain("Now configured.");
+    // The worker beat the deadline: no degraded-start fact ever landed.
+    expect(h.events("events.iterate.com/agent/birth-timed-out")).toHaveLength(0);
   });
 
   it("interrupt mid-flight: aborts, settles cancelled with the streamed partial; the zombie completion loses the settle race", async () => {
@@ -1092,23 +1143,32 @@ describe("AgentProcessor script execution", () => {
     expect(h.llm.calls).toHaveLength(1); // no new turn
   });
 
-  it("does not render results from an ITX execution requested outside the agent processor", async () => {
+  it("the agent-lane executionId prefix IS the membership rule: any writer's agent-output execution counts and renders", async () => {
+    // Under interpretation-as-a-service there is no processor-stamped
+    // "inside": the interpretation service and vendored userland interpreters
+    // are all ordinary appenders. The `agent-output:`/slash prefixes decide
+    // what belongs to the agent lane — for the fold's runningScripts count
+    // and for settlement rendering alike.
     const h = makeAgentHarness();
     await h.play(["append", ...NEW_AGENT_EVENTS]);
-    const itemsBefore = h.state().contextItems.length;
     const executionId = "agent-output:999";
+
+    await h.play([
+      "append",
+      {
+        type: "events.iterate.com/capability-host/script-run-requested",
+        payload: {
+          executionId,
+          code: "async () => 'external result'",
+          expiresAt: h.clock.now + 60_000,
+        },
+      },
+    ]);
+    expect(h.state().activeScriptExecutionIds).toEqual([executionId]);
 
     await h.play(
       [
         "append",
-        {
-          type: "events.iterate.com/capability-host/script-run-requested",
-          payload: {
-            executionId,
-            code: "async () => 'external result'",
-            expiresAt: h.clock.now + 60_000,
-          },
-        },
         {
           type: "events.iterate.com/capability-host/script-run-settled",
           payload: { executionId, settlement: { status: "succeeded", result: "external result" } },
@@ -1116,10 +1176,10 @@ describe("AgentProcessor script execution", () => {
       ],
       ["advanceTime", 10_000],
     );
-
     expect(h.state().activeScriptExecutionIds).toEqual([]);
-    expect(h.state().contextItems).toHaveLength(itemsBefore);
-    expect(h.llm.calls).toHaveLength(0);
+    expect(
+      h.state().contextItems.some((item) => item.payload.content.includes("external result")),
+    ).toBe(true);
   });
 
   it("spills an oversized script result to a workspace file and references it; small results stay inline", async () => {

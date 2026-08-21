@@ -196,12 +196,7 @@ test("project lifecycle cases directly install and handle the default heartbeat"
   const append = vi.fn(async (input: unknown) => [input]);
   const project = {
     repos: { list: async () => [] },
-    // The worker-updated case re-publishes the repo's prompt file as the
-    // project's agent birth defaults.
-    repo: {
-      readFile: async (input: { path: string }) =>
-        input.path === "prompts/agent-system-prompt.md" ? { content: "PROMPT TEXT\n" } : null,
-    },
+    repo: { readFile: async () => null },
     streams: { get: () => ({ append }) },
     scheduler: { set },
     // The MediaApp glue mounts itx.media on worker-updated.
@@ -247,28 +242,6 @@ test("project lifecycle cases directly install and handle the default heartbeat"
   );
   expect(configured.script).toContain("payload: { scheduleKey: schedule.key }");
 
-  // The same case publishes the repo's prompt file as birth defaults under
-  // the generic per-key defaults event: one prompt-slot event,
-  // newline-stripped (matching the platform's embedded copy), under a
-  // content-hash key — an unchanged file republishes the SAME occurrence, so
-  // redeliveries dedupe server-side.
-  expect(append).toHaveBeenCalledTimes(2);
-  expect(append.mock.calls[0]![0]).toMatchObject({
-    type: "events.iterate.com/project/defaults-configured",
-    payload: {
-      key: "agents/birth-defaults",
-      value: {
-        birthEvents: [
-          {
-            type: "events.iterate.com/agents/context-added",
-            payload: { content: "PROMPT TEXT", key: "agent/system-prompt", role: "system" },
-          },
-        ],
-      },
-    },
-  });
-  expect(append.mock.calls[1]![0]).toEqual(append.mock.calls[0]![0]);
-
   const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
   await deliver(worker, {
     type: "events.iterate.com/project/heartbeat-triggered",
@@ -308,6 +281,152 @@ test("project lifecycle cases directly install and handle the default heartbeat"
   expect(set).toHaveBeenCalledTimes(2);
   expect(log).toHaveBeenCalledOnce();
 });
+
+test("agent/created runs the birth job: platform defaults + the house-style tweak + finalize", async () => {
+  const agentAppend = vi.fn(async (...events: unknown[]) => events);
+  const defaultPromptEvent = {
+    type: "events.iterate.com/agents/context-added",
+    idempotencyKey: "agent/default-birth:prompt:web:abcd1234",
+    payload: { role: "system", key: "agent/system-prompt", content: "DEFAULT" },
+  };
+  const getDefaultBirthEvents = vi.fn(async () => [defaultPromptEvent]);
+  const project = {
+    agents: {
+      get: vi.fn(() => ({
+        append: agentAppend,
+        getDefaultBirthEvents,
+        // The AGENTS.md sync (which runs right after the birth job) reads the
+        // current keyed slot before appending.
+        processor: { snapshot: vi.fn(async () => ({ state: { contextItems: [] } })) },
+      })),
+    },
+    repo: { readFile: vi.fn(async () => null) },
+    [Symbol.dispose]: vi.fn(),
+  };
+  const worker = new ProjectWorker(
+    {} as never,
+    {
+      ITERATE_WORKER_VERSION: "test",
+      ITX: { get: vi.fn(() => pipelinedProject(project)) },
+    } as never,
+  );
+
+  await deliver(worker, {
+    type: "events.iterate.com/agent/created",
+    path: "/agents/demo",
+    payload: {},
+  });
+
+  expect(project.agents.get).toHaveBeenCalledWith("/agents/demo");
+  expect(getDefaultBirthEvents).toHaveBeenCalledWith({ kind: "web" });
+  // ONE batch: the defaults, this repo's illustrative tweak, and the
+  // finalize that releases the platform's readiness hold — all keyed.
+  expect(agentAppend.mock.calls[0]).toEqual([
+    defaultPromptEvent,
+    expect.objectContaining({
+      idempotencyKey: "iterate/config/house-style:v1",
+      payload: expect.objectContaining({
+        key: "config/house-style",
+        content: "all responses should be in all-lowercase",
+      }),
+    }),
+    expect.objectContaining({
+      type: "events.iterate.com/agent/birth-finalized",
+      idempotencyKey: "iterate/config/birth-finalized:v1",
+    }),
+  ]);
+
+  // Channel kinds map from the router path prefixes.
+  await deliver(worker, {
+    type: "events.iterate.com/agent/created",
+    path: "/agents/slack/main/C1/ts-1",
+    payload: { channel: { type: "slack", connection: "main" } },
+  });
+  expect(getDefaultBirthEvents).toHaveBeenLastCalledWith({ kind: "slack" });
+
+  // A copy on the collection stream is not a birth.
+  const birthsBefore = getDefaultBirthEvents.mock.calls.length;
+  await worker.processEventBatch({
+    events: [
+      {
+        type: "events.iterate.com/agent/created",
+        path: "/agents",
+        payload: {},
+        source: { copiedFrom: { streamPath: "/agents/demo", offset: 1 } },
+      },
+    ],
+  } as never);
+  expect(getDefaultBirthEvents.mock.calls.length).toBe(birthsBefore);
+});
+
+test("with-voice authors births too: platform defaults + finalize, no tweaks", async () => {
+  // The create-project spec caught this template unmigrated on a preview:
+  // without a birth job its onboarding agent only ever got the 10s degraded
+  // start, and without interpretation delegation the model's scripted
+  // welcome (itx.chat.sendMessage inside a ```ts fence) never ran — no
+  // visible assistant message at all.
+  const agentAppend = vi.fn(async (...events: unknown[]) => events);
+  const defaultPromptEvent = {
+    type: "events.iterate.com/agents/context-added",
+    idempotencyKey: "agent/default-birth:prompt:onboarding:abcd1234",
+    payload: { role: "system", key: "agent/system-prompt", content: "DEFAULT" },
+  };
+  const getDefaultBirthEvents = vi.fn(async () => [defaultPromptEvent]);
+  const project = {
+    agents: { get: vi.fn(() => ({ append: agentAppend, getDefaultBirthEvents })) },
+    [Symbol.dispose]: vi.fn(),
+  };
+  const worker = new VoiceProjectWorker(
+    {} as never,
+    {
+      ITERATE_WORKER_VERSION: "test",
+      ITX: { get: vi.fn(() => pipelinedProject(project)) },
+    } as never,
+  );
+
+  await deliver(worker, {
+    type: "events.iterate.com/agent/created",
+    path: "/agents/onboarding",
+    payload: {},
+  });
+  expect(getDefaultBirthEvents).toHaveBeenCalledWith({ kind: "onboarding" });
+  expect(agentAppend.mock.calls[0]).toEqual([
+    defaultPromptEvent,
+    expect.objectContaining({ type: "events.iterate.com/agent/birth-finalized" }),
+  ]);
+});
+
+test.each([
+  { name: "default", worker: (env: never) => new ProjectWorker({} as never, env) },
+  { name: "with-voice", worker: (env: never) => new VoiceProjectWorker({} as never, env) },
+])(
+  "$name: agent-stream events delegate to the platform interpreter, per event",
+  async ({ worker: makeWorker }) => {
+    const interpretResponse = vi.fn(async () => []);
+    const project = {
+      agents: { get: vi.fn(() => ({ interpretResponse })) },
+      [Symbol.dispose]: vi.fn(),
+    };
+    const worker = makeWorker({
+      ITERATE_WORKER_VERSION: "test",
+      ITX: { get: vi.fn(() => pipelinedProject(project)) },
+    } as never);
+
+    const assistantEvent = {
+      type: "events.iterate.com/agents/context-added",
+      path: "/agents/demo",
+      offset: 9,
+      payload: { role: "assistant", content: "```ts\nasync (itx) => 1\n```", llmRequestOffset: 8 },
+    };
+    await deliver(worker, assistantEvent);
+    expect(project.agents.get).toHaveBeenCalledWith("/agents/demo");
+    expect(interpretResponse).toHaveBeenCalledWith(expect.objectContaining({ offset: 9 }));
+
+    // Non-agent streams never interpret.
+    await deliver(worker, { ...assistantEvent, path: "/clients/os-app/tab" });
+    expect(interpretResponse).toHaveBeenCalledTimes(1);
+  },
+);
 
 test("packaged apps stay behind the thin router", () => {
   const worker = templateFile("worker.ts");

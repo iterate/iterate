@@ -254,23 +254,17 @@ export function foldAgentSummaryUpdated({
 
 type AgentRuntimeSource = {
   activeScriptExecutionIds: readonly string[];
-  contextItems: readonly { payload: { role: string; key?: string } }[];
+  birthFinalizedAtOffset?: number;
   openRequest: null | { requestedAtOffset: number };
   pendingLlmRequestTrigger: null | { offset: number };
 };
 
-export function deriveAgentRuntime(
-  state: AgentRuntimeSource,
-  systemPromptContextKey: string,
-): AgentRuntimeRecord {
+export function deriveAgentRuntime(state: AgentRuntimeSource): AgentRuntimeRecord {
   const pending = state.pendingLlmRequestTrigger === null ? 0 : 1;
-  const runnable =
-    pending === 1 &&
-    state.contextItems.some(
-      (item) => item.payload.role === "system" && item.payload.key === systemPromptContextKey,
-    )
-      ? 1
-      : 0;
+  // A trigger is runnable once the birth is finalized — the turn loop's
+  // readiness hold, mirrored here so a held trigger presents as pending, not
+  // queued.
+  const runnable = pending === 1 && state.birthFinalizedAtOffset !== undefined ? 1 : 0;
   return {
     triggers: { pending, runnable },
     // The offset-identified request model has no scheduled/started phases:

@@ -509,6 +509,36 @@ export interface Agent {
    */
   create(payload?: AgentCreateInput): Promise<Agent>;
   /**
+   * The platform-default personality for this agent, as PLAIN KEYED EVENTS —
+   * ready to append (plus your own tweaks, plus `agent/birth-finalized`) from
+   * a config worker's `agent/created` handler. `kind` selects the variant:
+   * "web"/"onboarding" (default web-chat prompt), "mcp" (ask_assistant reply
+   * contract), or the channel kinds "slack"/"telegram"/"email", whose prompts
+   * interpolate the channel facts an integration router recorded in this
+   * agent's birth certificate. Returns the keyed system prompt, the default
+   * model config, and the boot-context item. Idempotency keys embed content
+   * hashes, so appending the same events twice dedupes and appending edited
+   * ones supersedes the same logical slots. Nothing here appends — the caller
+   * stays the author of its agent's birth.
+   */
+  getDefaultBirthEvents(input: { kind: AgentBirthKind }): Promise<AgentEventInput[]>;
+  /**
+   * Interpret ONE committed event on this agent's stream and append its
+   * consequences — the platform-implemented interpretation service. The
+   * platform never calls this on its own: a config worker that wants classic
+   * behavior calls it per delivered event (assistant `agents/context-added`
+   * outputs, `capability-host/script-run-settled`, preamble changes,
+   * `stream/error-occurred`, and slash-command user messages); a project that
+   * wants a different response grammar vendors its own interpreter instead.
+   * Pass the delivered event itself — only its `offset` is used; the
+   * committed event is re-read from the stream, so the caller's copy is never
+   * trusted. Consequences carry deterministic `agent/`-namespace idempotency
+   * keys: repeated interpretation (redelivered handlers, retries) converges
+   * instead of double-executing. Returns the committed consequence events
+   * (empty when the event means nothing).
+   */
+  interpretResponse(event: { offset: number }): Promise<StreamEvent[]>;
+  /**
    * Send a message to this agent — THE inbound door for every caller. The
    * context item's actor derives from the calling scope: inside an agent script
    * (itx scoped to an agent path), the message is stamped
@@ -2210,7 +2240,6 @@ export type ProjectProcessorState = {
     revokedAt: string | null;
   }[];
   notificationReady: boolean;
-  defaults: Record<string, unknown>;
 };
 
 /**
@@ -2589,6 +2618,8 @@ export type CfBrowserQuickActionOptions = Record<string, unknown> &
 /** The agent processor's reduced state, inferred from the contract's `stateSchema`. */
 export type AgentProcessorState = {
   birthCertificate: { createdAtOffset: number } | null;
+  birthFinalizedAtOffset?: number | undefined;
+  birthTimedOutAtOffset?: number | undefined;
   config: {
     llm: { model: string };
     llmRequestDebounceMs: number;
@@ -2597,7 +2628,6 @@ export type AgentProcessorState = {
     maxAutonomousTurns: number;
     scriptResultHistoryLimit: number;
     compactionTriggerFraction: number;
-    driver: "agent" | "agent-headless";
   };
   contextItems: {
     offset: number;
@@ -2702,6 +2732,11 @@ export type AgentLiveState = {
 
 /** Append input accepted by the Agent processor, derived from its `consumes` contract. */
 export type AgentEventInput =
+  | TypedConsumedEventInput<"events.iterate.com/agent/birth-finalized", { [x: string]: unknown }>
+  | TypedConsumedEventInput<
+      "events.iterate.com/agent/birth-timed-out",
+      { heldTriggerOffset: number; deadlineMs: number }
+    >
   | TypedConsumedEventInput<
       "events.iterate.com/agent/configured",
       {
@@ -2719,7 +2754,6 @@ export type AgentEventInput =
           maxAutonomousTurns?: number | undefined;
           scriptResultHistoryLimit?: number | undefined;
           compactionTriggerFraction?: number | undefined;
-          driver?: "agent" | "agent-headless" | undefined;
         };
       }
     >
@@ -2929,6 +2963,11 @@ export type StreamEvent = {
 /** The `agent/created` payload — the agent's birth certificate (a loose
  * object of caller-authored birth facts; `{}` is the norm). */
 export type AgentCreateInput = { [x: string]: unknown };
+
+/** Which platform-default personality `getDefaultBirthEvents` serves — the
+ * web/onboarding default prompt, the MCP reply contract, or a channel prompt
+ * interpolated from the birth certificate's channel facts. */
+export type AgentBirthKind = "email" | "mcp" | "onboarding" | "slack" | "telegram" | "web";
 
 /**
  * Bytes accepted by every file-writing surface. Strings are ALWAYS treated as

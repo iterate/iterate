@@ -33,10 +33,13 @@ import { AgentBinding, AgentSummary, AgentSummaryUpdated } from "./agent-presenc
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "5.2.0",
+  version: "6.0.0",
   description:
-    "Maintains model-visible history, schedules debounced offset-identified LLM turns, runs " +
-    "them through the Workers AI transport, and executes scripts through the capability host.",
+    "The agent processor: maintains model-visible history and schedules debounced " +
+    "offset-identified LLM turns, held until the project's config worker finalizes the " +
+    "agent's birth (agent/birth-finalized, with a degraded-start deadline), run through the " +
+    "Workers AI transport. Interprets nothing: response interpretation is a service the " +
+    "project's config worker invokes per event (usually with itx.agents.get(path).interpretResponse).",
   stateSchema: z.object({
     birthCertificate: z
       .object({
@@ -50,6 +53,31 @@ export const AgentProcessorContract = defineProcessorContract({
       .default(null)
       .meta({
         description: "Existence marker: null until agent/created reduces. No turns run before it.",
+      }),
+    birthFinalizedAtOffset: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .meta({
+        description:
+          "Offset of the first agent/birth-finalized event. Births are authored by the " +
+          "project's config worker (personality, config, context — appended after " +
+          "agent/created), and the turn loop HOLDS every LLM trigger until this reduces: " +
+          "nothing may dispatch on a half-authored personality. Later finalize occurrences " +
+          "are harmless stream facts.",
+      }),
+    birthTimedOutAtOffset: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .meta({
+        description:
+          "Offset of the agent/birth-timed-out event that APPLIED — one that reduced while " +
+          "the birth was still unfinalized. The platform's degraded-start consequence (the " +
+          "default personality plus agent/birth-finalized) hangs off exactly this fact; a " +
+          "timed-out event racing in after a finalize reduces to nothing.",
       }),
     // The complete configuration, every knob defaulted. `.prefault({})` is
     // core zod 4 (not a patch): unlike `.default(value)`, which returns the
@@ -155,18 +183,6 @@ export const AgentProcessorContract = defineProcessorContract({
               "conversation into a compacted context item. Halfway leaves room for many more " +
               "turns before the window actually fills, so a slow or failed summary attempt " +
               "never races an imminent context overflow.",
-          }),
-        driver: z
-          .enum(["agent", "agent-headless"])
-          .default("agent")
-          .meta({
-            description:
-              "Which registered agent processor DRIVES this stream (by contract slug); the " +
-              "other stands down entirely. Hosted-processor subscriptions cannot be removed, " +
-              "so a stream subscribed to both processors needs exactly one to act — this knob " +
-              "is that selection, and appending it is the public half of the headless " +
-              "handover (see agent-headless-processor.ts). Format-agnostic on purpose: what " +
-              "a headless stream's responses MEAN is decided in userland, never here.",
           }),
       })
       .prefault({})
@@ -343,8 +359,41 @@ export const AgentProcessorContract = defineProcessorContract({
       payloadSchema: agentContextItemSchema(),
     },
     "events.iterate.com/agent/created": {
-      description: "The agent exists. Payload is open — provenance may ride along.",
+      description:
+        "The agent exists. Payload is open — the birth certificate: caller-authored birth " +
+        "facts ride along ({} is the norm; integration routers record their channel facts " +
+        "here, e.g. { channel: { type: 'slack', connection } }, which " +
+        "itx.agents.get(path).getDefaultBirthEvents reads to build channel personalities).",
       payloadSchema: z.looseObject({}),
+    },
+    "events.iterate.com/agent/birth-finalized": {
+      description:
+        "The agent's birth is fully authored: the project's config worker (or the platform's " +
+        "degraded-start fallback after the readiness deadline) finished appending the birth " +
+        "events — personality, config, context. The turn loop holds every LLM trigger until " +
+        "this reduces; the first occurrence wins and later ones are harmless stream facts.",
+      payloadSchema: z.looseObject({}),
+    },
+    "events.iterate.com/agent/birth-timed-out": {
+      description:
+        "The project's config worker did not finalize this agent's birth within the platform " +
+        "deadline (measured from the first HELD trigger, never from birth — an idle unborn " +
+        "agent waits forever for free). Reduces to a degraded-start fact only while the birth " +
+        "is still unfinalized; that fact's own delivery appends the platform-default " +
+        "personality plus agent/birth-finalized so the held turn can run. Visible on purpose: " +
+        "the UI renders \"this project's setup didn't respond\" from it.",
+      payloadSchema: z.object({
+        heldTriggerOffset: z
+          .number()
+          .int()
+          .positive()
+          .meta({ description: "The held trigger whose readiness deadline expired." }),
+        deadlineMs: z
+          .number()
+          .int()
+          .positive()
+          .meta({ description: "The platform readiness deadline that expired, in ms." }),
+      }),
     },
     "events.iterate.com/agent/configured": {
       description:
@@ -371,7 +420,6 @@ export const AgentProcessorContract = defineProcessorContract({
             maxAutonomousTurns: z.number().int().positive().optional(),
             scriptResultHistoryLimit: z.number().int().positive().optional(),
             compactionTriggerFraction: z.number().positive().max(1).optional(),
-            driver: z.enum(["agent", "agent-headless"]).optional(),
           })
           .strict()
           .meta({ description: "Partial patch, deep-merged into the current config." }),
@@ -585,6 +633,8 @@ export const AgentProcessorContract = defineProcessorContract({
   },
   consumes: [
     "events.iterate.com/agent/created",
+    "events.iterate.com/agent/birth-finalized",
+    "events.iterate.com/agent/birth-timed-out",
     "events.iterate.com/agent/configured",
     "events.iterate.com/agents/context-added",
     "events.iterate.com/agents/web-message-sent",
@@ -612,6 +662,13 @@ export const AgentProcessorContract = defineProcessorContract({
     // platform components never emit it themselves today); listed so variant
     // hosts and tests can validate the full loop's appends in one place.
     "events.iterate.com/agents/web-message-sent",
+    // The degraded-start lane: on a birth-readiness deadline the turn loop
+    // appends the timed-out fact, then (off that fact's own delivery) the
+    // platform-default personality — a config patch plus keyed context —
+    // and the finalize that releases the held trigger.
+    "events.iterate.com/agent/birth-timed-out",
+    "events.iterate.com/agent/birth-finalized",
+    "events.iterate.com/agent/configured",
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/agent/llm-request-settled",
     "events.iterate.com/agent/llm-response-chunk",

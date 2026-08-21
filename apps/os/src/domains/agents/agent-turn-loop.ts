@@ -1,12 +1,15 @@
-// The agent's TURN LOOP component — one of the three parts composed into the
+// The agent's TURN LOOP component — one of the two parts composed into the
 // agent processor (see agent-processor-implementation.ts). It owns the
-// conversational loop: mirroring visible chat messages into history, clearing
-// an agent-authored wait on a qualifying wake, interrupting an in-flight turn
-// on new input, transcribing stream errors into model-visible context, and
-// the whole at-head lifecycle — resume, the autonomous-turn breaker, the
-// debounced intent, and adopting or expiring the open request. It does not
-// talk to the model itself: it tells the AgentLlmRequest component when to
-// run and when to abort.
+// conversational loop: mirroring visible chat messages into history,
+// interrupting an in-flight turn on new input, the birth-readiness hold (and
+// its degraded-start deadline), and the whole at-head lifecycle — resume,
+// the autonomous-turn breaker, the debounced intent, and adopting or expiring
+// the open request. It does not talk to the model itself: it tells the
+// AgentLlmRequest component when to run and when to abort. And it interprets
+// nothing — everything opinion-shaped (response parsing, slash commands,
+// settlement rendering, error transcription, waiting clears) lives in the
+// interpretation service project code invokes per event
+// (agent-response-interpreter.ts, via itx.agents.get(path).interpretResponse).
 
 import type { EmittedInput, ProcessEventArgs } from "iterate/processors";
 import {
@@ -15,7 +18,7 @@ import {
   type AgentHost,
 } from "./agent-host.ts";
 import type { AgentProcessorContract, AgentProcessorState } from "./agent-processor-contract.ts";
-import { contextClearsWaitingFor } from "./agent-prompt-fold.ts";
+import { defaultAgentBirthEvents } from "./agent-defaults.ts";
 import type { AgentLlmRequest } from "./agent-llm-request.ts";
 import { resolveSlashCommand } from "./slash-commands.ts";
 
@@ -75,30 +78,12 @@ export class AgentTurnLoop implements AgentComponent {
       }
       case "events.iterate.com/agents/context-added": {
         const payload = event.payload;
-        // WAITING CLEAR — a qualifying wake retires an agent-authored
-        // "waiting for input" summary. Registered BEFORE the interrupt's
-        // early return: the interrupting message is itself a wake. The
-        // conditional-clear payload carries the waking offset, so the reduce
-        // only clears a wait established at or before it (a wait the agent
-        // set AFTER this input raced in survives). Blocked: per-event
-        // consequence, delivered once.
-        if (state.summary.waitingFor !== undefined && contextClearsWaitingFor(payload)) {
-          blockProcessorWhile(() =>
-            appendUnlessLostIdempotencyRace(append, [
-              {
-                type: "events.iterate.com/agent/summary-updated",
-                payload: { waitingFor: null, clearWaitingForThroughOffset: event.offset },
-                idempotencyKey: this.#host.idempotencyKey(`waiting-clear@${event.offset}`),
-              },
-            ]),
-          );
-        }
         // A user message that resolves to a slash command belongs to the
-        // codemode component (it runs as a script), and it is a side-band
-        // action, not conversation: it must neither cancel an in-flight turn
-        // nor schedule one — the SAME pure resolver gates it here, in the
-        // codemode component, and in the fold's contextTriggerSource, so the
-        // three can never disagree.
+        // interpretation service (it runs as a script when project code asks),
+        // and it is a side-band action, not conversation: it must neither
+        // cancel an in-flight turn nor schedule one — the SAME pure resolver
+        // gates it here, in the interpreter, and in the fold's
+        // contextTriggerSource, so the three can never disagree.
         if (payload.role === "user" && resolveSlashCommand(payload.content) !== null) break;
         // INTERRUPT — cancellation is a property of new input, never a
         // free-standing command. Abort whatever this incarnation is running
@@ -158,24 +143,32 @@ export class AgentTurnLoop implements AgentComponent {
         }
         break;
       }
-      case "events.iterate.com/stream/error-occurred": {
-        // EVERY error on the stream — the LLM component's own failures, the
-        // sender's repeatedly failing events that were skipped, anything else — is transcribed into
-        // model-visible context, without itself triggering a turn (retries
-        // are the reduce's job). The integration actor demotes the error text
-        // to user role at prompt time: error strings are data, not
-        // instructions. Per-event render (blocked): delivered once.
+      case "events.iterate.com/agent/birth-timed-out": {
+        // The degraded start — a per-event consequence of the timed-out fact
+        // that APPLIED (the fold's guard makes a finalize that beat it to the
+        // stream win; a stale timed-out event reduces to nothing and this
+        // branch never fires). Append the platform-default personality plus
+        // the finalize that releases the held trigger — everything
+        // content-hash keyed, so a late worker appending its own birth events
+        // afterwards supersedes these occurrences in the same logical slots
+        // instead of conflicting. Blocked: delivered once, and losing the
+        // append would hold the trigger forever.
+        if (state.birthTimedOutAtOffset !== event.offset) break;
         blockProcessorWhile(() =>
-          append({
-            type: "events.iterate.com/agents/context-added",
-            payload: {
-              role: "developer",
-              content: `Error on stream: ${event.payload.message}`,
-              actor: { type: "integration", name: "stream-error" },
-              llmRequestPolicy: { behaviour: "dont-trigger-request" },
+          appendUnlessLostIdempotencyRace(append, [
+            ...defaultAgentBirthEvents({
+              kind: "web",
+              // No directory access from inside the stream's Durable Object:
+              // the boot context degrades to its id-only project line, and a
+              // late worker's directory-informed version supersedes it.
+              coordinates: this.#host.identity,
+            }),
+            {
+              type: "events.iterate.com/agent/birth-finalized",
+              payload: {},
+              idempotencyKey: this.#host.idempotencyKey(`birth-finalized/degraded@${event.offset}`),
             },
-            idempotencyKey: this.#host.idempotencyKey(`transcribe-error@${event.offset}`),
-          }),
+          ]),
         );
         break;
       }
@@ -224,18 +217,51 @@ export class AgentTurnLoop implements AgentComponent {
     // recovering after an eviction are the same code path.
     const trigger = state.pendingLlmRequestTrigger;
     if (state.paused === null && trigger !== null && state.openRequest === null) {
-      // Agent birth and inbound input are independent distributed reactions.
-      // Hold the trigger until the canonical system-prompt slot has arrived;
-      // that context event's own delivery re-runs this pass over the same
-      // pending trigger, so early user input cannot race an unconfigured
-      // first turn.
-      if (
-        !state.contextItems.some(
-          (item) => item.payload.role === "system" && item.payload.key === "agent/system-prompt",
-        )
-      ) {
-        console.warn("[agent] holding llm trigger until canonical system prompt arrives", {
+      // THE BIRTH-READINESS HOLD. Agent birth is authored by the project's
+      // config worker — an independent distributed reaction to agent/created
+      // — so early input cannot race a half-authored personality: hold the
+      // trigger until agent/birth-finalized reduces (that event's own
+      // delivery re-runs this pass over the same pending trigger). The
+      // deadline arms at the first HELD trigger, never at birth: an idle
+      // unborn agent waits forever for free, but a user staring at an unsent
+      // reply gets the degraded start after ~10s — a visible
+      // agent/birth-timed-out fact, then (off that fact's delivery, guarded
+      // by its reduce) the platform-default personality plus finalize. The
+      // failure mode is visible waiting, then a default answer — never a
+      // silently wrong personality.
+      if (state.birthFinalizedAtOffset === undefined) {
+        console.warn("[agent] holding llm trigger until the birth is finalized", {
           pendingTriggerOffset: trigger.offset,
+        });
+        const deadlineInMs = trigger.atMs + AGENT_BIRTH_FINALIZE_DEADLINE_MS - this.#host.now();
+        // Deterministic body + trigger-keyed dedupe fence: every delivery at
+        // head while unfinalized schedules another sleeper for the same
+        // trigger, and identical bodies collapse on the key. A droppable
+        // attempt — an eviction mid-sleep is re-armed by the revival pass
+        // (re-anchored to the then-pending trigger).
+        const timedOut: EmittedInput<AgentProcessorContract> = {
+          type: "events.iterate.com/agent/birth-timed-out",
+          payload: {
+            heldTriggerOffset: trigger.offset,
+            deadlineMs: AGENT_BIRTH_FINALIZE_DEADLINE_MS,
+          },
+          idempotencyKey: this.#host.idempotencyKey(`birth-timeout/${trigger.offset}`),
+        };
+        runInBackground(async () => {
+          if (deadlineInMs > 0) await this.#host.sleep(deadlineInMs);
+          // Best-effort freshness check so a worker that finalized in time
+          // (the overwhelmingly common case) never gets a stray timed-out
+          // fact on its stream. The check-then-append race is closed by the
+          // fold, not here: a timed-out event landing after a finalize
+          // reduces to nothing.
+          using pager = this.#host.readEvents({
+            afterOffset: 0,
+            eventTypes: ["events.iterate.com/agent/birth-finalized"],
+            limit: 1,
+          });
+          const finalized = await pager.next();
+          if (finalized.length > 0) return;
+          await appendUnlessLostIdempotencyRace(append, [timedOut]);
         });
         return;
       }
@@ -343,6 +369,17 @@ export class AgentTurnLoop implements AgentComponent {
  * horizon, so ordinary starts (debounce is seconds) never come near it.
  */
 const MIN_LLM_ATTEMPT_VALIDITY_MS = 30_000;
+
+/**
+ * How long a HELD trigger waits for the project's config worker to finalize
+ * the agent's birth before the platform degrades to its default personality.
+ * A platform constant, deliberately not configurable: a configurable
+ * pre-birth deadline would need exactly the stored-wishes mechanism the
+ * birth refactor deleted. Sized for the worker's ordinary reaction time
+ * (a delivery hop plus a few appends), not its first build — a ~60s first
+ * build blows through this on purpose, visibly.
+ */
+export const AGENT_BIRTH_FINALIZE_DEADLINE_MS = 10_000;
 
 /** Exponential failure backoff reduced into the debounce window: doubling from
  * the policy's base, capped at its ceiling. */

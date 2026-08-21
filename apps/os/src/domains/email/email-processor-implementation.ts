@@ -1,10 +1,6 @@
 import { StreamProcessor } from "iterate/processors";
 import type { EmittedInput, ProcessEventArgs, ReduceArgs } from "iterate/processors";
-import {
-  agentCreationForPath,
-  EMAIL_AGENT_SYSTEM_PROMPT,
-  EMAIL_AGENT_SYSTEM_PROMPT_REVISION,
-} from "../agents/agent-defaults.ts";
+import { agentCreationForPath } from "../agents/agent-defaults.ts";
 import { normalizeAgentBindingLabel } from "../agents/agent-presence.ts";
 import { EmailAgentProcessorContract } from "./email-agent-processor-contract.ts";
 import {
@@ -254,6 +250,10 @@ function emailAgentCreationEvents(input: {
   const creation = agentCreationForPath({
     agentPath: input.path,
     projectId: input.projectId,
+    // Channel facts in the birth certificate: the project's config worker
+    // authors the personality from them
+    // (itx.agents.get(path).getDefaultBirthEvents({ kind: "email" })).
+    payload: { channel: { type: "email", threadId: input.threadId } },
     initialEvents: [
       {
         type: "events.iterate.com/agent/binding-set",
@@ -266,11 +266,6 @@ function emailAgentCreationEvents(input: {
         },
       },
     ],
-    systemPromptPolicy: {
-      content: EMAIL_AGENT_SYSTEM_PROMPT,
-      id: "email",
-      revision: EMAIL_AGENT_SYSTEM_PROMPT_REVISION,
-    },
     sibling: {
       birthCertificate: EmailAgentProcessorContract.buildEvent({
         type: "events.iterate.com/email-agent/created",

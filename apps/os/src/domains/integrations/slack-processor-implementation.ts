@@ -1,11 +1,7 @@
 import { z } from "zod";
 import { StreamProcessor } from "iterate/processors";
 import type { EmittedInput, ProcessEventArgs, ReduceArgs } from "iterate/processors";
-import {
-  agentCreationForPath,
-  slackAgentSystemPrompt,
-  SLACK_AGENT_SYSTEM_PROMPT_REVISION,
-} from "../agents/agent-defaults.ts";
+import { agentCreationForPath } from "../agents/agent-defaults.ts";
 import { SlackAgentProcessorContract } from "./slack-agent-processor-contract.ts";
 import { readRecord, readString, slackThreadStreamPath, webhookAckIsFresh } from "./utils.ts";
 import { SlackProcessorContract, type SlackProcessorState } from "./slack-processor-contract.ts";
@@ -176,9 +172,12 @@ type SlackProcessorDeps = {
 // -----------------------------------------------------------------------------
 
 /** The complete creation batch for a fresh routed thread stream: agent +
- * capability host + slack-agent facet births, their subscriptions, the Slack
- * system prompt, and the typed thread binding. Every event's idempotency key
- * derives from stable coordinates (project, path, revision), so replayed
+ * capability host + slack-agent facet births, their subscriptions, and the
+ * typed thread binding. The birth certificate records the CHANNEL FACTS —
+ * the project's config worker authors the personality from them
+ * (itx.agents.get(path).getDefaultBirthEvents({ kind: "slack" }) interpolates
+ * the Slack prompt from the recorded connection). Every event's idempotency
+ * key derives from stable coordinates (project, path, revision), so replayed
  * creations dedupe. */
 function slackAgentCreationEvents(input: {
   channel: string;
@@ -190,6 +189,14 @@ function slackAgentCreationEvents(input: {
   const creation = agentCreationForPath({
     agentPath: input.path,
     projectId: input.projectId,
+    payload: {
+      channel: {
+        type: "slack",
+        connection: input.connection,
+        channelId: input.channel,
+        threadTs: input.threadTs,
+      },
+    },
     initialEvents: [
       {
         type: "events.iterate.com/agent/binding-set",
@@ -202,11 +209,6 @@ function slackAgentCreationEvents(input: {
         },
       },
     ],
-    systemPromptPolicy: {
-      content: slackAgentSystemPrompt(input.connection),
-      id: "slack",
-      revision: SLACK_AGENT_SYSTEM_PROMPT_REVISION,
-    },
     sibling: {
       birthCertificate: SlackAgentProcessorContract.buildEvent({
         type: "events.iterate.com/slack-agent/created",
