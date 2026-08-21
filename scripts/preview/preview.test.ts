@@ -1643,7 +1643,15 @@ describe("cloudflare preview state helpers", () => {
       "## Environment Config Lease [Login ↗](https://auth.iterate-preview-2.com/test-login?email=pr2474%2Btest%40nustom.com&project=pr2474&return_to=https%3A%2F%2Fos.iterate-preview-2.com%2Fapi%2Fiterate-auth%2Flogin)",
     );
     expect(body).toContain(
-      "<summary>Slot: preview-2 | Doppler config: preview_2</summary>\n\n| app | status | commit | preview | size (gzip) | deploy duration | test duration | retries | cleanup duration | workflow run | updated | summary |",
+      "<summary>Slot: preview-2 | Doppler config: preview_2</summary>\n\nNew project from template: ",
+    );
+    // One quick-launch link per catalog template: signs in and lands on
+    // /new-project with the template preselected.
+    expect(body).toContain(
+      "[Codemode tag ↗](https://auth.iterate-preview-2.com/test-login?email=pr2474%2Btest%40nustom.com&project=pr2474&return_to=https%3A%2F%2Fos.iterate-preview-2.com%2Fapi%2Fiterate-auth%2Flogin%3Freturn_to%3D%252Fnew-project%253Ftemplate%253Dcodemode-tag)",
+    );
+    expect(body).toContain(
+      "\n\n| app | status | commit | preview | size (gzip) | deploy duration | test duration | retries | cleanup duration | workflow run | updated | summary |",
     );
     expect(body).toContain("<!-- CLOUDFLARE_PREVIEW_STATE -->");
     expect(body).toContain("<!--\n{");

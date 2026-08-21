@@ -9,17 +9,13 @@
 // run and when to abort.
 
 import type { EmittedInput, ProcessEventArgs } from "iterate/processors";
-import {
-  appendUnlessLostIdempotencyRace,
-  type AgentComponent,
-  type AgentHost,
-} from "./agent-host.ts";
+import { appendUnlessLostIdempotencyRace, type AgentHost } from "./agent-host.ts";
 import type { AgentProcessorContract, AgentProcessorState } from "./agent-processor-contract.ts";
 import { contextClearsWaitingFor } from "./agent-prompt-fold.ts";
 import type { AgentLlmRequest } from "./agent-llm-request.ts";
 import { resolveSlashCommand } from "./slash-commands.ts";
 
-export class AgentTurnLoop implements AgentComponent {
+export class AgentTurnLoop {
   readonly #host: AgentHost;
   readonly #llm: AgentLlmRequest;
 

@@ -33,10 +33,12 @@ import { AgentBinding, AgentSummary, AgentSummaryUpdated } from "./agent-presenc
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "5.2.0",
+  version: "6.0.0",
   description:
     "Maintains model-visible history, schedules debounced offset-identified LLM turns, runs " +
-    "them through the Workers AI transport, and executes scripts through the capability host.",
+    "them through the Workers AI transport, and executes scripts through the capability host. " +
+    "Response interpretation is a config flag (interpretResponses) — off, project " +
+    "code parses assistant output and appends the consequences itself.",
   stateSchema: z.object({
     birthCertificate: z
       .object({
@@ -80,8 +82,11 @@ export const AgentProcessorContract = defineProcessorContract({
               "Debounce window before a pending trigger records its turn intent: long enough " +
               "to coalesce a burst of context events that arrive together (a message plus its " +
               "attachments, a script result fan-in), short enough to be invisible next to LLM " +
-              "latency. Measured from the FIRST uncovered trigger — continuous input cannot " +
-              "delay a turn indefinitely.",
+              "latency. Anchored at the NEWEST uncovered trigger (each new input re-opens the " +
+              "window). Agents are born with this set high (60s) so the project's config " +
+              "worker can react to agent/created and append its overrides before the first " +
+              "turn; the worker lowers it to the ordinary 250ms as its done-configuring " +
+              "signal, which also releases any held first turn immediately.",
           }),
         llmRequestExpiryMs: z
           .number()
@@ -156,17 +161,18 @@ export const AgentProcessorContract = defineProcessorContract({
               "turns before the window actually fills, so a slow or failed summary attempt " +
               "never races an imminent context overflow.",
           }),
-        driver: z
-          .enum(["agent", "agent-headless"])
-          .default("agent")
+        interpretResponses: z
+          .boolean()
+          .default(true)
           .meta({
             description:
-              "Which registered agent processor DRIVES this stream (by contract slug); the " +
-              "other stands down entirely. Hosted-processor subscriptions cannot be removed, " +
-              "so a stream subscribed to both processors needs exactly one to act — this knob " +
-              "is that selection, and appending it is the public half of the headless " +
-              "handover (see agent-headless-processor.ts). Format-agnostic on purpose: what " +
-              "a headless stream's responses MEAN is decided in userland, never here.",
+              "Whether the platform interprets assistant output (codemode extraction, slash " +
+              "commands, settlement rendering — the AgentCodemode component). Off, assistant " +
+              "output lands on the stream as raw context and nothing platform-side parses " +
+              "it: project code consumes the response events and appends the consequences " +
+              "itself (script-run-requested, web-message-sent, corrective feedback). " +
+              "Format-agnostic on purpose: what a raw response MEANS is decided in " +
+              "userland, never here.",
           }),
       })
       .prefault({})
@@ -371,7 +377,7 @@ export const AgentProcessorContract = defineProcessorContract({
             maxAutonomousTurns: z.number().int().positive().optional(),
             scriptResultHistoryLimit: z.number().int().positive().optional(),
             compactionTriggerFraction: z.number().positive().max(1).optional(),
-            driver: z.enum(["agent", "agent-headless"]).optional(),
+            interpretResponses: z.boolean().optional(),
           })
           .strict()
           .meta({ description: "Partial patch, deep-merged into the current config." }),

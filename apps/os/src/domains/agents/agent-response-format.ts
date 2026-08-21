@@ -25,7 +25,7 @@
  * - `none`: no code at all — a deliberate no-op turn ending the loop. `prose`
  *   carries any user-visible text a richer format wants delivered anyway.
  */
-export type ResponseParseOutcome =
+type ResponseParseOutcome =
   | { kind: "script"; code: string; status?: string; prose?: string }
   | { kind: "multiple"; feedback: string }
   | { kind: "malformed"; feedback: string }
@@ -36,7 +36,7 @@ export type ResponseParseOutcome =
  * place format names are enumerated is the processor contract's config knob,
  * so this module never learns which formats exist.
  */
-export type AgentResponseFormat = {
+type AgentResponseFormat = {
   id: string;
   parse: (content: string) => ResponseParseOutcome;
 };

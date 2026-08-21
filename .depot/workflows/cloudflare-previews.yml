@@ -53,6 +53,7 @@ on:
       - scripts/lib/**
       - apps/auth-example/**
       - apps/os/**
+      - configs/**
       - specs/**
       - playwright.config.ts
       - apps/mobile/**

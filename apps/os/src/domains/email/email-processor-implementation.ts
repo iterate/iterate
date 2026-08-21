@@ -254,6 +254,9 @@ function emailAgentCreationEvents(input: {
   const creation = agentCreationForPath({
     agentPath: input.path,
     projectId: input.projectId,
+    // Router-born agent: the explicit systemPromptPolicy below is its
+    // personality — no config-worker window, ordinary debounce from birth.
+    highInitialDebounce: false,
     initialEvents: [
       {
         type: "events.iterate.com/agent/binding-set",
