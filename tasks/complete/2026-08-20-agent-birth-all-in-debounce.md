@@ -1,7 +1,8 @@
 ---
-status: in-progress
+status: done
 size: large
-supersedes: agent-birth-userland-refactor (PR #2507, to be closed)
+supersedes: agent-birth-userland-refactor (PR #2507, closed)
+pr: https://github.com/iterate/iterate/pull/2508
 ---
 
 # Agent birth: all-in on debounce
