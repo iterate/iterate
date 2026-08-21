@@ -1,0 +1,123 @@
+// Expected-fail spec pinning a live platform gap: an LLM attempt that stalls
+// MID-STREAM is never settled on its own.
+//
+// Observed on preview-15, stream /agents/onboarding, 2026-08-21 15:08 and
+// 15:11 UTC: the request was recorded, the transport emitted 19 chunks over
+// ~1.3s, then went silent. No llm-request-settled, no failure. The request
+// stayed open past the 10-minute llmRequestExpiryMs horizon because the
+// expiry settle in the turn loop only runs when a delivery wakes the stream,
+// and nothing else was being delivered. The user's reply never arrived and
+// the next message queued behind the dead attempt.
+//
+// What this spec asserts (and what is NOT true today): a stall after chunks
+// settles the request (failed or cancelled) within a bounded stall budget —
+// 60 seconds of virtual time after the last chunk — with no external delivery
+// arriving. The exact budget is a product decision; see
+// tasks/llm-attempt-stall-detection.md.
+
+import { expect, it } from "vitest";
+import type { ConsumedInput } from "iterate/processors";
+import { makeProcessorHarness } from "iterate/processors/testing";
+import { AgentProcessorContract } from "./agent-processor-contract.ts";
+import { AgentProcessor } from "./agent-processor-implementation.ts";
+
+it.fails("a mid-stream stall (chunks, then silence) settles the request within 60s of the last chunk without any delivery", async () => {
+  const h = makeStallHarness();
+  await h.play(
+    ["append", ...NEW_AGENT_EVENTS, userMessage("Hello there")],
+    ["advanceTime", 10_000], // debounce closes → request adopted → transport dialed
+  );
+  expect(h.llm.calls).toHaveLength(1);
+  expect(h.state().openRequest).not.toBeNull();
+
+  // The transport streams a few deltas and then goes quiet forever.
+  await h.play(() => h.llm.streamChunks(["Hel", "lo ", "the"]));
+  expect(h.events(RESPONSE_CHUNK)).toHaveLength(3);
+
+  // 60 seconds of silence, no deliveries. Today nothing wakes the stream:
+  // the whole-phase transport deadline is the remaining expiry horizon
+  // (~10 min), and the expiry settle runs only on delivery. Under this
+  // harness the first self-driven wake is the keepalive's wedge detection
+  // (MAX_CONSECUTIVE_BUSY_REFIRES, ~15 min), whose revival fact is the
+  // delivery that finally triggers the expiry settle — so this assertion
+  // starts passing somewhere between 14m50s and 15m10s of virtual time.
+  await h.play(["advanceTime", 60_000]);
+
+  expect(h.events(SETTLED)).toMatchObject([
+    {
+      payload: {
+        result: { status: expect.stringMatching(/^(failed|cancelled)$/) },
+      },
+    },
+  ]);
+  expect(h.state().openRequest).toBeNull();
+});
+
+// -----------------------------------------------------------------------------
+// Helpers
+// -----------------------------------------------------------------------------
+
+type AgentEventInput = ConsumedInput<AgentProcessorContract>;
+
+const SETTLED = "events.iterate.com/agent/llm-request-settled";
+const RESPONSE_CHUNK = "events.iterate.com/agent/llm-response-chunk";
+
+const NEW_AGENT_EVENTS = [
+  { type: "events.iterate.com/agent/created", payload: {} },
+  {
+    type: "events.iterate.com/agent/configured",
+    payload: { config: { llm: { model: "test-model" } } },
+  },
+  {
+    type: "events.iterate.com/agents/context-added",
+    payload: {
+      role: "system",
+      key: "agent/system-prompt",
+      content: "You are a helpful test agent.",
+    },
+  },
+] satisfies AgentEventInput[];
+
+function userMessage(content: string): AgentEventInput {
+  return {
+    type: "events.iterate.com/agents/context-added",
+    payload: {
+      role: "user",
+      content,
+      actor: { type: "user", origin: "web" },
+      llmRequestPolicy: { behaviour: "after-current-request" },
+    },
+  };
+}
+
+/**
+ * A transport that dies mid-stream. It delivers chunks on demand and then
+ * NEVER resolves or rejects — and deliberately ignores the abort signal. The
+ * scripted transport in agent-processor.test.ts rejects on abort, which lets
+ * the attempt's catch path run; a real fetch body read that has gone silent
+ * gives no such guarantee. Any stall fix must settle the request from the
+ * processor's side without waiting on the transport promise, so this
+ * transport models the harshest case: no settle will ever come from it.
+ */
+function makeDeadStreamLlm() {
+  const calls: { onChunk?: (text: string) => Promise<void>; signal: AbortSignal }[] = [];
+  return {
+    calls,
+    async streamChunks(chunks: string[]) {
+      for (const chunk of chunks) await calls.at(-1)!.onChunk!(chunk);
+    },
+    transport: (args: { signal: AbortSignal; onChunk?: (text: string) => Promise<void> }) =>
+      new Promise<{ text: string }>(() => {
+        calls.push(args);
+      }),
+  };
+}
+
+function makeStallHarness() {
+  const llm = makeDeadStreamLlm();
+  const harness = makeProcessorHarness<AgentProcessorContract>({
+    createProcessor: (deps) => new AgentProcessor({ ...deps, callLlm: llm.transport }),
+    path: "/agents/test",
+  });
+  return { ...harness, llm };
+}
