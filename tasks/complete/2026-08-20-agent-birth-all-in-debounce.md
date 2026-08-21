@@ -229,3 +229,19 @@ and the #2507 readiness-machinery approach (open draft, to be closed).
   pinned template (observed on p0936). The one red check on the previous
   head was an unrelated slack-agent e2e flake (model reply omitted the
   slack call; same code passed the suite on the prior run).
+- 2026-08-20 (pre-merge prd migration): the debounce-lowering `agent/created`
+  reaction was committed to 9 of the 10 prd project config repos ahead of
+  deploy (harmless today: 250 is already the default; `interpretResponses`
+  deliberately NOT included — prd's strict configured-payload schema would
+  reject it until this deploys). Via `itx.repo.edit` exact-once matching;
+  every worker rebuilt (`worker-updated`) within seconds. Placed AFTER the
+  existing AGENTS.md sync where one existed (release last). Commits:
+  voice-test 75104c9, voice-fresh f952ecb, eval-…403947 16ada83,
+  eval-…249689 1aa12a9, jeeves 7f4b7c1, garple be512df, lispwoso 4a176f7,
+  misha ed2856c, iterate 3f04ffe.
+  **restaurant NOT migrated**: it is built on the deleted mechanisms
+  (publishes `agents/birth-defaults` with `driver: "agent-headless"` + a
+  waiter debounce, gates its prompt sync on `config.driver`). After deploy
+  its defaults publish is inert, driver appends are rejected, and the gate
+  never matches — its waiter flow breaks until migrated to
+  `interpretResponses` + a reactive birth, which can only land post-deploy.
