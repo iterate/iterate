@@ -12,8 +12,25 @@
 // What this spec asserts (and what is NOT true today): a stall after chunks
 // settles the request (failed or cancelled) within a bounded stall budget —
 // 60 seconds of virtual time after the last chunk — with no external delivery
-// arriving. The exact budget is a product decision; see
-// tasks/llm-attempt-stall-detection.md.
+// arriving. The 60s is a placeholder for the product decision the fix makes.
+//
+// Why nothing settles today:
+// - There is no stall detection anywhere. With `deps.callLlm` injected the
+//   attempt passes no deadline to the transport at all, and in production
+//   the Workers AI transport's deadline is whole-phase — the remaining expiry
+//   horizon (~10 min) — not a chunk-idle budget.
+// - The 10-minute expiry does not fire on its own either: the expiry settle
+//   in the turn loop runs on delivery. Under this harness the first
+//   self-driven wake is the keepalive's wedge detection
+//   (MAX_CONSECUTIVE_BUSY_REFIRES = 90 refires at a 10s lead, ~15 min), whose
+//   revival fact is the delivery that finally runs the expiry settle — so the
+//   effective bound is ~15 min after dial, and only as a side effect of the
+//   keepalive's crash-loop breaker. Same family as the 2026-08-13 prd
+//   incident noted in agent-turn-loop.ts.
+//
+// Fix directions (not taken here): a chunk-idle watchdog on the attempt
+// (abort + settle failed when no chunk arrives for N seconds), or
+// alarm-driven expiry instead of delivery-driven.
 
 import { expect, it } from "vitest";
 import type { ConsumedInput } from "iterate/processors";
