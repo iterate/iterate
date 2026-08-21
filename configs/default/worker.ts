@@ -142,52 +142,11 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     });
   }
 
-  /** This repo's personality for web-chat agents: the prompt file and an
-   * illustrative standing tweak. The prompt is appended UNCONDITIONALLY
-   * rather than read-compared against the agent's current slot — a
-   * snapshot at this moment may predate the processor reducing the birth
-   * batch, and an unforked file is byte-identical to the platform's slot,
-   * so the append lands in the same uncovered keyed slot and replaces in
-   * place: free when unforked, a supersession when forked. */
+  /** This repo's personality for web-chat agents: the prompt file (when
+   * present) and an illustrative standing tweak. */
   async #webAgentShaping() {
-    const file = await this.itx.repo.readFile({ path: "prompts/agent-system-prompt.md" });
-    // Best-effort size guard (~4 chars/token): the platform's own default
-    // prompt is budget-tested at ~4.3k tokens; warn well before a fork's
-    // edits silently double every request's cost.
-    if (file !== null && file.content.length > 6_000 * 4) {
-      console.warn(
-        `prompts/agent-system-prompt.md is ~${Math.round(file.content.length / 4)} tokens; ` +
-          "it rides every LLM request of every agent — consider trimming.",
-      );
-    }
-    // The platform's embedded copy is newline-stripped; the same
-    // normalization keeps "unforked file" byte-identical.
-    const content = file === null ? null : file.content.replace(/\n$/, "");
-    const hash =
-      content === null
-        ? null
-        : [
-            ...new Uint8Array(
-              await crypto.subtle.digest("SHA-256", new TextEncoder().encode(content)),
-            ).slice(0, 8),
-          ]
-            .map((byte) => byte.toString(16).padStart(2, "0"))
-            .join("");
     return [
-      ...(content === null
-        ? []
-        : [
-            {
-              type: "events.iterate.com/agents/context-added" as const,
-              idempotencyKey: `iterate/config/agent-system-prompt:${hash}`,
-              payload: {
-                content,
-                key: "agent/system-prompt",
-                llmRequestPolicy: { behaviour: "dont-trigger-request" as const },
-                role: "system" as const,
-              },
-            },
-          ]),
+      ...(await this.#promptSupersession()),
       {
         // An illustrative standing tweak — replace or delete freely; it
         // exists to show the shape of project-authored agent personality.
@@ -196,6 +155,45 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         payload: {
           content: "House style: write all responses in all-lowercase.",
           key: "config/house-style",
+          llmRequestPolicy: { behaviour: "dont-trigger-request" as const },
+          role: "system" as const,
+        },
+      },
+    ];
+  }
+
+  /** prompts/agent-system-prompt.md as the agent's system prompt. Appended
+   * UNCONDITIONALLY rather than read-compared against the agent's current
+   * slot — a snapshot at this moment may predate the processor reducing
+   * the birth batch, and an unforked file is byte-identical to the
+   * platform's slot, so the append lands in the same uncovered keyed slot
+   * and replaces in place: free when unforked, a supersession when forked. */
+  async #promptSupersession() {
+    const file = await this.itx.repo.readFile({ path: "prompts/agent-system-prompt.md" });
+    if (file === null) return [];
+    // Best-effort size guard (~4 chars/token): the platform's own default
+    // prompt is budget-tested at ~4.3k tokens; warn well before a fork's
+    // edits silently double every request's cost.
+    if (file.content.length > 6_000 * 4) {
+      console.warn(
+        `prompts/agent-system-prompt.md is ~${Math.round(file.content.length / 4)} tokens; ` +
+          "it rides every LLM request of every agent — consider trimming.",
+      );
+    }
+    // The platform's embedded copy is newline-stripped; the same
+    // normalization keeps "unforked file" byte-identical.
+    const content = file.content.replace(/\n$/, "");
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(content));
+    const hash = [...new Uint8Array(digest).slice(0, 8)]
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+    return [
+      {
+        type: "events.iterate.com/agents/context-added" as const,
+        idempotencyKey: `iterate/config/agent-system-prompt:${hash}`,
+        payload: {
+          content,
+          key: "agent/system-prompt",
           llmRequestPolicy: { behaviour: "dont-trigger-request" as const },
           role: "system" as const,
         },

@@ -864,52 +864,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    });\n" +
       "  }\n" +
       "\n" +
-      "  /** This repo's personality for web-chat agents: the prompt file and an\n" +
-      "   * illustrative standing tweak. The prompt is appended UNCONDITIONALLY\n" +
-      "   * rather than read-compared against the agent's current slot — a\n" +
-      "   * snapshot at this moment may predate the processor reducing the birth\n" +
-      "   * batch, and an unforked file is byte-identical to the platform's slot,\n" +
-      "   * so the append lands in the same uncovered keyed slot and replaces in\n" +
-      "   * place: free when unforked, a supersession when forked. */\n" +
+      "  /** This repo's personality for web-chat agents: the prompt file (when\n" +
+      "   * present) and an illustrative standing tweak. */\n" +
       "  async #webAgentShaping() {\n" +
-      "    const file = await this.itx.repo.readFile({ path: \"prompts/agent-system-prompt.md\" });\n" +
-      "    // Best-effort size guard (~4 chars/token): the platform's own default\n" +
-      "    // prompt is budget-tested at ~4.3k tokens; warn well before a fork's\n" +
-      "    // edits silently double every request's cost.\n" +
-      "    if (file !== null && file.content.length > 6_000 * 4) {\n" +
-      "      console.warn(\n" +
-      "        `prompts/agent-system-prompt.md is ~${Math.round(file.content.length / 4)} tokens; ` +\n" +
-      "          \"it rides every LLM request of every agent — consider trimming.\",\n" +
-      "      );\n" +
-      "    }\n" +
-      "    // The platform's embedded copy is newline-stripped; the same\n" +
-      "    // normalization keeps \"unforked file\" byte-identical.\n" +
-      "    const content = file === null ? null : file.content.replace(/\\n$/, \"\");\n" +
-      "    const hash =\n" +
-      "      content === null\n" +
-      "        ? null\n" +
-      "        : [\n" +
-      "            ...new Uint8Array(\n" +
-      "              await crypto.subtle.digest(\"SHA-256\", new TextEncoder().encode(content)),\n" +
-      "            ).slice(0, 8),\n" +
-      "          ]\n" +
-      "            .map((byte) => byte.toString(16).padStart(2, \"0\"))\n" +
-      "            .join(\"\");\n" +
       "    return [\n" +
-      "      ...(content === null\n" +
-      "        ? []\n" +
-      "        : [\n" +
-      "            {\n" +
-      "              type: \"events.iterate.com/agents/context-added\" as const,\n" +
-      "              idempotencyKey: `iterate/config/agent-system-prompt:${hash}`,\n" +
-      "              payload: {\n" +
-      "                content,\n" +
-      "                key: \"agent/system-prompt\",\n" +
-      "                llmRequestPolicy: { behaviour: \"dont-trigger-request\" as const },\n" +
-      "                role: \"system\" as const,\n" +
-      "              },\n" +
-      "            },\n" +
-      "          ]),\n" +
+      "      ...(await this.#promptSupersession()),\n" +
       "      {\n" +
       "        // An illustrative standing tweak — replace or delete freely; it\n" +
       "        // exists to show the shape of project-authored agent personality.\n" +
@@ -918,6 +877,45 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        payload: {\n" +
       "          content: \"House style: write all responses in all-lowercase.\",\n" +
       "          key: \"config/house-style\",\n" +
+      "          llmRequestPolicy: { behaviour: \"dont-trigger-request\" as const },\n" +
+      "          role: \"system\" as const,\n" +
+      "        },\n" +
+      "      },\n" +
+      "    ];\n" +
+      "  }\n" +
+      "\n" +
+      "  /** prompts/agent-system-prompt.md as the agent's system prompt. Appended\n" +
+      "   * UNCONDITIONALLY rather than read-compared against the agent's current\n" +
+      "   * slot — a snapshot at this moment may predate the processor reducing\n" +
+      "   * the birth batch, and an unforked file is byte-identical to the\n" +
+      "   * platform's slot, so the append lands in the same uncovered keyed slot\n" +
+      "   * and replaces in place: free when unforked, a supersession when forked. */\n" +
+      "  async #promptSupersession() {\n" +
+      "    const file = await this.itx.repo.readFile({ path: \"prompts/agent-system-prompt.md\" });\n" +
+      "    if (file === null) return [];\n" +
+      "    // Best-effort size guard (~4 chars/token): the platform's own default\n" +
+      "    // prompt is budget-tested at ~4.3k tokens; warn well before a fork's\n" +
+      "    // edits silently double every request's cost.\n" +
+      "    if (file.content.length > 6_000 * 4) {\n" +
+      "      console.warn(\n" +
+      "        `prompts/agent-system-prompt.md is ~${Math.round(file.content.length / 4)} tokens; ` +\n" +
+      "          \"it rides every LLM request of every agent — consider trimming.\",\n" +
+      "      );\n" +
+      "    }\n" +
+      "    // The platform's embedded copy is newline-stripped; the same\n" +
+      "    // normalization keeps \"unforked file\" byte-identical.\n" +
+      "    const content = file.content.replace(/\\n$/, \"\");\n" +
+      "    const digest = await crypto.subtle.digest(\"SHA-256\", new TextEncoder().encode(content));\n" +
+      "    const hash = [...new Uint8Array(digest).slice(0, 8)]\n" +
+      "      .map((byte) => byte.toString(16).padStart(2, \"0\"))\n" +
+      "      .join(\"\");\n" +
+      "    return [\n" +
+      "      {\n" +
+      "        type: \"events.iterate.com/agents/context-added\" as const,\n" +
+      "        idempotencyKey: `iterate/config/agent-system-prompt:${hash}`,\n" +
+      "        payload: {\n" +
+      "          content,\n" +
+      "          key: \"agent/system-prompt\",\n" +
       "          llmRequestPolicy: { behaviour: \"dont-trigger-request\" as const },\n" +
       "          role: \"system\" as const,\n" +
       "        },\n" +
