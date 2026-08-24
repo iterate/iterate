@@ -249,6 +249,18 @@ export type AgentCreateInput = z.input<
   (typeof AgentProcessorContract.events)["events.iterate.com/agent/created"]["payloadSchema"]
 >;
 
+/** The initial debounce for agents whose first turn should wait for the
+ * project's config worker. Deliberately RIDICULOUSLY generous: a first-ever
+ * worker build occasionally blew through 10s in preview, and a wrong-dialect
+ * first turn costs more than a slow one — a dead worker still leaves a
+ * usable (platform-default) agent after this window. The worker lowers it
+ * to the ordinary 250ms as its done-configuring signal, which also releases
+ * any held first turn immediately — see llmRequestDebounceMs in the
+ * contract. Tighten once cold-build latency is optimised. */
+export const AGENT_INITIAL_DEBOUNCE_MS = 60_000;
+
+const AGENT_BIRTH_CONFIG_REVISION = "1";
+
 /**
  * Build the complete creation batch for one agent stream. Every agent has the
  * same agent + capability-host pair; a router may add one explicitly named
@@ -260,136 +272,9 @@ export type AgentCreateInput = z.input<
  * an EXISTING agent with a different payload is rejected by the stream's
  * same-key-different-body rule — the loud duplicate-create failure.
  */
-/**
- * PROJECT-LEVEL AGENT BIRTH DEFAULTS — the format-agnostic door that makes
- * the agent processor swappable in userland WITHOUT a race: a project
- * publishes this value under the AGENT_BIRTH_DEFAULTS_KEY of its generic
- * defaults store (`project/defaults-configured`, latest occurrence wins per
- * key), and the agent-creation door folds it into every birth batch — so an
- * agent is BORN with the chosen driver, prompt, and processor subscriptions
- * instead of being converted a delivery-hop after its first turn already
- * started. The project stores the value opaquely; THIS schema and the
- * vocabulary check run at the door's read site, and the platform never
- * learns what any of it means. Explicit per-call policies (integration
- * routers' systemPromptPolicy) always win over project defaults.
- */
-/** The agents domain's key in the project's generic defaults store
- * (`project/defaults-configured` → `state.defaults[key]`). The project holds
- * the value opaquely; THIS domain parses it (AgentBirthDefaults +
- * validateAgentBirthEvents) at the creation door's read site. */
-export const AGENT_BIRTH_DEFAULTS_KEY = "agents/birth-defaults";
-
-export const AgentBirthDefaults = z.object({
-  /** Which agents these defaults apply to. Absent = every agent born through
-   * the generic creation door. */
-  matches: z.object({ pathPrefix: z.string().trim().min(1) }).optional(),
-  /**
-   * The project's contribution to every matching birth batch, as PLAIN
-   * EVENTS: a prompt is a keyed `agents/context-added`, a driver choice an
-   * `agent/configured`, a processor attachment a
-   * `stream/subscription-configured`. No per-field plumbing — the next
-   * defaultable thing needs zero platform changes. Validated by
-   * `validateAgentBirthEvents` (agent-consumed vocabulary plus a tight
-   * platform-lane allowlist); idempotency keys are platform-minted with the
-   * content in the key, so changed defaults supersede replay-safely and a
-   * project can never wedge creates with hand-rolled keys.
-   */
-  birthEvents: z
-    .array(
-      z.object({
-        type: z.string().trim().min(1),
-        payload: z.record(z.string(), z.unknown()).optional(),
-      }),
-    )
-    .max(20),
-});
-export type AgentBirthDefaults = z.infer<typeof AgentBirthDefaults>;
-
-/** Platform-lane items a project may include beyond the agent-consumed
- * vocabulary: attaching a registered agent-family processor. Everything else
- * platform-lane stays platform-authored. */
-const BIRTH_DEFAULTS_SUBSCRIPTION_ALLOWLIST = new Set<string>(["agent-headless"]);
-
-/**
- * Validate one defaults value's birth events. Returns ok or an error string —
- * the caller (the creation door's read of the project's generic defaults
- * store) treats any error as "no defaults", never as a creation failure:
- * malformed userland data must degrade to platform-default births.
- */
-export function validateAgentBirthEvents(
-  birthEvents: AgentBirthDefaults["birthEvents"],
-): { ok: true } | { ok: false; error: string } {
-  for (const [index, event] of birthEvents.entries()) {
-    if (event.type === "events.iterate.com/stream/subscription-configured") {
-      // The FULL payload schema first: anything that would fail the stream's
-      // own validation must be rejected HERE, where it degrades to
-      // platform-default births — inside the atomic birth append it would
-      // break every matching create() instead.
-      const payloadCheck = CoreProcessorContract.events[
-        "events.iterate.com/stream/subscription-configured"
-      ].payloadSchema.safeParse(event.payload);
-      if (!payloadCheck.success) {
-        return {
-          ok: false,
-          error: `birthEvents[${index}]: invalid subscription-configured payload: ${payloadCheck.error.message}`,
-        };
-      }
-      // Then the gate: a BUILTIN facet processor under an allowlisted
-      // agent-family name — a userspace source would run arbitrary worker
-      // code under the allowlisted name.
-      const subscription = z
-        .looseObject({
-          name: z.string(),
-          receiver: z.looseObject({
-            action: z.literal("facet-processor"),
-            source: z.looseObject({ kind: z.literal("builtin") }),
-          }),
-        })
-        .safeParse(event.payload);
-      if (!subscription.success) {
-        return {
-          ok: false,
-          error: `birthEvents[${index}]: only builtin facet-processor subscriptions may ride a birth batch`,
-        };
-      }
-      if (!BIRTH_DEFAULTS_SUBSCRIPTION_ALLOWLIST.has(subscription.data.name)) {
-        return {
-          ok: false,
-          error: `birthEvents[${index}]: subscription name ${JSON.stringify(subscription.data.name)} is not an allowlisted agent-family processor`,
-        };
-      }
-      continue;
-    }
-    try {
-      // parseConsumedInput's input type is the typed consumed-event union so
-      // AUTHORED appends catch typos at compile time; this callsite is the
-      // other use — runtime validation of untrusted data, where the cast
-      // exists purely to hand the parser something to accept or reject.
-      AgentProcessorContract.parseConsumedInput({
-        type: event.type,
-        ...(event.payload === undefined ? {} : { payload: event.payload }),
-      } as never);
-    } catch (error) {
-      return {
-        ok: false,
-        error: `birthEvents[${index}] (${event.type}): ${error instanceof Error ? error.message : String(error)}`,
-      };
-    }
-  }
-  return { ok: true };
-}
-
-/** Deterministic, synchronous content hash for defaults idempotency keys —
- * djb2 over the JSON form; collision-tolerant because the full content also
- * rides the batch and same-key-different-body appends are rejected. */
-function hashAgentBirthDefaults(birthEvents: AgentBirthDefaults["birthEvents"]): string {
-  return contentHash(JSON.stringify(birthEvents));
-}
-
 export function agentCreationForPath<
   const SiblingBirthCertificate extends StreamEventInput = never,
   const InitialEvent extends StreamEventInput = never,
-  const Defaults extends AgentBirthDefaults | undefined = undefined,
 >(input: {
   agentPath: string;
   projectId: string;
@@ -407,10 +292,16 @@ export function agentCreationForPath<
   project?: { name: string; slug: string; workerUrl?: string };
   /** Initial execution policy for a routed agent. */
   systemPromptPolicy?: AgentSystemPromptPolicy;
-  /** Project-level birth defaults (see AgentBirthDefaults): validated plain
-   * events folded into the batch. An explicit systemPromptPolicy wins over
-   * any prompt-slot event in the list. */
-  defaults?: Defaults;
+  /**
+   * Whether this batch is committing a BRAND-NEW agent (the caller probed
+   * the stream — see AgentRpcTarget.create) whose first turn should wait
+   * for the project's config worker: true adds the birth-config event
+   * (parsing on, debounce AGENT_INITIAL_DEBOUNCE_MS). False for re-creates
+   * over existing agents — a late high-debounce event would overwrite the
+   * worker's lowered value — and for integration routers, whose agents
+   * carry explicit prompts at birth and keep the ordinary debounce.
+   */
+  highInitialDebounce: boolean;
   sibling?: {
     birthCertificate: SiblingBirthCertificate;
     /** The sibling's subscription name — the sibling contract's slug. */
@@ -427,43 +318,6 @@ export function agentCreationForPath<
     revision: DEFAULT_AGENT_SYSTEM_PROMPT_REVISION,
   };
   const systemPrompt = systemPromptPolicy.content;
-  // Project birth defaults: validated plain events appended into the batch
-  // with platform-minted content-hash keys. Invalid lists degrade to
-  // platform-default births (warn, never fail creation). An explicit
-  // systemPromptPolicy outranks the project: prompt-slot events are dropped
-  // from the list; otherwise a project prompt-slot event REPLACES the
-  // platform fallback below.
-  const rawBirthEvents = input.defaults?.birthEvents ?? [];
-  const birthEventsCheck =
-    rawBirthEvents.length === 0
-      ? ({ ok: true } as const)
-      : validateAgentBirthEvents(rawBirthEvents);
-  if (!birthEventsCheck.ok) {
-    console.warn("[agent] ignoring invalid agent birth defaults", {
-      agentPath,
-      error: birthEventsCheck.error,
-    });
-  }
-  const isPromptSlotEvent = (candidate: { type: string; payload?: Record<string, unknown> }) =>
-    candidate.type === "events.iterate.com/agents/context-added" &&
-    candidate.payload?.role === "system" &&
-    candidate.payload?.key === "agent/system-prompt";
-  const birthEvents = (birthEventsCheck.ok ? rawBirthEvents : []).filter(
-    (candidate) => input.systemPromptPolicy === undefined || !isPromptSlotEvent(candidate),
-  );
-  const defaultsCarryPrompt = birthEvents.some(isPromptSlotEvent);
-  const birthEventsHash = hashAgentBirthDefaults(birthEvents);
-  // Userland events cannot carry static types — but callers that never pass
-  // `defaults` (the integration routers, whose creation events must satisfy
-  // their contracts' emit vocabularies) should not have their events union
-  // widened by a branch that is empty for them. `never[]` when no defaults
-  // were passed; plain StreamEventInput otherwise (runtime-validated above).
-  const defaultsEvents = birthEvents.map((candidate, index) => ({
-    type: candidate.type,
-    payload: candidate.payload ?? {},
-    idempotencyKey: `agent/birth-defaults:${birthEventsHash}:${index}:${projectId}:${agentPath}`,
-  })) as unknown as [Defaults] extends [undefined] ? never[] : StreamEventInput[];
-
   const birthCertificate = AgentProcessorContract.buildEvent({
     type: "events.iterate.com/agent/created",
     idempotencyKey: `agent/created:${projectId}:${agentPath}`,
@@ -499,6 +353,25 @@ export function agentCreationForPath<
     idempotencyKey: `agent/model-configured:v${AGENT_MODEL_POLICY_REVISION}:${projectId}:${agentPath}`,
     payload: { config: { llm: { model } } },
   });
+  // The birth config, explicit on the stream (not a schema default): the
+  // parsing flag spelled out, and the high initial debounce that gives the
+  // project's config worker its window before the first turn. NEWBORN
+  // streams only — this event must never land on an agent whose worker
+  // already lowered the debounce (see the highInitialDebounce input doc).
+  const birthConfig = input.highInitialDebounce
+    ? [
+        AgentProcessorContract.buildEvent({
+          type: "events.iterate.com/agent/configured",
+          idempotencyKey: `agent/birth-config:v${AGENT_BIRTH_CONFIG_REVISION}:${projectId}:${agentPath}`,
+          payload: {
+            config: {
+              interpretResponses: true,
+              llmRequestDebounceMs: AGENT_INITIAL_DEBOUNCE_MS,
+            },
+          },
+        }),
+      ]
+    : [];
   const systemPromptContext = agentSystemPromptContextEvent({
     content: systemPrompt,
     idempotencyKey: `agent/system-prompt:${systemPromptPolicy.id}:v${systemPromptPolicy.revision}:${projectId}:${agentPath}`,
@@ -590,18 +463,14 @@ export function agentCreationForPath<
       capabilityHostBirthCertificate,
       ...siblingBirthCertificates,
       configured,
-      // The fallback prompt slot is skipped when the project's defaults carry
-      // their own prompt-slot event (single prompt per birth); an explicit
-      // systemPromptPolicy already filtered those out above.
-      ...(defaultsCarryPrompt ? [] : [systemPromptContext]),
+      ...birthConfig,
+      systemPromptContext,
       workspaceProvided,
       bootContext,
       agentSubscription,
       capabilityHostSubscription,
       collectionSubscription,
       ...siblingSubscriptions,
-      // Project defaults LAST: keyed occurrences supersede platform slots.
-      ...defaultsEvents,
     ],
   };
 }

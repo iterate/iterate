@@ -13,6 +13,14 @@ import { breadcrumbStaticData } from "~/lib/route-breadcrumbs.ts";
 
 export const Route = createFileRoute("/_app/new-project")({
   staticData: breadcrumbStaticData("New project"),
+  // `?template=` preselects the template dropdown, so a shared link can land
+  // on a specific template. Accepts a full reference
+  // (github:iterate/iterate#<ref>&path:configs/codemode-tag) or just a
+  // template's short name (codemode-tag).
+  validateSearch: (search: Record<string, unknown>) =>
+    typeof search.template === "string" && search.template !== ""
+      ? { template: search.template }
+      : {},
   loader: async () => ({
     configRepoTemplates: await getConfigRepoTemplateOptions(),
   }),
@@ -28,8 +36,18 @@ export const Route = createFileRoute("/_app/new-project")({
  */
 function NewProjectPage() {
   const { configRepoTemplates } = Route.useLoaderData();
+  const { template } = Route.useSearch();
   const navigate = useNavigate();
   const [creating, setCreating] = useState(false);
+  const defaultTemplate =
+    template === undefined
+      ? undefined
+      : configRepoTemplates.find(
+          (option) =>
+            option.reference === template ||
+            option.reference.includes(`path:configs/${template}`) ||
+            option.label.toLowerCase() === template.toLowerCase(),
+        )?.reference;
 
   return (
     <Sheet
@@ -57,6 +75,7 @@ function NewProjectPage() {
         <div className="p-4">
           <CreateProjectForm
             configRepoTemplates={configRepoTemplates}
+            defaultTemplate={defaultTemplate}
             onPendingChange={setCreating}
           />
         </div>

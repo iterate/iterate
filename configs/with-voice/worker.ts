@@ -2,6 +2,22 @@ import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
 
 export default class VoiceProjectWorker extends IterateWorkerEntrypoint {
   protected override async processEvent(event: StreamEvent): Promise<void> {
+    if (
+      event.type === "events.iterate.com/agent/created" &&
+      event.source?.copiedFrom === undefined
+    ) {
+      // The platform births agents with a high (60s) debounce — the window
+      // for this worker to configure them before their first turn. This
+      // template keeps the platform defaults, so lowering the debounce back
+      // to the ordinary 250ms is its whole birth reaction; doing so also
+      // releases a held first turn immediately.
+      await this.itx.agents.get(event.path).append({
+        type: "events.iterate.com/agent/configured",
+        idempotencyKey: "iterate/config/agent-birth-configured:v1",
+        payload: { config: { llmRequestDebounceMs: 250 } },
+      });
+      return;
+    }
     if (event.type !== "events.iterate.com/project/created" || event.path !== "/") return;
 
     const instructions = await this.itx.repo.readFile({ path: "ONBOARDING.md" });

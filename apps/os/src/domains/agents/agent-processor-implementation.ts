@@ -1,11 +1,10 @@
 import { StreamProcessor } from "iterate/processors";
 import type { ProcessEventArgs, ReduceArgs } from "iterate/processors";
 import { AgentCodemode } from "./agent-codemode.ts";
-import type { AgentComponent, AgentHost, AgentProcessorDeps } from "./agent-host.ts";
+import type { AgentHost, AgentProcessorDeps } from "./agent-host.ts";
 import { AgentLlmRequest } from "./agent-llm-request.ts";
 import { AgentProcessorContract } from "./agent-processor-contract.ts";
 import { reduceAgentEvent } from "./agent-prompt-fold.ts";
-import { fencedTsResponseFormat, type AgentResponseFormat } from "./agent-response-format.ts";
 import { AgentTurnLoop } from "./agent-turn-loop.ts";
 
 // Established import sites, preserved across the split: deps/transport types
@@ -18,10 +17,8 @@ export {
 } from "./agent-llm-request.ts";
 
 /**
- * The agent processor: a COMPOSITION of three components over one shared
- * reduced state. Design: tasks/simplify-stream-processor-contract.md,
- * tasks/agent-processor-replacement.md, and the split:
- * tasks/agent-processor-split-codemode.md.
+ * The agent processor, in three parts over one shared reduced state (the
+ * split: tasks/agent-processor-split-codemode.md):
  *
  * - `AgentTurnLoop` (agent-turn-loop.ts) — the conversational loop: chat
  *   mirroring, waiting clears, interrupts, error transcription, and the
@@ -31,80 +28,64 @@ export {
  *   atomic settle appends, and compaction (an LLM request with the
  *   summarize instruction as its trailing message).
  * - `AgentCodemode` (agent-codemode.ts) — text ↔ scripts: slash commands,
- *   response parsing through the injected `AgentResponseFormat`, and
- *   settlement rendering back into model-visible context.
+ *   response parsing, and settlement rendering back into model-visible
+ *   context. The one CONFIGURABLE part: `config.interpretResponses` off
+ *   skips it entirely, and project code consumes the raw assistant output
+ *   events and appends these same consequences itself.
  *
- * The components communicate ONLY through events on the stream and the
- * shared reduce (`reduceAgentEvent`, agent-prompt-fold.ts — also imported
- * off-runtime by lib/llm-request-replay.ts, so it stays transport-free); the
- * one in-memory edge is the turn loop telling the LLM component to run or
- * abort. A variant processor is the same wiring with an element swapped or
- * dropped — a different response format, or no codemode component at all
- * (the "headless" lane, where project code interprets assistant output).
+ * The parts communicate ONLY through events on the stream and the shared
+ * reduce (`reduceAgentEvent`, agent-prompt-fold.ts — a transport-free
+ * module because the browser-side request inspector replays the same
+ * projection; see the note on `reduce` below); the one in-memory edge is
+ * the turn loop telling the LLM part to run or abort.
  *
- * Idempotency keys are minted through the host in the FIXED `agent/`
- * namespace, not the hosting contract's slug: a stream handed between the
- * classic processor and a variant dedupes every recorded consequence instead
- * of re-executing scripts under a fresh prefix.
+ * Idempotency keys are minted in the FIXED `agent/` namespace, so a
+ * userland interpreter appending the same recorded consequences dedupes
+ * against this processor instead of double-executing.
  */
 export class AgentProcessor extends StreamProcessor<AgentProcessorContract, AgentProcessorDeps> {
   readonly contract = AgentProcessorContract;
-  readonly #components = buildAgentComponents(agentComponentHost(this), {
-    format: fencedTsResponseFormat,
-  });
+  readonly #host = this.#makeHost();
+  readonly #llm = new AgentLlmRequest(this.#host);
+  readonly #turnLoop = new AgentTurnLoop(this.#host, this.#llm);
+  readonly #codemode = new AgentCodemode(this.#host);
 
   protected override processEvent(args: ProcessEventArgs<AgentProcessorContract>): undefined {
-    // Stand down entirely when another registered processor drives this
-    // stream (config.driver — hosted-processor subscriptions cannot be
-    // removed, so streams subscribed to both rely on this selection). The
-    // fold still runs above, so reads and a later hand-back stay coherent.
-    if (args.state.config.driver !== "agent") return;
-    for (const component of this.#components) component.processEvent(args);
+    this.#turnLoop.processEvent(args);
+    this.#llm.processEvent(args);
+    // The interpretation switch: off, assistant output stays raw on the
+    // stream — no slash commands, no response parsing, no settlement
+    // rendering. Flipping mid-life is safe because a userland interpreter
+    // mints the same `agent/` keys, so overlap dedupes instead of
+    // double-executing.
+    if (args.state.config.interpretResponses) this.#codemode.processEvent(args);
   }
 
   // Pure reduce. The one switch lives in the module-level `reduceAgentEvent`
   // (not inline here) because two OFF-RUNTIME readers run the exact same
-  // projection over raw stream events: prompt building (the request is a
-  // pure re-reduction pinned to the requested offset) and the UI's request
-  // inspector (lib/llm-request-replay.ts replays the wire messages from
-  // mirrored events via `reduceAgentEvents`).
+  // projection over raw stream events, via `buildAgentLlmRequestBody`
+  // (which re-reduces internally): prompt building (the request is a pure
+  // re-reduction pinned to the requested offset) and the UI's request
+  // inspector (lib/llm-request-replay.ts — a BROWSER import, which is also
+  // why the fold must stay in its own transport-free module).
   protected override reduce({ event, state }: ReduceArgs<AgentProcessorContract>) {
     return reduceAgentEvent({ event, state });
   }
-}
 
-/** The classic component set. A variant passes a different format — or
- * builds its own list without the codemode element. (Module-private until a
- * variant processor exists to import it.) */
-function buildAgentComponents(
-  host: AgentHost,
-  options: { format: AgentResponseFormat },
-): AgentComponent[] {
-  const llm = new AgentLlmRequest(host);
-  return [new AgentTurnLoop(host, llm), llm, new AgentCodemode(host, options.format)];
-}
-
-/** Adapts a hosting StreamProcessor to the component host surface. Usable by
- * any agent-contract processor class (the classic one here, variants
- * elsewhere) — call it with `this` from a field initializer. The base
- * class's members are protected, so the adapter reaches them through a
- * scoped cast rather than widening them to public. `idempotencyKey` is
- * pinned to the `agent/` namespace on purpose; see the class doc. */
-export function agentComponentHost(processor: object): AgentHost {
-  const p = processor as {
-    deps: AgentProcessorDeps;
-    stream: { readEvents: AgentHost["readEvents"] };
-    append: AgentHost["append"];
-  };
-  return {
-    deps: p.deps,
-    idempotencyKey: (suffix) => `agent/${suffix}`,
-    readEvents: (input) => p.stream.readEvents(input),
-    append: (...events) => p.append(...events),
-    now: () => p.deps.now?.() ?? Date.now(),
-    sleep: (ms) =>
-      p.deps.sleep === undefined
-        ? new Promise((resolve) => setTimeout(resolve, ms))
-        : p.deps.sleep(ms),
-  };
+  /** The surface the three parts borrow from this processor: deps, the key
+   * mint (pinned to the `agent/` namespace — see the class doc), stream
+   * reads, the out-of-frame append, and the injectable clock. */
+  #makeHost(): AgentHost {
+    return {
+      deps: this.deps,
+      idempotencyKey: (suffix) => `agent/${suffix}`,
+      readEvents: (input) => this.stream.readEvents(input),
+      append: (...events) => this.append(...events),
+      now: () => this.deps.now?.() ?? Date.now(),
+      sleep: (ms) =>
+        this.deps.sleep === undefined
+          ? new Promise((resolve) => setTimeout(resolve, ms))
+          : this.deps.sleep(ms),
+    };
+  }
 }

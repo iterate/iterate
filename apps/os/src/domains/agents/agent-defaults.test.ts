@@ -1,10 +1,9 @@
 import { describe, expect, test } from "vitest";
 import {
+  AGENT_INITIAL_DEBOUNCE_MS,
   agentCreationForPath,
   agentSystemPromptContextEvent,
   DEFAULT_AGENT_SYSTEM_PROMPT,
-  validateAgentBirthEvents,
-  type AgentBirthDefaults,
 } from "./agent-defaults.ts";
 
 const PROJECT_ID = "prj_defaults_test";
@@ -13,6 +12,7 @@ function defaultsFor(agentPath: string) {
   return agentCreationForPath({
     agentPath,
     projectId: PROJECT_ID,
+    highInitialDebounce: true,
   });
 }
 
@@ -28,6 +28,7 @@ describe("agentCreationForPath", () => {
       const events = agentCreationForPath({
         agentPath: "/agents/demo",
         projectId: PROJECT_ID,
+        highInitialDebounce: true,
         ...(project === undefined ? {} : { project }),
       }).events;
       const boot = events.find((event) =>
@@ -106,6 +107,7 @@ describe("agentCreationForPath", () => {
     const creation = agentCreationForPath({
       agentPath: "/agents/slack/test",
       projectId: PROJECT_ID,
+      highInitialDebounce: false,
       systemPromptPolicy: {
         content: "Slack execution contract",
         id: "slack",
@@ -131,6 +133,7 @@ describe("agentCreationForPath", () => {
       agentCreationForPath({
         agentPath: "/agents/routed/test",
         projectId: PROJECT_ID,
+        highInitialDebounce: false,
         systemPromptPolicy: { content, id: "routed", revision },
       }).events.find(
         (event) =>
@@ -232,173 +235,33 @@ describe("agentSystemPromptContextEvent", () => {
   });
 });
 
-describe("agent birth defaults", () => {
-  const base = { agentPath: "/agents/defaults-test", projectId: "prj_test" };
-  // A project's contribution as plain events: a driver choice, a prompt, and
-  // an allowlisted processor attachment — the codemode-template shape.
-  const defaults: AgentBirthDefaults = {
-    birthEvents: [
-      {
-        type: "events.iterate.com/agent/configured",
-        payload: { config: { driver: "agent-headless" } },
-      },
-      {
-        type: "events.iterate.com/agents/context-added",
-        payload: { role: "system", key: "agent/system-prompt", content: "You speak codemode." },
-      },
-      {
-        type: "events.iterate.com/stream/subscription-configured",
-        payload: {
-          name: "agent-headless",
-          receiver: { action: "facet-processor", source: { kind: "builtin" } },
-        },
-      },
-    ],
-  };
-  const promptSlots = (creation: { events: { payload?: unknown }[] }) =>
-    creation.events.filter(
-      (event) => (event.payload as { key?: string })?.key === "agent/system-prompt",
-    );
-
-  test("defaults ride the birth batch: driver config, prompt slot, processor attachment", () => {
-    const creation = agentCreationForPath({ ...base, defaults });
-
-    const configured = creation.events.filter(
+describe("birth config", () => {
+  test("a newborn gets the explicit birth config: parsing on, high debounce", () => {
+    const configured = defaultsFor("/agents/demo").events.filter(
       (event) => event.type === "events.iterate.com/agent/configured",
     );
-    expect(configured.at(-1)).toMatchObject({ payload: { config: { driver: "agent-headless" } } });
-    // The project's prompt-slot event REPLACES the platform fallback — one
-    // prompt per birth.
-    expect(promptSlots(creation)).toMatchObject([{ payload: { content: "You speak codemode." } }]);
-    expect(
-      creation.events.filter(
-        (event) =>
-          event.type === "events.iterate.com/stream/subscription-configured" &&
-          (event.payload as { name?: string }).name === "agent-headless",
-      ),
-    ).toHaveLength(1);
-  });
-
-  test("an explicit systemPromptPolicy wins: the defaults' prompt-slot event is dropped", () => {
-    const creation = agentCreationForPath({
-      ...base,
-      defaults,
-      systemPromptPolicy: { content: "Channel policy.", id: "slack", revision: "1" },
-    });
-    expect(creation.systemPrompt).toBe("Channel policy.");
-    expect(promptSlots(creation)).toMatchObject([{ payload: { content: "Channel policy." } }]);
-    // The non-prompt defaults still ride.
-    expect(
-      creation.events
-        .filter((event) => event.type === "events.iterate.com/agent/configured")
-        .at(-1),
-    ).toMatchObject({ payload: { config: { driver: "agent-headless" } } });
-  });
-
-  test("changed defaults content mints different platform keys (replay-safe supersession)", () => {
-    const first = agentCreationForPath({ ...base, defaults });
-    const changed = agentCreationForPath({
-      ...base,
-      defaults: {
-        birthEvents: [
-          { type: "events.iterate.com/agent/configured", payload: { config: { driver: "agent" } } },
-        ],
-      },
-    });
-    const keysOf = (creation: typeof first) =>
-      creation.events
-        .map((event) => String(event.idempotencyKey))
-        .filter((key) => key.startsWith("agent/birth-defaults:"));
-    expect(keysOf(first)).toHaveLength(3);
-    expect(keysOf(changed)).toHaveLength(1);
-    expect(keysOf(first)).not.toContain(keysOf(changed)[0]);
-    // Deterministic: same content, same keys.
-    expect(keysOf(agentCreationForPath({ ...base, defaults }))).toEqual(keysOf(first));
-  });
-
-  test("an invalid list degrades to platform-default births — never breaks creation", () => {
-    const creation = agentCreationForPath({
-      ...base,
-      defaults: {
-        birthEvents: [
-          // Not an allowlisted agent-family processor: the whole list is dropped.
-          {
-            type: "events.iterate.com/stream/subscription-configured",
-            payload: { name: "project", receiver: { action: "facet-processor" } },
+    expect(configured).toMatchObject([
+      { payload: { config: { llm: { model: "openai/gpt-5.6-terra" } } } },
+      {
+        idempotencyKey: `agent/birth-config:v1:${PROJECT_ID}:/agents/demo`,
+        payload: {
+          config: {
+            interpretResponses: true,
+            llmRequestDebounceMs: AGENT_INITIAL_DEBOUNCE_MS,
           },
-        ],
+        },
       },
-    });
-    expect(
-      creation.events.filter((event) =>
-        String(event.idempotencyKey).startsWith("agent/birth-defaults:"),
-      ),
-    ).toHaveLength(0);
-    expect(promptSlots(creation)).toMatchObject([
-      { payload: { content: DEFAULT_AGENT_SYSTEM_PROMPT } },
     ]);
   });
 
-  test("validateAgentBirthEvents: agent vocabulary passes, foreign vocabulary is rejected", () => {
-    expect(validateAgentBirthEvents(defaults.birthEvents)).toEqual({ ok: true });
-    expect(
-      validateAgentBirthEvents([{ type: "events.iterate.com/project/created", payload: {} }]),
-    ).toMatchObject({ ok: false, error: expect.stringContaining("project/created") });
-    // Schema-valid but the wrong receiver kind: only the facet-processor
-    // attachment lane is open to defaults.
-    expect(
-      validateAgentBirthEvents([
-        {
-          type: "events.iterate.com/stream/subscription-configured",
-          payload: {
-            name: "agent-headless",
-            receiver: {
-              action: "copy-to-stream",
-              receivingStreamPath: "/elsewhere",
-              delivery: { start: "beginning", onFailingEvent: "halt" },
-            },
-          },
-        },
-      ]),
-    ).toMatchObject({ ok: false, error: expect.stringContaining("facet-processor") });
-    // Anything the stream's own payload schema would reject must be caught
-    // HERE (degrade to platform defaults) — inside the atomic birth append it
-    // would break every matching create(). A source-less receiver is the
-    // canonical example.
-    expect(
-      validateAgentBirthEvents([
-        {
-          type: "events.iterate.com/stream/subscription-configured",
-          payload: { name: "agent-headless", receiver: { action: "facet-processor" } },
-        },
-      ]),
-    ).toMatchObject({ ok: false, error: expect.stringContaining("payload") });
-    // A userspace source would run arbitrary worker code under the
-    // allowlisted name — builtin only.
-    expect(
-      validateAgentBirthEvents([
-        {
-          type: "events.iterate.com/stream/subscription-configured",
-          payload: {
-            name: "agent-headless",
-            receiver: {
-              action: "facet-processor",
-              source: {
-                kind: "userspace",
-                worker: {
-                  className: "Evil",
-                  durableWorkerKey: "evil",
-                  type: "stateful",
-                  path: "/apps/evil",
-                  source: {
-                    createApp: { files: { type: "inline", files: { "worker.ts": "export {}" } } },
-                  },
-                },
-              },
-            },
-          },
-        },
-      ]),
-    ).toMatchObject({ ok: false, error: expect.stringContaining("builtin") });
+  test("highInitialDebounce false (re-creates, routers) omits the birth config entirely", () => {
+    const configured = agentCreationForPath({
+      agentPath: "/agents/demo",
+      projectId: PROJECT_ID,
+      highInitialDebounce: false,
+    }).events.filter((event) => event.type === "events.iterate.com/agent/configured");
+    expect(configured).toMatchObject([
+      { payload: { config: { llm: { model: "openai/gpt-5.6-terra" } } } },
+    ]);
   });
 });

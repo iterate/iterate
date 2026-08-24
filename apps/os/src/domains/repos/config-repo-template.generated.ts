@@ -725,11 +725,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "import { GuestbookApp } from \"iterate/starter-apps/guestbook\";\n" +
       "import { MediaApp } from \"iterate/starter-apps/media\";\n" +
       "import { NotesApp } from \"iterate/starter-apps/notes\";\n" +
-      "import {\n" +
-      "  IterateWorkerEntrypoint,\n" +
-      "  type AgentBirthDefaultsValue,\n" +
-      "  type StreamEvent,\n" +
-      "} from \"iterate/sdk\";\n" +
+      "import { IterateWorkerEntrypoint, type StreamEvent } from \"iterate/sdk\";\n" +
       "import { TodoApp } from \"iterate/starter-apps/todo\";\n" +
       "\n" +
       "// An iterate project is, in the abstract, just a fetch function.\n" +
@@ -834,63 +830,97 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  }\n" +
       "\n" +
       "  /**\n" +
-      "   * THE PROJECT'S PROMPT, published as data: the project root's generic\n" +
-      "   * defaults store (`project/defaults-configured`, latest occurrence wins\n" +
-      "   * per key) holds this repo's birth events under the \"agents/birth-defaults\"\n" +
-      "   * key, and the platform's agent-creation door folds them into every agent\n" +
-      "   * birth batch — so agents in this project are BORN with this repo's\n" +
-      "   * prompts/agent-system-prompt.md as their system prompt. Edit that file\n" +
-      "   * and commit to change it — the content-hash key re-publishes and the\n" +
-      "   * newest event wins; no platform deploy. Deleting the file publishes an\n" +
-      "   * EMPTY list, which restores the platform's embedded fallback prompt\n" +
-      "   * (identical text until you fork the file). Rough token budget: prompts\n" +
-      "   * ride every LLM request, so a much larger file mostly buys latency and\n" +
-      "   * cost — keep it lean.\n" +
+      "   * BIRTH CONFIGURATION — the pattern to copy to customize how agents in\n" +
+      "   * this project are born. The platform births every agent with coherent\n" +
+      "   * defaults and a HIGH debounce (60s), which is this worker's window: it\n" +
+      "   * reacts to `agent/created` here, appends whatever should shape the agent\n" +
+      "   * before its first turn (a superseding system prompt, standing context,\n" +
+      "   * config), and finishes by lowering the debounce to the ordinary 250ms —\n" +
+      "   * the done-configuring signal, which also releases a held first turn\n" +
+      "   * immediately. If this worker is slow or broken, the agent still answers\n" +
+      "   * after ~60s with the platform defaults; keyed context supersession heals\n" +
+      "   * later turns.\n" +
+      "   *\n" +
+      "   * The project's prompt lives in prompts/agent-system-prompt.md — edit and\n" +
+      "   * commit to change it for web agents born after the commit; no platform\n" +
+      "   * deploy.\n" +
       "   */\n" +
-      "  async #publishAgentBirthDefaults(): Promise<void> {\n" +
+      "  async #configureNewbornAgent(agentPath: string): Promise<void> {\n" +
       "    const itx = this.itx;\n" +
-      "    const file = await itx.repo.readFile({ path: \"prompts/agent-system-prompt.md\" });\n" +
-      "    const birthEvents: AgentBirthDefaultsValue[\"birthEvents\"] =\n" +
-      "      file === null\n" +
-      "        ? []\n" +
-      "        : [\n" +
-      "            {\n" +
-      "              type: \"events.iterate.com/agents/context-added\",\n" +
-      "              payload: {\n" +
-      "                // The platform's embedded copy of this file is newline-stripped;\n" +
-      "                // publishing the same normalization keeps \"unchanged file\" a\n" +
-      "                // byte-identical no-op.\n" +
-      "                content: file.content.replace(/\\n$/, \"\"),\n" +
-      "                key: \"agent/system-prompt\",\n" +
-      "                role: \"system\",\n" +
-      "              },\n" +
-      "            },\n" +
-      "          ];\n" +
+      "    // Channel agents (slack/telegram/email) and MCP session agents are born\n" +
+      "    // with their OWN system prompt in the same keyed slot; superseding it\n" +
+      "    // with this repo's web-chat prompt would silently strip their channel\n" +
+      "    // instructions (a slack agent that forgets to reply on slack). They keep\n" +
+      "    // the platform's prompt and personality — only the release below\n" +
+      "    // applies to them.\n" +
+      "    const channelAgent = /^\\/agents\\/(slack|telegram|email|mcp)\\//.test(agentPath);\n" +
+      "    const shaping = channelAgent ? [] : await this.#webAgentShaping();\n" +
+      "    await itx.agents.get(agentPath).append(...shaping, {\n" +
+      "      // LAST on purpose: done configuring — the ordinary debounce replaces\n" +
+      "      // the platform's high birth value and releases a held first turn.\n" +
+      "      type: \"events.iterate.com/agent/configured\",\n" +
+      "      idempotencyKey: \"iterate/config/agent-birth-configured:v1\",\n" +
+      "      payload: { config: { llmRequestDebounceMs: 250 } },\n" +
+      "    });\n" +
+      "  }\n" +
+      "\n" +
+      "  /** This repo's personality for web-chat agents: the prompt file (when\n" +
+      "   * present) and an illustrative standing tweak. */\n" +
+      "  async #webAgentShaping() {\n" +
+      "    return [\n" +
+      "      ...(await this.#promptSupersession()),\n" +
+      "      {\n" +
+      "        // An illustrative standing tweak — replace or delete freely; it\n" +
+      "        // exists to show the shape of project-authored agent personality.\n" +
+      "        type: \"events.iterate.com/agents/context-added\" as const,\n" +
+      "        idempotencyKey: \"iterate/config/house-style:v1\",\n" +
+      "        payload: {\n" +
+      "          content: \"House style: write all responses in all-lowercase.\",\n" +
+      "          key: \"config/house-style\",\n" +
+      "          llmRequestPolicy: { behaviour: \"dont-trigger-request\" as const },\n" +
+      "          role: \"system\" as const,\n" +
+      "        },\n" +
+      "      },\n" +
+      "    ];\n" +
+      "  }\n" +
+      "\n" +
+      "  /** prompts/agent-system-prompt.md as the agent's system prompt. Appended\n" +
+      "   * UNCONDITIONALLY rather than read-compared against the agent's current\n" +
+      "   * slot — a snapshot at this moment may predate the processor reducing\n" +
+      "   * the birth batch, and an unforked file is byte-identical to the\n" +
+      "   * platform's slot, so the append lands in the same uncovered keyed slot\n" +
+      "   * and replaces in place: free when unforked, a supersession when forked. */\n" +
+      "  async #promptSupersession() {\n" +
+      "    const file = await this.itx.repo.readFile({ path: \"prompts/agent-system-prompt.md\" });\n" +
+      "    if (file === null) return [];\n" +
       "    // Best-effort size guard (~4 chars/token): the platform's own default\n" +
       "    // prompt is budget-tested at ~4.3k tokens; warn well before a fork's\n" +
       "    // edits silently double every request's cost.\n" +
-      "    if (file !== null && file.content.length > 6_000 * 4) {\n" +
+      "    if (file.content.length > 6_000 * 4) {\n" +
       "      console.warn(\n" +
       "        `prompts/agent-system-prompt.md is ~${Math.round(file.content.length / 4)} tokens; ` +\n" +
       "          \"it rides every LLM request of every agent — consider trimming.\",\n" +
       "      );\n" +
       "    }\n" +
-      "    const encoded = new TextEncoder().encode(JSON.stringify(birthEvents));\n" +
-      "    const digest = await crypto.subtle.digest(\"SHA-256\", encoded);\n" +
+      "    // The platform's embedded copy is newline-stripped; the same\n" +
+      "    // normalization keeps \"unforked file\" byte-identical.\n" +
+      "    const content = file.content.replace(/\\n$/, \"\");\n" +
+      "    const digest = await crypto.subtle.digest(\"SHA-256\", new TextEncoder().encode(content));\n" +
       "    const hash = [...new Uint8Array(digest).slice(0, 8)]\n" +
       "      .map((byte) => byte.toString(16).padStart(2, \"0\"))\n" +
       "      .join(\"\");\n" +
-      "    await itx.streams.get(\"/\").append({\n" +
-      "      type: \"events.iterate.com/project/defaults-configured\",\n" +
-      "      // New prefix on purpose: the stream rejects same-key-different-body\n" +
-      "      // appends, so the generic event must not reuse the legacy\n" +
-      "      // `iterate/config/agent-birth-defaults:` keys.\n" +
-      "      idempotencyKey: `iterate/config/defaults:agents/birth-defaults:${hash}`,\n" +
-      "      payload: {\n" +
-      "        key: \"agents/birth-defaults\",\n" +
-      "        value: { birthEvents } satisfies AgentBirthDefaultsValue,\n" +
+      "    return [\n" +
+      "      {\n" +
+      "        type: \"events.iterate.com/agents/context-added\" as const,\n" +
+      "        idempotencyKey: `iterate/config/agent-system-prompt:${hash}`,\n" +
+      "        payload: {\n" +
+      "          content,\n" +
+      "          key: \"agent/system-prompt\",\n" +
+      "          llmRequestPolicy: { behaviour: \"dont-trigger-request\" as const },\n" +
+      "          role: \"system\" as const,\n" +
+      "        },\n" +
       "      },\n" +
-      "    });\n" +
+      "    ];\n" +
       "  }\n" +
       "\n" +
       "  // The base class delivers committed events on ANY stream here at least once and in\n" +
@@ -963,6 +993,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        // source.copiedFrom and must not re-target the collection stream).\n" +
       "        if (event.source?.copiedFrom !== undefined) break;\n" +
       "        await this.#syncAgentsMdContext([event.path]);\n" +
+      "        await this.#configureNewbornAgent(event.path);\n" +
       "        break;\n" +
       "      }\n" +
       "      case \"events.iterate.com/repo/commit-completed\": {\n" +
@@ -1003,9 +1034,6 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "            });\n" +
       "          }`,\n" +
       "        });\n" +
-      "        // Any commit MAY have changed the prompt file; unchanged content\n" +
-      "        // dedupes on the content-hash key.\n" +
-      "        await this.#publishAgentBirthDefaults();\n" +
       "        break;\n" +
       "      }\n" +
       "      default:\n" +
