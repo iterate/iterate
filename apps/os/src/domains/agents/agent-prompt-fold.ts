@@ -415,7 +415,13 @@ export function projectContextAdded(args: {
       const list = occurrencesBySection.get(segment.sectionId) || [];
       occurrencesBySection.set(segment.sectionId, [...list, occurrence]);
     }
-    let standingSections = args.standingSections;
+    // The umbrella supersession is decided per EVENT, before any of its
+    // writes: a segments append that includes the umbrella (an untagged
+    // fork, the MCP prompt's untagged suffix riding a tagged file) must not
+    // clear the sibling sections the very same event establishes.
+    let standingSections = occurrencesBySection.has(AGENT_SYSTEM_PROMPT_SECTION_ID)
+      ? clearSectionsSupersededByUmbrella(args.standingSections)
+      : args.standingSections;
     for (const [sectionId, occurrences] of occurrencesBySection) {
       standingSections = writeStandingSection({
         sections: standingSections,
@@ -432,7 +438,10 @@ export function projectContextAdded(args: {
     const covered = latest !== undefined && latest.offset <= args.lastLlmRequestOffset;
     return {
       standingSections: writeStandingSection({
-        sections: args.standingSections,
+        sections:
+          payload.key === AGENT_SYSTEM_PROMPT_SECTION_ID
+            ? clearSectionsSupersededByUmbrella(args.standingSections)
+            : args.standingSections,
         sectionId: payload.key,
         occurrences: [item],
         mode: covered ? "append-latest" : "collapse",
@@ -477,7 +486,10 @@ function applyContextUpdated(args: {
   };
   return {
     standingSections: writeStandingSection({
-      sections: state.standingSections,
+      sections:
+        sectionId === AGENT_SYSTEM_PROMPT_SECTION_ID
+          ? clearSectionsSupersededByUmbrella(state.standingSections)
+          : state.standingSections,
       sectionId,
       occurrences: [occurrence],
       mode: payload.mode === "append-latest" ? "append-latest" : "collapse",
@@ -486,24 +498,28 @@ function applyContextUpdated(args: {
   };
 }
 
+/** Writing the umbrella `agent/system-prompt` section supersedes the WHOLE
+ * prompt: the platform prompt-file sections are cleared first, so a
+ * whole-prompt supersession (an old template worker, an integration prompt)
+ * never leaves the segmented default prompt standing beside it. Callers
+ * apply this once per EVENT, before its writes. */
+function clearSectionsSupersededByUmbrella(
+  sections: AgentProcessorState["standingSections"],
+): AgentProcessorState["standingSections"] {
+  return sections.filter(
+    (section) => !AGENT_SYSTEM_PROMPT_FILE_SECTION_IDS.includes(section.sectionId),
+  );
+}
+
 /** Write occurrences into one standing section (creating it if absent) and
- * re-establish canonical order. Writing the umbrella `agent/system-prompt`
- * section clears the platform prompt-file sections: a whole-prompt
- * supersession (an old template worker, an integration prompt) must not
- * leave the segmented default prompt standing beside it. */
+ * re-establish canonical order. */
 function writeStandingSection(args: {
   sections: AgentProcessorState["standingSections"];
   sectionId: string;
   occurrences: AgentStandingOccurrence[];
   mode: "collapse" | "append-latest";
 }): AgentProcessorState["standingSections"] {
-  const cleared =
-    args.sectionId === AGENT_SYSTEM_PROMPT_SECTION_ID
-      ? args.sections.filter(
-          (section) => !AGENT_SYSTEM_PROMPT_FILE_SECTION_IDS.includes(section.sectionId),
-        )
-      : args.sections;
-  const existing = cleared.find((section) => section.sectionId === args.sectionId);
+  const existing = args.sections.find((section) => section.sectionId === args.sectionId);
   const written = {
     sectionId: args.sectionId,
     occurrences:
@@ -511,18 +527,21 @@ function writeStandingSection(args: {
         ? [...existing.occurrences, ...args.occurrences]
         : args.occurrences,
   };
-  return [...cleared.filter((section) => section.sectionId !== args.sectionId), written].sort(
+  return [...args.sections.filter((section) => section.sectionId !== args.sectionId), written].sort(
     compareStandingSections,
   );
 }
 
 /** The canonical standing order — a property of the section id alone, so
  * arrival order can never affect it: the platform prompt sections first
- * (umbrella, then the prompt file's sections in file order, then the boot
- * context), every other section alphabetically, hot sections last. */
+ * (the prompt file's sections in file order, then the umbrella — which
+ * usually stands ALONE, but when one event carries both, its untagged
+ * content is a trailing addendum like the MCP prompt's override note, so it
+ * follows the tagged sections), then the boot context, every other section
+ * alphabetically, hot sections last. */
 const CANONICAL_STANDING_SECTION_PREFIX = [
-  AGENT_SYSTEM_PROMPT_SECTION_ID,
   ...AGENT_SYSTEM_PROMPT_FILE_SECTION_IDS,
+  AGENT_SYSTEM_PROMPT_SECTION_ID,
   "agent/boot-context",
 ];
 

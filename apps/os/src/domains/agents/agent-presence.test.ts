@@ -86,14 +86,16 @@ describe("agent runtime", () => {
       deriveAgentRuntime(
         {
           activeScriptExecutionIds: ["script-a", "script-b"],
-          contextItems: [
-            { payload: { role: "system", key: "agent/system-prompt" } },
-            { payload: { role: "user" } },
+          standingSections: [
+            {
+              sectionId: "agent/system-prompt",
+              occurrences: [{ offset: 1, payload: { role: "system", content: "prompt" } }],
+            },
           ],
           openRequest: { requestedAtOffset: 4 },
           pendingLlmRequestTrigger: { offset: 12 },
         },
-        "agent/system-prompt",
+        ["agent/system-prompt"],
       ),
     ).toEqual({
       triggers: { pending: 1, runnable: 1 },
@@ -109,11 +111,11 @@ describe("agent runtime", () => {
       deriveAgentRuntime(
         {
           activeScriptExecutionIds: [],
-          contextItems: [],
+          standingSections: [],
           openRequest: null,
           pendingLlmRequestTrigger: { offset: 2 },
         },
-        "agent/system-prompt",
+        ["agent/system-prompt"],
       ),
     ).toMatchObject({ triggers: { pending: 1, runnable: 0 } });
   });

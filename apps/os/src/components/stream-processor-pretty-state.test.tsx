@@ -19,16 +19,23 @@ function v5AgentState() {
     autonomousTurnCount: 3,
     openRequest: { requestedAtOffset: 44, expiresAt: 999, model: "openai/gpt-5.6-sol" },
     activeScriptExecutionIds: ["agent-output:7"],
-    contextItems: [
+    standingSections: [
       {
-        offset: 2,
-        payload: {
-          role: "system" as const,
-          key: "agent/system-prompt",
-          content: "You are a helpful agent.",
-          llmRequestPolicy: { behaviour: "after-current-request" as const },
-        },
+        sectionId: "agent/system-prompt",
+        occurrences: [
+          {
+            offset: 2,
+            payload: {
+              role: "system" as const,
+              key: "agent/system-prompt",
+              content: "You are a helpful agent.",
+              llmRequestPolicy: { behaviour: "after-current-request" as const },
+            },
+          },
+        ],
       },
+    ],
+    turns: [
       {
         offset: 40,
         payload: {
@@ -51,8 +58,8 @@ test("renders the v5 agent fold as pretty stats, not the raw-JSON fallback", () 
   expect(html).toContain("openai/gpt-5.6-sol"); // config.llm.model
   expect(html).toContain("Open request");
   expect(html).toContain("agent-output:7"); // in-progress script
-  expect(html).toContain("what is the weather?"); // last history message preview
-  expect(html).toContain("System context"); // the system-role contextItem
+  expect(html).toContain("what is the weather?"); // last turn preview
+  expect(html).toContain("Standing sections"); // the standing lane
 });
 
 test("a paused agent shows the paused state", () => {
@@ -69,7 +76,7 @@ test("a paused agent shows the paused state", () => {
   expect(html).toContain("autonomous turn limit reached");
 });
 
-test("falls back to raw JSON for a non-agent state (no contextItems)", () => {
+test("falls back to raw JSON for a non-agent state (no context lanes)", () => {
   const html = renderToStaticMarkup(<AgentPrettyState state={{ some: "other-processor" }} />);
   expect(html).not.toContain("Open request");
 });

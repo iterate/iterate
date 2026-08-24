@@ -1,4 +1,6 @@
 import { describe, expect, test } from "vitest";
+import { parsePromptSections } from "iterate/processors";
+import { AGENT_SYSTEM_PROMPT_FILE_SECTION_IDS } from "./agent-processor-contract.ts";
 import {
   AGENT_INITIAL_DEBOUNCE_MS,
   agentCreationForPath,
@@ -91,16 +93,39 @@ describe("agentCreationForPath", () => {
       defaults.events.find(
         (event) =>
           event.type === "events.iterate.com/agents/context-added" &&
-          event.payload.key === "agent/system-prompt",
+          event.payload.segments !== undefined,
       )?.payload,
     ).toEqual({
       role: "system",
-      key: "agent/system-prompt",
-      content: DEFAULT_AGENT_SYSTEM_PROMPT,
+      content: "",
+      // The sectionized default prompt file, parsed at append time — one
+      // segment per <section id>, tags stripped.
+      segments: parsePromptSections({
+        content: DEFAULT_AGENT_SYSTEM_PROMPT,
+        fallbackSectionId: "agent/system-prompt",
+      }),
       // The flat context payload defaults the policy on every role; the
       // processor ignores it on system items.
       llmRequestPolicy: { behaviour: "after-current-request" },
     });
+  });
+
+  test("the shipped prompt file's section ids match the contract's canonical list", () => {
+    // The fold's canonical standing order and the turn loop's readiness gate
+    // hardcode the file's section ids (the fold must never read the file);
+    // this pins the two against drift.
+    const segments = parsePromptSections({
+      content: DEFAULT_AGENT_SYSTEM_PROMPT,
+      fallbackSectionId: "agent/system-prompt",
+    });
+    expect(segments.map((segment) => segment.sectionId)).toEqual(
+      AGENT_SYSTEM_PROMPT_FILE_SECTION_IDS,
+    );
+    // Tags are authoring syntax: none survive into model-visible content.
+    for (const segment of segments) {
+      expect(segment.content).not.toContain("<section");
+      expect(segment.content).not.toContain("</section>");
+    }
   });
 
   test("lets a routed agent choose one initial prompt without changing birth", () => {
@@ -117,14 +142,17 @@ describe("agentCreationForPath", () => {
     const prompts = creation.events.filter(
       (event) =>
         event.type === "events.iterate.com/agents/context-added" &&
-        event.payload.key === "agent/system-prompt",
+        event.payload.segments !== undefined,
     );
 
     expect(creation.birthCertificate.payload).toEqual({});
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toMatchObject({
-      idempotencyKey: `agent/system-prompt:slack:v7:${PROJECT_ID}:/agents/slack/test`,
-      payload: { content: "Slack execution contract" },
+      idempotencyKey: `agent/system-prompt-segments:slack:v7:${PROJECT_ID}:/agents/slack/test`,
+      // An untagged prompt parses to the one umbrella section.
+      payload: {
+        segments: [{ sectionId: "agent/system-prompt", content: "Slack execution contract" }],
+      },
     });
   });
 
@@ -138,14 +166,16 @@ describe("agentCreationForPath", () => {
       }).events.find(
         (event) =>
           event.type === "events.iterate.com/agents/context-added" &&
-          event.payload.key === "agent/system-prompt",
+          event.payload.segments !== undefined,
       );
 
     const first = promptEvent("1", "first policy");
     expect(promptEvent("1", "first policy")).toEqual(first);
     expect(promptEvent("2", "changed policy")).toMatchObject({
-      idempotencyKey: `agent/system-prompt:routed:v2:${PROJECT_ID}:/agents/routed/test`,
-      payload: { content: "changed policy", key: "agent/system-prompt" },
+      idempotencyKey: `agent/system-prompt-segments:routed:v2:${PROJECT_ID}:/agents/routed/test`,
+      payload: {
+        segments: [{ sectionId: "agent/system-prompt", content: "changed policy" }],
+      },
     });
   });
 
@@ -231,7 +261,10 @@ describe("agentSystemPromptContextEvent", () => {
     expect(retry).toEqual(first);
     expect(first.idempotencyKey).toBe("agent/test-system-prompt:v1");
     expect(changed.idempotencyKey).toBe("agent/test-system-prompt:v2");
-    expect(changed.payload).toMatchObject({ key: "agent/system-prompt", role: "system" });
+    expect(changed.payload).toMatchObject({
+      role: "system",
+      segments: [{ sectionId: "agent/system-prompt", content: "changed policy" }],
+    });
   });
 });
 

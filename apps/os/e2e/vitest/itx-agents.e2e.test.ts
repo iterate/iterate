@@ -92,12 +92,16 @@ test("agent create installs only generic machinery; later events configure it", 
     },
   });
   await agent.processor.waitUntilProcessed({ offset: configured.offset, timeoutMs: 30_000 });
-  expect((await agent.processor.snapshot()).state.contextItems).toContainEqual(
+  expect((await agent.processor.snapshot()).state.standingSections).toContainEqual(
     expect.objectContaining({
-      payload: expect.objectContaining({
-        key: "test/config-after-create",
-        content: "configuration is an ordinary event after generic creation",
-      }),
+      sectionId: "test/config-after-create",
+      occurrences: [
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            content: "configuration is an ordinary event after generic creation",
+          }),
+        }),
+      ],
     }),
   );
 });
@@ -289,8 +293,7 @@ test("Agent create replays its earlier birth and setup events through its subscr
   );
   const systemPromptOffset = requiredOffset(
     "platform system context",
-    (event) =>
-      event.type === AGENT_CONTEXT_ADDED_TYPE && event.payload?.key === "agent/system-prompt",
+    (event) => event.type === AGENT_CONTEXT_ADDED_TYPE && event.payload?.segments !== undefined,
   );
   const bootContextOffset = requiredOffset(
     "boot context",
@@ -348,9 +351,12 @@ test("Agent create replays its earlier birth and setup events through its subscr
   expect(agentSnapshot.state).toMatchObject({
     birthCertificate: { createdAtOffset: expect.any(Number) },
     config: { llm: { model: expect.any(String) } },
-    contextItems: expect.arrayContaining([
-      expect.objectContaining({ payload: expect.objectContaining({ key: "agent/system-prompt" }) }),
-      expect.objectContaining({ payload: expect.objectContaining({ key: "agent/boot-context" }) }),
+    standingSections: expect.arrayContaining([
+      // The sectionized default prompt establishes its sections at birth…
+      expect.objectContaining({ sectionId: "identity" }),
+      expect.objectContaining({ sectionId: "output-formatting" }),
+      // …and the boot context is the legacy keyed vocabulary, mapped in.
+      expect.objectContaining({ sectionId: "agent/boot-context" }),
     ]),
   });
 
@@ -660,7 +666,7 @@ test("agents.get(path).create explicitly appends and processes the complete birt
   const basePrompt = birthEvents.find(
     (event) =>
       event.type === AGENT_CONTEXT_ADDED_TYPE &&
-      (event.payload as { key?: string } | undefined)?.key === "agent/system-prompt",
+      (event.payload as { segments?: unknown } | undefined)?.segments !== undefined,
   );
   const workspaceMount = birthEvents.find(
     (event) => event.type === "events.iterate.com/capability-host/capability-provided",
@@ -671,8 +677,14 @@ test("agents.get(path).create explicitly appends and processes the complete birt
   });
   expect(basePrompt?.payload).toMatchObject({
     role: "system",
-    key: "agent/system-prompt",
-    content: expect.stringContaining("async (itx)"),
+    // The sectionized default prompt, parsed at append time; the codemode
+    // contract lives in its output-formatting section.
+    segments: expect.arrayContaining([
+      expect.objectContaining({
+        sectionId: "output-formatting",
+        content: expect.stringContaining("async (itx)"),
+      }),
+    ]),
   });
   expect(workspaceMount?.payload).toMatchObject({ path: ["workspace"] });
 

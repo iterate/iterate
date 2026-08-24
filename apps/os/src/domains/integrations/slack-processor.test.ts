@@ -134,12 +134,14 @@ describe("SlackProcessor (webhook router)", () => {
       routed.find(
         (event) =>
           event.type === "events.iterate.com/agents/context-added" &&
-          (event.payload as { key?: string }).key === "agent/system-prompt",
+          (event.payload as { segments?: unknown }).segments !== undefined,
       ),
     ).toMatchObject({
       payload: {
-        content: slackAgentSystemPrompt(CONNECTION),
-        key: "agent/system-prompt",
+        // The untagged slack prompt parses to the one umbrella section.
+        segments: [
+          { sectionId: "agent/system-prompt", content: slackAgentSystemPrompt(CONNECTION) },
+        ],
         role: "system",
       },
     });

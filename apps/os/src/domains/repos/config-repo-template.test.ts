@@ -294,10 +294,10 @@ test("project lifecycle cases directly install and handle the default heartbeat"
 test("the birth reaction shapes each newborn and lowers the debounce as its last word", async () => {
   const makeReactionWorker = (promptFileContent: string) => {
     const append = vi.fn(async (...events: unknown[]) => events);
-    // AGENTS.md sync reads the agent's slot; the birth shaping deliberately
-    // does NOT (a snapshot this early may predate the fold reducing the
-    // birth batch).
-    const snapshot = vi.fn(async () => ({ state: { contextItems: [] } }));
+    // AGENTS.md sync reads the agent's standing lane; the birth shaping
+    // deliberately does NOT (a snapshot this early may predate the fold
+    // reducing the birth batch).
+    const snapshot = vi.fn(async () => ({ state: { standingSections: [] } }));
     const project = {
       repo: {
         readFile: vi.fn(async (input: { path: string }) => {
@@ -320,10 +320,12 @@ test("the birth reaction shapes each newborn and lowers the debounce as its last
     return { worker, append, project };
   };
 
-  // A web agent: AGENTS.md, then ONE atomic batch — the repo's prompt
-  // (appended unconditionally: unforked content replaces the platform's
-  // identical slot in place, forked content supersedes it), the house
-  // style, and the debounce lowered LAST (the done-configuring signal).
+  // A web agent: AGENTS.md (a replace op on the hot standing section), then
+  // ONE atomic batch — the repo's prompt parsed into segments (appended
+  // unconditionally: an unforked file parses to segments identical to the
+  // platform's, a forked one supersedes; an UNTAGGED fork lands in the
+  // umbrella section and supersedes the whole prompt), the house style
+  // section, and the debounce lowered LAST (the done-configuring signal).
   const web = makeReactionWorker("FORKED PROMPT\n");
   await deliver(web.worker, {
     type: "events.iterate.com/agent/created",
@@ -335,25 +337,34 @@ test("the birth reaction shapes each newborn and lowers the debounce as its last
     type: string;
     payload: Record<string, unknown>;
   }[];
-  expect(webEvents.map((event) => event.payload.key || event.type)).toEqual([
-    "config/agents-md",
-    "agent/system-prompt",
-    "config/house-style",
-    "events.iterate.com/agent/configured",
+  expect(webEvents).toMatchObject([
+    {
+      type: "events.iterate.com/agents/context-updated",
+      payload: { op: "replace", selector: "#config/agents-md" },
+    },
+    {
+      type: "events.iterate.com/agents/context-added",
+      payload: {
+        role: "system",
+        segments: [{ sectionId: "agent/system-prompt", content: "FORKED PROMPT" }],
+      },
+    },
+    {
+      type: "events.iterate.com/agents/context-added",
+      payload: { segments: [{ sectionId: "config/house-style" }] },
+    },
+    {
+      type: "events.iterate.com/agent/configured",
+      idempotencyKey: "iterate/config/agent-birth-configured:v1",
+      payload: { config: { llmRequestDebounceMs: 250 } },
+    },
   ]);
-  expect(webEvents.find((event) => event.payload.key === "agent/system-prompt")).toMatchObject({
-    payload: { content: "FORKED PROMPT", role: "system" },
-  });
-  expect(webEvents.at(-1)).toMatchObject({
-    type: "events.iterate.com/agent/configured",
-    idempotencyKey: "iterate/config/agent-birth-configured:v1",
-    payload: { config: { llmRequestDebounceMs: 250 } },
-  });
 
-  // A channel agent is born with its OWN prompt in the same keyed slot
-  // (slack/telegram/email routers, MCP sessions): the repo's web-chat
-  // prompt and personality must NOT clobber it — only the release applies.
-  // (A slack agent that lost its slack prompt stopped replying on slack.)
+  // A channel agent is born with its OWN prompt in the same umbrella
+  // section (slack/telegram/email routers, MCP sessions): the repo's
+  // web-chat prompt and personality must NOT clobber it — only the release
+  // applies. (A slack agent that lost its slack prompt stopped replying on
+  // slack.)
   const slack = makeReactionWorker("FORKED PROMPT\n");
   await deliver(slack.worker, {
     type: "events.iterate.com/agent/created",
@@ -364,9 +375,12 @@ test("the birth reaction shapes each newborn and lowers the debounce as its last
     type: string;
     payload: Record<string, unknown>;
   }[];
-  expect(slackEvents.map((event) => event.payload.key || event.type)).toEqual([
-    "config/agents-md",
-    "events.iterate.com/agent/configured",
+  expect(slackEvents).toMatchObject([
+    {
+      type: "events.iterate.com/agents/context-updated",
+      payload: { op: "replace", selector: "#config/agents-md" },
+    },
+    { type: "events.iterate.com/agent/configured" },
   ]);
 
   // Copies to the collection stream never re-trigger the reaction.

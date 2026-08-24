@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { parsePromptSections } from "iterate/processors";
 import {
   MCP_AGENT_SYSTEM_PROMPT,
   MCP_AGENT_SYSTEM_PROMPT_REVISION,
@@ -46,8 +47,13 @@ describe("ensureMcpSessionAgentReady", () => {
       idempotencyKey: `agent/mcp-system-prompt:v${MCP_AGENT_SYSTEM_PROMPT_REVISION}`,
       payload: {
         role: "system",
-        key: "agent/system-prompt",
-        content: MCP_AGENT_SYSTEM_PROMPT,
+        content: "",
+        // The MCP prompt is the tagged default file plus an untagged override
+        // suffix: the file's sections, then the suffix in the umbrella.
+        segments: parsePromptSections({
+          content: MCP_AGENT_SYSTEM_PROMPT,
+          fallbackSectionId: "agent/system-prompt",
+        }),
         // The processor ignores the defaulted policy on system items.
         llmRequestPolicy: { behaviour: "after-current-request" },
       },

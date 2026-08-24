@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { AgentProcessorContract } from "../domains/agents/agent-processor-contract.ts";
 import { replayLlmRequest } from "./llm-request-replay.ts";
 
 // Raw rows exactly as the browser mirror returns them: the full committed
@@ -396,6 +397,30 @@ describe("replayLlmRequest", () => {
   it("reports no response when nothing streamed or committed", () => {
     const replay = replayLlmRequest({ rawEventJsons: conversationRows(), llmRequestOffset: 7 });
     expect(replay?.response).toBeNull();
+  });
+
+  it("labels a request sent by an older fold as reconstructed; a current-version stamp is byte-exact", () => {
+    // conversationRows' requested events carry no contractVersion stamp —
+    // pre-migration requests, rebuilt under the current fold.
+    const oldFold = replayLlmRequest({ rawEventJsons: conversationRows(), llmRequestOffset: 3 });
+    expect(oldFold?.reconstructed).toBe(true);
+
+    const stamped = replayLlmRequest({
+      rawEventJsons: [
+        ...conversationRows().slice(0, 2),
+        row(
+          "events.iterate.com/agent/llm-request-requested",
+          {
+            model: "openai/gpt-5.5",
+            contractVersion: AgentProcessorContract.version,
+            expiresAt: Date.parse("2026-07-11T00:01:00.000Z"),
+          },
+          3,
+        ),
+      ],
+      llmRequestOffset: 3,
+    });
+    expect(stamped?.reconstructed).toBe(false);
   });
 
   it("returns null when the offset has no llm-request-requested event", () => {
