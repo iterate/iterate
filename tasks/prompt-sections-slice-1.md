@@ -299,3 +299,26 @@ interpreters would happily extract and run the surviving half-script.
   in reduced state/events with parsing off (all a userland worker gets).
 - The prefix-superset spec the handoff asked about already existed
   (agent-prompt-fold.test.ts, "strict byte-superset") — not duplicated.
+
+### 2026-08-24 (bugbot round)
+
+- **Umbrella supersession made symmetric** (bugbot HIGH): a segments append
+  that writes prompt-FILE sections and no umbrella is itself a whole-prompt
+  statement (segments only ever come from parsing one authored file), so it
+  now removes a standing legacy umbrella from both lanes — an old converted
+  agent re-created under the new platform renders exactly one prompt.
+  Direction decision, deliberately: HARD-DROP even when the umbrella was
+  already sent, mirroring the forward direction (demo scenario 4 hard-drops
+  sent file sections on an umbrella write). Landing the file sections
+  temporally while leaving the umbrella standing was considered and
+  rejected: the umbrella would keep rendering, and compaction's per-key
+  collapse would fold BOTH prompts into the standing document permanently.
+  A one-time cache bust at a rare migration moment beats a doubled prompt
+  forever. Single-key adds (codemode-tag's output-formatting swap) remain
+  partial overrides and clear nothing — deleting a legacy umbrella because
+  one section changed would lobotomise the agent. Regression specs for both
+  sides in agent-prompt-fold.test.ts.
+- **Duration formatter** (bugbot LOW): round to whole seconds BEFORE
+  splitting minutes — 179.7s now renders "3m", not "2m 60s". Mirrored in
+  codemode-tag's vendored renderer; harness spec drives it through real
+  journaled timestamps with virtual time.

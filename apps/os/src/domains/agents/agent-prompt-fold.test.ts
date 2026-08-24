@@ -279,6 +279,61 @@ test("a whole-prompt write at the umbrella key supersedes the prompt-file sectio
   expect(messages.some((message) => message.content.includes("Platform identity"))).toBe(false);
 });
 
+test("a sectioned prompt re-append supersedes a legacy whole-prompt umbrella — never stacks on it", () => {
+  // The reverse of the umbrella supersession: an old converted agent carries
+  // the whole prompt under agent/system-prompt (an old worker's write); a
+  // later revision-bumped birth batch re-appends the SECTIONED platform
+  // prompt. Exactly one prompt's worth of content may render.
+  const events = [
+    keyedSystem(1, "agent/system-prompt", "The old whole prompt, one blob."),
+    userMessage(2, "hello"),
+    requested(3),
+    settled(4, 3),
+    // The re-created agent's birth batch: a segments append of the file's
+    // sections, no umbrella — a whole-prompt statement.
+    contextAdded(5, {
+      role: "system",
+      content: "",
+      segments: [
+        { key: "identity", content: "Sectioned identity." },
+        { key: "output-formatting", content: "Sectioned format." },
+      ],
+    }),
+    userMessage(6, "still there?"),
+    requested(7),
+  ];
+  const { messages } = buildAgentLlmRequestBody({ events, llmRequestOffset: 7 });
+  const rendered = messages.map((message) => message.content).join("\n");
+  expect(rendered).not.toContain("The old whole prompt");
+  expect(rendered).toContain("Sectioned identity.");
+  // The umbrella was already SENT, so the file sections land temporally
+  // (conversation exists — first occurrence of each key); the standing
+  // document no longer holds a prompt at all. Hard-dropping the sent
+  // umbrella is the same discipline the forward direction applies to sent
+  // file sections: a one-time cache bust beats two prompts forever.
+  expect(messages.some((message) => message.content.startsWith('<section key="identity">'))).toBe(
+    true,
+  );
+});
+
+test("a single-key section add is a partial override: it never clears a legacy umbrella", () => {
+  // codemode-tag re-adds ONE section (output-formatting) on an old agent
+  // whose whole prompt lives in the umbrella. Clearing the umbrella would
+  // leave the agent with nothing but the grammar section — a lobotomy. The
+  // partial override lands alongside; only a whole-prompt statement (a
+  // segments append of prompt-file sections) supersedes the umbrella.
+  const events = [
+    keyedSystem(1, "agent/system-prompt", "The old whole codemode prompt."),
+    keyedSystem(2, "output-formatting", "Respond with one <codemode> tag."),
+    userMessage(3, "hi"),
+    requested(4),
+  ];
+  const { messages } = buildAgentLlmRequestBody({ events, llmRequestOffset: 4 });
+  const doc = messages[1]!.content;
+  expect(doc).toContain("The old whole codemode prompt.");
+  expect(doc).toContain("Respond with one <codemode> tag.");
+});
+
 test("one event carrying tagged sections AND untagged umbrella content keeps them all — the umbrella clears only PRIOR prompt sections", () => {
   // The MCP prompt shape: the tagged default file plus an untagged override
   // suffix, parsed into one append. The suffix (umbrella) must not clear the

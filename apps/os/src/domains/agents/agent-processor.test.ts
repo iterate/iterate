@@ -1366,6 +1366,35 @@ describe("AgentProcessor script execution", () => {
     expect(h.events("events.iterate.com/capability-host/script-run-requested")).toHaveLength(1);
   });
 
+  it('renders whole minutes for near-minute script durations — never "1m 60s"', async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("do something slow")],
+      ["advanceTime", 10_000],
+      () => h.llm.respond("```ts\nasync (itx) => itx.doSlowThing()\n```"),
+    );
+    const executionId = h.events("events.iterate.com/capability-host/script-run-requested")[0]!
+      .payload.executionId;
+
+    // 179.7s between the requested and settled events' journaled times:
+    // rounding the leftover seconds after splitting minutes rendered
+    // "2m 60s"; rounding the total first renders "3m".
+    await h.play(
+      ["advanceTime", 179_700],
+      [
+        "append",
+        {
+          type: "events.iterate.com/capability-host/script-run-settled",
+          payload: { executionId, settlement: { status: "succeeded", result: 7 } },
+        },
+      ],
+    );
+    const rendered = conversationTurns(h.state()).find((item) =>
+      item.payload.content.startsWith("Your script returned"),
+    );
+    expect(rendered!.payload.content).toContain("Your script returned (in 3m):");
+  });
+
   it("renders a failed settlement as corrective input that triggers the next turn", async () => {
     const h = makeAgentHarness();
     await h.play(

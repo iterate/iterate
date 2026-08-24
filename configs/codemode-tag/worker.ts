@@ -515,8 +515,11 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       if (!Number.isFinite(durationMs) || durationMs < 0) return null;
       if (durationMs < 1000) return `${Math.round(durationMs)}ms`;
       if (durationMs < 120_000) return `${Math.round(durationMs / 100) / 10}s`;
-      const minutes = Math.floor(durationMs / 60_000);
-      const seconds = Math.round((durationMs % 60_000) / 1000);
+      // Round to whole seconds BEFORE splitting into minutes (mirrors the
+      // platform's formatScriptDuration): otherwise 179.7s renders "2m 60s".
+      const totalSeconds = Math.round(durationMs / 1000);
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
       return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
     } catch (error) {
       console.error("[codemode-tag] failed to derive script duration", { error });

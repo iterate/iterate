@@ -440,14 +440,31 @@ export function projectContextAdded(args: {
   if (payload.segments !== undefined) {
     const { segments, ...base } = payload;
     // The umbrella supersession is decided per EVENT, before any of its
-    // writes: a segments append that includes the umbrella (an untagged
-    // fork, the MCP prompt's untagged suffix riding a tagged file) must not
-    // clear the sibling sections the very same event establishes.
-    let lanes: AgentContextLanes = segments.some(
-      (segment) => segment.key === AGENT_SYSTEM_PROMPT_KEY,
-    )
+    // writes, in BOTH directions:
+    // - a segments append that includes the umbrella (an untagged fork, the
+    //   MCP prompt's untagged suffix riding a tagged file) supersedes the
+    //   prompt-file sections — but never the siblings the very same event
+    //   establishes;
+    // - a segments append that writes prompt-FILE sections and no umbrella
+    //   is itself a whole-prompt statement (segments only ever come from
+    //   parsing ONE authored file), so a standing legacy umbrella — an old
+    //   worker's whole-prompt write — must not stack under it. Same
+    //   hard-drop discipline as the forward direction (demo scenario 4
+    //   blesses dropping sent occurrences for whole-prompt supersession):
+    //   a one-time cache bust beats rendering two prompts forever,
+    //   including after compaction collapses both to standing.
+    // A single-key add (codemode-tag swapping `output-formatting`) is a
+    // PARTIAL override and deliberately clears nothing — deleting a legacy
+    // umbrella because one section changed would lobotomise the agent.
+    const writesUmbrella = segments.some((segment) => segment.key === AGENT_SYSTEM_PROMPT_KEY);
+    const writesPromptFileSections = segments.some((segment) =>
+      AGENT_SYSTEM_PROMPT_FILE_SECTION_KEYS.includes(segment.key),
+    );
+    let lanes: AgentContextLanes = writesUmbrella
       ? clearSectionsSupersededByUmbrella(args)
-      : { standingSections: args.standingSections, turns: args.turns };
+      : writesPromptFileSections
+        ? removeSection(args, AGENT_SYSTEM_PROMPT_KEY)
+        : { standingSections: args.standingSections, turns: args.turns };
     for (const segment of segments) {
       lanes = addKeyedOccurrence({
         lanes,
