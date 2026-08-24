@@ -254,20 +254,21 @@ export function foldAgentSummaryUpdated({
 
 type AgentRuntimeSource = {
   activeScriptExecutionIds: readonly string[];
-  contextItems: readonly { payload: { role: string; key?: string } }[];
+  standingSections: readonly { sectionId: string; occurrences: readonly unknown[] }[];
   openRequest: null | { requestedAtOffset: number };
   pendingLlmRequestTrigger: null | { offset: number };
 };
 
 export function deriveAgentRuntime(
   state: AgentRuntimeSource,
-  systemPromptContextKey: string,
+  systemPromptSectionIds: readonly string[],
 ): AgentRuntimeRecord {
   const pending = state.pendingLlmRequestTrigger === null ? 0 : 1;
   const runnable =
     pending === 1 &&
-    state.contextItems.some(
-      (item) => item.payload.role === "system" && item.payload.key === systemPromptContextKey,
+    state.standingSections.some(
+      (section) =>
+        systemPromptSectionIds.includes(section.sectionId) && section.occurrences.length > 0,
     )
       ? 1
       : 0;

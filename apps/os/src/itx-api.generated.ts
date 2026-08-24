@@ -2598,12 +2598,69 @@ export type AgentProcessorState = {
     compactionTriggerFraction: number;
     interpretResponses: boolean;
   };
-  contextItems: {
+  standingSections: {
+    sectionId: string;
+    occurrences: {
+      offset: number;
+      payload: {
+        role: "assistant" | "developer" | "system" | "user";
+        content: string;
+        key?: string | undefined;
+        segments?: { sectionId: string; content: string }[] | undefined;
+        files?:
+          | { contentType: string; filename: string; path: string; size: number; url: string }[]
+          | undefined;
+        refs?:
+          | (
+              | {
+                  type: "event";
+                  streamPath: string;
+                  offset: number;
+                  eventType?: string | undefined;
+                }
+              | { type: "user"; userId: string }
+              | { type: "file"; path: string }
+              | { type: "git-commit"; repoPath: string; commitOid: string }
+            )[]
+          | undefined;
+        actor?:
+          | { type: "user"; origin: "mcp" | "web"; userId?: string | undefined }
+          | { type: "agent"; path: string }
+          | { type: "script"; executionId: string }
+          | { type: "integration"; name: string }
+          | { type: "slack"; userId?: string | undefined; botName?: string | undefined }
+          | { type: "telegram"; userId?: string | undefined; username?: string | undefined }
+          | { type: "email"; address?: string | undefined; name?: string | undefined }
+          | { type: "github"; login?: string | undefined; senderType?: string | undefined }
+          | undefined;
+        llmRequestPolicy:
+          | { behaviour: "dont-trigger-request" }
+          | { behaviour: "interrupt-current-request" }
+          | { behaviour: "after-current-request" };
+        llmRequestOffset?: number | undefined;
+        compaction?:
+          | {
+              replacesHistoryThrough: number;
+              usage?:
+                | {
+                    inputTokens: number;
+                    outputTokens: number;
+                    cachedInputTokens?: number | undefined;
+                    reasoningOutputTokens?: number | undefined;
+                  }
+                | undefined;
+            }
+          | undefined;
+      };
+    }[];
+  }[];
+  turns: {
     offset: number;
     payload: {
       role: "assistant" | "developer" | "system" | "user";
       content: string;
       key?: string | undefined;
+      segments?: { sectionId: string; content: string }[] | undefined;
       files?:
         | { contentType: string; filename: string; path: string; size: number; url: string }[]
         | undefined;
@@ -2725,7 +2782,7 @@ export type AgentEventInput =
   | TypedConsumedEventInput<"events.iterate.com/agent/created", { [x: string]: unknown }>
   | TypedConsumedEventInput<
       "events.iterate.com/agent/llm-request-requested",
-      { model: string; expiresAt: number }
+      { model: string; contractVersion?: string | undefined; expiresAt: number }
     >
   | TypedConsumedEventInput<
       "events.iterate.com/agent/llm-request-settled",
@@ -2788,6 +2845,7 @@ export type AgentEventInput =
         role: "assistant" | "developer" | "system" | "user";
         content: string;
         key?: string | undefined;
+        segments?: { sectionId: string; content: string }[] | undefined;
         files?:
           | { contentType: string; filename: string; path: string; size: number; url: string }[]
           | undefined;
@@ -2833,6 +2891,15 @@ export type AgentEventInput =
                 | undefined;
             }
           | undefined;
+      }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/agents/context-updated",
+      {
+        op: "delete" | "replace";
+        selector: string;
+        content?: string | undefined;
+        mode?: "append-latest" | undefined;
       }
     >
   | TypedConsumedEventInput<
@@ -4405,7 +4472,7 @@ export type JsonValue =
 
 /** One model-visible context item's payload — the wire contract for every
  * committed `agents/context-added` event. */
-export type AgentContextAddedPayload = AgentProcessorState["contextItems"][number]["payload"];
+export type AgentContextAddedPayload = AgentProcessorState["turns"][number]["payload"];
 
 /** Dynamic invocation envelope used by flattened live capabilities. */
 export type FlattenedCapabilityInvocation = {

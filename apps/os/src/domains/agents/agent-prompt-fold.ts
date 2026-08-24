@@ -19,10 +19,15 @@ import {
 } from "iterate/processors";
 import type { StreamEvent } from "iterate/processors";
 import {
+  AGENT_SYSTEM_PROMPT_FILE_SECTION_IDS,
+  AGENT_SYSTEM_PROMPT_SECTION_ID,
   AgentProcessorContract,
+  HOT_STANDING_SECTION_IDS,
+  SYSTEM_PROMPT_STANDING_SECTION_IDS,
   type AgentContextAddedPayload,
   type AgentFileAttachment,
   type AgentProcessorState,
+  type AgentStandingSection,
 } from "./agent-processor-contract.ts";
 import { deriveAgentRuntime, foldAgentSummaryUpdated } from "./agent-presence.ts";
 import { resolveSlashCommand, SLASH_COMMAND_EXECUTION_PREFIX } from "./slash-commands.ts";
@@ -40,7 +45,7 @@ export function reduceAgentEvent(input: {
   state: AgentProcessorState;
 }): AgentProcessorState {
   const state = reduceAgentEventCore(input);
-  const runtime: AgentRuntime = deriveAgentRuntime(state, "agent/system-prompt");
+  const runtime: AgentRuntime = deriveAgentRuntime(state, SYSTEM_PROMPT_STANDING_SECTION_IDS);
   // Genesis zero stays absent. Every later count change is significant,
   // including changes which retain the same compact display state.
   const changed =
@@ -79,8 +84,8 @@ function reduceAgentEventCore(input: {
       };
     case "events.iterate.com/agents/context-added": {
       const payload = event.payload;
-      // COMPACTION — the one structural rewrite of the reduced conversation.
-      // Fail closed on a raw malformed append: a summary can replace only
+      // COMPACTION — the one structural rewrite of the turns lane. Fail
+      // closed on a raw malformed append: a summary can replace only
       // history that existed before the summary itself (the payload schema
       // cannot compare a field with the containing event's envelope offset).
       if (payload.role === "developer" && payload.compaction !== undefined) {
@@ -92,21 +97,23 @@ function reduceAgentEventCore(input: {
           // exactly that prefix as covered; items arriving while it ran stay
           // uncovered and may still coalesce before the next request.
           lastLlmRequestOffset: Math.max(state.lastLlmRequestOffset, cutoff),
-          contextItems: [
-            // Compaction is also the cache-busting rebaseline for durable
-            // keyed instructions: keep every system fact (whatever side of
-            // the barrier it sits on), but collapse historical values of each
-            // key to its latest occurrence so repeated prompt updates cannot
-            // grow the compaction-immune prefix forever.
-            ...retainLatestKeyedOccurrences(
-              state.contextItems.filter((item) => item.payload.role === "system"),
-            ),
+          // Compaction is also the cache-busting rebaseline for the standing
+          // lane: collapse every section to its latest occurrence, so
+          // repeated append-latest updates cannot grow the compaction-immune
+          // prefix forever.
+          standingSections: state.standingSections.map((section) => ({
+            sectionId: section.sectionId,
+            occurrences: section.occurrences.slice(-1),
+          })),
+          turns: [
+            // Unkeyed system facts are durable instructions outside
+            // compactable history: keep them (whatever side of the barrier
+            // they sit on), ahead of the summary.
+            ...state.turns.filter((turn) => turn.payload.role === "system"),
             // The summary replaces a prefix and therefore precedes everything
             // that arrived after its barrier.
             { offset: event.offset, payload },
-            ...state.contextItems.filter(
-              (item) => item.payload.role !== "system" && item.offset > cutoff,
-            ),
+            ...state.turns.filter((turn) => turn.payload.role !== "system" && turn.offset > cutoff),
           ],
         };
       }
@@ -120,16 +127,17 @@ function reduceAgentEventCore(input: {
       ) {
         return state;
       }
-      const contextItems = projectContextAdded({
-        items: state.contextItems,
+      const lanes = projectContextAdded({
+        standingSections: state.standingSections,
+        turns: state.turns,
         lastLlmRequestOffset: state.lastLlmRequestOffset,
         item: { offset: event.offset, payload },
       });
       const trigger = contextTriggerSource(payload);
-      if (trigger === null) return { ...state, contextItems };
+      if (trigger === null) return { ...state, ...lanes };
       return {
         ...state,
-        contextItems,
+        ...lanes,
         // Every trigger moves the pending slot — newest wins; the debounce
         // window and the intent idempotency key anchor to these coordinates.
         pendingLlmRequestTrigger: {
@@ -146,6 +154,8 @@ function reduceAgentEventCore(input: {
         }),
       };
     }
+    case "events.iterate.com/agents/context-updated":
+      return { ...state, ...applyContextUpdated({ state, event }) };
     case "events.iterate.com/agent/llm-request-requested": {
       // Reduce-guard: a late debounced intent — trigger interrupted away, a
       // sibling intent already won, or the agent paused meanwhile — reduces
@@ -373,42 +383,178 @@ export function contextClearsWaitingFor(payload: AgentContextAddedPayload): bool
   return payload.actor !== undefined && payload.actor.type !== "script";
 }
 
+type AgentContextLanes = Pick<AgentProcessorState, "standingSections" | "turns">;
+type AgentStandingOccurrence = AgentStandingSection["occurrences"][number];
+
 /**
- * Reduce one context item into the list. The rule, in one sentence: if no LLM
- * request has seen the keyed item yet, an update with the same key replaces
- * it in place; once a request has seen it, the update appends a new
- * occurrence (append-only history — every covered prompt stays
- * reconstructible).
+ * Reduce one context item into the two lanes. Segments establish (collapse)
+ * their standing sections; a legacy keyed item maps deterministically into
+ * the standing lane (key → sectionId; uncovered → collapse, covered →
+ * append-as-latest — the old vocabulary reproduced forever, decision 10 of
+ * tasks/prompt-sections-tree.md); everything else is one implicit turn node.
  */
 export function projectContextAdded(args: {
-  items: AgentProcessorState["contextItems"];
+  standingSections: AgentProcessorState["standingSections"];
+  turns: AgentProcessorState["turns"];
   lastLlmRequestOffset: number;
-  item: AgentProcessorState["contextItems"][number];
-}): AgentProcessorState["contextItems"] {
-  const key = args.item.payload.key;
-  if (key !== undefined) {
-    const slotIndex = args.items.findLastIndex((existing) => existing.payload.key === key);
-    if (slotIndex >= 0 && args.items[slotIndex]!.offset > args.lastLlmRequestOffset) {
-      const replaced = [...args.items];
-      replaced[slotIndex] = args.item;
-      return replaced;
+  item: AgentProcessorState["turns"][number];
+}): AgentContextLanes {
+  const { item } = args;
+  const payload = item.payload;
+  if (payload.segments !== undefined) {
+    // One append, several sections: group segments by section (a file may
+    // hold several untagged runs mapped to the same fallback id), collapse
+    // each named section to this event's segments for it.
+    const occurrencesBySection = new Map<string, AgentStandingOccurrence[]>();
+    for (const segment of payload.segments) {
+      const { segments: _segments, ...base } = payload;
+      const occurrence = {
+        offset: item.offset,
+        payload: { ...base, content: segment.content, key: segment.sectionId },
+      };
+      const list = occurrencesBySection.get(segment.sectionId) || [];
+      occurrencesBySection.set(segment.sectionId, [...list, occurrence]);
     }
+    let standingSections = args.standingSections;
+    for (const [sectionId, occurrences] of occurrencesBySection) {
+      standingSections = writeStandingSection({
+        sections: standingSections,
+        sectionId,
+        occurrences,
+        mode: "collapse",
+      });
+    }
+    return { standingSections, turns: args.turns };
   }
-  return [...args.items, args.item];
+  if (payload.key !== undefined) {
+    const section = args.standingSections.find((candidate) => candidate.sectionId === payload.key);
+    const latest = section?.occurrences.at(-1);
+    const covered = latest !== undefined && latest.offset <= args.lastLlmRequestOffset;
+    return {
+      standingSections: writeStandingSection({
+        sections: args.standingSections,
+        sectionId: payload.key,
+        occurrences: [item],
+        mode: covered ? "append-latest" : "collapse",
+      }),
+      turns: args.turns,
+    };
+  }
+  return { standingSections: args.standingSections, turns: [...args.turns, item] };
 }
 
-/** The compaction reduce's system-prefix rebaseline: keep every unkeyed system
- * fact, collapse historical values of each key to its latest occurrence. */
-function retainLatestKeyedOccurrences(
-  items: AgentProcessorState["contextItems"],
-): AgentProcessorState["contextItems"] {
-  const latestIndexByKey = new Map<string, number>();
-  for (const [index, item] of items.entries()) {
-    if (item.payload.key !== undefined) latestIndexByKey.set(item.payload.key, index);
+/** Apply one agents/context-updated op to the lanes. Replace and delete
+ * collapse always; append-latest is the explicit opt-in; `delete *` deletes
+ * everything, both lanes — no guardrails, the op's audit trail is the
+ * safeguard. */
+function applyContextUpdated(args: {
+  state: AgentProcessorState;
+  event: Extract<AgentConsumedEvent, { type: "events.iterate.com/agents/context-updated" }>;
+}): AgentContextLanes {
+  const { state, event } = args;
+  const payload = event.payload;
+  if (payload.op === "delete") {
+    if (payload.selector === "*") return { standingSections: [], turns: [] };
+    const sectionId = payload.selector.slice(1);
+    return {
+      standingSections: state.standingSections.filter((section) => section.sectionId !== sectionId),
+      turns: state.turns,
+    };
   }
-  return items.filter(
-    (item, index) =>
-      item.payload.key === undefined || latestIndexByKey.get(item.payload.key) === index,
+  const sectionId = payload.selector.slice(1);
+  const section = state.standingSections.find((candidate) => candidate.sectionId === sectionId);
+  const occurrence: AgentStandingOccurrence = {
+    offset: event.offset,
+    payload: {
+      // Role stays stored on occurrences (provenance/derived roles are slice
+      // 2); an op inherits the section's current role, and a replace that
+      // CREATES a section makes a standing instruction — system.
+      role: section?.occurrences.at(-1)?.payload.role || "system",
+      content: payload.content === undefined ? "" : payload.content,
+      key: sectionId,
+      llmRequestPolicy: { behaviour: "dont-trigger-request" },
+    },
+  };
+  return {
+    standingSections: writeStandingSection({
+      sections: state.standingSections,
+      sectionId,
+      occurrences: [occurrence],
+      mode: payload.mode === "append-latest" ? "append-latest" : "collapse",
+    }),
+    turns: state.turns,
+  };
+}
+
+/** Write occurrences into one standing section (creating it if absent) and
+ * re-establish canonical order. Writing the umbrella `agent/system-prompt`
+ * section clears the platform prompt-file sections: a whole-prompt
+ * supersession (an old template worker, an integration prompt) must not
+ * leave the segmented default prompt standing beside it. */
+function writeStandingSection(args: {
+  sections: AgentProcessorState["standingSections"];
+  sectionId: string;
+  occurrences: AgentStandingOccurrence[];
+  mode: "collapse" | "append-latest";
+}): AgentProcessorState["standingSections"] {
+  const cleared =
+    args.sectionId === AGENT_SYSTEM_PROMPT_SECTION_ID
+      ? args.sections.filter(
+          (section) => !AGENT_SYSTEM_PROMPT_FILE_SECTION_IDS.includes(section.sectionId),
+        )
+      : args.sections;
+  const existing = cleared.find((section) => section.sectionId === args.sectionId);
+  const written = {
+    sectionId: args.sectionId,
+    occurrences:
+      args.mode === "append-latest" && existing !== undefined
+        ? [...existing.occurrences, ...args.occurrences]
+        : args.occurrences,
+  };
+  return [...cleared.filter((section) => section.sectionId !== args.sectionId), written].sort(
+    compareStandingSections,
+  );
+}
+
+/** The canonical standing order — a property of the section id alone, so
+ * arrival order can never affect it: the platform prompt sections first
+ * (umbrella, then the prompt file's sections in file order, then the boot
+ * context), every other section alphabetically, hot sections last. */
+const CANONICAL_STANDING_SECTION_PREFIX = [
+  AGENT_SYSTEM_PROMPT_SECTION_ID,
+  ...AGENT_SYSTEM_PROMPT_FILE_SECTION_IDS,
+  "agent/boot-context",
+];
+
+function compareStandingSections(a: AgentStandingSection, b: AgentStandingSection): number {
+  const bucket = (sectionId: string) =>
+    HOT_STANDING_SECTION_IDS.includes(sectionId)
+      ? 2
+      : CANONICAL_STANDING_SECTION_PREFIX.includes(sectionId)
+        ? 0
+        : 1;
+  const bucketA = bucket(a.sectionId);
+  const bucketB = bucket(b.sectionId);
+  if (bucketA !== bucketB) return bucketA - bucketB;
+  if (bucketA === 0) {
+    return (
+      CANONICAL_STANDING_SECTION_PREFIX.indexOf(a.sectionId) -
+      CANONICAL_STANDING_SECTION_PREFIX.indexOf(b.sectionId)
+    );
+  }
+  return a.sectionId < b.sectionId ? -1 : a.sectionId > b.sectionId ? 1 : 0;
+}
+
+/** The turn loop's readiness gate, tree-world: the standing lane holds the
+ * birth prompt — the umbrella `#agent/system-prompt` section or any section
+ * the sectionized default prompt file defines. */
+export function hasSystemPromptStandingSection(
+  sections: AgentProcessorState["standingSections"],
+): boolean {
+  return sections.some(
+    (section) =>
+      SYSTEM_PROMPT_STANDING_SECTION_IDS.includes(section.sectionId) &&
+      section.occurrences.length > 0,
   );
 }
 
@@ -458,7 +604,13 @@ export function buildAgentLlmRequestBody(input: {
   return {
     messages: [
       { role: "system", content: AGENT_CONTEXT_PROTOCOL_PROMPT },
-      ...state.contextItems.map(renderProjectedContextItem),
+      // The standing prefix first, in the canonical order the fold maintains
+      // (each occurrence its own message, oldest first within a section),
+      // then the turns lane.
+      ...state.standingSections.flatMap((section) =>
+        section.occurrences.map(renderProjectedContextItem),
+      ),
+      ...state.turns.map(renderProjectedContextItem),
       ...(requestedAt === undefined
         ? []
         : [
@@ -473,9 +625,7 @@ export function buildAgentLlmRequestBody(input: {
   };
 }
 
-function renderProjectedContextItem(
-  item: AgentProcessorState["contextItems"][number],
-): AgentChatMessage {
+function renderProjectedContextItem(item: AgentProcessorState["turns"][number]): AgentChatMessage {
   const { payload } = item;
   const actor = payload.actor;
   const fields = [

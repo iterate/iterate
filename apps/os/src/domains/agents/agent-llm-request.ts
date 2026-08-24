@@ -72,7 +72,7 @@ export class AgentLlmRequest {
     );
     if (contextTokens < thresholdTokens) return;
     const triggerFraction = state.config.compactionTriggerFraction;
-    const hasHistory = state.contextItems.some((item) => item.payload.role !== "system");
+    const hasHistory = state.turns.some((turn) => turn.payload.role !== "system");
     blockProcessorWhile(async () => {
       // A later over-threshold report already in the stream supersedes this
       // one: summarizing an older prefix now would be thrown away by the

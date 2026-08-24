@@ -269,10 +269,13 @@ export function AgentPrettyState({ state }: { state: unknown }) {
   const phase = paused != null ? "paused" : openRequest == null ? "idle" : "requested";
   const config = readRuntimeRecord(agent.config);
   const llm = readRuntimeRecord(config?.llm);
-  const contextItems = Array.isArray(agent.contextItems) ? agent.contextItems : [];
-  const isSystem = (item: unknown) => readItemPayload(item)?.role === "system";
-  const system = contextItems.filter(isSystem);
-  const history = contextItems.filter((item) => !isSystem(item));
+  const standingSections = Array.isArray(agent.standingSections) ? agent.standingSections : [];
+  const standingOccurrences = standingSections.flatMap((section: unknown) => {
+    if (section == null || typeof section !== "object") return [];
+    const occurrences = (section as Record<string, unknown>).occurrences;
+    return Array.isArray(occurrences) ? (occurrences as unknown[]) : [];
+  });
+  const history = Array.isArray(agent.turns) ? agent.turns : [];
   const lastMessage = history.length > 0 ? history[history.length - 1] : null;
   const lastPreview = lastMessage == null ? null : previewProjectedItem(lastMessage);
   const scripts = Array.isArray(agent.activeScriptExecutionIds)
@@ -344,13 +347,13 @@ export function AgentPrettyState({ state }: { state: unknown }) {
         </div>
       </div>
 
-      {system.length === 0 ? null : (
+      {standingOccurrences.length === 0 ? null : (
         <details className="rounded-xl bg-muted/40 px-3 py-2">
           <summary className="cursor-pointer text-[10px] uppercase tracking-wide text-muted-foreground/70">
-            System context ({system.length})
+            Standing sections ({standingSections.length})
           </summary>
           <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-xs text-foreground/80">
-            {system.map(renderProjectedContextItem).join("\n\n")}
+            {standingOccurrences.map(renderProjectedContextItem).join("\n\n")}
           </pre>
         </details>
       )}
@@ -367,8 +370,8 @@ function asAgentState(state: unknown): Record<string, unknown> | null {
   if (state == null || typeof state !== "object") return null;
   const record = state as Record<string, unknown>;
   // Agent state is recognized by its provider-neutral context projection
-  // (`contextItems`) plus its config.
-  if (!("contextItems" in record) || !("config" in record)) {
+  // (the two-lane tree: `standingSections` + `turns`) plus its config.
+  if (!("turns" in record) || !("standingSections" in record) || !("config" in record)) {
     return null;
   }
   return record;

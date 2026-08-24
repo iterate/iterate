@@ -31,9 +31,47 @@ import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { AgentBinding, AgentSummary, AgentSummaryUpdated } from "./agent-presence.ts";
 
+/** The one logical system-prompt section. Legacy keyed `agent/system-prompt`
+ * events land here, as does untagged prompt-file content parsed at append
+ * time. Writing this section supersedes the WHOLE prompt, so the fold clears
+ * the platform prompt-file sections when an occurrence lands here — an old
+ * template worker's whole-prompt supersession must not leave the segmented
+ * default prompt standing beside it (the p1711 double-prompt trace). */
+export const AGENT_SYSTEM_PROMPT_SECTION_ID = "agent/system-prompt";
+
+/** The section ids the platform's sectionized default prompt file defines, in
+ * file order — also their canonical render order in the standing lane.
+ * agent-defaults.test.ts guards this list against drift from the file. */
+export const AGENT_SYSTEM_PROMPT_FILE_SECTION_IDS = [
+  "identity",
+  "output-formatting",
+  "summary-instruction",
+  "workspace-and-repo",
+  "find-working-code",
+  "capability-tour",
+  "shape-of-work",
+  "other-agents",
+  "files",
+  "gotchas",
+];
+
+/** Standing sections that satisfy the turn loop's readiness gate: triggers
+ * are held until the birth batch's system prompt has reduced — either the one
+ * umbrella section (keyed births, untagged prompt files) or any section the
+ * sectionized default prompt file defines. */
+export const SYSTEM_PROMPT_STANDING_SECTION_IDS = [
+  AGENT_SYSTEM_PROMPT_SECTION_ID,
+  ...AGENT_SYSTEM_PROMPT_FILE_SECTION_IDS,
+];
+
+/** Hot standing sections render LAST in the standing prefix, so their updates
+ * bust only their own prompt-cache suffix (decision 4 in
+ * tasks/prompt-sections-tree.md). AGENTS.md is the one hot section today. */
+export const HOT_STANDING_SECTION_IDS = ["config/agents-md"];
+
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "6.0.0",
+  version: "7.0.0",
   description:
     "Maintains model-visible history, schedules debounced offset-identified LLM turns, runs " +
     "them through the Workers AI transport, and executes scripts through the capability host. " +
@@ -177,11 +215,46 @@ export const AgentProcessorContract = defineProcessorContract({
       })
       .prefault({})
       .meta({ description: "The agent's complete configuration, every knob defaulted." }),
-    contextItems: z
+    standingSections: z
+      .array(
+        z.object({
+          sectionId: z.string().min(1).meta({
+            description:
+              "The section's stable identity — the ops selector `#<sectionId>` addresses it.",
+          }),
+          occurrences: z
+            .array(
+              z.object({
+                offset: z.number().int().positive().meta({
+                  description: "Stream offset of the event this occurrence reduced from.",
+                }),
+                payload: agentContextItemSchema(),
+              }),
+            )
+            .meta({
+              description:
+                "The section's content, oldest first. Normally one occurrence: replace and " +
+                "delete collapse ALWAYS. An update with mode append-latest (and a legacy " +
+                "keyed update landing on a covered section) appends instead, keeping earlier " +
+                "occurrence bytes in place for the provider's prompt cache; compaction " +
+                "collapses every section back to its latest occurrence.",
+            }),
+        }),
+      )
+      .default([])
+      .meta({
+        description:
+          "The STANDING lane of the two-lane section tree (depth 1): the prompt prefix, held " +
+          "in canonical order regardless of arrival order — the platform prompt sections " +
+          "first (umbrella, then the prompt file's sections), then agent/boot-context, then " +
+          "every other section alphabetically, hot sections (config/agents-md) last. Renders " +
+          "before the turns lane on every request.",
+      }),
+    turns: z
       .array(
         z.object({
           offset: z.number().int().positive().meta({
-            description: "Stream offset of the context-added event this item reduced from.",
+            description: "Stream offset of the context-added event this turn reduced from.",
           }),
           payload: agentContextItemSchema(),
         }),
@@ -189,12 +262,10 @@ export const AgentProcessorContract = defineProcessorContract({
       .default([])
       .meta({
         description:
-          "The reduced conversation: ONE ordered list of every model-visible item (system items " +
-          "sit in place — providers accept system/developer content mid-history). A keyed item " +
-          "no request has covered yet is replaced in place by an update with the same key; a " +
-          "covered one appends a new occurrence (see lastLlmRequestOffset). Compaction " +
-          "restructures the list: system items move to the front (latest occurrence per key), " +
-          "the summary follows, then everything after the barrier.",
+          "The TURNS lane: the conversation itself, ordered by offset — every plain (unkeyed, " +
+          "unsectioned) context item is one implicit turn node. Compaction restructures the " +
+          "lane: unkeyed system facts move to the front, the summary follows, then everything " +
+          "after the barrier.",
       }),
     lastLlmRequestOffset: z
       .number()
@@ -204,9 +275,9 @@ export const AgentProcessorContract = defineProcessorContract({
       .meta({
         description:
           "Offset of the newest llm-request-requested event (bumped at least to the barrier " +
-          "by a compaction item). Context items at or below it have been covered by a " +
-          "request: a keyed update to a covered item appends instead of replacing in place, " +
-          "keeping every covered prompt reconstructible.",
+          "by a compaction item) — barrier bookkeeping. Its one remaining behavioral job is " +
+          "the legacy keyed-vocabulary mapping: a keyed update to a section whose latest " +
+          "occurrence a request has covered appends as latest instead of collapsing.",
       }),
     latestExternalTriggerOffset: z
       .number()
@@ -345,8 +416,65 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agents/context-added": {
       description:
         "Model-visible context arrived (user message, developer note, assistant output, system " +
-        "item). The single source of truth for what the LLM sees.",
+        "item). The single source of truth for what the LLM sees. With `segments`, one append " +
+        "establishes standing sections (structure decided at append time — ops never parse " +
+        "model-visible strings); without, the item is one implicit turn node (or, with the " +
+        "legacy `key`, a standing section named by the key).",
       payloadSchema: agentContextItemSchema(),
+    },
+    "events.iterate.com/agents/context-updated": {
+      description:
+        'An operation on the standing lane: replace a section\'s content (`selector: "#id"`) ' +
+        'or delete a section — `selector: "*"` deletes EVERYTHING, both lanes, standing ' +
+        "sections included (guidance: don't, unless you want a lobotomised agent; the event's " +
+        "audit trail is the safeguard). Replace and delete collapse always; `mode: " +
+        '"append-latest"` opts a replace into appending a new latest occurrence instead, ' +
+        "keeping earlier occurrence bytes in place for the provider's prompt cache. Never " +
+        "triggers a turn by itself.",
+      payloadSchema: z
+        .strictObject({
+          op: z.enum(["replace", "delete"]).meta({ description: "The operation." }),
+          selector: z
+            .string()
+            .regex(/^(#.+|\*)$/)
+            .meta({ description: 'Target: "#<sectionId>" for one standing section, or "*".' }),
+          content: z
+            .string()
+            .optional()
+            .meta({ description: "Replacement content (replace only)." }),
+          mode: z
+            .literal("append-latest")
+            .optional()
+            .meta({
+              description:
+                "Replace only: append the content as the section's new latest occurrence " +
+                "instead of collapsing the section to it.",
+            }),
+        })
+        .superRefine((payload, ctx) => {
+          if (payload.op === "replace") {
+            if (payload.content === undefined) {
+              ctx.addIssue({ code: "custom", path: ["content"], message: "replace needs content" });
+            }
+            if (payload.selector === "*") {
+              ctx.addIssue({
+                code: "custom",
+                path: ["selector"],
+                message: 'replace targets one section ("#id"); "*" is delete-only',
+              });
+            }
+          }
+          if (
+            payload.op === "delete" &&
+            (payload.content !== undefined || payload.mode !== undefined)
+          ) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["op"],
+              message: "delete carries no content or mode",
+            });
+          }
+        }),
     },
     "events.iterate.com/agent/created": {
       description: "The agent exists. Payload is open — provenance may ride along.",
@@ -416,6 +544,16 @@ export const AgentProcessorContract = defineProcessorContract({
         "request already is open — a late debounced intent is a harmless stream fact.",
       payloadSchema: z.object({
         model: z.string().meta({ description: "Model pinned for this turn." }),
+        contractVersion: z
+          .string()
+          .optional()
+          .meta({
+            description:
+              "The agent contract version whose fold built (and will rebuild) this request. " +
+              "A replay under a DIFFERENT current version is a reconstruction under the " +
+              "current fold, not byte-exact — the inspector labels it so. Absent on " +
+              "pre-7.0.0 requests, which are reconstructions by definition.",
+          }),
         expiresAt: z.number().meta({
           description:
             "Absolute epoch-ms horizon (trigger time + llmRequestExpiryMs — deterministic, " +
@@ -593,6 +731,7 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/created",
     "events.iterate.com/agent/configured",
     "events.iterate.com/agents/context-added",
+    "events.iterate.com/agents/context-updated",
     "events.iterate.com/agents/web-message-sent",
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/agent/llm-request-settled",
@@ -645,7 +784,10 @@ export type AgentProcessorState = ProcessorState<AgentProcessorContract>;
 
 /** One model-visible context item's payload — the wire contract for every
  * committed `agents/context-added` event. */
-export type AgentContextAddedPayload = AgentProcessorState["contextItems"][number]["payload"];
+export type AgentContextAddedPayload = AgentProcessorState["turns"][number]["payload"];
+
+/** One standing section of the two-lane tree — sectionId plus its occurrences. */
+export type AgentStandingSection = AgentProcessorState["standingSections"][number];
 
 /** A file attached to an agent context item: content type, filename, project
  * file-storage path, size, and the signed public URL minted at attach time
@@ -689,8 +831,27 @@ function agentContextItemSchema() {
         .optional()
         .meta({
           description:
-            "Stable logical identity: a keyed item no request has covered is REPLACED in " +
-            "place by an update with the same key; a covered one appends a new occurrence.",
+            "LEGACY stable logical identity, mapped deterministically into the standing " +
+            "lane: key → sectionId; an uncovered update collapses the section, a covered one " +
+            "appends as latest. New writers use `segments` or agents/context-updated.",
+        }),
+      segments: z
+        .array(
+          z.object({
+            sectionId: z.string().min(1).meta({
+              description: "The standing section this segment establishes or supersedes.",
+            }),
+            content: z.string().meta({ description: "The section's model-visible text." }),
+          }),
+        )
+        .min(1)
+        .optional()
+        .meta({
+          description:
+            "Standing sections established by this ONE append — the output of parsing a " +
+            "sectionized prompt file at append time. Each named section collapses to this " +
+            "event's segments for it; `content` must be empty (all text lives in the " +
+            "segments). Role and actor apply to every segment.",
         }),
       files: z
         .array(agentFileAttachmentSchema())
@@ -848,6 +1009,30 @@ function agentContextItemSchema() {
         }),
     })
     .superRefine((payload, ctx) => {
+      if (payload.segments !== undefined) {
+        if (payload.key !== undefined) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["key"],
+            message: "segments and the legacy key are two spellings of the same thing — pick one",
+          });
+        }
+        if (payload.content !== "") {
+          ctx.addIssue({
+            code: "custom",
+            path: ["content"],
+            message:
+              "a segments append carries all its text in the segments; content must be empty",
+          });
+        }
+        if (payload.compaction !== undefined) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["compaction"],
+            message: "compaction is a turns-lane rewrite and cannot carry segments",
+          });
+        }
+      }
       if (payload.role !== "developer" || payload.compaction === undefined) return;
       if (payload.key !== undefined) {
         ctx.addIssue({

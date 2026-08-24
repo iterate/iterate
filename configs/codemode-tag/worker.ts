@@ -7,11 +7,13 @@ import { parseCodemodeResponse } from "./codemode-format.ts";
 // plus one embedded <codemode status="..."> tag instead of a bare ```ts
 // fence, and THIS FILE is the interpreter. The platform births every agent
 // with default response parsing ON and a HIGH debounce (60s); this worker
-// reacts to `agent/created`, turns default parsing OFF, supersedes the
-// system prompt with the codemode grammar, and lowers the debounce to the
-// ordinary 250ms — the done-configuring signal, which releases a held first
-// turn immediately. From then on this worker plays the part the platform's
-// codemode component plays for ordinary projects:
+// reacts to `agent/created`, turns default parsing OFF, replaces ONLY the
+// `#output-formatting` section of the platform prompt with the codemode
+// grammar (an agents/context-updated op — the rest of the platform prompt
+// stands untouched), and lowers the debounce to the ordinary 250ms — the
+// done-configuring signal, which releases a held first turn immediately.
+// From then on this worker plays the part the platform's codemode component
+// plays for ordinary projects:
 //
 //   assistant output event  → parse the tag → append script-run-requested,
 //                             the prose as a chat message, the status as the
@@ -20,8 +22,9 @@ import { parseCodemodeResponse } from "./codemode-format.ts";
 //                             context, which drives the agent's next turn
 //
 // Everything happens through public stream events any project member could
-// append — no platform privileges involved. The prompt teaching the grammar
-// lives at prompts/agent-system-prompt.md in this repo; the parser at
+// append — no platform privileges involved. The grammar section's content
+// lives at prompts/agent-system-prompt.md in this repo (JUST the
+// output-formatting section, not a whole-prompt fork); the parser at
 // codemode-format.ts. Editing either is a commit — no platform deploy.
 //
 // Idempotency keys deliberately mirror the platform component's keys (the
@@ -42,7 +45,9 @@ import { parseCodemodeResponse } from "./codemode-format.ts";
 /** Assistant output events stamped by the platform's LLM component carry
  * the agent contract's slug. */
 const AGENT_PROCESSOR_SLUG = "agent";
-const SYSTEM_PROMPT_KEY = "agent/system-prompt";
+/** The one standing section this experiment replaces: the platform prompt's
+ * response-format section. Everything else stays the platform's. */
+const OUTPUT_FORMATTING_SECTION_ID = "output-formatting";
 const SCRIPT_EXPIRY_MS = 10 * 60_000;
 const RESULT_HISTORY_LIMIT = 30_000;
 /** Inline budget once the full copy is spilled — the inline copy is a map of
@@ -154,11 +159,13 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     );
   }
 
-  /** Parsing off + the codemode grammar as the system prompt. A missing
-   * prompt file converts nothing: the platform prompt AND platform parsing
-   * stay — this experiment degrades to fenced-ts, never to an agent taught
-   * a grammar nobody interprets. (The release above still happens either
-   * way: a degraded agent must not also keep the 60s birth debounce.) */
+  /** Parsing off + the codemode grammar replacing the platform prompt's
+   * `#output-formatting` section (collapse — replace always collapses; the
+   * rest of the prompt stands). A missing prompt file converts nothing: the
+   * platform prompt AND platform parsing stay — this experiment degrades to
+   * fenced-ts, never to an agent taught a grammar nobody interprets. (The
+   * release above still happens either way: a degraded agent must not also
+   * keep the 60s birth debounce.) */
   async #codemodeConversion() {
     const file = await this.itx.repo.readFile({ path: "prompts/agent-system-prompt.md" });
     if (file === null) return [];
@@ -173,23 +180,21 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         payload: { config: { interpretResponses: false } },
       },
       {
-        type: "events.iterate.com/agents/context-added" as const,
+        type: "events.iterate.com/agents/context-updated" as const,
         idempotencyKey: `codemode-tag/birth-prompt:${hash}`,
         payload: {
+          op: "replace" as const,
+          selector: `#${OUTPUT_FORMATTING_SECTION_ID}`,
           content: file.content,
-          key: SYSTEM_PROMPT_KEY,
-          llmRequestPolicy: { behaviour: "dont-trigger-request" as const },
-          role: "system" as const,
         },
       },
     ];
   }
 
   /**
-   * The codemode-tag prompt supersedes the platform's keyed system-prompt
-   * slot (same pattern as the AGENTS.md sync in the default template: keyed
-   * system context, per-transition idempotency keys, appends only on a real
-   * change, dont-trigger-request).
+   * Keep every converted agent's `#output-formatting` section current with
+   * the repo's grammar file: per-transition idempotency keys, appends only
+   * on a real change. An op event never triggers a turn by itself.
    */
   async #syncSystemPromptContext(agentPaths: string[]): Promise<void> {
     if (agentPaths.length === 0) return;
@@ -212,18 +217,18 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         // parser still interprets its output would break every turn. The
         // conversion sweep flips the flag; this sync follows it.
         if (snapshot.state.config.interpretResponses) return;
-        const slot = snapshot.state.contextItems.findLast(
-          (item) => item.payload.key === SYSTEM_PROMPT_KEY,
+        const section = snapshot.state.standingSections.find(
+          (candidate) => candidate.sectionId === OUTPUT_FORMATTING_SECTION_ID,
         );
+        const slot = section?.occurrences.at(-1);
         if (slot?.payload.content === content) return;
         await agent.append({
-          type: "events.iterate.com/agents/context-added",
+          type: "events.iterate.com/agents/context-updated",
           idempotencyKey: `codemode-tag/system-prompt:${hash}:after-${slot?.offset || 0}`,
           payload: {
+            op: "replace",
+            selector: `#${OUTPUT_FORMATTING_SECTION_ID}`,
             content,
-            key: SYSTEM_PROMPT_KEY,
-            llmRequestPolicy: { behaviour: "dont-trigger-request" },
-            role: "system",
           },
         });
       }),
@@ -234,8 +239,10 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
 
   /**
    * Standing agent context — same recipe as the default template's AGENTS.md
-   * sync: keyed system context, per-transition idempotency keys, appends only
-   * on a real change, dont-trigger-request, tombstone on deletion.
+   * sync: the hot `#config/agents-md` standing section (rendered last in the
+   * standing prefix, so updates bust only their own cache suffix), replaced
+   * via context-updated with per-transition idempotency keys, only on a real
+   * change, tombstone on deletion.
    */
   async #syncAgentsMdContext(agentPaths: string[]): Promise<void> {
     if (agentPaths.length === 0) return;
@@ -253,19 +260,15 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       agentPaths.map(async (path) => {
         const agent = itx.agents.get(path);
         const snapshot = await agent.processor.snapshot();
-        const slot = snapshot.state.contextItems.findLast(
-          (item) => item.payload.key === "config/agents-md",
+        const section = snapshot.state.standingSections.find(
+          (candidate) => candidate.sectionId === "config/agents-md",
         );
+        const slot = section?.occurrences.at(-1);
         if (slot?.payload.content === content) return;
         await agent.append({
-          type: "events.iterate.com/agents/context-added",
+          type: "events.iterate.com/agents/context-updated",
           idempotencyKey: `iterate/config/agents-md:${hash}:after-${slot?.offset || 0}`,
-          payload: {
-            content,
-            key: "config/agents-md",
-            llmRequestPolicy: { behaviour: "dont-trigger-request" },
-            role: "system",
-          },
+          payload: { op: "replace", selector: "#config/agents-md", content },
         });
       }),
     );

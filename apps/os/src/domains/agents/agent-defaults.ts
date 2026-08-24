@@ -5,7 +5,7 @@
 
 import { AGENT_SUMMARY_UPDATED_EVENT_TYPE } from "@iterate-com/shared/agent-events";
 import { z } from "zod";
-import type { StreamEventInput } from "iterate/processors";
+import { parsePromptSections, type StreamEventInput } from "iterate/processors";
 import { PROJECT_REPO_INITIAL_FILES } from "../repos/config-repo-template.generated.ts";
 import { buildFacetProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
@@ -18,7 +18,10 @@ import {
   AGENT_COLLECTION_SUBSCRIPTION_NAME,
   AgentCollectionProcessorContract,
 } from "./agent-collection-processor-contract.ts";
-import { AgentProcessorContract } from "./agent-processor-contract.ts";
+import {
+  AGENT_SYSTEM_PROMPT_SECTION_ID,
+  AgentProcessorContract,
+} from "./agent-processor-contract.ts";
 
 /**
  * Deterministic, synchronous content hash (djb2, hex) — the occurrence
@@ -224,10 +227,15 @@ export const MCP_AGENT_SYSTEM_PROMPT = [
 export const MCP_AGENT_SYSTEM_PROMPT_REVISION = contentHash(MCP_AGENT_SYSTEM_PROMPT);
 
 /**
- * One exact, retryable occurrence updating the agent runtime's keyed
- * system-context slot. `idempotencyKey` identifies this payload occurrence;
- * the context key identifies the logical slot and makes a later revision
- * supersede it. Never reuse an idempotency key after changing `content`.
+ * One exact, retryable occurrence establishing the agent's system prompt as
+ * STANDING SECTIONS: the sectionized prompt file is parsed here, at append
+ * time (structure at append; fold ops never parse model-visible strings).
+ * A tagged file becomes one section per `<section id>`; untagged content —
+ * including whole untagged files, the integration channel prompts — becomes
+ * the one umbrella `agent/system-prompt` section, whose presence (like any
+ * prompt-file section's) makes the agent ready: the processor holds LLM
+ * triggers until the birth prompt stands. `idempotencyKey` identifies this
+ * payload occurrence; never reuse one after changing `content`.
  */
 export function agentSystemPromptContextEvent(input: { content: string; idempotencyKey: string }) {
   return AgentProcessorContract.buildEvent({
@@ -235,10 +243,11 @@ export function agentSystemPromptContextEvent(input: { content: string; idempote
     idempotencyKey: input.idempotencyKey,
     payload: {
       role: "system",
-      // The one logical system-context slot whose presence makes an agent
-      // ready — the processor holds LLM triggers until it exists.
-      key: "agent/system-prompt",
-      content: input.content,
+      content: "",
+      segments: parsePromptSections({
+        content: input.content,
+        fallbackSectionId: AGENT_SYSTEM_PROMPT_SECTION_ID,
+      }),
     },
   });
 }
@@ -374,7 +383,11 @@ export function agentCreationForPath<
     : [];
   const systemPromptContext = agentSystemPromptContextEvent({
     content: systemPrompt,
-    idempotencyKey: `agent/system-prompt:${systemPromptPolicy.id}:v${systemPromptPolicy.revision}:${projectId}:${agentPath}`,
+    // "segments" in the prefix on purpose: the event BODY changed shape when
+    // prompts became standing sections, and an unchanged prompt file keeps
+    // the same revision — a re-create over a pre-sections agent must append a
+    // fresh superseding occurrence, not trip same-key-different-body.
+    idempotencyKey: `agent/system-prompt-segments:${systemPromptPolicy.id}:v${systemPromptPolicy.revision}:${projectId}:${agentPath}`,
   });
   const bootContext = AgentProcessorContract.buildEvent({
     // Per-agent boot context as a second durable system item: ids and paths

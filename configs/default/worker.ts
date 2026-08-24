@@ -4,6 +4,7 @@ import { GuestbookApp } from "iterate/starter-apps/guestbook";
 import { MediaApp } from "iterate/starter-apps/media";
 import { NotesApp } from "iterate/starter-apps/notes";
 import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
+import { parsePromptSections } from "iterate/processors";
 import { TodoApp } from "iterate/starter-apps/todo";
 
 // An iterate project is, in the abstract, just a fetch function.
@@ -49,20 +50,22 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   /**
    * STANDING AGENT CONTEXT — the pattern to copy for any always-on knowledge.
    *
-   * Every agent in this project carries the config repo's AGENTS.md as a
-   * keyed context item: appended at agent birth, and re-synced to EVERY
-   * agent whenever a config-repo commit lands. Covered keyed context is
-   * append-only (an agent that already ran keeps old occurrences until
-   * compaction), so the sync appends ONLY on a real change — it reads each
-   * agent's current slot first, and a deleted AGENTS.md supersedes with a
-   * tombstone rather than lingering forever. The idempotency key is unique
-   * per TRANSITION (content hash + the occurrence it replaces): redeliveries
-   * dedupe, reverting to earlier content still supersedes, and an edited
-   * wrapper can never reuse a key with a different body.
-   * dont-trigger-request means this never wakes an agent by itself. This
-   * content rides every LLM request of every agent — keep AGENTS.md lean.
-   * (Known narrow race: an agent born while a commit's fan-out is running
-   * can end up one version behind until the next AGENTS.md change.)
+   * Every agent in this project carries the config repo's AGENTS.md as the
+   * HOT `#config/agents-md` standing section: established at agent birth,
+   * and re-synced to EVERY agent whenever a config-repo commit lands, via an
+   * agents/context-updated replace — which collapses the section to the new
+   * content (standing sections are compaction-immune by construction, and
+   * hot sections render LAST in the standing prefix, so an update busts only
+   * its own prompt-cache suffix). The sync appends ONLY on a real change —
+   * it reads each agent's current section first, and a deleted AGENTS.md
+   * supersedes with a tombstone rather than lingering forever. The
+   * idempotency key is unique per TRANSITION (content hash + the occurrence
+   * it replaces): redeliveries dedupe, reverting to earlier content still
+   * supersedes, and an edited wrapper can never reuse a key with a different
+   * body. An op event never wakes an agent by itself. This content rides
+   * every LLM request of every agent — keep AGENTS.md lean. (Known narrow
+   * race: an agent born while a commit's fan-out is running can end up one
+   * version behind until the next AGENTS.md change.)
    */
   async #syncAgentsMdContext(agentPaths: string[]): Promise<void> {
     if (agentPaths.length === 0) return;
@@ -80,23 +83,15 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       agentPaths.map(async (path) => {
         const agent = itx.agents.get(path);
         const snapshot = await agent.processor.snapshot();
-        const slot = snapshot.state.contextItems.findLast(
-          (item) => item.payload.key === "config/agents-md",
+        const section = snapshot.state.standingSections.find(
+          (candidate) => candidate.sectionId === "config/agents-md",
         );
+        const slot = section?.occurrences.at(-1);
         if (slot?.payload.content === content) return;
         await agent.append({
-          type: "events.iterate.com/agents/context-added",
-          idempotencyKey: `iterate/config/agents-md:${hash}:after-${slot?.offset ?? 0}`,
-          payload: {
-            content,
-            key: "config/agents-md",
-            llmRequestPolicy: { behaviour: "dont-trigger-request" },
-            // SYSTEM role on purpose: compaction keeps keyed system facts
-            // (collapsed to the latest occurrence) — a developer item would
-            // be dropped at the first compaction, and the unchanged-content
-            // re-sync would then dedupe against the birth append forever.
-            role: "system",
-          },
+          type: "events.iterate.com/agents/context-updated",
+          idempotencyKey: `iterate/config/agents-md:${hash}:after-${slot?.offset || 0}`,
+          payload: { op: "replace", selector: "#config/agents-md", content },
         });
       }),
     );
@@ -148,13 +143,20 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     return [
       ...(await this.#promptSupersession()),
       {
-        // An illustrative standing tweak — replace or delete freely; it
-        // exists to show the shape of project-authored agent personality.
+        // An illustrative standing SECTION — replace it later with
+        // { op: "replace", selector: "#config/house-style", content } on an
+        // agents/context-updated event, or delete it; it exists to show the
+        // shape of project-authored agent personality.
         type: "events.iterate.com/agents/context-added" as const,
-        idempotencyKey: "iterate/config/house-style:v1",
+        idempotencyKey: "iterate/config/house-style:v2",
         payload: {
-          content: "House style: write all responses in all-lowercase.",
-          key: "config/house-style",
+          content: "",
+          segments: [
+            {
+              sectionId: "config/house-style",
+              content: "House style: write all responses in all-lowercase.",
+            },
+          ],
           llmRequestPolicy: { behaviour: "dont-trigger-request" as const },
           role: "system" as const,
         },
@@ -162,12 +164,16 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     ];
   }
 
-  /** prompts/agent-system-prompt.md as the agent's system prompt. Appended
-   * UNCONDITIONALLY rather than read-compared against the agent's current
-   * slot — a snapshot at this moment may predate the processor reducing
-   * the birth batch, and an unforked file is byte-identical to the
-   * platform's slot, so the append lands in the same uncovered keyed slot
-   * and replaces in place: free when unforked, a supersession when forked. */
+  /** prompts/agent-system-prompt.md as the agent's system prompt, parsed at
+   * append time into standing sections (`<section id="...">` tags are the
+   * authoring syntax; untagged content lands in the umbrella
+   * `agent/system-prompt` section, which supersedes the whole platform
+   * prompt). Appended UNCONDITIONALLY rather than read-compared against the
+   * agent's current sections — a snapshot at this moment may predate the
+   * processor reducing the birth batch, and an unforked file parses to
+   * segments byte-identical to the platform's birth append, so each section
+   * collapses to identical content: free when unforked, a supersession when
+   * forked. Fork ONE section's content and only that section changes. */
   async #promptSupersession() {
     const file = await this.itx.repo.readFile({ path: "prompts/agent-system-prompt.md" });
     if (file === null) return [];
@@ -190,10 +196,13 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     return [
       {
         type: "events.iterate.com/agents/context-added" as const,
-        idempotencyKey: `iterate/config/agent-system-prompt:${hash}`,
+        idempotencyKey: `iterate/config/agent-system-prompt-segments:${hash}`,
         payload: {
-          content,
-          key: "agent/system-prompt",
+          content: "",
+          segments: parsePromptSections({
+            content,
+            fallbackSectionId: "agent/system-prompt",
+          }),
           llmRequestPolicy: { behaviour: "dont-trigger-request" as const },
           role: "system" as const,
         },
