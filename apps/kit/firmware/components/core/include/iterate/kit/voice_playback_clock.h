@@ -1,0 +1,112 @@
+#ifndef ITERATE_KIT_VOICE_PLAYBACK_CLOCK_H
+#define ITERATE_KIT_VOICE_PLAYBACK_CLOCK_H
+
+#include <stdbool.h>
+#include <stdint.h>
+
+#include "iterate/kit/voice_device_profile.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/*
+ * Shared playout-clock policy; it owns no ring, clock, task, or audio device.
+ *
+ * The producer decides what to queue — which is now nothing at all, because
+ * the sender paces the answer and marks the chunk that replaces one.  This
+ * module answers the separate realtime question at each 20 ms sink tick: wait
+ * for opening prefill, play, conceal a mid-answer hole, or discard one late
+ * frame to bound excessive backlog.  That question is about occupancy, which
+ * is local to the consumer and knowable nowhere else.
+ *
+ * There was a fifth answer, DROP_DEBT: one frame discarded per frame
+ * concealed, so concealment could not permanently add its own duration to
+ * playout lag.  Nothing ever incurred the debt — `drop_debt_frames` was only
+ * ever zeroed and decremented, never incremented — so the branch, its counter
+ * and the five device arms that read it were unreachable from the day they
+ * were written.  DROP_CATCHUP is what actually bounds lag.
+ *
+ * One playback owner mutates this structure.  Calls are allocation-free and
+ * non-blocking; `now_ms` is monotonic milliseconds and `queued_bytes` excludes
+ * the candidate frame already removed from the ring.
+ */
+struct iterate_kit_voice_playback_clock {
+  bool priming;
+  bool answer_done;
+  uint64_t last_write_ms;
+  uint64_t starve_at_ms;
+};
+
+enum iterate_kit_voice_playback_action {
+  ITERATE_KIT_VOICE_PLAYBACK_WAIT = 0,
+  ITERATE_KIT_VOICE_PLAYBACK_PLAY,
+  ITERATE_KIT_VOICE_PLAYBACK_CONCEAL,
+  ITERATE_KIT_VOICE_PLAYBACK_DROP_CATCHUP,
+};
+
+void iterate_kit_voice_playback_clock_init(
+    struct iterate_kit_voice_playback_clock *clock);
+void iterate_kit_voice_playback_clock_reprime(
+    struct iterate_kit_voice_playback_clock *clock);
+void iterate_kit_voice_playback_clock_answer_done(
+    struct iterate_kit_voice_playback_clock *clock);
+
+/** Returns true exactly once when new audio proves a recent starve audible. */
+bool iterate_kit_voice_playback_clock_audio_arrived(
+    struct iterate_kit_voice_playback_clock *clock, uint64_t now_ms);
+
+/**
+ * How far behind its own timeline an answer has fallen.
+ *
+ * `emitted_ms` is the audio actually handed to the speaker so far, which is
+ * what the timeline is made of. Counting CALLS instead of milliseconds made a
+ * short read — the tail of an answer, or any partial the ring hands back —
+ * advance the timeline by a full frame it had not played, so `due` ran ahead
+ * of the audio and lag read LOW exactly when playback was starving.
+ *
+ * `started_ms` of zero means this is the first frame, and the answer is by
+ * definition on time.
+ *
+ * Shared rather than written twice because both targets need exactly this
+ * arithmetic and one of them getting it subtly different is how a metric ends
+ * up meaning two things — which has already cost this project a night.
+ */
+static inline uint32_t iterate_kit_voice_playout_lag_ms(
+    uint64_t started_ms, uint32_t emitted_ms, uint64_t now_ms) {
+  const uint64_t due = started_ms + emitted_ms;
+  if (started_ms == 0U || now_ms <= due) return 0U;
+  return (uint32_t)(now_ms - due);
+}
+
+/** Whether the owner should remove a frame from the ring on this iteration. */
+bool iterate_kit_voice_playback_clock_ready(
+    struct iterate_kit_voice_playback_clock *clock,
+    uint32_t queued_bytes);
+
+/** Decide a dry sink tick after playback has left priming. */
+enum iterate_kit_voice_playback_action
+iterate_kit_voice_playback_clock_empty(
+    struct iterate_kit_voice_playback_clock *clock, uint64_t now_ms);
+
+/**
+ * Decide what to do with one whole frame removed from the ring.
+ *
+ * `lag_ms` is how far behind its own timeline this answer has fallen — frame
+ * N belongs 20N ms after the first one played, and this is the gap between
+ * that and now. It is the caller's to measure because only the caller knows
+ * when a frame actually reached the speaker; it is the clock's to act on
+ * because dropping a frame is a playout decision.
+ */
+enum iterate_kit_voice_playback_action
+iterate_kit_voice_playback_clock_frame(
+    struct iterate_kit_voice_playback_clock *clock,
+    uint32_t queued_bytes,
+    uint32_t lag_ms,
+    uint64_t now_ms);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* ITERATE_KIT_VOICE_PLAYBACK_CLOCK_H */

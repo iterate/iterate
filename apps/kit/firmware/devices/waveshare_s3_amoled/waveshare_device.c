@@ -1,0 +1,442 @@
+/*
+ * Waveshare ESP32-S3 Touch AMOLED 1.8 — what makes this board this board.
+ *
+ * The program it runs is components/voice/src/voice_loop.c, and it is the same
+ * program the other three run. What is left here is the hardware: an AMOLED
+ * panel with a face on it, two buttons, an ES8311 with a class-D amplifier
+ * whose DMA ring this file accounts for, and the twelve health counters those
+ * three produce.
+ *
+ * Turn taking is MANUAL: no VAD anywhere. BOOT toggles the call, PWR is held
+ * while speaking. That is a FACT below rather than code, but the reason is
+ * physical and belongs with the hardware: this board has no AEC reference, so
+ * the only way the speaker is never live into an open microphone is for the
+ * microphone to be shut unless somebody is holding it open.
+ *
+ * Opening the USB console resets this board, which is why `health()` exists
+ * and why the stats line is the instrument of record.
+ */
+#include <stdio.h>
+#include <string.h>
+
+#include "esp_timer.h"
+
+#include "iterate/kit/audio_processor.h"
+#include "iterate/kit/devices/waveshare_s3_amoled.h"
+#include "capnweb/capnweb.h"
+#include "iterate/kit/session_grammar.h"
+#include "iterate/kit/voice/loop.h"
+#include "iterate/kit/voice_device_profile.h"
+
+#include "waveshare_audio.h"
+#include "waveshare_avatar.h"
+#include "waveshare_buttons.h"
+#include "waveshare_display.h"
+
+/*
+ * The baked UI sounds: the wake chime (the official Home Assistant Voice PE
+ * press asset, trimmed to its audible body — see assets/make-sounds.py for
+ * why an open microphone with no AEC makes the full ring a cost) and the
+ * "call ended" announcement, 16 kHz mono PCM16LE in .rodata. Included here
+ * because the COMPOSITION decides what a gesture sounds like; the audio
+ * driver only knows how to play PCM it is handed.
+ */
+#include "assets/waveshare_sounds_generated.inc"
+
+/*
+ * The session the two buttons speak, and mirrors of the loop's two view
+ * facts the grammar classifies against, because `poll` runs before the
+ * pass's view exists. The machine is components/core's shared session
+ * grammar; this file only wires gestures to it and its answers to the
+ * loop's intent seams.
+ */
+static struct {
+  struct iterate_kit_session session;
+  bool call_active;
+  bool wants_call;
+} session_state;
+
+static bool start(void *context, struct iterate_kit_board_audio *out) {
+  (void)context;
+  /*
+   * Display first: its bring-up pulses the board's shared reset lines (the
+   * panel, the touch controller and their neighbours hang off one TCA9554),
+   * and doing that after the codec is configured would reset the codec.
+   */
+  if (!waveshare_display_init()) return false;
+  if (!waveshare_audio_init()) return false;
+  (void)waveshare_buttons_init();
+  out->codec = waveshare_audio_codec();
+  out->processor = iterate_kit_audio_processor_passthrough();
+  return true;
+}
+
+/*
+ * `button.press()` / `button.end()` — the two physical buttons, injectable.
+ * They set the same pending latches the fingers do, so the handler path is
+ * ONE path and the loop's button audit records both alike.
+ */
+static const char *const button_press_path[] = {"button", "press"};
+static const char *const button_end_path[] = {"button", "end"};
+
+static enum capnweb_status button_press(
+    void *context, const struct capnweb_call *call, struct capnweb_reply *reply) {
+  (void)context;
+  (void)call;
+  waveshare_buttons_inject_upper();
+  return capnweb_reply_set_boolean(reply, true);
+}
+
+static enum capnweb_status button_end(
+    void *context, const struct capnweb_call *call, struct capnweb_reply *reply) {
+  (void)context;
+  (void)call;
+  waveshare_buttons_inject_lower();
+  return capnweb_reply_set_boolean(reply, true);
+}
+
+static size_t modules(
+    void *context, struct iterate_kit_module *out, size_t capacity) {
+  static const struct iterate_kit_method board_methods[] = {
+    {button_press_path, 2U, button_press},
+    {button_end_path, 2U, button_end},
+  };
+  (void)context;
+  if (capacity < 1U) return 0U;
+  out[0] = (struct iterate_kit_module){
+    .methods = board_methods,
+    .method_count = sizeof(board_methods) / sizeof(board_methods[0]),
+    .context = NULL,
+    .close = NULL,
+    .session_ended = NULL,
+  };
+  return 1U;
+}
+
+static void present(
+    void *context, const struct iterate_kit_voice_view *view) {
+  (void)context;
+  /* Mirrored for `poll`, which classifies the session before this pass's
+   * view exists — one poll of lag, invisible at the loop's cadence. */
+  session_state.call_active = view->call_active;
+  session_state.wants_call = view->wants_call;
+  waveshare_display_present(view);
+  /*
+   * Let the face's delay line drain on this task, which is the only one that
+   * writes to the analyzer. Without it the last 90ms of every answer would
+   * never be animated and the mouth would stop open — see waveshare_avatar.h.
+   * It rides `present` because `present` is the once-per-pass call the loop
+   * already makes, and a second op for "tick me" would have said nothing the
+   * first one does not.
+   */
+  waveshare_avatar_set_call_active(view->call_active);
+  waveshare_avatar_set_listening(view->listening);
+  waveshare_avatar_tick();
+}
+
+static void poll(void *context, struct iterate_kit_voice_intent *out) {
+  (void)context;
+  waveshare_buttons_poll();
+  /*
+   * THE BUTTONS MEAN WHAT THE SESSION SAYS THEY MEAN — the shared grammar
+   * in iterate/kit/session_grammar.h, push-to-talk posture. The upper
+   * button is both the call control and the talk hold: its press edge wakes
+   * from idle (`tap_wakes` — which is also what keeps the injected
+   * button.press() a wake, since injection raises only the edge, never the
+   * level) and its level is the microphone, but the press must NOT end the
+   * session (`tap_ends` false) or every turn would begin by hanging up. The
+   * lower button is the dedicated end (`end_press`), the one gesture whose
+   * only meaning is hang up. The grammar's chime edges render through the
+   * baked sounds: the wake chime (trimmed — the wake gesture opens the
+   * microphone on a board with no AEC, see assets/make-sounds.py) and the
+   * "call ended" announcement on every session's exit. What the machine
+   * fixes over the raw edges: an upper hold begun during the teardown no
+   * longer reopens the call the lower button just ended (ENDING absorbs
+   * it), and an idle lower press no longer minted a phantom end.
+   */
+  struct iterate_kit_session_actions actions;
+  const struct iterate_kit_session_poll gestures = {
+    .tap = waveshare_buttons_take_upper_press(),
+    .held = waveshare_buttons_upper_held(),
+    .end_press = waveshare_buttons_take_lower_press(),
+    .wants_call = session_state.wants_call,
+    .call_active = session_state.call_active,
+    .push_to_talk = true,
+    .tap_wakes = true,
+    .tap_ends = false,
+    .now_ms = (uint64_t)(esp_timer_get_time() / 1000),
+  };
+  iterate_kit_session_step(&session_state.session, &gestures, &actions);
+  out->start_call = actions.start_call;
+  out->end_call = actions.end_call;
+  out->talk_held = actions.talk_held;
+  /* End before wake: play_sound replaces, so if one poll carries both
+   * edges the newer intent — the wake — is the one heard. */
+  if (actions.end_chime) {
+    waveshare_audio_play_sound(
+        waveshare_sound_chime_ended, sizeof(waveshare_sound_chime_ended));
+  }
+  if (actions.wake_chime) {
+    waveshare_audio_play_sound(
+        waveshare_sound_chime_press, sizeof(waveshare_sound_chime_press));
+  }
+}
+
+static void phase(void *context, enum iterate_kit_voice_phase phase_value) {
+  (void)context;
+  switch (phase_value) {
+    case ITERATE_KIT_VOICE_PHASE_ARRIVED:
+      waveshare_audio_amplifier(true);
+      break;
+    case ITERATE_KIT_VOICE_PHASE_FEEDING:
+      waveshare_audio_dma_watch(true);
+      break;
+    case ITERATE_KIT_VOICE_PHASE_WAITING:
+      waveshare_audio_dma_watch(false);
+      break;
+    case ITERATE_KIT_VOICE_PHASE_DRAINING:
+      waveshare_audio_dma_draining();
+      waveshare_audio_dma_watch(false);
+      break;
+    case ITERATE_KIT_VOICE_PHASE_FLUSHED:
+      /*
+       * DISARM BEFORE DECLARING, not after. The loop calls this before it
+       * throws the audio away; doing the two in the other order leaves a
+       * window in which the device's own intentional cut is recorded as
+       * listener-visible starvation.
+       */
+      waveshare_audio_dma_watch(false);
+      waveshare_audio_note_flush();
+      break;
+    case ITERATE_KIT_VOICE_PHASE_QUIET:
+      /*
+       * Not while the board's own voice is mid-word: the idle powerdown fires
+       * 1.5 s after the last stream write, which is exactly when "call ended"
+       * is playing. QUIET is re-raised every idle pass, so the amplifier
+       * still drops on the first pass after the sound finishes.
+       */
+      if (!waveshare_audio_sound_active()) waveshare_audio_amplifier(false);
+      break;
+  }
+}
+
+static void observe_playout(
+    void *context, const int16_t *pcm, size_t samples) {
+  (void)context;
+  /*
+   * The mouth, from audio the DAC has accepted rather than audio that
+   * arrived. This is the only place on the device where those two are the
+   * same thing — see waveshare_avatar.h for what the delay line does with it.
+   */
+  waveshare_avatar_observe_playout(pcm, samples);
+}
+
+static void observe_answer(
+    void *context, const struct iterate_kit_voice_answer_note *note) {
+  (void)context;
+  switch (note->kind) {
+    case ITERATE_KIT_VOICE_ANSWER_ADMITTED:
+      /* Counted only for frames the playout admitted: the viseme ledger must
+       * see exactly the samples the analyzer will eventually be fed. */
+      waveshare_avatar_note_accepted(note->answer, note->sample_count);
+      break;
+    case ITERATE_KIT_VOICE_ANSWER_ABANDONED:
+      waveshare_avatar_note_abandoned();
+      /*
+       * The mouth track dies with the audio it was scheduled against: a mouth
+       * saying words nobody will hear is the exact lie this lane exists to
+       * avoid. Its intake was unfed for a while — the `viseme` event was
+       * deleted before the state that replaced it was wired — and the queue
+       * and this reset are the half that survived that gap.
+       */
+      waveshare_avatar_viseme_reset();
+      break;
+    case ITERATE_KIT_VOICE_ANSWER_VISEME:
+      /*
+       * From the processor's runtime bag rather than an event, and in the
+       * same coordinates the event used: a 0-14 shape at a sample offset
+       * inside `answer`. The queue schedules it against audio the DAC has
+       * actually accepted, so a shape whose answer was abandoned above is
+       * already gone by the time it would have played.
+       */
+      waveshare_avatar_note_viseme(
+          note->answer, note->offset_samples, note->viseme, note->confidence);
+      break;
+  }
+}
+
+static enum iterate_kit_status set_volume(
+    void *context, uint8_t percent, uint8_t *applied) {
+  (void)context;
+  return waveshare_audio_set_volume(percent, applied);
+}
+
+static uint8_t volume(void *context) {
+  (void)context;
+  return waveshare_audio_volume();
+}
+
+/*
+ * The twelve counters that are this board's hardware rather than the loop's
+ * state. Same `,"name":value` shape as the shared table, and the same rule: a
+ * field that does not fit returns 0 and the whole stats line is dropped,
+ * because a truncated document is not a shorter one.
+ */
+static size_t health(void *context, char *out, size_t capacity) {
+  struct field {
+    const char *name;
+    uint32_t value;
+  };
+  const struct field fields[] = {
+    {"codecCaptureOverruns", waveshare_audio_capture_overruns()},
+    {"codecCaptureFailures", waveshare_audio_capture_driver_failures()},
+    /*
+     * NOT A STARVATION MEASURE — an epoch-relative ledger deficit, kept for
+     * diagnosis and named so nobody gates on it again.
+     *
+     * The ISR credits audio per feeding epoch and debits a descriptor per send.
+     * An intentional cut discards the software buffer but NOT the DMA ring, so
+     * the ring keeps sending descriptors credited in the PREVIOUS epoch while
+     * the re-arm has reset the ledger to zero. Measured across one barge-in:
+     * written fell 380ms -> 20ms and eleven such descriptors arrived; they were
+     * charged to dmaOpening that time and to this counter (+4, +2) on an
+     * earlier run, differing only in how much new audio had been credited when
+     * they landed. The same physical event under two names is not a gate.
+     *
+     * spkStarvedMs is the authoritative one: wall-clock lateness against an
+     * absolute audio-empty deadline, which stayed at 0 through both cuts.
+     */
+    {"dmaLedgerDeficit", waveshare_audio_dma_underruns()},
+    {"dmaOpening", waveshare_audio_dma_underruns_opening()},
+    /* Normal answer-end drain, kept apart from the ledger deficit on purpose. */
+    {"dmaDraining", waveshare_audio_dma_sends_draining()},
+    /* The task-side starvation measure: ms the ring was empty, and how often. */
+    {"spkStarvedMs", waveshare_audio_starved_ms()},
+    {"spkStarveEvents", waveshare_audio_starve_events()},
+    {"codecPlaybackFailures", waveshare_audio_playback_driver_failures()},
+    /*
+     * Worth publishing because the lower button's I2C read deliberately fails
+     * RELEASED, which makes a button that has quietly stopped working look
+     * exactly like a user who has stopped pressing it.
+     */
+    {"lowerReadFailures", waveshare_buttons_lower_read_failures()},
+    /*
+     * THE FACE, AND THE ONE NUMBER THAT SAYS IT IS ALIVE.
+     *
+     * `faceFrames` counts completed analysis windows — 100 a second while
+     * audio plays. A mouth that has stopped moving is either this number
+     * standing still or the audio never arriving, and nothing on the screen
+     * tells those apart. The frozen-pose bug was diagnosed from source because
+     * there was no counter to look at; there is one now.
+     */
+    {"faceFrames", waveshare_avatar_frames_analysed()},
+    {"faceDropped", waveshare_avatar_dropped_samples()},
+    {"faceRenderFails", waveshare_avatar_render_failures()},
+  };
+  size_t used = 0U;
+  size_t index;
+  (void)context;
+  for (index = 0U; index < sizeof(fields) / sizeof(fields[0]); index++) {
+    const int written = snprintf(
+        out + used,
+        capacity - used,
+        ",\"%s\":%u",
+        fields[index].name,
+        (unsigned int)fields[index].value);
+    if (written <= 0 || (size_t)written >= capacity - used) return 0U;
+    used += (size_t)written;
+  }
+  return used;
+}
+
+static const struct iterate_kit_board_ops ops = {
+  .start = start,
+  .present = present,
+  .poll = poll,
+  .phase = phase,
+  .capture_meta = NULL,
+  /* Full duplex by policy rather than by hardware: see `turns` below. */
+  .capture_fence = NULL,
+  .playout_fenced_out = NULL,
+  .observe_playout = observe_playout,
+  .observe_answer = observe_answer,
+  /* Speaker, health, conversation control and push-to-talk are the loop's. */
+  .modules = modules,
+  .health = health,
+};
+
+static const struct iterate_kit_board_facts facts = {
+  /*
+   * Under /agents/voice/ because the conversation's stream IS its agent: the
+   * voice half and the thinking half are one identity at one path. A default
+   * outside /agents/ gave the device a conversation with no agent behind it.
+   * And one per BOARD: while every device defaulted to "/agents/voice/device",
+   * three boards on one stream produced two call-started for a single press
+   * and an answer that never reached anybody.
+   */
+  .stream_path = "/agents/voice/waveshare",
+  .client_path = "/clients/waveshare",
+  .conversation_id = "wsdev",
+  .greeting = "Hi, I am your Iterate device. What can I do for you?",
+  .instructions =
+      "Waveshare AMOLED: a voice endpoint with a touch screen showing a face. "
+      "The upper button is push-to-talk; the lower button hangs up. "
+      "pushToTalk.start() is the whole gesture: it opens a call if none is up "
+      "and holds the microphone open, exactly as pressing the upper button "
+      "does; pushToTalk.stop() commits the turn and asks for an answer. It has "
+      "no echo cancellation, so it only listens while talk is held. "
+      "conversation.start() opens a call WITHOUT holding the microphone, for "
+      "when you want it to greet you first; conversation.end() hangs up. "
+      "health() returns this device's full diagnostics — start there when it "
+      "seems unwell. "
+      "speaker.setVolume({percent}) sets how loud it plays, 0-100, clamped to "
+      "a ceiling this board has a measured reason for; speaker.volume() reads "
+      "it back. Both answer {percent,ceiling}. "
+      "Audio and lifecycle events share this stream connection.",
+  .peer_description =
+      "{\"instructions\":\"Waveshare voice endpoint. "
+      "pushToTalk.start() opens a call and holds the microphone open the way "
+      "the upper button does, and pushToTalk.stop() commits the turn; "
+      "conversation.start() opens a call without holding the microphone and "
+      "conversation.end() hangs up. speaker.setVolume({percent}) sets how loud "
+      "it plays, 0-100; it clamps to a ceiling this board has a measured "
+      "reason for and answers with {percent,ceiling}, which speaker.volume() "
+      "also returns. health() returns this device's full diagnostics "
+      "document.\",\"children\":{}}",
+  .talk_hint = "hold the upper button to talk",
+  .call_hint = "press upper to call",
+  .speaker = {
+    /*
+     * TURN IT UP. Every board here shipped at a volume somebody measured once
+     * and nobody could change without a reflash, and all four were reported as
+     * too quiet. The driver keeps its ceiling; the knob is a call away.
+     */
+    .context = NULL,
+    .set_volume = set_volume,
+    .volume = volume,
+    .ceiling = WAVESHARE_AUDIO_VOLUME_CEILING,
+  },
+  /*
+   * Two thirds of the 90 ms I2S DMA ring (6 descriptors x 240 frames at
+   * 16 kHz), so a late frame is absorbed by the hardware cushion rather than
+   * concealed, while the remaining third still bounds how long the playback
+   * step can sit before the ring genuinely empties.
+   */
+  .speaker_dry_wait_ms = 60,
+  .processing_frame_samples = ITERATE_KIT_VOICE_FRAME_SAMPLES,
+  /* This codec hands over one whole 20 ms frame per read, so the bridge's
+   * three cadences are all 320 and it degenerates to a pass-through. */
+  .capture_chunk_samples = ITERATE_KIT_VOICE_FRAME_SAMPLES,
+  .capture_stack_bytes = 4096,
+  .turns = ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK,
+  /*
+   * The codec first. This board's panel and codec share reset lines, so the
+   * order inside `start` is fixed — and its bring-up is fast, so there is
+   * nothing for the radio to overlap with.
+   */
+  .radio_before_codec = false,
+};
+
+void iterate_kit_waveshare_s3_amoled_run(void) {
+  iterate_kit_voice_loop_run(&ops, &facts, NULL);
+}

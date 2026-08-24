@@ -1,0 +1,8 @@
+# Everything under characters/*/generated/ is derived from avatar.json +
+# source PNGs; `avatar_pipeline.py build`/`publish` recreate it.
+characters/*/generated/
+__pycache__/
+
+# Multi-megabyte character source scans live outside git; fetch or redraw
+# them before running the pipeline. The committed avatar.json is the spec.
+characters/*/source/

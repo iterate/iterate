@@ -87,6 +87,7 @@ type CapabilityHostStreamStub = {
 export class CapabilityProviderPagerRelay {
   readonly #durableObject: CapabilityHostStreamStub;
   readonly #waitUntil: (promise: Promise<unknown>) => void;
+  readonly #onPagerLost: (() => void) | undefined;
   readonly #mounts = new Map<number, MountedProvider>();
   #connectedAtOffset: number | undefined;
   #operationTail = Promise.resolve();
@@ -96,6 +97,17 @@ export class CapabilityProviderPagerRelay {
     env: Env;
     scope: { path: string; projectId: string };
     waitUntil(promise: Promise<unknown>): void;
+    /**
+     * The Pager died from the FAR side while live mounts were riding it.
+     *
+     * This is the mount invariant's carrier: whatever killed the Durable
+     * Object's half of the chain (DO reset, deploy, eviction), the mounts are
+     * gone and the provider client is now silently unreachable — so the
+     * session owner uses this to tear the client's whole transport down and
+     * let its reconnect loop re-dial and re-mount. Never fired by our own
+     * deliberate closes (revoke of the last mount, failed pager dial).
+     */
+    onPagerLost?: () => void;
   }) {
     const path = normalizePath(input.scope.path);
     // Safe: the STREAM stub's generated RPC surface carries exactly these
@@ -107,6 +119,7 @@ export class CapabilityProviderPagerRelay {
       DurableObjectNameCodec.stringify({ path, projectId: input.scope.projectId }),
     ) as unknown as CapabilityHostStreamStub;
     this.#waitUntil = input.waitUntil;
+    this.#onPagerLost = input.onPagerLost;
   }
 
   provide(input: LiveProvideInput): Promise<CapabilityProviderPagerProvision> {
@@ -210,12 +223,28 @@ export class CapabilityProviderPagerRelay {
 
   #enqueuePagerClosed(pager: WebSocket): void {
     const task = this.#enqueue(() => {
+      // Every deliberate close (#retireMount's last-mount close, #ensurePager's
+      // failed-dial close) nulls #pager BEFORE closing, so reaching this body
+      // means the FAR side hung up on live mounts.
       if (this.#pager !== pager) return;
       this.#pager = undefined;
       this.#connectedAtOffset = undefined;
+      const hadMounts = this.#mounts.size > 0;
       for (const providedAtOffset of [...this.#mounts.keys()]) {
         this.#retireMount(providedAtOffset);
       }
+      /*
+       * MAXIMUM TEARDOWN, DELIBERATELY. The alternative — quietly re-dialing
+       * the Pager and re-providing right here — would keep the client's
+       * socket up, but it forks the recovery story into two paths with two
+       * sets of bugs, and the client MUST own a robust
+       * reconnect-and-re-mount loop anyway (its socket dies hourly to
+       * isolate churn). One recovery path, exercised constantly, beats a
+       * rarely-run special case: kill the whole session and let that one
+       * loop do its job. Revisit re-dialing here only if the full redial
+       * round-trip ever becomes too dear.
+       */
+      if (hadMounts) this.#onPagerLost?.();
     });
     this.#waitUntil(task);
   }

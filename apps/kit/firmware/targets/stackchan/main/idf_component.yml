@@ -1,0 +1,12 @@
+dependencies:
+  capnweb:
+    git: https://github.com/iterate/capnweb.git
+    path: c
+    version: aee32b391063c4f5baf0aec852f38851eeeed1d9
+  # The tuned VOIP AEC engine (DiOS/athena-signal) the processor wraps.
+  espressif/esp-sr: "==2.4.7"
+  # tjpgd wrapper for screen.show()'s fetched images. Already here
+  # transitively through esp32-camera; named directly because the device
+  # component includes jpeg_decoder.h on its own account.
+  espressif/esp_jpeg: "==1.3.1"
+  idf: ">=5.4"

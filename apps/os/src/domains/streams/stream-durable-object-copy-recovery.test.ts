@@ -794,8 +794,11 @@ describe("StreamDurableObject reconciliation recovery", () => {
       context.setKv("stateVersion", -1);
 
       new StreamDurableObject(context.ctx, env);
+      // The trailing colon pins the cause suffix: everything downstream of
+      // this error (console, RPC, observability) drops `error.cause`, so the
+      // zod issue must already be inside the message.
       await expect(context.waitForInitialization()).rejects.toThrow(
-        `failed to replay core event at path "${SOURCE_PATH}", offset ${woken!.offset}, type "events.iterate.com/stream/woken", state version ${CORE_STATE_VERSION}`,
+        `failed to replay core event at path "${SOURCE_PATH}", offset ${woken!.offset}, type "events.iterate.com/stream/woken", state version ${CORE_STATE_VERSION}: `,
       );
 
       // Initialization never promoted a partial reduction or authored a new

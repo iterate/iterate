@@ -87,3 +87,12 @@ experiments/archil-node-modules/disk-config.json
 
 # Local alchemy-era dev artifacts (local dev secrets + miniflare state); never commit.
 .alchemy/
+
+# Voicelab run evidence: audio both directions plus metrics, one dir per run.
+.voicelab-runs/
+
+# The host CLI's default playback file: an artifact of running it, not source.
+iterate-kit-playback.wav
+
+# Whisper models: build-tool input, fetched on demand. 141MB — over GitHub's limit.
+apps/kit/firmware/tools/models/

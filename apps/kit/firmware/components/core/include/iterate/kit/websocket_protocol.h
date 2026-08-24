@@ -1,0 +1,25 @@
+#ifndef ITERATE_KIT_WEBSOCKET_PROTOCOL_H
+#define ITERATE_KIT_WEBSOCKET_PROTOCOL_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+enum iterate_kit_websocket_opcode {
+  ITERATE_KIT_WEBSOCKET_CONTINUATION = 0x0,
+  ITERATE_KIT_WEBSOCKET_TEXT = 0x1,
+  ITERATE_KIT_WEBSOCKET_BINARY = 0x2,
+  ITERATE_KIT_WEBSOCKET_CLOSE = 0x8,
+  ITERATE_KIT_WEBSOCKET_PING = 0x9,
+  ITERATE_KIT_WEBSOCKET_PONG = 0xa,
+};
+
+enum {
+  ITERATE_KIT_WEBSOCKET_CONTROL_PAYLOAD_MAX_BYTES = 125,
+};
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

@@ -1,0 +1,11 @@
+# 8 MiB flash (M5StickS3). Offsets match the donor firmware exactly so the
+# ITERKIT1 provisioning blob already at 0x210000 on the physical unit
+# survives a plain app flash; --erase-all wipes it (and with it the adopted
+# conversation path in NVS), which looks like the feature failing.
+# Name,     Type, SubType, Offset,   Size,     Flags
+nvs,        data, nvs,     0x9000,   0x6000,
+phy_init,   data, phy,     0xf000,   0x1000,
+ota_0,      app,  ota_0,   0x10000,  0x200000,
+iterate_kit, 0x40, 0x00,   0x210000, 0x1000,
+otadata,    data, ota,     0x211000, 0x2000,
+ota_1,      app,  ota_1,   0x220000, 0x200000,

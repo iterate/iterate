@@ -1,0 +1,10 @@
+# 16 MiB flash (Waveshare ESP32-S3 Touch AMOLED). The stock phone_s3_box_3
+# image keeps its app at 0x100000; flash with --erase-all so this table is
+# the only authority. iterate_kit is the ITERKIT1 provisioning partition.
+# Name,     Type, SubType, Offset,   Size,     Flags
+nvs,        data, nvs,     0x9000,   0x6000,
+phy_init,   data, phy,     0xf000,   0x1000,
+ota_0,      app,  ota_0,   0x10000,  0x400000,
+iterate_kit, 0x40, 0x00,   0x410000, 0x1000,
+otadata,    data, ota,     0x411000, 0x2000,
+ota_1,      app,  ota_1,   0x420000, 0x400000,

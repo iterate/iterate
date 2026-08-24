@@ -286,6 +286,14 @@ export interface ProjectCollection {
    * with it. Callers invoke it through the scope's capability host:
    * `itx.clients.get(path).capabilities.browser.navigate(url)`.
    * Returns the project itx, exactly like `get`.
+   *
+   * THE MOUNT INVARIANT: the reverse teardown holds too. If the platform's
+   * half of the mount dies while this session's socket is healthy (the
+   * Pager closes from the far side — DO reset, deploy, eviction), the
+   * session is closed (4901) rather than left connected-but-unreachable.
+   * A client's job is to stay connected and re-run `connect` on every
+   * reconnect; this guarantees that job is sufficient — an open socket
+   * means a live mount, and mount loss always arrives as a close event.
    */
   connect(
     idOrSlug: string,
@@ -296,6 +304,19 @@ export interface ProjectCollection {
       description: string;
       /** Live capabilities target (an RpcTarget or plain object in the caller's process). */
       capabilities?: unknown;
+      /**
+       * Route the whole dotted path to the target as ONE call instead of
+       * traversing it member by member.
+       *
+       * Required by any client whose capabilities object is a path-building
+       * proxy rather than a material object tree — every microcontroller, and
+       * anything else that answers calls from a static dispatch table. Without
+       * it the host awaits each intermediate member, so `servos.move(...)`
+       * issues an incomplete call at `servos` and never reaches `move`.
+       */
+      flattenNestedPaths?: boolean;
+      /** Optional TypeScript declaration for the mounted surface. */
+      types?: string;
     },
   ): Promise<Project>;
   /**
@@ -3826,11 +3847,20 @@ export type StreamConnectionPing = (
  * (replaced, delivery failure, or explicit close); it rejects when the stream's
  * Durable Object incarnation is gone. Either non-`true` outcome means the
  * owner should open another connection.
+ *
+ * CAUTION ON THE DATA PROPERTIES BELOW. A handle obtained across the worker
+ * relay was measured NOT to materialize `streamMaxOffset` as a number — it is
+ * present inside the Stream DO and can arrive undefined to a remote consumer.
+ * Prefer the delivery batches for offsets: every connection receives an initial
+ * (possibly empty) batch immediately on open, carrying `streamMaxOffset` and
+ * `scannedThroughOffset`, and those are the values to seed a resume cursor
+ * from. A consumer that advances its cursor from the handle can silently
+ * resume at zero.
  */
 export type StreamConnectionHandle = Disposable & {
   /** Stable identity of this live connection. */
   connectionKey: ConnectionKey;
-  /** The stream's max offset when the connection opened. */
+  /** The stream's max offset when the connection opened. See the caution above. */
   streamMaxOffset: number;
   ping(): boolean | Promise<boolean>;
   /** Close this connection; safe to call more than once. */

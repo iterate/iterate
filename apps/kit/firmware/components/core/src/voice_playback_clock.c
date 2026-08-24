@@ -1,0 +1,186 @@
+#include "iterate/kit/voice_playback_clock.h"
+
+#include "iterate/kit/voice_device_profile.h"
+
+#include <stddef.h>
+#include <string.h>
+
+void iterate_kit_voice_playback_clock_init(
+    struct iterate_kit_voice_playback_clock *clock) {
+  if (clock == NULL) return;
+  memset(clock, 0, sizeof(*clock));
+  clock->priming = true;
+}
+
+void iterate_kit_voice_playback_clock_reprime(
+    struct iterate_kit_voice_playback_clock *clock) {
+  if (clock == NULL) return;
+  clock->priming = true;
+  clock->answer_done = false;
+}
+
+void iterate_kit_voice_playback_clock_answer_done(
+    struct iterate_kit_voice_playback_clock *clock) {
+  if (clock != NULL) clock->answer_done = true;
+}
+
+bool iterate_kit_voice_playback_clock_audio_arrived(
+    struct iterate_kit_voice_playback_clock *clock, uint64_t now_ms) {
+  bool underrun = false;
+  if (clock == NULL) return false;
+  /*
+   * An empty ring at response end is healthy.  It becomes an underrun only
+   * when more speech arrives within a second, proving the answer had a hole.
+   */
+  if (clock->starve_at_ms != 0U) {
+    underrun = now_ms - clock->starve_at_ms < 1000U;
+    clock->starve_at_ms = 0U;
+  }
+  clock->answer_done = false;
+  return underrun;
+}
+
+bool iterate_kit_voice_playback_clock_ready(
+    struct iterate_kit_voice_playback_clock *clock,
+    uint32_t queued_bytes) {
+  if (clock == NULL) return false;
+  /*
+   * A FINISHED ANSWER IS ALWAYS READY, however little of it there is.
+   *
+   * Prefill answers "will more arrive in time?", and once the sender has
+   * said the answer is complete the question is settled: nothing more is
+   * coming, so waiting for a threshold that can never be reached is waiting
+   * forever. Without this, every answer SHORTER than the prefill was never
+   * played at all — "Yes, I can hear you clearly" is under a second, and the
+   * larger the prefill the more of the conversation disappears. That failure
+   * is silent at both ends: the model believes it spoke, and the listener
+   * hears nothing.
+   */
+  /*
+   * A finished answer short-circuits the PREFILL WAIT, and nothing else.
+   *
+   * Written as an unconditional `if (answer_done) return true`, this became a
+   * latch: `answer_done` stays set until the dry-tick path clears it, that
+   * path is only reached once a frame has been taken, and a caller that skips
+   * its idle branch because ready() said true never takes one. The speaker
+   * task then span on an empty buffer for the rest of the session - played
+   * and concealed both frozen while frames arrived, no counter moving,
+   * because neither the play path nor the conceal path was ever reached.
+   *
+   * Measured: 0 of 5 journeys, recovering completely on a restart, after the
+   * first answer completed. Scoped to `priming` it does what it was added
+   * for - an answer shorter than the prefill still plays - and stops being a
+   * latch, because once priming is false the flag is irrelevant anyway.
+   */
+  if (clock->priming && clock->answer_done) {
+    clock->priming = false;
+    return true;
+  }
+  if (clock->priming &&
+      queued_bytes < ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES) {
+    return false;
+  }
+  clock->priming = false;
+  return true;
+}
+
+enum iterate_kit_voice_playback_action
+iterate_kit_voice_playback_clock_empty(
+    struct iterate_kit_voice_playback_clock *clock, uint64_t now_ms) {
+  if (clock == NULL) return ITERATE_KIT_VOICE_PLAYBACK_WAIT;
+  if (clock->answer_done ||
+      (clock->last_write_ms != 0U &&
+       now_ms - clock->last_write_ms >
+           ITERATE_KIT_VOICE_SPEAKER_CONCEAL_LIMIT_MS)) {
+    clock->answer_done = false;
+    clock->priming = true;
+    return ITERATE_KIT_VOICE_PLAYBACK_WAIT;
+  }
+  /*
+   * NO DEBT IS INCURRED. Concealing does not put this device behind anything.
+   *
+   * Repaying concealment by dropping a later real frame made sense against a
+   * sender that PACED audio to a schedule: 20ms of inserted silence put
+   * playback 20ms late, and dropping one frame put it back on the clock. That
+   * sender is gone. The whole answer now arrives at once and this device owns
+   * the playout clock, so there is no schedule to be late for — and the debt
+   * became a machine for deleting words.
+   *
+   * Measured on the device, one answer: 298 frames arrived with no loss, no
+   * overflow and no bad frames; 107 of them were dropped to repay 107
+   * concealed frames, and 191 were played. A third of the answer thrown away
+   * to pay for silence nobody asked for. That is exactly the "words clipped
+   * out of the first sentence" a listener reports.
+   *
+   * The honest response to a dry buffer is to play what arrives when it
+   * arrives. The answer finishes a few hundred milliseconds later than it
+   * might have, which nobody notices; a missing word is all anybody notices.
+   */
+  clock->starve_at_ms = now_ms;
+  return ITERATE_KIT_VOICE_PLAYBACK_CONCEAL;
+}
+
+enum iterate_kit_voice_playback_action
+iterate_kit_voice_playback_clock_frame(
+    struct iterate_kit_voice_playback_clock *clock,
+    uint32_t queued_bytes,
+    uint32_t lag_ms,
+    uint64_t now_ms) {
+  const uint32_t queued_ms = queued_bytes / 32U;
+  if (clock == NULL) return ITERATE_KIT_VOICE_PLAYBACK_WAIT;
+  /*
+   * BEHIND ITS OWN TIMELINE, so skip forward until level again.
+   *
+   * SKIP, NOT TRIM. The first version of this dropped one frame in fifty —
+   * 20 ms recovered per second — which is the right shape for trimming slow
+   * clock drift and hopeless against a stall. Measured: 3.1 s of lag, three
+   * frames dropped, 60 ms recovered; at that rate the answer ends long before
+   * the device is level, so it simply stays late for the rest of the call.
+   *
+   * A listener who is behind can only catch up by playing less than arrives,
+   * and doing that gradually means doing it audibly for a long time. Doing it
+   * at once costs one visible cut and then the conversation is live again,
+   * which is what a person actually wants from a voice device: they would
+   * rather lose a syllable than talk to something three seconds in the past.
+   *
+   * The threshold is what keeps this rare — a lag this large only follows a
+   * real stall, and ordinary jitter never reaches it.
+   */
+  /*
+   * ONLY WHILE THERE IS SOMETHING TO SKIP INTO.
+   *
+   * Skipping recovers lag by playing less than arrived, so it is only ever
+   * correct when audio is waiting. With an empty ring the next frame IS the
+   * live edge — discarding it removes speech and recovers nothing, because
+   * the timeline is already as current as the data allows.
+   *
+   * Measured without this guard: 64 of 183 frames skipped, which the listener
+   * hears as the opening of an answer missing. Lag is at its highest exactly
+   * when an answer starts, since the timeline begins at the first frame
+   * played and prefill has already spent its cushion — so an unguarded rule
+   * attacks the first words of every answer, which is precisely the part
+   * nobody can afford to lose.
+   */
+  /*
+   * ONE CATCH-UP RULE, NOT TWO. A second trigger used to sit here, firing on
+   * queue DEPTH past a 9,000 ms high-water mark and dropping one frame every
+   * N — and the paragraphs above are the argument against it, written beside
+   * it: depth cannot tell "the sender is ahead of realtime" from "playback has
+   * stalled", and dropping gradually is hopeless against a stall (3.1 s of lag,
+   * three frames dropped, 60 ms recovered).
+   *
+   * It was also unreachable. voice-agent2 caps the device at
+   * MAX_DEVICE_SPEAKER_BACKLOG_BYTES — 128,000 bytes, 4,000 ms — so 9,000 ms of
+   * backlog required the server's model of this device's memory to be wrong by
+   * more than five seconds. Kept as a backstop against exactly that, it was a
+   * backstop nobody had ever seen fire, which is a comment rather than a
+   * mechanism. If the model does go that wrong, the honest signal is the same
+   * one this function already trusts: lateness against the audio timeline.
+   */
+  if (lag_ms > ITERATE_KIT_VOICE_SPEAKER_LAG_CATCHUP_MS &&
+      queued_ms > ITERATE_KIT_VOICE_FRAME_MS) {
+    return ITERATE_KIT_VOICE_PLAYBACK_DROP_CATCHUP;
+  }
+  clock->last_write_ms = now_ms;
+  return ITERATE_KIT_VOICE_PLAYBACK_PLAY;
+}

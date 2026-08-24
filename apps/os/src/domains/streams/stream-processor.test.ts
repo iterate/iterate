@@ -271,6 +271,48 @@ describe("StreamProcessor provenance stamping", () => {
     }
   }
 
+  /*
+   * A processor that emits BOTH halves: one type it consumes (so the append
+   * loops back through its own subscription) and one it does not. Only the
+   * first can produce a `consumeOwnAppendMs` sample.
+   */
+  const SelfConsumingContract = defineProcessorContract({
+    slug: "test-self-consuming",
+    version: "0.0.1",
+    description: "Emits one type it consumes and one it does not.",
+    stateSchema: z.object({ seen: z.number().default(0) }),
+    events: {
+      "events.iterate.com/test/reflected": {
+        description: "Emitted AND consumed: this one loops back.",
+        payloadSchema: z.object({ id: z.string() }),
+      },
+      "events.iterate.com/test/announced": {
+        description: "Emitted only: nobody hands this back.",
+        payloadSchema: z.object({ id: z.string() }),
+      },
+    },
+    consumes: ["events.iterate.com/test/reflected"],
+    emits: ["events.iterate.com/test/reflected", "events.iterate.com/test/announced"],
+  });
+
+  class SelfConsumingProcessor extends StreamProcessor<typeof SelfConsumingContract> {
+    readonly contract = SelfConsumingContract;
+
+    reflect() {
+      return this.append({
+        type: "events.iterate.com/test/reflected",
+        payload: { id: "reflected" },
+      });
+    }
+
+    announce() {
+      return this.append({
+        type: "events.iterate.com/test/announced",
+        payload: { id: "announced" },
+      });
+    }
+  }
+
   // At-head appends are derived from the whole fold, not one event — the
   // caught-up processing (processEvent under `delivery.caughtUp`) runs them,
   // riding the LAST CONSUMED event of a caught-up batch. That event is the
@@ -312,25 +354,35 @@ describe("StreamProcessor provenance stamping", () => {
     });
   });
 
-  it("self-measured metrics: home appends open the consume-own-append loop; delivery past the committed offset closes it", async () => {
+  /*
+   * `consumeOwnAppendMs` NAMES A LOOP, and only a loop may be reported in it.
+   *
+   * A voice facet published p50 8.7s / p95 12s here against a 24ms append
+   * round trip. Every sample was an `events.iterate.com/voice-agent/spk-frame`
+   * — a type the facet emits fifty times a second and never consumes —
+   * "settled" by the acknowledgement cursor sweeping past it when the person
+   * finally spoke again. The instrument was reporting the pause between two
+   * sentences as the time to see its own append.
+   */
+  it("self-measured metrics: an append of a type it does NOT consume is timed for its round trip alone", async () => {
     const { stream } = recordingNetwork();
     const processor = new EchoProcessor({ stream, ...HOME });
     const { deliver } = drive(processor, stream);
 
     // The trigger makes the processor append its echo (home commits at offset
-    // 1001 in the recording network) plus a sibling copy — only the HOME
-    // append is timed: the sibling never loops back through this subscription.
+    // 1001 in the recording network) plus a sibling copy. `echoed` is emitted
+    // and NOT consumed, so it can never come back through this subscription.
     await deliver({ events: [triggeredEvent(7)], streamMaxOffset: 7 });
     let report = processor.eventConsumptionMetrics.report();
     expect(report.appendRoundTripMs).toMatchObject({ samples: 1 });
-    expect(report.consumeOwnAppendMs).toBeNull(); // echo not delivered back yet
+    expect(report.consumeOwnAppendMs).toBeNull();
     expect(report.batchesIngested).toBe(1);
     expect(report.eventsIngested).toBe(1);
     expect(report.ingestMs).not.toBeNull();
 
-    // A later (non-consumed) event past the committed echo offset advances the
-    // acknowledged cursor through it — the loop closes on real delivery, not
-    // on append.
+    // A later unrelated event advances the acknowledged cursor clean past the
+    // echo's offset. That is the cursor overtaking a row nobody delivered, not
+    // a slow loop, and it must leave the loop metric empty.
     await deliver({
       events: [
         {
@@ -344,8 +396,30 @@ describe("StreamProcessor provenance stamping", () => {
       streamMaxOffset: 1_500,
     });
     report = processor.eventConsumptionMetrics.report();
-    expect(report.consumeOwnAppendMs).toMatchObject({ samples: 1 });
+    expect(report.consumeOwnAppendMs).toBeNull();
     expect(report.appendRoundTripMs).toMatchObject({ samples: 1 });
+  });
+
+  it("self-measured metrics: an append of a CONSUMED type closes the loop when that offset comes back", async () => {
+    const { stream } = recordingNetwork();
+    const processor = new SelfConsumingProcessor({ stream, ...HOME });
+    const { deliver } = drive(processor, stream);
+
+    // Two appends: one the processor will never be handed, one it will.
+    await processor.announce();
+    const [reflected] = await processor.reflect();
+    expect(processor.eventConsumptionMetrics.report()).toMatchObject({
+      appendRoundTripMs: { samples: 2 },
+      consumeOwnAppendMs: null,
+    });
+
+    // One batch that CARRIES the reflected offset while sweeping past the
+    // announcement's: exactly one sample, from the append that looped.
+    await deliver({ events: [reflected!], streamMaxOffset: reflected!.offset });
+    expect(processor.eventConsumptionMetrics.report()).toMatchObject({
+      appendRoundTripMs: { samples: 2 },
+      consumeOwnAppendMs: { samples: 1 },
+    });
   });
 
   it("appendTo lands on the sibling stream with the same stamp, overwriting claims", async () => {

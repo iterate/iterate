@@ -1,0 +1,108 @@
+{
+  "assembly_cell": [400, 400],
+  "assembly_gap": 24,
+  "background": "#ff00ff",
+  "display_name": "Dot Matrix Oracle",
+  "expressions": "canonical11",
+  "flags": ["breathe"],
+  "id": "dot-matrix-oracle",
+  "license": "project-generated",
+  "notes": "AI-assisted original segmented-display robot features, authored for the StackChan black display.",
+  "palette": {
+    "despeckle": false,
+    "locked": ["#06113c", "#075ed6", "#1fa5ff", "#c9fbff"],
+    "max_colors": 4,
+    "variants": [
+      {
+        "background": "#000000",
+        "colors": ["#06113c", "#075ed6", "#1fa5ff", "#c9fbff"],
+        "display_name": "Electric blue on black",
+        "id": "original"
+      }
+    ]
+  },
+  "rig": {
+    "baseline_y": 60,
+    "canvas": [80, 60],
+    "eyes": {
+      "blink": "none",
+      "left": [5, 7, 31, 29],
+      "right": [44, 7, 31, 29]
+    },
+    "composition": {
+      "mode": "features_only",
+      "regions": [
+        [5, 0, 31, 30],
+        [44, 0, 31, 30]
+      ],
+      "transparent_colors": ["#ff00ff"],
+      "transparent_tolerance": 16
+    },
+    "max_body": [80, 58],
+    "mouth": {
+      "box": [25, 51, 30, 8],
+      "erase": false,
+      "source": "isolated"
+    }
+  },
+  "sources": [
+    {
+      "background_tolerance": 96,
+      "grid": [4, 3],
+      "inset": 4,
+      "names": [
+        "neutral",
+        "warm",
+        "joy",
+        "concern",
+        "surprise",
+        "thoughtful",
+        "skeptical",
+        "determined",
+        "sleepy",
+        "excited",
+        "embarrassed",
+        null
+      ],
+      "path": "source/expressions-v1.png",
+      "role": "expression"
+    },
+    {
+      "background_tolerance": 96,
+      "grid": [5, 3],
+      "inset": 4,
+      "names": [
+        "sil",
+        "pp",
+        "ff",
+        "th",
+        "dd",
+        "kk",
+        "ch",
+        "ss",
+        "nn",
+        "rr",
+        "aa",
+        "e",
+        "ih",
+        "oh",
+        "ou"
+      ],
+      "path": "source/mouths-v1.png",
+      "role": "mouth"
+    }
+  ],
+  "targets": [
+    {
+      "canvas": [80, 60],
+      "frame": [160, 120],
+      "framing": "face_fill",
+      "id": "cores3-fine",
+      "catalog_slug": "dot-matrix-oracle",
+      "catalog_name": "Dot Matrix Oracle",
+      "device_themes": ["original"],
+      "max_flash_bytes": 48000,
+      "scale": 2
+    }
+  ]
+}

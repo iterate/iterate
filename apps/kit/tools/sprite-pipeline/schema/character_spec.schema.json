@@ -1,0 +1,329 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "fspp/character_spec.schema.json",
+  "title": "FSPP character spec",
+  "description": "Target-neutral source of truth for one avatar: where the pixels come from, how the sheet is laid out, the rig geometry, palette budget, and device targets. Enforced by fspp/spec.py (the pipeline is dependency-free; this file documents the same contract).",
+  "type": "object",
+  "required": ["schema_version", "id", "source", "layout", "targets"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]*$",
+      "description": "Stable identifier; used in C symbol and file names."
+    },
+    "display_name": { "type": "string" },
+    "license": {
+      "type": "string",
+      "description": "License of the source art. Never feed copyleft or ambiguously licensed sheets to the compiler."
+    },
+    "notes": { "type": "string" },
+    "source": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["sheet", "prompt", "reference"] },
+        "sheet": {
+          "type": "string",
+          "description": "PNG path, relative to this spec file. Required for kind=sheet; for prompt/reference sources run `spritepipe.py brief` first and pass the generated sheet via --sheet."
+        },
+        "prompt": { "type": "string" },
+        "reference": { "type": "string" },
+        "background": {
+          "description": "'auto' detects the modal border color; '#rrggbb' pins it.",
+          "default": "auto",
+          "anyOf": [{ "const": "auto" }, { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" }]
+        },
+        "background_tolerance": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 128,
+          "default": 24,
+          "description": "Max per-channel delta for flood-fill keying from the border."
+        },
+        "pixel_grid": {
+          "description": "'auto' detects the fake-pixel pitch per cell and reconciles a sheet-wide median; 'none' disables snapping; an integer pins the pitch.",
+          "default": "auto",
+          "anyOf": [
+            { "enum": ["auto", "none"] },
+            { "type": "integer", "minimum": 1, "maximum": 64 }
+          ]
+        }
+      }
+    },
+    "layout": {
+      "type": "object",
+      "properties": {
+        "mode": { "enum": ["bands", "boxes"], "default": "bands" },
+        "rows": {
+          "type": "array",
+          "description": "Bands mode: one entry per horizontal band, top to bottom; names map cells left to right.",
+          "items": {
+            "type": "object",
+            "required": ["role", "names"],
+            "properties": {
+              "role": { "enum": ["expression", "mouth"] },
+              "names": {
+                "type": "array",
+                "minItems": 1,
+                "items": { "type": "string" },
+                "description": "Expression rows use canonical slugs (neutral, warm, joy, concern, surprise, thoughtful, skeptical, determined, sleepy, excited, embarrassed); mouth rows use 23-slot vocabulary names (sil, pp, ff, th, dd, kk, ch, ss, nn, rr, aa, e, ih, oh, ou, smile, frown, grin, tongue, pucker, gasp, lateral, smirk)."
+              }
+            }
+          }
+        },
+        "boxes": {
+          "type": "object",
+          "description": "Boxes mode: explicit [x, y, w, h] source rectangles keyed by cell name.",
+          "additionalProperties": {
+            "type": "array",
+            "minItems": 4,
+            "maxItems": 4,
+            "items": { "type": "integer" }
+          }
+        },
+        "row_gap": {
+          "type": "integer",
+          "default": 8,
+          "description": "Empty rows ending a band."
+        },
+        "column_gap": { "type": "integer", "default": 6 },
+        "min_cell_span": {
+          "type": "integer",
+          "default": 8,
+          "description": "Reserved noise floor for future projection modes; band clustering keys off component sizes instead."
+        }
+      }
+    },
+    "rig": {
+      "type": "object",
+      "description": "Canvas-space geometry every bank registers against.",
+      "properties": {
+        "canvas": {
+          "type": "array",
+          "items": { "type": "integer" },
+          "default": [80, 60],
+          "description": "Native authoring resolution [w, h]."
+        },
+        "baseline_y": {
+          "type": "integer",
+          "description": "Row the dominant body component's bottom sits on."
+        },
+        "max_body": {
+          "type": "array",
+          "items": { "type": "integer" },
+          "description": "The median portrait body scales to fill this box; one shared rational scale then applies to every cell."
+        },
+        "mouth": {
+          "type": "object",
+          "properties": {
+            "box": {
+              "type": "array",
+              "minItems": 4,
+              "maxItems": 4,
+              "items": { "type": "integer" },
+              "description": "Rendered replacement mouth region [x, y, w, h] in canvas coordinates."
+            },
+            "erase_box": {
+              "type": "array",
+              "minItems": 4,
+              "maxItems": 4,
+              "items": { "type": "integer" },
+              "description": "Optional larger source-mouth clearing region. Defaults to box."
+            },
+            "erase": { "type": "boolean", "default": true },
+            "source": {
+              "enum": ["auto", "isolated", "face_crop"],
+              "default": "auto",
+              "description": "Whether mouth cells are isolated cels or whole mouth-study faces (cropped at the mouth box after portrait-style registration). Auto compares cell size against the median portrait body."
+            }
+          }
+        },
+        "eyes": {
+          "type": "object",
+          "properties": {
+            "left": {
+              "type": "array",
+              "minItems": 4,
+              "maxItems": 4,
+              "items": { "type": "integer" }
+            },
+            "right": {
+              "type": "array",
+              "minItems": 4,
+              "maxItems": 4,
+              "items": { "type": "integer" }
+            },
+            "blink": {
+              "enum": ["synth", "none"],
+              "default": "none",
+              "description": "synth derives half/closed lids from the neutral portrait's surrounding skin color."
+            }
+          }
+        },
+        "composition": {
+          "type": "object",
+          "description": "Optional sparse composition. features_only keeps only declared feature regions and keys shell/skin colours so a physical display can itself read as the character's head.",
+          "properties": {
+            "mode": {
+              "enum": ["portrait", "features_only"],
+              "default": "portrait"
+            },
+            "regions": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "minItems": 4,
+                "maxItems": 4,
+                "items": { "type": "integer" }
+              },
+              "description": "Canvas-space [x, y, w, h] regions allowed to survive in features_only mode."
+            },
+            "transparent_colors": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^#[0-9a-fA-F]{6}$"
+              },
+              "description": "Authored shell/skin colours made transparent inside retained regions."
+            },
+            "transparent_tolerance": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 128,
+              "default": 24
+            },
+            "brows": {
+              "type": "object",
+              "description": "Optional expression-specific pixel eyebrow strokes baked into base sprites after sparse feature isolation.",
+              "required": ["color", "poses"],
+              "properties": {
+                "color": {
+                  "type": "string",
+                  "pattern": "^#[0-9a-fA-F]{6}$"
+                },
+                "thickness": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3,
+                  "default": 1
+                },
+                "poses": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "object",
+                    "required": ["left", "right"],
+                    "properties": {
+                      "left": {
+                        "type": "array",
+                        "minItems": 4,
+                        "maxItems": 4,
+                        "items": { "type": "integer" }
+                      },
+                      "right": {
+                        "type": "array",
+                        "minItems": 4,
+                        "maxItems": 4,
+                        "items": { "type": "integer" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "palette": {
+      "type": "object",
+      "properties": {
+        "max_colors": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 255,
+          "default": 15,
+          "description": "Visible colors; index 0 stays transparent."
+        },
+        "locked": {
+          "type": ["array", "null"],
+          "items": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
+          "description": "Optional fixed palette (e.g. a DMG ramp); otherwise deterministic median cut."
+        },
+        "variants": {
+          "type": "array",
+          "description": "Index-preserving palette/background remaps. Requires locked; geometry/blob data is shared by every emitted C atlas.",
+          "items": {
+            "type": "object",
+            "required": ["id", "background", "colors"],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_-]*$"
+              },
+              "display_name": { "type": "string" },
+              "background": {
+                "type": "string",
+                "pattern": "^#[0-9a-fA-F]{6}$"
+              },
+              "colors": {
+                "type": "array",
+                "minItems": 2,
+                "items": {
+                  "type": "string",
+                  "pattern": "^#[0-9a-fA-F]{6}$"
+                }
+              }
+            }
+          }
+        },
+        "despeckle": { "type": "boolean", "default": true }
+      }
+    },
+    "expressions": {
+      "description": "'canonical11' or an explicit subset of canonical slugs.",
+      "default": "canonical11",
+      "anyOf": [{ "const": "canonical11" }, { "type": "array", "items": { "type": "string" } }]
+    },
+    "flags": {
+      "type": "array",
+      "items": { "enum": ["auto_blink", "breathe", "idle_saccades"] },
+      "description": "FSPR atlas flags; idle_saccades is dropped with a note when no pupil layers exist, and auto_blink follows the blink rig: defaulted on when eyes.blink=synth authored lid cells, dropped with a note otherwise."
+    },
+    "targets": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*$" },
+          "framing": {
+            "enum": ["face_fill", "stage"],
+            "default": "face_fill",
+            "description": "face_fill keeps the rig canvas (portrait fills the frame); stage shrinks the whole rig into a smaller canvas with a margin (zoomed-out character)."
+          },
+          "canvas": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": { "type": "integer" },
+            "description": "Native target canvas [w, h]."
+          },
+          "frame": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": { "type": "integer", "minimum": 1 },
+            "default": [160, 120],
+            "description": "RGB565 output surface [w, h]; canvas x scale must fit this frame."
+          },
+          "scale": { "type": "integer", "minimum": 1, "maximum": 8, "default": 1 },
+          "margin": { "type": "integer", "default": 0 },
+          "max_flash_bytes": { "type": "integer", "default": 65536 },
+          "emit_c": { "type": "boolean", "default": true }
+        }
+      }
+    }
+  }
+}

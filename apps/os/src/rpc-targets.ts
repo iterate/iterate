@@ -62,6 +62,7 @@ import type {
 } from "@iterate-com/auth-contract/worker";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
+import { closeItxSessionTransport } from "./session-transport.ts";
 import {
   isStreamDeliveryAuth,
   resolveItxAuth,
@@ -346,6 +347,7 @@ import type {
   ProjectEgressInterceptor,
 } from "./domains/projects/egress.ts";
 import type {
+  FlattenedCapabilityTarget,
   ProvideCapabilityInput,
   RevokeCapabilityInput,
   SetPreambleInput,
@@ -5617,6 +5619,14 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
    * with it. Callers invoke it through the scope's capability host:
    * `itx.clients.get(path).capabilities.browser.navigate(url)`.
    * Returns the project itx, exactly like `get`.
+   *
+   * THE MOUNT INVARIANT: the reverse teardown holds too. If the platform's
+   * half of the mount dies while this session's socket is healthy (the
+   * Pager closes from the far side — DO reset, deploy, eviction), the
+   * session is closed (4901) rather than left connected-but-unreachable.
+   * A client's job is to stay connected and re-run `connect` on every
+   * reconnect; this guarantees that job is sufficient — an open socket
+   * means a live mount, and mount loss always arrives as a close event.
    */
   async connect(
     idOrSlug: string,
@@ -5627,6 +5637,19 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       description: string;
       /** Live capabilities target (an RpcTarget or plain object in the caller's process). */
       capabilities?: unknown;
+      /**
+       * Route the whole dotted path to the target as ONE call instead of
+       * traversing it member by member.
+       *
+       * Required by any client whose capabilities object is a path-building
+       * proxy rather than a material object tree — every microcontroller, and
+       * anything else that answers calls from a static dispatch table. Without
+       * it the host awaits each intermediate member, so `servos.move(...)`
+       * issues an incomplete call at `servos` and never reaches `move`.
+       */
+      flattenNestedPaths?: boolean;
+      /** Optional TypeScript declaration for the mounted surface. */
+      types?: string;
     },
   ): Promise<ProjectRpcTarget> {
     if (typeof opts.path !== "string" || !opts.path.trim().startsWith("/")) {
@@ -5683,8 +5706,16 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
         await host.provideCapability({
           type: "live",
           path: ["capabilities"],
-          capability: opts.capabilities,
           instructions: opts.description,
+          ...(opts.types === undefined ? {} : { types: opts.types }),
+          // The two shapes are one input union discriminated on the flag, so
+          // the branch is what types the capability — not a cast.
+          ...(opts.flattenNestedPaths === true
+            ? {
+                flattenNestedPaths: true as const,
+                capability: opts.capabilities as FlattenedCapabilityTarget,
+              }
+            : { capability: opts.capabilities }),
         }),
       );
     }
@@ -5929,6 +5960,19 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
         env,
         scope: { path: this.#props.path, projectId: this.#props.projectId },
         waitUntil: (promise) => this.#props.ctx.waitUntil(promise),
+        // The mount invariant: mounts died server-side, so the session dies
+        // with them — the client's reconnect re-dials and re-mounts. Sessions
+        // with no client transport (HTTP batch, Durable-Object-side itx) have
+        // no registration and this is a no-op. The reason names the actual
+        // failure and MUST stay ≤123 UTF-8 bytes: a longer close reason makes
+        // close() THROW, and an unsent close is a silently broken invariant.
+        onPagerLost: () => {
+          closeItxSessionTransport(
+            this.#props.ctx,
+            4901,
+            "hibernatable pager WebSocket to the scope's Durable Object failed; live mounts lost; reconnect and connect() again",
+          );
+        },
       });
       const provision = await this.#capabilityProviderPagerRelay.provide(input);
       return new CapabilityProvisionRpcTarget({

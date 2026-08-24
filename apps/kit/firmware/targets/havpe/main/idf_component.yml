@@ -1,0 +1,8 @@
+dependencies:
+  capnweb:
+    git: https://github.com/iterate/capnweb.git
+    path: c
+    version: aee32b391063c4f5baf0aec852f38851eeeed1d9
+  # The 12-pixel WS2812 status ring (RMT backend). Donor-pinned version.
+  espressif/led_strip: "==2.5.5"
+  idf: ">=5.4"

@@ -1,0 +1,108 @@
+{
+  "assembly_cell": [400, 400],
+  "assembly_gap": 24,
+  "background": "#ff00ff",
+  "display_name": "Starbyte",
+  "expressions": "canonical11",
+  "flags": ["breathe"],
+  "id": "starbyte",
+  "license": "project-generated",
+  "notes": "AI-assisted original star-pupil arcade mascot features, authored for the StackChan black display.",
+  "palette": {
+    "despeckle": false,
+    "locked": ["#43003d", "#9b1244", "#ff5b42", "#fff4bd"],
+    "max_colors": 4,
+    "variants": [
+      {
+        "background": "#000000",
+        "colors": ["#43003d", "#9b1244", "#ff5b42", "#fff4bd"],
+        "display_name": "Coral arcade on black",
+        "id": "original"
+      }
+    ]
+  },
+  "rig": {
+    "baseline_y": 43,
+    "canvas": [80, 60],
+    "eyes": {
+      "blink": "none",
+      "left": [4, 6, 32, 31],
+      "right": [44, 6, 32, 31]
+    },
+    "composition": {
+      "mode": "features_only",
+      "regions": [
+        [4, 0, 32, 30],
+        [44, 0, 32, 30]
+      ],
+      "transparent_colors": ["#ff00ff"],
+      "transparent_tolerance": 16
+    },
+    "max_body": [76, 42],
+    "mouth": {
+      "box": [23, 45, 34, 13],
+      "erase": false,
+      "source": "isolated"
+    }
+  },
+  "sources": [
+    {
+      "background_tolerance": 96,
+      "grid": [4, 3],
+      "inset": 4,
+      "names": [
+        "neutral",
+        "warm",
+        "joy",
+        "concern",
+        "surprise",
+        "thoughtful",
+        "skeptical",
+        "determined",
+        "sleepy",
+        "excited",
+        "embarrassed",
+        null
+      ],
+      "path": "source/expressions-v1.png",
+      "role": "expression"
+    },
+    {
+      "background_tolerance": 96,
+      "grid": [5, 3],
+      "inset": 4,
+      "names": [
+        "sil",
+        "pp",
+        "ff",
+        "th",
+        "dd",
+        "kk",
+        "ch",
+        "ss",
+        "nn",
+        "rr",
+        "aa",
+        "e",
+        "ih",
+        "oh",
+        "ou"
+      ],
+      "path": "source/mouths-v1.png",
+      "role": "mouth"
+    }
+  ],
+  "targets": [
+    {
+      "canvas": [80, 60],
+      "frame": [160, 120],
+      "framing": "face_fill",
+      "id": "cores3-fine",
+      "catalog_slug": "starbyte",
+      "catalog_name": "Starbyte",
+      "device_themes": ["original"],
+      "max_flash_bytes": 48000,
+      "scale": 2
+    }
+  ]
+}
