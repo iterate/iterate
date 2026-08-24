@@ -2900,6 +2900,16 @@ export class VoiceAgentProcessor extends StreamProcessor<
                 role: "system",
               },
             });
+            // The platform births agents with a high (60s) debounce so a
+            // config worker can shape them before their first turn. This
+            // template has no config worker — the talk client is the
+            // colleague's only configurator — so lowering the debounce here
+            // is the done-configuring signal that releases the first turn.
+            await agent.append({
+              type: "events.iterate.com/agent/configured",
+              idempotencyKey: this.idempotencyKey(`colleague-config:${dial.conversationId}`),
+              payload: { config: { llmRequestDebounceMs: 250 } },
+            });
             this.#colleagueBriefed.add(dial.conversationId);
           }
           return await agent.ask({ message: note, timeoutMs: NOTE_REPLY_DEADLINE_MS });
