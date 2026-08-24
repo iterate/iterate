@@ -2196,90 +2196,73 @@
           durations, and nobody has an audited rewrite verb (they all just truncate or
           wholesale-compact).
         </div>
-        <h4>Worth stealing — with the one-line "how"</h4>
+        <h4>What to take from this — graded</h4>
+        <p>
+          An earlier draft of this list called everything a "steal"; on review, most items are
+          tests, deferred notes, or receipts for bets we already made. The honest grading:
+        </p>
         <ul class="exec">
           <li>
-            <strong>A tested byte-identical-prefix invariant</strong>
+            <strong>Genuine steal, near-term: a truncated model reply is never executable</strong>
             <em
-              >(Codex; motivated by Claude Code's observed resume drift — a moved reminder block and
-              one stray <code>\n</code> permanently busting caches)</em
-            >. <em>How:</em> a spec that renders consecutive requests from the fold and asserts
-            request N's rendered text is a strict prefix of request N+1's whenever no
-            rewrite/compaction intervened — our superset property as CI, so a stray byte can never
-            silently cost every conversation its cache.
+              >(pi: a length stop-reason fails ALL tool calls rather than running possibly-truncated
+              arguments)</em
+            >. <em>How:</em> the response interpreter refuses script extraction when the assistant
+            reply ended on max-tokens; corrective feedback is appended instead.
           </li>
           <li>
-            <strong>A verbatim recent tail through compaction</strong>
+            <strong>A test requirement, not an idea: the byte-identical-prefix invariant</strong>
             <em
-              >(opencode, Codex, and pi all keep ~20k tokens of real recent turns after the
-              summary)</em
-            >. <em>How:</em> the slice-3 compaction op takes a keep-recent token budget and cuts at
-            a turn boundary, so only history OLDER than the tail is summarized — recency stays
-            lossless.
+              >(Codex tests it in CI; Claude Code's observed resume drift — a moved reminder block,
+              one stray <code>\n</code> — shows why vigilance isn't enough)</em
+            >. <em>How:</em> a spec renders consecutive requests from the fold and asserts request N
+            is a strict prefix of request N+1 absent rewrites/compaction. Belongs on the slice-1
+            checklist.
+          </li>
+          <li>
+            <strong>Slice-3 notes (the compaction bundle)</strong> — parked until compaction is
+            rebuilt as a range rewrite: keep a <em>verbatim recent tail</em> (~20k tokens, cut at a
+            turn boundary — opencode/Codex/pi all converge here); a
+            <em>rigid summary schema</em> preserving user messages and security constraints
+            verbatim, with Claude Code's anti-injection clause;
+            <em>cumulative read/modified file breadcrumbs</em> across compactions (pi) so the
+            post-compact agent re-reads instead of rediscovering; and on cache strategy note that pi
+            and Claude Code take OPPOSITE approaches — pi isolates one-off summarizer calls from the
+            cache, Claude Code deliberately shares the warm prefix (its summarizer fork replays the
+            conversation's exact bytes, so summarization is mostly cache reads). Ours favors Claude
+            Code's: a summarizer that re-reduces the same events gets the prefix for free — and
+            since compaction is just a rewrite op in our vocabulary, the summarizer may simply be an
+            ordinary capability call or agent turn, the way titles already happen in-band via
+            <code>summary-updated</code>.
           </li>
           <li>
             <strong
-              >A rigid compaction schema that preserves user messages and constraints
-              verbatim</strong
+              >Slice-2 audit item: provenance, not role, answers "was this really the user?"</strong
             >
             <em
-              >(Claude Code — plus its anti-injection clause: transcript-shaped text inside
-              assistant output must never be attributed to the user)</em
-            >. <em>How:</em> our summarizer prompt becomes a fixed template (intent / decisions /
-            files / ALL user messages / verbatim next step) with the constraint-preservation and
-            anti-injection clauses copied nearly wholesale.
+              >(Codex excludes marker-tagged contextual user messages from turn-boundary and
+              rollback semantics)</em
+            >. <em>How:</em> when provenance lands, audit every fold site that keys off user-role —
+            <code>contextTriggerSource</code>'s external classification, the autonomous-turn breaker
+            reset, failure-streak reset — so a worker-appended webhook text doesn't reset budgets
+            the way a human message does.
           </li>
           <li>
-            <strong>Cumulative file breadcrumbs across compactions</strong>
-            <em
-              >(pi tracks read/modified file lists across every compaction; Claude Code leaves
-              per-file "too large — re-read if needed" pointers)</em
-            >. <em>How:</em> the compaction summary section carries a cumulative read/modified-paths
-            list so a post-compact agent knows what to re-read instead of rediscovering it.
-          </li>
-          <li>
-            <strong>One-off LLM calls never pollute the conversation's cache</strong>
-            <em
-              >(pi runs summarization/title calls with a fresh cache key and cache-writes
-              disabled)</em
-            >. <em>How:</em> our LLM transport gets a per-request cache policy flag; the compaction
-            summarizer and any future title/annotation calls set it, keeping the agent's own prefix
-            cache warm and unevicted.
-          </li>
-          <li>
-            <strong>Model-visible durations on tool results</strong>
-            <em>(Codex's "Wall time: 2.3 seconds" — the one place anyone was ahead of us)</em>.
-            <em>How:</em> already adopted in the design (scenario 1b): settlement renderers print
-            "(in 1.8s)" from the settlement's measured duration — a formatting change in the
-            platform and codemode-tag renderers, no new plumbing.
-          </li>
-          <li>
-            <strong>A truncated model reply is never executable</strong>
-            <em
-              >(pi: a length stop-reason fails ALL tool calls in that message rather than running
-              possibly-truncated arguments)</em
-            >. <em>How:</em> our response interpreter treats a max-tokens-truncated assistant reply
-            as non-executable — no script extraction, corrective feedback appended instead.
+            <strong>Validation with receipts, already shipped: model-visible durations</strong>
+            <em>(scenario 1b; Codex's "Wall time" is the only other example in the field)</em>.
+            Nothing to do — the settlement renderers print the measured duration.
           </li>
           <li>
             <strong
-              >Synthetic-vs-real user content drives harness semantics, not just rendering</strong
+              >Validation with receipts, already fundamental: capability catalogs as
+              pointers</strong
             >
-            <em
-              >(Codex excludes marker-tagged contextual user messages from turn-boundary, rollback,
-              and history-snapshot semantics)</em
-            >. <em>How:</em> our slice-2 provenance field (not content sniffing) is what trigger
-            counting, autonomous-turn budgets, and rollback boundaries key off — provenance as data,
-            consulted everywhere the harness asks "was this really the user?"
-          </li>
-          <li>
-            <strong>Keep tool/capability catalogs as pointers, verified by the numbers</strong>
             <em
               >(Pocock measured ~155KB of tool definitions across 69 tools riding EVERY Claude Code
               request; pi refuses MCP for the same reason)</em
-            >. <em>How:</em> no change — validation that our one-tour-script +
-            <code>itx.docs.search</code> lazy-discovery model is right; treat any future
-            per-capability schema injection proposal as guilty until proven cheap.
+            >. This is the codemode + lazy <code>itx.docs</code> discovery bet, quantified by
+            others' pain — the differentiator, not a steal. Treat any future per-capability
+            schema-injection proposal as guilty until proven cheap.
           </li>
         </ul>
       </details>
