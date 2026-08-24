@@ -78,7 +78,7 @@ test(`the default prompt stays under ${DEFAULT_PROMPT_TOKEN_CEILING} tokens`, ()
   // request, so they don't count against the budget.
   const modelVisibleChars = parsePromptSections({
     content: DEFAULT_AGENT_SYSTEM_PROMPT,
-    fallbackSectionId: "agent/system-prompt",
+    fallbackKey: "agent/system-prompt",
   }).reduce((sum, segment) => sum + segment.content.length, 0);
   expect(modelVisibleChars).toBeLessThanOrEqual(DEFAULT_PROMPT_TOKEN_CEILING * CHARS_PER_TOKEN);
 });

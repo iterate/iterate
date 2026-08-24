@@ -11,7 +11,7 @@
 import type { EmittedInput, ProcessEventArgs } from "iterate/processors";
 import { appendUnlessLostIdempotencyRace, type AgentHost } from "./agent-host.ts";
 import { AgentProcessorContract, type AgentProcessorState } from "./agent-processor-contract.ts";
-import { contextClearsWaitingFor, hasSystemPromptStandingSection } from "./agent-prompt-fold.ts";
+import { contextClearsWaitingFor, hasSystemPromptSection } from "./agent-prompt-fold.ts";
 import type { AgentLlmRequest } from "./agent-llm-request.ts";
 import { resolveSlashCommand } from "./slash-commands.ts";
 
@@ -221,12 +221,12 @@ export class AgentTurnLoop {
     const trigger = state.pendingLlmRequestTrigger;
     if (state.paused === null && trigger !== null && state.openRequest === null) {
       // Agent birth and inbound input are independent distributed reactions.
-      // Hold the trigger until the birth prompt stands in the standing lane
-      // (the `#agent/system-prompt` umbrella section, or the sectionized
-      // prompt file's sections); that context event's own delivery re-runs
-      // this pass over the same pending trigger, so early user input cannot
-      // race an unconfigured first turn.
-      if (!hasSystemPromptStandingSection(state.standingSections)) {
+      // Hold the trigger until the birth prompt exists (the umbrella
+      // `agent/system-prompt` section, or the sectionized prompt file's
+      // sections); that context event's own delivery re-runs this pass over
+      // the same pending trigger, so early user input cannot race an
+      // unconfigured first turn.
+      if (!hasSystemPromptSection(state)) {
         console.warn("[agent] holding llm trigger until canonical system prompt arrives", {
           pendingTriggerOffset: trigger.offset,
         });

@@ -297,7 +297,7 @@ test("the birth reaction shapes each newborn and lowers the debounce as its last
     // AGENTS.md sync reads the agent's standing lane; the birth shaping
     // deliberately does NOT (a snapshot this early may predate the fold
     // reducing the birth batch).
-    const snapshot = vi.fn(async () => ({ state: { standingSections: [] } }));
+    const snapshot = vi.fn(async () => ({ state: { standingSections: [], turns: [] } }));
     const project = {
       repo: {
         readFile: vi.fn(async (input: { path: string }) => {
@@ -320,12 +320,13 @@ test("the birth reaction shapes each newborn and lowers the debounce as its last
     return { worker, append, project };
   };
 
-  // A web agent: AGENTS.md (a replace op on the hot standing section), then
-  // ONE atomic batch — the repo's prompt parsed into segments (appended
-  // unconditionally: an unforked file parses to segments identical to the
-  // platform's, a forked one supersedes; an UNTAGGED fork lands in the
-  // umbrella section and supersedes the whole prompt), the house style
-  // section, and the debounce lowered LAST (the done-configuring signal).
+  // A web agent: AGENTS.md (the everyday keyed add on the hot section), then
+  // ONE atomic batch — the repo's prompt parsed into keyed segments
+  // (appended unconditionally: inside the un-sent birth window each segment
+  // coalesces in place, so an unforked file is free and a forked one
+  // supersedes; an UNTAGGED fork lands in the umbrella section and
+  // supersedes the whole prompt), the house style section, and the debounce
+  // lowered LAST (the done-configuring signal).
   const web = makeReactionWorker("FORKED PROMPT\n");
   await deliver(web.worker, {
     type: "events.iterate.com/agent/created",
@@ -339,19 +340,19 @@ test("the birth reaction shapes each newborn and lowers the debounce as its last
   }[];
   expect(webEvents).toMatchObject([
     {
-      type: "events.iterate.com/agents/context-updated",
-      payload: { op: "replace", selector: "#config/agents-md" },
+      type: "events.iterate.com/agents/context-added",
+      payload: { role: "system", key: "config/agents-md" },
     },
     {
       type: "events.iterate.com/agents/context-added",
       payload: {
         role: "system",
-        segments: [{ sectionId: "agent/system-prompt", content: "FORKED PROMPT" }],
+        segments: [{ key: "agent/system-prompt", content: "FORKED PROMPT" }],
       },
     },
     {
       type: "events.iterate.com/agents/context-added",
-      payload: { segments: [{ sectionId: "config/house-style" }] },
+      payload: { role: "system", key: "config/house-style" },
     },
     {
       type: "events.iterate.com/agent/configured",
@@ -377,8 +378,8 @@ test("the birth reaction shapes each newborn and lowers the debounce as its last
   }[];
   expect(slackEvents).toMatchObject([
     {
-      type: "events.iterate.com/agents/context-updated",
-      payload: { op: "replace", selector: "#config/agents-md" },
+      type: "events.iterate.com/agents/context-added",
+      payload: { role: "system", key: "config/agents-md" },
     },
     { type: "events.iterate.com/agent/configured" },
   ]);

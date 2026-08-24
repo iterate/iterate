@@ -31,18 +31,18 @@ import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { AgentBinding, AgentSummary, AgentSummaryUpdated } from "./agent-presence.ts";
 
-/** The one logical system-prompt section. Legacy keyed `agent/system-prompt`
+/** The one whole-prompt section key — the umbrella. Keyed `agent/system-prompt`
  * events land here, as does untagged prompt-file content parsed at append
- * time. Writing this section supersedes the WHOLE prompt, so the fold clears
+ * time. Writing this key supersedes the WHOLE prompt, so the fold clears
  * the platform prompt-file sections when an occurrence lands here — an old
  * template worker's whole-prompt supersession must not leave the segmented
  * default prompt standing beside it (the p1711 double-prompt trace). */
-export const AGENT_SYSTEM_PROMPT_SECTION_ID = "agent/system-prompt";
+export const AGENT_SYSTEM_PROMPT_KEY = "agent/system-prompt";
 
-/** The section ids the platform's sectionized default prompt file defines, in
- * file order — also their canonical render order in the standing lane.
+/** The section keys the platform's sectionized default prompt file defines, in
+ * file order — also their canonical render order in the standing document.
  * agent-defaults.test.ts guards this list against drift from the file. */
-export const AGENT_SYSTEM_PROMPT_FILE_SECTION_IDS = [
+export const AGENT_SYSTEM_PROMPT_FILE_SECTION_KEYS = [
   "identity",
   "output-formatting",
   "summary-instruction",
@@ -55,19 +55,19 @@ export const AGENT_SYSTEM_PROMPT_FILE_SECTION_IDS = [
   "gotchas",
 ];
 
-/** Standing sections that satisfy the turn loop's readiness gate: triggers
- * are held until the birth batch's system prompt has reduced — either the one
+/** Section keys that satisfy the turn loop's readiness gate: triggers are
+ * held until the birth batch's system prompt has reduced — either the one
  * umbrella section (keyed births, untagged prompt files) or any section the
  * sectionized default prompt file defines. */
-export const SYSTEM_PROMPT_STANDING_SECTION_IDS = [
-  AGENT_SYSTEM_PROMPT_SECTION_ID,
-  ...AGENT_SYSTEM_PROMPT_FILE_SECTION_IDS,
+export const SYSTEM_PROMPT_SECTION_KEYS = [
+  AGENT_SYSTEM_PROMPT_KEY,
+  ...AGENT_SYSTEM_PROMPT_FILE_SECTION_KEYS,
 ];
 
-/** Hot standing sections render LAST in the standing prefix, so their updates
- * bust only their own prompt-cache suffix (decision 4 in
- * tasks/prompt-sections-tree.md). AGENTS.md is the one hot section today. */
-export const HOT_STANDING_SECTION_IDS = ["config/agents-md"];
+/** Hot sections render LAST in the standing document, so their updates bust
+ * only their own prompt-cache suffix (tasks/prompt-sections-tree.md).
+ * AGENTS.md is the one hot section today. */
+export const HOT_SECTION_KEYS = ["config/agents-md"];
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
@@ -218,43 +218,16 @@ export const AgentProcessorContract = defineProcessorContract({
     standingSections: z
       .array(
         z.object({
-          sectionId: z.string().min(1).meta({
-            description:
-              "The section's stable identity — the ops selector `#<sectionId>` addresses it.",
-          }),
-          occurrences: z
-            .array(
-              z.object({
-                offset: z.number().int().positive().meta({
-                  description: "Stream offset of the event this occurrence reduced from.",
-                }),
-                payload: agentContextItemSchema(),
-              }),
-            )
+          key: z
+            .string()
+            .min(1)
             .meta({
               description:
-                "The section's content, oldest first. Normally one occurrence: replace and " +
-                "delete collapse ALWAYS. An update with mode append-latest (and a legacy " +
-                "keyed update landing on a covered section) appends instead, keeping earlier " +
-                "occurrence bytes in place for the provider's prompt cache; compaction " +
-                "collapses every section back to its latest occurrence.",
+                "The section's stable identity — re-adding this key IS the update; " +
+                "agents/context-rewritten addresses it for deliberate rewrites.",
             }),
-        }),
-      )
-      .default([])
-      .meta({
-        description:
-          "The STANDING lane of the two-lane section tree (depth 1): the prompt prefix, held " +
-          "in canonical order regardless of arrival order — the platform prompt sections " +
-          "first (umbrella, then the prompt file's sections), then agent/boot-context, then " +
-          "every other section alphabetically, hot sections (config/agents-md) last. Renders " +
-          "before the turns lane on every request.",
-      }),
-    turns: z
-      .array(
-        z.object({
           offset: z.number().int().positive().meta({
-            description: "Stream offset of the context-added event this turn reduced from.",
+            description: "Stream offset of the event whose content this section holds.",
           }),
           payload: agentContextItemSchema(),
         }),
@@ -262,10 +235,70 @@ export const AgentProcessorContract = defineProcessorContract({
       .default([])
       .meta({
         description:
-          "The TURNS lane: the conversation itself, ordered by offset — every plain (unkeyed, " +
-          "unsectioned) context item is one implicit turn node. Compaction restructures the " +
-          "lane: unkeyed system facts move to the front, the summary follows, then everything " +
-          "after the barrier.",
+          "The STANDING DOCUMENT: exactly one occurrence per section, rendered as ONE system " +
+          "message of <section key> blocks in canonical order regardless of arrival order — " +
+          "the prompt file's sections in file order, the umbrella, agent/boot-context, every " +
+          "other section alphabetically, hot sections (config/agents-md) last. A keyed add " +
+          "whose latest occurrence no request has sent yet edits its entry in place (the " +
+          "birth window — free); once sent, updates land in the turns lane instead, and " +
+          "compaction folds each section's newest occurrence back in here.",
+      }),
+    turns: z
+      .array(
+        z.union([
+          z.strictObject({
+            offset: z.number().int().positive().meta({
+              description: "Stream offset of the llm-request-requested event.",
+            }),
+            requestedAt: z.iso.datetime().meta({
+              description:
+                "The requested event's own journaled createdAt — rendered permanently into " +
+                'the timeline as the "Requested at:" send stamp.',
+            }),
+          }),
+          z.strictObject({
+            offset: z.number().int().positive().meta({
+              description: "Stream offset of the context-added event this update reduced from.",
+            }),
+            section: z
+              .strictObject({
+                key: z.string().min(1).meta({ description: "The section this update supersedes." }),
+                supersedes: z
+                  .number()
+                  .int()
+                  .positive()
+                  .optional()
+                  .meta({
+                    description:
+                      "Offset of the occurrence this one supersedes — stamped by the fold; " +
+                      "absent when the section first appeared mid-conversation.",
+                  }),
+              })
+              .meta({
+                description:
+                  "Marks a TEMPORAL section occurrence: a keyed add that landed after a " +
+                  "request had sent the section (or after conversation existed). Renders at " +
+                  "this offset as a <section key supersedes> block — everything above it " +
+                  "visibly predates it, and the whole prefix stays byte-stable.",
+              }),
+            payload: agentContextItemSchema(),
+          }),
+          z.strictObject({
+            offset: z.number().int().positive().meta({
+              description: "Stream offset of the context-added event this turn reduced from.",
+            }),
+            payload: agentContextItemSchema(),
+          }),
+        ]),
+      )
+      .default([])
+      .meta({
+        description:
+          "The TIMELINE: conversation turns (every unkeyed context item), temporal section " +
+          "occurrences, and the permanent per-request send stamps, in arrival order. " +
+          "Compaction restructures the lane: unkeyed system facts move to the front, the " +
+          "summary follows, then everything after the barrier; each section's newest " +
+          "temporal occurrence collapses back into the standing document.",
       }),
     lastLlmRequestOffset: z
       .number()
@@ -367,9 +400,23 @@ export const AgentProcessorContract = defineProcessorContract({
           "Consecutive agent-loop-triggered turns; reset by any external trigger and by " +
           "agent/resumed.",
       }),
-    activeScriptExecutionIds: z.array(z.string()).default([]).meta({
-      description: "Capability-host executions this agent requested and has not seen settle.",
-    }),
+    activeScriptExecutions: z
+      .array(
+        z.object({
+          executionId: z.string().meta({ description: "The capability-host execution." }),
+          requestedAt: z.iso.datetime().meta({
+            description:
+              "The script-run-requested event's own journaled createdAt. Settlement " +
+              "rendering derives the script's duration from this and the settled event's " +
+              "createdAt — deterministic (both journaled), never wall clock — so slow " +
+              "operations become knowable to the model.",
+          }),
+        }),
+      )
+      .default([])
+      .meta({
+        description: "Capability-host executions this agent requested and has not seen settle.",
+      }),
     summary: AgentSummary.prefault({}).meta({
       description:
         "Human- or agent-written presentation summary. Every writer appends the same " +
@@ -416,63 +463,51 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agents/context-added": {
       description:
         "Model-visible context arrived (user message, developer note, assistant output, system " +
-        "item). The single source of truth for what the LLM sees. With `segments`, one append " +
-        "establishes standing sections (structure decided at append time — ops never parse " +
-        "model-visible strings); without, the item is one implicit turn node (or, with the " +
-        "legacy `key`, a standing section named by the key).",
+        "item) — the everyday event, the only one most authors ever use. With `key` (or " +
+        "`segments: [{key, content}]` for many at once): keyed standing content, and " +
+        "RE-ADDING A KEY IS THE UPDATE — an occurrence no request has sent yet coalesces in " +
+        "place (free; the whole birth window), a sent one appends at the tail at its moment " +
+        "in time with `supersedes` stamped by the fold. Without a key: one turn at its offset.",
       payloadSchema: agentContextItemSchema(),
     },
-    "events.iterate.com/agents/context-updated": {
+    "events.iterate.com/agents/context-rewritten": {
       description:
-        'An operation on the standing lane: replace a section\'s content (`selector: "#id"`) ' +
-        'or delete a section — `selector: "*"` deletes EVERYTHING, both lanes, standing ' +
-        "sections included (guidance: don't, unless you want a lobotomised agent; the event's " +
-        "audit trail is the safeguard). Replace and delete collapse always; `mode: " +
-        '"append-latest"` opts a replace into appending a new latest occurrence instead, ' +
-        "keeping earlier occurrence bytes in place for the provider's prompt cache. Never " +
-        "triggers a turn by itself.",
+        "Deliberate HISTORY REWRITING — rare, audited, named to discourage casual use: it " +
+        "changes what PAST render positions contain, busting the provider cache from the " +
+        "standing document down, and a replaced covered behavioral rule leaves visible " +
+        "history contradicting the instruction (the scenario-3a anti-pattern in " +
+        "docs/prompt-sections-demo.html). For redaction (the author supplies the replacement " +
+        "text) and un-saying; the everyday update is re-adding the key on " +
+        'agents/context-added. `key: "*"` with delete removes EVERYTHING, both lanes ' +
+        "(guidance: don't, unless you want a lobotomised agent; the event's audit trail is " +
+        "the safeguard). Never triggers a turn by itself.",
       payloadSchema: z
         .strictObject({
           op: z.enum(["replace", "delete"]).meta({ description: "The operation." }),
-          selector: z
+          key: z
             .string()
-            .regex(/^(#.+|\*)$/)
-            .meta({ description: 'Target: "#<sectionId>" for one standing section, or "*".' }),
+            .min(1)
+            .meta({ description: 'The section to rewrite, or "*" (delete only) for everything.' }),
           content: z
             .string()
             .optional()
             .meta({ description: "Replacement content (replace only)." }),
-          mode: z
-            .literal("append-latest")
-            .optional()
-            .meta({
-              description:
-                "Replace only: append the content as the section's new latest occurrence " +
-                "instead of collapsing the section to it.",
-            }),
         })
         .superRefine((payload, ctx) => {
           if (payload.op === "replace") {
             if (payload.content === undefined) {
               ctx.addIssue({ code: "custom", path: ["content"], message: "replace needs content" });
             }
-            if (payload.selector === "*") {
+            if (payload.key === "*") {
               ctx.addIssue({
                 code: "custom",
-                path: ["selector"],
-                message: 'replace targets one section ("#id"); "*" is delete-only',
+                path: ["key"],
+                message: 'replace targets one section; "*" is delete-only',
               });
             }
           }
-          if (
-            payload.op === "delete" &&
-            (payload.content !== undefined || payload.mode !== undefined)
-          ) {
-            ctx.addIssue({
-              code: "custom",
-              path: ["op"],
-              message: "delete carries no content or mode",
-            });
+          if (payload.op === "delete" && payload.content !== undefined) {
+            ctx.addIssue({ code: "custom", path: ["op"], message: "delete carries no content" });
           }
         }),
     },
@@ -731,7 +766,7 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/created",
     "events.iterate.com/agent/configured",
     "events.iterate.com/agents/context-added",
-    "events.iterate.com/agents/context-updated",
+    "events.iterate.com/agents/context-rewritten",
     "events.iterate.com/agents/web-message-sent",
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/agent/llm-request-settled",
@@ -784,10 +819,14 @@ export type AgentProcessorState = ProcessorState<AgentProcessorContract>;
 
 /** One model-visible context item's payload — the wire contract for every
  * committed `agents/context-added` event. */
-export type AgentContextAddedPayload = AgentProcessorState["turns"][number]["payload"];
+export type AgentContextAddedPayload = AgentProcessorState["standingSections"][number]["payload"];
 
-/** One standing section of the two-lane tree — sectionId plus its occurrences. */
+/** One entry of the standing document — key, source offset, content payload. */
 export type AgentStandingSection = AgentProcessorState["standingSections"][number];
+
+/** One item of the timeline lane: a turn, a temporal section occurrence, or a
+ * permanent send stamp. */
+export type AgentTimelineItem = AgentProcessorState["turns"][number];
 
 /** A file attached to an agent context item: content type, filename, project
  * file-storage path, size, and the signed public URL minted at attach time
@@ -831,15 +870,17 @@ function agentContextItemSchema() {
         .optional()
         .meta({
           description:
-            "LEGACY stable logical identity, mapped deterministically into the standing " +
-            "lane: key → sectionId; an uncovered update collapses the section, a covered one " +
-            "appends as latest. New writers use `segments` or agents/context-updated.",
+            "The section's stable identity — THE addressing mechanism: re-adding a key IS " +
+            "the update. An occurrence no request has sent yet is edited in place " +
+            "(coalesced, free); a sent one appends at the tail of the timeline with " +
+            "`supersedes` stamped by the fold. Existing streams' keyed events already mean " +
+            "exactly this.",
         }),
       segments: z
         .array(
           z.object({
-            sectionId: z.string().min(1).meta({
-              description: "The standing section this segment establishes or supersedes.",
+            key: z.string().min(1).meta({
+              description: "The standing section this segment establishes or updates.",
             }),
             content: z.string().meta({ description: "The section's model-visible text." }),
           }),
@@ -848,10 +889,10 @@ function agentContextItemSchema() {
         .optional()
         .meta({
           description:
-            "Standing sections established by this ONE append — the output of parsing a " +
-            "sectionized prompt file at append time. Each named section collapses to this " +
-            "event's segments for it; `content` must be empty (all text lives in the " +
-            "segments). Role and actor apply to every segment.",
+            "Many keyed sections in ONE append — the output of parsing a sectionized prompt " +
+            "file at append time. Each segment carries the same re-add-is-the-update " +
+            "semantics as a single `key`; the event's `content` must be empty (all text " +
+            "lives in the segments). Role and actor apply to every segment.",
         }),
       files: z
         .array(agentFileAttachmentSchema())

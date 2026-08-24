@@ -18,6 +18,7 @@ import {
   AgentLiveState,
   AgentProcessorContract,
   type AgentContextAddedPayload,
+  type AgentProcessorState,
 } from "./agent-processor-contract.ts";
 import {
   AgentProcessor,
@@ -165,16 +166,19 @@ describe("AgentProcessor turn lifecycle", () => {
     expect(requested.idempotencyKey).toMatch(/^agent\/request\/\d+$/);
     expect(h.state().openRequest).toMatchObject({ requestedAtOffset: requested.offset });
 
-    // The prompt: the context-protocol wrapper first, then the system slot,
-    // the user message, and the timestamp LAST (prompt-cache prefix safety).
+    // The prompt: the context-protocol wrapper first, then the standing
+    // document (ONE system message of tagged sections), the user message,
+    // and the request's own permanent send stamp LAST — the model's clock.
     const call = h.llm.calls[0]!;
     expect(call.model).toBe("test-model");
     expect(call.messages[0]!.role).toBe("system");
     expect(call.messages[0]!.content).toContain("append-only event stream");
     expect(call.messages[1]!.role).toBe("system");
-    expect(call.messages[1]!.content).toContain("You are a helpful test agent.");
+    expect(call.messages[1]!.content).toBe(
+      '<section key="agent/system-prompt">\nYou are a helpful test agent.\n</section>',
+    );
     expect(call.messages.at(-2)?.content).toContain("Hello there");
-    expect(call.messages.at(-1)?.content).toMatch(/Current date and time \(UTC\)/);
+    expect(call.messages.at(-1)?.content).toMatch(/^Requested at: /);
 
     await h.play(() => h.llm.respond("Hi!", { inputTokens: 10, outputTokens: 2 }));
 
@@ -187,7 +191,7 @@ describe("AgentProcessor turn lifecycle", () => {
         },
       },
     ]);
-    expect(h.state().turns.at(-1)).toMatchObject({
+    expect(conversationTurns(h.state()).at(-1)).toMatchObject({
       payload: { role: "assistant", content: "Hi!", llmRequestOffset: requested.offset },
     });
 
@@ -386,13 +390,15 @@ describe("AgentProcessor turn lifecycle", () => {
     // even a raced completion loses on the shared settle key.
     await h.play(() => h.llm.respond("too late"));
     expect(h.events(SETTLED)).toHaveLength(1);
-    expect(h.state().turns.some((item) => item.payload.content === "too late")).toBe(false);
+    expect(conversationTurns(h.state()).some((item) => item.payload.content === "too late")).toBe(
+      false,
+    );
 
     // The streamed partial is preserved as model-visible history WITHOUT an
     // llmRequestOffset, so script extraction can never run on a half response.
-    const partialItem = h
-      .state()
-      .turns.find((item) => item.payload.content.includes("partial output follows"));
+    const partialItem = conversationTurns(h.state()).find((item) =>
+      item.payload.content.includes("partial output follows"),
+    );
     expect(partialItem).toMatchObject({ payload: { role: "assistant" } });
     expect(partialItem!.payload).not.toHaveProperty("llmRequestOffset");
     expect(partialItem!.payload.content).toContain("Hello");
@@ -451,9 +457,9 @@ describe("AgentProcessor turn lifecycle", () => {
         },
       },
     ]);
-    const preserved = h
-      .state()
-      .turns.find((item) => item.payload.content.includes("partial output follows"));
+    const preserved = conversationTurns(h.state()).find((item) =>
+      item.payload.content.includes("partial output follows"),
+    );
     expect(preserved!.payload.content).toContain("The complete non-streamed answer.");
 
     // The interrupting message's own turn sees what the user never saw lost.
@@ -486,7 +492,7 @@ describe("AgentProcessor turn lifecycle", () => {
 
     // Assistant role, deliberately: sendMessage must never elevate model
     // output to instruction precedence. Files ride the reflection (vision).
-    expect(h.state().turns.at(-1)).toMatchObject({
+    expect(conversationTurns(h.state()).at(-1)).toMatchObject({
       payload: {
         role: "assistant",
         content: "The assistant sent this visible web-chat message: Here you go!",
@@ -608,31 +614,40 @@ describe("AgentProcessor turn lifecycle", () => {
         llmRequestPolicy: { behaviour: "dont-trigger-request" },
       },
     });
-    const occurrences = () =>
+    const standingStatus = () =>
+      h.state().standingSections.find((section) => section.key === "integration/github/status");
+    const temporalStatuses = () =>
       h
         .state()
-        .standingSections.find((section) => section.sectionId === "integration/github/status")!
-        .occurrences;
+        .turns.flatMap((item) =>
+          "section" in item && item.section.key === "integration/github/status" ? [item] : [],
+        );
 
-    // Ten uncovered updates collapse to ONE occurrence holding the newest value.
+    // Ten un-sent updates coalesce in place: one standing entry, newest value.
     await h.play([
       "append",
       ...NEW_AGENT_EVENTS,
       ...Array.from({ length: 10 }, (_, index) => statusUpdate(`status ${index + 1}`)),
     ]);
-    expect(occurrences()).toMatchObject([{ payload: { content: "status 10" } }]);
-    // Keyed items land in the STANDING lane, never the turns lane.
-    expect(h.state().turns.some((turn) => turn.payload.key !== undefined)).toBe(false);
+    expect(standingStatus()).toMatchObject({ payload: { content: "status 10" } });
+    expect(temporalStatuses()).toEqual([]);
+    // Keyed items never land as plain conversation turns.
+    expect(conversationTurns(h.state()).some((turn) => turn.payload.key !== undefined)).toBe(false);
 
-    // A request covers the section; the next update appends a second
-    // occurrence (append-as-latest) instead of rewriting covered history.
+    // A request sends the section; the next update lands at the tail — a
+    // temporal occurrence with supersedes stamped by the fold. The sent copy
+    // stays in the standing document untouched (cache intact).
     await h.play(["append", userMessage("what's up?")], ["advanceTime", 10_000], () =>
       h.llm.respond("Checking."),
     );
+    const sentOffset = standingStatus()!.offset;
     await h.play(["append", statusUpdate("status 11")]);
-    expect(occurrences()).toMatchObject([
-      { payload: { content: "status 10" } },
-      { payload: { content: "status 11" } },
+    expect(standingStatus()).toMatchObject({ payload: { content: "status 10" } });
+    expect(temporalStatuses()).toMatchObject([
+      {
+        section: { key: "integration/github/status", supersedes: sentOffset },
+        payload: { content: "status 11" },
+      },
     ]);
 
     // The prompt renders each occurrence on its own @offset line with key= provenance.
@@ -699,7 +714,9 @@ describe("AgentProcessor recovery", () => {
     await h.play(() => h.llm.calls[0]!.resolve({ text: "from-zombie" }));
 
     expect(h.events(SETTLED)).toHaveLength(1);
-    const assistants = h.state().turns.filter((item) => item.payload.role === "assistant");
+    const assistants = conversationTurns(h.state()).filter(
+      (item) => item.payload.role === "assistant",
+    );
     expect(assistants).toMatchObject([{ payload: { content: "from-successor" } }]);
   });
 
@@ -754,7 +771,9 @@ describe("AgentProcessor recovery", () => {
     expect(h.events("events.iterate.com/stream/error-occurred")).toMatchObject([
       { payload: { message: expect.stringContaining("expired") } },
     ]);
-    expect(h.state().turns.find((item) => item.payload.content.includes("expired"))).toMatchObject({
+    expect(
+      conversationTurns(h.state()).find((item) => item.payload.content.includes("expired")),
+    ).toMatchObject({
       payload: { role: "developer", actor: { type: "integration" } },
     });
   });
@@ -842,9 +861,9 @@ describe("AgentProcessor recovery", () => {
     expect(h.events(SETTLED)).toMatchObject([
       { payload: { result: { status: "succeeded", text: "second try" } } },
     ]);
-    expect(h.state().turns.filter((item) => item.payload.role === "assistant")).toMatchObject([
-      { payload: { content: "second try" } },
-    ]);
+    expect(
+      conversationTurns(h.state()).filter((item) => item.payload.role === "assistant"),
+    ).toMatchObject([{ payload: { content: "second try" } }]);
     expect(h.state().openRequest).toBeNull();
   });
 });
@@ -884,9 +903,9 @@ describe("AgentProcessor failure policy", () => {
       { payload: { message: expect.stringContaining("attempt 1 of 2") } },
       { payload: { message: expect.stringContaining("Giving up") } },
     ]);
-    const transcripts = h
-      .state()
-      .turns.filter((item) => item.payload.content.startsWith("Error on stream:"));
+    const transcripts = conversationTurns(h.state()).filter((item) =>
+      item.payload.content.startsWith("Error on stream:"),
+    );
     expect(transcripts).toHaveLength(2);
 
     // The retry-policy patch merged into the config without disturbing the
@@ -1044,7 +1063,7 @@ describe("AgentProcessor script execution", () => {
       },
     ]);
     const executionId = scriptRequests[0]!.payload.executionId;
-    expect(h.state().activeScriptExecutionIds).toEqual([executionId]);
+    expect(h.state().activeScriptExecutions).toMatchObject([{ executionId }]);
 
     // The capability host settles (played by the test); the rendered result is
     // an agent-loop trigger, so the next turn sees it.
@@ -1061,7 +1080,7 @@ describe("AgentProcessor script execution", () => {
       ],
       ["advanceTime", 10_000],
     );
-    expect(h.state().activeScriptExecutionIds).toEqual([]);
+    expect(h.state().activeScriptExecutions).toEqual([]);
     expect(h.llm.calls).toHaveLength(2);
     const prompt = h.llm.calls[1]!.messages.map((message) => message.content).join("\n");
     expect(prompt).toContain("unreadCount");
@@ -1082,9 +1101,9 @@ describe("AgentProcessor script execution", () => {
     // NOTHING ran — the model queued future steps, and executing only the
     // first while silently dropping the rest is the worst option.
     expect(h.events("events.iterate.com/capability-host/script-run-requested")).toHaveLength(0);
-    const feedback = h
-      .state()
-      .turns.find((item) => item.payload.content.includes("2 fenced code blocks"));
+    const feedback = conversationTurns(h.state()).find((item) =>
+      item.payload.content.includes("2 fenced code blocks"),
+    );
     expect(feedback).toMatchObject({
       payload: { role: "developer", llmRequestPolicy: { behaviour: "after-current-request" } },
     });
@@ -1103,7 +1122,7 @@ describe("AgentProcessor script execution", () => {
 
     expect(h.events("events.iterate.com/capability-host/script-run-requested")).toHaveLength(0);
     expect(
-      h.state().turns.find((item) => item.payload.content.includes("did NOT run")),
+      conversationTurns(h.state()).find((item) => item.payload.content.includes("did NOT run")),
     ).toMatchObject({ payload: { role: "developer" } });
   });
 
@@ -1124,7 +1143,9 @@ describe("AgentProcessor script execution", () => {
     ]);
     expect(h.events("events.iterate.com/capability-host/script-run-requested")).toHaveLength(0);
     // The fold-guard also drops it from history (no open request matches).
-    expect(h.state().turns.some((item) => item.payload.content.includes("evil"))).toBe(false);
+    expect(conversationTurns(h.state()).some((item) => item.payload.content.includes("evil"))).toBe(
+      false,
+    );
   });
 
   it("a script that returns nothing ends the loop, and foreign executions stay invisible", async () => {
@@ -1137,7 +1158,7 @@ describe("AgentProcessor script execution", () => {
     const executionId = h.events("events.iterate.com/capability-host/script-run-requested")[0]!
       .payload.executionId;
 
-    const itemsBefore = h.state().turns.length;
+    const itemsBefore = conversationTurns(h.state()).length;
     await h.play(
       [
         "append",
@@ -1158,14 +1179,14 @@ describe("AgentProcessor script execution", () => {
       ],
       ["advanceTime", 20_000],
     );
-    expect(h.state().turns.length).toBe(itemsBefore);
+    expect(conversationTurns(h.state()).length).toBe(itemsBefore);
     expect(h.llm.calls).toHaveLength(1); // no new turn
   });
 
   it("does not render results from an ITX execution requested outside the agent processor", async () => {
     const h = makeAgentHarness();
     await h.play(["append", ...NEW_AGENT_EVENTS]);
-    const itemsBefore = h.state().turns.length;
+    const itemsBefore = conversationTurns(h.state()).length;
     const executionId = "agent-output:999";
 
     await h.play(
@@ -1187,8 +1208,8 @@ describe("AgentProcessor script execution", () => {
       ["advanceTime", 10_000],
     );
 
-    expect(h.state().activeScriptExecutionIds).toEqual([]);
-    expect(h.state().turns).toHaveLength(itemsBefore);
+    expect(h.state().activeScriptExecutions).toEqual([]);
+    expect(conversationTurns(h.state())).toHaveLength(itemsBefore);
     expect(h.llm.calls).toHaveLength(0);
   });
 
@@ -1235,9 +1256,9 @@ describe("AgentProcessor script execution", () => {
         content: bigText,
       },
     ]);
-    const rendered = h
-      .state()
-      .turns.find((item) => item.payload.content.startsWith("Your script returned:"));
+    const rendered = conversationTurns(h.state()).find((item) =>
+      item.payload.content.startsWith("Your script returned"),
+    );
     // The notice names exactly the fully-qualified path the dep answered with.
     expect(rendered!.payload.content).toContain(
       `saved in your workspace at "/workspaces/agents/main/${written[0]!.path}"`,
@@ -1293,9 +1314,9 @@ describe("AgentProcessor script execution", () => {
         payload: { executionId, settlement: { status: "succeeded", result: "y".repeat(200) } },
       },
     ]);
-    const rendered = h
-      .state()
-      .turns.find((item) => item.payload.content.startsWith("Your script returned:"));
+    const rendered = conversationTurns(h.state()).find((item) =>
+      item.payload.content.startsWith("Your script returned"),
+    );
     expect(rendered!.payload.content).toContain("truncated");
     expect(rendered!.payload.content).not.toContain("saved in your workspace");
   });
@@ -1332,11 +1353,11 @@ describe("AgentProcessor script execution", () => {
     );
 
     // The failure renders with its phase/kind and the error text…
-    const rendered = h
-      .state()
-      .turns.find((item) => item.payload.content.startsWith("Your script failed"));
+    const rendered = conversationTurns(h.state()).find((item) =>
+      item.payload.content.startsWith("Your script failed"),
+    );
     expect(rendered).toMatchObject({ payload: { role: "developer" } });
-    expect(rendered!.payload.content).toContain("failed during execution (runtime)");
+    expect(rendered!.payload.content).toContain("failed during execution (runtime, after ");
     expect(rendered!.payload.content).toContain("gmail exploded");
     // …and is an agent-loop trigger: the model gets a turn to react.
     expect(h.llm.calls).toHaveLength(2);
@@ -1366,9 +1387,9 @@ describe("AgentProcessor script execution", () => {
       },
     ]);
 
-    const rendered = h
-      .state()
-      .turns.find((item) => item.payload.content.startsWith("Your script returned"));
+    const rendered = conversationTurns(h.state()).find((item) =>
+      item.payload.content.startsWith("Your script returned"),
+    );
     // The string is fed to the model as ITSELF, not as an escaped JSON string.
     expect(rendered!.payload.content).toContain('line one\nline "two"');
     expect(rendered!.payload.content).not.toContain("\\n");
@@ -1412,9 +1433,9 @@ describe("AgentProcessor script execution", () => {
         },
       },
     ]);
-    const rendered = h
-      .state()
-      .turns.find((item) => item.payload.content.startsWith("Your script returned"));
+    const rendered = conversationTurns(h.state()).find((item) =>
+      item.payload.content.startsWith("Your script returned"),
+    );
     // The paging recipe itself uses the preamble loader, not a readFile call.
     expect(rendered!.payload.content).toContain("await results[0].load(itx)");
     expect(rendered!.payload.content).not.toContain("await itx.workspace.readFile(");
@@ -1434,9 +1455,9 @@ describe("AgentProcessor script execution", () => {
       ],
       ["advanceTime", 60_000],
     );
-    const setItem = h
-      .state()
-      .turns.find((item) => item.payload.content.startsWith('Preamble entry "channels"'));
+    const setItem = conversationTurns(h.state()).find((item) =>
+      item.payload.content.startsWith('Preamble entry "channels"'),
+    );
     expect(setItem).toMatchObject({ payload: { role: "developer" } });
     expect(setItem!.payload.content).toContain('const TECH_CHANNEL_ID = "c1234";');
     expect(h.llm.calls.length).toBe(callsBefore); // configuration, not conversation
@@ -1452,7 +1473,9 @@ describe("AgentProcessor script execution", () => {
       ["advanceTime", 60_000],
     );
     expect(
-      h.state().turns.some((item) => item.payload.content.includes('"channels" was removed')),
+      conversationTurns(h.state()).some((item) =>
+        item.payload.content.includes('"channels" was removed'),
+      ),
     ).toBe(true);
     expect(h.llm.calls.length).toBe(callsBefore);
   });
@@ -1501,9 +1524,9 @@ describe("AgentProcessor script execution", () => {
     // The rendered item: a bounded preview plus the paste-ready recipe. The
     // recipe leads with the preamble loader (a competing readFile snippet
     // would win over a footnote); the workspace path stays as a pointer.
-    const rendered = h
-      .state()
-      .turns.find((item) => item.payload.content.startsWith("Your script returned"));
+    const rendered = conversationTurns(h.state()).find((item) =>
+      item.payload.content.startsWith("Your script returned"),
+    );
     expect(rendered!.payload.content).toContain(
       `saved in your workspace at "/workspaces/agents/main/${written[0]!.path}"`,
     );
@@ -1513,7 +1536,7 @@ describe("AgentProcessor script execution", () => {
     expect(rendered!.payload.content).not.toContain("results[0].load(");
     expect(rendered!.payload.content).not.toContain("JSON.parse(await itx.workspace.readFile(");
     expect(rendered!.payload.content).toContain(
-      `Your script returned ${spilled.length.toLocaleString("en-US")} chars of JSON — over the ~100-char inline limit.`,
+      `Your script returned ${spilled.length.toLocaleString("en-US")} chars of JSON (in 0ms) — over the ~100-char inline limit.`,
     );
     // The inferred type block tells the model the shape it cannot see.
     expect(rendered!.payload.content).toContain("Inferred type:");
@@ -1561,9 +1584,9 @@ describe("AgentProcessor script execution", () => {
       },
     ]);
 
-    const rendered = h
-      .state()
-      .turns.find((item) => item.payload.content.startsWith("Your script returned"));
+    const rendered = conversationTurns(h.state()).find((item) =>
+      item.payload.content.startsWith("Your script returned"),
+    );
     const content = rendered!.payload.content;
     // Type: element shapes merged across all 400 rows, cardinality annotated.
     expect(content).toContain('status: "open" | "closed"');
@@ -1611,9 +1634,9 @@ describe("AgentProcessor script execution", () => {
     // One runnable ts block plus ANY other fenced block is still 2 blocks:
     // nothing executes, and the feedback says so.
     expect(h.events("events.iterate.com/capability-host/script-run-requested")).toHaveLength(0);
-    const feedback = h
-      .state()
-      .turns.find((item) => item.payload.content.includes("2 fenced code blocks"));
+    const feedback = conversationTurns(h.state()).find((item) =>
+      item.payload.content.includes("2 fenced code blocks"),
+    );
     expect(feedback).toMatchObject({
       payload: { role: "developer", llmRequestPolicy: { behaviour: "after-current-request" } },
     });
@@ -1630,9 +1653,9 @@ describe("AgentProcessor script execution", () => {
     // No fence anywhere = a deliberate no-op turn: no script, no feedback,
     // no follow-up trigger, no extra dial.
     expect(h.events("events.iterate.com/capability-host/script-run-requested")).toHaveLength(0);
-    expect(h.state().turns.some((item) => item.payload.content.includes("did NOT run"))).toBe(
-      false,
-    );
+    expect(
+      conversationTurns(h.state()).some((item) => item.payload.content.includes("did NOT run")),
+    ).toBe(false);
     expect(h.state().pendingLlmRequestTrigger).toBeNull();
     expect(h.llm.calls).toHaveLength(1);
 
@@ -1642,7 +1665,7 @@ describe("AgentProcessor script execution", () => {
       h.llm.respond("```python\nprint('hi')\n```"),
     );
     expect(
-      h.state().turns.find((item) => item.payload.content.includes("did NOT run")),
+      conversationTurns(h.state()).find((item) => item.payload.content.includes("did NOT run")),
     ).toMatchObject({ payload: { role: "developer" } });
     expect(h.events("events.iterate.com/capability-host/script-run-requested")).toHaveLength(0);
   });
@@ -1684,7 +1707,7 @@ describe("AgentProcessor script execution", () => {
     // Every re-appended per-event consequence deduped: the journal is
     // byte-identical, and the replayed fold reaches the same head state.
     expect(replay.events().map((row) => row.offset)).toEqual(journalledOffsets);
-    expect(replay.state().activeScriptExecutionIds).toEqual([]);
+    expect(replay.state().activeScriptExecutions).toEqual([]);
   });
 });
 
@@ -1700,7 +1723,7 @@ describe("AgentProcessor stream facts", () => {
       },
     ]);
 
-    expect(h.state().turns.at(-1)).toMatchObject({
+    expect(conversationTurns(h.state()).at(-1)).toMatchObject({
       payload: {
         role: "developer",
         content: expect.stringContaining("skipped failing event"),
@@ -1815,7 +1838,9 @@ describe("AgentProcessor stream facts", () => {
 
     // The in-flight zombie's answer folds to nothing (no open request).
     await h.play(() => h.llm.respond("too late"));
-    expect(h.state().turns.some((item) => item.payload.content === "too late")).toBe(false);
+    expect(conversationTurns(h.state()).some((item) => item.payload.content === "too late")).toBe(
+      false,
+    );
   });
 
   it("a pause landing while a request is open does NOT strand it: a revived incarnation still adopts it", async () => {
@@ -1923,7 +1948,9 @@ describe("AgentProcessor stream facts", () => {
     // script extraction per-event effect fired — and no real dial happened.
     expect(h.llm.calls).toHaveLength(0);
     expect(h.state().openRequest).toBeNull();
-    expect(h.state().turns.some((item) => item.payload.content.includes("Checking."))).toBe(true);
+    expect(
+      conversationTurns(h.state()).some((item) => item.payload.content.includes("Checking.")),
+    ).toBe(true);
     expect(h.events("events.iterate.com/capability-host/script-run-requested")).toMatchObject([
       { payload: { code: script, executionId: `agent-output:${requestedOffset + 1}` } },
     ]);
@@ -2130,7 +2157,7 @@ describe("AgentProcessor slash commands", () => {
     expect(h.llm.calls).toHaveLength(0);
     expect(h.events(REQUESTED)).toHaveLength(0);
 
-    const itemsBeforeSettlement = h.state().turns.length;
+    const itemsBeforeSettlement = conversationTurns(h.state()).length;
     await h.play([
       "append",
       {
@@ -2144,7 +2171,7 @@ describe("AgentProcessor slash commands", () => {
     // The generated script already appended this result. Its successful
     // settlement only preserves the value for `results`; it must not append a
     // second context item.
-    expect(h.state().turns).toHaveLength(itemsBeforeSettlement);
+    expect(conversationTurns(h.state())).toHaveLength(itemsBeforeSettlement);
   });
 
   it("a resolving /example still renders its successful settlement", async () => {
@@ -2168,13 +2195,11 @@ describe("AgentProcessor slash commands", () => {
       ["advanceTime", 10_000],
     );
 
-    const renderedResult = h
-      .state()
-      .turns.find(
-        (item) =>
-          item.payload.actor?.type === "script" &&
-          item.payload.actor.executionId === scriptRequest.payload.executionId,
-      );
+    const renderedResult = conversationTurns(h.state()).find(
+      (item) =>
+        item.payload.actor?.type === "script" &&
+        item.payload.actor.executionId === scriptRequest.payload.executionId,
+    );
     expect(renderedResult?.payload.content).toContain('"projectId": "project-1"');
     expect(h.llm.calls).toHaveLength(1);
   });
@@ -2379,7 +2404,9 @@ describe("AgentProcessor compaction", () => {
     // The compaction item folded: coverage sealed through the barrier,
     // pre-barrier turns dropped, the system prompt untouched in the standing
     // lane, the summary at the front of the turns lane.
-    const compacted = h.state().turns.find((item) => item.payload.compaction !== undefined);
+    const compacted = conversationTurns(h.state()).find(
+      (item) => item.payload.compaction !== undefined,
+    );
     expect(compacted).toMatchObject({
       payload: {
         role: "developer",
@@ -2389,10 +2416,12 @@ describe("AgentProcessor compaction", () => {
     });
     expect(compacted!.payload.content).toContain("Dense summary");
     expect(h.state().standingSections).toMatchObject([
-      { sectionId: "agent/system-prompt", occurrences: [{ payload: { role: "system" } }] },
+      { key: "agent/system-prompt", payload: { role: "system" } },
     ]);
-    expect(h.state().turns[0]!.payload.compaction).toBeDefined();
-    expect(h.state().turns.some((item) => item.payload.content === "First question")).toBe(false);
+    expect(conversationTurns(h.state())[0]!.payload.compaction).toBeDefined();
+    expect(
+      conversationTurns(h.state()).some((item) => item.payload.content === "First question"),
+    ).toBe(false);
     expect(h.state().lastLlmRequestOffset).toBeGreaterThanOrEqual(secondRequestOffset);
     expect(firstRequestOffset).toBeLessThan(secondRequestOffset);
 
@@ -2428,7 +2457,9 @@ describe("AgentProcessor compaction", () => {
       ],
     );
     expect(h.llm.calls).toHaveLength(1); // no summary turn
-    expect(h.state().turns.every((item) => item.payload.compaction === undefined)).toBe(true);
+    expect(
+      conversationTurns(h.state()).every((item) => item.payload.compaction === undefined),
+    ).toBe(true);
   });
 
   it("a malformed compaction item whose cutoff is not earlier than itself folds to nothing", async () => {
@@ -2451,11 +2482,15 @@ describe("AgentProcessor compaction", () => {
     // Fail closed: a summary can replace only history that existed before the
     // summary itself, so the raw append rewrites nothing — and folds to
     // nothing itself.
-    expect(h.state().turns.some((item) => item.payload.content === "keep me")).toBe(true);
-    expect(h.state().turns.some((item) => item.payload.compaction !== undefined)).toBe(false);
-    expect(h.state().turns.some((item) => item.payload.content === "malformed summary")).toBe(
+    expect(conversationTurns(h.state()).some((item) => item.payload.content === "keep me")).toBe(
+      true,
+    );
+    expect(conversationTurns(h.state()).some((item) => item.payload.compaction !== undefined)).toBe(
       false,
     );
+    expect(
+      conversationTurns(h.state()).some((item) => item.payload.content === "malformed summary"),
+    ).toBe(false);
   });
 
   it("an item landing between the barrier and the summary survives, ordered behind the summary", async () => {
@@ -2500,11 +2535,11 @@ describe("AgentProcessor compaction", () => {
     await catchUp;
     await h.settle();
 
-    const items = h.state().turns;
+    const items = conversationTurns(h.state());
     // The system prompt stands apart in the standing lane; the turns lane
     // starts at the summary, with the mid-compaction survivor behind it.
     expect(
-      h.state().standingSections.some((section) => section.sectionId === "agent/system-prompt"),
+      h.state().standingSections.some((section) => section.key === "agent/system-prompt"),
     ).toBe(true);
     const summaryIndex = items.findIndex((item) => item.payload.compaction !== undefined);
     const survivorIndex = items.findIndex(
@@ -2523,8 +2558,8 @@ describe("AgentProcessor compaction", () => {
     );
     const requestOffset = h.events(REQUESTED)[0]!.offset;
 
-    // The covered keyed prompt update appends a SECOND occurrence; an unkeyed
-    // system fact rides along.
+    // The sent keyed prompt update lands TEMPORALLY (the standing copy stays
+    // put); an unkeyed system fact rides along.
     await h.play([
       "append",
       {
@@ -2534,9 +2569,13 @@ describe("AgentProcessor compaction", () => {
       { type: CONTEXT_ADDED, payload: { role: "system", content: "Unkeyed durable fact." } },
     ]);
     expect(
-      h.state().standingSections.find((section) => section.sectionId === "agent/system-prompt")!
-        .occurrences,
-    ).toHaveLength(2);
+      h.state().standingSections.find((section) => section.key === "agent/system-prompt"),
+    ).toMatchObject({ payload: { content: "You are a helpful test agent." } });
+    expect(
+      h
+        .state()
+        .turns.some((item) => "section" in item && item.section.key === "agent/system-prompt"),
+    ).toBe(true);
 
     await h.stream.append({
       type: "events.iterate.com/agent/token-usage-reported",
@@ -2557,14 +2596,14 @@ describe("AgentProcessor compaction", () => {
     await catchUp;
     await h.settle();
 
-    // System facts survive on both sides of the barrier, but each standing
-    // section's occurrence history collapses to the latest — repeated prompt
-    // updates cannot grow the compaction-immune prefix forever.
-    const items = h.state().turns;
+    // System facts survive on both sides of the barrier, and each section
+    // collapses to its NEWEST occurrence, folded back into the standing
+    // document — repeated prompt updates cannot grow history forever.
+    const items = conversationTurns(h.state());
     expect(
-      h.state().standingSections.find((section) => section.sectionId === "agent/system-prompt")!
-        .occurrences,
-    ).toMatchObject([{ payload: { content: "You are v2." } }]);
+      h.state().standingSections.find((section) => section.key === "agent/system-prompt"),
+    ).toMatchObject({ payload: { content: "You are v2." } });
+    expect(h.state().turns.some((item) => "section" in item)).toBe(false);
     const factIndex = items.findIndex((item) => item.payload.content === "Unkeyed durable fact.");
     const summaryIndex = items.findIndex((item) => item.payload.compaction !== undefined);
     expect(factIndex).toBeGreaterThanOrEqual(0);
@@ -2618,7 +2657,7 @@ describe("AgentProcessor compaction", () => {
     expect(replay.llm.calls).toHaveLength(0);
     expect(replay.events().map((row) => row.offset)).toEqual(journalledOffsets);
     expect(
-      replay.state().turns.filter((item) => item.payload.compaction !== undefined),
+      conversationTurns(replay.state()).filter((item) => item.payload.compaction !== undefined),
     ).toHaveLength(1);
   });
 
@@ -2725,9 +2764,9 @@ describe("AgentProcessor compaction", () => {
     await h.settle();
 
     expect(h.llm.calls).toHaveLength(3); // the older report never dialed
-    expect(h.state().turns.filter((item) => item.payload.compaction !== undefined)).toMatchObject([
-      { payload: { compaction: { replacesHistoryThrough: secondRequestOffset } } },
-    ]);
+    expect(
+      conversationTurns(h.state()).filter((item) => item.payload.compaction !== undefined),
+    ).toMatchObject([{ payload: { compaction: { replacesHistoryThrough: secondRequestOffset } } }]);
   });
 
   it("token tallies accumulate cached and reasoning components", async () => {
@@ -2789,7 +2828,7 @@ describe("context projection", () => {
     } as AgentContextAddedPayload,
   });
 
-  it("a keyed item maps to its standing section: uncovered updates collapse it, covered ones append a new occurrence", () => {
+  it("re-adding a key IS the update: un-sent coalesces in place, sent appends temporally with supersedes", () => {
     const first = projectContextAdded({
       standingSections: [],
       turns: [],
@@ -2802,23 +2841,25 @@ describe("context projection", () => {
       item: systemItem(2, "v2"),
     });
     expect(replaced.standingSections).toMatchObject([
-      {
-        sectionId: "agent/system-prompt",
-        occurrences: [{ offset: 2, payload: { content: "v2" } }],
-      },
+      { key: "agent/system-prompt", offset: 2, payload: { content: "v2" } },
     ]);
     expect(replaced.turns).toEqual([]);
 
-    // A request at offset 5 has now covered the section — the next keyed
-    // update appends as latest instead of rewriting covered history.
+    // A request at offset 5 has now SENT the section — the next keyed update
+    // lands at the tail with supersedes, and the sent copy stays in place.
     const updated = projectContextAdded({
       ...replaced,
       lastLlmRequestOffset: 5,
       item: systemItem(6, "v3"),
     });
-    expect(updated.standingSections[0]!.occurrences.map((occurrence) => occurrence.offset)).toEqual(
-      [2, 6],
-    );
+    expect(updated.standingSections).toMatchObject([{ offset: 2, payload: { content: "v2" } }]);
+    expect(updated.turns).toMatchObject([
+      {
+        offset: 6,
+        section: { key: "agent/system-prompt", supersedes: 2 },
+        payload: { content: "v3" },
+      },
+    ]);
   });
 });
 
@@ -2851,7 +2892,10 @@ describe("prompt building", () => {
       actor: { type: "script", executionId: "agent-output:9" },
       llmRequestPolicy: { behaviour: "after-current-request" },
     }),
-    streamEvent(5, "events.iterate.com/agent/llm-request-requested", { model: "m" }),
+    streamEvent(5, "events.iterate.com/agent/llm-request-requested", {
+      model: "m",
+      expiresAt: Date.parse("2030-01-01T00:00:00Z"),
+    }),
     streamEvent(6, CONTEXT_ADDED, {
       role: "user",
       content: "arrived after the request",
@@ -2878,9 +2922,10 @@ describe("prompt building", () => {
     const slackMessage = messages.find((message) => message.content.includes("from slack"))!;
     expect(slackMessage.content).toContain('actor=slack:"U1"');
     expect(slackMessage.content).toContain('refs=["/integrations/slack/acme@81"]');
-    // The timestamp is the requested event's own journaled createdAt — the
-    // request replays byte-identically.
-    expect(messages.at(-1)!.content).toBe(`Current date and time (UTC): ${events[4]!.createdAt}`);
+    // The send stamp is the requested event's own journaled createdAt,
+    // rendered permanently into the timeline — the request replays
+    // byte-identically, and every later request is a strict superset.
+    expect(messages.at(-1)!.content).toBe(`Requested at: ${events[4]!.createdAt}`);
   });
 
   it("demotes telegram, email, and github developer items to user; agent mail stays trusted", () => {
@@ -2915,7 +2960,10 @@ describe("prompt building", () => {
         actor: { type: "agent", path: "/agents/main" },
         llmRequestPolicy: { behaviour: "after-current-request" },
       }),
-      streamEvent(7, "events.iterate.com/agent/llm-request-requested", { model: "m" }),
+      streamEvent(7, "events.iterate.com/agent/llm-request-requested", {
+        model: "m",
+        expiresAt: Date.parse("2030-01-01T00:00:00Z"),
+      }),
     ];
     const { messages } = buildAgentLlmRequestBody({ events: taxonomy, llmRequestOffset: 7 });
     const byContent = (needle: string) =>
@@ -2954,7 +3002,10 @@ describe("prompt building", () => {
         files: [file],
         llmRequestPolicy: { behaviour: "after-current-request" },
       }),
-      streamEvent(4, "events.iterate.com/agent/llm-request-requested", { model: "m" }),
+      streamEvent(4, "events.iterate.com/agent/llm-request-requested", {
+        model: "m",
+        expiresAt: Date.parse("2030-01-01T00:00:00Z"),
+      }),
     ];
     const { messages } = buildAgentLlmRequestBody({ events: rows, llmRequestOffset: 4 });
     const projected = messages.find((message) => message.content.includes("look at this chart"))!;
@@ -2994,3 +3045,9 @@ describe("prompt building", () => {
     expect(contextWindowTokens("@cf/meta/llama-3.3-70b")).toBe(128_000);
   });
 });
+
+/** The timeline's conversation turns — send stamps and temporal section
+ * occurrences skipped, so assertions read plain context payloads. */
+function conversationTurns(state: Pick<AgentProcessorState, "turns">) {
+  return state.turns.flatMap((item) => ("requestedAt" in item || "section" in item ? [] : [item]));
+}

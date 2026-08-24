@@ -253,25 +253,27 @@ export function foldAgentSummaryUpdated({
 }
 
 type AgentRuntimeSource = {
-  activeScriptExecutionIds: readonly string[];
-  standingSections: readonly { sectionId: string; occurrences: readonly unknown[] }[];
+  activeScriptExecutions: readonly unknown[];
+  standingSections: readonly { key: string }[];
+  turns: readonly { offset: number; section?: { key: string } }[];
   openRequest: null | { requestedAtOffset: number };
   pendingLlmRequestTrigger: null | { offset: number };
 };
 
 export function deriveAgentRuntime(
   state: AgentRuntimeSource,
-  systemPromptSectionIds: readonly string[],
+  systemPromptSectionKeys: readonly string[],
 ): AgentRuntimeRecord {
   const pending = state.pendingLlmRequestTrigger === null ? 0 : 1;
-  const runnable =
-    pending === 1 &&
-    state.standingSections.some(
-      (section) =>
-        systemPromptSectionIds.includes(section.sectionId) && section.occurrences.length > 0,
-    )
-      ? 1
-      : 0;
+  // The birth prompt may stand in the document or (after an old worker's
+  // whole-prompt write mid-conversation) as a temporal occurrence — either
+  // makes the agent runnable.
+  const promptExists =
+    state.standingSections.some((section) => systemPromptSectionKeys.includes(section.key)) ||
+    state.turns.some(
+      (item) => item.section !== undefined && systemPromptSectionKeys.includes(item.section.key),
+    );
+  const runnable = pending === 1 && promptExists ? 1 : 0;
   return {
     triggers: { pending, runnable },
     // The offset-identified request model has no scheduled/started phases:
@@ -283,7 +285,7 @@ export function deriveAgentRuntime(
       requested: state.openRequest === null ? 0 : 1,
       started: 0,
     },
-    runningScripts: state.activeScriptExecutionIds.length,
+    runningScripts: state.activeScriptExecutions.length,
   };
 }
 

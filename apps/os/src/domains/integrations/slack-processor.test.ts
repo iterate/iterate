@@ -139,9 +139,7 @@ describe("SlackProcessor (webhook router)", () => {
     ).toMatchObject({
       payload: {
         // The untagged slack prompt parses to the one umbrella section.
-        segments: [
-          { sectionId: "agent/system-prompt", content: slackAgentSystemPrompt(CONNECTION) },
-        ],
+        segments: [{ key: "agent/system-prompt", content: slackAgentSystemPrompt(CONNECTION) }],
         role: "system",
       },
     });

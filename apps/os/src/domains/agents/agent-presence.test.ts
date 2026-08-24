@@ -85,13 +85,9 @@ describe("agent runtime", () => {
     expect(
       deriveAgentRuntime(
         {
-          activeScriptExecutionIds: ["script-a", "script-b"],
-          standingSections: [
-            {
-              sectionId: "agent/system-prompt",
-              occurrences: [{ offset: 1, payload: { role: "system", content: "prompt" } }],
-            },
-          ],
+          activeScriptExecutions: [{ executionId: "script-a" }, { executionId: "script-b" }],
+          standingSections: [{ key: "agent/system-prompt" }],
+          turns: [],
           openRequest: { requestedAtOffset: 4 },
           pendingLlmRequestTrigger: { offset: 12 },
         },
@@ -110,8 +106,9 @@ describe("agent runtime", () => {
     expect(
       deriveAgentRuntime(
         {
-          activeScriptExecutionIds: [],
+          activeScriptExecutions: [],
           standingSections: [],
+          turns: [],
           openRequest: null,
           pendingLlmRequestTrigger: { offset: 2 },
         },

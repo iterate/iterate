@@ -82,17 +82,18 @@ describe("replayLlmRequest", () => {
       },
       {
         id: "3:1",
+        // The standing document: one system message of tagged sections.
         role: "system",
-        content: '@1 key="agent/system-prompt"\nYou are **demo**.',
+        content: '<section key="agent/system-prompt">\nYou are **demo**.\n</section>',
       },
       { id: "3:2", role: "user", content: "@2 actor=user:web\nhello" },
       {
         id: "3:3",
         role: "developer",
-        // The clock rides as the LAST message (prompt-cache prefix safety),
-        // stamped from the llm-request-requested event's own append time —
-        // replay reproduces it exactly.
-        content: "Current date and time (UTC): 2026-07-11T00:00:03.000Z",
+        // The request's own permanent send stamp, from the
+        // llm-request-requested event's journaled append time — replay
+        // reproduces it exactly, and every later request is a superset.
+        content: "Requested at: 2026-07-11T00:00:03.000Z",
       },
     ]);
     // Settled by the settled event that points back at this offset.
@@ -105,10 +106,10 @@ describe("replayLlmRequest", () => {
       "system",
       "system",
       "user",
+      "developer", // request 3's permanent send stamp
       "assistant",
       "user",
-      // The trailing clock stamp (prompt-cache-safe tail position).
-      "developer",
+      "developer", // this request's own send stamp
     ]);
     const lastMessage = replay?.messages.at(-2);
     expect(lastMessage?.content).toContain("look at this");

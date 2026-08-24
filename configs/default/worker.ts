@@ -51,21 +51,26 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
    * STANDING AGENT CONTEXT — the pattern to copy for any always-on knowledge.
    *
    * Every agent in this project carries the config repo's AGENTS.md as the
-   * HOT `#config/agents-md` standing section: established at agent birth,
-   * and re-synced to EVERY agent whenever a config-repo commit lands, via an
-   * agents/context-updated replace — which collapses the section to the new
-   * content (standing sections are compaction-immune by construction, and
-   * hot sections render LAST in the standing prefix, so an update busts only
-   * its own prompt-cache suffix). The sync appends ONLY on a real change —
-   * it reads each agent's current section first, and a deleted AGENTS.md
-   * supersedes with a tombstone rather than lingering forever. The
-   * idempotency key is unique per TRANSITION (content hash + the occurrence
-   * it replaces): redeliveries dedupe, reverting to earlier content still
-   * supersedes, and an edited wrapper can never reuse a key with a different
-   * body. An op event never wakes an agent by itself. This content rides
-   * every LLM request of every agent — keep AGENTS.md lean. (Known narrow
-   * race: an agent born while a commit's fan-out is running can end up one
-   * version behind until the next AGENTS.md change.)
+   * hot `config/agents-md` section (rendered LAST in the standing document,
+   * so an update busts only its own prompt-cache suffix): established at
+   * agent birth and re-synced to EVERY agent on each config-repo commit with
+   * the SAME everyday event — a plain keyed context-added. Re-adding the key
+   * IS the update: un-sent content coalesces in place (free), sent content
+   * lands at the tail of the timeline at its moment, with supersedes stamped
+   * by the fold — the conversation above it visibly predates the new
+   * version, and the whole prefix stays cached. The sync appends ONLY on a
+   * real change: re-adding identical content to a SENT section would append
+   * a pointless duplicate temporal copy (on an un-sent one it would merely
+   * coalesce to the same bytes), so it reads each agent's latest occurrence
+   * first; a deleted AGENTS.md supersedes with a tombstone rather than
+   * lingering forever. The idempotency key is unique per TRANSITION (content
+   * hash + the occurrence it replaces): redeliveries dedupe, reverting to
+   * earlier content still supersedes, and an edited wrapper can never reuse
+   * a key with a different body. dont-trigger-request means this never wakes
+   * an agent by itself. This content rides every LLM request of every agent
+   * — keep AGENTS.md lean. (Known narrow race: an agent born while a
+   * commit's fan-out is running can end up one version behind until the next
+   * AGENTS.md change.)
    */
   async #syncAgentsMdContext(agentPaths: string[]): Promise<void> {
     if (agentPaths.length === 0) return;
@@ -83,15 +88,17 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       agentPaths.map(async (path) => {
         const agent = itx.agents.get(path);
         const snapshot = await agent.processor.snapshot();
-        const section = snapshot.state.standingSections.find(
-          (candidate) => candidate.sectionId === "config/agents-md",
-        );
-        const slot = section?.occurrences.at(-1);
-        if (slot?.payload.content === content) return;
+        const slot = latestSectionOccurrence(snapshot.state, "config/agents-md");
+        if (slot?.content === content) return;
         await agent.append({
-          type: "events.iterate.com/agents/context-updated",
+          type: "events.iterate.com/agents/context-added",
           idempotencyKey: `iterate/config/agents-md:${hash}:after-${slot?.offset || 0}`,
-          payload: { op: "replace", selector: "#config/agents-md", content },
+          payload: {
+            content,
+            key: "config/agents-md",
+            llmRequestPolicy: { behaviour: "dont-trigger-request" },
+            role: "system",
+          },
         });
       }),
     );
@@ -143,20 +150,15 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     return [
       ...(await this.#promptSupersession()),
       {
-        // An illustrative standing SECTION — replace it later with
-        // { op: "replace", selector: "#config/house-style", content } on an
-        // agents/context-updated event, or delete it; it exists to show the
-        // shape of project-authored agent personality.
+        // An illustrative standing SECTION — update it later by re-adding
+        // the key with new content (the everyday event), or remove it with
+        // agents/context-rewritten delete; it exists to show the shape of
+        // project-authored agent personality.
         type: "events.iterate.com/agents/context-added" as const,
-        idempotencyKey: "iterate/config/house-style:v2",
+        idempotencyKey: "iterate/config/house-style:v3",
         payload: {
-          content: "",
-          segments: [
-            {
-              sectionId: "config/house-style",
-              content: "House style: write all responses in all-lowercase.",
-            },
-          ],
+          content: "House style: write all responses in all-lowercase.",
+          key: "config/house-style",
           llmRequestPolicy: { behaviour: "dont-trigger-request" as const },
           role: "system" as const,
         },
@@ -165,15 +167,16 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   }
 
   /** prompts/agent-system-prompt.md as the agent's system prompt, parsed at
-   * append time into standing sections (`<section id="...">` tags are the
-   * authoring syntax; untagged content lands in the umbrella
-   * `agent/system-prompt` section, which supersedes the whole platform
-   * prompt). Appended UNCONDITIONALLY rather than read-compared against the
-   * agent's current sections — a snapshot at this moment may predate the
-   * processor reducing the birth batch, and an unforked file parses to
-   * segments byte-identical to the platform's birth append, so each section
-   * collapses to identical content: free when unforked, a supersession when
-   * forked. Fork ONE section's content and only that section changes. */
+   * append time into keyed segments (`<section key="...">` tags are the
+   * authoring syntax — the same tags the fold renders the standing document
+   * with; untagged content lands in the umbrella `agent/system-prompt`
+   * section, which supersedes the whole platform prompt). Appended
+   * UNCONDITIONALLY rather than read-compared against the agent's current
+   * sections — a snapshot at this moment may predate the processor reducing
+   * the birth batch, and inside the un-sent birth window each segment
+   * coalesces in place: an unforked file coalesces to identical bytes
+   * (free), a forked section supersedes. Fork ONE section's content and
+   * only that section changes. */
   async #promptSupersession() {
     const file = await this.itx.repo.readFile({ path: "prompts/agent-system-prompt.md" });
     if (file === null) return [];
@@ -196,13 +199,13 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     return [
       {
         type: "events.iterate.com/agents/context-added" as const,
-        idempotencyKey: `iterate/config/agent-system-prompt-segments:${hash}`,
+        // v2: the segment field spelling changed (sectionId -> key) while the
+        // content hash didn't — a replay over a pre-rename agent must append
+        // a fresh occurrence, not trip same-key-different-body.
+        idempotencyKey: `iterate/config/agent-system-prompt-segments:v2:${hash}`,
         payload: {
           content: "",
-          segments: parsePromptSections({
-            content,
-            fallbackSectionId: "agent/system-prompt",
-          }),
+          segments: parsePromptSections({ content, fallbackKey: "agent/system-prompt" }),
           llmRequestPolicy: { behaviour: "dont-trigger-request" as const },
           role: "system" as const,
         },
@@ -370,4 +373,33 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       { headers: { "content-type": "text/html; charset=utf-8" } },
     );
   }
+}
+
+/**
+ * The latest occurrence of a keyed section, wherever it lives in the agent's
+ * reduced state: the last temporal item in the timeline for that key (they
+ * always postdate the standing entry), else the standing document's entry.
+ * The AGENTS.md sync reads this to skip re-adding content a sent section
+ * already holds — a duplicate temporal copy teaches the model nothing.
+ */
+function latestSectionOccurrence(
+  state: {
+    standingSections: { key: string; offset: number; payload: { content: string } }[];
+    turns: (
+      | { offset: number; requestedAt: string }
+      | { offset: number; section: { key: string }; payload: { content: string } }
+      | { offset: number; payload: { content: string } }
+    )[];
+  },
+  key: string,
+): { offset: number; content: string } | null {
+  for (let index = state.turns.length - 1; index >= 0; index -= 1) {
+    const item = state.turns[index]!;
+    if ("section" in item && item.section.key === key) {
+      return { offset: item.offset, content: item.payload.content };
+    }
+  }
+  const standing = state.standingSections.find((section) => section.key === key);
+  if (standing === undefined) return null;
+  return { offset: standing.offset, content: standing.payload.content };
 }

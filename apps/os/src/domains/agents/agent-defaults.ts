@@ -18,10 +18,7 @@ import {
   AGENT_COLLECTION_SUBSCRIPTION_NAME,
   AgentCollectionProcessorContract,
 } from "./agent-collection-processor-contract.ts";
-import {
-  AGENT_SYSTEM_PROMPT_SECTION_ID,
-  AgentProcessorContract,
-} from "./agent-processor-contract.ts";
+import { AGENT_SYSTEM_PROMPT_KEY, AgentProcessorContract } from "./agent-processor-contract.ts";
 
 /**
  * Deterministic, synchronous content hash (djb2, hex) — the occurrence
@@ -246,7 +243,7 @@ export function agentSystemPromptContextEvent(input: { content: string; idempote
       content: "",
       segments: parsePromptSections({
         content: input.content,
-        fallbackSectionId: AGENT_SYSTEM_PROMPT_SECTION_ID,
+        fallbackKey: AGENT_SYSTEM_PROMPT_KEY,
       }),
     },
   });
@@ -383,11 +380,13 @@ export function agentCreationForPath<
     : [];
   const systemPromptContext = agentSystemPromptContextEvent({
     content: systemPrompt,
-    // "segments" in the prefix on purpose: the event BODY changed shape when
-    // prompts became standing sections, and an unchanged prompt file keeps
-    // the same revision — a re-create over a pre-sections agent must append a
-    // fresh superseding occurrence, not trip same-key-different-body.
-    idempotencyKey: `agent/system-prompt-segments:${systemPromptPolicy.id}:v${systemPromptPolicy.revision}:${projectId}:${agentPath}`,
+    // "segments" (and the v2) in the prefix on purpose: the event BODY
+    // changed shape when prompts became keyed segments (and again when the
+    // segment field spelling settled on `key`), while an unchanged prompt
+    // file keeps the same revision — a re-create over an agent born under
+    // the older shape must append a fresh superseding occurrence, not trip
+    // same-key-different-body.
+    idempotencyKey: `agent/system-prompt-segments:v2:${systemPromptPolicy.id}:v${systemPromptPolicy.revision}:${projectId}:${agentPath}`,
   });
   const bootContext = AgentProcessorContract.buildEvent({
     // Per-agent boot context as a second durable system item: ids and paths

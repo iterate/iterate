@@ -18,21 +18,19 @@ function v5AgentState() {
     consecutiveLlmFailures: 0,
     autonomousTurnCount: 3,
     openRequest: { requestedAtOffset: 44, expiresAt: 999, model: "openai/gpt-5.6-sol" },
-    activeScriptExecutionIds: ["agent-output:7"],
+    activeScriptExecutions: [
+      { executionId: "agent-output:7", requestedAt: "2026-08-24T00:00:00.000Z" },
+    ],
     standingSections: [
       {
-        sectionId: "agent/system-prompt",
-        occurrences: [
-          {
-            offset: 2,
-            payload: {
-              role: "system" as const,
-              key: "agent/system-prompt",
-              content: "You are a helpful agent.",
-              llmRequestPolicy: { behaviour: "after-current-request" as const },
-            },
-          },
-        ],
+        key: "agent/system-prompt",
+        offset: 2,
+        payload: {
+          role: "system" as const,
+          key: "agent/system-prompt",
+          content: "You are a helpful agent.",
+          llmRequestPolicy: { behaviour: "after-current-request" as const },
+        },
       },
     ],
     turns: [
@@ -59,7 +57,7 @@ test("renders the v5 agent fold as pretty stats, not the raw-JSON fallback", () 
   expect(html).toContain("Open request");
   expect(html).toContain("agent-output:7"); // in-progress script
   expect(html).toContain("what is the weather?"); // last turn preview
-  expect(html).toContain("Standing sections"); // the standing lane
+  expect(html).toContain("Standing document"); // the standing lane
 });
 
 test("a paused agent shows the paused state", () => {

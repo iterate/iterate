@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { parsePromptSections } from "iterate/processors";
-import { AGENT_SYSTEM_PROMPT_FILE_SECTION_IDS } from "./agent-processor-contract.ts";
+import { AGENT_SYSTEM_PROMPT_FILE_SECTION_KEYS } from "./agent-processor-contract.ts";
 import {
   AGENT_INITIAL_DEBOUNCE_MS,
   agentCreationForPath,
@@ -102,7 +102,7 @@ describe("agentCreationForPath", () => {
       // segment per <section id>, tags stripped.
       segments: parsePromptSections({
         content: DEFAULT_AGENT_SYSTEM_PROMPT,
-        fallbackSectionId: "agent/system-prompt",
+        fallbackKey: "agent/system-prompt",
       }),
       // The flat context payload defaults the policy on every role; the
       // processor ignores it on system items.
@@ -116,11 +116,9 @@ describe("agentCreationForPath", () => {
     // this pins the two against drift.
     const segments = parsePromptSections({
       content: DEFAULT_AGENT_SYSTEM_PROMPT,
-      fallbackSectionId: "agent/system-prompt",
+      fallbackKey: "agent/system-prompt",
     });
-    expect(segments.map((segment) => segment.sectionId)).toEqual(
-      AGENT_SYSTEM_PROMPT_FILE_SECTION_IDS,
-    );
+    expect(segments.map((segment) => segment.key)).toEqual(AGENT_SYSTEM_PROMPT_FILE_SECTION_KEYS);
     // Tags are authoring syntax: none survive into model-visible content.
     for (const segment of segments) {
       expect(segment.content).not.toContain("<section");
@@ -148,10 +146,10 @@ describe("agentCreationForPath", () => {
     expect(creation.birthCertificate.payload).toEqual({});
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toMatchObject({
-      idempotencyKey: `agent/system-prompt-segments:slack:v7:${PROJECT_ID}:/agents/slack/test`,
+      idempotencyKey: `agent/system-prompt-segments:v2:slack:v7:${PROJECT_ID}:/agents/slack/test`,
       // An untagged prompt parses to the one umbrella section.
       payload: {
-        segments: [{ sectionId: "agent/system-prompt", content: "Slack execution contract" }],
+        segments: [{ key: "agent/system-prompt", content: "Slack execution contract" }],
       },
     });
   });
@@ -172,9 +170,9 @@ describe("agentCreationForPath", () => {
     const first = promptEvent("1", "first policy");
     expect(promptEvent("1", "first policy")).toEqual(first);
     expect(promptEvent("2", "changed policy")).toMatchObject({
-      idempotencyKey: `agent/system-prompt-segments:routed:v2:${PROJECT_ID}:/agents/routed/test`,
+      idempotencyKey: `agent/system-prompt-segments:v2:routed:v2:${PROJECT_ID}:/agents/routed/test`,
       payload: {
-        segments: [{ sectionId: "agent/system-prompt", content: "changed policy" }],
+        segments: [{ key: "agent/system-prompt", content: "changed policy" }],
       },
     });
   });
@@ -263,7 +261,7 @@ describe("agentSystemPromptContextEvent", () => {
     expect(changed.idempotencyKey).toBe("agent/test-system-prompt:v2");
     expect(changed.payload).toMatchObject({
       role: "system",
-      segments: [{ sectionId: "agent/system-prompt", content: "changed policy" }],
+      segments: [{ key: "agent/system-prompt", content: "changed policy" }],
     });
   });
 });

@@ -94,14 +94,10 @@ test("agent create installs only generic machinery; later events configure it", 
   await agent.processor.waitUntilProcessed({ offset: configured.offset, timeoutMs: 30_000 });
   expect((await agent.processor.snapshot()).state.standingSections).toContainEqual(
     expect.objectContaining({
-      sectionId: "test/config-after-create",
-      occurrences: [
-        expect.objectContaining({
-          payload: expect.objectContaining({
-            content: "configuration is an ordinary event after generic creation",
-          }),
-        }),
-      ],
+      key: "test/config-after-create",
+      payload: expect.objectContaining({
+        content: "configuration is an ordinary event after generic creation",
+      }),
     }),
   );
 });
@@ -353,10 +349,10 @@ test("Agent create replays its earlier birth and setup events through its subscr
     config: { llm: { model: expect.any(String) } },
     standingSections: expect.arrayContaining([
       // The sectionized default prompt establishes its sections at birth…
-      expect.objectContaining({ sectionId: "identity" }),
-      expect.objectContaining({ sectionId: "output-formatting" }),
+      expect.objectContaining({ key: "identity" }),
+      expect.objectContaining({ key: "output-formatting" }),
       // …and the boot context is the legacy keyed vocabulary, mapped in.
-      expect.objectContaining({ sectionId: "agent/boot-context" }),
+      expect.objectContaining({ key: "agent/boot-context" }),
     ]),
   });
 
@@ -681,7 +677,7 @@ test("agents.get(path).create explicitly appends and processes the complete birt
     // contract lives in its output-formatting section.
     segments: expect.arrayContaining([
       expect.objectContaining({
-        sectionId: "output-formatting",
+        key: "output-formatting",
         content: expect.stringContaining("async (itx)"),
       }),
     ]),

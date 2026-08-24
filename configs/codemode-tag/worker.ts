@@ -7,11 +7,13 @@ import { parseCodemodeResponse } from "./codemode-format.ts";
 // plus one embedded <codemode status="..."> tag instead of a bare ```ts
 // fence, and THIS FILE is the interpreter. The platform births every agent
 // with default response parsing ON and a HIGH debounce (60s); this worker
-// reacts to `agent/created`, turns default parsing OFF, replaces ONLY the
-// `#output-formatting` section of the platform prompt with the codemode
-// grammar (an agents/context-updated op — the rest of the platform prompt
-// stands untouched), and lowers the debounce to the ordinary 250ms — the
-// done-configuring signal, which releases a held first turn immediately.
+// reacts to `agent/created`, turns default parsing OFF, re-adds ONLY the
+// `output-formatting` section of the platform prompt with the codemode
+// grammar (a plain keyed context-added — re-adding a key IS the update, and
+// inside the un-sent birth window it coalesces in place, free; the rest of
+// the platform prompt stands untouched), and lowers the debounce to the
+// ordinary 250ms — the done-configuring signal, which releases a held first
+// turn immediately.
 // From then on this worker plays the part the platform's codemode component
 // plays for ordinary projects:
 //
@@ -45,9 +47,9 @@ import { parseCodemodeResponse } from "./codemode-format.ts";
 /** Assistant output events stamped by the platform's LLM component carry
  * the agent contract's slug. */
 const AGENT_PROCESSOR_SLUG = "agent";
-/** The one standing section this experiment replaces: the platform prompt's
+/** The one section this experiment re-adds: the platform prompt's
  * response-format section. Everything else stays the platform's. */
-const OUTPUT_FORMATTING_SECTION_ID = "output-formatting";
+const OUTPUT_FORMATTING_KEY = "output-formatting";
 const SCRIPT_EXPIRY_MS = 10 * 60_000;
 const RESULT_HISTORY_LIMIT = 30_000;
 /** Inline budget once the full copy is spilled — the inline copy is a map of
@@ -159,10 +161,12 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     );
   }
 
-  /** Parsing off + the codemode grammar replacing the platform prompt's
-   * `#output-formatting` section (collapse — replace always collapses; the
-   * rest of the prompt stands). A missing prompt file converts nothing: the
-   * platform prompt AND platform parsing stay — this experiment degrades to
+  /** Parsing off + the codemode grammar re-added under the platform prompt's
+   * `output-formatting` key — the everyday event: inside the un-sent birth
+   * window the section coalesces in place, so the swapped grammar renders in
+   * the standing document as if authored there, and the other nine sections
+   * stand untouched. A missing prompt file converts nothing: the platform
+   * prompt AND platform parsing stay — this experiment degrades to
    * fenced-ts, never to an agent taught a grammar nobody interprets. (The
    * release above still happens either way: a degraded agent must not also
    * keep the 60s birth debounce.) */
@@ -180,21 +184,27 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         payload: { config: { interpretResponses: false } },
       },
       {
-        type: "events.iterate.com/agents/context-updated" as const,
+        type: "events.iterate.com/agents/context-added" as const,
         idempotencyKey: `codemode-tag/birth-prompt:${hash}`,
         payload: {
-          op: "replace" as const,
-          selector: `#${OUTPUT_FORMATTING_SECTION_ID}`,
           content: file.content,
+          key: OUTPUT_FORMATTING_KEY,
+          llmRequestPolicy: { behaviour: "dont-trigger-request" as const },
+          role: "system" as const,
         },
       },
     ];
   }
 
   /**
-   * Keep every converted agent's `#output-formatting` section current with
-   * the repo's grammar file: per-transition idempotency keys, appends only
-   * on a real change. An op event never triggers a turn by itself.
+   * Keep every converted agent's `output-formatting` section current with
+   * the repo's grammar file — the same plain keyed add as the birth
+   * reaction; adaptive placement does the rest (un-sent coalesces free,
+   * sent lands temporally with supersedes). The content-equality skip is
+   * about SENT sections: re-adding identical content to an un-sent section
+   * coalesces to the same bytes anyway, but on a sent one it would append a
+   * pointless duplicate temporal copy. Per-transition idempotency keys;
+   * dont-trigger-request means this never wakes an agent by itself.
    */
   async #syncSystemPromptContext(agentPaths: string[]): Promise<void> {
     if (agentPaths.length === 0) return;
@@ -217,18 +227,16 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         // parser still interprets its output would break every turn. The
         // conversion sweep flips the flag; this sync follows it.
         if (snapshot.state.config.interpretResponses) return;
-        const section = snapshot.state.standingSections.find(
-          (candidate) => candidate.sectionId === OUTPUT_FORMATTING_SECTION_ID,
-        );
-        const slot = section?.occurrences.at(-1);
-        if (slot?.payload.content === content) return;
+        const slot = latestSectionOccurrence(snapshot.state, OUTPUT_FORMATTING_KEY);
+        if (slot?.content === content) return;
         await agent.append({
-          type: "events.iterate.com/agents/context-updated",
+          type: "events.iterate.com/agents/context-added",
           idempotencyKey: `codemode-tag/system-prompt:${hash}:after-${slot?.offset || 0}`,
           payload: {
-            op: "replace",
-            selector: `#${OUTPUT_FORMATTING_SECTION_ID}`,
             content,
+            key: OUTPUT_FORMATTING_KEY,
+            llmRequestPolicy: { behaviour: "dont-trigger-request" },
+            role: "system",
           },
         });
       }),
@@ -239,10 +247,10 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
 
   /**
    * Standing agent context — same recipe as the default template's AGENTS.md
-   * sync: the hot `#config/agents-md` standing section (rendered last in the
-   * standing prefix, so updates bust only their own cache suffix), replaced
-   * via context-updated with per-transition idempotency keys, only on a real
-   * change, tombstone on deletion.
+   * sync: the hot `config/agents-md` section (rendered last in the standing
+   * document), re-added as a plain keyed context-added on a real change,
+   * tombstone on deletion. The content-equality skip prevents appending an
+   * identical temporal copy once the section has been sent.
    */
   async #syncAgentsMdContext(agentPaths: string[]): Promise<void> {
     if (agentPaths.length === 0) return;
@@ -260,15 +268,17 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       agentPaths.map(async (path) => {
         const agent = itx.agents.get(path);
         const snapshot = await agent.processor.snapshot();
-        const section = snapshot.state.standingSections.find(
-          (candidate) => candidate.sectionId === "config/agents-md",
-        );
-        const slot = section?.occurrences.at(-1);
-        if (slot?.payload.content === content) return;
+        const slot = latestSectionOccurrence(snapshot.state, "config/agents-md");
+        if (slot?.content === content) return;
         await agent.append({
-          type: "events.iterate.com/agents/context-updated",
+          type: "events.iterate.com/agents/context-added",
           idempotencyKey: `iterate/config/agents-md:${hash}:after-${slot?.offset || 0}`,
-          payload: { op: "replace", selector: "#config/agents-md", content },
+          payload: {
+            content,
+            key: "config/agents-md",
+            llmRequestPolicy: { behaviour: "dont-trigger-request" },
+            role: "system",
+          },
         });
       }),
     );
@@ -384,10 +394,13 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   /**
    * The "tool result" half of the loop: a settled execution renders back as
    * developer context with after-current-request — which is what drives the
-   * agent's next turn. A script that returned undefined (and didn't throw)
-   * renders nothing: returning no value is how an agent ends its turn. A
-   * settlement the classic processor already rendered (the birth race)
-   * dedupes on the shared key.
+   * agent's next turn. The render INCLUDES how long the script ran, derived
+   * from the script-run-requested and -settled events' own journaled
+   * createdAt (deterministic — never wall clock), so slow operations become
+   * knowable to the model. A script that returned undefined (and didn't
+   * throw) renders nothing: returning no value is how an agent ends its
+   * turn. A settlement the classic processor already rendered (the birth
+   * race) dedupes on the shared key.
    */
   async #renderScriptSettlement(event: StreamEvent): Promise<void> {
     if (!event.path.startsWith("/agents/")) return;
@@ -406,13 +419,14 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     const settlement = payload.settlement;
     if (executionId === undefined || settlement === undefined) return;
     if (!executionId.startsWith("agent-output:")) return;
+    const ranIn = await this.#scriptDuration({ agentPath: event.path, executionId, event });
     let content: string;
     if (settlement.status === "failed") {
       const note = settlement.executionMayHaveOccurred
         ? "The script may have partially executed; inspect state before retrying."
         : "The script did not execute.";
       content =
-        `Your script failed during ${settlement.phase} (${settlement.failureKind}):\n` +
+        `Your script failed during ${settlement.phase} (${settlement.failureKind}${ranIn === null ? "" : `, after ${ranIn}`}):\n` +
         `\`\`\`\n${truncate(settlement.error || "unknown error")}\n\`\`\`\n${note}\n` +
         `Before retrying: \`await itx.docs.typecheck({ code })\` compiles a script against this ` +
         `scope's real types, and \`await itx.docs.search({ q: "several related words" })\` finds working examples.`;
@@ -426,6 +440,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         agentPath: event.path,
         executionId,
         isRawText,
+        ranIn,
         text,
       });
     }
@@ -445,6 +460,46 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   }
 
   /**
+   * How long the script ran, from the journaled createdAt of its
+   * script-run-requested event to this settlement's — deterministic across
+   * redeliveries. Best-effort: an unreadable stream (or a request this
+   * worker never saw) renders without the duration rather than failing the
+   * result append.
+   */
+  async #scriptDuration(input: {
+    agentPath: string;
+    executionId: string;
+    event: StreamEvent;
+  }): Promise<string | null> {
+    try {
+      // The executionId encodes the assistant output's offset, and the
+      // request event lands right after it — a narrow typed read.
+      const assistantOffset = Number(input.executionId.split(":")[1]);
+      if (!Number.isFinite(assistantOffset)) return null;
+      const events = await this.itx.streams.get(input.agentPath).getEvents({
+        afterOffset: assistantOffset,
+        beforeOffset: input.event.offset,
+        eventTypes: ["events.iterate.com/capability-host/script-run-requested"],
+      });
+      const requested = events.find(
+        (candidate) =>
+          (candidate.payload as { executionId?: string }).executionId === input.executionId,
+      );
+      if (requested === undefined) return null;
+      const durationMs = Date.parse(input.event.createdAt) - Date.parse(requested.createdAt);
+      if (!Number.isFinite(durationMs) || durationMs < 0) return null;
+      if (durationMs < 1000) return `${Math.round(durationMs)}ms`;
+      if (durationMs < 120_000) return `${Math.round(durationMs / 100) / 10}s`;
+      const minutes = Math.floor(durationMs / 60_000);
+      const seconds = Math.round((durationMs % 60_000) / 1000);
+      return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
+    } catch (error) {
+      console.error("[codemode-tag] failed to derive script duration", { error });
+      return null;
+    }
+  }
+
+  /**
    * An oversized result SPILLS to the agent's own workspace (mirroring the
    * platform codemode component): the inline copy becomes a preview plus a
    * read-it-back recipe, and the model pages through the file with plain
@@ -455,12 +510,14 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     agentPath: string;
     executionId: string;
     isRawText: boolean;
+    ranIn: string | null;
     text: string;
   }): Promise<string> {
-    const { agentPath, executionId, isRawText, text } = input;
+    const { agentPath, executionId, isRawText, ranIn, text } = input;
+    const returnedHeader = `Your script returned${ranIn === null ? "" : ` (in ${ranIn})`}:`;
     const fence = isRawText ? "```" : "```json";
     if (text.length <= RESULT_HISTORY_LIMIT) {
-      return `Your script returned:\n${fence}\n${text}\n\`\`\``;
+      return `${returnedHeader}\n${fence}\n${text}\n\`\`\``;
     }
     try {
       // One file per execution, so replays overwrite idempotently. The agent
@@ -473,7 +530,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       await itx.workspaces.get(workspace).writeFile(`${workspace}/${relativePath}`, text);
       const shown = text.slice(0, RESULT_SPILL_PREVIEW_CHARS);
       return [
-        "Your script returned:",
+        returnedHeader,
         fence,
         shown,
         "```",
@@ -486,7 +543,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       ].join("\n");
     } catch (error) {
       console.error("[codemode-tag] failed to spill oversized script result", { error });
-      return `Your script returned:\n${fence}\n${truncate(text)}\n\`\`\``;
+      return `${returnedHeader}\n${fence}\n${truncate(text)}\n\`\`\``;
     }
   }
 
@@ -525,4 +582,33 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
 function truncate(text: string): string {
   if (text.length <= RESULT_HISTORY_LIMIT) return text;
   return `${text.slice(0, RESULT_HISTORY_LIMIT)}\n… truncated (${text.length} chars total — return less: slice arrays, pick fields)`;
+}
+
+/**
+ * The latest occurrence of a keyed section, wherever it lives in the agent's
+ * reduced state: the last temporal item in the timeline for that key (they
+ * always postdate the standing entry), else the standing document's entry.
+ * The syncs read this to skip re-adding content a sent section already holds
+ * — a duplicate temporal copy teaches the model nothing.
+ */
+function latestSectionOccurrence(
+  state: {
+    standingSections: { key: string; offset: number; payload: { content: string } }[];
+    turns: (
+      | { offset: number; requestedAt: string }
+      | { offset: number; section: { key: string }; payload: { content: string } }
+      | { offset: number; payload: { content: string } }
+    )[];
+  },
+  key: string,
+): { offset: number; content: string } | null {
+  for (let index = state.turns.length - 1; index >= 0; index -= 1) {
+    const item = state.turns[index]!;
+    if ("section" in item && item.section.key === key) {
+      return { offset: item.offset, content: item.payload.content };
+    }
+  }
+  const standing = state.standingSections.find((section) => section.key === key);
+  if (standing === undefined) return null;
+  return { offset: standing.offset, content: standing.payload.content };
 }

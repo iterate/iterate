@@ -1,172 +1,236 @@
-// The two-lane section tree fold (design: tasks/prompt-sections-tree.md),
-// driven through the public request builder: raw committed events in, the
-// exact wire messages out. Everything here is a pure re-reduction — the same
-// fold the processor, the request inspector, and the mobile Meta tab run.
+// The two-lane fold (design: tasks/prompt-sections-tree.md, spec-by-demo:
+// docs/prompt-sections-demo.html), driven through the public request builder:
+// raw committed events in, the exact wire messages out. Everything here is a
+// pure re-reduction — the same fold the processor, the request inspector, and
+// the mobile Meta tab run.
 
 import { expect, test } from "vitest";
 import type { StreamEvent } from "iterate/processors";
 import { buildAgentLlmRequestBody } from "./agent-prompt-fold.ts";
 
-test("replace #id collapses one section and leaves every other standing message byte-identical, order intact", () => {
-  const base = [
+test("the standing document is ONE system message — and un-sent keyed re-adds coalesce into it, free", () => {
+  const events = [
     contextAdded(1, {
       role: "system",
       content: "",
       segments: [
-        { sectionId: "identity", content: "You are the test agent." },
-        { sectionId: "output-formatting", content: "Respond with one fenced ts block." },
-        { sectionId: "gotchas", content: "Await handles before calling through them." },
+        { key: "identity", content: "You are the test agent." },
+        { key: "output-formatting", content: "Respond with one fenced ts block." },
       ],
     }),
-    contextUpdated(2, { op: "replace", selector: "#config/agents-md", content: "Project notes." }),
+    // The birth window: the worker re-adds the same key before any request
+    // has been sent — the pending section is edited in place. One section
+    // swapped, the other untouched, no fork, no special verb.
+    keyedSystem(2, "output-formatting", "Respond with markdown plus one <codemode> tag."),
     userMessage(3, "hello"),
     requested(4),
   ];
-  const before = buildAgentLlmRequestBody({ events: base, llmRequestOffset: 4 });
-
-  const after = buildAgentLlmRequestBody({
-    events: [
-      ...base,
-      contextUpdated(5, {
-        op: "replace",
-        selector: "#output-formatting",
-        content: "Respond with markdown plus one <codemode> tag.",
-      }),
-      requested(6),
-    ],
-    llmRequestOffset: 6,
-  });
-
-  // Cache-relevant: every message BEFORE the replaced section — and the ones
-  // after it — is byte-identical to the previous request; only the one
-  // section's message changed, in place. The hot agents-md section stays
-  // last in the standing prefix, after the replaced section.
-  const changed = after.messages.filter(
-    (message, index) => before.messages[index]?.content !== message.content,
-  );
-  expect(changed).toEqual([
-    expect.objectContaining({
-      content: '@5 key="output-formatting"\nRespond with markdown plus one <codemode> tag.',
-    }),
-    // The trailing clock stamp is per-request by design.
-    expect.objectContaining({ content: expect.stringContaining("Current date and time") }),
+  const { messages } = buildAgentLlmRequestBody({ events, llmRequestOffset: 4 });
+  expect(messages.map((message) => message.role)).toEqual([
+    "system", // protocol
+    "system", // the standing document
+    "user",
+    "developer", // the request's own send stamp
   ]);
-  expect(after.messages.slice(0, -1).map((message) => message.content.split("\n")[0])).toEqual(
-    before.messages.slice(0, -1).map((message, index) =>
-      // Same shape, same order — only the replaced section's source offset moved.
-      index === 2 ? '@5 key="output-formatting"' : message.content.split("\n")[0],
-    ),
+  expect(messages[1]!.content).toBe(
+    [
+      '<section key="identity">',
+      "You are the test agent.",
+      "</section>",
+      "",
+      '<section key="output-formatting">',
+      "Respond with markdown plus one <codemode> tag.",
+      "</section>",
+    ].join("\n"),
   );
-  expect(sectionIdsOf(after)).toEqual([
-    "identity",
-    "output-formatting",
-    "gotchas",
-    "config/agents-md",
-  ]);
+  expect(messages.at(-1)!.content).toBe(`Requested at: ${isoAt(4)}`);
 });
 
-test("append-latest keeps the covered occurrence's bytes in place and appends the new one directly after it", () => {
+test("a sent section's re-add lands at the tail with supersedes; the standing document stays byte-identical", () => {
   const base = [
     contextAdded(1, {
       role: "system",
       content: "",
-      segments: [{ sectionId: "identity", content: "You are the test agent." }],
+      segments: [{ key: "identity", content: "You are the test agent." }],
     }),
-    contextUpdated(2, { op: "replace", selector: "#config/agents-md", content: "Notes v1." }),
+    keyedSystem(2, "config/agents-md", "Notes v1."),
     userMessage(3, "hi"),
     requested(4),
   ];
+  const before = buildAgentLlmRequestBody({ events: base, llmRequestOffset: 4 });
   const events = [
     ...base,
-    contextUpdated(5, {
-      op: "replace",
-      selector: "#config/agents-md",
-      content: "Notes v2.",
-      mode: "append-latest",
-    }),
-    requested(6),
+    settled(5, 4),
+    keyedSystem(6, "config/agents-md", "Notes v2."),
+    userMessage(7, "and now?"),
+    requested(8),
   ];
-  const { messages } = buildAgentLlmRequestBody({ events, llmRequestOffset: 6 });
-  const agentsMd = messages.filter((message) => message.content.includes('key="config/agents-md"'));
-  expect(agentsMd).toEqual([
-    // The old occurrence's exact bytes stand (prompt-cache prefix intact)…
-    expect.objectContaining({ content: '@2 key="config/agents-md"\nNotes v1.' }),
-    // …and the correction rides after it as the section's latest occurrence.
-    expect.objectContaining({ content: '@5 key="config/agents-md"\nNotes v2.' }),
+  const after = buildAgentLlmRequestBody({ events, llmRequestOffset: 8 });
+
+  // The whole earlier request — standing document included — is an exact
+  // byte prefix of the new one (the provider cache stays warm), and the
+  // update renders at its moment in time with supersedes linkage: everything
+  // above it visibly predates it.
+  expect(after.messages.slice(0, before.messages.length)).toEqual(before.messages);
+  expect(after.messages.slice(before.messages.length).map((message) => message.content)).toEqual([
+    `<section key="config/agents-md" supersedes="@2">\nNotes v2.\n</section>`,
+    "@7 actor=user:web\nand now?",
+    `Requested at: ${isoAt(8)}`,
   ]);
 });
 
-test("delete with selector * deletes everything — standing sections included — leaving only protocol and clock", () => {
+test("every request's prompt is a strict byte-superset of the previous one — stamps included", () => {
   const events = [
     contextAdded(1, {
       role: "system",
       content: "",
-      segments: [{ sectionId: "identity", content: "You are the test agent." }],
+      segments: [{ key: "identity", content: "You are the test agent." }],
     }),
-    userMessage(2, "remember all of this"),
+    userMessage(2, "first question"),
     requested(3),
-    contextUpdated(4, { op: "delete", selector: "*" }),
-    userMessage(5, "anyone home?"),
-    requested(6),
+    assistantOutput(4, "first answer", 3),
+    settled(5, 3),
+    keyedSystem(6, "config/agents-md", "Notes v2."), // temporal update between turns
+    userMessage(7, "second question"),
+    requested(8),
+    assistantOutput(9, "second answer", 8),
+    settled(10, 8),
+    userMessage(11, "third question"),
+    requested(12),
   ];
-  const { messages } = buildAgentLlmRequestBody({ events, llmRequestOffset: 6 });
-  // No guardrails, guidance only: the lobotomy is complete — the context
-  // protocol prompt, the post-delete message, and the clock are all that
-  // remain.
+  const first = buildAgentLlmRequestBody({ events, llmRequestOffset: 3 });
+  const second = buildAgentLlmRequestBody({ events, llmRequestOffset: 8 });
+  const third = buildAgentLlmRequestBody({ events, llmRequestOffset: 12 });
+  expect(second.messages.slice(0, first.messages.length)).toEqual(first.messages);
+  expect(third.messages.slice(0, second.messages.length)).toEqual(second.messages);
+  // The newest stamp is the current time; the older stamps are the
+  // conversation's own permanent clock lines.
+  expect(
+    third.messages.filter((message) => message.content.startsWith("Requested at:")),
+  ).toHaveLength(3);
+});
+
+test("a first-ever key joins the standing document only while no conversation exists; later it lands temporally", () => {
+  const events = [
+    contextAdded(1, {
+      role: "system",
+      content: "",
+      segments: [{ key: "identity", content: "You are the test agent." }],
+    }),
+    userMessage(2, "hello"),
+    // Conversation exists now — a brand-new key must not rewrite the
+    // document above it; it lands at its moment, without supersedes.
+    keyedSystem(3, "config/house-style", "House style: all-lowercase."),
+    requested(4),
+  ];
+  const { messages } = buildAgentLlmRequestBody({ events, llmRequestOffset: 4 });
+  expect(messages[1]!.content).toBe(
+    '<section key="identity">\nYou are the test agent.\n</section>',
+  );
   expect(messages.map((message) => message.content.split("\n")[0])).toEqual([
     expect.stringContaining("Journal-projected context messages"),
-    "@5 actor=user:web",
-    expect.stringContaining("Current date and time"),
+    '<section key="identity">',
+    "@2 actor=user:web",
+    '<section key="config/house-style">',
+    expect.stringContaining("Requested at:"),
   ]);
 });
 
-test("delete #id removes one standing section and nothing else", () => {
+test("context-rewritten replace swaps what past positions contain — the deliberate cache-busting rewrite", () => {
   const events = [
+    keyedSystem(1, "config/house-style", "House style: all-lowercase."),
+    userMessage(2, "hi"),
+    requested(3),
+    settled(4, 3),
+    // The scenario-3a shape: a bare rewrite of a sent behavioral rule. The
+    // fold obeys — the standing document changes in place and any temporal
+    // occurrences of the key vanish. (Don't do this for routine changes;
+    // re-add the key instead.)
+    contextRewritten(5, {
+      op: "replace",
+      key: "config/house-style",
+      content: "House style: proper capitalisation.",
+    }),
+    requested(6),
+  ];
+  const before = buildAgentLlmRequestBody({ events, llmRequestOffset: 3 });
+  const after = buildAgentLlmRequestBody({ events, llmRequestOffset: 6 });
+  expect(before.messages[1]!.content).toContain("all-lowercase");
+  expect(after.messages[1]!.content).toBe(
+    '<section key="config/house-style">\nHouse style: proper capitalisation.\n</section>',
+  );
+  expect(after.messages.some((message) => message.content.includes("all-lowercase"))).toBe(false);
+});
+
+test("context-rewritten delete removes one section; delete * removes everything, both lanes", () => {
+  const base = [
     contextAdded(1, {
       role: "system",
       content: "",
       segments: [
-        { sectionId: "identity", content: "You are the test agent." },
-        { sectionId: "gotchas", content: "Await handles." },
+        { key: "identity", content: "You are the test agent." },
+        { key: "gotchas", content: "Await handles." },
       ],
     }),
-    contextUpdated(2, { op: "delete", selector: "#gotchas" }),
-    userMessage(3, "hello"),
-    requested(4),
+    userMessage(2, "remember all of this"),
+    requested(3),
+    settled(4, 3),
   ];
-  const replay = buildAgentLlmRequestBody({ events, llmRequestOffset: 4 });
-  expect(sectionIdsOf(replay)).toEqual(["identity"]);
-  expect(replay.messages.some((message) => message.content.includes("Await handles"))).toBe(false);
-  expect(replay.messages.some((message) => message.content.includes("hello"))).toBe(true);
+  const oneGone = buildAgentLlmRequestBody({
+    events: [...base, contextRewritten(5, { op: "delete", key: "gotchas" }), requested(6)],
+    llmRequestOffset: 6,
+  });
+  expect(oneGone.messages[1]!.content).toBe(
+    '<section key="identity">\nYou are the test agent.\n</section>',
+  );
+
+  // The lobotomy: no guardrails, guidance only — the audit trail is the
+  // event itself. Protocol, the post-delete message, and its stamp are all
+  // that remain.
+  const allGone = buildAgentLlmRequestBody({
+    events: [
+      ...base,
+      contextRewritten(5, { op: "delete", key: "*" }),
+      userMessage(6, "anyone home?"),
+      requested(7),
+    ],
+    llmRequestOffset: 7,
+  });
+  expect(allGone.messages.map((message) => message.content.split("\n")[0])).toEqual([
+    expect.stringContaining("Journal-projected context messages"),
+    "@6 actor=user:web",
+    expect.stringContaining("Requested at:"),
+  ]);
 });
 
-test("the canonical standing order does not depend on arrival order", () => {
+test("the standing document's canonical order does not depend on arrival order", () => {
   // The same standing content arriving in two very different orders — hot
-  // section first vs last, prompt segments in the middle vs up front.
+  // section first vs last, prompt segments in the middle vs up front. All
+  // BEFORE any conversation, so everything coalesces into the document.
   const forwards = [
     contextAdded(1, {
       role: "system",
       content: "",
       segments: [
-        { sectionId: "identity", content: "You are the test agent." },
-        { sectionId: "output-formatting", content: "One fenced block." },
+        { key: "identity", content: "You are the test agent." },
+        { key: "output-formatting", content: "One fenced block." },
       ],
     }),
     keyedSystem(2, "agent/boot-context", "Context for this agent."),
     keyedSystem(3, "config/house-style", "All lowercase."),
-    contextUpdated(4, { op: "replace", selector: "#config/agents-md", content: "Notes." }),
+    keyedSystem(4, "config/agents-md", "Notes."),
     requested(5),
   ];
   const backwards = [
-    contextUpdated(1, { op: "replace", selector: "#config/agents-md", content: "Notes." }),
+    keyedSystem(1, "config/agents-md", "Notes."),
     keyedSystem(2, "config/house-style", "All lowercase."),
     keyedSystem(3, "agent/boot-context", "Context for this agent."),
     contextAdded(4, {
       role: "system",
       content: "",
       segments: [
-        { sectionId: "identity", content: "You are the test agent." },
-        { sectionId: "output-formatting", content: "One fenced block." },
+        { key: "identity", content: "You are the test agent." },
+        { key: "output-formatting", content: "One fenced block." },
       ],
     }),
     requested(5),
@@ -174,42 +238,24 @@ test("the canonical standing order does not depend on arrival order", () => {
   const canonical = [
     // Platform prompt sections in file order, boot context behind them,
     // other config sections alphabetically, hot sections last.
-    "identity",
-    "output-formatting",
-    "agent/boot-context",
-    "config/house-style",
-    "config/agents-md",
+    '<section key="identity">',
+    '<section key="output-formatting">',
+    '<section key="agent/boot-context">',
+    '<section key="config/house-style">',
+    '<section key="config/agents-md">',
   ];
-  expect(sectionIdsOf(buildAgentLlmRequestBody({ events: forwards, llmRequestOffset: 5 }))).toEqual(
+  const docTagLines = (body: { messages: { content: string }[] }) =>
+    body.messages[1]!.content.split("\n").filter((line) => line.startsWith("<section"));
+  expect(docTagLines(buildAgentLlmRequestBody({ events: forwards, llmRequestOffset: 5 }))).toEqual(
     canonical,
   );
-  expect(
-    sectionIdsOf(buildAgentLlmRequestBody({ events: backwards, llmRequestOffset: 5 })),
-  ).toEqual(canonical);
-});
-
-test("legacy keyed events map into the tree: key is the sectionId, uncovered updates collapse, covered ones append as latest", () => {
-  const events = [
-    keyedSystem(1, "integration/github/status", "status 1"),
-    keyedSystem(2, "integration/github/status", "status 2"), // uncovered → collapse
-    userMessage(3, "what's up?"),
-    requested(4),
-    keyedSystem(5, "integration/github/status", "status 3"), // covered → append-as-latest
-    requested(6),
-  ];
-  const { messages } = buildAgentLlmRequestBody({ events, llmRequestOffset: 6 });
-  const statuses = messages.filter((message) =>
-    message.content.includes('key="integration/github/status"'),
+  expect(docTagLines(buildAgentLlmRequestBody({ events: backwards, llmRequestOffset: 5 }))).toEqual(
+    canonical,
   );
-  expect(statuses.map((message) => message.content)).toEqual([
-    '@2 key="integration/github/status"\nstatus 2',
-    '@5 key="integration/github/status"\nstatus 3',
-  ]);
-  expect(messages.some((message) => message.content.includes("status 1"))).toBe(false);
 });
 
-test("a legacy whole-prompt supersession at key agent/system-prompt clears the segmented prompt sections", () => {
-  // The old default-template worker ships the whole (untagged) prompt file
+test("a whole-prompt write at the umbrella key supersedes the prompt-file sections — the forked prompt never stacks", () => {
+  // An old default-template worker ships the whole (untagged) prompt file
   // keyed agent/system-prompt AFTER the platform birth appended segments —
   // without the umbrella clearing the file sections, every such agent would
   // carry a double prompt (the p1711 trace).
@@ -218,19 +264,19 @@ test("a legacy whole-prompt supersession at key agent/system-prompt clears the s
       role: "system",
       content: "",
       segments: [
-        { sectionId: "identity", content: "Platform identity." },
-        { sectionId: "output-formatting", content: "Platform format." },
+        { key: "identity", content: "Platform identity." },
+        { key: "output-formatting", content: "Platform format." },
       ],
     }),
     keyedSystem(2, "agent/system-prompt", "The project's own whole prompt."),
     userMessage(3, "hello"),
     requested(4),
   ];
-  const replay = buildAgentLlmRequestBody({ events, llmRequestOffset: 4 });
-  expect(sectionIdsOf(replay)).toEqual(["agent/system-prompt"]);
-  expect(replay.messages.some((message) => message.content.includes("Platform identity"))).toBe(
-    false,
+  const { messages } = buildAgentLlmRequestBody({ events, llmRequestOffset: 4 });
+  expect(messages[1]!.content).toBe(
+    '<section key="agent/system-prompt">\nThe project\'s own whole prompt.\n</section>',
   );
+  expect(messages.some((message) => message.content.includes("Platform identity"))).toBe(false);
 });
 
 test("one event carrying tagged sections AND untagged umbrella content keeps them all — the umbrella clears only PRIOR prompt sections", () => {
@@ -242,40 +288,59 @@ test("one event carrying tagged sections AND untagged umbrella content keeps the
       role: "system",
       content: "",
       segments: [
-        { sectionId: "identity", content: "Platform identity." },
-        { sectionId: "output-formatting", content: "Platform format." },
-        { sectionId: "agent/system-prompt", content: "You are serving the MCP session." },
+        { key: "identity", content: "Platform identity." },
+        { key: "output-formatting", content: "Platform format." },
+        { key: "agent/system-prompt", content: "You are serving the MCP session." },
       ],
     }),
     userMessage(2, "hello"),
     requested(3),
   ];
-  const replay = buildAgentLlmRequestBody({ events, llmRequestOffset: 3 });
-  expect(sectionIdsOf(replay)).toEqual(["identity", "output-formatting", "agent/system-prompt"]);
+  const { messages } = buildAgentLlmRequestBody({ events, llmRequestOffset: 3 });
+  expect(messages[1]!.content.split("\n").filter((line) => line.startsWith("<section"))).toEqual([
+    '<section key="identity">',
+    '<section key="output-formatting">',
+    '<section key="agent/system-prompt">',
+  ]);
 });
 
-test("a replace op on a missing section creates it as a standing system section", () => {
+test("an un-sent temporal occurrence coalesces in place too, keeping its supersedes anchor", () => {
   const events = [
-    contextUpdated(1, { op: "replace", selector: "#config/agents-md", content: "Fresh notes." }),
+    keyedSystem(1, "config/agents-md", "Notes v1."),
     userMessage(2, "hi"),
     requested(3),
+    settled(4, 3),
+    // Two rapid re-adds after the send, no request between them: the first
+    // lands temporally; the second edits IT (never sent) instead of
+    // stacking a third copy.
+    keyedSystem(5, "config/agents-md", "Notes v2."),
+    keyedSystem(6, "config/agents-md", "Notes v3."),
+    requested(7),
   ];
-  const { messages } = buildAgentLlmRequestBody({ events, llmRequestOffset: 3 });
-  const agentsMd = messages.find((message) => message.content.includes('key="config/agents-md"'))!;
-  expect(agentsMd).toMatchObject({ role: "system" });
-  expect(agentsMd.content).toBe('@1 key="config/agents-md"\nFresh notes.');
+  const { messages } = buildAgentLlmRequestBody({ events, llmRequestOffset: 7 });
+  const updates = messages.filter((message) =>
+    message.content.split("\n")[0]!.includes("supersedes="),
+  );
+  expect(updates.map((message) => message.content)).toEqual([
+    `<section key="config/agents-md" supersedes="@1">\nNotes v3.\n</section>`,
+  ]);
+  expect(messages.some((message) => message.content.includes("Notes v2."))).toBe(false);
 });
 
 // -----------------------------------------------------------------------------
 // Event literals.
 // -----------------------------------------------------------------------------
 
+function isoAt(offset: number): string {
+  return new Date(1_700_000_000_000 + offset * 1000).toISOString();
+}
+
 function streamEvent(offset: number, type: string, payload: unknown): StreamEvent {
   return {
     type,
     payload: payload as Record<string, unknown>,
     offset,
-    createdAt: new Date(1_700_000_000_000 + offset * 1000).toISOString(),
+    createdAt: isoAt(offset),
     path: "/agents/test",
   };
 }
@@ -284,8 +349,8 @@ function contextAdded(offset: number, payload: Record<string, unknown>): StreamE
   return streamEvent(offset, "events.iterate.com/agents/context-added", payload);
 }
 
-function contextUpdated(offset: number, payload: Record<string, unknown>): StreamEvent {
-  return streamEvent(offset, "events.iterate.com/agents/context-updated", payload);
+function contextRewritten(offset: number, payload: Record<string, unknown>): StreamEvent {
+  return streamEvent(offset, "events.iterate.com/agents/context-rewritten", payload);
 }
 
 function keyedSystem(offset: number, key: string, content: string): StreamEvent {
@@ -306,18 +371,20 @@ function userMessage(offset: number, content: string): StreamEvent {
   });
 }
 
+function assistantOutput(offset: number, content: string, llmRequestOffset: number): StreamEvent {
+  return contextAdded(offset, { role: "assistant", content, llmRequestOffset });
+}
+
+function settled(offset: number, requestOffset: number): StreamEvent {
+  return streamEvent(offset, "events.iterate.com/agent/llm-request-settled", {
+    requestOffset,
+    result: { status: "succeeded", text: "ok" },
+  });
+}
+
 function requested(offset: number): StreamEvent {
   return streamEvent(offset, "events.iterate.com/agent/llm-request-requested", {
     model: "test-model",
     expiresAt: Date.parse("2030-01-01T00:00:00Z"),
-  });
-}
-
-/** The standing prefix's section ids, in rendered order, read off the
- * messages' own `key="…"` protocol lines. */
-function sectionIdsOf(body: { messages: { content: string }[] }): string[] {
-  return body.messages.flatMap((message) => {
-    const match = message.content.split("\n")[0]!.match(/key="([^"]+)"/);
-    return match === null ? [] : [match[1]!];
   });
 }

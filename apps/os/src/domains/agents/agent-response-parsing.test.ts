@@ -11,7 +11,7 @@ import { expect, it } from "vitest";
 import type { ConsumedInput } from "iterate/processors";
 import { makeProcessorHarness } from "iterate/processors/testing";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
-import type { AgentProcessorContract } from "./agent-processor-contract.ts";
+import type { AgentProcessorContract, AgentProcessorState } from "./agent-processor-contract.ts";
 import type { WorkersAiMessage } from "./workers-ai-transport.ts";
 
 const CONTEXT_ADDED = "events.iterate.com/agents/context-added";
@@ -29,14 +29,16 @@ it("runs a full turn but interprets nothing: even a perfect ```ts script is left
 
   // The response landed as raw assistant context and the request settled…
   expect(h.state().openRequest).toBeNull();
-  expect(h.state().turns.at(-1)).toMatchObject({
+  expect(conversationTurns(h.state()).at(-1)).toMatchObject({
     payload: { role: "assistant", content: "```ts\nasync (itx) => 1\n```" },
   });
   // …and that is ALL: no script request, no corrective feedback, no chat
   // message. Interpretation belongs to userland.
   expect(h.events(SCRIPT_REQUESTED)).toHaveLength(0);
   expect(h.events(WEB_MESSAGE_SENT)).toHaveLength(0);
-  expect(h.state().turns.filter((item) => item.payload.role === "developer")).toHaveLength(0);
+  expect(
+    conversationTurns(h.state()).filter((item) => item.payload.role === "developer"),
+  ).toHaveLength(0);
 });
 
 it("slash commands are inert with parsing off: no execution, no LLM turn (userland's job)", async () => {
@@ -61,7 +63,7 @@ it("the full userland loop: worker-appended consequences drive scripts, chat, an
       'On it!\n<codemode status="Checking">\nreturn await itx.doWhatever()\n</codemode>',
     ),
   );
-  const assistantOffset = h.state().turns.at(-1)!.offset;
+  const assistantOffset = conversationTurns(h.state()).at(-1)!.offset;
 
   // Now play the config worker's part — the same appends the platform's
   // codemode component would have made, through the public vocabulary.
@@ -89,11 +91,9 @@ it("the full userland loop: worker-appended consequences drive scripts, chat, an
   // assistant text is already there).
   expect(h.state().summary).toMatchObject({ activity: "Checking" });
   expect(
-    h
-      .state()
-      .turns.filter((item) =>
-        item.payload.content.startsWith("The assistant sent this visible web-chat message:"),
-      ),
+    conversationTurns(h.state()).filter((item) =>
+      item.payload.content.startsWith("The assistant sent this visible web-chat message:"),
+    ),
   ).toHaveLength(0);
 
   // The script settles; the worker renders the result as developer context
@@ -132,7 +132,7 @@ it("a plain sendMessage (no llmRequestOffset) still mirrors into assistant histo
     ...PARSING_OFF_AGENT_EVENTS,
     { type: WEB_MESSAGE_SENT, payload: { message: "sent by a script" } },
   ]);
-  expect(h.state().turns.at(-1)).toMatchObject({
+  expect(conversationTurns(h.state()).at(-1)).toMatchObject({
     payload: {
       role: "assistant",
       content: "The assistant sent this visible web-chat message: sent by a script",
@@ -203,4 +203,10 @@ function makeScriptedLlm() {
         calls.push({ ...args, resolve, reject });
       }),
   };
+}
+
+/** The timeline's conversation turns — send stamps and temporal section
+ * occurrences skipped, so assertions read plain context payloads. */
+function conversationTurns(state: { turns: AgentProcessorState["turns"] }) {
+  return state.turns.flatMap((item) => ("requestedAt" in item || "section" in item ? [] : [item]));
 }

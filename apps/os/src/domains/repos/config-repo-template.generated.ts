@@ -405,7 +405,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
   {
     path: "prompts/agent-system-prompt.md",
     content:
-      "<section id=\"identity\">\n" +
+      "<section key=\"identity\">\n" +
       "You are a general-purpose agent on the iterate platform. You live at an agent stream path inside a project; the transcript you see is that stream's history, and everything you do is an event on it.\n" +
       "\n" +
       "Two ideas govern everything you do:\n" +
@@ -415,7 +415,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "`itx` is a Cap'n Web RpcStub (Cloudflare's RPC protocol — https://github.com/cloudflare/capnweb) scoped to YOUR agent path in this project. Built-in capabilities (chat, docs, streams, repo, workspace, files, integrations, sandboxes, scheduler, ai, browser, mcp, ...) plus anything this project has mounted for you — on your path or an enclosing one, up to the project root — resolve as `itx.<name>`. A system context item titled \"Context for this agent\" carries your project id, agent path, and pointers for this scope.\n" +
       "</section>\n" +
       "\n" +
-      "<section id=\"output-formatting\">\n" +
+      "<section key=\"output-formatting\">\n" +
       "HOW YOU ACT: respond with exactly ONE fenced TypeScript code block and no prose outside the fence. The block must contain a single async arrow function and START with `async` — no comments or statements before it:\n" +
       "\n" +
       "```ts\n" +
@@ -431,7 +431,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "- Scripts run fresh, but every script sees `results` (recent script outcomes, newest first, typed): `results[0].data`, `await results[0].load(itx)` if large, `.error` if failed — use it instead of re-pasting JSON. `itx.capabilityHost.setPreamble({ key, code })` pins constants/helpers above all later scripts.\n" +
       "</section>\n" +
       "\n" +
-      "<section id=\"summary-instruction\">\n" +
+      "<section key=\"summary-instruction\">\n" +
       "AGENT SUMMARY (mandatory) — append alongside your work:\n" +
       "```ts\n" +
       "// FIRST TURN: set title and initial activity.\n" +
@@ -465,7 +465,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "Combine waitingFor with first/second-turn fields when needed. Use \"external_event\" or \"timer\" only when genuinely next; qualifying input clears it. Update description (1–2 sentences) only when purpose or conclusions change. Never set pinned unless asked.\n" +
       "</section>\n" +
       "\n" +
-      "<section id=\"workspace-and-repo\">\n" +
+      "<section key=\"workspace-and-repo\">\n" +
       "YOUR FILES — one path namespace; your workspace (`itx.workspace`) is your private working copy of it:\n" +
       "- Every project repo is mounted at its own path — the config repo at \"/repos/config\", others at their \"/repos/<name>\"; new repos just appear. Reads follow each repo's latest main; your writes stay private until `await itx.workspace.git.commit({ message, scope: \"/repos/config\" })` commits ONE repo's changes to ITS main (scope required when several are dirty). Uncommitted content exists only in YOUR workspace — share by committing.\n" +
       "- Your own directory (your workspace path, in \"Context for this agent\") is private scratch — never committable; relative paths like readFile(\"notes.md\") resolve there. Everywhere else use absolute, fully-qualified paths.\n" +
@@ -480,13 +480,13 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "- TASKS BOARD VIEW: the same app shows your task files as a live board — `await itx.worker.docs.link({ workspace: \"/workspaces/agents/you\", repo: \"/repos/config\" })` (optional task: \"tasks/plan.md\" opens one card). Humans there read, comment, and edit your uncommitted task files; committing stays yours.\n" +
       "</section>\n" +
       "\n" +
-      "<section id=\"find-working-code\">\n" +
+      "<section key=\"find-working-code\">\n" +
       "`itx.docs.search` finds working examples (most PROVEN, CI-run), types, and mounted capabilities; word-overlap matching, so pass MANY related words. The top hit inlines its full doc in `result` — skip the get.\n" +
       "\n" +
       "A docs hit's `fetchCall` is the exact call that fetches its full doc; copy it verbatim. Fetched examples are paste-ready scripts (their inputs sit in a `vars` object inside the function — swap in real values); fetched type names return TypeScript source plus referenced types. `await itx.<node>.__describe()` describes any node — including mounted capabilities — with instructions and a member map. Search first, describe what you hold, never guess an API shape.\n" +
       "</section>\n" +
       "\n" +
-      "<section id=\"capability-tour\">\n" +
+      "<section key=\"capability-tour\">\n" +
       "A TOUR IN CODE — every call below is real (one script would never do all this at once); `itx.docs.search` has the full story and a working example for each:\n" +
       "\n" +
       "```ts\n" +
@@ -579,7 +579,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "```\n" +
       "</section>\n" +
       "\n" +
-      "<section id=\"shape-of-work\">\n" +
+      "<section key=\"shape-of-work\">\n" +
       "THE SHAPE OF WORK — scripts are tool calls, not programs:\n" +
       "- Most scripts should fetch data and RETURN it. You cannot see data while writing the script, so code that interprets response shapes you have never seen is guesswork. Get the data in front of your eyes; decide on the next turn.\n" +
       "- YOU are the LLM: don't pipe content through `itx.ai.run` to summarize, draft, or answer — return the data and write it yourself. `ai.run` is for what you cannot do: images, audio, transcription, bulk classification.\n" +
@@ -588,19 +588,19 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "- Send as many chat messages per script as helps: an acknowledgement before slow work, one message per result, a final summary.\n" +
       "</section>\n" +
       "\n" +
-      "<section id=\"other-agents\">\n" +
+      "<section key=\"other-agents\">\n" +
       "OTHER AGENTS — the semantics behind the tour's delegation calls:\n" +
       "- A relative name (`itx.agents.get(\"researcher\")`) addresses a child under YOUR path; an absolute one (`/agents/bugs`) a shared project agent. Call zero-argument `create()` before messaging it. Creating folders or appending ordinary events never implies an agent.\n" +
       "- The receiver cannot see your conversation; its report arrives as your input, labeled with the sender's path and how to reply. For a quick question `ask({ message, timeoutMs })` is send-and-wait; prefer message() plus end-turn for real delegated work — a report can outlive ask's timeout.\n" +
       "</section>\n" +
       "\n" +
-      "<section id=\"files\">\n" +
+      "<section key=\"files\">\n" +
       "FILES:\n" +
       "- You cannot see image pixels: every file — yours or the user's — reaches you as a hint line with the path, type, and recipes. To find out what an image or document CONTAINS, convert it to text: `const doc = await itx.ai.toMarkdown({ name, blob: await itx.files.get(path).bytes() });` (bytes/base64, never a Blob).\n" +
       "- To keep a file from a URL at hand across turns, attach it to yourself: fetch it, then `itx.agent.addFiles({ files: [{ filename, contentType, data }], llmRequestPolicy: { behaviour: \"dont-trigger-request\" } })` (the option keeps the upload from waking you). Attached images render inline for the user and become visible to YOU on later turns.\n" +
       "</section>\n" +
       "\n" +
-      "<section id=\"gotchas\">\n" +
+      "<section key=\"gotchas\">\n" +
       "GOTCHAS:\n" +
       "- Some handles must be awaited before you call through them: if `itx.x.get(...).method(...)` fails oddly, split it — `const h = await itx.x.get(...); await h.method(...)`.\n" +
       "- Never tell the user you lack access before checking: `await itx.integrations.list()` shows connections (Gmail, GitHub, Slack, ...); mounted capabilities appear in `itx.docs.search` and `itx.__describe()`.\n" +
@@ -793,21 +793,26 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "   * STANDING AGENT CONTEXT — the pattern to copy for any always-on knowledge.\n" +
       "   *\n" +
       "   * Every agent in this project carries the config repo's AGENTS.md as the\n" +
-      "   * HOT `#config/agents-md` standing section: established at agent birth,\n" +
-      "   * and re-synced to EVERY agent whenever a config-repo commit lands, via an\n" +
-      "   * agents/context-updated replace — which collapses the section to the new\n" +
-      "   * content (standing sections are compaction-immune by construction, and\n" +
-      "   * hot sections render LAST in the standing prefix, so an update busts only\n" +
-      "   * its own prompt-cache suffix). The sync appends ONLY on a real change —\n" +
-      "   * it reads each agent's current section first, and a deleted AGENTS.md\n" +
-      "   * supersedes with a tombstone rather than lingering forever. The\n" +
-      "   * idempotency key is unique per TRANSITION (content hash + the occurrence\n" +
-      "   * it replaces): redeliveries dedupe, reverting to earlier content still\n" +
-      "   * supersedes, and an edited wrapper can never reuse a key with a different\n" +
-      "   * body. An op event never wakes an agent by itself. This content rides\n" +
-      "   * every LLM request of every agent — keep AGENTS.md lean. (Known narrow\n" +
-      "   * race: an agent born while a commit's fan-out is running can end up one\n" +
-      "   * version behind until the next AGENTS.md change.)\n" +
+      "   * hot `config/agents-md` section (rendered LAST in the standing document,\n" +
+      "   * so an update busts only its own prompt-cache suffix): established at\n" +
+      "   * agent birth and re-synced to EVERY agent on each config-repo commit with\n" +
+      "   * the SAME everyday event — a plain keyed context-added. Re-adding the key\n" +
+      "   * IS the update: un-sent content coalesces in place (free), sent content\n" +
+      "   * lands at the tail of the timeline at its moment, with supersedes stamped\n" +
+      "   * by the fold — the conversation above it visibly predates the new\n" +
+      "   * version, and the whole prefix stays cached. The sync appends ONLY on a\n" +
+      "   * real change: re-adding identical content to a SENT section would append\n" +
+      "   * a pointless duplicate temporal copy (on an un-sent one it would merely\n" +
+      "   * coalesce to the same bytes), so it reads each agent's latest occurrence\n" +
+      "   * first; a deleted AGENTS.md supersedes with a tombstone rather than\n" +
+      "   * lingering forever. The idempotency key is unique per TRANSITION (content\n" +
+      "   * hash + the occurrence it replaces): redeliveries dedupe, reverting to\n" +
+      "   * earlier content still supersedes, and an edited wrapper can never reuse\n" +
+      "   * a key with a different body. dont-trigger-request means this never wakes\n" +
+      "   * an agent by itself. This content rides every LLM request of every agent\n" +
+      "   * — keep AGENTS.md lean. (Known narrow race: an agent born while a\n" +
+      "   * commit's fan-out is running can end up one version behind until the next\n" +
+      "   * AGENTS.md change.)\n" +
       "   */\n" +
       "  async #syncAgentsMdContext(agentPaths: string[]): Promise<void> {\n" +
       "    if (agentPaths.length === 0) return;\n" +
@@ -825,15 +830,17 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      agentPaths.map(async (path) => {\n" +
       "        const agent = itx.agents.get(path);\n" +
       "        const snapshot = await agent.processor.snapshot();\n" +
-      "        const section = snapshot.state.standingSections.find(\n" +
-      "          (candidate) => candidate.sectionId === \"config/agents-md\",\n" +
-      "        );\n" +
-      "        const slot = section?.occurrences.at(-1);\n" +
-      "        if (slot?.payload.content === content) return;\n" +
+      "        const slot = latestSectionOccurrence(snapshot.state, \"config/agents-md\");\n" +
+      "        if (slot?.content === content) return;\n" +
       "        await agent.append({\n" +
-      "          type: \"events.iterate.com/agents/context-updated\",\n" +
+      "          type: \"events.iterate.com/agents/context-added\",\n" +
       "          idempotencyKey: `iterate/config/agents-md:${hash}:after-${slot?.offset || 0}`,\n" +
-      "          payload: { op: \"replace\", selector: \"#config/agents-md\", content },\n" +
+      "          payload: {\n" +
+      "            content,\n" +
+      "            key: \"config/agents-md\",\n" +
+      "            llmRequestPolicy: { behaviour: \"dont-trigger-request\" },\n" +
+      "            role: \"system\",\n" +
+      "          },\n" +
       "        });\n" +
       "      }),\n" +
       "    );\n" +
@@ -885,20 +892,15 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    return [\n" +
       "      ...(await this.#promptSupersession()),\n" +
       "      {\n" +
-      "        // An illustrative standing SECTION — replace it later with\n" +
-      "        // { op: \"replace\", selector: \"#config/house-style\", content } on an\n" +
-      "        // agents/context-updated event, or delete it; it exists to show the\n" +
-      "        // shape of project-authored agent personality.\n" +
+      "        // An illustrative standing SECTION — update it later by re-adding\n" +
+      "        // the key with new content (the everyday event), or remove it with\n" +
+      "        // agents/context-rewritten delete; it exists to show the shape of\n" +
+      "        // project-authored agent personality.\n" +
       "        type: \"events.iterate.com/agents/context-added\" as const,\n" +
-      "        idempotencyKey: \"iterate/config/house-style:v2\",\n" +
+      "        idempotencyKey: \"iterate/config/house-style:v3\",\n" +
       "        payload: {\n" +
-      "          content: \"\",\n" +
-      "          segments: [\n" +
-      "            {\n" +
-      "              sectionId: \"config/house-style\",\n" +
-      "              content: \"House style: write all responses in all-lowercase.\",\n" +
-      "            },\n" +
-      "          ],\n" +
+      "          content: \"House style: write all responses in all-lowercase.\",\n" +
+      "          key: \"config/house-style\",\n" +
       "          llmRequestPolicy: { behaviour: \"dont-trigger-request\" as const },\n" +
       "          role: \"system\" as const,\n" +
       "        },\n" +
@@ -907,15 +909,16 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  }\n" +
       "\n" +
       "  /** prompts/agent-system-prompt.md as the agent's system prompt, parsed at\n" +
-      "   * append time into standing sections (`<section id=\"...\">` tags are the\n" +
-      "   * authoring syntax; untagged content lands in the umbrella\n" +
-      "   * `agent/system-prompt` section, which supersedes the whole platform\n" +
-      "   * prompt). Appended UNCONDITIONALLY rather than read-compared against the\n" +
-      "   * agent's current sections — a snapshot at this moment may predate the\n" +
-      "   * processor reducing the birth batch, and an unforked file parses to\n" +
-      "   * segments byte-identical to the platform's birth append, so each section\n" +
-      "   * collapses to identical content: free when unforked, a supersession when\n" +
-      "   * forked. Fork ONE section's content and only that section changes. */\n" +
+      "   * append time into keyed segments (`<section key=\"...\">` tags are the\n" +
+      "   * authoring syntax — the same tags the fold renders the standing document\n" +
+      "   * with; untagged content lands in the umbrella `agent/system-prompt`\n" +
+      "   * section, which supersedes the whole platform prompt). Appended\n" +
+      "   * UNCONDITIONALLY rather than read-compared against the agent's current\n" +
+      "   * sections — a snapshot at this moment may predate the processor reducing\n" +
+      "   * the birth batch, and inside the un-sent birth window each segment\n" +
+      "   * coalesces in place: an unforked file coalesces to identical bytes\n" +
+      "   * (free), a forked section supersedes. Fork ONE section's content and\n" +
+      "   * only that section changes. */\n" +
       "  async #promptSupersession() {\n" +
       "    const file = await this.itx.repo.readFile({ path: \"prompts/agent-system-prompt.md\" });\n" +
       "    if (file === null) return [];\n" +
@@ -938,13 +941,13 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    return [\n" +
       "      {\n" +
       "        type: \"events.iterate.com/agents/context-added\" as const,\n" +
-      "        idempotencyKey: `iterate/config/agent-system-prompt-segments:${hash}`,\n" +
+      "        // v2: the segment field spelling changed (sectionId -> key) while the\n" +
+      "        // content hash didn't — a replay over a pre-rename agent must append\n" +
+      "        // a fresh occurrence, not trip same-key-different-body.\n" +
+      "        idempotencyKey: `iterate/config/agent-system-prompt-segments:v2:${hash}`,\n" +
       "        payload: {\n" +
       "          content: \"\",\n" +
-      "          segments: parsePromptSections({\n" +
-      "            content,\n" +
-      "            fallbackSectionId: \"agent/system-prompt\",\n" +
-      "          }),\n" +
+      "          segments: parsePromptSections({ content, fallbackKey: \"agent/system-prompt\" }),\n" +
       "          llmRequestPolicy: { behaviour: \"dont-trigger-request\" as const },\n" +
       "          role: \"system\" as const,\n" +
       "        },\n" +
@@ -1112,6 +1115,35 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      { headers: { \"content-type\": \"text/html; charset=utf-8\" } },\n" +
       "    );\n" +
       "  }\n" +
+      "}\n" +
+      "\n" +
+      "/**\n" +
+      " * The latest occurrence of a keyed section, wherever it lives in the agent's\n" +
+      " * reduced state: the last temporal item in the timeline for that key (they\n" +
+      " * always postdate the standing entry), else the standing document's entry.\n" +
+      " * The AGENTS.md sync reads this to skip re-adding content a sent section\n" +
+      " * already holds — a duplicate temporal copy teaches the model nothing.\n" +
+      " */\n" +
+      "function latestSectionOccurrence(\n" +
+      "  state: {\n" +
+      "    standingSections: { key: string; offset: number; payload: { content: string } }[];\n" +
+      "    turns: (\n" +
+      "      | { offset: number; requestedAt: string }\n" +
+      "      | { offset: number; section: { key: string }; payload: { content: string } }\n" +
+      "      | { offset: number; payload: { content: string } }\n" +
+      "    )[];\n" +
+      "  },\n" +
+      "  key: string,\n" +
+      "): { offset: number; content: string } | null {\n" +
+      "  for (let index = state.turns.length - 1; index >= 0; index -= 1) {\n" +
+      "    const item = state.turns[index]!;\n" +
+      "    if (\"section\" in item && item.section.key === key) {\n" +
+      "      return { offset: item.offset, content: item.payload.content };\n" +
+      "    }\n" +
+      "  }\n" +
+      "  const standing = state.standingSections.find((section) => section.key === key);\n" +
+      "  if (standing === undefined) return null;\n" +
+      "  return { offset: standing.offset, content: standing.payload.content };\n" +
       "}\n",
   },
 ];

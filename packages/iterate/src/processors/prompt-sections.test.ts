@@ -4,19 +4,19 @@ import { parsePromptSections } from "./prompt-sections.ts";
 test("a tagged file parses to one segment per section, in file order, tags stripped", () => {
   const segments = parsePromptSections({
     content: [
-      '<section id="identity">',
+      '<section key="identity">',
       "You are the test agent.",
       "</section>",
       "",
-      '<section id="output-formatting">',
+      '<section key="output-formatting">',
       "Respond with one fenced block.",
       "</section>",
     ].join("\n"),
-    fallbackSectionId: "agent/system-prompt",
+    fallbackKey: "agent/system-prompt",
   });
   expect(segments).toEqual([
-    { sectionId: "identity", content: "You are the test agent." },
-    { sectionId: "output-formatting", content: "Respond with one fenced block." },
+    { key: "identity", content: "You are the test agent." },
+    { key: "output-formatting", content: "Respond with one fenced block." },
   ]);
 });
 
@@ -24,46 +24,44 @@ test("an untagged file is one fallback segment — old prompt files keep working
   expect(
     parsePromptSections({
       content: "Just a whole prompt.\nNo tags anywhere.\n",
-      fallbackSectionId: "agent/system-prompt",
+      fallbackKey: "agent/system-prompt",
     }),
-  ).toEqual([
-    { sectionId: "agent/system-prompt", content: "Just a whole prompt.\nNo tags anywhere." },
-  ]);
+  ).toEqual([{ key: "agent/system-prompt", content: "Just a whole prompt.\nNo tags anywhere." }]);
 });
 
 test("untagged runs between and around tags land in the fallback section at their file position", () => {
   const segments = parsePromptSections({
     content: [
       "Preamble outside any tag.",
-      '<section id="identity">Tagged.</section>',
+      '<section key="identity">Tagged.</section>',
       "A trailing addendum (the MCP prompt suffix shape).",
     ].join("\n"),
-    fallbackSectionId: "agent/system-prompt",
+    fallbackKey: "agent/system-prompt",
   });
   expect(segments).toEqual([
-    { sectionId: "agent/system-prompt", content: "Preamble outside any tag." },
-    { sectionId: "identity", content: "Tagged." },
+    { key: "agent/system-prompt", content: "Preamble outside any tag." },
+    { key: "identity", content: "Tagged." },
     {
-      sectionId: "agent/system-prompt",
+      key: "agent/system-prompt",
       content: "A trailing addendum (the MCP prompt suffix shape).",
     },
   ]);
 });
 
 test("an empty file still parses to one empty fallback segment", () => {
-  expect(parsePromptSections({ content: "  \n", fallbackSectionId: "x" })).toEqual([
-    { sectionId: "x", content: "" },
+  expect(parsePromptSections({ content: "  \n", fallbackKey: "x" })).toEqual([
+    { key: "x", content: "" },
   ]);
 });
 
 test("malformed authoring fails loudly at append time", () => {
   expect(() =>
-    parsePromptSections({ content: '<section id="a">unclosed', fallbackSectionId: "x" }),
+    parsePromptSections({ content: '<section key="a">unclosed', fallbackKey: "x" }),
   ).toThrow(/unclosed/);
   expect(() =>
     parsePromptSections({
-      content: '<section id="a"><section id="b">nested</section></section>',
-      fallbackSectionId: "x",
+      content: '<section key="a"><section key="b">nested</section></section>',
+      fallbackKey: "x",
     }),
   ).toThrow(/flat/);
 });

@@ -165,7 +165,7 @@ describe("TelegramProcessor (webhook router)", () => {
         // The untagged telegram prompt parses to the one umbrella section.
         segments: [
           {
-            sectionId: "agent/system-prompt",
+            key: "agent/system-prompt",
             content: telegramAgentSystemPrompt({
               agentPath: CHAT_PATH,
               chatId: String(CHAT_ID),

@@ -139,7 +139,7 @@ describe("EmailProcessor (thread router)", () => {
     expect(routed[5]).toMatchObject({
       payload: {
         // The untagged email prompt parses to the one umbrella section.
-        segments: [{ sectionId: "agent/system-prompt", content: EMAIL_AGENT_SYSTEM_PROMPT }],
+        segments: [{ key: "agent/system-prompt", content: EMAIL_AGENT_SYSTEM_PROMPT }],
         role: "system",
       },
     });

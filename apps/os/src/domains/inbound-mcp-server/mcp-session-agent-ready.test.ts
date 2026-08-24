@@ -52,7 +52,7 @@ describe("ensureMcpSessionAgentReady", () => {
         // suffix: the file's sections, then the suffix in the umbrella.
         segments: parsePromptSections({
           content: MCP_AGENT_SYSTEM_PROMPT,
-          fallbackSectionId: "agent/system-prompt",
+          fallbackKey: "agent/system-prompt",
         }),
         // The processor ignores the defaulted policy on system items.
         llmRequestPolicy: { behaviour: "after-current-request" },

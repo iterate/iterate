@@ -270,16 +270,26 @@ export function AgentPrettyState({ state }: { state: unknown }) {
   const config = readRuntimeRecord(agent.config);
   const llm = readRuntimeRecord(config?.llm);
   const standingSections = Array.isArray(agent.standingSections) ? agent.standingSections : [];
-  const standingOccurrences = standingSections.flatMap((section: unknown) => {
-    if (section == null || typeof section !== "object") return [];
-    const occurrences = (section as Record<string, unknown>).occurrences;
-    return Array.isArray(occurrences) ? (occurrences as unknown[]) : [];
-  });
   const history = Array.isArray(agent.turns) ? agent.turns : [];
-  const lastMessage = history.length > 0 ? history[history.length - 1] : null;
+  // Preview the last conversation TURN — send stamps and temporal section
+  // occurrences are timeline bookkeeping, not messages.
+  const lastMessage =
+    [...history]
+      .reverse()
+      .find(
+        (item: unknown) =>
+          item != null &&
+          typeof item === "object" &&
+          !("requestedAt" in (item as Record<string, unknown>)) &&
+          !("section" in (item as Record<string, unknown>)),
+      ) || null;
   const lastPreview = lastMessage == null ? null : previewProjectedItem(lastMessage);
-  const scripts = Array.isArray(agent.activeScriptExecutionIds)
-    ? agent.activeScriptExecutionIds
+  const scripts = Array.isArray(agent.activeScriptExecutions)
+    ? agent.activeScriptExecutions.map((execution: unknown) =>
+        execution != null && typeof execution === "object"
+          ? (execution as Record<string, unknown>).executionId || "script"
+          : "script",
+      )
     : [];
 
   return (
@@ -347,13 +357,13 @@ export function AgentPrettyState({ state }: { state: unknown }) {
         </div>
       </div>
 
-      {standingOccurrences.length === 0 ? null : (
+      {standingSections.length === 0 ? null : (
         <details className="rounded-xl bg-muted/40 px-3 py-2">
           <summary className="cursor-pointer text-[10px] uppercase tracking-wide text-muted-foreground/70">
-            Standing sections ({standingSections.length})
+            Standing document ({standingSections.length} sections)
           </summary>
           <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-xs text-foreground/80">
-            {standingOccurrences.map(renderProjectedContextItem).join("\n\n")}
+            {standingSections.map(renderProjectedContextItem).join("\n\n")}
           </pre>
         </details>
       )}
