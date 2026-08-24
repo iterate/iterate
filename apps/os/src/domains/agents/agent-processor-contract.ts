@@ -809,9 +809,9 @@ export const AgentLiveState = z.strictObject({
 export type AgentLiveState = z.infer<typeof AgentLiveState>;
 
 /**
- * The context-item payload — used twice in the contract (the
- * `agents/context-added` event and the state's `contextItems`), so it lives in
- * this hoisted function instead of inline. One flat object for every role; the
+ * The context-item payload — used repeatedly in the contract (the
+ * `agents/context-added` event and both context lanes of the state), so it
+ * lives in this hoisted function instead of inline. One flat object for every role; the
  * role-specific fields are optional and documented per-field. `refs` and the
  * actor union are how the slack/telegram/email/github integrations attach
  * provenance and source coordinates; `compaction` marks the structural
