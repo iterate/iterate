@@ -33,9 +33,9 @@ import { parseCodemodeResponse } from "./codemode-format.ts";
 // observation-grade — an event this handler fails on is SKIPPED, not
 // retried forever, so a dropped delivery quietly kills that turn (send a new
 // message to start fresh). Slash commands (/example, /script) are platform
-// interpretation and therefore inert here. Slack/Telegram/email agents keep
-// default parsing untouched — the conversion below only fires for plain
-// `/agents/…` web agents. If this worker is down at a birth, the agent
+// interpretation and therefore inert here. Slack/Telegram/email and MCP
+// session agents keep default parsing and their own channel prompts
+// untouched — the conversion below only fires for plain web agents. If this worker is down at a birth, the agent
 // answers after ~60s with the platform's fenced-ts defaults — coherent,
 // just not the codemode dialect — until the next deploy's sweep converts it.
 
@@ -94,8 +94,14 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         if (event.path !== "/") break;
         const itx = this.itx;
         const agents = await itx.agents.list();
-        await this.#convertAgents(agents.map((agent) => agent.path));
-        await this.#syncSystemPromptContext(agents.map((agent) => agent.path));
+        // The birth reaction IS the conversion: one atomic batch of parsing
+        // off + codemode prompt + debounce release, all idempotency-keyed —
+        // already-converted agents dedupe to a no-op, and a prompt changed
+        // since their conversion supersedes via its content-hash key. A
+        // separate flag-then-sync sweep raced its own append (the snapshot
+        // gate read a fold that had not reduced the flag yet) and skipped
+        // the prompt, leaving parsing off with the fenced prompt standing.
+        for (const agent of agents) await this.#configureNewbornAgent(agent.path);
         await this.#syncAgentsMdContext(agents.map((agent) => agent.path));
         break;
       }
@@ -136,7 +142,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
    */
   async #configureNewbornAgent(agentPath: string): Promise<void> {
     if (!agentPath.startsWith("/agents/")) return;
-    if (/^\/agents\/(slack|telegram|email)\//.test(agentPath)) return;
+    if (/^\/agents\/(slack|telegram|email|mcp)\//.test(agentPath)) return;
     const conversion = await this.#codemodeConversion();
     await this.#appendUnlessAlreadyRecorded(() =>
       this.itx.agents.get(agentPath).append(...conversion, {
@@ -177,30 +183,6 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         },
       },
     ];
-  }
-
-  /**
-   * The deploy-time sweep for agents born before this worker version (or
-   * while it was down): same conversion as the birth reaction, one
-   * idempotency-keyed event per agent so repeats no-op. Mid-turn flips are
-   * tolerated — a response generated under the fenced prompt but parsed by
-   * the codemode parser gets corrective feedback and the loop recovers.
-   */
-  async #convertAgents(agentPaths: string[]): Promise<void> {
-    const itx = this.itx;
-    for (const path of agentPaths) {
-      if (!path.startsWith("/agents/")) continue;
-      if (/^\/agents\/(slack|telegram|email)\//.test(path)) continue;
-      await this.#appendUnlessAlreadyRecorded(() =>
-        itx.agents.get(path).append({
-          type: "events.iterate.com/agent/configured",
-          idempotencyKey: "codemode-tag/convert:v1",
-          payload: {
-            config: { interpretResponses: false, llmRequestDebounceMs: 250 },
-          },
-        }),
-      );
-    }
   }
 
   /**
@@ -301,7 +283,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
    */
   async #interpretAssistantResponse(event: StreamEvent): Promise<void> {
     if (!event.path.startsWith("/agents/")) return;
-    if (/^\/agents\/(slack|telegram|email)\//.test(event.path)) return;
+    if (/^\/agents\/(slack|telegram|email|mcp)\//.test(event.path)) return;
     // Only interpret output the platform's LLM component produced: the stamp
     // means it authored this event for an accepted request. A raw member
     // append carries no platform stamp and must not gain an interpretation.
