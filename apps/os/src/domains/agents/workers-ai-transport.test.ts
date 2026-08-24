@@ -180,6 +180,40 @@ describe("runWorkersAiAttempt", () => {
       completion_tokens: 5,
       total_tokens: 17,
     });
+    // The finish reason rides the empty-delta frame; a clean "stop" means
+    // the reply is complete.
+    expect(completion.finishReason).toBe("stop");
+  });
+
+  it('surfaces finish_reason "length" so a max-tokens-truncated reply is never treated as complete', async () => {
+    const encoder = new TextEncoder();
+    const frames = [
+      { choices: [{ delta: { content: "```ts\nasync (itx) => {", role: "assistant" }, index: 0 }] },
+      // The reply dies mid-fence: the final content frame reports "length".
+      { choices: [{ delta: {}, finish_reason: "length", index: 0 }] },
+    ];
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const frame of frames) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`));
+        }
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+
+    const completion = await runWorkersAiAttempt({
+      ai: { run: async () => body },
+      deadlineMs: 1_000,
+      messages: [{ role: "user", content: "hi" }],
+      model: DEFAULT_AGENT_MODEL,
+      onChunk: async () => {},
+    });
+
+    expect(completion.finishReason).toBe("length");
+    // The journal evidence carries it too, so a replay can see why the
+    // reply is marked truncated.
+    expect(completion.rawResponse).toMatchObject({ finishReason: "length" });
   });
 });
 

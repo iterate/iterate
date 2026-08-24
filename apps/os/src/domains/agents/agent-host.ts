@@ -34,6 +34,11 @@ export type AgentLlmTransport = (args: {
     reasoningOutputTokens?: number;
   };
   rawResponse?: unknown;
+  /** The provider's finish reason ("stop" | "length" | …). Optional so
+   * existing scripted transports keep working; set it to something other
+   * than "stop" to simulate a truncated reply (nothing may be extracted
+   * from one). Absent = assume complete. */
+  finishReason?: string;
 }>;
 
 /**

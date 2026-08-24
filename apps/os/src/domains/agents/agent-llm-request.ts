@@ -198,6 +198,14 @@ export class AgentLlmRequest {
           inFlight.partialText = completion.text;
         }
         const usage = completion.usage;
+        // A finish reason other than "stop" (max-tokens "length", a filtered
+        // or otherwise cut-off stream) means the text is NOT a complete
+        // reply. The fact rides the assistant context event itself, so every
+        // interpreter — the platform's codemode component, a userland worker
+        // seeing only events, a replay a deployment later — can refuse to
+        // extract a half-script from it.
+        const truncated =
+          completion.finishReason !== undefined && completion.finishReason !== "stop";
         await appendUnlessLostIdempotencyRace(args.append, [
           {
             type: "events.iterate.com/agents/context-added",
@@ -205,6 +213,7 @@ export class AgentLlmRequest {
               role: "assistant",
               content: completion.text,
               llmRequestOffset: requestOffset,
+              ...(truncated && { truncated: true }),
             },
             idempotencyKey: this.#host.idempotencyKey(`assistant-context@${requestOffset}`),
           },
@@ -311,6 +320,9 @@ export class AgentLlmRequest {
       reasoningOutputTokens?: number;
     };
     rawResponse?: unknown;
+    /** Provider finish reason; anything other than "stop" marks the text as
+     * an incomplete reply (see the assistant append in run()). */
+    finishReason?: string;
   }> {
     if (this.#host.deps.callLlm !== undefined) {
       return await this.#host.deps.callLlm({
@@ -342,6 +354,7 @@ export class AgentLlmRequest {
       text: completion.text,
       ...(usage === undefined ? {} : { usage }),
       rawResponse: completion.rawResponse,
+      ...(completion.finishReason === undefined ? {} : { finishReason: completion.finishReason }),
     };
   }
 

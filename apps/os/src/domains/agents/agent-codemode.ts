@@ -28,6 +28,14 @@ import {
   SLASH_COMMAND_EXECUTION_PREFIX,
 } from "./slash-commands.ts";
 
+/** Corrective feedback for a truncated assistant reply. Also mirrored by the
+ * codemode-tag template's vendored interpreter (its worker.ts carries a copy
+ * — keep the two in step). */
+const TRUNCATED_REPLY_FEEDBACK =
+  "Your reply was truncated before it finished (the model hit an output limit or the stream " +
+  "was cut off) — NOTHING was executed and nothing was delivered to the user. Re-send your " +
+  "complete reply; if it was long, send a shorter one, or split the work across turns.";
+
 export class AgentCodemode {
   readonly #host: AgentHost;
   readonly #format = fencedTsResponseFormat;
@@ -91,6 +99,29 @@ export class AgentCodemode {
           payload.llmRequestOffset !== undefined &&
           payload.llmRequestOffset === state.openRequest?.requestedAtOffset
         ) {
+          // TRUNCATED REPLIES ARE NEVER EXECUTABLE. A reply cut off by
+          // max-tokens or a broken stream can end mid-fence — extracting and
+          // running whatever half-script survived would execute code the
+          // model never finished writing. Corrective feedback drives a
+          // retry instead, exactly like the malformed-snippet path.
+          if (payload.truncated === true) {
+            blockProcessorWhile(() =>
+              appendUnlessLostIdempotencyRace(append, [
+                {
+                  type: "events.iterate.com/agents/context-added",
+                  payload: {
+                    role: "developer",
+                    content: TRUNCATED_REPLY_FEEDBACK,
+                    llmRequestPolicy: { behaviour: "after-current-request" },
+                  },
+                  idempotencyKey: this.#host.idempotencyKey(
+                    `truncated-reply-rejected@${event.offset}`,
+                  ),
+                },
+              ]),
+            );
+            break;
+          }
           const outcome = this.#format.parse(payload.content);
           if (outcome.kind === "malformed" || outcome.kind === "multiple") {
             const idempotencyKeySuffix =

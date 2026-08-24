@@ -305,6 +305,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       role?: string;
       content?: string;
       llmRequestOffset?: number;
+      truncated?: boolean;
     };
     if (payload.role !== "assistant") return;
     if (typeof payload.llmRequestOffset !== "number") return;
@@ -315,9 +316,33 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     // message. One snapshot per assistant turn is cheap.
     const snapshot = await this.itx.agents.get(event.path).processor.snapshot();
     if (snapshot.state.config.interpretResponses) return;
-    const outcome = parseCodemodeResponse(payload.content);
     const itx = this.itx;
     const agent = itx.agents.get(event.path);
+    // TRUNCATED REPLIES ARE NEVER EXECUTABLE (nor deliverable as prose): the
+    // platform stamps `truncated` on assistant output whose finish reason
+    // was not "stop" — the tail can end mid-<codemode> block, and running
+    // (or half-delivering) it would act on code the model never finished.
+    // Feedback text and key mirror the platform component's, so the birth
+    // race dedupes instead of double-appending.
+    if (payload.truncated === true) {
+      await this.#appendUnlessAlreadyRecorded(() =>
+        agent.append({
+          type: "events.iterate.com/agents/context-added",
+          idempotencyKey: `agent/truncated-reply-rejected@${event.offset}`,
+          payload: {
+            role: "developer",
+            content:
+              "Your reply was truncated before it finished (the model hit an output limit or " +
+              "the stream was cut off) — NOTHING was executed and nothing was delivered to " +
+              "the user. Re-send your complete reply; if it was long, send a shorter one, or " +
+              "split the work across turns.",
+            llmRequestPolicy: { behaviour: "after-current-request" },
+          },
+        }),
+      );
+      return;
+    }
+    const outcome = parseCodemodeResponse(payload.content);
     if (outcome.kind === "malformed" || outcome.kind === "multiple") {
       const keySuffix =
         outcome.kind === "malformed"

@@ -57,6 +57,12 @@ type WorkersAiCompletion = {
   /** JSON-safe response evidence for the journal (never a live object graph). */
   rawResponse: unknown;
   usage?: unknown;
+  /** The provider's `finish_reason` ("stop" | "length" | …), when reported.
+   * Anything other than "stop" means the text is NOT a complete reply — a
+   * truncated tail must never have a script extracted from it. Absent when
+   * the model's dialect reports none (assume complete: fails open to
+   * today's behavior rather than blocking every reply). */
+  finishReason?: string;
 };
 
 /** One provider-facing chat message. `containsFiles` is transport metadata,
@@ -133,10 +139,12 @@ export async function runWorkersAiAttempt(input: {
     if (raw instanceof ReadableStream) {
       return await drainSseResponse({ body: raw, deadline, onChunk: input.onChunk });
     }
+    const finishReason = extractFinishReason(raw);
     return {
       text: extractAssistantText(raw),
       rawResponse: jsonCompatible(raw),
       usage: extractUsage(raw),
+      ...(finishReason === undefined ? {} : { finishReason }),
     };
   } finally {
     deadline.clear();
@@ -310,10 +318,15 @@ async function drainSseResponse(input: {
   let chunkCount = 0;
   let text = "";
   let usage: unknown;
+  let finishReason: string | undefined;
 
   const handleChunk = async (chunk: unknown) => {
     text += extractChunkText(chunk);
     usage = extractUsage(chunk) ?? usage;
+    // chat/completions SSE: the last content-bearing chunk carries
+    // choices[0].finish_reason ("stop" | "length" | …); earlier chunks carry
+    // null. Last non-null wins.
+    finishReason = extractFinishReason(chunk) ?? finishReason;
     await input.deadline.race(input.onChunk(chunk, chunkCount));
     chunkCount += 1;
   };
@@ -346,9 +359,11 @@ async function drainSseResponse(input: {
       chunkCount,
       response: text,
       ...(usage === undefined ? {} : { usage }),
+      ...(finishReason === undefined ? {} : { finishReason }),
     },
     text,
     ...(usage === undefined ? {} : { usage }),
+    ...(finishReason === undefined ? {} : { finishReason }),
   };
 }
 
@@ -422,6 +437,18 @@ export function extractChunkText(chunk: unknown): string {
 
 function extractUsage(raw: unknown): unknown | undefined {
   return typeof raw === "object" && raw !== null && "usage" in raw ? raw.usage : undefined;
+}
+
+/** `choices[0].finish_reason` from a chat/completions response or SSE chunk
+ * (null mid-stream, a string on the final content chunk). The gateway proxies
+ * chunk bodies verbatim, so BYOK responses carry it exactly as OpenAI sent
+ * it; dialects without it return undefined. */
+function extractFinishReason(raw: unknown): string | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const choices = (raw as { choices?: unknown }).choices;
+  if (!Array.isArray(choices) || choices.length === 0) return undefined;
+  const finishReason = (choices[0] as { finish_reason?: unknown } | undefined)?.finish_reason;
+  return typeof finishReason === "string" ? finishReason : undefined;
 }
 
 /**
