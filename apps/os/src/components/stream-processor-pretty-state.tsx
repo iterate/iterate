@@ -269,20 +269,20 @@ export function AgentPrettyState({ state }: { state: unknown }) {
   const phase = paused != null ? "paused" : openRequest == null ? "idle" : "requested";
   const config = readRuntimeRecord(agent.config);
   const llm = readRuntimeRecord(config?.llm);
-  const standingSections = Array.isArray(agent.standingSections) ? agent.standingSections : [];
-  const history = Array.isArray(agent.turns) ? agent.turns : [];
-  // Preview the last conversation TURN — send stamps and temporal section
-  // occurrences are timeline bookkeeping, not messages.
-  const lastMessage =
-    [...history]
-      .reverse()
-      .find(
-        (item: unknown) =>
-          item != null &&
-          typeof item === "object" &&
-          !("requestedAt" in (item as Record<string, unknown>)) &&
-          !("section" in (item as Record<string, unknown>)),
-      ) || null;
+  const contextItems = Array.isArray(agent.contextItems) ? agent.contextItems : [];
+  const itemKind = (item: unknown) =>
+    item != null && typeof item === "object" ? (item as Record<string, unknown>).kind : undefined;
+  // The derived standing document: the leading run of section items.
+  const document: unknown[] = [];
+  for (const item of contextItems) {
+    if (itemKind(item) !== "section") break;
+    if ((item as Record<string, unknown>).supersedes !== undefined) break;
+    document.push(item);
+  }
+  const history = contextItems.filter((item: unknown) => itemKind(item) === "message");
+  // Preview the last conversation message — send stamps and section
+  // occurrences are bookkeeping, not messages.
+  const lastMessage = history.length > 0 ? history[history.length - 1] : null;
   const lastPreview = lastMessage == null ? null : previewProjectedItem(lastMessage);
   const scripts = Array.isArray(agent.activeScriptExecutions)
     ? agent.activeScriptExecutions.map((execution: unknown) =>
@@ -357,13 +357,13 @@ export function AgentPrettyState({ state }: { state: unknown }) {
         </div>
       </div>
 
-      {standingSections.length === 0 ? null : (
+      {document.length === 0 ? null : (
         <details className="rounded-xl bg-muted/40 px-3 py-2">
           <summary className="cursor-pointer text-[10px] uppercase tracking-wide text-muted-foreground/70">
-            Standing document ({standingSections.length} sections)
+            Standing document ({document.length} sections)
           </summary>
           <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-xs text-foreground/80">
-            {standingSections.map(renderProjectedContextItem).join("\n\n")}
+            {document.map(renderProjectedContextItem).join("\n\n")}
           </pre>
         </details>
       )}
@@ -380,8 +380,8 @@ function asAgentState(state: unknown): Record<string, unknown> | null {
   if (state == null || typeof state !== "object") return null;
   const record = state as Record<string, unknown>;
   // Agent state is recognized by its provider-neutral context projection
-  // (the section tree: `standingSections` + `turns`) plus its config.
-  if (!("turns" in record) || !("standingSections" in record) || !("config" in record)) {
+  // (`contextItems`) plus its config.
+  if (!("contextItems" in record) || !("config" in record)) {
     return null;
   }
   return record;

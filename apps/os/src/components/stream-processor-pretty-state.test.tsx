@@ -21,8 +21,9 @@ function v5AgentState() {
     activeScriptExecutions: [
       { executionId: "agent-output:7", requestedAt: "2026-08-24T00:00:00.000Z" },
     ],
-    standingSections: [
+    contextItems: [
       {
+        kind: "section" as const,
         key: "agent/system-prompt",
         offset: 2,
         payload: {
@@ -32,9 +33,8 @@ function v5AgentState() {
           llmRequestPolicy: { behaviour: "after-current-request" as const },
         },
       },
-    ],
-    turns: [
       {
+        kind: "message" as const,
         offset: 40,
         payload: {
           role: "user" as const,

@@ -373,3 +373,29 @@ with them every place the kernel interpreted a key:
   plain structural terms); the one lane-bearing identifier
   (`AgentContextLanes` + its `lanes` locals) renamed to `AgentContextTree` /
   `tree`; pre-existing "lane" comments left alone.
+
+### 2026-08-25 (second): one collection, derived document
+
+State is a single offset-ordered `contextItems` array (the field name every
+pre-existing reader and migration already knows), a proper discriminated
+union — `kind: "message" | "section" | "request"` — with plain z.object
+variants (the tag discriminates; unknown-key tolerance is deliberate). The
+standing document is derived at render: the leading run of section items
+(up to the first message, send stamp, or superseding occurrence) merges
+into one tagged system message. The update rule is one findLast over one
+array: an un-sent latest occurrence coalesces in place; anything else
+appends at the tail with `supersedes`. context-rewritten replace keeps the
+key's FIRST occurrence at its position (single copy — past positions
+change, which is what a rewrite means); compaction rebuilds the array as
+newest-occurrence-per-key (first-appearance order, supersedes cleared),
+unkeyed system facts, the summary, then the post-barrier tail. Renders are
+byte-identical: agent-prompt-fold.test.ts — including the byte-superset and
+first-appearance specs — passed with ZERO changes. Derivation judgment
+calls: the leading run stops on structure alone (message/stamp/supersedes),
+not on role — every keyed birth item joins the document regardless of
+stored role, matching what rendered before; compaction retains unkeyed
+system facts ahead of the summary (position: after the collapsed keyed
+block), which keeps the document derivation clean and the durable-fact
+ordering spec intact; a rewrite that creates a brand-new key appends at
+the tail. Readers simplified throughout (presence, pretty-state, templates'
+findLast-by-key, compaction gate).

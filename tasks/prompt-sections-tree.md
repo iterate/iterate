@@ -58,6 +58,22 @@ of them incidents or clumsiness from the agent-birth work (#2508).
 >   from the requested/settled events' journaled createdAt) — slow operations
 >   become knowable to the model.
 
+> **Revised 2026-08-25 (second) — one collection, derived document.** The
+> reduced state is a single offset-ordered `contextItems` array (a proper
+> discriminated union: `kind: "message" | "section" | "request"`). The
+> standing document is DERIVED AT RENDER — the collection's leading run of
+> section items, ending at the first message, send stamp, or superseding
+> occurrence, merged into one tagged system message. Reasons: one collection
+> is the simplest state that supports every behavior (the update rule is a
+> findLast-and-coalesce over one array; readers ask one question of one
+> shape); document membership is a fact of position — a section stands
+> exactly when nothing conversational precedes it — so there is no partition
+> to keep consistent with the render; and compaction's rebuild (newest
+> occurrence per key in first-appearance order, unkeyed system facts, the
+> summary, the post-barrier tail) reads directly as the array it produces.
+> Renders are byte-identical under this state model — the byte-superset and
+> first-appearance specs pass untouched.
+
 ## Decisions
 
 1. **Operations are events; the rendered request is a fold.** Events stay

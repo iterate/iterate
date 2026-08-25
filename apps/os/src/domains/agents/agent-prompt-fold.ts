@@ -21,9 +21,9 @@ import type { StreamEvent } from "iterate/processors";
 import {
   AgentProcessorContract,
   type AgentContextAddedPayload,
+  type AgentContextItem,
   type AgentFileAttachment,
   type AgentProcessorState,
-  type AgentTimelineItem,
 } from "./agent-processor-contract.ts";
 import { deriveAgentRuntime, foldAgentSummaryUpdated } from "./agent-presence.ts";
 import { resolveSlashCommand, SLASH_COMMAND_EXECUTION_PREFIX } from "./slash-commands.ts";
@@ -93,31 +93,30 @@ function reduceAgentEventCore(input: {
           // exactly that prefix as covered; items arriving while it ran stay
           // un-sent and may still coalesce before the next request.
           lastLlmRequestOffset: Math.max(state.lastLlmRequestOffset, cutoff),
-          // The rebaseline for keyed content: each section's superseded
-          // occurrences rode the timeline until now — compaction collapses
-          // every section to its NEWEST occurrence, folded back into the
-          // standing document, so repeated updates cannot grow history
-          // forever.
-          standingSections: collapseSectionsToLatest(state),
-          turns: [
+          contextItems: [
+            // The rebaseline for keyed content: superseded occurrences rode
+            // the collection until now — compaction collapses every key to
+            // its NEWEST occurrence, in first-appearance order (supersedes
+            // cleared: these are the standing document again), so repeated
+            // updates cannot grow history forever.
+            ...collapseKeyedToLatest(state.contextItems),
             // Unkeyed system facts are durable instructions outside
             // compactable history: keep them (whatever side of the barrier
             // they sit on), ahead of the summary.
-            ...state.turns.filter(
-              (item) =>
-                !("requestedAt" in item) && !("section" in item) && item.payload.role === "system",
+            ...state.contextItems.filter(
+              (item) => item.kind === "message" && item.payload.role === "system",
             ),
             // The summary replaces a prefix and therefore precedes everything
             // that arrived after its barrier.
-            { offset: event.offset, payload },
-            // Post-barrier turns and send stamps survive at their positions;
-            // temporal section occurrences do not — their newest content
-            // just became the standing document's.
-            ...state.turns.filter(
+            { kind: "message" as const, offset: event.offset, payload },
+            // Post-barrier conversation and send stamps survive at their
+            // positions; section occurrences do not — their newest content is
+            // already in the collapsed block above.
+            ...state.contextItems.filter(
               (item) =>
                 item.offset > cutoff &&
-                !("section" in item) &&
-                ("requestedAt" in item || item.payload.role !== "system"),
+                (item.kind === "request" ||
+                  (item.kind === "message" && item.payload.role !== "system")),
             ),
           ],
         };
@@ -132,17 +131,16 @@ function reduceAgentEventCore(input: {
       ) {
         return state;
       }
-      const tree = projectContextAdded({
-        standingSections: state.standingSections,
-        turns: state.turns,
+      const contextItems = projectContextAdded({
+        contextItems: state.contextItems,
         lastLlmRequestOffset: state.lastLlmRequestOffset,
         item: { offset: event.offset, payload },
       });
       const trigger = contextTriggerSource(payload);
-      if (trigger === null) return { ...state, ...tree };
+      if (trigger === null) return { ...state, contextItems };
       return {
         ...state,
-        ...tree,
+        contextItems,
         // Every trigger moves the pending slot — newest wins; the debounce
         // window and the intent idempotency key anchor to these coordinates.
         pendingLlmRequestTrigger: {
@@ -160,7 +158,7 @@ function reduceAgentEventCore(input: {
       };
     }
     case "events.iterate.com/agents/context-rewritten":
-      return { ...state, ...applyContextRewritten({ state, event }) };
+      return { ...state, contextItems: applyContextRewritten({ state, event }) };
     case "events.iterate.com/agent/llm-request-requested": {
       // Reduce-guard: a late debounced intent — trigger interrupted away, a
       // sibling intent already won, or the agent paused meanwhile — reduces
@@ -193,7 +191,10 @@ function reduceAgentEventCore(input: {
         // keeps the cache property AND makes every request's prompt a strict
         // byte-superset of the previous one: the newest stamp is the current
         // time, the older ones are the conversation's own clock line.
-        turns: [...state.turns, { offset: event.offset, requestedAt: event.createdAt }],
+        contextItems: [
+          ...state.contextItems,
+          { kind: "request", offset: event.offset, requestedAt: event.createdAt },
+        ],
         autonomousTurnCount:
           state.pendingLlmRequestTrigger.source === "agent-loop"
             ? state.autonomousTurnCount + 1
@@ -409,42 +410,37 @@ export function contextClearsWaitingFor(payload: AgentContextAddedPayload): bool
   return payload.actor !== undefined && payload.actor.type !== "script";
 }
 
-type AgentContextTree = Pick<AgentProcessorState, "standingSections" | "turns">;
+type AgentContextItems = AgentProcessorState["contextItems"];
 
 /**
- * Reduce one context item into the two tree. A `key` (or `segments`, many
- * keys in one append) carries the ADAPTIVE PLACEMENT rule — re-adding a key
- * IS the update (docs/prompt-sections-demo.html):
- * - the key's latest occurrence has not been sent in any request → edit it in
- *   place (coalesce — free; this is the whole birth window);
- * - already sent → append a NEW occurrence at the tail of the timeline, with
- *   `supersedes` stamped by the fold (the prefix stays byte-stable, and
- *   everything above the update visibly predates it);
- * - first-ever occurrence → joins the standing document if no conversation
- *   exists yet, else lands temporally.
- * Everything unkeyed is one turn at its offset.
+ * Reduce one context item into the collection. A `key` (or `segments`, many
+ * keys in one append) carries the update rule — re-adding a key IS the
+ * update:
+ * - the key's latest occurrence has not been sent in any request → edit that
+ *   item in place, content and source offset (coalesce — free; this is the
+ *   whole birth window);
+ * - otherwise → append at the tail with `supersedes` pointing at the prior
+ *   occurrence (absent on a first occurrence): the prefix stays byte-stable,
+ *   and everything above the update visibly predates it.
+ * Keys are arbitrary strings the kernel never interprets — no key triggers
+ * clearing, ordering, or gating of any other key, and placement is append
+ * order alone. Everything unkeyed is one plain item at its offset.
  */
 export function projectContextAdded(args: {
-  standingSections: AgentProcessorState["standingSections"];
-  turns: AgentProcessorState["turns"];
+  contextItems: AgentContextItems;
   lastLlmRequestOffset: number;
   item: { offset: number; payload: AgentContextAddedPayload };
-}): AgentContextTree {
+}): AgentContextItems {
   const { item } = args;
   const payload = item.payload;
   if (payload.segments !== undefined) {
     const { segments, ...base } = payload;
-    // Keys are arbitrary strings the kernel never interprets: no key
-    // triggers clearing, ordering, or gating of any other key. Segments
-    // apply in their event (file) order, so a parsed prompt file's sections
-    // first-appear — and therefore render — in the authored layout.
-    let tree: AgentContextTree = {
-      standingSections: args.standingSections,
-      turns: args.turns,
-    };
+    // Segments apply in their event (file) order, so a parsed prompt file's
+    // sections first-appear — and therefore render — in the authored layout.
+    let contextItems = args.contextItems;
     for (const segment of segments) {
-      tree = addKeyedOccurrence({
-        tree,
+      contextItems = addKeyedOccurrence({
+        contextItems,
         lastLlmRequestOffset: args.lastLlmRequestOffset,
         key: segment.key,
         item: {
@@ -453,143 +449,87 @@ export function projectContextAdded(args: {
         },
       });
     }
-    return tree;
+    return contextItems;
   }
   if (payload.key !== undefined) {
     return addKeyedOccurrence({
-      tree: { standingSections: args.standingSections, turns: args.turns },
+      contextItems: args.contextItems,
       lastLlmRequestOffset: args.lastLlmRequestOffset,
       key: payload.key,
       item,
     });
   }
-  return { standingSections: args.standingSections, turns: [...args.turns, item] };
+  return [...args.contextItems, { kind: "message", ...item }];
 }
 
-/** The adaptive placement rule for one keyed occurrence — see
- * projectContextAdded's contract comment. */
+/** The update rule for one keyed occurrence — see projectContextAdded's
+ * contract comment. */
 function addKeyedOccurrence(args: {
-  tree: AgentContextTree;
+  contextItems: AgentContextItems;
   lastLlmRequestOffset: number;
   key: string;
   item: { offset: number; payload: AgentContextAddedPayload };
-}): AgentContextTree {
-  const { tree, key, item } = args;
-  const latest = latestKeyedOccurrence(tree, key);
-  if (latest !== null && latest.offset > args.lastLlmRequestOffset) {
-    // Not yet sent → coalesce: same position (standing entry or temporal
-    // item), new content and source offset. A coalesced temporal item keeps
-    // its supersedes anchor — it still replaces the same sent occurrence.
-    if (latest.place === "standing") {
-      return {
-        standingSections: tree.standingSections.map((section) =>
-          section.key === key ? { key, offset: item.offset, payload: item.payload } : section,
-        ),
-        turns: tree.turns,
-      };
-    }
-    return {
-      standingSections: tree.standingSections,
-      turns: tree.turns.map((candidate, index) =>
-        index === latest.index
-          ? { offset: item.offset, section: latest.section, payload: item.payload }
-          : candidate,
-      ),
-    };
+}): AgentContextItems {
+  const { contextItems, key, item } = args;
+  const index = contextItems.findLastIndex(
+    (candidate) => candidate.kind === "section" && candidate.key === key,
+  );
+  const latest = index < 0 ? undefined : contextItems[index]!;
+  if (latest !== undefined && latest.offset > args.lastLlmRequestOffset) {
+    // Not yet sent → coalesce: same position, new content and source offset.
+    // A coalesced occurrence keeps its supersedes anchor — it still replaces
+    // the same sent occurrence.
+    return contextItems.map((candidate, candidateIndex) =>
+      candidateIndex === index
+        ? { ...candidate, offset: item.offset, payload: item.payload }
+        : candidate,
+    );
   }
-  if (latest === null) {
-    // First-ever occurrence: joins the standing document when no
-    // conversation exists yet, else lands at its moment in time.
-    if (tree.turns.length === 0) {
-      // First-appearance order: the new section joins at the END of the
-      // document. Authors control placement through append order — in every
-      // real flow the worker's hot content (AGENTS.md) arrives after the
-      // birth batch and so lands last. An attribute-based ordering feature
-      // can be added if a use case ever genuinely needs one.
-      return {
-        standingSections: [
-          ...tree.standingSections,
-          { key, offset: item.offset, payload: item.payload },
-        ],
-        turns: tree.turns,
-      };
-    }
-    return {
-      standingSections: tree.standingSections,
-      turns: [...tree.turns, { offset: item.offset, section: { key }, payload: item.payload }],
-    };
-  }
-  // Sent → temporal append: the new occurrence lands at the tail, at its
-  // moment in time, superseding the sent one. The superseded copy rides
-  // until compaction collapses the section to latest — the price of a
-  // coherent timeline and an intact cache.
-  return {
-    standingSections: tree.standingSections,
-    turns: [
-      ...tree.turns,
-      { offset: item.offset, section: { key, supersedes: latest.offset }, payload: item.payload },
-    ],
-  };
-}
-
-/** The key's latest occurrence, wherever it lives: the last temporal item
- * for the key when any exist (they always postdate the standing entry), else
- * the standing document's entry. */
-function latestKeyedOccurrence(
-  tree: AgentContextTree,
-  key: string,
-):
-  | { place: "standing"; offset: number; payload: AgentContextAddedPayload }
-  | {
-      place: "temporal";
-      index: number;
-      offset: number;
-      payload: AgentContextAddedPayload;
-      section: Extract<AgentTimelineItem, { section: unknown }>["section"];
-    }
-  | null {
-  for (let index = tree.turns.length - 1; index >= 0; index -= 1) {
-    const item = tree.turns[index]!;
-    if ("section" in item && item.section.key === key) {
-      return {
-        place: "temporal",
-        index,
-        offset: item.offset,
-        payload: item.payload,
-        section: item.section,
-      };
-    }
-  }
-  const standing = tree.standingSections.find((section) => section.key === key);
-  if (standing === undefined) return null;
-  return { place: "standing", offset: standing.offset, payload: standing.payload };
+  // Sent (or first-ever) → append at the tail, at its moment in time. A
+  // superseded copy rides until compaction collapses the key to its newest
+  // occurrence — the price of a coherent history and an intact cache.
+  return [
+    ...contextItems,
+    {
+      kind: "section",
+      offset: item.offset,
+      key,
+      ...(latest === undefined ? {} : { supersedes: latest.offset }),
+      payload: item.payload,
+    },
+  ];
 }
 
 /** Apply one agents/context-rewritten op — deliberate history rewriting.
- * replace swaps what the section's PAST render positions contain (the
- * standing document changes; temporal occurrences of the key vanish);
- * delete removes the section; `key: "*"` deletes everything, both tree —
- * no guardrails, the op's audit trail is the safeguard. */
+ * replace keeps the key's FIRST occurrence at its position with the new
+ * content and removes every later occurrence (a single copy: past render
+ * positions change — that is what a rewrite means); delete removes all of
+ * the key's occurrences; `key: "*"` empties the collection — no guardrails,
+ * the op's audit trail is the safeguard. */
 function applyContextRewritten(args: {
   state: AgentProcessorState;
   event: Extract<AgentConsumedEvent, { type: "events.iterate.com/agents/context-rewritten" }>;
-}): AgentContextTree {
+}): AgentContextItems {
   const { state, event } = args;
   const payload = event.payload;
-  if (payload.op === "delete" && payload.key === "*") {
-    return { standingSections: [], turns: [] };
-  }
-  const removed = removeSection(state, payload.key);
-  if (payload.op === "delete") return removed;
+  if (payload.op === "delete" && payload.key === "*") return [];
+  const remaining = state.contextItems.filter(
+    (item) => !(item.kind === "section" && item.key === payload.key),
+  );
+  if (payload.op === "delete") return remaining;
   // Role stays stored on occurrences (provenance/derived roles are slice 2);
-  // a rewrite inherits the section's current role, and one that CREATES a
-  // section makes a standing instruction — system.
-  const role = latestKeyedOccurrence(state, payload.key)?.payload.role || "system";
+  // a rewrite inherits the key's current role, and one that CREATES a key
+  // makes a standing instruction — system.
+  const occurrences = state.contextItems.filter(
+    (item): item is Extract<AgentContextItem, { kind: "section" }> =>
+      item.kind === "section" && item.key === payload.key,
+  );
   const rewritten = {
-    key: payload.key,
+    kind: "section" as const,
     offset: event.offset,
+    key: payload.key,
     payload: {
-      role,
+      role: occurrences.at(-1)?.payload.role || ("system" as const),
       content: payload.content === undefined ? "" : payload.content,
       key: payload.key,
       // as const: in the object literal the literal would widen to string
@@ -597,46 +537,30 @@ function applyContextRewritten(args: {
       llmRequestPolicy: { behaviour: "dont-trigger-request" as const },
     },
   };
-  // A rewrite changes what PAST positions contain, so an existing standing
-  // entry keeps its first-appearance position; a key that never stood (only
-  // temporal, or brand new) joins at the end.
-  const hadStanding = state.standingSections.some((section) => section.key === payload.key);
-  return {
-    standingSections: hadStanding
-      ? state.standingSections.map((section) => (section.key === payload.key ? rewritten : section))
-      : [...removed.standingSections, rewritten],
-    turns: removed.turns,
-  };
+  const first = occurrences[0];
+  if (first === undefined) return [...remaining, rewritten];
+  const firstIndex = state.contextItems.indexOf(first);
+  const notThisKey = (item: AgentContextItem) =>
+    !(item.kind === "section" && item.key === payload.key);
+  return [
+    ...state.contextItems.slice(0, firstIndex).filter(notThisKey),
+    rewritten,
+    ...state.contextItems.slice(firstIndex + 1).filter(notThisKey),
+  ];
 }
 
-/** Remove one section from both tree: its standing entry and every temporal
- * occurrence. */
-function removeSection(tree: AgentContextTree, key: string): AgentContextTree {
-  return {
-    standingSections: tree.standingSections.filter((section) => section.key !== key),
-    turns: tree.turns.filter((item) => !("section" in item && item.section.key === key)),
-  };
-}
-
-/** The compaction rebaseline for keyed content: every section collapses to
- * its NEWEST occurrence, folded back into the standing document at its
- * first-appearance position (existing standing entries keep their order;
- * keys that only ever appeared temporally join at the end, in the order
- * they first appeared on the timeline — the superseded copies were riding
- * the timeline only until now). */
-function collapseSectionsToLatest(tree: AgentContextTree): AgentProcessorState["standingSections"] {
-  // Set insertion order IS first-appearance order: standing entries first
-  // (in their existing order), then temporal-only keys as encountered.
-  const keys = new Set<string>(tree.standingSections.map((section) => section.key));
-  for (const item of tree.turns) {
-    if ("section" in item) keys.add(item.section.key);
+/** The compaction rebaseline for keyed content: every key collapses to its
+ * NEWEST occurrence, placed in first-appearance order with `supersedes`
+ * cleared — these occurrences are the standing document again (the
+ * superseded copies were riding the collection only until now). */
+function collapseKeyedToLatest(contextItems: AgentContextItems): AgentContextItems {
+  const newestByKey = new Map<string, Extract<AgentContextItem, { kind: "section" }>>();
+  for (const item of contextItems) {
+    if (item.kind === "section") newestByKey.set(item.key, item);
   }
-  const collapsed: AgentProcessorState["standingSections"] = [];
-  for (const key of keys) {
-    const latest = latestKeyedOccurrence(tree, key);
-    if (latest !== null) collapsed.push({ key, offset: latest.offset, payload: latest.payload });
-  }
-  return collapsed;
+  // Map insertion order IS first-appearance order (set() keeps the original
+  // slot on overwrite).
+  return [...newestByKey.values()].map(({ supersedes: _supersedes, ...item }) => item);
 }
 
 // -----------------------------------------------------------------------------
@@ -676,28 +600,48 @@ export function buildAgentLlmRequestBody(input: {
   const state = reduceAgentEvents(
     input.events.filter((event) => event.offset <= input.llmRequestOffset),
   );
+  const items = state.contextItems;
+  const document = standingDocumentItems(items);
   return {
     messages: [
       { role: "system", content: AGENT_CONTEXT_PROTOCOL_PROMPT },
-      // The standing document: ONE system message — every standing section
-      // as a tagged block, in the canonical order the fold maintains. On an
-      // unforked project this is byte-identical to the authored prompt file.
-      ...(state.standingSections.length === 0
+      // The standing document is DERIVED here: the collection's leading run
+      // of section items, merged into ONE system message of tagged blocks.
+      // On an unforked project this is byte-identical to the authored
+      // prompt file.
+      ...(document.length === 0
         ? []
-        : [{ role: "system" as const, content: renderStandingDocument(state.standingSections) }]),
-      // Then the timeline: turns, temporal section occurrences, and send
-      // stamps, at their moments in time.
-      ...state.turns.map(renderTimelineItem),
+        : [{ role: "system" as const, content: renderStandingDocument(document) }]),
+      // Everything after the leading run renders at its position: messages,
+      // later section occurrences, and send stamps.
+      ...items.slice(document.length).map(renderContextItem),
     ],
   };
 }
 
-/** The standing document — all standing sections as visible
+/** The derived standing document: the collection's leading run of section
+ * items, ending at the first message, send stamp, or superseding occurrence.
+ * Membership is position, not a stored partition — a section item lands in
+ * the document exactly when nothing conversational precedes it. */
+function standingDocumentItems(
+  items: AgentProcessorState["contextItems"],
+): Extract<AgentContextItem, { kind: "section" }>[] {
+  const document: Extract<AgentContextItem, { kind: "section" }>[] = [];
+  for (const item of items) {
+    if (item.kind !== "section" || item.supersedes !== undefined) break;
+    document.push(item);
+  }
+  return document;
+}
+
+/** The standing document's text — its sections as visible
  * `<section key="...">` blocks, one blank line apart. The SAME syntax the
  * authoring parser reads, so an unforked prompt file round-trips
  * byte-identically. */
-function renderStandingDocument(sections: AgentProcessorState["standingSections"]): string {
-  return sections
+function renderStandingDocument(
+  document: Extract<AgentContextItem, { kind: "section" }>[],
+): string {
+  return document
     .map(
       (section) =>
         `<section key=${JSON.stringify(section.key)}>\n${section.payload.content}\n</section>`,
@@ -705,18 +649,18 @@ function renderStandingDocument(sections: AgentProcessorState["standingSections"
     .join("\n\n");
 }
 
-function renderTimelineItem(item: AgentTimelineItem): AgentChatMessage {
-  if ("requestedAt" in item) {
+function renderContextItem(item: AgentContextItem): AgentChatMessage {
+  if (item.kind === "request") {
     return { role: "developer", content: `Requested at: ${item.requestedAt}` };
   }
-  if ("section" in item) {
-    // A temporal section occurrence: everything above it visibly predates
-    // it, so no marker text is needed — the position is the explanation.
-    const supersedes =
-      item.section.supersedes === undefined ? "" : ` supersedes="@${item.section.supersedes}"`;
+  if (item.kind === "section") {
+    // A section occurrence outside the standing document: everything above
+    // it visibly predates it, so no marker text is needed — the position is
+    // the explanation.
+    const supersedes = item.supersedes === undefined ? "" : ` supersedes="@${item.supersedes}"`;
     return {
       role: modelRoleForContextItem(item.payload),
-      content: `<section key=${JSON.stringify(item.section.key)}${supersedes}>\n${item.payload.content}\n</section>`,
+      content: `<section key=${JSON.stringify(item.key)}${supersedes}>\n${item.payload.content}\n</section>`,
     };
   }
   return renderProjectedContextItem(item);

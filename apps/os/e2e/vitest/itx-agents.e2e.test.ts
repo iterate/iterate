@@ -92,8 +92,9 @@ test("agent create installs only generic machinery; later events configure it", 
     },
   });
   await agent.processor.waitUntilProcessed({ offset: configured.offset, timeoutMs: 30_000 });
-  expect((await agent.processor.snapshot()).state.standingSections).toContainEqual(
+  expect((await agent.processor.snapshot()).state.contextItems).toContainEqual(
     expect.objectContaining({
+      kind: "section",
       key: "test/config-after-create",
       payload: expect.objectContaining({
         content: "configuration is an ordinary event after generic creation",
@@ -347,12 +348,12 @@ test("Agent create replays its earlier birth and setup events through its subscr
   expect(agentSnapshot.state).toMatchObject({
     birthCertificate: { createdAtOffset: expect.any(Number) },
     config: { llm: { model: expect.any(String) } },
-    standingSections: expect.arrayContaining([
+    contextItems: expect.arrayContaining([
       // The sectionized default prompt establishes its sections at birth…
-      expect.objectContaining({ key: "identity" }),
-      expect.objectContaining({ key: "output-formatting" }),
-      // …and the boot context is the legacy keyed vocabulary, mapped in.
-      expect.objectContaining({ key: "agent/boot-context" }),
+      expect.objectContaining({ kind: "section", key: "identity" }),
+      expect.objectContaining({ kind: "section", key: "output-formatting" }),
+      // …plus the boot context, keyed the same everyday way.
+      expect.objectContaining({ kind: "section", key: "agent/boot-context" }),
     ]),
   });
 

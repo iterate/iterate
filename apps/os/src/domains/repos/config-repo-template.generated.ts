@@ -1118,32 +1118,22 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "}\n" +
       "\n" +
       "/**\n" +
-      " * The latest occurrence of a keyed section, wherever it lives in the agent's\n" +
-      " * reduced state: the last temporal item in the timeline for that key (they\n" +
-      " * always postdate the standing entry), else the standing document's entry.\n" +
-      " * The AGENTS.md sync reads this to skip re-adding content a sent section\n" +
-      " * already holds — a duplicate temporal copy teaches the model nothing.\n" +
+      " * The latest occurrence of a keyed section in the agent's reduced state —\n" +
+      " * one findLast over `contextItems`. The AGENTS.md sync reads this to skip\n" +
+      " * re-adding content a sent section already holds: a duplicate copy teaches\n" +
+      " * the model nothing.\n" +
       " */\n" +
       "function latestSectionOccurrence(\n" +
       "  state: {\n" +
-      "    standingSections: { key: string; offset: number; payload: { content: string } }[];\n" +
-      "    turns: (\n" +
-      "      | { offset: number; requestedAt: string }\n" +
-      "      | { offset: number; section: { key: string }; payload: { content: string } }\n" +
-      "      | { offset: number; payload: { content: string } }\n" +
-      "    )[];\n" +
+      "    contextItems: { kind: string; offset: number; key?: string; payload?: { content: string } }[];\n" +
       "  },\n" +
       "  key: string,\n" +
-      "): { offset: number; content: string } | null {\n" +
-      "  for (let index = state.turns.length - 1; index >= 0; index -= 1) {\n" +
-      "    const item = state.turns[index]!;\n" +
-      "    if (\"section\" in item && item.section.key === key) {\n" +
-      "      return { offset: item.offset, content: item.payload.content };\n" +
-      "    }\n" +
-      "  }\n" +
-      "  const standing = state.standingSections.find((section) => section.key === key);\n" +
-      "  if (standing === undefined) return null;\n" +
-      "  return { offset: standing.offset, content: standing.payload.content };\n" +
+      "): { offset: number; content: string | undefined } | null {\n" +
+      "  const item = state.contextItems.findLast(\n" +
+      "    (candidate) => candidate.kind === \"section\" && candidate.key === key,\n" +
+      "  );\n" +
+      "  if (item === undefined) return null;\n" +
+      "  return { offset: item.offset, content: item.payload?.content };\n" +
       "}\n",
   },
 ];

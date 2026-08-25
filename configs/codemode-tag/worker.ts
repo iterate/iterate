@@ -613,30 +613,20 @@ function truncate(text: string): string {
 }
 
 /**
- * The latest occurrence of a keyed section, wherever it lives in the agent's
- * reduced state: the last temporal item in the timeline for that key (they
- * always postdate the standing entry), else the standing document's entry.
- * The syncs read this to skip re-adding content a sent section already holds
- * — a duplicate temporal copy teaches the model nothing.
+ * The latest occurrence of a keyed section in the agent's reduced state —
+ * one findLast over `contextItems`. The syncs read this to skip re-adding
+ * content a sent section already holds: a duplicate copy teaches the model
+ * nothing.
  */
 function latestSectionOccurrence(
   state: {
-    standingSections: { key: string; offset: number; payload: { content: string } }[];
-    turns: (
-      | { offset: number; requestedAt: string }
-      | { offset: number; section: { key: string }; payload: { content: string } }
-      | { offset: number; payload: { content: string } }
-    )[];
+    contextItems: { kind: string; offset: number; key?: string; payload?: { content: string } }[];
   },
   key: string,
-): { offset: number; content: string } | null {
-  for (let index = state.turns.length - 1; index >= 0; index -= 1) {
-    const item = state.turns[index]!;
-    if ("section" in item && item.section.key === key) {
-      return { offset: item.offset, content: item.payload.content };
-    }
-  }
-  const standing = state.standingSections.find((section) => section.key === key);
-  if (standing === undefined) return null;
-  return { offset: standing.offset, content: standing.payload.content };
+): { offset: number; content: string | undefined } | null {
+  const item = state.contextItems.findLast(
+    (candidate) => candidate.kind === "section" && candidate.key === key,
+  );
+  if (item === undefined) return null;
+  return { offset: item.offset, content: item.payload?.content };
 }

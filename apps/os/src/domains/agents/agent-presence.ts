@@ -254,12 +254,7 @@ export function foldAgentSummaryUpdated({
 
 type AgentRuntimeSource = {
   activeScriptExecutions: readonly unknown[];
-  standingSections: readonly { key: string; payload: { role: string } }[];
-  turns: readonly {
-    offset: number;
-    section?: { key: string };
-    payload?: { role: string };
-  }[];
+  contextItems: readonly { kind: string; payload?: { role: string } }[];
   openRequest: null | { requestedAtOffset: number };
   pendingLlmRequestTrigger: null | { offset: number };
 };
@@ -267,13 +262,12 @@ type AgentRuntimeSource = {
 export function deriveAgentRuntime(state: AgentRuntimeSource): AgentRuntimeRecord {
   const pending = state.pendingLlmRequestTrigger === null ? 0 : 1;
   // Key-agnostic (the kernel knows no section key by name): a pending
-  // trigger counts as runnable once ANY system-role section exists —
-  // standing or temporal. Purely a presentation facet; the turn loop itself
-  // no longer gates on it (every creation path ships prompt content in the
-  // birth batch).
-  const promptExists =
-    state.standingSections.some((section) => section.payload.role === "system") ||
-    state.turns.some((item) => item.section !== undefined && item.payload?.role === "system");
+  // trigger counts as runnable once ANY system-role section exists. Purely
+  // a presentation facet; the turn loop itself no longer gates on it (every
+  // creation path ships prompt content in the birth batch).
+  const promptExists = state.contextItems.some(
+    (item) => item.kind === "section" && item.payload?.role === "system",
+  );
   const runnable = pending === 1 && promptExists ? 1 : 0;
   return {
     triggers: { pending, runnable },

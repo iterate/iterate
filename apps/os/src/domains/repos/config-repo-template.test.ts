@@ -294,10 +294,10 @@ test("project lifecycle cases directly install and handle the default heartbeat"
 test("the birth reaction shapes each newborn and lowers the debounce as its last word", async () => {
   const makeReactionWorker = (promptFileContent: string) => {
     const append = vi.fn(async (...events: unknown[]) => events);
-    // AGENTS.md sync reads the agent's standing document; the birth shaping
+    // AGENTS.md sync reads the agent's context items; the birth shaping
     // deliberately does NOT (a snapshot this early may predate the fold
     // reducing the birth batch).
-    const snapshot = vi.fn(async () => ({ state: { standingSections: [], turns: [] } }));
+    const snapshot = vi.fn(async () => ({ state: { contextItems: [] } }));
     const project = {
       repo: {
         readFile: vi.fn(async (input: { path: string }) => {

@@ -177,80 +177,69 @@ export const AgentProcessorContract = defineProcessorContract({
       })
       .prefault({})
       .meta({ description: "The agent's complete configuration, every knob defaulted." }),
-    standingSections: z
+    contextItems: z
       .array(
-        z.object({
-          key: z
-            .string()
-            .min(1)
-            .meta({
+        z.discriminatedUnion("kind", [
+          z.object({
+            kind: z.literal("request").meta({
               description:
-                "The section's stable identity — re-adding this key IS the update; " +
-                "agents/context-rewritten addresses it for deliberate rewrites.",
+                "A send stamp: the llm-request-requested event, rendered permanently at " +
+                'its position as the "Requested at:" line.',
             }),
-          offset: z.number().int().positive().meta({
-            description: "Stream offset of the event whose content this section holds.",
-          }),
-          payload: agentContextItemSchema(),
-        }),
-      )
-      .default([])
-      .meta({
-        description:
-          "The STANDING DOCUMENT: exactly one occurrence per section, rendered as ONE system " +
-          "message of <section key> blocks in FIRST-APPEARANCE order — the order their keys " +
-          "first appeared on the stream (commit order; segments within one event keep their " +
-          "file order, which preserves the authored prompt layout). Keys are arbitrary " +
-          "strings the kernel never interprets; authors control placement through append " +
-          "order (in every real flow the worker's hot content, e.g. AGENTS.md, arrives after " +
-          "the birth batch and so lands last). A keyed add whose latest occurrence no request " +
-          "has sent yet edits its entry in place (the birth window — free); once sent, " +
-          "updates land in the timeline instead, and compaction folds each section's " +
-          "newest occurrence back in here at its first-appearance position.",
-      }),
-    turns: z
-      .array(
-        z.union([
-          z.strictObject({
             offset: z.number().int().positive().meta({
               description: "Stream offset of the llm-request-requested event.",
             }),
             requestedAt: z.iso.datetime().meta({
-              description:
-                "The requested event's own journaled createdAt — rendered permanently into " +
-                'the timeline as the "Requested at:" send stamp.',
+              description: "The requested event's own journaled createdAt.",
             }),
           }),
-          z.strictObject({
-            offset: z.number().int().positive().meta({
-              description: "Stream offset of the context-added event this update reduced from.",
+          z.object({
+            kind: z.literal("section").meta({
+              description:
+                "A keyed section occurrence. The STANDING DOCUMENT is derived at render: " +
+                "the collection's leading run of section items (up to the first message, " +
+                "request stamp, or superseding occurrence) merges into ONE tagged system " +
+                "message; every later section item renders at its position as a " +
+                "<section key> block.",
             }),
-            section: z
-              .strictObject({
-                key: z.string().min(1).meta({ description: "The section this update supersedes." }),
-                supersedes: z
-                  .number()
-                  .int()
-                  .positive()
-                  .optional()
-                  .meta({
-                    description:
-                      "Offset of the occurrence this one supersedes — stamped by the fold; " +
-                      "absent when the section first appeared mid-conversation.",
-                  }),
-              })
+            offset: z
+              .number()
+              .int()
+              .positive()
               .meta({
                 description:
-                  "Marks a TEMPORAL section occurrence: a keyed add that landed after a " +
-                  "request had sent the section (or after conversation existed). Renders at " +
-                  "this offset as a <section key supersedes> block — everything above it " +
-                  "visibly predates it, and the whole prefix stays byte-stable.",
+                  "Stream offset of the event whose content this occurrence holds — updated " +
+                  "in place when an un-sent occurrence coalesces.",
+              }),
+            key: z
+              .string()
+              .min(1)
+              .meta({
+                description:
+                  "The section's stable identity — an arbitrary string the kernel never " +
+                  "interprets. Re-adding a key IS the update; agents/context-rewritten " +
+                  "addresses it for deliberate rewrites.",
+              }),
+            supersedes: z
+              .number()
+              .int()
+              .positive()
+              .optional()
+              .meta({
+                description:
+                  "Offset of the key's prior occurrence — stamped by the fold when an " +
+                  "update lands after the prior occurrence was sent; absent on a first " +
+                  "occurrence. Everything above a superseding occurrence visibly predates " +
+                  "it, and the whole prefix stays byte-stable.",
               }),
             payload: agentContextItemSchema(),
           }),
-          z.strictObject({
+          z.object({
+            kind: z.literal("message").meta({
+              description: "A plain conversation item at its offset.",
+            }),
             offset: z.number().int().positive().meta({
-              description: "Stream offset of the context-added event this turn reduced from.",
+              description: "Stream offset of the context-added event this item reduced from.",
             }),
             payload: agentContextItemSchema(),
           }),
@@ -259,11 +248,17 @@ export const AgentProcessorContract = defineProcessorContract({
       .default([])
       .meta({
         description:
-          "The TIMELINE: conversation turns (every unkeyed context item), temporal section " +
-          "occurrences, and the permanent per-request send stamps, in arrival order. " +
-          "Compaction restructures the timeline: unkeyed system facts move to the front, the " +
-          "summary follows, then everything after the barrier; each section's newest " +
-          "temporal occurrence collapses back into the standing document.",
+          "Every model-visible item, one offset-ordered collection: section occurrences, " +
+          "conversation messages, and the permanent per-request send stamps. A keyed add " +
+          "whose latest occurrence no request has sent yet edits that item in place (the " +
+          "birth window — free); otherwise it appends at the tail with `supersedes` " +
+          "pointing at the prior occurrence. On an unforked project the derived standing " +
+          "document is byte-identical to the authored prompt file, whose segments keep " +
+          "their file order. Keys are arbitrary strings; authors control placement through " +
+          "append order (a worker's hot content, e.g. AGENTS.md, lands after the birth " +
+          "batch and so renders last in the document). Compaction rebuilds the collection: " +
+          "each key's newest occurrence in first-appearance order, unkeyed system facts, " +
+          "the summary, then everything after the barrier.",
       }),
     lastLlmRequestOffset: z
       .number()
@@ -785,11 +780,16 @@ export type AgentProcessorState = ProcessorState<AgentProcessorContract>;
 
 /** One model-visible context item's payload — the wire contract for every
  * committed `agents/context-added` event. */
-export type AgentContextAddedPayload = AgentProcessorState["standingSections"][number]["payload"];
+export type AgentContextAddedPayload = z.infer<typeof AgentContextAddedPayload>;
 
-/** One item of the timeline: a turn, a temporal section occurrence, or a
- * permanent send stamp. */
-export type AgentTimelineItem = AgentProcessorState["turns"][number];
+/** One shared schema instance, so the payload type above infers by plain
+ * z.infer (the itx-api generator resolves that; type-level indexing into the
+ * state union does not travel). */
+const AgentContextAddedPayload = agentContextItemSchema();
+
+/** One reduced context item: a keyed section occurrence, a plain
+ * conversation item, or a permanent send stamp. */
+export type AgentContextItem = AgentProcessorState["contextItems"][number];
 
 /** A file attached to an agent context item: content type, filename, project
  * file-storage path, size, and the signed public URL minted at attach time
@@ -812,7 +812,7 @@ export type AgentLiveState = z.infer<typeof AgentLiveState>;
 
 /**
  * The context-item payload — used repeatedly in the contract (the
- * `agents/context-added` event and both context collections of the state), so it
+ * `agents/context-added` event and the state's context items), so it
  * lives in this hoisted function instead of inline. One flat object for every role; the
  * role-specific fields are optional and documented per-field. `refs` and the
  * actor union are how the slack/telegram/email/github integrations attach
