@@ -577,6 +577,10 @@ const FACET_SOURCE_VERSION_KV_PREFIX = "facetSourceVersion:";
 /** Bounded extra delay before retrying a facet's failed alarm replay. */
 const FACET_ALARM_RETRY_DELAY_MS = 1_000;
 
+/** One facet's failed `handleAlarm` replay, surfaced so the alarm invocation
+ * can fail and keep the platform's alarm retry owed (see `alarm()`). */
+type FacetAlarmReplayFailure = { facet: string; error: unknown };
+
 /**
  * One row of `subscriptions.list()`: the committed catalog entry joined with
  * its durable cursor — name, receiver kind, status, and lag
@@ -1245,13 +1249,29 @@ export class StreamDurableObject extends DurableObject<Env> {
     ]);
   }
 
-  /** Use Cloudflare's native alarm invocation as the trace root; retry work remains background. */
-  alarm(alarmInfo?: AlarmInvocationInfo): void {
+  /**
+   * Use Cloudflare's native alarm invocation as the trace root; reconcile and
+   * delivery retry work remains background, but facet alarm replays are
+   * awaited: a failed replay rejects this invocation so the platform's alarm
+   * retry — which survives Durable Object resets — keeps the fire owed even
+   * when the bounded self-re-arm is lost with the incarnation (see
+   * {@link #fireDueFacetAlarms}).
+   */
+  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
     this.#alarmArmer.markFired();
+    let facetReplays: Promise<FacetAlarmReplayFailure[]> | undefined;
     this.#deliveryAlarmBoundary.runAlarmTurn(() => {
-      this.#fireDueFacetAlarms(alarmInfo);
+      facetReplays = this.#fireDueFacetAlarms(alarmInfo);
       this.#reconcileCommittedState({ alarmTurn: true });
     });
+    const failures = facetReplays === undefined ? [] : await facetReplays;
+    if (failures.length > 0) {
+      throw new Error(
+        `facet alarm replay failed for ${failures.map((failure) => failure.facet).join(", ")}; ` +
+          `failing the alarm invocation keeps the platform's alarm retry owed`,
+        { cause: failures[0]!.error },
+      );
+    }
   }
 
   // ===========================================================================
@@ -1510,15 +1530,25 @@ export class StreamDurableObject extends DurableObject<Env> {
    * a fresh desire the completion path never clobbers), then replay the fire
    * into EVERY facet-placed subscription's facet — early fires are safe, and
    * without per-facet identity the fan-out is what makes no desire lose its
-   * fire. A failed replay merges a bounded retry back into the slot.
+   * fire. A failed replay merges a bounded retry back into the slot AND is
+   * returned to the alarm handler, which fails the invocation: the fire
+   * consumed the native alarm, so the self-armed retry write is the ONLY
+   * wakeup left, and a reset storm can lose it after this incarnation's
+   * in-memory work is gone (the 2026-08-25 preview incident: a deploy reset
+   * the DO between the fire and the re-arm commit, stranding a persisted
+   * keepalive revival desire until an unrelated request happened to boot the
+   * DO two minutes later). A failed alarm invocation keeps the platform's
+   * own alarm retry owed — platform retries survive resets.
    */
-  #fireDueFacetAlarms(alarmInfo?: AlarmInvocationInfo): void {
+  #fireDueFacetAlarms(
+    alarmInfo?: AlarmInvocationInfo,
+  ): Promise<FacetAlarmReplayFailure[]> | undefined {
     const dueAtMs = this.#readFacetAlarmAtMs();
-    if (dueAtMs === null) return;
+    if (dueAtMs === null) return undefined;
     if (dueAtMs > Date.now()) {
       // A fresh incarnation's armer memory is empty; keep the slot armed.
       this.#alarmArmer.armNoLaterThan(dueAtMs);
-      return;
+      return undefined;
     }
     this.ctx.storage.kv.delete(FACET_ALARM_KV_KEY);
     const facetNames = Object.entries(
@@ -1537,11 +1567,12 @@ export class StreamDurableObject extends DurableObject<Env> {
             retryCount: alarmInfo.retryCount,
             scheduledTime: alarmInfo.scheduledTime,
           };
-    for (const facet of facetNames) {
-      this.#runInBackground(async () => {
+    return Promise.all(
+      facetNames.map(async (facet): Promise<FacetAlarmReplayFailure[]> => {
         try {
           await this.#callProcessorFacet(facet, (stub) => stub.handleAlarm(info));
           this.#facetAlarmFailures.delete(facet);
+          return [];
         } catch (error) {
           const failures = (this.#facetAlarmFailures.get(facet) ?? 0) + 1;
           this.#facetAlarmFailures.set(facet, failures);
@@ -1550,12 +1581,15 @@ export class StreamDurableObject extends DurableObject<Env> {
             failures,
             error,
           });
+          // Best effort: if this arming write itself fails, the rejection
+          // reaches the alarm handler's await and the platform retry covers it.
           this.#mergeFacetAlarmDesire(
             Date.now() + computeBackoffMs(failures, Math.random()) + FACET_ALARM_RETRY_DELAY_MS,
           );
+          return [{ facet, error }];
         }
-      });
-    }
+      }),
+    ).then((results) => results.flat());
   }
 
   /**
