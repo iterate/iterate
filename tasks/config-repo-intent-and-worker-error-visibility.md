@@ -213,3 +213,11 @@ test-only hooks. The sync button gained a `data-spinner` marker while
 pending (the spec waiters key on it; also honest progress UI). Videos
 recorded with VIDEO_MODE=1 and embedded in the PR body as bare
 user-attachments URLs.
+
+2026-08-25 (review round) — cursor bugbot raised two valid points, both
+fixed in 0af4fa54f and their threads resolved: the loader-side failure
+journal moved from a public append with a guessable key to the platform
+door under the readiness probe's own internalStreamId key (un-claimable,
+and the two sources now dedupe into one outcome per commit), and the health
+sheet's description grew a third branch so child-stream-only trouble no
+longer blames the root stream.
