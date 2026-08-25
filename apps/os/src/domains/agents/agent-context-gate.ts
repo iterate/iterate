@@ -132,7 +132,7 @@ function stampContextPayload(input: { caller: AgentContextCaller; payload: unkno
   // The stored role is not a write surface: a deployed older client may
   // still send one, but it never survives the gate — the stamped actor is
   // what the role derives from.
-  const { actor: claimedActor, kind: _kind, key, role: _role, ...rest } = payload;
+  const { actor: claimedActor, kind: _kind, key, role, ...rest } = payload;
 
   if (caller.tier === "user" || caller.tier === "agent") {
     if (key !== undefined) {
@@ -176,9 +176,21 @@ function stampContextPayload(input: { caller: AgentContextCaller; payload: unkno
       ? claimedActor
       : { type: "worker", name: "project-worker" };
   if (key !== undefined) {
-    // Keyed content is the section shape; content this shape does not carry
-    // (refs, files, policies) does not survive — sections are standing
-    // instructions, nothing else.
+    // A keyed append claiming a CONVERSATIONAL role predates sections
+    // deriving system: worker code shipped before v8 (config repos pulled
+    // from older refs) starts conversations with keyed developer items —
+    // the templates' onboarding kickoff. Landing those as sections would
+    // silently swallow the turn they exist to drive, so they stay
+    // conversational: an unkeyed worker message keeping its policy, refs,
+    // and files (the worker actor derives developer — exactly the claimed
+    // role, no escalation; the key's update identity is lost, which only a
+    // superseded kickoff would ever notice).
+    if (role === "developer" || role === "user" || role === "assistant") {
+      return { ...rest, actor: workerActor };
+    }
+    // Keyed standing content is the section shape; content this shape does
+    // not carry (refs, files, policies) does not survive — sections are
+    // standing instructions, nothing else.
     const { content } = rest as { content?: unknown };
     return { kind: "section", key, content, actor: workerActor };
   }

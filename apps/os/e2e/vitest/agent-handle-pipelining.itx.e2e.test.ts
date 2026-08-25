@@ -149,7 +149,9 @@ test(
     );
 
     expect(run.result).toMatchObject({
-      messageActor: { type: "user", origin: "web" },
+      // The script executes at the project-root capability host — project
+      // code, not a signed-in user — so message() stamps the worker actor.
+      messageActor: { type: "worker", name: "project-worker" },
       messageType: AGENT_CONTEXT_ADDED_TYPE,
       proofType: PROOF_TYPE,
     });
@@ -175,10 +177,8 @@ test(
       agentEvents.some(
         (event) =>
           event.type === AGENT_CONTEXT_ADDED_TYPE &&
-          (event.payload?.actor as { origin?: string; type?: string } | undefined)?.type ===
-            "user" &&
-          (event.payload?.actor as { origin?: string; type?: string } | undefined)?.origin ===
-            "web" &&
+          (event.payload?.actor as { name?: string; type?: string } | undefined)?.type ===
+            "worker" &&
           event.payload?.content === "pipelined hello",
       ),
     ).toBe(true);

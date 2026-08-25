@@ -110,12 +110,23 @@ and apps/mobile's chat reducer cannot import apps/os, and both need it.
 
 - Keyed items derive system, ALWAYS — so a keyed role-developer item no
   longer triggers a turn (v7 fired an agent-loop trigger for it). The one
-  live producer that relied on that is the default template's
+  live producer that relied on that is the templates'
   `config/onboarding-start`; it becomes an unkeyed worker-actor message
-  (derives developer, still triggers). **JC**: projects whose config repo
-  still runs the old template create their onboarding agent with a keyed
-  developer item that no longer speaks first; new projects seed the new
-  template, existing projects already onboarded — accepted, not mitigated.
+  (derives developer, still triggers). **JC — revised after the first
+  preview run**: the original "old templates only, accepted" framing was
+  WRONG. Non-default templates (with-voice, codemode-tag, voice-agent) are
+  pulled from a GitHub REF at project creation — on local dev and any
+  unpinned/default-branch deployment that ref serves worker code predating
+  v8, whose keyed-developer kickoff the gate was normalizing into a
+  section, silently swallowing the onboarding agent's first turn
+  (create-project.spec.ts caught it: the with-voice half never spoke). The
+  gate now normalizes worker-tier keyed appends BY CLAIMED ROLE: system (or
+  none) → section; developer/user/assistant → an unkeyed worker message
+  keeping its policy/refs/files, so pre-v8 conversation starters still
+  drive their turn (the worker actor derives developer — exactly the
+  claimed role, no escalation; only the key's update identity is lost).
+  Spec'd in agent-context-gate.test.ts; create-project.spec.ts passes
+  locally against both template code generations.
 - `contextTriggerSource`/`contextClearsWaitingFor` rewritten on the derived
   role: system/assistant → never; user → slash-check then external;
   developer → agent-loop. **JC**: `worker` classifies as developer ⇒
@@ -218,3 +229,31 @@ prompt line only, plus any legacy-keyed role drift); add scenario
   - Deferred deliberately: context-rewritten stays ungated (slice-3
     territory: "whoever may replace may compact"); no identity linking of
     channel actors to OS principals (D8: future work); preview e2e run.
+
+- 2026-08-25 (second): first preview run came back with three spec
+  failures; all three root-caused, two were real regressions:
+  - **create-project.spec** — two causes stacked: the spec polled the
+    `iterate/config/onboarding-instructions:v1` idempotency key I had
+    bumped to v2 (spec now finds the event by payload key, which survives
+    both shapes AND both template code generations), and the with-voice
+    half exposed the gate swallowing pre-v8 keyed-developer kickoffs (the
+    JC rewrite above; gate fixed). Passes locally end to end.
+  - **repl-examples "agent-send-message"** — the gate correctly refused
+    `message()`'s user-actor claim from the REPL's execution scope (project
+    code at a non-agent path = worker tier). Fix: `#contextActor()` in
+    rpc-targets now classifies through the same gate ladder — worker-tier
+    callers' message/ask/addFiles stamp `{type:"worker",
+    name:"project-worker"}` instead of claiming a user. Ripples: the REPL
+    example and the pipelining e2e assert the worker actor now; a
+    worker-tier `message()` is an agent-loop trigger (does not refill the
+    autonomous budget) and renders with an actor=worker line — honest:
+    these senders are project automation, not attested humans. The MCP
+    handler and admin tooling are trusted-tier and keep stamping user
+    actors; the voice-agent talk client's ask() moves to the worker actor
+    (its notes are relayed transcriptions, not attested user identity).
+  - **mobile media.spec** — reproduced the full seeded flow locally:
+    PASSES. The CI failure was an image-viewer interaction ("Full screen
+    media" not visible) after list/search/thumbnails all worked; nothing in
+    this diff touches media, files, or the mobile media screen (the gate
+    only sees agents/context-added). Ruled preview flake with that
+    evidence; the rerun decides.

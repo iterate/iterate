@@ -145,6 +145,34 @@ test("a worker keeps worker and channel actors, but can never be a signed-in hum
   ).toThrow(/cannot claim to be a signed-in user/);
 });
 
+test("a worker's keyed CONVERSATIONAL append stays a conversation starter", () => {
+  // Worker code from before sections derived system (config repos pulled
+  // from older refs) kicks off conversations with keyed developer items —
+  // the templates' onboarding start. The gate keeps them conversational
+  // (an unkeyed worker message with its policy intact) so the turn they
+  // exist to drive still fires; landing them as sections would silently
+  // swallow it.
+  const [gated] = gateAgentContextEvents({
+    caller: { tier: "worker" },
+    events: [
+      {
+        type: CONTEXT_ADDED,
+        payload: {
+          role: "developer",
+          key: "config/onboarding-start",
+          content: "Begin onboarding now.",
+          llmRequestPolicy: { behaviour: "after-current-request" },
+        },
+      },
+    ],
+  });
+  expect(gated!.payload).toEqual({
+    content: "Begin onboarding now.",
+    actor: { type: "worker", name: "project-worker" },
+    llmRequestPolicy: { behaviour: "after-current-request" },
+  });
+});
+
 test("a worker's keyed append — the older deployed shape included — lands as a section", () => {
   const [gated] = gateAgentContextEvents({
     caller: { tier: "worker" },

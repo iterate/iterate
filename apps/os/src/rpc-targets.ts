@@ -5240,17 +5240,29 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     return event;
   }
 
-  /** Provenance for context added through this handle. The user variant
-   * stamps the authenticated principal — the identity device enrollments
-   * record as ownerId — so the chat-reply push producer can address the
-   * sender's devices only. */
+  /** Provenance for context added through this handle, aligned with the
+   * append gate's caller classification so the stamped actor is one this
+   * caller may actually send: an agent scope speaks as the agent, a
+   * worker-tier scope (config worker, REPL/scheduler scripts — project
+   * code executing at a non-agent path) speaks as the project's worker,
+   * and everything else is a user message. The user variant stamps the
+   * authenticated principal — the identity device enrollments record as
+   * ownerId — so the chat-reply push producer can address the sender's
+   * devices only. */
   #contextActor():
     | { type: "agent"; path: string }
-    | { type: "user"; origin: "web"; userId: string } {
+    | { type: "user"; origin: "web"; userId: string }
+    | { type: "worker"; name: string } {
     const source = this.#props.sourceScopePath;
-    return source !== undefined && source.startsWith("/agents/")
-      ? { type: "agent", path: source }
-      : { type: "user", origin: "web", userId: this.#props.auth.principal };
+    if (source !== undefined && source.startsWith("/agents/")) {
+      return { type: "agent", path: source };
+    }
+    const caller = classifyAgentContextCaller({
+      auth: this.#props.auth,
+      scopePath: this.#props.contextGateScopePath,
+    });
+    if (caller.tier === "worker") return { type: "worker", name: "project-worker" };
+    return { type: "user", origin: "web", userId: this.#props.auth.principal };
   }
 
   /**

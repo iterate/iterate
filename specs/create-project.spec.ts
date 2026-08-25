@@ -49,10 +49,14 @@ test("the config template opens a proactive onboarding conversation for a new pr
   await expect
     .poll(
       async () => {
-        const event = await firstProject.agents.get("/agents/onboarding").stream.getEvent({
-          idempotencyKey: "iterate/config/onboarding-instructions:v1",
+        // Found by payload key, not idempotency key: the template repo may
+        // come from a pinned ref whose worker code predates the current
+        // event shape, and the key survives both.
+        const events = await firstProject.agents.get("/agents/onboarding").stream.getEvents({
+          eventTypes: ["events.iterate.com/agents/context-added"],
         });
-        return event?.payload?.content;
+        return events.find((event) => event.payload?.key === "config/onboarding-instructions")
+          ?.payload?.content;
       },
       { timeout: 60_000, intervals: [500] }, // timeout: ITX polling has no browser UI for spinner-waiter
     )
@@ -106,15 +110,19 @@ test("the config template opens a proactive onboarding conversation for a new pr
     await page.getByRole("button", { name: "Send message" }).waitFor({ timeout: 120_000 }); // timeout: manual because spinner-waiter is disabled for the multi-tool onboarding turn
   });
 
-  const [projectCreatedEvents, createdEvent, promptEvent] = await Promise.all([
+  const [projectCreatedEvents, createdEvent, contextEvents] = await Promise.all([
     createdProject.streams
       .get("/")
       .getEvents({ eventTypes: ["events.iterate.com/project/created"] }),
     onboardingAgent.stream.getEvents({ eventTypes: ["events.iterate.com/agent/created"] }),
-    onboardingAgent.stream.getEvent({
-      idempotencyKey: "iterate/config/onboarding-instructions:v1",
+    onboardingAgent.stream.getEvents({
+      eventTypes: ["events.iterate.com/agents/context-added"],
     }),
   ]);
+  // Found by payload key for the same pinned-ref tolerance as the poll above.
+  const promptEvent = contextEvents.find(
+    (event) => event.payload?.key === "config/onboarding-instructions",
+  );
   expect(
     createdEvent.find((event) => event.type === "events.iterate.com/agent/created")?.payload,
   ).toEqual({});

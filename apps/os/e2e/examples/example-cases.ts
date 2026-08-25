@@ -473,7 +473,10 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       expect(result).toMatchObject({
         payload: {
           content: `hello ${marker}`,
-          actor: { type: "user", origin: "web" },
+          // The REPL executes examples as project code at a non-agent
+          // scope, so message() stamps the worker actor — the caller may
+          // not claim to be a signed-in user (agent-context-gate.ts).
+          actor: { type: "worker", name: "project-worker" },
         },
         type: "events.iterate.com/agents/context-added",
       });
