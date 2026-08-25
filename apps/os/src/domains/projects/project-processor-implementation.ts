@@ -651,26 +651,24 @@ export class ProjectProcessor extends StreamProcessor<
       }
       case "events.iterate.com/notification/created":
         return { ...state, notificationReady: true };
-      case "events.iterate.com/project/worker-updated":
-        return {
-          ...state,
-          worker: {
-            at: event.createdAt,
-            commitOid: event.payload.commitOid,
-            error: null,
-            status: "updated" as const,
-          },
+      case "events.iterate.com/project/worker-updated": {
+        const worker: ProjectProcessorState["worker"] = {
+          at: event.createdAt,
+          commitOid: event.payload.commitOid,
+          error: null,
+          status: "updated",
         };
-      case "events.iterate.com/project/worker-update-failed":
-        return {
-          ...state,
-          worker: {
-            at: event.createdAt,
-            commitOid: event.payload.commitOid,
-            error: event.payload.error,
-            status: "update-failed" as const,
-          },
+        return { ...state, worker };
+      }
+      case "events.iterate.com/project/worker-update-failed": {
+        const worker: ProjectProcessorState["worker"] = {
+          at: event.createdAt,
+          commitOid: event.payload.commitOid,
+          error: event.payload.error,
+          status: "update-failed",
         };
+        return { ...state, worker };
+      }
       case "events.iterate.com/stream/created":
         if (event.payload.projectId !== this.deps.itx.projectId) return state;
         return {

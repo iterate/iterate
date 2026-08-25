@@ -91,6 +91,7 @@ async function resolveThroughBuild(input: {
       : { ok: true as const, source: memoized };
   if (!built.ok) {
     await recordConfigRepoBuildFailure({
+      buildKey,
       failure: built.failure,
       projectId: input.projectId,
       resolved,
@@ -149,15 +150,20 @@ async function resolveArtifact(
  * dynamic package substitution can break the build of an unchanged repo, and
  * without this the only trace is each subscription's transient lastError.
  *
- * The append rides the platform door under the readiness probe's OWN
- * platform-namespace idempotency key, so the two sources dedupe into ONE
- * durable outcome per commit (the probe's outcome-per-commit contract), every
- * retrying delivery dedupes to it, the append the fact itself triggers
- * dedupes too (no self-sustaining loop), and no public append can pre-claim
- * or forge the key. Best-effort: the build failure result must reach the
- * caller even when the journal append fails.
+ * The append uses the platform-authored append surface under a
+ * platform-namespace idempotency key no public append can pre-claim or
+ * forge. The key is (commitOid, buildKey), NOT the readiness probe's
+ * one-outcome-per-commit key: the buildKey folds in the deployment's package
+ * substitution, so a platform deploy that breaks the build of an unchanged,
+ * previously-successful commit journals a NEW failure fact (the incident
+ * shape) instead of colliding with the recorded success — while every
+ * retrying delivery of the SAME broken build dedupes to one fact, including
+ * the delivery this very append triggers (no self-sustaining loop).
+ * Best-effort: the build failure result must reach the caller even when the
+ * journal append fails.
  */
 async function recordConfigRepoBuildFailure(input: {
+  buildKey: string;
   failure: WorkerBuildFailure;
   projectId: string;
   resolved: ResolvedWorkerFileSource;
@@ -168,9 +174,10 @@ async function recordConfigRepoBuildFailure(input: {
     const stream = env.STREAM.getByName(
       DurableObjectNameCodec.stringify({ path: "/", projectId: input.projectId }),
     );
-    // The platform door is fenced to one stream lifetime; read the identity
-    // in the same dial. A recreated stream between the two calls surfaces as
-    // a loud mismatch instead of journaling onto the wrong lifetime.
+    // The platform-append method is fenced to one stream lifetime; read the
+    // identity in the same dial. A recreated stream between the two calls
+    // surfaces as a loud mismatch instead of journaling onto the wrong
+    // lifetime.
     const { streamId } = await stream.getEventPage({ limit: 1 });
     disposeIgnoredRpcResult(
       await stream.appendCoreEventsIfStreamId({
@@ -178,7 +185,11 @@ async function recordConfigRepoBuildFailure(input: {
         events: [
           ProjectProcessorContract.parseEventInput({
             type: "events.iterate.com/project/worker-update-failed",
-            idempotencyKey: internalStreamId("project-worker-update", input.resolved.commitOid),
+            idempotencyKey: internalStreamId(
+              "worker-build-failed",
+              input.resolved.commitOid,
+              input.buildKey,
+            ),
             payload: {
               commitOid: input.resolved.commitOid,
               error: input.failure.message,

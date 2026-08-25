@@ -93,6 +93,10 @@ export function ProjectWorkerHealthWarning({
       try {
         return await itx.subscriptionHealth();
       } finally {
+        // Safe: the per-fetch project stub carries a disposer over Cap'n Web
+        // but the generated surface does not declare Disposable; the cast
+        // narrows to exactly the optional disposal member (the same release
+        // pattern useItxQuery uses), and `?.` keeps a stub without one valid.
         (itx as Partial<Disposable>)[Symbol.dispose]?.();
       }
     },
