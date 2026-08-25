@@ -56,7 +56,7 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
 test.fails(
   "the source-version pin tells a facet that recycled from one the commit rebuilt",
   // Ceiling, not an expectation: the run is ~60-90s against an idle
-  // deployment. 150s was not enough on a saturated preview lane (the first
+  // deployment. 150s was not enough on a fully loaded preview run (the first
   // attempt of the run described above timed out), and a ceiling only costs
   // wall time when it is actually hit.
   { timeout: 240_000 },
