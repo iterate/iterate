@@ -13,12 +13,16 @@
 // commit; settlements point back with that offset, and idempotency keys are
 // derived from offsets.
 //
-// The context-added payload is ONE flat shape for every role, and its richer
-// fields are live product features: `refs` carries coordinates for retrieving
-// source material on demand, the actor union names every authoring lane
-// (user, agent, script, integration, slack, telegram, email, github) and
-// drives the prompt-time trust demotion, and `compaction` marks the
-// structural history rewrite produced by context compaction.
+// The context-added payload is a kind-discriminated union — a keyed SECTION
+// or a plain MESSAGE — plus a read-side branch for events committed before
+// v8 (those carry a stored `role`). Provenance is the payload's spine: every
+// new append names its author through the `actor` union (user, agent,
+// script, worker, platform, model, integration, slack, telegram, email,
+// github), and the LLM role is DERIVED from that provenance at read time
+// (`deriveRole` in @iterate-com/shared/agent-events) — never stored, never
+// claimable. `refs` carries coordinates for retrieving source material on
+// demand, and `compaction` marks the structural history rewrite produced by
+// context compaction.
 
 import { z } from "zod";
 import { AgentRuntime } from "@iterate-com/shared/agent-events";
@@ -33,7 +37,7 @@ import { AgentBinding, AgentSummary, AgentSummaryUpdated } from "./agent-presenc
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "7.0.0",
+  version: "8.0.0",
   description:
     "Maintains model-visible history, schedules debounced offset-identified LLM turns, runs " +
     "them through the Workers AI transport, and executes scripts through the capability host. " +
@@ -422,8 +426,9 @@ export const AgentProcessorContract = defineProcessorContract({
     // event's namespace ("agents"), and the docs URLs must not move.
     "events.iterate.com/agents/context-added": {
       description:
-        "Model-visible context arrived (user message, developer note, assistant output, system " +
-        "item) — the everyday event, the only one most authors ever use. With `key`: keyed " +
+        "Model-visible context arrived — the everyday event, the only one most authors ever " +
+        "use. Every append names its author through `actor`; the LLM role derives from that " +
+        'provenance at read time, never from a stored claim. `kind: "section"`: keyed ' +
         "standing content, one event per section, and RE-ADDING A KEY IS THE UPDATE — an " +
         "occurrence no request has sent yet coalesces in place (free; the whole birth " +
         "window), a sent one appends at the tail at its moment in time with `supersedes` " +
@@ -513,10 +518,10 @@ export const AgentProcessorContract = defineProcessorContract({
       description:
         "A visible agent message was sent to the web UI — by a script (itx.chat.sendMessage), " +
         "or by a userland response interpreter delivering prose extracted straight from an " +
-        "assistant output. The processor mirrors script-sent messages back into context as " +
-        "assistant history so the model sees what it sent; extracted messages carry " +
-        "llmRequestOffset and are NOT mirrored — their raw text is already in history as the " +
-        "assistant context item.",
+        "assistant output. The processor records script-sent messages back into context as " +
+        "assistant records so the model sees what it sent; extracted messages carry " +
+        "llmRequestOffset and are NOT re-recorded — their raw text is already in history as " +
+        "the assistant record.",
       payloadSchema: z.object({
         message: z.string().meta({ description: "The visible chat message (markdown)." }),
         files: z
@@ -531,7 +536,7 @@ export const AgentProcessorContract = defineProcessorContract({
           .meta({
             description:
               "Present when the message was extracted from the identified LLM response rather " +
-              "than sent by a script. Suppresses the assistant-history mirror.",
+              "than sent by a script. Suppresses the assistant record of the sent message.",
           }),
       }),
     },
@@ -796,7 +801,17 @@ export type AgentContextItem = AgentProcessorState["contextItems"][number];
 /** A file attached to an agent context item: content type, filename, project
  * file-storage path, size, and the signed public URL minted at attach time
  * (stored, not re-minted — it expires with its signature). */
-export type AgentFileAttachment = NonNullable<AgentContextAddedPayload["files"]>[number];
+export type AgentFileAttachment = z.infer<ReturnType<typeof agentFileAttachmentSchema>>;
+
+/** The actor union — who supplied a context item. Every payload shape
+ * carries it (optional only on the read branch for events committed before
+ * actors were required). */
+export type AgentContextActor = z.infer<ReturnType<typeof agentContextActorSchema>>;
+
+/** One source-material coordinate riding a context item's `refs`. */
+export type AgentContextRef = NonNullable<
+  z.infer<ReturnType<typeof agentContextRefsSchema>>
+>[number];
 
 /** Exact runtime plus the event which first established it in reduced state.
  * This is processor state exposed through live state, not a stream event. */
@@ -814,208 +829,304 @@ export type AgentLiveState = z.infer<typeof AgentLiveState>;
 
 /**
  * The context-item payload — used repeatedly in the contract (the
- * `agents/context-added` event and the state's context items), so it
- * lives in this hoisted function instead of inline. One flat object for every role; the
- * role-specific fields are optional and documented per-field. `refs` and the
- * actor union are how the slack/telegram/email/github integrations attach
- * provenance and source coordinates; `compaction` marks the structural
- * history rewrite produced by context compaction. Parse failure means the
- * item silently drops from reduced state, i.e. conversation loss.
+ * `agents/context-added` event and the state's context items), so it lives
+ * in this hoisted function instead of inline. A union of three shapes:
+ *
+ * - `section` — keyed standing content, self-described by `kind: "section"`.
+ *   `key` exists ONLY here, so "keyed ⇒ standing instruction" is structure,
+ *   not a cross-field rule.
+ * - message — a plain conversation item (no `kind`).
+ * - the read branch — events committed before v8, recognizable by their
+ *   stored `role`. They reduce through the same schema (a parse failure
+ *   silently drops the item from reduced state, i.e. conversation loss), and
+ *   the stored role is only a render fallback: `deriveRole` consults it
+ *   solely when no actor is present, so a dropped actor can demote but never
+ *   escalate.
+ *
+ * `role` is absent from the section and message shapes and `actor` is
+ * required on both, so the union itself enforces the v8 write surface:
+ * every new append names its author, and the LLM role is derived from that
+ * provenance at read time.
  */
 function agentContextItemSchema() {
   return z
-    .strictObject({
-      role: z
-        .enum(["system", "developer", "user", "assistant"])
-        .meta({ description: "The LLM message role this item renders as." }),
-      content: z.string().meta({ description: "The model-visible text." }),
-      key: z
-        .string()
-        .min(1)
-        .optional()
-        .meta({
+    .union([
+      z.strictObject({
+        kind: z.literal("section").meta({
           description:
-            "The section's stable identity — THE addressing mechanism: re-adding a key IS " +
-            "the update. An occurrence no request has sent yet is edited in place " +
-            "(coalesced, free); a sent one appends at the tail of the timeline with " +
-            "`supersedes` stamped by the fold. Existing streams' keyed events already mean " +
-            "exactly this.",
+            "A keyed section — standing instructions (system role, always). Re-adding a " +
+            "key IS the update.",
         }),
-      files: z
-        .array(agentFileAttachmentSchema())
-        .optional()
-        .meta({ description: "Files riding on this item." }),
-      refs: z
-        .array(
-          z
-            .discriminatedUnion("type", [
-              z.object({
-                type: z.literal("event"),
-                streamPath: z.string().meta({ description: "The referenced stream's path." }),
-                offset: z
-                  .number()
-                  .int()
-                  .positive()
-                  .meta({ description: "The referenced event's offset on that stream." }),
-                eventType: z
-                  .string()
-                  .optional()
-                  .meta({ description: "The referenced event's type, when known." }),
-              }),
-              z.object({
-                type: z.literal("user"),
-                userId: z.string().meta({ description: "The referenced platform user." }),
-              }),
-              z.object({
-                type: z.literal("file"),
-                path: z.string().meta({ description: "Project file-storage path." }),
-              }),
-              z.object({
-                type: z.literal("git-commit"),
-                repoPath: z.string().meta({ description: "The repo's mount path." }),
-                commitOid: z.string().meta({ description: "The commit id." }),
-              }),
-            ])
-            .meta({ description: "One coordinate for richer source material." }),
-        )
-        .optional()
-        .meta({ description: "Coordinates for retrieving richer source material on demand." }),
-      actor: z
-        .discriminatedUnion("type", [
-          z.object({
-            type: z.literal("user"),
-            origin: z
-              .enum(["web", "mcp"])
-              .meta({ description: "Which surface the user wrote from." }),
-            userId: z
-              .string()
-              .optional()
-              .meta({
-                description:
-                  "The authenticated principal who wrote the message — the same identity " +
-                  "device enrollments record as ownerId, so a chat-reply push can be " +
-                  "addressed to the sender's devices only.",
-              }),
+        key: z
+          .string()
+          .min(1)
+          .meta({
+            description:
+              "The section's stable identity — THE addressing mechanism: re-adding a key IS " +
+              "the update. An occurrence no request has sent yet is edited in place " +
+              "(coalesced, free); a sent one appends at the tail of the timeline with " +
+              "`supersedes` stamped by the fold.",
           }),
-          z.object({
-            type: z.literal("agent"),
-            path: z.string().meta({ description: "The authoring agent's stream path." }),
-          }),
-          z.object({
-            type: z.literal("script"),
-            executionId: z
-              .string()
-              .meta({ description: "The capability-host execution that produced it." }),
-          }),
-          z.object({
-            type: z.literal("integration"),
-            name: z.string().meta({ description: "Which integration supplied it." }),
-          }),
-          z.object({
-            type: z.literal("slack"),
-            userId: z
-              .string()
-              .optional()
-              .meta({ description: "The Slack user who wrote the source message." }),
-            botName: z
-              .string()
-              .optional()
-              .meta({ description: "The Slack bot that wrote the source message." }),
-          }),
-          z.object({
-            type: z.literal("telegram"),
-            userId: z
-              .string()
-              .optional()
-              .meta({ description: "The Telegram user who wrote the source message." }),
-            username: z
-              .string()
-              .optional()
-              .meta({ description: "The Telegram username, when known." }),
-          }),
-          z.object({
-            type: z.literal("email"),
-            address: z.string().optional().meta({ description: "The sender's email address." }),
-            name: z.string().optional().meta({ description: "The sender's display name." }),
-          }),
-          z.object({
-            type: z.literal("github"),
-            login: z.string().optional().meta({ description: "The GitHub login of the sender." }),
-            senderType: z
-              .string()
-              .optional()
-              .meta({ description: "GitHub's sender classification (User, Bot, ...)." }),
-          }),
-        ])
-        .optional()
-        .meta({
-          description:
-            "Who supplied this item. Trust boundary at prompt time: a developer-role item " +
-            "keeps developer precedence only when platform-authored (no actor) or authored " +
-            "by an agent or its own script; every integration-lane author (slack, telegram, " +
-            "email, github, integration) is DEMOTED to user role — third-party text must " +
-            "not read as instructions.",
-        }),
-      llmRequestPolicy: z
-        .discriminatedUnion("behaviour", [
-          z.object({ behaviour: z.literal("dont-trigger-request") }),
-          z.object({ behaviour: z.literal("interrupt-current-request") }),
-          z.object({ behaviour: z.literal("after-current-request") }),
-        ])
-        .default({ behaviour: "after-current-request" })
-        .meta({
-          description:
-            "What this item does to the turn loop (ignored on system/assistant items). The " +
-            "interrupt behaviour is the ONLY cancel mechanism: cancellation is a property of " +
-            "new input, never a free-standing command.",
-        }),
-      llmRequestOffset: z
-        .number()
-        .int()
-        .positive()
-        .optional()
-        .meta({
-          description:
-            "On assistant items: offset of the llm-request-requested event this output " +
-            "answers. The reduce IGNORES an assistant item whose request is no longer the open " +
-            "one — that guard is what closes the interrupt-vs-settle race.",
-        }),
-      compaction: z
-        .object({
-          replacesHistoryThrough: z.number().int().positive().meta({
-            description: "Replace model-visible history through this stream offset with this item.",
-          }),
-          usage: llmTokenUsageSchema()
+        content: z.string().meta({ description: "The model-visible text." }),
+        actor: agentContextActorSchema(),
+        llmRequestPolicy: agentLlmRequestPolicySchema(),
+      }),
+      z
+        .strictObject({
+          content: z.string().meta({ description: "The model-visible text." }),
+          actor: agentContextActorSchema(),
+          files: z
+            .array(agentFileAttachmentSchema())
             .optional()
-            .meta({ description: "Provider-reported usage for the summarization request." }),
+            .meta({ description: "Files riding on this item." }),
+          refs: agentContextRefsSchema(),
+          llmRequestPolicy: agentLlmRequestPolicySchema(),
+          compaction: agentContextCompactionSchema(),
         })
-        .optional()
-        .meta({
-          description:
-            "Metadata for the structural history rewrite produced by compaction (developer " +
-            "role only): this item replaces every non-system item at or below the barrier.",
+        .superRefine((payload, ctx) => {
+          if (payload.compaction === undefined) return;
+          if (payload.llmRequestPolicy.behaviour !== "dont-trigger-request") {
+            ctx.addIssue({
+              code: "custom",
+              path: ["llmRequestPolicy", "behaviour"],
+              message: "compaction cannot trigger an LLM request",
+            });
+          }
         }),
-    })
-    .superRefine((payload, ctx) => {
-      if (payload.role !== "developer" || payload.compaction === undefined) return;
-      if (payload.key !== undefined) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["key"],
-          message: "compaction is a structural history rewrite and cannot be keyed",
-        });
-      }
-      if (payload.llmRequestPolicy.behaviour !== "dont-trigger-request") {
-        ctx.addIssue({
-          code: "custom",
-          path: ["llmRequestPolicy", "behaviour"],
-          message: "compaction cannot trigger an LLM request",
-        });
-      }
-    })
+      z
+        .strictObject({
+          role: z
+            .enum(["system", "developer", "user", "assistant"])
+            .meta({
+              description: "Stored role — a render fallback read only when no actor is present.",
+            }),
+          content: z.string().meta({ description: "The model-visible text." }),
+          key: z.string().min(1).optional().meta({ description: "The section's stable identity." }),
+          files: z
+            .array(agentFileAttachmentSchema())
+            .optional()
+            .meta({ description: "Files riding on this item." }),
+          refs: agentContextRefsSchema(),
+          actor: agentContextActorSchema().optional(),
+          llmRequestPolicy: agentLlmRequestPolicySchema(),
+          llmRequestOffset: z
+            .number()
+            .int()
+            .positive()
+            .optional()
+            .meta({
+              description:
+                "On assistant items: offset of the llm-request-requested event this output " +
+                "answers (model-actor items carry it on the actor instead).",
+            }),
+          compaction: agentContextCompactionSchema(),
+        })
+        .superRefine((payload, ctx) => {
+          if (payload.role !== "developer" || payload.compaction === undefined) return;
+          if (payload.key !== undefined) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["key"],
+              message: "compaction is a structural history rewrite and cannot be keyed",
+            });
+          }
+          if (payload.llmRequestPolicy.behaviour !== "dont-trigger-request") {
+            ctx.addIssue({
+              code: "custom",
+              path: ["llmRequestPolicy", "behaviour"],
+              message: "compaction cannot trigger an LLM request",
+            });
+          }
+        }),
+    ])
     .meta({
       description:
         "One model-visible context item. The single source of truth for what the LLM sees.",
+    });
+}
+
+/**
+ * Who supplied a context item — the payload's spine. Roles derive from this
+ * at read time (`deriveRole`): platform/agent/script/worker speak with
+ * application authority (developer), model output renders assistant, and
+ * every other author — humans on any surface, every channel, integrations,
+ * all future actors — renders user, so third-party text never gains
+ * instruction precedence from the way it arrived. The append gate in the OS
+ * worker decides what each caller may claim: `model` and `platform` are
+ * platform-internal, a user session is always stamped as itself, and
+ * channel actors on router-fed streams are attested by the router that
+ * authenticated the webhook.
+ */
+function agentContextActorSchema() {
+  return z
+    .discriminatedUnion("type", [
+      z.object({
+        type: z.literal("user"),
+        origin: z.enum(["web", "mcp"]).meta({ description: "Which surface the user wrote from." }),
+        userId: z
+          .string()
+          .optional()
+          .meta({
+            description:
+              "The authenticated principal who wrote the message — the same identity " +
+              "device enrollments record as ownerId, so a chat-reply push can be " +
+              "addressed to the sender's devices only.",
+          }),
+      }),
+      z.object({
+        type: z.literal("agent"),
+        path: z.string().meta({ description: "The authoring agent's stream path." }),
+      }),
+      z.object({
+        type: z.literal("script"),
+        executionId: z
+          .string()
+          .meta({ description: "The capability-host execution that produced it." }),
+      }),
+      z.object({
+        type: z.literal("worker"),
+        name: z
+          .string()
+          .meta({ description: "The authoring project worker, named by its config slug." }),
+      }),
+      z.object({
+        type: z.literal("platform").meta({
+          description:
+            "Platform machinery: birth sections, compaction summaries, corrective " +
+            "feedback about the agent's own output. Renders no actor line — default " +
+            "authorship carries zero information.",
+        }),
+      }),
+      z.object({
+        type: z.literal("model"),
+        llmRequestOffset: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .meta({
+            description:
+              "Offset of the llm-request-requested event this output answers. The reduce " +
+              "IGNORES a model item whose request is no longer the open one — that guard " +
+              "is what closes the interrupt-vs-settle race.",
+          }),
+      }),
+      z.object({
+        type: z.literal("integration"),
+        name: z.string().meta({ description: "Which integration supplied it." }),
+      }),
+      z.object({
+        type: z.literal("slack"),
+        userId: z
+          .string()
+          .optional()
+          .meta({ description: "The Slack user who wrote the source message." }),
+        botName: z
+          .string()
+          .optional()
+          .meta({ description: "The Slack bot that wrote the source message." }),
+      }),
+      z.object({
+        type: z.literal("telegram"),
+        userId: z
+          .string()
+          .optional()
+          .meta({ description: "The Telegram user who wrote the source message." }),
+        username: z.string().optional().meta({ description: "The Telegram username, when known." }),
+      }),
+      z.object({
+        type: z.literal("email"),
+        address: z.string().optional().meta({ description: "The sender's email address." }),
+        name: z.string().optional().meta({ description: "The sender's display name." }),
+      }),
+      z.object({
+        type: z.literal("github"),
+        login: z.string().optional().meta({ description: "The GitHub login of the sender." }),
+        senderType: z
+          .string()
+          .optional()
+          .meta({ description: "GitHub's sender classification (User, Bot, ...)." }),
+      }),
+    ])
+    .meta({ description: "Who supplied this item; the LLM role derives from it at read time." });
+}
+
+/** Turn-loop policy for one context item — shared by every payload shape. */
+function agentLlmRequestPolicySchema() {
+  return z
+    .discriminatedUnion("behaviour", [
+      z.object({ behaviour: z.literal("dont-trigger-request") }),
+      z.object({ behaviour: z.literal("interrupt-current-request") }),
+      z.object({ behaviour: z.literal("after-current-request") }),
+    ])
+    .default({ behaviour: "after-current-request" })
+    .meta({
+      description:
+        "What this item does to the turn loop (ignored on items deriving system/assistant " +
+        "roles). The interrupt behaviour is the ONLY cancel mechanism: cancellation is a " +
+        "property of new input, never a free-standing command.",
+    });
+}
+
+/** Source-material coordinates riding a context item — shared by the message
+ * and read-branch payload shapes. */
+function agentContextRefsSchema() {
+  return z
+    .array(
+      z
+        .discriminatedUnion("type", [
+          z.object({
+            type: z.literal("event"),
+            streamPath: z.string().meta({ description: "The referenced stream's path." }),
+            offset: z
+              .number()
+              .int()
+              .positive()
+              .meta({ description: "The referenced event's offset on that stream." }),
+            eventType: z
+              .string()
+              .optional()
+              .meta({ description: "The referenced event's type, when known." }),
+          }),
+          z.object({
+            type: z.literal("user"),
+            userId: z.string().meta({ description: "The referenced platform user." }),
+          }),
+          z.object({
+            type: z.literal("file"),
+            path: z.string().meta({ description: "Project file-storage path." }),
+          }),
+          z.object({
+            type: z.literal("git-commit"),
+            repoPath: z.string().meta({ description: "The repo's mount path." }),
+            commitOid: z.string().meta({ description: "The commit id." }),
+          }),
+        ])
+        .meta({ description: "One coordinate for richer source material." }),
+    )
+    .optional()
+    .meta({ description: "Coordinates for retrieving richer source material on demand." });
+}
+
+/** Compaction metadata — the structural history rewrite, shared by the
+ * message and read-branch payload shapes. An item carrying it renders as
+ * user: the summary is the agent's memory of prior context, not a fresh
+ * instruction. */
+function agentContextCompactionSchema() {
+  return z
+    .object({
+      replacesHistoryThrough: z.number().int().positive().meta({
+        description: "Replace model-visible history through this stream offset with this item.",
+      }),
+      usage: llmTokenUsageSchema()
+        .optional()
+        .meta({ description: "Provider-reported usage for the summarization request." }),
+    })
+    .optional()
+    .meta({
+      description:
+        "Metadata for the structural history rewrite produced by compaction: this item " +
+        "replaces every non-system item at or below the barrier.",
     });
 }
 

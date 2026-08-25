@@ -17,6 +17,7 @@
 // the durable record. What the customer said and what the voice said come
 // through anyway, because the bridge copies both to the thinking half as
 // context, which is persisted.
+import { deriveRole } from "@iterate-com/shared/agent-events";
 import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
 
 /** Options for `pnpm cli voicelab chronology`. */
@@ -102,7 +103,8 @@ function describe(event: StreamEventLike, width: number): Row | null {
 
   switch (short) {
     case "agents/context-added": {
-      const role = String(payload.role ?? "");
+      // The same provenance ladder the prompt fold renders with.
+      const role = deriveRole(payload as Parameters<typeof deriveRole>[0]);
       return row("→BRAIN", `[${role}] ${clip(payload.content, width)}`);
     }
     case "agents/web-message-sent":

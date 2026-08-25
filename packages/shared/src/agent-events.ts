@@ -3,6 +3,55 @@ import { z } from "zod";
 export const AgentLlmRequestCancelReason = z.enum(["interrupted-by-user-input", "expired"]);
 export type AgentLlmRequestCancelReason = z.infer<typeof AgentLlmRequestCancelReason>;
 
+/** The LLM message role a context item renders as. */
+export type AgentContextRole = "system" | "developer" | "user" | "assistant";
+
+/**
+ * THE role derivation for agent context items — the one place a payload's
+ * provenance becomes an LLM role. Role is a fact ABOUT the author, derived at
+ * read time, never a claim stored in the payload:
+ *
+ * - keyed items are sections — standing instructions, system;
+ * - a compaction summary is the agent's memory of prior context, not a fresh
+ *   instruction — user;
+ * - platform machinery, the project's config worker, agents, and their own
+ *   scripts speak with application authority — developer;
+ * - the model's own recorded output — assistant;
+ * - everyone else — humans on any surface, every channel
+ *   (slack/telegram/email/github), integrations, and every future actor —
+ *   user: third-party text never gains instruction precedence from the way
+ *   it arrived.
+ *
+ * The final `role` fallback covers events committed before actors were
+ * required; a dropped actor can only ever demote (fails down to user).
+ *
+ * Lives here (not in the os fold) because the browser feed reducer
+ * (packages/ui) and the mobile chat reducer derive the same roles; the
+ * param is structural so contract payload unions and loosely-typed UI
+ * payloads both fit.
+ */
+export function deriveRole(payload: {
+  key?: string | undefined;
+  compaction?: unknown;
+  actor?: { type: string } | undefined;
+  role?: AgentContextRole | undefined;
+}): AgentContextRole {
+  if (payload.key) return "system";
+  if (payload.compaction) return "user";
+  if (!payload.actor) return payload.role || "user";
+  switch (payload.actor.type) {
+    case "platform":
+    case "agent":
+    case "script":
+    case "worker":
+      return "developer";
+    case "model":
+      return "assistant";
+    default:
+      return "user";
+  }
+}
+
 export const AGENT_SUMMARY_UPDATED_EVENT_TYPE = "events.iterate.com/agent/summary-updated";
 export const AGENT_BINDING_SET_EVENT_TYPE = "events.iterate.com/agent/binding-set";
 

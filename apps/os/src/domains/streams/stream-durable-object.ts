@@ -1119,6 +1119,10 @@ export class StreamDurableObject extends DurableObject<Env> {
           streamContext: { kind: "scope", scopePath: "/" },
           path: "/",
           projectId: this.name.projectId,
+          // Delivery evaluates PROJECT-AUTHORED expressions (wake dials,
+          // receiver calls): agent-context appends through this root are
+          // gate-classified as the project's own automation.
+          contextGateScopePath: "/",
         });
   }
 

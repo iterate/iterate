@@ -85,7 +85,7 @@ describe("agent runtime", () => {
     expect(
       deriveAgentRuntime({
         activeScriptExecutions: [{ executionId: "script-a" }, { executionId: "script-b" }],
-        contextItems: [{ kind: "section", payload: { role: "system" } }],
+        contextItems: [{ kind: "section" }],
         openRequest: { requestedAtOffset: 4 },
         pendingLlmRequestTrigger: { offset: 12 },
       }),

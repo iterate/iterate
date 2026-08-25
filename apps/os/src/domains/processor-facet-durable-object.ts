@@ -384,6 +384,10 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
           streamContext: { kind: "scope", scopePath: path },
           path,
           projectId,
+          // This itx runs USERSPACE scripts at this scope: agent-context
+          // appends through it are gate-classified by the scope (an agent
+          // path → the agent tier).
+          contextGateScopePath: path,
         }),
         reads: {
           snapshot: () => requireReads().snapshot(),

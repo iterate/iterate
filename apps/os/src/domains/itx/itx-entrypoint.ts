@@ -37,7 +37,17 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
       // project stream's does.
       return deploymentItxForInternal({ auth, ctx: this.ctx });
     }
-    return itxForScope({ auth, ctx: this.ctx, path, projectId, streamContext });
+    // contextGateScopePath: this binding hands userspace code its itx, so
+    // agent-context appends through it are gate-classified by this scope
+    // (agent path → the agent tier, anything else → the project's worker).
+    return itxForScope({
+      auth,
+      ctx: this.ctx,
+      path,
+      projectId,
+      streamContext,
+      contextGateScopePath: path,
+    });
   }
 
   /**

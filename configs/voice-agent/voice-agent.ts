@@ -2894,10 +2894,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
               type: "events.iterate.com/agents/context-added",
               idempotencyKey: this.idempotencyKey(`colleague-brief:${dial.conversationId}`),
               payload: {
-                content: COLLEAGUE_BRIEF,
+                kind: "section",
                 key: "voice-agent/colleague-brief",
-                llmRequestPolicy: { behaviour: "dont-trigger-request" },
-                role: "system",
+                content: COLLEAGUE_BRIEF,
+                actor: { type: "worker", name: "voice-agent" },
               },
             });
             // The platform births agents with a high (60s) debounce so a

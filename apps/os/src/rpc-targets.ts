@@ -67,6 +67,7 @@ import {
   isStreamDeliveryAuth,
   resolveItxAuth,
   resolveOrganizationSlugForCreate,
+  trustedInternalAuthContext,
   userPrincipalOf,
   widenProjectAccess,
 } from "./auth.ts";
@@ -294,6 +295,10 @@ import {
   type AgentLiveState,
   type AgentProcessorState,
 } from "./domains/agents/agent-processor-contract.ts";
+import {
+  classifyAgentContextCaller,
+  gateAgentContextEvents,
+} from "./domains/agents/agent-context-gate.ts";
 import {
   capabilityHostCreationEvents,
   type CapabilityHostCreateInput,
@@ -587,7 +592,19 @@ export const STREAM_DURABLE_OBJECT_STUB = Symbol("stream-durable-object-stub");
  * callers and processors still work with explicit events.
  */
 export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
-  readonly props: { auth: ItxAuth; projectId: string | null; path: string };
+  readonly props: {
+    auth: ItxAuth;
+    projectId: string | null;
+    path: string;
+    /**
+     * The itx scope this handle was reached through, when one exists —
+     * dynamic workers and agent scripts always carry the scope their itx
+     * was minted for; platform code constructs targets without one. Feeds
+     * the agent-context append gate's caller classification
+     * (agent-context-gate.ts) together with `auth`.
+     */
+    callerScopePath?: string;
+  };
 
   async __describe(): Promise<Description> {
     return describeNode({
@@ -624,7 +641,12 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     });
   }
 
-  constructor(props: { auth: ItxAuth; projectId: string | null; path: string }) {
+  constructor(props: {
+    auth: ItxAuth;
+    projectId: string | null;
+    path: string;
+    callerScopePath?: string;
+  }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
     this.props = { ...props, path: canonicalizeStreamPath(props.path) };
@@ -669,9 +691,24 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   // so a read cannot inherit the surrounding wake connection's lifetime.
   /** Commit events; resolves with the same events carrying offsets and timestamps. */
   async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
-    return await this.#appendRetrying(events, () =>
-      Promise.resolve(this[STREAM_DURABLE_OBJECT_STUB].append(...events)),
+    const gated = this.#gateAgentContext(events);
+    return await this.#appendRetrying(gated, () =>
+      Promise.resolve(this[STREAM_DURABLE_OBJECT_STUB].append(...gated)),
     );
+  }
+
+  /** The agent-context append gate: caller-scoped validation and actor
+   * stamping for agents/context-added events; every other type passes
+   * through. Applied on every append path through this target, so the itx
+   * doors — the agent handle's typed helpers included — share one gate. */
+  #gateAgentContext(events: StreamEventInput[]): StreamEventInput[] {
+    return gateAgentContextEvents({
+      events,
+      caller: classifyAgentContextCaller({
+        auth: this.props.auth,
+        scopePath: this.props.callerScopePath,
+      }),
+    });
   }
 
   async #appendRetrying(
@@ -717,10 +754,11 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   }
 
   /** Commit only if this path still names the supplied stream lifetime. */
-  async appendIfStreamId(args: {
+  async appendIfStreamId(input: {
     streamId: string;
     events: StreamEventInput[];
   }): Promise<StreamEvent[]> {
+    const args = { streamId: input.streamId, events: this.#gateAgentContext(input.events) };
     const append = () => Promise.resolve(this[STREAM_DURABLE_OBJECT_STUB].appendIfStreamId(args));
     const result = await (
       args.events.every(
@@ -742,6 +780,9 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       auth: this.props.auth,
       projectId: this.props.projectId,
       path: resolveStreamPath(this.props.path, path),
+      ...(this.props.callerScopePath === undefined
+        ? {}
+        : { callerScopePath: this.props.callerScopePath }),
     });
   }
 
@@ -1407,7 +1448,9 @@ class StreamCollectionRpcTarget<
     });
   }
 
-  constructor(readonly props: { auth: ItxAuth; projectId: string | null }) {
+  constructor(
+    readonly props: { auth: ItxAuth; projectId: string | null; callerScopePath?: string },
+  ) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
   }
@@ -1418,13 +1461,18 @@ class StreamCollectionRpcTarget<
       auth: this.props.auth,
       projectId: this.props.projectId,
       path,
+      ...(this.props.callerScopePath === undefined
+        ? {}
+        : { callerScopePath: this.props.callerScopePath }),
     });
   }
 }
 
 /** Project-scoped stream catalog with reduced-state listing. */
 class ProjectStreamCollectionRpcTarget extends StreamCollectionRpcTarget<"ProjectStreamCollection"> {
-  constructor(readonly projectProps: { auth: ItxAuth; projectId: string }) {
+  constructor(
+    readonly projectProps: { auth: ItxAuth; projectId: string; callerScopePath?: string },
+  ) {
     super(projectProps);
   }
 
@@ -2029,6 +2077,8 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
        * a property of the tree, not of per-call auth.
        */
       sourceScopePath?: string;
+      /** See {@link ExistingProjectRpcTargetProps.contextGateScopePath}. */
+      contextGateScopePath?: string;
     },
   ) {
     super();
@@ -2060,6 +2110,9 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
       ...(this.props.sourceScopePath === undefined
         ? {}
         : { sourceScopePath: this.props.sourceScopePath }),
+      ...(this.props.contextGateScopePath === undefined
+        ? {}
+        : { contextGateScopePath: this.props.contextGateScopePath }),
     });
   }
 
@@ -4891,6 +4944,8 @@ type AgentRpcTargetProps = {
   projectId: string;
   /** The calling scope's path ("current actor") — see AgentCollectionRpcTarget. */
   sourceScopePath?: string;
+  /** See {@link ExistingProjectRpcTargetProps.contextGateScopePath}. */
+  contextGateScopePath?: string;
 };
 
 /**
@@ -4980,6 +5035,11 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       auth: this.#props.auth,
       projectId: this.#props.projectId,
       path: this.#path,
+      // The userspace scope this agent handle was reached through — the
+      // agent-context append gate classifies internal callers by it.
+      ...(this.#props.contextGateScopePath === undefined
+        ? {}
+        : { callerScopePath: this.#props.contextGateScopePath }),
     });
   }
 
@@ -4995,7 +5055,17 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
    */
   async append(...events: AgentEventInput[]): Promise<StreamEvent[]> {
     await this.#assertCreated();
-    const parsed = events.map((event) => AgentProcessorContract.parseConsumedInput(event));
+    // Gate FIRST (caller-scoped context validation + actor stamping — the
+    // same gate `stream.append` applies, run here so the vocabulary parse
+    // below sees the stamped payloads), then validate against the contract.
+    const gated = gateAgentContextEvents({
+      events,
+      caller: classifyAgentContextCaller({
+        auth: this.#props.auth,
+        scopePath: this.#props.contextGateScopePath,
+      }),
+    });
+    const parsed = gated.map((event) => AgentProcessorContract.parseConsumedInput(event));
     return await this.stream.append(...parsed);
   }
 
@@ -5080,7 +5150,16 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     await collectionStream.append(
       ...agentCollectionCreationEvents({ projectId: this.#props.projectId }),
     );
-    const committed = await this.stream.append(...creation.events);
+    // The birth batch is platform policy, not caller input (its sections
+    // carry the platform actor, which the context gate rightly refuses from
+    // any external caller): append it with platform authority. The caller's
+    // own project access was asserted when this handle was constructed.
+    const birthStream = new StreamRpcTarget({
+      auth: trustedInternalAuthContext(),
+      projectId: this.#props.projectId,
+      path: this.#path,
+    });
+    const committed = await birthStream.append(...creation.events);
     // append() preserves INPUT order, including idempotency hits at their old
     // offsets. A paired capability host may already exist, so the last input
     // is not necessarily the newest event. The create boundary is the maximum
@@ -5153,7 +5232,6 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     const [event] = await this.stream.append({
       type: "events.iterate.com/agents/context-added",
       payload: {
-        role: actor.type === "agent" ? "developer" : "user",
         content: message,
         actor,
         ...(files === undefined ? {} : { files }),
@@ -5199,7 +5277,6 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     const [sent] = await this.stream.append({
       type: "events.iterate.com/agents/context-added",
       payload: {
-        role: actor.type === "agent" ? "developer" : "user",
         content: input.message,
         actor:
           actor.type === "user"
@@ -5245,7 +5322,6 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     const [event] = await this.stream.append({
       type: "events.iterate.com/agents/context-added",
       payload: {
-        role: actor.type === "agent" ? "developer" : "user",
         actor,
         content:
           input.message ?? `[Files attached: ${files.map((file) => file.filename).join(", ")}]`,
@@ -6259,6 +6335,15 @@ type ExistingProjectRpcTargetProps = {
   streamContext: StreamContext;
   projectId: string;
   /**
+   * Set ONLY where userspace code is handed its itx (a dynamic worker's
+   * env.ITX, a capability-host script, a stream delivery's expression
+   * root): the scope the code runs in, feeding the agent-context append
+   * gate's caller classification (agent-context-gate.ts). Absent on
+   * session- and platform-minted handles, whose appends classify by their
+   * auth alone.
+   */
+  contextGateScopePath?: string;
+  /**
    * Owned handles whose lifetime IS this itx handle's: disposed when the
    * handle is (explicitly, or by the session teardown disposing its exports).
    * `projects.connect` parks its live-capability provision here so a dying
@@ -6356,6 +6441,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
 
   get #streamContext(): StreamContext {
     return this.#existingProps.streamContext;
+  }
+
+  get #contextGateScopePath(): string | undefined {
+    return this.#existingProps.contextGateScopePath;
   }
 
   /** The project this itx is scoped into. */
@@ -7040,6 +7129,9 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return new ProjectStreamCollectionRpcTarget({
       auth: this.#props.auth,
       projectId: this.#projectId,
+      ...(this.#contextGateScopePath === undefined
+        ? {}
+        : { callerScopePath: this.#contextGateScopePath }),
     });
   }
 
@@ -7053,6 +7145,9 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       // resolve against it, and message() stamps it as the sender when the
       // scope is an agent — how delegated reports know who they are from.
       sourceScopePath: this.#capabilityHost.path,
+      ...(this.#contextGateScopePath === undefined
+        ? {}
+        : { contextGateScopePath: this.#contextGateScopePath }),
     });
   }
 
@@ -7319,6 +7414,8 @@ export function itxForScope(props: {
   streamContext: StreamContext;
   path: string;
   projectId: string;
+  /** See {@link ExistingProjectRpcTargetProps.contextGateScopePath}. */
+  contextGateScopePath?: string;
   /** See {@link ExistingProjectRpcTargetProps.ownedDisposables}. */
   ownedDisposables?: Disposable[];
 }): ProjectRpcTarget {
@@ -7328,6 +7425,9 @@ export function itxForScope(props: {
     ctx: props.ctx,
     streamContext: props.streamContext,
     projectId: props.projectId,
+    ...(props.contextGateScopePath === undefined
+      ? {}
+      : { contextGateScopePath: props.contextGateScopePath }),
     ...(props.ownedDisposables === undefined ? {} : { ownedDisposables: props.ownedDisposables }),
   });
 }

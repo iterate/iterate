@@ -25,7 +25,11 @@ export async function ensureMcpSessionAgentReady(input: {
   await agent.append(
     ...agentSystemPromptContextEvents({
       content: MCP_AGENT_SYSTEM_PROMPT,
-      idempotencyKeyBase: `agent/mcp-system-prompt:v${MCP_AGENT_SYSTEM_PROMPT_REVISION}`,
+      // ":v2:" — the payload shape changed (kind/actor) while an unchanged
+      // prompt keeps its content-hash revision; a replay over a session
+      // born under the older shape must supersede, not trip
+      // same-key-different-body.
+      idempotencyKeyBase: `agent/mcp-system-prompt:v2:v${MCP_AGENT_SYSTEM_PROMPT_REVISION}`,
     }),
   );
 }

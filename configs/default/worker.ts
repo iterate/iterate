@@ -17,6 +17,11 @@ import { TodoApp } from "iterate/starter-apps/todo";
 // Hence, the essence of an iterate project can be expressed as two functions:
 // { fetch, processEvent }
 
+/** Provenance for every context item this worker authors: the project's
+ * config worker, named by its config slug. Worker-authored messages derive
+ * developer role at read time; sections derive system. */
+const WORKER_ACTOR = { type: "worker", name: "default" } as const;
+
 export default class ProjectWorker extends IterateWorkerEntrypoint {
   #aiLintApp = GithubAiLinter.create(this.env, {
     policyVersion: "2",
@@ -92,12 +97,16 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         if (slot?.content === content) return;
         await agent.append({
           type: "events.iterate.com/agents/context-added",
-          idempotencyKey: `iterate/config/agents-md:${hash}:after-${slot?.offset || 0}`,
+          // ":v2" — the payload shape carries the worker actor now; a
+          // replayed transition first synced under the older shape must
+          // dedupe on content (the skip above), never trip
+          // same-key-different-body.
+          idempotencyKey: `iterate/config/agents-md:v2:${hash}:after-${slot?.offset || 0}`,
           payload: {
-            content,
+            kind: "section",
             key: "config/agents-md",
-            llmRequestPolicy: { behaviour: "dont-trigger-request" },
-            role: "system",
+            content,
+            actor: WORKER_ACTOR,
           },
         });
       }),
@@ -157,12 +166,12 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         // agents/context-rewritten delete; it exists to show the shape of
         // project-authored agent personality.
         type: "events.iterate.com/agents/context-added" as const,
-        idempotencyKey: "iterate/config/house-style:v3",
+        idempotencyKey: "iterate/config/house-style:v4",
         payload: {
-          content: "House style: write all responses in all-lowercase.",
+          kind: "section" as const,
           key: "config/house-style",
-          llmRequestPolicy: { behaviour: "dont-trigger-request" as const },
-          role: "system" as const,
+          content: "House style: write all responses in all-lowercase.",
+          actor: WORKER_ACTOR,
         },
       },
     ];
@@ -204,17 +213,17 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     return parsePromptSections({ content, fallbackKey: "agent/system-prompt" }).map(
       (section, index) => ({
         type: "events.iterate.com/agents/context-added" as const,
-        // Per-section keys ("section:v3" prefix: the event body shape has
+        // Per-section keys ("section:v4" prefix: the event body shape has
         // changed across revisions while the content hash didn't — a replay
         // over an agent born under an older shape must append fresh
         // occurrences, not trip same-key-different-body). The index
         // disambiguates repeated section keys (several untagged runs).
-        idempotencyKey: `iterate/config/agent-system-prompt-section:v3:${hash}:${index}:${section.key}`,
+        idempotencyKey: `iterate/config/agent-system-prompt-section:v4:${hash}:${index}:${section.key}`,
         payload: {
-          content: section.content,
+          kind: "section" as const,
           key: section.key,
-          llmRequestPolicy: { behaviour: "dont-trigger-request" as const },
-          role: "system" as const,
+          content: section.content,
+          actor: WORKER_ACTOR,
         },
       }),
     );
@@ -236,22 +245,24 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         await onboardingAgent.append(
           {
             type: "events.iterate.com/agents/context-added",
-            idempotencyKey: "iterate/config/onboarding-instructions:v1",
+            idempotencyKey: "iterate/config/onboarding-instructions:v2",
             payload: {
-              role: "system",
+              kind: "section",
               key: "config/onboarding-instructions",
               content: instructions.content,
-              llmRequestPolicy: { behaviour: "dont-trigger-request" },
+              actor: WORKER_ACTOR,
             },
           },
           {
             type: "events.iterate.com/agents/context-added",
-            idempotencyKey: "iterate/config/onboarding-start:v1",
+            idempotencyKey: "iterate/config/onboarding-start:v2",
             payload: {
-              role: "developer",
-              key: "config/onboarding-start",
+              // A plain worker message, not a section: the kickoff must
+              // TRIGGER the agent's first turn, and sections (standing
+              // instructions) never trigger.
               content:
                 "Begin onboarding now. The project owner just created this project. Welcome them, then follow the onboarding instructions one question at a time.",
+              actor: WORKER_ACTOR,
               llmRequestPolicy: { behaviour: "after-current-request" },
             },
           },

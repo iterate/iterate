@@ -19,6 +19,8 @@ import {
 import {
   AGENT_COMPACTION_PROMPT,
   buildAgentLlmRequestBody,
+  contextItemCompaction,
+  deriveRole,
   flattenMessageToText,
   type AgentChatMessage,
 } from "./agent-prompt-fold.ts";
@@ -76,7 +78,7 @@ export class AgentLlmRequest {
     // durable system fact (send stamps and section occurrences alone are
     // not a conversation).
     const hasHistory = state.contextItems.some(
-      (item) => item.kind === "message" && item.payload.role !== "system",
+      (item) => item.kind === "message" && deriveRole(item.payload) !== "system",
     );
     blockProcessorWhile(async () => {
       // A later over-threshold report already in the stream supersedes this
@@ -202,9 +204,8 @@ export class AgentLlmRequest {
           {
             type: "events.iterate.com/agents/context-added",
             payload: {
-              role: "assistant",
               content: completion.text,
-              llmRequestOffset: requestOffset,
+              actor: { type: "model", llmRequestOffset: requestOffset },
             },
             idempotencyKey: this.#host.idempotencyKey(`assistant-context@${requestOffset}`),
           },
@@ -420,7 +421,7 @@ export class AgentLlmRequest {
         type: "events.iterate.com/agents/context-added",
         idempotencyKey: this.#host.idempotencyKey(`compact-context@${triggerOffset}`),
         payload: {
-          role: "developer",
+          actor: { type: "platform" },
           content:
             `[Earlier conversation history was compacted through @${llmRequestOffset} ` +
             `(~${contextTokens} tokens > ${thresholdTokens}). Summary:]\n\n${summary.text}`,
@@ -460,12 +461,12 @@ export class AgentLlmRequest {
       if (
         page.some((candidate) => {
           const parsed = payloadSchema.safeParse(candidate.payload);
+          if (!parsed.success) return false;
+          const compaction = contextItemCompaction(parsed.data);
           return (
-            parsed.success &&
-            parsed.data.role === "developer" &&
-            parsed.data.compaction !== undefined &&
-            parsed.data.compaction.replacesHistoryThrough >= offset &&
-            parsed.data.compaction.replacesHistoryThrough < candidate.offset
+            compaction !== undefined &&
+            compaction.replacesHistoryThrough >= offset &&
+            compaction.replacesHistoryThrough < candidate.offset
           );
         })
       ) {

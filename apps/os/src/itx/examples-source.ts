@@ -946,7 +946,7 @@ return await itx.projects.get(pid).__describe();
     id: "agent-send-message",
     title: "Create an agent, then send it a message",
     description:
-      "Agents live at /agents/<name> and are addressed through itx.agents.get(path). create() explicitly appends the agent and capability-host birth certificates, setup, and subscriptions, then waits for both processors. message() requires that birth and appends an agents/context-added item — the sender and user/developer role are derived from your scope. Put everything a delegated child needs in its first message.",
+      "Agents live at /agents/<name> and are addressed through itx.agents.get(path). create() explicitly appends the agent and capability-host birth certificates, setup, and subscriptions, then waits for both processors. message() requires that birth and appends an agents/context-added item — the sender actor (and with it the message's role) is derived from your scope. Put everything a delegated child needs in its first message.",
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { agentPath?: string; message?: string }) => {
       const agent = itx.agents.get(vars.agentPath ?? "/agents/repl-demo");

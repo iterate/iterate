@@ -27,7 +27,13 @@ import {
   prepareAgentLlmMessages,
   type AgentProcessorDeps,
 } from "./agent-processor-implementation.ts";
-import { buildAgentLlmRequestBody, projectContextAdded } from "./agent-prompt-fold.ts";
+import {
+  buildAgentLlmRequestBody,
+  contextItemCompaction,
+  contextItemKey,
+  deriveRole,
+  projectContextAdded,
+} from "./agent-prompt-fold.ts";
 import type { WorkersAiMessage } from "./workers-ai-transport.ts";
 
 type AgentEventInput = ConsumedInput<AgentProcessorContract>;
@@ -626,9 +632,9 @@ describe("AgentProcessor turn lifecycle", () => {
     ]);
     expect(statusOccurrences()).toMatchObject([{ payload: { content: "status 10" } }]);
     // Keyed items never land as plain conversation messages.
-    expect(conversationMessages(h.state()).some((item) => item.payload.key !== undefined)).toBe(
-      false,
-    );
+    expect(
+      conversationMessages(h.state()).some((item) => contextItemKey(item.payload) !== undefined),
+    ).toBe(false);
 
     // A request sends the section; the next update lands at the tail with
     // supersedes stamped by the fold. The sent copy stays in place, so the
@@ -708,7 +714,7 @@ describe("AgentProcessor recovery", () => {
 
     expect(h.events(SETTLED)).toHaveLength(1);
     const assistants = conversationMessages(h.state()).filter(
-      (item) => item.payload.role === "assistant",
+      (item) => deriveRole(item.payload) === "assistant",
     );
     expect(assistants).toMatchObject([{ payload: { content: "from-successor" } }]);
   });
@@ -855,7 +861,7 @@ describe("AgentProcessor recovery", () => {
       { payload: { result: { status: "succeeded", text: "second try" } } },
     ]);
     expect(
-      conversationMessages(h.state()).filter((item) => item.payload.role === "assistant"),
+      conversationMessages(h.state()).filter((item) => deriveRole(item.payload) === "assistant"),
     ).toMatchObject([{ payload: { content: "second try" } }]);
     expect(h.state().openRequest).toBeNull();
   });
@@ -2427,7 +2433,7 @@ describe("AgentProcessor compaction", () => {
     // pre-barrier turns dropped, the system prompt untouched in the standing
     // document, the summary at the front of the timeline.
     const compacted = conversationMessages(h.state()).find(
-      (item) => item.payload.compaction !== undefined,
+      (item) => contextItemCompaction(item.payload) !== undefined,
     );
     expect(compacted).toMatchObject({
       payload: {
@@ -2440,7 +2446,7 @@ describe("AgentProcessor compaction", () => {
     expect(h.state().contextItems.filter((item) => item.kind === "section")).toMatchObject([
       { key: "agent/system-prompt", payload: { role: "system" } },
     ]);
-    expect(conversationMessages(h.state())[0]!.payload.compaction).toBeDefined();
+    expect(contextItemCompaction(conversationMessages(h.state())[0]!.payload)).toBeDefined();
     expect(
       conversationMessages(h.state()).some((item) => item.payload.content === "First question"),
     ).toBe(false);
@@ -2480,7 +2486,9 @@ describe("AgentProcessor compaction", () => {
     );
     expect(h.llm.calls).toHaveLength(1); // no summary turn
     expect(
-      conversationMessages(h.state()).every((item) => item.payload.compaction === undefined),
+      conversationMessages(h.state()).every(
+        (item) => contextItemCompaction(item.payload) === undefined,
+      ),
     ).toBe(true);
   });
 
@@ -2508,7 +2516,9 @@ describe("AgentProcessor compaction", () => {
       true,
     );
     expect(
-      conversationMessages(h.state()).some((item) => item.payload.compaction !== undefined),
+      conversationMessages(h.state()).some(
+        (item) => contextItemCompaction(item.payload) !== undefined,
+      ),
     ).toBe(false);
     expect(
       conversationMessages(h.state()).some((item) => item.payload.content === "malformed summary"),
@@ -2565,7 +2575,9 @@ describe("AgentProcessor compaction", () => {
         .state()
         .contextItems.some((item) => item.kind === "section" && item.key === "agent/system-prompt"),
     ).toBe(true);
-    const summaryIndex = items.findIndex((item) => item.payload.compaction !== undefined);
+    const summaryIndex = items.findIndex(
+      (item) => contextItemCompaction(item.payload) !== undefined,
+    );
     const survivorIndex = items.findIndex(
       (item) => item.payload.content === "unanswered while compacting",
     );
@@ -2628,13 +2640,15 @@ describe("AgentProcessor compaction", () => {
     const items = conversationMessages(h.state());
     expect(promptOccurrences()).toMatchObject([{ payload: { content: "You are v2." } }]);
     const factIndex = items.findIndex((item) => item.payload.content === "Unkeyed durable fact.");
-    const summaryIndex = items.findIndex((item) => item.payload.compaction !== undefined);
+    const summaryIndex = items.findIndex(
+      (item) => contextItemCompaction(item.payload) !== undefined,
+    );
     expect(factIndex).toBeGreaterThanOrEqual(0);
     expect(summaryIndex).toBeGreaterThan(factIndex);
     expect(items.some((item) => item.payload.content === "First question")).toBe(false);
     // The summary call's own usage is journaled on the compaction item, so
     // cost views see the cache split.
-    expect(items[summaryIndex]!.payload.compaction).toMatchObject({
+    expect(contextItemCompaction(items[summaryIndex]!.payload)).toMatchObject({
       replacesHistoryThrough: requestOffset,
       usage: { inputTokens: 141_000, outputTokens: 20 },
     });
@@ -2680,7 +2694,9 @@ describe("AgentProcessor compaction", () => {
     expect(replay.llm.calls).toHaveLength(0);
     expect(replay.events().map((row) => row.offset)).toEqual(journalledOffsets);
     expect(
-      conversationMessages(replay.state()).filter((item) => item.payload.compaction !== undefined),
+      conversationMessages(replay.state()).filter(
+        (item) => contextItemCompaction(item.payload) !== undefined,
+      ),
     ).toHaveLength(1);
   });
 
@@ -2733,7 +2749,7 @@ describe("AgentProcessor compaction", () => {
 
     const compactionRows = h
       .events(CONTEXT_ADDED)
-      .filter((row) => row.payload.compaction !== undefined);
+      .filter((row) => contextItemCompaction(row.payload) !== undefined);
     expect(compactionRows).toHaveLength(2);
     expect(compactionRows[1]).toMatchObject({
       payload: { compaction: { replacesHistoryThrough: secondRequestOffset } },
@@ -2788,7 +2804,9 @@ describe("AgentProcessor compaction", () => {
 
     expect(h.llm.calls).toHaveLength(3); // the older report never dialed
     expect(
-      conversationMessages(h.state()).filter((item) => item.payload.compaction !== undefined),
+      conversationMessages(h.state()).filter(
+        (item) => contextItemCompaction(item.payload) !== undefined,
+      ),
     ).toMatchObject([{ payload: { compaction: { replacesHistoryThrough: secondRequestOffset } } }]);
   });
 

@@ -75,12 +75,17 @@ export class ChatReplyNotifyProcessor extends StreamProcessor<ChatReplyNotifyPro
         if (state.birthCertificate !== null) return state;
         return { ...state, birthCertificate: event.payload };
       case "events.iterate.com/agents/context-added": {
-        // Only user-authored turns owe a push; agent/script/integration
-        // context (developer-role delegation traffic included) never opens
-        // one. actor is optional on the wire — an actor-less user item still
-        // opens a turn, just without a sender to address.
-        const { actor, role } = event.payload;
-        if (role !== "user" || (actor !== undefined && actor.type !== "user")) return state;
+        // Only human-authored turns owe a push: the actor must be a user
+        // (agent/script/worker/channel context never opens one). Events
+        // committed before actors were required carry a stored role instead
+        // — an actor-less role-user item still opens a turn, just without a
+        // sender to address.
+        const { actor } = event.payload;
+        const humanAuthored =
+          actor === undefined
+            ? "role" in event.payload && event.payload.role === "user"
+            : actor.type === "user";
+        if (!humanAuthored) return state;
         const userId = actor?.type === "user" && actor.userId !== undefined ? actor.userId : null;
         return { ...state, pendingTurn: { messageOffset: event.offset, userId } };
       }

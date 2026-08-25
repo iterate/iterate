@@ -1,6 +1,6 @@
 // The agent's TURN LOOP component — one of the three parts composed into the
 // agent processor (see agent-processor-implementation.ts). It owns the
-// conversational loop: mirroring visible chat messages into history, clearing
+// conversational loop: recording visible chat messages into history, clearing
 // an agent-authored wait on a qualifying wake, interrupting an in-flight turn
 // on new input, transcribing stream errors into model-visible context, and
 // the whole at-head lifecycle — resume, the autonomous-turn breaker, the
@@ -11,7 +11,7 @@
 import type { EmittedInput, ProcessEventArgs } from "iterate/processors";
 import { appendUnlessLostIdempotencyRace, type AgentHost } from "./agent-host.ts";
 import { AgentProcessorContract, type AgentProcessorState } from "./agent-processor-contract.ts";
-import { contextClearsWaitingFor } from "./agent-prompt-fold.ts";
+import { contextClearsWaitingFor, deriveRole } from "./agent-prompt-fold.ts";
 import type { AgentLlmRequest } from "./agent-llm-request.ts";
 import { resolveSlashCommand } from "./slash-commands.ts";
 
@@ -24,10 +24,10 @@ export class AgentTurnLoop {
     this.#llm = llm;
   }
 
-  // Synchronous. The two side-effect lanes are chosen HERE, at the dispatch
-  // site, never inside helpers. The rule for choosing:
+  // Synchronous. The two side-effect disciplines are chosen HERE, at the
+  // dispatch site, never inside helpers. The rule for choosing:
   //
-  // - PER-EVENT consequences (the mirror, the waiting clear, the interrupt's
+  // - PER-EVENT consequences (the assistant record, the waiting clear, the interrupt's
   //   cancel, the error transcription) use `blockProcessorWhile`: the event
   //   will not be delivered again once the cursor passes it, so losing the
   //   append would lose the consequence forever — at-least-once is the
@@ -40,18 +40,19 @@ export class AgentTurnLoop {
 
     switch (event?.type) {
       case "events.iterate.com/agents/web-message-sent": {
-        // Mirror the visible chat message into assistant history so the model
-        // SEES what it sent on later turns (files ride along for vision).
-        // Assistant role, deliberately: this quotes assistant-authored text,
-        // and model output must never acquire developer/system instruction
-        // precedence merely by passing through sendMessage. Blocked: a
-        // per-event consequence — the event is delivered once, and losing the
-        // mirror would silently drop the agent's own words from its memory.
+        // Record the visible chat message in history as an assistant record
+        // so the model SEES what it sent on later turns (files ride along for
+        // vision). Model actor, deliberately: this quotes model-authored
+        // text, and model output must never acquire developer/system
+        // instruction precedence merely by passing through sendMessage.
+        // Blocked: a per-event consequence — the event is delivered once,
+        // and losing the record would silently drop the agent's own words
+        // from its memory.
         //
         // EXCEPT extracted prose (llmRequestOffset set): a userland response
         // interpreter delivering text lifted from an assistant output whose
-        // raw form is ALREADY in history — mirroring would make the model
-        // read its own words twice.
+        // raw form is ALREADY in history — recording it again would make the
+        // model read its own words twice.
         if (event.payload.llmRequestOffset !== undefined) break;
         const files = event.payload.files;
         blockProcessorWhile(() =>
@@ -59,7 +60,11 @@ export class AgentTurnLoop {
             {
               type: "events.iterate.com/agents/context-added",
               payload: {
-                role: "assistant",
+                // No llmRequestOffset on the actor: this record does not
+                // answer a request, it quotes a sent message (the reduce
+                // guard must not drop it, and script extraction never runs
+                // on it).
+                actor: { type: "model" },
                 content: `The assistant sent this visible web-chat message: ${event.payload.message}`,
                 ...(files === undefined || files.length === 0 ? {} : { files }),
               },
@@ -95,7 +100,7 @@ export class AgentTurnLoop {
         // nor schedule one — the SAME pure resolver gates it here, in the
         // codemode component, and in the fold's contextTriggerSource, so the
         // three can never disagree.
-        if (payload.role === "user" && resolveSlashCommand(payload.content) !== null) break;
+        if (deriveRole(payload) === "user" && resolveSlashCommand(payload.content) !== null) break;
         // INTERRUPT — cancellation is a property of new input, never a
         // free-standing command. Abort whatever this incarnation is running
         // and settle the open request as cancelled, carrying the streamed
@@ -103,7 +108,7 @@ export class AgentTurnLoop {
         // the shared settle key; whichever append lands second is dropped.
         if (
           payload.llmRequestPolicy.behaviour === "interrupt-current-request" &&
-          (payload.role === "user" || payload.role === "developer") &&
+          ["user", "developer"].includes(deriveRole(payload)) &&
           state.openRequest !== null
         ) {
           const open = state.openRequest;
@@ -115,10 +120,11 @@ export class AgentTurnLoop {
               payload: {
                 // The streamed partial stays model-visible — the next turn
                 // must know what the user already watched stream, or the
-                // model repeats or contradicts it. No `llmRequestOffset`:
-                // this is a record of an interruption, not parseable output
-                // (script extraction must never run on a half response).
-                role: "assistant",
+                // model repeats or contradicts it. No llmRequestOffset on
+                // the actor: this is a record of an interruption, not
+                // parseable output (script extraction must never run on a
+                // half response, and the reduce guard must not drop it).
+                actor: { type: "model" },
                 content: `[Response interrupted by the user's next message; partial output follows]\n${partialText}`,
               },
               idempotencyKey: this.#host.idempotencyKey(
@@ -165,7 +171,6 @@ export class AgentTurnLoop {
           append({
             type: "events.iterate.com/agents/context-added",
             payload: {
-              role: "developer",
               content: `Error on stream: ${event.payload.message}`,
               actor: { type: "integration", name: "stream-error" },
               llmRequestPolicy: { behaviour: "dont-trigger-request" },

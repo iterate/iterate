@@ -18,6 +18,11 @@ import {
 import { loadGithubAiLinterRules, type GithubAiLinterRules } from "./rules.ts";
 import { pullRequestLinterSubscriptionEvent, type GithubAiLinterConfig } from "./worker-ref.ts";
 
+/** Provenance for context this app authors itself: project-authored
+ * automation, named for the app. Worker-authored messages derive developer
+ * role at read time; sections derive system. */
+const WORKER_ACTOR = { type: "worker", name: "github-ai-linter" } as const;
+
 const pullRequestAgentPolicyVersion = "5";
 const pullRequestAgentPolicy = [
   "You are an iterate AI agent attached to one GitHub pull request.",
@@ -207,20 +212,20 @@ export async function handleGithubPullRequestWebhook(
     agentEvents.push(
       {
         type: "events.iterate.com/agents/context-added",
-        idempotencyKey: `github-pr/mention-instructions:${event.path}:${event.offset}`,
+        idempotencyKey: `github-pr/mention-instructions:v2:${event.path}:${event.offset}`,
         payload: {
           content: [
             `You're the GitHub agent for ${repository.owner}/${repository.repo} pull request #${number}.`,
             `GitHub's signed webhook identifies @${author.login} as ${author.association}. This project accepts OWNER, MEMBER, and COLLABORATOR authors for read-and-comment requests, so userspace has already authorized this request.`,
             `Their message is the next context item. If it can be answered from that message, respond in your first script with itx.integrations.github.get(${JSON.stringify(route.connection)}).octokit.rest.issues.createComment({ owner: ${JSON.stringify(repository.owner)}, repo: ${JSON.stringify(repository.repo)}, issue_number: ${number}, body: "your response" }); do not spend turns rereading the webhook or rechecking access. You may read GitHub and publish pull-request conversation comments or replies, but never create, submit, or dismiss a pull-request review; change code, refs, labels, or merge state; or answer through web chat. Finish after leaving the result or exact blocker on the pull request.`,
           ].join("\n\n"),
+          actor: WORKER_ACTOR,
           llmRequestPolicy: { behaviour: "dont-trigger-request" },
-          role: "developer",
         },
       },
       {
         type: "events.iterate.com/agents/context-added",
-        idempotencyKey: `github-pr/mention:${event.path}:${event.offset}`,
+        idempotencyKey: `github-pr/mention:v2:${event.path}:${event.offset}`,
         payload: {
           actor: { type: "github", login: author.login, senderType: author.type },
           content: [
@@ -229,7 +234,6 @@ export async function handleGithubPullRequestWebhook(
           ].join("\n\n"),
           llmRequestPolicy: { behaviour: "after-current-request" },
           refs: [reference],
-          role: "developer",
         },
       },
     );
@@ -238,12 +242,12 @@ export async function handleGithubPullRequestWebhook(
   await agent.append(
     {
       type: "events.iterate.com/agents/context-added",
-      idempotencyKey: `github-pr/agent-policy:v${pullRequestAgentPolicyVersion}`,
+      idempotencyKey: `github-pr/agent-policy:v2:${pullRequestAgentPolicyVersion}`,
       payload: {
-        content: pullRequestAgentPolicy,
+        kind: "section",
         key: "github/pull-request-policy",
-        llmRequestPolicy: { behaviour: "dont-trigger-request" },
-        role: "developer",
+        content: pullRequestAgentPolicy,
+        actor: WORKER_ACTOR,
       },
     },
     {
@@ -298,12 +302,12 @@ export async function handleGithubPullRequestWebhook(
     },
     {
       type: "events.iterate.com/agents/context-added",
-      idempotencyKey: `github-ai-linter/agent-policy:v${githubAiLinterPromptVersion}`,
+      idempotencyKey: `github-ai-linter/agent-policy:v2:${githubAiLinterPromptVersion}`,
       payload: {
-        content: githubAiLinterAgentPolicy,
+        kind: "section",
         key: "github-ai-linter/policy",
-        llmRequestPolicy: { behaviour: "dont-trigger-request" },
-        role: "developer",
+        content: githubAiLinterAgentPolicy,
+        actor: WORKER_ACTOR,
       },
     },
     {
@@ -381,14 +385,17 @@ export async function handleGithubPullRequestWebhook(
   await linter.append(
     {
       type: "events.iterate.com/agents/context-added",
-      idempotencyKey: `github-ai-linter/task:${analysisRequest.offset}`,
+      idempotencyKey: `github-ai-linter/task:v2:${analysisRequest.offset}`,
       payload: {
+        // A plain worker message (derives developer), not a section: one
+        // analysis's task is conversation for that analysis, and it carries
+        // refs to the raw request — which sections do not.
         content: githubAiLinterTask({
           analysis: analysisInput.payload,
           analysisRequestOffset: analysisRequest.offset,
           streamPath: linterPath,
         }),
-        key: `github-ai-linter/analysis:${analysisRequest.offset}`,
+        actor: WORKER_ACTOR,
         llmRequestPolicy: { behaviour: "dont-trigger-request" },
         refs: [
           {
@@ -398,12 +405,11 @@ export async function handleGithubPullRequestWebhook(
             type: "event",
           },
         ],
-        role: "developer",
       },
     },
     {
       type: "events.iterate.com/agents/context-added",
-      idempotencyKey: `github-ai-linter/trigger:${analysisRequest.offset}`,
+      idempotencyKey: `github-ai-linter/trigger:v2:${analysisRequest.offset}`,
       payload: {
         actor: { type: "integration", name: "github-ai-linter" },
         content:
@@ -417,7 +423,6 @@ export async function handleGithubPullRequestWebhook(
             type: "event",
           },
         ],
-        role: "user",
       },
     },
   );

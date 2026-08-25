@@ -5,11 +5,26 @@
 
 import type { StreamEvent } from "iterate/sdk/itx/react";
 
-// User messages travel as a context-added event with role "user" (the single
-// inbound door every caller — web, Slack, mobile — now shares); there is no
-// dedicated "user message" event type anymore.
+// User messages travel as a context-added event stamped with a user actor
+// (the single inbound path every caller — web, Slack, mobile — shares);
+// there is no dedicated "user message" event type.
 export const USER_MESSAGE_TYPE = "events.iterate.com/agents/context-added";
 export const ASSISTANT_MESSAGE_TYPE = "events.iterate.com/agents/web-message-sent";
+
+/** Whether a context-added event is a human chat message: stamped with a
+ * user actor, or (events committed before actors were required) carrying a
+ * stored role "user" with no actor. Interrupt-policy items are stop signals
+ * riding the context event (the web interrupt control sends one), not typed
+ * messages. */
+function isUserChatMessage(payload: {
+  actor?: { type?: unknown };
+  llmRequestPolicy?: { behaviour?: unknown };
+  role?: unknown;
+}): boolean {
+  if (payload.llmRequestPolicy?.behaviour === "interrupt-current-request") return false;
+  if (payload.actor) return payload.actor.type === "user";
+  return payload.role === "user";
+}
 
 /**
  * The send RPC can acknowledge its context append before the live feed sees
@@ -54,7 +69,7 @@ export function reduceChatEvents(events: StreamEvent[]): ChatThread {
   let maxOffset = 0;
   for (const event of events) {
     maxOffset = Math.max(maxOffset, event.offset);
-    if (event.type === USER_MESSAGE_TYPE && event.payload?.role === "user") {
+    if (event.type === USER_MESSAGE_TYPE && isUserChatMessage(event.payload || {})) {
       lastUserOffset = event.offset;
       messages.push({
         role: "user",

@@ -2605,108 +2605,278 @@ export type AgentProcessorState = {
         offset: number;
         key: string;
         supersedes?: number | undefined;
-        payload: {
-          role: "assistant" | "developer" | "system" | "user";
-          content: string;
-          key?: string | undefined;
-          files?:
-            | { contentType: string; filename: string; path: string; size: number; url: string }[]
-            | undefined;
-          refs?:
-            | (
+        payload:
+          | {
+              content: string;
+              actor:
+                | { type: "user"; origin: "mcp" | "web"; userId?: string | undefined }
+                | { type: "agent"; path: string }
+                | { type: "script"; executionId: string }
+                | { type: "worker"; name: string }
+                | { type: "platform" }
+                | { type: "model"; llmRequestOffset?: number | undefined }
+                | { type: "integration"; name: string }
+                | { type: "slack"; userId?: string | undefined; botName?: string | undefined }
+                | { type: "telegram"; userId?: string | undefined; username?: string | undefined }
+                | { type: "email"; address?: string | undefined; name?: string | undefined }
+                | { type: "github"; login?: string | undefined; senderType?: string | undefined };
+              files?:
                 | {
-                    type: "event";
-                    streamPath: string;
-                    offset: number;
-                    eventType?: string | undefined;
+                    contentType: string;
+                    filename: string;
+                    path: string;
+                    size: number;
+                    url: string;
+                  }[]
+                | undefined;
+              refs?:
+                | (
+                    | {
+                        type: "event";
+                        streamPath: string;
+                        offset: number;
+                        eventType?: string | undefined;
+                      }
+                    | { type: "user"; userId: string }
+                    | { type: "file"; path: string }
+                    | { type: "git-commit"; repoPath: string; commitOid: string }
+                  )[]
+                | undefined;
+              llmRequestPolicy:
+                | { behaviour: "dont-trigger-request" }
+                | { behaviour: "interrupt-current-request" }
+                | { behaviour: "after-current-request" };
+              compaction?:
+                | {
+                    replacesHistoryThrough: number;
+                    usage?:
+                      | {
+                          inputTokens: number;
+                          outputTokens: number;
+                          cachedInputTokens?: number | undefined;
+                          reasoningOutputTokens?: number | undefined;
+                        }
+                      | undefined;
                   }
-                | { type: "user"; userId: string }
-                | { type: "file"; path: string }
-                | { type: "git-commit"; repoPath: string; commitOid: string }
-              )[]
-            | undefined;
-          actor?:
-            | { type: "user"; origin: "mcp" | "web"; userId?: string | undefined }
-            | { type: "agent"; path: string }
-            | { type: "script"; executionId: string }
-            | { type: "integration"; name: string }
-            | { type: "slack"; userId?: string | undefined; botName?: string | undefined }
-            | { type: "telegram"; userId?: string | undefined; username?: string | undefined }
-            | { type: "email"; address?: string | undefined; name?: string | undefined }
-            | { type: "github"; login?: string | undefined; senderType?: string | undefined }
-            | undefined;
-          llmRequestPolicy:
-            | { behaviour: "dont-trigger-request" }
-            | { behaviour: "interrupt-current-request" }
-            | { behaviour: "after-current-request" };
-          llmRequestOffset?: number | undefined;
-          compaction?:
-            | {
-                replacesHistoryThrough: number;
-                usage?:
-                  | {
-                      inputTokens: number;
-                      outputTokens: number;
-                      cachedInputTokens?: number | undefined;
-                      reasoningOutputTokens?: number | undefined;
-                    }
-                  | undefined;
-              }
-            | undefined;
-        };
+                | undefined;
+            }
+          | {
+              role: "assistant" | "developer" | "system" | "user";
+              content: string;
+              key?: string | undefined;
+              files?:
+                | {
+                    contentType: string;
+                    filename: string;
+                    path: string;
+                    size: number;
+                    url: string;
+                  }[]
+                | undefined;
+              refs?:
+                | (
+                    | {
+                        type: "event";
+                        streamPath: string;
+                        offset: number;
+                        eventType?: string | undefined;
+                      }
+                    | { type: "user"; userId: string }
+                    | { type: "file"; path: string }
+                    | { type: "git-commit"; repoPath: string; commitOid: string }
+                  )[]
+                | undefined;
+              actor?:
+                | { type: "user"; origin: "mcp" | "web"; userId?: string | undefined }
+                | { type: "agent"; path: string }
+                | { type: "script"; executionId: string }
+                | { type: "worker"; name: string }
+                | { type: "platform" }
+                | { type: "model"; llmRequestOffset?: number | undefined }
+                | { type: "integration"; name: string }
+                | { type: "slack"; userId?: string | undefined; botName?: string | undefined }
+                | { type: "telegram"; userId?: string | undefined; username?: string | undefined }
+                | { type: "email"; address?: string | undefined; name?: string | undefined }
+                | { type: "github"; login?: string | undefined; senderType?: string | undefined }
+                | undefined;
+              llmRequestPolicy:
+                | { behaviour: "dont-trigger-request" }
+                | { behaviour: "interrupt-current-request" }
+                | { behaviour: "after-current-request" };
+              llmRequestOffset?: number | undefined;
+              compaction?:
+                | {
+                    replacesHistoryThrough: number;
+                    usage?:
+                      | {
+                          inputTokens: number;
+                          outputTokens: number;
+                          cachedInputTokens?: number | undefined;
+                          reasoningOutputTokens?: number | undefined;
+                        }
+                      | undefined;
+                  }
+                | undefined;
+            }
+          | {
+              kind: "section";
+              key: string;
+              content: string;
+              actor:
+                | { type: "user"; origin: "mcp" | "web"; userId?: string | undefined }
+                | { type: "agent"; path: string }
+                | { type: "script"; executionId: string }
+                | { type: "worker"; name: string }
+                | { type: "platform" }
+                | { type: "model"; llmRequestOffset?: number | undefined }
+                | { type: "integration"; name: string }
+                | { type: "slack"; userId?: string | undefined; botName?: string | undefined }
+                | { type: "telegram"; userId?: string | undefined; username?: string | undefined }
+                | { type: "email"; address?: string | undefined; name?: string | undefined }
+                | { type: "github"; login?: string | undefined; senderType?: string | undefined };
+              llmRequestPolicy:
+                | { behaviour: "dont-trigger-request" }
+                | { behaviour: "interrupt-current-request" }
+                | { behaviour: "after-current-request" };
+            };
       }
     | {
         kind: "message";
         offset: number;
-        payload: {
-          role: "assistant" | "developer" | "system" | "user";
-          content: string;
-          key?: string | undefined;
-          files?:
-            | { contentType: string; filename: string; path: string; size: number; url: string }[]
-            | undefined;
-          refs?:
-            | (
+        payload:
+          | {
+              content: string;
+              actor:
+                | { type: "user"; origin: "mcp" | "web"; userId?: string | undefined }
+                | { type: "agent"; path: string }
+                | { type: "script"; executionId: string }
+                | { type: "worker"; name: string }
+                | { type: "platform" }
+                | { type: "model"; llmRequestOffset?: number | undefined }
+                | { type: "integration"; name: string }
+                | { type: "slack"; userId?: string | undefined; botName?: string | undefined }
+                | { type: "telegram"; userId?: string | undefined; username?: string | undefined }
+                | { type: "email"; address?: string | undefined; name?: string | undefined }
+                | { type: "github"; login?: string | undefined; senderType?: string | undefined };
+              files?:
                 | {
-                    type: "event";
-                    streamPath: string;
-                    offset: number;
-                    eventType?: string | undefined;
+                    contentType: string;
+                    filename: string;
+                    path: string;
+                    size: number;
+                    url: string;
+                  }[]
+                | undefined;
+              refs?:
+                | (
+                    | {
+                        type: "event";
+                        streamPath: string;
+                        offset: number;
+                        eventType?: string | undefined;
+                      }
+                    | { type: "user"; userId: string }
+                    | { type: "file"; path: string }
+                    | { type: "git-commit"; repoPath: string; commitOid: string }
+                  )[]
+                | undefined;
+              llmRequestPolicy:
+                | { behaviour: "dont-trigger-request" }
+                | { behaviour: "interrupt-current-request" }
+                | { behaviour: "after-current-request" };
+              compaction?:
+                | {
+                    replacesHistoryThrough: number;
+                    usage?:
+                      | {
+                          inputTokens: number;
+                          outputTokens: number;
+                          cachedInputTokens?: number | undefined;
+                          reasoningOutputTokens?: number | undefined;
+                        }
+                      | undefined;
                   }
-                | { type: "user"; userId: string }
-                | { type: "file"; path: string }
-                | { type: "git-commit"; repoPath: string; commitOid: string }
-              )[]
-            | undefined;
-          actor?:
-            | { type: "user"; origin: "mcp" | "web"; userId?: string | undefined }
-            | { type: "agent"; path: string }
-            | { type: "script"; executionId: string }
-            | { type: "integration"; name: string }
-            | { type: "slack"; userId?: string | undefined; botName?: string | undefined }
-            | { type: "telegram"; userId?: string | undefined; username?: string | undefined }
-            | { type: "email"; address?: string | undefined; name?: string | undefined }
-            | { type: "github"; login?: string | undefined; senderType?: string | undefined }
-            | undefined;
-          llmRequestPolicy:
-            | { behaviour: "dont-trigger-request" }
-            | { behaviour: "interrupt-current-request" }
-            | { behaviour: "after-current-request" };
-          llmRequestOffset?: number | undefined;
-          compaction?:
-            | {
-                replacesHistoryThrough: number;
-                usage?:
-                  | {
-                      inputTokens: number;
-                      outputTokens: number;
-                      cachedInputTokens?: number | undefined;
-                      reasoningOutputTokens?: number | undefined;
-                    }
-                  | undefined;
-              }
-            | undefined;
-        };
+                | undefined;
+            }
+          | {
+              role: "assistant" | "developer" | "system" | "user";
+              content: string;
+              key?: string | undefined;
+              files?:
+                | {
+                    contentType: string;
+                    filename: string;
+                    path: string;
+                    size: number;
+                    url: string;
+                  }[]
+                | undefined;
+              refs?:
+                | (
+                    | {
+                        type: "event";
+                        streamPath: string;
+                        offset: number;
+                        eventType?: string | undefined;
+                      }
+                    | { type: "user"; userId: string }
+                    | { type: "file"; path: string }
+                    | { type: "git-commit"; repoPath: string; commitOid: string }
+                  )[]
+                | undefined;
+              actor?:
+                | { type: "user"; origin: "mcp" | "web"; userId?: string | undefined }
+                | { type: "agent"; path: string }
+                | { type: "script"; executionId: string }
+                | { type: "worker"; name: string }
+                | { type: "platform" }
+                | { type: "model"; llmRequestOffset?: number | undefined }
+                | { type: "integration"; name: string }
+                | { type: "slack"; userId?: string | undefined; botName?: string | undefined }
+                | { type: "telegram"; userId?: string | undefined; username?: string | undefined }
+                | { type: "email"; address?: string | undefined; name?: string | undefined }
+                | { type: "github"; login?: string | undefined; senderType?: string | undefined }
+                | undefined;
+              llmRequestPolicy:
+                | { behaviour: "dont-trigger-request" }
+                | { behaviour: "interrupt-current-request" }
+                | { behaviour: "after-current-request" };
+              llmRequestOffset?: number | undefined;
+              compaction?:
+                | {
+                    replacesHistoryThrough: number;
+                    usage?:
+                      | {
+                          inputTokens: number;
+                          outputTokens: number;
+                          cachedInputTokens?: number | undefined;
+                          reasoningOutputTokens?: number | undefined;
+                        }
+                      | undefined;
+                  }
+                | undefined;
+            }
+          | {
+              kind: "section";
+              key: string;
+              content: string;
+              actor:
+                | { type: "user"; origin: "mcp" | "web"; userId?: string | undefined }
+                | { type: "agent"; path: string }
+                | { type: "script"; executionId: string }
+                | { type: "worker"; name: string }
+                | { type: "platform" }
+                | { type: "model"; llmRequestOffset?: number | undefined }
+                | { type: "integration"; name: string }
+                | { type: "slack"; userId?: string | undefined; botName?: string | undefined }
+                | { type: "telegram"; userId?: string | undefined; username?: string | undefined }
+                | { type: "email"; address?: string | undefined; name?: string | undefined }
+                | { type: "github"; login?: string | undefined; senderType?: string | undefined };
+              llmRequestPolicy:
+                | { behaviour: "dont-trigger-request" }
+                | { behaviour: "interrupt-current-request" }
+                | { behaviour: "after-current-request" };
+            };
       }
   )[];
   lastLlmRequestOffset: number;
@@ -2848,56 +3018,130 @@ export type AgentEventInput =
     >
   | TypedConsumedEventInput<
       "events.iterate.com/agents/context-added",
-      {
-        role: "assistant" | "developer" | "system" | "user";
-        content: string;
-        key?: string | undefined;
-        files?:
-          | { contentType: string; filename: string; path: string; size: number; url: string }[]
-          | undefined;
-        refs?:
-          | (
-              | {
-                  type: "event";
-                  streamPath: string;
-                  offset: number;
-                  eventType?: string | undefined;
-                }
-              | { type: "user"; userId: string }
-              | { type: "file"; path: string }
-              | { type: "git-commit"; repoPath: string; commitOid: string }
-            )[]
-          | undefined;
-        actor?:
-          | { type: "user"; origin: "mcp" | "web"; userId?: string | undefined }
-          | { type: "agent"; path: string }
-          | { type: "script"; executionId: string }
-          | { type: "integration"; name: string }
-          | { type: "slack"; userId?: string | undefined; botName?: string | undefined }
-          | { type: "telegram"; userId?: string | undefined; username?: string | undefined }
-          | { type: "email"; address?: string | undefined; name?: string | undefined }
-          | { type: "github"; login?: string | undefined; senderType?: string | undefined }
-          | undefined;
-        llmRequestPolicy?:
-          | { behaviour: "dont-trigger-request" }
-          | { behaviour: "interrupt-current-request" }
-          | { behaviour: "after-current-request" }
-          | undefined;
-        llmRequestOffset?: number | undefined;
-        compaction?:
-          | {
-              replacesHistoryThrough: number;
-              usage?:
+      | {
+          kind: "section";
+          key: string;
+          content: string;
+          actor:
+            | { type: "user"; origin: "mcp" | "web"; userId?: string | undefined }
+            | { type: "agent"; path: string }
+            | { type: "script"; executionId: string }
+            | { type: "worker"; name: string }
+            | { type: "platform" }
+            | { type: "model"; llmRequestOffset?: number | undefined }
+            | { type: "integration"; name: string }
+            | { type: "slack"; userId?: string | undefined; botName?: string | undefined }
+            | { type: "telegram"; userId?: string | undefined; username?: string | undefined }
+            | { type: "email"; address?: string | undefined; name?: string | undefined }
+            | { type: "github"; login?: string | undefined; senderType?: string | undefined };
+          llmRequestPolicy?:
+            | { behaviour: "dont-trigger-request" }
+            | { behaviour: "interrupt-current-request" }
+            | { behaviour: "after-current-request" }
+            | undefined;
+        }
+      | {
+          content: string;
+          actor:
+            | { type: "user"; origin: "mcp" | "web"; userId?: string | undefined }
+            | { type: "agent"; path: string }
+            | { type: "script"; executionId: string }
+            | { type: "worker"; name: string }
+            | { type: "platform" }
+            | { type: "model"; llmRequestOffset?: number | undefined }
+            | { type: "integration"; name: string }
+            | { type: "slack"; userId?: string | undefined; botName?: string | undefined }
+            | { type: "telegram"; userId?: string | undefined; username?: string | undefined }
+            | { type: "email"; address?: string | undefined; name?: string | undefined }
+            | { type: "github"; login?: string | undefined; senderType?: string | undefined };
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          refs?:
+            | (
                 | {
-                    inputTokens: number;
-                    outputTokens: number;
-                    cachedInputTokens?: number | undefined;
-                    reasoningOutputTokens?: number | undefined;
+                    type: "event";
+                    streamPath: string;
+                    offset: number;
+                    eventType?: string | undefined;
                   }
-                | undefined;
-            }
-          | undefined;
-      }
+                | { type: "user"; userId: string }
+                | { type: "file"; path: string }
+                | { type: "git-commit"; repoPath: string; commitOid: string }
+              )[]
+            | undefined;
+          llmRequestPolicy?:
+            | { behaviour: "dont-trigger-request" }
+            | { behaviour: "interrupt-current-request" }
+            | { behaviour: "after-current-request" }
+            | undefined;
+          compaction?:
+            | {
+                replacesHistoryThrough: number;
+                usage?:
+                  | {
+                      inputTokens: number;
+                      outputTokens: number;
+                      cachedInputTokens?: number | undefined;
+                      reasoningOutputTokens?: number | undefined;
+                    }
+                  | undefined;
+              }
+            | undefined;
+        }
+      | {
+          role: "assistant" | "developer" | "system" | "user";
+          content: string;
+          key?: string | undefined;
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          refs?:
+            | (
+                | {
+                    type: "event";
+                    streamPath: string;
+                    offset: number;
+                    eventType?: string | undefined;
+                  }
+                | { type: "user"; userId: string }
+                | { type: "file"; path: string }
+                | { type: "git-commit"; repoPath: string; commitOid: string }
+              )[]
+            | undefined;
+          actor?:
+            | { type: "user"; origin: "mcp" | "web"; userId?: string | undefined }
+            | { type: "agent"; path: string }
+            | { type: "script"; executionId: string }
+            | { type: "worker"; name: string }
+            | { type: "platform" }
+            | { type: "model"; llmRequestOffset?: number | undefined }
+            | { type: "integration"; name: string }
+            | { type: "slack"; userId?: string | undefined; botName?: string | undefined }
+            | { type: "telegram"; userId?: string | undefined; username?: string | undefined }
+            | { type: "email"; address?: string | undefined; name?: string | undefined }
+            | { type: "github"; login?: string | undefined; senderType?: string | undefined }
+            | undefined;
+          llmRequestPolicy?:
+            | { behaviour: "dont-trigger-request" }
+            | { behaviour: "interrupt-current-request" }
+            | { behaviour: "after-current-request" }
+            | undefined;
+          llmRequestOffset?: number | undefined;
+          compaction?:
+            | {
+                replacesHistoryThrough: number;
+                usage?:
+                  | {
+                      inputTokens: number;
+                      outputTokens: number;
+                      cachedInputTokens?: number | undefined;
+                      reasoningOutputTokens?: number | undefined;
+                    }
+                  | undefined;
+              }
+            | undefined;
+        }
     >
   | TypedConsumedEventInput<
       "events.iterate.com/agents/context-rewritten",
@@ -3008,7 +3252,13 @@ export type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream
 /** A file attached to an agent context item: content type, filename, project
  * file-storage path, size, and the signed public URL minted at attach time
  * (stored, not re-minted — it expires with its signature). */
-export type AgentFileAttachment = NonNullable<AgentContextAddedPayload["files"]>[number];
+export type AgentFileAttachment = {
+  contentType: string;
+  filename: string;
+  path: string;
+  size: number;
+  url: string;
+};
 
 /** The `capability-host/created` payload — the scope's birth certificate. */
 export type CapabilityHostCreateInput = { config: Record<string, never>; fallback?: unknown };
@@ -4470,53 +4720,6 @@ export type JsonValue =
   | null
   | JsonValue[]
   | { [key: string]: JsonValue };
-
-/** One model-visible context item's payload — the wire contract for every
- * committed `agents/context-added` event. */
-export type AgentContextAddedPayload = {
-  role: "assistant" | "developer" | "system" | "user";
-  content: string;
-  key?: string | undefined;
-  files?:
-    | { contentType: string; filename: string; path: string; size: number; url: string }[]
-    | undefined;
-  refs?:
-    | (
-        | { type: "event"; streamPath: string; offset: number; eventType?: string | undefined }
-        | { type: "user"; userId: string }
-        | { type: "file"; path: string }
-        | { type: "git-commit"; repoPath: string; commitOid: string }
-      )[]
-    | undefined;
-  actor?:
-    | { type: "user"; origin: "mcp" | "web"; userId?: string | undefined }
-    | { type: "agent"; path: string }
-    | { type: "script"; executionId: string }
-    | { type: "integration"; name: string }
-    | { type: "slack"; userId?: string | undefined; botName?: string | undefined }
-    | { type: "telegram"; userId?: string | undefined; username?: string | undefined }
-    | { type: "email"; address?: string | undefined; name?: string | undefined }
-    | { type: "github"; login?: string | undefined; senderType?: string | undefined }
-    | undefined;
-  llmRequestPolicy:
-    | { behaviour: "dont-trigger-request" }
-    | { behaviour: "interrupt-current-request" }
-    | { behaviour: "after-current-request" };
-  llmRequestOffset?: number | undefined;
-  compaction?:
-    | {
-        replacesHistoryThrough: number;
-        usage?:
-          | {
-              inputTokens: number;
-              outputTokens: number;
-              cachedInputTokens?: number | undefined;
-              reasoningOutputTokens?: number | undefined;
-            }
-          | undefined;
-      }
-    | undefined;
-};
 
 /** Dynamic invocation envelope used by flattened live capabilities. */
 export type FlattenedCapabilityInvocation = {

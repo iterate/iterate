@@ -1,4 +1,8 @@
-import { AgentLlmRequestCancelReason, type AgentRuntime } from "@iterate-com/shared/agent-events";
+import {
+  AgentLlmRequestCancelReason,
+  deriveRole,
+  type AgentRuntime,
+} from "@iterate-com/shared/agent-events";
 import { ScriptExecutionSettlement } from "@iterate-com/shared/script-execution";
 import { z } from "zod";
 import type { Event } from "./types.ts";
@@ -630,12 +634,12 @@ function reduceAgentUiEvent(
   if (!Number.isFinite(timestampMs)) return state;
 
   switch (event.type) {
-    // The canonical model-visible context event. User context renders as a
-    // bubble; assistant context replaces the streamed LLM text; developer
-    // context from another human-facing integration renders with its source.
-    // Script-produced developer context is model input, not another bubble.
+    // The canonical model-visible context event, classified by the SAME
+    // provenance ladder the prompt fold renders with (deriveRole): human
+    // context renders as a bubble; model output replaces the streamed LLM
+    // text; context from another human-facing channel renders with its
+    // source. Script/worker/platform context is model input, not a bubble.
     case AGENT_CONTEXT_ADDED: {
-      const role = readString(event, "role");
       const text = readString(event, "content");
       if (text == null) return state;
       let contextState = state;
@@ -651,8 +655,17 @@ function reduceAgentUiEvent(
         };
       }
 
+      const actor = readRecord(event, "actor");
+      const actorType = typeof actor?.type === "string" ? actor.type : undefined;
+      // The cast narrows the untyped payload record to deriveRole's
+      // structural param; wrong-shaped fields fall down to "user".
+      const role = deriveRole(readPayloadRecord(event) as Parameters<typeof deriveRole>[0]);
+
       if (role === "assistant") {
-        const llmRequestOffset = readLlmRequestOffset(event);
+        const llmRequestOffset =
+          actorType === "model" && typeof actor?.llmRequestOffset === "number"
+            ? actor.llmRequestOffset
+            : readLlmRequestOffset(event);
         if (llmRequestOffset == null) return contextState;
         return updateLlmStep(contextState, llmRequestOffset, (step) =>
           step.status === "running"
@@ -661,11 +674,17 @@ function reduceAgentUiEvent(
         );
       }
       if (role === "system") return contextState;
+      // The compaction summary derives user role for the model (memory, not
+      // instruction) but is machinery, not a typed message.
+      if (compaction != null) return contextState;
 
-      const actor = readRecord(event, "actor");
-      const actorType = typeof actor?.type === "string" ? actor.type : undefined;
       const files = readFileAttachments(event);
-      if (role === "user") {
+      if (actorType === "user" || actorType === undefined) {
+        if (role !== "user") return contextState;
+        // Interrupt-policy items are stop signals riding the context event,
+        // not typed messages (the web interrupt control sends one).
+        const policy = readRecord(event, "llmRequestPolicy");
+        if (policy?.behaviour === "interrupt-current-request") return contextState;
         return emitUserMessageItem(contextState, items, {
           kind: "user",
           id: `user-${event.offset}`,

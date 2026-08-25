@@ -11,6 +11,7 @@ import { expect, it } from "vitest";
 import type { ConsumedInput } from "iterate/processors";
 import { makeProcessorHarness } from "iterate/processors/testing";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
+import { deriveRole } from "./agent-prompt-fold.ts";
 import type { AgentProcessorContract, AgentProcessorState } from "./agent-processor-contract.ts";
 import type { WorkersAiMessage } from "./workers-ai-transport.ts";
 
@@ -37,7 +38,7 @@ it("runs a full turn but interprets nothing: even a perfect ```ts script is left
   expect(h.events(SCRIPT_REQUESTED)).toHaveLength(0);
   expect(h.events(WEB_MESSAGE_SENT)).toHaveLength(0);
   expect(
-    conversationMessages(h.state()).filter((item) => item.payload.role === "developer"),
+    conversationMessages(h.state()).filter((item) => deriveRole(item.payload) === "developer"),
   ).toHaveLength(0);
 });
 

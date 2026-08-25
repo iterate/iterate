@@ -38,7 +38,6 @@ function ProjectStreamDetailContent() {
     const [event] = await itx.streams.get(streamPath).append({
       type: "events.iterate.com/agents/context-added",
       payload: {
-        role: "user",
         content: message,
         actor: { type: "user", origin: "web" },
       },

@@ -119,8 +119,8 @@ export class EmailAgentProcessor extends StreamProcessor<
               }]`;
             }
           }
-          // Normalized email is developer context; actor and refs retain
-          // the untrusted sender and exact raw source coordinate.
+          // Actor and refs retain the untrusted sender and exact raw source
+          // coordinate; the email actor derives user role at read time.
           const fromAddress = event.payload.message.from.address ?? event.payload.envelope.from;
           const fromName = event.payload.message.from.name;
           try {
@@ -128,7 +128,6 @@ export class EmailAgentProcessor extends StreamProcessor<
               type: "events.iterate.com/agents/context-added",
               idempotencyKey: this.idempotencyKey("received-to-agent-context", event),
               payload: {
-                role: "developer",
                 content:
                   attachmentFailureNote === undefined
                     ? inboundEmailAgentInput(event.payload)

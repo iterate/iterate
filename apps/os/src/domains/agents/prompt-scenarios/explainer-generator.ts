@@ -11,7 +11,7 @@
 // matches.
 import fs from "node:fs";
 import path from "node:path";
-import { reduceAgentEvents } from "../agent-prompt-fold.ts";
+import { deriveRole, reduceAgentEvents } from "../agent-prompt-fold.ts";
 import {
   computeScenarioOutputs,
   formatElapsed,
@@ -246,7 +246,8 @@ function cardBadges(entry: ScenarioEntry): string[] {
         return [`×${keys.length} events, one batch`, `key=${keys[0]}`, `+${keys.length - 1} more`];
       }
       if (payload.key !== undefined) return [`key=${payload.key}`];
-      return [payload.role];
+      // The same provenance ladder the fold renders with.
+      return [deriveRole(payload as Parameters<typeof deriveRole>[0])];
     }
     case "agent/configured": {
       const badges: string[] = [];

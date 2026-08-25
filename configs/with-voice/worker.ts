@@ -30,22 +30,23 @@ export default class VoiceProjectWorker extends IterateWorkerEntrypoint {
     await onboardingAgent.append(
       {
         type: "events.iterate.com/agents/context-added",
-        idempotencyKey: "iterate/config/onboarding-instructions:v1",
+        idempotencyKey: "iterate/config/onboarding-instructions:v2",
         payload: {
-          role: "system",
+          kind: "section",
           key: "config/onboarding-instructions",
           content: instructions.content,
-          llmRequestPolicy: { behaviour: "dont-trigger-request" },
+          actor: { type: "worker", name: "with-voice" },
         },
       },
       {
         type: "events.iterate.com/agents/context-added",
-        idempotencyKey: "iterate/config/onboarding-start:v1",
+        idempotencyKey: "iterate/config/onboarding-start:v2",
         payload: {
-          role: "developer",
-          key: "config/onboarding-start",
+          // A plain worker message, not a section: the kickoff must TRIGGER
+          // the agent's first turn, and sections never trigger.
           content:
             "Begin onboarding now. The project owner just created this voice project. Welcome them, then follow the onboarding instructions one question at a time.",
+          actor: { type: "worker", name: "with-voice" },
           llmRequestPolicy: { behaviour: "after-current-request" },
         },
       },

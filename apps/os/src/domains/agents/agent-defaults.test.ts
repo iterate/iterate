@@ -6,6 +6,7 @@ import {
   agentSystemPromptContextEvents,
   DEFAULT_AGENT_SYSTEM_PROMPT,
 } from "./agent-defaults.ts";
+import { contextItemKey } from "./agent-prompt-fold.ts";
 
 const PROJECT_ID = "prj_defaults_test";
 
@@ -95,19 +96,20 @@ describe("agentCreationForPath", () => {
     const promptEvents = defaults.events.filter(
       (event) =>
         event.type === "events.iterate.com/agents/context-added" &&
-        event.payload.key !== undefined &&
-        event.payload.key !== "agent/boot-context",
+        contextItemKey(event.payload) !== undefined &&
+        contextItemKey(event.payload) !== "agent/boot-context",
     );
     expect(promptEvents.map((event) => event.payload)).toEqual(
       parsePromptSections({
         content: DEFAULT_AGENT_SYSTEM_PROMPT,
         fallbackKey: "agent/system-prompt",
       }).map((section) => ({
-        role: "system",
+        kind: "section",
         key: section.key,
         content: section.content,
-        // The flat context payload defaults the policy on every role; the
-        // processor ignores it on system items.
+        actor: { type: "platform" },
+        // The payload schema defaults the policy on every shape; sections
+        // never trigger regardless.
         llmRequestPolicy: { behaviour: "after-current-request" },
       })),
     );
@@ -144,7 +146,7 @@ describe("agentCreationForPath", () => {
     const prompts = creation.events.filter(
       (event) =>
         event.type === "events.iterate.com/agents/context-added" &&
-        event.payload.key === "agent/system-prompt",
+        contextItemKey(event.payload) === "agent/system-prompt",
     );
 
     expect(creation.birthCertificate.payload).toEqual({});
@@ -152,7 +154,7 @@ describe("agentCreationForPath", () => {
     // authoring convention — keys are arbitrary strings to the kernel).
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toMatchObject({
-      idempotencyKey: `agent/system-prompt-section:v3:slack:v7:${PROJECT_ID}:/agents/slack/test:0:agent/system-prompt`,
+      idempotencyKey: `agent/system-prompt-section:v4:slack:v7:${PROJECT_ID}:/agents/slack/test:0:agent/system-prompt`,
       payload: { key: "agent/system-prompt", content: "Slack execution contract" },
     });
   });
@@ -167,7 +169,7 @@ describe("agentCreationForPath", () => {
       }).events.find(
         (event) =>
           event.type === "events.iterate.com/agents/context-added" &&
-          event.payload.key === "agent/system-prompt",
+          contextItemKey(event.payload) === "agent/system-prompt",
       );
 
     const first = promptEvent("1", "first policy");

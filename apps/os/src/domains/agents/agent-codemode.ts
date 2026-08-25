@@ -20,6 +20,7 @@ import {
   type AgentProcessorDeps,
 } from "./agent-host.ts";
 import type { AgentProcessorContract } from "./agent-processor-contract.ts";
+import { deriveRole, modelOutputRequestOffset } from "./agent-prompt-fold.ts";
 import { fencedTsResponseFormat } from "./agent-response-format.ts";
 import {
   buildSlashCommandCode,
@@ -54,7 +55,7 @@ export class AgentCodemode {
         // an at-least-once redelivery dedupes on the key, race-tolerant for
         // a config change between deliveries. Non-resolving "/..." text falls
         // through to the model untouched.
-        if (payload.role === "user") {
+        if (deriveRole(payload) === "user") {
           const slashCommand = resolveSlashCommand(payload.content);
           if (slashCommand !== null) {
             const executionId = `${SLASH_COMMAND_EXECUTION_PREFIX}${slashCommand.command}:${event.offset}`;
@@ -80,16 +81,16 @@ export class AgentCodemode {
         // (agent-response-format.ts); mapping the outcome to appends stays
         // here so every side effect keeps the processor's idempotency and
         // blocking discipline. Only output linked to THE open request is
-        // executable: a caller may raw-append assistant-role history, and may
-        // even supply a numeric llmRequestOffset, without thereby gaining a
+        // executable: a caller may raw-append model-output history, and may
+        // even supply a numeric request offset, without thereby gaining a
         // path to capability execution. Blocked for the same per-event reason
         // as the slash path: this event is delivered once, and both the
         // script request and the corrective feedback would be lost forever
         // with it.
+        const outputRequestOffset = modelOutputRequestOffset(payload);
         if (
-          payload.role === "assistant" &&
-          payload.llmRequestOffset !== undefined &&
-          payload.llmRequestOffset === state.openRequest?.requestedAtOffset
+          outputRequestOffset !== undefined &&
+          outputRequestOffset === state.openRequest?.requestedAtOffset
         ) {
           const outcome = this.#format.parse(payload.content);
           if (outcome.kind === "malformed" || outcome.kind === "multiple") {
@@ -102,8 +103,8 @@ export class AgentCodemode {
                 {
                   type: "events.iterate.com/agents/context-added",
                   payload: {
-                    role: "developer",
                     content: outcome.feedback,
+                    actor: { type: "platform" },
                     llmRequestPolicy: { behaviour: "after-current-request" },
                   },
                   idempotencyKey: this.#host.idempotencyKey(idempotencyKeySuffix),
@@ -151,8 +152,8 @@ export class AgentCodemode {
             {
               type: "events.iterate.com/agents/context-added",
               payload: {
-                role: "developer",
                 content,
+                actor: { type: "platform" },
                 llmRequestPolicy: { behaviour: "dont-trigger-request" },
               },
               idempotencyKey: this.#host.idempotencyKey(`render-preamble-change@${event.offset}`),
@@ -206,7 +207,6 @@ export class AgentCodemode {
             {
               type: "events.iterate.com/agents/context-added",
               payload: {
-                role: "developer",
                 content,
                 actor: { type: "script", executionId },
                 llmRequestPolicy: { behaviour: "after-current-request" },

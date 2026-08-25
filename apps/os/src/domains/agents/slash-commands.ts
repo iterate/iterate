@@ -119,7 +119,6 @@ if (!itx.agent) throw new Error("/script requires an agent-scoped itx");
 await itx.agent.append({
   type: "events.iterate.com/agents/context-added",
   payload: {
-    role: "developer",
     content: ${resultPrefix} + (typeof result === "string" ? result : JSON.stringify(result, null, 2)),
     actor: ${actor},
     llmRequestPolicy: { behaviour: "interrupt-current-request" },

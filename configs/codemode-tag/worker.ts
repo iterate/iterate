@@ -50,6 +50,10 @@ const AGENT_PROCESSOR_SLUG = "agent";
 /** The one section this experiment re-adds: the platform prompt's
  * response-format section. Everything else stays the platform's. */
 const OUTPUT_FORMATTING_KEY = "output-formatting";
+/** Provenance for every context item this worker authors: the project's
+ * config worker, named by its config slug. Worker-authored messages derive
+ * developer role at read time; sections derive system. */
+const WORKER_ACTOR = { type: "worker", name: "codemode-tag" } as const;
 const SCRIPT_EXPIRY_MS = 10 * 60_000;
 const RESULT_HISTORY_LIMIT = 30_000;
 /** Inline budget once the full copy is spilled — the inline copy is a map of
@@ -185,12 +189,16 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       },
       {
         type: "events.iterate.com/agents/context-added" as const,
-        idempotencyKey: `codemode-tag/birth-prompt:${hash}`,
+        // ":v2" — the payload shape carries the worker actor now; an
+        // unchanged grammar file keeps the same content hash, and a replay
+        // over an agent born under the older shape must not trip
+        // same-key-different-body.
+        idempotencyKey: `codemode-tag/birth-prompt:v2:${hash}`,
         payload: {
-          content: file.content,
+          kind: "section" as const,
           key: OUTPUT_FORMATTING_KEY,
-          llmRequestPolicy: { behaviour: "dont-trigger-request" as const },
-          role: "system" as const,
+          content: file.content,
+          actor: WORKER_ACTOR,
         },
       },
     ];
@@ -231,12 +239,13 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         if (slot?.content === content) return;
         await agent.append({
           type: "events.iterate.com/agents/context-added",
-          idempotencyKey: `codemode-tag/system-prompt:${hash}:after-${slot?.offset || 0}`,
+          // ":v2" — payload shape change; see #codemodeConversion.
+          idempotencyKey: `codemode-tag/system-prompt:v2:${hash}:after-${slot?.offset || 0}`,
           payload: {
-            content,
+            kind: "section",
             key: OUTPUT_FORMATTING_KEY,
-            llmRequestPolicy: { behaviour: "dont-trigger-request" },
-            role: "system",
+            content,
+            actor: WORKER_ACTOR,
           },
         });
       }),
@@ -272,12 +281,14 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         if (slot?.content === content) return;
         await agent.append({
           type: "events.iterate.com/agents/context-added",
-          idempotencyKey: `iterate/config/agents-md:${hash}:after-${slot?.offset || 0}`,
+          // ":v2" — payload shape change; the content-equality skip above
+          // dedupes transitions first synced under the older shape.
+          idempotencyKey: `iterate/config/agents-md:v2:${hash}:after-${slot?.offset || 0}`,
           payload: {
-            content,
+            kind: "section",
             key: "config/agents-md",
-            llmRequestPolicy: { behaviour: "dont-trigger-request" },
-            role: "system",
+            content,
+            actor: WORKER_ACTOR,
           },
         });
       }),
@@ -305,9 +316,18 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       role?: string;
       content?: string;
       llmRequestOffset?: number;
+      actor?: { type?: string; llmRequestOffset?: number };
     };
-    if (payload.role !== "assistant") return;
-    if (typeof payload.llmRequestOffset !== "number") return;
+    // A model output names the request it answers on the model actor —
+    // or payload-level with a stored assistant role on events committed
+    // before actors were required.
+    const llmRequestOffset =
+      payload.actor?.type === "model"
+        ? payload.actor.llmRequestOffset
+        : payload.role === "assistant"
+          ? payload.llmRequestOffset
+          : undefined;
+    if (typeof llmRequestOffset !== "number") return;
     if (typeof payload.content !== "string") return;
     // Interpret ONLY when default parsing is off for this agent: with it on
     // (a birth this worker was too slow for), the platform's own parser owns
@@ -328,8 +348,8 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
           type: "events.iterate.com/agents/context-added",
           idempotencyKey: `agent/${keySuffix}`,
           payload: {
-            role: "developer",
             content: outcome.feedback,
+            actor: WORKER_ACTOR,
             llmRequestPolicy: { behaviour: "after-current-request" },
           },
         }),
@@ -343,13 +363,12 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         agent.append({
           type: "events.iterate.com/agents/web-message-sent",
           idempotencyKey: `agent/codemode-prose@${event.offset}`,
-          payload: { message: prose, llmRequestOffset: payload.llmRequestOffset },
+          payload: { message: prose, llmRequestOffset },
         }),
       );
       return;
     }
     const { code, status, prose } = outcome;
-    const llmRequestOffset = payload.llmRequestOffset;
     // Order matters twice over: the status precedes the script so the code
     // step is born with its activity label, and the script precedes the
     // prose so the feed groups the turn as ONE activity — an assistant
@@ -450,7 +469,6 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         type: "events.iterate.com/agents/context-added",
         idempotencyKey: `agent/render-script-result@${event.offset}`,
         payload: {
-          role: "developer",
           content,
           actor: { type: "script", executionId },
           llmRequestPolicy: { behaviour: "after-current-request" },

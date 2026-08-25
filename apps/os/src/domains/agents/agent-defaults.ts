@@ -140,7 +140,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = embeddedTemplateFile("prompts/agent-s
 const DEFAULT_AGENT_SYSTEM_PROMPT_REVISION = contentHash(DEFAULT_AGENT_SYSTEM_PROMPT);
 const AGENT_MODEL_POLICY_REVISION = "2";
 const AGENT_WORKSPACE_POLICY_REVISION = "3";
-const AGENT_BOOT_CONTEXT_REVISION = "3";
+const AGENT_BOOT_CONTEXT_REVISION = "4";
 
 export const SLACK_AGENT_SYSTEM_PROMPT_REVISION = contentHash(
   embeddedTemplateFile("prompts/slack.md"),
@@ -249,9 +249,10 @@ export function agentSystemPromptContextEvents(input: {
         type: "events.iterate.com/agents/context-added",
         idempotencyKey: `${input.idempotencyKeyBase}:${index}:${section.key}`,
         payload: {
-          role: "system",
+          kind: "section",
           key: section.key,
           content: section.content,
+          actor: { type: "platform" },
         },
       }),
   );
@@ -388,12 +389,12 @@ export function agentCreationForPath<
     : [];
   const systemPromptContext = agentSystemPromptContextEvents({
     content: systemPrompt,
-    // "section:v3" in the prefix on purpose: the event BODY shape has
+    // "section:v4" in the prefix on purpose: the event BODY shape has
     // changed across revisions while an unchanged prompt file keeps the
     // same revision — a re-create over an agent born under an older shape
     // must append fresh superseding occurrences, not trip
     // same-key-different-body.
-    idempotencyKeyBase: `agent/system-prompt-section:v3:${systemPromptPolicy.id}:v${systemPromptPolicy.revision}:${projectId}:${agentPath}`,
+    idempotencyKeyBase: `agent/system-prompt-section:v4:${systemPromptPolicy.id}:v${systemPromptPolicy.revision}:${projectId}:${agentPath}`,
   });
   const bootContext = AgentProcessorContract.buildEvent({
     // Per-agent boot context as a second durable system item: ids and paths
@@ -415,8 +416,9 @@ export function agentCreationForPath<
         : `:${JSON.stringify([project.name, project.slug, project.workerUrl ?? null])}`
     }`,
     payload: {
-      role: "system",
+      kind: "section",
       key: "agent/boot-context",
+      actor: { type: "platform" },
       content: [
         "Context for this agent:",
         project === undefined

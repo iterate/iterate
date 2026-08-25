@@ -132,11 +132,27 @@ const SettledPayloadSlice = z.looseObject({
     z.looseObject({ status: z.literal("cancelled"), partialText: z.string().optional() }),
   ]),
 });
-const OutputPayloadSlice = z.looseObject({
-  role: z.literal("assistant"),
-  content: z.string(),
-  llmRequestOffset: z.number(),
-});
+// A request's committed output: a model-actor record carrying the request
+// offset on the actor, or (events committed before actors were required) an
+// assistant-role item carrying it payload-level.
+const OutputPayloadSlice = z.union([
+  z.looseObject({
+    actor: z.looseObject({ type: z.literal("model"), llmRequestOffset: z.number() }),
+    content: z.string(),
+  }),
+  z.looseObject({
+    role: z.literal("assistant"),
+    content: z.string(),
+    llmRequestOffset: z.number(),
+  }),
+]);
+function outputSliceRequestOffset(payload: z.infer<typeof OutputPayloadSlice>): number {
+  // looseObject passthrough keys widen `in` narrowing away; the model-actor
+  // branch is the one whose actor parsed as an object.
+  return typeof payload.actor === "object" && payload.actor !== null
+    ? (payload.actor as { llmRequestOffset: number }).llmRequestOffset
+    : (payload as { llmRequestOffset: number }).llmRequestOffset;
+}
 const ChunkPayloadSlice = z.looseObject({
   chunk: z.unknown(),
   llmRequestOffset: z.number(),
@@ -230,7 +246,9 @@ function replayResponse(input: {
   for (const event of input.events) {
     if (event.type !== "events.iterate.com/agents/context-added") continue;
     const parsed = OutputPayloadSlice.safeParse(event.payload);
-    if (!parsed.success || parsed.data.llmRequestOffset !== input.llmRequestOffset) continue;
+    if (!parsed.success || outputSliceRequestOffset(parsed.data) !== input.llmRequestOffset) {
+      continue;
+    }
     outputText = parsed.data.content;
     break;
   }

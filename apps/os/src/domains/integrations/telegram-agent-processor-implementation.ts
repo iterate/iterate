@@ -223,7 +223,6 @@ export class TelegramAgentProcessor extends StreamProcessor<
       type: "events.iterate.com/agents/context-added",
       idempotencyKey: `telegram-agent:webhook-to-agent-context:${event.offset}`,
       payload: {
-        role: "developer",
         content: telegramWebhookAgentInput(event.payload, { newCommand }),
         actor: {
           type: "telegram",

@@ -168,8 +168,9 @@ export class SlackAgentProcessor extends StreamProcessor<
         break;
       }
       case "events.iterate.com/slack/webhook-received": {
-        // The webhook transcribes into application-supplied developer
-        // context; actor/refs retain its untrusted external provenance.
+        // The webhook transcribes into agent context; actor/refs retain its
+        // untrusted external provenance (the slack actor derives user role
+        // at read time).
         // The sender is extracted here, once, wherever the payload shape
         // carries it (event_callback events vs interactivity payloads), so
         // button presses and reactions keep their sender too.
@@ -187,7 +188,6 @@ export class SlackAgentProcessor extends StreamProcessor<
             type: "events.iterate.com/agents/context-added",
             idempotencyKey: this.idempotencyKey("webhook-to-agent-context", event),
             payload: {
-              role: "developer",
               content:
                 input.contentNote === undefined
                   ? slackWebhookAgentInput(event.payload)

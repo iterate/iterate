@@ -7,7 +7,15 @@
 // code block, never a crash.
 
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
+import { deriveRole } from "@iterate-com/shared/agent-events";
 import { readNumber, readRuntimeRecord } from "~/lib/runtime-record.ts";
+
+/** Derived LLM role for a loose payload record — the cast narrows the
+ * untyped record to deriveRole's structural param; wrong-shaped fields make
+ * it fall down to "user", never crash. */
+function deriveLooseRole(payload: Record<string, unknown>): string {
+  return deriveRole(payload as Parameters<typeof deriveRole>[0]);
+}
 
 export function RuntimeStateStat({ label, value }: { label: string; value: string }) {
   return (
@@ -402,7 +410,7 @@ function renderProjectedContextItem(item: unknown): string {
     typeof record.offset === "number" ? `@${record.offset}` : "@?",
     typeof payload.key === "string" ? `key=${JSON.stringify(payload.key)}` : null,
     typeof record.updatesOffset === "number" ? `updates=@${record.updatesOffset}` : null,
-    typeof payload.role === "string" ? `role=${payload.role}` : null,
+    `role=${deriveLooseRole(payload)}`,
   ].filter((field): field is string => field !== null);
   return `${fields.join(" ")}\n${String(payload.content ?? "")}`;
 }
@@ -413,7 +421,8 @@ function previewProjectedItem(item: unknown): { role: string; text: string } | n
 }
 
 function previewChatMessage(message: Record<string, unknown>): { role: string; text: string } {
-  const role = String(message.role ?? message.kind ?? "message");
+  // Wire messages carry a role; context-item payloads derive theirs.
+  const role = typeof message.role === "string" ? message.role : deriveLooseRole(message);
   const content = message.content ?? message.text ?? message;
   let text = "";
   if (typeof content === "string") text = content;
