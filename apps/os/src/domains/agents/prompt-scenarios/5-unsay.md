@@ -150,20 +150,15 @@ messages:
       </section>
   # ✂ provider cache: every token above this line is a byte-stable prefix (cached)
   - role: user
-    content: |-
-      @25 actor=user:web
-      hi — what can you do?
+    content: "hi — what can you do?"
   - role: developer
     content: "Requested at: 2026-08-24T16:41:04.500Z"
   - role: assistant
     content: |-
-      @28
       Hi! I'm your project's agent — I can read and change the repo, run scripts, wire up integrations…
       <codemode status="Idle">return</codemode>
   - role: user
-    content: |-
-      @91 actor=user:web
-      summarise the project notes for me?
+    content: "summarise the project notes for me?"
   - role: developer
     content: "Requested at: 2026-08-24T16:49:20.000Z"
 ```
@@ -182,10 +177,8 @@ messages:
     # ✂ provider cache: every token above this line is a byte-stable prefix (cached)
     content: ""
   - role: user
-    content: |-
-      @96 actor=user:web
-      # all that survives delete *: the protocol, an empty standing document, this message, and its stamp
-      anyone home?
+    # all that survives delete *: the protocol, an empty standing document, this message, and its stamp
+    content: "anyone home?"
   - role: developer
     content: "Requested at: 2026-08-24T16:50:00.000Z"
 ```

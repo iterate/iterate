@@ -186,22 +186,17 @@ messages:
       Project AGENTS.md (auto-injected): keep replies terse; the dashboard lives at /projects/demo; deploys go out on merge to main.
       </section>
   - role: user
-    content: |-
-      @25 actor=user:web
-      hi — what can you do?
+    content: "hi — what can you do?"
   - role: developer
     content: "Requested at: 2026-08-24T16:41:04.500Z"
   # ✂ provider cache: every token above this line is a byte-stable prefix (cached)
   - role: assistant
     content: |-
-      @28
       Hi! I'm your project's agent — I can read and change the repo, run scripts, wire up integrations…
       <codemode status="Idle">return</codemode>
   - role: user
-    content: |-
-      @30 actor=user:web
-      # ten minutes in, a fresh trigger — everything above this turn is a cached prefix
-      how many open PRs do we have?
+    # ten minutes in, a fresh trigger — everything above this turn is a cached prefix
+    content: "how many open PRs do we have?"
   - role: developer
     content: "Requested at: 2026-08-24T16:51:10.000Z"
 ```
@@ -266,26 +261,20 @@ messages:
       Project AGENTS.md (auto-injected): keep replies terse; the dashboard lives at /projects/demo; deploys go out on merge to main.
       </section>
   - role: user
-    content: |-
-      @25 actor=user:web
-      hi — what can you do?
+    content: "hi — what can you do?"
   - role: developer
     content: "Requested at: 2026-08-24T16:41:04.500Z"
   - role: assistant
     content: |-
-      @28
       Hi! I'm your project's agent — I can read and change the repo, run scripts, wire up integrations…
       <codemode status="Idle">return</codemode>
   - role: user
-    content: |-
-      @30 actor=user:web
-      how many open PRs do we have?
+    content: "how many open PRs do we have?"
   - role: developer
     content: "Requested at: 2026-08-24T16:51:10.000Z"
   # ✂ provider cache: every token above this line is a byte-stable prefix (cached)
   - role: assistant
     content: |-
-      @33
       # the raw codemode reply @33, now history — the worker extracted and ran its block
       let me check!
       <codemode status="Counting open PRs">
