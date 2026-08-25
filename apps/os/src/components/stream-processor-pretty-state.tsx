@@ -270,13 +270,23 @@ export function AgentPrettyState({ state }: { state: unknown }) {
   const config = readRuntimeRecord(agent.config);
   const llm = readRuntimeRecord(config?.llm);
   const contextItems = Array.isArray(agent.contextItems) ? agent.contextItems : [];
-  const isSystem = (item: unknown) => readItemPayload(item)?.role === "system";
-  const system = contextItems.filter(isSystem);
-  const history = contextItems.filter((item) => !isSystem(item));
+  const itemKind = (item: unknown) => readRuntimeRecord(item)?.kind;
+  // The derived standing document: the leading run of section items.
+  const document: unknown[] = [];
+  for (const item of contextItems) {
+    if (itemKind(item) !== "section") break;
+    if (readRuntimeRecord(item)?.supersedes !== undefined) break;
+    document.push(item);
+  }
+  const history = contextItems.filter((item: unknown) => itemKind(item) === "message");
+  // Preview the last conversation message — send stamps and section
+  // occurrences are bookkeeping, not messages.
   const lastMessage = history.length > 0 ? history[history.length - 1] : null;
   const lastPreview = lastMessage == null ? null : previewProjectedItem(lastMessage);
-  const scripts = Array.isArray(agent.activeScriptExecutionIds)
-    ? agent.activeScriptExecutionIds
+  const scripts = Array.isArray(agent.activeScriptExecutions)
+    ? agent.activeScriptExecutions.map(
+        (execution: unknown) => readRuntimeRecord(execution)?.executionId || "script",
+      )
     : [];
 
   return (
@@ -344,13 +354,13 @@ export function AgentPrettyState({ state }: { state: unknown }) {
         </div>
       </div>
 
-      {system.length === 0 ? null : (
+      {document.length === 0 ? null : (
         <details className="rounded-xl bg-muted/40 px-3 py-2">
           <summary className="cursor-pointer text-[10px] uppercase tracking-wide text-muted-foreground/70">
-            System context ({system.length})
+            Standing document ({document.length} sections)
           </summary>
           <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-xs text-foreground/80">
-            {system.map(renderProjectedContextItem).join("\n\n")}
+            {document.map(renderProjectedContextItem).join("\n\n")}
           </pre>
         </details>
       )}

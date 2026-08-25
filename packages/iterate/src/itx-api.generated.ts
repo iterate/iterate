@@ -2598,53 +2598,117 @@ export type AgentProcessorState = {
     compactionTriggerFraction: number;
     interpretResponses: boolean;
   };
-  contextItems: {
-    offset: number;
-    payload: {
-      role: "assistant" | "developer" | "system" | "user";
-      content: string;
-      key?: string | undefined;
-      files?:
-        | { contentType: string; filename: string; path: string; size: number; url: string }[]
-        | undefined;
-      refs?:
-        | (
-            | { type: "event"; streamPath: string; offset: number; eventType?: string | undefined }
-            | { type: "user"; userId: string }
-            | { type: "file"; path: string }
-            | { type: "git-commit"; repoPath: string; commitOid: string }
-          )[]
-        | undefined;
-      actor?:
-        | { type: "user"; origin: "mcp" | "web"; userId?: string | undefined }
-        | { type: "agent"; path: string }
-        | { type: "script"; executionId: string }
-        | { type: "integration"; name: string }
-        | { type: "slack"; userId?: string | undefined; botName?: string | undefined }
-        | { type: "telegram"; userId?: string | undefined; username?: string | undefined }
-        | { type: "email"; address?: string | undefined; name?: string | undefined }
-        | { type: "github"; login?: string | undefined; senderType?: string | undefined }
-        | undefined;
-      llmRequestPolicy:
-        | { behaviour: "dont-trigger-request" }
-        | { behaviour: "interrupt-current-request" }
-        | { behaviour: "after-current-request" };
-      llmRequestOffset?: number | undefined;
-      compaction?:
-        | {
-            replacesHistoryThrough: number;
-            usage?:
-              | {
-                  inputTokens: number;
-                  outputTokens: number;
-                  cachedInputTokens?: number | undefined;
-                  reasoningOutputTokens?: number | undefined;
-                }
-              | undefined;
-          }
-        | undefined;
-    };
-  }[];
+  contextItems: (
+    | { kind: "request"; offset: number; requestedAt: string }
+    | {
+        kind: "section";
+        offset: number;
+        key: string;
+        supersedes?: number | undefined;
+        payload: {
+          role: "assistant" | "developer" | "system" | "user";
+          content: string;
+          key?: string | undefined;
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          refs?:
+            | (
+                | {
+                    type: "event";
+                    streamPath: string;
+                    offset: number;
+                    eventType?: string | undefined;
+                  }
+                | { type: "user"; userId: string }
+                | { type: "file"; path: string }
+                | { type: "git-commit"; repoPath: string; commitOid: string }
+              )[]
+            | undefined;
+          actor?:
+            | { type: "user"; origin: "mcp" | "web"; userId?: string | undefined }
+            | { type: "agent"; path: string }
+            | { type: "script"; executionId: string }
+            | { type: "integration"; name: string }
+            | { type: "slack"; userId?: string | undefined; botName?: string | undefined }
+            | { type: "telegram"; userId?: string | undefined; username?: string | undefined }
+            | { type: "email"; address?: string | undefined; name?: string | undefined }
+            | { type: "github"; login?: string | undefined; senderType?: string | undefined }
+            | undefined;
+          llmRequestPolicy:
+            | { behaviour: "dont-trigger-request" }
+            | { behaviour: "interrupt-current-request" }
+            | { behaviour: "after-current-request" };
+          llmRequestOffset?: number | undefined;
+          compaction?:
+            | {
+                replacesHistoryThrough: number;
+                usage?:
+                  | {
+                      inputTokens: number;
+                      outputTokens: number;
+                      cachedInputTokens?: number | undefined;
+                      reasoningOutputTokens?: number | undefined;
+                    }
+                  | undefined;
+              }
+            | undefined;
+        };
+      }
+    | {
+        kind: "message";
+        offset: number;
+        payload: {
+          role: "assistant" | "developer" | "system" | "user";
+          content: string;
+          key?: string | undefined;
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          refs?:
+            | (
+                | {
+                    type: "event";
+                    streamPath: string;
+                    offset: number;
+                    eventType?: string | undefined;
+                  }
+                | { type: "user"; userId: string }
+                | { type: "file"; path: string }
+                | { type: "git-commit"; repoPath: string; commitOid: string }
+              )[]
+            | undefined;
+          actor?:
+            | { type: "user"; origin: "mcp" | "web"; userId?: string | undefined }
+            | { type: "agent"; path: string }
+            | { type: "script"; executionId: string }
+            | { type: "integration"; name: string }
+            | { type: "slack"; userId?: string | undefined; botName?: string | undefined }
+            | { type: "telegram"; userId?: string | undefined; username?: string | undefined }
+            | { type: "email"; address?: string | undefined; name?: string | undefined }
+            | { type: "github"; login?: string | undefined; senderType?: string | undefined }
+            | undefined;
+          llmRequestPolicy:
+            | { behaviour: "dont-trigger-request" }
+            | { behaviour: "interrupt-current-request" }
+            | { behaviour: "after-current-request" };
+          llmRequestOffset?: number | undefined;
+          compaction?:
+            | {
+                replacesHistoryThrough: number;
+                usage?:
+                  | {
+                      inputTokens: number;
+                      outputTokens: number;
+                      cachedInputTokens?: number | undefined;
+                      reasoningOutputTokens?: number | undefined;
+                    }
+                  | undefined;
+              }
+            | undefined;
+        };
+      }
+  )[];
   lastLlmRequestOffset: number;
   latestExternalTriggerOffset: number;
   pendingLlmRequestTrigger: {
@@ -2656,7 +2720,7 @@ export type AgentProcessorState = {
   consecutiveLlmFailures: number;
   paused: { reason?: string | undefined; atOffset: number } | null;
   autonomousTurnCount: number;
-  activeScriptExecutionIds: string[];
+  activeScriptExecutions: { executionId: string; requestedAt: string }[];
   summary: {
     title?: string | undefined;
     description?: string | undefined;
@@ -2725,7 +2789,7 @@ export type AgentEventInput =
   | TypedConsumedEventInput<"events.iterate.com/agent/created", { [x: string]: unknown }>
   | TypedConsumedEventInput<
       "events.iterate.com/agent/llm-request-requested",
-      { model: string; expiresAt: number }
+      { model: string; contractVersion?: string | undefined; expiresAt: number }
     >
   | TypedConsumedEventInput<
       "events.iterate.com/agent/llm-request-settled",
@@ -2834,6 +2898,10 @@ export type AgentEventInput =
             }
           | undefined;
       }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/agents/context-rewritten",
+      { op: "delete" | "replace"; key: string; content?: string | undefined }
     >
   | TypedConsumedEventInput<
       "events.iterate.com/agents/web-message-sent",
@@ -4405,7 +4473,50 @@ export type JsonValue =
 
 /** One model-visible context item's payload — the wire contract for every
  * committed `agents/context-added` event. */
-export type AgentContextAddedPayload = AgentProcessorState["contextItems"][number]["payload"];
+export type AgentContextAddedPayload = {
+  role: "assistant" | "developer" | "system" | "user";
+  content: string;
+  key?: string | undefined;
+  files?:
+    | { contentType: string; filename: string; path: string; size: number; url: string }[]
+    | undefined;
+  refs?:
+    | (
+        | { type: "event"; streamPath: string; offset: number; eventType?: string | undefined }
+        | { type: "user"; userId: string }
+        | { type: "file"; path: string }
+        | { type: "git-commit"; repoPath: string; commitOid: string }
+      )[]
+    | undefined;
+  actor?:
+    | { type: "user"; origin: "mcp" | "web"; userId?: string | undefined }
+    | { type: "agent"; path: string }
+    | { type: "script"; executionId: string }
+    | { type: "integration"; name: string }
+    | { type: "slack"; userId?: string | undefined; botName?: string | undefined }
+    | { type: "telegram"; userId?: string | undefined; username?: string | undefined }
+    | { type: "email"; address?: string | undefined; name?: string | undefined }
+    | { type: "github"; login?: string | undefined; senderType?: string | undefined }
+    | undefined;
+  llmRequestPolicy:
+    | { behaviour: "dont-trigger-request" }
+    | { behaviour: "interrupt-current-request" }
+    | { behaviour: "after-current-request" };
+  llmRequestOffset?: number | undefined;
+  compaction?:
+    | {
+        replacesHistoryThrough: number;
+        usage?:
+          | {
+              inputTokens: number;
+              outputTokens: number;
+              cachedInputTokens?: number | undefined;
+              reasoningOutputTokens?: number | undefined;
+            }
+          | undefined;
+      }
+    | undefined;
+};
 
 /** Dynamic invocation envelope used by flattened live capabilities. */
 export type FlattenedCapabilityInvocation = {

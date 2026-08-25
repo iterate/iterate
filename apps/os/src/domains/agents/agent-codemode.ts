@@ -166,7 +166,10 @@ export class AgentCodemode {
         // Settlement reduction removes the execution from `state`, so inspect
         // the immediately preceding projection. Only a request provenance-
         // stamped by this agent processor can enter that active set.
-        if (!previousState.activeScriptExecutionIds.includes(executionId)) break;
+        const execution = previousState.activeScriptExecutions.find(
+          (candidate) => candidate.executionId === executionId,
+        );
+        if (execution === undefined) break;
         // `/script` publishes its successful result directly as interruptive
         // context, then returns the same value so the capability host keeps it
         // in the script-results preamble. Only its failures render here.
@@ -188,6 +191,13 @@ export class AgentCodemode {
           const content = await renderScriptSettlement({
             executionId,
             settlement,
+            // How long the script ran, derived from the requested and settled
+            // events' own journaled createdAt — deterministic across
+            // redeliveries and replays, never wall clock.
+            durationMs: Math.max(
+              0,
+              Date.parse(event.createdAt) - Date.parse(execution.requestedAt),
+            ),
             historyLimit: state.config.scriptResultHistoryLimit,
             writeWorkspaceFile: this.#host.deps.writeWorkspaceFile,
           });
@@ -233,10 +243,15 @@ async function renderScriptSettlement(input: {
     failureKind?: string;
     executionMayHaveOccurred?: boolean;
   };
+  /** How long the script ran — derived by the caller from the requested and
+   * settled events' journaled createdAt, so slow operations become knowable
+   * to the model. */
+  durationMs: number;
   historyLimit: number;
   writeWorkspaceFile: AgentProcessorDeps["writeWorkspaceFile"];
 }): Promise<string | null> {
   const { executionId, settlement, historyLimit, writeWorkspaceFile } = input;
+  const ranIn = formatScriptDuration(input.durationMs);
   if (settlement.status === "failed") {
     // Advertise the recovery tools at the moment of failure — a wrong call
     // is exactly when docs.typecheck's did-you-mean and docs.search's
@@ -245,7 +260,7 @@ async function renderScriptSettlement(input: {
       ? "The script may have partially executed; inspect state before retrying."
       : "The script did not execute.";
     return (
-      `Your script failed during ${settlement.phase} (${settlement.failureKind}):\n` +
+      `Your script failed during ${settlement.phase} (${settlement.failureKind}, after ${ranIn}):\n` +
       `\`\`\`\n${truncateScriptResult(settlement.error ?? "unknown error", historyLimit)}\n\`\`\`\n${executionNote}\n` +
       `Before retrying: \`await itx.docs.typecheck({ code })\` compiles a script against this ` +
       `scope's real types (typos come back as "did you mean …"), and ` +
@@ -284,7 +299,7 @@ async function renderScriptSettlement(input: {
       if (isRawText) {
         const shownChars = Math.min(OVERSIZED_RAW_TEXT_PREVIEW_CHARS, historyLimit);
         return [
-          "Your script returned:",
+          `Your script returned (in ${ranIn}):`,
           "```",
           text.slice(0, shownChars),
           "```",
@@ -299,6 +314,7 @@ async function renderScriptSettlement(input: {
       return renderOversizedJsonResult({
         historyLimit,
         path: spilledPath,
+        ranIn,
         result: settlement.result,
         resultsAccess,
         text,
@@ -312,7 +328,7 @@ async function renderScriptSettlement(input: {
       });
     }
   }
-  return `Your script returned:\n${fence}\n${truncateScriptResult(text, historyLimit)}\n\`\`\`${preambleNote}`;
+  return `Your script returned (in ${ranIn}):\n${fence}\n${truncateScriptResult(text, historyLimit)}\n\`\`\`${preambleNote}`;
 }
 
 /**
@@ -358,6 +374,8 @@ function renderOversizedJsonResult(input: {
   /** Which member the preamble `results` row for THIS result actually has —
    * `data` (inline literal) or `load` (typed async loader); the recipe must
    * name the one that exists or the next script fails typecheck. */
+  /** Formatted script duration ("1.8s"), rendered into the header line. */
+  ranIn: string;
   resultsAccess: "data" | "load";
   text: string;
 }): string {
@@ -383,7 +401,7 @@ function renderOversizedJsonResult(input: {
     previewText = `${input.text.slice(0, Math.min(OVERSIZED_JSON_PREVIEW_MAX_BYTES, input.historyLimit))}\n… (cut mid-document)`;
   }
   return [
-    `Your script returned ${input.text.length.toLocaleString("en-US")} chars of JSON — over the ~${input.historyLimit.toLocaleString("en-US")}-char inline limit.${typeText === null ? "" : " Inferred type:"}`,
+    `Your script returned ${input.text.length.toLocaleString("en-US")} chars of JSON (in ${input.ranIn}) — over the ~${input.historyLimit.toLocaleString("en-US")}-char inline limit.${typeText === null ? "" : " Inferred type:"}`,
     ...(typeText === null ? [] : ["```ts", `type Result = ${typeText}`, "```"]),
     "Preview (long arrays/strings elided):",
     "```json",
@@ -427,4 +445,18 @@ function rawTextSpillNotice(input: {
     "```",
     `(The full copy is also saved in your workspace at ${JSON.stringify(input.path)}.)`,
   ].join("\n");
+}
+
+/** Human-scale script duration for the settlement render: "840ms", "1.8s",
+ * "2m 5s". The codemode-tag template's vendored settlement renderer carries
+ * its own copy of this. */
+function formatScriptDuration(durationMs: number): string {
+  if (durationMs < 1000) return `${Math.round(durationMs)}ms`;
+  if (durationMs < 120_000) return `${Math.round(durationMs / 100) / 10}s`;
+  // Round to whole seconds BEFORE splitting into minutes: rounding the
+  // leftover afterwards turns 179.7s into "2m 60s" instead of "3m".
+  const totalSeconds = Math.round(durationMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
 }

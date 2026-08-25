@@ -72,7 +72,12 @@ export class AgentLlmRequest {
     );
     if (contextTokens < thresholdTokens) return;
     const triggerFraction = state.config.compactionTriggerFraction;
-    const hasHistory = state.contextItems.some((item) => item.payload.role !== "system");
+    // Something summarizable exists: a conversation message that is not a
+    // durable system fact (send stamps and section occurrences alone are
+    // not a conversation).
+    const hasHistory = state.contextItems.some(
+      (item) => item.kind === "message" && item.payload.role !== "system",
+    );
     blockProcessorWhile(async () => {
       // A later over-threshold report already in the stream supersedes this
       // one: summarizing an older prefix now would be thrown away by the

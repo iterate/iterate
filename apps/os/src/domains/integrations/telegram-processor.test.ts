@@ -162,12 +162,13 @@ describe("TelegramProcessor (webhook router)", () => {
       ),
     ).toMatchObject({
       payload: {
+        // The untagged telegram prompt parses to one "agent/system-prompt" section.
+        key: "agent/system-prompt",
         content: telegramAgentSystemPrompt({
           agentPath: CHAT_PATH,
           chatId: String(CHAT_ID),
           connection: CONNECTION,
         }),
-        key: "agent/system-prompt",
         role: "system",
       },
     });

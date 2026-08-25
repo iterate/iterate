@@ -35,8 +35,14 @@ export function resultYaml(value: unknown) {
 export function buildRoundMetaYaml(
   llm: AgentUiLlmStep | null,
   code: AgentUiCodeStep,
-  promptMessages: { role: string; content: string }[] | null,
+  promptReplay: {
+    messages: { role: string; content: string }[];
+    /** Built by an older fold than the one replaying it — the shown prompt is
+     * a reconstruction under the current fold, not byte-exact. */
+    reconstructed: boolean;
+  } | null,
 ) {
+  const promptMessages = promptReplay === null ? null : promptReplay.messages;
   const doc = new Document({
     ...(llm && {
       llm: {
@@ -77,7 +83,9 @@ export function buildRoundMetaYaml(
     Pair(_key, pair) {
       if (promptMessages && pair.key instanceof Scalar && pair.key.value === "prompt") {
         const chars = promptMessages.reduce((sum, message) => sum + message.content.length, 0);
-        pair.key.comment = ` ${promptMessages.length} messages, ${chars} chars`;
+        pair.key.comment = ` ${promptMessages.length} messages, ${chars} chars${
+          promptReplay?.reconstructed ? " — reconstructed under the current fold" : ""
+        }`;
       }
     },
   });

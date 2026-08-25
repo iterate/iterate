@@ -542,7 +542,11 @@ function RoundMetaWithPrompt({
           llmRequestOffset: llm.llmRequestOffset,
         })
       : null;
-    return buildRoundMetaYaml(llm, code, replay?.messages ?? null);
+    return buildRoundMetaYaml(
+      llm,
+      code,
+      replay === null ? null : { messages: replay.messages, reconstructed: replay.reconstructed },
+    );
   }, [loaded, eventsResult.data, llm, code]);
   return <MetaYamlBlock yamlText={yamlText} />;
 }

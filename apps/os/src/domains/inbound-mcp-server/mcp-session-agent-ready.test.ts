@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { parsePromptSections } from "iterate/processors";
 import {
   MCP_AGENT_SYSTEM_PROMPT,
   MCP_AGENT_SYSTEM_PROMPT_REVISION,
@@ -41,17 +42,25 @@ describe("ensureMcpSessionAgentReady", () => {
     await ready;
 
     expect(returned).toBe(true);
-    expect(append).toHaveBeenCalledWith({
-      type: "events.iterate.com/agents/context-added",
-      idempotencyKey: `agent/mcp-system-prompt:v${MCP_AGENT_SYSTEM_PROMPT_REVISION}`,
-      payload: {
-        role: "system",
-        key: "agent/system-prompt",
+    // The MCP prompt is the tagged default file plus an untagged override
+    // suffix: one keyed event per section (the suffix under the fallback
+    // key), all in a single atomic append call.
+    expect(append).toHaveBeenCalledWith(
+      ...parsePromptSections({
         content: MCP_AGENT_SYSTEM_PROMPT,
-        // The processor ignores the defaulted policy on system items.
-        llmRequestPolicy: { behaviour: "after-current-request" },
-      },
-    });
+        fallbackKey: "agent/system-prompt",
+      }).map((section, index) => ({
+        type: "events.iterate.com/agents/context-added",
+        idempotencyKey: `agent/mcp-system-prompt:v${MCP_AGENT_SYSTEM_PROMPT_REVISION}:${index}:${section.key}`,
+        payload: {
+          role: "system",
+          key: section.key,
+          content: section.content,
+          // The processor ignores the defaulted policy on system items.
+          llmRequestPolicy: { behaviour: "after-current-request" },
+        },
+      })),
+    );
   });
 
   it("retries the same exact policy occurrence after idempotent creation", async () => {

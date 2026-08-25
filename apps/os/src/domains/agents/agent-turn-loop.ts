@@ -10,7 +10,7 @@
 
 import type { EmittedInput, ProcessEventArgs } from "iterate/processors";
 import { appendUnlessLostIdempotencyRace, type AgentHost } from "./agent-host.ts";
-import type { AgentProcessorContract, AgentProcessorState } from "./agent-processor-contract.ts";
+import { AgentProcessorContract, type AgentProcessorState } from "./agent-processor-contract.ts";
 import { contextClearsWaitingFor } from "./agent-prompt-fold.ts";
 import type { AgentLlmRequest } from "./agent-llm-request.ts";
 import { resolveSlashCommand } from "./slash-commands.ts";
@@ -220,21 +220,13 @@ export class AgentTurnLoop {
     // recovering after an eviction are the same code path.
     const trigger = state.pendingLlmRequestTrigger;
     if (state.paused === null && trigger !== null && state.openRequest === null) {
-      // Agent birth and inbound input are independent distributed reactions.
-      // Hold the trigger until the canonical system-prompt slot has arrived;
-      // that context event's own delivery re-runs this pass over the same
-      // pending trigger, so early user input cannot race an unconfigured
-      // first turn.
-      if (
-        !state.contextItems.some(
-          (item) => item.payload.role === "system" && item.payload.key === "agent/system-prompt",
-        )
-      ) {
-        console.warn("[agent] holding llm trigger until canonical system prompt arrives", {
-          pendingTriggerOffset: trigger.offset,
-        });
-        return;
-      }
+      // There is deliberately no "hold until a system prompt exists" gate
+      // here any more: every creation path ships its prompt content in the
+      // SAME atomic batch as agent/created, and the birthCertificate check
+      // above already parks triggers that raced ahead of birth — so by the
+      // time a trigger can schedule at all, the birth batch's prompt has
+      // reduced. A hand-rolled promptless birth answers with an empty
+      // standing document rather than holding its triggers forever.
       const { maxAutonomousTurns } = state.config;
       if (trigger.source === "agent-loop" && state.autonomousTurnCount >= maxAutonomousTurns) {
         runInBackground(() =>
@@ -269,6 +261,10 @@ export class AgentTurnLoop {
         type: "events.iterate.com/agent/llm-request-requested",
         payload: {
           model: state.config.llm.model,
+          // The fold version that will (re)build this request's prompt. A
+          // later fold replaying it is a reconstruction, not byte-exact —
+          // the request inspector reads this stamp to say so.
+          contractVersion: AgentProcessorContract.version,
           expiresAt: trigger.atMs + state.config.llmRequestExpiryMs,
         },
         // Dedupe fence only, keyed on the trigger's coordinates — the

@@ -5,7 +5,7 @@
 
 import { AGENT_SUMMARY_UPDATED_EVENT_TYPE } from "@iterate-com/shared/agent-events";
 import { z } from "zod";
-import type { StreamEventInput } from "iterate/processors";
+import { parsePromptSections, type StreamEventInput } from "iterate/processors";
 import { PROJECT_REPO_INITIAL_FILES } from "../repos/config-repo-template.generated.ts";
 import { buildFacetProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
@@ -224,23 +224,37 @@ export const MCP_AGENT_SYSTEM_PROMPT = [
 export const MCP_AGENT_SYSTEM_PROMPT_REVISION = contentHash(MCP_AGENT_SYSTEM_PROMPT);
 
 /**
- * One exact, retryable occurrence updating the agent runtime's keyed
- * system-context slot. `idempotencyKey` identifies this payload occurrence;
- * the context key identifies the logical slot and makes a later revision
- * supersede it. Never reuse an idempotency key after changing `content`.
+ * The exact, retryable occurrences establishing the agent's system prompt as
+ * STANDING SECTIONS: the sectionized prompt file is parsed here, at append
+ * time (structure at append; fold ops never parse model-visible strings),
+ * into ONE KEYED EVENT PER SECTION, in file order. The whole list must ride
+ * a single append batch: the batch commits atomically in input order, so
+ * file order becomes offset order becomes document order — and no render
+ * can see a half-written prompt. Untagged content — including whole
+ * untagged files, the integration channel prompts — becomes one
+ * "agent/system-prompt" section (an authoring convention; keys are
+ * arbitrary strings the kernel never interprets). `idempotencyKeyBase`
+ * identifies this payload occurrence set; each event's key is
+ * `<base>:<index>:<sectionKey>` (the index disambiguates repeated section
+ * keys, e.g. several untagged runs). Never reuse a base after changing
+ * `content`.
  */
-export function agentSystemPromptContextEvent(input: { content: string; idempotencyKey: string }) {
-  return AgentProcessorContract.buildEvent({
-    type: "events.iterate.com/agents/context-added",
-    idempotencyKey: input.idempotencyKey,
-    payload: {
-      role: "system",
-      // The one logical system-context slot whose presence makes an agent
-      // ready — the processor holds LLM triggers until it exists.
-      key: "agent/system-prompt",
-      content: input.content,
-    },
-  });
+export function agentSystemPromptContextEvents(input: {
+  content: string;
+  idempotencyKeyBase: string;
+}) {
+  return parsePromptSections({ content: input.content, fallbackKey: "agent/system-prompt" }).map(
+    (section, index) =>
+      AgentProcessorContract.buildEvent({
+        type: "events.iterate.com/agents/context-added",
+        idempotencyKey: `${input.idempotencyKeyBase}:${index}:${section.key}`,
+        payload: {
+          role: "system",
+          key: section.key,
+          content: section.content,
+        },
+      }),
+  );
 }
 
 /** The `agent/created` payload — the agent's birth certificate (a loose
@@ -372,9 +386,14 @@ export function agentCreationForPath<
         }),
       ]
     : [];
-  const systemPromptContext = agentSystemPromptContextEvent({
+  const systemPromptContext = agentSystemPromptContextEvents({
     content: systemPrompt,
-    idempotencyKey: `agent/system-prompt:${systemPromptPolicy.id}:v${systemPromptPolicy.revision}:${projectId}:${agentPath}`,
+    // "section:v3" in the prefix on purpose: the event BODY shape has
+    // changed across revisions while an unchanged prompt file keeps the
+    // same revision — a re-create over an agent born under an older shape
+    // must append fresh superseding occurrences, not trip
+    // same-key-different-body.
+    idempotencyKeyBase: `agent/system-prompt-section:v3:${systemPromptPolicy.id}:v${systemPromptPolicy.revision}:${projectId}:${agentPath}`,
   });
   const bootContext = AgentProcessorContract.buildEvent({
     // Per-agent boot context as a second durable system item: ids and paths
@@ -464,7 +483,7 @@ export function agentCreationForPath<
       ...siblingBirthCertificates,
       configured,
       ...birthConfig,
-      systemPromptContext,
+      ...systemPromptContext,
       workspaceProvided,
       bootContext,
       agentSubscription,
