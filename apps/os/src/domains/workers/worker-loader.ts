@@ -5,6 +5,8 @@ import { StreamContext } from "../projects/stream-context.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { CONFIG_REPO_PATH } from "../repos/paths.ts";
 import { REPO_DEFAULT_BRANCH } from "../repos/repo-defaults.ts";
+import { ProjectProcessorContract } from "../projects/project-processor-contract.ts";
+import { internalStreamId } from "../streams/stream-delivery-utils.ts";
 import type { DynamicWorkerSource, WorkerFileSource } from "./schemas.ts";
 import {
   KvWorkerBuildArtifactStore,
@@ -146,9 +148,13 @@ async function resolveArtifact(
  * failures with NO commit behind them — a platform deployment changing the
  * dynamic package substitution can break the build of an unchanged repo, and
  * without this the only trace is each subscription's transient lastError.
- * Idempotency-keyed by the failing commit, so every retrying delivery dedupes
- * to one durable fact, and the append that fact triggers dedupes too (no
- * self-sustaining loop). Best-effort: the build failure result must reach the
+ *
+ * The append rides the platform door under the readiness probe's OWN
+ * platform-namespace idempotency key, so the two sources dedupe into ONE
+ * durable outcome per commit (the probe's outcome-per-commit contract), every
+ * retrying delivery dedupes to it, the append the fact itself triggers
+ * dedupes too (no self-sustaining loop), and no public append can pre-claim
+ * or forge the key. Best-effort: the build failure result must reach the
  * caller even when the journal append fails.
  */
 async function recordConfigRepoBuildFailure(input: {
@@ -162,14 +168,23 @@ async function recordConfigRepoBuildFailure(input: {
     const stream = env.STREAM.getByName(
       DurableObjectNameCodec.stringify({ path: "/", projectId: input.projectId }),
     );
+    // The platform door is fenced to one stream lifetime; read the identity
+    // in the same dial. A recreated stream between the two calls surfaces as
+    // a loud mismatch instead of journaling onto the wrong lifetime.
+    const { streamId } = await stream.getEventPage({ limit: 1 });
     disposeIgnoredRpcResult(
-      await stream.append({
-        type: "events.iterate.com/project/worker-update-failed",
-        idempotencyKey: `worker-build-failed:${input.resolved.commitOid}`,
-        payload: {
-          commitOid: input.resolved.commitOid,
-          error: input.failure.message,
-        },
+      await stream.appendCoreEventsIfStreamId({
+        streamId,
+        events: [
+          ProjectProcessorContract.parseEventInput({
+            type: "events.iterate.com/project/worker-update-failed",
+            idempotencyKey: internalStreamId("project-worker-update", input.resolved.commitOid),
+            payload: {
+              commitOid: input.resolved.commitOid,
+              error: input.failure.message,
+            },
+          }),
+        ],
       }),
     );
   } catch (error) {

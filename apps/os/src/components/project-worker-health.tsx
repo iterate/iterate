@@ -237,9 +237,13 @@ function StrugglingSubscriptionsSheet({
           <SheetDescription>
             {buildFailure !== null
               ? "The project worker no longer builds, so nothing that depends on it runs — agents included — until a config repo commit fixes the build."
-              : severe
-                ? "A subscription on this project's root stream halted after repeated failures. New events pile up undelivered until you resume it. Resume retries from where it stopped; if one event keeps breaking delivery, skip past it."
-                : "A subscription on this project's root stream keeps failing and is retrying with backoff. Events pile up undelivered until delivery resumes. Resume retries from where it stopped; if one event keeps breaking delivery, skip past it."}
+              : struggling.length > 0
+                ? severe
+                  ? "A subscription on this project's root stream halted after repeated failures. New events pile up undelivered until you resume it. Resume retries from where it stopped; if one event keeps breaking delivery, skip past it."
+                  : "A subscription on this project's root stream keeps failing and is retrying with backoff. Events pile up undelivered until delivery resumes. Resume retries from where it stopped; if one event keeps breaking delivery, skip past it."
+                : severe
+                  ? "A subscription on one of this project's streams halted after repeated failures. New events pile up undelivered until it is resumed — open the stream to resume or skip."
+                  : "A subscription on one of this project's streams keeps failing and is retrying with backoff. Events pile up undelivered until delivery resumes — open the stream for the repair verbs."}
           </SheetDescription>
         </SheetHeader>
         <ScrollArea className="min-h-0 flex-1">
