@@ -584,16 +584,15 @@ export function buildAgentLlmRequestBody(input: {
   const state = reduceAgentEvents(
     input.events.filter((event) => event.offset <= input.llmRequestOffset),
   );
-  const items = state.contextItems;
   // The standing document is DERIVED here: the collection's leading run of
   // section items (ending at the first message, send stamp, or superseding
   // occurrence — membership is position, not a stored partition), merged
-  // into ONE system message of tagged blocks. The tag syntax is the SAME the
-  // authoring parser reads, so an unforked prompt file round-trips
-  // byte-identically.
+  // into ONE system message of tagged blocks (empty when nothing stands).
+  // The tag syntax is the SAME the authoring parser reads, so an unforked
+  // prompt file round-trips byte-identically.
   const standingSections: string[] = [];
-  for (const item of items) {
-    if (item.kind !== "section" || item.supersedes !== undefined) break;
+  for (const item of state.contextItems) {
+    if (item.kind !== "section" || item.supersedes) break;
     standingSections.push(
       `<section key=${JSON.stringify(item.key)}>\n${item.payload.content}\n</section>`,
     );
@@ -601,12 +600,10 @@ export function buildAgentLlmRequestBody(input: {
   return {
     messages: [
       { role: "system", content: AGENT_CONTEXT_PROTOCOL_PROMPT },
-      ...(standingSections.length === 0
-        ? []
-        : [{ role: "system" as const, content: standingSections.join("\n\n") }]),
+      { role: "system", content: standingSections.join("\n\n") },
       // Everything after the leading run renders at its position: messages,
       // later section occurrences, and send stamps.
-      ...items.slice(standingSections.length).map(renderContextItem),
+      ...state.contextItems.slice(standingSections.length).map(renderContextItem),
     ],
   };
 }

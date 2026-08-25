@@ -163,8 +163,8 @@ test("context-rewritten delete removes one section; delete * removes everything 
   );
 
   // The lobotomy: no guardrails, guidance only — the audit trail is the
-  // event itself. Protocol, the post-delete message, and its stamp are all
-  // that remain.
+  // event itself. Protocol, an emptied standing document, the post-delete
+  // message, and its stamp are all that remain.
   const allGone = buildAgentLlmRequestBody({
     events: [
       ...base,
@@ -176,6 +176,7 @@ test("context-rewritten delete removes one section; delete * removes everything 
   });
   expect(allGone.messages.map((message) => message.content.split("\n")[0])).toEqual([
     expect.stringContaining("Journal-projected context messages"),
+    "",
     "@7 actor=user:web",
     expect.stringContaining("Requested at:"),
   ]);

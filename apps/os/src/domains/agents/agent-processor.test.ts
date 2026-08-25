@@ -347,8 +347,15 @@ describe("AgentProcessor turn lifecycle", () => {
     expect(h.llm.calls).toHaveLength(1);
     const prompt = h.llm.calls[0]!.messages.map((m) => m.content).join("\n");
     expect(prompt).toContain("am I early?");
-    // No standing document message — just protocol, the turn, the stamp.
-    expect(h.llm.calls[0]!.messages.map((m) => m.role)).toEqual(["system", "user", "developer"]);
+    // The standing document message is present but empty — then the turn
+    // and the stamp.
+    expect(h.llm.calls[0]!.messages.map((m) => m.role)).toEqual([
+      "system",
+      "system",
+      "user",
+      "developer",
+    ]);
+    expect(h.llm.calls[0]!.messages[1]).toMatchObject({ content: "" });
   });
 
   it("interrupt mid-flight: aborts, settles cancelled with the streamed partial; the zombie completion loses the settle race", async () => {
