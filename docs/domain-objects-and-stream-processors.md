@@ -35,9 +35,10 @@ await agent.append({
   type: "events.iterate.com/agents/context-added",
   idempotencyKey: "researcher-role:v1",
   payload: {
-    role: "system",
+    kind: "section",
     key: "agent/researcher-role",
     content: "You are the project's research specialist.",
+    actor: { type: "worker", name: "my-config" },
   },
 });
 await agent.message("Start the research");

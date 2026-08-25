@@ -15,7 +15,6 @@ Everything the model can see is appended as
 await agentStream.append({
   type: "events.iterate.com/agents/context-added",
   payload: {
-    role: "user",
     actor: { type: "user", origin: "web" },
     content: "Please review this change.",
     refs: [
@@ -31,29 +30,35 @@ await agentStream.append({
 });
 ```
 
-The roles are product semantics before they are provider wire roles:
+Payloads store no role. The LLM role is derived at read time from the
+payload's provenance — `deriveRole` in `@iterate-com/shared/agent-events`,
+the one ladder every reader shares:
 
-- `system` is the compaction-immune instruction prefix.
-- `developer` is compactable application, integration, or agent context in the
-  product projection.
-- `user` is a human-authored message.
-- `assistant` is an earlier model output. Only an assistant item carrying a
-  genuine `llmRequestOffset` may request code execution.
+- a keyed item is a section — a standing instruction — and renders `system`;
+- a compaction summary (the `compaction` field) renders `user`: a faithful
+  summary can quote untrusted instructions and must not launder them into
+  instruction precedence;
+- `platform`, `worker`, `agent`, and `script` actors carry application
+  authority and render `developer`;
+- a `model` actor is an earlier model output and renders `assistant`. Only a
+  model item whose actor carries a genuine `llmRequestOffset` may request
+  code execution;
+- every other actor — humans on any surface, Slack, Telegram, email, GitHub,
+  integrations, and all future actors — renders `user`: external data cannot
+  acquire instruction precedence from the way it arrived.
 
-Actor metadata records who supplied an item independently of its product role.
-An actorless developer item is application- or platform-authored. Before a
-provider call, developer items carrying Slack, Telegram, email, GitHub, or
-script actors are downgraded to the provider's `user` role. External data
-therefore cannot acquire instruction precedence merely because an application
-chose to summarize it as developer context. Agent-authored and actorless
-developer items remain developer messages. Compaction summaries are the
-exception: although structurally recorded as developer history, they project as
-provider `user` messages because a faithful summary can quote untrusted
-instructions and must not launder them into developer/system precedence. A
-script result still counts as agent-loop feedback for the autonomous-turn
-circuit breaker; provider trust and turn budgeting are separate decisions.
-`refs` point back to richer source events or objects so the model need not
-receive an entire webhook. Files are attached directly to the context item.
+Events committed before actors were required carry a stored `role`; it is
+consulted only when no actor is present, so a dropped actor can demote but
+never escalate. The append gate in the OS worker
+(`agent-context-gate.ts`) stamps the actor from the authenticated caller:
+user sessions are always stamped as themselves, agent scripts keep
+script/agent self-attribution, config workers may name themselves and relay
+channel-native identity, and `user`/`model`/`platform` are inexpressible
+outside platform code. A script result still counts as agent-loop feedback
+for the autonomous-turn circuit breaker; provider trust and turn budgeting
+are separate decisions. `refs` point back to richer source events or objects
+so the model need not receive an entire webhook. Files are attached directly
+to the context item.
 
 Agent actors intentionally share one trusted instruction domain within a
 project. Sending a message to another agent is an explicit capability call, so
@@ -234,7 +239,7 @@ unexplained errors before declaring the rollout complete.
 
 - Append model-visible information only through `context-added`.
 - Use `system` only for instructions that must survive compaction.
-- Give human input the `user` role and a user actor.
+- Human input carries a user actor; the platform's append gate stamps it.
 - Give webhook summaries a typed integration actor and an event ref; keep
   secrets and bulky raw payloads in the referenced event.
 - Use a payload key only for a logical value that can be updated. Never use it

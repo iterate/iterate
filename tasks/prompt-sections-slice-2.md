@@ -11,8 +11,15 @@ Slice 1 was PR #2512; the decision record is tasks/prompt-sections-tree.md
 
 ## Status
 
-In progress. Spec below is final; the implementation plan (with the judgment
-calls it forced) is at the bottom, in the log.
+Implemented; local suites green (apps/os 3001 tests, packages/iterate 405,
+mobile 149, shared 77; typecheck/lint/knip/format clean). Main pieces: the
+v8 payload union + `deriveRole` in packages/shared, the producer sweep
+(platform, routers, templates, starter apps), the append gate in
+rpc-targets with per-caller-class specs, every `payload.role` reader
+derived, the protocol-prompt rewrite + cache-key bump, and scenario
+6-provenance. Remaining: preview e2e verification, and review of the
+judgment calls marked **JC** in the plan below (especially worker-tier
+channel-actor claims).
 
 ## The shape
 
@@ -54,13 +61,13 @@ function deriveRole(payload): Role {
 
 ## Checklist
 
-- [ ] Contract v8.0.0: kind-discriminated context-added payload; `actor` required on new appends; `worker`/`platform`/`model` actor variants; `role` demoted to read-side fallback; regenerate itx-api
-- [ ] Fold: `modelRoleForContextItem` → exported `deriveRole` (the ladder); demotion special-cases deleted
-- [ ] Gate: caller-scoped append schemas; actor stamped from authenticated caller; section variant absent from router shapes; specs per caller class
-- [ ] Producers: routers (slack/telegram/email/github) stop writing `role`; MCP session policy + birth defaults + both template workers author the section variant; three assistant-record sites gain `{type: "model"}`; corrective-feedback sites gain `{type: "platform"}`
-- [ ] UI readers of `payload.role` (pretty-state, feed, activity rounds, inspectors) switch to `deriveRole`
-- [ ] Protocol prompt: role paragraph rewritten to teach trust-by-provenance; AI Gateway response-cache key version bump
-- [ ] Specs: slice-1 byte-superset + first-appearance pass with only event-synthesis edits; build on the prompt-scenarios fixture suite (apps/os/src/domains/agents/prompt-scenarios/) — extend/add scenarios rather than hand-writing request outputs
+- [x] Contract v8.0.0: kind-discriminated context-added payload; `actor` required on new appends; `worker`/`platform`/`model` actor variants; `role` demoted to read-side fallback; regenerate itx-api — _agent-processor-contract.ts: three-shape z.union (section / message / read branch); role required on the read branch and absent elsewhere makes "role-free ⇒ actor required" a property of the union itself; `llmRequestOffset` moved onto the model actor; itx-api + examples regenerated_
+- [x] Fold: `modelRoleForContextItem` → exported `deriveRole` (the ladder); demotion special-cases deleted — _the ladder lives in packages/shared/src/agent-events.ts (packages/ui and apps/mobile derive the same roles), re-exported from agent-prompt-fold.ts; union access helpers `contextItemKey`/`contextItemCompaction`/`modelOutputRequestOffset` beside it; trigger/waiting-clear/compaction logic reads the derived role_
+- [x] Gate: caller-scoped append schemas; actor stamped from authenticated caller; section variant absent from router shapes; specs per caller class — _agent-context-gate.ts under StreamRpcTarget.append/appendIfStreamId + AgentRpcTarget.append; caller classes from ItxAuth plus a `contextGateScopePath` threaded only from the userspace itx mints (env.ITX, capability-host scripts, delivery expression roots); agent-context-gate.test.ts, one spec per class_
+- [x] Producers: routers (slack/telegram/email/github) stop writing `role`; MCP session policy + birth defaults + both template workers author the section variant; three assistant-record sites gain `{type: "model"}`; corrective-feedback sites gain `{type: "platform"}` — _plus with-voice, voice-agent, the github-ai-linter starter app, slash-command generated code, rpc message/ask/addFiles, and the web routes; body-shape idempotency-key bumps everywhere a payload changed under a stable key_
+- [x] UI readers of `payload.role` (pretty-state, feed, activity rounds, inspectors) switch to `deriveRole` — _agent-ui-reducer (with an interrupt-policy skip replacing the old developer-role feed hiding), mobile chat, pretty-state, llm-request-replay's output slice, agent-codemode/turn-loop/llm-request/presence, chat-reply-notify, explainer badge, voicelab chronology; activity-rounds already keyed on the script actor_
+- [x] Protocol prompt: role paragraph rewritten to teach trust-by-provenance; AI Gateway response-cache key version bump — _AGENT_CONTEXT_PROTOCOL_PROMPT teaches stamped-actor provenance; cache key v4 → v5; the masker needed no new rules (worker names are stable config slugs, not per-run entropy)_
+- [x] Specs: slice-1 byte-superset + first-appearance pass with only event-synthesis edits; build on the prompt-scenarios fixture suite — _byte-superset and first-appearance passed with ZERO changes; regenerating all seven scenarios moved only the protocol-prompt abridgement line; scenario 6-provenance added, rendering every tier in one request_
 - [ ] Decision record: dated revision note on D8 (done in this branch's first commit); slice 2 checked off on merge
 
 ## Implementation log
@@ -185,4 +192,29 @@ prompt line only, plus any legacy-keyed role drift); add scenario
 
 ### Work log
 
-- (running notes appended below as implementation proceeds)
+- 2026-08-25: implemented in three commits (plan → contract/fold/producers/
+  gate → readers/tests/scenarios/regen). Notes beyond the plan:
+  - **Keyed items never trigger, confirmed live**: converting
+    `config/onboarding-start` (and with-voice's twin) to an unkeyed
+    worker-actor message preserved onboarding's first turn; the template
+    tests pin the shape.
+  - **Feed/mobile interrupt hiding moved to policy**: the web interrupt
+    notice used role=developer to stay out of the chat; both readers now
+    skip `llmRequestPolicy: interrupt-current-request` items instead —
+    old interrupt events (role developer + user actor) stay hidden too.
+  - **Birth batch appends with platform authority**: AgentRpcTarget.create
+    appends the creation batch through a trusted-internal stream target —
+    the gate rightly refuses platform actors from external sessions, and
+    the batch is platform policy, not caller input. The MCP session policy
+    already ran on a trusted-internal itx (no gate marker → trusted).
+  - **github-ai-linter task item became a message**: it carries `refs`,
+    which the section shape does not; worker actor keeps its developer
+    render. Its keyed POLICY items became sections (now derive system
+    where v7 rendered developer — single-purpose linter agents, accepted).
+  - **project-app-session parses to a user tier** by principal prefix; an
+    unknown external credential fails DOWN to user with no richer identity.
+  - Docs: apps/os/docs/agents.md role paragraphs rewritten to the derived
+    model; snippet fixes in domain-objects and debugging-streams docs.
+  - Deferred deliberately: context-rewritten stays ungated (slice-3
+    territory: "whoever may replace may compact"); no identity linking of
+    channel actors to OS principals (D8: future work); preview e2e run.
