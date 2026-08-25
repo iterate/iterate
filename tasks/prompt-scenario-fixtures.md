@@ -170,3 +170,29 @@ provide flag).
 - Verified: unit + scenario + page tests green in assert mode and after a
   full `-u` cycle; apps/os typecheck, repo lint, knip clean; page exercised
   in a live browser (cards, pane, badges, sched lines, deep links).
+- Review follow-up (Misha): the pane now shows the request-so-far AS OF the
+  clicked event again — the generator computes a fold render per chain event
+  and embeds it in the page JSON (fixture files unchanged: they keep only
+  the per-request fences). At a requested offset the embedded snapshot IS
+  the pinned fence, byte for byte (asserted in prompt-scenarios.test.ts; the
+  client-side reconstruction was hash-verified against the committed fence
+  in a live browser). Line-diff highlighting restored via
+  `import("https://esm.sh/diff@8.0.4")` in the shell (page degrades to
+  no-highlights if the import fails): each snapshot diffs against the
+  PREVIOUS EVENT's — added lines green (`--add`), remove+add pairs yellow
+  (`--chg`), bare removals a red strip (`--del`, new) on the first surviving
+  line. Identical renders show the old "ⓘ no change to the rendered
+  request" note (old wording for configure events; a turn-loop-machinery
+  variant for settlements/script events, which the old page didn't have).
+  Verified: birth @5/@9/@22/@25/@26, 3a @70/@80/@84 (one yellow in-place
+  swap vs 3b @80's five green appended lines — the contrast), legacy @80,
+  unsay @90 (red strip) and @95 (churn).
+- Embedding stays ~237KB (the old page was ~103KB): per-event renders are
+  suffix-encoded against the previous event's comment-free render (the
+  superset property makes suffixes small) with woven `#` comments carried as
+  [index, text] inserts, replayed exactly by the client.
+- ✂-vs-diff baselines differ by design: the harness-woven ✂ line marks
+  divergence from the previous REQUEST (what the provider cache actually
+  compares at a send), while the click-time highlights diff against the
+  previous EVENT. At 3a's @84 the ✂ therefore sits up at the rewritten rule
+  while the green lines mark only the stamp — both true, each labeled.

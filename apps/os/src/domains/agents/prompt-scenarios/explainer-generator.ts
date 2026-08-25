@@ -2,11 +2,13 @@
 // static shell (explainer-shell.html — header, opinion box, vocabulary
 // tables, appendices, and the thin renderer script) plus one embedded JSON
 // payload derived here. Everything interactive on the page is a lookup over
-// this payload: the pinned request bodies come from the same computation the
-// fixture output fences assert, and the per-event scheduling notes come from
-// the real fold's reduced state (pending trigger + debounce config).
-// prompt-scenarios.test.ts owns freshness: `-u` writes the page, plain runs
-// assert the committed page matches.
+// this payload: every event card carries the request-so-far AS OF that event
+// (computed by the real fold; at a requested offset it is byte-identical to
+// the fixture's pinned request fence, woven comments included), and the
+// per-event scheduling notes come from the real fold's reduced state
+// (pending trigger + debounce config). prompt-scenarios.test.ts owns
+// freshness: `-u` writes the page, plain runs assert the committed page
+// matches.
 import fs from "node:fs";
 import path from "node:path";
 import { reduceAgentEvents } from "../agent-prompt-fold.ts";
@@ -14,6 +16,7 @@ import {
   computeScenarioOutputs,
   formatElapsed,
   parseElapsed,
+  renderChainSnapshotLines,
   SCENARIO_TIME_ZERO,
   scenarioDir,
   synthesizeEvents,
@@ -32,23 +35,17 @@ const DATA_PLACEHOLDER = "__SCENARIO_DATA_JSON__";
 
 export function generateExplainerHtml(scenarios: LoadedScenario[]): string {
   const byId = new Map(scenarios.map((scenario) => [scenario.id, scenario]));
-  const requests: Record<string, string> = {};
-  for (const scenario of scenarios) {
-    for (const output of computeScenarioOutputs(scenario)) {
-      requests[`${scenario.id}@${output.offset}`] = output.content.trimEnd();
-    }
-  }
   const data = {
     scenarios: scenarios.map((scenario) => renderScenarioData(scenario, byId)),
-    requests,
   };
   const shell = fs.readFileSync(shellPath, "utf8");
   if (!shell.includes(DATA_PLACEHOLDER)) {
     throw new Error(`explainer-shell.html is missing the ${DATA_PLACEHOLDER} placeholder`);
   }
-  // "</" escaped as the JSON-legal "<\/" so no content string can terminate
-  // the embedding <script> element early.
-  const json = JSON.stringify(data, null, 2).replaceAll("</", "<\\/");
+  // Compact JSON — the fixtures are the human-readable source, the blob is
+  // page payload. "</" escaped as the JSON-legal "<\/" so no content string
+  // can terminate the embedding <script> element early.
+  const json = JSON.stringify(data).replaceAll("</", "<\\/");
   return shell.replace(DATA_PLACEHOLDER, json);
 }
 
@@ -58,16 +55,82 @@ export function generateExplainerHtml(scenarios: LoadedScenario[]): string {
 function chainRequests(
   scenario: LoadedScenario,
   byId: Map<string, LoadedScenario>,
-): { offset: number; tMs: number; key: string }[] {
+): { offset: number; tMs: number; owner: LoadedScenario; model: string }[] {
   const own = scenario.entries
     .filter((entry) => entry.type === "agent/llm-request-requested")
     .map((entry) => ({
       offset: entry.off,
       tMs: parseElapsed(entry.t),
-      key: `${scenario.id}@${entry.off}`,
+      owner: scenario,
+      model: (entry.payload as any).model as string,
     }));
   if (scenario.base === null) return own;
   return [...chainRequests(byId.get(scenario.base)!, byId), ...own];
+}
+
+/**
+ * The display text of the request-so-far at every chain entry, aligned with
+ * `scenario.chainEntries`. At a requested offset this is the fixture's pinned
+ * fence content — the same computation the fixture test asserts, ✂ line and
+ * annotations included. Elsewhere it is the plain fold render as of that
+ * event; an event whose render is identical to the previous event's gains the
+ * "ⓘ no change to the rendered request" note lines.
+ */
+export function computeChainSnapshots(
+  scenario: LoadedScenario,
+  byId: Map<string, LoadedScenario>,
+): { off: number; content: string }[] {
+  const requests = chainRequests(scenario, byId);
+  if (requests.length === 0) {
+    throw new Error(
+      `${scenario.fileName}: a scenario needs at least one llm-request-requested event`,
+    );
+  }
+  const pinnedByOffset = new Map<number, string>();
+  for (const request of requests) {
+    const outputs = computeScenarioOutputs(request.owner);
+    const output = outputs.find((candidate) => candidate.offset === request.offset)!;
+    pinnedByOffset.set(request.offset, output.content.trimEnd());
+  }
+  let previousPlain: string | null = null;
+  return scenario.chainEntries.map((entry) => {
+    const maxOff = synthesizeEvents(entry).at(-1)!.offset;
+    const pinned = pinnedByOffset.get(entry.off);
+    // The model line mirrors what a request fired here would carry: the
+    // nearest requested event at-or-after this offset, else the latest one.
+    const model = (requests.find((request) => request.offset >= maxOff) || requests.at(-1)!).model;
+    const rendered =
+      pinned === undefined ? renderChainSnapshotLines(scenario, maxOff, model).join("\n") : pinned;
+    const plain = stripCommentLines(rendered);
+    const content =
+      previousPlain !== null && plain === previousPlain
+        ? noChangeNote(entry, scenario) + rendered
+        : rendered;
+    previousPlain = plain;
+    return { off: entry.off, content };
+  });
+}
+
+function stripCommentLines(text: string): string {
+  return text
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("# "))
+    .join("\n");
+}
+
+function noChangeNote(entry: ScenarioEntry, scenario: LoadedScenario): string {
+  const index = scenario.chainEntries.indexOf(entry);
+  const previousOff = scenario.chainEntries[index - 1]!.off;
+  if (entry.type === "agent/configured" || entry.type === "agent/created") {
+    return (
+      `# ⓘ no change to the rendered request — @${entry.off} configures the agent\n` +
+      `#   (debounce / parsing flag), it adds nothing the model sees. Identical to @${previousOff}.\n`
+    );
+  }
+  return (
+    `# ⓘ no change to the rendered request — @${entry.off} is turn-loop machinery\n` +
+    `#   (never model-visible), it adds nothing the model sees. Identical to @${previousOff}.\n`
+  );
 }
 
 type EventCard = {
@@ -81,7 +144,12 @@ type EventCard = {
   yaml: string;
   sched: string;
   paneTitle: string;
-  showRequest: string | null;
+  /** The request-so-far as of this event. The comment-free render is
+   * suffix-encoded against the previous card's (`p` chars shared, then `s` —
+   * the fold's superset property keeps most suffixes small); `c` carries the
+   * woven `#` comment lines as [displayIndex, text] inserts, so the
+   * client-side reconstruction is byte-identical to the server render. */
+  snap: { p: number; s: string; c?: [number, string][] };
 };
 
 function renderScenarioData(scenario: LoadedScenario, byId: Map<string, LoadedScenario>) {
@@ -89,13 +157,32 @@ function renderScenarioData(scenario: LoadedScenario, byId: Map<string, LoadedSc
   const baseCount = scenario.chainEntries.length - scenario.entries.length;
   const base = scenario.base === null ? null : byId.get(scenario.base)!;
   const requests = chainRequests(scenario, byId);
+  const snapshots = computeChainSnapshots(scenario, byId);
+  let previousPlain = "";
   const events: EventCard[] = scenario.chainEntries.map((entry, index) => {
-    const expanded = synthesizeEvents(entry);
-    const maxOff = expanded.at(-1)!.offset;
-    const covering = requests.find((request) => request.offset >= maxOff);
-    const prior = requests.filter((request) => request.offset <= maxOff).at(-1);
-    const showRequest = covering || prior || null;
+    const maxOff = synthesizeEvents(entry).at(-1)!.offset;
     const state = reduceAgentEvents(scenario.chainEvents.filter((event) => event.offset <= maxOff));
+    const comments: [number, string][] = [];
+    const plainLines: string[] = [];
+    snapshots[index]!.content.split("\n").forEach((line, lineIndex) => {
+      if (line.trim().startsWith("# ")) comments.push([lineIndex, line]);
+      else plainLines.push(line);
+    });
+    const plain = plainLines.join("\n");
+    let shared = 0;
+    while (
+      shared < plain.length &&
+      shared < previousPlain.length &&
+      plain[shared] === previousPlain[shared]
+    ) {
+      shared++;
+    }
+    const snap = {
+      p: shared,
+      s: plain.slice(shared),
+      ...(comments.length > 0 && { c: comments }),
+    };
+    previousPlain = plain;
     return {
       off: entry.off,
       t: entry.t,
@@ -106,8 +193,10 @@ function renderScenarioData(scenario: LoadedScenario, byId: Map<string, LoadedSc
       note: entry.note || null,
       yaml: cardYaml(entry),
       sched: schedLine({ state, requests }),
-      paneTitle: paneTitle({ entry, shortTitle, covering, prior }),
-      showRequest: showRequest === null ? null : showRequest.key,
+      paneTitle:
+        `Provider request as of <span class="off">@${entry.off}</span> ` +
+        `<span style="font-weight:400;color:var(--muted)">(${shortTitle} · t=${entry.t})</span>`,
+      snap,
     };
   });
   return {
@@ -120,28 +209,6 @@ function renderScenarioData(scenario: LoadedScenario, byId: Map<string, LoadedSc
         : `…the ${base.chainEntries.length} events of ${base.title.split(" — ")[0]!.toLowerCase()}, replayed in full (shared start — click to expand)`,
     events,
   };
-}
-
-function paneTitle(input: {
-  entry: ScenarioEntry;
-  shortTitle: string;
-  covering: { offset: number; key: string } | undefined;
-  prior: { offset: number; key: string } | undefined;
-}): string {
-  const { entry, shortTitle, covering, prior } = input;
-  const meta = (text: string) =>
-    ` <span style="font-weight:400;color:var(--muted)">(${text})</span>`;
-  const off = (value: number) => `<span class="off">@${value}</span>`;
-  if (covering !== undefined && covering.offset === entry.off) {
-    return `Provider request ${off(entry.off)}${meta(`${shortTitle} · t=${entry.t}`)}`;
-  }
-  if (covering !== undefined) {
-    return `Provider request ${off(covering.offset)}${meta(`covers @${entry.off} · ${shortTitle} · t=${entry.t}`)}`;
-  }
-  if (prior !== undefined) {
-    return `Provider request ${off(prior.offset)}${meta(`latest sent — @${entry.off} not yet covered · ${shortTitle} · t=${entry.t}`)}`;
-  }
-  return `No request yet${meta(`${shortTitle} · t=${entry.t}`)}`;
 }
 
 function schedLine(input: {

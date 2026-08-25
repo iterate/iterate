@@ -6,7 +6,11 @@
 
 import fs from "node:fs";
 import { expect, inject, test } from "vitest";
-import { explainerPath, generateExplainerHtml } from "./explainer-generator.ts";
+import {
+  computeChainSnapshots,
+  explainerPath,
+  generateExplainerHtml,
+} from "./explainer-generator.ts";
 import { computeScenarioOutputs, loadScenarios, regenerateFixtureText } from "./fixture-helpers.ts";
 
 const scenarios = loadScenarios();
@@ -24,6 +28,20 @@ for (const scenario of scenarios) {
     expect(original, UPDATE_HINT).toBe(expected);
   });
 }
+
+test("the page's per-event snapshot at a requested offset IS the pinned request fence, byte for byte", () => {
+  const byId = new Map(scenarios.map((scenario) => [scenario.id, scenario]));
+  for (const scenario of scenarios) {
+    const snapshots = new Map(
+      computeChainSnapshots(scenario, byId).map((snapshot) => [snapshot.off, snapshot.content]),
+    );
+    for (const output of computeScenarioOutputs(scenario)) {
+      expect(snapshots.get(output.offset), `${scenario.fileName} request@${output.offset}`).toBe(
+        output.content.trimEnd(),
+      );
+    }
+  }
+});
 
 test("explainers/prompt-sections.html is generated from these fixtures", () => {
   const expected = generateExplainerHtml(scenarios);

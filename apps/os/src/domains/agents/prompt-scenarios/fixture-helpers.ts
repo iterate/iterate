@@ -294,7 +294,27 @@ function renderRequestPlainLines(scenario: LoadedScenario, requestOffset: number
     );
   }
   const { messages } = buildAgentLlmRequestBody({ events, llmRequestOffset: requestOffset });
-  const lines: string[] = [`model: ${(requested.payload as any).model}`, "messages:"];
+  return renderMessageLines((requested.payload as any).model, messages);
+}
+
+/** The request-so-far at ANY chain offset — the projection a request fired at
+ * that instant would carry (at an actual requested offset this IS the pinned
+ * request). The explainer's per-event snapshots come from here. */
+export function renderChainSnapshotLines(
+  scenario: LoadedScenario,
+  uptoOffset: number,
+  model: string,
+): string[] {
+  const events = scenario.chainEvents.filter((event) => event.offset <= uptoOffset);
+  const { messages } = buildAgentLlmRequestBody({ events, llmRequestOffset: uptoOffset });
+  return renderMessageLines(model, messages);
+}
+
+function renderMessageLines(
+  model: string,
+  messages: ReturnType<typeof buildAgentLlmRequestBody>["messages"],
+): string[] {
+  const lines: string[] = [`model: ${model}`, "messages:"];
   for (const message of messages) {
     lines.push(`  - role: ${message.role}`);
     if (message.content.includes("\n")) {

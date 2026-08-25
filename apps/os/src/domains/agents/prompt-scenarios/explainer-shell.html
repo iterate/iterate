@@ -22,6 +22,7 @@
         --sel: #fef3c7;
         --add: #dcfce7;
         --chg: #fef9c3;
+        --del: #ef4444;
       }
       @media (prefers-color-scheme: dark) {
         :root {
@@ -33,6 +34,7 @@
           --sel: #3b2f14;
           --add: #14331f;
           --chg: #33301a;
+          --del: #b91c1c;
         }
         body {
           background: #111;
@@ -242,6 +244,12 @@
       .line-changed {
         background: var(--chg);
       }
+      /* lines vanished from the previous request right above this line — a
+         removal has no line of its own in the new text, so it renders as a
+         strip on the first surviving line */
+      .line-removal {
+        box-shadow: inset 0 2px 0 var(--del);
+      }
       .line-cache {
         color: var(--accent) !important;
       }
@@ -351,17 +359,18 @@
       <h1>The life of a prompt</h1>
       <p>
         Click any event card: it expands to the full event (YAML), the right pane shows the
-        <strong>provider request covering that offset</strong> — every request body on this page
-        was rendered by the REAL fold (<code>buildAgentLlmRequestBody</code>) and pinned as a test
-        fixture in <code>apps/os/src/domains/agents/prompt-scenarios/</code> — and the URL updates
-        so you can link to any state. The standing document renders as
+        <strong>actual provider request as of that offset</strong> — every render on this page
+        comes from the REAL fold (<code>buildAgentLlmRequestBody</code>), pinned by the test
+        fixtures in <code>apps/os/src/domains/agents/prompt-scenarios/</code> — and the URL
+        updates so you can link to any state. The standing document renders as
         <strong>ONE system message</strong>: the tagged document in first-appearance order (append
         order is the layout; hot content lands last simply because the worker's reaction arrives
-        after the birth batch). <code>#</code> lines carry the fixtures' commentary; the ✂ line
-        marks where the provider's cached token prefix ends (with permanent send stamps, that is
-        everything except the newest suffix), and the lines below it are the request's new suffix.
-        Assistant turns are REAL raw outputs — they exhibit the rules that were in force when they
-        were generated, which is what makes the replace-vs-append question visible.
+        after the birth batch). Line highlights mark the diff vs the previous event;
+        <code>#</code> lines carry the fixtures' commentary; the ✂ line marks where the provider's
+        cached token prefix ends at each send (with permanent send stamps, that is everything
+        except the newest suffix). Assistant turns are REAL raw outputs — they exhibit the rules
+        that were in force when they were generated, which is what makes the replace-vs-append
+        question visible.
       </p>
     </header>
     <div class="opinion">
@@ -459,13 +468,36 @@
       </aside>
     </div>
     <script id="scenario-data" type="application/json">__SCENARIO_DATA_JSON__</script>
-    <script>
+    <script type="module">
       // Thin renderer over precomputed data. Every request body on this page
       // was rendered by the real fold (buildAgentLlmRequestBody) and pinned as
       // a test fixture; this script only looks the pinned renders up. The page
       // itself is generated from those fixtures — regenerate with:
       //   cd apps/os && pnpm vitest run prompt-scenarios -u
+      //
+      // Every event card carries the request-so-far AS OF that event
+      // (suffix-encoded in the JSON — the fold's superset property keeps the
+      // suffixes small; reconstructed below). The one runtime computation:
+      // each snapshot is line-diffed against the PREVIOUS event's snapshot,
+      // so added lines show green exactly on what that event contributed,
+      // changed regions yellow, and removals a red strip — the superset
+      // invariant renders as a pure green tail, and the rewrite scenarios
+      // (3a, 4, 5) show their churn mid-document. The page stays useful
+      // without the diff library: highlights just don't render.
+      const diffModule = await import("https://esm.sh/diff@8.0.4").catch(() => null);
       const DATA = JSON.parse(document.getElementById("scenario-data").textContent);
+      for (const sc of DATA.scenarios) {
+        let prevPlain = "";
+        for (const card of sc.events) {
+          const plain = prevPlain.slice(0, card.snap.p) + card.snap.s;
+          prevPlain = plain;
+          const lines = plain.split("\n");
+          // Comment inserts carry their final display index — ascending
+          // order makes each splice land exactly where the server wove it.
+          for (const [i, text] of card.snap.c || []) lines.splice(i, 0, text);
+          card.snapshot = lines.join("\n");
+        }
+      }
       const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
       let selectedEl = null,
         requestCm = null;
@@ -473,20 +505,65 @@
       function classifyLines(text) {
         const lines = text.split("\n");
         let cut = -1;
+        const info = [];
         const notes = [];
         lines.forEach((line, i) => {
           const trimmed = line.trim();
           if (trimmed.startsWith("# ✂")) cut = i;
+          else if (trimmed.startsWith("# ⓘ") || trimmed.startsWith("#   ")) info.push(i);
           else if (trimmed.startsWith("# ")) notes.push(i);
         });
-        return { lines, cut, notes };
+        return { lines, cut, info, notes };
+      }
+      // Comment lines are woven in per request, so the diff runs on the plain
+      // YAML lines; `map` carries each plain line back to its display index.
+      function splitPlain(text) {
+        const map = [];
+        const plain = [];
+        text.split("\n").forEach((line, i) => {
+          if (line.trim().startsWith("# ")) return;
+          map.push(i);
+          plain.push(line);
+        });
+        return { text: plain.join("\n") + "\n", map };
+      }
+      /** Display-line background classes for the current request, diffed
+       * against the previous request in the chain: added lines green,
+       * remove+add pairs yellow (changed), a bare removal a red strip on the
+       * first surviving line. */
+      function diffBackgrounds(prevText, currText) {
+        const curr = splitPlain(currText);
+        const prev = splitPlain(prevText);
+        const classes = new Map();
+        let line = 0;
+        let pendingRemoval = false;
+        for (const part of diffModule.diffLines(prev.text, curr.text)) {
+          if (part.removed) {
+            pendingRemoval = true;
+            continue;
+          }
+          if (part.added) {
+            const cls = pendingRemoval ? "line-changed" : "line-added";
+            for (let i = 0; i < part.count; i++) classes.set(curr.map[line + i], cls);
+            line += part.count;
+            pendingRemoval = false;
+            continue;
+          }
+          if (pendingRemoval && line < curr.map.length) {
+            classes.set(curr.map[line], "line-removal");
+            pendingRemoval = false;
+          }
+          line += part.count;
+        }
+        if (pendingRemoval && curr.map.length > 0) {
+          classes.set(curr.map[curr.map.length - 1], "line-removal");
+        }
+        return classes;
       }
       function show(scenario, card) {
         document.getElementById("rtitle").innerHTML = card.paneTitle;
         document.getElementById("sched").innerHTML = card.sched;
-        const text = card.showRequest
-          ? DATA.requests[card.showRequest]
-          : "# no request pinned for this scenario yet";
+        const text = card.snapshot;
         if (!requestCm)
           requestCm = CodeMirror(cmhost, {
             value: text,
@@ -496,25 +573,29 @@
             viewportMargin: Infinity,
           });
         else requestCm.setValue(text);
-        const { lines, cut, notes } = classifyLines(text);
+        const { lines, cut, info, notes } = classifyLines(text);
+        const index = scenario.events.indexOf(card);
+        const previous = index > 0 ? scenario.events[index - 1].snapshot : null;
+        const backgrounds =
+          diffModule !== null && previous !== null ? diffBackgrounds(previous, text) : new Map();
         requestCm.operation(() => {
           for (let i = 0; i < requestCm.lineCount(); i++) {
             requestCm.removeLineClass(i, "background");
             requestCm.removeLineClass(i, "text");
           }
           for (const i of notes) requestCm.addLineClass(i, "text", "line-note");
-          if (cut >= 0) {
-            requestCm.addLineClass(cut, "text", "line-cache");
-            for (let i = cut + 1; i < lines.length; i++)
-              requestCm.addLineClass(i, "background", "line-added");
-          }
+          for (const i of info) requestCm.addLineClass(i, "text", "line-cache");
+          if (cut >= 0) requestCm.addLineClass(cut, "text", "line-cache");
+          for (const [i, cls] of backgrounds) requestCm.addLineClass(i, "background", cls);
         });
-        // Scroll to this event's own rendered line where one exists; a
-        // request event scrolls to its ✂ line (the start of its new suffix).
+        // Scroll to what this event changed: the first diffed line, else this
+        // event's own rendered line, else the ✂ line, else the top.
         const offPattern = new RegExp("(^|[^\\d@])@" + card.off + "(?!\\d)");
-        let target = lines.findIndex(
-          (line) => !line.trim().startsWith("# ") && offPattern.test(line),
-        );
+        let target = backgrounds.size > 0 ? Math.min(...backgrounds.keys()) : -1;
+        if (target < 0)
+          target = lines.findIndex(
+            (line) => !line.trim().startsWith("# ") && offPattern.test(line),
+          );
         if (target < 0) target = cut;
         if (target >= 0) requestCm.scrollIntoView({ line: Math.max(0, target - 3), ch: 0 }, 120);
         else requestCm.scrollTo(null, 0);
