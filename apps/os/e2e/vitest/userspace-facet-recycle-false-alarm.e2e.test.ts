@@ -42,6 +42,11 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
  * seeing a new boot id the pin has to go back and re-probe for evidence that
  * the commit is what replaced the facet. That is a separate change; this test
  * only holds the bug still.
+ *
+ * Needs a real deployment, like the pin: against local dev the facet never
+ * builds at all and the first ping times out, which `test.fails` absorbs into
+ * a vacuous pass. The `console.log` below is the receipt — if it is not in
+ * the run output, the run proved nothing.
  */
 test.fails(
   "the source-version pin tells a facet that recycled from one the commit rebuilt",
