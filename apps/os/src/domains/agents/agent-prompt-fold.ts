@@ -421,6 +421,10 @@ type AgentContextItems = AgentProcessorState["contextItems"];
  * - otherwise → append at the tail with `supersedes` pointing at the prior
  *   occurrence (absent on a first occurrence): the prefix stays byte-stable,
  *   and everything above the update visibly predates it.
+ * So `supersedes` is present exactly when the occurrence replaces a copy the
+ * model has already seen — the fold writes it, preserves it through
+ * coalesces, and strips it at compaction; it is read as render metadata for
+ * the model, not by the update rule itself.
  * Keys are arbitrary strings the kernel never interprets — no key triggers
  * clearing, ordering, or gating of any other key, and placement is append
  * order alone (a multi-section write is a batch of keyed events; the batch
