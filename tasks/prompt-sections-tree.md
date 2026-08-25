@@ -3,7 +3,7 @@ status: ready
 size: large
 ---
 
-# Prompt sections: from keyed context slots to a two-lane section tree
+# Prompt sections: from keyed context slots to a section tree
 
 Settled via a use-case-driven plannotator interview (11 rounds, approved
 2026-08-24). Each decision below was banked against a concrete use case, most
@@ -35,7 +35,7 @@ of them incidents or clumsiness from the agent-birth work (#2508).
 >   "Requested at:" developer line — the one machinery event with a rendered
 >   face — making each request's prompt a strict byte-superset of the
 >   previous one (maximal cache reuse under every regime).
-> - The standing lane renders as **ONE system message**: the tagged document
+> - The standing collection renders as **ONE system message**: the tagged document
 >   (`<section key="...">` blocks) — byte-identical to the authored prompt
 >   file on an unforked project. Temporal occurrences render at their offset
 >   as `<section key supersedes="@N">` messages.
@@ -105,7 +105,7 @@ of them incidents or clumsiness from the agent-birth work (#2508).
     append-as-latest); pre-migration requests labeled "reconstructed under
     the current fold", not byte-exact.
 11. **(Revised) Shape: the section tree, scoped.** Exactly two top-level
-    lanes — the standing document (protocol message first, then sections in
+    collections — the standing document (protocol message first, then sections in
     FIRST-APPEARANCE order; keys are arbitrary strings the kernel never
     interprets, and placement is guidance — append order — not mechanism)
     and turns (offset-ordered). Depth capped at 1 until a use case forces
@@ -116,7 +116,8 @@ of them incidents or clumsiness from the agent-birth work (#2508).
     turn; with `key` (or `segments: [{key, content}]` for many at once)
     keyed standing content under the adaptive placement rule. The rare
     `agents/context-rewritten` (`{op: replace|delete, key, content?}`, plain
-    fields, no selector grammar; `key: "*"` = everything, both lanes) is
+    fields, no selector grammar; `key: "*"` = everything, standing document
+    and timeline both) is
     deliberate history rewriting. The send stamp is not an event at all:
     `agent/llm-request-requested` projects into the timeline as the
     permanent "Requested at:" line — no separate timestamp event, no

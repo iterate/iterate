@@ -1,4 +1,4 @@
-// The two-lane fold (design: tasks/prompt-sections-tree.md, spec-by-demo:
+// The section-tree fold (design: tasks/prompt-sections-tree.md, spec-by-demo:
 // docs/prompt-sections-demo.html), driven through the public request builder:
 // raw committed events in, the exact wire messages out. Everything here is a
 // pure re-reduction — the same fold the processor, the request inspector, and
@@ -162,7 +162,7 @@ test("context-rewritten replace swaps what past positions contain — the delibe
   expect(after.messages.some((message) => message.content.includes("all-lowercase"))).toBe(false);
 });
 
-test("context-rewritten delete removes one section; delete * removes everything, both lanes", () => {
+test("context-rewritten delete removes one section; delete * removes everything — standing document and timeline", () => {
   const base = [
     contextAdded(1, {
       role: "system",

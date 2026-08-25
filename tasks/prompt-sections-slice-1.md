@@ -19,10 +19,10 @@ decision record — read it first; its decisions are not re-litigated here).
 ## Scope
 
 IN:
-- Fold state becomes the two-lane section tree: standing prefix (canonically
+- Fold state becomes the section tree: standing prefix (canonically
   ordered children: protocol, config sections in a stable order, hot sections
   last) and turns (offset-ordered). Depth 1: sections are flat children of
-  their lane.
+  their collection.
 - `agents/context-added` learns optional `segments: [{sectionId, content}]`;
   a tagged-file parser at append time (authoring syntax → segments) so
   templates can author one file with `<section id>` tags; plain messages stay
@@ -35,7 +35,7 @@ IN:
   covered-append → append-as-latest). One fold, no legacy reducer;
   pre-migration requests render under the new fold (inspector labels them
   "reconstructed under the current fold").
-- Renderer: tree → messages, standing lane first in canonical order, turns by
+- Renderer: tree → messages, standing document first in canonical order, turns by
   offset; per-request timestamp stays the render-time tail.
 - Sectionize `prompts/agent-system-prompt.md` (id'd sections: identity,
   capabilities tour, output-formatting, summary-instruction, …).
@@ -53,7 +53,7 @@ OUT (later slices / explicitly deferred):
 - Provenance & derived roles (slice 2) — `role` stays stored on segments.
 - Range selectors (`turn:before(N)`) and the compaction rebuild (slice 3) —
   today's compaction event keeps working, re-expressed minimally against the
-  turns lane with unchanged semantics.
+  timeline with unchanged semantics.
 - Placement ops (insert-before/after): deferred unless trivial; canonical
   ordering covers hot-last without them.
 
@@ -64,7 +64,7 @@ interactive-demo review (docs/prompt-sections-demo.html — see the dated
 revision note in the decision record): re-adding a key IS the update
 (adaptive placement: un-sent coalesces, sent lands temporally with
 supersedes), `agents/context-rewritten` for rare deliberate rewrites, the
-standing lane rendered as ONE tagged system document, permanent "Requested
+standing document rendered as ONE tagged system document, permanent "Requested
 at:" send stamps replacing the render-time tail (every request a strict
 byte-superset of the last), and script settlements rendered with measured
 durations. Remaining: preview e2e verification (e2e suites updated but only
@@ -74,7 +74,7 @@ runnable against a deployed env).
 
 - [x] Spec commit (this file + the decision record) — _commit ce164d3d6_
 - [x] Contract: segments on context-added; the rewrite event; state schema =
-      the two lanes; version bump — _agent-processor-contract.ts: 7.0.0;
+      the two collections; version bump — _agent-processor-contract.ts: 7.0.0;
       `standingSections` (flat entries) + `turns` (timeline union) replace
       `contextItems`; `agents/context-rewritten` (context-updated died in the
       demo review); section-key constants live here too_
@@ -102,7 +102,7 @@ runnable against a deployed env).
       runnable → `hasSystemPromptStandingSection`; replay exposes
       `reconstructed` (requested events now stamp `contractVersion`;
       inspector + round-meta YAML label older-fold replays); pretty-state
-      renders the two lanes; budget test measures parsed model-visible chars_
+      renders the two collections; budget test measures parsed model-visible chars_
 - [x] Sectionized default prompt; codemode-tag one-section override —
       _configs/default/prompts/agent-system-prompt.md wears `<section key>`
       tags (keys pinned against the contract list by agent-defaults.test.ts);
@@ -135,10 +135,10 @@ runnable against a deployed env).
   Judgment calls, in decision order:
   - **State shape**: two top-level fields (`standingSections`, `turns`)
     rather than one nested tree object — flatter for consumers, and the two
-    lanes ARE the whole tree at depth 1. Occurrences store the full context
+    collections ARE the whole tree at depth 1. Occurrences store the full context
     payload (with `key` set to the sectionId) so the renderer and
-    pretty-state read one shape for both lanes.
-  - **Readiness gate**: the spec's "standing lane has a
+    pretty-state read one shape for both collections.
+  - **Readiness gate**: the spec's "standing document has a
     `#agent/system-prompt` section" is honored as: umbrella section OR any
     sectionized-prompt-file section (`SYSTEM_PROMPT_STANDING_SECTION_IDS`).
     Segment births produce `identity` etc., never the umbrella, so the
@@ -156,7 +156,7 @@ runnable against a deployed env).
   - **Canonical order for unknown sections**: alphabetical (deterministic,
     arrival-independent). Template-specific ids (house-style, onboarding-*)
     are deliberately NOT hardcoded platform-side.
-  - **Unkeyed system-role items** stay in the turns lane (no sectionId to
+  - **Unkeyed system-role items** stay in the timeline (no sectionId to
     address them by); compaction keeps them, moved ahead of the summary —
     old semantics preserved.
   - **"Reconstructed" detection**: `llm-request-requested` now stamps
@@ -206,8 +206,9 @@ authoritative artifact, committed with this pass). What changed here:
   authoring tags (same tags the renderer emits — unforked files round-trip
   byte-identically).
 - New rare `agents/context-rewritten` (`{op: replace|delete, key,
-  content?}`, no selector grammar; `key: "*"` deletes everything, both
-  lanes). replace rewrites the standing document in place and drops the
+  content?}`, no selector grammar; `key: "*"` deletes everything — standing
+  document and timeline both). replace rewrites the standing document in
+  place and drops the
   key's temporal occurrences.
 - State: `standingSections` became flat single-occurrence entries
   `{key, offset, payload}`; `turns` became the TIMELINE — a union of plain
@@ -255,7 +256,7 @@ Judgment calls in this pass:
   collapses to latest"); post-barrier stamps survive at their positions,
   pre-barrier stamps are summarized away with the turns they timed.
 - The umbrella supersession (writes to `agent/system-prompt` clear the
-  prompt-file sections, per event, both lanes) and the canonical order
+  prompt-file sections, per event, both collections) and the canonical order
   (file sections, umbrella, boot-context, others alphabetical, hot last)
   carried over unchanged from the first pass, as instructed.
 - Idempotency-key bumps for changed bodies: platform prompt append
@@ -305,7 +306,7 @@ interpreters would happily extract and run the surviving half-script.
 - **Umbrella supersession made symmetric** (bugbot HIGH): a segments append
   that writes prompt-FILE sections and no umbrella is itself a whole-prompt
   statement (segments only ever come from parsing one authored file), so it
-  now removes a standing legacy umbrella from both lanes — an old converted
+  now removes a standing legacy umbrella from both collections — an old converted
   agent re-created under the new platform renders exactly one prompt.
   Direction decision, deliberately: HARD-DROP even when the umbrella was
   already sent, mirroring the forward direction (demo scenario 4 hard-drops
@@ -366,3 +367,9 @@ with them every place the kernel interpreted a key:
   rewritten to the arbitrary-keys story (appendices untouched), decision
   record revised (Decision 11 + a dated note: the kernel must not know key
   meanings).
+
+- 2026-08-25: terminology sweep per [terminology/no-metaphorical-lane-door-seam]:
+  every PR-introduced "lane" reworded ("standing document" / "the timeline" /
+  plain structural terms); the one lane-bearing identifier
+  (`AgentContextLanes` + its `lanes` locals) renamed to `AgentContextTree` /
+  `tree`; pre-existing "lane" comments left alone.

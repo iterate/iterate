@@ -80,7 +80,7 @@ function reduceAgentEventCore(input: {
       };
     case "events.iterate.com/agents/context-added": {
       const payload = event.payload;
-      // COMPACTION — the one structural rewrite of the turns lane. Fail
+      // COMPACTION — the one structural rewrite of the timeline. Fail
       // closed on a raw malformed append: a summary can replace only
       // history that existed before the summary itself (the payload schema
       // cannot compare a field with the containing event's envelope offset).
@@ -132,17 +132,17 @@ function reduceAgentEventCore(input: {
       ) {
         return state;
       }
-      const lanes = projectContextAdded({
+      const tree = projectContextAdded({
         standingSections: state.standingSections,
         turns: state.turns,
         lastLlmRequestOffset: state.lastLlmRequestOffset,
         item: { offset: event.offset, payload },
       });
       const trigger = contextTriggerSource(payload);
-      if (trigger === null) return { ...state, ...lanes };
+      if (trigger === null) return { ...state, ...tree };
       return {
         ...state,
-        ...lanes,
+        ...tree,
         // Every trigger moves the pending slot — newest wins; the debounce
         // window and the intent idempotency key anchor to these coordinates.
         pendingLlmRequestTrigger: {
@@ -409,10 +409,10 @@ export function contextClearsWaitingFor(payload: AgentContextAddedPayload): bool
   return payload.actor !== undefined && payload.actor.type !== "script";
 }
 
-type AgentContextLanes = Pick<AgentProcessorState, "standingSections" | "turns">;
+type AgentContextTree = Pick<AgentProcessorState, "standingSections" | "turns">;
 
 /**
- * Reduce one context item into the two lanes. A `key` (or `segments`, many
+ * Reduce one context item into the two tree. A `key` (or `segments`, many
  * keys in one append) carries the ADAPTIVE PLACEMENT rule — re-adding a key
  * IS the update (docs/prompt-sections-demo.html):
  * - the key's latest occurrence has not been sent in any request → edit it in
@@ -429,7 +429,7 @@ export function projectContextAdded(args: {
   turns: AgentProcessorState["turns"];
   lastLlmRequestOffset: number;
   item: { offset: number; payload: AgentContextAddedPayload };
-}): AgentContextLanes {
+}): AgentContextTree {
   const { item } = args;
   const payload = item.payload;
   if (payload.segments !== undefined) {
@@ -438,13 +438,13 @@ export function projectContextAdded(args: {
     // triggers clearing, ordering, or gating of any other key. Segments
     // apply in their event (file) order, so a parsed prompt file's sections
     // first-appear — and therefore render — in the authored layout.
-    let lanes: AgentContextLanes = {
+    let tree: AgentContextTree = {
       standingSections: args.standingSections,
       turns: args.turns,
     };
     for (const segment of segments) {
-      lanes = addKeyedOccurrence({
-        lanes,
+      tree = addKeyedOccurrence({
+        tree,
         lastLlmRequestOffset: args.lastLlmRequestOffset,
         key: segment.key,
         item: {
@@ -453,11 +453,11 @@ export function projectContextAdded(args: {
         },
       });
     }
-    return lanes;
+    return tree;
   }
   if (payload.key !== undefined) {
     return addKeyedOccurrence({
-      lanes: { standingSections: args.standingSections, turns: args.turns },
+      tree: { standingSections: args.standingSections, turns: args.turns },
       lastLlmRequestOffset: args.lastLlmRequestOffset,
       key: payload.key,
       item,
@@ -469,28 +469,28 @@ export function projectContextAdded(args: {
 /** The adaptive placement rule for one keyed occurrence — see
  * projectContextAdded's contract comment. */
 function addKeyedOccurrence(args: {
-  lanes: AgentContextLanes;
+  tree: AgentContextTree;
   lastLlmRequestOffset: number;
   key: string;
   item: { offset: number; payload: AgentContextAddedPayload };
-}): AgentContextLanes {
-  const { lanes, key, item } = args;
-  const latest = latestKeyedOccurrence(lanes, key);
+}): AgentContextTree {
+  const { tree, key, item } = args;
+  const latest = latestKeyedOccurrence(tree, key);
   if (latest !== null && latest.offset > args.lastLlmRequestOffset) {
     // Not yet sent → coalesce: same position (standing entry or temporal
     // item), new content and source offset. A coalesced temporal item keeps
     // its supersedes anchor — it still replaces the same sent occurrence.
     if (latest.place === "standing") {
       return {
-        standingSections: lanes.standingSections.map((section) =>
+        standingSections: tree.standingSections.map((section) =>
           section.key === key ? { key, offset: item.offset, payload: item.payload } : section,
         ),
-        turns: lanes.turns,
+        turns: tree.turns,
       };
     }
     return {
-      standingSections: lanes.standingSections,
-      turns: lanes.turns.map((candidate, index) =>
+      standingSections: tree.standingSections,
+      turns: tree.turns.map((candidate, index) =>
         index === latest.index
           ? { offset: item.offset, section: latest.section, payload: item.payload }
           : candidate,
@@ -500,7 +500,7 @@ function addKeyedOccurrence(args: {
   if (latest === null) {
     // First-ever occurrence: joins the standing document when no
     // conversation exists yet, else lands at its moment in time.
-    if (lanes.turns.length === 0) {
+    if (tree.turns.length === 0) {
       // First-appearance order: the new section joins at the END of the
       // document. Authors control placement through append order — in every
       // real flow the worker's hot content (AGENTS.md) arrives after the
@@ -508,15 +508,15 @@ function addKeyedOccurrence(args: {
       // can be added if a use case ever genuinely needs one.
       return {
         standingSections: [
-          ...lanes.standingSections,
+          ...tree.standingSections,
           { key, offset: item.offset, payload: item.payload },
         ],
-        turns: lanes.turns,
+        turns: tree.turns,
       };
     }
     return {
-      standingSections: lanes.standingSections,
-      turns: [...lanes.turns, { offset: item.offset, section: { key }, payload: item.payload }],
+      standingSections: tree.standingSections,
+      turns: [...tree.turns, { offset: item.offset, section: { key }, payload: item.payload }],
     };
   }
   // Sent → temporal append: the new occurrence lands at the tail, at its
@@ -524,9 +524,9 @@ function addKeyedOccurrence(args: {
   // until compaction collapses the section to latest — the price of a
   // coherent timeline and an intact cache.
   return {
-    standingSections: lanes.standingSections,
+    standingSections: tree.standingSections,
     turns: [
-      ...lanes.turns,
+      ...tree.turns,
       { offset: item.offset, section: { key, supersedes: latest.offset }, payload: item.payload },
     ],
   };
@@ -536,7 +536,7 @@ function addKeyedOccurrence(args: {
  * for the key when any exist (they always postdate the standing entry), else
  * the standing document's entry. */
 function latestKeyedOccurrence(
-  lanes: AgentContextLanes,
+  tree: AgentContextTree,
   key: string,
 ):
   | { place: "standing"; offset: number; payload: AgentContextAddedPayload }
@@ -548,8 +548,8 @@ function latestKeyedOccurrence(
       section: Extract<AgentTimelineItem, { section: unknown }>["section"];
     }
   | null {
-  for (let index = lanes.turns.length - 1; index >= 0; index -= 1) {
-    const item = lanes.turns[index]!;
+  for (let index = tree.turns.length - 1; index >= 0; index -= 1) {
+    const item = tree.turns[index]!;
     if ("section" in item && item.section.key === key) {
       return {
         place: "temporal",
@@ -560,7 +560,7 @@ function latestKeyedOccurrence(
       };
     }
   }
-  const standing = lanes.standingSections.find((section) => section.key === key);
+  const standing = tree.standingSections.find((section) => section.key === key);
   if (standing === undefined) return null;
   return { place: "standing", offset: standing.offset, payload: standing.payload };
 }
@@ -568,12 +568,12 @@ function latestKeyedOccurrence(
 /** Apply one agents/context-rewritten op — deliberate history rewriting.
  * replace swaps what the section's PAST render positions contain (the
  * standing document changes; temporal occurrences of the key vanish);
- * delete removes the section; `key: "*"` deletes everything, both lanes —
+ * delete removes the section; `key: "*"` deletes everything, both tree —
  * no guardrails, the op's audit trail is the safeguard. */
 function applyContextRewritten(args: {
   state: AgentProcessorState;
   event: Extract<AgentConsumedEvent, { type: "events.iterate.com/agents/context-rewritten" }>;
-}): AgentContextLanes {
+}): AgentContextTree {
   const { state, event } = args;
   const payload = event.payload;
   if (payload.op === "delete" && payload.key === "*") {
@@ -609,12 +609,12 @@ function applyContextRewritten(args: {
   };
 }
 
-/** Remove one section from both lanes: its standing entry and every temporal
+/** Remove one section from both tree: its standing entry and every temporal
  * occurrence. */
-function removeSection(lanes: AgentContextLanes, key: string): AgentContextLanes {
+function removeSection(tree: AgentContextTree, key: string): AgentContextTree {
   return {
-    standingSections: lanes.standingSections.filter((section) => section.key !== key),
-    turns: lanes.turns.filter((item) => !("section" in item && item.section.key === key)),
+    standingSections: tree.standingSections.filter((section) => section.key !== key),
+    turns: tree.turns.filter((item) => !("section" in item && item.section.key === key)),
   };
 }
 
@@ -624,18 +624,16 @@ function removeSection(lanes: AgentContextLanes, key: string): AgentContextLanes
  * keys that only ever appeared temporally join at the end, in the order
  * they first appeared on the timeline — the superseded copies were riding
  * the timeline only until now). */
-function collapseSectionsToLatest(
-  lanes: AgentContextLanes,
-): AgentProcessorState["standingSections"] {
+function collapseSectionsToLatest(tree: AgentContextTree): AgentProcessorState["standingSections"] {
   // Set insertion order IS first-appearance order: standing entries first
   // (in their existing order), then temporal-only keys as encountered.
-  const keys = new Set<string>(lanes.standingSections.map((section) => section.key));
-  for (const item of lanes.turns) {
+  const keys = new Set<string>(tree.standingSections.map((section) => section.key));
+  for (const item of tree.turns) {
     if ("section" in item) keys.add(item.section.key);
   }
   const collapsed: AgentProcessorState["standingSections"] = [];
   for (const key of keys) {
-    const latest = latestKeyedOccurrence(lanes, key);
+    const latest = latestKeyedOccurrence(tree, key);
     if (latest !== null) collapsed.push({ key, offset: latest.offset, payload: latest.payload });
   }
   return collapsed;

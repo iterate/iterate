@@ -205,7 +205,7 @@ export const AgentProcessorContract = defineProcessorContract({
           "order (in every real flow the worker's hot content, e.g. AGENTS.md, arrives after " +
           "the birth batch and so lands last). A keyed add whose latest occurrence no request " +
           "has sent yet edits its entry in place (the birth window — free); once sent, " +
-          "updates land in the turns lane instead, and compaction folds each section's " +
+          "updates land in the timeline instead, and compaction folds each section's " +
           "newest occurrence back in here at its first-appearance position.",
       }),
     turns: z
@@ -261,7 +261,7 @@ export const AgentProcessorContract = defineProcessorContract({
         description:
           "The TIMELINE: conversation turns (every unkeyed context item), temporal section " +
           "occurrences, and the permanent per-request send stamps, in arrival order. " +
-          "Compaction restructures the lane: unkeyed system facts move to the front, the " +
+          "Compaction restructures the timeline: unkeyed system facts move to the front, the " +
           "summary follows, then everything after the barrier; each section's newest " +
           "temporal occurrence collapses back into the standing document.",
       }),
@@ -443,7 +443,8 @@ export const AgentProcessorContract = defineProcessorContract({
         "history contradicting the instruction (the scenario-3a anti-pattern in " +
         "docs/prompt-sections-demo.html). For redaction (the author supplies the replacement " +
         "text) and un-saying; the everyday update is re-adding the key on " +
-        'agents/context-added. `key: "*"` with delete removes EVERYTHING, both lanes ' +
+        'agents/context-added. `key: "*"` with delete removes EVERYTHING — standing ' +
+        "document and timeline both — " +
         "(guidance: don't, unless you want a lobotomised agent; the event's audit trail is " +
         "the safeguard). Never triggers a turn by itself.",
       payloadSchema: z
@@ -786,7 +787,7 @@ export type AgentProcessorState = ProcessorState<AgentProcessorContract>;
  * committed `agents/context-added` event. */
 export type AgentContextAddedPayload = AgentProcessorState["standingSections"][number]["payload"];
 
-/** One item of the timeline lane: a turn, a temporal section occurrence, or a
+/** One item of the timeline: a turn, a temporal section occurrence, or a
  * permanent send stamp. */
 export type AgentTimelineItem = AgentProcessorState["turns"][number];
 
@@ -811,7 +812,7 @@ export type AgentLiveState = z.infer<typeof AgentLiveState>;
 
 /**
  * The context-item payload — used repeatedly in the contract (the
- * `agents/context-added` event and both context lanes of the state), so it
+ * `agents/context-added` event and both context collections of the state), so it
  * lives in this hoisted function instead of inline. One flat object for every role; the
  * role-specific fields are optional and documented per-field. `refs` and the
  * actor union are how the slack/telegram/email/github integrations attach
@@ -1044,7 +1045,7 @@ function agentContextItemSchema() {
           ctx.addIssue({
             code: "custom",
             path: ["compaction"],
-            message: "compaction is a turns-lane rewrite and cannot carry segments",
+            message: "compaction is a timeline rewrite and cannot carry segments",
           });
         }
       }

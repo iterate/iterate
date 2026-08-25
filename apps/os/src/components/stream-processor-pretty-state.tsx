@@ -380,7 +380,7 @@ function asAgentState(state: unknown): Record<string, unknown> | null {
   if (state == null || typeof state !== "object") return null;
   const record = state as Record<string, unknown>;
   // Agent state is recognized by its provider-neutral context projection
-  // (the two-lane tree: `standingSections` + `turns`) plus its config.
+  // (the section tree: `standingSections` + `turns`) plus its config.
   if (!("turns" in record) || !("standingSections" in record) || !("config" in record)) {
     return null;
   }

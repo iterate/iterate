@@ -345,13 +345,13 @@
       <p>
         Click any event card: it expands to the full event (YAML), the right pane shows the
         <strong>actual provider request as of that offset</strong> (computed live by a miniature of
-        the real fold), and the URL updates so you can link to any state. The standing lane renders
-        as <strong>ONE system message</strong>: the tagged document in first-appearance order
-        (append order is the layout; hot content lands last simply because the worker's reaction
-        arrives after the birth batch). Line highlights mark the diff vs the previous event; the ✂
-        line marks where the provider's cached token prefix ends (with permanent send stamps, that
-        is everything except the newest suffix). Assistant turns are REAL raw outputs — they exhibit
-        the rules that were in force when they were generated, which is what makes the
+        the real fold), and the URL updates so you can link to any state. The standing document
+        renders as <strong>ONE system message</strong>: the tagged document in first-appearance
+        order (append order is the layout; hot content lands last simply because the worker's
+        reaction arrives after the birth batch). Line highlights mark the diff vs the previous
+        event; the ✂ line marks where the provider's cached token prefix ends (with permanent send
+        stamps, that is everything except the newest suffix). Assistant turns are REAL raw outputs —
+        they exhibit the rules that were in force when they were generated, which is what makes the
         replace-vs-append question visible.
       </p>
     </header>
@@ -417,10 +417,10 @@
           <td>
             <strong>Deliberate history rewriting — rare, audited, named to discourage.</strong>
             <code>{op: "replace"|"delete", key, content?}</code> (plain fields, no selector grammar;
-            <code>key: "*"</code> = everything, both lanes). Changes what PAST render positions
-            contain: busts the cache from the standing document down and, applied to behavioral
-            rules with contradicting visible history, produces the scenario-3a anti-pattern. For
-            redaction (author supplies replacement text) and un-saying.
+            <code>key: "*"</code> = everything, standing document and timeline both). Changes what
+            PAST render positions contain: busts the cache from the standing document down and,
+            applied to behavioral rules with contradicting visible history, produces the scenario-3a
+            anti-pattern. For redaction (author supplies replacement text) and un-saying.
           </td>
         </tr>
         <tr>
@@ -563,7 +563,7 @@
         push("    content: " + y(req.protocol.content), "protocol");
         if (req.doc.length > 0) {
           push(
-            "  - role: system        # the standing lane — " +
+            "  - role: system        # the standing document — " +
               req.doc.length +
               " sections, one document",
             "doc-head:" + req.doc.length,
@@ -963,7 +963,7 @@
                 role: "assistant",
                 content: "(…nine more request/response exchanges about the project, elided…)",
               },
-              "conversation accumulates in the turns lane",
+              "conversation accumulates in the timeline",
             ),
             ev(
               61,
@@ -1224,7 +1224,7 @@
           id: "unsay",
           title: "Scenario 5 — un-saying",
           intro:
-            "delete removes a standing section from all future renders. delete * removes EVERYTHING — both lanes, prompt included. Deliberate: guidance, not guardrails; every op is an attributable event and that audit trail is the safeguard. (Redacting inside a TURN needs turn addressing — slice 3.)",
+            "delete removes a standing section from all future renders. delete * removes EVERYTHING — standing document and timeline, prompt included. Deliberate: guidance, not guardrails; every op is an attributable event and that audit trail is the safeguard. (Redacting inside a TURN needs turn addressing — slice 3.)",
           base: "birth",
           events: [
             ev(

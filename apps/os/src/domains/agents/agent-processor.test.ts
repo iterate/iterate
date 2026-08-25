@@ -2467,7 +2467,7 @@ describe("AgentProcessor compaction", () => {
 
     // The compaction item folded: coverage sealed through the barrier,
     // pre-barrier turns dropped, the system prompt untouched in the standing
-    // lane, the summary at the front of the turns lane.
+    // document, the summary at the front of the timeline.
     const compacted = conversationTurns(h.state()).find(
       (item) => item.payload.compaction !== undefined,
     );
@@ -2600,7 +2600,7 @@ describe("AgentProcessor compaction", () => {
     await h.settle();
 
     const items = conversationTurns(h.state());
-    // The system prompt stands apart in the standing lane; the turns lane
+    // The system prompt stands apart in the standing document; the timeline
     // starts at the summary, with the mid-compaction survivor behind it.
     expect(
       h.state().standingSections.some((section) => section.key === "agent/system-prompt"),

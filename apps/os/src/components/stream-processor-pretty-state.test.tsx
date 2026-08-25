@@ -57,7 +57,7 @@ test("renders the v5 agent fold as pretty stats, not the raw-JSON fallback", () 
   expect(html).toContain("Open request");
   expect(html).toContain("agent-output:7"); // in-progress script
   expect(html).toContain("what is the weather?"); // last turn preview
-  expect(html).toContain("Standing document"); // the standing lane
+  expect(html).toContain("Standing document"); // the standing document card
 });
 
 test("a paused agent shows the paused state", () => {
@@ -74,7 +74,7 @@ test("a paused agent shows the paused state", () => {
   expect(html).toContain("autonomous turn limit reached");
 });
 
-test("falls back to raw JSON for a non-agent state (no context lanes)", () => {
+test("falls back to raw JSON for a non-agent state (no context collections)", () => {
   const html = renderToStaticMarkup(<AgentPrettyState state={{ some: "other-processor" }} />);
   expect(html).not.toContain("Open request");
 });

@@ -540,7 +540,7 @@ test("Project egress substitutes path-addressed secrets for explicit and project
           (section) => section.key === "agent/boot-context",
         ),
       {
-        description: "agent boot context to fold into the standing lane",
+        description: "agent boot context to fold into the standing document",
         timeoutMs: 30_000,
       },
     );
