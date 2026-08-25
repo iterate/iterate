@@ -585,52 +585,30 @@ export function buildAgentLlmRequestBody(input: {
     input.events.filter((event) => event.offset <= input.llmRequestOffset),
   );
   const items = state.contextItems;
-  const document = standingDocumentItems(items);
+  // The standing document is DERIVED here: the collection's leading run of
+  // section items (ending at the first message, send stamp, or superseding
+  // occurrence — membership is position, not a stored partition), merged
+  // into ONE system message of tagged blocks. The tag syntax is the SAME the
+  // authoring parser reads, so an unforked prompt file round-trips
+  // byte-identically.
+  const standingSections: string[] = [];
+  for (const item of items) {
+    if (item.kind !== "section" || item.supersedes !== undefined) break;
+    standingSections.push(
+      `<section key=${JSON.stringify(item.key)}>\n${item.payload.content}\n</section>`,
+    );
+  }
   return {
     messages: [
       { role: "system", content: AGENT_CONTEXT_PROTOCOL_PROMPT },
-      // The standing document is DERIVED here: the collection's leading run
-      // of section items, merged into ONE system message of tagged blocks.
-      // On an unforked project this is byte-identical to the authored
-      // prompt file.
-      ...(document.length === 0
+      ...(standingSections.length === 0
         ? []
-        : [{ role: "system" as const, content: renderStandingDocument(document) }]),
+        : [{ role: "system" as const, content: standingSections.join("\n\n") }]),
       // Everything after the leading run renders at its position: messages,
       // later section occurrences, and send stamps.
-      ...items.slice(document.length).map(renderContextItem),
+      ...items.slice(standingSections.length).map(renderContextItem),
     ],
   };
-}
-
-/** The derived standing document: the collection's leading run of section
- * items, ending at the first message, send stamp, or superseding occurrence.
- * Membership is position, not a stored partition — a section item lands in
- * the document exactly when nothing conversational precedes it. */
-function standingDocumentItems(
-  items: AgentProcessorState["contextItems"],
-): Extract<AgentContextItem, { kind: "section" }>[] {
-  const document: Extract<AgentContextItem, { kind: "section" }>[] = [];
-  for (const item of items) {
-    if (item.kind !== "section" || item.supersedes !== undefined) break;
-    document.push(item);
-  }
-  return document;
-}
-
-/** The standing document's text — its sections as visible
- * `<section key="...">` blocks, one blank line apart. The SAME syntax the
- * authoring parser reads, so an unforked prompt file round-trips
- * byte-identically. */
-function renderStandingDocument(
-  document: Extract<AgentContextItem, { kind: "section" }>[],
-): string {
-  return document
-    .map(
-      (section) =>
-        `<section key=${JSON.stringify(section.key)}>\n${section.payload.content}\n</section>`,
-    )
-    .join("\n\n");
 }
 
 function renderContextItem(item: AgentContextItem): AgentChatMessage {
