@@ -221,3 +221,14 @@ door under the readiness probe's own internalStreamId key (un-claimable,
 and the two sources now dedupe into one outcome per commit), and the health
 sheet's description grew a third branch so child-stream-only trouble no
 longer blames the root stream.
+
+Round 2 (61de39ee5): cursor's high-severity follow-up was right — sharing
+the probe's one-outcome-per-commit key would have silenced a later
+platform-side failure of an already-successful commit, the exact incident
+shape. The loader journal now keys by (commitOid, buildKey): the buildKey
+folds in the deployment's package substitution, so platform skew journals a
+new failure fact while retries of the same broken build dedupe. Plus lint
+follow-ups: typed construction instead of as-const in the worker reduce,
+an explained disposer cast, and metaphor-free comment wording. One CI
+Previews round failed on a transient Cloudflare API error deploying the
+auth app (code 10013, unrelated to this PR) — retried.
