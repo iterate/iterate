@@ -111,4 +111,45 @@ retrofitting intent onto repos beyond the `empty`→default mapping.
 
 ## Implementation log
 
-(append as you go)
+2026-08-25 — recon pass over the named code. Two findings that shape the build:
+
+- `project/worker-update-failed {commitOid, error}` ALREADY exists
+  (project-processor-contract.ts, added in #2299) and is appended on `/` when
+  the commit-triggered readiness probe hits a terminal build failure. The
+  interview's "no failure counterpart" was stale. **Deviation: reuse
+  `project/worker-update-failed` instead of introducing a duplicate
+  `project/worker-build-failed`.** The genuinely missing pieces: (a) a
+  terminal build failure with NO new commit (the incident: platform-side SDK
+  skew) appends nothing — fix by appending the same event from the worker
+  build resolution when the failing source is the config repo head;
+  (b) nothing reduces the outcome into project state; (c) nothing renders it.
+- The build coordinator DO is keyed by content-hash buildKey shared across
+  projects (identical seeded repos share one build), so appending from
+  `#rememberTerminalFailure` itself is unworkable — the append happens where
+  a build failure is observed WITH project context (worker-loader's
+  resolveThroughBuild, which pins repo source to a commitOid before building).
+
+Planned slices:
+
+1. Template sync core: `downloadPublicGithubTemplate` returns
+   `{commitOid, files}`; generalize the package.json repointing out of
+   `projectRepoSeedFiles`; new `template-sync.ts` (reference resolution from
+   createRequest incl. empty→default + pinned-SHA strip, pure three-way
+   plan); `repo/template-synced` event + `lastTemplateSync` state slot
+   (contract 0.8.0→0.9.0); `RepoDurableObject.syncFromTemplate` under the
+   write serializer; `RepoRpcTarget.syncFromTemplate()`.
+2. Repo IDE Template row + toast.
+3. Worker-update-failed append from worker-loader on config-repo build
+   failure; `worker` outcome slot reduced into project state; health warning
+   renders red + cross-link; supersession via the slot holding the latest
+   outcome.
+4. `last_error_at` column (new sqlfu migration) written beside `last_error`,
+   surfaced through cursor row, listSubscriptions (+ attempt/nextAttemptAt),
+   describeSubscription, and runtime state.
+5. Project-level `subscriptionHealth()` on ProjectRpcTarget: fan-out over
+   `/` + well-known platform streams + agent streams ranked by the streams
+   index `lastActivityAt` (cap 20 — the index IS the activity signal), tier
+   classification (halted/lagging/informational) in a pure module.
+6. Dashboard sheet: badges + informational rows + 60s react-query polling
+   (visibility-gated by react-query's default refetchIntervalInBackground).
+7. Docs breadcrumb + itx-api regeneration.
