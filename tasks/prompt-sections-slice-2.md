@@ -17,9 +17,12 @@ v8 payload union + `deriveRole` in packages/shared, the producer sweep
 (platform, routers, templates, starter apps), the append gate in
 rpc-targets with per-caller-class specs, every `payload.role` reader
 derived, the protocol-prompt rewrite + cache-key bump, and scenario
-6-provenance. Remaining: preview e2e verification, and review of the
-judgment calls marked **JC** in the plan below (especially worker-tier
-channel-actor claims).
+6-provenance. Preview e2e verified: every check green on head 63bd37236
+(the deploy+e2e run passed outright after several rounds of preview-run
+fixes logged below; the one retried job was the pre-existing
+userspace-facet false alarm). Remaining: review of the judgment calls
+marked **JC** in the plan below (especially worker-tier channel-actor
+claims).
 
 ## The shape
 
