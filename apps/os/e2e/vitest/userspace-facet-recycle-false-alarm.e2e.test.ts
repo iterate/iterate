@@ -132,12 +132,22 @@ test.fails(
           await new Promise((resolve) => setTimeout(resolve, 2_000));
         }
       }
-      await waitForCondition(async () => (await answers()).some((answer) => answer.id === id), {
+      try {
+        await waitForCondition(async () => (await answers()).some((answer) => answer.id === id), {
+          description: `the userspace facet to answer ping "${id}"`,
+          timeoutMs,
+        });
+      } catch (error) {
         // A build failure surfaces as a `subscription-delivery-halted` event on
-        // the stream — read it if this ever times out.
-        description: `the userspace facet to answer ping "${id}"`,
-        timeoutMs,
-      });
+        // the stream. `test.fails` would swallow that silently, so make the
+        // stream give its own account of the run before rethrowing.
+        const events = await stream.getEvents({});
+        log(
+          "stream events at timeout",
+          events.slice(-25).map((event) => ({ type: event.type, payload: event.payload })),
+        );
+        throw error;
+      }
       const answer = (await answers()).find((entry) => entry.id === id);
       if (answer === undefined) throw new Error(`no answer for ping "${id}"`);
       log(`answered ${label}`, answer);
