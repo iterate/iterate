@@ -1,14 +1,14 @@
 ---
-status: in-review
+status: done
 size: medium
 ---
 
 # Prompt scenario fixtures
 
-**Status summary**: implemented, PR in review. All seven scenarios live as
+**Status summary**: done — PR #2515 approved path: all checklist items shipped, review follow-ups (per-event snapshots + diffs, abridged renders) and bugbot findings addressed. All seven scenarios live as
 markdown fixtures whose request outputs come from the real fold; the explainer
 page is generated from them (mini-fold deleted, appendices byte-identical);
-`-u` regenerates everything, plain runs assert freshness. Remaining: review.
+`-u` regenerates everything, plain runs assert freshness.
 
 The interactive explainer (`explainers/prompt-sections.html`) carries its own
 hand-written mini-fold and hand-written "rendered request" outputs. That was
