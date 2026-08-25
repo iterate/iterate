@@ -192,6 +192,14 @@ Project-scoped and platform-wide operator browser sessions are documented in
 - `wrangler.jsonc` — the deployment config, generated from the root
   `envs.ts` by `scripts/generate-wrangler-config.ts` (one worker, all DO
   classes; see docs/worker-topology.md). Deploys: `pnpm run deploy --env <name>`.
+- Worker/config health surfaces: `repo.syncFromTemplate()` re-syncs a config
+  repo against its creation template (`src/domains/repos/template-sync.ts`;
+  the repo IDE's Template panel is the button), terminal config-repo build
+  failures land durably as `project/worker-update-failed` (appended by the
+  readiness probe AND by `worker-loader.ts` for no-commit failures) and
+  render red in the sidebar's worker-health warning, and
+  `itx.subscriptionHealth()` rolls up per-stream subscription delivery
+  health (`src/domains/projects/subscription-health.ts`).
 
 ## History
 

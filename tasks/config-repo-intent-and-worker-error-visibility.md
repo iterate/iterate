@@ -5,9 +5,11 @@ size: medium
 
 # Config repo intent + worker error visibility
 
-**Status summary**: spec complete (grill-you interview, 4 rounds — transcript
-at [config-repo-intent-and-worker-error-visibility.interview.md](./config-repo-intent-and-worker-error-visibility.interview.md));
-implementation not started.
+**Status summary**: implemented — both gaps landed with specs (template sync
+core + IDE button; durable build-failure rendering + `subscriptionHealth()`
+rollup + polled dashboard sheet + `lastErrorAt`). Remaining: CI verification
+and review follow-ups. Spec transcript:
+[config-repo-intent-and-worker-error-visibility.interview.md](./config-repo-intent-and-worker-error-visibility.interview.md).
 
 Two platform gaps from the 2026-08-25 misha-project incident: a config repo
 pinned a July SDK whose skew broke agent births twice over (missing `this.itx`
@@ -96,18 +98,43 @@ retrofitting intent onto repos beyond the `empty`→default mapping.
 
 ## Checklist
 
-- [ ] `repo.syncFromTemplate()`: template resolution (github-public-template
+- [x] `repo.syncFromTemplate()`: template resolution (github-public-template
       + empty→default), three-way file plan, skip-and-report, normal commit,
       `repo/template-synced` event, package.json substitution re-applied
-- [ ] integration specs: clean sync, user-edited-keep, both-changed-skip,
+      _(template-sync.ts owns reference resolution + plan + orchestration;
+      RepoDurableObject.syncFromTemplate runs it under the write serializer;
+      RepoRpcTarget resolves intent from processor state; substitution
+      generalized as `repointPackageJsonDependencies` in project-repo-seed.ts)_
+- [x] integration specs: clean sync, user-edited-keep, both-changed-skip,
       repeated sync no-op (`upToDate`), first-sync-on-old-history
-- [ ] repo IDE "Template" row + button + result toast
-- [ ] `project/worker-build-failed` appended on terminal build failure;
+      _(template-sync.test.ts drives runTemplateSync through an in-memory
+      repo/template fake — all five scenarios plus deletes and the
+      pinned-seed substitution case)_
+- [x] repo IDE "Template" row + button + result toast
+      _(repo-template-panel.tsx, mounted above the GitHub panel in the gh
+      sidebar view; toast lists updated/skipped paths and notes skipped =
+      files you edited)_
+- [x] `project/worker-build-failed` appended on terminal build failure;
       ProjectWorkerHealthWarning renders + supersession + cross-link; spec
-- [ ] subscription-health itx method (fan-out, tiers, lastErrorAt) + spec
-- [ ] dashboard sheet: red/amber badges, informational lastError rows,
+      _(deviation: reuses the EXISTING `project/worker-update-failed`
+      (#2299) instead of a duplicate event; worker-loader.ts appends it for
+      no-commit failures — the coordinator DO is buildKey-shared across
+      projects so the append lives where project context exists; reduced
+      `worker` slot + selectWorkerBuildFailure render/supersede; specs in
+      project-processor.test.ts + project-worker-health.test.ts)_
+- [x] subscription-health itx method (fan-out, tiers, lastErrorAt) + spec
+      _(`itx.subscriptionHealth()` on ProjectRpcTarget; pure selection +
+      tier logic in domains/projects/subscription-health.ts with tests;
+      `last_error_at` column via new sqlfu migration, stamped in nack and
+      cleared with last_error, spec in stream-storage.test.ts)_
+- [x] dashboard sheet: red/amber badges, informational lastError rows,
       react-query polling gated on visibility
-- [ ] docs breadcrumb (apps/os/AGENTS.md or docs/) for both surfaces
+      _(project-worker-health.tsx polls every 60s — react-query pauses the
+      interval in hidden tabs; historical errors are quiet lines with an
+      age label, never a badge)_
+- [x] docs breadcrumb (apps/os/AGENTS.md or docs/) for both surfaces
+      _(apps/os/README.md "Important Files" — one entry naming all three
+      surfaces and their modules)_
 
 ## Implementation log
 
@@ -153,3 +180,24 @@ Planned slices:
 6. Dashboard sheet: badges + informational rows + 60s react-query polling
    (visibility-gated by react-query's default refetchIntervalInBackground).
 7. Docs breadcrumb + itx-api regeneration.
+
+2026-08-25 (later) — all slices landed. Decisions made while implementing:
+
+- Template-synced base advance: `repo/template-synced` records the latest
+  template revision after EVERY run that read a newer one, commit or not and
+  skips or not — so a both-changed skip is reported once per template change
+  (at the moment of the sync whose toast explains it), not on every click.
+  The task's "skipped-and-reported forever" reads as "never auto-updated
+  again"; re-reporting stale skips on every click is exactly the alarm
+  fatigue Q4 warned about.
+- `downloadPublicGithubTemplate` now returns `{commitOid, files}` (the sync
+  needs the revision identity; creation ignores it).
+- The worker-loader append awaits inline on the (rare) failure path rather
+  than using waitUntil — the loader is a plain function without an
+  ExecutionContext, and a dangling promise could be cancelled at request end.
+- "Recently-active agents" uses the project DO's streams index
+  `lastActivityAt` (a real activity signal — better than the interview's
+  guess that none exists cheaply), capped at 20.
+- Known cosmetic flaw: the slice-3 commit message contains a shell-quoting
+  artifact ("appendú", a swallowed word) — left as-is (no history rewrites);
+  the squash-merge commit message comes from the PR body anyway.
