@@ -36,5 +36,11 @@ export default defineConfig({
     pool: "forks",
     hookTimeout: 60_000,
     testTimeout: 45_000,
+    provide: {
+      // Fixture tests (src/domains/agents/prompt-scenarios/) read this via
+      // `inject("updateSnapshots")`: `vitest run <suite> -u` rewrites fixture
+      // output fences and generated artifacts in place instead of asserting.
+      updateSnapshots: process.argv.includes("--update") || process.argv.includes("-u"),
+    },
   },
 });

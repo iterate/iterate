@@ -349,7 +349,7 @@ function reduceAgentEventCore(input: {
  * malformed event is a fact of the log, not an exception). Reducer bugs, by
  * contrast, throw — swallowing them would silently reduce to wrong state.
  */
-function reduceAgentEvents(events: readonly StreamEvent[]): AgentProcessorState {
+export function reduceAgentEvents(events: readonly StreamEvent[]): AgentProcessorState {
   let state = AgentProcessorContract.stateSchema.parse({});
   for (const event of events) {
     const definition = getConsumedEventDefinition({
