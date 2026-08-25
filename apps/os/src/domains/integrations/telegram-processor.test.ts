@@ -158,21 +158,17 @@ describe("TelegramProcessor (webhook router)", () => {
       allRouted.find(
         (event) =>
           event.type === "events.iterate.com/agents/context-added" &&
-          (event.payload as { segments?: unknown }).segments !== undefined,
+          (event.payload as { key?: string }).key === "agent/system-prompt",
       ),
     ).toMatchObject({
       payload: {
         // The untagged telegram prompt parses to one "agent/system-prompt" section.
-        segments: [
-          {
-            key: "agent/system-prompt",
-            content: telegramAgentSystemPrompt({
-              agentPath: CHAT_PATH,
-              chatId: String(CHAT_ID),
-              connection: CONNECTION,
-            }),
-          },
-        ],
+        key: "agent/system-prompt",
+        content: telegramAgentSystemPrompt({
+          agentPath: CHAT_PATH,
+          chatId: String(CHAT_ID),
+          connection: CONNECTION,
+        }),
         role: "system",
       },
     });

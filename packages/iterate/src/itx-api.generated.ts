@@ -2609,7 +2609,6 @@ export type AgentProcessorState = {
           role: "assistant" | "developer" | "system" | "user";
           content: string;
           key?: string | undefined;
-          segments?: { key: string; content: string }[] | undefined;
           files?:
             | { contentType: string; filename: string; path: string; size: number; url: string }[]
             | undefined;
@@ -2664,7 +2663,6 @@ export type AgentProcessorState = {
           role: "assistant" | "developer" | "system" | "user";
           content: string;
           key?: string | undefined;
-          segments?: { key: string; content: string }[] | undefined;
           files?:
             | { contentType: string; filename: string; path: string; size: number; url: string }[]
             | undefined;
@@ -2856,7 +2854,6 @@ export type AgentEventInput =
         role: "assistant" | "developer" | "system" | "user";
         content: string;
         key?: string | undefined;
-        segments?: { key: string; content: string }[] | undefined;
         files?:
           | { contentType: string; filename: string; path: string; size: number; url: string }[]
           | undefined;
@@ -4483,7 +4480,6 @@ export type AgentContextAddedPayload = {
   role: "assistant" | "developer" | "system" | "user";
   content: string;
   key?: string | undefined;
-  segments?: { key: string; content: string }[] | undefined;
   files?:
     | { contentType: string; filename: string; path: string; size: number; url: string }[]
     | undefined;

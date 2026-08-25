@@ -321,13 +321,13 @@ test("the birth reaction shapes each newborn and lowers the debounce as its last
   };
 
   // A web agent: AGENTS.md (the everyday keyed add on the hot section), then
-  // ONE atomic batch — the repo's prompt parsed into keyed segments
-  // (appended unconditionally: inside the un-sent birth window each segment
-  // coalesces in place, so an unforked file is free and a forked one
-  // supersedes; an UNTAGGED fork lands in one "agent/system-prompt"
+  // ONE atomic batch — the repo's prompt parsed into keyed events, one per
+  // section (appended unconditionally: inside the un-sent birth window each
+  // section coalesces in place, so an unforked file is free and a forked
+  // one supersedes; an UNTAGGED fork lands in one "agent/system-prompt"
   // section — an authoring convention, not kernel vocabulary), the house
-  // style section, and the debounce
-  // lowered LAST (the done-configuring signal).
+  // style section, and the debounce lowered LAST (the done-configuring
+  // signal).
   const web = makeReactionWorker("FORKED PROMPT\n");
   await deliver(web.worker, {
     type: "events.iterate.com/agent/created",
@@ -346,10 +346,7 @@ test("the birth reaction shapes each newborn and lowers the debounce as its last
     },
     {
       type: "events.iterate.com/agents/context-added",
-      payload: {
-        role: "system",
-        segments: [{ key: "agent/system-prompt", content: "FORKED PROMPT" }],
-      },
+      payload: { role: "system", key: "agent/system-prompt", content: "FORKED PROMPT" },
     },
     {
       type: "events.iterate.com/agents/context-added",

@@ -10,22 +10,18 @@ import { buildAgentLlmRequestBody } from "./agent-prompt-fold.ts";
 
 test("the standing document is ONE system message — and un-sent keyed re-adds coalesce into it, free", () => {
   const events = [
-    contextAdded(1, {
-      role: "system",
-      content: "",
-      segments: [
-        { key: "identity", content: "You are the test agent." },
-        { key: "output-formatting", content: "Respond with one fenced ts block." },
-      ],
-    }),
+    // The parsed prompt file: one keyed event per section, committed as one
+    // atomic batch — file order becomes offset order becomes document order.
+    keyedSystem(1, "identity", "You are the test agent."),
+    keyedSystem(2, "output-formatting", "Respond with one fenced ts block."),
     // The birth window: the worker re-adds the same key before any request
     // has been sent — the pending section is edited in place. One section
     // swapped, the other untouched, no fork, no special verb.
-    keyedSystem(2, "output-formatting", "Respond with markdown plus one <codemode> tag."),
-    userMessage(3, "hello"),
-    requested(4),
+    keyedSystem(3, "output-formatting", "Respond with markdown plus one <codemode> tag."),
+    userMessage(4, "hello"),
+    requested(5),
   ];
-  const { messages } = buildAgentLlmRequestBody({ events, llmRequestOffset: 4 });
+  const { messages } = buildAgentLlmRequestBody({ events, llmRequestOffset: 5 });
   expect(messages.map((message) => message.role)).toEqual([
     "system", // protocol
     "system", // the standing document
@@ -43,16 +39,12 @@ test("the standing document is ONE system message — and un-sent keyed re-adds 
       "</section>",
     ].join("\n"),
   );
-  expect(messages.at(-1)!.content).toBe(`Requested at: ${isoAt(4)}`);
+  expect(messages.at(-1)!.content).toBe(`Requested at: ${isoAt(5)}`);
 });
 
 test("a sent section's re-add lands at the tail with supersedes; the standing document stays byte-identical", () => {
   const base = [
-    contextAdded(1, {
-      role: "system",
-      content: "",
-      segments: [{ key: "identity", content: "You are the test agent." }],
-    }),
+    keyedSystem(1, "identity", "You are the test agent."),
     keyedSystem(2, "config/agents-md", "Notes v1."),
     userMessage(3, "hi"),
     requested(4),
@@ -81,11 +73,7 @@ test("a sent section's re-add lands at the tail with supersedes; the standing do
 
 test("every request's prompt is a strict byte-superset of the previous one — stamps included", () => {
   const events = [
-    contextAdded(1, {
-      role: "system",
-      content: "",
-      segments: [{ key: "identity", content: "You are the test agent." }],
-    }),
+    keyedSystem(1, "identity", "You are the test agent."),
     userMessage(2, "first question"),
     requested(3),
     assistantOutput(4, "first answer", 3),
@@ -112,11 +100,7 @@ test("every request's prompt is a strict byte-superset of the previous one — s
 
 test("a first-ever key joins the standing document only while no conversation exists; later it lands temporally", () => {
   const events = [
-    contextAdded(1, {
-      role: "system",
-      content: "",
-      segments: [{ key: "identity", content: "You are the test agent." }],
-    }),
+    keyedSystem(1, "identity", "You are the test agent."),
     userMessage(2, "hello"),
     // Conversation exists now — a brand-new key must not rewrite the
     // document above it; it lands at its moment, without supersedes.
@@ -164,21 +148,15 @@ test("context-rewritten replace swaps what past positions contain — the delibe
 
 test("context-rewritten delete removes one section; delete * removes everything — standing document and timeline", () => {
   const base = [
-    contextAdded(1, {
-      role: "system",
-      content: "",
-      segments: [
-        { key: "identity", content: "You are the test agent." },
-        { key: "gotchas", content: "Await handles." },
-      ],
-    }),
-    userMessage(2, "remember all of this"),
-    requested(3),
-    settled(4, 3),
+    keyedSystem(1, "identity", "You are the test agent."),
+    keyedSystem(2, "gotchas", "Await handles."),
+    userMessage(3, "remember all of this"),
+    requested(4),
+    settled(5, 4),
   ];
   const oneGone = buildAgentLlmRequestBody({
-    events: [...base, contextRewritten(5, { op: "delete", key: "gotchas" }), requested(6)],
-    llmRequestOffset: 6,
+    events: [...base, contextRewritten(6, { op: "delete", key: "gotchas" }), requested(7)],
+    llmRequestOffset: 7,
   });
   expect(oneGone.messages[1]!.content).toBe(
     '<section key="identity">\nYou are the test agent.\n</section>',
@@ -190,43 +168,37 @@ test("context-rewritten delete removes one section; delete * removes everything 
   const allGone = buildAgentLlmRequestBody({
     events: [
       ...base,
-      contextRewritten(5, { op: "delete", key: "*" }),
-      userMessage(6, "anyone home?"),
-      requested(7),
+      contextRewritten(6, { op: "delete", key: "*" }),
+      userMessage(7, "anyone home?"),
+      requested(8),
     ],
-    llmRequestOffset: 7,
+    llmRequestOffset: 8,
   });
   expect(allGone.messages.map((message) => message.content.split("\n")[0])).toEqual([
     expect.stringContaining("Journal-projected context messages"),
-    "@6 actor=user:web",
+    "@7 actor=user:web",
     expect.stringContaining("Requested at:"),
   ]);
 });
 
 test("the standing document keeps first-appearance order — append order is the layout", () => {
   // Keys are arbitrary; the kernel imposes no ordering of its own. Sections
-  // render in the order their keys first appeared on the stream, with
-  // segments inside one event keeping their file order (the authored prompt
-  // layout). Hot content like AGENTS.md lands last in every real flow
-  // simply because the worker's reaction arrives after the birth batch —
-  // authors control placement through their own append order.
+  // render in the order their keys first appeared on the stream — a parsed
+  // prompt file's per-section batch commits in file order, so the authored
+  // layout is the document order. Hot content like AGENTS.md lands last in
+  // every real flow simply because the worker's reaction arrives after the
+  // birth batch — authors control placement through their own append order.
   const events = [
-    contextAdded(1, {
-      role: "system",
-      content: "",
-      segments: [
-        { key: "identity", content: "You are the test agent." },
-        { key: "output-formatting", content: "One fenced block." },
-      ],
-    }),
-    keyedSystem(2, "agent/boot-context", "Context for this agent."),
-    keyedSystem(3, "config/agents-md", "Notes."),
-    keyedSystem(4, "config/house-style", "All lowercase."),
+    keyedSystem(1, "identity", "You are the test agent."),
+    keyedSystem(2, "output-formatting", "One fenced block."),
+    keyedSystem(3, "agent/boot-context", "Context for this agent."),
+    keyedSystem(4, "config/agents-md", "Notes."),
+    keyedSystem(5, "config/house-style", "All lowercase."),
     // A birth-window coalesce keeps its section's first-appearance position.
-    keyedSystem(5, "identity", "You are the RENAMED test agent."),
-    requested(6),
+    keyedSystem(6, "identity", "You are the RENAMED test agent."),
+    requested(7),
   ];
-  const { messages } = buildAgentLlmRequestBody({ events, llmRequestOffset: 6 });
+  const { messages } = buildAgentLlmRequestBody({ events, llmRequestOffset: 7 });
   expect(messages[1]!.content.split("\n").filter((line) => line.startsWith("<section"))).toEqual([
     '<section key="identity">',
     '<section key="output-formatting">',
@@ -245,19 +217,13 @@ test("a whole-prompt-keyed section and file sections coexist as plain sections �
   // with the new sectioned prompt) is ACCEPTED behavior, to be closed by a
   // prd repo sweep — this spec documents it, it does not guard a shim.
   const events = [
-    contextAdded(1, {
-      role: "system",
-      content: "",
-      segments: [
-        { key: "identity", content: "Platform identity." },
-        { key: "output-formatting", content: "Platform format." },
-      ],
-    }),
-    keyedSystem(2, "agent/system-prompt", "The project's own whole prompt."),
-    userMessage(3, "hello"),
-    requested(4),
+    keyedSystem(1, "identity", "Platform identity."),
+    keyedSystem(2, "output-formatting", "Platform format."),
+    keyedSystem(3, "agent/system-prompt", "The project's own whole prompt."),
+    userMessage(4, "hello"),
+    requested(5),
   ];
-  const { messages } = buildAgentLlmRequestBody({ events, llmRequestOffset: 4 });
+  const { messages } = buildAgentLlmRequestBody({ events, llmRequestOffset: 5 });
   expect(messages[1]!.content.split("\n").filter((line) => line.startsWith("<section"))).toEqual([
     '<section key="identity">',
     '<section key="output-formatting">',
@@ -265,31 +231,6 @@ test("a whole-prompt-keyed section and file sections coexist as plain sections �
   ]);
   expect(messages[1]!.content).toContain("Platform identity.");
   expect(messages[1]!.content).toContain("The project's own whole prompt.");
-});
-
-test("a mixed tagged+untagged event needs no special handling: its segments are sections in event order", () => {
-  // The MCP prompt shape — the tagged default file plus an untagged override
-  // suffix, parsed into one append. Every segment is just a section; the
-  // untagged remainder's fallback key holds no special meaning.
-  const events = [
-    contextAdded(1, {
-      role: "system",
-      content: "",
-      segments: [
-        { key: "identity", content: "Platform identity." },
-        { key: "output-formatting", content: "Platform format." },
-        { key: "agent/system-prompt", content: "You are serving the MCP session." },
-      ],
-    }),
-    userMessage(2, "hello"),
-    requested(3),
-  ];
-  const { messages } = buildAgentLlmRequestBody({ events, llmRequestOffset: 3 });
-  expect(messages[1]!.content.split("\n").filter((line) => line.startsWith("<section"))).toEqual([
-    '<section key="identity">',
-    '<section key="output-formatting">',
-    '<section key="agent/system-prompt">',
-  ]);
 });
 
 test("an un-sent temporal occurrence coalesces in place too, keeping its supersedes anchor", () => {

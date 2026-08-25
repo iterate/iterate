@@ -399,3 +399,25 @@ block), which keeps the document derivation clean and the durable-fact
 ordering spec intact; a rewrite that creates a brand-new key appends at
 the tail. Readers simplified throughout (presence, pretty-state, templates'
 findLast-by-key, compaction gate).
+
+### 2026-08-25 (third): one event per section
+
+The multi-section sub-array on `agents/context-added` is gone, along with
+its content-must-be-empty constraint: the event has exactly one shape
+(optional `key` + `content` + the ordinary fields). A parsed prompt file is
+a BATCH of keyed events, one per section, in file order — the append batch
+commits atomically in input order, so file order becomes offset order
+becomes document order, and no render can see a half-written prompt (the
+producers each carry a one-line comment saying the single append call is
+what guarantees that). The parser stays a pure list of {key, content}
+sections (type renamed PromptSection) that callers map to events.
+Idempotency keys go per section — `<base>:<index>:<sectionKey>`, index
+disambiguating repeated keys (several untagged runs) — minted in
+agentSystemPromptContextEvents, the default worker's promptSupersession,
+and the MCP session policy append. Section occurrences now own their own
+offsets, so `supersedes` points at exact occurrences. The byte-superset and
+first-appearance specs passed with only their event synthesis changed
+(bundle fixtures became per-section keyed events at successive offsets);
+the mixed tagged+untagged fold spec is deleted — the parser spec already
+proves the N+1 list, and at the event level there is nothing special left
+to show.

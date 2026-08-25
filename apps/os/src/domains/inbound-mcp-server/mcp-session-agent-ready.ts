@@ -1,6 +1,6 @@
 import type { StreamEvent } from "iterate/processors";
 import {
-  agentSystemPromptContextEvent,
+  agentSystemPromptContextEvents,
   MCP_AGENT_SYSTEM_PROMPT,
   MCP_AGENT_SYSTEM_PROMPT_REVISION,
 } from "../agents/agent-defaults.ts";
@@ -20,10 +20,12 @@ export async function ensureMcpSessionAgentReady(input: {
 }): Promise<void> {
   const agent = input.projectItx.agents.get(input.agentPath);
   await agent.create();
+  // One keyed event per section, all in a SINGLE append call: the batch
+  // commits atomically, so no render can see a half-written prompt.
   await agent.append(
-    agentSystemPromptContextEvent({
+    ...agentSystemPromptContextEvents({
       content: MCP_AGENT_SYSTEM_PROMPT,
-      idempotencyKey: `agent/mcp-system-prompt:v${MCP_AGENT_SYSTEM_PROMPT_REVISION}`,
+      idempotencyKeyBase: `agent/mcp-system-prompt:v${MCP_AGENT_SYSTEM_PROMPT_REVISION}`,
     }),
   );
 }

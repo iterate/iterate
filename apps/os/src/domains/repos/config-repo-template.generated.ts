@@ -877,6 +877,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    // applies to them.\n" +
       "    const channelAgent = /^\\/agents\\/(slack|telegram|email|mcp)\\//.test(agentPath);\n" +
       "    const shaping = channelAgent ? [] : await this.#webAgentShaping();\n" +
+      "    // ONE append call on purpose: the batch commits atomically, so a render\n" +
+      "    // can never see a half-updated prompt.\n" +
       "    await itx.agents.get(agentPath).append(...shaping, {\n" +
       "      // LAST on purpose: done configuring — the ordinary debounce replaces\n" +
       "      // the platform's high birth value and releases a held first turn.\n" +
@@ -909,16 +911,19 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  }\n" +
       "\n" +
       "  /** prompts/agent-system-prompt.md as the agent's system prompt, parsed at\n" +
-      "   * append time into keyed segments (`<section key=\"...\">` tags are the\n" +
-      "   * authoring syntax — the same tags the fold renders the standing document\n" +
-      "   * with; untagged content lands in one \"agent/system-prompt\" section —\n" +
-      "   * keys are arbitrary strings, an authoring convention only). Appended\n" +
-      "   * UNCONDITIONALLY rather than read-compared against the agent's current\n" +
-      "   * sections — a snapshot at this moment may predate the processor reducing\n" +
-      "   * the birth batch, and inside the un-sent birth window each segment\n" +
-      "   * coalesces in place: an unforked file coalesces to identical bytes\n" +
-      "   * (free), a forked section supersedes. Fork ONE section's content and\n" +
-      "   * only that section changes. */\n" +
+      "   * append time into ONE KEYED EVENT PER SECTION, in file order\n" +
+      "   * (`<section key=\"...\">` tags are the authoring syntax — the same tags\n" +
+      "   * the fold renders the standing document with; untagged content lands in\n" +
+      "   * one \"agent/system-prompt\" section — keys are arbitrary strings, an\n" +
+      "   * authoring convention only). The caller must spread the whole list into\n" +
+      "   * a SINGLE append call: the batch commits atomically in input order, so\n" +
+      "   * no render can see a half-updated prompt, and file order becomes offset\n" +
+      "   * order becomes document order. Appended UNCONDITIONALLY rather than\n" +
+      "   * read-compared against the agent's current sections — a snapshot at this\n" +
+      "   * moment may predate the processor reducing the birth batch, and inside\n" +
+      "   * the un-sent birth window each section coalesces in place: an unforked\n" +
+      "   * file coalesces to identical bytes (free), a forked section supersedes.\n" +
+      "   * Fork ONE section's content and only that section changes. */\n" +
       "  async #promptSupersession() {\n" +
       "    const file = await this.itx.repo.readFile({ path: \"prompts/agent-system-prompt.md\" });\n" +
       "    if (file === null) return [];\n" +
@@ -938,21 +943,23 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    const hash = [...new Uint8Array(digest).slice(0, 8)]\n" +
       "      .map((byte) => byte.toString(16).padStart(2, \"0\"))\n" +
       "      .join(\"\");\n" +
-      "    return [\n" +
-      "      {\n" +
+      "    return parsePromptSections({ content, fallbackKey: \"agent/system-prompt\" }).map(\n" +
+      "      (section, index) => ({\n" +
       "        type: \"events.iterate.com/agents/context-added\" as const,\n" +
-      "        // v2: the segment field spelling changed (sectionId -> key) while the\n" +
-      "        // content hash didn't — a replay over a pre-rename agent must append\n" +
-      "        // a fresh occurrence, not trip same-key-different-body.\n" +
-      "        idempotencyKey: `iterate/config/agent-system-prompt-segments:v2:${hash}`,\n" +
+      "        // Per-section keys (\"section:v3\" prefix: the event body shape has\n" +
+      "        // changed across revisions while the content hash didn't — a replay\n" +
+      "        // over an agent born under an older shape must append fresh\n" +
+      "        // occurrences, not trip same-key-different-body). The index\n" +
+      "        // disambiguates repeated section keys (several untagged runs).\n" +
+      "        idempotencyKey: `iterate/config/agent-system-prompt-section:v3:${hash}:${index}:${section.key}`,\n" +
       "        payload: {\n" +
-      "          content: \"\",\n" +
-      "          segments: parsePromptSections({ content, fallbackKey: \"agent/system-prompt\" }),\n" +
+      "          content: section.content,\n" +
+      "          key: section.key,\n" +
       "          llmRequestPolicy: { behaviour: \"dont-trigger-request\" as const },\n" +
       "          role: \"system\" as const,\n" +
       "        },\n" +
-      "      },\n" +
-      "    ];\n" +
+      "      }),\n" +
+      "    );\n" +
       "  }\n" +
       "\n" +
       "  // The base class delivers committed events on ANY stream here at least once and in\n" +

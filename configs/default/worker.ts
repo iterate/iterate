@@ -135,6 +135,8 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     // applies to them.
     const channelAgent = /^\/agents\/(slack|telegram|email|mcp)\//.test(agentPath);
     const shaping = channelAgent ? [] : await this.#webAgentShaping();
+    // ONE append call on purpose: the batch commits atomically, so a render
+    // can never see a half-updated prompt.
     await itx.agents.get(agentPath).append(...shaping, {
       // LAST on purpose: done configuring — the ordinary debounce replaces
       // the platform's high birth value and releases a held first turn.
@@ -167,16 +169,19 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   }
 
   /** prompts/agent-system-prompt.md as the agent's system prompt, parsed at
-   * append time into keyed segments (`<section key="...">` tags are the
-   * authoring syntax — the same tags the fold renders the standing document
-   * with; untagged content lands in one "agent/system-prompt" section —
-   * keys are arbitrary strings, an authoring convention only). Appended
-   * UNCONDITIONALLY rather than read-compared against the agent's current
-   * sections — a snapshot at this moment may predate the processor reducing
-   * the birth batch, and inside the un-sent birth window each segment
-   * coalesces in place: an unforked file coalesces to identical bytes
-   * (free), a forked section supersedes. Fork ONE section's content and
-   * only that section changes. */
+   * append time into ONE KEYED EVENT PER SECTION, in file order
+   * (`<section key="...">` tags are the authoring syntax — the same tags
+   * the fold renders the standing document with; untagged content lands in
+   * one "agent/system-prompt" section — keys are arbitrary strings, an
+   * authoring convention only). The caller must spread the whole list into
+   * a SINGLE append call: the batch commits atomically in input order, so
+   * no render can see a half-updated prompt, and file order becomes offset
+   * order becomes document order. Appended UNCONDITIONALLY rather than
+   * read-compared against the agent's current sections — a snapshot at this
+   * moment may predate the processor reducing the birth batch, and inside
+   * the un-sent birth window each section coalesces in place: an unforked
+   * file coalesces to identical bytes (free), a forked section supersedes.
+   * Fork ONE section's content and only that section changes. */
   async #promptSupersession() {
     const file = await this.itx.repo.readFile({ path: "prompts/agent-system-prompt.md" });
     if (file === null) return [];
@@ -196,21 +201,23 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     const hash = [...new Uint8Array(digest).slice(0, 8)]
       .map((byte) => byte.toString(16).padStart(2, "0"))
       .join("");
-    return [
-      {
+    return parsePromptSections({ content, fallbackKey: "agent/system-prompt" }).map(
+      (section, index) => ({
         type: "events.iterate.com/agents/context-added" as const,
-        // v2: the segment field spelling changed (sectionId -> key) while the
-        // content hash didn't — a replay over a pre-rename agent must append
-        // a fresh occurrence, not trip same-key-different-body.
-        idempotencyKey: `iterate/config/agent-system-prompt-segments:v2:${hash}`,
+        // Per-section keys ("section:v3" prefix: the event body shape has
+        // changed across revisions while the content hash didn't — a replay
+        // over an agent born under an older shape must append fresh
+        // occurrences, not trip same-key-different-body). The index
+        // disambiguates repeated section keys (several untagged runs).
+        idempotencyKey: `iterate/config/agent-system-prompt-section:v3:${hash}:${index}:${section.key}`,
         payload: {
-          content: "",
-          segments: parsePromptSections({ content, fallbackKey: "agent/system-prompt" }),
+          content: section.content,
+          key: section.key,
           llmRequestPolicy: { behaviour: "dont-trigger-request" as const },
           role: "system" as const,
         },
-      },
-    ];
+      }),
+    );
   }
 
   // The base class delivers committed events on ANY stream here at least once and in

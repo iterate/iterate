@@ -1,34 +1,37 @@
 // The append-time authoring parser for sectionized prompt files (design:
 // tasks/prompt-sections-tree.md and docs/prompt-sections-demo.html): authors
 // write ONE file with `<section key="...">` tags; the APPENDING code parses
-// it once into segments, and every later change addresses a section by
-// re-adding its key — nothing ever parses model-visible strings again. The
-// tags are the SAME syntax the fold renders the standing document with, so
-// an unforked file round-trips byte-identically. Shared between the platform
-// (agent birth defaults) and config-repo template workers, which is why it
-// lives in the iterate package rather than apps/os.
+// it once into a list of {key, content} sections it maps to keyed
+// context-added events — one per section, committed in a single atomic
+// batch, so file order becomes offset order becomes document order, and
+// every later change addresses a section by re-adding its key. Nothing ever
+// parses model-visible strings again. The tags are the SAME syntax the fold
+// renders the standing document with, so an unforked file round-trips
+// byte-identically. Shared between the platform (agent birth defaults) and
+// config-repo template workers, which is why it lives in the iterate
+// package rather than apps/os.
 
-export type PromptSegment = { key: string; content: string };
+export type PromptSection = { key: string; content: string };
 
 const SECTION_OPEN_TAG = /<section key="([^"<>]+)">/g;
 
 /**
- * Parse a prompt file's authoring syntax into segments, in file order.
- * Content inside `<section key="x">...</section>` becomes a segment with
+ * Parse a prompt file's authoring syntax into sections, in file order.
+ * Content inside `<section key="x">...</section>` becomes a section with
  * that key; content outside any tag (including a whole untagged file)
- * becomes a segment with `fallbackKey` — so an untagged prompt file parses
- * to one segment and keeps working unchanged. Throws on malformed authoring
+ * becomes a section with `fallbackKey` — so an untagged prompt file parses
+ * to one section and keeps working unchanged. Throws on malformed authoring
  * (unclosed or nested tags): this runs at append time, where a loud failure
  * beats silently shipping tag soup to a model.
  */
 export function parsePromptSections(input: {
   content: string;
   fallbackKey: string;
-}): PromptSegment[] {
-  const segments: PromptSegment[] = [];
+}): PromptSection[] {
+  const sections: PromptSection[] = [];
   const pushFallback = (raw: string) => {
     const content = raw.trim();
-    if (content !== "") segments.push({ key: input.fallbackKey, content });
+    if (content !== "") sections.push({ key: input.fallbackKey, content });
   };
   let cursor = 0;
   SECTION_OPEN_TAG.lastIndex = 0;
@@ -45,15 +48,15 @@ export function parsePromptSections(input: {
     if (body.includes("<section ")) {
       throw new Error(`nested <section> inside <section key="${open[1]}"> — sections are flat`);
     }
-    segments.push({ key: open[1]!, content: body.trim() });
+    sections.push({ key: open[1]!, content: body.trim() });
     cursor = close + "</section>".length;
     SECTION_OPEN_TAG.lastIndex = cursor;
   }
   pushFallback(input.content.slice(cursor));
-  if (segments.length === 0) {
+  if (sections.length === 0) {
     // An empty (or whitespace-only) file still parses: one empty fallback
     // segment, so a keyed supersession with empty content stays expressible.
-    segments.push({ key: input.fallbackKey, content: "" });
+    sections.push({ key: input.fallbackKey, content: "" });
   }
-  return segments;
+  return sections;
 }

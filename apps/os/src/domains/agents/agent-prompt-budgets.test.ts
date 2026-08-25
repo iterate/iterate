@@ -79,7 +79,7 @@ test(`the default prompt stays under ${DEFAULT_PROMPT_TOKEN_CEILING} tokens`, ()
   const modelVisibleChars = parsePromptSections({
     content: DEFAULT_AGENT_SYSTEM_PROMPT,
     fallbackKey: "agent/system-prompt",
-  }).reduce((sum, segment) => sum + segment.content.length, 0);
+  }).reduce((sum, section) => sum + section.content.length, 0);
   expect(modelVisibleChars).toBeLessThanOrEqual(DEFAULT_PROMPT_TOKEN_CEILING * CHARS_PER_TOKEN);
 });
 

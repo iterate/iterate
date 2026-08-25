@@ -224,34 +224,37 @@ export const MCP_AGENT_SYSTEM_PROMPT = [
 export const MCP_AGENT_SYSTEM_PROMPT_REVISION = contentHash(MCP_AGENT_SYSTEM_PROMPT);
 
 /**
- * One exact, retryable occurrence establishing the agent's system prompt as
+ * The exact, retryable occurrences establishing the agent's system prompt as
  * STANDING SECTIONS: the sectionized prompt file is parsed here, at append
- * time (structure at append; fold ops never parse model-visible strings).
- * A tagged file becomes one section per `<section key>`, in file order —
- * which is the render order, since the standing document keeps
- * first-appearance order; untagged content — including whole untagged
- * files, the integration channel prompts — becomes one
- * "agent/system-prompt" section (an authoring convention). This event
- * rides the atomic birth batch, so the prompt
- * always exists before any trigger can schedule a turn. `idempotencyKey`
- * identifies this payload occurrence; never reuse one after changing
+ * time (structure at append; fold ops never parse model-visible strings),
+ * into ONE KEYED EVENT PER SECTION, in file order. The whole list must ride
+ * a single append batch: the batch commits atomically in input order, so
+ * file order becomes offset order becomes document order — and no render
+ * can see a half-written prompt. Untagged content — including whole
+ * untagged files, the integration channel prompts — becomes one
+ * "agent/system-prompt" section (an authoring convention; keys are
+ * arbitrary strings the kernel never interprets). `idempotencyKeyBase`
+ * identifies this payload occurrence set; each event's key is
+ * `<base>:<index>:<sectionKey>` (the index disambiguates repeated section
+ * keys, e.g. several untagged runs). Never reuse a base after changing
  * `content`.
  */
-export function agentSystemPromptContextEvent(input: { content: string; idempotencyKey: string }) {
-  return AgentProcessorContract.buildEvent({
-    type: "events.iterate.com/agents/context-added",
-    idempotencyKey: input.idempotencyKey,
-    payload: {
-      role: "system",
-      content: "",
-      segments: parsePromptSections({
-        content: input.content,
-        // An authoring convention, not platform vocabulary: keys are
-        // arbitrary strings the kernel never interprets.
-        fallbackKey: "agent/system-prompt",
+export function agentSystemPromptContextEvents(input: {
+  content: string;
+  idempotencyKeyBase: string;
+}) {
+  return parsePromptSections({ content: input.content, fallbackKey: "agent/system-prompt" }).map(
+    (section, index) =>
+      AgentProcessorContract.buildEvent({
+        type: "events.iterate.com/agents/context-added",
+        idempotencyKey: `${input.idempotencyKeyBase}:${index}:${section.key}`,
+        payload: {
+          role: "system",
+          key: section.key,
+          content: section.content,
+        },
       }),
-    },
-  });
+  );
 }
 
 /** The `agent/created` payload — the agent's birth certificate (a loose
@@ -383,15 +386,14 @@ export function agentCreationForPath<
         }),
       ]
     : [];
-  const systemPromptContext = agentSystemPromptContextEvent({
+  const systemPromptContext = agentSystemPromptContextEvents({
     content: systemPrompt,
-    // "segments" (and the v2) in the prefix on purpose: the event BODY
-    // changed shape when prompts became keyed segments (and again when the
-    // segment field spelling settled on `key`), while an unchanged prompt
-    // file keeps the same revision — a re-create over an agent born under
-    // the older shape must append a fresh superseding occurrence, not trip
+    // "section:v3" in the prefix on purpose: the event BODY shape has
+    // changed across revisions while an unchanged prompt file keeps the
+    // same revision — a re-create over an agent born under an older shape
+    // must append fresh superseding occurrences, not trip
     // same-key-different-body.
-    idempotencyKey: `agent/system-prompt-segments:v2:${systemPromptPolicy.id}:v${systemPromptPolicy.revision}:${projectId}:${agentPath}`,
+    idempotencyKeyBase: `agent/system-prompt-section:v3:${systemPromptPolicy.id}:v${systemPromptPolicy.revision}:${projectId}:${agentPath}`,
   });
   const bootContext = AgentProcessorContract.buildEvent({
     // Per-agent boot context as a second durable system item: ids and paths
@@ -481,7 +483,7 @@ export function agentCreationForPath<
       ...siblingBirthCertificates,
       configured,
       ...birthConfig,
-      systemPromptContext,
+      ...systemPromptContext,
       workspaceProvided,
       bootContext,
       agentSubscription,

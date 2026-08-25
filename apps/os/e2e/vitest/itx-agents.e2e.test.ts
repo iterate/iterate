@@ -290,7 +290,7 @@ test("Agent create replays its earlier birth and setup events through its subscr
   );
   const systemPromptOffset = requiredOffset(
     "platform system context",
-    (event) => event.type === AGENT_CONTEXT_ADDED_TYPE && event.payload?.segments !== undefined,
+    (event) => event.type === AGENT_CONTEXT_ADDED_TYPE && event.payload?.key === "identity",
   );
   const bootContextOffset = requiredOffset(
     "boot context",
@@ -660,10 +660,12 @@ test("agents.get(path).create explicitly appends and processes the complete birt
   const configured = birthEvents.find(
     (event) => event.type === "events.iterate.com/agent/configured",
   );
+  // The sectionized default prompt lands as one keyed event per section;
+  // the codemode contract lives in its output-formatting section.
   const basePrompt = birthEvents.find(
     (event) =>
       event.type === AGENT_CONTEXT_ADDED_TYPE &&
-      (event.payload as { segments?: unknown } | undefined)?.segments !== undefined,
+      (event.payload as { key?: string } | undefined)?.key === "output-formatting",
   );
   const workspaceMount = birthEvents.find(
     (event) => event.type === "events.iterate.com/capability-host/capability-provided",
@@ -674,14 +676,8 @@ test("agents.get(path).create explicitly appends and processes the complete birt
   });
   expect(basePrompt?.payload).toMatchObject({
     role: "system",
-    // The sectionized default prompt, parsed at append time; the codemode
-    // contract lives in its output-formatting section.
-    segments: expect.arrayContaining([
-      expect.objectContaining({
-        key: "output-formatting",
-        content: expect.stringContaining("async (itx)"),
-      }),
-    ]),
+    key: "output-formatting",
+    content: expect.stringContaining("async (itx)"),
   });
   expect(workspaceMount?.payload).toMatchObject({ path: ["workspace"] });
 

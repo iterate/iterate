@@ -253,7 +253,7 @@ export const AgentProcessorContract = defineProcessorContract({
           "whose latest occurrence no request has sent yet edits that item in place (the " +
           "birth window — free); otherwise it appends at the tail with `supersedes` " +
           "pointing at the prior occurrence. On an unforked project the derived standing " +
-          "document is byte-identical to the authored prompt file, whose segments keep " +
+          "document is byte-identical to the authored prompt file, whose sections keep " +
           "their file order. Keys are arbitrary strings; authors control placement through " +
           "append order (a worker's hot content, e.g. AGENTS.md, lands after the birth " +
           "batch and so renders last in the document). Compaction rebuilds the collection: " +
@@ -423,11 +423,13 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agents/context-added": {
       description:
         "Model-visible context arrived (user message, developer note, assistant output, system " +
-        "item) — the everyday event, the only one most authors ever use. With `key` (or " +
-        "`segments: [{key, content}]` for many at once): keyed standing content, and " +
-        "RE-ADDING A KEY IS THE UPDATE — an occurrence no request has sent yet coalesces in " +
-        "place (free; the whole birth window), a sent one appends at the tail at its moment " +
-        "in time with `supersedes` stamped by the fold. Without a key: one turn at its offset.",
+        "item) — the everyday event, the only one most authors ever use. With `key`: keyed " +
+        "standing content, one event per section, and RE-ADDING A KEY IS THE UPDATE — an " +
+        "occurrence no request has sent yet coalesces in place (free; the whole birth " +
+        "window), a sent one appends at the tail at its moment in time with `supersedes` " +
+        "stamped by the fold. A multi-section write (a parsed prompt file) is a BATCH of " +
+        "these, one per section: the batch commits atomically in input order, so file order " +
+        "becomes offset order becomes document order. Without a key: one turn at its offset.",
       payloadSchema: agentContextItemSchema(),
     },
     "events.iterate.com/agents/context-rewritten": {
@@ -839,24 +841,6 @@ function agentContextItemSchema() {
             "`supersedes` stamped by the fold. Existing streams' keyed events already mean " +
             "exactly this.",
         }),
-      segments: z
-        .array(
-          z.object({
-            key: z.string().min(1).meta({
-              description: "The standing section this segment establishes or updates.",
-            }),
-            content: z.string().meta({ description: "The section's model-visible text." }),
-          }),
-        )
-        .min(1)
-        .optional()
-        .meta({
-          description:
-            "Many keyed sections in ONE append — the output of parsing a sectionized prompt " +
-            "file at append time. Each segment carries the same re-add-is-the-update " +
-            "semantics as a single `key`; the event's `content` must be empty (all text " +
-            "lives in the segments). Role and actor apply to every segment.",
-        }),
       files: z
         .array(agentFileAttachmentSchema())
         .optional()
@@ -1025,30 +1009,6 @@ function agentContextItemSchema() {
         }),
     })
     .superRefine((payload, ctx) => {
-      if (payload.segments !== undefined) {
-        if (payload.key !== undefined) {
-          ctx.addIssue({
-            code: "custom",
-            path: ["key"],
-            message: "segments and the legacy key are two spellings of the same thing — pick one",
-          });
-        }
-        if (payload.content !== "") {
-          ctx.addIssue({
-            code: "custom",
-            path: ["content"],
-            message:
-              "a segments append carries all its text in the segments; content must be empty",
-          });
-        }
-        if (payload.compaction !== undefined) {
-          ctx.addIssue({
-            code: "custom",
-            path: ["compaction"],
-            message: "compaction is a timeline rewrite and cannot carry segments",
-          });
-        }
-      }
       if (payload.role !== "developer" || payload.compaction === undefined) return;
       if (payload.key !== undefined) {
         ctx.addIssue({

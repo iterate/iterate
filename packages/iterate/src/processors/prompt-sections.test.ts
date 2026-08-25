@@ -1,8 +1,8 @@
 import { expect, test } from "vitest";
 import { parsePromptSections } from "./prompt-sections.ts";
 
-test("a tagged file parses to one segment per section, in file order, tags stripped", () => {
-  const segments = parsePromptSections({
+test("a tagged file parses to one section per section, in file order, tags stripped", () => {
+  const sections = parsePromptSections({
     content: [
       '<section key="identity">',
       "You are the test agent.",
@@ -14,13 +14,13 @@ test("a tagged file parses to one segment per section, in file order, tags strip
     ].join("\n"),
     fallbackKey: "agent/system-prompt",
   });
-  expect(segments).toEqual([
+  expect(sections).toEqual([
     { key: "identity", content: "You are the test agent." },
     { key: "output-formatting", content: "Respond with one fenced block." },
   ]);
 });
 
-test("an untagged file is one fallback segment — old prompt files keep working unchanged", () => {
+test("an untagged file is one fallback section — old prompt files keep working unchanged", () => {
   expect(
     parsePromptSections({
       content: "Just a whole prompt.\nNo tags anywhere.\n",
@@ -30,7 +30,7 @@ test("an untagged file is one fallback segment — old prompt files keep working
 });
 
 test("untagged runs between and around tags land in the fallback section at their file position", () => {
-  const segments = parsePromptSections({
+  const sections = parsePromptSections({
     content: [
       "Preamble outside any tag.",
       '<section key="identity">Tagged.</section>',
@@ -38,7 +38,7 @@ test("untagged runs between and around tags land in the fallback section at thei
     ].join("\n"),
     fallbackKey: "agent/system-prompt",
   });
-  expect(segments).toEqual([
+  expect(sections).toEqual([
     { key: "agent/system-prompt", content: "Preamble outside any tag." },
     { key: "identity", content: "Tagged." },
     {
@@ -48,7 +48,7 @@ test("untagged runs between and around tags land in the fallback section at thei
   ]);
 });
 
-test("an empty file still parses to one empty fallback segment", () => {
+test("an empty file still parses to one empty fallback section", () => {
   expect(parsePromptSections({ content: "  \n", fallbackKey: "x" })).toEqual([
     { key: "x", content: "" },
   ]);

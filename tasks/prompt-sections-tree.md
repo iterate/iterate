@@ -74,6 +74,17 @@ of them incidents or clumsiness from the agent-birth work (#2508).
 > Renders are byte-identical under this state model — the byte-superset and
 > first-appearance specs pass untouched.
 
+> **Revised 2026-08-25 (third) — one event per section.** `agents/context-added`
+> has exactly one shape: optional `key`, plus `content` and the ordinary
+> fields — no bundled multi-section variant, no cross-field constraint. A
+> parsed prompt file becomes a BATCH of keyed events, one per section, in
+> file order; the append batch already commits atomically in input order, so
+> file order becomes offset order becomes document order, and no render can
+> see a half-written prompt. Each section occurrence owns its own offset, so
+> `supersedes` points at exact occurrences. Idempotency keys go per section:
+> `<base>:<index>:<sectionKey>` (the index disambiguates repeated keys, e.g.
+> several untagged runs of one file).
+
 ## Decisions
 
 1. **Operations are events; the rendered request is a fold.** Events stay

@@ -413,9 +413,8 @@ export function contextClearsWaitingFor(payload: AgentContextAddedPayload): bool
 type AgentContextItems = AgentProcessorState["contextItems"];
 
 /**
- * Reduce one context item into the collection. A `key` (or `segments`, many
- * keys in one append) carries the update rule — re-adding a key IS the
- * update:
+ * Reduce one context item into the collection. A `key` carries the update
+ * rule — re-adding a key IS the update:
  * - the key's latest occurrence has not been sent in any request → edit that
  *   item in place, content and source offset (coalesce — free; this is the
  *   whole birth window);
@@ -424,7 +423,10 @@ type AgentContextItems = AgentProcessorState["contextItems"];
  *   and everything above the update visibly predates it.
  * Keys are arbitrary strings the kernel never interprets — no key triggers
  * clearing, ordering, or gating of any other key, and placement is append
- * order alone. Everything unkeyed is one plain item at its offset.
+ * order alone (a multi-section write is a batch of keyed events; the batch
+ * commits atomically in input order, so file order becomes offset order
+ * becomes document order). Everything unkeyed is one plain item at its
+ * offset.
  */
 export function projectContextAdded(args: {
   contextItems: AgentContextItems;
@@ -433,24 +435,6 @@ export function projectContextAdded(args: {
 }): AgentContextItems {
   const { item } = args;
   const payload = item.payload;
-  if (payload.segments !== undefined) {
-    const { segments, ...base } = payload;
-    // Segments apply in their event (file) order, so a parsed prompt file's
-    // sections first-appear — and therefore render — in the authored layout.
-    let contextItems = args.contextItems;
-    for (const segment of segments) {
-      contextItems = addKeyedOccurrence({
-        contextItems,
-        lastLlmRequestOffset: args.lastLlmRequestOffset,
-        key: segment.key,
-        item: {
-          offset: item.offset,
-          payload: { ...base, content: segment.content, key: segment.key },
-        },
-      });
-    }
-    return contextItems;
-  }
   if (payload.key !== undefined) {
     return addKeyedOccurrence({
       contextItems: args.contextItems,
