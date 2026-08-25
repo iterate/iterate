@@ -11,7 +11,7 @@ import {
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 /*
- * Why the pin next door goes red for no reason.
+ * Why the adjacent pin goes red for no reason.
  *
  * `userspace-facet-source-version.e2e.test.ts` is a `test.fails`: it asserts
  * the FIX ("a source commit reaches the RUNNING facet") and stays green only
