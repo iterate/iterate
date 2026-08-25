@@ -2222,6 +2222,12 @@ export type ProjectProcessorState = {
     revokedAt: string | null;
   }[];
   notificationReady: boolean;
+  worker: {
+    at: string;
+    commitOid: string;
+    error: string | null;
+    status: "update-failed" | "updated";
+  } | null;
 };
 
 /**

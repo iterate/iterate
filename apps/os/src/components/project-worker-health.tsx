@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { Link } from "@tanstack/react-router";
 import { TriangleAlert } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { ScrollArea } from "@iterate-com/ui/components/scroll-area";
@@ -22,7 +23,9 @@ import { useItx, useLiveState } from "iterate/sdk/itx/react";
 import {
   buildRedriveEvents,
   selectStrugglingSubscriptions,
+  selectWorkerBuildFailure,
   type SubscriptionHealth,
+  type WorkerBuildFailureFact,
 } from "./project-worker-health-logic.ts";
 
 /**
@@ -42,7 +45,13 @@ import {
  * stream (the prod `/guestbook` case) is NOT caught here yet — that needs a
  * project rollup across every stream and is deliberately out of scope.
  */
-export function ProjectWorkerHealthWarning({ projectId }: { projectId: string | null }) {
+export function ProjectWorkerHealthWarning({
+  projectId,
+  projectSlug,
+}: {
+  projectId: string | null;
+  projectSlug: string;
+}) {
   const [open, setOpen] = useState(false);
   const subscriptionState = useLiveState(
     (itx) => itx.streams.get("/").liveState,
@@ -57,20 +66,32 @@ export function ProjectWorkerHealthWarning({ projectId }: { projectId: string | 
     () => selectStrugglingSubscriptions(subscriptionState),
     [subscriptionState],
   );
+  // The durable worker outcome: `project/worker-update-failed` renders red
+  // until a later worker-updated supersedes it in the reduced slot.
+  const workerOutcome = useLiveState(
+    (itx) => itx.liveState,
+    (state) => state.reduced.worker,
+    [projectId],
+    { slug: projectId ?? "", enabled: projectId !== null },
+  ).value;
+  const buildFailure = selectWorkerBuildFailure(workerOutcome);
 
-  if (struggling.length === 0) return null;
+  if (struggling.length === 0 && buildFailure === null) return null;
 
   const haltedCount = struggling.filter((subscription) => subscription.status === "halted").length;
-  // Halted is the loud, red state; backoff-only is an amber "events are
-  // piling up" heads-up.
-  const severe = haltedCount > 0;
-  const label = severe
-    ? haltedCount === 1
-      ? "Event delivery stopped"
-      : `${haltedCount} event deliveries stopped`
-    : struggling.length === 1
-      ? "Event delivery retrying"
-      : `${struggling.length} event deliveries struggling`;
+  // A build failure and halted are the loud, red states; backoff-only is an
+  // amber "events are piling up" heads-up.
+  const severe = haltedCount > 0 || buildFailure !== null;
+  const label =
+    buildFailure !== null
+      ? "Project worker build failed"
+      : severe
+        ? haltedCount === 1
+          ? "Event delivery stopped"
+          : `${haltedCount} event deliveries stopped`
+        : struggling.length === 1
+          ? "Event delivery retrying"
+          : `${struggling.length} event deliveries struggling`;
 
   return (
     <>
@@ -103,7 +124,9 @@ export function ProjectWorkerHealthWarning({ projectId }: { projectId: string | 
         open={open}
         onOpenChange={setOpen}
         projectId={projectId}
+        projectSlug={projectSlug}
         struggling={struggling}
+        buildFailure={buildFailure}
         severe={severe}
       />
     </>
@@ -114,13 +137,17 @@ function StrugglingSubscriptionsSheet({
   open,
   onOpenChange,
   projectId,
+  projectSlug,
   struggling,
+  buildFailure,
   severe,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   projectId: string | null;
+  projectSlug: string;
   struggling: SubscriptionHealth[];
+  buildFailure: WorkerBuildFailureFact | null;
   severe: boolean;
 }) {
   const itx = useItx(projectId ?? undefined);
@@ -153,18 +180,60 @@ function StrugglingSubscriptionsSheet({
             )}
           >
             <TriangleAlert className="size-4" />
-            {severe ? "Event delivery stopped" : "Event delivery not flowing"}
+            {buildFailure !== null
+              ? "Project worker build failed"
+              : severe
+                ? "Event delivery stopped"
+                : "Event delivery not flowing"}
           </SheetTitle>
           <SheetDescription>
-            {severe
-              ? "A subscription on this project's root stream halted after repeated failures. New events pile up undelivered until you resume it."
-              : "A subscription on this project's root stream keeps failing and is retrying with backoff. Events pile up undelivered until delivery resumes."}{" "}
-            Resume retries from where it stopped; if one event keeps breaking delivery, skip past
-            it.
+            {buildFailure !== null
+              ? "The project worker no longer builds, so nothing that depends on it runs — agents included — until a config repo commit fixes the build."
+              : severe
+                ? "A subscription on this project's root stream halted after repeated failures. New events pile up undelivered until you resume it. Resume retries from where it stopped; if one event keeps breaking delivery, skip past it."
+                : "A subscription on this project's root stream keeps failing and is retrying with backoff. Events pile up undelivered until delivery resumes. Resume retries from where it stopped; if one event keeps breaking delivery, skip past it."}
           </SheetDescription>
         </SheetHeader>
         <ScrollArea className="min-h-0 flex-1">
           <div className="divide-y">
+            {buildFailure === null ? null : (
+              <div className="flex flex-col gap-2 px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <span className="shrink-0 text-[10px] font-medium tracking-wide uppercase text-destructive">
+                    Build failed
+                  </span>
+                  <span className="min-w-0 flex-1 truncate font-mono text-xs">
+                    config repo @ {buildFailure.commitOid.slice(0, 7)}
+                  </span>
+                </div>
+                <div className="text-xs break-words whitespace-pre-wrap text-destructive">
+                  {buildFailure.error}
+                </div>
+                <div className="pt-1">
+                  {/* The incident-shaped fix path: broken worker → open the
+                      config repo, whose Template panel updates the project to
+                      the latest template. */}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    render={
+                      <Link
+                        to="/projects/$projectSlug/repos/$"
+                        params={{ projectSlug, _splat: "config" }}
+                        search={{}}
+                        onClick={() => onOpenChange(false)}
+                      />
+                    }
+                  >
+                    Open config repo
+                  </Button>
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  Fix the build with a config repo commit — or use the repo&apos;s Template panel to
+                  update to the latest template.
+                </span>
+              </div>
+            )}
             {struggling.map((subscription) => {
               const halted = subscription.status === "halted";
               return (

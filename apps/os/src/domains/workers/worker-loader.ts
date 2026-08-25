@@ -3,6 +3,8 @@ import { itxEnv as env, workerVersion } from "../../env.ts";
 import { parseIterateRepoPkgSpecOverridesEnv } from "../../pkg-pr-new.ts";
 import { StreamContext } from "../projects/stream-context.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { CONFIG_REPO_PATH } from "../repos/paths.ts";
+import { REPO_DEFAULT_BRANCH } from "../repos/repo-defaults.ts";
 import type { DynamicWorkerSource, WorkerFileSource } from "./schemas.ts";
 import {
   KvWorkerBuildArtifactStore,
@@ -85,7 +87,14 @@ async function resolveThroughBuild(input: {
           source: input.source,
         })
       : { ok: true as const, source: memoized };
-  if (!built.ok) return built;
+  if (!built.ok) {
+    await recordConfigRepoBuildFailure({
+      failure: built.failure,
+      projectId: input.projectId,
+      resolved,
+    });
+    return built;
+  }
   return {
     ok: true,
     source:
@@ -127,6 +136,48 @@ async function resolveArtifact(
     // RPC adds a disposal group to object results even when they contain only
     // data today. Memoization copied the fields we retain, so release it now.
     disposeIgnoredRpcResult(built);
+  }
+}
+
+/**
+ * Journal a terminal config-repo build failure on the project's root stream
+ * as `project/worker-update-failed`. The commit-triggered readiness probe
+ * appends the same fact for failures a config commit causes; this covers the
+ * failures with NO commit behind them — a platform deployment changing the
+ * dynamic package substitution can break the build of an unchanged repo, and
+ * without this the only trace is each subscription's transient lastError.
+ * Idempotency-keyed by the failing commit, so every retrying delivery dedupes
+ * to one durable fact, and the append that fact triggers dedupes too (no
+ * self-sustaining loop). Best-effort: the build failure result must reach the
+ * caller even when the journal append fails.
+ */
+async function recordConfigRepoBuildFailure(input: {
+  failure: WorkerBuildFailure;
+  projectId: string;
+  resolved: ResolvedWorkerFileSource;
+}): Promise<void> {
+  if (input.resolved.type !== "repo" || input.resolved.repoPath !== CONFIG_REPO_PATH) return;
+  if (input.resolved.branch !== REPO_DEFAULT_BRANCH) return;
+  try {
+    const stream = env.STREAM.getByName(
+      DurableObjectNameCodec.stringify({ path: "/", projectId: input.projectId }),
+    );
+    disposeIgnoredRpcResult(
+      await stream.append({
+        type: "events.iterate.com/project/worker-update-failed",
+        idempotencyKey: `worker-build-failed:${input.resolved.commitOid}`,
+        payload: {
+          commitOid: input.resolved.commitOid,
+          error: input.failure.message,
+        },
+      }),
+    );
+  } catch (error) {
+    console.warn("config repo build failure could not be journaled on the project stream", {
+      commitOid: input.resolved.commitOid,
+      error,
+      projectId: input.projectId,
+    });
   }
 }
 

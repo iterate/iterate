@@ -72,7 +72,7 @@ export type ProjectClientListItem = Omit<ProjectClientRecord, "connectedAtOffset
 
 export const ProjectProcessorContract = defineProcessorContract({
   slug: "project",
-  version: "0.7.0",
+  version: "0.8.0",
   description:
     "Project root: runs the project/create-requested → project/created bootstrap saga, births " +
     "the sibling processors every project gets (root capability host, primary scheduler, config " +
@@ -213,6 +213,25 @@ export const ProjectProcessorContract = defineProcessorContract({
       description:
         "True once the notification/created fact from the atomic project birth batch reduces.",
     }),
+    worker: z
+      .object({
+        at: z.string().meta({ description: "When the outcome was recorded (event createdAt)." }),
+        commitOid: z.string().meta({ description: "The config-repo commit the outcome is about." }),
+        error: z.string().nullable().meta({
+          description: "The deterministic build failure, or null on a successful update.",
+        }),
+        status: z.enum(["updated", "update-failed"]).meta({
+          description: "Whether the newest outcome built and answered its readiness probe.",
+        }),
+      })
+      .nullable()
+      .default(null)
+      .meta({
+        description:
+          "The NEWEST default-worker lifecycle outcome (project/worker-updated or " +
+          "project/worker-update-failed) — a later worker-updated supersedes a recorded " +
+          "failure; what the dashboard's worker-health warning renders.",
+      }),
   }),
   events: {
     "events.iterate.com/project/create-requested": {

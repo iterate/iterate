@@ -552,7 +552,7 @@ function ProjectSidebarGroup({
 
   return (
     <>
-      <ProjectWorkerHealthWarning projectId={projectId} />
+      <ProjectWorkerHealthWarning projectId={projectId} projectSlug={projectSlug} />
       <SidebarGroup>
         <SidebarGroupContent>
           <SidebarMenu>

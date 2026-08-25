@@ -214,6 +214,34 @@ describe("ProjectProcessor worker lifecycle", () => {
         payload: { commitOid: "c".repeat(40) },
       },
     ]);
+    // The reduced `worker` slot holds the NEWEST outcome — the fixed commit's
+    // worker-updated supersedes the recorded failure, which is what clears
+    // the dashboard's red worker-health warning.
+    expect(h.state().worker).toMatchObject({
+      status: "updated",
+      commitOid: "c".repeat(40),
+      error: null,
+    });
+  });
+
+  it("reduces a worker build failure into state until a later update supersedes it", async () => {
+    const h = makeProjectHarness({
+      workerOutcomes: [
+        new WorkerBuildFailedError({ kind: "source", message: "missing this.itx getter" }),
+      ],
+    });
+    await h.play([
+      "append",
+      PROJECT_CREATE_REQUESTED,
+      PROJECT_CREATED,
+      CONFIG_REPO_COMMIT_COMPLETED,
+    ]);
+
+    expect(h.state().worker).toMatchObject({
+      status: "update-failed",
+      commitOid: "b".repeat(40),
+      error: "missing this.itx getter",
+    });
   });
 
   it("leaves a transient update probe failure open for durable redelivery", async () => {

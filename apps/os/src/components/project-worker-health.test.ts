@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildRedriveEvents,
   selectStrugglingSubscriptions,
+  selectWorkerBuildFailure,
 } from "./project-worker-health-logic.ts";
 
 const healthy = {
@@ -182,5 +183,32 @@ describe("buildRedriveEvents", () => {
         canSetCursor: false,
       }),
     ).toThrow(/owns its cursor at the receiver/);
+  });
+});
+
+describe("selectWorkerBuildFailure", () => {
+  it("surfaces a standing build failure and clears once a later update supersedes it", () => {
+    const failed = {
+      at: "2026-08-25T10:00:00.000Z",
+      commitOid: "b".repeat(40),
+      error: "missing this.itx getter",
+      status: "update-failed" as const,
+    };
+    expect(selectWorkerBuildFailure(failed)).toMatchObject({
+      commitOid: "b".repeat(40),
+      error: "missing this.itx getter",
+    });
+    // The reduced slot holds only the newest outcome, so a later
+    // worker-updated replaces the failure wholesale.
+    expect(
+      selectWorkerBuildFailure({
+        at: "2026-08-25T10:05:00.000Z",
+        commitOid: "c".repeat(40),
+        error: null,
+        status: "updated",
+      }),
+    ).toBeNull();
+    expect(selectWorkerBuildFailure(null)).toBeNull();
+    expect(selectWorkerBuildFailure(undefined)).toBeNull();
   });
 });
