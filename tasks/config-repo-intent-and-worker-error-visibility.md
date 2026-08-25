@@ -201,3 +201,15 @@ Planned slices:
 - Known cosmetic flaw: the slice-3 commit message contains a shell-quoting
   artifact ("appendú", a swallowed word) — left as-is (no history rewrites);
   the squash-merge commit message comes from the PR body anyway.
+
+2026-08-25 (later still) — playwright spec coverage + walkthrough videos
+(missed convention, flagged by Misha): `specs/repo-ide-template-sync.spec.ts`
+(provenance row → sync → toast → recorded base) and
+`specs/project-worker-health.spec.ts` (a breaking config commit → red
+sidebar warning → sheet with build error AND the polled child-stream rollup
+rows → "Open config repo" → Template panel). The failure injection is a
+plain `repo.commitFiles` of broken worker.ts — the real incident shape, no
+test-only hooks. The sync button gained a `data-spinner` marker while
+pending (the spec waiters key on it; also honest progress UI). Videos
+recorded with VIDEO_MODE=1 and embedded in the PR body as bare
+user-attachments URLs.

@@ -72,6 +72,9 @@ export function RepoTemplatePanel({ repoPath }: { repoPath: string }) {
         variant="outline"
         className="text-xs"
         disabled={sync.isPending}
+        // The sync fetches the template from GitHub and commits — visible
+        // progress, and the marker the spec waiters key on.
+        data-spinner={sync.isPending ? "true" : undefined}
         onClick={() => sync.mutate()}
       >
         {sync.isPending ? "Updating…" : "Update to latest template"}
