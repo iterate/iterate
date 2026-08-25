@@ -150,6 +150,19 @@ of them incidents or clumsiness from the agent-birth work (#2508).
     permanent "Requested at:" line — no separate timestamp event, no
     floating tail.
 
+### 2026-08-25: Decision 8 refined by the slice-2 interview
+
+Provenance-first held; the mechanics settled differently from the original
+sketch: the pure function takes the payload alone (no placement argument) —
+placement is already in the item. No roleOverride: assistant records carry a
+platform-only `{type: "model"}` actor, corrective feedback `{type:
+"platform"}`, and `actor` is required on every new append, so a dropped
+actor can only demote (fails down to user, never escalates). Sections
+self-describe as `kind: "section"` (payload-level discriminated union;
+`key` only in that variant; router schemas omit it — owners only).
+"Verified" means channel attestation, not OS-principal resolution (identity
+linking is future work). Full spec: tasks/prompt-sections-slice-2.md.
+
 ## Checklist (one PR per slice; fold + templates + tests + state-reader migrations together)
 
 - [x] Slice 1: _done — PR #2512 (task record: tasks/complete/2026-08-25-prompt-sections-slice-1.md); the design evolved during review: arbitrary keys, one contextItems collection, one event per section, permanent send stamps_
