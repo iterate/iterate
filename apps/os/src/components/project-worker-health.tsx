@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { TriangleAlert } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
@@ -19,7 +20,9 @@ import {
 } from "@iterate-com/ui/components/sidebar";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { cn } from "@iterate-com/ui/lib/utils";
-import { useItx, useLiveState } from "iterate/sdk/itx/react";
+import { connectIterateSession, useItx, useLiveState } from "iterate/sdk/itx/react";
+import type { ProjectSubscriptionHealth } from "../domains/projects/subscription-health.ts";
+import { StreamDebugLink } from "./stream-debug-link.tsx";
 import {
   buildRedriveEvents,
   selectStrugglingSubscriptions,
@@ -41,9 +44,12 @@ import {
  * retry time. Nothing pushes into the project DO — the stream stays
  * ignorant of the sidebar.
  *
- * Scope for now: `/` only. A userspace processor that struggles on a CHILD
- * stream (the prod `/guestbook` case) is NOT caught here yet — that needs a
- * project rollup across every stream and is deliberately out of scope.
+ * Three sources feed it: the root stream's live subscription state (push,
+ * instant), the project's reduced worker outcome (a standing build failure
+ * renders red until a later worker-updated supersedes it), and the polled
+ * `itx.subscriptionHealth()` rollup covering CHILD streams (the prod
+ * `/guestbook` case) — halted/lagging entries badge, historical lastError
+ * entries stay quiet informational lines in the sheet.
  */
 export function ProjectWorkerHealthWarning({
   projectId,
@@ -75,23 +81,62 @@ export function ProjectWorkerHealthWarning({
     { slug: projectId ?? "", enabled: projectId !== null },
   ).value;
   const buildFailure = selectWorkerBuildFailure(workerOutcome);
+  // Child-stream subscription health is PULL: the server-side fan-out result
+  // polled while the dashboard is open. react-query's default interval gating
+  // pauses the poll in hidden tabs, so an unattended dashboard costs nothing.
+  const childHealth = useQuery({
+    enabled: projectId !== null,
+    queryKey: ["itx", "subscription-health", projectId],
+    queryFn: async () => {
+      const session = await connectIterateSession();
+      const itx = session.projects.get(projectSlug);
+      try {
+        return await itx.subscriptionHealth();
+      } finally {
+        (itx as Partial<Disposable>)[Symbol.dispose]?.();
+      }
+    },
+    refetchInterval: 60_000,
+    staleTime: 55_000,
+  });
+  // The root stream's live view is authoritative and instant; the polled
+  // rollup contributes the CHILD streams only.
+  const childStreams = useMemo(
+    () =>
+      (childHealth.data === undefined ? [] : childHealth.data.streams).filter(
+        (stream) => stream.path !== "/",
+      ),
+    [childHealth.data],
+  );
+  const childEntries = childStreams.flatMap((stream) =>
+    stream.subscriptions.map((subscription) => ({ path: stream.path, ...subscription })),
+  );
+  const childHalted = childEntries.filter((entry) => entry.tier === "halted");
+  const childLagging = childEntries.filter((entry) => entry.tier === "lagging");
+  // Historical lastError entries never trigger the badge — they show only as
+  // quiet informational lines inside the sheet.
+  const badgeworthyChildCount = childHalted.length + childLagging.length;
 
-  if (struggling.length === 0 && buildFailure === null) return null;
+  if (struggling.length === 0 && buildFailure === null && badgeworthyChildCount === 0) return null;
 
   const haltedCount = struggling.filter((subscription) => subscription.status === "halted").length;
   // A build failure and halted are the loud, red states; backoff-only is an
   // amber "events are piling up" heads-up.
-  const severe = haltedCount > 0 || buildFailure !== null;
+  const severe = haltedCount > 0 || buildFailure !== null || childHalted.length > 0;
   const label =
     buildFailure !== null
       ? "Project worker build failed"
-      : severe
+      : haltedCount > 0
         ? haltedCount === 1
           ? "Event delivery stopped"
           : `${haltedCount} event deliveries stopped`
-        : struggling.length === 1
-          ? "Event delivery retrying"
-          : `${struggling.length} event deliveries struggling`;
+        : struggling.length > 0
+          ? struggling.length === 1
+            ? "Event delivery retrying"
+            : `${struggling.length} event deliveries struggling`
+          : childHalted.length > 0
+            ? `Event delivery stopped in ${childHalted.length === 1 ? "a child stream" : `${childHalted.length} child streams`}`
+            : `Event delivery struggling in ${childLagging.length === 1 ? "a child stream" : `${childLagging.length} child streams`}`;
 
   return (
     <>
@@ -127,6 +172,7 @@ export function ProjectWorkerHealthWarning({
         projectSlug={projectSlug}
         struggling={struggling}
         buildFailure={buildFailure}
+        childStreams={childStreams}
         severe={severe}
       />
     </>
@@ -140,6 +186,7 @@ function StrugglingSubscriptionsSheet({
   projectSlug,
   struggling,
   buildFailure,
+  childStreams,
   severe,
 }: {
   open: boolean;
@@ -148,6 +195,7 @@ function StrugglingSubscriptionsSheet({
   projectSlug: string;
   struggling: SubscriptionHealth[];
   buildFailure: WorkerBuildFailureFact | null;
+  childStreams: ProjectSubscriptionHealth["streams"];
   severe: boolean;
 }) {
   const itx = useItx(projectId ?? undefined);
@@ -302,9 +350,117 @@ function StrugglingSubscriptionsSheet({
                 </div>
               );
             })}
+            <ChildStreamHealthRows projectSlug={projectSlug} childStreams={childStreams} />
           </div>
         </ScrollArea>
       </SheetContent>
     </Sheet>
   );
+}
+
+/**
+ * The polled child-stream rollup, split by severity: halted and lagging
+ * entries render like the root rows (read-only — the stream page has the
+ * repair verbs), while historical lastError entries are QUIET informational
+ * lines: real facts worth a glance, never a badge.
+ */
+function ChildStreamHealthRows({
+  projectSlug,
+  childStreams,
+}: {
+  projectSlug: string;
+  childStreams: ProjectSubscriptionHealth["streams"];
+}) {
+  const entries = childStreams.flatMap((stream) =>
+    stream.subscriptions.map((subscription) => ({ streamPath: stream.path, ...subscription })),
+  );
+  const active = entries.filter((entry) => entry.tier !== "informational");
+  const informational = entries.filter((entry) => entry.tier === "informational");
+  const unreadable = childStreams.filter((stream) => stream.error !== null);
+  if (active.length === 0 && informational.length === 0 && unreadable.length === 0) return null;
+
+  return (
+    <>
+      {active.map((entry) => {
+        const halted = entry.tier === "halted";
+        return (
+          <div key={`${entry.streamPath}:${entry.name}`} className="flex flex-col gap-2 px-4 py-3">
+            <div className="flex items-center gap-2">
+              <span
+                className={cn(
+                  "shrink-0 text-[10px] font-medium tracking-wide uppercase",
+                  halted ? "text-destructive" : "text-amber-600 dark:text-amber-500",
+                )}
+              >
+                {halted ? "Halted" : "Retrying"}
+              </span>
+              <span className="min-w-0 flex-1 truncate font-mono text-xs">
+                {entry.streamPath} · {entry.name}
+              </span>
+            </div>
+            <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+              <dt>Behind</dt>
+              <dd className="tabular-nums">
+                {entry.lag} event{entry.lag === 1 ? "" : "s"}
+              </dd>
+              <dt>Attempts</dt>
+              <dd className="tabular-nums">{entry.attempt}</dd>
+            </dl>
+            {entry.lastError ? (
+              <div
+                className={cn(
+                  "text-xs break-words whitespace-pre-wrap",
+                  halted ? "text-destructive" : "text-amber-600 dark:text-amber-500",
+                )}
+              >
+                {entry.lastError}
+              </div>
+            ) : null}
+            <div className="pt-1">
+              <StreamDebugLink projectSlug={projectSlug} streamPath={entry.streamPath} />
+            </div>
+          </div>
+        );
+      })}
+      {unreadable.map((stream) => (
+        <div key={stream.path} className="px-4 py-2 text-xs text-muted-foreground">
+          <span className="font-mono">{stream.path}</span> could not be read: {stream.error}
+        </div>
+      ))}
+      {informational.length === 0 ? null : (
+        <div className="flex flex-col gap-1 px-4 py-3">
+          <span className="text-[10px] font-medium tracking-wide uppercase text-muted-foreground">
+            Past delivery errors
+          </span>
+          {informational.map((entry) => (
+            <div
+              key={`${entry.streamPath}:${entry.name}`}
+              className="text-xs break-words text-muted-foreground"
+            >
+              <span className="font-mono">
+                {entry.streamPath} · {entry.name}
+              </span>{" "}
+              — {entry.lastError}{" "}
+              <span className="opacity-70">
+                ({entry.lastErrorAt === null ? "unknown age" : timeAgoLabel(entry.lastErrorAt)})
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+/** Compact "3d ago"-style age; falls back to the raw timestamp when unparsable. */
+function timeAgoLabel(at: string): string {
+  const thenMs = Date.parse(at);
+  if (Number.isNaN(thenMs)) return at;
+  const elapsedMs = Math.max(0, Date.now() - thenMs);
+  const minutes = Math.floor(elapsedMs / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
 }

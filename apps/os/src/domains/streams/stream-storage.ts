@@ -329,6 +329,9 @@ export type SubscriptionCursorRow = {
   /** Live connection generation that owns the watchdog; ignores a late older result. */
   inFlightConnectionGeneration: number | null;
   lastError: string | null;
+  /** When `lastError` was recorded (ISO). Null with a non-null `lastError`
+   * means the row predates the column — unknown age, not "just now". */
+  lastErrorAt: string | null;
   /**
    * Offset of the configuration or cursor-set event that most recently chose
    * this cursor. A delivery remembers this offset before calling its receiver;
@@ -441,6 +444,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         failing_event_attempt integer not null default 0,
         failing_event_skips_since_last_success integer not null default 0,
         last_error text,
+        last_error_at text,
         in_flight_deadline_at integer,
         in_flight_connection_generation integer,
         updated_at text not null
@@ -513,6 +517,15 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
           rename column confirmed_offset to processed_through_offset;
         `,
       },
+      {
+        // Error age beside the error: the skip policy leaves last_error
+        // standing with zero lag, so health surfaces need to know how stale
+        // it is. Null on rows written before this column = unknown age.
+        name: "20260825000001_add_last_error_at",
+        content: sql`
+          alter table subscription_cursors add column last_error_at text;
+        `,
+      },
     ],
     queries: {
       get: sql.nullableOne<{
@@ -521,7 +534,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
       }>`
         select name, processed_through_offset, status, configured_at_offset,
                attempt, next_attempt_at, in_flight_deadline_at,
-               in_flight_connection_generation, last_error,
+               in_flight_connection_generation, last_error, last_error_at,
                failing_event_offset, failing_event_attempt,
                failing_event_skips_since_last_success, cursor_changed_at_offset
         from subscription_cursors
@@ -530,7 +543,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
       list: sql.many<{ result: SubscriptionCursorRowRecord }>`
         select name, processed_through_offset, status, configured_at_offset,
                attempt, next_attempt_at, in_flight_deadline_at,
-               in_flight_connection_generation, last_error,
+               in_flight_connection_generation, last_error, last_error_at,
                failing_event_offset, failing_event_attempt,
                failing_event_skips_since_last_success, cursor_changed_at_offset
         from subscription_cursors
@@ -559,7 +572,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
           next_attempt_at = null,
           in_flight_deadline_at = null,
           in_flight_connection_generation = null,
-          last_error = null,
+          last_error = null, last_error_at = null,
           failing_event_offset = null,
           failing_event_attempt = 0,
           failing_event_skips_since_last_success = 0,
@@ -579,7 +592,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         set processed_through_offset = max(processed_through_offset, :offset),
             attempt = 0, next_attempt_at = null, in_flight_deadline_at = null,
             in_flight_connection_generation = null,
-            last_error = null,
+            last_error = null, last_error_at = null,
             failing_event_offset = null, failing_event_attempt = 0,
             failing_event_skips_since_last_success = case
               when :preserveFailingEventSkips = 1 then failing_event_skips_since_last_success else 0 end,
@@ -599,7 +612,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         set processed_through_offset = max(processed_through_offset, :offset),
             attempt = 0, next_attempt_at = null, in_flight_deadline_at = null,
             in_flight_connection_generation = null,
-            last_error = null,
+            last_error = null, last_error_at = null,
             failing_event_offset = null, failing_event_attempt = 0,
             failing_event_skips_since_last_success = case
               when :preserveFailingEventSkips = 1 then failing_event_skips_since_last_success else 0 end,
@@ -619,7 +632,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         set processed_through_offset = max(processed_through_offset, :offset),
             attempt = 0, next_attempt_at = null, in_flight_deadline_at = null,
             in_flight_connection_generation = null,
-            last_error = null,
+            last_error = null, last_error_at = null,
             failing_event_offset = null, failing_event_attempt = 0,
             failing_event_skips_since_last_success = failing_event_skips_since_last_success + 1,
             updated_at = :updatedAt
@@ -635,6 +648,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         update subscription_cursors
         set attempt = case when :offset > processed_through_offset then 0 else attempt end,
             last_error = case when :offset > processed_through_offset then null else last_error end,
+            last_error_at = case when :offset > processed_through_offset then null else last_error_at end,
             failing_event_offset = case when :offset > processed_through_offset then null else failing_event_offset end,
             failing_event_attempt = case when :offset > processed_through_offset then 0 else failing_event_attempt end,
             failing_event_skips_since_last_success = case
@@ -657,6 +671,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         update subscription_cursors
         set attempt = case when :offset > processed_through_offset then 0 else attempt end,
             last_error = case when :offset > processed_through_offset then null else last_error end,
+            last_error_at = case when :offset > processed_through_offset then null else last_error_at end,
             failing_event_offset = case when :offset > processed_through_offset then null else failing_event_offset end,
             failing_event_attempt = case when :offset > processed_through_offset then 0 else failing_event_attempt end,
             failing_event_skips_since_last_success = case
@@ -694,7 +709,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         };
       }>`
         update subscription_cursors
-        set attempt = 0, next_attempt_at = null, last_error = null,
+        set attempt = 0, next_attempt_at = null, last_error = null, last_error_at = null,
             in_flight_deadline_at = null, in_flight_connection_generation = null,
             failing_event_offset = null, failing_event_attempt = 0,
             failing_event_skips_since_last_success = 0,
@@ -716,6 +731,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
       }>`
         update subscription_cursors
         set attempt = :attempt, next_attempt_at = :nextAttemptAt, last_error = :error,
+            last_error_at = :updatedAt,
             in_flight_deadline_at = null,
             in_flight_connection_generation = null,
             failing_event_offset = :failingEventOffset, failing_event_attempt = :failingEventAttempt,
@@ -732,7 +748,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
       }>`
         update subscription_cursors
         set processed_through_offset = :offset,
-            attempt = 0, next_attempt_at = null, last_error = null,
+            attempt = 0, next_attempt_at = null, last_error = null, last_error_at = null,
             in_flight_deadline_at = null,
             in_flight_connection_generation = null,
             failing_event_offset = null, failing_event_attempt = 0, failing_event_skips_since_last_success = 0,
@@ -972,6 +988,7 @@ type SubscriptionCursorRowRecord = {
   in_flight_deadline_at: number | null;
   in_flight_connection_generation: number | null;
   last_error: string | null;
+  last_error_at: string | null;
   failing_event_offset: number | null;
   failing_event_attempt: number;
   failing_event_skips_since_last_success: number;
@@ -992,6 +1009,7 @@ function rowFromRecord(record: SubscriptionCursorRowRecord): SubscriptionCursorR
     inFlightDeadlineAt: record.in_flight_deadline_at,
     inFlightConnectionGeneration: record.in_flight_connection_generation,
     lastError: record.last_error,
+    lastErrorAt: record.last_error_at,
     failingEventOffset: record.failing_event_offset,
     failingEventAttempt: record.failing_event_attempt,
     failingEventSkipsSinceLastSuccess: record.failing_event_skips_since_last_success,

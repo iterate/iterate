@@ -309,6 +309,8 @@ export type SubscriptionRuntimeState = {
   nextAttemptAt: number | null;
   inFlightDeadlineAt: number | null;
   lastError: string | null;
+  /** When lastError was recorded (ISO); null = unknown age. */
+  lastErrorAt: string | null;
   /** Serialized payload bytes delivered by copy, ITX-call, and webhook subscriptions. */
   bytesSent?: number;
   /** Commit-to-acked latency (stream clock): newest event `createdAt` → awaited delivery resolved. */
@@ -1638,6 +1640,7 @@ export class StreamEventSender {
             nextAttemptAt: row?.nextAttemptAt ?? null,
             inFlightDeadlineAt: row?.inFlightDeadlineAt ?? null,
             lastError: row?.lastError ?? null,
+            lastErrorAt: row?.lastErrorAt ?? null,
             ...(metrics === undefined ? {} : { bytesSent: metrics.bytesSent }),
             ...(completionLatencyMs === null ? {} : { completionLatencyMs }),
             ...(deliveryDurationMs === null ? {} : { deliveryDurationMs }),

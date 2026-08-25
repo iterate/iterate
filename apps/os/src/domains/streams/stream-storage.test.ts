@@ -250,6 +250,31 @@ describe("SqliteSubscriptionCursorStore hosted delivery watchdog", () => {
     });
   });
 
+  it("stamps lastErrorAt beside lastError and clears both only on progress", () => {
+    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
+    store.ensure("processor", 4, 12);
+    const cursorChangedAtOffset = store.get("processor")!.cursorChangedAtOffset;
+    expect(store.get("processor")).toMatchObject({ lastError: null, lastErrorAt: null });
+
+    store.nack("processor", { attempt: 1, nextAttemptAt: 19_000, error: "receiver blew up" });
+    const nacked = store.get("processor")!;
+    expect(nacked.lastError).toBe("receiver blew up");
+    // Recorded at write time, so health surfaces can age the error — the
+    // skip policy leaves lastError standing with zero lag for a long time.
+    expect(Date.parse(nacked.lastErrorAt!)).toBeGreaterThan(Date.now() - 60_000);
+
+    // A confirm WITHOUT progress keeps the error and its timestamp together.
+    store.confirm("processor", 4, { cursorChangedAtOffset });
+    expect(store.get("processor")).toMatchObject({
+      lastError: "receiver blew up",
+      lastErrorAt: nacked.lastErrorAt,
+    });
+
+    // Progress clears them together too.
+    store.confirm("processor", 6, { cursorChangedAtOffset });
+    expect(store.get("processor")).toMatchObject({ lastError: null, lastErrorAt: null });
+  });
+
   it("confirm is fenced by the cursor-changing event like an acknowledgement", () => {
     const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
     store.ensure("processor", 4, 12);

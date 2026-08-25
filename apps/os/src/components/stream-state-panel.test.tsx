@@ -272,6 +272,7 @@ test.each([
     nextAttemptAt: null,
     inFlightDeadlineAt: null,
     lastError: null,
+    lastErrorAt: null,
   };
   liveStateMocks.project.mockReturnValue({
     value: state,
@@ -343,6 +344,7 @@ test("the catalog renders one uniform row per subscription with status and lag",
     nextAttemptAt: 1_753_000_000_000,
     inFlightDeadlineAt: null,
     lastError: 'capability "dashboard" is offline',
+    lastErrorAt: null,
   };
   state.runtime.subscriptions["ops-webhook"] = {
     confirmedOffset: 9,
@@ -352,6 +354,7 @@ test("the catalog renders one uniform row per subscription with status and lag",
     nextAttemptAt: null,
     inFlightDeadlineAt: null,
     lastError: "HTTP 500 from receiver",
+    lastErrorAt: null,
   };
   liveStateMocks.project.mockReturnValue({
     value: state,
@@ -586,6 +589,7 @@ function streamRuntimeState(maxOffset: number): StreamRuntimeDebugState {
           nextAttemptAt: null,
           inFlightDeadlineAt: null,
           lastError: null,
+          lastErrorAt: null,
         },
       },
       ephemeralEvents: {

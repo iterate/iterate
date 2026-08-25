@@ -138,6 +138,12 @@ import {
   type TemplateSyncResult,
 } from "./domains/repos/template-sync.ts";
 import {
+  classifySubscriptionHealth,
+  selectSubscriptionHealthStreamPaths,
+  type ProjectSubscriptionHealth,
+  type StreamSubscriptionHealth,
+} from "./domains/projects/subscription-health.ts";
+import {
   agentWorkspacePath,
   effectiveWorkspaceMounts,
   normalizeWorkspaceMountKeys,
@@ -6268,6 +6274,8 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   schedulers: "Scheduler catalog: get(path) for extra /scheduler/** instances.",
   secrets: "Secret catalog by path.",
   streams: "Project stream catalog: get(path), list().",
+  subscriptionHealth:
+    "Roll up subscription delivery health across the project's streams (root + well-known platform streams + recently active agents): halted (red), lagging/backoff (amber), and historical lastError (informational) entries with lag, attempts, and lastErrorAt.",
   worker: "The default repo-backed project worker.",
   workers: "Dynamic worker refs: get(ref).",
   workspaces:
@@ -6914,6 +6922,57 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       name: project.name,
       projectId: project.projectId,
     });
+  }
+
+  /**
+   * Roll up subscription delivery health across the project's streams: the
+   * root stream, the well-known platform streams, and the most recently
+   * active agent streams (bounded — see subscription-health.ts). Server-side
+   * fan-out, one plain result: per stream, its halted (red), lagging/backoff
+   * (amber), and historical-lastError (informational) subscriptions with
+   * lag, attempts, and error age. The dashboard's worker-health sheet polls
+   * this while open; it is equally the programmatic surface for agents
+   * checking their own project's delivery health.
+   */
+  async subscriptionHealth(): Promise<ProjectSubscriptionHealth> {
+    const live = await new LiveStateRelayRpcTarget<ProjectLiveState>(() => this.#projectDo, {
+      label: `project ${this.#projectId} subscription health`,
+    }).get();
+    const paths = selectSubscriptionHealthStreamPaths({
+      streamsIndex: live.streamsIndex,
+      catalogPaths: live.reduced.streams.map((stream) => stream.path),
+    });
+    const streams = await Promise.all(
+      paths.map(async (path): Promise<StreamSubscriptionHealth> => {
+        try {
+          const entries = await new StreamSubscriptionCollectionRpcTarget({
+            auth: this.#props.auth,
+            path,
+            projectId: this.#projectId,
+          }).list();
+          return {
+            path,
+            subscriptions: entries.flatMap((entry) => {
+              const classified = classifySubscriptionHealth(entry);
+              return classified === null ? [] : [classified];
+            }),
+            error: null,
+          };
+        } catch (error) {
+          // One unreadable stream must not hide every other stream's health.
+          return {
+            path,
+            subscriptions: [],
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      }),
+    );
+    return {
+      generatedAt: new Date().toISOString(),
+      scannedPaths: paths,
+      streams: streams.filter((stream) => stream.subscriptions.length > 0 || stream.error !== null),
+    };
   }
 
   /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */

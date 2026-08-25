@@ -144,6 +144,17 @@ export interface Project {
    * `itx.docs.get({ name })` per declaration away).
    */
   __describe(): Promise<ProjectDescription>;
+  /**
+   * Roll up subscription delivery health across the project's streams: the
+   * root stream, the well-known platform streams, and the most recently
+   * active agent streams (bounded — see subscription-health.ts). Server-side
+   * fan-out, one plain result: per stream, its halted (red), lagging/backoff
+   * (amber), and historical-lastError (informational) subscriptions with
+   * lag, attempts, and error age. The dashboard's worker-health sheet polls
+   * this while open; it is equally the programmatic surface for agents
+   * checking their own project's delivery health.
+   */
+  subscriptionHealth(): Promise<ProjectSubscriptionHealth>;
   /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */
   debug(): Promise<string>;
   /** Restart the project's server-side object; the next request boots it fresh. */
@@ -2130,6 +2141,15 @@ export type ProjectDescription = Description & {
   projectId: string;
 };
 
+/** What `itx.subscriptionHealth()` returns. */
+export type ProjectSubscriptionHealth = {
+  generatedAt: string;
+  /** Every stream the scan covered — the fan-out bound made visible. */
+  scannedPaths: string[];
+  /** Only streams with something to report; healthy subscriptions are omitted. */
+  streams: StreamSubscriptionHealth[];
+};
+
 /**
  * The internal extension used when stream delivery calls a hosted processor.
  * Public processor properties expose only {@link StreamProcessorRpc}; a stored
@@ -2417,6 +2437,14 @@ export type CapabilityDescription = {
   scope?: string;
   type: "builtin" | "live" | "itx-call";
   types?: string;
+};
+
+/** One scanned stream's troubled subscriptions, or the read error that hid them. */
+export type StreamSubscriptionHealth = {
+  path: string;
+  subscriptions: SubscriptionHealthEntry[];
+  /** Non-null when the stream could not be read; its subscriptions are unknown. */
+  error: string | null;
 };
 
 /**
@@ -4463,6 +4491,20 @@ export type CommittedSubscriptionRemovedEvent = Omit<
  */
 export type ProjectDeploymentStatus = "created" | "creating" | "failed" | "missing" | "unknown";
 
+/** One troubled subscription in the rollup: its tier plus the delivery facts behind it. */
+export type SubscriptionHealthEntry = {
+  name: string;
+  tier: SubscriptionHealthTier;
+  lag: number;
+  confirmedOffset: number;
+  attempt: number;
+  nextAttemptAt: number | null;
+  lastError: string | null;
+  /** When lastError was recorded (ISO); null = unknown age (rows written
+   * before the column existed). */
+  lastErrorAt: string | null;
+};
+
 /** One consistent read of a processor (what `snapshot()` returns): the folded
  * state pinned to the offset of the last event folded into it. */
 export type ProcessorSnapshot<State> = {
@@ -5122,6 +5164,8 @@ export type SubscriptionRuntimeState = {
   nextAttemptAt: number | null;
   inFlightDeadlineAt: number | null;
   lastError: string | null;
+  /** When lastError was recorded (ISO); null = unknown age. */
+  lastErrorAt: string | null;
   /** Serialized payload bytes delivered by copy, ITX-call, and webhook subscriptions. */
   bytesSent?: number;
   /** Commit-to-acked latency (stream clock): newest event `createdAt` → awaited delivery resolved. */
@@ -5207,8 +5251,27 @@ export type StreamSubscriptionListEntry = {
   status: "active" | "halted";
   lag: number;
   confirmedOffset: number;
+  attempt: number;
+  /** Wall-clock ms before which delivery must not retry; non-null = delivery
+   * is failing and backing off right now. */
+  nextAttemptAt: number | null;
   lastError: string | null;
+  /** When lastError was recorded (ISO); null with a non-null lastError =
+   * unknown age (rows written before the column existed). */
+  lastErrorAt: string | null;
 };
+
+/**
+ * Severity tiers, in the order the dashboard escalates them:
+ * - `halted` — delivery durably gave up; nothing flows until a human resumes
+ *   it (red badge);
+ * - `lagging` — delivery is failing and backing off right now, so events are
+ *   piling up (amber badge);
+ * - `informational` — a historical `lastError` on an otherwise-delivering
+ *   subscription (the skip policy leaves these standing for a long time);
+ *   shown as a quiet line, never a badge — alarm fatigue kills the surface.
+ */
+export type SubscriptionHealthTier = "halted" | "lagging" | "informational";
 
 /** Internal hosted-processor frame: an ordinary batch plus its one-shot completion callback. */
 export type StreamWakeEventBatch = StreamEventBatch & {
@@ -5435,6 +5498,8 @@ export type StreamSubscriptionDescription = {
   attempt: number;
   nextAttemptAt: number | null;
   lastError: string | null;
+  /** When lastError was recorded (ISO); null = unknown age. */
+  lastErrorAt: string | null;
 };
 
 /**

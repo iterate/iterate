@@ -590,7 +590,14 @@ export type StreamSubscriptionListEntry = {
   status: "active" | "halted";
   lag: number;
   confirmedOffset: number;
+  attempt: number;
+  /** Wall-clock ms before which delivery must not retry; non-null = delivery
+   * is failing and backing off right now. */
+  nextAttemptAt: number | null;
   lastError: string | null;
+  /** When lastError was recorded (ISO); null with a non-null lastError =
+   * unknown age (rows written before the column existed). */
+  lastErrorAt: string | null;
 };
 
 /** `subscriptions.get(name).describe()`: the committed configuration plus the
@@ -605,6 +612,8 @@ export type StreamSubscriptionDescription = {
   attempt: number;
   nextAttemptAt: number | null;
   lastError: string | null;
+  /** When lastError was recorded (ISO); null = unknown age. */
+  lastErrorAt: string | null;
 };
 
 /**
@@ -1901,7 +1910,10 @@ export class StreamDurableObject extends DurableObject<Env> {
             (entry.deliveryHalted !== undefined ? ("halted" as const) : ("active" as const)),
           lag: Math.max(0, head - confirmedOffset),
           confirmedOffset,
+          attempt: row?.attempt ?? 0,
+          nextAttemptAt: row?.nextAttemptAt ?? null,
           lastError: row?.lastError ?? null,
+          lastErrorAt: row?.lastErrorAt ?? null,
         };
       },
     );
@@ -1924,6 +1936,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       attempt: row?.attempt ?? 0,
       nextAttemptAt: row?.nextAttemptAt ?? null,
       lastError: row?.lastError ?? null,
+      lastErrorAt: row?.lastErrorAt ?? null,
     };
   }
 
