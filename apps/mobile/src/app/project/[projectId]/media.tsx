@@ -749,22 +749,22 @@ function MediaRow({
 
   return (
     <Pressable onPress={() => setExpanded(!expanded)} style={styles.row}>
-      <Pressable
-        accessibilityLabel="View full screen"
-        disabled={imageUri === null}
-        onPress={() => imageUri && onViewImage(imageUri)}
-      >
-        {imageUri ? (
+      {imageUri ? (
+        // The press target EXISTS only once it can act. A disabled pressable
+        // here silently swallowed presses that raced the signed-URL query
+        // (on slow preview runs the query resolved ~100ms AFTER the tap that
+        // was aimed at it — the viewer never opened and nothing re-tapped);
+        // rendering the labeled target only when pressable turns that race
+        // into an ordinary wait-for-element.
+        <Pressable accessibilityLabel="View full screen" onPress={() => onViewImage(imageUri)}>
           <Image source={{ uri: imageUri }} style={styles.thumb} />
-        ) : (
-          // "Loading" while the signed-URL query resolves: the press above
-          // is a silent no-op until imageUri exists, so the placeholder must
-          // SAY it is loading — for humans, and for spec drivers that hold
-          // clicks while a loading indicator is on screen (the full-screen
-          // viewer spec raced this exact window on preview).
-          <View accessibilityLabel="Loading" style={[styles.thumb, styles.thumbPlaceholder]} />
-        )}
-      </Pressable>
+        </Pressable>
+      ) : (
+        // "Loading" while the signed-URL query resolves — for humans, and
+        // for spec drivers that extend action deadlines while a loading
+        // indicator is visible.
+        <View accessibilityLabel="Loading" style={[styles.thumb, styles.thumbPlaceholder]} />
+      )}
       <View style={styles.rowBody}>
         {item.payload.title ? (
           <Text numberOfLines={expanded ? undefined : 1} style={styles.rowTitle}>

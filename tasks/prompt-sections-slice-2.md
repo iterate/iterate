@@ -244,6 +244,26 @@ prompt line only, plus any legacy-keyed role drift); add scenario
     worker actor), so agent-send-message asserts the derived-sender SET,
     not one actor.
 
+- 2026-08-25 (fifth): media failed BOTH attempts on the next run despite the
+  Loading label — the label fix was insufficient, and the trace archaeology
+  that followed nailed the full mechanism across all four failing attempts
+  (runs 2 and 4, both attempts each): the row's signed-URL query takes
+  ~15-20s on the affected runs, and its React commit lands 80-140ms AFTER
+  the spec's tap every single time (both the spec's progress and the query
+  ride the same slow session, so they converge on the same wall-clock
+  moment — correlated, not coincidence). The tap hits the still-disabled
+  pressable: silent no-op, viewer never opens, and the post-tap DOM is
+  byte-frozen in the trace. The Loading label couldn't save it because
+  middlewright extends deadlines only while a spinner is VISIBLE, and the
+  placeholder vanished 80ms after the tap — before the next action's
+  polls. (An earlier "label never rendered" reading was a grep artifact:
+  raw-grepping JSON-escaped snapshot attributes.) Fix is structural now:
+  the labeled "View full screen" pressable EXISTS only once imageUri does —
+  a press target that cannot act is not rendered — so the spec's tap is an
+  ordinary wait-for-element (extended by the visible Loading placeholder),
+  and no latency can swallow a press. Verified green against both the local
+  and the preview-9 backends.
+
 - 2026-08-25 (fourth): round-three preview verdict, from the run's own
   evidence (not the lane summary): the playwright lane PASSED — media green
   (the race fix holds), create-project FLAKY-passed. Its first attempt lost
