@@ -561,7 +561,7 @@ export type AgentChatMessage = {
   files?: AgentFileAttachment[];
 };
 
-const AGENT_CONTEXT_PROTOCOL_PROMPT = [
+export const AGENT_CONTEXT_PROTOCOL_PROMPT = [
   "Journal-projected context messages are items from an append-only event stream.",
   'Standing instructions render as one document of <section key="..."> blocks. A later <section key="..." supersedes="@<offset>"> block in the timeline replaces the section occurrence it names from that moment on; everything above it predates it.',
   "Timeline items start with @<offset>, their stable source coordinate. actor= and refs=[] record provenance and where richer source material can be retrieved.",

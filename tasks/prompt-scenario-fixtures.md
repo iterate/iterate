@@ -196,3 +196,13 @@ provide flag).
   compares at a send), while the click-time highlights diff against the
   previous EVENT. At 3a's @84 the ✂ therefore sits up at the rewritten rule
   while the green lines mark only the stamp — both true, each labeled.
+- Review follow-up (Misha): declared abridgements in the render layer — the
+  printer replaces long fold-injected boilerplate with the explainer's short
+  stand-in before printing, keyed on the imported constant itself
+  (AGENT_CONTEXT_PROTOCOL_PROMPT, now exported from agent-prompt-fold) so
+  the mapping breaks loudly rather than rotting. The protocol renders as the
+  page's original one-liner ending in "…"; fences and page snapshots share
+  the pass (renderMessageLines), so the byte-identity test still holds.
+  Audit of all fences found no other long fold-injected text — every other
+  long-ish line is a fixture-authored stand-in already ending in "…".
+  #birth@5 renders as 6 lines. Page: 227KB.
