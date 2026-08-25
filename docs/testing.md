@@ -345,6 +345,22 @@ the credentialed, lane-specific pieces at the edges that need them. The
 spec actually needs it: "needed by both lanes" is proven by a consumer, not
 predicted.
 
+## Data fixtures with regenerable outputs
+
+`apps/os/src/domains/agents/prompt-scenarios/` is the pattern reference: one
+markdown file per scenario holds input events (YAML fence) and output fences
+computed by the real prompt fold. Plain runs assert the outputs (and the
+generated `explainers/prompt-sections.html`) are byte-fresh; refresh with:
+
+```bash
+cd apps/os && pnpm vitest run prompt-scenarios -u
+```
+
+Commentary lives in an `annotations.yaml` fence ({request, find, comment});
+the harness re-weaves `#` comment lines into regenerated outputs, and an
+annotation matching nothing fails the test. See `fixture-helpers.ts` for the
+format.
+
 ## Video mode: recorded spec demos for PRs
 
 Any Playwright spec re-runs as a watchable demo — pointer highlights on every
