@@ -1254,6 +1254,18 @@ export interface Repo {
    * large histories without changing anything on GitHub.
    */
   resetFromGithub(input: { depth?: number }): Promise<GithubResetResult>;
+  /**
+   * Update this repo from the template it was created from — the durable
+   * creation request is the template intent (`empty` creates map to the
+   * picker's Default template, so every seeded repo is syncable; imports are
+   * refused with directions to syncFromGithub). Per-file three-way against
+   * the template content at the last sync: user-untouched files adopt the
+   * latest template, user-edited files stand, both-changed files are skipped
+   * and reported in the result. One normal commit, never a reset;
+   * `repo/template-synced` records the template revision as the next sync's
+   * base.
+   */
+  syncFromTemplate(): Promise<TemplateSyncResult>;
   /** The repo stream processor (snapshot/state) — facet-hosted on the repo stream. */
   processor: StreamProcessorRpc<RepoProcessorState>;
   /** The repo's live state — its reduced processor state. See {@link LiveStateRpc}. */
@@ -3590,6 +3602,21 @@ export type GithubResetResult = {
   previousCommitOid: string | null;
 };
 
+/** What `repo.syncFromTemplate` returns. */
+export type TemplateSyncResult = {
+  /** The branch head after the sync — a fresh commit, or the unchanged head. */
+  commitOid: string;
+  /** Paths committed from the template (adds, updates, and deletes). */
+  updated: string[];
+  /** Both-changed paths left untouched — the template moved AND the repo's
+   * copy differs from the template content at the last sync. */
+  skipped: string[];
+  /** The template revision this sync read. */
+  templateCommitOid: string;
+  /** Present (true) when nothing needed updating and nothing was skipped. */
+  upToDate?: boolean;
+};
+
 /**
  * The repo processor's reduced state, inferred from the contract's
  * `stateSchema` — the one definition of the shape.
@@ -3679,6 +3706,7 @@ export type RepoProcessorState = {
     ok: boolean;
   } | null;
   remote: string | null;
+  lastTemplateSync: { at: string; templateCommitOid: string } | null;
 };
 
 /** Worker reference accepted by `workers.get` and worker-backed capabilities. */

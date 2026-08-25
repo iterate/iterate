@@ -134,6 +134,10 @@ import {
 } from "./domains/sandboxes/sandbox-processor-contract.ts";
 import { linkRepoToGithub, unlinkRepoFromGithub } from "./domains/repos/github-link.ts";
 import {
+  templateReferenceForCreateRequest,
+  type TemplateSyncResult,
+} from "./domains/repos/template-sync.ts";
+import {
   agentWorkspacePath,
   effectiveWorkspaceMounts,
   normalizeWorkspaceMountKeys,
@@ -1614,6 +1618,8 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
           "Destructively replace the Artifacts repo with the linked GitHub branch ({ depth? }); GitHub always wins and big repositories require a shallow depth.",
         syncFromGithub:
           "Adopt GitHub's branch head (fast-forward only; { force } discards local-only commits; { depth } requests a bounded history window, while fast-forwards always retain the prior Artifacts head for queue diffs).",
+        syncFromTemplate:
+          "Update the repo from the template it was created from (empty creates map to the Default template): per-file three-way against the template at the last sync, one normal commit, files changed on both sides skipped and reported.",
         unlinkGithub: "Remove the GitHub link and its webhook subscription.",
         whoami: "Repo identity string (debug).",
       },
@@ -1889,6 +1895,26 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
    */
   resetFromGithub(input: { depth?: number } = {}): Promise<GithubResetResult> {
     return this.#durableObjectStub.resetFromGithub(input);
+  }
+
+  /**
+   * Update this repo from the template it was created from — the durable
+   * creation request is the template intent (`empty` creates map to the
+   * picker's Default template, so every seeded repo is syncable; imports are
+   * refused with directions to syncFromGithub). Per-file three-way against
+   * the template content at the last sync: user-untouched files adopt the
+   * latest template, user-edited files stand, both-changed files are skipped
+   * and reported in the result. One normal commit, never a reset;
+   * `repo/template-synced` records the template revision as the next sync's
+   * base.
+   */
+  async syncFromTemplate(): Promise<TemplateSyncResult> {
+    const { state } = await this.processor.snapshot();
+    return await this.#durableObjectStub.syncFromTemplate({
+      reference: templateReferenceForCreateRequest(state.createRequest),
+      baseTemplateCommitOid:
+        state.lastTemplateSync === null ? null : state.lastTemplateSync.templateCommitOid,
+    });
   }
 
   // GitHub connections are project-scoped (their secrets and streams live in

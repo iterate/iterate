@@ -33,10 +33,13 @@ describe("downloadPublicGithubTemplate", () => {
         },
         githubFetch,
       ),
-    ).resolves.toEqual([
-      { content: "agents\n", path: "AGENTS.md" },
-      { content: "worker", path: "worker.ts" },
-    ]);
+    ).resolves.toEqual({
+      commitOid: fixture.commitOid,
+      files: [
+        { content: "agents\n", path: "AGENTS.md" },
+        { content: "worker", path: "worker.ts" },
+      ],
+    });
 
     expect(githubFetch).toHaveBeenCalledTimes(2);
     expect(githubFetch.mock.calls[0]?.[0]).toBe(
@@ -71,7 +74,10 @@ describe("downloadPublicGithubTemplate", () => {
         },
         githubFetch,
       ),
-    ).resolves.toEqual([{ content: "worker", path: "worker.ts" }]);
+    ).resolves.toEqual({
+      commitOid: fixture.commitOid,
+      files: [{ content: "worker", path: "worker.ts" }],
+    });
     expect(githubFetch).toHaveBeenCalledTimes(3);
     expect(decodeRequestBody(githubFetch.mock.calls[0]?.[1]?.body)).toContain(
       "ref-prefix refs/pull/2503/head",

@@ -419,6 +419,14 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
             ok: true,
           },
         };
+      case "events.iterate.com/repo/template-synced":
+        return {
+          ...state,
+          lastTemplateSync: {
+            at: event.createdAt,
+            templateCommitOid: event.payload.templateCommitOid,
+          },
+        };
       case "events.iterate.com/repo/github-import-requested":
         return { ...state, githubImport: { ...event.payload, status: "requested" as const } };
       case "events.iterate.com/repo/github-import-started":

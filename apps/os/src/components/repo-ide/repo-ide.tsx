@@ -28,6 +28,7 @@ import { CommitHistoryPanel } from "./commit-history-panel.tsx";
 import { RepoEditorPane } from "./repo-editor-pane.tsx";
 import { discardRepoFile } from "./repo-file-discard.ts";
 import { RepoGithubPanel } from "./repo-github-panel.tsx";
+import { RepoTemplatePanel } from "./repo-template-panel.tsx";
 import { RepoFileTree, type RepoTreeActions } from "./repo-file-tree.tsx";
 import {
   commitPlan,
@@ -348,7 +349,10 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
                 </div>
               }
             >
-              <RepoGithubPanel projectId={projectId} repoPath={repoPath} />
+              <div className="flex h-full flex-col overflow-y-auto">
+                <RepoTemplatePanel repoPath={repoPath} />
+                <RepoGithubPanel projectId={projectId} repoPath={repoPath} />
+              </div>
             </Suspense>
           ) : scm ? (
             <GitPanel
