@@ -231,8 +231,8 @@ export const MCP_AGENT_SYSTEM_PROMPT_REVISION = contentHash(MCP_AGENT_SYSTEM_PRO
  * which is the render order, since the standing document keeps
  * first-appearance order; untagged content — including whole untagged
  * files, the integration channel prompts — becomes one
- * "agent/system-prompt" section (an authoring convention: the kernel knows
- * no key by name). This event rides the atomic birth batch, so the prompt
+ * "agent/system-prompt" section (an authoring convention). This event
+ * rides the atomic birth batch, so the prompt
  * always exists before any trigger can schedule a turn. `idempotencyKey`
  * identifies this payload occurrence; never reuse one after changing
  * `content`.

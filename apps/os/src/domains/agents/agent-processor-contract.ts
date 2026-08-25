@@ -31,11 +31,6 @@ import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { AgentBinding, AgentSummary, AgentSummaryUpdated } from "./agent-presence.ts";
 
-// Section keys are FULLY ARBITRARY strings — the kernel knows no key by
-// name. "agent/system-prompt", "identity", "config/agents-md" are authoring
-// conventions, not platform vocabulary: no key triggers special clearing,
-// ordering, or gating of any other key.
-
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
   version: "7.0.0",
