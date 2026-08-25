@@ -1,6 +1,13 @@
 import { expect, test } from "vitest";
 import type { StreamEventInput } from "iterate/processors";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
+import {
+  type FacetProbeAnswer,
+  PING,
+  PROBE_PATH,
+  probeFacetSource,
+  SEEN,
+} from "./facet-version-probe.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 // The source-change contract for a userspace processor FACET, in both
@@ -22,11 +29,8 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
 // half of the marker — plus a per-instance boot id and the source revision it
 // was built from.
 
-const PING = "events.iterate.test/facet-version/ping";
-const SEEN = "events.iterate.test/facet-version/seen";
 const WOKEN = "events.iterate.com/stream/woken";
 
-const PROBE_PATH = "version-probe.js";
 const ECHO_PATH = "version-echo.js";
 
 /*
@@ -59,7 +63,10 @@ const ECHO_PATH = "version-echo.js";
  * the poll, and a restarted facet legitimately builds the new source; the
  * very next run was back to 16 same-boot polls on the old key. Before
  * believing this bug fixed, check the probe: the claim is only about a
- * SAME-BOOT facet, and only same-boot evidence refutes it.
+ * SAME-BOOT facet, and only same-boot evidence refutes it. Every red run
+ * since has been the same coincidence, and the four comparisons below
+ * cannot see it: `userspace-facet-recycle-false-alarm.e2e.test.ts` forces
+ * the recycle instead of waiting for it and pins that blind spot.
  */
 test.fails(
   "a userspace facet rebuilds on a source commit and only on a source commit",
@@ -128,14 +135,13 @@ test.fails(
       },
     } satisfies StreamEventInput);
 
-    type Answer = { id: string; bootId: string; buildKey: string; revision: string };
-    const answers = async (): Promise<Answer[]> => {
+    const answers = async (): Promise<FacetProbeAnswer[]> => {
       const events = await stream.getEvents({ eventTypes: [SEEN] });
-      return events.map((event) => event.payload as Answer);
+      return events.map((event) => event.payload as FacetProbeAnswer);
     };
 
     /** Ping the facet and return the answer it committed. */
-    const identify = async (label: string, timeoutMs: number): Promise<Answer> => {
+    const identify = async (label: string, timeoutMs: number): Promise<FacetProbeAnswer> => {
       const id = `${label}-${crypto.randomUUID().slice(0, 8)}`;
       await stream.append({ type: PING, payload: { id } } satisfies StreamEventInput);
       await waitForCondition(
@@ -192,7 +198,7 @@ test.fails(
     // Poll rather than ping once: a rebuild that merely LAGS the commit is a
     // different (and much milder) thing than one that never happens, and only
     // a repeated ping tells them apart.
-    const afterCommitAnswers: Answer[] = [];
+    const afterCommitAnswers: FacetProbeAnswer[] = [];
     const deadline = Date.now() + 45_000;
     let afterCommit = await identify("after-commit-0", 90_000);
     afterCommitAnswers.push(afterCommit);
@@ -239,89 +245,6 @@ test.fails(
     expect(afterCommit).not.toMatchObject({ bootId: third.bootId });
   },
 );
-
-/**
- * The probe facet, committed to the project's config repo. Plain JavaScript
- * (the platform bundles it; TS syntax fails the build as a
- * `subscription-delivery-halted` event) — so `#private` fields and plain
- * assignment instead of type annotations.
- *
- * It owes no background work, so `recovery` stays off: this probe is about
- * facet IDENTITY across incarnations, and a keepalive alarm would add a second
- * thing that revives the facet.
- */
-const probeFacetSource = (revision: string) => `
-import { StreamProcessorFacet } from "iterate/sdk";
-import { defineProcessorContract, StreamProcessor } from "iterate/processors";
-import { z } from "zod";
-
-export const VersionProbeContract = defineProcessorContract({
-  slug: "facet-version",
-  version: "1.0.0",
-  description: "Reports which facet instance and which loaded build handled each ping.",
-  stateSchema: z.object({ seen: z.array(z.string()).default([]) }),
-  events: {
-    "${PING}": {
-      description: "Ask the facet to identify itself.",
-      payloadSchema: z.object({ id: z.string() }),
-    },
-    "${SEEN}": {
-      description: "The answering facet instance, its build key, and its source revision.",
-      payloadSchema: z.object({
-        id: z.string(),
-        bootId: z.string(),
-        buildKey: z.string(),
-        revision: z.string(),
-      }),
-    },
-  },
-  consumes: ["${PING}"],
-  emits: ["${SEEN}"],
-});
-
-class VersionProbeProcessor extends StreamProcessor {
-  contract = VersionProbeContract;
-  // Set by the facet below, once per created processor.
-  bootId = "unset";
-  buildKey = "unset";
-
-  reduce({ state, event }) {
-    return { ...state, seen: [...state.seen, event.payload.id] };
-  }
-
-  processEvent({ event, append, blockProcessorWhile }) {
-    if (event === null || event.type !== "${PING}") return;
-    const id = event.payload.id;
-    const bootId = this.bootId;
-    const buildKey = this.buildKey;
-    // Per-event work the cursor must not outrun: the answer IS the measurement.
-    blockProcessorWhile(async () => {
-      await append({
-        type: "${SEEN}",
-        idempotencyKey: "seen@" + id,
-        // Baked into the SOURCE, so the answer says which build actually ran.
-        payload: { id, bootId, buildKey, revision: "${revision}" },
-      });
-    });
-  }
-}
-
-export class VersionProbeFacet extends StreamProcessorFacet {
-  // One per FACET INSTANCE: a new value proves the facet was torn down and
-  // started again (the base rebuilds its host per incarnation, but this field
-  // lives on the Durable Object instance itself).
-  #bootId = crypto.randomUUID();
-
-  createProcessor(deps) {
-    const processor = new VersionProbeProcessor(deps);
-    processor.bootId = this.#bootId;
-    // The build key the Stream DO resolved for this load — verbatim the
-    // cacheKey half of the facetSourceVersion marker that drives the abort.
-    processor.buildKey = String(this.env.ITERATE_WORKER_VERSION ?? "missing");
-    return processor;
-  }
-}
-`;
 
 /**
  * A STATELESS worker off the same repo. It holds no facet and caches nothing,
