@@ -116,15 +116,6 @@ runnable against a deployed env).
       placement, rewrite replace/delete/`*`, canonical-order-vs-arrival,
       umbrella supersession, temporal coalesce); parser specs in
       packages/iterate; full local suite green_
-- [x] Truncated replies are never executable — _finish_reason captured in
-      workers-ai-transport's SSE drain (and non-streamed path), threaded
-      through the callLlm seam (optional, so scripted transports opt in);
-      an assistant context event whose finish reason wasn't "stop" carries
-      `truncated: true`, and BOTH interpreters (agent-codemode.ts and
-      codemode-tag's vendored worker parser) answer it with corrective
-      feedback instead of extracting the half-script; specs in
-      workers-ai-transport.test.ts, agent-processor.test.ts, and
-      agent-response-parsing.test.ts_
 - [ ] Draft PR, preview e2e green — _PR #2512 open (draft); e2e assertions
       updated for the new state shape but need a preview run_
 
@@ -266,41 +257,6 @@ Judgment calls in this pass:
   AND body shape (`iterate/config/agents-md:<hash>:after-<off>` + keyed
   context-added), so old-worker and new-worker syncs of the same transition
   dedupe against each other.
-
-### 2026-08-24 (late): truncated replies are never executable
-
-From the cross-agent research handoff: a completion cut off by max-tokens or
-a broken stream can end mid-`<codemode>` block / mid-fence, and both
-interpreters would happily extract and run the surviving half-script.
-
-- The SSE drain captures `choices[0].finish_reason` (last non-null wins —
-  it rides the empty-delta final content frame, per the existing gpt-5.5
-  fixture) and the non-streamed path extracts it from the response object;
-  it also lands in the journaled rawResponse evidence.
-- `AgentLlmTransport` (the callLlm test seam) gained optional
-  `finishReason`; scripted harness transports set it to simulate truncation.
-- The assistant `agents/context-added` payload gained optional
-  `truncated: boolean`, stamped when the finish reason exists and isn't
-  "stop" — the fact must live on the EVENT because codemode-tag's worker
-  sees only events, possibly a delivery later, and replays must see it too.
-- Both interpreters guard before parsing: corrective developer feedback
-  ("your reply was truncated — NOTHING was executed; re-send"),
-  after-current-request, idempotency-keyed
-  `agent/truncated-reply-rejected@<offset>` in BOTH so the birth race
-  dedupes (same pattern as the malformed-snippet feedback).
-- Fallback rule: a dialect that reports no finish_reason at all leaves the
-  reply untreated (assume complete) — fails open to today's behavior rather
-  than blocking every reply from models that never report one. The AI
-  Gateway question resolved cleanly: BYOK proxies chunk BODIES verbatim
-  (the response cache replays recorded SSE byte-identically), and
-  finish_reason lives in the chunk JSON, not headers — nothing to strip.
-- No test seam exists that drives codemode-tag's worker interpreter
-  directly; its guard mirrors the platform's exactly, and
-  agent-response-parsing.test.ts proves the `truncated` marker is visible
-  in reduced state/events with parsing off (all a userland worker gets).
-- The prefix-superset spec the handoff asked about already existed
-  (agent-prompt-fold.test.ts, "strict byte-superset") — not duplicated.
-
 ### 2026-08-24 (bugbot round)
 
 - **Umbrella supersession made symmetric** (bugbot HIGH): a segments append
@@ -421,3 +377,12 @@ first-appearance specs passed with only their event synthesis changed
 the mixed tagged+untagged fold spec is deleted — the parser spec already
 proves the N+1 list, and at the event level there is nothing special left
 to show.
+
+### 2026-08-25 (fourth): truncation guard pulled back out
+
+The truncated-reply guard (finish_reason capture, `truncated` on assistant
+events, both interpreters refusing extraction with corrective feedback) was
+built and spec'd, then removed before merge to keep this diff to the prompt
+model itself. The full implementation lives in commit a9e3c7ef3 (reverted
+by the commit after this note); follow-up task:
+tasks/truncated-reply-guard.md.

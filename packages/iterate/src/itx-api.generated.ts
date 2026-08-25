@@ -2635,7 +2635,6 @@ export type AgentProcessorState = {
             | { type: "email"; address?: string | undefined; name?: string | undefined }
             | { type: "github"; login?: string | undefined; senderType?: string | undefined }
             | undefined;
-          truncated?: boolean | undefined;
           llmRequestPolicy:
             | { behaviour: "dont-trigger-request" }
             | { behaviour: "interrupt-current-request" }
@@ -2689,7 +2688,6 @@ export type AgentProcessorState = {
             | { type: "email"; address?: string | undefined; name?: string | undefined }
             | { type: "github"; login?: string | undefined; senderType?: string | undefined }
             | undefined;
-          truncated?: boolean | undefined;
           llmRequestPolicy:
             | { behaviour: "dont-trigger-request" }
             | { behaviour: "interrupt-current-request" }
@@ -2880,7 +2878,6 @@ export type AgentEventInput =
           | { type: "email"; address?: string | undefined; name?: string | undefined }
           | { type: "github"; login?: string | undefined; senderType?: string | undefined }
           | undefined;
-        truncated?: boolean | undefined;
         llmRequestPolicy?:
           | { behaviour: "dont-trigger-request" }
           | { behaviour: "interrupt-current-request" }
@@ -4501,7 +4498,6 @@ export type AgentContextAddedPayload = {
     | { type: "email"; address?: string | undefined; name?: string | undefined }
     | { type: "github"; login?: string | undefined; senderType?: string | undefined }
     | undefined;
-  truncated?: boolean | undefined;
   llmRequestPolicy:
     | { behaviour: "dont-trigger-request" }
     | { behaviour: "interrupt-current-request" }

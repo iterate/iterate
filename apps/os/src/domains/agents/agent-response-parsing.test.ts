@@ -125,31 +125,6 @@ it("the full userland loop: worker-appended consequences drive scripts, chat, an
   expect(prompt).toContain('"abc": 123');
 });
 
-it("a truncated reply lands with the truncated marker — event-visible to userland interpreters, uninterpreted by the platform", async () => {
-  const h = makeAgentHarness();
-  await h.play(
-    ["append", ...PARSING_OFF_AGENT_EVENTS, userMessage("count things")],
-    ["advanceTime", 10_000],
-  );
-  await h.play(() =>
-    h.llm.calls.at(-1)!.resolve({
-      text: 'half a reply\n<codemode status="Counting">\nreturn (await itx.repo.listPul',
-      finishReason: "length",
-    }),
-  );
-  // The committed assistant event carries the fact (this is ALL a userland
-  // worker like codemode-tag's sees — it must refuse to extract from it)…
-  expect(conversationMessages(h.state()).at(-1)).toMatchObject({
-    payload: { role: "assistant", truncated: true },
-  });
-  // …and the platform, with parsing off, still interprets nothing: no script,
-  // no corrective feedback — the worker owns the reaction.
-  expect(h.events(SCRIPT_REQUESTED)).toHaveLength(0);
-  expect(
-    conversationMessages(h.state()).filter((item) => item.payload.role === "developer"),
-  ).toEqual([]);
-});
-
 it("a plain sendMessage (no llmRequestOffset) still mirrors into assistant history", async () => {
   const h = makeAgentHarness();
   await h.play([
@@ -214,7 +189,7 @@ function makeScriptedLlm() {
     model: string;
     messages: WorkersAiMessage[];
     signal: AbortSignal;
-    resolve: (result: { text: string; finishReason?: string }) => void;
+    resolve: (result: { text: string }) => void;
     reject: (error: Error) => void;
   }[] = [];
   return {
@@ -223,7 +198,7 @@ function makeScriptedLlm() {
       calls.at(-1)!.resolve({ text });
     },
     transport: (args: { model: string; messages: WorkersAiMessage[]; signal: AbortSignal }) =>
-      new Promise<{ text: string; finishReason?: string }>((resolve, reject) => {
+      new Promise<{ text: string }>((resolve, reject) => {
         args.signal.addEventListener("abort", () => reject(new Error("aborted")));
         calls.push({ ...args, resolve, reject });
       }),

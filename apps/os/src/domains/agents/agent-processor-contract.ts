@@ -956,18 +956,6 @@ function agentContextItemSchema() {
             "email, github, integration) is DEMOTED to user role — third-party text must " +
             "not read as instructions.",
         }),
-      truncated: z
-        .boolean()
-        .optional()
-        .meta({
-          description:
-            'On assistant items: the provider reported a finish reason other than "stop" ' +
-            "(max-tokens, a cut-off stream), so the text is NOT a complete reply. NOTHING " +
-            "may be extracted or executed from a truncated reply — every interpreter " +
-            "(platform response parsing and userland workers alike) must answer it with " +
-            "corrective feedback instead. The raw finish reason rides the settled event's " +
-            "rawResponse evidence.",
-        }),
       llmRequestPolicy: z
         .discriminatedUnion("behaviour", [
           z.object({ behaviour: z.literal("dont-trigger-request") }),

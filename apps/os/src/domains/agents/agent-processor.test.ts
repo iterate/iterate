@@ -105,8 +105,6 @@ function makeScriptedLlm() {
     resolve: (result: {
       text: string;
       usage?: { inputTokens: number; outputTokens: number };
-      /** Set to something other than "stop" to simulate a truncated reply. */
-      finishReason?: string;
     }) => void;
     reject: (error: Error) => void;
   }[] = [];
@@ -1307,49 +1305,6 @@ describe("AgentProcessor script execution", () => {
     );
     expect(rendered!.payload.content).toContain("truncated");
     expect(rendered!.payload.content).not.toContain("saved in your workspace");
-  });
-
-  it("a truncated reply is never executable: corrective feedback drives a retry instead of the half-script", async () => {
-    const h = makeAgentHarness();
-    await h.play(
-      ["append", ...NEW_AGENT_EVENTS, userMessage("count the open PRs")],
-      ["advanceTime", 10_000],
-    );
-    expect(h.llm.calls).toHaveLength(1);
-
-    // Max-tokens cut the reply off mid-fence (finish reason "length") — the
-    // surviving half-script must never run.
-    await h.play(() =>
-      h.llm.calls.at(-1)!.resolve({
-        text: "on it!\n```ts\nasync (itx) => {\n  const pulls = await itx.repo.listPul",
-        finishReason: "length",
-      }),
-    );
-
-    // No script extraction from the half-reply…
-    expect(h.events("events.iterate.com/capability-host/script-run-requested")).toHaveLength(0);
-    // …the assistant item carries the truncation fact for EVERY interpreter
-    // (a userland worker sees only events)…
-    expect(conversationMessages(h.state()).at(-2)).toMatchObject({
-      payload: { role: "assistant", truncated: true },
-    });
-    // …and corrective feedback landed, keyed like the malformed-snippet
-    // path, as the next turn's trigger.
-    const feedback = conversationMessages(h.state()).at(-1)!;
-    expect(feedback).toMatchObject({
-      payload: { role: "developer", llmRequestPolicy: { behaviour: "after-current-request" } },
-    });
-    expect(feedback.payload.content).toContain("truncated");
-    expect(feedback.payload.content).toContain("NOTHING was executed");
-
-    await h.play(["advanceTime", 10_000]);
-    expect(h.llm.calls).toHaveLength(2); // the retry turn
-    expect(h.llm.calls[1]!.messages.map((message) => message.content).join("\n")).toContain(
-      "truncated",
-    );
-    // A complete retry runs normally.
-    await h.play(() => h.llm.respond("```ts\nasync (itx) => 1\n```"));
-    expect(h.events("events.iterate.com/capability-host/script-run-requested")).toHaveLength(1);
   });
 
   it('renders whole minutes for near-minute script durations — never "1m 60s"', async () => {
