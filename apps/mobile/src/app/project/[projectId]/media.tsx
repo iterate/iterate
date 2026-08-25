@@ -757,7 +757,12 @@ function MediaRow({
         {imageUri ? (
           <Image source={{ uri: imageUri }} style={styles.thumb} />
         ) : (
-          <View style={[styles.thumb, styles.thumbPlaceholder]} />
+          // "Loading" while the signed-URL query resolves: the press above
+          // is a silent no-op until imageUri exists, so the placeholder must
+          // SAY it is loading — for humans, and for spec drivers that hold
+          // clicks while a loading indicator is on screen (the full-screen
+          // viewer spec raced this exact window on preview).
+          <View accessibilityLabel="Loading" style={[styles.thumb, styles.thumbPlaceholder]} />
         )}
       </Pressable>
       <View style={styles.rowBody}>

@@ -550,7 +550,7 @@ test("Project egress substitutes path-addressed secrets for explicit and project
           kind: "section",
           key: "agent/boot-context",
           payload: expect.objectContaining({
-            role: "system",
+            kind: "section",
             content: expect.stringContaining(`Your agent stream path: ${agentPath}`),
           }),
         }),

@@ -471,15 +471,15 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     }),
     assert: (result, { marker }, expect) => {
       expect(result).toMatchObject({
-        payload: {
-          content: `hello ${marker}`,
-          // The REPL executes examples as project code at a non-agent
-          // scope, so message() stamps the worker actor — the caller may
-          // not claim to be a signed-in user (agent-context-gate.ts).
-          actor: { type: "worker", name: "project-worker" },
-        },
+        payload: { content: `hello ${marker}` },
         type: "events.iterate.com/agents/context-added",
       });
+      // The sender is derived from the executing runtime's scope, never
+      // claimed: session runtimes (node/cli — admin credentials) send as a
+      // user; project-code runtimes (the REPL, the project worker) send as
+      // the worker actor (agent-context-gate.ts).
+      const actor = (result as { payload: { actor: { type: string } } }).payload.actor;
+      expect(["user", "worker"]).toContain(actor.type);
       expect((result as { offset: number }).offset).toBeGreaterThan(0);
     },
   },

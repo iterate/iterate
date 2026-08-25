@@ -51,7 +51,6 @@ export async function appendSyntheticProviderOutput(
         asserted(triggerOffset, {
           type: AGENT_CONTEXT_ADDED_TYPE,
           payload: {
-            role: "developer",
             content: "[e2e synthetic provider turn: the next assistant output is injected]",
             actor: { type: "user", origin: "web" },
             llmRequestPolicy: { behaviour: "after-current-request" },
@@ -63,7 +62,9 @@ export async function appendSyntheticProviderOutput(
         }),
         asserted(llmRequestOffset + 1, {
           type: AGENT_CONTEXT_ADDED_TYPE,
-          payload: { role: "assistant", content, llmRequestOffset },
+          // The same shape the platform's LLM component records: the
+          // answered request rides the model actor.
+          payload: { content, actor: { type: "model", llmRequestOffset } },
         }),
         asserted(llmRequestOffset + 2, {
           type: "events.iterate.com/agent/llm-request-settled",

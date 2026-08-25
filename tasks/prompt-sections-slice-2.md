@@ -230,6 +230,20 @@ prompt line only, plus any legacy-keyed role drift); add scenario
     territory: "whoever may replace may compact"); no identity linking of
     channel actors to OS principals (D8: future work); preview e2e run.
 
+- 2026-08-25 (third): merged-head preview fallout (after Misha merged
+  main/#2516 into the branch and moved the checkout to the root worktree) —
+  all in e2e fixtures and assertions:
+  - itx-agents' synthetic-provider helper injected the pre-v8 assistant
+    shape; it now records `{content, actor: {type: "model",
+    llmRequestOffset}}` — the shape the platform's LLM component writes —
+    and its trigger item dropped its stored role.
+  - Birth-batch assertions in itx-agents/itx-egress asserted stored
+    `role: "system"` on sections; they assert `kind: "section"` now.
+  - examples-matrix runs each example across runtimes whose gate tiers
+    differ (node/cli sessions send as user; REPL/project-worker send as the
+    worker actor), so agent-send-message asserts the derived-sender SET,
+    not one actor.
+
 - 2026-08-25 (second): first preview run came back with three spec
   failures; all three root-caused, two were real regressions:
   - **create-project.spec** — two causes stacked: the spec polled the
@@ -251,9 +265,19 @@ prompt line only, plus any legacy-keyed role drift); add scenario
     handler and admin tooling are trusted-tier and keep stamping user
     actors; the voice-agent talk client's ask() moves to the worker actor
     (its notes are relayed transcriptions, not attested user identity).
-  - **mobile media.spec** — reproduced the full seeded flow locally:
-    PASSES. The CI failure was an image-viewer interaction ("Full screen
-    media" not visible) after list/search/thumbnails all worked; nothing in
-    this diff touches media, files, or the mobile media screen (the gate
-    only sees agents/context-added). Ruled preview flake with that
-    evidence; the rerun decides.
+  - **mobile media.spec** — first ruled preview flake (passes locally, no
+    mechanism in this diff), then OVERRULED by comparison evidence (#2516's
+    preview passed first try; slice-2 previews failed 4/4). The run
+    artifacts (trace + failure screenshot, Depot run znd31nkr6b) gave the
+    real mechanism: a RACE in the media row, not a slice-2 code path. "View
+    full screen" is a silently-DISABLED press until the signed-URL query
+    resolves; the spec clicks ~0.4s after the row's text renders, and on
+    the slice-2 previews the URL resolved ~100ms after the click (the trace
+    shows the image GET starting right after the failed press). A lost race
+    is terminal — nothing re-clicks. Whether slice-2 shifts that latency or
+    the previews just landed on the losing side is not provable from two
+    runs; the CLASS is closed product-side: the placeholder thumb now
+    declares accessibilityLabel="Loading", so middlewright's spinner-waiter
+    holds the click until the URL resolves (and humans see an honest
+    loading state — the same convention the screen's list loader already
+    uses).

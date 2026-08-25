@@ -674,7 +674,7 @@ test("agents.get(path).create explicitly appends and processes the complete birt
     config: { llm: { model: expect.any(String) } },
   });
   expect(basePrompt?.payload).toMatchObject({
-    role: "system",
+    kind: "section",
     key: "output-formatting",
     content: expect.stringContaining("async (itx)"),
   });
