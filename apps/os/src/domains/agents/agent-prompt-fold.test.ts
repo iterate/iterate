@@ -66,7 +66,7 @@ test("a sent section's re-add lands at the tail with supersedes; the standing do
   expect(after.messages.slice(0, before.messages.length)).toEqual(before.messages);
   expect(after.messages.slice(before.messages.length).map((message) => message.content)).toEqual([
     `<section key="config/agents-md" supersedes="@2">\nNotes v2.\n</section>`,
-    "@7 actor=user:web\nand now?",
+    "and now?",
     `Requested at: ${isoAt(8)}`,
   ]);
 });
@@ -114,7 +114,7 @@ test("a first-ever key joins the standing document only while no conversation ex
   expect(messages.map((message) => message.content.split("\n")[0])).toEqual([
     expect.stringContaining("Journal-projected context messages"),
     '<section key="identity">',
-    "@2 actor=user:web",
+    "hello",
     '<section key="config/house-style">',
     expect.stringContaining("Requested at:"),
   ]);
@@ -177,7 +177,7 @@ test("context-rewritten delete removes one section; delete * removes everything 
   expect(allGone.messages.map((message) => message.content.split("\n")[0])).toEqual([
     expect.stringContaining("Journal-projected context messages"),
     "",
-    "@7 actor=user:web",
+    "anyone home?",
     expect.stringContaining("Requested at:"),
   ]);
 });

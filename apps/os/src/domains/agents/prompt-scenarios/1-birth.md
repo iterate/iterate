@@ -242,10 +242,8 @@ messages:
       Project AGENTS.md (auto-injected): keep replies terse; the dashboard lives at /projects/demo; deploys go out on merge to main.
       </section>
   - role: user
-    content: |-
-      @25 actor=user:web
-      # the @25 trigger — external input; debounce was already lowered to 250ms by @23
-      hi — what can you do?
+    # the @25 trigger — external input; debounce was already lowered to 250ms by @23
+    content: "hi — what can you do?"
   - role: developer
     # the send stamp — the @26 event's own permanent render; the model's clock
     content: "Requested at: 2026-08-24T16:41:04.500Z"

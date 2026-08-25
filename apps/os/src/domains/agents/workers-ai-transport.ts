@@ -217,7 +217,7 @@ async function runByokAttempt(input: {
 
 /** Bump to invalidate every cached response at once (prompt-format overhauls,
  * masking-rule changes). */
-const CLOUDFLARE_AI_GATEWAY_RESPONSE_CACHE_KEY_VERSION = "cloudflare-ai-gateway-response-cache-v4";
+const CLOUDFLARE_AI_GATEWAY_RESPONSE_CACHE_KEY_VERSION = "cloudflare-ai-gateway-response-cache-v5";
 
 /**
  * The custom `cf-aig-cache-key` for one request body: a hash of the body with

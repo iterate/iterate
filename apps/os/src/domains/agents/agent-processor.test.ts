@@ -3032,8 +3032,9 @@ describe("prompt building", () => {
     ];
     const { messages } = buildAgentLlmRequestBody({ events: rows, llmRequestOffset: 4 });
     const projected = messages.find((message) => message.content.includes("look at this chart"))!;
-    expect(projected).toMatchObject({ role: "user", files: [file] });
-    expect(projected.content).toContain("@3");
+    // A user payload renders bare — the attachment rides the message object,
+    // and the attachment hint line is flattened in at send time.
+    expect(projected).toMatchObject({ role: "user", files: [file], content: "look at this chart" });
   });
 
   it("the compaction request is the normal request byte-for-byte, with the instruction appended last", () => {

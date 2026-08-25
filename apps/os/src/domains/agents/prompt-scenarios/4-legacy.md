@@ -205,9 +205,7 @@ messages:
       Project AGENTS.md v1 (keyed add)…
       </section>
   - role: user
-    content: |-
-      @35 actor=user:web
-      what does this project do?
+    content: "what does this project do?"
   - role: developer
     content: "Requested at: 2026-08-24T16:41:03.000Z"
 ```
@@ -268,15 +266,12 @@ messages:
       Project AGENTS.md v1 (keyed add)…
       </section>
   - role: user
-    content: |-
-      @35 actor=user:web
-      what does this project do?
+    content: "what does this project do?"
   - role: developer
     content: "Requested at: 2026-08-24T16:41:03.000Z"
   # ✂ provider cache: every token above this line is a byte-stable prefix (cached)
   - role: assistant
     content: |-
-      @37
       It's the demo project — a dashboard at /projects/demo, deployed on merge to main.
       <codemode status="Idle">return</codemode>
   - role: system
@@ -292,9 +287,7 @@ messages:
       <the old worker's entire forked prompt, one 4,000-token blob>
       </section>
   - role: user
-    content: |-
-      @81 actor=user:web
-      quick sanity check — you still there?
+    content: "quick sanity check — you still there?"
   - role: developer
     content: "Requested at: 2026-08-24T16:55:30.000Z"
 ```

@@ -5,7 +5,10 @@ size: small
 
 # Context metadata lines only on synthesized messages
 
-**Status summary**: spec committed, implementation not started.
+**Status summary**: implemented — fold render gated on stored role (refs
+exception via keep-the-line), protocol prompt updated, cache key bumped to v5,
+all unit suites, regenerated fixtures, and both e2e sanity specs green
+locally. Nothing outstanding beyond CI/review.
 
 Today every timeline item renders with a leading protocol-metadata line
 (`@<offset> [key=…] [actor=…] [refs=[…]]`). Design review of the merged
@@ -68,16 +71,56 @@ message, so the model's clock keeps its place in the timeline.
 
 ## Checklist
 
-- [ ] fold render: metadata line gated on stored role (decision 1–4),
-      protocol prompt wording updated (decision 5)
-- [ ] cache key version bump + mask sanity check (decision 6)
-- [ ] fold/processor specs updated; byte-superset + first-appearance specs
-      still pass
-- [ ] scenario fixtures + explainer regenerated via -u; annotations
-      re-anchored where they referenced dropped lines
-- [ ] e2e/eval sanity: agent-response-cache e2e and one codemode round-trip
-      spec green
+- [x] fold render: metadata line gated on stored role (decision 1–4),
+      protocol prompt wording updated (decision 5) — _`renderProjectedContextItem`
+      in agent-prompt-fold.ts: `hasMetadataLine = role system/developer || refs
+      present`; decision-4 choice: any item WITH refs keeps the full metadata
+      line (one render shape, one protocol sentence). Protocol prompt sentence 3
+      now conditions on role, sentence 5 reworded to "Protocol metadata never
+      extends past an item's first line"_
+- [x] cache key version bump + mask sanity check (decision 6) —
+      _workers-ai-transport.ts v4 → v5; the `"content":"@\d+` offset mask still
+      matches exactly the items that keep the line, "Requested at:" mask
+      untouched — no mask change needed_
+- [x] fold/processor specs updated; byte-superset + first-appearance specs
+      still pass — _agent-prompt-fold.test.ts (3 user-item first-lines now bare
+      content), agent-processor.test.ts (files test asserts bare content),
+      llm-request-replay.test.ts (same); byte-superset and first-appearance
+      specs pass unchanged. Full apps/os unit suite green_
+- [x] scenario fixtures + explainer regenerated via -u; annotations
+      re-anchored where they referenced dropped lines — _`vitest run
+      prompt-scenarios -u` then a plain run (idempotent); every annotation
+      `find` anchored to content or section tags, none referenced dropped
+      lines, so no manual re-anchoring was needed_
+- [x] e2e/eval sanity: agent-response-cache e2e and one codemode round-trip
+      spec green — _both run locally against a fresh dev server under
+      `doppler run --config dev`: agent-response-cache.e2e.test.ts (cache HIT
+      after the v5 key's warm-up MISS) and agent-codemode-fence.itx.e2e.test.ts
+      each 1/1 green_
 
 ## Implementation log
 
-(append as you go)
+- Decision 4 resolved as "any item carrying refs keeps the metadata line
+  regardless of role": one render shape, one protocol-prompt sentence, and
+  the ref coordinates stay on the same line as `actor=` provenance. The
+  trailing-bracket-line alternative would have introduced a second metadata
+  format needing its own protocol explanation.
+- Decision 1 confirmed in code: the gate reads `payload.role` (stored), so a
+  demoted developer item (slack/telegram/email/github actor, compaction
+  summary) renders as user WITH its provenance line — the existing
+  demotion-taxonomy specs in agent-processor.test.ts pass unchanged.
+- A user item with file attachments but no refs renders bare: files ride the
+  message object and `prepareAgentLlmMessages` flattens the attachment hint
+  at send time, so nothing is lost from the prompt.
+- stream-processor-pretty-state.tsx's `renderProjectedContextItem` was
+  inspected and left alone: it is a state-inspector view of the standing
+  document that prints `role=` and `updates=` fields the prompt never
+  renders — a debug affordance, not a prompt mirror. codemode-tag's worker
+  has no vendored renderer; its `@${event.offset}` hits are idempotency keys.
+- Fixture regeneration: all annotation `find` anchors already pointed at
+  content strings or `<section>` tags, so the -u cycle re-anchored the
+  rendered comments automatically; a plain run confirms idempotency.
+- e2e sanity ran locally: started a detached dev server and ran
+  agent-response-cache.e2e.test.ts plus agent-codemode-fence.itx.e2e.test.ts
+  under `doppler run --config dev` — both green. The v5 cache-key bump makes
+  the first run a MISS then HIT, which the test models as expected warm-up.

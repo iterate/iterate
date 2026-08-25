@@ -86,7 +86,7 @@ describe("replayLlmRequest", () => {
         role: "system",
         content: '<section key="agent/system-prompt">\nYou are **demo**.\n</section>',
       },
-      { id: "3:2", role: "user", content: "@2 actor=user:web\nhello" },
+      { id: "3:2", role: "user", content: "hello" },
       {
         id: "3:3",
         role: "developer",
@@ -438,7 +438,7 @@ describe("replayLlmRequest", () => {
     expect(replay?.messages.at(-2)).toEqual({
       id: "3:2",
       role: "user",
-      content: "@2 actor=user:web\nhello",
+      content: "hello",
     });
   });
 });
