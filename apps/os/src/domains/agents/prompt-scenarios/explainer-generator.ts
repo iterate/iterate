@@ -44,9 +44,11 @@ export function generateExplainerHtml(scenarios: LoadedScenario[]): string {
   }
   // Compact JSON — the fixtures are the human-readable source, the blob is
   // page payload. "</" escaped as the JSON-legal "<\/" so no content string
-  // can terminate the embedding <script> element early.
+  // can terminate the embedding <script> element early. The replacement is a
+  // function so `$` sequences inside the JSON stay literal ($$, $&, $' are
+  // replacement patterns in a string replacement).
   const json = JSON.stringify(data).replaceAll("</", "<\\/");
-  return shell.replace(DATA_PLACEHOLDER, json);
+  return shell.replace(DATA_PLACEHOLDER, () => json);
 }
 
 /** Every llm-request-requested event in a scenario's chain, tagged with the

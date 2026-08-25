@@ -625,9 +625,11 @@
           (card.note ? '<div class="note">' + esc(card.note) + "</div>" : "") +
           '<div class="yaml"></div>';
         let cm = null;
-        d.addEventListener("click", () => {
+        d.addEventListener("click", (clickEvent) => {
           if (selectedEl === d) {
-            d.classList.toggle("expanded");
+            // Clicks inside the expanded YAML are text selection/copying, not
+            // a toggle — only the card chrome collapses it.
+            if (!clickEvent.target.closest(".yaml")) d.classList.toggle("expanded");
             return;
           }
           if (selectedEl) {
