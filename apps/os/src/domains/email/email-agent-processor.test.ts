@@ -108,7 +108,6 @@ describe("EmailAgentProcessor", () => {
     const inputs = h.events("events.iterate.com/agents/context-added");
     expect(inputs).toHaveLength(1);
     expect(inputs[0]!.payload).toMatchObject({
-      role: "developer",
       actor: { type: "email", address: "jonas@example.com", name: "Jonas" },
       refs: [
         {

@@ -159,7 +159,6 @@ describe("TelegramAgentProcessor", () => {
     expect(inputs).toHaveLength(1);
     const payload = inputs[0]!.payload;
     expect(payload).toMatchObject({
-      role: "developer",
       actor: { type: "telegram", userId: "555", username: "misha" },
       refs: [
         {
@@ -258,7 +257,6 @@ describe("TelegramAgentProcessor", () => {
     // The sender is the button PRESSER (callback_query.from), never the
     // bot that authored the embedded message.
     expect(payload).toMatchObject({
-      role: "developer",
       actor: { type: "telegram", userId: "7" },
       refs: [
         {
@@ -646,7 +644,6 @@ describe("TelegramAgentProcessor", () => {
       {
         type: "events.iterate.com/agents/context-added",
         payload: {
-          role: "developer",
           content: "transcribed...",
           llmRequestPolicy: { behaviour: "dont-trigger-request" },
         },

@@ -895,11 +895,9 @@ function agentContextItemSchema() {
         }),
       z
         .strictObject({
-          role: z
-            .enum(["system", "developer", "user", "assistant"])
-            .meta({
-              description: "Stored role — a render fallback read only when no actor is present.",
-            }),
+          role: z.enum(["system", "developer", "user", "assistant"]).meta({
+            description: "Stored role — a render fallback read only when no actor is present.",
+          }),
           content: z.string().meta({ description: "The model-visible text." }),
           key: z.string().min(1).optional().meta({ description: "The section's stable identity." }),
           files: z

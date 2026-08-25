@@ -141,7 +141,7 @@ describe("SlackProcessor (webhook router)", () => {
         // The untagged slack prompt parses to one "agent/system-prompt" section.
         key: "agent/system-prompt",
         content: slackAgentSystemPrompt(CONNECTION),
-        role: "system",
+        kind: "section",
       },
     });
     expect(routed.slice(-2).map((event) => event.type)).toEqual([

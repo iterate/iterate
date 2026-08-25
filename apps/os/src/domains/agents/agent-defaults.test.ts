@@ -175,7 +175,7 @@ describe("agentCreationForPath", () => {
     const first = promptEvent("1", "first policy");
     expect(promptEvent("1", "first policy")).toEqual(first);
     expect(promptEvent("2", "changed policy")).toMatchObject({
-      idempotencyKey: `agent/system-prompt-section:v3:routed:v2:${PROJECT_ID}:/agents/routed/test:0:agent/system-prompt`,
+      idempotencyKey: `agent/system-prompt-section:v4:routed:v2:${PROJECT_ID}:/agents/routed/test:0:agent/system-prompt`,
       payload: { key: "agent/system-prompt", content: "changed policy" },
     });
   });
@@ -266,7 +266,7 @@ describe("agentSystemPromptContextEvents", () => {
     expect(changed).toMatchObject([
       {
         idempotencyKey: "agent/test-system-prompt:v2:0:agent/system-prompt",
-        payload: { role: "system", key: "agent/system-prompt", content: "changed policy" },
+        payload: { kind: "section", key: "agent/system-prompt", content: "changed policy" },
       },
     ]);
   });

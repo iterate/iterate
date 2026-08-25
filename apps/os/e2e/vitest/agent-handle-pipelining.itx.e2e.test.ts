@@ -137,7 +137,6 @@ test(
               return {
                 messageActor: sent.payload?.actor,
                 messageOffset: sent.offset,
-                messageRole: sent.payload?.role,
                 messageType: sent.type,
                 proofOffset: appended.offset,
                 proofType: appended.type,
@@ -151,7 +150,6 @@ test(
 
     expect(run.result).toMatchObject({
       messageActor: { type: "user", origin: "web" },
-      messageRole: "user",
       messageType: AGENT_CONTEXT_ADDED_TYPE,
       proofType: PROOF_TYPE,
     });
@@ -177,12 +175,11 @@ test(
       agentEvents.some(
         (event) =>
           event.type === AGENT_CONTEXT_ADDED_TYPE &&
-          event.payload?.role === "user" &&
-          (event.payload.actor as { origin?: string; type?: string } | undefined)?.type ===
+          (event.payload?.actor as { origin?: string; type?: string } | undefined)?.type ===
             "user" &&
-          (event.payload.actor as { origin?: string; type?: string } | undefined)?.origin ===
+          (event.payload?.actor as { origin?: string; type?: string } | undefined)?.origin ===
             "web" &&
-          event.payload.content === "pipelined hello",
+          event.payload?.content === "pipelined hello",
       ),
     ).toBe(true);
     const proofEvents = await measurePhase("read proof events", "assertion", () =>
@@ -214,11 +211,11 @@ test(
     ]);
     expect(sentA).toMatchObject({
       type: AGENT_CONTEXT_ADDED_TYPE,
-      payload: { role: "user", actor: { type: "user", origin: "web" } },
+      payload: { actor: { type: "user", origin: "web" } },
     });
     expect(sentB).toMatchObject({
       type: AGENT_CONTEXT_ADDED_TYPE,
-      payload: { role: "user", actor: { type: "user", origin: "web" } },
+      payload: { actor: { type: "user", origin: "web" } },
     });
     expect(sentA).not.toMatchObject({ offset: sentB.offset });
     expect(description).toMatchObject({ agentPath: "/agents/fanout-capnweb" });
@@ -277,7 +274,6 @@ test(
           actor: sent.payload?.actor,
           offset: sent.offset,
           path: sent.path,
-          role: sent.payload?.role,
         };
       })
     ).execution;
@@ -287,7 +283,6 @@ test(
       path: `${parentPath}/researcher`,
       // …and the sender stamped as the parent agent, because the calling
       // scope is an agent path.
-      role: "developer",
       actor: { type: "agent", path: parentPath },
     });
   },

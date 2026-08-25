@@ -51,12 +51,13 @@ describe("ensureMcpSessionAgentReady", () => {
         fallbackKey: "agent/system-prompt",
       }).map((section, index) => ({
         type: "events.iterate.com/agents/context-added",
-        idempotencyKey: `agent/mcp-system-prompt:v${MCP_AGENT_SYSTEM_PROMPT_REVISION}:${index}:${section.key}`,
+        idempotencyKey: `agent/mcp-system-prompt:v2:v${MCP_AGENT_SYSTEM_PROMPT_REVISION}:${index}:${section.key}`,
         payload: {
-          role: "system",
+          kind: "section",
           key: section.key,
           content: section.content,
-          // The processor ignores the defaulted policy on system items.
+          actor: { type: "platform" },
+          // The processor ignores the defaulted policy; sections never trigger.
           llmRequestPolicy: { behaviour: "after-current-request" },
         },
       })),

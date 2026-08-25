@@ -1333,7 +1333,7 @@ export interface Stream {
   /** Commit events; resolves with the same events carrying offsets and timestamps. */
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   /** Commit only if this path still names the supplied stream lifetime. */
-  appendIfStreamId(args: { streamId: string; events: StreamEventInput[] }): Promise<StreamEvent[]>;
+  appendIfStreamId(input: { streamId: string; events: StreamEventInput[] }): Promise<StreamEvent[]>;
   /** The stream at a sub-path, resolved relative to this stream's path. */
   at(path: string): Stream;
   /** One event by offset or idempotencyKey; undefined when it does not exist.

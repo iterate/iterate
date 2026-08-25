@@ -182,7 +182,6 @@ describe("SlackAgentProcessor", () => {
     expect(inputs).toHaveLength(1);
     const payload = inputs[0]!.payload;
     expect(payload).toMatchObject({
-      role: "developer",
       actor: { type: "slack", userId: "UHUMAN" },
       refs: [
         {
@@ -867,7 +866,6 @@ describe("SlackAgentProcessor", () => {
     const payload = inputs[0]!.payload;
     // Interactivity payloads carry the presser at user.id, not event.user.
     expect(payload).toMatchObject({
-      role: "developer",
       actor: { type: "slack", userId: "U777" },
       refs: [
         {

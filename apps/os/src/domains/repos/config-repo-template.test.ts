@@ -119,21 +119,22 @@ test.each([
     expect(append).toHaveBeenCalledWith(
       {
         type: "events.iterate.com/agents/context-added",
-        idempotencyKey: "iterate/config/onboarding-instructions:v1",
+        idempotencyKey: "iterate/config/onboarding-instructions:v2",
         payload: {
-          role: "system",
+          kind: "section",
           key: "config/onboarding-instructions",
           content: prompt,
-          llmRequestPolicy: { behaviour: "dont-trigger-request" },
+          actor: { type: "worker", name },
         },
       },
       expect.objectContaining({
         type: "events.iterate.com/agents/context-added",
-        idempotencyKey: "iterate/config/onboarding-start:v1",
+        idempotencyKey: "iterate/config/onboarding-start:v2",
         payload: expect.objectContaining({
-          role: "developer",
-          key: "config/onboarding-start",
+          // A plain worker message, not a section: the kickoff must trigger
+          // the agent's first turn, and sections never trigger.
           content: expect.stringContaining(start),
+          actor: { type: "worker", name },
           llmRequestPolicy: { behaviour: "after-current-request" },
         }),
       }),
@@ -342,15 +343,15 @@ test("the birth reaction shapes each newborn and lowers the debounce as its last
   expect(webEvents).toMatchObject([
     {
       type: "events.iterate.com/agents/context-added",
-      payload: { role: "system", key: "config/agents-md" },
+      payload: { kind: "section", key: "config/agents-md" },
     },
     {
       type: "events.iterate.com/agents/context-added",
-      payload: { role: "system", key: "agent/system-prompt", content: "FORKED PROMPT" },
+      payload: { kind: "section", key: "agent/system-prompt", content: "FORKED PROMPT" },
     },
     {
       type: "events.iterate.com/agents/context-added",
-      payload: { role: "system", key: "config/house-style" },
+      payload: { kind: "section", key: "config/house-style" },
     },
     {
       type: "events.iterate.com/agent/configured",
@@ -377,7 +378,7 @@ test("the birth reaction shapes each newborn and lowers the debounce as its last
   expect(slackEvents).toMatchObject([
     {
       type: "events.iterate.com/agents/context-added",
-      payload: { role: "system", key: "config/agents-md" },
+      payload: { kind: "section", key: "config/agents-md" },
     },
     { type: "events.iterate.com/agent/configured" },
   ]);

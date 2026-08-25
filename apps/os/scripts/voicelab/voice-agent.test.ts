@@ -981,7 +981,10 @@ describe("tools on the birth certificate", () => {
     const h = makeHarness();
     const gotten: string[] = [];
     const created: string[] = [];
-    const briefs: { type: string; payload: { role?: string; content?: string } }[] = [];
+    const briefs: {
+      type: string;
+      payload: { kind?: string; actor?: unknown; content?: string };
+    }[] = [];
     const asked: string[] = [];
     let resolveReply!: (reply: { payload: { message: string } }) => void;
     h.projectRoot.current = {
@@ -1042,9 +1045,10 @@ describe("tools on the birth certificate", () => {
     /* One colleague, on ITS OWN fresh agent stream named for the call. */
     expect(gotten[0]).toBe(`/agents/voice-notes/${conversationId}`);
     expect(created).toEqual([`/agents/voice-notes/${conversationId}`]);
-    /* Born briefed, as a system context item that triggers no turn. */
+    /* Born briefed, as a standing section (system role) that triggers no turn. */
     expect(briefs[0]!.type).toBe("events.iterate.com/agents/context-added");
-    expect(briefs[0]!.payload.role).toBe("system");
+    expect(briefs[0]!.payload.kind).toBe("section");
+    expect(briefs[0]!.payload.actor).toEqual({ type: "worker", name: "voice-agent" });
     expect(briefs[0]!.payload.content).toContain("careful, thinking half");
     expect(asked).toEqual(["look up the March invoice"]);
 

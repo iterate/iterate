@@ -192,8 +192,8 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
   const reflectedFilesReply = agent.stream.waitForEvent({
     eventTypes: [AGENT_CONTEXT_ADDED_TYPE],
     predicate: (event) =>
-      event.payload?.role === "assistant" &&
-      event.payload.content ===
+      (event.payload?.actor as { type?: string } | undefined)?.type === "model" &&
+      event.payload?.content ===
         "The assistant sent this visible web-chat message: string form with files",
     timeoutMs: 30_000,
   });
@@ -239,8 +239,7 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
       expect.objectContaining({
         type: AGENT_CONTEXT_ADDED_TYPE,
         payload: expect.objectContaining({
-          role: "assistant",
-          llmRequestOffset,
+          actor: { type: "model", llmRequestOffset },
         }),
       }),
       expect.objectContaining({
@@ -253,8 +252,8 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
     ]),
   );
 
-  expect(reflectedFilesEvent.payload).toMatchObject({ role: "assistant" });
-  expect(reflectedFilesEvent.payload).not.toHaveProperty("llmRequestOffset");
+  expect(reflectedFilesEvent.payload).toMatchObject({ actor: { type: "model" } });
+  expect(reflectedFilesEvent.payload?.actor).not.toHaveProperty("llmRequestOffset");
 });
 
 test("Agent create replays its earlier birth and setup events through its subscriptions", async () => {

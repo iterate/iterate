@@ -153,8 +153,7 @@ test.skipIf(signingSecret === null)(
         events.some(
           (event) =>
             event.type === AGENT_CONTEXT_ADDED_TYPE &&
-            event.payload?.role === "developer" &&
-            (event.payload.actor as { type?: string } | undefined)?.type === "slack",
+            (event.payload?.actor as { type?: string } | undefined)?.type === "slack",
         ) &&
         hasEvent(events, "events.iterate.com/agent/llm-request-requested"),
       () => `agent context + llm request on ${agentStreamPath}`,

@@ -169,7 +169,7 @@ describe("TelegramProcessor (webhook router)", () => {
           chatId: String(CHAT_ID),
           connection: CONNECTION,
         }),
-        role: "system",
+        kind: "section",
       },
     });
     const routed = webhooksAt(h.network, CHAT_PATH);

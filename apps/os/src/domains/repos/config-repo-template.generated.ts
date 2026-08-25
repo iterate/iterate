@@ -759,6 +759,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "// Hence, the essence of an iterate project can be expressed as two functions:\n" +
       "// { fetch, processEvent }\n" +
       "\n" +
+      "/** Provenance for every context item this worker authors: the project's\n" +
+      " * config worker, named by its config slug. Worker-authored messages derive\n" +
+      " * developer role at read time; sections derive system. */\n" +
+      "const WORKER_ACTOR = { type: \"worker\", name: \"default\" } as const;\n" +
+      "\n" +
       "export default class ProjectWorker extends IterateWorkerEntrypoint {\n" +
       "  #aiLintApp = GithubAiLinter.create(this.env, {\n" +
       "    policyVersion: \"2\",\n" +
@@ -834,12 +839,16 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        if (slot?.content === content) return;\n" +
       "        await agent.append({\n" +
       "          type: \"events.iterate.com/agents/context-added\",\n" +
-      "          idempotencyKey: `iterate/config/agents-md:${hash}:after-${slot?.offset || 0}`,\n" +
+      "          // \":v2\" — the payload shape carries the worker actor now; a\n" +
+      "          // replayed transition first synced under the older shape must\n" +
+      "          // dedupe on content (the skip above), never trip\n" +
+      "          // same-key-different-body.\n" +
+      "          idempotencyKey: `iterate/config/agents-md:v2:${hash}:after-${slot?.offset || 0}`,\n" +
       "          payload: {\n" +
-      "            content,\n" +
+      "            kind: \"section\",\n" +
       "            key: \"config/agents-md\",\n" +
-      "            llmRequestPolicy: { behaviour: \"dont-trigger-request\" },\n" +
-      "            role: \"system\",\n" +
+      "            content,\n" +
+      "            actor: WORKER_ACTOR,\n" +
       "          },\n" +
       "        });\n" +
       "      }),\n" +
@@ -899,12 +908,12 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        // agents/context-rewritten delete; it exists to show the shape of\n" +
       "        // project-authored agent personality.\n" +
       "        type: \"events.iterate.com/agents/context-added\" as const,\n" +
-      "        idempotencyKey: \"iterate/config/house-style:v3\",\n" +
+      "        idempotencyKey: \"iterate/config/house-style:v4\",\n" +
       "        payload: {\n" +
-      "          content: \"House style: write all responses in all-lowercase.\",\n" +
+      "          kind: \"section\" as const,\n" +
       "          key: \"config/house-style\",\n" +
-      "          llmRequestPolicy: { behaviour: \"dont-trigger-request\" as const },\n" +
-      "          role: \"system\" as const,\n" +
+      "          content: \"House style: write all responses in all-lowercase.\",\n" +
+      "          actor: WORKER_ACTOR,\n" +
       "        },\n" +
       "      },\n" +
       "    ];\n" +
@@ -946,17 +955,17 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    return parsePromptSections({ content, fallbackKey: \"agent/system-prompt\" }).map(\n" +
       "      (section, index) => ({\n" +
       "        type: \"events.iterate.com/agents/context-added\" as const,\n" +
-      "        // Per-section keys (\"section:v3\" prefix: the event body shape has\n" +
+      "        // Per-section keys (\"section:v4\" prefix: the event body shape has\n" +
       "        // changed across revisions while the content hash didn't — a replay\n" +
       "        // over an agent born under an older shape must append fresh\n" +
       "        // occurrences, not trip same-key-different-body). The index\n" +
       "        // disambiguates repeated section keys (several untagged runs).\n" +
-      "        idempotencyKey: `iterate/config/agent-system-prompt-section:v3:${hash}:${index}:${section.key}`,\n" +
+      "        idempotencyKey: `iterate/config/agent-system-prompt-section:v4:${hash}:${index}:${section.key}`,\n" +
       "        payload: {\n" +
-      "          content: section.content,\n" +
+      "          kind: \"section\" as const,\n" +
       "          key: section.key,\n" +
-      "          llmRequestPolicy: { behaviour: \"dont-trigger-request\" as const },\n" +
-      "          role: \"system\" as const,\n" +
+      "          content: section.content,\n" +
+      "          actor: WORKER_ACTOR,\n" +
       "        },\n" +
       "      }),\n" +
       "    );\n" +
@@ -978,22 +987,24 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        await onboardingAgent.append(\n" +
       "          {\n" +
       "            type: \"events.iterate.com/agents/context-added\",\n" +
-      "            idempotencyKey: \"iterate/config/onboarding-instructions:v1\",\n" +
+      "            idempotencyKey: \"iterate/config/onboarding-instructions:v2\",\n" +
       "            payload: {\n" +
-      "              role: \"system\",\n" +
+      "              kind: \"section\",\n" +
       "              key: \"config/onboarding-instructions\",\n" +
       "              content: instructions.content,\n" +
-      "              llmRequestPolicy: { behaviour: \"dont-trigger-request\" },\n" +
+      "              actor: WORKER_ACTOR,\n" +
       "            },\n" +
       "          },\n" +
       "          {\n" +
       "            type: \"events.iterate.com/agents/context-added\",\n" +
-      "            idempotencyKey: \"iterate/config/onboarding-start:v1\",\n" +
+      "            idempotencyKey: \"iterate/config/onboarding-start:v2\",\n" +
       "            payload: {\n" +
-      "              role: \"developer\",\n" +
-      "              key: \"config/onboarding-start\",\n" +
+      "              // A plain worker message, not a section: the kickoff must\n" +
+      "              // TRIGGER the agent's first turn, and sections (standing\n" +
+      "              // instructions) never trigger.\n" +
       "              content:\n" +
       "                \"Begin onboarding now. The project owner just created this project. Welcome them, then follow the onboarding instructions one question at a time.\",\n" +
+      "              actor: WORKER_ACTOR,\n" +
       "              llmRequestPolicy: { behaviour: \"after-current-request\" },\n" +
       "            },\n" +
       "          },\n" +

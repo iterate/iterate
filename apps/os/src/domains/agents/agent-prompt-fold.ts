@@ -21,6 +21,7 @@ import {
 import type { StreamEvent } from "iterate/processors";
 import {
   AgentProcessorContract,
+  type AgentContextActor,
   type AgentContextAddedPayload,
   type AgentContextItem,
   type AgentContextRef,
@@ -693,7 +694,7 @@ function renderProjectedContextItem(item: {
 }
 
 function renderContextActor(
-  actor: Exclude<NonNullable<AgentContextAddedPayload["actor"]>, { type: "model" | "platform" }>,
+  actor: Exclude<AgentContextActor, { type: "model" | "platform" }>,
 ): string {
   switch (actor.type) {
     case "user":

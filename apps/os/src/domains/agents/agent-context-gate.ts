@@ -31,7 +31,7 @@ const AGENT_CONTEXT_ADDED_TYPE = "events.iterate.com/agents/context-added";
  *   non-agent scope (the config worker), or the project's own machine
  *   credential (a remote app holding the born project API key).
  */
-export type AgentContextCaller =
+type AgentContextCaller =
   | { tier: "trusted" }
   | { tier: "user"; userId: string | undefined }
   | { tier: "agent"; scopePath: string }

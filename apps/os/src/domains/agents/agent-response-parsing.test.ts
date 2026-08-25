@@ -31,7 +31,7 @@ it("runs a full turn but interprets nothing: even a perfect ```ts script is left
   // The response landed as raw assistant context and the request settled…
   expect(h.state().openRequest).toBeNull();
   expect(conversationMessages(h.state()).at(-1)).toMatchObject({
-    payload: { role: "assistant", content: "```ts\nasync (itx) => 1\n```" },
+    payload: { actor: { type: "model" }, content: "```ts\nasync (itx) => 1\n```" },
   });
   // …and that is ALL: no script request, no corrective feedback, no chat
   // message. Interpretation belongs to userland.
@@ -135,7 +135,7 @@ it("a plain sendMessage (no llmRequestOffset) still mirrors into assistant histo
   ]);
   expect(conversationMessages(h.state()).at(-1)).toMatchObject({
     payload: {
-      role: "assistant",
+      actor: { type: "model" },
       content: "The assistant sent this visible web-chat message: sent by a script",
     },
   });

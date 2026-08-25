@@ -472,7 +472,6 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     assert: (result, { marker }, expect) => {
       expect(result).toMatchObject({
         payload: {
-          role: "user",
           content: `hello ${marker}`,
           actor: { type: "user", origin: "web" },
         },

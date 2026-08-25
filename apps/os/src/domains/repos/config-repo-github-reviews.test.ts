@@ -285,11 +285,11 @@ describe("userspace GitHub pull-request routing", () => {
 
     expect(parentAgentEvents).toMatchObject([
       {
-        idempotencyKey: "github-pr/agent-policy:v5",
+        idempotencyKey: "github-pr/agent-policy:v2:5",
         payload: {
+          kind: "section",
           key: "github/pull-request-policy",
-          llmRequestPolicy: { behaviour: "dont-trigger-request" },
-          role: "developer",
+          actor: { type: "worker", name: "github-ai-linter" },
         },
       },
       {
@@ -334,11 +334,11 @@ describe("userspace GitHub pull-request routing", () => {
         type: "events.iterate.com/agent/configured",
       },
       {
-        idempotencyKey: "github-ai-linter/agent-policy:v3",
+        idempotencyKey: "github-ai-linter/agent-policy:v2:3",
         payload: {
+          kind: "section",
           key: "github-ai-linter/policy",
-          llmRequestPolicy: { behaviour: "dont-trigger-request" },
-          role: "developer",
+          actor: { type: "worker", name: "github-ai-linter" },
         },
       },
       {
@@ -350,9 +350,9 @@ describe("userspace GitHub pull-request routing", () => {
         },
       },
       {
-        idempotencyKey: "github-ai-linter/task:7",
+        idempotencyKey: "github-ai-linter/task:v2:7",
         payload: {
-          key: "github-ai-linter/analysis:7",
+          actor: { type: "worker", name: "github-ai-linter" },
           llmRequestPolicy: { behaviour: "dont-trigger-request" },
           refs: [
             {
@@ -362,15 +362,13 @@ describe("userspace GitHub pull-request routing", () => {
               type: "event",
             },
           ],
-          role: "developer",
         },
       },
       {
-        idempotencyKey: "github-ai-linter/trigger:7",
+        idempotencyKey: "github-ai-linter/trigger:v2:7",
         payload: {
           actor: { name: "github-ai-linter", type: "integration" },
           llmRequestPolicy: { behaviour: "interrupt-current-request" },
-          role: "user",
         },
       },
     ]);
@@ -615,15 +613,14 @@ describe("userspace GitHub pull-request routing", () => {
 
     expect(test.appendBatches[0]?.events).toHaveLength(3);
     expect(test.appendBatches[0]?.events[1]).toMatchObject({
-      idempotencyKey: "github-pr/mention-instructions:/integrations/github/install-789:12",
+      idempotencyKey: "github-pr/mention-instructions:v2:/integrations/github/install-789:12",
       payload: {
         llmRequestPolicy: { behaviour: "dont-trigger-request" },
-        role: "developer",
+        actor: { type: "worker", name: "github-ai-linter" },
       },
     });
-    expect(test.appendBatches[0]?.events[1]?.payload).not.toHaveProperty("actor");
     expect(test.appendBatches[0]?.events[2]).toMatchObject({
-      idempotencyKey: "github-pr/mention:/integrations/github/install-789:12",
+      idempotencyKey: "github-pr/mention:v2:/integrations/github/install-789:12",
       payload: {
         actor: { login: "jonas", senderType: "User", type: "github" },
         llmRequestPolicy: { behaviour: "after-current-request" },

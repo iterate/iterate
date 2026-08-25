@@ -141,7 +141,7 @@ describe("EmailProcessor (thread router)", () => {
         // The untagged email prompt parses to one "agent/system-prompt" section.
         key: "agent/system-prompt",
         content: EMAIL_AGENT_SYSTEM_PROMPT,
-        role: "system",
+        kind: "section",
       },
     });
     expect(routed[13]!.payload).toEqual(receivedPayload({}));

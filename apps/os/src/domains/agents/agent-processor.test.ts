@@ -198,7 +198,7 @@ describe("AgentProcessor turn lifecycle", () => {
       },
     ]);
     expect(conversationMessages(h.state()).at(-1)).toMatchObject({
-      payload: { role: "assistant", content: "Hi!", llmRequestOffset: requested.offset },
+      payload: { content: "Hi!", actor: { type: "model", llmRequestOffset: requested.offset } },
     });
 
     // Parseable usage rode the SAME atomic append as the settlement, as the
@@ -402,8 +402,8 @@ describe("AgentProcessor turn lifecycle", () => {
     const partialItem = conversationMessages(h.state()).find((item) =>
       item.payload.content.includes("partial output follows"),
     );
-    expect(partialItem).toMatchObject({ payload: { role: "assistant" } });
-    expect(partialItem!.payload).not.toHaveProperty("llmRequestOffset");
+    expect(partialItem).toMatchObject({ payload: { actor: { type: "model" } } });
+    expect(partialItem!.payload.actor).not.toHaveProperty("llmRequestOffset");
     expect(partialItem!.payload.content).toContain("Hello");
 
     // The interrupting input is itself the next trigger, on a NEW request that
@@ -497,7 +497,7 @@ describe("AgentProcessor turn lifecycle", () => {
     // output to instruction precedence. Files ride the reflection (vision).
     expect(conversationMessages(h.state()).at(-1)).toMatchObject({
       payload: {
-        role: "assistant",
+        actor: { type: "model" },
         content: "The assistant sent this visible web-chat message: Here you go!",
         files: [{ filename: "chart.png" }],
       },
@@ -773,7 +773,7 @@ describe("AgentProcessor recovery", () => {
     expect(
       conversationMessages(h.state()).find((item) => item.payload.content.includes("expired")),
     ).toMatchObject({
-      payload: { role: "developer", actor: { type: "integration" } },
+      payload: { actor: { type: "integration" } },
     });
   });
 
@@ -1104,7 +1104,10 @@ describe("AgentProcessor script execution", () => {
       item.payload.content.includes("2 fenced code blocks"),
     );
     expect(feedback).toMatchObject({
-      payload: { role: "developer", llmRequestPolicy: { behaviour: "after-current-request" } },
+      payload: {
+        actor: { type: "platform" },
+        llmRequestPolicy: { behaviour: "after-current-request" },
+      },
     });
     // The feedback is an agent-loop trigger: the model gets a turn to resend.
     await h.play(["advanceTime", 10_000]);
@@ -1122,7 +1125,7 @@ describe("AgentProcessor script execution", () => {
     expect(h.events("events.iterate.com/capability-host/script-run-requested")).toHaveLength(0);
     expect(
       conversationMessages(h.state()).find((item) => item.payload.content.includes("did NOT run")),
-    ).toMatchObject({ payload: { role: "developer" } });
+    ).toMatchObject({ payload: { actor: { type: "platform" } } });
   });
 
   it("does not execute assistant context that merely claims an LLM request offset", async () => {
@@ -1384,7 +1387,7 @@ describe("AgentProcessor script execution", () => {
     const rendered = conversationMessages(h.state()).find((item) =>
       item.payload.content.startsWith("Your script failed"),
     );
-    expect(rendered).toMatchObject({ payload: { role: "developer" } });
+    expect(rendered).toMatchObject({ payload: { actor: { type: "script" } } });
     expect(rendered!.payload.content).toContain("failed during execution (runtime, after ");
     expect(rendered!.payload.content).toContain("gmail exploded");
     // …and is an agent-loop trigger: the model gets a turn to react.
@@ -1486,7 +1489,7 @@ describe("AgentProcessor script execution", () => {
     const setItem = conversationMessages(h.state()).find((item) =>
       item.payload.content.startsWith('Preamble entry "channels"'),
     );
-    expect(setItem).toMatchObject({ payload: { role: "developer" } });
+    expect(setItem).toMatchObject({ payload: { actor: { type: "platform" } } });
     expect(setItem!.payload.content).toContain('const TECH_CHANNEL_ID = "c1234";');
     expect(h.llm.calls.length).toBe(callsBefore); // configuration, not conversation
 
@@ -1666,7 +1669,10 @@ describe("AgentProcessor script execution", () => {
       item.payload.content.includes("2 fenced code blocks"),
     );
     expect(feedback).toMatchObject({
-      payload: { role: "developer", llmRequestPolicy: { behaviour: "after-current-request" } },
+      payload: {
+        actor: { type: "platform" },
+        llmRequestPolicy: { behaviour: "after-current-request" },
+      },
     });
   });
 
@@ -1694,7 +1700,7 @@ describe("AgentProcessor script execution", () => {
     );
     expect(
       conversationMessages(h.state()).find((item) => item.payload.content.includes("did NOT run")),
-    ).toMatchObject({ payload: { role: "developer" } });
+    ).toMatchObject({ payload: { actor: { type: "platform" } } });
     expect(h.events("events.iterate.com/capability-host/script-run-requested")).toHaveLength(0);
   });
 
@@ -1753,7 +1759,6 @@ describe("AgentProcessor stream facts", () => {
 
     expect(conversationMessages(h.state()).at(-1)).toMatchObject({
       payload: {
-        role: "developer",
         content: expect.stringContaining("skipped failing event"),
         actor: { type: "integration", name: "stream-error" },
         llmRequestPolicy: { behaviour: "dont-trigger-request" },
@@ -2437,14 +2442,14 @@ describe("AgentProcessor compaction", () => {
     );
     expect(compacted).toMatchObject({
       payload: {
-        role: "developer",
+        actor: { type: "platform" },
         compaction: { replacesHistoryThrough: secondRequestOffset },
         llmRequestPolicy: { behaviour: "dont-trigger-request" },
       },
     });
     expect(compacted!.payload.content).toContain("Dense summary");
     expect(h.state().contextItems.filter((item) => item.kind === "section")).toMatchObject([
-      { key: "agent/system-prompt", payload: { role: "system" } },
+      { key: "agent/system-prompt", payload: { content: "You are a helpful test agent." } },
     ]);
     expect(contextItemCompaction(conversationMessages(h.state())[0]!.payload)).toBeDefined();
     expect(
