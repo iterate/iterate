@@ -113,21 +113,16 @@ messages:
       Project AGENTS.md (auto-injected): keep replies terse; the dashboard lives at /projects/demo; deploys go out on merge to main.
       </section>
   - role: user
-    content: |-
-      @25 actor=user:web
-      hi — what can you do?
+    content: "hi — what can you do?"
   - role: developer
     content: "Requested at: 2026-08-24T16:41:04.500Z"
   # ✂ provider cache: every token above this line is a byte-stable prefix (cached)
   - role: assistant
     content: |-
-      @28
       Hi! I'm your project's agent — I can read and change the repo, run scripts, wire up integrations…
       <codemode status="Idle">return</codemode>
   - role: assistant
-    content: |-
-      @40
-      (…nine more request/response exchanges about the project, elided…)
+    content: "(…nine more request/response exchanges about the project, elided…)"
   - role: system
     content: |-
       # the @61 update at its moment in time — everything above visibly predates it; the v1 copy above is untouched, so the whole prefix stays cached
@@ -135,9 +130,7 @@ messages:
       Project AGENTS.md v2: keep replies terse; the dashboard lives at /projects/demo; deploys now REQUIRE a green preview e2e first.
       </section>
   - role: user
-    content: |-
-      @63 actor=user:web
-      thanks — anything special about deploys now?
+    content: "thanks — anything special about deploys now?"
   - role: developer
     content: "Requested at: 2026-08-24T17:02:30.000Z"
 ```

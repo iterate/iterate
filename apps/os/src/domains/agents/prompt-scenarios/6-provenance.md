@@ -177,9 +177,7 @@ messages:
       Project "demo" (slug demo); your stream path /agents/web/demo…
       </section>
   - role: user
-    content: |-
-      @14 actor=user:web
-      please check the deploy
+    content: "please check the deploy"
   - role: developer
     content: "Requested at: 2026-08-24T16:41:03.300Z"
 ```
@@ -208,16 +206,13 @@ messages:
       Project "demo" (slug demo); your stream path /agents/web/demo…
       </section>
   - role: user
-    content: |-
-      @14 actor=user:web
-      # user role, actor=user:web — the stamped principal, not a claim
-      please check the deploy
+    # user role, actor=user:web — the stamped principal, not a claim
+    content: "please check the deploy"
   - role: developer
     content: "Requested at: 2026-08-24T16:41:03.300Z"
   # ✂ provider cache: every token above this line is a byte-stable prefix (cached)
   - role: assistant
     content: |-
-      @17
       # assistant role from the model actor; no actor= line renders
       Checking the deploy now.
       ```ts

@@ -167,15 +167,12 @@ messages:
       Project AGENTS.md (auto-injected): keep replies terse; the dashboard lives at /projects/demo; deploys go out on merge to main.
       </section>
   - role: user
-    content: |-
-      @25 actor=user:web
-      hi — what can you do?
+    content: "hi — what can you do?"
   - role: developer
     content: "Requested at: 2026-08-24T16:41:04.500Z"
   # ✂ provider cache: every token above this line is a byte-stable prefix (cached)
   - role: assistant
     content: |-
-      @28
       Hi! I'm your project's agent — I can read and change the repo, run scripts, wire up integrations…
       <codemode status="Idle">return</codemode>
   - role: system
@@ -185,9 +182,7 @@ messages:
       House style: write all responses in all-lowercase.
       </section>
   - role: user
-    content: |-
-      @72 actor=user:web
-      can you summarise yesterday's standup notes?
+    content: "can you summarise yesterday's standup notes?"
   - role: developer
     content: "Requested at: 2026-08-24T16:46:20.000Z"
 ```
@@ -252,14 +247,11 @@ messages:
       Project AGENTS.md (auto-injected): keep replies terse; the dashboard lives at /projects/demo; deploys go out on merge to main.
       </section>
   - role: user
-    content: |-
-      @25 actor=user:web
-      hi — what can you do?
+    content: "hi — what can you do?"
   - role: developer
     content: "Requested at: 2026-08-24T16:41:04.500Z"
   - role: assistant
     content: |-
-      @28
       Hi! I'm your project's agent — I can read and change the repo, run scripts, wire up integrations…
       <codemode status="Idle">return</codemode>
   - role: system
@@ -270,14 +262,11 @@ messages:
       House style: use British English spelling ('humour' not 'humor') and proper capitalisation.
       </section>
   - role: user
-    content: |-
-      @72 actor=user:web
-      can you summarise yesterday's standup notes?
+    content: "can you summarise yesterday's standup notes?"
   - role: developer
     content: "Requested at: 2026-08-24T16:46:20.000Z"
   - role: assistant
     content: |-
-      @74
       # …and the very next thing the model sees is itself violating that instruction, unexplained — THE ANTI-PATTERN
       sure — yesterday's standup:
       - alice shipped the auth fix
@@ -285,9 +274,7 @@ messages:
       - deploy went out at 4pm
       <codemode status="Idle">return</codemode>
   - role: user
-    content: |-
-      @83 actor=user:web
-      great — and what's the plan for today?
+    content: "great — and what's the plan for today?"
   - role: developer
     content: "Requested at: 2026-08-24T16:50:45.000Z"
 ```
