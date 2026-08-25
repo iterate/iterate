@@ -152,7 +152,8 @@ of them incidents or clumsiness from the agent-birth work (#2508).
 
 ## Checklist (one PR per slice; fold + templates + tests + state-reader migrations together)
 
-- [ ] Slice 1: tree fold + segments-at-append + id-ops (`#id`, `*`) — retires
+- [x] Slice 1: _done — PR #2512 (task record: tasks/complete/2026-08-25-prompt-sections-slice-1.md); the design evolved during review: arbitrary keys, one contextItems collection, one event per section, permanent send stamps_
+      Slice 1 original scope: tree fold + segments-at-append + id-ops (`#id`, `*`) — retires
       #2508's whole-slot prompt replacement; codemode-tag replaces only the
       dialect section; AGENTS.md updates collapse cleanly; migrate
       `state.contextItems` readers (request inspector, budgets test,
