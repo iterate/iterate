@@ -4,6 +4,7 @@ import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import {
   type FacetProbeAnswer,
   PING,
+  PROBE_CONTRACT_SLUG,
   PROBE_PATH,
   probeFacetSource,
   SEEN,
@@ -82,7 +83,9 @@ test.fails(
     await project.projectId;
 
     const streamPath = "/facet-version";
-    const subscriptionName = "facet-version";
+    // Must equal the probe contract's slug: a facet-processor subscription
+    // named anything else is silently delivered nothing.
+    const subscriptionName = PROBE_CONTRACT_SLUG;
 
     await project.repo.commitFiles({
       changes: [

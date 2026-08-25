@@ -14,6 +14,14 @@ export const SEEN = "events.iterate.test/facet-version/seen";
 
 export const PROBE_PATH = "version-probe.js";
 
+/**
+ * The probe processor contract's slug, and therefore the only subscription
+ * name that can receive anything: a facet-processor subscription whose name
+ * differs from its contract slug is delivered NOTHING, with no error and no
+ * halted-delivery event. Both suites name their subscription after this.
+ */
+export const PROBE_CONTRACT_SLUG = "facet-version";
+
 /** One `SEEN` payload: who answered, on which build, from which source. */
 export type FacetProbeAnswer = { id: string; bootId: string; buildKey: string; revision: string };
 
@@ -33,7 +41,7 @@ import { defineProcessorContract, StreamProcessor } from "iterate/processors";
 import { z } from "zod";
 
 export const VersionProbeContract = defineProcessorContract({
-  slug: "facet-version",
+  slug: "${PROBE_CONTRACT_SLUG}",
   version: "1.0.0",
   description: "Reports which facet instance and which loaded build handled each ping.",
   stateSchema: z.object({ seen: z.array(z.string()).default([]) }),

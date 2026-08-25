@@ -4,6 +4,7 @@ import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import {
   type FacetProbeAnswer,
   PING,
+  PROBE_CONTRACT_SLUG,
   PROBE_PATH,
   probeFacetSource,
   SEEN,
@@ -47,19 +48,19 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
  * the commit is what replaced the facet. That is a separate change; this test
  * only holds the bug still.
  *
- * Needs a real deployment, like the pin: against local dev the facet never
- * builds at all and the first ping times out, which `test.fails` absorbs into
- * a vacuous pass. Hence the `[facet-recycle]` phase log — `test.fails` hides
- * WHICH throw ended the run, so a run that proves anything is one whose log
- * reaches `verdict`.
+ * The `[facet-recycle]` phase log is not decoration. `test.fails` reports
+ * every throw as the expected one, so a green pin says nothing about whether
+ * the pinned thing happened — the same blind spot this file is about. Three
+ * runs of this test "passed" while never reaching the assertion at all. A run
+ * proves something only if its log reaches `verdict`.
  */
 test.fails(
   "the source-version pin tells a facet that recycled from one the commit rebuilt",
-  // Ceiling, not an expectation: the run is ~60-90s against an idle
-  // deployment. 150s was not enough on a fully loaded preview run (the first
-  // attempt of the run described above timed out), and a ceiling only costs
-  // wall time when it is actually hit.
-  { timeout: 240_000 },
+  // Ceiling, not an expectation: ~6s against a warm local deployment, and the
+  // pin's comparable scenario takes 50-75s on a busy preview. Matched to the
+  // pin's ceiling because a ceiling costs wall time only when it is hit, and
+  // hitting it here would be absorbed as a vacuous pass rather than reported.
+  { timeout: 180_000 },
   async () => {
     // `test.fails` reports every throw as the expected one, so the phase log
     // is the only way to tell a run that measured something from one that
@@ -75,7 +76,10 @@ test.fails(
     log("project created", await project.projectId);
 
     const streamPath = "/facet-recycle";
-    const subscriptionName = "facet-recycle";
+    // Must equal the probe contract's slug: a facet-processor subscription
+    // named anything else is silently delivered nothing — no error, no
+    // halted-delivery event, just a facet that never answers.
+    const subscriptionName = PROBE_CONTRACT_SLUG;
 
     await project.repo.commitFiles({
       changes: [{ content: probeFacetSource("v1"), path: PROBE_PATH }],
