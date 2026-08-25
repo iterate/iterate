@@ -244,6 +244,24 @@ prompt line only, plus any legacy-keyed role drift); add scenario
     worker actor), so agent-send-message asserts the derived-sender SET,
     not one actor.
 
+- 2026-08-25 (fourth): round-three preview verdict, from the run's own
+  evidence (not the lane summary): the playwright lane PASSED — media green
+  (the race fix holds), create-project FLAKY-passed. Its first attempt lost
+  to a platform recovery cycle, proven from the fixture project's stream on
+  preview-9: user reply @16:17:01, request opened @16:17:02, then silence
+  until stream/processor-revived @16:19:07 — the incarnation died
+  mid-attempt (streamed chunks occupy the offset gap), the keepalive
+  revival adopted the open request, and the reply landed 16:19:17 — ~16s
+  past the spec's 120s manual budget. The retry's sibling project answered
+  in 17s end to end. Not a slice-2 code path (nothing here touches
+  eviction, keepalive, or transport lifetimes) and not papered over: the
+  spec's budget is deliberately shorter than a worst-case revival cycle,
+  and lengthening it would hide a real platform-latency event behind green.
+  The vitest lane's one red, userspace-facet-source-version, is the known
+  pre-existing expected-fail false alarm (distinct bootIds on recycle) —
+  not chased, per coordination. Preview retried as-is (Depot job
+  wz1s7587kt).
+
 - 2026-08-25 (second): first preview run came back with three spec
   failures; all three root-caused, two were real regressions:
   - **create-project.spec** — two causes stacked: the spec polled the
