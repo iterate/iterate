@@ -6,6 +6,7 @@
 
 import fs from "node:fs";
 import { expect, inject, test } from "vitest";
+import { explainerPath, generateExplainerHtml } from "./explainer-generator.ts";
 import { computeScenarioOutputs, loadScenarios, regenerateFixtureText } from "./fixture-helpers.ts";
 
 const scenarios = loadScenarios();
@@ -23,3 +24,13 @@ for (const scenario of scenarios) {
     expect(original, UPDATE_HINT).toBe(expected);
   });
 }
+
+test("explainers/prompt-sections.html is generated from these fixtures", () => {
+  const expected = generateExplainerHtml(scenarios);
+  const original = fs.readFileSync(explainerPath, "utf8");
+  if (inject("updateSnapshots")) {
+    if (expected !== original) fs.writeFileSync(explainerPath, expected);
+    return;
+  }
+  expect(original, UPDATE_HINT).toBe(expected);
+});

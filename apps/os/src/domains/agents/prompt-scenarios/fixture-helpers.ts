@@ -85,7 +85,7 @@ export type LoadedScenario = ParsedScenario & {
 // Parsing
 // -----------------------------------------------------------------------------
 
-export function listScenarioFiles(): string[] {
+function listScenarioFiles(): string[] {
   return fs
     .readdirSync(scenarioDir)
     .filter((name) => name.endsWith(".md"))
@@ -96,7 +96,7 @@ export function listScenarioFiles(): string[] {
 const FENCE_PATTERN =
   /^```(?<lang>[\w-]+)[ \t]+\((?<path>[^)]+)\)[ \t]*\n(?<content>[\s\S]*?)^```[ \t]*$/gm;
 
-export function parseScenarioFile(filePath: string): ParsedScenario {
+function parseScenarioFile(filePath: string): ParsedScenario {
   const text = fs.readFileSync(filePath, "utf8");
   const fileName = path.basename(filePath);
   const titleMatch = text.match(/^# (.+)$/m);
@@ -163,21 +163,18 @@ export function formatElapsed(ms: number): string {
 // Event synthesis: fixture entries -> contract-valid StreamEvents
 // -----------------------------------------------------------------------------
 
-function isoAt(elapsedMs: number): string {
-  return new Date(SCENARIO_TIME_ZERO + elapsedMs).toISOString();
-}
-
 /** One fixture entry can synthesize several events: a payload carrying
  * `sections` is the parsed prompt file — one keyed context-added per section,
  * offsets off..off+N-1, riding one atomic batch. */
 export function synthesizeEvents(entry: ScenarioEntry): StreamEvent[] {
   const elapsedMs = parseElapsed(entry.t);
   const type = EVENT_TYPE_PREFIX + entry.type;
+  const createdAt = new Date(SCENARIO_TIME_ZERO + elapsedMs).toISOString();
   const streamEvent = (offset: number, payload: any): StreamEvent => ({
     type,
     payload,
     offset,
-    createdAt: isoAt(elapsedMs),
+    createdAt,
     path: "/agents/web/demo",
   });
   if (entry.payload?.sections !== undefined) {
@@ -200,7 +197,7 @@ export function synthesizeEvents(entry: ScenarioEntry): StreamEvent[] {
  * exactly the wrong behavior for a teaching fixture, where a typo'd payload
  * would silently vanish from the rendered request. So every synthesized event
  * must parse against its consumed-event definition, loudly. */
-export function validateEvents(events: StreamEvent[], context: string): void {
+function validateEvents(events: StreamEvent[], context: string): void {
   for (const event of events) {
     const definition = getConsumedEventDefinition({
       contract: AgentProcessorContract,
@@ -264,7 +261,7 @@ export function loadScenarios(): LoadedScenario[] {
 // Rendering: fold output -> deterministic YAML lines
 // -----------------------------------------------------------------------------
 
-export function requestedOffsetsInChain(scenario: LoadedScenario): number[] {
+function requestedOffsetsInChain(scenario: LoadedScenario): number[] {
   return scenario.chainEvents
     .filter((event) => event.type === EVENT_TYPE_PREFIX + "agent/llm-request-requested")
     .map((event) => event.offset);
@@ -274,7 +271,7 @@ export function requestedOffsetsInChain(scenario: LoadedScenario): number[] {
  * (comments not yet woven in). The model line comes from the requested
  * event's own payload — it is part of the request the fold's messages ride
  * in. */
-export function renderRequestPlainLines(scenario: LoadedScenario, requestOffset: number): string[] {
+function renderRequestPlainLines(scenario: LoadedScenario, requestOffset: number): string[] {
   const events = scenario.chainEvents;
   const requested = events.find(
     (event) =>
