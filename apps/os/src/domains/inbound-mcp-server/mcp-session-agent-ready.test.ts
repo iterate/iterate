@@ -49,7 +49,7 @@ describe("ensureMcpSessionAgentReady", () => {
         role: "system",
         content: "",
         // The MCP prompt is the tagged default file plus an untagged override
-        // suffix: the file's sections, then the suffix in the umbrella.
+        // suffix: the file's sections, then the suffix under the fallback key.
         segments: parsePromptSections({
           content: MCP_AGENT_SYSTEM_PROMPT,
           fallbackKey: "agent/system-prompt",

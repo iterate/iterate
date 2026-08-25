@@ -332,7 +332,11 @@ describe("AgentProcessor turn lifecycle", () => {
     );
   });
 
-  it("holds an early trigger until the canonical system prompt arrives", async () => {
+  it("a promptless birth answers rather than holding its triggers (the old readiness gate is gone)", async () => {
+    // Every real creation path ships prompt content in the SAME atomic
+    // batch as agent/created, so "hold until a system prompt exists" became
+    // vestigial and was deleted: a hand-rolled bare birth answers with an
+    // empty standing document instead of parking its triggers forever.
     const h = makeAgentHarness();
     await h.play(
       [
@@ -340,27 +344,13 @@ describe("AgentProcessor turn lifecycle", () => {
         { type: "events.iterate.com/agent/created", payload: {} },
         userMessage("am I early?"),
       ],
-      ["advanceTime", 60_000],
-    );
-    // No system-prompt slot yet: the trigger stays parked, nothing dials.
-    expect(h.events(REQUESTED)).toHaveLength(0);
-    expect(h.llm.calls).toHaveLength(0);
-    expect(h.state().pendingLlmRequestTrigger).not.toBeNull();
-
-    // The system prompt's own delivery re-runs the pass over the SAME
-    // pending trigger — the early message gets its turn.
-    await h.play(
-      [
-        "append",
-        {
-          type: CONTEXT_ADDED,
-          payload: { role: "system", key: "agent/system-prompt", content: "Now configured." },
-        },
-      ],
       ["advanceTime", 10_000],
     );
     expect(h.llm.calls).toHaveLength(1);
-    expect(h.llm.calls[0]!.messages.map((m) => m.content).join("\n")).toContain("am I early?");
+    const prompt = h.llm.calls[0]!.messages.map((m) => m.content).join("\n");
+    expect(prompt).toContain("am I early?");
+    // No standing document message — just protocol, the turn, the stamp.
+    expect(h.llm.calls[0]!.messages.map((m) => m.role)).toEqual(["system", "user", "developer"]);
   });
 
   it("interrupt mid-flight: aborts, settles cancelled with the streamed partial; the zombie completion loses the settle race", async () => {

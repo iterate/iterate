@@ -19,15 +19,10 @@ import {
 } from "iterate/processors";
 import type { StreamEvent } from "iterate/processors";
 import {
-  AGENT_SYSTEM_PROMPT_FILE_SECTION_KEYS,
-  AGENT_SYSTEM_PROMPT_KEY,
   AgentProcessorContract,
-  HOT_SECTION_KEYS,
-  SYSTEM_PROMPT_SECTION_KEYS,
   type AgentContextAddedPayload,
   type AgentFileAttachment,
   type AgentProcessorState,
-  type AgentStandingSection,
   type AgentTimelineItem,
 } from "./agent-processor-contract.ts";
 import { deriveAgentRuntime, foldAgentSummaryUpdated } from "./agent-presence.ts";
@@ -46,7 +41,7 @@ export function reduceAgentEvent(input: {
   state: AgentProcessorState;
 }): AgentProcessorState {
   const state = reduceAgentEventCore(input);
-  const runtime: AgentRuntime = deriveAgentRuntime(state, SYSTEM_PROMPT_SECTION_KEYS);
+  const runtime: AgentRuntime = deriveAgentRuntime(state);
   // Genesis zero stays absent. Every later count change is significant,
   // including changes which retain the same compact display state.
   const changed =
@@ -439,32 +434,14 @@ export function projectContextAdded(args: {
   const payload = item.payload;
   if (payload.segments !== undefined) {
     const { segments, ...base } = payload;
-    // The umbrella supersession is decided per EVENT, before any of its
-    // writes, in BOTH directions:
-    // - a segments append that includes the umbrella (an untagged fork, the
-    //   MCP prompt's untagged suffix riding a tagged file) supersedes the
-    //   prompt-file sections — but never the siblings the very same event
-    //   establishes;
-    // - a segments append that writes prompt-FILE sections and no umbrella
-    //   is itself a whole-prompt statement (segments only ever come from
-    //   parsing ONE authored file), so a standing legacy umbrella — an old
-    //   worker's whole-prompt write — must not stack under it. Same
-    //   hard-drop discipline as the forward direction (demo scenario 4
-    //   blesses dropping sent occurrences for whole-prompt supersession):
-    //   a one-time cache bust beats rendering two prompts forever,
-    //   including after compaction collapses both to standing.
-    // A single-key add (codemode-tag swapping `output-formatting`) is a
-    // PARTIAL override and deliberately clears nothing — deleting a legacy
-    // umbrella because one section changed would lobotomise the agent.
-    const writesUmbrella = segments.some((segment) => segment.key === AGENT_SYSTEM_PROMPT_KEY);
-    const writesPromptFileSections = segments.some((segment) =>
-      AGENT_SYSTEM_PROMPT_FILE_SECTION_KEYS.includes(segment.key),
-    );
-    let lanes: AgentContextLanes = writesUmbrella
-      ? clearSectionsSupersededByUmbrella(args)
-      : writesPromptFileSections
-        ? removeSection(args, AGENT_SYSTEM_PROMPT_KEY)
-        : { standingSections: args.standingSections, turns: args.turns };
+    // Keys are arbitrary strings the kernel never interprets: no key
+    // triggers clearing, ordering, or gating of any other key. Segments
+    // apply in their event (file) order, so a parsed prompt file's sections
+    // first-appear — and therefore render — in the authored layout.
+    let lanes: AgentContextLanes = {
+      standingSections: args.standingSections,
+      turns: args.turns,
+    };
     for (const segment of segments) {
       lanes = addKeyedOccurrence({
         lanes,
@@ -479,12 +456,8 @@ export function projectContextAdded(args: {
     return lanes;
   }
   if (payload.key !== undefined) {
-    const lanes =
-      payload.key === AGENT_SYSTEM_PROMPT_KEY
-        ? clearSectionsSupersededByUmbrella(args)
-        : { standingSections: args.standingSections, turns: args.turns };
     return addKeyedOccurrence({
-      lanes,
+      lanes: { standingSections: args.standingSections, turns: args.turns },
       lastLlmRequestOffset: args.lastLlmRequestOffset,
       key: payload.key,
       item,
@@ -528,11 +501,16 @@ function addKeyedOccurrence(args: {
     // First-ever occurrence: joins the standing document when no
     // conversation exists yet, else lands at its moment in time.
     if (lanes.turns.length === 0) {
+      // First-appearance order: the new section joins at the END of the
+      // document. Authors control placement through append order — in every
+      // real flow the worker's hot content (AGENTS.md) arrives after the
+      // birth batch and so lands last. An attribute-based ordering feature
+      // can be added if a use case ever genuinely needs one.
       return {
         standingSections: [
           ...lanes.standingSections,
           { key, offset: item.offset, payload: item.payload },
-        ].sort(compareStandingSections),
+        ],
         turns: lanes.turns,
       };
     }
@@ -607,22 +585,26 @@ function applyContextRewritten(args: {
   // a rewrite inherits the section's current role, and one that CREATES a
   // section makes a standing instruction — system.
   const role = latestKeyedOccurrence(state, payload.key)?.payload.role || "system";
+  const rewritten = {
+    key: payload.key,
+    offset: event.offset,
+    payload: {
+      role,
+      content: payload.content === undefined ? "" : payload.content,
+      key: payload.key,
+      // as const: in the object literal the literal would widen to string
+      // and fall out of the policy union.
+      llmRequestPolicy: { behaviour: "dont-trigger-request" as const },
+    },
+  };
+  // A rewrite changes what PAST positions contain, so an existing standing
+  // entry keeps its first-appearance position; a key that never stood (only
+  // temporal, or brand new) joins at the end.
+  const hadStanding = state.standingSections.some((section) => section.key === payload.key);
   return {
-    standingSections: [
-      ...removed.standingSections,
-      {
-        key: payload.key,
-        offset: event.offset,
-        payload: {
-          role,
-          content: payload.content === undefined ? "" : payload.content,
-          key: payload.key,
-          // as const: in the array literal the literal would widen to string
-          // and fall out of the policy union.
-          llmRequestPolicy: { behaviour: "dont-trigger-request" as const },
-        },
-      },
-    ].sort(compareStandingSections),
+    standingSections: hadStanding
+      ? state.standingSections.map((section) => (section.key === payload.key ? rewritten : section))
+      : [...removed.standingSections, rewritten],
     turns: removed.turns,
   };
 }
@@ -636,29 +618,17 @@ function removeSection(lanes: AgentContextLanes, key: string): AgentContextLanes
   };
 }
 
-/** Writing the umbrella `agent/system-prompt` key supersedes the WHOLE
- * prompt: the platform prompt-file sections are cleared from both lanes
- * first, so a whole-prompt supersession (an old template worker, an
- * integration prompt) never leaves the segmented default prompt standing
- * beside it. Callers apply this once per EVENT, before its writes. */
-function clearSectionsSupersededByUmbrella(lanes: AgentContextLanes): AgentContextLanes {
-  return {
-    standingSections: lanes.standingSections.filter(
-      (section) => !AGENT_SYSTEM_PROMPT_FILE_SECTION_KEYS.includes(section.key),
-    ),
-    turns: lanes.turns.filter(
-      (item) =>
-        !("section" in item && AGENT_SYSTEM_PROMPT_FILE_SECTION_KEYS.includes(item.section.key)),
-    ),
-  };
-}
-
 /** The compaction rebaseline for keyed content: every section collapses to
- * its NEWEST occurrence, folded back into the standing document in canonical
- * order (the superseded copies were riding the timeline only until now). */
+ * its NEWEST occurrence, folded back into the standing document at its
+ * first-appearance position (existing standing entries keep their order;
+ * keys that only ever appeared temporally join at the end, in the order
+ * they first appeared on the timeline — the superseded copies were riding
+ * the timeline only until now). */
 function collapseSectionsToLatest(
   lanes: AgentContextLanes,
 ): AgentProcessorState["standingSections"] {
+  // Set insertion order IS first-appearance order: standing entries first
+  // (in their existing order), then temporal-only keys as encountered.
   const keys = new Set<string>(lanes.standingSections.map((section) => section.key));
   for (const item of lanes.turns) {
     if ("section" in item) keys.add(item.section.key);
@@ -668,47 +638,7 @@ function collapseSectionsToLatest(
     const latest = latestKeyedOccurrence(lanes, key);
     if (latest !== null) collapsed.push({ key, offset: latest.offset, payload: latest.payload });
   }
-  return collapsed.sort(compareStandingSections);
-}
-
-/** The canonical standing-document order — a property of the section key
- * alone, so arrival order can never affect it: the platform prompt sections
- * first (the prompt file's sections in file order, then the umbrella — which
- * usually stands ALONE, but when one event carries both, its untagged
- * content is a trailing addendum like the MCP prompt's override note, so it
- * follows the tagged sections), then the boot context, every other section
- * alphabetically, hot sections last. */
-const CANONICAL_SECTION_KEY_PREFIX = [
-  ...AGENT_SYSTEM_PROMPT_FILE_SECTION_KEYS,
-  AGENT_SYSTEM_PROMPT_KEY,
-  "agent/boot-context",
-];
-
-function compareStandingSections(a: AgentStandingSection, b: AgentStandingSection): number {
-  const bucket = (key: string) =>
-    HOT_SECTION_KEYS.includes(key) ? 2 : CANONICAL_SECTION_KEY_PREFIX.includes(key) ? 0 : 1;
-  const bucketA = bucket(a.key);
-  const bucketB = bucket(b.key);
-  if (bucketA !== bucketB) return bucketA - bucketB;
-  if (bucketA === 0) {
-    return (
-      CANONICAL_SECTION_KEY_PREFIX.indexOf(a.key) - CANONICAL_SECTION_KEY_PREFIX.indexOf(b.key)
-    );
-  }
-  return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
-}
-
-/** The turn loop's readiness gate: the birth prompt exists — the umbrella
- * `agent/system-prompt` section or any section the sectionized default
- * prompt file defines, wherever its latest occurrence lives (an old worker's
- * whole-prompt write can land the umbrella temporally). */
-export function hasSystemPromptSection(lanes: AgentContextLanes): boolean {
-  return (
-    lanes.standingSections.some((section) => SYSTEM_PROMPT_SECTION_KEYS.includes(section.key)) ||
-    lanes.turns.some(
-      (item) => "section" in item && SYSTEM_PROMPT_SECTION_KEYS.includes(item.section.key),
-    )
-  );
+  return collapsed;
 }
 
 // -----------------------------------------------------------------------------

@@ -100,7 +100,7 @@ test("renders, searches, and views seeded media", async ({ page }, testInfo) => 
 test("captures through the live vision pipeline", async ({ page }, testInfo) => {
   test.skip(
     process.env.MOBILE_MEDIA_SPECS !== "1",
-    "parked: AI-dependent (real toMarkdown + vision calls), so never CI-deterministic — likely becomes an eval; run with MOBILE_MEDIA_SPECS=1 — revisit by 2026-08-24",
+    "parked: AI-dependent (real toMarkdown + vision calls), so never CI-deterministic — likely becomes an eval; run with MOBILE_MEDIA_SPECS=1 — revisit by 2026-09-21",
   );
   // Test BUDGET (not an action timeout): two real vision-model calls ride
   // this test and routinely take over a minute together.

@@ -911,8 +911,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  /** prompts/agent-system-prompt.md as the agent's system prompt, parsed at\n" +
       "   * append time into keyed segments (`<section key=\"...\">` tags are the\n" +
       "   * authoring syntax — the same tags the fold renders the standing document\n" +
-      "   * with; untagged content lands in the umbrella `agent/system-prompt`\n" +
-      "   * section, which supersedes the whole platform prompt). Appended\n" +
+      "   * with; untagged content lands in one \"agent/system-prompt\" section —\n" +
+      "   * keys are arbitrary strings, an authoring convention only). Appended\n" +
       "   * UNCONDITIONALLY rather than read-compared against the agent's current\n" +
       "   * sections — a snapshot at this moment may predate the processor reducing\n" +
       "   * the birth batch, and inside the un-sent birth window each segment\n" +

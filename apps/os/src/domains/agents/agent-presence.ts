@@ -254,25 +254,26 @@ export function foldAgentSummaryUpdated({
 
 type AgentRuntimeSource = {
   activeScriptExecutions: readonly unknown[];
-  standingSections: readonly { key: string }[];
-  turns: readonly { offset: number; section?: { key: string } }[];
+  standingSections: readonly { key: string; payload: { role: string } }[];
+  turns: readonly {
+    offset: number;
+    section?: { key: string };
+    payload?: { role: string };
+  }[];
   openRequest: null | { requestedAtOffset: number };
   pendingLlmRequestTrigger: null | { offset: number };
 };
 
-export function deriveAgentRuntime(
-  state: AgentRuntimeSource,
-  systemPromptSectionKeys: readonly string[],
-): AgentRuntimeRecord {
+export function deriveAgentRuntime(state: AgentRuntimeSource): AgentRuntimeRecord {
   const pending = state.pendingLlmRequestTrigger === null ? 0 : 1;
-  // The birth prompt may stand in the document or (after an old worker's
-  // whole-prompt write mid-conversation) as a temporal occurrence — either
-  // makes the agent runnable.
+  // Key-agnostic (the kernel knows no section key by name): a pending
+  // trigger counts as runnable once ANY system-role section exists —
+  // standing or temporal. Purely a presentation facet; the turn loop itself
+  // no longer gates on it (every creation path ships prompt content in the
+  // birth batch).
   const promptExists =
-    state.standingSections.some((section) => systemPromptSectionKeys.includes(section.key)) ||
-    state.turns.some(
-      (item) => item.section !== undefined && systemPromptSectionKeys.includes(item.section.key),
-    );
+    state.standingSections.some((section) => section.payload.role === "system") ||
+    state.turns.some((item) => item.section !== undefined && item.payload?.role === "system");
   const runnable = pending === 1 && promptExists ? 1 : 0;
   return {
     triggers: { pending, runnable },

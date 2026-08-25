@@ -324,8 +324,9 @@ test("the birth reaction shapes each newborn and lowers the debounce as its last
   // ONE atomic batch — the repo's prompt parsed into keyed segments
   // (appended unconditionally: inside the un-sent birth window each segment
   // coalesces in place, so an unforked file is free and a forked one
-  // supersedes; an UNTAGGED fork lands in the umbrella section and
-  // supersedes the whole prompt), the house style section, and the debounce
+  // supersedes; an UNTAGGED fork lands in one "agent/system-prompt"
+  // section — an authoring convention, not kernel vocabulary), the house
+  // style section, and the debounce
   // lowered LAST (the done-configuring signal).
   const web = makeReactionWorker("FORKED PROMPT\n");
   await deliver(web.worker, {
@@ -361,8 +362,8 @@ test("the birth reaction shapes each newborn and lowers the debounce as its last
     },
   ]);
 
-  // A channel agent is born with its OWN prompt in the same umbrella
-  // section (slack/telegram/email routers, MCP sessions): the repo's
+  // A channel agent is born with its OWN prompt under the same key
+  // (slack/telegram/email routers, MCP sessions): the repo's
   // web-chat prompt and personality must NOT clobber it — only the release
   // applies. (A slack agent that lost its slack prompt stopped replying on
   // slack.)

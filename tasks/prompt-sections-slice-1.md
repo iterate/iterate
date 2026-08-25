@@ -322,3 +322,47 @@ interpreters would happily extract and run the surviving half-script.
   splitting minutes — 179.7s now renders "3m", not "2m 60s". Mirrored in
   codemode-tag's vendored renderer; harness spec drives it through real
   journaled timestamps with virtual time.
+
+### 2026-08-25: arbitrary keys — the kernel stops knowing any key by name
+
+Design simplification per Misha. The four contract constants are gone, and
+with them every place the kernel interpreted a key:
+
+- **Ordering is first-appearance, nothing else**: sections render in the
+  order their keys first appeared on the stream (commit order); segments
+  within one event keep their file order, which preserves the authored
+  prompt layout. The canonical comparator is deleted. Hot content lands
+  last in every real flow because the worker's reaction arrives after the
+  birth batch; authors control placement through append order; an
+  attribute-based ordering feature can be added if ever genuinely needed.
+  Compaction's fold-back keeps first-appearance positions (standing
+  entries keep their order; temporal-only keys join at the end in timeline
+  first-appearance order). A context-rewritten replace keeps an existing
+  standing entry's position (it rewrites what past positions contain); a
+  key that never stood joins at the end.
+- **Umbrella supersession deleted, both directions.** No key triggers
+  clearing of any other key, ever. A whole-prompt-keyed section and file
+  sections coexist as plain sections; the doubling mix on old streams is
+  accepted and will be closed by a prd repo sweep (audited separately).
+  The umbrella specs became a coexistence spec documenting the accepted
+  behavior; the MCP mixed-shape event needs no special handling (its
+  segments are just sections in event order — the parser never
+  special-cased it, so only the fold changed).
+- **The readiness gate is DELETED, not generalized** (turn-loop hold +
+  console.warn + its spec): every creation path ships prompt content in
+  the SAME atomic batch as agent/created, and the birthCertificate-null
+  check already parks pre-birth triggers, so by the time a trigger can
+  schedule, the birth prompt has reduced. A hand-rolled promptless birth
+  now answers with an empty standing document instead of holding its
+  triggers forever (spec'd). The presence facet (`triggers.runnable`) kept
+  its shape but generalized key-agnostically: runnable = pending AND any
+  system-role section exists (standing or temporal) — display-only, the
+  loop no longer reads it.
+- Ripples: contract meta descriptions, agent-defaults comments + inlined
+  "agent/system-prompt" fallback literal (an authoring convention), the
+  defaults drift test became an arbitrary-keys pin (the file must keep
+  defining "output-formatting" — codemode-tag targets it by convention),
+  the explainer's opinion box / vocab table / scenario 4 / mini-fold
+  rewritten to the arbitrary-keys story (appendices untouched), decision
+  record revised (Decision 11 + a dated note: the kernel must not know key
+  meanings).

@@ -1,6 +1,5 @@
 import { describe, expect, test } from "vitest";
 import { parsePromptSections } from "iterate/processors";
-import { AGENT_SYSTEM_PROMPT_FILE_SECTION_KEYS } from "./agent-processor-contract.ts";
 import {
   AGENT_INITIAL_DEBOUNCE_MS,
   agentCreationForPath,
@@ -110,15 +109,16 @@ describe("agentCreationForPath", () => {
     });
   });
 
-  test("the shipped prompt file's section ids match the contract's canonical list", () => {
-    // The fold's canonical standing order and the turn loop's readiness gate
-    // hardcode the file's section ids (the fold must never read the file);
-    // this pins the two against drift.
+  test("the shipped prompt file parses cleanly into arbitrary-keyed sections", () => {
+    // Keys are authoring conventions the kernel never interprets — but the
+    // codemode-tag template targets "output-formatting" by that convention,
+    // so the shipped file must keep defining it.
     const segments = parsePromptSections({
       content: DEFAULT_AGENT_SYSTEM_PROMPT,
       fallbackKey: "agent/system-prompt",
     });
-    expect(segments.map((segment) => segment.key)).toEqual(AGENT_SYSTEM_PROMPT_FILE_SECTION_KEYS);
+    expect(segments.length).toBeGreaterThanOrEqual(4);
+    expect(segments.map((segment) => segment.key)).toContain("output-formatting");
     // Tags are authoring syntax: none survive into model-visible content.
     for (const segment of segments) {
       expect(segment.content).not.toContain("<section");
@@ -147,7 +147,8 @@ describe("agentCreationForPath", () => {
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toMatchObject({
       idempotencyKey: `agent/system-prompt-segments:v2:slack:v7:${PROJECT_ID}:/agents/slack/test`,
-      // An untagged prompt parses to the one umbrella section.
+      // An untagged prompt parses to one "agent/system-prompt" section (an
+      // authoring convention — keys are arbitrary strings to the kernel).
       payload: {
         segments: [{ key: "agent/system-prompt", content: "Slack execution contract" }],
       },

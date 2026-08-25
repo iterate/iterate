@@ -203,11 +203,14 @@ test("context-rewritten delete removes one section; delete * removes everything,
   ]);
 });
 
-test("the standing document's canonical order does not depend on arrival order", () => {
-  // The same standing content arriving in two very different orders — hot
-  // section first vs last, prompt segments in the middle vs up front. All
-  // BEFORE any conversation, so everything coalesces into the document.
-  const forwards = [
+test("the standing document keeps first-appearance order — append order is the layout", () => {
+  // Keys are arbitrary; the kernel imposes no ordering of its own. Sections
+  // render in the order their keys first appeared on the stream, with
+  // segments inside one event keeping their file order (the authored prompt
+  // layout). Hot content like AGENTS.md lands last in every real flow
+  // simply because the worker's reaction arrives after the birth batch —
+  // authors control placement through their own append order.
+  const events = [
     contextAdded(1, {
       role: "system",
       content: "",
@@ -217,48 +220,30 @@ test("the standing document's canonical order does not depend on arrival order",
       ],
     }),
     keyedSystem(2, "agent/boot-context", "Context for this agent."),
-    keyedSystem(3, "config/house-style", "All lowercase."),
-    keyedSystem(4, "config/agents-md", "Notes."),
-    requested(5),
+    keyedSystem(3, "config/agents-md", "Notes."),
+    keyedSystem(4, "config/house-style", "All lowercase."),
+    // A birth-window coalesce keeps its section's first-appearance position.
+    keyedSystem(5, "identity", "You are the RENAMED test agent."),
+    requested(6),
   ];
-  const backwards = [
-    keyedSystem(1, "config/agents-md", "Notes."),
-    keyedSystem(2, "config/house-style", "All lowercase."),
-    keyedSystem(3, "agent/boot-context", "Context for this agent."),
-    contextAdded(4, {
-      role: "system",
-      content: "",
-      segments: [
-        { key: "identity", content: "You are the test agent." },
-        { key: "output-formatting", content: "One fenced block." },
-      ],
-    }),
-    requested(5),
-  ];
-  const canonical = [
-    // Platform prompt sections in file order, boot context behind them,
-    // other config sections alphabetically, hot sections last.
+  const { messages } = buildAgentLlmRequestBody({ events, llmRequestOffset: 6 });
+  expect(messages[1]!.content.split("\n").filter((line) => line.startsWith("<section"))).toEqual([
     '<section key="identity">',
     '<section key="output-formatting">',
     '<section key="agent/boot-context">',
-    '<section key="config/house-style">',
     '<section key="config/agents-md">',
-  ];
-  const docTagLines = (body: { messages: { content: string }[] }) =>
-    body.messages[1]!.content.split("\n").filter((line) => line.startsWith("<section"));
-  expect(docTagLines(buildAgentLlmRequestBody({ events: forwards, llmRequestOffset: 5 }))).toEqual(
-    canonical,
-  );
-  expect(docTagLines(buildAgentLlmRequestBody({ events: backwards, llmRequestOffset: 5 }))).toEqual(
-    canonical,
-  );
+    '<section key="config/house-style">',
+  ]);
+  expect(messages[1]!.content).toContain("RENAMED");
 });
 
-test("a whole-prompt write at the umbrella key supersedes the prompt-file sections — the forked prompt never stacks", () => {
-  // An old default-template worker ships the whole (untagged) prompt file
-  // keyed agent/system-prompt AFTER the platform birth appended segments —
-  // without the umbrella clearing the file sections, every such agent would
-  // carry a double prompt (the p1711 trace).
+test("a whole-prompt-keyed section and file sections coexist as plain sections — no key supersedes another", () => {
+  // "agent/system-prompt" is an authoring convention, not kernel
+  // vocabulary: no key triggers clearing of any other key, ever. An old
+  // stream whose prompt is one whole-prompt-keyed section keeps rendering
+  // exactly that; the doubling case (an old whole-prompt sync coexisting
+  // with the new sectioned prompt) is ACCEPTED behavior, to be closed by a
+  // prd repo sweep — this spec documents it, it does not guard a shim.
   const events = [
     contextAdded(1, {
       role: "system",
@@ -273,71 +258,19 @@ test("a whole-prompt write at the umbrella key supersedes the prompt-file sectio
     requested(4),
   ];
   const { messages } = buildAgentLlmRequestBody({ events, llmRequestOffset: 4 });
-  expect(messages[1]!.content).toBe(
-    '<section key="agent/system-prompt">\nThe project\'s own whole prompt.\n</section>',
-  );
-  expect(messages.some((message) => message.content.includes("Platform identity"))).toBe(false);
+  expect(messages[1]!.content.split("\n").filter((line) => line.startsWith("<section"))).toEqual([
+    '<section key="identity">',
+    '<section key="output-formatting">',
+    '<section key="agent/system-prompt">',
+  ]);
+  expect(messages[1]!.content).toContain("Platform identity.");
+  expect(messages[1]!.content).toContain("The project's own whole prompt.");
 });
 
-test("a sectioned prompt re-append supersedes a legacy whole-prompt umbrella — never stacks on it", () => {
-  // The reverse of the umbrella supersession: an old converted agent carries
-  // the whole prompt under agent/system-prompt (an old worker's write); a
-  // later revision-bumped birth batch re-appends the SECTIONED platform
-  // prompt. Exactly one prompt's worth of content may render.
-  const events = [
-    keyedSystem(1, "agent/system-prompt", "The old whole prompt, one blob."),
-    userMessage(2, "hello"),
-    requested(3),
-    settled(4, 3),
-    // The re-created agent's birth batch: a segments append of the file's
-    // sections, no umbrella — a whole-prompt statement.
-    contextAdded(5, {
-      role: "system",
-      content: "",
-      segments: [
-        { key: "identity", content: "Sectioned identity." },
-        { key: "output-formatting", content: "Sectioned format." },
-      ],
-    }),
-    userMessage(6, "still there?"),
-    requested(7),
-  ];
-  const { messages } = buildAgentLlmRequestBody({ events, llmRequestOffset: 7 });
-  const rendered = messages.map((message) => message.content).join("\n");
-  expect(rendered).not.toContain("The old whole prompt");
-  expect(rendered).toContain("Sectioned identity.");
-  // The umbrella was already SENT, so the file sections land temporally
-  // (conversation exists — first occurrence of each key); the standing
-  // document no longer holds a prompt at all. Hard-dropping the sent
-  // umbrella is the same discipline the forward direction applies to sent
-  // file sections: a one-time cache bust beats two prompts forever.
-  expect(messages.some((message) => message.content.startsWith('<section key="identity">'))).toBe(
-    true,
-  );
-});
-
-test("a single-key section add is a partial override: it never clears a legacy umbrella", () => {
-  // codemode-tag re-adds ONE section (output-formatting) on an old agent
-  // whose whole prompt lives in the umbrella. Clearing the umbrella would
-  // leave the agent with nothing but the grammar section — a lobotomy. The
-  // partial override lands alongside; only a whole-prompt statement (a
-  // segments append of prompt-file sections) supersedes the umbrella.
-  const events = [
-    keyedSystem(1, "agent/system-prompt", "The old whole codemode prompt."),
-    keyedSystem(2, "output-formatting", "Respond with one <codemode> tag."),
-    userMessage(3, "hi"),
-    requested(4),
-  ];
-  const { messages } = buildAgentLlmRequestBody({ events, llmRequestOffset: 4 });
-  const doc = messages[1]!.content;
-  expect(doc).toContain("The old whole codemode prompt.");
-  expect(doc).toContain("Respond with one <codemode> tag.");
-});
-
-test("one event carrying tagged sections AND untagged umbrella content keeps them all — the umbrella clears only PRIOR prompt sections", () => {
-  // The MCP prompt shape: the tagged default file plus an untagged override
-  // suffix, parsed into one append. The suffix (umbrella) must not clear the
-  // sibling sections its own event establishes — and it renders after them.
+test("a mixed tagged+untagged event needs no special handling: its segments are sections in event order", () => {
+  // The MCP prompt shape — the tagged default file plus an untagged override
+  // suffix, parsed into one append. Every segment is just a section; the
+  // untagged remainder's fallback key holds no special meaning.
   const events = [
     contextAdded(1, {
       role: "system",

@@ -31,43 +31,10 @@ import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { AgentBinding, AgentSummary, AgentSummaryUpdated } from "./agent-presence.ts";
 
-/** The one whole-prompt section key — the umbrella. Keyed `agent/system-prompt`
- * events land here, as does untagged prompt-file content parsed at append
- * time. Writing this key supersedes the WHOLE prompt, so the fold clears
- * the platform prompt-file sections when an occurrence lands here — an old
- * template worker's whole-prompt supersession must not leave the segmented
- * default prompt standing beside it (the p1711 double-prompt trace). */
-export const AGENT_SYSTEM_PROMPT_KEY = "agent/system-prompt";
-
-/** The section keys the platform's sectionized default prompt file defines, in
- * file order — also their canonical render order in the standing document.
- * agent-defaults.test.ts guards this list against drift from the file. */
-export const AGENT_SYSTEM_PROMPT_FILE_SECTION_KEYS = [
-  "identity",
-  "output-formatting",
-  "summary-instruction",
-  "workspace-and-repo",
-  "find-working-code",
-  "capability-tour",
-  "shape-of-work",
-  "other-agents",
-  "files",
-  "gotchas",
-];
-
-/** Section keys that satisfy the turn loop's readiness gate: triggers are
- * held until the birth batch's system prompt has reduced — either the one
- * umbrella section (keyed births, untagged prompt files) or any section the
- * sectionized default prompt file defines. */
-export const SYSTEM_PROMPT_SECTION_KEYS = [
-  AGENT_SYSTEM_PROMPT_KEY,
-  ...AGENT_SYSTEM_PROMPT_FILE_SECTION_KEYS,
-];
-
-/** Hot sections render LAST in the standing document, so their updates bust
- * only their own prompt-cache suffix (tasks/prompt-sections-tree.md).
- * AGENTS.md is the one hot section today. */
-export const HOT_SECTION_KEYS = ["config/agents-md"];
+// Section keys are FULLY ARBITRARY strings — the kernel knows no key by
+// name. "agent/system-prompt", "identity", "config/agents-md" are authoring
+// conventions, not platform vocabulary: no key triggers special clearing,
+// ordering, or gating of any other key.
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
@@ -236,12 +203,15 @@ export const AgentProcessorContract = defineProcessorContract({
       .meta({
         description:
           "The STANDING DOCUMENT: exactly one occurrence per section, rendered as ONE system " +
-          "message of <section key> blocks in canonical order regardless of arrival order — " +
-          "the prompt file's sections in file order, the umbrella, agent/boot-context, every " +
-          "other section alphabetically, hot sections (config/agents-md) last. A keyed add " +
-          "whose latest occurrence no request has sent yet edits its entry in place (the " +
-          "birth window — free); once sent, updates land in the turns lane instead, and " +
-          "compaction folds each section's newest occurrence back in here.",
+          "message of <section key> blocks in FIRST-APPEARANCE order — the order their keys " +
+          "first appeared on the stream (commit order; segments within one event keep their " +
+          "file order, which preserves the authored prompt layout). Keys are arbitrary " +
+          "strings the kernel never interprets; authors control placement through append " +
+          "order (in every real flow the worker's hot content, e.g. AGENTS.md, arrives after " +
+          "the birth batch and so lands last). A keyed add whose latest occurrence no request " +
+          "has sent yet edits its entry in place (the birth window — free); once sent, " +
+          "updates land in the turns lane instead, and compaction folds each section's " +
+          "newest occurrence back in here at its first-appearance position.",
       }),
     turns: z
       .array(
@@ -820,9 +790,6 @@ export type AgentProcessorState = ProcessorState<AgentProcessorContract>;
 /** One model-visible context item's payload — the wire contract for every
  * committed `agents/context-added` event. */
 export type AgentContextAddedPayload = AgentProcessorState["standingSections"][number]["payload"];
-
-/** One entry of the standing document — key, source offset, content payload. */
-export type AgentStandingSection = AgentProcessorState["standingSections"][number];
 
 /** One item of the timeline lane: a turn, a temporal section occurrence, or a
  * permanent send stamp. */

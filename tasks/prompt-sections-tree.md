@@ -36,9 +36,24 @@ of them incidents or clumsiness from the agent-birth work (#2508).
 >   face — making each request's prompt a strict byte-superset of the
 >   previous one (maximal cache reuse under every regime).
 > - The standing lane renders as **ONE system message**: the tagged document
->   (`<section key="...">` blocks, canonical order, hot last) — byte-identical
->   to the authored prompt file on an unforked project. Temporal occurrences
->   render at their offset as `<section key supersedes="@N">` messages.
+>   (`<section key="...">` blocks) — byte-identical to the authored prompt
+>   file on an unforked project. Temporal occurrences render at their offset
+>   as `<section key supersedes="@N">` messages.
+>
+> **Revised again 2026-08-25 — arbitrary keys.** The kernel must not know
+> key meanings: the four named-key constants (umbrella, prompt-file
+> sections, readiness keys, hot keys) are gone, and with them the umbrella
+> supersession (no key ever triggers clearing of another key — a
+> whole-prompt-keyed section and file sections coexist as plain sections;
+> the rare doubled mix on old streams is closed by a prd repo sweep, not by
+> kernel key-smarts), the canonical-order comparator (ordering is pure
+> FIRST-APPEARANCE: commit order, segments keeping their file order — hot
+> content lands last in every real flow because the worker's reaction
+> arrives after the birth batch; authors control placement through append
+> order, and an attribute-based ordering feature can be added if genuinely
+> needed), and the turn loop's readiness gate (every creation path ships
+> prompt content in the atomic birth batch, so the hold was vestigial; the
+> presence facet generalizes to "any system-role section exists").
 > - Script settlements render WITH the script's measured duration (derived
 >   from the requested/settled events' journaled createdAt) — slow operations
 >   become knowable to the model.
@@ -89,12 +104,13 @@ of them incidents or clumsiness from the agent-birth work (#2508).
     `sectionId`; uncovered-replace → collapse; covered-append →
     append-as-latest); pre-migration requests labeled "reconstructed under
     the current fold", not byte-exact.
-11. **Shape: the section tree, scoped.** Exactly two top-level lanes —
-    standing prefix (canonically ordered: protocol, config in stable order,
-    hot sections last) and turns (offset-ordered). Depth capped at 1 until a
-    use case forces nesting; placement ops (insert-before/after) on the
-    standing lane only. Inline HTML survives as authoring syntax; render
-    serializes the tree to messages.
+11. **(Revised) Shape: the section tree, scoped.** Exactly two top-level
+    lanes — the standing document (protocol message first, then sections in
+    FIRST-APPEARANCE order; keys are arbitrary strings the kernel never
+    interprets, and placement is guidance — append order — not mechanism)
+    and turns (offset-ordered). Depth capped at 1 until a use case forces
+    nesting. Inline HTML survives as authoring syntax; render serializes
+    the tree to messages.
 12. **(Revised) Vocabulary: two events.** `agents/context-added` is the
     everyday event — the only one most authors ever use: without `key` a
     turn; with `key` (or `segments: [{key, content}]` for many at once)

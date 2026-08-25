@@ -162,7 +162,7 @@ describe("TelegramProcessor (webhook router)", () => {
       ),
     ).toMatchObject({
       payload: {
-        // The untagged telegram prompt parses to the one umbrella section.
+        // The untagged telegram prompt parses to one "agent/system-prompt" section.
         segments: [
           {
             key: "agent/system-prompt",

@@ -169,8 +169,8 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   /** prompts/agent-system-prompt.md as the agent's system prompt, parsed at
    * append time into keyed segments (`<section key="...">` tags are the
    * authoring syntax — the same tags the fold renders the standing document
-   * with; untagged content lands in the umbrella `agent/system-prompt`
-   * section, which supersedes the whole platform prompt). Appended
+   * with; untagged content lands in one "agent/system-prompt" section —
+   * keys are arbitrary strings, an authoring convention only). Appended
    * UNCONDITIONALLY rather than read-compared against the agent's current
    * sections — a snapshot at this moment may predate the processor reducing
    * the birth batch, and inside the un-sent birth window each segment

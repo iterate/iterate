@@ -18,7 +18,7 @@ import {
   AGENT_COLLECTION_SUBSCRIPTION_NAME,
   AgentCollectionProcessorContract,
 } from "./agent-collection-processor-contract.ts";
-import { AGENT_SYSTEM_PROMPT_KEY, AgentProcessorContract } from "./agent-processor-contract.ts";
+import { AgentProcessorContract } from "./agent-processor-contract.ts";
 
 /**
  * Deterministic, synchronous content hash (djb2, hex) — the occurrence
@@ -227,12 +227,15 @@ export const MCP_AGENT_SYSTEM_PROMPT_REVISION = contentHash(MCP_AGENT_SYSTEM_PRO
  * One exact, retryable occurrence establishing the agent's system prompt as
  * STANDING SECTIONS: the sectionized prompt file is parsed here, at append
  * time (structure at append; fold ops never parse model-visible strings).
- * A tagged file becomes one section per `<section id>`; untagged content —
- * including whole untagged files, the integration channel prompts — becomes
- * the one umbrella `agent/system-prompt` section, whose presence (like any
- * prompt-file section's) makes the agent ready: the processor holds LLM
- * triggers until the birth prompt stands. `idempotencyKey` identifies this
- * payload occurrence; never reuse one after changing `content`.
+ * A tagged file becomes one section per `<section key>`, in file order —
+ * which is the render order, since the standing document keeps
+ * first-appearance order; untagged content — including whole untagged
+ * files, the integration channel prompts — becomes one
+ * "agent/system-prompt" section (an authoring convention: the kernel knows
+ * no key by name). This event rides the atomic birth batch, so the prompt
+ * always exists before any trigger can schedule a turn. `idempotencyKey`
+ * identifies this payload occurrence; never reuse one after changing
+ * `content`.
  */
 export function agentSystemPromptContextEvent(input: { content: string; idempotencyKey: string }) {
   return AgentProcessorContract.buildEvent({
@@ -243,7 +246,9 @@ export function agentSystemPromptContextEvent(input: { content: string; idempote
       content: "",
       segments: parsePromptSections({
         content: input.content,
-        fallbackKey: AGENT_SYSTEM_PROMPT_KEY,
+        // An authoring convention, not platform vocabulary: keys are
+        // arbitrary strings the kernel never interprets.
+        fallbackKey: "agent/system-prompt",
       }),
     },
   });
