@@ -4,9 +4,9 @@ branch: fix/restore-ai-linter-rules
 
 # Restore GitHub AI lint reviews
 
-Status: The production route and processor are restored, and the repository
-now carries the new rule plus a deliberate violation. Focused template tests
-pass; the live bot comment and full checks are still pending.
+Status: The production route and processor are restored, and `iterate[bot]`
+commented on the deliberate violation. Focused and full static checks pass;
+the full test aggregate has one unrelated expired parked-test date.
 
 ## Goal
 
@@ -30,8 +30,8 @@ explains why the word is literal or justified.
 - [x] Repair the stale rule-loading/configuration path without hiding failures. _Restored `/repos/iterate`; config commit `f059bea` pins the current subscription API, recreates the source link after future restores, and produced `project/worker-updated` plus an active `review-bot` subscription._
 - [x] Add the banned-metaphor rule to the canonical rules and hosted linter config. _Added `terminology/no-metaphorical-lane-door-seam` to root policy, the default template, and production config policy v6._
 - [x] Add one obvious offending variable solely as an end-to-end review probe. _`configs/default/worker.ts` names the rule-path array `reviewLane` without an exception._
-- [ ] Prove `iterate[bot]` comments on that variable, then preserve the proof in the PR.
-- [ ] Run focused tests and checks for every changed code/config surface.
+- [x] Prove `iterate[bot]` comments on that variable, then preserve the proof in the PR. _Review `5016262887` and inline comments `3850695732`/`3850695742` flag `reviewLane` under the new rule._
+- [x] Run focused tests and checks for every changed code/config surface. _Template typecheck and 12 focused tests pass; full typecheck, lint, Knip, and formatting pass. The full test aggregate reaches an unrelated expired `revisit by 2026-08-24` marker in `specs/mobile/media.spec.ts`._
 - [ ] Move this task to `tasks/complete/` once the live proof and CI are green.
 
 ## Implementation log
@@ -57,3 +57,8 @@ explains why the word is literal or justified.
   `voice-agent.ts` still uses removed `consumesEphemeral` types. It does not enter
   the project-worker/linter build; migrate it separately before the next voice
   agent deployment rather than mixing that large change into this repair.
+- 2026-08-25: PR #2514's `ready_for_review` delivery created the linter child,
+  loaded policy v6 from config commit `f059bea`, reported two
+  `terminology/no-metaphorical-lane-door-seam` diagnostics, and published
+  comment-only review `5016262887` plus a neutral Check Run. The review-bot
+  connection subscription finished at zero lag with no recorded error.
