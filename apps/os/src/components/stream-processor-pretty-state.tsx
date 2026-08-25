@@ -270,13 +270,12 @@ export function AgentPrettyState({ state }: { state: unknown }) {
   const config = readRuntimeRecord(agent.config);
   const llm = readRuntimeRecord(config?.llm);
   const contextItems = Array.isArray(agent.contextItems) ? agent.contextItems : [];
-  const itemKind = (item: unknown) =>
-    item != null && typeof item === "object" ? (item as Record<string, unknown>).kind : undefined;
+  const itemKind = (item: unknown) => readRuntimeRecord(item)?.kind;
   // The derived standing document: the leading run of section items.
   const document: unknown[] = [];
   for (const item of contextItems) {
     if (itemKind(item) !== "section") break;
-    if ((item as Record<string, unknown>).supersedes !== undefined) break;
+    if (readRuntimeRecord(item)?.supersedes !== undefined) break;
     document.push(item);
   }
   const history = contextItems.filter((item: unknown) => itemKind(item) === "message");
@@ -285,10 +284,8 @@ export function AgentPrettyState({ state }: { state: unknown }) {
   const lastMessage = history.length > 0 ? history[history.length - 1] : null;
   const lastPreview = lastMessage == null ? null : previewProjectedItem(lastMessage);
   const scripts = Array.isArray(agent.activeScriptExecutions)
-    ? agent.activeScriptExecutions.map((execution: unknown) =>
-        execution != null && typeof execution === "object"
-          ? (execution as Record<string, unknown>).executionId || "script"
-          : "script",
+    ? agent.activeScriptExecutions.map(
+        (execution: unknown) => readRuntimeRecord(execution)?.executionId || "script",
       )
     : [];
 
