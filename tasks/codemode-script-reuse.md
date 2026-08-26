@@ -193,6 +193,15 @@ Supporting changes:
 
 ## Follow-up ideas (deliberately out of scope)
 
+- Gate policy discovery (typed-spec work): the execution gate blocks only
+  provable errors (syntax range + near-miss typos) — plain TS2322
+  assignability mismatches NEVER block, by design ("a script must never be
+  stopped by what the checker doesn't know"). `satisfies` failures are
+  TS1360 (syntax range) and DO block — which makes satisfies the reliable
+  in-script type-assertion idiom. Also: tsgo doesn't report unused
+  `@ts-expect-error` (TS2578). Worth deciding deliberately whether either
+  should change.
+
 - A `contains`/search addressing mode so the agent can name a past script by
   content rather than offset.
 - Stale-prose corrections: when a reused script's message carries the old

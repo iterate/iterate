@@ -42,19 +42,13 @@ test("a repeat request reuses the previous turn's journaled script instead of re
   // Turn 1: the long way. The script really runs; the answer is computed.
   await composer.fill("prime factorize 52479543428582704627");
   await send.click();
-  // timeout: the agent turn runs server-side with no loading UI for the spinnerWaiter to key off; preview turns take minutes (deployed workers, cold typecheck sidecar).
-  await page.getByText("52479543428582704627 = 6203868971 × 8459163737").waitFor({
-    timeout: 300_000,
-  });
+  await page.getByText("52479543428582704627 = 6203868971 × 8459163737").waitFor();
 
   // Turn 2: the reused way. The child run executes turn 1's algorithm with
   // the new number — the correct product proves real execution, not prose.
   await composer.fill("now do 66778601389380731119");
   await send.click();
-  // timeout: same as above — no loading UI for the spinnerWaiter during the server-side turn.
-  await page.getByText("66778601389380731119 = 7316102869 × 9127619251").waitFor({
-    timeout: 300_000,
-  });
+  await page.getByText("66778601389380731119 = 7316102869 × 9127619251").waitFor();
 
   // Open turn 1's codemode snippet: the full derived algorithm.
   const activities = page.getByRole("button", { name: /Ran code/ });
@@ -112,12 +106,27 @@ test("run() return values are typed from the reused row's data, through the real
   // Turns are strictly sequential, so a call counter is honest routing:
   // 1 = turn 1 round 1 (factorize, RETURN the factors),
   // 2 = turn 1 round 2 (send the message from results[0].data),
-  // 3 = turn 2 (typed reuse).
+  // 3 = turn 2 attempt 1 (reuse asserting `satisfies readonly number[]` — the
+  //     typecheck gate MUST reject it; if run()'s inference ever degraded to
+  //     `any`, the satisfies would pass, this script would run and end the
+  //     turn, and the final message — which only attempt 2 sends — would
+  //     never arrive),
+  // 4 = turn 2 attempt 2 (the corrective retry: `readonly string[]` passes).
+  //
+  // `satisfies`, not a `const result: readonly number[] =` annotation: gate
+  // policy blocks only provable errors (syntax + near-miss typos), and plain
+  // TS2322 assignability mismatches deliberately never block — but satisfies
+  // failures are TS1360, in the syntax range the gate does block on.
   let modelCalls = 0;
   using _interception = await project.ai.intercept(async (call) => {
     if (call.source !== "agent-turn") throw new Error(`unexpected source: ${call.source}`);
     modelCalls += 1;
-    const script = [RETURNING_SCRIPT, SEND_RESULT_SCRIPT, TYPED_REUSE_SCRIPT][modelCalls - 1];
+    const script = [
+      RETURNING_SCRIPT,
+      SEND_RESULT_SCRIPT,
+      WRONGLY_ANNOTATED_REUSE_SCRIPT,
+      CORRECTLY_ANNOTATED_REUSE_SCRIPT,
+    ][modelCalls - 1];
     if (!script) throw new Error(`unexpected model call #${modelCalls}`);
     return ["```ts", script, "```"].join("\n");
   });
@@ -128,13 +137,15 @@ test("run() return values are typed from the reused row's data, through the real
 
   await composer.fill("prime factorize 8633");
   await send.click();
-  // timeout: the agent turn runs server-side with no loading UI for the spinnerWaiter to key off; preview turns take minutes.
-  await page.getByText("factors of 8633: 89 × 97").waitFor({ timeout: 300_000 });
+  await page.getByText("factors of 8633: 89 × 97").waitFor();
 
   await composer.fill("now do 10403");
   await send.click();
-  // timeout: same as above — no loading UI for the spinnerWaiter during the server-side turn.
-  await page.getByText("Result is 101 × 103").waitFor({ timeout: 300_000 });
+  await page.getByText("Result is 101 × 103").waitFor();
+  // Four model calls means the gate really rejected attempt 1 and the agent
+  // loop delivered the corrective retry; three would mean the wrongly
+  // annotated script slipped through.
+  if (modelCalls !== 4) throw new Error(`expected 4 model calls, saw ${modelCalls}`);
 });
 
 // Turn 1's scripted reply: a real, working factorization (Pollard's rho +
@@ -244,22 +255,32 @@ const SEND_RESULT_SCRIPT = `async (itx) => {
   await itx.chat.sendMessage(\`factors of 8633: \${results[0].data.join(" × ")}\`);
 }`;
 
-// Turn 2: reuse the factorize row (results[1] — results[0] is round 2's done
-// row) and assert the inferred types inside the script. The real typecheck
-// gate compiles this against the real preamble: a degraded inference fails
-// the run and the spec.
-const TYPED_REUSE_SCRIPT = `async (itx) => {
+// Turn 2, attempt 1: the WRONG assertion. run()'s result type is inferred
+// from the reused row's data (readonly ["89", "97"]), so
+// `satisfies readonly number[]` must fail the typecheck gate — the script
+// never runs and its marker message never sends. This only asserts something
+// because the inference is real: `any` would satisfy anything and run.
+const WRONGLY_ANNOTATED_REUSE_SCRIPT = `async (itx) => {
   const helper = await itx.capabilityHost.previousScriptHelper({
     ...results[1],
     parameterize: { n: 8633n },
   });
   const result = await helper.run({ n: 10403n });
-  result satisfies readonly string[];
-  // @ts-expect-error - symmetry check: a string tuple is not a number array
   result satisfies readonly number[];
-  // Anti-any tripwire the gate provably reports (tsgo does not flag unused
-  // @ts-expect-error): \`true satisfies never\` errors iff result is any.
-  type IsAny<T> = 0 extends 1 & T ? true : false;
-  true satisfies (IsAny<typeof result> extends false ? true : never);
+  await itx.chat.sendMessage(\`this should never send: \${result}\`);
+}`;
+
+// Turn 2, attempt 2 (after the gate's corrective feedback): the satisfies
+// matching the inferred type passes, the child run executes, message lands.
+// results[2], not [1]: attempt 1's gate rejection settled as an ERROR row,
+// shifting positions — exactly the drift results.byOffset exists to absorb;
+// a scripted retry can just count.
+const CORRECTLY_ANNOTATED_REUSE_SCRIPT = `async (itx) => {
+  const helper = await itx.capabilityHost.previousScriptHelper({
+    ...results[2],
+    parameterize: { n: 8633n },
+  });
+  const result = await helper.run({ n: 10403n });
+  result satisfies readonly string[];
   await itx.chat.sendMessage(\`Result is \${result.join(" × ")}\`);
 }`;
