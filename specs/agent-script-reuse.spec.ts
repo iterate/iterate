@@ -35,6 +35,12 @@ test("a repeat request reuses the previous turn's journaled script instead of re
     return ["```ts", script, "```"].join("\n");
   });
 
+  // Warm the typecheck sidecar before driving the UI: the first gate call on
+  // a cold deployment compiles the compiler wasm, which alone can outlast the
+  // stuck-spinner ceiling. Setup work, not an assertion.
+  await project.capabilityHosts.get("/").create();
+  await project.capabilityHosts.get("/").runScript("async (itx) => 1");
+
   await page.goto(`/projects/${fixture.project.slug}/agents/streams${agentPath}`);
   const composer = page.getByPlaceholder("Message this agent");
   const send = page.getByRole("button", { name: "Send message" });
@@ -130,6 +136,12 @@ test("run() return values are typed from the reused row's data, through the real
     if (!script) throw new Error(`unexpected model call #${modelCalls}`);
     return ["```ts", script, "```"].join("\n");
   });
+
+  // Warm the typecheck sidecar before driving the UI: the first gate call on
+  // a cold deployment compiles the compiler wasm, which alone can outlast the
+  // stuck-spinner ceiling. Setup work, not an assertion.
+  await project.capabilityHosts.get("/").create();
+  await project.capabilityHosts.get("/").runScript("async (itx) => 1");
 
   await page.goto(`/projects/${fixture.project.slug}/agents/streams${agentPath}`);
   const composer = page.getByPlaceholder("Message this agent");
