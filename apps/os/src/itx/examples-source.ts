@@ -1942,7 +1942,7 @@ export default class ProjectWorker extends WorkerEntrypoint {
     e2eProven: false,
     title: "Generate video with a Workers AI model",
     description:
-      "Runs xAI Grok Imagine Video through itx.ai.run(). The model returns a hosted MP4 URL in result.video. First-party docs: https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/ . Uses paid/remote AI infrastructure — interactive-only.",
+      "Runs xAI Grok Imagine Video through itx.ai.run(). The model returns a hosted MP4 URL in result.video. Note: partner models like xai/* and bytedance/* do not appear in itx.ai.models() (it lists only the classic @cf/* catalog) but work directly via itx.ai.run(). First-party docs: https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/ . Uses paid/remote AI infrastructure — interactive-only.",
     runtimes: INTERACTIVE_RUNTIMES,
     fn: async (itx) => {
       const response = await itx.ai.run("xai/grok-imagine-video", {
@@ -1954,6 +1954,33 @@ export default class ProjectWorker extends WorkerEntrypoint {
 
       return {
         docs: "https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/",
+        videoUrl: response?.result?.video,
+        response,
+      };
+    },
+  }),
+  projectExample<{
+    // Same run<T> rationale as ai-generate-text; Seedance answers with a
+    // hosted MP4 URL in `result.video`.
+    ai: { run(model: string, body: unknown): Promise<{ result?: { video?: string } }> };
+  }>({
+    id: "ai-generate-video-seedance",
+    e2eProven: false,
+    title: "Generate video with ByteDance Seedance 2.0",
+    description:
+      "Runs bytedance/seedance-2.0 (ByteDance Seedance, a partner Workers AI model) through itx.ai.run(). Partner models like bytedance/seedance-2.0 and xai/* do NOT appear in itx.ai.models() — that lists only the classic @cf/* catalog — but they work directly via itx.ai.run(), so do not conclude a model is unavailable just because models() omits it. Seedance takes prompt (max 2000 chars), duration 4-12 seconds, resolution 480p/720p/1080p/4K, aspect_ratio (16:9, 4:3, 1:1, 3:4, 9:16, 21:9, 9:21), plus optional reference images/videos, audio, and seed. result.video is a ByteDance-hosted SIGNED URL that expires after ~24h — download and store the file to keep it. First-party docs: https://developers.cloudflare.com/ai/models/bytedance/seedance-2.0/ . Uses paid/remote AI infrastructure — interactive-only.",
+    runtimes: INTERACTIVE_RUNTIMES,
+    fn: async (itx) => {
+      const response = await itx.ai.run("bytedance/seedance-2.0", {
+        prompt: "A red ball rolling across a clean white table, soft studio lighting",
+        duration: 4,
+        resolution: "480p",
+        aspect_ratio: "16:9",
+      });
+
+      return {
+        docs: "https://developers.cloudflare.com/ai/models/bytedance/seedance-2.0/",
+        // Signed, short-lived (~24h) URL — download the MP4 to keep it.
         videoUrl: response?.result?.video,
         response,
       };
