@@ -10,6 +10,7 @@
 // decides WHEN a normal request runs and calls `run()`/`abortInFlight()`.
 
 import type { EmittedInput, ProcessEventArgs, StreamEvent } from "iterate/processors";
+import * as modelInterception from "../../lib/model-interception.ts";
 import { appendUnlessLostIdempotencyRace, stringifyError, type AgentHost } from "./agent-host.ts";
 import {
   AgentProcessorContract,
@@ -319,6 +320,34 @@ export class AgentLlmRequest {
         signal: input.signal,
         onChunk: (text) => input.onChunk(text),
       });
+    }
+    if (modelInterception.isInterceptedModel(input.model)) {
+      const consult = this.#host.deps.consultAiInterceptor;
+      if (consult === undefined) throw modelInterception.noAiInterceptorError(input.model);
+      const result = await raceAbort(
+        input.signal,
+        consult({
+          source: "agent-turn",
+          model: input.model,
+          body: { messages: input.messages },
+        }),
+      );
+      const normalized = modelInterception.normalizeInterceptedTurnResult({
+        result,
+        model: input.model,
+        inputCharacters: input.messages.reduce((sum, message) => sum + message.content.length, 0),
+      });
+      // Word-split delivery keeps journaled chunk events flowing. An
+      // abort mid-delivery fails the attempt like the real transport's
+      // raceAbort-over-the-drain does — a succeeded completion must never
+      // race the interrupt's cancelled settle on the shared idempotency key.
+      for (const chunk of normalized.text.split(/\b/)) {
+        if (chunk.length === 0) continue;
+        if (input.signal.aborted) break;
+        await input.onChunk(chunk);
+      }
+      if (input.signal.aborted) throw new Error("Interception attempt aborted mid-response.");
+      return { text: normalized.text, usage: normalized.usage, rawResponse: result };
     }
     const ai = this.#host.deps.ai;
     if (ai === undefined) {

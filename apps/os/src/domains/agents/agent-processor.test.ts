@@ -2148,60 +2148,19 @@ describe("AgentProcessor stream facts", () => {
 // =============================================================================
 
 describe("AgentProcessor slash commands", () => {
-  it("a resolving /script runs deterministically and delegates its result append to the script", async () => {
+  it("a resolving /example runs deterministically and renders its successful settlement", async () => {
     const h = makeAgentHarness();
     await h.play(
-      ["append", ...NEW_AGENT_EVENTS, userMessage("/script await itx.__describe()")],
+      ["append", ...NEW_AGENT_EVENTS, userMessage("/example describe-project")],
       ["advanceTime", 10_000], // would close the turn debounce if a turn were owed
     );
 
-    const scriptRequests = h.events("events.iterate.com/capability-host/script-run-requested");
-    expect(scriptRequests).toHaveLength(1);
-    const commandOffset = h
-      .events(CONTEXT_ADDED)
-      .find((event) =>
-        (event.payload as { content?: string }).content?.startsWith("/script"),
-      )!.offset;
-    expect(scriptRequests[0]!.payload).toMatchObject({
-      executionId: `slash-command:script:${commandOffset}`,
-    });
-    expect(scriptRequests[0]!.payload.code).toContain(
-      "const result = await (async () => {\nreturn await (itx.__describe()\n);\n})();",
-    );
-    expect(scriptRequests[0]!.payload.code).toContain(
-      "User ran `/script await itx.__describe()` command with the following result",
-    );
-    expect(scriptRequests[0]!.payload.code).toContain(
-      'llmRequestPolicy: { behaviour: "interrupt-current-request" }',
-    );
-    // The command IS the action — the model's turn comes later, from the
-    // context item appended by the script, not from the command message.
-    expect(h.llm.calls).toHaveLength(0);
-    expect(h.events(REQUESTED)).toHaveLength(0);
-
-    const itemsBeforeSettlement = conversationMessages(h.state()).length;
-    await h.play([
-      "append",
-      {
-        type: "events.iterate.com/capability-host/script-run-settled",
-        payload: {
-          executionId: `slash-command:script:${commandOffset}`,
-          settlement: { status: "succeeded", result: { projectId: "project-1" } },
-        },
-      },
-    ]);
-    // The generated script already appended this result. Its successful
-    // settlement only preserves the value for `results`; it must not append a
-    // second context item.
-    expect(conversationMessages(h.state())).toHaveLength(itemsBeforeSettlement);
-  });
-
-  it("a resolving /example still renders its successful settlement", async () => {
-    const h = makeAgentHarness();
-    await h.play(["append", ...NEW_AGENT_EVENTS, userMessage("/example describe-project")]);
-
     const scriptRequest = h.events("events.iterate.com/capability-host/script-run-requested")[0]!;
     expect(scriptRequest.payload.executionId).toMatch(/^slash-command:example:/);
+    // The command IS the action — the model's turn comes later, from the
+    // rendered settlement, not from the command message.
+    expect(h.llm.calls).toHaveLength(0);
+    expect(h.events(REQUESTED)).toHaveLength(0);
 
     await h.play(
       [
@@ -2226,7 +2185,7 @@ describe("AgentProcessor slash commands", () => {
     expect(h.llm.calls).toHaveLength(1);
   });
 
-  it("a /script mid-turn runs as a side-band action: no interrupt, no lost command", async () => {
+  it("a slash command mid-turn runs as a side-band action: no interrupt, no lost command", async () => {
     const h = makeAgentHarness();
     await h.play(
       ["append", ...NEW_AGENT_EVENTS, userMessage("Hello there")],
@@ -2236,7 +2195,7 @@ describe("AgentProcessor slash commands", () => {
 
     await h.play([
       "append",
-      userMessage("/script await itx.__describe()", { behaviour: "interrupt-current-request" }),
+      userMessage("/example describe-project", { behaviour: "interrupt-current-request" }),
     ]);
 
     // The command ran; the in-flight turn was NOT cancelled by it.
@@ -2275,7 +2234,7 @@ describe("AgentProcessor summary", () => {
         type: "events.iterate.com/agent/summary-updated",
         payload: { waitingFor: "user_input" },
       },
-      userMessage("/script await itx.__describe()"),
+      userMessage("/example describe-project"),
     ]);
     // The command ran (script requested) but the agent still awaits a real
     // answer — no clear was appended.
