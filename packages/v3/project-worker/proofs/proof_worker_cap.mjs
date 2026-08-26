@@ -76,9 +76,7 @@ await itx.invokeCapability({
     "export default async (itx, who) => `hi ${who} from ${(await itx.whoami()).projectId}`;",
   ],
 });
-const greeting = await itx.invoke(
-  "itx.workers.get({ source: \"itx.kv.get('src/greet.js')\" }).run('jonas')",
-);
+const greeting = await itx.invoke("itx.workers.run(\"itx.kv.get('src/greet.js')\", 'jonas')");
 check(
   greeting === `hi jonas from ${CTX}`,
   "6. stateless run() capability with itx callback inside",

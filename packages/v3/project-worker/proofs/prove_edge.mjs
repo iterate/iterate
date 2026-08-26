@@ -32,7 +32,7 @@ await itx.invokeCapability({
     "export default async (itx) => `from-kv:${(await itx.whoami()).projectId}`;",
   ],
 });
-const out = await itx.invoke(`itx.workers.get({ source: "itx.kv.get('src/mine.js')" }).run()`);
+const out = await itx.invoke(`itx.workers.run("itx.kv.get('src/mine.js')")`);
 check(
   out === `from-kv:${CTX}`,
   "kv-stored source runs as a worker (itx round-trip inside)",
@@ -42,7 +42,7 @@ check(
 // 3. fetchCap: a fetch-shaped capability through the SESSION (no /cap door)
 await itx.provide({
   path: "itx.site",
-  target: `itx.workers.get({ source: "itx.kv.get('src/site.js')" })`,
+  target: `itx.workers.get({ type: 'stateless', source: "itx.kv.get('src/site.js')" })`,
 });
 const resp = await itx.fetchCap("itx.site", new Request(`https://${BASE}/`));
 const html = await resp.text();

@@ -32,10 +32,18 @@ type FacetsView = {
   get(slug: string): unknown;
 };
 
-/** Run code in this context — THE fundamental context operation. `className` present = host
- *  that exported class durably; absent = run the default export in a fresh confined isolate. */
+/** Run code in this context — THE fundamental context operation, mirroring apps/os
+ *  `DynamicWorkerRef`. `get` takes a discriminated ref: `type:"stateless"` → a fresh confined
+ *  isolate, a `{ run, fetch }` handle (no DO, no storage); `type:"stateful"` → the exported
+ *  `className` hosted DURABLY as a facet of this stream (a deep dotted method proxy + `.fetch`).
+ *  `run` is one-hop sugar for `get({ type:"stateless", source }).run(...)`. */
 type WorkersView = {
-  get(ref: { source: unknown; className?: string; type?: string }): unknown;
+  get(
+    ref:
+      | { type: "stateless"; source: unknown; props?: Record<string, unknown> }
+      | { type: "stateful"; source: unknown; className: string },
+  ): unknown;
+  run(source: unknown, ...args: unknown[]): Promise<unknown>;
 };
 import type { StreamDurableObject } from "./stream-durable-object.ts";
 
@@ -97,39 +105,48 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
    *  callbacks/Dates/bytes ride natively — plus `fetch` when the source serves one). ONE
    *  isolate and ONE billed loader identity per source either way. The isolate's whole world
    *  is the interposition entrypoint, never a raw DO stub (iterate-context-entrypoint.ts). */
+  /** PRIMITIVE — load a stateless, non-facet confined worker (kind "code"): its own isolate,
+   *  no DO, no storage, `env.ITX` bound. Returns the `{ run, fetch }` handle. `props` (apps/os
+   *  parity) seed the entrypoint's `ctx.props`. */
+  const statelessHandle = (source: Expression, props?: Record<string, unknown>) => {
+    const entrypoint = async () => {
+      const modules = await loadModules(source);
+      const worker = confinedWorker(
+        env,
+        { kind: "code", owner: contextName, contentHash: hashSource(JSON.stringify(modules)) },
+        "run.js",
+        { "run.js": CODE_CAP_RUNNER, ...modules },
+        itxEntrypointFor(deps.hostCtx, contextName),
+      );
+      return (props !== undefined
+        ? worker.getEntrypoint(undefined, { props })
+        : worker.getEntrypoint()) as unknown as {
+        run(...a: unknown[]): Promise<unknown>;
+        fetch(r: Request): Promise<Response>;
+      };
+    };
+    return {
+      run: async (...args: unknown[]) => (await entrypoint()).run(...args),
+      fetch: async (request: Request) => (await entrypoint()).fetch(request),
+    };
+  };
   const workers: WorkersView = {
     get: (ref) => {
       const source = toExpression(ref.source as string | Expression);
-      const className = ref.className;
-      if (!className) {
-        const worker = async () => {
-          const modules = await loadModules(source);
-          return confinedWorker(
-            env,
-            { kind: "code", owner: contextName, contentHash: hashSource(JSON.stringify(modules)) },
-            "run.js",
-            { "run.js": CODE_CAP_RUNNER, ...modules },
-            itxEntrypointFor(deps.hostCtx, contextName),
-          );
-        };
-        return {
-          run: async (...args: unknown[]) =>
-            (
-              (await worker()).getEntrypoint() as unknown as {
-                run(...a: unknown[]): Promise<unknown>;
-              }
-            ).run(...args),
-          fetch: async (request: Request) => (await worker()).getEntrypoint().fetch(request),
-        };
+      if (ref.type === "stateful") {
+        // Durable class: a FACET of this stream — a method proxy that walks deep dots natively;
+        // a top-level `.fetch` forwards to the facet's own fetch (101s pass, no header protocol).
+        const className = ref.className;
+        return pathProxy((segments, args) => {
+          if (segments.length === 1 && segments[0] === "fetch")
+            return deps.statefulWorkers.fetch({ source, className }, args[0] as Request);
+          return deps.statefulWorkers.invoke({ source, className }, segments, args);
+        });
       }
-      // Durable class: a FACET of this stream — a method proxy that walks deep dots natively;
-      // a top-level `.fetch` forwards to the facet's own fetch (101s pass, no header protocol).
-      return pathProxy((segments, args) => {
-        if (segments.length === 1 && segments[0] === "fetch")
-          return deps.statefulWorkers.fetch({ source, className }, args[0] as Request);
-        return deps.statefulWorkers.invoke({ source, className }, segments, args);
-      });
+      return statelessHandle(source, ref.props);
     },
+    run: (source: unknown, ...args: unknown[]) =>
+      statelessHandle(toExpression(source as string | Expression)).run(...args),
   };
 
   const { itxKv, secretsKv } = { itxKv: env.ITX_KV, secretsKv: env.SECRETS_KV };

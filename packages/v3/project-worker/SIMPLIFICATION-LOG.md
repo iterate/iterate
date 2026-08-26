@@ -232,3 +232,32 @@ defect on the `stateful` lane (`wave2-sweep.failing.test.ts`). Reducing that con
 fixing a security defect (escape/length-prefix the owner seam) — a separate, security-touching effort
 outside "reduce complexity." The clean, safe simplification has been made; the rest is honestly
 documented, not papered over.
+
+## MAXIMAL CONSOLIDATION (Jonas: "do it all") — the plan
+
+Jonas asked for the maximum reduction without losing capabilities. Target: 3 nouns
+(`itx.workers.get({type})`, `itx.facets.get(slug)`, `itx.subscribe(...)`), one source producer
+primitive (inline/repo/callback sugar over one resolve+cache path), one subscribe verb. Deletions:
+`itx.processors.*` namespace, `enableProcessor` verb, ProcessorPolicy-as-separate-field, `#facetEntries`,
+the second commit loop, one per-commit derivation, source variant branching, `#facet`+`#statefulFacet`
+→ one `#durableFacet`, loader kinds 3→2 (after the wave2 owner-collision fix), `className?` polymorphism
+
+- dead `type` field. Three delivery lanes (facet-reduce / connected-fastpath / absent-forwarder) LIFTED
+  verbatim — no capability lost, hot path untouched, perf-gated by prove_ephemeralflood.
+
+Order: (1) loader mirror + workers.run + one-producer source; (2) #durableFacet + collision fix + kinds
+3→2; (3) the fold (.processors → subscribe, delete enableProcessor). Each committed + typecheck + suite
+
+- live-proven.
+
+### Inc 1a DONE — `itx.workers.get` discriminated union + `itx.workers.run` (mirror apps/os)
+
+`workers.get(ref)` now takes the apps/os `DynamicWorkerRef` shape: `{type:"stateless", source, props?}`
+→ a `{run, fetch}` handle, `{type:"stateful", source, className}` → the facet method proxy. The
+`className`-presence polymorphism is gone (discriminate on `type`); the previously-dead `type` field is
+revived with meaning; `props` threads to `getEntrypoint(undefined, {props})` (apps/os parity). Added
+`itx.workers.run(source, ...args)` — one-hop sugar for `get({type:"stateless"}).run(...)` (the runScript
+composition: `loadModules` → `confinedWorker` kind "code" → `.run`, three labeled lines, no helper
+functions). Extracted `statelessHandle()` so the stateless primitive has a name. Updated callers (the
+proofs already used `type` in several places — this aligns code with them; converted two `.run()` sites
+to `workers.run`). Typecheck clean; suite 279 passed / 37 xf / 2 skip / 31 todo (identical baseline).
