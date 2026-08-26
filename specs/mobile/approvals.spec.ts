@@ -42,6 +42,14 @@ import { withApprovalDeliveryDiagnostic } from "./approval-delivery-diagnostics.
 const DEVICE_ID = "spec-web-approver";
 
 test("approve and reject script bursts from inside the chat thread", async ({ page }, testInfo) => {
+  // timeout: this spec now runs two REAL agent turns (command → intercepted
+  // model → codemode burst) on top of the signup + cold-itx-WebSocket costs
+  // every mobile spec pays. Measured on preview runners (2026-08-26): the
+  // pre-conversion spec ran ~80s cold, the turns add ~10-12s, so the 90s
+  // default trips deterministically while everything inside passes; the
+  // outwait/warm-up overlap already reclaimed the serial slack. 120s covers
+  // the measured worst case; locally the spec runs in ~28s.
+  test.setTimeout(120_000);
   const osBaseUrl = await resolveOsBaseUrl();
   const echo = await startEgressEcho();
   try {
