@@ -1,4 +1,4 @@
-// The intercepted/* model lane through the agent processor: attempts on a intercepted/*
+// intercepted/* models through the agent processor: attempts on an intercepted/*
 // model are served by the host's consultAiInterceptor dep (in production, the
 // project's live itx.ai.intercept handler) instead of any provider dial. Same
 // generic step harness as agent-processor.test.ts; the interceptor here is an
@@ -14,7 +14,7 @@ const REQUESTED = "events.iterate.com/agent/llm-request-requested";
 const SETTLED = "events.iterate.com/agent/llm-request-settled";
 const RESPONSE_CHUNK = "events.iterate.com/agent/llm-response-chunk";
 
-test("a intercepted/* turn is served by the interceptor: prompt in, text out, usage estimated, chunks journaled", async () => {
+test("an intercepted/* turn is served by the interceptor: prompt in, text out, usage estimated, chunks journaled", async () => {
   const seen: { source: string; model: string; body: { messages: { content: string }[] } }[] = [];
   const h = makeInterceptedModelHarness(async (input) => {
     seen.push(input as never);
@@ -45,7 +45,7 @@ test("a intercepted/* turn is served by the interceptor: prompt in, text out, us
   expect(h.events("events.iterate.com/agent/token-usage-reported")).toMatchObject([
     { payload: { model: "intercepted/main", outputTokens: 13 } },
   ]);
-  // Word-split chunk delivery kept the journaled streaming lane exercised.
+  // Word-split chunk delivery kept journaled chunk events flowing.
   const chunks = h.events(RESPONSE_CHUNK);
   expect(chunks.length).toBeGreaterThan(1);
 });
@@ -66,7 +66,7 @@ test("a handler returning { text, usage } reports that usage verbatim", async ()
   ]);
 });
 
-test("a intercepted/* model with no interceptor lane fails the attempt with the canonical loud error", async () => {
+test("an intercepted/* model with no interceptor consult dep fails the attempt with the canonical loud error", async () => {
   // No consultAiInterceptor dep at all — the bare-host analogue of "nothing
   // installed": the attempt must fail recorded, not hang or dial anything.
   const h = makeInterceptedModelHarness(undefined);
@@ -97,9 +97,9 @@ test("a rejecting interceptor (handler died with its session) fails the attempt 
   ]);
 });
 
-test("callLlm outranks the interception lane: a scripted transport takes intercepted/* attempts too", async () => {
+test("callLlm outranks the interceptor: a scripted transport takes intercepted/* attempts too", async () => {
   // Unit suites script EVERYTHING through callLlm regardless of model string;
-  // the fake branch must sit behind that seam, not in front of it.
+  // the intercepted-model branch must sit behind that dependency, not in front of it.
   let interceptorCalls = 0;
   const h = makeProcessorHarness<AgentProcessorContract>({
     createProcessor: (deps) =>
@@ -158,7 +158,7 @@ function userMessage(content: string): AgentEventInput {
   };
 }
 
-/** Harness with NO callLlm (so the interception lane is reachable) and the given interceptor consult. */
+/** Harness with NO callLlm (so the intercepted-model branch is reachable) and the given interceptor consult. */
 function makeInterceptedModelHarness(
   consultAiInterceptor: AgentProcessorDeps["consultAiInterceptor"],
 ) {

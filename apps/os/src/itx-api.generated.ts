@@ -395,7 +395,7 @@ export interface Ai {
    * verbatim (no handler installed → a loud error). */
   run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T>;
   /** Install a live handler for `intercepted/*` models (last writer wins); returns a
-   * release handle. The deterministic-testing lane: an agent configured with
+   * release handle. For deterministic testing: an agent configured with
    * `model: "intercepted/<x>"` and every `run("intercepted/<x>", …)` call are served by your
    * handler — an in-memory function on YOUR side of the connection — instead
    * of a real provider. The handler receives

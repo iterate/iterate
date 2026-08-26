@@ -1,11 +1,11 @@
 // =============================================================================
-// The intercepted/* model lane: definitions shared by both LLM egress paths.
+// intercepted/* models: definitions shared by both LLM egress paths.
 // =============================================================================
 // `intercepted/<name>` models are never dialed to a real provider. They are served by
 // a LIVE interceptor — a function installed via `itx.ai.intercept(handler)`,
 // typically living in a test process and reached back over its capnweb
-// connection. The lane exists identically in every environment: there is no
-// gate, no config, and no credential, and a intercepted/* call with no interceptor
+// connection. The namespace behaves identically in every environment: there is no
+// gate, no config, and no credential, and an intercepted/* call with no interceptor
 // installed fails loudly. The interception is scoped to this namespace on
 // purpose — a turn whose journal says `openai/*` can never have been served by
 // a handler.
@@ -94,7 +94,7 @@ export function normalizeInterceptedTurnResult(input: {
   };
 }
 
-/** The error every path raises when a intercepted/* model has no live interceptor. */
+/** The error every path raises when an intercepted/* model has no live interceptor. */
 export function noAiInterceptorError(model: string): Error {
   return new Error(
     `No AI interceptor installed for "${model}". Models under "${INTERCEPTED_MODEL_PREFIX}" are served by a live handler: itx.ai.intercept(handler). The handler died with its session, or was never installed.`,

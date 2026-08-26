@@ -48,8 +48,8 @@ test("a chat wears its agent-set title in the thread header and chat list", asyn
     projectId,
   });
   // The client defers agent creation to the first message; with no message in
-  // this spec, birth the agent explicitly (get-or-create, same door the
-  // client uses) before appending to it.
+  // this spec, birth the agent explicitly (get-or-create, the same create
+  // call the client uses) before appending to it.
   using agent = itx.agents.get(agentPath);
   await agent.create();
   await agent.append({

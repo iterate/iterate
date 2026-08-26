@@ -66,7 +66,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
   #egressInterceptor?: ReturnType<typeof deepRetainRpcStubs<ProjectEgressInterceptor>>;
-  // The intercepted/* model lane's live handler slot (itx.ai.intercept) — same
+  // The live handler slot serving intercepted/* models (itx.ai.intercept) — same
   // last-writer-wins, session-bound semantics as the egress interceptor.
   #aiInterceptor?: ReturnType<typeof deepRetainRpcStubs<ProjectAiInterceptor>>;
   // Last time #egressRules paid a facade snapshot — bounds rules staleness to ~5s.
@@ -827,7 +827,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
    * egress paths (`itx.ai.run` in the isolate, agent turns in the processor
    * facet) land here, so the handler slot and its last-writer-wins story live
    * in exactly one place. No interceptor → the canonical loud error; the
-   * caller's own failure lane (recorded attempt failure, RPC rejection)
+   * caller's own failure handling (recorded attempt failure, RPC rejection)
    * carries it from there.
    */
   async consultAiInterceptor(input: ProjectAiInterceptorInput): Promise<unknown> {

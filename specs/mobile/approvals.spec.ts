@@ -1,8 +1,8 @@
 // The phone approver, end to end in a browser — and entirely INSIDE the
 // conversation: a plain chat message ("Run the approve-me burst") reaches an
-// agent on the intercepted/* lane, whose model is THIS spec's itx.ai.intercept
+// agent on an intercepted/* model, served by THIS spec's itx.ai.intercept
 // handler pairing each command with a codemode script. The script runs a
-// burst deterministically, the requests park at the egress door as ONE
+// burst deterministically, the requests park at the egress approval gate as ONE
 // batch, and the approval dialog appears in-thread where the human is
 // already looking. Approve all behind the Face ID stand-in (the web build
 // gates authenticated key reads behind `confirm()`), then a second burst
@@ -137,10 +137,10 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     await page.getByText("New chat").click();
     await page.getByPlaceholder("Message").waitFor();
     const agentPath = decodeURIComponent(new URL(page.url()).searchParams.get("path")!);
-    // Point the chat's agent at the interception lane (an ordinary journaled config
+    // Point the chat's agent at an intercepted/* model (an ordinary journaled config
     // event) and drop the newborn debounce so each command's turn opens fast.
     // The client defers creation to the first message, so birth the agent
-    // explicitly first (get-or-create, same door the client uses).
+    // explicitly first (get-or-create, the same create call the client uses).
     using agent = itx.agents.get(agentPath);
     await agent.create();
     await agent.append({
@@ -170,8 +170,8 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
       ].join("\n");
 
     // The "model": commands pair with scripts right here, in-test, over the
-    // live capnweb hop — the intercepted/* lane this repo grew for exactly this.
-    const lanes: Record<string, { marker: string; statusUpdates: object[] }> = {
+    // live capnweb hop — the interception this repo grew for exactly this.
+    const bursts: Record<string, { marker: string; statusUpdates: object[] }> = {
       "Run the approve-me burst": {
         marker: "approve-me",
         statusUpdates: [
@@ -189,9 +189,9 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     using _interception = await itx.ai.intercept(async ({ source, body }) => {
       if (source !== "agent-turn") throw new Error(`unexpected source: ${source}`);
       const message = [...body.messages].reverse().find((m) => m.role === "user")?.content ?? "";
-      const lane = lanes[message.trim()];
-      if (!lane) throw new Error(`unexpected message: ${message}`);
-      return burstScript(lane.marker, lane.statusUpdates);
+      const burst = bursts[message.trim()];
+      if (!burst) throw new Error(`unexpected message: ${message}`);
+      return burstScript(burst.marker, burst.statusUpdates);
     });
 
     const readOutcomeMessages = async () =>
@@ -203,7 +203,7 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
         .map((event) => (event.payload as { message: string }).message)
         .filter((message) => message.includes(" outcomes: "));
 
-    // Approve lane: the command's turn is served by the handler above, the
+    // The approve burst: the command's turn is served by the handler above, the
     // burst parks as one batch, and the dialog appears in-thread while the
     // working indicator honestly spins — no spinner-waiter escapes needed.
     await sendChatMessage(page, "Run the approve-me burst");

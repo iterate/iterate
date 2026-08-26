@@ -180,8 +180,8 @@ test("the approval push is suppressed in the watched thread and sent when you're
     await page.getByPlaceholder("Message").waitFor();
     const watchedPath = decodeURIComponent(new URL(page.url()).searchParams.get("path")!);
     const watchedAgent = itx.agents.get(watchedPath);
-    // Start this lane through the visible composer: the message's turn runs
-    // on the intercepted/* lane, whose model is THIS spec's interceptor pairing the
+    // Start this act through the visible composer: the message's turn runs
+    // on an intercepted/* model, served by THIS spec's interceptor pairing the
     // command with the park script — deterministic, and the run carries the
     // agent's own script provenance like a real turn. The agent is birthed
     // and pointed at intercepted/driver first (the client defers creation to the

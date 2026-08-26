@@ -16,7 +16,7 @@
 // TypeScript as a side-band action). It was removed in favor of the two
 // surfaces that do its jobs better: operators run
 // `itx.agents.get(path).capabilityHost.runScript(...)` from the REPL/CLI, and
-// tests script whole conversations through the intercepted/* model lane
+// tests script whole conversations through intercepted/* models
 // (`itx.ai.intercept`).
 
 import { z } from "zod";
@@ -29,7 +29,7 @@ const ExampleVars = z.record(z.string(), z.unknown());
 type ResolvedSlashCommand = {
   /** Which command matched — recorded on nothing, useful for tests/logs. */
   command: "example";
-  /** The exact `async (itx) => …` source handed to the run-script door. */
+  /** The exact `async (itx) => …` source handed to the capability host's runScript. */
   code: string;
 };
 

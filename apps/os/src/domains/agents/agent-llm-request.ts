@@ -337,7 +337,7 @@ export class AgentLlmRequest {
         model: input.model,
         inputCharacters: input.messages.reduce((sum, message) => sum + message.content.length, 0),
       });
-      // Word-split delivery keeps the journaled chunk lane exercised. An
+      // Word-split delivery keeps journaled chunk events flowing. An
       // abort mid-delivery fails the attempt like the real transport's
       // raceAbort-over-the-drain does — a succeeded completion must never
       // race the interrupt's cancelled settle on the shared idempotency key.
