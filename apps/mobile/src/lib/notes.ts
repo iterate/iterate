@@ -54,6 +54,46 @@ export function isNoteFilePath(path: string): boolean {
   return /^\/repos\/notes\/\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[^/]+\.md$/.test(path);
 }
 
+/** The chat about a note lives at a path DERIVED from the note, so tapping
+ * "chat about this" twice continues one conversation instead of littering the
+ * chat list with a new thread each time. The chat list is the unfiltered
+ * /agents catalogue, so the conversation is reachable later like any other.
+ *
+ * Lowercased and scrubbed because the platform PARSES agent paths rather than
+ * repairing them (apps/os .../agent-presence.ts AgentPath): "/agents/" then
+ * lowercase [a-z0-9_-] segments, nothing else. A note's filename stamp
+ * carries an uppercase T and Z, so the obvious derivation is rejected. */
+export function noteChatPath(notePath: string): string {
+  const stem = notePath
+    .split("/")
+    .pop()!
+    .replace(/\.md$/, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-");
+  return `/agents/mobile/note-${stem}`;
+}
+
+/** The first message of a note-chat, typed into the composer rather than
+ * sent: only the human knows the actual question, and auto-sending "about
+ * this note:" with nothing after it spends a model turn to be asked "what
+ * about it?". The note's TEXT rides along, not just its path — the path
+ * alone assumes the agent will go globbing, while the text makes the opening
+ * message self-contained and leaves the path for follow-up. */
+export function noteChatSeed(note: { path: string; text: string; displayTitle: string }): string {
+  const body = (note.text.trim() || note.displayTitle).slice(0, NOTE_CHAT_SEED_LIMIT);
+  const quoted = body
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+  // The trailing blank line is where the cursor lands — the question goes
+  // under the quote, the way you would write it yourself.
+  return `About my note \`${note.path}\`:\n\n${quoted}\n\n`;
+}
+
+/** Long notes get pointed at rather than pasted: past this the composer is
+ * a wall of quote and the path is the better handle. */
+const NOTE_CHAT_SEED_LIMIT = 400;
+
 // --- frontmatter (hand-mirrored from the server module) ---
 
 export type NoteFile = {
