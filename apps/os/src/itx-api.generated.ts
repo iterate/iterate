@@ -144,20 +144,6 @@ export interface Project {
    * `itx.docs.get({ name })` per declaration away).
    */
   __describe(): Promise<ProjectDescription>;
-  /**
-   * Roll up subscription delivery health across the project's streams: the
-   * root stream, the well-known platform streams, and the most recently
-   * active agent streams. Every scanned stream is one Durable Object dial,
-   * so the agent fan-out is bounded: `agentStreamLimit` picks the bound per
-   * scan (default 20, hard-capped — see subscription-health.ts; 0 scans the
-   * platform streams only). Server-side fan-out, one plain result: per
-   * stream, its halted (red), lagging/backoff (amber), and
-   * historical-lastError (informational) subscriptions with lag, attempts,
-   * and error age. The dashboard's worker-health sheet polls this while
-   * open; it is equally the programmatic surface for agents checking their
-   * own project's delivery health.
-   */
-  subscriptionHealth(input: { agentStreamLimit?: number }): Promise<ProjectSubscriptionHealth>;
   /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */
   debug(): Promise<string>;
   /** Restart the project's server-side object; the next request boots it fresh. */
@@ -1268,18 +1254,6 @@ export interface Repo {
    * large histories without changing anything on GitHub.
    */
   resetFromGithub(input: { depth?: number }): Promise<GithubResetResult>;
-  /**
-   * Update this repo from the template it was created from — the durable
-   * creation request is the template intent (`empty` creates map to the
-   * picker's Default template, so every seeded repo is syncable; imports are
-   * refused with directions to syncFromGithub). Per-file three-way against
-   * the template content at the last sync: user-untouched files adopt the
-   * latest template, user-edited files stand, both-changed files are skipped
-   * and reported in the result. One normal commit, never a reset;
-   * `repo/template-synced` records the template revision as the next sync's
-   * base.
-   */
-  syncFromTemplate(): Promise<TemplateSyncResult>;
   /** The repo stream processor (snapshot/state) — facet-hosted on the repo stream. */
   processor: StreamProcessorRpc<RepoProcessorState>;
   /** The repo's live state — its reduced processor state. See {@link LiveStateRpc}. */
@@ -2144,15 +2118,6 @@ export type ProjectDescription = Description & {
   projectId: string;
 };
 
-/** What `itx.subscriptionHealth()` returns. */
-export type ProjectSubscriptionHealth = {
-  generatedAt: string;
-  /** Every stream the scan covered — the fan-out bound made visible. */
-  scannedPaths: string[];
-  /** Only streams with something to report; healthy subscriptions are omitted. */
-  streams: StreamSubscriptionHealth[];
-};
-
 /**
  * The internal extension used when stream delivery calls a hosted processor.
  * Public processor properties expose only {@link StreamProcessorRpc}; a stored
@@ -2440,14 +2405,6 @@ export type CapabilityDescription = {
   scope?: string;
   type: "builtin" | "live" | "itx-call";
   types?: string;
-};
-
-/** One scanned stream's troubled subscriptions, or the read error that hid them. */
-export type StreamSubscriptionHealth = {
-  path: string;
-  subscriptions: SubscriptionHealthEntry[];
-  /** Non-null when the stream could not be read; its subscriptions are unknown. */
-  error: string | null;
 };
 
 /**
@@ -3639,21 +3596,6 @@ export type GithubResetResult = {
   previousCommitOid: string | null;
 };
 
-/** What `repo.syncFromTemplate` returns. */
-export type TemplateSyncResult = {
-  /** The branch head after the sync — a fresh commit, or the unchanged head. */
-  commitOid: string;
-  /** Paths committed from the template (adds, updates, and deletes). */
-  updated: string[];
-  /** Both-changed paths left untouched — the template moved AND the repo's
-   * copy differs from the template content at the last sync. */
-  skipped: string[];
-  /** The template revision this sync read. */
-  templateCommitOid: string;
-  /** Present (true) when nothing needed updating and nothing was skipped. */
-  upToDate?: boolean;
-};
-
 /**
  * The repo processor's reduced state, inferred from the contract's
  * `stateSchema` — the one definition of the shape.
@@ -3743,7 +3685,6 @@ export type RepoProcessorState = {
     ok: boolean;
   } | null;
   remote: string | null;
-  lastTemplateSync: { at: string; templateCommitOid: string } | null;
 };
 
 /** Worker reference accepted by `workers.get` and worker-backed capabilities. */
@@ -4493,20 +4434,6 @@ export type CommittedSubscriptionRemovedEvent = Omit<
  * - `unknown` — the probe failed (engine hiccup); don't block the list on it.
  */
 export type ProjectDeploymentStatus = "created" | "creating" | "failed" | "missing" | "unknown";
-
-/** One troubled subscription in the rollup: its tier plus the delivery facts behind it. */
-export type SubscriptionHealthEntry = {
-  name: string;
-  tier: SubscriptionHealthTier;
-  lag: number;
-  confirmedOffset: number;
-  attempt: number;
-  nextAttemptAt: number | null;
-  lastError: string | null;
-  /** When lastError was recorded (ISO); null = unknown age (rows written
-   * before the column existed). */
-  lastErrorAt: string | null;
-};
 
 /** One consistent read of a processor (what `snapshot()` returns): the folded
  * state pinned to the offset of the last event folded into it. */
@@ -5263,18 +5190,6 @@ export type StreamSubscriptionListEntry = {
    * unknown age (rows written before the column existed). */
   lastErrorAt: string | null;
 };
-
-/**
- * Severity tiers, in the order the dashboard escalates them:
- * - `halted` — delivery durably gave up; nothing flows until a human resumes
- *   it (red badge);
- * - `lagging` — delivery is failing and backing off right now, so events are
- *   piling up (amber badge);
- * - `informational` — a historical `lastError` on an otherwise-delivering
- *   subscription (the skip policy leaves these standing for a long time);
- *   shown as a quiet line, never a badge — alarm fatigue kills the surface.
- */
-export type SubscriptionHealthTier = "halted" | "lagging" | "informational";
 
 /** Internal hosted-processor frame: an ordinary batch plus its one-shot completion callback. */
 export type StreamWakeEventBatch = StreamEventBatch & {

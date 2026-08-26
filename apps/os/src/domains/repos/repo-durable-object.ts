@@ -15,7 +15,6 @@ import {
   mintGithubInstallationToken,
 } from "../integrations/github-app.ts";
 import { ITERATE_GITHUB_BOT_COMMIT_AUTHOR } from "../integrations/utils.ts";
-import type { ConfigRepoTemplateReference } from "../../lib/config-repo-template-reference.ts";
 import type {
   CommitRepoFilesInput,
   CommitRepoFilesResult,
@@ -70,7 +69,6 @@ import { importGithubArtifactWithInitialPushCapture } from "./artifact-import.ts
 import { getOrCreateArtifact, type GetOrCreateArtifactResult } from "./artifact-creation.ts";
 import { artifactWriteToken, seedArtifactRepo } from "./artifact-seeding.ts";
 import { downloadPublicGithubTemplate } from "./public-github-template.ts";
-import { runTemplateSync, type TemplateSyncResult } from "./template-sync.ts";
 
 const ARTIFACT_HEAD_VISIBILITY_RETRIES = 5;
 const REPO_DIR = "/repo";
@@ -149,7 +147,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     repo: string;
   }): Promise<{ artifactName: string; defaultBranch: string; remote: string }> {
     return this.#serializeWrite(() =>
-      this.createSeededArtifactRepo(async () => (await downloadPublicGithubTemplate(input)).files),
+      this.createSeededArtifactRepo(() => downloadPublicGithubTemplate(input)),
     );
   }
 
@@ -1582,54 +1580,6 @@ export class RepoDurableObject extends DurableObject<Env> {
       },
     });
     return { artifactReplaced: true, branch, commitOid: headOid, previousCommitOid };
-  }
-
-  /**
-   * Reconcile this repo against its creation template (template-sync.ts owns
-   * the three-way plan). Serialized like every branch-moving write, so no
-   * other commit moves the branch between the head read and the sync commit.
-   * The template reference and recorded sync base are resolved by the caller
-   * (RepoRpcTarget reads them from the repo processor's reduced state).
-   */
-  syncFromTemplate(input: {
-    reference: ConfigRepoTemplateReference;
-    baseTemplateCommitOid: string | null;
-  }): Promise<TemplateSyncResult> {
-    return this.#serializeWrite(() =>
-      runTemplateSync(input, {
-        downloadTemplate: (reference) => downloadPublicGithubTemplate(reference),
-        repointConfig: parseConfig(this.env),
-        readRootCommitFiles: () => this.#readRootCommitFiles(),
-        readHeadFiles: (paths) => this.getFilesSnapshot({ paths }),
-        commitChanges: async ({ changes, message }) => {
-          const result = await this.#commitFiles({ changes, message });
-          return { commitOid: result.commitOid };
-        },
-        appendTemplateSynced: async (payload) => {
-          await this.#stream.append({
-            type: "events.iterate.com/repo/template-synced",
-            payload,
-          });
-        },
-      }),
-    );
-  }
-
-  /** The seed/root commit's file contents — template sync's base before any
-   * recorded repo/template-synced fact. */
-  async #readRootCommitFiles(): Promise<Record<string, string>> {
-    const { filesystem, git } = await this.#checkout({ historyDepth: "full" });
-    const entries = await git.log({});
-    const root = entries.at(-1);
-    if (root === undefined || root.parent.length > 0) {
-      throw new Error("Repo root commit could not be resolved from the branch history.");
-    }
-    await git.checkout({ ref: root.oid, force: true });
-    const bytes = await readCheckoutBytes(filesystem, REPO_DIR);
-    const decoder = new TextDecoder();
-    return Object.fromEntries(
-      [...bytes.entries()].map(([path, content]) => [path, decoder.decode(content)]),
-    );
   }
 
   /**

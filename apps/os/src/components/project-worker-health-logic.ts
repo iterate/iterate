@@ -23,6 +23,9 @@ export type SubscriptionHealth = {
   lag: number;
   attempt: number;
   lastError: string | null;
+  /** When lastError was recorded (ISO); null = unknown age (rows written
+   * before the column existed, or a durable halt fact without one). */
+  lastErrorAt: string | null;
   canSetCursor: boolean;
 };
 
@@ -33,6 +36,7 @@ type SubscriptionRuntimeFacts = {
   attempt: number;
   nextAttemptAt: number | null;
   lastError: string | null;
+  lastErrorAt: string | null;
 };
 
 /** The durable stop facts reduced from halt events. */
@@ -80,6 +84,9 @@ export function selectStrugglingSubscriptions(
         lag: runtime.lag,
         attempt: configured.deliveryHalted?.attempts ?? runtime.attempt,
         lastError: configured.deliveryHalted?.error ?? runtime.lastError,
+        // The halt fact carries no timestamp; the cursor row's is close
+        // enough (the halting failure was its last write).
+        lastErrorAt: runtime.lastErrorAt,
         canSetCursor:
           configured.configuration.receiver.action !== "facet-processor" &&
           configured.configuration.receiver.action !== "wake-processor",

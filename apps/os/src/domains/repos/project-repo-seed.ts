@@ -25,55 +25,14 @@ export function projectRepoSeedFiles(config: {
   iterateRepoPkgSpecOverrides?: Record<string, string>;
 }): Array<{ content: string; path: string }> {
   const ref = config.iterateRepoPkgRef;
-  const { files, refPinned, unmatchedOverrides } = repointPackageJsonDependencies(
-    PROJECT_REPO_INITIAL_FILES,
-    config,
-  );
-
-  // Fail loudly: a knob that matched nothing would make every preview e2e
-  // project (or local dev build) quietly test against main's published
-  // packages again.
-  if (ref !== undefined && refPinned === 0) {
-    throw new Error(
-      `iterateRepoPkgRef ${JSON.stringify(ref)} pinned nothing — no template package.json carries an iterate/iterate pkg.pr.new spec (see src/pkg-pr-new.ts).`,
-    );
-  }
-  if (unmatchedOverrides.length > 0) {
-    throw new Error(
-      `iterateRepoPkgSpecOverrides for ${unmatchedOverrides.join(", ")} matched no template package.json dependency.`,
-    );
-  }
-  return files;
-}
-
-/**
- * Apply the deployment's pkg.pr.new knobs to every package.json in an
- * arbitrary template file map — the substitution shared by the embedded seed
- * (which fails loudly on unmatched knobs, above) and template sync (which
- * must not: a third-party template may carry no iterate/iterate specs, and
- * syncing it should not throw). Without this, a preview deployment's synced
- * template would diff against the pinned seed on every run.
- */
-export function repointPackageJsonDependencies(
-  templateFiles: Array<{ content: string; path: string }>,
-  config: {
-    iterateRepoPkgRef?: string;
-    iterateRepoPkgSpecOverrides?: Record<string, string>;
-  },
-): {
-  files: Array<{ content: string; path: string }>;
-  refPinned: number;
-  unmatchedOverrides: string[];
-} {
-  const ref = config.iterateRepoPkgRef;
   const specOverrides = config.iterateRepoPkgSpecOverrides || {};
   if (ref === undefined && Object.keys(specOverrides).length === 0) {
-    return { files: templateFiles, refPinned: 0, unmatchedOverrides: [] };
+    return PROJECT_REPO_INITIAL_FILES;
   }
 
   let refPinned = 0;
   const unmatchedOverrides = new Set(Object.keys(specOverrides));
-  const files = templateFiles.map((file) => {
+  const files = PROJECT_REPO_INITIAL_FILES.map((file) => {
     if (!file.path.endsWith("package.json")) return file;
     const manifest = JSON.parse(file.content) as Record<string, Record<string, string> | undefined>;
     let changed = false;
@@ -103,7 +62,20 @@ export function repointPackageJsonDependencies(
     return { ...file, content: `${JSON.stringify(manifest, null, 2)}\n` };
   });
 
-  return { files, refPinned, unmatchedOverrides: [...unmatchedOverrides] };
+  // Fail loudly: a knob that matched nothing would make every preview e2e
+  // project (or local dev build) quietly test against main's published
+  // packages again.
+  if (ref !== undefined && refPinned === 0) {
+    throw new Error(
+      `iterateRepoPkgRef ${JSON.stringify(ref)} pinned nothing — no template package.json carries an iterate/iterate pkg.pr.new spec (see src/pkg-pr-new.ts).`,
+    );
+  }
+  if (unmatchedOverrides.size > 0) {
+    throw new Error(
+      `iterateRepoPkgSpecOverrides for ${[...unmatchedOverrides].join(", ")} matched no template package.json dependency.`,
+    );
+  }
+  return files;
 }
 
 /**

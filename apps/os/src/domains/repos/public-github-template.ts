@@ -28,13 +28,11 @@ type GithubFetch = (url: string, init: RequestInit) => Promise<Response>;
  * smart-HTTP protocol gives us the exact ref's tree graph in one blobless
  * request, then every selected file in one batch request. That keeps the
  * source immutable without REST/raw request fan-out or its anonymous quota.
- * The resolved commit oid identifies the exact template revision the files
- * came from — template sync records it as the next sync's base.
  */
 export async function downloadPublicGithubTemplate(
   reference: ConfigRepoTemplateReference,
   githubFetch: GithubFetch = globalThis.fetch,
-): Promise<{ commitOid: string; files: Array<{ content: string; path: string }> }> {
+): Promise<Array<{ content: string; path: string }>> {
   const repository = `${encodeURIComponent(reference.owner)}/${encodeURIComponent(reference.repo)}`;
   const endpoint = `https://github.com/${repository}.git/git-upload-pack`;
   const requestedRef = reference.ref ?? "HEAD";
@@ -97,24 +95,21 @@ export async function downloadPublicGithubTemplate(
     { maxObjectBytes: MAX_FILE_BYTES, maxTotalObjectBytes: MAX_TEMPLATE_BYTES },
   );
   const blobsByOid = new Map(blobs.map((object) => [object.oid, object]));
-  return {
-    commitOid,
-    files: files.map((file) => {
-      const blob = blobsByOid.get(file.oid);
-      if (blob?.type !== "blob") {
-        throw new Error(`GitHub did not return template file ${JSON.stringify(file.path)}.`);
-      }
-      let content: string;
-      try {
-        content = new TextDecoder("utf-8", { fatal: true }).decode(blob.payload);
-      } catch (error) {
-        throw new Error(`Config template file ${JSON.stringify(file.path)} is not UTF-8 text.`, {
-          cause: error,
-        });
-      }
-      return { content, path: file.path };
-    }),
-  };
+  return files.map((file) => {
+    const blob = blobsByOid.get(file.oid);
+    if (blob?.type !== "blob") {
+      throw new Error(`GitHub did not return template file ${JSON.stringify(file.path)}.`);
+    }
+    let content: string;
+    try {
+      content = new TextDecoder("utf-8", { fatal: true }).decode(blob.payload);
+    } catch (error) {
+      throw new Error(`Config template file ${JSON.stringify(file.path)} is not UTF-8 text.`, {
+        cause: error,
+      });
+    }
+    return { content, path: file.path };
+  });
 }
 
 async function resolveGithubRef(

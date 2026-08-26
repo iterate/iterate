@@ -22,7 +22,7 @@ import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
 export const RepoProcessorContract = defineProcessorContract({
   slug: "repo",
-  version: "0.9.0",
+  version: "0.8.0",
   description: "Projects repo lifecycle, Git activity, and linked GitHub default-branch imports.",
   stateSchema: z.object({
     createRequest: repoCreateRequestSchema().nullable().default(null).meta({
@@ -121,20 +121,6 @@ export const RepoProcessorContract = defineProcessorContract({
     remote: z.string().nullable().default(null).meta({
       description: "The backing artifact's Git remote URL, recorded by repos/created.",
     }),
-    lastTemplateSync: z
-      .object({
-        at: z.string().meta({ description: "When the sync recorded (event createdAt)." }),
-        templateCommitOid: z
-          .string()
-          .meta({ description: "The template commit the repo last synced against." }),
-      })
-      .nullable()
-      .default(null)
-      .meta({
-        description:
-          "The newest repo/template-synced fact — the template revision the next " +
-          "syncFromTemplate diffs against; null means the seed/root commit is the base.",
-      }),
   }),
   events: {
     "events.iterate.com/repos/create-requested": {
@@ -240,20 +226,6 @@ export const RepoProcessorContract = defineProcessorContract({
         reset: z.boolean().optional().meta({
           description: "True when the artifact was destroyed and recreated (resetFromGithub).",
         }),
-      }),
-    },
-    "events.iterate.com/repo/template-synced": {
-      description:
-        "syncFromTemplate reconciled the repo against its creation template and recorded the " +
-        "template commit it read — the base the NEXT sync three-ways against. Appended by the " +
-        "Repo Durable Object after the sync commit (or after confirming the repo already " +
-        "matches a newer template revision).",
-      payloadSchema: z.object({
-        templateCommitOid: z
-          .string()
-          .trim()
-          .min(1)
-          .meta({ description: "The template repository commit the sync read." }),
       }),
     },
     "events.iterate.com/repo/github-import-requested": {
@@ -362,7 +334,6 @@ export const RepoProcessorContract = defineProcessorContract({
     "events.iterate.com/repo/github-push-completed",
     "events.iterate.com/repo/github-push-failed",
     "events.iterate.com/repo/github-synced",
-    "events.iterate.com/repo/template-synced",
     "events.iterate.com/repo/github-import-requested",
     "events.iterate.com/repo/github-import-started",
     "events.iterate.com/repo/github-import-completed",

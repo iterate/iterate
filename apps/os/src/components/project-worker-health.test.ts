@@ -11,6 +11,7 @@ const healthy = {
   attempt: 0,
   nextAttemptAt: null,
   lastError: null,
+  lastErrorAt: null,
 };
 
 const sourceOwnedConfiguration = {
@@ -38,6 +39,7 @@ describe("selectStrugglingSubscriptions", () => {
           attempt: 0,
           nextAttemptAt: null,
           lastError: null,
+          lastErrorAt: null,
         },
         "iterate-platform-posthog": healthy,
       },
@@ -51,6 +53,7 @@ describe("selectStrugglingSubscriptions", () => {
         lag: 12,
         attempt: 15,
         lastError: "userspace processor threw on offset 300",
+        lastErrorAt: null,
         canSetCursor: true,
       },
     ]);
@@ -66,6 +69,7 @@ describe("selectStrugglingSubscriptions", () => {
           attempt: 3,
           nextAttemptAt: 1_000,
           lastError: "receiver unavailable",
+          lastErrorAt: null,
         },
       },
     });
@@ -78,6 +82,7 @@ describe("selectStrugglingSubscriptions", () => {
         lag: 4,
         attempt: 3,
         lastError: "receiver unavailable",
+        lastErrorAt: null,
         canSetCursor: true,
       },
     ]);
@@ -98,6 +103,7 @@ describe("selectStrugglingSubscriptions", () => {
           attempt: 2,
           nextAttemptAt: 1_000,
           lastError: "late",
+          lastErrorAt: null,
         },
       },
     });
@@ -126,6 +132,7 @@ describe("buildRedriveEvents", () => {
     lag: 12,
     attempt: 15,
     lastError: null,
+    lastErrorAt: null,
     canSetCursor: true,
   };
 
@@ -161,6 +168,7 @@ describe("buildRedriveEvents", () => {
         lag: 4,
         attempt: 3,
         lastError: null,
+        lastErrorAt: null,
         canSetCursor: true,
       }),
     ).toEqual([

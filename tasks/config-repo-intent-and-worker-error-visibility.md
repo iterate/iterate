@@ -5,10 +5,17 @@ size: medium
 
 # Config repo intent + worker error visibility
 
-**Status summary**: implemented — both gaps landed with specs (template sync
-core + IDE button; durable build-failure rendering + `subscriptionHealth()`
-rollup + polled dashboard sheet + `lastErrorAt`). Remaining: CI verification
-and review follow-ups. Spec transcript:
+**Status summary**: shipped, then deliberately REDUCED TO FACTS-ONLY after
+Misha's core-simplicity review (see the dated section at the bottom — read
+it before resurrecting anything). What merged: the durable
+`project/worker-update-failed` fact incl. no-commit build failures, the
+reduced `worker` slot, the red sidebar warning + sheet, `last_error_at` on
+subscription cursor rows surfaced through existing reads, a display-only
+template-provenance row in the repo IDE, and an admin runbook
+(apps/os/docs/worker-health-runbook.md) holding the cut compositions as
+scripts. `repo.syncFromTemplate()` and `itx.subscriptionHealth()` were built
+with full spec suites and then removed; resurrection guide below. Spec
+transcript:
 [config-repo-intent-and-worker-error-visibility.interview.md](./config-repo-intent-and-worker-error-visibility.interview.md).
 
 Two platform gaps from the 2026-08-25 misha-project incident: a config repo
@@ -104,16 +111,19 @@ retrofitting intent onto repos beyond the `empty`→default mapping.
       _(template-sync.ts owns reference resolution + plan + orchestration;
       RepoDurableObject.syncFromTemplate runs it under the write serializer;
       RepoRpcTarget resolves intent from processor state; substitution
-      generalized as `repointPackageJsonDependencies` in project-repo-seed.ts)_
+      generalized as `repointPackageJsonDependencies` in project-repo-seed.ts —
+      REMOVED in the 2026-08-26 facts-only reduction, see below)_
 - [x] integration specs: clean sync, user-edited-keep, both-changed-skip,
       repeated sync no-op (`upToDate`), first-sync-on-old-history
       _(template-sync.test.ts drives runTemplateSync through an in-memory
       repo/template fake — all five scenarios plus deletes and the
-      pinned-seed substitution case)_
+      pinned-seed substitution case — REMOVED with the capability; the suite
+      lives at commit 3b59d2460)_
 - [x] repo IDE "Template" row + button + result toast
       _(repo-template-panel.tsx, mounted above the GitHub panel in the gh
       sidebar view; toast lists updated/skipped paths and notes skipped =
-      files you edited)_
+      files you edited — REDUCED to a display-only provenance row in the
+      facts-only reduction)_
 - [x] `project/worker-build-failed` appended on terminal build failure;
       ProjectWorkerHealthWarning renders + supersession + cross-link; spec
       _(deviation: reuses the EXISTING `project/worker-update-failed`
@@ -126,12 +136,15 @@ retrofitting intent onto repos beyond the `empty`→default mapping.
       _(`itx.subscriptionHealth()` on ProjectRpcTarget; pure selection +
       tier logic in domains/projects/subscription-health.ts with tests;
       `last_error_at` column via new sqlfu migration, stamped in nack and
-      cleared with last_error, spec in stream-storage.test.ts)_
+      cleared with last_error, spec in stream-storage.test.ts — the METHOD
+      was removed in the facts-only reduction (module + specs live at
+      3b59d2460); the column and its surfacing through existing reads
+      stayed)_
 - [x] dashboard sheet: red/amber badges, informational lastError rows,
       react-query polling gated on visibility
-      _(project-worker-health.tsx polls every 60s — react-query pauses the
-      interval in hidden tabs; historical errors are quiet lines with an
-      age label, never a badge)_
+      _(went through three shapes — 60s poll, then on-request per Misha,
+      then REMOVED with subscriptionHealth in the facts-only reduction; the
+      sheet is root-only again, with lastErrorAt ages on its rows)_
 - [x] docs breadcrumb (apps/os/AGENTS.md or docs/) for both surfaces
       _(apps/os/README.md "Important Files" — one entry naming all three
       surfaces and their modules)_
@@ -259,3 +272,49 @@ Follow-up idea left on the thread:
 stamp the SEED commit with its template identity and derive
 "commits on top of template Y@Z" from trailers — valuable for
 GitHub-imported repos whose event history is gone.
+
+## 2026-08-26: reduced to facts-only
+
+Misha's core-simplicity review, after everything above was green: parts that
+record FACTS are justified core additions; resolver/composition methods wear
+away the team's ability to reason about the core, and everything the methods
+did is achievable with ad-hoc admin itx scripts now the facts exist.
+
+**Kept** (merged): `last_error_at` on subscription cursor rows, surfaced
+through the reads that already existed (cursor row, subscriptions
+list/describe, runtime state — root sheet rows show the age);
+worker-loader's build-failure journaling + the project contract `worker`
+slot (0.8.0) — the incident's central missing fact; the sidebar "Worker
+build failed" warning with its layout polish and the config-repo-IDE
+cross-link; a display-only "Created from …" template-provenance row in the
+repo IDE (reads existing `createRequest` state, zero new surface); the
+[worker-health runbook](../apps/os/docs/worker-health-runbook.md) holding
+both cut compositions as copy-paste admin scripts.
+
+**Cut** (fully, not flagged): `repo.syncFromTemplate()` (RpcTarget + DO
+method + `template-sync.ts` + the `repo/template-synced` contract event and
+`lastTemplateSync` slot — repo contract back to 0.8.0; the event was a
+redundant fact, git trailers on sync commits carry the same thing);
+`itx.subscriptionHealth()` (+ `subscription-health.ts`, `agentStreamLimit`,
+the builtin blip); the IDE's "Update to latest template" button; the
+sheet's child-stream section and Re-check (root-only again).
+
+**The one honest loss**: a non-admin project owner now sees "Worker build
+failed" plus the error but has no self-serve template fix — accepted
+because the only known casualty of this failure class had admin powers.
+
+**How to add the capabilities one day**: resurrect from this branch's
+pre-reduction commits — `3b59d2460` holds the fullest
+`apps/os/src/domains/repos/template-sync.ts` (+ its five-scenario spec
+suite and git-trailer commit messages) and
+`apps/os/src/domains/projects/subscription-health.ts` (+ tier/bound specs
+and the clamped `agentStreamLimit`); `f03af21df` is the last pre-reduction
+head with the full UI (on-request sheet section, Re-check button, template
+sync toast) and the playwright specs driving both. Design guidance if they
+return: derive the sync base from `Template-Commit` git trailers rather
+than a contract event; resolve the Default catalog entry by a stable id,
+not the "Default" label; prefer a general `expectedHeadOid`
+compare-and-swap option on `commitFiles` over a bespoke DO method, so the
+composition can live outside the core with atomicity; and never host these
+in the project worker — a recovery/diagnostic surface must not depend on
+the thing it diagnoses.

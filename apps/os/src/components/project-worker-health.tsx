@@ -1,5 +1,4 @@
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { TriangleAlert } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
@@ -20,9 +19,7 @@ import {
 } from "@iterate-com/ui/components/sidebar";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { cn } from "@iterate-com/ui/lib/utils";
-import { connectIterateSession, useItx, useLiveState } from "iterate/sdk/itx/react";
-import type { ProjectSubscriptionHealth } from "../domains/projects/subscription-health.ts";
-import { StreamDebugLink } from "./stream-debug-link.tsx";
+import { useItx, useLiveState } from "iterate/sdk/itx/react";
 import {
   buildRedriveEvents,
   selectStrugglingSubscriptions,
@@ -39,19 +36,13 @@ import {
  * halt). Either way events pile up undelivered — a project-level "something
  * is wrong".
  *
- * Read-side only. It reads the `/` stream's own `liveState`, which is
- * authoritative about each subscription's durable halt/park facts and runtime
- * retry time. Nothing pushes into the project DO — the stream stays
- * ignorant of the sidebar.
- *
- * The BADGE derives only from push facts already flowing to the sidebar:
- * the root stream's live subscription state and the project's reduced worker
- * outcome (a standing build failure renders red until a later worker-updated
- * supersedes it). Child-stream detail is fetched ON REQUEST — the
- * `itx.subscriptionHealth()` rollup runs when the sheet opens and on its
- * refresh button, never on a timer or window focus: each scan dials up to a
- * couple dozen Durable Objects, and a background poll would keep dormant
- * agent DOs from ever staying evicted.
+ * Read-side only, and push facts only: the `/` stream's own `liveState`
+ * (authoritative about each subscription's durable halt/park facts and
+ * runtime retry state) plus the project's reduced `worker` outcome — a
+ * standing `project/worker-update-failed` renders red until a later
+ * worker-updated supersedes it. Nothing here dials other streams: a
+ * cross-stream sweep is an admin script, not a dashboard poll (see
+ * apps/os/docs/worker-health-runbook.md).
  */
 export function ProjectWorkerHealthWarning({
   projectId,
@@ -166,36 +157,6 @@ function StrugglingSubscriptionsSheet({
   // Keyed `${name}:${action}` so a single row's button shows pending while
   // every other button disables — no two redrives race the same stream.
   const [pending, setPending] = useState<string | null>(null);
-  // The child-stream rollup runs ON REQUEST only: once when the sheet opens
-  // (enabled flips true and the default staleTime marks any cached result
-  // stale, so a re-open re-checks) and on the sheet's refresh button. Never
-  // on a timer or window focus — each scan dials up to a couple dozen
-  // Durable Objects, and any implicit trigger would keep dormant agent DOs
-  // from staying evicted.
-  const childHealth = useQuery({
-    enabled: open && projectId !== null,
-    queryKey: ["itx", "subscription-health", projectId],
-    queryFn: async () => {
-      const session = await connectIterateSession();
-      const itx = session.projects.get(projectSlug);
-      try {
-        return await itx.subscriptionHealth({});
-      } finally {
-        // Safe: the per-fetch project stub carries a disposer over Cap'n Web
-        // but the generated surface does not declare Disposable; the cast
-        // narrows to exactly the optional disposal member (the same release
-        // pattern useItxQuery uses), and `?.` keeps a stub without one valid.
-        (itx as Partial<Disposable>)[Symbol.dispose]?.();
-      }
-    },
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-  });
-  // The root stream's live view above is authoritative and instant; the
-  // on-request rollup contributes the CHILD streams only.
-  const childStreams = (childHealth.data === undefined ? [] : childHealth.data.streams).filter(
-    (stream) => stream.path !== "/",
-  );
 
   async function run(action: "resume" | "skip", subscription: SubscriptionHealth) {
     setPending(`${subscription.name}:${action}`);
@@ -229,9 +190,6 @@ function StrugglingSubscriptionsSheet({
                 : "Event delivery not flowing"}
           </SheetTitle>
           <SheetDescription>
-            {/* The warning only opens on root push facts, so the copy names
-                the root stream or the build — child-stream detail arrives
-                below via the on-open check. */}
             {buildFailure !== null
               ? "The project worker no longer builds, so nothing that depends on it runs — agents included — until a config repo commit fixes the build."
               : severe
@@ -256,8 +214,7 @@ function StrugglingSubscriptionsSheet({
                 </div>
                 <div className="pt-1">
                   {/* The incident-shaped fix path: broken worker → open the
-                      config repo, whose Template panel updates the project to
-                      the latest template. */}
+                      config repo and fix the code. */}
                   <Button
                     size="sm"
                     variant="outline"
@@ -273,10 +230,6 @@ function StrugglingSubscriptionsSheet({
                     Open config repo
                   </Button>
                 </div>
-                <span className="text-xs text-muted-foreground">
-                  Fix the build with a config repo commit — or use the repo&apos;s Template panel to
-                  update to the latest template.
-                </span>
               </div>
             )}
             {struggling.map((subscription) => {
@@ -317,6 +270,12 @@ function StrugglingSubscriptionsSheet({
                       )}
                     >
                       {subscription.lastError}
+                      {subscription.lastErrorAt === null ? null : (
+                        <span className="opacity-70">
+                          {" "}
+                          ({timeAgoLabel(subscription.lastErrorAt)})
+                        </span>
+                      )}
                     </div>
                   ) : null}
                   <div className="flex gap-2 pt-1">
@@ -347,135 +306,10 @@ function StrugglingSubscriptionsSheet({
                 </div>
               );
             })}
-            <div className="flex flex-col gap-1 px-4 py-3">
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-medium tracking-wide uppercase text-muted-foreground">
-                  Other streams
-                </span>
-                <span className="flex-1" />
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="text-xs"
-                  disabled={childHealth.isFetching}
-                  data-spinner={childHealth.isFetching ? "true" : undefined}
-                  onClick={() => void childHealth.refetch()}
-                >
-                  {childHealth.isFetching ? "Checking…" : "Re-check"}
-                </Button>
-              </div>
-              {childHealth.isError ? (
-                <span className="text-xs break-words text-destructive" data-type="error">
-                  Could not check the other streams:{" "}
-                  {childHealth.error instanceof Error
-                    ? childHealth.error.message
-                    : String(childHealth.error)}
-                </span>
-              ) : childHealth.data !== undefined && childStreams.length === 0 ? (
-                <span className="text-xs text-muted-foreground">
-                  No delivery trouble in the {childHealth.data.scannedPaths.length} checked streams.
-                </span>
-              ) : null}
-            </div>
-            <ChildStreamHealthRows projectSlug={projectSlug} childStreams={childStreams} />
           </div>
         </ScrollArea>
       </SheetContent>
     </Sheet>
-  );
-}
-
-/**
- * The on-request child-stream rollup, split by severity: halted and lagging
- * entries render like the root rows (read-only — the stream page has the
- * repair verbs), while historical lastError entries are QUIET informational
- * lines: real facts worth a glance, never a badge.
- */
-function ChildStreamHealthRows({
-  projectSlug,
-  childStreams,
-}: {
-  projectSlug: string;
-  childStreams: ProjectSubscriptionHealth["streams"];
-}) {
-  const entries = childStreams.flatMap((stream) =>
-    stream.subscriptions.map((subscription) => ({ streamPath: stream.path, ...subscription })),
-  );
-  const active = entries.filter((entry) => entry.tier !== "informational");
-  const informational = entries.filter((entry) => entry.tier === "informational");
-  const unreadable = childStreams.filter((stream) => stream.error !== null);
-  if (active.length === 0 && informational.length === 0 && unreadable.length === 0) return null;
-
-  return (
-    <>
-      {active.map((entry) => {
-        const halted = entry.tier === "halted";
-        return (
-          <div key={`${entry.streamPath}:${entry.name}`} className="flex flex-col gap-2 px-4 py-3">
-            <div className="flex items-center gap-2">
-              <span
-                className={cn(
-                  "shrink-0 text-[10px] font-medium tracking-wide uppercase",
-                  halted ? "text-destructive" : "text-amber-600 dark:text-amber-500",
-                )}
-              >
-                {halted ? "Halted" : "Retrying"}
-              </span>
-              <span className="min-w-0 flex-1 truncate font-mono text-xs">
-                {entry.streamPath} · {entry.name}
-              </span>
-            </div>
-            <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-              <dt>Behind</dt>
-              <dd className="tabular-nums">
-                {entry.lag} event{entry.lag === 1 ? "" : "s"}
-              </dd>
-              <dt>Attempts</dt>
-              <dd className="tabular-nums">{entry.attempt}</dd>
-            </dl>
-            {entry.lastError ? (
-              <div
-                className={cn(
-                  "text-xs break-words whitespace-pre-wrap",
-                  halted ? "text-destructive" : "text-amber-600 dark:text-amber-500",
-                )}
-              >
-                {entry.lastError}
-              </div>
-            ) : null}
-            <div className="pt-1">
-              <StreamDebugLink projectSlug={projectSlug} streamPath={entry.streamPath} />
-            </div>
-          </div>
-        );
-      })}
-      {unreadable.map((stream) => (
-        <div key={stream.path} className="px-4 py-2 text-xs text-muted-foreground">
-          <span className="font-mono">{stream.path}</span> could not be read: {stream.error}
-        </div>
-      ))}
-      {informational.length === 0 ? null : (
-        <div className="flex flex-col gap-1 px-4 py-3">
-          <span className="text-[10px] font-medium tracking-wide uppercase text-muted-foreground">
-            Past delivery errors
-          </span>
-          {informational.map((entry) => (
-            <div
-              key={`${entry.streamPath}:${entry.name}`}
-              className="text-xs break-words text-muted-foreground"
-            >
-              <span className="font-mono">
-                {entry.streamPath} · {entry.name}
-              </span>{" "}
-              — {entry.lastError}{" "}
-              <span className="opacity-70">
-                ({entry.lastErrorAt === null ? "unknown age" : timeAgoLabel(entry.lastErrorAt)})
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-    </>
   );
 }
 

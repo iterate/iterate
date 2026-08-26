@@ -134,17 +134,6 @@ import {
 } from "./domains/sandboxes/sandbox-processor-contract.ts";
 import { linkRepoToGithub, unlinkRepoFromGithub } from "./domains/repos/github-link.ts";
 import {
-  templateReferenceForCreateRequest,
-  type TemplateSyncResult,
-} from "./domains/repos/template-sync.ts";
-import {
-  clampAgentStreamLimit,
-  classifySubscriptionHealth,
-  selectSubscriptionHealthStreamPaths,
-  type ProjectSubscriptionHealth,
-  type StreamSubscriptionHealth,
-} from "./domains/projects/subscription-health.ts";
-import {
   agentWorkspacePath,
   effectiveWorkspaceMounts,
   normalizeWorkspaceMountKeys,
@@ -1625,8 +1614,6 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
           "Destructively replace the Artifacts repo with the linked GitHub branch ({ depth? }); GitHub always wins and big repositories require a shallow depth.",
         syncFromGithub:
           "Adopt GitHub's branch head (fast-forward only; { force } discards local-only commits; { depth } requests a bounded history window, while fast-forwards always retain the prior Artifacts head for queue diffs).",
-        syncFromTemplate:
-          "Update the repo from the template it was created from (empty creates map to the Default template): per-file three-way against the template at the last sync, one normal commit, files changed on both sides skipped and reported.",
         unlinkGithub: "Remove the GitHub link and its webhook subscription.",
         whoami: "Repo identity string (debug).",
       },
@@ -1902,26 +1889,6 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
    */
   resetFromGithub(input: { depth?: number } = {}): Promise<GithubResetResult> {
     return this.#durableObjectStub.resetFromGithub(input);
-  }
-
-  /**
-   * Update this repo from the template it was created from — the durable
-   * creation request is the template intent (`empty` creates map to the
-   * picker's Default template, so every seeded repo is syncable; imports are
-   * refused with directions to syncFromGithub). Per-file three-way against
-   * the template content at the last sync: user-untouched files adopt the
-   * latest template, user-edited files stand, both-changed files are skipped
-   * and reported in the result. One normal commit, never a reset;
-   * `repo/template-synced` records the template revision as the next sync's
-   * base.
-   */
-  async syncFromTemplate(): Promise<TemplateSyncResult> {
-    const { state } = await this.processor.snapshot();
-    return await this.#durableObjectStub.syncFromTemplate({
-      reference: templateReferenceForCreateRequest(state.createRequest),
-      baseTemplateCommitOid:
-        state.lastTemplateSync === null ? null : state.lastTemplateSync.templateCommitOid,
-    });
   }
 
   // GitHub connections are project-scoped (their secrets and streams live in
@@ -6275,8 +6242,6 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   schedulers: "Scheduler catalog: get(path) for extra /scheduler/** instances.",
   secrets: "Secret catalog by path.",
   streams: "Project stream catalog: get(path), list().",
-  subscriptionHealth:
-    "Roll up subscription delivery health across the project's streams (root + well-known platform streams + recently active agents; { agentStreamLimit? } bounds the agent fan-out, default 20): halted (red), lagging/backoff (amber), and historical lastError (informational) entries with lag, attempts, and lastErrorAt.",
   worker: "The default repo-backed project worker.",
   workers: "Dynamic worker refs: get(ref).",
   workspaces:
@@ -6923,63 +6888,6 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       name: project.name,
       projectId: project.projectId,
     });
-  }
-
-  /**
-   * Roll up subscription delivery health across the project's streams: the
-   * root stream, the well-known platform streams, and the most recently
-   * active agent streams. Every scanned stream is one Durable Object dial,
-   * so the agent fan-out is bounded: `agentStreamLimit` picks the bound per
-   * scan (default 20, hard-capped — see subscription-health.ts; 0 scans the
-   * platform streams only). Server-side fan-out, one plain result: per
-   * stream, its halted (red), lagging/backoff (amber), and
-   * historical-lastError (informational) subscriptions with lag, attempts,
-   * and error age. The dashboard's worker-health sheet polls this while
-   * open; it is equally the programmatic surface for agents checking their
-   * own project's delivery health.
-   */
-  async subscriptionHealth(
-    input: { agentStreamLimit?: number } = {},
-  ): Promise<ProjectSubscriptionHealth> {
-    const live = await new LiveStateRelayRpcTarget<ProjectLiveState>(() => this.#projectDo, {
-      label: `project ${this.#projectId} subscription health`,
-    }).get();
-    const paths = selectSubscriptionHealthStreamPaths({
-      streamsIndex: live.streamsIndex,
-      catalogPaths: live.reduced.streams.map((stream) => stream.path),
-      agentStreamLimit: clampAgentStreamLimit(input.agentStreamLimit),
-    });
-    const streams = await Promise.all(
-      paths.map(async (path): Promise<StreamSubscriptionHealth> => {
-        try {
-          const entries = await new StreamSubscriptionCollectionRpcTarget({
-            auth: this.#props.auth,
-            path,
-            projectId: this.#projectId,
-          }).list();
-          return {
-            path,
-            subscriptions: entries.flatMap((entry) => {
-              const classified = classifySubscriptionHealth(entry);
-              return classified === null ? [] : [classified];
-            }),
-            error: null,
-          };
-        } catch (error) {
-          // One unreadable stream must not hide every other stream's health.
-          return {
-            path,
-            subscriptions: [],
-            error: error instanceof Error ? error.message : String(error),
-          };
-        }
-      }),
-    );
-    return {
-      generatedAt: new Date().toISOString(),
-      scannedPaths: paths,
-      streams: streams.filter((stream) => stream.subscriptions.length > 0 || stream.error !== null),
-    };
   }
 
   /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */
