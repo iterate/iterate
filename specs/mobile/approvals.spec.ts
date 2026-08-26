@@ -128,10 +128,11 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
       notificationsStatus: "granted",
       platform: "ios",
     });
-    // Outwait the egress gate's ~5s rules cache before the first burst —
-    // marked dead air so the rendered video skips the on-screen idle.
-    const outwaitRulesCache = () => new Promise((resolve) => setTimeout(resolve, 6_000));
-    await (page.videoMode ? page.videoMode.deadAir(outwaitRulesCache) : outwaitRulesCache());
+    // Outwait the egress gate's ~5s rules cache before the first burst. The
+    // spec's total budget is tight on cold previews (two real turns now live
+    // inside it), so the wait STARTS here and is only awaited after the chat
+    // setup below has absorbed most of it.
+    const rulesCacheOutwaited = new Promise((resolve) => setTimeout(resolve, 6_000));
 
     // ── Into the conversation: everything below happens in ONE chat thread.
     await page.getByText("New chat").click();
@@ -143,17 +144,23 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     // explicitly first (get-or-create, the same create call the client uses).
     using agent = itx.agents.get(agentPath);
     await agent.create();
+    // Cold script isolates on a fresh preview deploy take many seconds before
+    // script-run-started, and no spinner covers that window (a known product
+    // latency, documented in notifications.spec.ts). One throwaway run pays
+    // the cold start now — concurrent with the config append, awaited before
+    // the first command. The settle poll below filters to agent-authored
+    // executions so this run stays invisible to the count.
+    const scriptIsolateWarm = agent.capabilityHost.runScript("async () => 'warm'");
     await agent.append({
       type: "events.iterate.com/agent/configured",
       payload: { config: { llm: { model: "intercepted/driver" }, llmRequestDebounceMs: 250 } },
     });
-    // Cold script isolates on a fresh preview deploy take many seconds before
-    // script-run-started, and no spinner covers that window (a known product
-    // latency, documented in notifications.spec.ts). One throwaway run pays
-    // the cold start HERE, before the UI acts start their waits. The settle
-    // poll below filters to agent-authored executions so this run stays
-    // invisible to the count.
-    await agent.capabilityHost.runScript("async () => 'warm'");
+    await scriptIsolateWarm;
+    // Any rules-cache time the setup didn't absorb passes as marked dead air
+    // so the rendered video skips the idle.
+    await (page.videoMode
+      ? page.videoMode.deadAir(() => rulesCacheOutwaited)
+      : rulesCacheOutwaited);
 
     // Each script narrates its own outcome (success or error) and returns
     // nothing — an undefined script result ends the turn loop, so no second
