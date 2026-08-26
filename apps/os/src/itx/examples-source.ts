@@ -1838,38 +1838,6 @@ export default class ProjectWorker extends WorkerEntrypoint {
     },
   }),
   projectExample<{
-    // The interceptor's minimal surface: install a handler, run a fake/*
-    // model against it, release. run<T> rationale as in ai-generate-text.
-    ai: {
-      run(model: string, body: unknown): Promise<{ response?: string }>;
-      intercept(
-        handler: (input: { source: string; model: string; body: unknown }) => Promise<unknown>,
-      ): Promise<{ release(): Promise<void> }>;
-    };
-  }>({
-    id: "ai-intercept",
-    title: "Serve fake/* models with a live interceptor (deterministic tests)",
-    description:
-      "Models under fake/ are never dialed to a real provider: itx.ai.intercept(handler) installs a live handler — an in-memory function on YOUR side of the connection — that serves every fake/* call until released (or until your session drops). This is the deterministic-testing lane: point an agent at model 'fake/main' (or call itx.ai.run('fake/…')) and script every response from your test, with zero cost and zero nondeterminism. The handler receives { source: 'agent-turn' | 'ai-run', model, body }; agent turns expect assistant text back, ai-run returns your value verbatim. Last writer wins; no handler installed → a loud error.",
-    runtimes: ALL_RUNTIMES,
-    fn: async (itx) => {
-      // The handler is an ordinary function on YOUR side of the connection.
-      // Narrow on source for typed chat messages ('agent-turn' body is
-      // { messages }); an 'ai-run' body is whatever the caller passed.
-      const interception = await itx.ai.intercept(async ({ model, body }) => {
-        return { response: `[${model}] got: ${JSON.stringify(body)}` };
-      });
-      try {
-        // Any name under fake/ reaches the handler — route on it however you like.
-        return await itx.ai.run("fake/greeting", {
-          messages: [{ role: "user", content: "ping" }],
-        });
-      } finally {
-        await interception.release();
-      }
-    },
-  }),
-  projectExample<{
     // Same run<T> rationale as ai-generate-text; FLUX answers with a
     // base64 image in `image`.
     ai: { run(model: string, body: unknown): Promise<{ image?: string }> };

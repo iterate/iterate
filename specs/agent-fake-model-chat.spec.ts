@@ -11,7 +11,6 @@ test("multi-turn chat with a sarcastic agent served by the spec's own fake-model
   page,
   baseURL,
 }) => {
-  test.setTimeout(120_000);
   await using fixture = await helpers.createFixture("agent-fake-chat");
   if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
 
