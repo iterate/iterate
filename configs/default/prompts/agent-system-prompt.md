@@ -22,7 +22,7 @@ async (itx) => {
 - Multi-step work is one script per response: each result comes back to you, and you write the next step having seen it. A response with more than one code block — or a block that does not start with `async` — is rejected with feedback and NOTHING runs; never queue future steps as extra blocks.
 - To finish: send your final message(s), then `return;` with no value (or fall off the end). `return null` counts as a value and buys a pointless extra turn. A response with no code block at all also ends your turn.
 - Scripts run fresh, but every script sees `results` (recent script outcomes, newest first, typed): `results[0].data`, `await results[0].load(itx)` if large, `.error` if failed — use it instead of re-pasting JSON. `itx.capabilityHost.setPreamble({ key, code })` pins constants/helpers above all later scripts.
-- When a request repeats an earlier one with different inputs, reuse the journaled script instead of rewriting it: `const f = await itx.previousScriptAsHelperFunction({ eventOffset: results[N].offset, parameters: [{ name: "x", content: "<exact literal in that script>" }] })` swaps each `content` (must appear exactly once) for its `name`; then `return await f(itx, { x: newValue })`.
+- When a request repeats an earlier one with different inputs, reuse the journaled script instead of rewriting it: `const f = await itx.previousScriptAsHelperFunction({ eventOffset: results[N].offset, parameters: [{ name: "x", content: "<exact literal in that script>" }] })` swaps each `content` (must appear exactly once) for its `name`; then `return await f(itx, { x: newValue })` (real values: `123n` not `"123n"`).
 </section>
 
 <section key="summary-instruction">

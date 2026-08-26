@@ -47,15 +47,17 @@ const RESULT_TYPE_MAX_CHARS = 3_000;
 export type RetainedScriptResult =
   | { kind: "data"; executionId: string; settledAtOffset: number; resultJson: string }
   | { kind: "large"; executionId: string; settledAtOffset: number; typeText: string }
-  | { kind: "error"; executionId: string; settledAtOffset: number; error: string };
+  | { kind: "error"; executionId: string; settledAtOffset: number; error: string }
+  | { kind: "done"; executionId: string; settledAtOffset: number };
 
 /** A user/agent-authored preamble entry, as reduced into host state. */
 export type PreambleEntry = { key: string; code: string; setAtOffset: number };
 
 /**
  * Classify one settlement into its retained row — the pure half of the
- * `script-run-settled` reduce. Returns null for settlements with nothing to
- * reference (a successful script that returned undefined ended its turn).
+ * `script-run-settled` reduce. A successful script that returned undefined
+ * becomes a payload-free "done" row: it carries no data, but its offset is
+ * the handle `previousScriptAsHelperFunction` needs to reuse the script.
  */
 export function retainedScriptResult(input: {
   executionId: string;
@@ -74,9 +76,9 @@ export function retainedScriptResult(input: {
           : `${settlement.error.slice(0, RETAINED_ERROR_LIMIT)}…`,
     };
   }
-  if (settlement.result === undefined) return null;
+  if (settlement.result === undefined) return { kind: "done", executionId, settledAtOffset };
   const resultJson = JSON.stringify(settlement.result);
-  if (typeof resultJson !== "string") return null;
+  if (typeof resultJson !== "string") return { kind: "done", executionId, settledAtOffset };
   if (resultJson.length <= INLINE_RESULT_PREAMBLE_LIMIT) {
     return { kind: "data", executionId, settledAtOffset, resultJson };
   }
@@ -175,6 +177,11 @@ function renderResultsArray(rows: RetainedScriptResult[], tsOnly: (code: string)
         elements.push(
           `  { offset: ${row.settledAtOffset}, executionId: ${id}, error: ${JSON.stringify(row.error)} },`,
         );
+        break;
+      case "done":
+        // No payload to reference, but the offset is still the handle for
+        // reusing the script (previousScriptAsHelperFunction).
+        elements.push(`  { offset: ${row.settledAtOffset}, executionId: ${id}, done: true },`);
         break;
     }
   });

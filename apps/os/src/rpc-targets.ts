@@ -6059,19 +6059,37 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     }
     const requestType = "events.iterate.com/capability-host/script-run-requested";
     let requested: StreamEvent | undefined;
+    // Settle events carry the executionId; assistant-output events ARE the
+    // executionId (`agent-output:<offset>`).
+    const executionId =
+      event.type === requestType ||
+      event.type === "events.iterate.com/capability-host/script-run-settled"
+        ? (event.payload as { executionId: string }).executionId
+        : `agent-output:${input.eventOffset}`;
     if (event.type === requestType) {
       requested = event;
     } else {
-      // Settle events carry the executionId; assistant-output events ARE the
-      // executionId (`agent-output:<offset>`). Either way the request event is
-      // one idempotency-key point read away.
-      const executionId =
-        event.type === "events.iterate.com/capability-host/script-run-settled"
-          ? (event.payload as { executionId: string }).executionId
-          : `agent-output:${input.eventOffset}`;
+      // Public-door runs journal the request under this key; one point read.
       requested = await this.#stream.getEvent({
         idempotencyKey: `capability-host/script-run-requested@${executionId}`,
       });
+    }
+    if (requested === undefined) {
+      // Agent-lane runs journal the request under the AGENT processor's
+      // idempotency prefix, but the executionId names the assistant-output
+      // offset and the request commits in that same append batch — scan the
+      // next few request events from there.
+      const anchor = /^agent-output:(\d+)$/.exec(executionId);
+      if (anchor !== null) {
+        const candidates = await this.#stream.getEvents({
+          afterOffset: Number(anchor[1]),
+          eventTypes: [requestType],
+          limit: 5,
+        });
+        requested = candidates.find(
+          (candidate) => (candidate.payload as { executionId: string }).executionId === executionId,
+        );
+      }
     }
     if (requested === undefined) {
       throw new Error(

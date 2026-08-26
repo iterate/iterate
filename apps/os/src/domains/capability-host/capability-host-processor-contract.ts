@@ -34,7 +34,10 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
   slug: "capability-host",
   // 0.6.0: two parallel 0.5.0 claims merged — main's provider pagers and this
   // branch's preamble (preamble-set/removed events, retained script results).
-  version: "0.6.0",
+  // 0.7.0: void-returning successes retain a payload-free "done" row, so
+  // every settled script keeps an offset handle in `results` (the handle
+  // previousScriptAsHelperFunction reuses); re-reduces from offset 0.
+  version: "0.7.0",
   description: "A tiny dynamic capability table and script execution stream.",
   stateSchema: z.object({
     birthCertificate: capabilityHostBirthCertificateSchema()
@@ -284,6 +287,16 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
               executionId: z.string(),
               settledAtOffset: z.number().int().nonnegative(),
               error: z.string().meta({ description: "The settlement error, truncated." }),
+            }),
+            z.strictObject({
+              kind: z.literal("done").meta({
+                description:
+                  "A successful script that returned no (JSON-serializable) value. No payload " +
+                  "to reference, but the offset stays addressable — the reuse handle for " +
+                  "previousScriptAsHelperFunction.",
+              }),
+              executionId: z.string(),
+              settledAtOffset: z.number().int().nonnegative(),
             }),
           ])
           .meta({

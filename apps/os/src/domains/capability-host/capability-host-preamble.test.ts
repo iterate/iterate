@@ -68,14 +68,14 @@ describe("retainedScriptResult", () => {
     expect(error.length).toBeLessThan(2_100);
   });
 
-  it("retains nothing for a script that returned undefined (that is how turns end)", () => {
+  it("retains a payload-free done row for a script that returned undefined (its offset is the reuse handle)", () => {
     expect(
       retainedScriptResult({
         executionId: "agent-output:9",
         settledAtOffset: 9,
         settlement: { status: "succeeded" },
       }),
-    ).toBeNull();
+    ).toEqual({ kind: "done", executionId: "agent-output:9", settledAtOffset: 9 });
   });
 });
 
@@ -145,6 +145,16 @@ describe("assemblePreamble", () => {
     expect(results.byOffset(33)).toMatchObject({ executionId: "agent-output:33", offset: 33 });
     // outside the retained window: loud, not undefined
     expect(() => results.byOffset(999)).toThrow("no retained script result settled at offset 999");
+  });
+
+  it("a done row renders offset + executionId only — the reuse handle for void scripts", async () => {
+    const { ts, js } = assemblePreamble({
+      entries: [],
+      results: [{ kind: "done", executionId: "agent-output:9", settledAtOffset: 9 }],
+    })!;
+    expect(ts).toContain("done: true");
+    const results = (await evaluatePreambleJs(js)) as { offset: number }[];
+    expect(results[0]).toMatchObject({ offset: 9, executionId: "agent-output:9", done: true });
   });
 
   it("the js variant is runnable JavaScript with the same bindings (no TS syntax)", async () => {
