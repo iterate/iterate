@@ -14,5 +14,6 @@ export { talk } from "./talk.ts";
 export { interjectRecall } from "./interject-recall.ts";
 export { vadDuplex } from "./vad-duplex.ts";
 export { timeline } from "./timeline.ts";
+export { transcript } from "./transcript.ts";
 export { utterances } from "./utterances.ts";
 export { wire } from "./wire.ts";

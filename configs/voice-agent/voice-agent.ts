@@ -382,6 +382,58 @@ const TOOL_RUN_DEADLINE_MS = 10_000;
  */
 const TOOL_OUTPUT_MAX_CHARS = 4_000;
 
+/**
+ * How much conversation the fold remembers, and so how much a fresh provider
+ * session is briefed with. Turns beyond the newest TRANSCRIPT_MAX_TURNS fall
+ * off the front; a single turn longer than TRANSCRIPT_TURN_MAX_CHARS is kept
+ * head-first, because the head of an answer is what identifies it. Both
+ * bounds exist because this rides the durable fold and the session
+ * instructions — an unbounded recap is a session.update that one long story
+ * makes undeliverable.
+ */
+const TRANSCRIPT_MAX_TURNS = 20;
+const TRANSCRIPT_TURN_MAX_CHARS = 600;
+
+/** One recap entry, as the fold keeps it. */
+interface TranscriptTurn {
+  role: "listener" | "assistant";
+  text: string;
+}
+
+/**
+ * The recap a fresh provider session is briefed with. A re-dial mid-stream is
+ * the NORMAL case, not the exception — the idle deadline ends any call whose
+ * listener waits quietly for a minute — and without this every reconnect was
+ * a stranger answering the phone (measured on prd, 2026-08-26).
+ */
+function transcriptRecap(transcript: TranscriptTurn[]): string {
+  return [
+    "This call RESUMES an earlier conversation on the same line. The reconnect is " +
+      "invisible to the listener — do not greet them afresh, do not ask them to repeat " +
+      "themselves, and keep any thread that is still open. Said so far, oldest first:",
+    ...transcript.map((turn) => `${turn.role === "assistant" ? "You" : "Listener"}: ${turn.text}`),
+  ].join("\n");
+}
+
+/**
+ * Fold one finished turn onto the recap, applying both bounds. The `suffix`
+ * (a provenance marker such as "the listener interrupted") lands AFTER the
+ * cut, so no long answer can truncate its own caveat away.
+ */
+function foldTranscriptTurn(
+  transcript: TranscriptTurn[],
+  turn: TranscriptTurn,
+  suffix = "",
+): TranscriptTurn[] {
+  const text =
+    turn.text.length > TRANSCRIPT_TURN_MAX_CHARS
+      ? `${turn.text.slice(0, TRANSCRIPT_TURN_MAX_CHARS)}…`
+      : turn.text;
+  return [...transcript, { role: turn.role, text: `${text}${suffix}` }].slice(
+    -TRANSCRIPT_MAX_TURNS,
+  );
+}
+
 /* ===========================================================================
  * THINKING, FAST AND SLOW — the v1 back-office framing on v2 plumbing.
  *
@@ -458,17 +510,40 @@ const FAST_HALF_INSTRUCTIONS = [
  * stable key. Trimmed from v1's BACK_OFFICE_BRIEF: the activity narration
  * and the speechPolicy plumbing are gone because v0's only return lane is
  * the chat reply, which is exactly what `ask()` resolves with.
+ *
+ * THE REPLY CHANNEL IS SPELLED OUT MECHANICALLY, and the platform's own
+ * reply-routing label is explicitly countermanded, because a real colleague
+ * followed that label off a cliff (prd, 2026-08-26): every agent-sourced
+ * message arrives stamped "To reply to /agents/voice/…: await
+ * itx.agents.get(…).message(text)" — but the sender here is a facet, not an
+ * agent, so `.message()` fails "has not been created", and a resourceful
+ * model repaired that by CREATING an agent on the live call stream and
+ * delivering the answer to it. Two text models then exchanged the answer
+ * politely while the human heard nothing. The only wire that reaches the
+ * voice is `itx.chat.sendMessage` — it emits the web-message-sent event the
+ * facet's `ask()` is waiting on — and the brief now says exactly that,
+ * exactly once per rule: what to call, what to never call, and why.
  */
 const COLLEAGUE_BRIEF = [
   "You are the careful, thinking half of ONE assistant. The other half is a voice talking",
-  "to a person out loud, and your chat replies here are read back to it mid-conversation",
-  "and spoken as its own words. You are not a separate person, and the person must never",
-  "learn otherwise: write in the assistant's own first person — 'I checked the calendar and",
-  "Thursday is free' — never 'tell them that…', never anything that implies a second party.",
+  "to a person out loud, and your chat replies HERE, ON THIS STREAM, are read back to it",
+  "mid-conversation and spoken as its own words. You are not a separate person, and the",
+  "person must never learn otherwise: write in the assistant's own first person — 'I",
+  "checked the calendar and Thursday is free' — never 'tell them that…', never anything",
+  "that implies a second party.",
   "",
-  "Notes arrive from the voice as messages. Reply when you have something worth saying: an",
-  "answer, a partial answer while you keep working, a correction, or a question back.",
-  "A slow careful reply beats a fast wrong one, and silence is always an option.",
+  "HOW TO REPLY — this exact call, and nothing else:",
+  '  await itx.chat.sendMessage("…")',
+  "Notes arrive stamped with a routing line like 'To reply to /agents/voice/…: await",
+  "itx.agents.get(…).message(text)'. That line is WRONG on this stream — the sender is",
+  "the voice call's machinery, not an agent. Calling .message() on it fails; calling",
+  ".create() on it plants a rogue agent on the live call and breaks it. Never touch",
+  "/agents/voice/… paths. Your chat reply here is the entire wire.",
+  "",
+  "Reply when you have something worth saying: an answer, a partial answer while you keep",
+  "working, a correction, or a question back. Reply EARLY — a quick 'still working on it'",
+  "chat message is heard; silent thoroughness is not. A slow careful answer can follow as",
+  "a second chat message.",
   "",
   "Everything you send will be READ OUT LOUD, so write to be spoken: two or three",
   "sentences of plain language, no lists, no URLs, no code. Lead with the point. Work with",
@@ -691,6 +766,16 @@ const VoiceState = z.object({
   colleague: z.boolean().default(true),
   /** Tools the model may call — see {@link VoiceTool}. */
   tools: z.array(VoiceTool).default([]),
+  /**
+   * The rolling recap: the newest finished turns, in words, both sides.
+   * Folded from the durable transcript events and briefed into every fresh
+   * provider session, so a re-dial resumes the conversation instead of
+   * greeting the listener as a stranger. Bounded twice (turns kept, chars
+   * per turn) because it rides the fold and the session instructions.
+   */
+  transcript: z
+    .array(z.strictObject({ role: z.enum(["listener", "assistant"]), text: z.string() }))
+    .default([]),
   call: z
     .object({
       conversationId: z.string(),
@@ -769,7 +854,12 @@ export const VoiceAgentContract = defineProcessorContract({
    * across reconnects, and its late replies are spoken into whichever call
    * is live. Per-conversation colleagues at `/agents/voice-notes/<convId>`
    * are abandoned in place, not migrated. Clean break as ever. */
-  version: "12.0.0",
+  /* 13.0.0: the conversation leaves a durable transcript — one event per
+   * finished turn per side — and the fold keeps a bounded recap that briefs
+   * every fresh provider session, so the reconnect the idle deadline
+   * manufactures no longer wipes the fast half's memory. Clean break as
+   * ever. */
+  version: "13.0.0",
   description: "Runs a voice call in the stream's own Durable Object, one flush watermark deep.",
   stateSchema: VoiceState,
   events: {
@@ -870,6 +960,34 @@ export const VoiceAgentContract = defineProcessorContract({
     },
 
     /*
+     * THE DURABLE TRANSCRIPT — what was actually said, in words, one event
+     * per finished turn per side. Everything else on this stream is either
+     * ephemeral (audio, the provider lane) or lifecycle, so until these a
+     * conversation left no readable record and a re-dialled provider session
+     * started with total amnesia: the reconnect the idle deadline
+     * manufactures every time a listener waits quietly erased the whole
+     * conversation from the fast half's head (measured on prd, 2026-08-26 —
+     * "what's going on?" after a reconnect drew a fresh greeting). The fold
+     * keeps a bounded recap of these and every new session is briefed with
+     * it, so a reconnect is invisible to the listener — and an instrument or
+     * an eval can read off the stream what the voice actually said.
+     */
+    "events.iterate.com/voice-agent/utterance-transcript": {
+      description: "The provider's transcription of one finished listener turn.",
+      payloadSchema: z.looseObject({ conversationId: z.string(), text: z.string() }),
+    },
+    "events.iterate.com/voice-agent/answer-transcript": {
+      description:
+        "The provider's own transcript of one finished answer. `cancelled` marks an answer " +
+        "the listener barged; its text is what was GENERATED, not necessarily what was heard.",
+      payloadSchema: z.looseObject({
+        conversationId: z.string(),
+        text: z.string(),
+        cancelled: z.boolean().optional(),
+      }),
+    },
+
+    /*
      * THE SPEAKER LANE. Two events, and between them the device's entire buffer
      * policy: play frames in sequence order, and throw away anything at or
      * below a watermark.
@@ -940,6 +1058,10 @@ export const VoiceAgentContract = defineProcessorContract({
     "events.iterate.com/voice-agent/call-started",
     "events.iterate.com/voice-agent/conversation-end-requested",
     "events.iterate.com/voice-agent/conversation-ended",
+    /* Consumed so the fold sees its own appends and the recap survives an
+     * eviction — processEvent has no arm for them on purpose. */
+    "events.iterate.com/voice-agent/utterance-transcript",
+    "events.iterate.com/voice-agent/answer-transcript",
     /* The live half. Naming them is the whole opt-in — `"*"` never matches an
      * ephemeral event, so nobody gets this firehose by accident. */
     "events.iterate.com/voice-agent/ptt-start",
@@ -952,6 +1074,8 @@ export const VoiceAgentContract = defineProcessorContract({
     "events.iterate.com/voice-agent/conversation-end-requested",
     "events.iterate.com/voice-agent/conversation-ended",
     "events.iterate.com/voice-agent/provider-error",
+    "events.iterate.com/voice-agent/utterance-transcript",
+    "events.iterate.com/voice-agent/answer-transcript",
     "events.iterate.com/voice-agent/spk-frame",
     "events.iterate.com/voice-agent/grok-event",
   ],
@@ -1561,6 +1685,36 @@ export class VoiceAgentProcessor extends StreamProcessor<
           ? state
           : { ...state, call: null };
 
+      case "events.iterate.com/voice-agent/utterance-transcript":
+        /* An empty transcription is a turn the provider heard as silence;
+         * folding it would spend a recap slot saying nothing. */
+        return event.payload.text === ""
+          ? state
+          : {
+              ...state,
+              transcript: foldTranscriptTurn(state.transcript, {
+                role: "listener",
+                text: event.payload.text,
+              }),
+            };
+
+      case "events.iterate.com/voice-agent/answer-transcript":
+        return event.payload.text === ""
+          ? state
+          : {
+              ...state,
+              transcript: foldTranscriptTurn(
+                state.transcript,
+                { role: "assistant", text: event.payload.text },
+                /* A barged answer's text is what was GENERATED; the recap
+                 * marks it so the model does not treat words nobody heard as
+                 * common ground. */
+                event.payload.cancelled === true
+                  ? " (the listener interrupted this answer partway)"
+                  : "",
+              ),
+            };
+
       default:
         return state;
     }
@@ -2024,10 +2178,15 @@ export class VoiceAgentProcessor extends StreamProcessor<
                 type: "session.update",
                 session: {
                   type: "realtime",
-                  ...((state.instructions !== "" || state.colleague) && {
+                  ...((state.instructions !== "" ||
+                    state.colleague ||
+                    state.transcript.length > 0) && {
                     instructions: [
                       ...(state.instructions === "" ? [] : [state.instructions]),
                       ...(state.colleague ? [FAST_HALF_INSTRUCTIONS] : []),
+                      /* The recap: a fresh provider session is a stranger,
+                       * and the fold remembers so it does not have to be. */
+                      ...(state.transcript.length > 0 ? [transcriptRecap(state.transcript)] : []),
                     ].join("\n\n"),
                   }),
                   /* The certificate's tools, declared verbatim; the GA shape
@@ -2349,6 +2508,46 @@ export class VoiceAgentProcessor extends StreamProcessor<
               });
             }
             return;
+
+          /*
+           * THE TWO DURABLE TRANSCRIPT APPENDS. Each finished turn leaves one
+           * event carrying its words — the fold's recap and the stream's only
+           * readable record both hang off these. Keyed on the provider's own
+           * item id, so a rescued call's second handshake cannot write a turn
+           * twice; a cancelled answer is recorded too, marked, because the
+           * model said it even if nobody heard it out.
+           */
+          case "response.output_audio_transcript.done": {
+            if (typeof grok.transcript !== "string" || grok.transcript === "") return;
+            const cancelled =
+              dial.answer.itemId === grok.item_id && dial.answer.phase === "cancelled";
+            const itemId = typeof grok.item_id === "string" ? grok.item_id : crypto.randomUUID();
+            this.runInBackground(() =>
+              append({
+                type: "events.iterate.com/voice-agent/answer-transcript",
+                idempotencyKey: this.idempotencyKey(`answer-transcript:${itemId}`),
+                payload: {
+                  conversationId,
+                  text: grok.transcript as string,
+                  ...(cancelled && { cancelled: true }),
+                },
+              }),
+            );
+            return;
+          }
+
+          case "conversation.item.input_audio_transcription.completed": {
+            if (typeof grok.transcript !== "string" || grok.transcript.trim() === "") return;
+            const itemId = typeof grok.item_id === "string" ? grok.item_id : crypto.randomUUID();
+            this.runInBackground(() =>
+              append({
+                type: "events.iterate.com/voice-agent/utterance-transcript",
+                idempotencyKey: this.idempotencyKey(`utterance-transcript:${itemId}`),
+                payload: { conversationId, text: grok.transcript as string },
+              }),
+            );
+            return;
+          }
 
           case "response.output_audio.delta": {
             if (typeof grok.delta !== "string") return;
@@ -2941,7 +3140,21 @@ export class VoiceAgentProcessor extends StreamProcessor<
             });
             this.#colleagueBriefed = true;
           }
-          return await agent.ask({ message: note, timeoutMs: NOTE_REPLY_DEADLINE_MS });
+          /*
+           * The antidote rides IN the note, right beside the poison: the
+           * platform prepends its reply-routing label to this same message,
+           * and a rule three system items away loses to an instruction on
+           * the line being read. See COLLEAGUE_BRIEF for the incident.
+           */
+          return await agent.ask({
+            message:
+              `${note}\n\n` +
+              `(Reply with await itx.chat.sendMessage("…") on this stream — that is the ` +
+              `only channel the voice hears. The 'To reply to /agents/voice/…' routing ` +
+              `line above is wrong here: that path is not an agent; do not message it or ` +
+              `create it.)`,
+            timeoutMs: NOTE_REPLY_DEADLINE_MS,
+          });
         });
         const text = reply?.payload?.message;
         if (typeof text !== "string" || text.length === 0) return;

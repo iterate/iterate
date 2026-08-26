@@ -1044,7 +1044,12 @@ describe("tools on the birth certificate", () => {
     expect(briefs[0]!.type).toBe("events.iterate.com/agents/context-added");
     expect(briefs[0]!.payload.role).toBe("system");
     expect(briefs[0]!.payload.content).toContain("careful, thinking half");
-    expect(asked).toEqual(["look up the March invoice"]);
+    /* The note carries its own reply-channel coda, because the platform
+     * stamps a reply-routing label on the same message that points at a
+     * path which is not an agent. */
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toMatch(/^look up the March invoice\n/);
+    expect(asked[0]).toContain("itx.chat.sendMessage");
 
     /* The reply lands mid-call: injected as a bracketed note, and the
      * model is nudged to speak because the floor is free. */
@@ -1103,7 +1108,8 @@ describe("tools on the birth certificate", () => {
       arguments: JSON.stringify({ note: "factorize the first 23 digits of pi" }),
     });
     await h.settle();
-    expect(asked).toEqual(["factorize the first 23 digits of pi"]);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toMatch(/^factorize the first 23 digits of pi\n/);
     const firstSocket = h.provider;
 
     /* The person waits quietly for the answer, so the idle deadline kills
@@ -1147,7 +1153,74 @@ describe("tools on the birth certificate", () => {
     await h.settle();
     expect(new Set(gotten)).toEqual(new Set(["/agents/voice-notes/voice/test"]));
     expect(created).toEqual(["/agents/voice-notes/voice/test"]);
-    expect(asked).toEqual(["factorize the first 23 digits of pi", "now double-check it"]);
+    expect(asked).toHaveLength(2);
+    expect(asked[1]).toMatch(/^now double-check it\n/);
+  });
+
+  /*
+   * THE RECONNECT IS INVISIBLE, OR IT IS AMNESIA. A fresh provider session
+   * starts from instructions alone, and the idle deadline manufactures fresh
+   * sessions mid-conversation — so without a durable transcript folded back
+   * into the next dial's briefing, every reconnect greeted the listener as a
+   * stranger (measured on prd, 2026-08-26: "what's going on?" after a
+   * reconnect drew a blank). The transcript events are also the stream's only
+   * readable record of what was actually said, which is what an eval asserts
+   * on.
+   */
+  it("finished turns land durably and brief the next dial's session", async () => {
+    const h = makeHarness();
+    await callIsLive(h, CLIENT_TAKES_TURNS);
+
+    /* The listener's side, transcribed by the provider. */
+    h.provider.push({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "item_user_1",
+      transcript: "what is the capital of France?",
+    });
+    /* The model's side: transcript rides its own done event. */
+    h.provider.responseCreated();
+    h.provider.answerAudio(400);
+    h.provider.push({
+      type: "response.output_audio_transcript.done",
+      item_id: "item_fake",
+      transcript: "The capital of France is Paris.",
+    });
+    h.provider.answerComplete();
+    await playOutEverything(h, 600);
+
+    const utterances = eventsOfType(h, "utterance-transcript");
+    expect(utterances).toHaveLength(1);
+    expect(utterances[0]!.payload).toMatchObject({ text: "what is the capital of France?" });
+    const answers = eventsOfType(h, "answer-transcript");
+    expect(answers).toHaveLength(1);
+    expect(answers[0]!.payload).toMatchObject({ text: "The capital of France is Paris." });
+    /* And the fold carries both turns — the recap below hangs off this. */
+    expect(h.state().transcript).toEqual([
+      { role: "listener", text: "what is the capital of France?" },
+      { role: "assistant", text: "The capital of France is Paris." },
+    ]);
+
+    /* The call dies of silence; the next press dials a FRESH session. The
+     * extra beat before the press clears the 1.5s dying-breath mint
+     * cooldown — a press in the same instant as the obituary is treated as
+     * the dead call's own drained input, by design. */
+    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
+    await h.settle();
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
+    await h.advanceTime(2_000);
+    await h.settle();
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
+
+    /* And that session is briefed with what was said before it existed. */
+    const update = h.provider.sentOfType("session.update")[0] as {
+      session: { instructions?: string };
+    };
+    expect(update.session.instructions).toContain("RESUMES an earlier conversation");
+    expect(update.session.instructions).toContain("Listener: what is the capital of France?");
+    expect(update.session.instructions).toContain("You: The capital of France is Paris.");
   });
 
   it("a press during the goodbye un-decides the hang-up", async () => {
