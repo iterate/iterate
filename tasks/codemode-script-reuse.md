@@ -116,6 +116,15 @@ Supporting changes:
   local dev — no model turns_
 - [x] `evals/script-reuse/eval.md` written _10-digit-prime semiprimes force a
   real algorithm; criteria demand the reuse mechanism, not just answers_
+- [x] `scriptOffset` on results rows + strict request-offset demand _Misha's
+  follow-up: contract 0.8.0; every retained row hands scripts the
+  request-event offset, and previousScriptHelper accepts only that — the
+  lenient settle/assistant resolution and agent-lane idempotency scan are
+  deleted_
+- [x] multi-turn UI spec + video _`specs/agent-script-reuse.spec.ts` on
+  #2523's intercepted/* models: both turns' scripts execute for real, the
+  spec opens each turn's codemode snippet, VIDEO_MODE recording embedded in
+  the PR body_
 - [x] eval run via `pnpm eval script-reuse` _passed on round 3
   (`evals/runs.ignoreme/script-reuse/1787769275338/`): reuse mechanism
   confirmed, 265 vs 2,408 chars, answers verified independently. Rounds 1–2

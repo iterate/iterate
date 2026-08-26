@@ -65,8 +65,8 @@ export type PreambleEntry = { key: string; code: string; setAtOffset: number };
 /**
  * Classify one settlement into its retained row — the pure half of the
  * `script-run-settled` reduce. A successful script that returned undefined
- * becomes a payload-free "done" row: it carries no data, but its offset is
- * the handle `previousScriptAsHelperFunction` needs to reuse the script.
+ * becomes a payload-free "done" row: it carries no data, but its
+ * `scriptOffset` is the handle `previousScriptHelper` needs to reuse it.
  */
 export function retainedScriptResult(input: {
   executionId: string;
