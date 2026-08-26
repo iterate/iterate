@@ -203,11 +203,11 @@ Draft proposal for the two gaps, keeping vanilla CLIs:
   specs side if a spec ever needs a dimension; don't build it until one
   does.
 
-The free-and-deterministic alternative to paying for turns is the `fake/*`
+The free-and-deterministic alternative to paying for turns is the `intercepted/*`
 model lane: `itx.ai.intercept(handler)` installs a live handler (an in-memory
 function in the test process, session-bound over capnweb) that serves every
-model under `fake/` — both `itx.ai.run("fake/…")` calls and full agent
-conversation turns for agents configured with `model: "fake/<x>"`. The whole
+model under `intercepted/` — both `itx.ai.run("intercepted/…")` calls and full agent
+conversation turns for agents configured with `model: "intercepted/<x>"`. The whole
 loop runs for real — debounce, journaled llm-request events, chunk streaming,
 codemode, chat reply — with the test scripting each response. Non-fake models
 are never interceptable, so a journaled `openai/*` turn is always the real

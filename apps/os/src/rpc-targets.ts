@@ -441,10 +441,10 @@ import { SlackProcessorContract } from "./domains/integrations/slack-processor-c
 import { WorkspaceProcessorContract } from "./domains/workspaces/workspace-processor-contract.ts";
 import { normalizeConfigRepoTemplateReference } from "./lib/config-repo-template-reference.ts";
 import {
-  isFakeModel,
+  isInterceptedModel,
   type ProjectAiIntercept,
   type ProjectAiInterceptor,
-} from "./lib/fake-models.ts";
+} from "./lib/model-interception.ts";
 import { resolveSlugConventionTemplate } from "./lib/slug-config-template.ts";
 
 /**
@@ -3330,12 +3330,12 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Cloudflare Workers AI: run(model, body) executes a model, models() lists the catalog, toMarkdown({ name, blob }) converts documents to Markdown — blob accepts bytes or base64 (a Blob made in a script cannot cross the RPC boundary); an in-hand HTML string converts via new TextEncoder().encode(html) with a .html name. run() is for what YOU cannot do: image/audio/video generation, transcription, embeddings, classification at volume. Don't run() a text model to summarize, draft, or answer over content you are about to read or relay — you are usually a more intelligent model; return the data and write it yourself. Text models take { messages: [{ role, content }, …] } and answer in result.response. Models under 'fake/' are never dialed: they are served by the live interceptor installed with intercept(handler) — the deterministic-testing lane, identical in every environment. First-party docs: Workers AI binding https://developers.cloudflare.com/workers-ai/configuration/bindings/ ; Markdown Conversion https://developers.cloudflare.com/workers-ai/features/markdown-conversion/ ; conversion options https://developers.cloudflare.com/workers-ai/features/markdown-conversion/conversion-options/ ; image model example https://developers.cloudflare.com/ai/models/%40cf/black-forest-labs/flux-2-klein-9b/ ; speech model example https://developers.cloudflare.com/ai/models/xai/grok-tts/ ; transcription example https://developers.cloudflare.com/ai/models/xai/grok-stt/ ; video model example https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/ .",
+        "Cloudflare Workers AI: run(model, body) executes a model, models() lists the catalog, toMarkdown({ name, blob }) converts documents to Markdown — blob accepts bytes or base64 (a Blob made in a script cannot cross the RPC boundary); an in-hand HTML string converts via new TextEncoder().encode(html) with a .html name. run() is for what YOU cannot do: image/audio/video generation, transcription, embeddings, classification at volume. Don't run() a text model to summarize, draft, or answer over content you are about to read or relay — you are usually a more intelligent model; return the data and write it yourself. Text models take { messages: [{ role, content }, …] } and answer in result.response. Models under 'intercepted/' are never dialed: they are served by the live interceptor installed with intercept(handler) — the deterministic-testing lane, identical in every environment. First-party docs: Workers AI binding https://developers.cloudflare.com/workers-ai/configuration/bindings/ ; Markdown Conversion https://developers.cloudflare.com/workers-ai/features/markdown-conversion/ ; conversion options https://developers.cloudflare.com/workers-ai/features/markdown-conversion/conversion-options/ ; image model example https://developers.cloudflare.com/ai/models/%40cf/black-forest-labs/flux-2-klein-9b/ ; speech model example https://developers.cloudflare.com/ai/models/xai/grok-tts/ ; transcription example https://developers.cloudflare.com/ai/models/xai/grok-stt/ ; video model example https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/ .",
       children: {
         models: "List available models.",
         run: "Run one model invocation — for outputs the caller cannot produce itself (images, audio, transcription, bulk classification), not for text the caller will read or relay.",
         intercept:
-          "Install a live handler for fake/* models (last writer wins); returns a release handle. The deterministic-testing lane: agents on a fake/* model and ai.run('fake/…') calls are served by your handler instead of a real provider.",
+          "Install a live handler for intercepted/* models (last writer wins); returns a release handle. The deterministic-testing lane: agents on a intercepted/* model and ai.run('intercepted/…') calls are served by your handler instead of a real provider.",
         toMarkdown:
           "Convert one document or an array of { name, blob } to Markdown — blob accepts bytes or base64 (a Blob made in a script cannot cross the RPC boundary); an in-hand HTML string converts via new TextEncoder().encode(html) with a .html name. Call with no args for supported formats. For emails and newsletters (mostly tracking links and giant base64 images), pass { conversionOptions: { output: { format: 'text' } } } to strip link targets and image URLs — often 10x smaller.",
       },
@@ -3362,11 +3362,11 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
    * `unknown`. The optional third argument is the binding's own options object
    * — e.g. `{ gateway: { id: "default", skipCache: true } }` — passed through
    * to `env.AI.run`; its `gateway` wins over any constructor-provided one.
-   * A `fake/*` model never reaches Cloudflare: the live interceptor installed
+   * A `intercepted/*` model never reaches Cloudflare: the live interceptor installed
    * with `intercept(handler)` serves it, and its return value comes back
    * verbatim (no handler installed → a loud error). */
   run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T> {
-    if (isFakeModel(model)) {
+    if (isInterceptedModel(model)) {
       return projectStub(env.PROJECT, this.props.projectId).consultAiInterceptor({
         source: "ai-run",
         model,
@@ -3382,9 +3382,9 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
     ) as Promise<T>;
   }
 
-  /** Install a live handler for `fake/*` models (last writer wins); returns a
+  /** Install a live handler for `intercepted/*` models (last writer wins); returns a
    * release handle. The deterministic-testing lane: an agent configured with
-   * `model: "fake/<x>"` and every `run("fake/<x>", …)` call are served by your
+   * `model: "intercepted/<x>"` and every `run("intercepted/<x>", …)` call are served by your
    * handler — an in-memory function on YOUR side of the connection — instead
    * of a real provider. The handler receives
    * `{ source: "agent-turn" | "ai-run", model, body }`; for agent turns it

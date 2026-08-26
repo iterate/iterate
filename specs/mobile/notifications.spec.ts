@@ -181,16 +181,16 @@ test("the approval push is suppressed in the watched thread and sent when you're
     const watchedPath = decodeURIComponent(new URL(page.url()).searchParams.get("path")!);
     const watchedAgent = itx.agents.get(watchedPath);
     // Start this lane through the visible composer: the message's turn runs
-    // on the fake/* lane, whose model is THIS spec's interceptor pairing the
+    // on the intercepted/* lane, whose model is THIS spec's interceptor pairing the
     // command with the park script — deterministic, and the run carries the
     // agent's own script provenance like a real turn. The agent is birthed
-    // and pointed at fake/driver first (the client defers creation to the
+    // and pointed at intercepted/driver first (the client defers creation to the
     // first message, and the birth batch's model default must not outrank
     // the fake config).
     await watchedAgent.create();
     await watchedAgent.append({
       type: "events.iterate.com/agent/configured",
-      payload: { config: { llm: { model: "fake/driver" }, llmRequestDebounceMs: 250 } },
+      payload: { config: { llm: { model: "intercepted/driver" }, llmRequestDebounceMs: 250 } },
     });
     using _interception = await itx.ai.intercept(async ({ source, body }) => {
       if (source !== "agent-turn") throw new Error(`unexpected source: ${source}`);

@@ -2,7 +2,7 @@ import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
 // The deterministic sibling of agent-chat.spec.ts: same UI journey (composer →
-// feed), but the "model" is this spec's own interceptor — the fake/* lane —
+// feed), but the "model" is this spec's own interceptor — the intercepted/* lane —
 // so a THREE-turn conversation completes in seconds, free, with scripted
 // replies. The real agent loop runs end to end: journaled llm-request events,
 // codemode script execution, web-message-sent, feed paint.
@@ -19,15 +19,15 @@ test("multi-turn chat with a sarcastic agent served by the spec's own fake-model
   const agentPath = `/agents/sarcastic-${crypto.randomUUID().slice(0, 8)}`;
   using agent = project.agents.get(agentPath);
   await agent.create();
-  // Point the agent at the fake lane and drop the newborn debounce window —
+  // Point the agent at the interception lane and drop the newborn debounce window —
   // an ordinary journaled config event, the same channel a config worker uses.
   await agent.append({
     type: "events.iterate.com/agent/configured",
-    payload: { config: { llm: { model: "fake/sarcastic" }, llmRequestDebounceMs: 250 } },
+    payload: { config: { llm: { model: "intercepted/sarcastic" }, llmRequestDebounceMs: 250 } },
   });
 
   // The "model": an in-memory function in THIS process, dialed back over
-  // capnweb for every fake/* turn. It answers the agent contract's way — one
+  // capnweb for every intercepted/* turn. It answers the agent contract's way — one
   // codemode script — sending a sarcastic rendering of whatever the user said.
   using _interception = await project.ai.intercept(async (call) => {
     if (call.source !== "agent-turn") throw new Error(`unexpected source: ${call.source}`);
@@ -60,7 +60,7 @@ test("multi-turn chat with a sarcastic agent served by the spec's own fake-model
 // -----------------------------------------------------------------------------
 // Sarcastic responder, adapted from dumbagent (github.com/mmkal/dumbagent,
 // src/presets/sarcastic.ts). Modifications: the wire-protocol Request/Response
-// layer is gone — the fake-model lane hands us parsed chat messages — keeping
+// layer is gone — the interception lane hands us parsed chat messages — keeping
 // the text pipeline: strip xml-ish blocks, spongebob-case the first 50 chars
 // (deterministic FNV-1a bit stream, not randomness), sneer.
 // -----------------------------------------------------------------------------

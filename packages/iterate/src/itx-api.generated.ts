@@ -390,13 +390,13 @@ export interface Ai {
    * `unknown`. The optional third argument is the binding's own options object
    * — e.g. `{ gateway: { id: "default", skipCache: true } }` — passed through
    * to `env.AI.run`; its `gateway` wins over any constructor-provided one.
-   * A `fake/*` model never reaches Cloudflare: the live interceptor installed
+   * A `intercepted/*` model never reaches Cloudflare: the live interceptor installed
    * with `intercept(handler)` serves it, and its return value comes back
    * verbatim (no handler installed → a loud error). */
   run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T>;
-  /** Install a live handler for `fake/*` models (last writer wins); returns a
+  /** Install a live handler for `intercepted/*` models (last writer wins); returns a
    * release handle. The deterministic-testing lane: an agent configured with
-   * `model: "fake/<x>"` and every `run("fake/<x>", …)` call are served by your
+   * `model: "intercepted/<x>"` and every `run("intercepted/<x>", …)` call are served by your
    * handler — an in-memory function on YOUR side of the connection — instead
    * of a real provider. The handler receives
    * `{ source: "agent-turn" | "ai-run", model, body }`; for agent turns it
@@ -2521,7 +2521,7 @@ export type CfAiRunOptions = {
 };
 
 /**
- * Live replacement for fake/* model calls. For `source: "agent-turn"` the
+ * Live replacement for intercepted/* model calls. For `source: "agent-turn"` the
  * return value must be assistant text — a plain string, or
  * `{ text, usage? }` to also report token usage (report inflated numbers to
  * drive compaction deterministically). For `source: "ai-run"` the return value
@@ -4482,7 +4482,7 @@ export type LiveStatePatch =
   | { fields?: Record<string, LiveStatePatch>; drop?: string[] };
 
 /**
- * One fake/* invocation as the interceptor sees it. `source` discriminates the
+ * One intercepted/* invocation as the interceptor sees it. `source` discriminates the
  * two egress paths: an agent conversation turn carries the provider-neutral
  * chat projection, a direct `itx.ai.run` call carries the caller's body
  * argument verbatim (honestly `unknown` — the caller chose its shape).

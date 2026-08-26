@@ -1,4 +1,4 @@
-// The fake/* model lane through the agent processor: attempts on a fake/*
+// The intercepted/* model lane through the agent processor: attempts on a intercepted/*
 // model are served by the host's consultAiInterceptor dep (in production, the
 // project's live itx.ai.intercept handler) instead of any provider dial. Same
 // generic step harness as agent-processor.test.ts; the interceptor here is an
@@ -14,19 +14,19 @@ const REQUESTED = "events.iterate.com/agent/llm-request-requested";
 const SETTLED = "events.iterate.com/agent/llm-request-settled";
 const RESPONSE_CHUNK = "events.iterate.com/agent/llm-response-chunk";
 
-test("a fake/* turn is served by the interceptor: prompt in, text out, usage estimated, chunks journaled", async () => {
+test("a intercepted/* turn is served by the interceptor: prompt in, text out, usage estimated, chunks journaled", async () => {
   const seen: { source: string; model: string; body: { messages: { content: string }[] } }[] = [];
-  const h = makeFakeModelHarness(async (input) => {
+  const h = makeInterceptedModelHarness(async (input) => {
     seen.push(input as never);
     return "well well well, look who needs a deterministic model";
   });
 
   await h.play(
-    ["append", ...newFakeAgentEvents("fake/main"), userMessage("Hello fake model")],
+    ["append", ...newFakeAgentEvents("intercepted/main"), userMessage("Hello fake model")],
     ["advanceTime", 10_000],
   );
 
-  expect(seen).toMatchObject([{ source: "agent-turn", model: "fake/main" }]);
+  expect(seen).toMatchObject([{ source: "agent-turn", model: "intercepted/main" }]);
   expect(seen[0]!.body.messages.some((m) => m.content.includes("Hello fake model"))).toBe(true);
 
   const requested = h.events(REQUESTED)[0]!;
@@ -43,7 +43,7 @@ test("a fake/* turn is served by the interceptor: prompt in, text out, usage est
   ]);
   // Usage was estimated from text length (~4 chars/token), not invented by the handler.
   expect(h.events("events.iterate.com/agent/token-usage-reported")).toMatchObject([
-    { payload: { model: "fake/main", outputTokens: 13 } },
+    { payload: { model: "intercepted/main", outputTokens: 13 } },
   ]);
   // Word-split chunk delivery kept the journaled streaming lane exercised.
   const chunks = h.events(RESPONSE_CHUNK);
@@ -51,13 +51,13 @@ test("a fake/* turn is served by the interceptor: prompt in, text out, usage est
 });
 
 test("a handler returning { text, usage } reports that usage verbatim", async () => {
-  const h = makeFakeModelHarness(async () => ({
+  const h = makeInterceptedModelHarness(async () => ({
     text: "counted precisely",
     usage: { inputTokens: 123_456, outputTokens: 7 },
   }));
 
   await h.play(
-    ["append", ...newFakeAgentEvents("fake/main"), userMessage("count your tokens")],
+    ["append", ...newFakeAgentEvents("intercepted/main"), userMessage("count your tokens")],
     ["advanceTime", 10_000],
   );
 
@@ -66,29 +66,29 @@ test("a handler returning { text, usage } reports that usage verbatim", async ()
   ]);
 });
 
-test("a fake/* model with no interceptor lane fails the attempt with the canonical loud error", async () => {
+test("a intercepted/* model with no interceptor lane fails the attempt with the canonical loud error", async () => {
   // No consultAiInterceptor dep at all — the bare-host analogue of "nothing
   // installed": the attempt must fail recorded, not hang or dial anything.
-  const h = makeFakeModelHarness(undefined);
+  const h = makeInterceptedModelHarness(undefined);
 
   await h.play(
-    ["append", ...newFakeAgentEvents("fake/anything"), userMessage("anyone there?")],
+    ["append", ...newFakeAgentEvents("intercepted/anything"), userMessage("anyone there?")],
     ["advanceTime", 10_000],
   );
 
   expect(h.events(SETTLED)).toMatchObject([{ payload: { result: { status: "failed" } } }]);
   expect((h.events(SETTLED)[0]!.payload as any).result.errorMessage).toContain(
-    'No AI interceptor installed for "fake/anything"',
+    'No AI interceptor installed for "intercepted/anything"',
   );
 });
 
 test("a rejecting interceptor (handler died with its session) fails the attempt recorded", async () => {
-  const h = makeFakeModelHarness(async () => {
+  const h = makeInterceptedModelHarness(async () => {
     throw new Error("RPC session lost");
   });
 
   await h.play(
-    ["append", ...newFakeAgentEvents("fake/main"), userMessage("still there?")],
+    ["append", ...newFakeAgentEvents("intercepted/main"), userMessage("still there?")],
     ["advanceTime", 10_000],
   );
 
@@ -97,7 +97,7 @@ test("a rejecting interceptor (handler died with its session) fails the attempt 
   ]);
 });
 
-test("callLlm outranks the fake lane: a scripted transport takes fake/* attempts too", async () => {
+test("callLlm outranks the interception lane: a scripted transport takes intercepted/* attempts too", async () => {
   // Unit suites script EVERYTHING through callLlm regardless of model string;
   // the fake branch must sit behind that seam, not in front of it.
   let interceptorCalls = 0;
@@ -115,7 +115,7 @@ test("callLlm outranks the fake lane: a scripted transport takes fake/* attempts
   });
 
   await h.play(
-    ["append", ...newFakeAgentEvents("fake/main"), userMessage("who answers?")],
+    ["append", ...newFakeAgentEvents("intercepted/main"), userMessage("who answers?")],
     ["advanceTime", 10_000],
   );
 
@@ -158,8 +158,10 @@ function userMessage(content: string): AgentEventInput {
   };
 }
 
-/** Harness with NO callLlm (so the fake lane is reachable) and the given interceptor consult. */
-function makeFakeModelHarness(consultAiInterceptor: AgentProcessorDeps["consultAiInterceptor"]) {
+/** Harness with NO callLlm (so the interception lane is reachable) and the given interceptor consult. */
+function makeInterceptedModelHarness(
+  consultAiInterceptor: AgentProcessorDeps["consultAiInterceptor"],
+) {
   return makeProcessorHarness<AgentProcessorContract>({
     createProcessor: (deps) =>
       new AgentProcessor({

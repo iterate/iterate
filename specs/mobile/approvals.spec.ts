@@ -1,6 +1,6 @@
 // The phone approver, end to end in a browser — and entirely INSIDE the
 // conversation: a plain chat message ("Run the approve-me burst") reaches an
-// agent on the fake/* lane, whose model is THIS spec's itx.ai.intercept
+// agent on the intercepted/* lane, whose model is THIS spec's itx.ai.intercept
 // handler pairing each command with a codemode script. The script runs a
 // burst deterministically, the requests park at the egress door as ONE
 // batch, and the approval dialog appears in-thread where the human is
@@ -10,7 +10,7 @@
 // thread.
 //
 // DETERMINISTIC turns, asserted from the journal: every llm-request in the
-// thread names model fake/driver — a model no real provider can serve, only
+// thread names model intercepted/driver — a model no real provider can serve, only
 // the handler in this process. The scripts narrate their own outcomes with
 // `itx.chat.sendMessage(...)` and return nothing, so each turn's script ends
 // the loop and no second request follows.
@@ -137,7 +137,7 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     await page.getByText("New chat").click();
     await page.getByPlaceholder("Message").waitFor();
     const agentPath = decodeURIComponent(new URL(page.url()).searchParams.get("path")!);
-    // Point the chat's agent at the fake lane (an ordinary journaled config
+    // Point the chat's agent at the interception lane (an ordinary journaled config
     // event) and drop the newborn debounce so each command's turn opens fast.
     // The client defers creation to the first message, so birth the agent
     // explicitly first (get-or-create, same door the client uses).
@@ -145,7 +145,7 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     await agent.create();
     await agent.append({
       type: "events.iterate.com/agent/configured",
-      payload: { config: { llm: { model: "fake/driver" }, llmRequestDebounceMs: 250 } },
+      payload: { config: { llm: { model: "intercepted/driver" }, llmRequestDebounceMs: 250 } },
     });
 
     // Each script narrates its own outcome (success or error) and returns
@@ -170,7 +170,7 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
       ].join("\n");
 
     // The "model": commands pair with scripts right here, in-test, over the
-    // live capnweb hop — the fake/* lane this repo grew for exactly this.
+    // live capnweb hop — the intercepted/* lane this repo grew for exactly this.
     const lanes: Record<string, { marker: string; statusUpdates: object[] }> = {
       "Run the approve-me burst": {
         marker: "approve-me",
@@ -266,14 +266,14 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
 
     // The headline guarantee, journal-certified: the ENTIRE conversation —
     // two commands, two bursts, two decisions, two narrated outcomes — opened
-    // exactly two LLM requests, both on fake/driver, a model only THIS spec's
+    // exactly two LLM requests, both on intercepted/driver, a model only THIS spec's
     // handler can serve. Nothing nondeterministic ever ran.
     const llmRequests = await itx.streams.get(agentPath).getEvents({
       eventTypes: ["events.iterate.com/agent/llm-request-requested"],
     });
     expect(llmRequests.map((event) => (event.payload as { model: string }).model)).toEqual([
-      "fake/driver",
-      "fake/driver",
+      "intercepted/driver",
+      "intercepted/driver",
     ]);
 
     // A decision releases the script immediately, while the notification

@@ -1,24 +1,24 @@
 // =============================================================================
-// The fake/* model lane: definitions shared by both LLM egress paths.
+// The intercepted/* model lane: definitions shared by both LLM egress paths.
 // =============================================================================
-// `fake/<name>` models are never dialed to a real provider. They are served by
+// `intercepted/<name>` models are never dialed to a real provider. They are served by
 // a LIVE interceptor — a function installed via `itx.ai.intercept(handler)`,
 // typically living in a test process and reached back over its capnweb
 // connection. The lane exists identically in every environment: there is no
-// gate, no config, and no credential, and a fake/* call with no interceptor
+// gate, no config, and no credential, and a intercepted/* call with no interceptor
 // installed fails loudly. The interception is scoped to this namespace on
 // purpose — a turn whose journal says `openai/*` can never have been served by
 // a handler.
 
 /** The model-name namespace served by the live AI interceptor. */
-const FAKE_MODEL_PREFIX = "fake/";
+const INTERCEPTED_MODEL_PREFIX = "intercepted/";
 
-export function isFakeModel(model: string): boolean {
-  return model.startsWith(FAKE_MODEL_PREFIX);
+export function isInterceptedModel(model: string): boolean {
+  return model.startsWith(INTERCEPTED_MODEL_PREFIX);
 }
 
 /**
- * One fake/* invocation as the interceptor sees it. `source` discriminates the
+ * One intercepted/* invocation as the interceptor sees it. `source` discriminates the
  * two egress paths: an agent conversation turn carries the provider-neutral
  * chat projection, a direct `itx.ai.run` call carries the caller's body
  * argument verbatim (honestly `unknown` — the caller chose its shape).
@@ -38,7 +38,7 @@ export type ProjectAiInterceptorInput =
     };
 
 /**
- * Live replacement for fake/* model calls. For `source: "agent-turn"` the
+ * Live replacement for intercepted/* model calls. For `source: "agent-turn"` the
  * return value must be assistant text — a plain string, or
  * `{ text, usage? }` to also report token usage (report inflated numbers to
  * drive compaction deterministically). For `source: "ai-run"` the return value
@@ -52,7 +52,7 @@ export interface ProjectAiIntercept extends Disposable {
 }
 
 /** What an agent-turn attempt needs back from the interceptor. */
-type FakeModelTurnResult = {
+type InterceptedTurnResult = {
   text: string;
   usage: {
     inputTokens: number;
@@ -68,11 +68,11 @@ type FakeModelTurnResult = {
  * deterministic text-length estimate (~4 chars/token) so token-usage events
  * and the compaction trigger stay plausible without the handler's help.
  */
-export function normalizeFakeModelTurnResult(input: {
+export function normalizeInterceptedTurnResult(input: {
   result: unknown;
   model: string;
   inputCharacters: number;
-}): FakeModelTurnResult {
+}): InterceptedTurnResult {
   const { result, model } = input;
   const asObject =
     typeof result === "string"
@@ -84,7 +84,7 @@ export function normalizeFakeModelTurnResult(input: {
     );
   }
   const estimate = (characters: number) => Math.ceil(characters / 4);
-  const usage = asObject.usage as FakeModelTurnResult["usage"] | undefined;
+  const usage = asObject.usage as InterceptedTurnResult["usage"] | undefined;
   return {
     text: asObject.text,
     usage: usage || {
@@ -94,9 +94,9 @@ export function normalizeFakeModelTurnResult(input: {
   };
 }
 
-/** The error every path raises when a fake/* model has no live interceptor. */
+/** The error every path raises when a intercepted/* model has no live interceptor. */
 export function noAiInterceptorError(model: string): Error {
   return new Error(
-    `No AI interceptor installed for "${model}". Models under "${FAKE_MODEL_PREFIX}" are served by a live handler: itx.ai.intercept(handler). The handler died with its session, or was never installed.`,
+    `No AI interceptor installed for "${model}". Models under "${INTERCEPTED_MODEL_PREFIX}" are served by a live handler: itx.ai.intercept(handler). The handler died with its session, or was never installed.`,
   );
 }

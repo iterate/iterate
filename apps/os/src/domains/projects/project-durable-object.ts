@@ -14,7 +14,7 @@ import {
   type ProjectAiIntercept,
   type ProjectAiInterceptor,
   type ProjectAiInterceptorInput,
-} from "../../lib/fake-models.ts";
+} from "../../lib/model-interception.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { LiveStatePagers } from "../live-state-pager.ts";
 import { deepRetainRpcStubs } from "../capability-host/live-capability.ts";
@@ -66,7 +66,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
   #egressInterceptor?: ReturnType<typeof deepRetainRpcStubs<ProjectEgressInterceptor>>;
-  // The fake/* model lane's live handler slot (itx.ai.intercept) — same
+  // The intercepted/* model lane's live handler slot (itx.ai.intercept) — same
   // last-writer-wins, session-bound semantics as the egress interceptor.
   #aiInterceptor?: ReturnType<typeof deepRetainRpcStubs<ProjectAiInterceptor>>;
   // Last time #egressRules paid a facade snapshot — bounds rules staleness to ~5s.
@@ -823,7 +823,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * Serve one fake/* model invocation through the live AI interceptor. Both
+   * Serve one intercepted/* model invocation through the live AI interceptor. Both
    * egress paths (`itx.ai.run` in the isolate, agent turns in the processor
    * facet) land here, so the handler slot and its last-writer-wins story live
    * in exactly one place. No interceptor → the canonical loud error; the

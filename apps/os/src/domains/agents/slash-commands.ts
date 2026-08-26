@@ -16,7 +16,7 @@
 // TypeScript as a side-band action). It was removed in favor of the two
 // surfaces that do its jobs better: operators run
 // `itx.agents.get(path).capabilityHost.runScript(...)` from the REPL/CLI, and
-// tests script whole conversations through the fake/* model lane
+// tests script whole conversations through the intercepted/* model lane
 // (`itx.ai.intercept`).
 
 import { z } from "zod";
