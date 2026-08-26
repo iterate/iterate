@@ -1,5 +1,5 @@
 ---
-status: ready
+status: done
 size: medium
 ---
 
@@ -7,9 +7,9 @@ size: medium
 
 ## Status
 
-**Done, both rounds.** Misha ran round one on a real phone and sent four
-pieces of feedback; all four are in (see "Round two" at the bottom). Round
-one is below and unchanged.
+**Done, both rounds, CI green.** Misha ran round one on a real phone and
+sent four pieces of feedback; all four are in (see "Round two" at the
+bottom). Round one is below and unchanged.
 
 **Round one: done.** The strip ships, the browser spec drives it end to end (tap →
 attach → note on /notes carrying the photo), and every lane is green:
