@@ -1264,7 +1264,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       facetReplays = this.#fireDueFacetAlarms(alarmInfo);
       this.#reconcileCommittedState({ alarmTurn: true });
     });
-    const failures = facetReplays === undefined ? [] : await facetReplays;
+    const failures = await (facetReplays || []);
     if (failures.length > 0) {
       throw new Error(
         `facet alarm replay failed for ${failures.map((failure) => failure.facet).join(", ")}; ` +
@@ -1539,18 +1539,30 @@ export class StreamDurableObject extends DurableObject<Env> {
    * keepalive revival desire until an unrelated request happened to boot the
    * DO two minutes later). A failed alarm invocation keeps the platform's
    * own alarm retry owed — platform retries survive resets.
+   *
+   * A RETRY fire (`alarmInfo.isRetry`) fans out even when the slot is empty
+   * or not yet due. The slot delete above and the failure path's re-merge
+   * commit independently (an await separates them), so a death in that gap
+   * leaves the platform retry facing an empty slot; trusting the slot there
+   * would resolve the retry and end the chain with nothing armed — the same
+   * strand again. Replays are level-triggered no-ops when nothing is owed,
+   * and a freshly booted facet re-issues its own persisted desire through
+   * the proxy at construction, so the poke rebuilds the slot from the
+   * facets' durable records. Retry fires only follow a failed invocation,
+   * so the extra pokes are bounded.
    */
   #fireDueFacetAlarms(
     alarmInfo?: AlarmInvocationInfo,
   ): Promise<FacetAlarmReplayFailure[]> | undefined {
     const dueAtMs = this.#readFacetAlarmAtMs();
-    if (dueAtMs === null) return undefined;
-    if (dueAtMs > Date.now()) {
+    const due = dueAtMs !== null && dueAtMs <= Date.now();
+    if (due) {
+      this.ctx.storage.kv.delete(FACET_ALARM_KV_KEY);
+    } else if (dueAtMs !== null) {
       // A fresh incarnation's armer memory is empty; keep the slot armed.
       this.#alarmArmer.armNoLaterThan(dueAtMs);
-      return undefined;
     }
-    this.ctx.storage.kv.delete(FACET_ALARM_KV_KEY);
+    if (!due && alarmInfo?.isRetry !== true) return undefined;
     const facetNames = Object.entries(
       this.#coreProcessorState.subscriptions.outbound.byName,
     ).flatMap(([name, entry]) => {

@@ -60,6 +60,40 @@ test("a successful facet alarm replay resolves the alarm and leaves the facet sl
   harness.context.close();
 });
 
+test("a platform retry fire replays into facets even when the shared slot is empty", async () => {
+  const harness = await bootStreamWithAgentFacet();
+
+  // The lost-merge window: the slot delete committed but the failure path's
+  // re-merge died with the incarnation. The platform retry must not trust
+  // the empty slot — it pokes every facet so their durable records re-derive
+  // whatever is owed.
+  await expect(
+    harness.stream.alarm({ isRetry: true, retryCount: 1 } as AlarmInvocationInfo),
+  ).resolves.toBeUndefined();
+  expect(harness.facet.handleAlarmCalls).toBe(1);
+
+  // A non-retry fire with an empty slot stays a no-op — ordinary delivery
+  // alarms must not poke facets on every append.
+  await expect(harness.stream.alarm()).resolves.toBeUndefined();
+  expect(harness.facet.handleAlarmCalls).toBe(1);
+
+  await harness.context.settle();
+  harness.context.close();
+});
+
+test("a failing facet keeps the platform retry chain alive across retry fires", async () => {
+  const harness = await bootStreamWithAgentFacet();
+  harness.facet.handleAlarmError = new Error("Durable Object reset because its code was updated");
+
+  await expect(
+    harness.stream.alarm({ isRetry: true, retryCount: 2 } as AlarmInvocationInfo),
+  ).rejects.toThrow(/facet alarm replay failed for agent/);
+  expect(harness.facet.handleAlarmCalls).toBe(1);
+
+  await harness.context.settle();
+  harness.context.close();
+});
+
 test("a not-yet-due facet desire re-arms without replaying and the alarm resolves", async () => {
   const harness = await bootStreamWithAgentFacet();
 
