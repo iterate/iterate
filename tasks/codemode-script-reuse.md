@@ -7,11 +7,12 @@ size: medium
 
 ## Status summary
 
-POC implemented and proven live: a real agent on local dev reused a 2.4k-char
-Pollard's-rho script through a 273-char reuse script on the follow-up request.
-Unit tests, an e2e, and the eval file are in. Remaining: the Codex-run eval
-result (running), reviewer judgement on the prompt-ceiling raise and the
-`done`-row contract bump.
+Done, pending review. The Codex-run eval **passed on round 3**: a real agent
+on local dev reused a 2,408-char Pollard's-rho script through a 265-char
+reuse script on the follow-up request, with no re-derived algorithm. Rounds 1
+and 2 each exposed a real gap (documented below) and drove product guards
+that made round 3 converge. Reviewer judgement wanted on: the prompt-ceiling
+raise (4250 → 4350) and the `done`-row contract bump (0.6.0 → 0.7.0).
 
 ## Problem
 
@@ -96,8 +97,11 @@ Supporting changes:
   local dev — no model turns_
 - [x] `evals/script-reuse/eval.md` written _10-digit-prime semiprimes force a
   real algorithm; criteria demand the reuse mechanism, not just answers_
-- [ ] eval run via `pnpm eval script-reuse` _(Codex run in progress; direct
-  live probes of the same flow already passed — see log)_
+- [x] eval run via `pnpm eval script-reuse` _passed on round 3
+  (`evals/runs.ignoreme/script-reuse/1787769275338/`): reuse mechanism
+  confirmed, 265 vs 2,408 chars, answers verified independently. Rounds 1–2
+  failed and each produced a product guard (failed-source rejection;
+  statement/template content rejection)_
 
 ## Assumptions made (user was AFK)
 
@@ -135,3 +139,26 @@ Supporting changes:
   hardcoded message prose.
 - Prompt ceiling: bullet compacted twice; final overage was exactly 1 char
   (17401/17400) before the last trim landed it at the raised ceiling.
+- Codex eval round 1: FAILED — the model's first attempt hit the `n` name
+  collision, `results[0]` shifted to that failed attempt's error row, and the
+  model pointed the next attempts at its own failed reuse script, nesting
+  reuse-of-reuse until it rewrote the algorithm. Guard added: a failed run is
+  rejected as a reuse source with the fix in the message.
+- Codex eval round 2: FAILED — splice-thinking: content was a whole
+  `const n = 123n;` line (child died with `n is not defined`) and a
+  template-string interior. Guards added: statement-shaped and
+  template-interior content rejected with the value-substitution recipe.
+- Codex eval round 3: SUCCESS — two failed attempts (caught by the new
+  teaching errors), one small results inspection, then a 265-char reuse
+  script; old-number prose corrected in a follow-up message per criteria.
+
+## Follow-up ideas (deliberately out of scope)
+
+- Suggest a free parameter name in the collision error (models pick `n`
+  first every time; a suggestion would save one corrective round).
+- Precise per-parameter vars typing via the `typeof`-placeholder trick from
+  the original sketch.
+- A `contains`/search addressing mode so the agent can name a past script by
+  content rather than offset.
+- `pnpm cli itx run` and the browser REPL don't manufacture the harness
+  callable — the helper exists only in capability-host script executions.
