@@ -19,15 +19,23 @@ export function isFakeModel(model: string): boolean {
 
 /**
  * One fake/* invocation as the interceptor sees it. `source` discriminates the
- * two egress paths — an agent conversation turn (`body` is `{ messages }`, the
- * provider-neutral projection) or a direct `itx.ai.run` call (`body` is the
- * caller's argument, verbatim).
+ * two egress paths: an agent conversation turn carries the provider-neutral
+ * chat projection, a direct `itx.ai.run` call carries the caller's body
+ * argument verbatim (honestly `unknown` — the caller chose its shape).
  */
-export type ProjectAiInterceptorInput = {
-  source: "agent-turn" | "ai-run";
-  model: string;
-  body: unknown;
-};
+export type ProjectAiInterceptorInput =
+  | {
+      source: "agent-turn";
+      model: string;
+      body: {
+        messages: { role: "system" | "developer" | "user" | "assistant"; content: string }[];
+      };
+    }
+  | {
+      source: "ai-run";
+      model: string;
+      body: unknown;
+    };
 
 /**
  * Live replacement for fake/* model calls. For `source: "agent-turn"` the

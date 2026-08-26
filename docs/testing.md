@@ -203,6 +203,17 @@ Draft proposal for the two gaps, keeping vanilla CLIs:
   specs side if a spec ever needs a dimension; don't build it until one
   does.
 
+The free-and-deterministic alternative to paying for turns is the `fake/*`
+model lane: `itx.ai.intercept(handler)` installs a live handler (an in-memory
+function in the test process, session-bound over capnweb) that serves every
+model under `fake/` — both `itx.ai.run("fake/…")` calls and full agent
+conversation turns for agents configured with `model: "fake/<x>"`. The whole
+loop runs for real — debounce, journaled llm-request events, chunk streaming,
+codemode, chat reply — with the test scripting each response. Non-fake models
+are never interceptable, so a journaled `openai/*` turn is always the real
+provider. Reach for a paid `.llm.` test only when the point IS real-model
+integration.
+
 Open questions for the next grilling round: is the filename the right home
 for cost (vs a lint-enforced import rule alone)? Should third-party reach
 be visible in filenames too, or is env-gating enough? Does "slow" deserve

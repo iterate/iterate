@@ -2179,7 +2179,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ProjectAiInterceptorInput",
     kind: "typeAlias",
     sourceText:
-      '/**\n * One fake/* invocation as the interceptor sees it. `source` discriminates the\n * two egress paths — an agent conversation turn (`body` is `{ messages }`, the\n * provider-neutral projection) or a direct `itx.ai.run` call (`body` is the\n * caller\'s argument, verbatim).\n */\nexport type ProjectAiInterceptorInput = {\n  source: "agent-turn" | "ai-run";\n  model: string;\n  body: unknown;\n};',
+      '/**\n * One fake/* invocation as the interceptor sees it. `source` discriminates the\n * two egress paths: an agent conversation turn carries the provider-neutral\n * chat projection, a direct `itx.ai.run` call carries the caller\'s body\n * argument verbatim (honestly `unknown` — the caller chose its shape).\n */\nexport type ProjectAiInterceptorInput =\n  | {\n      source: "agent-turn";\n      model: string;\n      body: {\n        messages: { role: "system" | "developer" | "user" | "assistant"; content: string }[];\n      };\n    }\n  | {\n      source: "ai-run";\n      model: string;\n      body: unknown;\n    };',
     summary: "One fake/* invocation as the interceptor sees it.",
     memberSummaries: {},
     referencedTypeNames: [],
