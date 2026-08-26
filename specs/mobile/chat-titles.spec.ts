@@ -1,18 +1,20 @@
 // Chat titles through the real phone-sized web build: a fresh chat starts as
 // its raw stream path (mobile/<timestamp> — all the client has before the
-// agent's first turn), then a `/script` maintains the agent status exactly
-// the way a real agent turn would (AGENT_SUMMARY_INSTRUCTION appends
-// agent/summary-updated) — and the title takes over both surfaces this
-// branch teaches to read it: the thread header live off the event stream,
-// and the chat list row via the title now carried by itx.agents.list().
+// agent's first turn), then an admin itx appends the same summary-updated
+// fact a real agent turn opens with (AGENT_SUMMARY_INSTRUCTION) — and the
+// title takes over both surfaces this branch teaches to read it: the thread
+// header live off the event stream, and the chat list row via the title now
+// carried by itx.agents.list().
 //
-// ZERO model turns: the script returns nothing, so no context is appended
-// and no LLM request ever opens. Every event in the thread is deterministic.
+// ZERO model turns: no message is ever sent, no LLM request ever opens.
+// Every event in the thread is deterministic. (This used the retired
+// `/script` command before; the event under test is identical either way.)
 
-import { type Page } from "@playwright/test";
 import { spinnerWaiter } from "middlewright";
+import { connectItxReady } from "iterate/node";
 import { localOsDevServer } from "../../apps/os/scripts/dev.ts";
 import { signUpWithEmailOtp, uniqueSignupEmail } from "../test-support/email-otp-signup.ts";
+import { resolveAdminSecret } from "../test-support/forged-session.ts";
 import { test } from "../test-support/test.ts";
 
 const TITLE = "Refund sweep for March";
@@ -24,6 +26,7 @@ test("a chat wears its agent-set title in the thread header and chat list", asyn
   const projectSlug = `mobile-chat-titles-${Date.now().toString(36)}`;
 
   await signUpToProject(page, testInfo, osBaseUrl, projectSlug);
+  const projectId = new URL(page.url()).pathname.split("/")[2]!;
 
   // ── A brand-new chat: the only name that exists yet is the stream path,
   // worn by the thread header (react-navigation renders header titles with
@@ -37,19 +40,25 @@ test("a chat wears its agent-set title in the thread header and chat list", asyn
   const agentPath = `/agents/${pathFallback}`;
 
   // ── The agent's first turn, minus the model: append the same
-  // summary-updated fact a real turn opens with. Returning nothing keeps the
-  // thread deterministic — no settlement context, no LLM request.
-  await sendChatMessage(
-    page,
-    `/script await itx.agent.append({ type: "events.iterate.com/agent/summary-updated", payload: ${JSON.stringify(
-      { title: TITLE, activity: "Emailing customers about refunds" },
-    )} });`,
-  );
+  // summary-updated fact a real turn opens with. No message, no script — the
+  // thread stays empty and deterministic while the title machinery runs.
+  using itx = await connectItxReady({
+    auth: { type: "admin-secret", secret: await resolveAdminSecret() },
+    baseUrl: osBaseUrl,
+    projectId,
+  });
+  // The client defers agent creation to the first message; with no message in
+  // this spec, birth the agent explicitly (get-or-create, same door the
+  // client uses) before appending to it.
+  using agent = itx.agents.get(agentPath);
+  await agent.create();
+  await agent.append({
+    type: "events.iterate.com/agent/summary-updated",
+    payload: { title: TITLE, activity: "Emailing customers about refunds" },
+  });
 
   // The header reads the title live off the thread's own event stream — no
-  // refetch, no navigation. The working indicator spins while the script
-  // runs, so this wait rides real product UI. role=heading scopes it to the
-  // header: the sent /script bubble also contains the title string.
+  // refetch, no navigation. role=heading scopes the wait to the header.
   await page.getByRole("heading", { name: TITLE }).waitFor();
 
   // ── Back on the chat list (via the header back control — accessible name
@@ -72,16 +81,6 @@ test("a chat wears its agent-set title in the thread header and chat list", asyn
     },
   );
 });
-
-/** Type into the chat composer and send. `insertText` rather than `fill`:
- * RN-web's controlled multiline TextInput intermittently fails playwright
- * fill's post-check under the harness even when visible/enabled/editable all
- * probe true; typing through the focused element sidesteps that. */
-async function sendChatMessage(page: Page, message: string) {
-  await page.getByPlaceholder("Message").click();
-  await page.keyboard.insertText(message);
-  await page.getByRole("button", { name: "Send" }).click();
-}
 
 async function signUpToProject(
   page: test.Page,
