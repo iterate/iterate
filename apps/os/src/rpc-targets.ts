@@ -6096,10 +6096,26 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
         `Event at offset ${input.eventOffset} (type ${JSON.stringify(event.type)}) does not correspond to a journaled script run. Pass the offset of a script-run-requested or script-run-settled event (results[N].offset works), or of the assistant output that produced the script.`,
       );
     }
+    const sourceExecutionId = (requested.payload as { executionId: string }).executionId;
+    // A failed run is (almost) never the intended source — observed live: a
+    // rejected reuse attempt becomes results[0], the model points the next
+    // attempt at it, and the reuse chain eats its own tail. Fail loudly with
+    // the right fix instead. (A not-yet-settled run stays reusable.)
+    const settledEvent = await this.#stream.getEvent({
+      idempotencyKey: `capability-host/script-run-settled@${sourceExecutionId}`,
+    });
+    const settlement = (
+      settledEvent?.payload as { settlement?: { status: string; error?: string } }
+    )?.settlement;
+    if (settlement?.status === "failed") {
+      throw new Error(
+        `The script run at offset ${input.eventOffset} (${sourceExecutionId}) FAILED (${(settlement.error || "unknown error").slice(0, 200)}). Reuse a run that succeeded — in the results array, pick the row of the original successful run, not a failed reuse attempt.`,
+      );
+    }
     const { code } = requested.payload as { code: string };
     return {
       ...reparameterizeScript({ code, parameters: input.parameters }),
-      sourceExecutionId: (requested.payload as { executionId: string }).executionId,
+      sourceExecutionId,
     };
   }
 

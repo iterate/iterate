@@ -64,5 +64,41 @@ test(
         }),
     );
     expect(second.success()).toEqual(["101", "103"]);
+
+    // A failed run must be rejected as a reuse source: live agents were
+    // observed pointing the next attempt at their own failed attempt
+    // (results[0] shifts to the error row) and nesting until they gave up.
+    const failure = await measurePhase("run a failing script", "operation", () =>
+      itxScript(itx.capabilityHost)
+        .execute(async (_itx) => {
+          throw new Error("deliberate failure");
+        })
+        .then(() => "unexpectedly succeeded")
+        .catch((error: Error) => String(error)),
+    );
+    expect(failure).toContain("deliberate failure");
+    const failedSettle = await measurePhase("find the failed settlement", "assertion", async () => {
+      const settled = await itx.streams.get("/").getEvents({
+        eventTypes: ["events.iterate.com/capability-host/script-run-settled"],
+        limit: 100,
+      });
+      return settled.findLast((e: any) => e.payload?.settlement?.status === "failed");
+    });
+    expect(failedSettle).toBeDefined();
+    const reuseOfFailed = await measurePhase("reuse the failed run", "operation", () =>
+      itxScript(itx.capabilityHost)
+        .context<ScriptReuseSurface>()
+        .vars({ eventOffset: failedSettle!.offset })
+        .execute(async (itxInScript, vars) => {
+          return await itxInScript.previousScriptAsHelperFunction({
+            eventOffset: vars.eventOffset,
+            parameters: [],
+          });
+        })
+        .then(() => "unexpectedly succeeded")
+        .catch((error: Error) => String(error)),
+    );
+    expect(reuseOfFailed).toContain("FAILED");
+    expect(reuseOfFailed).toContain("Reuse a run that succeeded");
   },
 );
