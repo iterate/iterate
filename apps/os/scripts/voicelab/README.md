@@ -36,6 +36,7 @@ for width.
 | `bench-frame`            | ephemeral  | transport bench traffic                                                                                                                                                                                                                      |
 | `utterance-transcript`   | durable    | `{ conversationId, text }` — the provider's transcription of one finished listener turn                                                                                                                                                      |
 | `answer-transcript`      | durable    | `{ conversationId, text, cancelled? }` — one finished answer, in words; `cancelled` marks a barged answer whose text was generated but not necessarily heard                                                                                 |
+| `colleague-status`       | durable    | `{ activity?, title?, waitingFor? }` — the colleague's own `agent/summary-updated` narration, forwarded by a copy-to-stream subscription its mint installs; whispered to the live session as quiet context, folded into the reconnect brief  |
 
 The two transcript events (contract 13.0.0) are the stream's only readable
 record of what was said — `pnpm cli voicelab transcript` prints them — and

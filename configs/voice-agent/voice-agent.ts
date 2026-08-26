@@ -776,6 +776,16 @@ const VoiceState = z.object({
   transcript: z
     .array(z.strictObject({ role: z.enum(["listener", "assistant"]), text: z.string() }))
     .default([]),
+  /**
+   * The colleague's latest self-reported status, folded from the forwarded
+   * `colleague-status` events. `waitingFor` null means mid-task — the state
+   * in which a fresh session's briefing warns that a note is still being
+   * worked; "user_input" means the desk is idle.
+   */
+  colleagueStatus: z
+    .strictObject({ activity: z.string(), waitingFor: z.string().nullable() })
+    .nullable()
+    .default(null),
   call: z
     .object({
       conversationId: z.string(),
@@ -859,7 +869,15 @@ export const VoiceAgentContract = defineProcessorContract({
    * every fresh provider session, so the reconnect the idle deadline
    * manufactures no longer wipes the fast half's memory. Clean break as
    * ever. */
-  version: "13.0.0",
+  /* 14.0.0: the colleague's progress reaches the call — the mint installs a
+   * copy-to-stream subscription that transforms the colleague's
+   * agent/summary-updated feed into `colleague-status` events on this
+   * stream; the fold keeps the latest, the live session hears about changes
+   * as quiet context items, and the reconnect briefing can say a note is
+   * still being worked (which is what stops re-asks). Streams installed
+   * before this bump get the new delivery filter on their next setup run.
+   * Clean break as ever. */
+  version: "14.0.0",
   description: "Runs a voice call in the stream's own Durable Object, one flush watermark deep.",
   stateSchema: VoiceState,
   events: {
@@ -988,6 +1006,29 @@ export const VoiceAgentContract = defineProcessorContract({
     },
 
     /*
+     * THE COLLEAGUE'S OWN NARRATION, forwarded. Every agent is required to
+     * append `agent/summary-updated` beside its work — the same feed the web
+     * UI renders as the pending status — and the colleague's copy of it is
+     * transformed onto this stream by the copy-to-stream subscription the
+     * mint installs (see #noteToColleague). Nobody polls anybody: statuses
+     * arrive only when the colleague actually does something. The fast half
+     * reads them silently (a quiet context item, never a spoken
+     * announcement), so "what's it doing?" gets "it's running the numbers"
+     * instead of vamping — and a reconnect's briefing can say a note is
+     * still being worked, which is what stops the re-ask duplication.
+     */
+    "events.iterate.com/voice-agent/colleague-status": {
+      description:
+        "One change of the colleague's self-reported status, copied (transformed) from its " +
+        'stream\'s agent/summary-updated feed. `waitingFor` of "user_input" means idle.',
+      payloadSchema: z.looseObject({
+        activity: z.string().optional(),
+        title: z.string().optional(),
+        waitingFor: z.string().nullable().optional(),
+      }),
+    },
+
+    /*
      * THE SPEAKER LANE. Two events, and between them the device's entire buffer
      * policy: play frames in sequence order, and throw away anything at or
      * below a watermark.
@@ -1062,6 +1103,10 @@ export const VoiceAgentContract = defineProcessorContract({
      * eviction — processEvent has no arm for them on purpose. */
     "events.iterate.com/voice-agent/utterance-transcript",
     "events.iterate.com/voice-agent/answer-transcript",
+    /* Appended by the copy-to-stream subscription on the colleague's stream,
+     * never by this processor — consumed for the fold and the quiet
+     * injection. */
+    "events.iterate.com/voice-agent/colleague-status",
     /* The live half. Naming them is the whole opt-in — `"*"` never matches an
      * ephemeral event, so nobody gets this firehose by accident. */
     "events.iterate.com/voice-agent/ptt-start",
@@ -1426,6 +1471,13 @@ interface Dial {
    * mid-word. Runtime on purpose: evicted, the 60s idle deadline backstops.
    */
   hangUpAfterAnswerDrains: string | null;
+  /**
+   * The last colleague activity injected into THIS session, so a status the
+   * platform redelivers (or a patch that changes only `waitingFor`) is not
+   * whispered twice. Per dial, not per incarnation: a fresh session heard
+   * nothing yet, and its briefing already carries the folded status.
+   */
+  lastColleagueActivity: string | null;
   /** The answer in flight — replaced wholesale at `response.created`. */
   answer: Answer;
 }
@@ -1460,6 +1512,7 @@ const freshDial = (
   openToolCallIds: new Set(),
   followUpResponsePending: false,
   hangUpAfterAnswerDrains: null,
+  lastColleagueActivity: null,
   answer: freshAnswer(),
 });
 
@@ -1714,6 +1767,25 @@ export class VoiceAgentProcessor extends StreamProcessor<
                   : "",
               ),
             };
+
+      case "events.iterate.com/voice-agent/colleague-status": {
+        /* summary-updated is a PATCH — an absent field means "unchanged",
+         * so each side merges over the previous status rather than
+         * replacing it. A status that has never named an activity says
+         * nothing worth keeping. */
+        const activity = event.payload.activity ?? state.colleagueStatus?.activity;
+        if (activity === undefined) return state;
+        return {
+          ...state,
+          colleagueStatus: {
+            activity,
+            waitingFor:
+              event.payload.waitingFor === undefined
+                ? (state.colleagueStatus?.waitingFor ?? null)
+                : event.payload.waitingFor,
+          },
+        };
+      }
 
       default:
         return state;
@@ -1995,6 +2067,40 @@ export class VoiceAgentProcessor extends StreamProcessor<
        * that an earlier incarnation died owing. An arm here was the same
        * action twice behind one idempotency key. */
 
+      case "events.iterate.com/voice-agent/colleague-status": {
+        /*
+         * THE WHISPER. A status change reaches the live session as a quiet
+         * context item — no response.create, so the model never announces
+         * progress unprompted; it simply KNOWS, and "what's it doing?" gets
+         * a real answer. No dial (or a dial mid-handshake, whose #sendControl
+         * no-ops) loses nothing: the fold kept the status and the next
+         * session's briefing carries it.
+         */
+        const activity = event.payload.activity;
+        if (typeof activity !== "string" || activity === "") return;
+        const dial = this.#dial;
+        if (dial === null || dial.lastColleagueActivity === activity) return;
+        dial.lastColleagueActivity = activity;
+        this.#sendControl(
+          dial,
+          {
+            type: "conversation.item.create",
+            item: {
+              type: "message",
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: `[your thinking half's status: ${activity}]`,
+                },
+              ],
+            },
+          },
+          append,
+        );
+        return;
+      }
+
       case "events.iterate.com/voice-agent/conversation-ended": {
         /*
          * THE ARM THAT WAS DELETED AS DEAD, AND WHY IT IS BACK. Reduce nulls
@@ -2187,6 +2293,19 @@ export class VoiceAgentProcessor extends StreamProcessor<
                       /* The recap: a fresh provider session is a stranger,
                        * and the fold remembers so it does not have to be. */
                       ...(state.transcript.length > 0 ? [transcriptRecap(state.transcript)] : []),
+                      /* A note still on the colleague's desk survives the
+                       * reconnect too — saying so is what stops this session
+                       * re-sending the same note (measured: a reconnected
+                       * session re-asked and the duplicate answer was never
+                       * even deliverable). */
+                      ...(state.colleagueStatus !== null &&
+                      state.colleagueStatus.waitingFor === null
+                        ? [
+                            `Your careful half is mid-task right now — its latest status: ` +
+                              `"${state.colleagueStatus.activity}". Its reply will arrive as a ` +
+                              `bracketed note; do not send another note for the same request.`,
+                          ]
+                        : []),
                     ].join("\n\n"),
                   }),
                   /* The certificate's tools, declared verbatim; the GA shape
@@ -3099,25 +3218,62 @@ export class VoiceAgentProcessor extends StreamProcessor<
     runInBackground(async () => {
       try {
         const reply = await this.deps.withProject(async (project) => {
-          const agent = (
-            project as {
-              agents: {
-                get(path: string): {
-                  create(payload?: object): Promise<unknown>;
-                  append(event: {
-                    type: string;
-                    idempotencyKey: string;
-                    payload: object;
-                  }): Promise<unknown>;
-                  ask(input: { message: string; timeoutMs?: number }): Promise<{
-                    payload?: { message?: unknown };
-                  }>;
-                };
+          const typedProject = project as {
+            agents: {
+              get(path: string): {
+                create(payload?: object): Promise<unknown>;
+                append(event: {
+                  type: string;
+                  idempotencyKey: string;
+                  payload: object;
+                }): Promise<unknown>;
+                ask(input: { message: string; timeoutMs?: number }): Promise<{
+                  payload?: { message?: unknown };
+                }>;
               };
-            }
-          ).agents.get(this.#colleaguePath());
+            };
+            streams: {
+              get(path: string): {
+                append(event: {
+                  type: string;
+                  idempotencyKey: string;
+                  payload: object;
+                }): Promise<unknown>;
+              };
+            };
+          };
+          const agent = typedProject.agents.get(this.#colleaguePath());
           if (!this.#colleagueBriefed) {
             await agent.create({});
+            /*
+             * THE STATUS LANE. The colleague already narrates itself —
+             * `agent/summary-updated` is mandatory beside its work, and an
+             * itx script can append its own — so forwarding that feed is
+             * the whole feature: a copy-to-stream subscription on the
+             * colleague's stream, transformed into this contract's
+             * `colleague-status`, delivered here only when the colleague
+             * actually does something. Push, not poll — a poll loop would
+             * rebuild exactly the wakeup cost the dev-stats heartbeat was
+             * deleted for. `start: "now"` because history is not status.
+             */
+            await typedProject.streams.get(this.#colleaguePath()).append({
+              type: "events.iterate.com/stream/subscription-configured",
+              idempotencyKey: this.idempotencyKey("colleague-status-subscription"),
+              payload: {
+                name: "voice-colleague-status",
+                description: "Forward the colleague's progress narration to the voice call.",
+                filter: { eventTypes: ["events.iterate.com/agent/summary-updated"] },
+                receiver: {
+                  action: "copy-to-stream",
+                  receivingStreamPath: this.path,
+                  jsonataTransform:
+                    '{ "type": "events.iterate.com/voice-agent/colleague-status", ' +
+                    '"payload": { "activity": payload.activity, "title": payload.title, ' +
+                    '"waitingFor": payload.waitingFor } }',
+                  delivery: { start: "now", onFailingEvent: "halt" },
+                },
+              },
+            });
             await agent.append({
               type: "events.iterate.com/agents/context-added",
               idempotencyKey: this.idempotencyKey("colleague-brief"),

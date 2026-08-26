@@ -982,6 +982,7 @@ describe("tools on the birth certificate", () => {
     const gotten: string[] = [];
     const created: string[] = [];
     const briefs: { type: string; payload: { role?: string; content?: string } }[] = [];
+    const subscriptions: { path: string; type: string; payload: any }[] = [];
     const asked: string[] = [];
     let resolveReply!: (reply: { payload: { message: string } }) => void;
     h.projectRoot.current = {
@@ -1000,6 +1001,15 @@ describe("tools on the birth certificate", () => {
               return new Promise((resolve) => {
                 resolveReply = resolve;
               });
+            },
+          };
+        },
+      },
+      streams: {
+        get(path: string) {
+          return {
+            append: async (event: any) => {
+              subscriptions.push({ path, ...event });
             },
           };
         },
@@ -1040,6 +1050,20 @@ describe("tools on the birth certificate", () => {
      * same desk for every conversation the stream ever holds. */
     expect(gotten[0]).toBe("/agents/voice-notes/voice/test");
     expect(created).toEqual(["/agents/voice-notes/voice/test"]);
+    /* And the mint wires the status lane: the colleague's own narration is
+     * forwarded to this stream as colleague-status events. */
+    expect(subscriptions).toHaveLength(1);
+    expect(subscriptions[0]).toMatchObject({
+      path: "/agents/voice-notes/voice/test",
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: {
+        filter: { eventTypes: ["events.iterate.com/agent/summary-updated"] },
+        receiver: { action: "copy-to-stream", receivingStreamPath: "/agents/voice/test" },
+      },
+    });
+    expect(subscriptions[0]!.payload.receiver.jsonataTransform).toContain(
+      "voice-agent/colleague-status",
+    );
     /* Born briefed, as a system context item that triggers no turn. */
     expect(briefs[0]!.type).toBe("events.iterate.com/agents/context-added");
     expect(briefs[0]!.payload.role).toBe("system");
@@ -1099,6 +1123,7 @@ describe("tools on the birth certificate", () => {
           };
         },
       },
+      streams: { get: () => ({ append: async () => {} }) },
     };
     await callIsLive(h, CLIENT_TAKES_TURNS);
     h.provider.push({
@@ -1221,6 +1246,80 @@ describe("tools on the birth certificate", () => {
     expect(update.session.instructions).toContain("RESUMES an earlier conversation");
     expect(update.session.instructions).toContain("Listener: what is the capital of France?");
     expect(update.session.instructions).toContain("You: The capital of France is Paris.");
+  });
+
+  /*
+   * THE STATUS WHISPER. The colleague's own narration (forwarded onto this
+   * stream as colleague-status events) reaches the live session as a quiet
+   * context item — the model KNOWS what stage the work is at without ever
+   * announcing it unprompted — and the folded latest status survives into
+   * the next session's briefing, which is what tells a reconnect that its
+   * note is still being worked rather than lost.
+   */
+  it("colleague status whispers into the live session and briefs the reconnect", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-status",
+      payload: { activity: "running the factorization script" },
+    });
+    await h.settle();
+    const whispers = () =>
+      (
+        h.provider.sentOfType("conversation.item.create") as {
+          item: { type: string; content?: { text: string }[] };
+        }[]
+      ).filter((entry) => entry.item.content?.[0]?.text.startsWith("[your thinking half"));
+    expect(whispers()).toHaveLength(1);
+    expect(whispers()[0]!.item.content![0]!.text).toBe(
+      "[your thinking half's status: running the factorization script]",
+    );
+    /* Quiet on purpose: knowing is not announcing. */
+    expect(h.provider.sentOfType("response.create")).toHaveLength(0);
+
+    /* A redelivered or waitingFor-only patch is not whispered twice… */
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-status",
+      payload: { activity: "running the factorization script" },
+    });
+    await h.settle();
+    expect(whispers()).toHaveLength(1);
+    /* …but a CHANGED activity is. */
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-status",
+      payload: { activity: "writing up the answer" },
+    });
+    await h.settle();
+    expect(whispers()).toHaveLength(2);
+
+    /* The reconnect's briefing carries the folded status, mid-task framing
+     * and all — the line that stops a fresh session re-sending the note. */
+    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
+    await h.settle();
+    await h.advanceTime(2_000);
+    await h.settle();
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
+    const update = h.provider.sentOfType("session.update")[0] as {
+      session: { instructions?: string };
+    };
+    expect(update.session.instructions).toContain("mid-task right now");
+    expect(update.session.instructions).toContain('"writing up the answer"');
+    expect(update.session.instructions).toContain("do not send another note");
+
+    /* Once the colleague reports itself idle, the framing retires. */
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-status",
+      payload: { activity: "done — answer delivered", waitingFor: "user_input" },
+    });
+    await h.settle();
+    expect(h.state().colleagueStatus).toEqual({
+      activity: "done — answer delivered",
+      waitingFor: "user_input",
+    });
   });
 
   it("a press during the goodbye un-decides the hang-up", async () => {
