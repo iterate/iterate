@@ -90,9 +90,10 @@ export function ProjectWorkerHealthWarning({
   // A build failure and halted are the loud, red states; backoff-only is an
   // amber "events are piling up" heads-up.
   const severe = haltedCount > 0 || buildFailure !== null;
+  // Short enough for one sidebar line; the tooltip and sheet carry detail.
   const label =
     buildFailure !== null
-      ? "Project worker build failed"
+      ? "Worker build failed"
       : haltedCount > 0
         ? haltedCount === 1
           ? "Event delivery stopped"
@@ -121,8 +122,11 @@ export function ProjectWorkerHealthWarning({
                 )}
               >
                 <TriangleAlert className="motion-safe:animate-pulse" />
-                <span className="flex-1 font-medium">{label}</span>
-                <span className="text-xs opacity-70">Fix…</span>
+                {/* The LABEL truncates (the tooltip repeats it in full); the
+                    action affordance never does — and it carries no ellipsis,
+                    which read as accidental truncation next to a long label. */}
+                <span className="min-w-0 flex-1 truncate font-medium">{label}</span>
+                <span className="shrink-0 text-xs whitespace-nowrap opacity-70">Fix</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>

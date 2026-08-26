@@ -40,7 +40,7 @@ test("a broken config commit shows a red worker warning that leads to the fix", 
     message: "Break the worker build (spec)",
   });
 
-  const warning = page.getByRole("button", { name: /Project worker build failed/ });
+  const warning = page.getByRole("button", { name: /Worker build failed/ });
   // The readiness probe rebuilds the changed source (bundler + package
   // install) before it can fail, entirely server-side; the sidebar
   // deliberately shows nothing until the durable failure fact lands.

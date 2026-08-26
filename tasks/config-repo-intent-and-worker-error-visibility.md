@@ -247,6 +247,14 @@ on-request only: the badge derives purely from root push facts, and
 plus a Re-check button — no interval, no refetch-on-focus. Health spec
 asserts the on-open check settles; health video re-recorded (the sheet
 gained the Other streams section + Re-check button on camera).
+
+Sidebar warning polish (Misha screenshot): label shortened to "Worker build
+failed", the label span truncates (min-w-0 + truncate — the tooltip carries
+the full text) while the action stays shrink-0, and the action lost its
+literal ellipsis ("Fix…" read as accidental truncation — now "Fix").
+Screenshot-verified at desktop and narrow widths against a real broken
+worker; video not re-recorded (the warning is dimmed background in the
+sheet shots).
 Follow-up idea left on the thread:
 stamp the SEED commit with its template identity and derive
 "commits on top of template Y@Z" from trailers — valuable for
