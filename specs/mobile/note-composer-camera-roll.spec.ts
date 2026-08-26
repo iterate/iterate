@@ -2,8 +2,8 @@
 // away, above the text field, without opening the full-screen picker.
 //
 // A browser has no camera roll, so the web build reads its library from the
-// seam apps/mobile/src/lib/recent-photos.ts documents — filled here with real
-// PNG fixtures before the app boots. Everything downstream of that seam is
+// boundary apps/mobile/src/lib/recent-photos.ts documents — filled here with
+// real PNG fixtures before the app boots. Everything downstream of it is
 // the shipping code path: the same strip component, the same tap-to-attach
 // mutation, the same note write, and the same attachment rendered on /notes.
 
