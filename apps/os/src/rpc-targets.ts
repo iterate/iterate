@@ -6092,56 +6092,24 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
    * that script and is swapped for a generated identifier. The returned
    * handle's `run(vars)` re-executes the script with new values as a
    * journaled child script run; `vars` is typed from the parameters object
-   * (`{ n: 123n }` → `run({ n: bigint })`). `eventOffset` accepts the offset
-   * of the run's script-run-requested event, its script-run-settled event
-   * (what `results[N].offset` exposes), or the assistant-output event that
-   * produced the script.
+   * (`{ n: 123n }` → `run({ n: bigint })`). `eventOffset` must be the offset
+   * of the run's script-run-requested event — every retained script result
+   * hands it to scripts as `results[N].scriptOffset`.
    */
   async previousScriptHelper<P extends Record<string, ScriptReuseValue>>(input: {
     eventOffset: number;
     parameters: P;
   }): Promise<Omit<ReusableScriptRpcTarget, "run"> & { run(vars: P): Promise<unknown> }> {
-    const event = await this.#stream.getEvent({ offset: input.eventOffset });
-    if (event === undefined) {
+    const requested = await this.#stream.getEvent({ offset: input.eventOffset });
+    if (requested === undefined) {
       throw new Error(`No event at offset ${input.eventOffset} on scope ${this.#props.path}.`);
     }
-    const requestType = "events.iterate.com/capability-host/script-run-requested";
-    let requested: StreamEvent | undefined;
-    // Settle events carry the executionId; assistant-output events ARE the
-    // executionId (`agent-output:<offset>`).
-    const executionId =
-      event.type === requestType ||
-      event.type === "events.iterate.com/capability-host/script-run-settled"
-        ? (event.payload as { executionId: string }).executionId
-        : `agent-output:${input.eventOffset}`;
-    if (event.type === requestType) {
-      requested = event;
-    } else {
-      // Public-door runs journal the request under this key; one point read.
-      requested = await this.#stream.getEvent({
-        idempotencyKey: `capability-host/script-run-requested@${executionId}`,
-      });
-    }
-    if (requested === undefined) {
-      // Agent-lane runs journal the request under the AGENT processor's
-      // idempotency prefix, but the executionId names the assistant-output
-      // offset and the request commits in that same append batch — scan the
-      // next few request events from there.
-      const anchor = /^agent-output:(\d+)$/.exec(executionId);
-      if (anchor !== null) {
-        const candidates = await this.#stream.getEvents({
-          afterOffset: Number(anchor[1]),
-          eventTypes: [requestType],
-          limit: 5,
-        });
-        requested = candidates.find(
-          (candidate) => (candidate.payload as { executionId: string }).executionId === executionId,
-        );
-      }
-    }
-    if (requested === undefined) {
+    // Strict by design: the request event holds the script, and the results
+    // array hands every script its request offset as `scriptOffset` — no
+    // guessing between settle/assistant offsets, no lenient resolution.
+    if (requested.type !== "events.iterate.com/capability-host/script-run-requested") {
       throw new Error(
-        `Event at offset ${input.eventOffset} (type ${JSON.stringify(event.type)}) does not correspond to a journaled script run. Pass the offset of a script-run-requested or script-run-settled event (results[N].offset works), or of the assistant output that produced the script.`,
+        `Event at offset ${input.eventOffset} is ${JSON.stringify(requested.type)}, not a script-run-requested event. Pass results[N].scriptOffset — the reuse handle every retained script result carries.`,
       );
     }
     const sourceExecutionId = (requested.payload as { executionId: string }).executionId;

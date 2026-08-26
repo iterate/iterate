@@ -45,10 +45,19 @@ const RESULT_TYPE_MAX_CHARS = 3_000;
  * Structurally identical to the contract's `settledScriptResults` element
  * (the contract pins it with `satisfies`). */
 export type RetainedScriptResult =
-  | { kind: "data"; executionId: string; settledAtOffset: number; resultJson: string }
-  | { kind: "large"; executionId: string; settledAtOffset: number; typeText: string }
-  | { kind: "error"; executionId: string; settledAtOffset: number; error: string }
-  | { kind: "done"; executionId: string; settledAtOffset: number };
+  | (RetainedScriptResultBase & { kind: "data"; resultJson: string })
+  | (RetainedScriptResultBase & { kind: "large"; typeText: string })
+  | (RetainedScriptResultBase & { kind: "error"; error: string })
+  | (RetainedScriptResultBase & { kind: "done" });
+
+/** `scriptOffset` — the run's script-run-requested event, the handle
+ * `previousScriptHelper` demands — is absent only for settlements whose
+ * request was never reduced (external/forged). */
+type RetainedScriptResultBase = {
+  executionId: string;
+  scriptOffset?: number;
+  settledAtOffset: number;
+};
 
 /** A user/agent-authored preamble entry, as reduced into host state. */
 export type PreambleEntry = { key: string; code: string; setAtOffset: number };
@@ -61,31 +70,36 @@ export type PreambleEntry = { key: string; code: string; setAtOffset: number };
  */
 export function retainedScriptResult(input: {
   executionId: string;
+  /** The run's script-run-requested offset (undefined when no request was reduced). */
+  scriptOffset: number | undefined;
   settledAtOffset: number;
   settlement: ScriptExecutionSettlement;
 }): RetainedScriptResult | null {
   const { executionId, settledAtOffset, settlement } = input;
+  const base = {
+    executionId,
+    settledAtOffset,
+    ...(input.scriptOffset === undefined ? {} : { scriptOffset: input.scriptOffset }),
+  };
   if (settlement.status === "failed") {
     return {
       kind: "error",
-      executionId,
-      settledAtOffset,
+      ...base,
       error:
         settlement.error.length <= RETAINED_ERROR_LIMIT
           ? settlement.error
           : `${settlement.error.slice(0, RETAINED_ERROR_LIMIT)}…`,
     };
   }
-  if (settlement.result === undefined) return { kind: "done", executionId, settledAtOffset };
+  if (settlement.result === undefined) return { kind: "done", ...base };
   const resultJson = JSON.stringify(settlement.result);
-  if (typeof resultJson !== "string") return { kind: "done", executionId, settledAtOffset };
+  if (typeof resultJson !== "string") return { kind: "done", ...base };
   if (resultJson.length <= INLINE_RESULT_PREAMBLE_LIMIT) {
-    return { kind: "data", executionId, settledAtOffset, resultJson };
+    return { kind: "data", ...base, resultJson };
   }
   return {
     kind: "large",
-    executionId,
-    settledAtOffset,
+    ...base,
     typeText: inferJsonType(settlement.result, { maxChars: RESULT_TYPE_MAX_CHARS }),
   };
 }
@@ -150,10 +164,15 @@ function renderResultsArray(rows: RetainedScriptResult[], tsOnly: (code: string)
   const elements: string[] = [];
   newestFirst.forEach((row, index) => {
     const id = JSON.stringify(row.executionId);
+    // The reuse handle: previousScriptHelper demands the request event's
+    // offset, and this field is how scripts get it. Absent for settlements
+    // whose request was never reduced.
+    const scriptOffset =
+      row.scriptOffset === undefined ? "" : `scriptOffset: ${row.scriptOffset}, `;
     switch (row.kind) {
       case "data":
         elements.push(
-          `  { offset: ${row.settledAtOffset}, executionId: ${id}, data: ${inlineDataExpression(row.resultJson, tsOnly)} },`,
+          `  { offset: ${row.settledAtOffset}, ${scriptOffset}executionId: ${id}, data: ${inlineDataExpression(row.resultJson, tsOnly)} },`,
         );
         break;
       case "large": {
@@ -166,6 +185,7 @@ function renderResultsArray(rows: RetainedScriptResult[], tsOnly: (code: string)
         elements.push(
           `  {`,
           `    offset: ${row.settledAtOffset},`,
+          ...(scriptOffset === "" ? [] : [`    scriptOffset: ${row.scriptOffset},`]),
           `    executionId: ${id},`,
           `    get data()${tsOnly(": never")} { throw new Error(${message}); },`,
           `    load: async (itx${tsOnly(": Itx")})${tsOnly(`: Promise<${typeName}>`)} => ${loadBody}${tsOnly(` as ${typeName}`)},`,
@@ -175,13 +195,15 @@ function renderResultsArray(rows: RetainedScriptResult[], tsOnly: (code: string)
       }
       case "error":
         elements.push(
-          `  { offset: ${row.settledAtOffset}, executionId: ${id}, error: ${JSON.stringify(row.error)} },`,
+          `  { offset: ${row.settledAtOffset}, ${scriptOffset}executionId: ${id}, error: ${JSON.stringify(row.error)} },`,
         );
         break;
       case "done":
-        // No payload to reference, but the offset is still the handle for
-        // reusing the script (previousScriptAsHelperFunction).
-        elements.push(`  { offset: ${row.settledAtOffset}, executionId: ${id}, done: true },`);
+        // No payload to reference, but scriptOffset still hands later scripts
+        // the reuse handle (previousScriptHelper).
+        elements.push(
+          `  { offset: ${row.settledAtOffset}, ${scriptOffset}executionId: ${id}, done: true },`,
+        );
         break;
     }
   });

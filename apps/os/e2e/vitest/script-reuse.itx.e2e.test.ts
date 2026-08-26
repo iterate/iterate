@@ -41,12 +41,20 @@ test(
     );
     expect(first.success()).toEqual(["89", "97"]);
 
-    // Run 2: no re-derivation — point at run 1 (by its settle offset, the one
-    // the preamble `results` array exposes) and run it with a new number.
+    // Run 2: no re-derivation — point at run 1's request event, the offset
+    // the preamble `results` array exposes as `scriptOffset`.
     const settledOffset = first.execution.completedEvent.offset;
+    const requestedOffset = await measurePhase("find request offset", "fixture", async () => {
+      const requests = await itx.streams.get("/").getEvents({
+        eventTypes: ["events.iterate.com/capability-host/script-run-requested"],
+        limit: 100,
+      });
+      return requests.find((e: any) => e.payload.executionId === first.execution.executionId)!
+        .offset;
+    });
     const second = await measurePhase("reuse script with new input", "operation", () =>
       itxScript(itx.capabilityHost)
-        .vars({ eventOffset: settledOffset })
+        .vars({ eventOffset: requestedOffset })
         .execute(async (itxInScript, vars) => {
           const helper = await itxInScript.capabilityHost.previousScriptHelper({
             eventOffset: vars.eventOffset,
@@ -57,6 +65,23 @@ test(
     );
     expect(second.success()).toEqual(["101", "103"]);
 
+    // Strict by design: any other event kind — here run 1's settle offset —
+    // is rejected with the fix (results[N].scriptOffset) named in the error.
+    const settleRejection = await measurePhase("reuse via settle offset", "operation", () =>
+      itxScript(itx.capabilityHost)
+        .vars({ eventOffset: settledOffset })
+        .execute(async (itxInScript, vars) => {
+          return await itxInScript.capabilityHost.previousScriptHelper({
+            eventOffset: vars.eventOffset,
+            parameters: {},
+          });
+        })
+        .then(() => "unexpectedly succeeded")
+        .catch((error: Error) => String(error)),
+    );
+    expect(settleRejection).toContain("not a script-run-requested event");
+    expect(settleRejection).toContain("results[N].scriptOffset");
+
     // The typed surface: run(vars) is inferred from the parameters object, so
     // passing the bigint as a string — the live models' favorite mistake —
     // dies at the server's typecheck gate before anything runs. Sent as raw
@@ -64,7 +89,7 @@ test(
     // this.
     const wrongType = await measurePhase("reuse with wrongly typed vars", "operation", () =>
       itxScript(itx.capabilityHost)
-        .vars({ eventOffset: settledOffset })
+        .vars({ eventOffset: requestedOffset })
         .executeSource(
           `async (itx, vars) => {
             const helper = await itx.capabilityHost.previousScriptHelper({
@@ -92,17 +117,26 @@ test(
         .catch((error: Error) => String(error)),
     );
     expect(failure).toContain("deliberate failure");
-    const failedSettle = await measurePhase("find the failed settlement", "assertion", async () => {
+    const failedRequest = await measurePhase("find the failed request", "assertion", async () => {
       const settled = await itx.streams.get("/").getEvents({
         eventTypes: ["events.iterate.com/capability-host/script-run-settled"],
         limit: 100,
       });
-      return settled.findLast((e: any) => e.payload?.settlement?.status === "failed");
+      const failedSettle = settled.findLast(
+        (e: any) => e.payload?.settlement?.status === "failed",
+      )!;
+      const requests = await itx.streams.get("/").getEvents({
+        eventTypes: ["events.iterate.com/capability-host/script-run-requested"],
+        limit: 100,
+      });
+      return requests.find(
+        (e: any) => e.payload.executionId === failedSettle.payload?.executionId,
+      )!;
     });
-    expect(failedSettle).toBeDefined();
+    expect(failedRequest).toBeDefined();
     const reuseOfFailed = await measurePhase("reuse the failed run", "operation", () =>
       itxScript(itx.capabilityHost)
-        .vars({ eventOffset: failedSettle!.offset })
+        .vars({ eventOffset: failedRequest!.offset })
         .execute(async (itxInScript, vars) => {
           return await itxInScript.capabilityHost.previousScriptHelper({
             eventOffset: vars.eventOffset,

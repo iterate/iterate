@@ -344,6 +344,10 @@ export class CapabilityHostProcessor extends StreamProcessor<
       }
       case "events.iterate.com/capability-host/script-run-settled": {
         const scriptExecutions = { ...state.scriptExecutions };
+        // The open obligation carries the request event's offset — the reuse
+        // handle (results[N].scriptOffset). An external settlement with no
+        // reduced request (forged/orphaned) has none.
+        const settledExecution = state.scriptExecutions[event.payload.executionId];
         delete scriptExecutions[event.payload.executionId];
         // Retain the outcome for the preamble's derived `results` array —
         // classification (inline JSON vs inferred-type-plus-loader vs error)
@@ -351,6 +355,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
         // settlement event stays the only durable storage of full payloads.
         const retained = retainedScriptResult({
           executionId: event.payload.executionId,
+          scriptOffset: settledExecution?.requestedAtOffset,
           settledAtOffset: event.offset,
           settlement: event.payload.settlement,
         });
