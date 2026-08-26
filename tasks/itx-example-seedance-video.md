@@ -86,3 +86,8 @@ this via `itx.docs.search`.
   the surface ever gains a typed `run<T>`, the excuse must be deleted.
 - No other generated artifacts involved — `examples.generated.ts` is the only
   derived file, freshness enforced by `examples.generated.test.ts`.
+- Review feedback (mmkal): "how would you recommend discovering them then?" —
+  fair; the text only warned about models() with no positive path. Both video
+  descriptions now recommend fetching
+  https://developers.cloudflare.com/ai/models/ (verified it lists the partner
+  models: seedance-2.0/-fast/-mini/2.5, seedream, xai/*). Commit 4f0dc6aab.
