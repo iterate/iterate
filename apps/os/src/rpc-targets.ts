@@ -6086,30 +6086,55 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
   }
 
   /**
-   * Reuse a previously journaled script as a parameterized helper. Each
-   * parameter is the VALUE the original script used inline (primitives only:
-   * string/number/boolean/bigint) — its literal must appear exactly once in
-   * that script and is swapped for a generated identifier. The returned
-   * handle's `run(vars)` re-executes the script with new values as a
-   * journaled child script run; `vars` is typed from the parameters object
-   * (`{ n: 123n }` → `run({ n: bigint })`). `eventOffset` must be the offset
-   * of the run's script-run-requested event — every retained script result
-   * hands it to scripts as `results[N].scriptOffset`.
+   * Reuse a previously journaled script as a parameterized helper:
+   * `previousScriptHelper({ ...results[0], parameterize: { n: 123n } })`.
+   * Spread a results row in — `scriptOffset` (the run's script-run-requested
+   * event offset) addresses the script, and spreading copies only enumerable
+   * props, so a large row's loader plumbing stays behind. `parameterize`
+   * names the VALUES the original script used inline (primitives only:
+   * string/number/boolean/bigint) that should become parameters — each
+   * literal must appear exactly once in that script and is swapped OUT for a
+   * generated identifier. The returned handle's `run(vars)` re-executes the
+   * script with new values as a journaled child script run; `vars` is typed
+   * from the parameterize object (`{ n: 123n }` → `run({ n: bigint })`), and
+   * the result type is best-effort inferred from the row's `data`/`load`
+   * when present (the SHAPE of the old result, not its values).
    */
+  async previousScriptHelper<Result, P extends Record<string, ScriptReuseValue>>(input: {
+    scriptOffset: number;
+    parameterize: P;
+    load: (itx: never) => Promise<Result>;
+  }): Promise<Omit<ReusableScriptRpcTarget, "run"> & { run(vars: P): Promise<Result> }>;
+  async previousScriptHelper<Result, P extends Record<string, ScriptReuseValue>>(input: {
+    scriptOffset: number;
+    parameterize: P;
+    data: Result;
+  }): Promise<Omit<ReusableScriptRpcTarget, "run"> & { run(vars: P): Promise<Result> }>;
   async previousScriptHelper<P extends Record<string, ScriptReuseValue>>(input: {
-    eventOffset: number;
-    parameters: P;
-  }): Promise<Omit<ReusableScriptRpcTarget, "run"> & { run(vars: P): Promise<unknown> }> {
-    const requested = await this.#stream.getEvent({ offset: input.eventOffset });
+    scriptOffset: number;
+    parameterize: P;
+  }): Promise<Omit<ReusableScriptRpcTarget, "run"> & { run(vars: P): Promise<unknown> }>;
+  async previousScriptHelper(input: {
+    scriptOffset: number;
+    parameterize: Record<string, ScriptReuseValue>;
+  }): Promise<ReusableScriptRpcTarget> {
+    const eventOffset = input.scriptOffset;
+    const parameters = input.parameterize;
+    if (typeof eventOffset !== "number") {
+      throw new Error(
+        `previousScriptHelper needs a spread results row carrying scriptOffset (the run's script-run-requested event offset); got ${JSON.stringify(eventOffset)}.`,
+      );
+    }
+    const requested = await this.#stream.getEvent({ offset: eventOffset });
     if (requested === undefined) {
-      throw new Error(`No event at offset ${input.eventOffset} on scope ${this.#props.path}.`);
+      throw new Error(`No event at offset ${eventOffset} on scope ${this.#props.path}.`);
     }
     // Strict by design: the request event holds the script, and the results
     // array hands every script its request offset as `scriptOffset` — no
     // guessing between settle/assistant offsets, no lenient resolution.
     if (requested.type !== "events.iterate.com/capability-host/script-run-requested") {
       throw new Error(
-        `Event at offset ${input.eventOffset} is ${JSON.stringify(requested.type)}, not a script-run-requested event. Pass results[N].scriptOffset — the reuse handle every retained script result carries.`,
+        `Event at offset ${eventOffset} is ${JSON.stringify(requested.type)}, not a script-run-requested event. Pass a results row — every retained script result carries scriptOffset, the reuse handle.`,
       );
     }
     const sourceExecutionId = (requested.payload as { executionId: string }).executionId;
@@ -6125,11 +6150,11 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     )?.settlement;
     if (settlement?.status === "failed") {
       throw new Error(
-        `The script run at offset ${input.eventOffset} (${sourceExecutionId}) FAILED (${(settlement.error || "unknown error").slice(0, 200)}). Reuse a run that succeeded — in the results array, pick the row of the original successful run, not a failed reuse attempt.`,
+        `The script run at offset ${eventOffset} (${sourceExecutionId}) FAILED (${(settlement.error || "unknown error").slice(0, 200)}). Reuse a run that succeeded — in the results array, pick the row of the original successful run, not a failed reuse attempt.`,
       );
     }
     const { code } = requested.payload as { code: string };
-    const transformed = reparameterizeScript({ code, parameters: input.parameters });
+    const transformed = reparameterizeScript({ code, parameters });
     return new ReusableScriptRpcTarget({
       code: transformed.code,
       parameters: transformed.parameters,

@@ -665,20 +665,33 @@ export interface CapabilityHost {
    */
   getScriptResult(executionId: string): Promise<{ executionId: string; data: unknown }>;
   /**
-   * Reuse a previously journaled script as a parameterized helper. Each
-   * parameter is the VALUE the original script used inline (primitives only:
-   * string/number/boolean/bigint) — its literal must appear exactly once in
-   * that script and is swapped for a generated identifier. The returned
-   * handle's `run(vars)` re-executes the script with new values as a
-   * journaled child script run; `vars` is typed from the parameters object
-   * (`{ n: 123n }` → `run({ n: bigint })`). `eventOffset` accepts the offset
-   * of the run's script-run-requested event, its script-run-settled event
-   * (what `results[N].offset` exposes), or the assistant-output event that
-   * produced the script.
+   * Reuse a previously journaled script as a parameterized helper:
+   * `previousScriptHelper({ ...results[0], parameterize: { n: 123n } })`.
+   * Spread a results row in — `scriptOffset` (the run's script-run-requested
+   * event offset) addresses the script, and spreading copies only enumerable
+   * props, so a large row's loader plumbing stays behind. `parameterize`
+   * names the VALUES the original script used inline (primitives only:
+   * string/number/boolean/bigint) that should become parameters — each
+   * literal must appear exactly once in that script and is swapped OUT for a
+   * generated identifier. The returned handle's `run(vars)` re-executes the
+   * script with new values as a journaled child script run; `vars` is typed
+   * from the parameterize object (`{ n: 123n }` → `run({ n: bigint })`), and
+   * the result type is best-effort inferred from the row's `data`/`load`
+   * when present (the SHAPE of the old result, not its values).
    */
+  previousScriptHelper<Result, P extends Record<string, ScriptReuseValue>>(input: {
+    scriptOffset: number;
+    parameterize: P;
+    load: (itx: never) => Promise<Result>;
+  }): Promise<Omit<ReusableScript, "run"> & { run(vars: P): Promise<Result> }>;
+  previousScriptHelper<Result, P extends Record<string, ScriptReuseValue>>(input: {
+    scriptOffset: number;
+    parameterize: P;
+    data: Result;
+  }): Promise<Omit<ReusableScript, "run"> & { run(vars: P): Promise<Result> }>;
   previousScriptHelper<P extends Record<string, ScriptReuseValue>>(input: {
-    eventOffset: number;
-    parameters: P;
+    scriptOffset: number;
+    parameterize: P;
   }): Promise<Omit<ReusableScript, "run"> & { run(vars: P): Promise<unknown> }>;
   /** Explicit dynamic dispatch; the dotted-path fallback (`itx.foo.bar(...)`) compiles to exactly this call. */
   invokeCapability(call: { args?: unknown[]; path: string[] }): Promise<unknown>;

@@ -137,7 +137,10 @@ describe("assemblePreamble", () => {
     expect(loadIndex).toBeGreaterThan(dataIndex);
     expect(errorIndex).toBeGreaterThan(loadIndex);
     expect(ts).toContain('data: {"users":["amy","bob"]}');
-    expect(ts).toContain("get data(): never");
+    // Large rows keep the teaching throw, but data/load are NON-ENUMERABLE:
+    // rows travel over RPC and structured clone invokes enumerable getters.
+    expect(ts).toContain("readonly data: never");
+    expect(ts).toContain("enumerable: false");
     expect(ts).toContain("await results[1].load(itx)");
     expect(ts).toContain('getScriptResult("agent-output:42")');
     expect(ts).toContain('error: "TypeError: boom"');
@@ -161,6 +164,14 @@ describe("assemblePreamble", () => {
     expect(results.byOffset(33)).toMatchObject({ executionId: "agent-output:33", offset: 33 });
     // outside the retained window: loud, not undefined
     expect(() => results.byOffset(999)).toThrow("no retained script result settled at offset 999");
+  });
+
+  it("a large row structured-clones without firing the data throw — rows travel over RPC", async () => {
+    const { js } = assemblePreamble({ entries: [], results: ROWS })!;
+    const results = (await evaluatePreambleJs(js)) as unknown[];
+    // previousScriptHelper(results[N], …) and scripts returning rows both
+    // serialize the row; the teaching getter must not detonate there.
+    expect(structuredClone(results[1])).toEqual({ offset: 42, executionId: "agent-output:42" });
   });
 
   it("a done row renders offset + scriptOffset + executionId — the reuse handle for void scripts", async () => {

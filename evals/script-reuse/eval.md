@@ -33,12 +33,12 @@ real algorithm (Pollard's rho or similar) and a long script. Verify the
 agent's answers with your own arithmetic, not by trusting its prose.)
 
 The system prompt teaches the agent that a repeat-shaped request should reuse
-the journaled script: `itx.capabilityHost.previousScriptHelper({ eventOffset:
-results[N].scriptOffset, parameters: { n: <original inline value> } })`
-locates each value's literal in the earlier script and returns a handle whose
-typed `run(vars)` re-executes it with new inputs as a journaled child run.
-Every retained result row (including void scripts' `done` rows) carries
-`scriptOffset`, the request-event offset the helper demands.
+the journaled script: `itx.capabilityHost.previousScriptHelper({
+...results[N], parameterize: { n: <original inline value> } })` locates each
+value's literal in that row's script and returns a handle whose typed
+`run(vars)` re-executes it with new inputs as a journaled child run. Every retained result row (including void
+scripts' `done` rows) carries `scriptOffset`, the request-event offset the
+helper reads from the row.
 
 Success criteria — the mechanism matters as much as the answers:
 

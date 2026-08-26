@@ -57,8 +57,8 @@ test(
         .vars({ eventOffset: requestedOffset })
         .execute(async (itxInScript, vars) => {
           const helper = await itxInScript.capabilityHost.previousScriptHelper({
-            eventOffset: vars.eventOffset,
-            parameters: { target: 8633n },
+            scriptOffset: vars.eventOffset,
+            parameterize: { target: 8633n },
           });
           return await helper.run({ target: 10403n });
         }),
@@ -66,21 +66,21 @@ test(
     expect(second.success()).toEqual(["101", "103"]);
 
     // Strict by design: any other event kind — here run 1's settle offset —
-    // is rejected with the fix (results[N].scriptOffset) named in the error.
+    // is rejected with the fix (pass a results row) named in the error.
     const settleRejection = await measurePhase("reuse via settle offset", "operation", () =>
       itxScript(itx.capabilityHost)
         .vars({ eventOffset: settledOffset })
         .execute(async (itxInScript, vars) => {
           return await itxInScript.capabilityHost.previousScriptHelper({
-            eventOffset: vars.eventOffset,
-            parameters: {},
+            scriptOffset: vars.eventOffset,
+            parameterize: {},
           });
         })
         .then(() => "unexpectedly succeeded")
         .catch((error: Error) => String(error)),
     );
     expect(settleRejection).toContain("not a script-run-requested event");
-    expect(settleRejection).toContain("results[N].scriptOffset");
+    expect(settleRejection).toContain("carries scriptOffset");
 
     // The typed surface: run(vars) is inferred from the parameters object, so
     // passing the bigint as a string — the live models' favorite mistake —
@@ -93,8 +93,8 @@ test(
         .executeSource(
           `async (itx, vars) => {
             const helper = await itx.capabilityHost.previousScriptHelper({
-              eventOffset: vars.eventOffset,
-              parameters: { target: 8633n },
+              scriptOffset: vars.eventOffset,
+              parameterize: { target: 8633n },
             });
             return await helper.run({ target: "10403n" });
           }`,
@@ -139,8 +139,8 @@ test(
         .vars({ eventOffset: failedRequest!.offset })
         .execute(async (itxInScript, vars) => {
           return await itxInScript.capabilityHost.previousScriptHelper({
-            eventOffset: vars.eventOffset,
-            parameters: {},
+            scriptOffset: vars.eventOffset,
+            parameterize: {},
           });
         })
         .then(() => "unexpectedly succeeded")

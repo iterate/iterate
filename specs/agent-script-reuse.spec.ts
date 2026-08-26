@@ -1,4 +1,3 @@
-import { expect } from "@playwright/test";
 import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
@@ -6,7 +5,7 @@ import { test } from "./test-support/test.ts";
 // chat UI, deterministically: the "model" is this spec's own interceptor.
 // Turn 1 answers with a full Pollard's-rho factorization script; turn 2
 // answers with a few-line reuse script pointing at turn 1's journaled run
-// (results[0].scriptOffset). Both scripts EXECUTE for real — the child run
+// (previousScriptHelper({ ...results[0], parameterize })). Both scripts EXECUTE for real — the child run
 // re-runs the original algorithm with the new number — and the spec opens
 // each turn's codemode snippet in the feed to show the shortcut.
 test("a repeat request reuses the previous turn's journaled script instead of re-deriving it", async ({
@@ -43,32 +42,46 @@ test("a repeat request reuses the previous turn's journaled script instead of re
   // Turn 1: the long way. The script really runs; the answer is computed.
   await composer.fill("prime factorize 52479543428582704627");
   await send.click();
-  await page.getByText("52479543428582704627 = 6203868971 × 8459163737").waitFor();
+  // The whole turn (debounce → intercept → typecheck → script run) happens
+  // server-side with no spinner to key off; give it a real budget.
+  await page.getByText("52479543428582704627 = 6203868971 × 8459163737").waitFor({
+    timeout: 60_000,
+  });
 
   // Turn 2: the reused way. The child run executes turn 1's algorithm with
   // the new number — the correct product proves real execution, not prose.
   await composer.fill("now do 66778601389380731119");
   await send.click();
-  await page.getByText("66778601389380731119 = 7316102869 × 9127619251").waitFor();
+  await page.getByText("66778601389380731119 = 7316102869 × 9127619251").waitFor({
+    timeout: 60_000,
+  });
 
   // Open turn 1's codemode snippet: the full derived algorithm.
   const activities = page.getByRole("button", { name: /Ran code/ });
   await activities.first().click();
   const firstScript = page.locator(".cm-content").first();
   await firstScript.waitFor();
-  await expect(firstScript).toContainText("const n = 52479543428582704627n");
-  await expect(firstScript).toContainText("modPow");
+  await firstScript
+    .locator(".cm-line", { hasText: "const n = 52479543428582704627n" })
+    .first()
+    .waitFor();
+  await firstScript.locator(".cm-line", { hasText: "modPow" }).first().waitFor();
   await activities.first().click(); // collapse again before opening turn 2
 
-  // Open turn 2's snippet: a few lines pointing at results[0].scriptOffset.
+  // Open turn 2's snippet: a few lines reusing results[0].
   await activities.nth(1).click();
   const reuseRound = page.getByTestId("agent-feed-round");
   if (await reuseRound.count()) await reuseRound.first().click();
   const secondScript = page.locator(".cm-content").first();
   await secondScript.waitFor();
-  await expect(secondScript).toContainText("previousScriptHelper");
-  await expect(secondScript).toContainText("results[0].scriptOffset");
-  await expect(secondScript).not.toContainText("modPow");
+  await secondScript
+    .locator(".cm-line", { hasText: "parameterize: { n: 52479543428582704627n }" })
+    .first()
+    .waitFor();
+  // The reuse turn's script must not carry the algorithm, so with turn 1
+  // collapsed no rendered line may mention modPow — absence IS the assertion,
+  // hence this exceptional detached wait.
+  await page.locator(".cm-line", { hasText: "modPow" }).first().waitFor({ state: "detached" });
 });
 
 // Turn 1's scripted reply: a real, working factorization (Pollard's rho +
@@ -150,8 +163,8 @@ const FACTORIZE_SCRIPT = `async (itx) => {
 // Turn 2's scripted reply: the whole point of the feature, in four lines.
 const REUSE_SCRIPT = `async (itx) => {
   const helper = await itx.capabilityHost.previousScriptHelper({
-    eventOffset: results[0].scriptOffset,
-    parameters: { n: 52479543428582704627n },
+    ...results[0],
+    parameterize: { n: 52479543428582704627n },
   });
   await helper.run({ n: 66778601389380731119n });
 }`;

@@ -182,14 +182,24 @@ function renderResultsArray(rows: RetainedScriptResult[], tsOnly: (code: string)
         const message = JSON.stringify(
           `Large result: use \`await results[${index}].load(itx)\` instead`,
         );
+        // data (the teaching throw) and load are NON-ENUMERABLE: rows travel
+        // over RPC (previousScriptHelper(results[0], …), a script returning a
+        // row), and structured clone invokes enumerable getters — the throw
+        // would fire at serialization time. Non-enumerable properties are
+        // skipped by clone yet behave identically to in-script readers. The
+        // cast re-states the full shape defineProperties erases.
+        const castEntries = [
+          `offset: ${row.settledAtOffset}`,
+          ...(scriptOffset === "" ? [] : [`scriptOffset: ${row.scriptOffset}`]),
+          `executionId: ${id}`,
+          `readonly data: never`,
+          `load: (itx: Itx) => Promise<${typeName}>`,
+        ].join("; ");
         elements.push(
-          `  {`,
-          `    offset: ${row.settledAtOffset},`,
-          ...(scriptOffset === "" ? [] : [`    scriptOffset: ${row.scriptOffset},`]),
-          `    executionId: ${id},`,
-          `    get data()${tsOnly(": never")} { throw new Error(${message}); },`,
-          `    load: async (itx${tsOnly(": Itx")})${tsOnly(`: Promise<${typeName}>`)} => ${loadBody}${tsOnly(` as ${typeName}`)},`,
-          `  },`,
+          `  Object.defineProperties({ offset: ${row.settledAtOffset}, ${scriptOffset}executionId: ${id} }, {`,
+          `    data: { get() { throw new Error(${message}); }, enumerable: false },`,
+          `    load: { value: async (itx${tsOnly(": Itx")}) => ${loadBody}${tsOnly(` as ${typeName}`)}, enumerable: false },`,
+          `  })${tsOnly(` as { ${castEntries} }`)},`,
         );
         break;
       }
