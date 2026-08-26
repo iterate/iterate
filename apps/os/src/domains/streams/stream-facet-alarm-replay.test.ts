@@ -39,8 +39,9 @@ test("a failed facet alarm replay rejects the alarm invocation and re-merges the
   const merged = harness.stream.proxyGetAlarm();
   expect(merged).not.toBeNull();
   expect(merged!).toBeGreaterThan(before);
-  // toContain, not at(-1): the halted wake lane's own retry may arm a nearer
-  // alarm after the merge; the merged desire's native write is what matters.
+  // toContain, not at(-1): the halted wake delivery's own retry may arm a
+  // nearer alarm after the merge; the merged desire's native write is what
+  // matters.
   expect(harness.context.alarms).toContain(merged);
 
   await harness.context.settle();
@@ -129,9 +130,9 @@ async function bootStreamWithAgentFacet() {
           ? Promise.resolve()
           : Promise.reject(facet.handleAlarmError);
       },
-      // The wake-delivery lane is not under test; its failure rides the
-      // sender's own retry machinery, which never touches the facet slot.
-      wakeStreamProcessor: () => Promise.reject(new Error("wake lane not under test")),
+      // The wake delivery is not under test; its failure rides the sender's
+      // own retry machinery, which never touches the facet slot.
+      wakeStreamProcessor: () => Promise.reject(new Error("wake delivery not under test")),
     },
   };
   const context = durableObjectContext(
