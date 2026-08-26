@@ -7,13 +7,14 @@ size: medium
 
 ## Status summary
 
-Done, pending review. The original Codex-run eval **passed on round 3**: a
-real agent reused a 2,408-char Pollard's-rho script through a 265-char reuse
-script. A later typed-API run successfully reused the algorithm, but failed
-the strict eval because the agent re-derived it while correcting stale prose;
-that run and the reusable audit helpers are documented below. Reviewer
-judgement wanted on: the prompt-ceiling raise (4250 → 4350) and the
-`done`-row contract bump (0.6.0 → 0.7.0).
+Done, pending review. Five Codex-run eval rounds drove the design: rounds 1–2
+failed and bought platform guards, round 3 passed (2 retries), round 4 passed
+first-attempt after the alias redesign, and round 5 (typed value-form
+parameters) reused first-attempt but failed the strict criterion when the
+model chose to re-derive the algorithm while correcting stale message prose —
+model stochasticity in the correction turn, not a mechanism failure; logged
+below. Reviewer judgement wanted on: the prompt-ceiling raise (4250 → 4350)
+and the `done`-row contract bump (0.6.0 → 0.7.0).
 
 ## Problem
 
@@ -50,9 +51,9 @@ surface's native shape, so the whole harness workaround was deleted:
 ```ts
 const h = await itx.capabilityHost.previousScriptHelper({
   eventOffset: results[0].offset,
-  parameters: [{ name: "n", content: "1234567890n" }],
+  parameters: { n: 1234567890n }, // the value the old script used inline
 })
-return await h.run({ n: 987n })
+return await h.run({ n: 987n }) // typed: { n: bigint } — "987n" is a gate error
 ```
 
 It lives on the capability host (next to runScript/getScriptResult/
@@ -67,12 +68,15 @@ REPL, workers, codemode), and is typed via the generated api.
    the script. Resolution: point-read by public-door idempotency key, then a
    bounded forward scan for agent-lane requests (their idempotency keys carry
    the agent processor's prefix).
-2. Each parameter's `content` must occur **exactly once** (count reported in
-   the error) and be a value expression (statement-shaped and
-   template-interior content rejected with teaching errors). The occurrence
-   is swapped for a **generated alias** (`__reuse_<name>`, deterministically
-   suffixed until free — Misha's suggestion), so the caller's `name` never
-   collides with the script's own identifiers.
+2. Parameters are **primitive values, not text** (Misha's follow-up): the
+   platform renders each value's candidate literal spellings (strings across
+   quote styles when escape-free; bare number/bigint/boolean literals
+   boundary-matched so `42` can't hit `142`) and requires exactly one
+   occurrence in total, reported per-spelling in the error. The occurrence is
+   swapped for a **generated alias** (`__reuse_<name>`, deterministically
+   suffixed until free — also Misha's suggestion), so parameter names never
+   collide with the script's own identifiers, and `run(vars)` is **typed
+   from the parameters object** through the generated api's generics.
 3. Returns a `ReusableScript` handle; `run(vars)` renders an envelope — the
    new values as consts (serialized as JS literals, bigint included) bound
    to the aliases — and submits it as a **journaled child script run** via
@@ -95,15 +99,16 @@ Supporting changes:
   `script-reuse.ts`; validation errors name counts so the agent can
   self-correct (observed live: it renamed `n` → `targetNumber` after the
   collision error)_
-- [x] offset→script lookup + transform RPC _`prepareScriptReuse` on
-  `CapabilityHostRpcTarget`, next to `getScriptResult`_
-- [x] harness closure `itx.previousScriptAsHelperFunction` _in
-  `scriptWorkerRef`'s synthesized source; envelope renderer embedded via
-  Function#toString like `sandboxExecTimeout`_
+- [x] offset→script lookup + transform RPC _now `previousScriptHelper` on
+  `CapabilityHostRpcTarget`, next to `getScriptResult`; returns the
+  `ReusableScript` handle_
+- [x] ~~harness closure `itx.previousScriptAsHelperFunction`~~ _superseded by
+  the redesign: plain RpcTarget handle; harness special-casing reverted_
 - [x] child-run execution path _journaled via existing `runScript`; no
   deadlock — the processor starts executions with `runInBackground`, verified
   live (child at offset 1156 ran while the parent awaited it)_
-- [x] prelude typing on `Itx` _virtual-project.ts, same-line intersection_
+- [x] ~~prelude typing on `Itx`~~ _superseded: typed via the generated api
+  (generic method + verbatim return annotation); prelude hack reverted_
 - [x] regenerate itx api _`pnpm generate:itx-api`_
 - [x] prompt documentation _agent-system-prompt.md + ceiling raise_
 - [x] `done` rows for void results _contract 0.7.0; new preamble tests_
@@ -132,8 +137,8 @@ Supporting changes:
 - Void-result `done` rows change the preamble surface for everyone — judged
   worth it because reuse is otherwise undiscoverable for the most common
   script shape.
-- Precise `typeof`-based vars typing deferred; `Record<string, unknown>` for
-  the POC.
+- ~~Precise `typeof`-based vars typing deferred~~ _done in the value-form
+  redesign: `run(vars)` is inferred from the parameters object_.
 - The prompt ceiling raise (4250 → 4350) is flagged for explicit review.
 
 ## Implementation log
@@ -169,18 +174,23 @@ Supporting changes:
 - Codex eval round 3: SUCCESS — two failed attempts (caught by the new
   teaching errors), one small results inspection, then a 265-char reuse
   script; old-number prose corrected in a follow-up message per criteria.
-- Typed-API eval `1787771786047`: FAILURE — the 373-char reuse script and
-  2,652-char platform child both succeeded, but the agent then wrote a fresh
-  2,097-char Pollard-rho implementation to correct the child script's stale
-  message label. Both equations were correct; the strict no-re-derivation
-  criterion failed. Evidence lives in the ignored run directory.
+- Codex eval round 5 (typed value-form, run `1787771786047`): FAILURE on the
+  strict criterion — the 373-char reuse script and platform child both
+  succeeded **first-attempt**, but the agent then wrote a fresh 2,097-char
+  Pollard-rho implementation to correct the child's stale message label
+  (rounds 3–4 wrote the short correction from the delivery receipt instead).
+  Both equations correct. Takeaway: the mechanism is solid; the correction
+  turn is model-stochastic. The Codex runner also contributed tracked
+  helpers (`run-turn.ts` settle-waiting driver, `report.ts` stream audit).
 
 ## Follow-up ideas (deliberately out of scope)
 
-- Precise per-parameter vars typing via the `typeof`-placeholder trick from
-  the original sketch.
 - A `contains`/search addressing mode so the agent can name a past script by
   content rather than offset.
+- Stale-prose corrections: when a reused script's message carries the old
+  input hardcoded in prose, models sometimes re-derive the answer instead of
+  writing the short correction from the delivery receipt (eval round 5). A
+  settlement-render nudge on reuse child runs could steer this.
 
 ## Redesign log (post-review)
 
