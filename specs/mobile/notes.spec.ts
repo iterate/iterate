@@ -79,6 +79,17 @@ test("captures a note from the global composer and manages it on /notes", async 
     /About my note `\/repos\/notes\/.*\.md`:[\s\S]*confirmed at home/,
   );
 
+  // Send it. This is the step that makes the platform PARSE the derived agent
+  // path (create() + message()), so a path it would reject — the note's
+  // filename stamp carries an uppercase T and Z — fails here instead of on a
+  // phone. Only the echo of our own message is asserted; whatever the agent
+  // says back is its own business.
+  await page.getByLabel("Send").click();
+  await page
+    .getByText(/About my note/)
+    .first()
+    .waitFor();
+
   // Back on /notes the note is untouched, and its row is still open — the
   // notes screen stayed mounted underneath the pushed chat.
   await page.goBack();

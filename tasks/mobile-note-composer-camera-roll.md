@@ -7,7 +7,10 @@ size: medium
 
 ## Status
 
-**Done, both rounds, CI green.** Misha ran round one on a real phone and
+**Round three: one device bug fixed.** Round two shipped a note-chat whose
+agent path the platform rejects; see "Round three" at the bottom.
+
+**Rounds one and two: done, CI green.** Misha ran round one on a real phone and
 sent four pieces of feedback; all four are in (see "Round two" at the
 bottom). Round one is below and unchanged.
 
@@ -204,3 +207,43 @@ would be handed the note's PREVIOUS text. Locally the refetch always won the
 race; against a preview deployment it did not. The seed now reads the note
 file itself (in parallel with the has-anyone-spoken check) and falls back to
 the row only for a note that has since gone.
+
+
+## Round three (device bug)
+
+Misha opened a note-chat on his phone and got a red zod blob under his
+message: `agent path must be canonical: "/agents/" followed by lowercase
+[a-z0-9_-] segments`.
+
+`noteChatPath` derived the thread from the note's filename, and a note
+filename is an ISO stamp — `2026-08-26T09-26-45-481Z-ejdd06` — whose **T and
+Z are uppercase**. `AgentPath` (apps/os/src/domains/agents/agent-presence.ts)
+is deliberately a parser, not a repair step, so it rejects the path outright.
+The message still lands, but the agent-presence projection errors and the
+failure renders in the feed.
+
+- [x] Lowercase and scrub the derived stem to `[a-z0-9_-]`.
+- [x] Pin it with a unit test that asserts against the platform's own regex,
+      hand-mirrored with a pointer to the source — the same convention
+      `notes.ts` already uses for the server's frontmatter helpers.
+- [x] Make `specs/mobile/notes.spec.ts` actually SEND the seeded message, so
+      the spec exercises `create()` + `message()` rather than stopping at a
+      pre-filled composer.
+
+### What actually catches this, honestly
+
+The **unit test**, not the spec. Reverting the fix and re-running the browser
+spec still passes: the message lands regardless, and the rejection surfaces
+asynchronously from the presence projection, after the spec has moved on. The
+send step is still worth having — it exercises the create/message path a
+pre-filled composer never reached — but it is not the regression test.
+
+### The blind spot underneath it
+
+`apps/mobile` sets `data-type="error"` **nowhere**, so middlewright's
+ui-error-reporter (specs/AGENTS.md) cannot see app errors at all — a spec can
+walk past a screen full of red and report green, which is exactly what
+happened here. Not fixed in this PR: react-native-web's `dataSet` prop is
+absent from react-native's TypeScript types, so it needs either a small
+`ErrorText` component or a module augmentation, and it wants applying across
+every error surface rather than one screen. Filed as its own task.

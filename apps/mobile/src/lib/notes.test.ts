@@ -122,7 +122,10 @@ test("event builders + fact offset", () => {
 
 test("the chat about a note is the same conversation every time you open it", () => {
   const path = "/repos/notes/2026-08-12T15-01-20-841Z-x7ab.md";
-  expect(noteChatPath(path)).toBe("/agents/mobile/note-2026-08-12T15-01-20-841Z-x7ab");
+  // Lowercase: the platform PARSES agent paths (AgentPath in apps/os
+  // .../agent-presence.ts) and rejects the stamp's uppercase T and Z outright.
+  expect(noteChatPath(path)).toBe("/agents/mobile/note-2026-08-12t15-01-20-841z-x7ab");
+  expect(noteChatPath(path)).toMatch(/^\/agents\/[a-z0-9_-]+(?:\/[a-z0-9_-]+)*$/);
   // Same note, same thread — tapping 💬 twice must not litter the chat list.
   expect(noteChatPath(path)).toBe(noteChatPath(path));
 });

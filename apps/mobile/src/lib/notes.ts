@@ -57,9 +57,20 @@ export function isNoteFilePath(path: string): boolean {
 /** The chat about a note lives at a path DERIVED from the note, so tapping
  * "chat about this" twice continues one conversation instead of littering the
  * chat list with a new thread each time. The chat list is the unfiltered
- * /agents catalogue, so the conversation is reachable later like any other. */
+ * /agents catalogue, so the conversation is reachable later like any other.
+ *
+ * Lowercased and scrubbed because the platform PARSES agent paths rather than
+ * repairing them (apps/os .../agent-presence.ts AgentPath): "/agents/" then
+ * lowercase [a-z0-9_-] segments, nothing else. A note's filename stamp
+ * carries an uppercase T and Z, so the obvious derivation is rejected. */
 export function noteChatPath(notePath: string): string {
-  return `/agents/mobile/note-${notePath.split("/").pop()!.replace(/\.md$/, "")}`;
+  const stem = notePath
+    .split("/")
+    .pop()!
+    .replace(/\.md$/, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-");
+  return `/agents/mobile/note-${stem}`;
 }
 
 /** The first message of a note-chat, typed into the composer rather than
