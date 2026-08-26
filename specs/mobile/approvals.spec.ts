@@ -147,6 +147,13 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
       type: "events.iterate.com/agent/configured",
       payload: { config: { llm: { model: "intercepted/driver" }, llmRequestDebounceMs: 250 } },
     });
+    // Cold script isolates on a fresh preview deploy take many seconds before
+    // script-run-started, and no spinner covers that window (a known product
+    // latency, documented in notifications.spec.ts). One throwaway run pays
+    // the cold start HERE, before the UI acts start their waits. The settle
+    // poll below filters to agent-authored executions so this run stays
+    // invisible to the count.
+    await agent.capabilityHost.runScript("async () => 'warm'");
 
     // Each script narrates its own outcome (success or error) and returns
     // nothing — an undefined script result ends the turn loop, so no second
@@ -220,7 +227,8 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     // is the upper bound of batch 1's thread-context fold (asserted on the
     // approvals screen below), so lane 2's status appends must land after
     // it. Settlement also implies run 1's narration already appended — the
-    // script sends it before returning.
+    // script sends it before returning. Agent-authored executions only: the
+    // warm-up run above settles on this stream too.
     await expect
       .poll(
         async () =>
@@ -228,6 +236,10 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
             await itx.streams.get(agentPath).getEvents({
               eventTypes: ["events.iterate.com/capability-host/script-run-settled"],
             })
+          ).filter((event) =>
+            String((event.payload as { executionId?: string }).executionId).startsWith(
+              "agent-output:",
+            ),
           ).length,
       )
       .toBe(1);
