@@ -3,7 +3,7 @@ status: in-review
 size: medium
 ---
 
-# Codemode script reuse: `itx.previousScriptAsHelperFunction`
+# Codemode script reuse: `itx.capabilityHost.previousScriptHelper`
 
 ## Status summary
 
@@ -39,9 +39,26 @@ async itx => {
 }
 ```
 
-## Design (as built)
+## Design (as built — redesigned after Misha's review)
 
-`itx.previousScriptAsHelperFunction({ eventOffset, parameters })`:
+The original build manufactured a plain-function callable inside the
+dynamic-worker harness ("RPC can't return a function"). Misha flagged that as
+a red flag and relaxed the API to a handle with a method — which is the itx
+surface's native shape, so the whole harness workaround was deleted:
+
+```ts
+const h = await itx.capabilityHost.previousScriptHelper({
+  eventOffset: results[0].offset,
+  parameters: [{ name: "n", content: "1234567890n" }],
+})
+return await h.run({ n: 987n })
+```
+
+It lives on the capability host (next to runScript/getScriptResult/
+setPreamble — where the script journal lives), works in every runtime (CLI,
+REPL, workers, codemode), and is typed via the generated api.
+
+`previousScriptHelper({ eventOffset, parameters })`:
 
 1. `eventOffset` accepts any of the three offsets the agent might know: the
    `script-run-requested` event, the `script-run-settled` event (what
@@ -49,16 +66,16 @@ async itx => {
    the script. Resolution: point-read by public-door idempotency key, then a
    bounded forward scan for agent-lane requests (their idempotency keys carry
    the agent processor's prefix).
-2. Each parameter's `name` must be a valid identifier not already appearing
-   in the script; its `content` must occur **exactly once** (count reported
-   in the error). The occurrence is replaced with `name`.
-3. Returns `(itx, vars) => result`. Calling it renders an envelope — the new
-   values as consts (serialized as JS literals, bigint included) that the
-   swapped identifiers close over — and submits it as a **journaled child
-   script run** via `capabilityHost.runScript`, so the reuse is a
-   self-contained auditable record. The callable itself is manufactured in
-   the dynamic-worker harness (`script-execution-entrypoint.ts`): RPC cannot
-   return a plain function and script isolates have no `eval`.
+2. Each parameter's `content` must occur **exactly once** (count reported in
+   the error) and be a value expression (statement-shaped and
+   template-interior content rejected with teaching errors). The occurrence
+   is swapped for a **generated alias** (`__reuse_<name>`, deterministically
+   suffixed until free — Misha's suggestion), so the caller's `name` never
+   collides with the script's own identifiers.
+3. Returns a `ReusableScript` handle; `run(vars)` renders an envelope — the
+   new values as consts (serialized as JS literals, bigint included) bound
+   to the aliases — and submits it as a **journaled child script run** via
+   `runScript`, so the reuse is a self-contained auditable record.
 
 Supporting changes:
 
@@ -66,14 +83,10 @@ Supporting changes:
   previously left no `results` row, making the common send-message-and-finish
   script unaddressable. Every settled script now keeps an offset handle;
   void successes render as `{ offset, executionId, done: true }`.
-- **Typecheck prelude** types the member on `Itx` (harness-only surface, so
-  it is not on the generated Project type). Kept on the same prelude line as
-  the alias — the prelude's line accounting must not shift.
 - **Prompt teach**: one bullet in the output-formatting section; prompt
   ceiling raised 4250 → 4350 with the raise argued in the constant's comment
   log (the sanctioned mechanism per that file).
-- `prepareScriptReuse` RPC on the capability host is the server half;
-  regenerated itx api.
+- Regenerated itx api (`ReusableScript` interface + the host method).
 
 ## Checklist
 
@@ -154,11 +167,23 @@ Supporting changes:
 
 ## Follow-up ideas (deliberately out of scope)
 
-- Suggest a free parameter name in the collision error (models pick `n`
-  first every time; a suggestion would save one corrective round).
 - Precise per-parameter vars typing via the `typeof`-placeholder trick from
   the original sketch.
 - A `contains`/search addressing mode so the agent can name a past script by
   content rather than offset.
-- `pnpm cli itx run` and the browser REPL don't manufacture the harness
-  callable — the helper exists only in capability-host script executions.
+
+## Redesign log (post-review)
+
+Misha's feedback replaced the harness-manufactured callable with a plain RPC
+handle (`ReusableScript.run(vars)`) on the capability host, and replaced
+name-collision *errors* with generated aliases (no collision class at all —
+it had been the first-attempt failure in every eval round). The harness and
+typecheck-prelude special cases were reverted wholesale; the collision
+follow-up idea above became moot.
+
+Eval round 4 (new API): **SUCCESS on the first attempt** — zero failed reuse
+attempts (round 3 needed two corrective rounds before the aliasing change).
+Turn 2: one 239-char reuse script via `results[0].offset`, the journaled
+child run, and the allowed prose-correction message. 562 chars of turn-2
+agent-authored script vs 2,359 for turn 1
+(`evals/runs.ignoreme/script-reuse/1787770331931/`).
