@@ -373,8 +373,13 @@ export function NoteCaptureOverlay() {
   }
 
   const canSend = draft.trim() !== "" || attachments.length > 0;
-  const pickMore = async () =>
-    setAttachments([...attachments, ...(await pickImages({ selectionLimit: 4 }))]);
+  const pickMore = async () => {
+    // Resolve the picker BEFORE touching state: it can stay open for many
+    // seconds, and a snapshot taken at press time would overwrite any strip
+    // tile whose transcode finished meanwhile.
+    const picked = await pickImages({ selectionLimit: 4 });
+    setAttachments((prev) => [...prev, ...picked]);
+  };
   const feedback =
     capture.data === "pending"
       ? "Saved on this phone — you'll be asked to store it when you open a project"

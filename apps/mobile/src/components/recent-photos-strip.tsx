@@ -38,7 +38,11 @@ const TILE = 100;
 
 export function RecentPhotosStrip(props: {
   attachments: PickedImage[];
-  onAttachmentsChange: (attachments: PickedImage[]) => void;
+  /** Functional-update only: a transcode can finish while the + picker is
+   * open or another tile is still reading, and a callsite that snapshots the
+   * array would overwrite that photo. Passing setAttachments directly is the
+   * whole implementation. */
+  onAttachmentsChange: (update: (prev: PickedImage[]) => PickedImage[]) => void;
   /** Opens the full-screen system picker — the same thing the composer's +
    * button does. It rides along at the END of the strip because that is
    * where you are when the strip ran out of what you wanted. */
@@ -58,7 +62,11 @@ export function RecentPhotosStrip(props: {
     queryKey: ["recent-photos"],
     queryFn: () => readRecentPhotos(RECENT_PHOTOS_LIMIT),
     enabled: access.data === "granted",
-    staleTime: 30_000,
+    // Never stale: the photo you JUST took is the strip's whole point, and
+    // focus-driven refetch (query.ts wires focusManager to AppState) only
+    // fires for stale data — a 30s window would hide exactly the photo you
+    // left the app to take. The read is one cheap getAssetsAsync page.
+    staleTime: 0,
   });
 
   const allow = useMutation({
@@ -67,7 +75,7 @@ export function RecentPhotosStrip(props: {
   });
   const attach = useMutation({
     mutationFn: readPhotoAsAttachment,
-    onSuccess: (picked) => props.onAttachmentsChange([...props.attachments, picked]),
+    onSuccess: (picked) => props.onAttachmentsChange((prev) => [...prev, picked]),
   });
 
   if (access.data === "unavailable" || access.data === undefined) return null;
@@ -112,8 +120,8 @@ export function RecentPhotosStrip(props: {
             loading={attach.isPending && attach.variables?.assetId === photo.assetId}
             onAttach={() => attach.mutate(photo)}
             onDetach={() =>
-              props.onAttachmentsChange(
-                props.attachments.filter((image) => image.assetId !== photo.assetId),
+              props.onAttachmentsChange((prev) =>
+                prev.filter((image) => image.assetId !== photo.assetId),
               )
             }
             photo={photo}
