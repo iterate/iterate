@@ -196,3 +196,11 @@ for `USER_MESSAGE_TYPE`/`ASSISTANT_MESSAGE_TYPE` specifically.
 **Second gotcha, in the spec:** the /notes screen stays mounted underneath the
 pushed chat screen, so an expanded row is still expanded after `goBack()` —
 "re-opening" it there actually closes it.
+
+**Third, caught by CI and not by the laptop:** the seed originally quoted the
+row's `item`, which comes from the file-derived list query. Tap 💬 straight
+after saving an edit and the list may not have refetched yet, so the agent
+would be handed the note's PREVIOUS text. Locally the refetch always won the
+race; against a preview deployment it did not. The seed now reads the note
+file itself (in parallel with the has-anyone-spoken check) and falls back to
+the row only for a note that has since gone.

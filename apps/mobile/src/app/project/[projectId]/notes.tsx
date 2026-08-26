@@ -38,6 +38,7 @@ import {
   latestNoteFactOffset,
   noteChatPath,
   noteChatSeed,
+  parseNoteListItem,
   NOTE_EVENT_TYPES,
   NOTES_REPO_PATH,
   NOTES_WORKSPACE_PATH,
@@ -255,17 +256,26 @@ function NoteRow({
     mutationFn: async () => {
       const project = await getProjectItx(baseUrl, projectId);
       const path = noteChatPath(item.path);
-      const said = await project.streams.get(path).getEvents({
-        afterOffset: 0,
-        eventTypes: [USER_MESSAGE_TYPE, ASSISTANT_MESSAGE_TYPE],
-      });
+      // Quote the note as it is ON THE SERVER, not as this row last saw it.
+      // The row renders a file-derived list query, so straight after an edit
+      // it can still be holding the previous text — and the seed is what the
+      // agent will read, so it has to be the saved note. Falls back to the
+      // row for a note that has since gone.
+      const [said, file] = await Promise.all([
+        project.streams.get(path).getEvents({
+          afterOffset: 0,
+          eventTypes: [USER_MESSAGE_TYPE, ASSISTANT_MESSAGE_TYPE],
+        }),
+        project.workspaces.get(NOTES_WORKSPACE_PATH).readFile(item.path),
+      ]);
+      const note = file === null ? item : parseNoteListItem(item.path, file);
       router.push({
         pathname: "/project/[projectId]/chat",
         params: {
           projectId,
           slug,
           path,
-          ...(said.length === 0 && { seed: noteChatSeed(item) }),
+          ...(said.length === 0 && { seed: noteChatSeed(note) }),
         },
       });
     },
