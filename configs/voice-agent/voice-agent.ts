@@ -388,12 +388,22 @@ const TOOL_OUTPUT_MAX_CHARS = 4_000;
  * The voice model is a mouth, a pair of ears and about 200ms of judgement;
  * anything that needs reading a repo, calling a tool chain, or being RIGHT
  * belongs to a text model with no clock on it. `note_to_self` is the seam:
- * the note goes as a user message to a full agent minted on its own fresh
- * `/agents/voice-notes/<conversationId>` stream — one colleague per
- * conversation, its memory born and discarded with the call — and the
+ * the note goes as a user message to a full agent minted on its own
+ * `/agents/voice-notes/...` stream — ONE COLLEAGUE PER VOICE STREAM, its
+ * memory shared by every conversation the stream ever holds — and the
  * agent's chat reply is read back into the live session as a bracketed
  * note. No new event types: the reply rides `ask()`, so the subscription
  * is untouched and an evicted incarnation merely loses replies in flight.
+ *
+ * PER STREAM, NOT PER CONVERSATION. It was per conversation, and one real
+ * call proved that wrong (prd, 2026-08-26): the idle deadline manufactures
+ * reconnects, each reconnect minted an amnesiac colleague, and "what's
+ * going on?" went to an agent that had never heard the question — which
+ * went spelunking through the platform instead of answering. Meanwhile the
+ * first colleague finished the actual answer into a conversation that no
+ * longer existed. One colleague per stream means the follow-up lands on
+ * the desk that holds the context, and a reply that outlives its own
+ * conversation is spoken into whichever call is live when it arrives.
  * ======================================================================== */
 
 /** How long a note waits for the careful half. Generous: agent first turns
@@ -669,9 +679,9 @@ const VoiceState = z.object({
    * Thinking, fast and slow. The voice model is a mouth, a pair of ears and
    * about 200ms of judgement; with this on it gets a `note_to_self` tool
    * that writes to the careful half — a full LLM agent minted on its own
-   * fresh `/agents/voice-notes/<conversationId>` stream, one per
-   * conversation, whose chat replies are read back into the call as
-   * bracketed notes. The v1 back-office framing, on v2 plumbing.
+   * `/agents/voice-notes/...` stream, ONE PER VOICE STREAM, whose chat
+   * replies are read back into the call as bracketed notes. The v1
+   * back-office framing, on v2 plumbing.
    *
    * ON BY DEFAULT: a voice that cannot leave itself a note is a mouth with
    * no desk, and every stream that shipped without the flag turned out to
@@ -754,7 +764,12 @@ export const VoiceAgentContract = defineProcessorContract({
    * `configured` now means openai. Grok's realtime lane has been down for
    * days and every stream anyone actually talks to names openai; the
    * default should be the provider that answers. Clean break as ever. */
-  version: "11.0.0",
+  /* 12.0.0: one colleague per STREAM, not per conversation — the note agent
+   * lives at a path derived from the voice stream's own, keeps its memory
+   * across reconnects, and its late replies are spoken into whichever call
+   * is live. Per-conversation colleagues at `/agents/voice-notes/<convId>`
+   * are abandoned in place, not migrated. Clean break as ever. */
+  version: "12.0.0",
   description: "Runs a voice call in the stream's own Durable Object, one flush watermark deep.",
   stateSchema: VoiceState,
   events: {
@@ -2750,7 +2765,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
           typeof (modelArgs as { note?: unknown })?.note === "string"
             ? ((modelArgs as { note: string }).note ?? "")
             : String(modelArgs ?? "");
-        this.#noteToColleague(dial, note, append, runInBackground);
+        this.#noteToColleague(note, append, runInBackground);
         output = JSON.stringify({
           status:
             "noted — the reply arrives later as a bracketed note; keep the conversation going",
@@ -2846,24 +2861,38 @@ export class VoiceAgentProcessor extends StreamProcessor<
   }
 
   /**
-   * Conversations whose colleague has been born and briefed by THIS
-   * incarnation — an RPC saver, not the truth: both the create and the brief
-   * dedupe server-side by idempotency key, so a rebuilt incarnation that
-   * re-runs them pays two no-op round trips and nothing else.
+   * The colleague has been born and briefed by THIS incarnation — an RPC
+   * saver, not the truth: both the create and the brief dedupe server-side
+   * by idempotency key, so a rebuilt incarnation that re-runs them pays two
+   * no-op round trips and nothing else.
    */
-  #colleagueBriefed = new Set<string>();
+  #colleagueBriefed = false;
 
   /**
-   * THE SLOW HALF. Mint the conversation's colleague (a full agent on its
-   * own fresh `/agents/voice-notes/<conversationId>` stream), brief it once,
-   * send the note as an ordinary user message, and read its chat reply back
-   * into the live session as a bracketed system item. Fire-and-forget from
-   * the caller's side; the reply races nothing and loses nothing if it never
-   * comes — silence is always an option. An eviction mid-ask loses that one
-   * reply, which is the price of needing no new event types at all.
+   * Where this stream's colleague lives: the voice stream's own path,
+   * re-rooted under `/agents/voice-notes/`. A pure function of `this.path`,
+   * so every conversation on the stream — and every incarnation — reaches
+   * the SAME desk, and a person who knows the call stream can type the
+   * colleague's path from memory. The common `/agents/` prefix is folded
+   * rather than repeated (`/agents/voice/x` → `/agents/voice-notes/voice/x`).
+   */
+  #colleaguePath(): string {
+    const suffix = this.path.startsWith("/agents/")
+      ? this.path.slice("/agents/".length)
+      : this.path.slice(1);
+    return `/agents/voice-notes/${suffix}`;
+  }
+
+  /**
+   * THE SLOW HALF. Mint the stream's colleague (a full agent on its own
+   * `/agents/voice-notes/...` stream), brief it once ever, send the note as
+   * an ordinary user message, and read its chat reply back into the live
+   * session as a bracketed system item. Fire-and-forget from the caller's
+   * side; the reply races nothing and loses nothing if it never comes —
+   * silence is always an option. An eviction mid-ask loses that one reply,
+   * which is the price of needing no new event types at all.
    */
   #noteToColleague(
-    dial: Dial,
     note: string,
     append: ProcessEventArgs<VoiceAgentContract>["append"],
     runInBackground: ProcessEventArgs<VoiceAgentContract>["runInBackground"],
@@ -2887,12 +2916,12 @@ export class VoiceAgentProcessor extends StreamProcessor<
                 };
               };
             }
-          ).agents.get(`/agents/voice-notes/${dial.conversationId}`);
-          if (!this.#colleagueBriefed.has(dial.conversationId)) {
+          ).agents.get(this.#colleaguePath());
+          if (!this.#colleagueBriefed) {
             await agent.create({});
             await agent.append({
               type: "events.iterate.com/agents/context-added",
-              idempotencyKey: this.idempotencyKey(`colleague-brief:${dial.conversationId}`),
+              idempotencyKey: this.idempotencyKey("colleague-brief"),
               payload: {
                 content: COLLEAGUE_BRIEF,
                 key: "voice-agent/colleague-brief",
@@ -2907,17 +2936,25 @@ export class VoiceAgentProcessor extends StreamProcessor<
             // is the done-configuring signal that releases the first turn.
             await agent.append({
               type: "events.iterate.com/agent/configured",
-              idempotencyKey: this.idempotencyKey(`colleague-config:${dial.conversationId}`),
+              idempotencyKey: this.idempotencyKey("colleague-config"),
               payload: { config: { llmRequestDebounceMs: 250 } },
             });
-            this.#colleagueBriefed.add(dial.conversationId);
+            this.#colleagueBriefed = true;
           }
           return await agent.ask({ message: note, timeoutMs: NOTE_REPLY_DEADLINE_MS });
         });
         const text = reply?.payload?.message;
         if (typeof text !== "string" || text.length === 0) return;
-        /* The fence every provider-lane completion wears. */
-        if (this.#dial !== dial) return;
+        /*
+         * INTO WHICHEVER CALL IS LIVE, not the one that asked. The idle
+         * deadline routinely outlives a careful answer, and the colleague
+         * is the same desk across conversations — so a reply that arrives
+         * after its own call died is still the assistant's own thought,
+         * worth speaking into the reconnect. Only a reply that finds NO
+         * call at all is dropped; silence is always an option.
+         */
+        const dial = this.#dial;
+        if (dial === null) return;
         this.#sendControl(
           dial,
           {
@@ -3659,8 +3696,9 @@ export interface SetupVoiceAgentOptions {
   turnDetection?: Record<string, unknown> & { type: string };
   /** Classify the answer into mouth shapes for a face-rendering client. */
   visemes?: boolean;
-  /** `note_to_self` mints a colleague agent per conversation and reads its
-   * chat replies back into the call. ON unless explicitly false — every
+  /** `note_to_self` writes to the stream's one colleague agent (per stream,
+   * not per conversation — contract 12.0.0) and its chat replies are read
+   * back into whichever call is live. ON unless explicitly false — every
    * stream is born with its colleague (contract 10.0.0). */
   colleague?: boolean;
   /** Tools the model may call: name/description/parameters go to the

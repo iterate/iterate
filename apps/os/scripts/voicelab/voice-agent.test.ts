@@ -977,7 +977,7 @@ describe("tools on the birth certificate", () => {
     expect(h.provider.sentOfType("response.create")).toHaveLength(0);
   });
 
-  it("note_to_self mints the conversation's colleague and reads its reply back", async () => {
+  it("note_to_self mints the stream's colleague and reads its reply back", async () => {
     const h = makeHarness();
     const gotten: string[] = [];
     const created: string[] = [];
@@ -1018,9 +1018,6 @@ describe("tools on the birth certificate", () => {
     await h.settle();
     h.provider.completeHandshake();
     await h.settle();
-    const conversationId = (
-      eventsOfType(h, "call-started")[0]!.payload as { conversationId: string }
-    ).conversationId;
 
     /* The certificate had no tools; the colleague flag alone arms the one
      * injected tool and the fast-half framing. */
@@ -1039,9 +1036,10 @@ describe("tools on the birth certificate", () => {
     await h.settle();
     /* The debt settles NOW; the model keeps the floor. */
     expect(toolOutputs(h)[0]!.output).toContain("noted");
-    /* One colleague, on ITS OWN fresh agent stream named for the call. */
-    expect(gotten[0]).toBe(`/agents/voice-notes/${conversationId}`);
-    expect(created).toEqual([`/agents/voice-notes/${conversationId}`]);
+    /* One colleague, on ITS OWN agent stream named for THIS stream — the
+     * same desk for every conversation the stream ever holds. */
+    expect(gotten[0]).toBe("/agents/voice-notes/voice/test");
+    expect(created).toEqual(["/agents/voice-notes/voice/test"]);
     /* Born briefed, as a system context item that triggers no turn. */
     expect(briefs[0]!.type).toBe("events.iterate.com/agents/context-added");
     expect(briefs[0]!.payload.role).toBe("system");
@@ -1061,6 +1059,95 @@ describe("tools on the birth certificate", () => {
       "[note from your thinking half] The March invoice was never sent.",
     );
     expect(h.provider.sentOfType("response.create")).toHaveLength(1);
+  });
+
+  /*
+   * THE REPLY THAT OUTLIVES ITS CALL, which is every hard question's shape:
+   * the idle deadline (60s) is shorter than the note deadline (180s), so a
+   * person who asks something slow and then waits quietly gets hung up on
+   * before the answer exists. Measured live (prd, 2026-08-26): four calls,
+   * four amnesiac per-conversation colleagues, a correct answer computed
+   * twice and spoken zero times. The colleague is per STREAM now, and its
+   * late reply is spoken into whichever call is live when it arrives.
+   */
+  it("a note reply that outlives its call is spoken into the next one", async () => {
+    const h = makeHarness();
+    const gotten: string[] = [];
+    const created: string[] = [];
+    const asked: string[] = [];
+    let resolveReply!: (reply: { payload: { message: string } }) => void;
+    h.projectRoot.current = {
+      agents: {
+        get(path: string) {
+          gotten.push(path);
+          return {
+            create: async () => {
+              created.push(path);
+            },
+            append: async () => {},
+            ask: async ({ message }: { message: string }) => {
+              asked.push(message);
+              return new Promise((resolve) => {
+                resolveReply = resolve;
+              });
+            },
+          };
+        },
+      },
+    };
+    await callIsLive(h, CLIENT_TAKES_TURNS);
+    h.provider.push({
+      type: "response.function_call_arguments.done",
+      call_id: "call_10",
+      name: "note_to_self",
+      arguments: JSON.stringify({ note: "factorize the first 23 digits of pi" }),
+    });
+    await h.settle();
+    expect(asked).toEqual(["factorize the first 23 digits of pi"]);
+    const firstSocket = h.provider;
+
+    /* The person waits quietly for the answer, so the idle deadline kills
+     * the call while the colleague is still thinking. */
+    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
+    await h.settle();
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
+
+    /* They press again: a fresh call, a fresh socket, the SAME stream. */
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
+    expect(eventsOfType(h, "call-started")).toHaveLength(2);
+    expect(h.provider).not.toBe(firstSocket);
+
+    /* The reply lands in the LIVE call, never the dead one. */
+    resolveReply({ payload: { message: "The factorization is done." } });
+    await h.settle();
+    const items = h.provider.sentOfType("conversation.item.create") as {
+      item: { type: string; content?: { text: string }[] };
+    }[];
+    const note = items.find((entry) => entry.item.type === "message");
+    expect(note).toBeDefined();
+    expect(note!.item.content![0]!.text).toBe(
+      "[note from your thinking half] The factorization is done.",
+    );
+    const staleItems = firstSocket.sentOfType("conversation.item.create") as {
+      item: { type: string };
+    }[];
+    expect(staleItems.filter((entry) => entry.item.type === "message")).toHaveLength(0);
+
+    /* A follow-up in the new call reaches the same desk: one colleague,
+     * created and briefed once, remembering across the reconnect. */
+    h.provider.push({
+      type: "response.function_call_arguments.done",
+      call_id: "call_11",
+      name: "note_to_self",
+      arguments: JSON.stringify({ note: "now double-check it" }),
+    });
+    await h.settle();
+    expect(new Set(gotten)).toEqual(new Set(["/agents/voice-notes/voice/test"]));
+    expect(created).toEqual(["/agents/voice-notes/voice/test"]);
+    expect(asked).toEqual(["factorize the first 23 digits of pi", "now double-check it"]);
   });
 
   it("a press during the goodbye un-decides the hang-up", async () => {

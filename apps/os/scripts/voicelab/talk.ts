@@ -185,9 +185,10 @@ export interface TalkOptions extends Partial<VoicelabConnectOptions> {
   /** Classify the answer into mouth shapes for a face-rendering board. */
   visemes?: boolean;
   /**
-   * Thinking fast and slow: `note_to_self` mints a colleague agent on a
-   * fresh `/agents/voice-notes/<conversationId>` stream per conversation
-   * and reads its chat replies back into the call.
+   * Thinking fast and slow: `note_to_self` writes to the stream's ONE
+   * colleague agent — minted under `/agents/voice-notes/` at a path derived
+   * from this stream's, remembering across every call on the stream — and
+   * its chat replies are read back into whichever call is live.
    *
    * ON BY DEFAULT — every stream is born with its colleague; pass
    * `--colleague false` to install one without.
