@@ -1,0 +1,157 @@
+import { expect } from "@playwright/test";
+import { connectAdminItx } from "./test-support/forged-session.ts";
+import { test } from "./test-support/test.ts";
+
+// Script reuse (itx.capabilityHost.previousScriptHelper) through the real
+// chat UI, deterministically: the "model" is this spec's own interceptor.
+// Turn 1 answers with a full Pollard's-rho factorization script; turn 2
+// answers with a few-line reuse script pointing at turn 1's journaled run
+// (results[0].scriptOffset). Both scripts EXECUTE for real — the child run
+// re-runs the original algorithm with the new number — and the spec opens
+// each turn's codemode snippet in the feed to show the shortcut.
+test("a repeat request reuses the previous turn's journaled script instead of re-deriving it", async ({
+  helpers,
+  page,
+  baseURL,
+}) => {
+  await using fixture = await helpers.createFixture("agent-script-reuse");
+  if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
+
+  using admin = await connectAdminItx(baseURL);
+  using project = admin.projects.get(fixture.project.id);
+  const agentPath = `/agents/factorizer-${crypto.randomUUID().slice(0, 8)}`;
+  using agent = project.agents.get(agentPath);
+  await agent.create();
+  await agent.append({
+    type: "events.iterate.com/agent/configured",
+    payload: { config: { llm: { model: "intercepted/factorizer" }, llmRequestDebounceMs: 250 } },
+  });
+
+  // The "model": turn 1 derives, turn 2 reuses. Routing is just the count of
+  // user messages in the turn's chat projection.
+  using _interception = await project.ai.intercept(async (call) => {
+    if (call.source !== "agent-turn") throw new Error(`unexpected source: ${call.source}`);
+    const userTurns = call.body.messages.filter((message) => message.role === "user").length;
+    const script = userTurns >= 2 ? REUSE_SCRIPT : FACTORIZE_SCRIPT;
+    return ["```ts", script, "```"].join("\n");
+  });
+
+  await page.goto(`/projects/${fixture.project.slug}/agents/streams${agentPath}`);
+  const composer = page.getByPlaceholder("Message this agent");
+  const send = page.getByRole("button", { name: "Send message" });
+
+  // Turn 1: the long way. The script really runs; the answer is computed.
+  await composer.fill("prime factorize 52479543428582704627");
+  await send.click();
+  await page.getByText("52479543428582704627 = 6203868971 × 8459163737").waitFor();
+
+  // Turn 2: the reused way. The child run executes turn 1's algorithm with
+  // the new number — the correct product proves real execution, not prose.
+  await composer.fill("now do 66778601389380731119");
+  await send.click();
+  await page.getByText("66778601389380731119 = 7316102869 × 9127619251").waitFor();
+
+  // Open turn 1's codemode snippet: the full derived algorithm.
+  const activities = page.getByRole("button", { name: /Ran code/ });
+  await activities.first().click();
+  const firstScript = page.locator(".cm-content").first();
+  await firstScript.waitFor();
+  await expect(firstScript).toContainText("const n = 52479543428582704627n");
+  await expect(firstScript).toContainText("modPow");
+  await activities.first().click(); // collapse again before opening turn 2
+
+  // Open turn 2's snippet: a few lines pointing at results[0].scriptOffset.
+  await activities.nth(1).click();
+  const reuseRound = page.getByTestId("agent-feed-round");
+  if (await reuseRound.count()) await reuseRound.first().click();
+  const secondScript = page.locator(".cm-content").first();
+  await secondScript.waitFor();
+  await expect(secondScript).toContainText("previousScriptHelper");
+  await expect(secondScript).toContainText("results[0].scriptOffset");
+  await expect(secondScript).not.toContainText("modPow");
+});
+
+// Turn 1's scripted reply: a real, working factorization (Pollard's rho +
+// deterministic Miller–Rabin). The message interpolates `n`, so a reused run
+// reports whatever number it was actually given.
+const FACTORIZE_SCRIPT = `async (itx) => {
+  const n = 52479543428582704627n;
+  const gcd = (a: bigint, b: bigint): bigint => {
+    while (b) [a, b] = [b, a % b];
+    return a;
+  };
+  const modPow = (a: bigint, e: bigint, m: bigint): bigint => {
+    let r = 1n;
+    a %= m;
+    while (e > 0n) {
+      if (e & 1n) r = (r * a) % m;
+      a = (a * a) % m;
+      e >>= 1n;
+    }
+    return r;
+  };
+  const isPrime = (x: bigint): boolean => {
+    if (x < 2n) return false;
+    for (const p of [2n, 3n, 5n, 7n, 11n, 13n, 17n, 19n, 23n, 29n, 31n, 37n]) {
+      if (x === p) return true;
+      if (x % p === 0n) return false;
+    }
+    let d = x - 1n;
+    let s = 0;
+    while ((d & 1n) === 0n) {
+      d >>= 1n;
+      s++;
+    }
+    for (const a of [2n, 325n, 9375n, 28178n, 450775n, 9780504n, 1795265022n]) {
+      if (a % x === 0n) continue;
+      let y = modPow(a, d, x);
+      if (y === 1n || y === x - 1n) continue;
+      let composite = true;
+      for (let r = 1; r < s; r++) {
+        y = (y * y) % x;
+        if (y === x - 1n) {
+          composite = false;
+          break;
+        }
+      }
+      if (composite) return false;
+    }
+    return true;
+  };
+  const rho = (x: bigint): bigint => {
+    if (x % 2n === 0n) return 2n;
+    for (let c = 1n; ; c++) {
+      const f = (v: bigint) => (v * v + c) % x;
+      let a = 2n, b = 2n, d = 1n;
+      while (d === 1n) {
+        a = f(a);
+        b = f(f(b));
+        d = gcd(a > b ? a - b : b - a, x);
+      }
+      if (d !== x) return d;
+    }
+  };
+  const factors: bigint[] = [];
+  const split = (x: bigint): void => {
+    if (x === 1n) return;
+    if (isPrime(x)) {
+      factors.push(x);
+      return;
+    }
+    const d = rho(x);
+    split(d);
+    split(x / d);
+  };
+  split(n);
+  factors.sort((p, q) => (p < q ? -1 : 1));
+  await itx.chat.sendMessage(\`\${n} = \${factors.join(" × ")}\`);
+}`;
+
+// Turn 2's scripted reply: the whole point of the feature, in four lines.
+const REUSE_SCRIPT = `async (itx) => {
+  const helper = await itx.capabilityHost.previousScriptHelper({
+    eventOffset: results[0].scriptOffset,
+    parameters: { n: 52479543428582704627n },
+  });
+  await helper.run({ n: 66778601389380731119n });
+}`;
