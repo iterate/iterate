@@ -146,14 +146,25 @@ export function renderScriptReuseEnvelope(input: {
   const consts = input.parameters
     .map((binding) => {
       const value = input.vars[binding.name];
-      // The typecheck gate enforces this statically for agent scripts; this
-      // is the same message for the gate-free lanes (CLI, direct RPC).
+      // The typecheck gate enforces this statically for agent scripts; these
+      // are the same messages for runtimes the gate does not cover (the CLI
+      // runtime, direct RPC callers).
+      if (
+        typeof value !== "string" &&
+        typeof value !== "number" &&
+        typeof value !== "boolean" &&
+        typeof value !== "bigint"
+      ) {
+        throw new Error(
+          `run() var ${JSON.stringify(binding.name)} must be a primitive; got ${typeof value}.`,
+        );
+      }
       if (typeof value !== binding.kind) {
         throw new Error(
           `run() var ${JSON.stringify(binding.name)} must be a ${binding.kind} (the original parameter's type); got ${typeof value}.`,
         );
       }
-      return `  const ${binding.alias} = ${primitiveLiteral(value as ScriptReuseValue)};`;
+      return `  const ${binding.alias} = ${primitiveLiteral(value)};`;
     })
     .join("\n");
   return [

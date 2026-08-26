@@ -6137,6 +6137,13 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
         `Event at offset ${eventOffset} is ${JSON.stringify(requested.type)}, not a script-run-requested event. Pass a results row — every retained script result carries scriptOffset, the reuse handle.`,
       );
     }
+    // The casts below are pinned by the event-type guard above: a
+    // script-run-requested event's payload is RunScriptCommand
+    // ({ code, executionId, expiresAt } — capability-host contract), appended
+    // through the contract's own buildEvent. StreamEvent.payload is untyped
+    // at this read boundary (getEvent returns any journaled event), and
+    // re-parsing with the contract schema here would duplicate the append-side
+    // validation for no new guarantee.
     const sourceExecutionId = (requested.payload as { executionId: string }).executionId;
     // A failed run is (almost) never the intended source — observed live: a
     // rejected reuse attempt becomes results[0], the model points the next
