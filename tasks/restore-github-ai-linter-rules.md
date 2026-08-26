@@ -5,8 +5,8 @@ branch: fix/restore-ai-linter-rules
 # Restore GitHub AI lint reviews
 
 Status: The production route and processor are restored, and `iterate[bot]`
-commented on the deliberate violation. Focused and full static checks pass;
-the full test aggregate has one unrelated expired parked-test date.
+commented on the deliberate violation. The metaphor rule now forbids suggested
+changes in both its prompt and publisher; production proof is still pending.
 
 ## Goal
 
@@ -21,6 +21,8 @@ explains why the word is literal or justified.
   lanes, physical doors, or actual joined/material seams.
 - A short comment immediately above an intentional non-literal use is the
   explicit escape hatch.
+- Metaphor diagnostics explain the unclear concept but do not propose a rename
+  or publish a GitHub suggested-change patch.
 - The task is complete only when a deliberately offending variable in this PR
   causes a visible `iterate[bot]` review comment.
 
@@ -31,6 +33,7 @@ explains why the word is literal or justified.
 - [x] Add the banned-metaphor rule to the canonical rules and hosted linter config. _Added `terminology/no-metaphorical-lane-door-seam` to root policy, the default template, and production config policy v6._
 - [x] Add one obvious offending variable solely as an end-to-end review probe. _`configs/default/worker.ts` names the rule-path array `reviewLane` without an exception._
 - [x] Prove `iterate[bot]` comments on that variable, then preserve the proof in the PR. _Review `5016262887` and inline comments `3850695732`/`3850695742` flag `reviewLane` under the new rule._
+- [ ] Prove the metaphor diagnostic is explanation-only, even if the model emits a fix. _The rule now declares `suggestions: forbidden`; the publisher has regression coverage that strips a model-supplied patch._
 - [x] Run focused tests and checks for every changed code/config surface. _Template typecheck and 12 focused tests pass; full typecheck, lint, Knip, and formatting pass. The full test aggregate reaches an unrelated expired `revisit by 2026-08-24` marker in `specs/mobile/media.spec.ts`._
 - [ ] Move this task to `tasks/complete/` once the live proof and CI are green.
 
@@ -62,3 +65,6 @@ explains why the word is literal or justified.
   `terminology/no-metaphorical-lane-door-seam` diagnostics, and published
   comment-only review `5016262887` plus a neutral Check Run. The review-bot
   connection subscription finished at zero lag with no recorded error.
+- 2026-08-26: Added a generic per-rule `suggestions` policy. Rules default to
+  `allowed`, while the metaphor rule uses `forbidden`; the agent prompt omits a
+  fix and the mechanical publisher refuses to render one even if supplied.

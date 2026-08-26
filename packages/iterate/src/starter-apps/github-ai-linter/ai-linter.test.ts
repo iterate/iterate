@@ -23,6 +23,7 @@ const analysisRequest = (headSha: string): GithubAiLinterAnalysisRequested => ({
       files: ["**/*.ts"],
       invariant: "Keep the example structurally sound.",
       severity: "error",
+      suggestions: "allowed",
     },
   },
   rulesCommit: "rules-abc",
@@ -283,6 +284,103 @@ describe("GithubAiLinterProcessor", () => {
     );
     expect(octokit.rest.pulls.get).toHaveBeenCalledTimes(2);
     expect(octokit.paginate).toHaveBeenCalledOnce();
+  });
+
+  it("does not publish a suggested change for a rule that forbids suggestions", async () => {
+    const createReview = vi.fn(async () => ({
+      data: {
+        html_url: "https://github.com/acme/widgets/pull/7#pullrequestreview-42",
+        id: 42,
+      },
+    }));
+    const project = {
+      integrations: {
+        github: {
+          get: () => ({
+            octokit: {
+              paginate: vi.fn(async () => []),
+              rest: {
+                checks: {
+                  create: vi.fn(async () => ({
+                    data: {
+                      html_url: "https://github.com/acme/widgets/runs/84",
+                      id: 84,
+                    },
+                  })),
+                  listForRef: vi.fn(async () => ({ data: { check_runs: [] } })),
+                },
+                pulls: {
+                  createReview,
+                  get: vi.fn(async () => ({
+                    data: {
+                      base: { sha: "base-abc" },
+                      draft: false,
+                      head: { sha: "head-abc" },
+                      state: "open",
+                    },
+                  })),
+                },
+              },
+            },
+          }),
+        },
+      },
+    };
+
+    await publishGithubAiLinterReview(project as unknown as Project, {
+      analysisRequestOffset: 1,
+      assessment: { summary: "One unclear metaphor remains.", verdict: "comment" },
+      diagnostics: [
+        {
+          classification: "new",
+          diagnostic: {
+            diagnosticKey: "terminology/no-metaphorical-lane-door-seam:src/example.ts:review-lane",
+            filename: "src/example.ts",
+            fix: {
+              content: "const reviewQueue = rules;",
+              kind: "suggestion",
+              span: { endLine: 10, startLine: 10 },
+            },
+            help: "Explain the actual role of this value and rename the surrounding concepts.",
+            labels: [{ span: { endLine: 10, startLine: 10 } }],
+            message: "`reviewLane` uses lane as a metaphor.",
+            ruleName: "terminology/no-metaphorical-lane-door-seam",
+            severity: "error",
+          },
+          eventOffset: 2,
+          suppression: null,
+        },
+      ],
+      request: {
+        ...analysisRequest("head-abc"),
+        rules: {
+          "terminology/no-metaphorical-lane-door-seam": {
+            files: ["**/*.ts"],
+            invariant: "Do not use lane as a metaphor.",
+            severity: "error",
+            suggestions: "forbidden",
+          },
+        },
+      },
+      resolvedDiagnostics: [],
+    });
+
+    expect(createReview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        comments: [
+          {
+            body: [
+              "**[terminology/no-metaphorical-lane-door-seam]** _new_",
+              "`reviewLane` uses lane as a metaphor.",
+              "Explain the actual role of this value and rename the surrounding concepts.",
+            ].join("\n\n"),
+            line: 10,
+            path: "src/example.ts",
+            side: "RIGHT",
+          },
+        ],
+      }),
+    );
   });
 
   it("settles an unfinished analysis as cancelled when a new head arrives", async () => {

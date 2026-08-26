@@ -819,6 +819,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "id: terminology/no-metaphorical-lane-door-seam\n" +
       "severity: error\n" +
       "files: [\"**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}\"]\n" +
+      "suggestions: forbidden\n" +
       "---\n" +
       "\n" +
       "# Ban lane, door, and seam as code metaphors\n" +
@@ -836,9 +837,12 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "const lane = vendor.lane;\n" +
       "```\n" +
       "\n" +
-      "A generic comment that merely restates the metaphor is not an excuse. Prefer a\n" +
-      "plain name that says what the code does, such as `queue`, `boundary`, `phase`,\n" +
-      "`path`, `channel`, `adapter`, or `entrypoint`.\n",
+      "A generic comment that merely restates the metaphor is not an excuse.\n" +
+      "\n" +
+      "Do not attach a suggested-change patch or propose a replacement identifier.\n" +
+      "The metaphor often means the surrounding model or explanation is unclear, and\n" +
+      "the right fix may rename several related concepts or rewrite a whole paragraph.\n" +
+      "State what is unclear and leave the scope and wording of the fix to the author.\n",
   },
   {
     path: "rules/typescript/explain-type-cast.md",
@@ -928,7 +932,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "export default class ProjectWorker extends IterateWorkerEntrypoint {\n" +
       "  #aiLintApp = GithubAiLinter.create(this.env, {\n" +
-      "    policyVersion: \"3\",\n" +
+      "    policyVersion: \"4\",\n" +
       "    rules: {\n" +
       "      paths: reviewLane,\n" +
       "      repoPath: \"/repos/config\",\n" +

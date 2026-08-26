@@ -28,7 +28,7 @@ const reviewLane = [
 
 export default class ProjectWorker extends IterateWorkerEntrypoint {
   #aiLintApp = GithubAiLinter.create(this.env, {
-    policyVersion: "3",
+    policyVersion: "4",
     rules: {
       paths: reviewLane,
       repoPath: "/repos/config",

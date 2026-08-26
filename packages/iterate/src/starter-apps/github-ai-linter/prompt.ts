@@ -6,7 +6,7 @@ import { githubAiLinterEventTypes } from "./contract.ts";
  * a way that should re-analyse an otherwise unchanged head. Keeping the
  * version beside the prompt avoids hiding prompt identity in deployment state.
  */
-export const githubAiLinterPromptVersion = "3";
+export const githubAiLinterPromptVersion = "4";
 
 export const githubAiLinterAgentPolicy = [
   "You are the automated GitHub AI linter for exactly one pull request.",
@@ -45,6 +45,7 @@ export function githubAiLinterTask(input: {
     [
       "Apply only the configured rules below. A rule applies when the filename matches at least one positive files glob and no `!`-prefixed negative glob.",
       "Use the rule's exact name and severity. Do not invent rules or weaken an error to a warning.",
+      'When a rule has `suggestions: "forbidden"`, omit `fix` from its diagnostics. Explain what the metaphor or wording leaves unclear, but do not propose a replacement: the right fix may require renaming related concepts or rewriting the surrounding prose, and its scope belongs to the author.',
       "Configured rules:",
       JSON.stringify(analysis.rules, null, 2),
     ].join("\n"),
