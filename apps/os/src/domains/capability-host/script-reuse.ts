@@ -27,6 +27,17 @@ const RESERVED_WORDS = new Set([
  * reliably, so they are excluded on purpose. */
 export type ScriptReuseValue = string | number | boolean | bigint;
 
+/** The runtime boundary check for {@link ScriptReuseValue}: parameterize
+ * entries and run() vars both arrive over RPC as unknown values. */
+function isScriptReuseValue(value: unknown): value is ScriptReuseValue {
+  return (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  );
+}
+
 export type ReuseParameterBinding = {
   alias: string;
   kind: "bigint" | "boolean" | "number" | "string";
@@ -46,12 +57,15 @@ export function reparameterizeScript(input: {
     if (!IDENTIFIER_PATTERN.test(name) || RESERVED_WORDS.has(name)) {
       throw new Error(`Parameter name ${JSON.stringify(name)} is not a valid JS identifier.`);
     }
-    const kind = typeof value;
-    if (kind !== "string" && kind !== "number" && kind !== "boolean" && kind !== "bigint") {
+    if (!isScriptReuseValue(value)) {
       throw new Error(
-        `Parameter ${JSON.stringify(name)} must be a string, number, boolean, or bigint (its literal text is located in the script); got ${kind}.`,
+        `Parameter ${JSON.stringify(name)} must be a string, number, boolean, or bigint (its literal text is located in the script); got ${typeof value}.`,
       );
     }
+    // The cast is pinned by the guard above: `typeof` on a ScriptReuseValue
+    // can only produce these four tags, but TypeScript types the operator's
+    // result as the full eight-tag union regardless of the operand.
+    const kind = typeof value as ReuseParameterBinding["kind"];
     if (value === "") {
       throw new Error(
         `Parameter ${JSON.stringify(name)} is an empty string — too ambiguous to locate in the script.`,
@@ -149,12 +163,7 @@ export function renderScriptReuseEnvelope(input: {
       // The typecheck gate enforces this statically for agent scripts; these
       // are the same messages for runtimes the gate does not cover (the CLI
       // runtime, direct RPC callers).
-      if (
-        typeof value !== "string" &&
-        typeof value !== "number" &&
-        typeof value !== "boolean" &&
-        typeof value !== "bigint"
-      ) {
+      if (!isScriptReuseValue(value)) {
         throw new Error(
           `run() var ${JSON.stringify(binding.name)} must be a primitive; got ${typeof value}.`,
         );
