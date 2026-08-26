@@ -38,6 +38,22 @@ export function reparameterizeScript(input: {
     if (content === "") {
       throw new Error(`Parameter ${JSON.stringify(name)} has empty content.`);
     }
+    // Substitution is VALUE substitution, not text splicing: the occurrence
+    // is replaced by the identifier and the identifier is bound to the
+    // caller's runtime value. Live agents were observed passing a whole
+    // `const n = 123n;` line (deleting the declaration leaves `n` dangling)
+    // or a template-string interior (which would become the literal identifier
+    // text inside the string) — reject both with the correct recipe.
+    if (/[;\n]/.test(content) || /^\s*(const|let|var)\b/.test(content)) {
+      throw new Error(
+        `Parameter ${JSON.stringify(name)}: content must be the exact text of a single VALUE expression from the script (e.g. "23409823948238439732889n"), not a statement or line. The platform swaps that expression for the identifier ${JSON.stringify(name)} and binds your runtime vars value to it — so keep the script's \`const x = …\` structure and target only the value.`,
+      );
+    }
+    if (content.includes("${") && !content.trimStart().startsWith("`")) {
+      throw new Error(
+        `Parameter ${JSON.stringify(name)}: content looks like the inside of a template string — swapping it would put the literal text ${JSON.stringify(name)} into the string. Target a value expression instead (a literal like "123n", or the whole backtick-quoted template).`,
+      );
+    }
     // The name will be injected as a `const` around the script; any existing
     // use of the same word in the script would shadow or collide with it.
     // (Word-boundary matching is deliberately conservative: `foo.number` also

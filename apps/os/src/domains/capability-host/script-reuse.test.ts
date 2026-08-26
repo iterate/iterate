@@ -40,6 +40,21 @@ test("content must appear exactly once", () => {
   ).toThrowError(/must appear exactly once/);
 });
 
+test("rejects statement-shaped and template-interior content with a teaching error (observed live splice-thinking)", () => {
+  expect(() =>
+    reparameterizeScript({
+      code: FACTORIZE,
+      parameters: [{ name: "declaration", content: "const target = 23409823948238439732889n;" }],
+    }),
+  ).toThrowError(/single VALUE expression.*not a statement/s);
+  expect(() =>
+    reparameterizeScript({
+      code: "async (itx) => itx.chat.sendMessage(`42 = **${answer}**`)",
+      parameters: [{ name: "messageBody", content: "42 = **${answer}**" }],
+    }),
+  ).toThrowError(/inside of a template string/);
+});
+
 test("rejects names that are not identifiers, are reserved, repeat, or already appear in the script", () => {
   const parameters = (name: string) => [{ name, content: "23409823948238439732889n" }];
   expect(() => reparameterizeScript({ code: FACTORIZE, parameters: parameters("not valid") })) //
