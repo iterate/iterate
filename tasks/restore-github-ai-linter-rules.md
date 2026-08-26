@@ -68,3 +68,6 @@ explains why the word is literal or justified.
 - 2026-08-26: Added a generic per-rule `suggestions` policy. Rules default to
   `allowed`, while the metaphor rule uses `forbidden`; the agent prompt omits a
   fix and the mechanical publisher refuses to render one even if supplied.
+- 2026-08-26: Production config commit `b03c198` pins the linter package from
+  this PR and activates policy v7. OS published `project/worker-updated` for
+  that exact commit; the refreshed `review-bot` subscription is active.
