@@ -167,6 +167,8 @@ const SURFACE_GAPS: Record<string, string> = {
   "ai-transcribe-audio":
     "same run<T> constraint as ai-generate-image; the body reads result.text and friends",
   "ai-generate-video": "same run<T> constraint as ai-generate-image; the body reads result.video",
+  "ai-generate-video-seedance":
+    "same run<T> constraint as ai-generate-image; the body reads result.video",
   "cf-browser-markdown":
     "browser.quickAction() returns the action-shaped unknown; markdown is a string per entry",
   "parallel-search-and-research":
