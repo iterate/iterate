@@ -7,10 +7,8 @@ size: medium
 
 ## Status
 
-**Round three: one device bug fixed.** Round two shipped a note-chat whose
-agent path the platform rejects; see "Round three" at the bottom.
-
-**Rounds one and two: done, CI green.** Misha ran round one on a real phone and
+**Done — three rounds, CI green on 39b123b.** Round three fixed the
+device-caught agent-path bug; see the bottom. Misha ran round one on a real phone and
 sent four pieces of feedback; all four are in (see "Round two" at the
 bottom). Round one is below and unchanged.
 
