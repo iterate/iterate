@@ -4,9 +4,9 @@ branch: fix/restore-ai-linter-rules
 
 # Restore GitHub AI lint reviews
 
-Status: The production route and processor are restored, and `iterate[bot]`
-commented on the deliberate violation. The metaphor rule now forbids suggested
-changes in both its prompt and publisher; production proof is still pending.
+Status: Production policy v7 is live. `iterate[bot]` reported the deliberate
+metaphor with explanation-only comments and no suggested-change patch. Static
+and focused checks pass; CI still has the unrelated expired parked-test date.
 
 ## Goal
 
@@ -30,11 +30,11 @@ explains why the word is literal or justified.
 
 - [x] Reproduce the missing AI lint run from a fresh PR and capture the failed stage. _Production had no `/repos/iterate` route after the August 8 recreation; restoring it then exposed the obsolete SDK's exact durable processor error._
 - [x] Repair the stale rule-loading/configuration path without hiding failures. _Restored `/repos/iterate`; config commit `f059bea` pins the current subscription API, recreates the source link after future restores, and produced `project/worker-updated` plus an active `review-bot` subscription._
-- [x] Add the banned-metaphor rule to the canonical rules and hosted linter config. _Added `terminology/no-metaphorical-lane-door-seam` to root policy, the default template, and production config policy v6._
+- [x] Add the banned-metaphor rule to the canonical rules and hosted linter config. _Added `terminology/no-metaphorical-lane-door-seam` to root policy, the default template, and production config policy v7._
 - [x] Add one obvious offending variable solely as an end-to-end review probe. _`configs/default/worker.ts` names the rule-path array `reviewLane` without an exception._
 - [x] Prove `iterate[bot]` comments on that variable, then preserve the proof in the PR. _Review `5016262887` and inline comments `3850695732`/`3850695742` flag `reviewLane` under the new rule._
-- [ ] Prove the metaphor diagnostic is explanation-only, even if the model emits a fix. _The rule now declares `suggestions: forbidden`; the publisher has regression coverage that strips a model-supplied patch._
-- [x] Run focused tests and checks for every changed code/config surface. _Template typecheck and 12 focused tests pass; full typecheck, lint, Knip, and formatting pass. The full test aggregate reaches an unrelated expired `revisit by 2026-08-24` marker in `specs/mobile/media.spec.ts`._
+- [x] Prove the metaphor diagnostic is explanation-only, even if the model emits a fix. _Policy-v7 review `5029789862` and comments `3862225098`/`3862225102` explain the unclear role without a replacement or suggestion fence; publisher regression coverage also strips a model-supplied patch._
+- [x] Run focused tests and checks for every changed code/config surface. _Template typecheck and 36 focused tests pass; full typecheck, lint, Knip, and formatting pass. The full test aggregate reaches an unrelated expired `revisit by 2026-08-24` marker in `specs/mobile/media.spec.ts`._
 - [ ] Move this task to `tasks/complete/` once the live proof and CI are green.
 
 ## Implementation log
@@ -71,3 +71,7 @@ explains why the word is literal or justified.
 - 2026-08-26: Production config commit `b03c198` pins the linter package from
   this PR and activates policy v7. OS published `project/worker-updated` for
   that exact commit; the refreshed `review-bot` subscription is active.
+- 2026-08-26: Analysis `5982` used policy v7, prompt v4, and config `b03c198`.
+  Its two durable diagnostics contained no `fix`; `iterate[bot]` review
+  `5029789862` published the same explanation-only comments with no suggestion
+  fences.
