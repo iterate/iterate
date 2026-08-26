@@ -50,6 +50,8 @@ export default async function run(
 
     Include in ${resultFile} every agent stream created in the eval project and the total token usage. You can write helper tools in the \`evals/\` directory. Track a helper in git only if it will help future evals; otherwise give it a gitignored filename.
 
+    Once you know the eval project's slug or id, collect this accounting with \`cd apps/os && doppler run --config <config> -- pnpm cli itx eval-audit --project <slug-or-id>\`. It reports every agent stream plus per-stream and project-wide token usage.
+
     Also include the coding agent session id in the result so it can be resumed later.
 
     If there are links to agent chats that are relevant, include a command like \`cd apps/os && doppler run --config prd -- pnpm cli session create --project prj_... --return-to /projects/eval-.../agents/streams/agents/... --open\` to make them easy to inspect after the run.
