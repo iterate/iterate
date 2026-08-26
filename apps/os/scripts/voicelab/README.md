@@ -34,6 +34,14 @@ for width.
 | `spk-frame`              | ephemeral  | `{ conversationId, pcm, drop?, last? }` — see below                                                                                                                                                                                          |
 | `grok-event`             | ephemeral  | `{ conversationId, t, event }` — the provider's own lane, verbatim, for observability only. No client subscribes to it: the two bits a board ever needed off it (`speech_started`, `response.done`) now ride the audio as `drop` and `last`. |
 | `bench-frame`            | ephemeral  | transport bench traffic                                                                                                                                                                                                                      |
+| `utterance-transcript`   | durable    | `{ conversationId, text }` — the provider's transcription of one finished listener turn                                                                                                                                                      |
+| `answer-transcript`      | durable    | `{ conversationId, text, cancelled? }` — one finished answer, in words; `cancelled` marks a barged answer whose text was generated but not necessarily heard                                                                                 |
+
+The two transcript events (contract 13.0.0) are the stream's only readable
+record of what was said — `pnpm cli voicelab transcript` prints them — and
+the fold's bounded recap of them briefs every fresh provider session, so the
+reconnect the idle deadline manufactures resumes the conversation instead of
+greeting the listener as a stranger.
 
 Ephemeral frames are only visible to live `openConnection()` callbacks — never
 to durable subscriptions or hosted processors — which is exactly the delivery
