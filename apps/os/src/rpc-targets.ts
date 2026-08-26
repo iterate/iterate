@@ -3362,11 +3362,16 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
    * `unknown`. The optional third argument is the binding's own options object
    * — e.g. `{ gateway: { id: "default", skipCache: true } }` — passed through
    * to `env.AI.run`; its `gateway` wins over any constructor-provided one.
-   * A `intercepted/*` model never reaches Cloudflare: the live interceptor installed
+   * An `intercepted/*` model never reaches Cloudflare: the live interceptor installed
    * with `intercept(handler)` serves it, and its return value comes back
    * verbatim (no handler installed → a loud error). */
   run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T> {
     if (isInterceptedModel(model)) {
+      // Same contract as the env.AI.run cast below: `run<T>` is
+      // caller-instantiated by design — the caller names the shape it will
+      // read, uninstantiated stays the honest `unknown` — and on this branch
+      // the caller also authored the handler producing the value, so no
+      // runtime schema exists to check it against.
       return projectStub(env.PROJECT, this.props.projectId).consultAiInterceptor({
         source: "ai-run",
         model,
