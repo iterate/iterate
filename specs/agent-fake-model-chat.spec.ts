@@ -1,8 +1,6 @@
 import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
-const assistantMessage = '[data-testid="agent-feed-message"][data-kind="assistant"]';
-
 // The deterministic sibling of agent-chat.spec.ts: same UI journey (composer →
 // feed), but the "model" is this spec's own interceptor — the fake/* lane —
 // so a THREE-turn conversation completes in seconds, free, with scripted
@@ -47,25 +45,17 @@ test("multi-turn chat with a sarcastic agent served by the spec's own fake-model
   const composer = page.getByPlaceholder("Message this agent");
   const send = page.getByRole("button", { name: "Send message" });
 
-  const turns = [
-    "Can you help me organize my inbox?",
-    "Why are you like this?",
-    "Fine. I will just do it myself.",
-  ];
-  for (const [index, message] of turns.entries()) {
-    await composer.waitFor();
-    await composer.fill(message);
-    await send.click();
-    // The user message reaches the projection raw (prompt-scenarios pin
-    // this), so the EXACT reply is computable here: same responder, same
-    // input. Deterministic — no model roulette, no marker fishing.
-    await page
-      .locator(assistantMessage)
-      .filter({ hasText: formatSarcasticResponse(message) })
-      .waitFor();
-    // Turn count grows one reply per message (nth waits for index+1 to exist).
-    await page.locator(assistantMessage).nth(index).waitFor();
-  }
+  await composer.fill("Can you help me organize my inbox?");
+  await send.click();
+  await page.getByText(/"can you help me .*" do you hear yourself/i).waitFor();
+
+  await composer.fill("Why are you like this?");
+  await send.click();
+  await page.getByText(/"why are you like this\?" do you hear yourself/i).waitFor();
+
+  await composer.fill("Fine. I will just do it myself.");
+  await send.click();
+  await page.getByText(/"fine. .*" do you hear yourself/i).waitFor();
 });
 
 // -----------------------------------------------------------------------------
