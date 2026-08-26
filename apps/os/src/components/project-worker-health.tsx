@@ -91,7 +91,7 @@ export function ProjectWorkerHealthWarning({
       const session = await connectIterateSession();
       const itx = session.projects.get(projectSlug);
       try {
-        return await itx.subscriptionHealth();
+        return await itx.subscriptionHealth({});
       } finally {
         // Safe: the per-fetch project stub carries a disposer over Cap'n Web
         // but the generated surface does not declare Disposable; the cast

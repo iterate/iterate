@@ -1,7 +1,8 @@
 import { expect, it } from "vitest";
 import {
+  clampAgentStreamLimit,
   classifySubscriptionHealth,
-  RECENTLY_ACTIVE_AGENT_STREAM_LIMIT,
+  DEFAULT_AGENT_STREAM_LIMIT,
   selectSubscriptionHealthStreamPaths,
 } from "./subscription-health.ts";
 
@@ -40,6 +41,7 @@ it("scans the well-known platform streams plus the most recently active agents",
   const paths = selectSubscriptionHealthStreamPaths({
     streamsIndex: { ...streamsIndex, "/guestbook": { lastActivityAt: "2026-08-25" } },
     catalogPaths: ["/agents/from-catalog-only"],
+    agentStreamLimit: DEFAULT_AGENT_STREAM_LIMIT,
   });
 
   expect(paths.slice(0, 4)).toEqual([
@@ -49,7 +51,7 @@ it("scans the well-known platform streams plus the most recently active agents",
     "/integrations/email",
   ]);
   const agentPaths = paths.slice(4);
-  expect(agentPaths).toHaveLength(RECENTLY_ACTIVE_AGENT_STREAM_LIMIT);
+  expect(agentPaths).toHaveLength(DEFAULT_AGENT_STREAM_LIMIT);
   // Most recent first; the 10 oldest (and the catalog-only path with no
   // recorded activity) fall outside the bound.
   expect(agentPaths[0]).toBe("/agents/agent-29");
@@ -63,9 +65,33 @@ it("includes catalog-only agent streams when the bound has room", () => {
   const paths = selectSubscriptionHealthStreamPaths({
     streamsIndex: { "/agents/active": { lastActivityAt: "2026-08-25T00:00:00.000Z" } },
     catalogPaths: ["/agents/pre-index"],
+    agentStreamLimit: DEFAULT_AGENT_STREAM_LIMIT,
   });
   expect(paths).toContain("/agents/active");
   expect(paths).toContain("/agents/pre-index");
+});
+
+it("lets a caller pick the agent fan-out, inside a hard cap", () => {
+  expect(clampAgentStreamLimit(undefined)).toBe(DEFAULT_AGENT_STREAM_LIMIT);
+  expect(clampAgentStreamLimit(3)).toBe(3);
+  // 0 = platform streams only; negatives and fractions normalize.
+  expect(clampAgentStreamLimit(0)).toBe(0);
+  expect(clampAgentStreamLimit(-5)).toBe(0);
+  expect(clampAgentStreamLimit(7.9)).toBe(7);
+  // Every scanned stream is a Durable Object dial — no caller unbounds it.
+  expect(clampAgentStreamLimit(10_000)).toBe(100);
+  expect(clampAgentStreamLimit(Number.POSITIVE_INFINITY)).toBe(DEFAULT_AGENT_STREAM_LIMIT);
+
+  const paths = selectSubscriptionHealthStreamPaths({
+    streamsIndex: {
+      "/agents/a": { lastActivityAt: "2026-08-25T02:00:00.000Z" },
+      "/agents/b": { lastActivityAt: "2026-08-25T01:00:00.000Z" },
+    },
+    catalogPaths: [],
+    agentStreamLimit: 1,
+  });
+  expect(paths).toContain("/agents/a");
+  expect(paths).not.toContain("/agents/b");
 });
 
 function entry(overrides: {

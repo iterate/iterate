@@ -156,11 +156,19 @@ export async function runTemplateSync(
   const head = await deps.readHeadFiles(paths);
   const plan = planTemplateSync({ base, latest: latestFiles, head: head.files });
 
+  // The subject carries the human-readable provenance; the git trailers
+  // carry the machine-readable identity, so "which template revision is this
+  // commit from" survives in plain git history (mirrors, clones, re-imports)
+  // independent of the stream's own template-synced fact.
+  const reference = formatConfigRepoTemplateReference(input.reference);
   const committed =
     plan.changes.length > 0
       ? await deps.commitChanges({
           changes: plan.changes,
-          message: `Sync from template ${formatConfigRepoTemplateReference(input.reference)} @ ${latest.commitOid.slice(0, 7)}`,
+          message:
+            `Sync from template ${reference} @ ${latest.commitOid.slice(0, 7)}\n\n` +
+            `Template-Reference: ${reference}\n` +
+            `Template-Commit: ${latest.commitOid}`,
         })
       : null;
   if (input.baseTemplateCommitOid !== latest.commitOid) {

@@ -8,8 +8,20 @@ import type { StreamSubscriptionListEntry } from "../streams/stream-durable-obje
  * Durable Object per stream (waking it), so agent streams are capped to the
  * most recently active ones — an old idle agent's subscriptions can only
  * carry stale facts anyway. The well-known platform streams always ride.
+ * Callers choose their own bound per scan; this is the default, and
+ * {@link clampAgentStreamLimit} keeps any request inside the hard cap.
  */
-export const RECENTLY_ACTIVE_AGENT_STREAM_LIMIT = 20;
+export const DEFAULT_AGENT_STREAM_LIMIT = 20;
+
+/** No caller widens a scan past this — the fan-out stays bounded by design. */
+const MAX_AGENT_STREAM_LIMIT = 100;
+
+/** The effective agent-stream bound for one scan: the default when absent,
+ * floored at 0 (platform streams only) and capped at the hard maximum. */
+export function clampAgentStreamLimit(requested: number | undefined): number {
+  if (requested === undefined || !Number.isFinite(requested)) return DEFAULT_AGENT_STREAM_LIMIT;
+  return Math.min(MAX_AGENT_STREAM_LIMIT, Math.max(0, Math.floor(requested)));
+}
 
 /** The streams every scan covers regardless of activity. */
 const WELL_KNOWN_HEALTH_STREAM_PATHS = [
@@ -70,6 +82,7 @@ export type ProjectSubscriptionHealth = {
 export function selectSubscriptionHealthStreamPaths(input: {
   streamsIndex: Record<string, { lastActivityAt: string }>;
   catalogPaths: string[];
+  agentStreamLimit: number;
 }): string[] {
   const agentPaths = [
     ...new Set(
@@ -83,7 +96,7 @@ export function selectSubscriptionHealthStreamPaths(input: {
       const rightActivity = input.streamsIndex[right]?.lastActivityAt || "";
       return rightActivity.localeCompare(leftActivity);
     })
-    .slice(0, RECENTLY_ACTIVE_AGENT_STREAM_LIMIT);
+    .slice(0, input.agentStreamLimit);
   return [...WELL_KNOWN_HEALTH_STREAM_PATHS, ...agentPaths];
 }
 

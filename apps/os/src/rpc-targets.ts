@@ -138,6 +138,7 @@ import {
   type TemplateSyncResult,
 } from "./domains/repos/template-sync.ts";
 import {
+  clampAgentStreamLimit,
   classifySubscriptionHealth,
   selectSubscriptionHealthStreamPaths,
   type ProjectSubscriptionHealth,
@@ -6275,7 +6276,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   secrets: "Secret catalog by path.",
   streams: "Project stream catalog: get(path), list().",
   subscriptionHealth:
-    "Roll up subscription delivery health across the project's streams (root + well-known platform streams + recently active agents): halted (red), lagging/backoff (amber), and historical lastError (informational) entries with lag, attempts, and lastErrorAt.",
+    "Roll up subscription delivery health across the project's streams (root + well-known platform streams + recently active agents; { agentStreamLimit? } bounds the agent fan-out, default 20): halted (red), lagging/backoff (amber), and historical lastError (informational) entries with lag, attempts, and lastErrorAt.",
   worker: "The default repo-backed project worker.",
   workers: "Dynamic worker refs: get(ref).",
   workspaces:
@@ -6927,20 +6928,26 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   /**
    * Roll up subscription delivery health across the project's streams: the
    * root stream, the well-known platform streams, and the most recently
-   * active agent streams (bounded — see subscription-health.ts). Server-side
-   * fan-out, one plain result: per stream, its halted (red), lagging/backoff
-   * (amber), and historical-lastError (informational) subscriptions with
-   * lag, attempts, and error age. The dashboard's worker-health sheet polls
-   * this while open; it is equally the programmatic surface for agents
-   * checking their own project's delivery health.
+   * active agent streams. Every scanned stream is one Durable Object dial,
+   * so the agent fan-out is bounded: `agentStreamLimit` picks the bound per
+   * scan (default 20, hard-capped — see subscription-health.ts; 0 scans the
+   * platform streams only). Server-side fan-out, one plain result: per
+   * stream, its halted (red), lagging/backoff (amber), and
+   * historical-lastError (informational) subscriptions with lag, attempts,
+   * and error age. The dashboard's worker-health sheet polls this while
+   * open; it is equally the programmatic surface for agents checking their
+   * own project's delivery health.
    */
-  async subscriptionHealth(): Promise<ProjectSubscriptionHealth> {
+  async subscriptionHealth(
+    input: { agentStreamLimit?: number } = {},
+  ): Promise<ProjectSubscriptionHealth> {
     const live = await new LiveStateRelayRpcTarget<ProjectLiveState>(() => this.#projectDo, {
       label: `project ${this.#projectId} subscription health`,
     }).get();
     const paths = selectSubscriptionHealthStreamPaths({
       streamsIndex: live.streamsIndex,
       catalogPaths: live.reduced.streams.map((stream) => stream.path),
+      agentStreamLimit: clampAgentStreamLimit(input.agentStreamLimit),
     });
     const streams = await Promise.all(
       paths.map(async (path): Promise<StreamSubscriptionHealth> => {

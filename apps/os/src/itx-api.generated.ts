@@ -147,14 +147,17 @@ export interface Project {
   /**
    * Roll up subscription delivery health across the project's streams: the
    * root stream, the well-known platform streams, and the most recently
-   * active agent streams (bounded — see subscription-health.ts). Server-side
-   * fan-out, one plain result: per stream, its halted (red), lagging/backoff
-   * (amber), and historical-lastError (informational) subscriptions with
-   * lag, attempts, and error age. The dashboard's worker-health sheet polls
-   * this while open; it is equally the programmatic surface for agents
-   * checking their own project's delivery health.
+   * active agent streams. Every scanned stream is one Durable Object dial,
+   * so the agent fan-out is bounded: `agentStreamLimit` picks the bound per
+   * scan (default 20, hard-capped — see subscription-health.ts; 0 scans the
+   * platform streams only). Server-side fan-out, one plain result: per
+   * stream, its halted (red), lagging/backoff (amber), and
+   * historical-lastError (informational) subscriptions with lag, attempts,
+   * and error age. The dashboard's worker-health sheet polls this while
+   * open; it is equally the programmatic surface for agents checking their
+   * own project's delivery health.
    */
-  subscriptionHealth(): Promise<ProjectSubscriptionHealth>;
+  subscriptionHealth(input: { agentStreamLimit?: number }): Promise<ProjectSubscriptionHealth>;
   /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */
   debug(): Promise<string>;
   /** Restart the project's server-side object; the next request boots it fresh. */

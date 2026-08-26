@@ -30,6 +30,16 @@ it("adopts template changes the user never touched (clean sync)", async () => {
     "rules/new-rule.md": "be nice\n",
   });
   expect(repo.templateSyncedEvents).toEqual([{ templateCommitOid: repo.template.commitOid }]);
+  // Git-native provenance: the trailers name the exact template revision, so
+  // plain git history answers "where did this commit come from" even on
+  // mirrors and re-imports that never see the stream's events.
+  expect(repo.commitMessages.at(-1)).toContain(
+    `Sync from template github:iterate/iterate#path:configs/default @ ${repo.template.commitOid.slice(0, 7)}`,
+  );
+  expect(repo.commitMessages.at(-1)).toContain(
+    "Template-Reference: github:iterate/iterate#path:configs/default",
+  );
+  expect(repo.commitMessages.at(-1)).toContain(`Template-Commit: ${repo.template.commitOid}`);
 });
 
 it("keeps the user's edits when the template did not change that file", async () => {
@@ -249,6 +259,7 @@ function seededRepo(
   const head = { ...seeded };
   let commitCount = 1;
   const templateSyncedEvents: Array<{ templateCommitOid: string }> = [];
+  const commitMessages: string[] = [];
 
   const deps: TemplateSyncDeps = {
     downloadTemplate: (reference) => {
@@ -267,7 +278,8 @@ function seededRepo(
         commitOid: `head${commitCount}`.padEnd(40, "0"),
         files: Object.fromEntries(paths.filter((path) => path in head).map((p) => [p, head[p]!])),
       }),
-    commitChanges: ({ changes }) => {
+    commitChanges: ({ changes, message }) => {
+      commitMessages.push(message);
       for (const change of changes) {
         if ("delete" in change) delete head[change.path];
         else if ("content" in change) head[change.path] = change.content;
@@ -284,6 +296,7 @@ function seededRepo(
   return {
     deps,
     templateSyncedEvents,
+    commitMessages,
     headFiles: () => ({ ...head }),
     commitCount: () => commitCount,
     commitUserEdit: (path: string, content: string) => {
