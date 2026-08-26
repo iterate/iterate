@@ -42,9 +42,9 @@ test("a repeat request reuses the previous turn's journaled script instead of re
   // Turn 1: the long way. The script really runs; the answer is computed.
   await composer.fill("prime factorize 52479543428582704627");
   await send.click();
-  // timeout: the agent turn runs server-side with no loading UI for the spinnerWaiter to key off; a cold dev server exceeds the post-spinner budget.
+  // timeout: the agent turn runs server-side with no loading UI for the spinnerWaiter to key off; preview turns take minutes (deployed workers, cold typecheck sidecar).
   await page.getByText("52479543428582704627 = 6203868971 × 8459163737").waitFor({
-    timeout: 60_000,
+    timeout: 300_000,
   });
 
   // Turn 2: the reused way. The child run executes turn 1's algorithm with
@@ -53,7 +53,7 @@ test("a repeat request reuses the previous turn's journaled script instead of re
   await send.click();
   // timeout: same as above — no loading UI for the spinnerWaiter during the server-side turn.
   await page.getByText("66778601389380731119 = 7316102869 × 9127619251").waitFor({
-    timeout: 60_000,
+    timeout: 300_000,
   });
 
   // Open turn 1's codemode snippet: the full derived algorithm.
