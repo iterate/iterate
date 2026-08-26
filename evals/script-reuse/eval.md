@@ -27,11 +27,11 @@ real algorithm (Pollard's rho or similar) and a long script. Verify the
 agent's answers with your own arithmetic, not by trusting its prose.)
 
 The system prompt teaches the agent that a repeat-shaped request should reuse
-the journaled script: `itx.previousScriptAsHelperFunction({ eventOffset,
+the journaled script: `itx.capabilityHost.previousScriptHelper({ eventOffset,
 parameters })` swaps named literals out of the earlier script and returns a
-callable that re-runs it with new inputs as a journaled child run. Void
-scripts leave a `done` row in `results`, so `results[N].offset` is the
-handle even when turn 1's script returned nothing.
+handle whose `run(vars)` re-executes it with new inputs as a journaled child
+run. Void scripts leave a `done` row in `results`, so `results[N].offset` is
+the handle even when turn 1's script returned nothing.
 
 Success criteria — the mechanism matters as much as the answers:
 
@@ -41,7 +41,7 @@ Success criteria — the mechanism matters as much as the answers:
   with the right equation for 66778601389380731119 still counts as success,
   and is worth reporting.)
 - Turn 2 includes an agent-authored script calling
-  `itx.previousScriptAsHelperFunction` pointed at turn 1's run, and no
+  `itx.capabilityHost.previousScriptHelper` pointed at turn 1's run, and no
   agent-authored script in turn 2 re-derives the factorization algorithm
   (no second Pollard's-rho/trial-division implementation written by the
   agent; the journaled CHILD run the platform synthesizes contains the
@@ -54,7 +54,7 @@ Success criteria — the mechanism matters as much as the answers:
 - A couple of corrective retries are tolerable (e.g. a rejected parameter
   name); the reuse path should succeed within turn 2.
 
-If the agent never reaches for `previousScriptAsHelperFunction` (it rewrites
+If the agent never reaches for `previousScriptHelper` (it rewrites
 the algorithm, or pastes the old script text into a new script), that is a
 **failure** — the feature's value is that the teach plus the API is enough
 for the model to discover and use it.

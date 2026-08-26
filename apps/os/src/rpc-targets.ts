@@ -300,7 +300,11 @@ import {
 } from "./domains/capability-host/capability-host-defaults.ts";
 import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "./domains/capability-host/capability-host-processor-contract.ts";
 import { runCapabilityHostScript } from "./domains/capability-host/capability-host-script-run.ts";
-import { reparameterizeScript } from "./domains/capability-host/script-reuse.ts";
+import {
+  renderScriptReuseEnvelope,
+  reparameterizeScript,
+  type ReuseParameterBinding,
+} from "./domains/capability-host/script-reuse.ts";
 import {
   settleByDeadline,
   type DeadlineOutcome,
@@ -6041,18 +6045,19 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
   }
 
   /**
-   * Look up a previously journaled script by stream offset and swap each
-   * parameter's exact `content` text (which must appear exactly once) for its
-   * `name` identifier. `eventOffset` accepts the offset of the run's
-   * script-run-requested event, its script-run-settled event (what
+   * Reuse a previously journaled script as a parameterized helper. Looks the
+   * script up by stream offset and swaps each parameter's exact `content`
+   * text (which must appear exactly once) for a generated identifier — the
+   * returned handle's `run(vars)` re-executes it with new values (by `name`)
+   * as a journaled child script run. `eventOffset` accepts the offset of the
+   * run's script-run-requested event, its script-run-settled event (what
    * `results[N].offset` exposes), or the assistant-output event that produced
-   * the script. This is the server half of
-   * `itx.previousScriptAsHelperFunction`; scripts normally call that instead.
+   * the script.
    */
-  async prepareScriptReuse(input: {
+  async previousScriptHelper(input: {
     eventOffset: number;
     parameters: { name: string; content: string }[];
-  }): Promise<{ code: string; parameterNames: string[]; sourceExecutionId: string }> {
+  }): Promise<ReusableScriptRpcTarget> {
     const event = await this.#stream.getEvent({ offset: input.eventOffset });
     if (event === undefined) {
       throw new Error(`No event at offset ${input.eventOffset} on scope ${this.#props.path}.`);
@@ -6113,10 +6118,13 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
       );
     }
     const { code } = requested.payload as { code: string };
-    return {
-      ...reparameterizeScript({ code, parameters: input.parameters }),
+    const transformed = reparameterizeScript({ code, parameters: input.parameters });
+    return new ReusableScriptRpcTarget({
+      code: transformed.code,
+      parameters: transformed.parameters,
+      runScript: (envelope) => this.runScript(envelope),
       sourceExecutionId,
-    };
+    });
   }
 
   /** Explicit dynamic dispatch; the dotted-path fallback (`itx.foo.bar(...)`) compiles to exactly this call. */
@@ -6149,8 +6157,8 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
         getPreamble: "The assembled preamble text the next script will see, plus the entry table.",
         getScriptResult:
           "Read one settled script result back by executionId (what results[N].load(itx) calls).",
-        prepareScriptReuse:
-          "Re-parameterize a journaled script by stream offset (the server half of itx.previousScriptAsHelperFunction).",
+        previousScriptHelper:
+          "Reuse a journaled script by stream offset: returns a handle whose run(vars) re-executes it with new values.",
       },
       parent: `project ${this.#props.projectId}; sibling scopes via capabilityHosts.get(path)`,
       capabilities,
@@ -6189,6 +6197,70 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
    * facets die together); the next request boots them fresh. */
   kill(): Promise<void> {
     return Promise.resolve(this.#stream[STREAM_DURABLE_OBJECT_STUB].kill());
+  }
+}
+
+/**
+ * A previously journaled script, re-parameterized into a reusable helper —
+ * returned by `itx.previousScriptHelper`. `run(vars)` executes it with new
+ * values as a journaled child script run in the same scope.
+ */
+export class ReusableScriptRpcTarget extends IterateRpcTarget<"ReusableScript"> {
+  async __describe(): Promise<Description> {
+    return describeNode({
+      instructions: `A reusable script (from run ${this.#props.sourceExecutionId}), parameterized over [${this.#props.parameters.map((binding) => binding.name).join(", ")}]: run(vars) re-executes it with new values as a journaled child script run.`,
+      children: {
+        run: "Execute the reused script with new values for the declared parameters.",
+        code: "The re-parameterized script text (inspection only).",
+      },
+      parent: "returned by previousScriptHelper",
+    });
+  }
+
+  readonly #props: {
+    code: string;
+    parameters: ReuseParameterBinding[];
+    runScript: (
+      envelope: string,
+    ) => Promise<{ completedEvent: StreamEvent; executionId: string; result: unknown }>;
+    sourceExecutionId: string;
+  };
+
+  constructor(props: {
+    code: string;
+    parameters: ReuseParameterBinding[];
+    runScript: (
+      envelope: string,
+    ) => Promise<{ completedEvent: StreamEvent; executionId: string; result: unknown }>;
+    sourceExecutionId: string;
+  }) {
+    super();
+    this.#props = props;
+  }
+
+  /** The re-parameterized script text (for inspection; `run` executes it). */
+  get code(): string {
+    return this.#props.code;
+  }
+
+  /** The executionId of the journaled run this helper was derived from. */
+  get sourceExecutionId(): string {
+    return this.#props.sourceExecutionId;
+  }
+
+  /**
+   * Execute the reused script with new values for the declared parameters —
+   * real values, not code text (`123n` not `"123n"`). Runs as a journaled
+   * child script run and resolves to its result.
+   */
+  async run(vars: Record<string, unknown>): Promise<unknown> {
+    const envelope = renderScriptReuseEnvelope({
+      code: this.#props.code,
+      parameters: this.#props.parameters,
+      vars,
+    });
+    const execution = await this.#props.runScript(envelope);
+    return execution.result;
   }
 }
 

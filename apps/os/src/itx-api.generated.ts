@@ -651,18 +651,19 @@ export interface CapabilityHost {
    */
   getScriptResult(executionId: string): Promise<{ executionId: string; data: unknown }>;
   /**
-   * Look up a previously journaled script by stream offset and swap each
-   * parameter's exact `content` text (which must appear exactly once) for its
-   * `name` identifier. `eventOffset` accepts the offset of the run's
-   * script-run-requested event, its script-run-settled event (what
+   * Reuse a previously journaled script as a parameterized helper. Looks the
+   * script up by stream offset and swaps each parameter's exact `content`
+   * text (which must appear exactly once) for a generated identifier — the
+   * returned handle's `run(vars)` re-executes it with new values (by `name`)
+   * as a journaled child script run. `eventOffset` accepts the offset of the
+   * run's script-run-requested event, its script-run-settled event (what
    * `results[N].offset` exposes), or the assistant-output event that produced
-   * the script. This is the server half of
-   * `itx.previousScriptAsHelperFunction`; scripts normally call that instead.
+   * the script.
    */
-  prepareScriptReuse(input: {
+  previousScriptHelper(input: {
     eventOffset: number;
     parameters: { name: string; content: string }[];
-  }): Promise<{ code: string; parameterNames: string[]; sourceExecutionId: string }>;
+  }): Promise<ReusableScript>;
   /** Explicit dynamic dispatch; the dotted-path fallback (`itx.foo.bar(...)`) compiles to exactly this call. */
   invokeCapability(call: { args?: unknown[]; path: string[] }): Promise<unknown>;
   /** Includes `capabilities`: everything reachable at this scope — own mounts plus inherited ones, tagged with their declaring scope. */
@@ -1555,6 +1556,25 @@ export interface StreamProcessorRpc<State = unknown> {
   getRuntimeState(): Promise<ProcessorRuntimeState<State>>;
   snapshot(): Promise<ProcessorSnapshot<State>>;
   waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void>;
+}
+
+/**
+ * A previously journaled script, re-parameterized into a reusable helper —
+ * returned by `itx.previousScriptHelper`. `run(vars)` executes it with new
+ * values as a journaled child script run in the same scope.
+ */
+export interface ReusableScript {
+  __describe(): Promise<Description>;
+  /** The re-parameterized script text (for inspection; `run` executes it). */
+  code: string;
+  /** The executionId of the journaled run this helper was derived from. */
+  sourceExecutionId: string;
+  /**
+   * Execute the reused script with new values for the declared parameters —
+   * real values, not code text (`123n` not `"123n"`). Runs as a journaled
+   * child script run and resolves to its result.
+   */
+  run(vars: Record<string, unknown>): Promise<unknown>;
 }
 
 /** Disposable handle for one live project egress interception. */

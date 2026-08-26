@@ -1,22 +1,13 @@
 /**
- * Goal coverage: `itx.previousScriptAsHelperFunction` end to end — a script
- * journaled by one run is re-parameterized and re-executed by a later script
- * with new inputs, through the harness-manufactured callable, the
- * prepareScriptReuse lookup, and a journaled child run. No model turns.
+ * Goal coverage: `itx.capabilityHost.previousScriptHelper` end to end — a
+ * script journaled by one run is re-parameterized and re-executed by a later
+ * script with new inputs, through the returned handle's `run(vars)`, the
+ * offset lookup, and a journaled child run. No model turns.
  */
 import { test } from "vitest";
 import { measureE2ePhase } from "@iterate-com/shared/test-support/measure-e2e-phase";
 import { createTestProject } from "../test-support/create-test-project.ts";
 import { itxScript } from "../test-support/itx-script-builder.ts";
-
-// The harness-only surface: manufactured inside script isolates, so it is not
-// on the generated Project type (RPC cannot return a plain function).
-type ScriptReuseSurface = {
-  previousScriptAsHelperFunction(options: {
-    eventOffset: number;
-    parameters: { name: string; content: string }[];
-  }): Promise<(itx: unknown, vars?: Record<string, unknown>) => Promise<unknown>>;
-};
 
 test(
   "a later script reuses an earlier journaled script with new inputs",
@@ -31,6 +22,8 @@ test(
     using itx = handle.itx();
 
     // Run 1: the "expensively derived" script, its input inline as a literal.
+    // `target` deliberately shadows an identifier the script uses — aliasing
+    // makes that a non-issue (live models pick the colliding name first).
     const first = await measurePhase("run original script", "operation", () =>
       itxScript(itx.capabilityHost).execute(async (_itx) => {
         const target = 8633n;
@@ -49,18 +42,17 @@ test(
     expect(first.success()).toEqual(["89", "97"]);
 
     // Run 2: no re-derivation — point at run 1 (by its settle offset, the one
-    // the preamble `results` array exposes) and call it with a new number.
+    // the preamble `results` array exposes) and run it with a new number.
     const settledOffset = first.execution.completedEvent.offset;
     const second = await measurePhase("reuse script with new input", "operation", () =>
       itxScript(itx.capabilityHost)
-        .context<ScriptReuseSurface>()
         .vars({ eventOffset: settledOffset })
         .execute(async (itxInScript, vars) => {
-          const factorize = await itxInScript.previousScriptAsHelperFunction({
+          const helper = await itxInScript.capabilityHost.previousScriptHelper({
             eventOffset: vars.eventOffset,
-            parameters: [{ name: "input", content: "8633n" }],
+            parameters: [{ name: "target", content: "8633n" }],
           });
-          return await factorize(itxInScript, { input: 10403n });
+          return await helper.run({ target: 10403n });
         }),
     );
     expect(second.success()).toEqual(["101", "103"]);
@@ -87,10 +79,9 @@ test(
     expect(failedSettle).toBeDefined();
     const reuseOfFailed = await measurePhase("reuse the failed run", "operation", () =>
       itxScript(itx.capabilityHost)
-        .context<ScriptReuseSurface>()
         .vars({ eventOffset: failedSettle!.offset })
         .execute(async (itxInScript, vars) => {
-          return await itxInScript.previousScriptAsHelperFunction({
+          return await itxInScript.capabilityHost.previousScriptHelper({
             eventOffset: vars.eventOffset,
             parameters: [],
           });
