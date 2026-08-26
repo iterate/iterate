@@ -180,14 +180,27 @@ test("the approval push is suppressed in the watched thread and sent when you're
     await page.getByPlaceholder("Message").waitFor();
     const watchedPath = decodeURIComponent(new URL(page.url()).searchParams.get("path")!);
     const watchedAgent = itx.agents.get(watchedPath);
-    // Start this lane through the visible composer. Creating the agent from a
-    // second admin connection after the blank chat has mounted replaces the
-    // lazily opened stream underneath the page; the browser store correctly
-    // heals that separate stream-birth race, but only after its liveness
-    // probe. A real first message creates the agent and nudges the same live
-    // connection before running the script, which is the foreground delivery
-    // path this spec means to exercise.
-    await sendChatMessage(page, `/script ${parkRequestBody("watched")}`);
+    // Start this act through the visible composer: the message's turn runs
+    // on an intercepted/* model, served by THIS spec's interceptor pairing the
+    // command with the park script — deterministic, and the run carries the
+    // agent's own script provenance like a real turn. The agent is birthed
+    // and pointed at intercepted/driver first (the client defers creation to the
+    // first message, and the birth batch's model default must not outrank
+    // the fake config).
+    await watchedAgent.create();
+    await watchedAgent.append({
+      type: "events.iterate.com/agent/configured",
+      payload: { config: { llm: { model: "intercepted/driver" }, llmRequestDebounceMs: 250 } },
+    });
+    using _interception = await itx.ai.intercept(async ({ source, body }) => {
+      if (source !== "agent-turn") throw new Error(`unexpected source: ${source}`);
+      const message = [...body.messages].reverse().find((m) => m.role === "user")?.content ?? "";
+      if (!/park one watched request/i.test(message)) {
+        throw new Error(`unexpected message: ${message}`);
+      }
+      return ["```ts", `async (itx) => { ${parkRequestBody("watched")} }`, "```"].join("\n");
+    });
+    await sendChatMessage(page, "Park one watched request");
     await page.getByText("running code…").waitFor();
     const watchedRunStarted = watchedAgent.stream.waitForEvent({
       afterOffset: 0,

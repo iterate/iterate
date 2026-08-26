@@ -389,8 +389,22 @@ export interface Ai {
    * read (`run<{ response?: string }>(…)`); uninstantiated it stays the honest
    * `unknown`. The optional third argument is the binding's own options object
    * — e.g. `{ gateway: { id: "default", skipCache: true } }` — passed through
-   * to `env.AI.run`; its `gateway` wins over any constructor-provided one. */
+   * to `env.AI.run`; its `gateway` wins over any constructor-provided one.
+   * An `intercepted/*` model never reaches Cloudflare: the live interceptor installed
+   * with `intercept(handler)` serves it, and its return value comes back
+   * verbatim (no handler installed → a loud error). */
   run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T>;
+  /** Install a live handler for `intercepted/*` models (last writer wins); returns a
+   * release handle. For deterministic testing: an agent configured with
+   * `model: "intercepted/<x>"` and every `run("intercepted/<x>", …)` call are served by your
+   * handler — an in-memory function on YOUR side of the connection — instead
+   * of a real provider. The handler receives
+   * `{ source: "agent-turn" | "ai-run", model, body }`; for agent turns it
+   * returns assistant text (a string, or `{ text, usage? }`), for ai-run its
+   * return value is handed back verbatim. Live means session-bound: the
+   * interception dies with your connection. Non-fake models are never
+   * interceptable — a journaled `openai/*` turn is always the real provider. */
+  intercept(handler: ProjectAiInterceptor): Promise<ProjectAiIntercept>;
   /** Calling with no arguments lists the file formats the converter accepts. */
   toMarkdown(): Promise<CfMarkdownSupportedFormat[]>;
   /** Convert one document (`{ name, blob }`) to Markdown — `blob` accepts
@@ -1544,6 +1558,11 @@ export interface StreamProcessorRpc<State = unknown> {
   waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void>;
 }
 
+/** Disposable handle for one live AI interception. */
+export interface ProjectAiIntercept extends Disposable {
+  release(): Promise<void>;
+}
+
 /** Disposable handle for one live project egress interception. */
 export interface ProjectEgressIntercept extends Disposable {
   release(): Promise<void>;
@@ -2500,6 +2519,15 @@ export type CfAiRunOptions = {
   };
   returnRawResponse?: boolean;
 };
+
+/**
+ * Live replacement for intercepted/* model calls. For `source: "agent-turn"` the
+ * return value must be assistant text — a plain string, or
+ * `{ text, usage? }` to also report token usage (report inflated numbers to
+ * drive compaction deterministically). For `source: "ai-run"` the return value
+ * is handed back to the `itx.ai.run` caller verbatim.
+ */
+export type ProjectAiInterceptor = (input: ProjectAiInterceptorInput) => Promise<unknown>;
 
 /** One file format the markdown converter accepts (extension plus MIME type);
  * `ai.toMarkdown()` with no arguments returns the full list. */
@@ -4452,6 +4480,26 @@ export type ProcessStreamWakeEventBatch = (batch: StreamWakeEventBatch) => unkno
 export type LiveStatePatch =
   | { set: unknown }
   | { fields?: Record<string, LiveStatePatch>; drop?: string[] };
+
+/**
+ * One intercepted/* invocation as the interceptor sees it. `source` discriminates the
+ * two egress paths: an agent conversation turn carries the provider-neutral
+ * chat projection, a direct `itx.ai.run` call carries the caller's body
+ * argument verbatim (honestly `unknown` — the caller chose its shape).
+ */
+export type ProjectAiInterceptorInput =
+  | {
+      source: "agent-turn";
+      model: string;
+      body: {
+        messages: { role: "system" | "developer" | "user" | "assistant"; content: string }[];
+      };
+    }
+  | {
+      source: "ai-run";
+      model: string;
+      body: unknown;
+    };
 
 /**
  * A durable processor input. Wake processors never receive ephemeral events, so

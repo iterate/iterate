@@ -14,7 +14,7 @@ import {
 } from "./chat.ts";
 
 test("a sent message stays pending until the live feed acknowledges agent activity", () => {
-  const sent = userMessage(17, "/script do the work");
+  const sent = userMessage(17, "/example describe-project");
 
   expect(awaitingAgentActivity([sent], sent.offset)).toBe(true);
   expect(

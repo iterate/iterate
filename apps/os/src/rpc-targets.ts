@@ -440,6 +440,11 @@ import { describeSecretState } from "./domains/secrets/secret-durable-object.ts"
 import { SlackProcessorContract } from "./domains/integrations/slack-processor-contract.ts";
 import { WorkspaceProcessorContract } from "./domains/workspaces/workspace-processor-contract.ts";
 import { normalizeConfigRepoTemplateReference } from "./lib/config-repo-template-reference.ts";
+import {
+  isInterceptedModel,
+  type ProjectAiIntercept,
+  type ProjectAiInterceptor,
+} from "./lib/model-interception.ts";
 import { resolveSlugConventionTemplate } from "./lib/slug-config-template.ts";
 
 /**
@@ -3325,10 +3330,12 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Cloudflare Workers AI: run(model, body) executes a model, models() lists the catalog, toMarkdown({ name, blob }) converts documents to Markdown — blob accepts bytes or base64 (a Blob made in a script cannot cross the RPC boundary); an in-hand HTML string converts via new TextEncoder().encode(html) with a .html name. run() is for what YOU cannot do: image/audio/video generation, transcription, embeddings, classification at volume. Don't run() a text model to summarize, draft, or answer over content you are about to read or relay — you are usually a more intelligent model; return the data and write it yourself. Text models take { messages: [{ role, content }, …] } and answer in result.response. First-party docs: Workers AI binding https://developers.cloudflare.com/workers-ai/configuration/bindings/ ; Markdown Conversion https://developers.cloudflare.com/workers-ai/features/markdown-conversion/ ; conversion options https://developers.cloudflare.com/workers-ai/features/markdown-conversion/conversion-options/ ; image model example https://developers.cloudflare.com/ai/models/%40cf/black-forest-labs/flux-2-klein-9b/ ; speech model example https://developers.cloudflare.com/ai/models/xai/grok-tts/ ; transcription example https://developers.cloudflare.com/ai/models/xai/grok-stt/ ; video model example https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/ .",
+        "Cloudflare Workers AI: run(model, body) executes a model, models() lists the catalog, toMarkdown({ name, blob }) converts documents to Markdown — blob accepts bytes or base64 (a Blob made in a script cannot cross the RPC boundary); an in-hand HTML string converts via new TextEncoder().encode(html) with a .html name. run() is for what YOU cannot do: image/audio/video generation, transcription, embeddings, classification at volume. Don't run() a text model to summarize, draft, or answer over content you are about to read or relay — you are usually a more intelligent model; return the data and write it yourself. Text models take { messages: [{ role, content }, …] } and answer in result.response. Models under 'intercepted/' are never dialed: they are served by the live interceptor installed with intercept(handler) — deterministic testing that behaves identically in every environment. First-party docs: Workers AI binding https://developers.cloudflare.com/workers-ai/configuration/bindings/ ; Markdown Conversion https://developers.cloudflare.com/workers-ai/features/markdown-conversion/ ; conversion options https://developers.cloudflare.com/workers-ai/features/markdown-conversion/conversion-options/ ; image model example https://developers.cloudflare.com/ai/models/%40cf/black-forest-labs/flux-2-klein-9b/ ; speech model example https://developers.cloudflare.com/ai/models/xai/grok-tts/ ; transcription example https://developers.cloudflare.com/ai/models/xai/grok-stt/ ; video model example https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/ .",
       children: {
         models: "List available models.",
         run: "Run one model invocation — for outputs the caller cannot produce itself (images, audio, transcription, bulk classification), not for text the caller will read or relay.",
+        intercept:
+          "Install a live handler for intercepted/* models (last writer wins); returns a release handle. For deterministic testing: agents on an intercepted/* model and ai.run('intercepted/…') calls are served by your handler instead of a real provider.",
         toMarkdown:
           "Convert one document or an array of { name, blob } to Markdown — blob accepts bytes or base64 (a Blob made in a script cannot cross the RPC boundary); an in-hand HTML string converts via new TextEncoder().encode(html) with a .html name. Call with no args for supported formats. For emails and newsletters (mostly tracking links and giant base64 images), pass { conversionOptions: { output: { format: 'text' } } } to strip link targets and image URLs — often 10x smaller.",
       },
@@ -3336,7 +3343,7 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
     });
   }
 
-  constructor(readonly props: { gateway?: AiRunOptions["gateway"] } = {}) {
+  constructor(readonly props: { projectId: string; gateway?: AiRunOptions["gateway"] }) {
     super();
   }
 
@@ -3354,8 +3361,23 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
    * read (`run<{ response?: string }>(…)`); uninstantiated it stays the honest
    * `unknown`. The optional third argument is the binding's own options object
    * — e.g. `{ gateway: { id: "default", skipCache: true } }` — passed through
-   * to `env.AI.run`; its `gateway` wins over any constructor-provided one. */
+   * to `env.AI.run`; its `gateway` wins over any constructor-provided one.
+   * An `intercepted/*` model never reaches Cloudflare: the live interceptor installed
+   * with `intercept(handler)` serves it, and its return value comes back
+   * verbatim (no handler installed → a loud error). */
   run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T> {
+    if (isInterceptedModel(model)) {
+      // Same contract as the env.AI.run cast below: `run<T>` is
+      // caller-instantiated by design — the caller names the shape it will
+      // read, uninstantiated stays the honest `unknown` — and on this branch
+      // the caller also authored the handler producing the value, so no
+      // runtime schema exists to check it against.
+      return projectStub(env.PROJECT, this.props.projectId).consultAiInterceptor({
+        source: "ai-run",
+        model,
+        body,
+      }) as Promise<T>;
+    }
     const gateway = options?.gateway ?? this.props.gateway;
     const merged = gateway === undefined ? options : { ...options, gateway };
     return env.AI.run(
@@ -3363,6 +3385,20 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
       body as Record<string, unknown>,
       merged as AiRunOptions | undefined,
     ) as Promise<T>;
+  }
+
+  /** Install a live handler for `intercepted/*` models (last writer wins); returns a
+   * release handle. For deterministic testing: an agent configured with
+   * `model: "intercepted/<x>"` and every `run("intercepted/<x>", …)` call are served by your
+   * handler — an in-memory function on YOUR side of the connection — instead
+   * of a real provider. The handler receives
+   * `{ source: "agent-turn" | "ai-run", model, body }`; for agent turns it
+   * returns assistant text (a string, or `{ text, usage? }`), for ai-run its
+   * return value is handed back verbatim. Live means session-bound: the
+   * interception dies with your connection. Non-fake models are never
+   * interceptable — a journaled `openai/*` turn is always the real provider. */
+  intercept(handler: ProjectAiInterceptor): Promise<ProjectAiIntercept> {
+    return projectStub(env.PROJECT, this.props.projectId).interceptAi(handler);
   }
 
   /** Calling with no arguments lists the file formats the converter accepts. */
@@ -3550,6 +3586,10 @@ class CfVideosCapabilityRpcTarget extends IterateRpcTarget<"CfVideosCapability">
 
 /** Grouped first-party Cloudflare platform bindings under integrations.cf. */
 class CloudflareIntegrationsRpcTarget extends IterateRpcTarget<"CloudflareIntegrations"> {
+  constructor(readonly props: { projectId: string }) {
+    super();
+  }
+
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
@@ -3566,7 +3606,7 @@ class CloudflareIntegrationsRpcTarget extends IterateRpcTarget<"CloudflareIntegr
 
   /** Workers AI: run(), models(), toMarkdown(). */
   get ai(): AiRpcTarget {
-    return new AiRpcTarget();
+    return new AiRpcTarget({ projectId: this.props.projectId });
   }
 
   /** Browser Run: quickAction() and raw fetch(). */
@@ -3810,7 +3850,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
    * Transformations. Like `parallel`, these ride the deployment's own
    * Cloudflare account — not a per-project connection. */
   get cf(): CloudflareIntegrationsRpcTarget {
-    return new CloudflareIntegrationsRpcTarget();
+    return new CloudflareIntegrationsRpcTarget({ projectId: this.props.projectId });
   }
 
   /** Dynamic provided-integration dispatch. The only selector is
@@ -6964,7 +7004,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
 
   /** Workers AI: run(model, body), models(). */
   get ai(): AiRpcTarget {
-    return new AiRpcTarget();
+    return new AiRpcTarget({ projectId: this.#projectId });
   }
 
   /** Browser auth for project-host web apps. */
@@ -7787,7 +7827,9 @@ class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
  * The Project Durable Object owns the retained live callback. This handle only
  * releases that exact retained callback if it is still the current interceptor.
  */
-export class ProjectEgressInterceptRpcTarget extends IterateRpcRelay<"ProjectEgressIntercept"> {
+export class ProjectEgressInterceptRpcTarget<
+  Name extends string = "ProjectEgressIntercept",
+> extends IterateRpcRelay<Name> {
   readonly #ctx: Pick<CfExecutionContext, "waitUntil"> | undefined;
   readonly #release: () => void | Promise<void>;
   #releasePromise: Promise<void> | undefined;
@@ -7818,6 +7860,12 @@ export class ProjectEgressInterceptRpcTarget extends IterateRpcRelay<"ProjectEgr
     return this.#releasePromise;
   }
 }
+
+/**
+ * Disposable ownership handle returned by `project.ai.intercept(...)` — the
+ * egress handle's release semantics, pointed at the AI interceptor slot.
+ */
+export class ProjectAiInterceptRpcTarget extends ProjectEgressInterceptRpcTarget<"ProjectAiIntercept"> {}
 
 /**
  * The read-only capability a hosting Durable Object hands out for one of its
