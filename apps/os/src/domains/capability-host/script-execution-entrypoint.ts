@@ -7,6 +7,7 @@ import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import { settleByDeadline } from "./execution-deadline.ts";
 import { SCRIPT_EXTERNAL_CLEANUP_GRACE_MS } from "./script-execution-budgets.ts";
 import { serializeScriptResult } from "./script-result-serialization.ts";
+import { renderScriptReuseEnvelope } from "./script-reuse.ts";
 import type { ScriptExecutionSettlement } from "./script-execution-settlement.ts";
 
 export { SCRIPT_EXTERNAL_CLEANUP_GRACE_MS } from "./script-execution-budgets.ts";
@@ -167,6 +168,7 @@ export function scriptWorkerRef(input: {
         : `await (async () => {\n${preambleJs}\nreturn (${input.code});\n})()`;
   const importLine = scriptModule === undefined ? "" : `import scriptModule from "./script.js";`;
   const sandboxExecTimeoutSource = sandboxExecTimeout.toString();
+  const renderScriptReuseEnvelopeSource = renderScriptReuseEnvelope.toString();
   const source = `
     import { WorkerEntrypoint } from "cloudflare:workers";
     ${importLine}
@@ -174,6 +176,28 @@ export function scriptWorkerRef(input: {
     const executionDeadline = ${input.expiresAt};
     const externalCleanupGraceMs = ${SCRIPT_EXTERNAL_CLEANUP_GRACE_MS};
     const sandboxExecTimeout = ${sandboxExecTimeoutSource};
+    const renderScriptReuseEnvelope = ${renderScriptReuseEnvelopeSource};
+
+    // itx.previousScriptAsHelperFunction: RPC cannot hand the script a plain
+    // function, so the callable is manufactured here, in the one JS layer that
+    // shares the script's isolate. The server half (prepareScriptReuse) looks
+    // up the journaled script and swaps parameter text for identifiers; the
+    // returned helper submits the rendered envelope as a normal journaled
+    // child script run.
+    function previousScriptAsHelperFunction(itx) {
+      return async (options) => {
+        const prepared = await itx.capabilityHost.prepareScriptReuse(options);
+        return async (itxForCall, vars) => {
+          const code = renderScriptReuseEnvelope({
+            code: prepared.code,
+            parameterNames: prepared.parameterNames,
+            vars: vars === undefined ? {} : vars,
+          });
+          const run = await itxForCall.capabilityHost.runScript(code);
+          return run.result;
+        };
+      };
+    }
 
     function receiverSafeProperty(target, property) {
       const value = Reflect.get(target, property, target);
@@ -251,9 +275,11 @@ export function scriptWorkerRef(input: {
       });
       return new Proxy(itx, {
         get(target, property) {
-          return property === "sandboxes"
-            ? guardedSandboxes
-            : receiverSafeProperty(target, property);
+          if (property === "sandboxes") return guardedSandboxes;
+          if (property === "previousScriptAsHelperFunction") {
+            return previousScriptAsHelperFunction(target);
+          }
+          return receiverSafeProperty(target, property);
         },
       });
     }

@@ -341,6 +341,10 @@ export async function checkPreamble(input: {
   return problems.length > 0 ? [...problems, ...checked.notes] : [];
 }
 
+/** Reuse a previously journaled script as a parameterized helper. One line —
+ * it joins the `type Itx` prelude line, which must stay a single line. */
+const SCRIPT_REUSE_SURFACE_TYPE = `{ previousScriptAsHelperFunction(options: { eventOffset: number; parameters: { name: string; content: string }[] }): Promise<(itx: Itx, vars?: Record<string, unknown>) => Promise<any>> }`;
+
 /** The virtual project for one script check — shared by the advisory door
  * (checkItxScript) and the execution gate (checkItxScriptForExecution).
  * `preambleLineRange` (1-based, inclusive, in script.ts coordinates) is where
@@ -383,7 +387,12 @@ function assembleScriptProject(
   const preambleLines = preamble === undefined || preamble === "" ? [] : preamble.split("\n");
   const prelude = [
     `import type { Project } from "./itx-types";`,
-    `type Itx = ${["Project", ...mountTerms].join(" & ")};`,
+    // previousScriptAsHelperFunction exists only inside script executions (the
+    // harness manufactures the callable locally — RPC cannot return a plain
+    // function), so it is typed here rather than on the generated Project
+    // surface. Kept on the SAME prelude line as the alias: preludeLineCount
+    // and preambleLineRange below assume a fixed prelude shape.
+    `type Itx = ${["Project", SCRIPT_REUSE_SURFACE_TYPE, ...mountTerms].join(" & ")};`,
     ...preambleLines,
     // Rest params so a script declaring extra parameters (the runtime calls
     // fn(itx), extras just stay undefined) stays assignable.

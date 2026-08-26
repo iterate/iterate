@@ -49,7 +49,11 @@ const CHARS_PER_TOKEN = 4;
 // 4200 → 4250 (2026-08-06): the script preamble shipped — the fresh-scripts
 // bullet now teaches `results` (prior outcomes in scope, typed) and
 // setPreamble; without the teach the injected symbols are dead weight.
-const DEFAULT_PROMPT_TOKEN_CEILING = 4_250;
+// 4250 → 4350 (2026-08-26): previousScriptAsHelperFunction shipped — one
+// bullet teaches reusing a journaled script with new inputs instead of
+// re-deriving it; the whole point is saving repeat-request output tokens, and
+// without the teach the helper is undiscoverable.
+const DEFAULT_PROMPT_TOKEN_CEILING = 4_350;
 
 const AGENT_PROMPTS: Record<string, string> = {
   default: DEFAULT_AGENT_SYSTEM_PROMPT,

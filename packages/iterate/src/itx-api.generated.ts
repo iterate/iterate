@@ -650,6 +650,19 @@ export interface CapabilityHost {
    * for unknown executions and for scripts that failed.
    */
   getScriptResult(executionId: string): Promise<{ executionId: string; data: unknown }>;
+  /**
+   * Look up a previously journaled script by stream offset and swap each
+   * parameter's exact `content` text (which must appear exactly once) for its
+   * `name` identifier. `eventOffset` accepts the offset of the run's
+   * script-run-requested event, its script-run-settled event (what
+   * `results[N].offset` exposes), or the assistant-output event that produced
+   * the script. This is the server half of
+   * `itx.previousScriptAsHelperFunction`; scripts normally call that instead.
+   */
+  prepareScriptReuse(input: {
+    eventOffset: number;
+    parameters: { name: string; content: string }[];
+  }): Promise<{ code: string; parameterNames: string[]; sourceExecutionId: string }>;
   /** Explicit dynamic dispatch; the dotted-path fallback (`itx.foo.bar(...)`) compiles to exactly this call. */
   invokeCapability(call: { args?: unknown[]; path: string[] }): Promise<unknown>;
   /** Includes `capabilities`: everything reachable at this scope — own mounts plus inherited ones, tagged with their declaring scope. */

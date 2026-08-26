@@ -300,6 +300,7 @@ import {
 } from "./domains/capability-host/capability-host-defaults.ts";
 import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "./domains/capability-host/capability-host-processor-contract.ts";
 import { runCapabilityHostScript } from "./domains/capability-host/capability-host-script-run.ts";
+import { reparameterizeScript } from "./domains/capability-host/script-reuse.ts";
 import {
   settleByDeadline,
   type DeadlineOutcome,
@@ -6039,6 +6040,51 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     return await (await this.#facade()).getScriptResult(executionId);
   }
 
+  /**
+   * Look up a previously journaled script by stream offset and swap each
+   * parameter's exact `content` text (which must appear exactly once) for its
+   * `name` identifier. `eventOffset` accepts the offset of the run's
+   * script-run-requested event, its script-run-settled event (what
+   * `results[N].offset` exposes), or the assistant-output event that produced
+   * the script. This is the server half of
+   * `itx.previousScriptAsHelperFunction`; scripts normally call that instead.
+   */
+  async prepareScriptReuse(input: {
+    eventOffset: number;
+    parameters: { name: string; content: string }[];
+  }): Promise<{ code: string; parameterNames: string[]; sourceExecutionId: string }> {
+    const event = await this.#stream.getEvent({ offset: input.eventOffset });
+    if (event === undefined) {
+      throw new Error(`No event at offset ${input.eventOffset} on scope ${this.#props.path}.`);
+    }
+    const requestType = "events.iterate.com/capability-host/script-run-requested";
+    let requested: StreamEvent | undefined;
+    if (event.type === requestType) {
+      requested = event;
+    } else {
+      // Settle events carry the executionId; assistant-output events ARE the
+      // executionId (`agent-output:<offset>`). Either way the request event is
+      // one idempotency-key point read away.
+      const executionId =
+        event.type === "events.iterate.com/capability-host/script-run-settled"
+          ? (event.payload as { executionId: string }).executionId
+          : `agent-output:${input.eventOffset}`;
+      requested = await this.#stream.getEvent({
+        idempotencyKey: `capability-host/script-run-requested@${executionId}`,
+      });
+    }
+    if (requested === undefined) {
+      throw new Error(
+        `Event at offset ${input.eventOffset} (type ${JSON.stringify(event.type)}) does not correspond to a journaled script run. Pass the offset of a script-run-requested or script-run-settled event (results[N].offset works), or of the assistant output that produced the script.`,
+      );
+    }
+    const { code } = requested.payload as { code: string };
+    return {
+      ...reparameterizeScript({ code, parameters: input.parameters }),
+      sourceExecutionId: (requested.payload as { executionId: string }).executionId,
+    };
+  }
+
   /** Explicit dynamic dispatch; the dotted-path fallback (`itx.foo.bar(...)`) compiles to exactly this call. */
   async invokeCapability(call: { args?: unknown[]; path: string[] }): Promise<unknown> {
     const { args = [], path } = call;
@@ -6069,6 +6115,8 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
         getPreamble: "The assembled preamble text the next script will see, plus the entry table.",
         getScriptResult:
           "Read one settled script result back by executionId (what results[N].load(itx) calls).",
+        prepareScriptReuse:
+          "Re-parameterize a journaled script by stream offset (the server half of itx.previousScriptAsHelperFunction).",
       },
       parent: `project ${this.#props.projectId}; sibling scopes via capabilityHosts.get(path)`,
       capabilities,
