@@ -42,10 +42,7 @@ test("a repeat request reuses the previous turn's journaled script instead of re
   // Turn 1: the long way. The script really runs; the answer is computed.
   await composer.fill("prime factorize 52479543428582704627");
   await send.click();
-  // Explicit timeout: the whole agent turn (debounce → intercept → typecheck
-  // → script run) happens server-side with no loading UI for spinnerWaiter
-  // to key off, so the post-spinner budget alone is too tight on a cold dev
-  // server.
+  // timeout: the agent turn runs server-side with no loading UI for the spinnerWaiter to key off; a cold dev server exceeds the post-spinner budget.
   await page.getByText("52479543428582704627 = 6203868971 × 8459163737").waitFor({
     timeout: 60_000,
   });
@@ -54,8 +51,7 @@ test("a repeat request reuses the previous turn's journaled script instead of re
   // the new number — the correct product proves real execution, not prose.
   await composer.fill("now do 66778601389380731119");
   await send.click();
-  // Explicit timeout for the same reason: no loading UI for spinnerWaiter
-  // during the server-side turn.
+  // timeout: same as above — no loading UI for the spinnerWaiter during the server-side turn.
   await page.getByText("66778601389380731119 = 7316102869 × 9127619251").waitFor({
     timeout: 60_000,
   });
