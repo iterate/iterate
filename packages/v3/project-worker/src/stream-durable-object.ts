@@ -116,6 +116,9 @@ type SubscriptionMount = DeliveryPolicy & {
   name: string;
   providedAtOffset: number; // the row's identity
   target?: Expression;
+  /** Present iff the target is a co-located facet (`facetTarget`) AND userspace code — the class
+   *  that facet loads. A processor is a facet-target subscriber; this is its code. */
+  processor?: ProcessorPolicy;
 };
 
 /** Match a CONNECTED target: `itx.connections.get('<key>')` plus an optional trailing dotted
@@ -132,6 +135,19 @@ const connectedTarget = (t?: Expression): { key: string; path: string[] } | unde
     path.push(step);
   }
   return { key: call[1], path };
+};
+
+/** Match a FACET target: `itx.facets.get('<slug>')` — a subscriber whose target is a co-located
+ *  facet on THIS stream. These ARE the processors: the commit pump drives them (a reduce over the
+ *  log). Because they are pump-driven, not delivered, BOTH the connected lane and the forwarder
+ *  skip a facet-target mount. Target-shape dispatch, one namespace: a processor is just a
+ *  subscription whose target is a facet. */
+const facetTarget = (t?: Expression): { slug: string } | undefined => {
+  if (!t || t.length !== 3 || t[0] !== "itx" || t[1] !== "facets") return undefined;
+  const call = t[2];
+  if (!Array.isArray(call) || call.length !== 2 || call[0] !== "get" || typeof call[1] !== "string")
+    return undefined;
+  return { slug: call[1] };
 };
 
 /** The subscription-forwarder facet's slug (auto-enabled when an absent-target subscription
@@ -697,6 +713,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           providedAtOffset: m.providedAtOffset,
           ...((m.delivery ?? {}) as DeliveryPolicy),
           target: m.target,
+          ...(m.processor ? { processor: m.processor as ProcessorPolicy } : {}),
         });
     }
     return rows;
@@ -822,25 +839,25 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   // ── facet-hosted processors (built-ins via processor-facet.ts; userspace via the LOADER) ──
 
-  /** DERIVED from the capability table: processor mounts (path itx.processors.<slug>) ARE the
-   *  registry — enablement is event-sourced like every other attachment; the facet-processors
-   *  kv registry is dead. Newest same-slug mount wins (re-enable with new props = shadow). */
+  /** DERIVED from the capability table: the PROCESSORS are exactly the subscriber mounts whose
+   *  target is a co-located facet (`itx.subscribers.<slug> → itx.facets.get('<slug>')`). A
+   *  processor IS a subscription to a facet — one namespace, no separate `itx.processors.*`.
+   *  Enablement is event-sourced like every other attachment; newest same-name mount wins
+   *  (`#activeSubscriptionMounts` already projects the shadow stack). */
   #facetEntries(): FacetProcessorEntry[] {
-    const state = this.#inline(CAPABILITY_TABLE_SLUG).state as CapabilityTable;
-    const bySlug = new Map<string, FacetProcessorEntry>();
-    for (const m of state.mounts) {
-      if (m.path.length === 3 && m.path[0] === "itx" && m.path[1] === "processors") {
-        const policy = (m.processor ?? {}) as ProcessorPolicy;
-        bySlug.set(m.path[2], {
-          slug: m.path[2],
-          ...(policy.source
-            ? { ref: { source: parse(policy.source), className: policy.className ?? "default" } }
-            : {}),
-          ...(policy.props ? { props: policy.props } : {}),
-        });
-      }
+    const entries: FacetProcessorEntry[] = [];
+    for (const row of this.#activeSubscriptionMounts()) {
+      if (!facetTarget(row.target)) continue; // a connected/absent subscriber, not a facet reduce
+      const policy = (row.processor ?? {}) as ProcessorPolicy;
+      entries.push({
+        slug: row.name,
+        ...(policy.source
+          ? { ref: { source: parse(policy.source), className: policy.className ?? "default" } }
+          : {}),
+        ...(policy.props ? { props: policy.props } : {}),
+      });
     }
-    return [...bySlug.values()];
+    return entries;
   }
 
   /** Materialize (or reuse) the facet hosting `slug`. A stored `ref` means USERSPACE: the
@@ -935,13 +952,13 @@ export class StreamDurableObject extends DurableObject<Env> {
    *
    *  SUGAR, deliberately: enabling a processor is just LOADING A CLASS AS A FACET (the exact
    *  `{ source, className }` ref `itx.workers.get` takes — `source` an expression resolved to
-   *  modules, `className` the exported StreamProcessor subclass) PLUS one appended fact — the
-   *  mount at `itx.processors.<slug>` — that tells this stream's commit pump to DRIVE it. The
-   *  only difference from a stateful `workers.get({ source, className })`: a processor's class
-   *  extends `StreamProcessor` (loaded behind the `runner.js` adapter, so the author writes a
-   *  reduce, never a DurableObject) and is driven by commits, where a `workers.get` class is a
-   *  raw DO you call directly. So `enableProcessor` == append that mount; there is no second,
-   *  separate "enablement" concept. */
+   *  modules, `className` the exported StreamProcessor subclass) PLUS one appended fact — a
+   *  SUBSCRIPTION mount `itx.subscribers.<slug> → itx.facets.get('<slug>')`. A processor is just a
+   *  subscription whose target is a co-located facet: the commit pump drives every facet-target
+   *  subscriber. The only difference from a stateful `workers.get({ source, className })`: a
+   *  processor's class extends `StreamProcessor` (loaded behind the `runner.js` adapter, so the
+   *  author writes a reduce, never a DurableObject). So `enableProcessor` == subscribe a facet;
+   *  there is no separate `itx.processors.*` namespace and no second "enablement" concept. */
   async enableProcessor(
     slug: string,
     ref?: { source: string | Expression; className: string },
@@ -956,11 +973,12 @@ export class StreamDurableObject extends DurableObject<Env> {
       throw new Error(
         `no built-in processor ${JSON.stringify(slug)} (pass a ref for userspace code)`,
       );
-    // Enablement IS a mount: the processor policy rides the capability-provided event
-    // (event-sourced, auditable, shadowable). #facet configures at materialization from that
-    // mount alone — the warm-up here just makes an immediate snapshot ready.
+    // Enablement IS a subscription mount at itx.subscribers.<slug> targeting the facet: the
+    // processor policy rides the capability-provided event (event-sourced, auditable, shadowable).
+    // #facet configures at materialization from that mount alone — the warm-up here just makes an
+    // immediate snapshot ready.
     await this.#capabilityTableProcessor().provide({
-      path: `itx.processors.${slug}`,
+      path: `itx.subscribers.${slug}`,
       target: `itx.facets.get('${slug}')`,
       processor: {
         ...(ref ? { source: print(toExpression(ref.source)), className: ref.className } : {}),
@@ -981,7 +999,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       throw new Error(`"${slug}" is an inline core processor — it cannot be disabled`);
     this.#driveChains.delete(slug);
     this.#driveDeliveredThrough.delete(slug); // a re-enable must not inherit a scanned range it never saw
-    await this.revokeCapability({ path: `itx.processors.${slug}` });
+    await this.revokeCapability({ path: `itx.subscribers.${slug}` });
     const facets = this.ctx.facets as unknown as { delete?: (name: string) => void };
     if (typeof facets.delete === "function") facets.delete(`proc:${slug}`);
     else this.ctx.facets.abort(`proc:${slug}`, "disabled");
@@ -1092,7 +1110,14 @@ export class StreamDurableObject extends DurableObject<Env> {
   }): Promise<{ providedAtOffset: number }> {
     this.#eventLog.touch();
     const pathString = typeof input.path === "string" ? input.path : input.path.join(".");
-    if (pathString.startsWith("itx.subscribers.") && !connectedTarget(toExpression(input.target))) {
+    // ABSENT = an itx.subscribers.* mount that is neither CONNECTED (client lane) nor a FACET
+    // (the pump's lane — a processor). Only an absent target needs the forwarder.
+    const targetExpr = toExpression(input.target);
+    if (
+      pathString.startsWith("itx.subscribers.") &&
+      !connectedTarget(targetExpr) &&
+      !facetTarget(targetExpr)
+    ) {
       if (input.delivery?.liveState)
         throw new Error(
           "a live-state subscription needs a CONNECTED target (itx.connections.get(…)) — an absent target has no revision chain to keep",

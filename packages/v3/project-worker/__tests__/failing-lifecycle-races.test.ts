@@ -188,9 +188,9 @@ test("FIXED (defect 29): every enableProcessor drives the enablement commit into
 });
 
 test("FIXED (defect 30): a processor mount through the ordinary provide door is HALF-ENABLED — /state lists it, every commit errors, snapshot throws", async () => {
-  // BUG: #facetEntries derives enablement purely from mounts at itx.processors.<slug> — which
-  //   ANY provide can mint (verified: Itx.provide passes even the UNDECLARED `processor` field
-  //   untouched — there is no boundary schema; a raw appended capability-provided event works too).
+  // BUG: #facetEntries derives enablement purely from facet-target mounts at itx.subscribers.<slug>
+  //   — which ANY provide can mint (verified: Itx.provide passes even the UNDECLARED `processor`
+  //   field untouched — there is no boundary schema; a raw appended capability-provided event too).
   //   But a facet only functions after enableProcessor's SECOND, non-event-sourced leg:
   //   configure(), which stashes identity in the facet's own kv. provide alone creates the
   //   entry with no configure — a permanently broken enablement.
@@ -210,7 +210,7 @@ test("FIXED (defect 30): a processor mount through the ordinary provide door is 
   //   client-reachable today: one provide from any session wedges a slug in loud-error mode.
   const ctx = "prj_lr_halfenable";
   const itx = await harness.itx(ctx);
-  await itx.provide({ path: "itx.processors.tally", target: "itx.facets.get('tally')" });
+  await itx.provide({ path: "itx.subscribers.tally", target: "itx.facets.get('tally')" });
   const state = await doState(ctx);
   expect(state.facetProcessors).toContain("tally"); // listed as enabled (this passes — the lie)
   await append(itx, { type: "mark" });

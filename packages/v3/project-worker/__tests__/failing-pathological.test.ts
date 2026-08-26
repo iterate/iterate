@@ -424,7 +424,7 @@ test.fails("BUG: 50 userspace processors — the loader lane cannot materialize 
   );
 
   // Sanity: a mid-pack processor really reduced the log (each enable event + the marker).
-  const snap = await itx.invoke(`itx.processors.fan7.snapshot()`);
+  const snap = await itx.invoke(`itx.subscribers.fan7.snapshot()`);
   expect(snap.offset).toBeGreaterThanOrEqual(marker.offset);
   expect((snap.state as { n: number }).n).toBeGreaterThan(0);
 

@@ -238,13 +238,13 @@ describe("event mounts + the shadow stack", () => {
       delivery: { consumes: ["mark"], liveState: undefined },
     });
     await host.provide({
-      path: "itx.processors.tally",
+      path: "itx.subscribers.tally",
       target: "itx.facets.get('tally')",
       processor: { props: { greeting: "hi" } },
     });
     const table = reduceAll();
     const sub = table.mounts.find((m) => m.path.join(".") === "itx.subscribers.watcher")!;
-    const proc = table.mounts.find((m) => m.path.join(".") === "itx.processors.tally")!;
+    const proc = table.mounts.find((m) => m.path.join(".") === "itx.subscribers.tally")!;
     expect(sub.delivery).toEqual({ consumes: ["mark"] });
     expect(proc.processor).toEqual({ props: { greeting: "hi" } });
   });

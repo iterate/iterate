@@ -98,7 +98,8 @@ const CapabilityTableContract = defineProcessorContract({
             liveState: z.object({ key: z.string() }).optional(),
           })
           .optional(),
-        /** PROCESSOR mounts only (path itx.processors.<slug>). */
+        /** PROCESSOR policy — rides a facet-target subscriber mount
+         *  (`itx.subscribers.<slug> → itx.facets.get('<slug>')`): the class that facet loads. */
         processor: z
           .object({
             source: z.string().optional(),

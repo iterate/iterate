@@ -138,12 +138,12 @@ test("a payload-less live-state/changed event never rejects an append that alrea
 
 test("enableProcessor rejects a slug the mount grammar re-segments (a dotted slug)", async () => {
   // BUG: enableProcessor(slug) builds the mount path by string interpolation
-  //      (`itx.processors.${slug}`) — a dotted slug ("a.b") parses into FOUR segments, so the
-  //      committed mount is itx.processors.a.b, which #facetEntries (path.length === 3) never
-  //      matches. The verb then happily materializes and configures an ORPHAN facet ("proc:a.b")
-  //      that no drive, snapshot, or alarm will ever reach, and returns {ok: true}.
+  //      (`itx.subscribers.${slug}`) — a dotted slug ("a.b") parses into FOUR segments, so the
+  //      committed mount is itx.subscribers.a.b, which #facetEntries (a 3-segment subscriber
+  //      mount) never matches. The verb then happily materializes and configures an ORPHAN facet
+  //      ("proc:a.b") that no drive, snapshot, or alarm will ever reach, and returns {ok: true}.
   // EXPECTED: a slug that cannot round-trip as ONE path segment is rejected at the door (the
-  //      space spelling already is — parseCapabilityPath throws on "itx.processors.a b" — the
+  //      space spelling already is — parseCapabilityPath throws on "itx.subscribers.a b" — the
   //      dot spelling silently re-segments instead: two spellings, two behaviors).
   // ACTUAL: {ok: true}; facetSnapshot("a.b") then rejects NO_FACET; the processor never runs.
   // WHY IT MATTERS (SHAPE S1, with an S5 seam — the slug is embedded in a parsed grammar in one
@@ -185,12 +185,12 @@ test("a processor enabled by its MOUNT alone (the documented event-sourced door)
   // BUG: stream-durable-object.ts documents "enablement IS a mount ... the mounts ARE the
   //      registry" (#facetEntries), and the capability-provided payload schema carries the
   //      processor policy for exactly this door. But only the enableProcessor VERB calls
-  //      facet.configure(); a mount provided directly (provideCapability at itx.processors.<slug>
-  //      — an ordinary, documented client verb) creates a registry entry whose facet was never
-  //      configured: every drive and every snapshot throws "ProcessorFacet: not configured".
-  // EXPECTED: the two doors agree — a mount at itx.processors.tally is sufficient for the tally
-  //      facet to run (the parent HAS the full identity: its own name, projectId, path, the
-  //      mount's slug and props — it can configure on first materialization).
+  //      facet.configure(); a mount provided directly (provideCapability at a facet-target
+  //      itx.subscribers.<slug> — an ordinary, documented client verb) creates a registry entry
+  //      whose facet was never configured: every drive and every snapshot throws "not configured".
+  // EXPECTED: the two doors agree — a facet-target mount at itx.subscribers.tally is sufficient for
+  //      the tally facet to run (the parent HAS the full identity: its own name, projectId, path,
+  //      the mount's slug and props — it can configure on first materialization).
   // ACTUAL: provide succeeds, the drive errors are swallowed per commit (S2), and
   //      facetSnapshot("tally") rejects "not configured (call configure() first)".
   // WHY IT MATTERS (SHAPE S5 — one rule, two implementations drifting; the same class as the
@@ -198,7 +198,7 @@ test("a processor enabled by its MOUNT alone (the documented event-sourced door)
   //      "re-enabling rebuilds from the log") quietly depends on the OTHER door having run once
   //      — an event-sourced world that cannot actually be rebuilt from its events.
   const itx = await harness.itx("prj_w2mount");
-  await itx.provide({ path: "itx.processors.tally", target: "itx.facets.get('tally')" });
+  await itx.provide({ path: "itx.subscribers.tally", target: "itx.facets.get('tally')" });
   await append(itx, { type: "seed" });
   const snap = await itx.facetSnapshot("tally"); // ← rejects: ProcessorFacet: not configured
   expect(snap.state).toHaveProperty("counts");

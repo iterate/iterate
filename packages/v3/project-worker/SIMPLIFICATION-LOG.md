@@ -297,3 +297,31 @@ markerKey, what })`. The two roles ("processor" = StreamProcessor behind the `ru
   raw stateful DO isolate now DROPS the ~330KB SDK it never used (pure win).
 
 Typecheck clean; suite **280 passed / 36 xf / 2 skip / 31 todo**. Live proof next.
+
+### Inc 3 DONE — THE FOLD: `itx.processors.*` deleted, a processor IS a subscribed facet
+
+The crown jewel. A processor is no longer its own namespace — it is a SUBSCRIPTION whose target is
+a co-located facet: `itx.subscribers.<slug> → itx.facets.get('<slug>')`. "Load a facet, subscribe
+the facet" is now literally the model.
+
+- **`facetTarget(t)`** — a new discriminant beside `connectedTarget(t)`. The three delivery lanes
+  are now chosen purely by TARGET SHAPE: `facetTarget` → the commit pump (a reduce); `connectedTarget`
+  → the one-directional client fast path; else → the absent-target forwarder.
+- **`#facetEntries()`** derives from `#activeSubscriptionMounts()` filtered by `facetTarget` (was:
+  a separate scan of `itx.processors.*`). One namespace, one shadow-stack projection.
+- **`enableProcessor`** now provides `itx.subscribers.<slug>` (facet target + the `processor` code
+  policy); `disableProcessor` revokes it. The VERB stays (sugar) so no caller/test that _calls_ it
+  churns — only the mount PATH moved.
+- **The forwarder skips facet targets** — in BOTH the parent's auto-enable guard AND the forwarder's
+  own reduce (a facet-target subscriber, including the forwarder itself, is the pump's lane, never a
+  delivery). This also kills a would-be recursion (enabling a processor no longer spuriously enables
+  the forwarder).
+- **Commit path UNCHANGED structurally** (deliberate, lowest hot-path risk): the pump loop still
+  drives `#facetEntries()`, `#deliverToConnectedSubscriptions` still handles connected. Only WHAT
+  `#facetEntries` reads changed. (Merging the two into one target-shape-dispatched loop — Agent B's
+  micro-optimisation, −1 derivation/commit — is deferred as a separate, perf-gated step.)
+
+Tests: the two that `provide` a facet mount DIRECTLY moved from `itx.processors.tally` →
+`itx.subscribers.tally` (their intent — a mount alone enables — is preserved). Typecheck clean;
+suite **280 passed / 36 xf / 2 skip / 31 todo**. Live proof next (esp. the forwarder: a processor
+must NOT trigger absent-delivery).

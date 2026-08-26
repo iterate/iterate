@@ -119,9 +119,16 @@ export class SubscriptionForwarderProcessor extends StreamProcessor<ForwarderSta
         const segments = path.split(".");
         if (segments.length !== 3 || segments[0] !== "itx" || segments[1] !== "subscribers")
           return undefined;
-        // Connected targets are the parent's lane; liveState never reaches an absent target
-        // (rejected at provide — this guard is the reduce's belt for raw appended events).
-        if (/^itx\.connections\.get\(/.test(target.trim()) || delivery?.liveState) return undefined;
+        // Connected targets are the parent's lane; FACET targets are the pump's lane (a processor
+        // is a facet-target subscriber — including this forwarder itself); liveState never reaches
+        // an absent target (rejected at provide — this guard is the reduce's belt for raw appends).
+        const t = target.trim();
+        if (
+          /^itx\.connections\.get\(/.test(t) ||
+          /^itx\.facets\.get\(/.test(t) ||
+          delivery?.liveState
+        )
+          return undefined;
         return {
           subscriptionMounts: [
             ...state.subscriptionMounts,
