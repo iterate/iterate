@@ -97,14 +97,27 @@ export function reparameterizeScript(input: {
 
 /** The literal spellings a script might plausibly use for a primitive value —
  * canonical first. Strings get quote variants only when no escaping would be
- * needed; exotic numeric spellings (1e6, 0x10, 1_000_000) are not chased. */
+ * needed; exotic numeric spellings (1e6, 0x10) are not chased. */
 function literalSpellings(value: ScriptReuseValue): string[] {
-  if (typeof value === "bigint") return [`${value}n`];
-  if (typeof value === "number" || typeof value === "boolean") return [String(value)];
+  if (typeof value === "boolean") return [String(value)];
+  // Deduped: for short numbers delimit() returns the canonical spelling and a
+  // duplicate would double-count every occurrence, breaking exactly-once.
+  if (typeof value === "bigint") return [...new Set([`${value}n`, `${delimit(String(value))}n`])];
+  if (typeof value === "number") return [...new Set([String(value), delimit(String(value))])];
   const spellings = [JSON.stringify(value)];
   if (!/[\\'\n\r]/.test(value)) spellings.push(`'${value}'`);
   if (!/[\\`\n\r]/.test(value) && !value.includes("${")) spellings.push(`\`${value}\``);
   return spellings;
+}
+
+/** "1234567" → "1_234_567": thousands-grouped integer digits, the one
+ * separator convention people actually type. The sign and any fraction pass
+ * through ungrouped; anything else (exponent forms, <4 digits) returns
+ * unchanged. */
+function delimit(number: string): string {
+  const match = /^(-?)(\d{4,})((?:\.\d+)?)$/.exec(number);
+  if (match === null) return number;
+  return match[1] + match[2].replace(/\B(?=(\d{3})+$)/g, "_") + match[3];
 }
 
 /**

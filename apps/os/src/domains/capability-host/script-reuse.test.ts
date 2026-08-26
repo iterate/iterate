@@ -54,6 +54,33 @@ test("the value's literal must appear exactly once, with boundary-aware matching
   expect(result.code).toBe("async (itx) => 142 + 42.5 + x42 + __reuse_answer");
 });
 
+test("underscore-grouped numeric spellings are chased", () => {
+  const grouped = reparameterizeScript({
+    code: "async (itx) => 1_000_000 + 1",
+    parameters: { size: 1000000 },
+  });
+  expect(grouped.code).toBe("async (itx) => __reuse_size + 1");
+  const groupedBigint = reparameterizeScript({
+    code: "async (itx) => 52_479_543_428_582_704_627n",
+    parameters: { n: 52479543428582704627n },
+  });
+  expect(groupedBigint.code).toBe("async (itx) => __reuse_n");
+  // Canonical and grouped both present counts as ambiguous, with both
+  // spellings named in the error.
+  expect(() =>
+    reparameterizeScript({
+      code: "async (itx) => 1_000_000 + 1000000",
+      parameters: { size: 1000000 },
+    }),
+  ).toThrowError(/1000000 \(1\), 1_000_000 \(1\) — 2 total/);
+  // Short numbers must not double-count via a duplicate grouped spelling.
+  const short = reparameterizeScript({
+    code: "async (itx) => 42 + 1",
+    parameters: { answer: 42 },
+  });
+  expect(short.code).toBe("async (itx) => __reuse_answer + 1");
+});
+
 test("string values match across quote styles, exactly once in total", () => {
   const result = reparameterizeScript({
     code: `async (itx) => itx.chat.sendMessage('hello world')`,
