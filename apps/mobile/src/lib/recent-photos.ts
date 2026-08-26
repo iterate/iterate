@@ -102,12 +102,12 @@ export async function readPhotoAsAttachment(photo: RecentPhoto): Promise<PickedI
 // --- The web build's photo library ----------------------------------------
 //
 // A browser has no camera roll, so on web this strip has no real source. The
-// web build is this app's browser spec lane (apps/mobile README, "Run and
-// test it in a browser"), and the strip is pure UI — leaving it unrenderable
-// there would mean the only lane that draws real screens can never see it.
-// So the web build reads its library from one seam a spec fills in with
-// page.addInitScript(). Native never reads it: every caller above only
-// consults the seam, and nothing sets it outside a browser.
+// web build is where this app's browser specs run (apps/mobile README, "Run
+// and test it in a browser"), and the strip is pure UI — leaving it
+// unrenderable there would mean the only tests that draw real screens can
+// never see it. So the web build reads its library from one boundary a spec
+// fills in with page.addInitScript(). Native never reads it: every caller
+// above only consults the boundary, and nothing sets it outside a browser.
 
 type WebPhoto = { assetId: string; filename: string; dataUri: string };
 
