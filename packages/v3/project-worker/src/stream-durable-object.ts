@@ -25,7 +25,13 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { substituteHeaderSecrets } from "@v3/shared/egress";
-import { confinedWorker, resolveSource, versionedFacet } from "./core/agent-runtime.ts";
+import {
+  confinedWorker,
+  facetLoaderOwner,
+  resolveSource,
+  versionedFacet,
+  type WorkerSource,
+} from "./core/agent-runtime.ts";
 import { parseAppConfig } from "./core/config.ts";
 import { createLogger } from "./core/logs.ts";
 import {
@@ -856,31 +862,15 @@ export class StreamDurableObject extends DurableObject<Env> {
         class: exports.ProcessorFacet as DurableObjectClass,
       })) as unknown as FacetProcessorHandle;
     } else {
-      const userModules = await resolveSource(
-        (e) => this.invoke(e),
-        entry.ref.source,
-        `processor "${slug}"`,
-      );
-      const version = hashSource(JSON.stringify(userModules));
-      const worker = confinedWorker(
-        this.env,
-        // Deploy id rides the minted key (the stale-isolate/DataCloneError family).
-        { kind: "procfacet", owner: `${this.#address.name}:${slug}`, contentHash: version },
-        "runner.js",
-        {
-          ...userModules,
-          "processor.js": PROCESSOR_SDK_MODULE,
-          "runner.js": PROCESSOR_RUNNER_MODULE,
-        },
-        itxEntrypointFor(this.ctx, this.#address.name),
-      );
-      handle = versionedFacet(this.ctx, {
-        worker,
-        className: "ProcessorFacetRunner",
+      handle = (await this.#durableFacet({
+        source: entry.ref.source,
+        role: "processor",
+        discriminator: slug,
+        loadedClassName: "ProcessorFacetRunner",
         facetName: `proc:${slug}`,
         markerKey: `procfacet:${slug}:version`,
-        version,
-      }) as FacetProcessorHandle;
+        what: `processor "${slug}"`,
+      })) as FacetProcessorHandle;
     }
     // CONFIGURE AT MATERIALIZATION — identity is derived ENTIRELY from the mount + this DO's
     // address, so enablement is ONE event-sourced fact. No configure-after-provide side-channel
@@ -894,6 +884,51 @@ export class StreamDurableObject extends DurableObject<Env> {
       ...(entry.props ? { props: entry.props } : {}),
     });
     return handle;
+  }
+
+  /** Load a class as a FACET of this stream — the ONE loader for both roles: a userspace
+   *  `StreamProcessor` (role "processor", behind the `runner.js` adapter + SDK, commit-driven) and
+   *  a raw stateful `DurableObject` class (role "stateful", loaded directly and called). Shared:
+   *  `resolveSource` → contentHash → `confinedWorker` (kind "facet") → `versionedFacet`; the two
+   *  roles differ ONLY in whether the SDK + runner adapter ride the module set. The loader `owner`
+   *  is composed collision-free (`facetLoaderOwner`). */
+  async #durableFacet(opts: {
+    source: WorkerSource;
+    role: "processor" | "stateful";
+    /** The owner's second half — a processor slug or a stateful className. */
+    discriminator: string;
+    /** The class `confinedWorker`/`versionedFacet` instantiate (the runner for a processor). */
+    loadedClassName: string;
+    facetName: string;
+    markerKey: string;
+    what: string;
+  }): Promise<unknown> {
+    const userModules = await resolveSource((e) => this.invoke(e), opts.source, opts.what);
+    const version = hashSource(JSON.stringify(userModules));
+    const worker = confinedWorker(
+      this.env,
+      {
+        kind: "facet",
+        owner: facetLoaderOwner(this.#address.name, opts.discriminator),
+        contentHash: version,
+      },
+      opts.role === "processor" ? "runner.js" : "cap.js",
+      opts.role === "processor"
+        ? {
+            ...userModules,
+            "processor.js": PROCESSOR_SDK_MODULE,
+            "runner.js": PROCESSOR_RUNNER_MODULE,
+          }
+        : userModules,
+      itxEntrypointFor(this.ctx, this.#address.name),
+    );
+    return versionedFacet(this.ctx, {
+      worker,
+      className: opts.loadedClassName,
+      facetName: opts.facetName,
+      markerKey: opts.markerKey,
+      version,
+    });
   }
 
   /** Enable a facet-hosted processor on this stream (idempotent; identity configured durably).
@@ -990,31 +1025,16 @@ export class StreamDurableObject extends DurableObject<Env> {
    *  (stable name), while versionedFacet restarts it when the resolved CONTENT changes. */
   async #statefulFacet(ref: { source: Expression; className: string }): Promise<unknown> {
     this.#noteActivity();
-    const modules = await resolveSource(
-      (e) => this.invoke(e),
-      ref.source,
-      `stateful worker "${ref.className}"`,
-    );
-    const version = hashSource(JSON.stringify(modules));
-    const worker = confinedWorker(
-      this.env,
-      {
-        kind: "stateful",
-        owner: `${this.#address.name}:${ref.className}`,
-        contentHash: version,
-      },
-      "cap.js",
-      modules,
-      itxEntrypointFor(this.ctx, this.#address.name),
-    );
     const facetName = `stateful:${ref.className}:${hashSource(JSON.stringify(ref.source))}`;
     this.#statefulFacetNames.add(facetName);
-    return versionedFacet(this.ctx, {
-      worker,
-      className: ref.className,
+    return this.#durableFacet({
+      source: ref.source,
+      role: "stateful",
+      discriminator: ref.className,
+      loadedClassName: ref.className,
       facetName,
       markerKey: `${facetName}:version`,
-      version,
+      what: `stateful worker "${ref.className}"`,
     });
   }
 

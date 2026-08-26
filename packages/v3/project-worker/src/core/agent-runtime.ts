@@ -67,14 +67,25 @@ export default class CodeCap extends WorkerEntrypoint {
  *  re-dial failure and re-key on DEPLOY, not per use.)
  *  ═══════════════════════════════════════════════════════════════════════════════════════════ */
 /** The cacheKey is MINTED HERE — the one audit point for the dollar lever. `kind` is a CLOSED
- *  union so a new key family is a deliberate type change; `owner` is the owning context (plus
- *  `:{slug}` for processor facets); `contentHash` versions the source. */
-import { PROCESSOR_SDK_MODULE } from "../generated/processor-sdk.ts";
+ *  union (`code` = a stateless isolate; `facet` = a durable class hosted as a facet — the merge
+ *  of the old `procfacet`/`stateful`, which differed only in module set) so a new key family is a
+ *  deliberate type change; `owner` is composed collision-free by `facetLoaderOwner`;
+ *  `contentHash` versions the source. */
 import { toExpression, type Expression } from "./expression.ts";
+
+/** Compose the loader cacheKey `owner` (context + a discriminator: a processor slug or a stateful
+ *  className) COLLISION-FREE. The naive `${context}:${discriminator}` aliased across a different
+ *  split — context "/x:y"+class "Door" and context "/x"+class "y:Door" both became
+ *  "…/x:y:Door", a SHARED loader cacheKey = silent cross-context authority transfer (the isolate's
+ *  whole world is the host stub baked in at first materialization). Length-prefixing the context
+ *  makes the split unambiguous regardless of `:` in either half. (wave2-sweep.test.ts) */
+export function facetLoaderOwner(contextName: string, discriminator: string): string {
+  return `${contextName.length}#${contextName}#${discriminator}`;
+}
 
 export function confinedWorker(
   env: { LOADER: WorkerLoader; CF_VERSION_METADATA?: { id: string } },
-  key: { kind: "code" | "procfacet" | "stateful"; owner: string; contentHash: string },
+  key: { kind: "code" | "facet"; owner: string; contentHash: string },
   mainModule: string,
   modules: Record<string, string>,
   host: Fetcher,
@@ -87,12 +98,11 @@ export function confinedWorker(
     // handle back — every chain member needs the flag (see iterate-context-entrypoint.ts).
     compatibilityFlags: ["allow_irrevocable_stub_storage"],
     mainModule,
-    // itx.js rides every confined isolate; the processor SDK (base class + zod, ~330KB) rides
-    // ONLY where a processor class can exist — stateless code caps never import it, and the
-    // dead module source was pure isolate weight for them.
+    // itx.js rides every confined isolate. The processor SDK (~330KB) is NOT injected here — the
+    // CALLER includes "processor.js" only where a StreamProcessor actually lives (#durableFacet's
+    // processor role), so a stateless code cap AND a raw stateful DO both skip the dead weight.
     modules: {
       "itx.js": ITX_SURFACE_MODULE,
-      ...(key.kind === "code" ? {} : { "processor.js": PROCESSOR_SDK_MODULE }),
       ...modules,
     },
     env: { ITX: host },

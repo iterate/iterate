@@ -28,7 +28,7 @@ vi.mock("cloudflare:workers", () => ({
 }));
 
 import { substituteHeaderSecrets } from "@v3/shared/egress";
-import { confinedWorker } from "./core/agent-runtime.ts";
+import { confinedWorker, facetLoaderOwner } from "./core/agent-runtime.ts";
 import { parseAppConfig } from "./core/config.ts";
 import { DurableObjectNameCodec } from "./core/durable-object-names.ts";
 import { parse, parseCapabilityPath, type Expression } from "./core/expression.ts";
@@ -44,26 +44,18 @@ import type { ProcessorStream } from "./core/processor.ts";
 
 // ═══════════════ 1. confinedWorker cacheKey — ":"-joined owner composition (S3) ═══════════════
 
-test.fails("two DIFFERENT stateful-worker identities never share one Worker Loader cacheKey", () => {
-  // BUG: confinedWorker mints `${kind}:${deploy}:${owner}:${contentHash}` and the stream DO
-  //      composes the stateful owner as `${contextName}:${className}` (stream-durable-object.ts
-  //      #statefulFacet) with NO escaping — but a context PATH may contain ":" (the edge accepts
-  //      any `?ctx=`; DurableObjectNameCodec never rejects ":") and a className is an arbitrary
-  //      string (ES2022 allows `export { X as "y:Door" }`, and nothing validates it before the
-  //      lookup). So context "/x:y" + class "Door" and context "/x" + class "y:Door" compose the
-  //      IDENTICAL owner string "prj_u.iterate/x:y:Door".
-  // EXPECTED: distinct (context, className) identities mint distinct loader cacheKeys — the
-  //      cacheKey doc block calls this "the one audit point" for identity.
-  // ACTUAL: both calls pass the SAME key to LOADER.get. Whoever calls second REUSES the first
-  //      caller's isolate — including its env.ITX/globalOutbound, which are minted for the FIRST
-  //      context (itxEntrypointFor(ctx, contextNameA)). The second context's stateful worker then
-  //      appends/reads/egresses AS THE OTHER CONTEXT.
-  // WHY IT MATTERS (SHAPE S3, composition collision — same family as the prefixed-kv door): the
-  //      loader cacheKey IS an authority boundary (the isolate's whole world is the host stub
-  //      baked in at first materialization). A collision is silent cross-context authority
-  //      transfer, not just a billing artifact. (kind "code"/"procfacet" decompose uniquely today
-  //      because hash and slug are colon-free — the stateful lane is the open door; one
-  //      delimiter-escape or length-prefix in the owner seam closes the family.)
+test("two DIFFERENT facet identities never share one Worker Loader cacheKey (facetLoaderOwner)", () => {
+  // FIXED (was S3, composition collision): confinedWorker mints
+  // `${kind}:${deploy}:${owner}:${contentHash}`, and the owner used to be `${contextName}:${disc}`
+  // with NO escaping — a context PATH may contain ":" (the edge accepts any `?ctx=`;
+  // DurableObjectNameCodec never rejects ":") and a className is arbitrary (ES2022 allows
+  // `export { X as "y:Door" }`). So context "/x:y"+class "Door" and context "/x"+class "y:Door"
+  // composed the IDENTICAL owner "prj_u.iterate/x:y:Door" → the SAME loader cacheKey → the second
+  // caller REUSES the first's isolate (its env.ITX/globalOutbound), i.e. silent cross-context
+  // authority transfer (the loader cacheKey IS an authority boundary — the isolate's whole world
+  // is the host stub baked in at first materialization).
+  // FIX: `facetLoaderOwner` LENGTH-PREFIXES the context so the (context, discriminator) split is
+  // unambiguous regardless of ":" in either half. The two identities below now mint DISTINCT keys.
   const keys: string[] = [];
   const env = {
     LOADER: { get: (key: string) => (keys.push(key), {}) },
@@ -77,7 +69,7 @@ test.fails("two DIFFERENT stateful-worker identities never share one Worker Load
   const contextA = DurableObjectNameCodec.stringify({ projectId: "prj_u", path: "/x:y" });
   confinedWorker(
     env,
-    { kind: "stateful", owner: `${contextA}:Door`, contentHash },
+    { kind: "facet", owner: facetLoaderOwner(contextA, "Door"), contentHash },
     "cap.js",
     modules,
     host,
@@ -85,13 +77,13 @@ test.fails("two DIFFERENT stateful-worker identities never share one Worker Load
   const contextB = DurableObjectNameCodec.stringify({ projectId: "prj_u", path: "/x" });
   confinedWorker(
     env,
-    { kind: "stateful", owner: `${contextB}:y:Door`, contentHash },
+    { kind: "facet", owner: facetLoaderOwner(contextB, "y:Door"), contentHash },
     "cap.js",
     modules,
     host,
   );
   expect(keys).toHaveLength(2);
-  expect(new Set(keys).size).toBe(2); // ← both are "stateful:deploy-1:prj_u.iterate/x:y:Door:1abc2d"
+  expect(new Set(keys).size).toBe(2); // distinct — the length-prefix makes the split unambiguous
 });
 
 // ═══════════════ 2. parseAppConfig — the ARRAY path branch is a fabricated proof (S7) ═══════════════

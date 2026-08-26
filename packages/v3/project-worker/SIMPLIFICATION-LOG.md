@@ -275,3 +275,25 @@ it. Added the ONE shape that isn't a producer expression: `{ type:"inline", file
 deliberately NOT a branch: it's sugar that compiles to a producer expression (`itx.repo.get(...)`),
 honouring Jonas' "repo compiles to the callback variant." Deleted the stale `workers.get({source,
 className?})` docstring. Typecheck clean; suite 279 passed / 37 xf / 2 skip / 31 todo (identical).
+
+### Inc 2 DONE — `#durableFacet` merge + `facetLoaderOwner` collision fix + loader kinds 3→2
+
+Three moves, one increment:
+
+- **`#durableFacet`** — `#facet`'s userspace branch and `#statefulFacet` were near-duplicate
+  `resolveSource → hashSource → confinedWorker → versionedFacet` skeletons (the S5 divergent-dup
+  pair). Merged into ONE `#durableFacet({ source, role, discriminator, loadedClassName, facetName,
+markerKey, what })`. The two roles ("processor" = StreamProcessor behind the `runner.js` adapter
+  - SDK, commit-driven; "stateful" = a raw DO class, called) now differ in exactly ONE place — the
+    mainModule + whether the SDK/adapter ride the module set.
+- **`facetLoaderOwner(context, discriminator)`** closes the wave2 owner-collision defect: the naive
+  `${context}:${disc}` aliased across a different `:` split (a documented silent cross-context
+  authority transfer). Length-prefixing the context makes the split unambiguous. The
+  `wave2-sweep` test flips from `test.fails` → passing (**36 xf, was 37**) — the fix is proven by
+  its own test.
+- **Loader kinds 3→2** (`code | facet`). `procfacet`+`stateful` were only ever different module
+  sets + a cacheKey prefix; with the collision fixed they merge safely. `confinedWorker` no longer
+  auto-injects `processor.js` by kind — the CALLER includes it only for the processor role, so a
+  raw stateful DO isolate now DROPS the ~330KB SDK it never used (pure win).
+
+Typecheck clean; suite **280 passed / 36 xf / 2 skip / 31 todo**. Live proof next.
