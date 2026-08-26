@@ -6205,7 +6205,7 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
  * returned by `itx.previousScriptHelper`. `run(vars)` executes it with new
  * values as a journaled child script run in the same scope.
  */
-export class ReusableScriptRpcTarget extends IterateRpcTarget<"ReusableScript"> {
+class ReusableScriptRpcTarget extends IterateRpcTarget<"ReusableScript"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions: `A reusable script (from run ${this.#props.sourceExecutionId}), parameterized over [${this.#props.parameters.map((binding) => binding.name).join(", ")}]: run(vars) re-executes it with new values as a journaled child script run.`,
