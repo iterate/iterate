@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: small
 ---
 
@@ -9,7 +9,7 @@ size: small
 
 Diagnosis complete (evidence below); fix + spec implemented: facet alarm
 replay failures now fail the Stream DO's alarm invocation so Cloudflare's
-platform alarm retry stays owed. Remaining: PR review.
+platform alarm retry stays owed. Merged via PR #2520.
 
 ## Problem
 
