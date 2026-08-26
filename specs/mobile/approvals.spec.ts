@@ -210,10 +210,31 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
         .map((event) => (event.payload as { message: string }).message)
         .filter((message) => message.includes(" outcomes: "));
 
+    // The command's turn (debounce, interceptor round trip, codemode
+    // extraction) happens BEFORE any UI the batch-card wait can extend
+    // against, and on a cold preview it eats enough of that wait's budget to
+    // starve the park → approval → paint chain it exists to cover. So each
+    // burst synchronizes on its script START itx-side first; the UI wait then
+    // budgets exactly what it budgeted before the turn existed.
+    const awaitAgentScriptStart = async (afterOffset: number) =>
+      itx.streams.get(agentPath).waitForEvent({
+        afterOffset,
+        eventTypes: ["events.iterate.com/capability-host/script-run-started"],
+        predicate: (event) =>
+          String((event.payload as { executionId?: string }).executionId).startsWith(
+            "agent-output:",
+          ),
+        timeoutMs: 60_000,
+      });
+    const lastAgentOffset = async () =>
+      (await itx.streams.get(agentPath).getEvents({ limit: 500 })).at(-1)?.offset ?? 0;
+
     // The approve burst: the command's turn is served by the handler above, the
     // burst parks as one batch, and the dialog appears in-thread while the
     // working indicator honestly spins — no spinner-waiter escapes needed.
+    const beforeApprove = await lastAgentOffset();
     await sendChatMessage(page, "Run the approve-me burst");
+    await awaitAgentScriptStart(beforeApprove);
     await waitForBatchCardButton({
       agentPaths: [agentPath],
       deviceId: DEVICE_ID,
@@ -248,7 +269,9 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     // the first append sets title + activity, then an activity-only update
     // as the phase changes (the fold must keep the standing title).
     const reason = "wrong recipient — use the staging address";
+    const beforeReject = await lastAgentOffset();
     await sendChatMessage(page, "Run the reject-me burst");
+    await awaitAgentScriptStart(beforeReject);
     await waitForBatchCardButton({
       agentPaths: [agentPath],
       deviceId: DEVICE_ID,
