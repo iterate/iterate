@@ -43,6 +43,7 @@ import { projectStub } from "./projects/egress.ts";
 import type { CapabilityDescription } from "./itx/describe.ts";
 import { DurableObjectNameCodec } from "./durable-object-names.ts";
 import { AgentProcessor } from "./agents/agent-processor-implementation.ts";
+import type { WorkersAiMessage } from "./agents/workers-ai-transport.ts";
 import {
   type AgentFileAttachment,
   type AgentLiveState,
@@ -539,8 +540,11 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
       // fake/* model turns are served by the project's live AI interceptor
       // (itx.ai.intercept); the slot lives on the Project DO so both egress
       // paths share one handler, and this hop only happens for fake/* models.
-      consultAiInterceptor: (input: { source: "agent-turn"; model: string; body: unknown }) =>
-        projectStub(this.env.PROJECT, projectId).consultAiInterceptor(input),
+      consultAiInterceptor: (input: {
+        source: "agent-turn";
+        model: string;
+        body: { messages: WorkersAiMessage[] };
+      }) => projectStub(this.env.PROJECT, projectId).consultAiInterceptor(input),
       // Resolved per attempt (not at construction) so a config problem
       // fails the turn with a journaled error instead of bricking the host.
       // The OpenAI prompt_cache_key is per agent stream: repeated turns

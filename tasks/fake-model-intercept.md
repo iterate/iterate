@@ -1,5 +1,5 @@
 ---
-status: ready
+status: in-review
 size: large
 ---
 
@@ -7,7 +7,11 @@ size: large
 
 ## Status summary
 
-Spec settled via a grill session (8 decisions below). Implementation not started.
+Implemented; PR #2523. Both egress paths consult the Project DO's live AI
+interceptor for `fake/*` models; unit tests, a three-turn sarcastic spec
+(video in the PR), the `ai-intercept` example, and the testing-doc paragraph
+are all in. dumbagent (separate repo) got server-free protocol/preset subpath
+exports plus a pkg.pr.new workflow. Remaining: CI + review.
 
 ## Ask
 
@@ -54,22 +58,27 @@ with the "model" being an in-memory function in the test process.
 
 ## Checklist
 
-- [ ] Project DO: live `ai` interceptor state next to the egress interceptor
+- [x] Project DO: live `ai` interceptor state next to the egress interceptor
       (same last-writer-wins/session-bound semantics), plus an internal consult
-      method callable from the facet DO
-- [ ] `AiRpcTarget` (`rpc-targets.ts`): `intercept(handler)` + `fake/` branch in
-      `run()` before `env.AI.run`; docstrings; `pnpm generate:itx-api`
-- [ ] Agent path (`agent-llm-request.ts` `attempt()`): `fake/` branch after the
+      method callable from the facet DO — _`interceptAi`/`consultAiInterceptor`
+      in `project-durable-object.ts`, slot mirrors `#egressInterceptor`_
+- [x] `AiRpcTarget` (`rpc-targets.ts`): `intercept(handler)` + `fake/` branch in
+      `run()` before `env.AI.run`; docstrings; `pnpm generate:itx-api` —
+      _projectId threaded through both construction sites; contract regenerated_
+- [x] Agent path (`agent-llm-request.ts` `attempt()`): `fake/` branch after the
       `callLlm` check — consult handler, word-split `onChunk`, usage default;
-      no handler → recorded attempt failure. New `AgentProcessorDeps` member,
-      wired in `processor-facet-durable-object.ts`
-- [ ] Unit tests for the fake branch (handler result, missing handler, usage
-      default) via the existing processor harness
-- [ ] e2e spec: multi-turn conversation with a sarcastic responder through the
-      browser UI; record with `VIDEO_MODE=1` for the PR body
-- [ ] itx example `ai-intercept` (`e2eProven: true`)
-- [ ] docs/testing.md: paragraph in the LLM-cost gap section
-- [ ] dumbagent (separate repo): export pure semantic cores + message helpers
+      no handler → recorded attempt failure — _dep `consultAiInterceptor` on
+      `AgentProcessorDeps`, wired via `projectStub` in the facet DO_
+- [x] Unit tests for the fake branch — _`agent-fake-model.test.ts`: 5 tests
+      incl. callLlm precedence and usage estimate/verbatim_
+- [x] e2e spec: multi-turn sarcastic conversation through the browser UI,
+      `VIDEO_MODE=1` recording — _`specs/agent-fake-model-chat.spec.ts`, three
+      turns in ~20s, exact-reply assertions; video in PR body_
+- [x] itx example `ai-intercept` (`e2eProven: true`) — _first matrix-proven
+      `itx.ai.run` coverage_
+- [x] docs/testing.md: paragraph in the LLM-cost gap section
+- [x] dumbagent (separate repo): semantic exports — _protocol split out of
+      api.ts; `./protocol` + `./presets/*` subpaths, server-free; pushed_
 
 ## Requirements from Misha
 

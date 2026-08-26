@@ -11,7 +11,7 @@
 // a handler.
 
 /** The model-name namespace served by the live AI interceptor. */
-export const FAKE_MODEL_PREFIX = "fake/";
+const FAKE_MODEL_PREFIX = "fake/";
 
 export function isFakeModel(model: string): boolean {
   return model.startsWith(FAKE_MODEL_PREFIX);
@@ -52,7 +52,7 @@ export interface ProjectAiIntercept extends Disposable {
 }
 
 /** What an agent-turn attempt needs back from the interceptor. */
-export type FakeModelTurnResult = {
+type FakeModelTurnResult = {
   text: string;
   usage: {
     inputTokens: number;

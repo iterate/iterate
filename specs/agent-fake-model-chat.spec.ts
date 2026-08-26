@@ -1,4 +1,3 @@
-import { expect } from "@playwright/test";
 import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
@@ -64,7 +63,8 @@ test("multi-turn chat with a sarcastic agent served by the spec's own fake-model
       .locator(assistantMessage)
       .filter({ hasText: formatSarcasticResponse(message) })
       .waitFor();
-    await expect(page.locator(assistantMessage)).toHaveCount(index + 1);
+    // Turn count grows one reply per message (nth waits for index+1 to exist).
+    await page.locator(assistantMessage).nth(index).waitFor();
   }
 });
 
