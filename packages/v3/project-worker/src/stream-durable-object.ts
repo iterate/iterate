@@ -25,7 +25,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { substituteHeaderSecrets } from "@v3/shared/egress";
-import { asModules, confinedWorker, versionedFacet } from "./core/agent-runtime.ts";
+import { confinedWorker, resolveSource, versionedFacet } from "./core/agent-runtime.ts";
 import { parseAppConfig } from "./core/config.ts";
 import { createLogger } from "./core/logs.ts";
 import {
@@ -856,7 +856,11 @@ export class StreamDurableObject extends DurableObject<Env> {
         class: exports.ProcessorFacet as DurableObjectClass,
       })) as unknown as FacetProcessorHandle;
     } else {
-      const userModules = asModules(await this.invoke(entry.ref.source), `processor "${slug}"`);
+      const userModules = await resolveSource(
+        (e) => this.invoke(e),
+        entry.ref.source,
+        `processor "${slug}"`,
+      );
       const version = hashSource(JSON.stringify(userModules));
       const worker = confinedWorker(
         this.env,
@@ -986,7 +990,11 @@ export class StreamDurableObject extends DurableObject<Env> {
    *  (stable name), while versionedFacet restarts it when the resolved CONTENT changes. */
   async #statefulFacet(ref: { source: Expression; className: string }): Promise<unknown> {
     this.#noteActivity();
-    const modules = asModules(await this.invoke(ref.source), `stateful worker "${ref.className}"`);
+    const modules = await resolveSource(
+      (e) => this.invoke(e),
+      ref.source,
+      `stateful worker "${ref.className}"`,
+    );
     const version = hashSource(JSON.stringify(modules));
     const worker = confinedWorker(
       this.env,

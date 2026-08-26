@@ -4,7 +4,12 @@
 // policed, the keys are simply absent). Config-mount targets read `kv`, `stream`,
 // `contexts.get('/x')`, `bindings.get('FALLBACK')` — the vocabulary, unbundled.
 
-import { asModules, CODE_CAP_RUNNER, confinedWorker } from "./core/agent-runtime.ts";
+import {
+  CODE_CAP_RUNNER,
+  confinedWorker,
+  resolveSource,
+  type WorkerSource,
+} from "./core/agent-runtime.ts";
 import { itxEntrypointFor } from "./itx-entrypoint.ts";
 import { pathProxy, toExpression, type Expression } from "./core/expression.ts";
 import type { Context } from "./core/stream.ts";
@@ -95,22 +100,13 @@ interface BuildBuiltInsDeps {
 export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> {
   const { projectId, path, contextName, env } = deps;
 
-  const loadModules = async (source: Expression): Promise<Record<string, string>> =>
-    asModules(await deps.invoke(source), "workers.get");
-
-  /** RUN CODE IN THIS CONTEXT — the fundamental context operation (owner: "one of the key,
-   *  key, key APIs"). `workers.get({source, className?})`: `className` present → the class is
-   *  hosted DURABLY (a facet of the runner DO, any deep dotted method + fetch); absent → run
-   *  the default export in a fresh confined isolate (`run(...args)` — a real RPC method, so
-   *  callbacks/Dates/bytes ride natively — plus `fetch` when the source serves one). ONE
-   *  isolate and ONE billed loader identity per source either way. The isolate's whole world
-   *  is the interposition entrypoint, never a raw DO stub (iterate-context-entrypoint.ts). */
   /** PRIMITIVE — load a stateless, non-facet confined worker (kind "code"): its own isolate,
-   *  no DO, no storage, `env.ITX` bound. Returns the `{ run, fetch }` handle. `props` (apps/os
-   *  parity) seed the entrypoint's `ctx.props`. */
-  const statelessHandle = (source: Expression, props?: Record<string, unknown>) => {
+   *  no DO, no storage, `env.ITX` bound. Returns the `{ run, fetch }` handle. `source` is a
+   *  producer (an itx-Expression, or `{ type:"inline", files }`), resolved by the one shared
+   *  `resolveSource` path. `props` (apps/os parity) seed the entrypoint's `ctx.props`. */
+  const statelessHandle = (source: WorkerSource, props?: Record<string, unknown>) => {
     const entrypoint = async () => {
-      const modules = await loadModules(source);
+      const modules = await resolveSource(deps.invoke, source, "workers.get");
       const worker = confinedWorker(
         env,
         { kind: "code", owner: contextName, contentHash: hashSource(JSON.stringify(modules)) },
@@ -132,10 +128,10 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   };
   const workers: WorkersView = {
     get: (ref) => {
-      const source = toExpression(ref.source as string | Expression);
       if (ref.type === "stateful") {
         // Durable class: a FACET of this stream — a method proxy that walks deep dots natively;
         // a top-level `.fetch` forwards to the facet's own fetch (101s pass, no header protocol).
+        const source = toExpression(ref.source as string | Expression);
         const className = ref.className;
         return pathProxy((segments, args) => {
           if (segments.length === 1 && segments[0] === "fetch")
@@ -143,10 +139,10 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           return deps.statefulWorkers.invoke({ source, className }, segments, args);
         });
       }
-      return statelessHandle(source, ref.props);
+      return statelessHandle(ref.source as WorkerSource, ref.props);
     },
     run: (source: unknown, ...args: unknown[]) =>
-      statelessHandle(toExpression(source as string | Expression)).run(...args),
+      statelessHandle(source as WorkerSource).run(...args),
   };
 
   const { itxKv, secretsKv } = { itxKv: env.ITX_KV, secretsKv: env.SECRETS_KV };

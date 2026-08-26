@@ -70,6 +70,7 @@ export default class CodeCap extends WorkerEntrypoint {
  *  union so a new key family is a deliberate type change; `owner` is the owning context (plus
  *  `:{slug}` for processor facets); `contentHash` versions the source. */
 import { PROCESSOR_SDK_MODULE } from "../generated/processor-sdk.ts";
+import { toExpression, type Expression } from "./expression.ts";
 
 export function confinedWorker(
   env: { LOADER: WorkerLoader; CF_VERSION_METADATA?: { id: string } },
@@ -111,6 +112,32 @@ export function asModules(result: unknown, what: string): Record<string, string>
   if (result && typeof result === "object" && !Array.isArray(result))
     return result as Record<string, string>;
   throw new Error(`${what}: source expression produced no module code`);
+}
+
+/** A worker/facet SOURCE is a PRODUCER of module code, resolved the SAME way at every load site
+ *  (stateless workers, stateful facets, processor facets — the three callers that used to inline
+ *  `asModules(await invoke(source))` each). Two shapes, both bottoming out here:
+ *   • an itx-Expression producer — the norm. `itx.kv.get('src/x.js')` IS a callback that fetches
+ *     the code; a repo fetch is just `itx.repo.get(...)`; a provided capnweb/Workers-RPC callback
+ *     is any expression that invokes it. Re-derivable across incarnations — the durable form,
+ *     mirroring apps/os `env.LOADER.get(cacheKey, () => code)` with the producer on the wire.
+ *   • `{ type: "inline", files }` — the code handed over literally (apps/os `WorkerFileSource`
+ *     inline), the one shape with no producer to invoke.
+ *  `type:"repo"` is deliberately NOT a third branch here — it is surface sugar that compiles to a
+ *  producer expression, so there is ONE resolve path, not a per-variant fan-out. */
+export type WorkerSource = string | Expression | { type: "inline"; files: Record<string, string> };
+export async function resolveSource(
+  invoke: (call: Expression) => Promise<unknown>,
+  source: WorkerSource,
+  what: string,
+): Promise<Record<string, string>> {
+  if (
+    typeof source === "object" &&
+    !Array.isArray(source) &&
+    (source as { type?: string }).type === "inline"
+  )
+    return asModules((source as { files: Record<string, string> }).files, what);
+  return asModules(await invoke(toExpression(source as string | Expression)), what);
 }
 
 export function versionedFacet(

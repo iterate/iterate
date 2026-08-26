@@ -261,3 +261,17 @@ composition: `loadModules` → `confinedWorker` kind "code" → `.run`, three la
 functions). Extracted `statelessHandle()` so the stateless primitive has a name. Updated callers (the
 proofs already used `type` in several places — this aligns code with them; converted two `.run()` sites
 to `workers.run`). Typecheck clean; suite 279 passed / 37 xf / 2 skip / 31 todo (identical baseline).
+
+### Inc 1b DONE — one-producer source (`resolveSource`) + `inline` sugar
+
+The three load sites each inlined `asModules(await invoke(source), what)` — built-ins' stateless
+worker, `#facet` (processor), `#statefulFacet` (stateful worker). Extracted the ONE
+`resolveSource(invoke, source, what)` in agent-runtime.ts and routed all three through it. The
+realisation that made this small: **source is ALREADY a producer** — every existing proof uses
+`source: "itx.kv.get('src/x.js')"`, which is literally a callback expression that fetches the code.
+So there was never a per-variant fan-out to collapse; the consolidation is one resolve path + naming
+it. Added the ONE shape that isn't a producer expression: `{ type:"inline", files }` (apps/os
+`WorkerFileSource` inline) — code handed over literally, no `kv.put` first. `type:"repo"` is
+deliberately NOT a branch: it's sugar that compiles to a producer expression (`itx.repo.get(...)`),
+honouring Jonas' "repo compiles to the callback variant." Deleted the stale `workers.get({source,
+className?})` docstring. Typecheck clean; suite 279 passed / 37 xf / 2 skip / 31 todo (identical).
