@@ -305,7 +305,6 @@ import {
   reparameterizeScript,
   type ReuseParameterBinding,
   type ScriptReuseValue,
-  type ScriptReuseVars,
 } from "./domains/capability-host/script-reuse.ts";
 import {
   settleByDeadline,
@@ -6061,9 +6060,7 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
   async previousScriptHelper<P extends Record<string, ScriptReuseValue>>(input: {
     eventOffset: number;
     parameters: P;
-  }): Promise<
-    Omit<ReusableScriptRpcTarget, "run"> & { run(vars: ScriptReuseVars<P>): Promise<unknown> }
-  > {
+  }): Promise<Omit<ReusableScriptRpcTarget, "run"> & { run(vars: P): Promise<unknown> }> {
     const event = await this.#stream.getEvent({ offset: input.eventOffset });
     if (event === undefined) {
       throw new Error(`No event at offset ${input.eventOffset} on scope ${this.#props.path}.`);

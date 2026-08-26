@@ -665,7 +665,7 @@ export interface CapabilityHost {
   previousScriptHelper<P extends Record<string, ScriptReuseValue>>(input: {
     eventOffset: number;
     parameters: P;
-  }): Promise<Omit<ReusableScript, "run"> & { run(vars: ScriptReuseVars<P>): Promise<unknown> }>;
+  }): Promise<Omit<ReusableScript, "run"> & { run(vars: P): Promise<unknown> }>;
   /** Explicit dynamic dispatch; the dotted-path fallback (`itx.foo.bar(...)`) compiles to exactly this call. */
   invokeCapability(call: { args?: unknown[]; path: string[] }): Promise<unknown>;
   /** Includes `capabilities`: everything reachable at this scope — own mounts plus inherited ones, tagged with their declaring scope. */
@@ -3064,20 +3064,6 @@ export type SetPreambleInput = {
  * located in the script. Objects/arrays never appear as one inline literal
  * reliably, so they are excluded on purpose. */
 export type ScriptReuseValue = string | number | boolean | bigint;
-
-/** `run(vars)`'s shape, widened from the literal types of the `parameters`
- * object (`{ n: 1234567890n }` → `{ n: bigint }`). */
-export type ScriptReuseVars<P> = {
-  [K in keyof P]: P[K] extends bigint
-    ? bigint
-    : P[K] extends string
-      ? string
-      : P[K] extends number
-        ? number
-        : P[K] extends boolean
-          ? boolean
-          : never;
-};
 
 /** Target shape for a live capability that wants to receive flattened paths. */
 export type FlattenedCapabilityTarget = {

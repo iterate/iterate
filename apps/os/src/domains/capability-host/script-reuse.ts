@@ -27,20 +27,6 @@ const RESERVED_WORDS = new Set([
  * reliably, so they are excluded on purpose. */
 export type ScriptReuseValue = string | number | boolean | bigint;
 
-/** `run(vars)`'s shape, widened from the literal types of the `parameters`
- * object (`{ n: 1234567890n }` → `{ n: bigint }`). */
-export type ScriptReuseVars<P> = {
-  [K in keyof P]: P[K] extends bigint
-    ? bigint
-    : P[K] extends string
-      ? string
-      : P[K] extends number
-        ? number
-        : P[K] extends boolean
-          ? boolean
-          : never;
-};
-
 export type ReuseParameterBinding = {
   alias: string;
   kind: "bigint" | "boolean" | "number" | "string";
