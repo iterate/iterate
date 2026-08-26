@@ -11,6 +11,12 @@ inside `doppler run --config dev -- …`:
    agent, and drive it with `agent.ask` through the itx surface
    (`doppler run --config dev -- pnpm cli itx run …`).
 
+`run-turn.ts` is the reusable create/ask script for both turns; it waits past
+the first visible reply until the agent has no open request, pending trigger,
+or active script. After both turns settle, `report.ts` returns the project
+identity, every agent stream, user/assistant messages, token usage, and full
+script requests and settlements needed for the mechanism audit.
+
 Send the agent two chat turns, the second only after the first has fully
 settled:
 

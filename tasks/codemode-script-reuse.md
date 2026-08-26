@@ -7,12 +7,13 @@ size: medium
 
 ## Status summary
 
-Done, pending review. The Codex-run eval **passed on round 3**: a real agent
-on local dev reused a 2,408-char Pollard's-rho script through a 265-char
-reuse script on the follow-up request, with no re-derived algorithm. Rounds 1
-and 2 each exposed a real gap (documented below) and drove product guards
-that made round 3 converge. Reviewer judgement wanted on: the prompt-ceiling
-raise (4250 → 4350) and the `done`-row contract bump (0.6.0 → 0.7.0).
+Done, pending review. The original Codex-run eval **passed on round 3**: a
+real agent reused a 2,408-char Pollard's-rho script through a 265-char reuse
+script. A later typed-API run successfully reused the algorithm, but failed
+the strict eval because the agent re-derived it while correcting stale prose;
+that run and the reusable audit helpers are documented below. Reviewer
+judgement wanted on: the prompt-ceiling raise (4250 → 4350) and the
+`done`-row contract bump (0.6.0 → 0.7.0).
 
 ## Problem
 
@@ -115,6 +116,10 @@ Supporting changes:
   confirmed, 265 vs 2,408 chars, answers verified independently. Rounds 1–2
   failed and each produced a product guard (failed-source rejection;
   statement/template content rejection)_
+- [x] Track reusable eval helpers _`evals/script-reuse/run-turn.ts` drives
+  each turn through full agent settlement; `report.ts` audits every agent
+  stream, turn boundary, message, token-usage event, script body, and
+  settlement without depending on leftover ignored files_
 
 ## Assumptions made (user was AFK)
 
@@ -164,6 +169,11 @@ Supporting changes:
 - Codex eval round 3: SUCCESS — two failed attempts (caught by the new
   teaching errors), one small results inspection, then a 265-char reuse
   script; old-number prose corrected in a follow-up message per criteria.
+- Typed-API eval `1787771786047`: FAILURE — the 373-char reuse script and
+  2,652-char platform child both succeeded, but the agent then wrote a fresh
+  2,097-char Pollard-rho implementation to correct the child script's stale
+  message label. Both equations were correct; the strict no-re-derivation
+  criterion failed. Evidence lives in the ignored run directory.
 
 ## Follow-up ideas (deliberately out of scope)
 
