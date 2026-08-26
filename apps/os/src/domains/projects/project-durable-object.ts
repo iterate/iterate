@@ -4,7 +4,17 @@ import type { StreamEvent } from "iterate/processors";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { parseConfig } from "../../config.ts";
 import { workerVersion, type Env } from "../../env.ts";
-import { ProjectEgressInterceptRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
+import {
+  ProjectAiInterceptRpcTarget,
+  ProjectEgressInterceptRpcTarget,
+  StreamRpcTarget,
+} from "../../rpc-targets.ts";
+import {
+  noAiInterceptorError,
+  type ProjectAiIntercept,
+  type ProjectAiInterceptor,
+  type ProjectAiInterceptorInput,
+} from "../../lib/fake-models.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { LiveStatePagers } from "../live-state-pager.ts";
 import { deepRetainRpcStubs } from "../capability-host/live-capability.ts";
@@ -56,6 +66,9 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
   #egressInterceptor?: ReturnType<typeof deepRetainRpcStubs<ProjectEgressInterceptor>>;
+  // The fake/* model lane's live handler slot (itx.ai.intercept) — same
+  // last-writer-wins, session-bound semantics as the egress interceptor.
+  #aiInterceptor?: ReturnType<typeof deepRetainRpcStubs<ProjectAiInterceptor>>;
   // Last time #egressRules paid a facade snapshot — bounds rules staleness to ~5s.
   #egressRulesFreshAt = 0;
   // Demo (stateful live state): a counter every watcher of `itx.liveState` sees
@@ -788,6 +801,39 @@ export class ProjectDurableObject extends DurableObject<Env> {
         this.#egressInterceptor = undefined;
       },
     });
+  }
+
+  interceptAi(handler: ProjectAiInterceptor): ProjectAiIntercept {
+    if (typeof handler !== "function") throw new Error("project AI interceptor must be a function");
+    const retained = deepRetainRpcStubs(handler);
+    if (this.#aiInterceptor !== undefined) {
+      console.warn("project AI interceptor overwritten", { projectId: this.#name.projectId });
+      this.#aiInterceptor[Symbol.dispose]();
+    }
+    this.#aiInterceptor = retained;
+
+    return new ProjectAiInterceptRpcTarget({
+      ctx: this.ctx,
+      release: () => {
+        if (this.#aiInterceptor !== retained) return;
+        retained[Symbol.dispose]();
+        this.#aiInterceptor = undefined;
+      },
+    });
+  }
+
+  /**
+   * Serve one fake/* model invocation through the live AI interceptor. Both
+   * egress paths (`itx.ai.run` in the isolate, agent turns in the processor
+   * facet) land here, so the handler slot and its last-writer-wins story live
+   * in exactly one place. No interceptor → the canonical loud error; the
+   * caller's own failure lane (recorded attempt failure, RPC rejection)
+   * carries it from there.
+   */
+  async consultAiInterceptor(input: ProjectAiInterceptorInput): Promise<unknown> {
+    const interceptor = this.#aiInterceptor;
+    if (interceptor === undefined) throw noAiInterceptorError(input.model);
+    return await interceptor.value(input);
   }
 }
 

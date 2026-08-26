@@ -39,6 +39,7 @@ import { workerVersion, type Env } from "../env.ts";
 import { itxForScope, StreamRpcTarget } from "../rpc-targets.ts";
 import { readProjectById } from "../project-directory.ts";
 import { facetProcessorFamilyForPath } from "./processor-facet-families.ts";
+import { projectStub } from "./projects/egress.ts";
 import type { CapabilityDescription } from "./itx/describe.ts";
 import { DurableObjectNameCodec } from "./durable-object-names.ts";
 import { AgentProcessor } from "./agents/agent-processor-implementation.ts";
@@ -535,6 +536,11 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
       path,
       projectId,
       ai: this.env.AI,
+      // fake/* model turns are served by the project's live AI interceptor
+      // (itx.ai.intercept); the slot lives on the Project DO so both egress
+      // paths share one handler, and this hop only happens for fake/* models.
+      consultAiInterceptor: (input: { source: "agent-turn"; model: string; body: unknown }) =>
+        projectStub(this.env.PROJECT, projectId).consultAiInterceptor(input),
       // Resolved per attempt (not at construction) so a config problem
       // fails the turn with a journaled error instead of bricking the host.
       // The OpenAI prompt_cache_key is per agent stream: repeated turns
