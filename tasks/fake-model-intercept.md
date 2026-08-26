@@ -79,6 +79,10 @@ with the "model" being an in-memory function in the test process.
 - [x] docs/testing.md: paragraph in the LLM-cost gap section
 - [x] dumbagent (separate repo): semantic exports — _protocol split out of
       api.ts; `./protocol` + `./presets/*` subpaths, server-free; pushed_
+- [x] Remove `/script` (added mid-review by Misha) — _its jobs move to
+      `capabilityHost.runScript` (operators) and `itx.ai.intercept` (tests);
+      `/example` and the shared slash-command plumbing stay; processor tests
+      converted to `/example`_
 
 ## Requirements from Misha
 
