@@ -84,6 +84,59 @@ test("a repeat request reuses the previous turn's journaled script instead of re
   await page.locator(".cm-line", { hasText: "modPow" }).first().waitFor({ state: "detached" });
 });
 
+// The typed-return sibling: turn 1's first script RETURNS its factors (so a
+// `data` row with the literal tuple type lands in `results`), a second round
+// sends the message from results[0].data, and turn 2 reuses the factorize row
+// with `satisfies` assertions INSIDE the codemode script — the real typecheck
+// gate, compiling against the real preamble, is the assertion engine. If the
+// preamble types or the previousScriptHelper inference chain degrade, the
+// gate rejects the script and this spec goes red.
+test("run() return values are typed from the reused row's data, through the real gate", async ({
+  helpers,
+  page,
+  baseURL,
+}) => {
+  await using fixture = await helpers.createFixture("agent-script-reuse-typed");
+  if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
+
+  using admin = await connectAdminItx(baseURL);
+  using project = admin.projects.get(fixture.project.id);
+  const agentPath = `/agents/typed-${crypto.randomUUID().slice(0, 8)}`;
+  using agent = project.agents.get(agentPath);
+  await agent.create();
+  await agent.append({
+    type: "events.iterate.com/agent/configured",
+    payload: { config: { llm: { model: "intercepted/typed" }, llmRequestDebounceMs: 250 } },
+  });
+
+  // Turns are strictly sequential, so a call counter is honest routing:
+  // 1 = turn 1 round 1 (factorize, RETURN the factors),
+  // 2 = turn 1 round 2 (send the message from results[0].data),
+  // 3 = turn 2 (typed reuse).
+  let modelCalls = 0;
+  using _interception = await project.ai.intercept(async (call) => {
+    if (call.source !== "agent-turn") throw new Error(`unexpected source: ${call.source}`);
+    modelCalls += 1;
+    const script = [RETURNING_SCRIPT, SEND_RESULT_SCRIPT, TYPED_REUSE_SCRIPT][modelCalls - 1];
+    if (!script) throw new Error(`unexpected model call #${modelCalls}`);
+    return ["```ts", script, "```"].join("\n");
+  });
+
+  await page.goto(`/projects/${fixture.project.slug}/agents/streams${agentPath}`);
+  const composer = page.getByPlaceholder("Message this agent");
+  const send = page.getByRole("button", { name: "Send message" });
+
+  await composer.fill("prime factorize 8633");
+  await send.click();
+  // timeout: the agent turn runs server-side with no loading UI for the spinnerWaiter to key off; preview turns take minutes.
+  await page.getByText("factors of 8633: 89 × 97").waitFor({ timeout: 300_000 });
+
+  await composer.fill("now do 10403");
+  await send.click();
+  // timeout: same as above — no loading UI for the spinnerWaiter during the server-side turn.
+  await page.getByText("Result is 101 × 103").waitFor({ timeout: 300_000 });
+});
+
 // Turn 1's scripted reply: a real, working factorization (Pollard's rho +
 // deterministic Miller–Rabin). The message interpolates `n`, so a reused run
 // reports whatever number it was actually given.
@@ -167,4 +220,46 @@ const REUSE_SCRIPT = `async (itx) => {
     parameterize: { n: 52479543428582704627n },
   });
   await helper.run({ n: 66778601389380731119n });
+}`;
+
+// Typed-return flow, turn 1 round 1: RETURN the factors (JSON-serializable,
+// so strings — bigints do not survive result serialization) instead of
+// messaging. The returned value becomes a `data` row typed by its literal.
+const RETURNING_SCRIPT = `async (itx) => {
+  const target = 8633n;
+  let remaining = target;
+  const factors: bigint[] = [];
+  for (let candidate = 2n; candidate * candidate <= remaining; candidate += 1n) {
+    while (remaining % candidate === 0n) {
+      factors.push(candidate);
+      remaining /= candidate;
+    }
+  }
+  if (remaining > 1n) factors.push(remaining);
+  return factors.map(String);
+}`;
+
+// Turn 1 round 2: the settlement made the value results[0].data — send it.
+const SEND_RESULT_SCRIPT = `async (itx) => {
+  await itx.chat.sendMessage(\`factors of 8633: \${results[0].data.join(" × ")}\`);
+}`;
+
+// Turn 2: reuse the factorize row (results[1] — results[0] is round 2's done
+// row) and assert the inferred types inside the script. The real typecheck
+// gate compiles this against the real preamble: a degraded inference fails
+// the run and the spec.
+const TYPED_REUSE_SCRIPT = `async (itx) => {
+  const helper = await itx.capabilityHost.previousScriptHelper({
+    ...results[1],
+    parameterize: { n: 8633n },
+  });
+  const result = await helper.run({ n: 10403n });
+  result satisfies readonly string[];
+  // @ts-expect-error - symmetry check: a string tuple is not a number array
+  result satisfies readonly number[];
+  // Anti-any tripwire the gate provably reports (tsgo does not flag unused
+  // @ts-expect-error): \`true satisfies never\` errors iff result is any.
+  type IsAny<T> = 0 extends 1 & T ? true : false;
+  true satisfies (IsAny<typeof result> extends false ? true : never);
+  await itx.chat.sendMessage(\`Result is \${result.join(" × ")}\`);
 }`;
