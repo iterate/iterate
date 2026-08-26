@@ -10,11 +10,7 @@
 // decides WHEN a normal request runs and calls `run()`/`abortInFlight()`.
 
 import type { EmittedInput, ProcessEventArgs, StreamEvent } from "iterate/processors";
-import {
-  isFakeModel,
-  noAiInterceptorError,
-  normalizeFakeModelTurnResult,
-} from "../../lib/fake-models.ts";
+import * as fakeModels from "../../lib/fake-models.ts";
 import { appendUnlessLostIdempotencyRace, stringifyError, type AgentHost } from "./agent-host.ts";
 import {
   AgentProcessorContract,
@@ -325,9 +321,9 @@ export class AgentLlmRequest {
         onChunk: (text) => input.onChunk(text),
       });
     }
-    if (isFakeModel(input.model)) {
+    if (fakeModels.isFakeModel(input.model)) {
       const consult = this.#host.deps.consultAiInterceptor;
-      if (consult === undefined) throw noAiInterceptorError(input.model);
+      if (consult === undefined) throw fakeModels.noAiInterceptorError(input.model);
       const result = await raceAbort(
         input.signal,
         consult({
@@ -336,13 +332,13 @@ export class AgentLlmRequest {
           body: { messages: input.messages },
         }),
       );
-      const normalized = normalizeFakeModelTurnResult({
+      const normalized = fakeModels.normalizeFakeModelTurnResult({
         result,
         model: input.model,
         inputCharacters: input.messages.reduce((sum, message) => sum + message.content.length, 0),
       });
       // Word-split delivery keeps the journaled chunk lane exercised.
-      for (const chunk of normalized.text.split(/(?<=\s)/)) {
+      for (const chunk of normalized.text.split(/\b/)) {
         if (input.signal.aborted || chunk.length === 0) continue;
         await input.onChunk(chunk);
       }
