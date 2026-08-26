@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: in-review
 size: medium
 ---
 
@@ -7,9 +7,11 @@ size: medium
 
 ## Status summary
 
-POC in progress. Design fleshed out below; implementation not started yet.
-Main pieces: re-parameterization function, script lookup RPC, harness-level
-callable, prompt docs, an eval proving the agent reaches for it.
+POC implemented and proven live: a real agent on local dev reused a 2.4k-char
+Pollard's-rho script through a 273-char reuse script on the follow-up request.
+Unit tests, an e2e, and the eval file are in. Remaining: the Codex-run eval
+result (running), reviewer judgement on the prompt-ceiling raise and the
+`done`-row contract bump.
 
 ## Problem
 
@@ -36,124 +38,100 @@ async itx => {
 }
 ```
 
-Told about this, the agent's second response shrinks from a full algorithm to
-a few lines — a large token saving on repeat-shaped work.
-
-## Design
-
-### Semantics
+## Design (as built)
 
 `itx.previousScriptAsHelperFunction({ eventOffset, parameters })`:
 
-1. Reads the event at `eventOffset` on the current scope stream. Accepts any
-   of the three offsets the agent might plausibly know:
-   - a `script-run-requested` event (code is right there)
-   - a `script-run-settled` event (what `results[N].offset` exposes) — resolve
-     `executionId` → request event via its idempotency key
-   - the assistant-output event that produced the script (`executionId` is
-     `agent-output:<offset>`) — same idempotency-key resolution
-   Throws with a clear message for any other event type or a missing offset.
-2. For each `parameters` entry: `name` must be a valid JS identifier, and
-   `content` must occur **exactly once** in the script text (0 or 2+ is an
-   error, with a count in the message). Replace the occurrence with `name`.
-3. Returns an async function `(itx, vars) => result` that executes the
-   re-parameterized script with `vars` in scope.
+1. `eventOffset` accepts any of the three offsets the agent might know: the
+   `script-run-requested` event, the `script-run-settled` event (what
+   `results[N].offset` exposes), or the assistant-output event that produced
+   the script. Resolution: point-read by public-door idempotency key, then a
+   bounded forward scan for agent-lane requests (their idempotency keys carry
+   the agent processor's prefix).
+2. Each parameter's `name` must be a valid identifier not already appearing
+   in the script; its `content` must occur **exactly once** (count reported
+   in the error). The occurrence is replaced with `name`.
+3. Returns `(itx, vars) => result`. Calling it renders an envelope — the new
+   values as consts (serialized as JS literals, bigint included) that the
+   swapped identifiers close over — and submits it as a **journaled child
+   script run** via `capabilityHost.runScript`, so the reuse is a
+   self-contained auditable record. The callable itself is manufactured in
+   the dynamic-worker harness (`script-execution-entrypoint.ts`): RPC cannot
+   return a plain function and script isolates have no `eval`.
 
-### Execution shape (deviation from the original sketch, and why)
+Supporting changes:
 
-The sketch suggested inserting `, { number }: { number: typeof ... }` into the
-original parameter list and `eval`-ing. Two constraints push a different shape:
-
-- Dynamic-worker isolates have no `eval`/`new Function`; new code only runs by
-  loading a fresh dynamic worker (that is the whole codemode design).
-- RPC can't return a plain function, so the callable must be manufactured in
-  the harness (`script-execution-entrypoint.ts`), the JS that already wraps
-  `itx` inside the script's isolate.
-
-So instead of parameter-list surgery, the platform wraps lexically:
-
-```js
-async (itx, vars) => {
-  const { number } = vars
-  const helper = <original script text, with the literal replaced by `number`>
-  return await helper(itx)
-}
-```
-
-Free `number` references inside the transformed script close over the
-destructured const. No fragile insertion into `async itx =>` vs
-`async (itx) =>` forms.
-
-The callable returned to the agent's script is a harness-local closure that
-submits this envelope as a **child script run** (vars serialized as JS
-literals — bigint included — so the journaled child script is a
-self-contained, auditable record) and returns its result.
-
-### Pieces
-
-- `reparameterizeScript({ code, parameters })` — pure function, unit-tested:
-  identifier validation, exactly-once occurrence check, replacement, envelope
-  rendering. Lives in the capability-host domain.
-- Offset→script lookup RPC on the capability host (sibling of
-  `getScriptResult`), so lookup + transform happen server-side with good
-  errors.
-- Harness wiring in `script-execution-entrypoint.ts`: `itx.previousScriptAsHelperFunction`
-  intercepted locally; returns the closure described above. Vars→literal
-  serialization embedded in the harness source.
-- Child-run execution: preferred door is the existing journaled script-run
-  flow so the reuse run gets normal observability (`results` array, settle
-  events, evals can audit it). **Risk to resolve:** whether the capability-host
-  processor picks up a child `script-run-requested` while the parent run is
-  still executing, or blocks (→ deadlock until expiry). If it blocks, fall
-  back to a direct `scriptExecutionEntrypoint.run` door with its own journal
-  breadcrumb.
-- Typing: the typecheck prelude (`virtual-project.ts`) gains the member on
-  `Itx`. POC types vars as `Record<string, any>`; the `typeof`-placeholder
-  trick for precise per-parameter types is future work.
-- Prompt: one-liner in `configs/default/prompts/agent-system-prompt.md`
-  (output-formatting section, next to the `results[0].data` guidance) so the
-  agent knows the helper exists. Possibly also the post-settlement recipe text
-  in `agent-codemode.ts`.
-- Regenerate `pnpm generate:itx-api` if any real RPC member is added.
-
-## Eval
-
-`evals/script-reuse/eval.md`: fresh project, ask for a prime factorization of
-one big number, then a second one. Success criteria: the second response's
-script uses `previousScriptAsHelperFunction` pointed at the first run (no
-re-derived algorithm), both answers are correct, and the second response's
-generated-script token count is a small fraction of the first. Must run
-against an environment with this branch deployed (local dev), not prod.
-
-Also a structural e2e test in `apps/os/e2e/vitest/` (synthetic provider
-output, no model spend) exercising the helper end-to-end: seed a first script
-run, then a second synthetic script that reuses it, assert the settlement.
+- **`done` results rows** (contract 0.6.0 → 0.7.0): a void-returning success
+  previously left no `results` row, making the common send-message-and-finish
+  script unaddressable. Every settled script now keeps an offset handle;
+  void successes render as `{ offset, executionId, done: true }`.
+- **Typecheck prelude** types the member on `Itx` (harness-only surface, so
+  it is not on the generated Project type). Kept on the same prelude line as
+  the alias — the prelude's line accounting must not shift.
+- **Prompt teach**: one bullet in the output-formatting section; prompt
+  ceiling raised 4250 → 4350 with the raise argued in the constant's comment
+  log (the sanctioned mechanism per that file).
+- `prepareScriptReuse` RPC on the capability host is the server half;
+  regenerated itx api.
 
 ## Checklist
 
-- [ ] `reparameterizeScript` pure function + unit tests
-- [ ] offset→script lookup + transform RPC on the capability host
-- [ ] harness closure: `itx.previousScriptAsHelperFunction`
-- [ ] child-run execution path (resolve the concurrent-run/deadlock question)
-- [ ] prelude typing on `Itx`
-- [ ] regenerate itx api if needed
-- [ ] prompt documentation (agent-system-prompt.md)
-- [ ] structural e2e test with synthetic provider output
-- [ ] `evals/script-reuse/eval.md` written
-- [ ] eval run against a dev environment, agent observed using the helper
+- [x] `reparameterizeScript` pure function + unit tests _in
+  `script-reuse.ts`; validation errors name counts so the agent can
+  self-correct (observed live: it renamed `n` → `targetNumber` after the
+  collision error)_
+- [x] offset→script lookup + transform RPC _`prepareScriptReuse` on
+  `CapabilityHostRpcTarget`, next to `getScriptResult`_
+- [x] harness closure `itx.previousScriptAsHelperFunction` _in
+  `scriptWorkerRef`'s synthesized source; envelope renderer embedded via
+  Function#toString like `sandboxExecTimeout`_
+- [x] child-run execution path _journaled via existing `runScript`; no
+  deadlock — the processor starts executions with `runInBackground`, verified
+  live (child at offset 1156 ran while the parent awaited it)_
+- [x] prelude typing on `Itx` _virtual-project.ts, same-line intersection_
+- [x] regenerate itx api _`pnpm generate:itx-api`_
+- [x] prompt documentation _agent-system-prompt.md + ceiling raise_
+- [x] `done` rows for void results _contract 0.7.0; new preamble tests_
+- [x] structural e2e test _`script-reuse.itx.e2e.test.ts`, passing against
+  local dev — no model turns_
+- [x] `evals/script-reuse/eval.md` written _10-digit-prime semiprimes force a
+  real algorithm; criteria demand the reuse mechanism, not just answers_
+- [ ] eval run via `pnpm eval script-reuse` _(Codex run in progress; direct
+  live probes of the same flow already passed — see log)_
 
 ## Assumptions made (user was AFK)
 
-- Exactly-once occurrence is enforced per parameter, as specified; error
-  messages report the actual count so the agent can self-correct.
-- The three accepted offset kinds (requested / settled / agent-output) are a
-  superset of the sketch's "the codemode script at that offset" — the settle
-  offset is what the agent actually sees in `results`, so accepting only the
-  request offset would make the feature nearly undiscoverable.
-- Precise `typeof`-based vars typing deferred; `Record<string, any>` for POC.
-- The reuse run is journaled as a normal child script run rather than being
-  invisible — observability seemed more valuable than journal thrift.
+- Exactly-once occurrence enforced per parameter, as specified; a literal
+  hardcoded twice (e.g. in a sendMessage template) stays un-swapped — the
+  live agent noticed via its delivery receipt and sent a correction message.
+- The callable executes as a journaled child run rather than in-isolate
+  (`eval` is unavailable in workers; observability seemed more valuable than
+  journal thrift anyway).
+- Void-result `done` rows change the preamble surface for everyone — judged
+  worth it because reuse is otherwise undiscoverable for the most common
+  script shape.
+- Precise `typeof`-based vars typing deferred; `Record<string, unknown>` for
+  the POC.
+- The prompt ceiling raise (4250 → 4350) is flagged for explicit review.
 
 ## Implementation log
 
-(nothing yet)
+- Explored codemode internals + evals harness (two subagent reports).
+- Built transform + envelope as pure functions; unit tests first failed on a
+  bad substring assumption, fixed.
+- e2e passed on the first live run (settle-offset door, child run, bigint
+  round trip).
+- Live probe 1 (easy numbers, small script): agent ignored the helper and
+  rewrote — exposed (a) void scripts leave no `results` row, (b) rewriting a
+  short script is rational. Led to `done` rows + harder eval numbers.
+- Live probe 2 (2^31/2^32-adjacent primes): agent tried
+  `eventOffset: <assistant offset>`; resolution failed (agent-lane
+  idempotency prefix) — fixed with the bounded forward scan. Model also
+  passed a bigint as a string (teach now says `123n` not `"123n"`), and then
+  factored the too-recognizable number in its own head (!) — eval numbers
+  changed to arbitrary 10-digit primes.
+- Live probe 3: full success — reuse via `results[N].offset` including
+  self-correction of a rejected parameter name and of the reused script's
+  hardcoded message prose.
+- Prompt ceiling: bullet compacted twice; final overage was exactly 1 char
+  (17401/17400) before the last trim landed it at the raised ceiling.
