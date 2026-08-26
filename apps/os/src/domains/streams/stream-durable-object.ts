@@ -1257,7 +1257,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    * when the bounded self-re-arm is lost with the incarnation (see
    * {@link #fireDueFacetAlarms}).
    */
-  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+  async alarm(alarmInfo?: AlarmInvocationInfo) {
     this.#alarmArmer.markFired();
     let facetReplays: Promise<FacetAlarmReplayFailure[]> | undefined;
     this.#deliveryAlarmBoundary.runAlarmTurn(() => {
@@ -1551,9 +1551,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    * facets' durable records. Retry fires only follow a failed invocation,
    * so the extra pokes are bounded.
    */
-  #fireDueFacetAlarms(
-    alarmInfo?: AlarmInvocationInfo,
-  ): Promise<FacetAlarmReplayFailure[]> | undefined {
+  #fireDueFacetAlarms(alarmInfo?: AlarmInvocationInfo) {
     const dueAtMs = this.#readFacetAlarmAtMs();
     const due = dueAtMs !== null && dueAtMs <= Date.now();
     if (due) {
