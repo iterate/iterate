@@ -11,6 +11,11 @@
 // store pending notes whenever a project is opened. Photo attachments upload
 // to itx.files and double-append onto /media with source "note" so the media
 // pipeline analyzes them for free.
+//
+// Photos arrive two ways: the camera-roll strip above the text field
+// (components/recent-photos-strip.tsx — one tap on a recent photo) and the +
+// button's full-screen system picker, for anything older. Both produce the
+// same PickedImage, and the strip checks a tile whichever way it got there.
 
 import { useRef, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -58,6 +63,7 @@ import { queryClient } from "../lib/query.ts";
 import { DEFAULT_SERVER } from "../lib/servers.ts";
 import { getServerBaseUrl } from "../lib/storage.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
+import { RecentPhotosStrip } from "./recent-photos-strip.tsx";
 
 /** Backgrounded longer than this → the composer re-expands on return: you
  * probably came back to capture something. */
@@ -407,6 +413,11 @@ export function NoteCaptureOverlay() {
             <Text style={styles.close}>✕</Text>
           </Pressable>
         </View>
+        <RecentPhotosStrip
+          attachments={attachments}
+          disabled={capture.isPending}
+          onAttachmentsChange={setAttachments}
+        />
         <View style={styles.composerRow}>
           <Pressable
             accessibilityLabel="Attach photos"

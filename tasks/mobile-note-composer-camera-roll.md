@@ -7,7 +7,16 @@ size: medium
 
 ## Status
 
-Spec written; implementation in progress on `mobile-note-composer-camera-roll`.
+**Done.** The strip ships, the browser spec drives it end to end (tap →
+attach → note on /notes carrying the photo), and every lane is green:
+`pnpm typecheck`, `lint`, `knip`, `format`, `pnpm --dir apps/mobile test`,
+`pnpm spec --project=mobile` (both the new spec and the existing notes one),
+plus `expo export --platform ios` and an `expo config --type introspect`
+showing the new `NSPhotoLibraryUsageDescription`.
+
+The one thing left for a human: this needs a native rebuild to reach a phone
+(see "Cost" below). Nothing about that is broken — it is the documented path
+and CI triggers the preview build — but nobody has installed it yet.
 
 ## What
 
@@ -68,9 +77,11 @@ to un-attach. The `+` stays where it is for the full-screen picker.
   into your project". The strip reads the whole roll to *display* it, so the
   string has to say so. This alone would bump the fingerprint even without
   D6.
-- **D8 — Attached tiles show a check, and the count is capped at 4** — the
-  same `selectionLimit: 4` the `+` picker uses. Tapping a 5th does nothing
-  visible except a "4 photos max" line; tapping an attached tile removes it.
+- ~~**D8 — cap attachments at 4.**~~ Dropped while building it: the `+`
+  path has no total cap today (each pick appends), so a cap enforced only on
+  the strip would be an inconsistency the user feels rather than a limit that
+  protects anything. Attached tiles do show a check, and tapping a checked
+  tile removes it — the toggle is the whole interaction.
 - **D9 — Selection identity is the asset id**, so the strip and the existing
   attachment strip stay in sync when you remove a thumbnail from either side.
   The `PickedImage` gains an optional `assetId` for exactly this.
@@ -86,18 +97,47 @@ of most camera photos being un-analyzable.
 
 ## Checklist
 
-- [ ] `apps/mobile/src/lib/recent-photos-core.ts` — pure: strip-model
-      derivation (tiles + attached state + cap), vitest-covered
-- [ ] `apps/mobile/src/lib/recent-photos.ts` — Expo-welded: non-prompting
+- [x] `apps/mobile/src/lib/recent-photos-core.ts` — pure *tell me what this
+      permission answer means* — `photoLibraryAccessFrom` — plus the tile
+      count. _The strip-model derivation the spec imagined turned out to be
+      one `.some()` call over the attachments, so it stayed inlined in the
+      component where a reader can see it._
+- [x] `apps/mobile/src/lib/recent-photos.ts` — Expo-welded: non-prompting
       permission read, request-on-tap, recent-asset listing, and
       asset → `PickedImage` (JPEG transcode)
-- [ ] `apps/mobile/src/lib/recent-photos.web.ts` — web has no photo library;
-      the browser spec lane supplies a controllable fake at this exact seam
-- [ ] `apps/mobile/src/components/recent-photos-strip.tsx` — the row
-- [ ] Wire it into `note-composer.tsx` above the text field, sharing
+- [x] ~~`recent-photos.web.ts`~~ — _the web seam lives at the bottom of
+      `recent-photos.ts` instead. Metro only substitutes a `.web.ts` sibling
+      for **extensionless** imports (`resolveSourceFile` tries the exact path
+      before any platform variant), and this repo writes every relative
+      import with its `.ts` extension — so a `.web.ts` file would have been
+      silently dead code._
+- [x] `apps/mobile/src/components/recent-photos-strip.tsx` — the row
+- [x] Wire it into `note-composer.tsx` above the text field, sharing
       selection state with the existing attachment strip
-- [ ] `expo-image-manipulator` dependency + `app.json` permission string
-- [ ] `apps/mobile/src/lib/recent-photos-core.test.ts`
-- [ ] `specs/mobile/note-composer-camera-roll.spec.ts` — browser spec:
-      tiles render, tap attaches, tap again removes, send carries the photo
-- [ ] README verification-table / layout-table rows
+- [x] `expo-image-manipulator` dependency + `app.json` permission string
+      _(verified landing in the Info.plist via `expo config --type
+      introspect`)_
+- [x] `apps/mobile/src/lib/recent-photos-core.test.ts`
+- [x] `specs/mobile/note-composer-camera-roll.spec.ts` — browser spec:
+      tiles render, tap attaches, tap again removes, and the note on /notes
+      carries the photo under its library filename
+- [x] README verification-table / layout-table rows _(plus the native-rebuild
+      paragraph, which now names this strip as the second such module)_
+
+## Implementation log
+
+**`PickedImage` gained `assetId`.** The strip needs to know which tiles are
+already in the note, and asset id is the only identity a camera-roll photo
+and a composer attachment share. `ImagePicker` reports the same id, so a
+photo added through the **+** button also shows up checked in the strip —
+one model, not two.
+
+**Bytes are read on tap, not on send.** `getAssetInfoAsync` can trigger an
+iCloud download, so the tile spins until real bytes exist and only then joins
+the attachment row. Reading at send time would have made a send fail for a
+reason that happened minutes earlier and nowhere the user was looking.
+
+**`readPhotoAsAttachment` still sniffs the result's magic bytes** even though
+`saveAsync({format: JPEG})` promises JPEG. Same scar tissue as
+`lib/attachments.ts`: the label picks the uploaded file's extension, and the
+server's converter picks by extension.

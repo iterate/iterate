@@ -37,7 +37,7 @@
       [
         "expo-media-library",
         {
-          "photosPermission": "Iterate syncs the screenshots you choose into your project so you can search them by content."
+          "photosPermission": "Iterate shows your recent photos above the note composer and syncs the ones you pick into your project, so you can search them by what they show."
         }
       ]
     ],
