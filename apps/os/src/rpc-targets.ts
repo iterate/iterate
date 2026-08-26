@@ -304,6 +304,8 @@ import {
   renderScriptReuseEnvelope,
   reparameterizeScript,
   type ReuseParameterBinding,
+  type ScriptReuseValue,
+  type ScriptReuseVars,
 } from "./domains/capability-host/script-reuse.ts";
 import {
   settleByDeadline,
@@ -6045,19 +6047,23 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
   }
 
   /**
-   * Reuse a previously journaled script as a parameterized helper. Looks the
-   * script up by stream offset and swaps each parameter's exact `content`
-   * text (which must appear exactly once) for a generated identifier — the
-   * returned handle's `run(vars)` re-executes it with new values (by `name`)
-   * as a journaled child script run. `eventOffset` accepts the offset of the
-   * run's script-run-requested event, its script-run-settled event (what
-   * `results[N].offset` exposes), or the assistant-output event that produced
-   * the script.
+   * Reuse a previously journaled script as a parameterized helper. Each
+   * parameter is the VALUE the original script used inline (primitives only:
+   * string/number/boolean/bigint) — its literal must appear exactly once in
+   * that script and is swapped for a generated identifier. The returned
+   * handle's `run(vars)` re-executes the script with new values as a
+   * journaled child script run; `vars` is typed from the parameters object
+   * (`{ n: 123n }` → `run({ n: bigint })`). `eventOffset` accepts the offset
+   * of the run's script-run-requested event, its script-run-settled event
+   * (what `results[N].offset` exposes), or the assistant-output event that
+   * produced the script.
    */
-  async previousScriptHelper(input: {
+  async previousScriptHelper<P extends Record<string, ScriptReuseValue>>(input: {
     eventOffset: number;
-    parameters: { name: string; content: string }[];
-  }): Promise<ReusableScriptRpcTarget> {
+    parameters: P;
+  }): Promise<
+    Omit<ReusableScriptRpcTarget, "run"> & { run(vars: ScriptReuseVars<P>): Promise<unknown> }
+  > {
     const event = await this.#stream.getEvent({ offset: input.eventOffset });
     if (event === undefined) {
       throw new Error(`No event at offset ${input.eventOffset} on scope ${this.#props.path}.`);
@@ -6158,7 +6164,7 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
         getScriptResult:
           "Read one settled script result back by executionId (what results[N].load(itx) calls).",
         previousScriptHelper:
-          "Reuse a journaled script by stream offset: returns a handle whose run(vars) re-executes it with new values.",
+          "Reuse a journaled script by stream offset: parameters are the original inline values ({ n: 123n }); returns a handle whose typed run(vars) re-executes it with new values.",
       },
       parent: `project ${this.#props.projectId}; sibling scopes via capabilityHosts.get(path)`,
       capabilities,

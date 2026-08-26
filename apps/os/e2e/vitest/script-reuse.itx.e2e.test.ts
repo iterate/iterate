@@ -50,12 +50,35 @@ test(
         .execute(async (itxInScript, vars) => {
           const helper = await itxInScript.capabilityHost.previousScriptHelper({
             eventOffset: vars.eventOffset,
-            parameters: [{ name: "target", content: "8633n" }],
+            parameters: { target: 8633n },
           });
           return await helper.run({ target: 10403n });
         }),
     );
     expect(second.success()).toEqual(["101", "103"]);
+
+    // The typed surface: run(vars) is inferred from the parameters object, so
+    // passing the bigint as a string — the live models' favorite mistake —
+    // dies at the server's typecheck gate before anything runs. Sent as raw
+    // source because the test file itself would (correctly) refuse to compile
+    // this.
+    const wrongType = await measurePhase("reuse with wrongly typed vars", "operation", () =>
+      itxScript(itx.capabilityHost)
+        .vars({ eventOffset: settledOffset })
+        .executeSource(
+          `async (itx, vars) => {
+            const helper = await itx.capabilityHost.previousScriptHelper({
+              eventOffset: vars.eventOffset,
+              parameters: { target: 8633n },
+            });
+            return await helper.run({ target: "10403n" });
+          }`,
+        )
+        .then(() => "unexpectedly succeeded")
+        .catch((error: Error) => String(error)),
+    );
+    expect(wrongType).not.toBe("unexpectedly succeeded");
+    expect(wrongType).toMatch(/string.*not assignable|must be a bigint/s);
 
     // A failed run must be rejected as a reuse source: live agents were
     // observed pointing the next attempt at their own failed attempt
@@ -83,7 +106,7 @@ test(
         .execute(async (itxInScript, vars) => {
           return await itxInScript.capabilityHost.previousScriptHelper({
             eventOffset: vars.eventOffset,
-            parameters: [],
+            parameters: {},
           });
         })
         .then(() => "unexpectedly succeeded")

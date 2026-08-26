@@ -28,10 +28,11 @@ agent's answers with your own arithmetic, not by trusting its prose.)
 
 The system prompt teaches the agent that a repeat-shaped request should reuse
 the journaled script: `itx.capabilityHost.previousScriptHelper({ eventOffset,
-parameters })` swaps named literals out of the earlier script and returns a
-handle whose `run(vars)` re-executes it with new inputs as a journaled child
-run. Void scripts leave a `done` row in `results`, so `results[N].offset` is
-the handle even when turn 1's script returned nothing.
+parameters: { n: <original inline value> } })` locates each value's literal in
+the earlier script and returns a handle whose typed `run(vars)` re-executes it
+with new inputs as a journaled child run. Void scripts leave a `done` row in
+`results`, so `results[N].offset` is the handle even when turn 1's script
+returned nothing.
 
 Success criteria — the mechanism matters as much as the answers:
 

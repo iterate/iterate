@@ -15,79 +15,76 @@ const FACTORIZE = `async (itx) => {
   return factors.map(String);
 }`;
 
-test("swaps each parameter content for a generated alias, so names never collide with the script", () => {
-  // `target` and `remaining` already appear in the script — with aliasing the
-  // caller can still use them (this was the #1 first-attempt failure in live
-  // agent runs, where the obvious name is the one the script already uses).
+test("locates each value's literal and swaps it for a generated alias, so names never collide with the script", () => {
+  // `target` already appears in the script — with aliasing the caller can
+  // still use it (live models pick the script's own variable name first).
   const result = reparameterizeScript({
     code: FACTORIZE,
-    parameters: [{ name: "target", content: "23409823948238439732889n" }],
+    parameters: { target: 23409823948238439732889n },
   });
-  expect(result.parameters).toEqual([{ name: "target", alias: "__reuse_target" }]);
+  expect(result.parameters).toEqual([{ name: "target", alias: "__reuse_target", kind: "bigint" }]);
   expect(result.code).toContain("const target = __reuse_target;");
   expect(result.code).not.toContain("23409823948238439732889");
 });
 
 test("aliases stay unique against the script text and each other, deterministically", () => {
   const result = reparameterizeScript({
-    code: `async (itx) => __reuse_x + ${"7777n"}`,
-    parameters: [{ name: "x", content: "7777n" }],
+    code: `async (itx) => __reuse_x + 7777n`,
+    parameters: { x: 7777n },
   });
-  expect(result.parameters).toEqual([{ name: "x", alias: "__reuse_x_2" }]);
+  expect(result.parameters).toEqual([{ name: "x", alias: "__reuse_x_2", kind: "bigint" }]);
   expect(result.code).toContain("__reuse_x + __reuse_x_2");
 });
 
-test("content must appear exactly once", () => {
+test("the value's literal must appear exactly once, with boundary-aware matching for bare literals", () => {
+  expect(() =>
+    reparameterizeScript({ code: FACTORIZE, parameters: { input: 998877n } }),
+  ).toThrowError(/exactly once.*998877n \(0\)/s);
   expect(() =>
     reparameterizeScript({
-      code: FACTORIZE,
-      parameters: [{ name: "input", content: "998877n" }],
+      code: "async (itx) => 5n + 5n",
+      parameters: { input: 5n },
     }),
-  ).toThrowError(/found 0 occurrence/);
-  expect(() =>
-    reparameterizeScript({
-      code: FACTORIZE,
-      parameters: [{ name: "input", content: "factors.push" }],
-    }),
-  ).toThrowError(/must appear exactly once/);
+  ).toThrowError(/2 total occurrence/);
+  // 42 must not match inside 142, 42.5, or x42 — only the standalone literal.
+  const result = reparameterizeScript({
+    code: "async (itx) => 142 + 42.5 + x42 + 42",
+    parameters: { answer: 42 },
+  });
+  expect(result.code).toBe("async (itx) => 142 + 42.5 + x42 + __reuse_answer");
 });
 
-test("rejects statement-shaped and template-interior content with a teaching error (observed live splice-thinking)", () => {
+test("string values match across quote styles, exactly once in total", () => {
+  const result = reparameterizeScript({
+    code: `async (itx) => itx.chat.sendMessage('hello world')`,
+    parameters: { greeting: "hello world" },
+  });
+  expect(result.code).toBe(`async (itx) => itx.chat.sendMessage(__reuse_greeting)`);
   expect(() =>
     reparameterizeScript({
-      code: FACTORIZE,
-      parameters: [{ name: "declaration", content: "const target = 23409823948238439732889n;" }],
+      code: "async (itx) => \"dup\" + 'dup'",
+      parameters: { d: "dup" },
     }),
-  ).toThrowError(/single VALUE expression.*not a statement/s);
-  expect(() =>
-    reparameterizeScript({
-      code: "async (itx) => itx.chat.sendMessage(`42 = **${answer}**`)",
-      parameters: [{ name: "messageBody", content: "42 = **${answer}**" }],
-    }),
-  ).toThrowError(/inside of a template string/);
+  ).toThrowError(/2 total occurrence/);
 });
 
-test("rejects names that are not identifiers, are reserved, or repeat", () => {
-  const parameters = (name: string) => [{ name, content: "23409823948238439732889n" }];
-  expect(() => reparameterizeScript({ code: FACTORIZE, parameters: parameters("not valid") })) //
-    .toThrowError(/not a valid JS identifier/);
-  expect(() => reparameterizeScript({ code: FACTORIZE, parameters: parameters("await") })) //
+test("rejects invalid names, non-primitive values, and empty strings", () => {
+  expect(() =>
+    reparameterizeScript({ code: FACTORIZE, parameters: { "not valid": 1n } }),
+  ).toThrowError(/not a valid JS identifier/);
+  expect(() => reparameterizeScript({ code: FACTORIZE, parameters: { await: 1n } })) //
     .toThrowError(/not a valid JS identifier/);
   expect(() =>
-    reparameterizeScript({
-      code: FACTORIZE,
-      parameters: [
-        { name: "input", content: "23409823948238439732889n" },
-        { name: "input", content: "2n" },
-      ],
-    }),
-  ).toThrowError(/appears more than once/);
+    reparameterizeScript({ code: FACTORIZE, parameters: { obj: { nested: true } as any } }),
+  ).toThrowError(/must be a string, number, boolean, or bigint/);
+  expect(() => reparameterizeScript({ code: FACTORIZE, parameters: { s: "" } })) //
+    .toThrowError(/empty string/);
 });
 
 describe("renderScriptReuseEnvelope", () => {
   const transformed = reparameterizeScript({
     code: FACTORIZE,
-    parameters: [{ name: "input", content: "23409823948238439732889n" }],
+    parameters: { input: 23409823948238439732889n },
   });
 
   test("binds serialized vars to the aliases the swapped expressions read", () => {
@@ -101,24 +98,25 @@ describe("renderScriptReuseEnvelope", () => {
     expect(envelope).toMatch(/return await __reusedScript\(itx\);\n\}$/);
   });
 
-  test("serializes JSON-style values plus bigint; rejects everything else", () => {
-    const render = (vars: any) =>
-      renderScriptReuseEnvelope({
-        code: "async (itx) => __reuse_v",
-        parameters: [{ alias: "__reuse_v", name: "v" }],
-        vars,
-      });
-    expect(render({ v: { a: [1, "two", true, null, 3n] } })).toContain(
-      `const __reuse_v = { "a": [1, "two", true, null, 3n] };`,
-    );
-    expect(() => render({ v: new Date() })).toThrowError(/JSON-style values/);
-    expect(() => render({ v: () => 1 })).toThrowError(/JSON-style values/);
-  });
-
-  test("vars must exactly match parameter names", () => {
+  test("vars must match the parameter names and each original value's primitive kind", () => {
     const render = (vars: any) => renderScriptReuseEnvelope({ ...transformed, vars });
     expect(() => render({})).toThrowError(/missing: \[input\]/);
     expect(() => render({ input: 1n, other: 2n })).toThrowError(/unexpected: \[other\]/);
+    // The typecheck gate enforces this statically for agent scripts; the
+    // runtime check covers the gate-free lanes with the same message.
+    expect(() => render({ input: "5489334582393292300937n" })).toThrowError(
+      /must be a bigint.*got string/,
+    );
+  });
+
+  test("string vars serialize quoted and escaped", () => {
+    const stringy = reparameterizeScript({
+      code: `async (itx) => 'plain'`,
+      parameters: { s: "plain" },
+    });
+    expect(renderScriptReuseEnvelope({ ...stringy, vars: { s: 'quo"te\n' } })).toContain(
+      String.raw`const __reuse_s = "quo\"te\n";`,
+    );
   });
 
   test("the rendered envelope is executable and produces the reused script's behavior", async () => {
