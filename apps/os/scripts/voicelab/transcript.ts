@@ -40,7 +40,8 @@ interface TranscriptEventLike {
   payload?: { conversationId?: string; text?: string; cancelled?: boolean; reason?: string };
 }
 
-export async function transcript(options: TranscriptOptions): Promise<TranscriptRow[]> {
+/** Print exactly once; a returned value would make trpc-cli render the rows a second time. */
+export async function transcript(options: TranscriptOptions): Promise<void> {
   if (!options.path.startsWith("/")) {
     throw new Error(`--path must be absolute; received ${JSON.stringify(options.path)}`);
   }
@@ -105,7 +106,7 @@ export async function transcript(options: TranscriptOptions): Promise<Transcript
 
   if (options.json === true) {
     console.log(JSON.stringify(rows, null, 2));
-    return rows;
+    return;
   }
   const column = [...rows, ...boundaries.map((b) => ({ ...b, boundary: true as const }))].sort(
     (a, b) => a.offset - b.offset,
@@ -113,7 +114,7 @@ export async function transcript(options: TranscriptOptions): Promise<Transcript
   if (column.length === 0) {
     console.log(`no durable transcript on ${options.path} — either nothing was said, or the`);
     console.log(`stream predates the transcript events (voice-agent contract 13.0.0).`);
-    return rows;
+    return;
   }
   for (const entry of column) {
     if ("boundary" in entry) {
@@ -124,5 +125,4 @@ export async function transcript(options: TranscriptOptions): Promise<Transcript
     const marker = entry.cancelled === true ? " [barged]" : "";
     console.log(`${entry.at.slice(11, 19)} ${speaker}${marker}  ${entry.text}`);
   }
-  return rows;
 }
