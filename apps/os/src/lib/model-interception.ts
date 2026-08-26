@@ -10,6 +10,8 @@
 // purpose — a turn whose journal says `openai/*` can never have been served by
 // a handler.
 
+import { z } from "zod";
+
 /** The model-name namespace served by the live AI interceptor. */
 const INTERCEPTED_MODEL_PREFIX = "intercepted/";
 
@@ -51,22 +53,38 @@ export interface ProjectAiIntercept extends Disposable {
   release(): Promise<void>;
 }
 
+/** An agent-turn handler's return value, validated at the trust boundary: the
+ * handler is arbitrary caller code, and its usage numbers feed journaled
+ * token-usage events and the compaction trigger, so nothing crosses uncast
+ * and unchecked. */
+const InterceptedTurn = z.union([
+  z.string().transform((text) => ({ text, usage: undefined })),
+  z.object({
+    text: z.string(),
+    usage: z
+      .object({
+        inputTokens: z.number(),
+        outputTokens: z.number(),
+        cachedInputTokens: z.number().optional(),
+        reasoningOutputTokens: z.number().optional(),
+      })
+      .optional(),
+  }),
+]);
+
 /** What an agent-turn attempt needs back from the interceptor. */
 type InterceptedTurnResult = {
   text: string;
-  usage: {
-    inputTokens: number;
-    outputTokens: number;
-    cachedInputTokens?: number;
-    reasoningOutputTokens?: number;
-  };
+  usage: NonNullable<z.infer<typeof InterceptedTurn>["usage"]>;
 };
 
 /**
- * Coerce an interceptor's agent-turn return value into the attempt shape. A
+ * Validate an interceptor's agent-turn return value into the attempt shape. A
  * handler that only cares about text returns a string; omitted usage gets a
  * deterministic text-length estimate (~4 chars/token) so token-usage events
- * and the compaction trigger stay plausible without the handler's help.
+ * and the compaction trigger stay plausible without the handler's help. A
+ * malformed result fails the attempt loudly — a handler bug should read as a
+ * recorded error, never as garbage token numbers in the journal.
  */
 export function normalizeInterceptedTurnResult(input: {
   result: unknown;
@@ -74,22 +92,18 @@ export function normalizeInterceptedTurnResult(input: {
   inputCharacters: number;
 }): InterceptedTurnResult {
   const { result, model } = input;
-  const asObject =
-    typeof result === "string"
-      ? { text: result }
-      : ((result || {}) as { text?: unknown; usage?: unknown });
-  if (typeof asObject.text !== "string") {
+  const parsed = InterceptedTurn.safeParse(result);
+  if (!parsed.success) {
     throw new Error(
-      `AI interceptor returned a non-text agent-turn result for "${model}": expected a string or { text, usage? }, got ${JSON.stringify(result)?.slice(0, 200)}`,
+      `AI interceptor returned an invalid agent-turn result for "${model}": expected a string or { text, usage? }, got ${JSON.stringify(result)?.slice(0, 200)}`,
     );
   }
   const estimate = (characters: number) => Math.ceil(characters / 4);
-  const usage = asObject.usage as InterceptedTurnResult["usage"] | undefined;
   return {
-    text: asObject.text,
-    usage: usage || {
+    text: parsed.data.text,
+    usage: parsed.data.usage || {
       inputTokens: estimate(input.inputCharacters),
-      outputTokens: estimate(asObject.text.length),
+      outputTokens: estimate(parsed.data.text.length),
     },
   };
 }
