@@ -26,14 +26,18 @@ test("a repeat request reuses the previous turn's journaled script instead of re
     payload: { config: { llm: { model: "intercepted/factorizer" }, llmRequestDebounceMs: 250 } },
   });
 
-  // The "model": turn 1 derives, turn 2 reuses. Routing is just the count of
-  // user messages in the turn's chat projection.
-  using _interception = await project.ai.intercept(async (call) => {
+  // The "model": turn 1 derives, turn 2 reuses. Routing keys on the LAST user
+  // message's content, so a recovery re-send (below) cannot skew it.
+  const interceptor = async (call: {
+    source: string;
+    body: { messages: { role: string; content: string }[] };
+  }) => {
     if (call.source !== "agent-turn") throw new Error(`unexpected source: ${call.source}`);
-    const userTurns = call.body.messages.filter((message) => message.role === "user").length;
-    const script = userTurns >= 2 ? REUSE_SCRIPT : FACTORIZE_SCRIPT;
+    const lastUser = [...call.body.messages].reverse().find((m) => m.role === "user");
+    const script = lastUser?.content.includes("now do") ? REUSE_SCRIPT : FACTORIZE_SCRIPT;
     return ["```ts", script, "```"].join("\n");
-  });
+  };
+  using _interception = await project.ai.intercept(interceptor);
 
   // Warm the typecheck sidecar before driving the UI: the first gate call on
   // a cold deployment compiles the compiler wasm, which alone can outlast the
@@ -45,16 +49,37 @@ test("a repeat request reuses the previous turn's journaled script instead of re
   const composer = page.getByPlaceholder("Message this agent");
   const send = page.getByRole("button", { name: "Send message" });
 
+  // A cold deployment can revive the agent's durable object mid-turn, which
+  // drops the session-bound interceptor ("No AI interceptor installed") — the
+  // documented recovery is reconnect and re-install. One guarded retry per
+  // turn keeps the assertions about the feature, not the environment.
+  await using recovery = new AsyncDisposableStack();
+  const sendExpecting = async (message: string, expected: string) => {
+    await composer.fill(message);
+    await send.click();
+    try {
+      await page.getByText(expected).waitFor();
+    } catch {
+      const freshAdmin = recovery.use(await connectAdminItx(baseURL));
+      recovery.use(await freshAdmin.projects.get(fixture.project.id).ai.intercept(interceptor));
+      await composer.fill(message);
+      await send.click();
+      await page.getByText(expected).waitFor();
+    }
+  };
+
   // Turn 1: the long way. The script really runs; the answer is computed.
-  await composer.fill("prime factorize 52479543428582704627");
-  await send.click();
-  await page.getByText("52479543428582704627 = 6203868971 × 8459163737").waitFor();
+  await sendExpecting(
+    "prime factorize 52479543428582704627",
+    "52479543428582704627 = 6203868971 × 8459163737",
+  );
 
   // Turn 2: the reused way. The child run executes turn 1's algorithm with
   // the new number — the correct product proves real execution, not prose.
-  await composer.fill("now do 66778601389380731119");
-  await send.click();
-  await page.getByText("66778601389380731119 = 7316102869 × 9127619251").waitFor();
+  await sendExpecting(
+    "now do 66778601389380731119",
+    "66778601389380731119 = 7316102869 × 9127619251",
+  );
 
   // Open turn 1's codemode snippet: the full derived algorithm.
   const activities = page.getByRole("button", { name: /Ran code/ });
