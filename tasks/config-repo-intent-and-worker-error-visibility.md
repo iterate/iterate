@@ -232,3 +232,14 @@ follow-ups: typed construction instead of as-const in the worker reduce,
 an explained disposer cast, and metaphor-free comment wording. One CI
 Previews round failed on a transient Cloudflare API error deploying the
 auth app (code 10013, unrelated to this PR) — retried.
+
+2026-08-26 — Misha's review (3b59d2460): `subscriptionHealth` takes
+`{ agentStreamLimit? }` (default 20, hard cap 100, 0 = platform streams
+only); sync commits carry Template-Reference / Template-Commit git trailers
+(the durable event stays the three-way base's authority — messages are
+user-editable, and empty→default must work before any sync commit). The
+useQuery auto-poll question answered as by-design (the badge is the
+discovery surface; visibility-gated). Follow-up idea left on the thread:
+stamp the SEED commit with its template identity and derive
+"commits on top of template Y@Z" from trailers — valuable for
+GitHub-imported repos whose event history is gone.
