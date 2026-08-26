@@ -6,10 +6,10 @@ import { test } from "./test-support/test.ts";
  * commit that breaks the worker build lands durably as
  * `project/worker-update-failed`, the sidebar renders it as a red warning,
  * and the warning's sheet cross-links to the config repo IDE — where the
- * Template panel (the incident's fix path) lives. The same sheet is where
- * the polled `itx.subscriptionHealth()` rollup reports halted/lagging child
- * streams; a fresh healthy project has none to show, so this walkthrough
- * shows the build-failure section.
+ * Template panel (the incident's fix path) lives. Opening the sheet also
+ * runs the `itx.subscriptionHealth()` check across the project's other
+ * streams — on request only (open, or the Re-check button), never on a
+ * timer, so dormant agent Durable Objects stay evicted.
  */
 test("a broken config commit shows a red worker warning that leads to the fix", async ({
   helpers,
@@ -51,6 +51,15 @@ test("a broken config commit shows a red worker warning that leads to the fix", 
   // The sheet names the failing commit and explains the blast radius.
   await page.getByText(/config repo @ [0-9a-f]{7}/).waitFor();
   await page.getByText("The project worker no longer builds").waitFor();
+
+  // Opening the sheet is what triggers the cross-stream check: the Other
+  // streams section settles into either troubled rows (the config repo's
+  // parked copy subscription, during a build failure) or the all-clear line.
+  await page.getByText("Other streams").waitFor();
+  await page
+    .getByText(/Open stream|No delivery trouble in the \d+ checked streams/)
+    .first()
+    .waitFor();
 
   // The incident-shaped fix path: straight to the config repo IDE, where the
   // Template panel's "Update to latest template" button lives.

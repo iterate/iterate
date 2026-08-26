@@ -239,7 +239,15 @@ only); sync commits carry Template-Reference / Template-Commit git trailers
 (the durable event stays the three-way base's authority — messages are
 user-editable, and empty→default must work before any sync commit). The
 useQuery auto-poll question answered as by-design (the badge is the
-discovery surface; visibility-gated). Follow-up idea left on the thread:
+discovery surface; visibility-gated) — then OVERRULED by Misha: the cost
+that matters is Durable Object wakes (a visible tab dialing up to 20
+dormant agent DOs a minute keeps them from ever staying evicted). Now
+on-request only: the badge derives purely from root push facts, and
+`subscriptionHealth` runs when the sheet opens (default-stale on re-open)
+plus a Re-check button — no interval, no refetch-on-focus. Health spec
+asserts the on-open check settles; health video re-recorded (the sheet
+gained the Other streams section + Re-check button on camera).
+Follow-up idea left on the thread:
 stamp the SEED commit with its template identity and derive
 "commits on top of template Y@Z" from trailers — valuable for
 GitHub-imported repos whose event history is gone.

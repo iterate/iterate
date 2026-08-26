@@ -44,12 +44,14 @@ import {
  * retry time. Nothing pushes into the project DO — the stream stays
  * ignorant of the sidebar.
  *
- * Three sources feed it: the root stream's live subscription state (push,
- * instant), the project's reduced worker outcome (a standing build failure
- * renders red until a later worker-updated supersedes it), and the polled
- * `itx.subscriptionHealth()` rollup covering CHILD streams (the prod
- * `/guestbook` case) — halted/lagging entries badge, historical lastError
- * entries stay quiet informational lines in the sheet.
+ * The BADGE derives only from push facts already flowing to the sidebar:
+ * the root stream's live subscription state and the project's reduced worker
+ * outcome (a standing build failure renders red until a later worker-updated
+ * supersedes it). Child-stream detail is fetched ON REQUEST — the
+ * `itx.subscriptionHealth()` rollup runs when the sheet opens and on its
+ * refresh button, never on a timer or window focus: each scan dials up to a
+ * couple dozen Durable Objects, and a background poll would keep dormant
+ * agent DOs from ever staying evicted.
  */
 export function ProjectWorkerHealthWarning({
   projectId,
@@ -81,52 +83,13 @@ export function ProjectWorkerHealthWarning({
     { slug: projectId ?? "", enabled: projectId !== null },
   ).value;
   const buildFailure = selectWorkerBuildFailure(workerOutcome);
-  // Child-stream subscription health is PULL: the server-side fan-out result
-  // polled while the dashboard is open. react-query's default interval gating
-  // pauses the poll in hidden tabs, so an unattended dashboard costs nothing.
-  const childHealth = useQuery({
-    enabled: projectId !== null,
-    queryKey: ["itx", "subscription-health", projectId],
-    queryFn: async () => {
-      const session = await connectIterateSession();
-      const itx = session.projects.get(projectSlug);
-      try {
-        return await itx.subscriptionHealth({});
-      } finally {
-        // Safe: the per-fetch project stub carries a disposer over Cap'n Web
-        // but the generated surface does not declare Disposable; the cast
-        // narrows to exactly the optional disposal member (the same release
-        // pattern useItxQuery uses), and `?.` keeps a stub without one valid.
-        (itx as Partial<Disposable>)[Symbol.dispose]?.();
-      }
-    },
-    refetchInterval: 60_000,
-    staleTime: 55_000,
-  });
-  // The root stream's live view is authoritative and instant; the polled
-  // rollup contributes the CHILD streams only.
-  const childStreams = useMemo(
-    () =>
-      (childHealth.data === undefined ? [] : childHealth.data.streams).filter(
-        (stream) => stream.path !== "/",
-      ),
-    [childHealth.data],
-  );
-  const childEntries = childStreams.flatMap((stream) =>
-    stream.subscriptions.map((subscription) => ({ path: stream.path, ...subscription })),
-  );
-  const childHalted = childEntries.filter((entry) => entry.tier === "halted");
-  const childLagging = childEntries.filter((entry) => entry.tier === "lagging");
-  // Historical lastError entries never trigger the badge — they show only as
-  // quiet informational lines inside the sheet.
-  const badgeworthyChildCount = childHalted.length + childLagging.length;
 
-  if (struggling.length === 0 && buildFailure === null && badgeworthyChildCount === 0) return null;
+  if (struggling.length === 0 && buildFailure === null) return null;
 
   const haltedCount = struggling.filter((subscription) => subscription.status === "halted").length;
   // A build failure and halted are the loud, red states; backoff-only is an
   // amber "events are piling up" heads-up.
-  const severe = haltedCount > 0 || buildFailure !== null || childHalted.length > 0;
+  const severe = haltedCount > 0 || buildFailure !== null;
   const label =
     buildFailure !== null
       ? "Project worker build failed"
@@ -134,13 +97,9 @@ export function ProjectWorkerHealthWarning({
         ? haltedCount === 1
           ? "Event delivery stopped"
           : `${haltedCount} event deliveries stopped`
-        : struggling.length > 0
-          ? struggling.length === 1
-            ? "Event delivery retrying"
-            : `${struggling.length} event deliveries struggling`
-          : childHalted.length > 0
-            ? `Event delivery stopped in ${childHalted.length === 1 ? "a child stream" : `${childHalted.length} child streams`}`
-            : `Event delivery struggling in ${childLagging.length === 1 ? "a child stream" : `${childLagging.length} child streams`}`;
+        : struggling.length === 1
+          ? "Event delivery retrying"
+          : `${struggling.length} event deliveries struggling`;
 
   return (
     <>
@@ -176,7 +135,6 @@ export function ProjectWorkerHealthWarning({
         projectSlug={projectSlug}
         struggling={struggling}
         buildFailure={buildFailure}
-        childStreams={childStreams}
         severe={severe}
       />
     </>
@@ -190,7 +148,6 @@ function StrugglingSubscriptionsSheet({
   projectSlug,
   struggling,
   buildFailure,
-  childStreams,
   severe,
 }: {
   open: boolean;
@@ -199,13 +156,42 @@ function StrugglingSubscriptionsSheet({
   projectSlug: string;
   struggling: SubscriptionHealth[];
   buildFailure: WorkerBuildFailureFact | null;
-  childStreams: ProjectSubscriptionHealth["streams"];
   severe: boolean;
 }) {
   const itx = useItx(projectId ?? undefined);
   // Keyed `${name}:${action}` so a single row's button shows pending while
   // every other button disables — no two redrives race the same stream.
   const [pending, setPending] = useState<string | null>(null);
+  // The child-stream rollup runs ON REQUEST only: once when the sheet opens
+  // (enabled flips true and the default staleTime marks any cached result
+  // stale, so a re-open re-checks) and on the sheet's refresh button. Never
+  // on a timer or window focus — each scan dials up to a couple dozen
+  // Durable Objects, and any implicit trigger would keep dormant agent DOs
+  // from staying evicted.
+  const childHealth = useQuery({
+    enabled: open && projectId !== null,
+    queryKey: ["itx", "subscription-health", projectId],
+    queryFn: async () => {
+      const session = await connectIterateSession();
+      const itx = session.projects.get(projectSlug);
+      try {
+        return await itx.subscriptionHealth({});
+      } finally {
+        // Safe: the per-fetch project stub carries a disposer over Cap'n Web
+        // but the generated surface does not declare Disposable; the cast
+        // narrows to exactly the optional disposal member (the same release
+        // pattern useItxQuery uses), and `?.` keeps a stub without one valid.
+        (itx as Partial<Disposable>)[Symbol.dispose]?.();
+      }
+    },
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+  // The root stream's live view above is authoritative and instant; the
+  // on-request rollup contributes the CHILD streams only.
+  const childStreams = (childHealth.data === undefined ? [] : childHealth.data.streams).filter(
+    (stream) => stream.path !== "/",
+  );
 
   async function run(action: "resume" | "skip", subscription: SubscriptionHealth) {
     setPending(`${subscription.name}:${action}`);
@@ -239,15 +225,14 @@ function StrugglingSubscriptionsSheet({
                 : "Event delivery not flowing"}
           </SheetTitle>
           <SheetDescription>
+            {/* The warning only opens on root push facts, so the copy names
+                the root stream or the build — child-stream detail arrives
+                below via the on-open check. */}
             {buildFailure !== null
               ? "The project worker no longer builds, so nothing that depends on it runs — agents included — until a config repo commit fixes the build."
-              : struggling.length > 0
-                ? severe
-                  ? "A subscription on this project's root stream halted after repeated failures. New events pile up undelivered until you resume it. Resume retries from where it stopped; if one event keeps breaking delivery, skip past it."
-                  : "A subscription on this project's root stream keeps failing and is retrying with backoff. Events pile up undelivered until delivery resumes. Resume retries from where it stopped; if one event keeps breaking delivery, skip past it."
-                : severe
-                  ? "A subscription on one of this project's streams halted after repeated failures. New events pile up undelivered until it is resumed — open the stream to resume or skip."
-                  : "A subscription on one of this project's streams keeps failing and is retrying with backoff. Events pile up undelivered until delivery resumes — open the stream for the repair verbs."}
+              : severe
+                ? "A subscription on this project's root stream halted after repeated failures. New events pile up undelivered until you resume it. Resume retries from where it stopped; if one event keeps breaking delivery, skip past it."
+                : "A subscription on this project's root stream keeps failing and is retrying with backoff. Events pile up undelivered until delivery resumes. Resume retries from where it stopped; if one event keeps breaking delivery, skip past it."}
           </SheetDescription>
         </SheetHeader>
         <ScrollArea className="min-h-0 flex-1">
@@ -358,6 +343,36 @@ function StrugglingSubscriptionsSheet({
                 </div>
               );
             })}
+            <div className="flex flex-col gap-1 px-4 py-3">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-medium tracking-wide uppercase text-muted-foreground">
+                  Other streams
+                </span>
+                <span className="flex-1" />
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-xs"
+                  disabled={childHealth.isFetching}
+                  data-spinner={childHealth.isFetching ? "true" : undefined}
+                  onClick={() => void childHealth.refetch()}
+                >
+                  {childHealth.isFetching ? "Checking…" : "Re-check"}
+                </Button>
+              </div>
+              {childHealth.isError ? (
+                <span className="text-xs break-words text-destructive" data-type="error">
+                  Could not check the other streams:{" "}
+                  {childHealth.error instanceof Error
+                    ? childHealth.error.message
+                    : String(childHealth.error)}
+                </span>
+              ) : childHealth.data !== undefined && childStreams.length === 0 ? (
+                <span className="text-xs text-muted-foreground">
+                  No delivery trouble in the {childHealth.data.scannedPaths.length} checked streams.
+                </span>
+              ) : null}
+            </div>
             <ChildStreamHealthRows projectSlug={projectSlug} childStreams={childStreams} />
           </div>
         </ScrollArea>
@@ -367,7 +382,7 @@ function StrugglingSubscriptionsSheet({
 }
 
 /**
- * The polled child-stream rollup, split by severity: halted and lagging
+ * The on-request child-stream rollup, split by severity: halted and lagging
  * entries render like the root rows (read-only — the stream page has the
  * repair verbs), while historical lastError entries are QUIET informational
  * lines: real facts worth a glance, never a badge.
