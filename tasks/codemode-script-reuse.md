@@ -50,7 +50,7 @@ surface's native shape, so the whole harness workaround was deleted:
 
 ```ts
 const h = await itx.capabilityHost.previousScriptHelper({
-  eventOffset: results[0].offset,
+  eventOffset: results[0].scriptOffset, // every results row carries its request-event offset
   parameters: { n: 1234567890n }, // the value the old script used inline
 })
 return await h.run({ n: 987n }) // typed: { n: bigint } — "987n" is a gate error
@@ -62,12 +62,11 @@ REPL, workers, codemode), and is typed via the generated api.
 
 `previousScriptHelper({ eventOffset, parameters })`:
 
-1. `eventOffset` accepts any of the three offsets the agent might know: the
-   `script-run-requested` event, the `script-run-settled` event (what
-   `results[N].offset` exposes), or the assistant-output event that produced
-   the script. Resolution: point-read by public-door idempotency key, then a
-   bounded forward scan for agent-lane requests (their idempotency keys carry
-   the agent processor's prefix).
+1. `eventOffset` must be the run's `script-run-requested` event offset —
+   every retained results row hands it to scripts as
+   `results[N].scriptOffset` (Misha's follow-up; this deleted an earlier
+   lenient three-offset resolution and its agent-lane idempotency scan). Any
+   other event kind errors with the fix named.
 2. Parameters are **primitive values, not text** (Misha's follow-up): the
    platform renders each value's candidate literal spellings (strings across
    quote styles when escape-free; bare number/bigint/boolean literals
