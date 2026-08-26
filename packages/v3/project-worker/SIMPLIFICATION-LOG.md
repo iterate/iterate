@@ -325,3 +325,38 @@ Tests: the two that `provide` a facet mount DIRECTLY moved from `itx.processors.
 `itx.subscribers.tally` (their intent — a mount alone enables — is preserved). Typecheck clean;
 suite **280 passed / 36 xf / 2 skip / 31 todo**. Live proof next (esp. the forwarder: a processor
 must NOT trigger absent-delivery).
+
+### Inc 3 LIVE-PROVEN (deploy 59fc452b) — all three lanes + perf, zero regression
+
+- **`prove_push` (THE forwarder check) — ALL PASS.** An absent-target subscribe auto-enables the
+  forwarder and delivers (3 marks digested by a stateless worker); halt+audit+resume all work;
+  `/state` shows the absent row on `lane:"forwarder"` while `facetProcessors: ["tally",
+"subscription-forwarder"]` — a processor is a facet-target subscriber on the pump lane, NEVER
+  confused for an absent delivery. The exact regression the fold risked: clean.
+- **`prove_userfacet` — ALL PASS.** A userspace processor (now an `itx.subscribers.<slug>` facet
+  subscription) reduces beside built-in `tally`.
+- **`prove_ephemeralflood` — ALL PASS, perf HELD.** 5195 ev/s, p50 210ms, 50× batching, zero pulls.
+- **`prove_slack` + `prove_crisp1` — ALL PASS.** Mounted-cap direct-call + stateful facet intact.
+
+## MAXIMAL CONSOLIDATION — DONE (Increments 1–3 complete, all live-proven)
+
+Final shape, three nouns:
+
+- `itx.workers.get({ type:"stateless"|"stateful", source })` (+ `itx.workers.run` sugar) — mirror
+  apps/os `DynamicWorkerRef`; one-producer `source` (`resolveSource`; inline/repo/callback sugar).
+- `itx.facets.get(slug)` — a durable facet by name; ONE loader `#durableFacet` (kind `facet`),
+  collision-safe `facetLoaderOwner`, SDK only where a StreamProcessor lives.
+- `itx.subscribers.<name>` — subscribe a target; the target's SHAPE picks the lane
+  (`facetTarget`=pump / `connectedTarget`=fast path / absent=forwarder). **A processor is a
+  subscribed facet; `itx.processors.*` is gone.**
+
+Deleted: the `className?` polymorphism, the dead `type` field, three duplicated source-resolve
+sites, `#facet`+`#statefulFacet` duplication, one loader kind, the `itx.processors.*` namespace + its
+separate `#facetEntries` scan, ~330KB SDK from raw stateful isolates. Fixed en route: the wave2
+owner-collision authority defect. Kept (with rationale): `enableProcessor` as thin sugar (spelling
+the facet-subscribe for you — deleting it would force hand-spelling the facet target, a net
+ergonomic loss). Deferred (perf-gated, separate): merging the two commit loops into one
+target-shape-dispatched loop (Agent B's −1-derivation/commit micro-opt).
+
+Every increment: typecheck + full suite + live deploy + proofs, zero regression throughout
+(perf held ~5200 ev/s / p50 ~210ms / 50× batching / zero pulls at every step).
