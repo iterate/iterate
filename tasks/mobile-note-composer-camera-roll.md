@@ -7,7 +7,11 @@ size: medium
 
 ## Status
 
-**Done.** The strip ships, the browser spec drives it end to end (tap →
+**Done, both rounds.** Misha ran round one on a real phone and sent four
+pieces of feedback; all four are in (see "Round two" at the bottom). Round
+one is below and unchanged.
+
+**Round one: done.** The strip ships, the browser spec drives it end to end (tap →
 attach → note on /notes carrying the photo), and every lane is green:
 `pnpm typecheck`, `lint`, `knip`, `format`, `pnpm --dir apps/mobile test`,
 `pnpm spec --project=mobile` (both the new spec and the existing notes one),
@@ -141,3 +145,54 @@ reason that happened minutes earlier and nowhere the user was looking.
 `saveAsync({format: JPEG})` promises JPEG. Same scar tissue as
 `lib/attachments.ts`: the label picks the uploaded file's extension, and the
 server's converter picks by extension.
+
+
+## Round two (device feedback)
+
+Screenshot from a real phone, four items:
+
+- [x] **More space above the text input.** _`paddingBottom: spacing.sm` on
+      the strip's row — 12px total with the sheet's own gap._
+- [x] **A way into the full picker from the end of the strip.** _A trailing
+      "＋ All photos" tile. It calls the composer's own `pickMore`, so the
+      tile and the `+` button are one handler, not two that can drift._
+- [x] **The keyboard's rounded top corners expose a different colour.** _The
+      sheet now hangs a 24px skirt of its own background below its content
+      (`marginBottom: -24` plus matching `paddingBottom`), which is what the
+      keyboard's corners reveal. Nothing moves; only the background reaches
+      lower._
+- [x] **A message-icon button on `/notes`.** _💬 Chat, first in the expanded
+      row's actions. Design in D10 below._
+
+### D10 — how the note-chat works
+
+A per-note chat at a **deterministic** path
+(`/agents/mobile/note-<the note file's stem>`), not a fresh chat per tap.
+Tapping 💬 twice lands you back in the same conversation instead of littering
+the chat list, and because the chat list is the unfiltered `/agents`
+catalogue, that conversation is reachable later like any other.
+
+The pointer is **typed into the composer, not auto-sent**. Auto-sending "about
+this note:" with no question spends a model turn to be asked "what about it?".
+Prefilling means the one thing only the human knows — the actual question —
+is what starts the conversation.
+
+The seed carries the note's **text as well as its path**. The path alone
+assumes the agent will glob the notes repo; the text makes the first message
+self-contained, and the path is still there for follow-up.
+
+The prefill is skipped when the thread already has events — a conversation in
+progress IS the context, and re-pasting the note on top of it is noise. The
+button resolves that with one `getEvents` call before it navigates, which is
+why it has a pending state like the other row actions.
+
+**Gotcha found while building it:** "has this thread got anything in it?"
+cannot be `getEvents({}).length === 0`. Merely READING a stream lazily
+initializes it, so an untouched note-chat comes back holding infrastructure
+events ("Stream durable object woke") and the seed silently never appeared —
+caught by the browser spec, which is exactly what it is for. The check asks
+for `USER_MESSAGE_TYPE`/`ASSISTANT_MESSAGE_TYPE` specifically.
+
+**Second gotcha, in the spec:** the /notes screen stays mounted underneath the
+pushed chat screen, so an expanded row is still expanded after `goBack()` —
+"re-opening" it there actually closes it.

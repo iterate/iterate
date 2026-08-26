@@ -39,6 +39,10 @@ const TILE = 100;
 export function RecentPhotosStrip(props: {
   attachments: PickedImage[];
   onAttachmentsChange: (attachments: PickedImage[]) => void;
+  /** Opens the full-screen system picker — the same thing the composer's +
+   * button does. It rides along at the END of the strip because that is
+   * where you are when the strip ran out of what you wanted. */
+  onPickMore: () => void;
   /** True while a capture is in flight — the sheet's attachments are being
    * sent, so the strip must not mutate them underneath it. */
   disabled: boolean;
@@ -116,6 +120,16 @@ export function RecentPhotosStrip(props: {
             position={index + 1}
           />
         ))}
+        <Pressable
+          accessibilityLabel="Choose from all photos"
+          accessibilityRole="button"
+          disabled={props.disabled}
+          onPress={props.onPickMore}
+          style={[styles.tile, styles.askTile]}
+        >
+          <Text style={styles.moreGlyph}>+</Text>
+          <Text style={styles.askText}>All photos</Text>
+        </Pressable>
       </ScrollView>
     </View>
   );
@@ -166,6 +180,8 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: spacing.sm,
     paddingHorizontal: spacing.md,
+    // The strip is not allowed to crowd the thing you came here to type in.
+    paddingBottom: spacing.sm,
   },
   tile: {
     width: TILE,
@@ -182,6 +198,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   askText: { color: colors.textMuted, fontSize: 13, textAlign: "center" },
+  moreGlyph: { color: colors.textMuted, fontSize: 24, lineHeight: 28 },
   check: {
     position: "absolute",
     top: spacing.xs,

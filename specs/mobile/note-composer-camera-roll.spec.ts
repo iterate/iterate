@@ -38,6 +38,10 @@ test("attaches a recent photo to a note straight from the composer strip", async
   await page.getByLabel("Remove recent photo 2").click();
   await page.getByLabel("Attach recent photo 2").waitFor();
 
+  // Past the last recent photo sits the way out to everything older — the
+  // same full-screen picker the + button opens.
+  await page.getByLabel("Choose from all photos").waitFor();
+
   await page.getByPlaceholder("Capture a note").fill("Ticket for the Florence train");
   await page.getByLabel("Save note").click();
 
