@@ -1,3 +1,4 @@
+import { expect } from "@playwright/test";
 import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
@@ -56,9 +57,9 @@ test("a repeat request reuses the previous turn's journaled script instead of re
   await using recovery = new AsyncDisposableStack();
   const sendExpecting = async (message: string, expected: string) => {
     // Baseline BEFORE the send: the diagnosis below must only see THIS turn's
-    // events — an earlier recovered failure must not poison a later turn, and
-    // a full head window must not hide a fresh one. (The baseline read falls
-    // back to a fresh connection when the previous turn killed this one.)
+    // events — an earlier recovered failure must not poison a later turn.
+    // (The baseline read falls back to a fresh connection when the previous
+    // turn killed this one.)
     const baseline = await agent.processor
       .snapshot()
       .then((snapshot) => snapshot.offset)
@@ -67,14 +68,22 @@ test("a repeat request reuses the previous turn's journaled script instead of re
         const freshAgent = freshAdmin.projects.get(fixture.project.id).agents.get(agentPath);
         return (await freshAgent.processor.snapshot()).offset;
       });
+    // expect.poll with an explicit timeout, not a locator wait: the first
+    // intercepted turn on a cold preview deployment settles after up to ~65s
+    // of HEALTHY server-side work with the working indicator up, so the
+    // spinnerWaiter's stuck ceiling would fail a slow-but-fine turn.
+    const pollForReply = () =>
+      // timeout: healthy first turns run up to ~65s server-side with the working indicator up, so the spinnerWaiter's stuck ceiling would fail them.
+      expect
+        .poll(async () => await page.getByText(expected).count(), { timeout: 120_000 })
+        .toBeGreaterThan(0);
     await composer.fill(message);
     await send.click();
     try {
-      await page.getByText(expected).waitFor();
-    } catch {
+      await pollForReply();
+    } catch (error) {
       // Diagnose before acting: only a journaled "No AI interceptor" failure
-      // in THIS turn means the interceptor died; a merely slow turn gets more
-      // waiting, not a duplicate send.
+      // in THIS turn means the interceptor died and a re-send is warranted.
       const freshAdmin = recovery.use(await connectAdminItx(baseURL));
       const freshProject = freshAdmin.projects.get(fixture.project.id);
       const events = await freshProject.agents
@@ -85,14 +94,11 @@ test("a repeat request reuses the previous turn's journaled script instead of re
           event.type === "events.iterate.com/agent/llm-request-settled" &&
           JSON.stringify(event.payload).includes("No AI interceptor"),
       );
-      if (!interceptorLost) {
-        await page.getByText(expected).waitFor();
-        return;
-      }
+      if (!interceptorLost) throw error;
       recovery.use(await freshProject.ai.intercept(interceptor));
       await composer.fill(message);
       await send.click();
-      await page.getByText(expected).waitFor();
+      await pollForReply();
     }
   };
 
