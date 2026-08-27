@@ -302,6 +302,7 @@ import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "./domains/capability-host/ca
 import { runCapabilityHostScript } from "./domains/capability-host/capability-host-script-run.ts";
 import {
   applyScriptEdits,
+  findStaleValueLeftovers,
   renderScriptReuseEnvelope,
   reparameterizeScript,
   type ReuseParameterBinding,
@@ -6175,6 +6176,20 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     // message prose hardcoding an old input, a stale label.
     const edited = input.edits === undefined ? code : applyScriptEdits(code, input.edits);
     const transformed = reparameterizeScript({ code: edited, parameters });
+    // A reused script that still mentions an old value outside the swapped
+    // expression (message prose, a label) will state stale facts when run.
+    // Observed live: the model reused correctly but sent the old number in
+    // the message. Omitting `edits` entirely means the caller has not
+    // considered this; an explicit `edits` (even []) is the opt-out.
+    if (input.edits === undefined) {
+      const leftovers = findStaleValueLeftovers(transformed.code, parameters);
+      if (leftovers.length > 0) {
+        const detail = leftovers.map(([name, bare]) => `${name} (${bare})`).join(", ");
+        throw new Error(
+          `The old value(s) of ${detail} still appear in the script outside the swapped expression — likely message prose that would state the OLD input. Pass edits: [[<pattern>, <replacement>], …] to rewrite that text (or edits: [] to keep it deliberately).`,
+        );
+      }
+    }
     return new ReusableScriptRpcTarget({
       code: transformed.code,
       parameters: transformed.parameters,

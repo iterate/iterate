@@ -136,6 +136,23 @@ export function reparameterizeScript(input: {
   return { code, parameters: bindings };
 }
 
+/** After parameterization, the OLD values should be gone. A leftover mention
+ * — the bare digits of a swapped bigint inside a message template, the old
+ * string inside prose — is how a reused script announces a stale fact.
+ * Returns the offending [name, leftoverText] pairs (values shorter than 4
+ * characters are skipped: too noisy to police). */
+export function findStaleValueLeftovers(
+  code: string,
+  parameters: Record<string, ScriptReuseValue>,
+): [string, string][] {
+  const leftovers: [string, string][] = [];
+  for (const [name, value] of Object.entries(parameters)) {
+    const bare = String(value);
+    if (bare.length >= 4 && code.includes(bare)) leftovers.push([name, bare]);
+  }
+  return leftovers;
+}
+
 /** The literal spellings a script might plausibly use for a primitive value —
  * canonical first. Strings get quote variants only when no escaping would be
  * needed; exotic numeric spellings (1e6, 0x10) are not chased. */

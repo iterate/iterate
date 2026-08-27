@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   applyScriptEdits,
+  findStaleValueLeftovers,
   renderScriptReuseEnvelope,
   reparameterizeScript,
 } from "./script-reuse.ts";
@@ -67,6 +68,20 @@ test("edits rewrite prose the parameters cannot reach, and must match", () => {
     "async (itx) => itx.chat.sendMessage(`76 = ${answer}`)",
   );
   expect(() => applyScriptEdits(code, [["not present", "x"]])).toThrowError(/matches nothing/);
+});
+
+test("stale-value leftovers are found — the old input's bare digits in message prose", () => {
+  const transformed = reparameterizeScript({
+    code: "async (itx) => {\n  const n = 8633000n;\n  await itx.chat.sendMessage(`8633000 = done`);\n}",
+    parameters: { n: 8633000n },
+  });
+  expect(findStaleValueLeftovers(transformed.code, { n: 8633000n })).toEqual([["n", "8633000"]]);
+  // interpolated prose leaves nothing behind
+  const clean = reparameterizeScript({
+    code: "async (itx) => {\n  const n = 8633000n;\n  await itx.chat.sendMessage(`${n} = done`);\n}",
+    parameters: { n: 8633000n },
+  });
+  expect(findStaleValueLeftovers(clean.code, { n: 8633000n })).toEqual([]);
 });
 
 test("underscore-grouped numeric spellings are chased", () => {
