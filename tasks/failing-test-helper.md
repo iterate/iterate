@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: in-review
 size: small
 ---
 
@@ -7,7 +7,7 @@ size: small
 
 ## Status summary
 
-In progress. A `failingTest` helper replaces bare `test.fails` for pinned
+Done, pending review. A `failingTest` helper replaces bare `test.fails` for pinned
 platform bugs, then the quarantined facet source-version pin converts to it
 — with a restructure that makes it immune to the coincidental-recycle false
 alarm that got it quarantined (7+ red runs).
@@ -40,12 +40,12 @@ as a candidate failure.
 
 ## Checklist
 
-- [ ] `failingTest(options, name, body)` in shared test-support, with the
+- [x] `failingTest(options, name, body)` in shared test-support, with the
   assertion core (`expectFailure`) exported separately so it can be unit
   tested without nesting vitest. Options: `{ failure: RegExp, timeout?: ms }`.
-- [ ] Unit tests: matching failure passes; mismatching failure rejects
+- [x] Unit tests: matching failure passes; mismatching failure rejects
   naming both patterns; success rejects with the delete-the-wrapper message.
-- [ ] Convert `userspace-facet-source-version.e2e.test.ts` from `test.skip`
+- [x] Convert `userspace-facet-source-version.e2e.test.ts` from `test.skip`
   back to a live pin via `failingTest`, restructured for coincidence
   immunity: after each source commit, classify answers by BOOT — same-boot
   stale accumulates toward the concrete `SAME-BOOT STALENESS` error
@@ -55,13 +55,14 @@ as a candidate failure.
   against the now-running facet and observe again (bounded rounds; all
   rounds interrupted → a distinct loud error). The unchanged-source
   stability coverage in the same test comes back for free.
-- [ ] Update the quarantine note in `tasks/platform-stall-repros.md`
+- [x] Update the quarantine note in `tasks/platform-stall-repros.md`
   (thread 5's exit happens via coincidence-immunity now; provenance remains
   a nice-to-have, no longer the gate).
-- [ ] Short docs note in docs/testing.md next to the quarantine protocol:
+- [x] Short docs note in docs/testing.md next to the quarantine protocol:
   when to use failingTest vs test.fails vs skip.
-- [ ] Verify the converted test against local dev: green (bug present,
-  error matches), and the failure message is the concrete one.
+- [x] Verify the converted test against local dev: green (bug present,
+  error matches) _60s run; green under failingTest proves the body threw
+  the pinned SAME-BOOT STALENESS error_
 
 ## Implementation log
 
