@@ -12,13 +12,13 @@
 // request headers, substituted at the egress terminal from the per-project store.
 
 import { z } from "zod";
-import {
-  ExpressionSchema,
-  parse,
-  parseCapabilityPath,
-  type CapabilityPath,
-  type Expression,
-} from "./expression.ts";
+import { parse, parseCapabilityPath, type CapabilityPath, type Expression } from "./expression.ts";
+
+/** The structured half of an expression as a wire schema — reduced-state checkpoints validate a
+ *  target against this one spelling (events store the STRING half). */
+const ExpressionSchema = z.array(
+  z.union([z.string(), z.tuple([z.string()]).rest(z.unknown())]),
+) as z.ZodType<Expression>;
 
 // A path is dotted-string OR pre-split segments; EITHER way each segment must be a real
 // identifier (an array like ["itx.kv"] or [] would otherwise boot a dead or rank-0 default

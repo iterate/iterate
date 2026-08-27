@@ -397,3 +397,16 @@ so no artificial budget needed). **Zero proof/test STRING churn** — JSON5 read
 platform already writes. expression.ts 479 → 331 lines. All defect-1/2/3 tests subsumed (JSON5
 round-trips exponents/keys natively; `-0`→`0` is a documented JSON5 limitation, not a bug). Suite
 286 passed / 30 xf; typecheck clean. NEXT (Jonas): two-block table tests + get expression.ts <100 LOC.
+
+## expression.ts < 100 LOC (Jonas: "use subagents to turn up a solution")
+
+Dispatched 3 worktree-isolated agents (split / densify / free-hand). Picked the FREE-HAND result:
+`core/expression.ts` is now **99 lines** — purely the string⇄structure CODEC (parse/print/
+toExpression/parseCapabilityPath + types). The MATCHER + EVALUATOR (`match`, `stepGet`,
+`walkSteps`, `invokePath`, `evaluate`, `apply`, `pathProxy`) moved to a new `core/dispatch.ts`
+(178 lines), re-exported from expression.ts in one line so every importer is unchanged (only
+`config.ts` edited). Genuine collapses, not just relocation: `apply`'s two duplicated
+"apply-args-or-throw-not-callable" blocks fold into one `callOn` helper; `walkSteps` is the single
+engine behind `evaluate`/`invokePath`/`apply`; `zod` left the codec entirely (`ExpressionSchema`
+moved next to its only consumer, `config.ts`). Typecheck clean; suite 286 passed / 30 xf; behavior
+identical. (expression.ts arc this session: 479 → 331 [JSON5] → 99 [split].)
