@@ -43,7 +43,7 @@ const DEPENDENCY_INSTALL_FAILURE_WARNING_PATTERNS = [
 const TRANSIENT_RESOLUTION_WARNING_PATTERNS = [
   /^Could not resolve version for\b/,
   /^Version .+ not found for\b/,
-] as const;
+];
 
 /**
  * Total attempts when every failure so far is a transient-resolution shape.
@@ -258,12 +258,11 @@ export async function executeWorkerBuild(input: {
         files,
       }),
     );
-    return built.ok
-      ? {
-          ok: true,
-          output: { assetManifest: {}, assets: {}, ...built.output },
-        }
-      : built;
+    if (!built.ok) return built;
+    return {
+      ok: true,
+      output: { assetManifest: {}, assets: {}, ...built.output },
+    };
   };
 
   let result = await buildOnce();

@@ -298,9 +298,9 @@ export class AgentLlmRequest {
    *
    * Deliberately in-memory and per-incarnation: every loss path is already
    * covered — if this incarnation dies, the keepalive revives a successor
-   * whose at-head adopt re-dials and arms a fresh watchdog. `host.sleep` is
-   * the virtualized clock seam, so the harness drives this with
-   * `advanceTime`.
+   * whose at-head adopt re-dials and arms a fresh watchdog. `host.sleep` and
+   * `host.now` are injectable, so the test harness controls this watchdog's
+   * clock with `advanceTime`.
    */
   #watchAttemptProgress(
     args: ProcessEventArgs<AgentProcessorContract>,
