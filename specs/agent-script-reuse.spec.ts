@@ -1,6 +1,5 @@
-import { expect } from "@playwright/test";
 import dedent from "dedent";
-import type { ProjectAiInterceptor } from "iterate/node";
+import { spinnerWaiter } from "middlewright";
 import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
@@ -10,10 +9,6 @@ import { test } from "./test-support/test.ts";
 // scripts EXECUTE for real — the child run re-runs turn 1's algorithm with
 // the new number — and the spec opens each turn's codemode snippet in the
 // feed to show the shortcut.
-// Quarantined in CI (passes locally): cold-preview intercepted turns exceed
-// the lane budgets — see tasks/quarantined-agent-script-reuse-spec.md for
-// the unquarantine criteria. The typed-return test below covers the reuse
-// mechanism in CI meanwhile.
 test("a repeat request reuses the previous turn's journaled script instead of re-deriving it", async ({
   helpers,
   page,
@@ -26,115 +21,147 @@ test("a repeat request reuses the previous turn's journaled script instead of re
   await using fixture = await helpers.createFixture("agent-script-reuse");
   if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
 
-  await using chat = await interceptedChat({
-    baseURL,
-    fixture,
-    page,
-    model: "intercepted/factorizer",
-    scripts: {
-      "warm up": dedent`
-        async (itx) => {
-          await itx.chat.sendMessage("warmed");
-        }
-      `,
-      "prime factorize": dedent`
-        async (itx) => {
-          const n = 52479543428582704627n;
-          const gcd = (a: bigint, b: bigint): bigint => {
-            while (b) [a, b] = [b, a % b];
-            return a;
-          };
-          const modPow = (a: bigint, e: bigint, m: bigint): bigint => {
-            let r = 1n;
-            a %= m;
-            while (e > 0n) {
-              if (e & 1n) r = (r * a) % m;
-              a = (a * a) % m;
-              e >>= 1n;
-            }
-            return r;
-          };
-          const isPrime = (x: bigint): boolean => {
-            if (x < 2n) return false;
-            for (const p of [2n, 3n, 5n, 7n, 11n, 13n, 17n, 19n, 23n, 29n, 31n, 37n]) {
-              if (x === p) return true;
-              if (x % p === 0n) return false;
-            }
-            let d = x - 1n;
-            let s = 0;
-            while ((d & 1n) === 0n) {
-              d >>= 1n;
-              s++;
-            }
-            for (const a of [2n, 325n, 9375n, 28178n, 450775n, 9780504n, 1795265022n]) {
-              if (a % x === 0n) continue;
-              let y = modPow(a, d, x);
-              if (y === 1n || y === x - 1n) continue;
-              let composite = true;
-              for (let r = 1; r < s; r++) {
-                y = (y * y) % x;
-                if (y === x - 1n) {
-                  composite = false;
-                  break;
-                }
-              }
-              if (composite) return false;
-            }
-            return true;
-          };
-          const rho = (x: bigint): bigint => {
-            if (x % 2n === 0n) return 2n;
-            for (let c = 1n; ; c++) {
-              const f = (v: bigint) => (v * v + c) % x;
-              let a = 2n, b = 2n, d = 1n;
-              while (d === 1n) {
-                a = f(a);
-                b = f(f(b));
-                d = gcd(a > b ? a - b : b - a, x);
-              }
-              if (d !== x) return d;
-            }
-          };
-          const factors: bigint[] = [];
-          const split = (x: bigint): void => {
-            if (x === 1n) return;
-            if (isPrime(x)) {
-              factors.push(x);
-              return;
-            }
-            const d = rho(x);
-            split(d);
-            split(x / d);
-          };
-          split(n);
-          factors.sort((p, q) => (p < q ? -1 : 1));
-          await itx.chat.sendMessage(\`\${n} = \${factors.join(" × ")}\`);
-        }
-      `,
-      "now do": dedent`
-        async (itx) => {
-          const helper = await itx.capabilityHost.previousScriptHelper({
-            ...results[0],
-            parameterize: { n: 52479543428582704627n },
-          });
-          await helper.run({ n: 66778601389380731119n });
-        }
-      `,
-    },
+  using admin = await connectAdminItx(baseURL);
+  using project = admin.projects.get(fixture.project.id);
+  const agentPath = `/agents/factorizer-${crypto.randomUUID().slice(0, 8)}`;
+  using agent = project.agents.get(agentPath);
+  await agent.create();
+  await agent.append({
+    type: "events.iterate.com/agent/configured",
+    payload: { config: { llm: { model: "intercepted/factorizer" }, llmRequestDebounceMs: 250 } },
   });
 
+  const scripts: Record<string, string> = {
+    "warm up": dedent`
+      async (itx) => {
+        await itx.chat.sendMessage("warmed");
+      }
+    `,
+    "prime factorize": dedent`
+      async (itx) => {
+        const n = 52479543428582704627n;
+        const gcd = (a: bigint, b: bigint): bigint => {
+          while (b) [a, b] = [b, a % b];
+          return a;
+        };
+        const modPow = (a: bigint, e: bigint, m: bigint): bigint => {
+          let r = 1n;
+          a %= m;
+          while (e > 0n) {
+            if (e & 1n) r = (r * a) % m;
+            a = (a * a) % m;
+            e >>= 1n;
+          }
+          return r;
+        };
+        const isPrime = (x: bigint): boolean => {
+          if (x < 2n) return false;
+          for (const p of [2n, 3n, 5n, 7n, 11n, 13n, 17n, 19n, 23n, 29n, 31n, 37n]) {
+            if (x === p) return true;
+            if (x % p === 0n) return false;
+          }
+          let d = x - 1n;
+          let s = 0;
+          while ((d & 1n) === 0n) {
+            d >>= 1n;
+            s++;
+          }
+          for (const a of [2n, 325n, 9375n, 28178n, 450775n, 9780504n, 1795265022n]) {
+            if (a % x === 0n) continue;
+            let y = modPow(a, d, x);
+            if (y === 1n || y === x - 1n) continue;
+            let composite = true;
+            for (let r = 1; r < s; r++) {
+              y = (y * y) % x;
+              if (y === x - 1n) {
+                composite = false;
+                break;
+              }
+            }
+            if (composite) return false;
+          }
+          return true;
+        };
+        const rho = (x: bigint): bigint => {
+          if (x % 2n === 0n) return 2n;
+          for (let c = 1n; ; c++) {
+            const f = (v: bigint) => (v * v + c) % x;
+            let a = 2n, b = 2n, d = 1n;
+            while (d === 1n) {
+              a = f(a);
+              b = f(f(b));
+              d = gcd(a > b ? a - b : b - a, x);
+            }
+            if (d !== x) return d;
+          }
+        };
+        const factors: bigint[] = [];
+        const split = (x: bigint): void => {
+          if (x === 1n) return;
+          if (isPrime(x)) {
+            factors.push(x);
+            return;
+          }
+          const d = rho(x);
+          split(d);
+          split(x / d);
+        };
+        split(n);
+        factors.sort((p, q) => (p < q ? -1 : 1));
+        await itx.chat.sendMessage(\`\${n} = \${factors.join(" × ")}\`);
+      }
+    `,
+    "now do": dedent`
+      async (itx) => {
+        const helper = await itx.capabilityHost.previousScriptHelper({
+          ...results[0],
+          parameterize: { n: 52479543428582704627n },
+        });
+        await helper.run({ n: 66778601389380731119n });
+      }
+    `,
+  };
+  await using _interception = await fixture.interceptAi(async (call) => {
+    if (call.source !== "agent-turn") throw new Error(`unexpected source: ${call.source}`);
+    const lastUser = [...call.body.messages].reverse().find((m) => m.role === "user");
+    const entry = Object.entries(scripts).find(([key]) => lastUser?.content.includes(key));
+    if (!entry) throw new Error(`no scripted reply matches: ${lastUser?.content.slice(0, 80)}`);
+    return ["```ts", entry[1], "```"].join("\n");
+  });
+
+  // Absorb the cold-deployment cost before the UI assertions: the FIRST
+  // intercepted turn on a fresh deployment runs 35-65s of platform churn; a
+  // throwaway agent takes that hit at the itx level, where waits carry no
+  // playwright budget.
+  const warmPath = `/agents/warm-${crypto.randomUUID().slice(0, 8)}`;
+  using warmAgent = project.agents.get(warmPath);
+  await warmAgent.create();
+  await warmAgent.append({
+    type: "events.iterate.com/agent/configured",
+    payload: { config: { llm: { model: "intercepted/factorizer" }, llmRequestDebounceMs: 250 } },
+  });
+  await warmAgent.ask({ message: "warm up", timeoutMs: 90_000 }).catch(() => {});
+
+  await page.goto(`/projects/${fixture.project.slug}/agents/streams${agentPath}`);
+  const composer = page.getByPlaceholder("Message this agent");
+  const send = page.getByRole("button", { name: "Send message" });
+
   // Turn 1: the long way. The script really runs; the answer is computed.
-  await chat.sendExpecting(
-    "prime factorize 52479543428582704627",
-    "52479543428582704627 = 6203868971 × 8459163737",
-  );
+  // The working indicator stays up while the turn runs server-side — a slow
+  // turn is healthy, so give the spinner more room instead of failing it.
+  await spinnerWaiter.settings.run({ spinnerTimeout: 60_000 }, async () => {
+    await composer.fill("prime factorize 52479543428582704627");
+    await send.click();
+    await page.getByText("52479543428582704627 = 6203868971 × 8459163737").waitFor();
+  });
 
   // Turn 2: the reused way. The child run executes turn 1's algorithm with
   // the new number — the correct product proves real execution, not prose.
-  await chat.sendExpecting(
-    "now do 66778601389380731119",
-    "66778601389380731119 = 7316102869 × 9127619251",
-  );
+  await spinnerWaiter.settings.run({ spinnerTimeout: 60_000 }, async () => {
+    await composer.fill("now do 66778601389380731119");
+    await send.click();
+    await page.getByText("66778601389380731119 = 7316102869 × 9127619251").waitFor();
+  });
 
   // Open turn 1's codemode snippet: the full derived algorithm.
   const activities = page.getByRole("button", { name: /Ran code/ });
@@ -186,6 +213,16 @@ test("run() return values are typed from the reused row's data, through the real
   await using fixture = await helpers.createFixture("agent-script-reuse-typed");
   if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
 
+  using admin = await connectAdminItx(baseURL);
+  using project = admin.projects.get(fixture.project.id);
+  const agentPath = `/agents/typed-${crypto.randomUUID().slice(0, 8)}`;
+  using agent = project.agents.get(agentPath);
+  await agent.create();
+  await agent.append({
+    type: "events.iterate.com/agent/configured",
+    payload: { config: { llm: { model: "intercepted/typed" }, llmRequestDebounceMs: 250 } },
+  });
+
   const nowDoQueue = [
     // Attempt 1 — the wrong satisfies; the gate must reject it and the
     // marker message must never send. results[1]: results[0] is the
@@ -217,119 +254,59 @@ test("run() return values are typed from the reused row's data, through the real
       }
     `,
   ];
-  await using chat = await interceptedChat({
-    baseURL,
-    fixture,
-    page,
-    model: "intercepted/typed",
-    scripts: {
-      "warm up": dedent`
+  const scriptQueues: Record<string, string[]> = {
+    "warm up": [
+      dedent`
         async (itx) => {
           await itx.chat.sendMessage("warmed");
         }
       `,
-      "prime factorize": [
-        // Round 1: RETURN the factors (JSON-serializable, so strings —
-        // bigints do not survive result serialization); the returned value
-        // becomes a data row typed by its literal.
-        dedent`
-          async (itx) => {
-            const target = 8633n;
-            let remaining = target;
-            const factors: bigint[] = [];
-            for (let candidate = 2n; candidate * candidate <= remaining; candidate += 1n) {
-              while (remaining % candidate === 0n) {
-                factors.push(candidate);
-                remaining /= candidate;
-              }
+    ],
+    "prime factorize": [
+      // Round 1: RETURN the factors (JSON-serializable, so strings —
+      // bigints do not survive result serialization); the returned value
+      // becomes a data row typed by its literal.
+      dedent`
+        async (itx) => {
+          const target = 8633n;
+          let remaining = target;
+          const factors: bigint[] = [];
+          for (let candidate = 2n; candidate * candidate <= remaining; candidate += 1n) {
+            while (remaining % candidate === 0n) {
+              factors.push(candidate);
+              remaining /= candidate;
             }
-            if (remaining > 1n) factors.push(remaining);
-            return factors.map(String);
           }
-        `,
-        // Round 2: the settlement made the value results[0].data — send it.
-        dedent`
-          async (itx) => {
-            await itx.chat.sendMessage(\`factors of 8633: \${results[0].data.join(" × ")}\`);
-          }
-        `,
-      ],
-      "now do": nowDoQueue,
-    },
-  });
-
-  await chat.sendExpecting("prime factorize 8633", "factors of 8633: 89 × 97");
-  await chat.sendExpecting("now do 10403", "Result is 101 × 103");
-  // The wrong attempt was consumed (the router keeps only the repeatable
-  // last entry) — the gate really rejected it and the agent loop delivered
-  // the corrective retry, which alone sends the final message.
-  if (nowDoQueue.length !== 1) {
-    throw new Error(`expected only the corrective retry to remain; ${nowDoQueue.length} left`);
-  }
-});
-
-// -----------------------------------------------------------------------------
-// One intercepted-chat fixture per test: agent + interceptor + cold-deployment
-// warm-up + turn driving.
-// -----------------------------------------------------------------------------
-
-/**
- * Create an agent on an intercepted/* model whose turns are served from
- * `scripts` — inline codemode sources keyed by a substring of the user
- * message; an array value is a queue consumed one model call at a time (the
- * last entry repeats if the queue empties).
- *
- * Interceptor churn is the platform/test-support contract's problem now:
- * `fixture.interceptAi` installs the handler through the resilient loop
- * (reconnect-and-reinstall on the 4901 pager-lost close), so this fixture
- * carries no recovery machinery of its own. The warm-up turn stays: the
- * FIRST intercepted turn on a cold deployment runs 35-65s of platform churn,
- * and a throwaway agent absorbs that at the itx level, where waits carry no
- * playwright budget.
- *
- * `sendExpecting(message, expected)` drives one chat turn and waits for the
- * expected reply by polling.
- */
-async function interceptedChat(input: {
-  baseURL: string;
-  fixture: {
-    project: { id: string; slug: string };
-    interceptAi: (handler: ProjectAiInterceptor) => Promise<AsyncDisposable>;
+          if (remaining > 1n) factors.push(remaining);
+          return factors.map(String);
+        }
+      `,
+      // Round 2: the settlement made the value results[0].data — send it.
+      dedent`
+        async (itx) => {
+          await itx.chat.sendMessage(\`factors of 8633: \${results[0].data.join(" × ")}\`);
+        }
+      `,
+    ],
+    "now do": nowDoQueue,
   };
-  page: import("@playwright/test").Page;
-  model: string;
-  scripts: Record<string, string | string[]>;
-}) {
-  const { baseURL, fixture, page, model, scripts } = input;
-  const stack = new AsyncDisposableStack();
-  const admin = stack.use(await connectAdminItx(baseURL));
-  const project = stack.use(admin.projects.get(fixture.project.id));
-  const agentPath = `/agents/under-test-${crypto.randomUUID().slice(0, 8)}`;
-  const agent = stack.use(project.agents.get(agentPath));
-  await agent.create();
-  await agent.append({
-    type: "events.iterate.com/agent/configured",
-    payload: { config: { llm: { model }, llmRequestDebounceMs: 250 } },
+  await using _interception = await fixture.interceptAi(async (call) => {
+    if (call.source !== "agent-turn") throw new Error(`unexpected source: ${call.source}`);
+    const lastUser = [...call.body.messages].reverse().find((m) => m.role === "user");
+    const entry = Object.entries(scriptQueues).find(([key]) => lastUser?.content.includes(key));
+    if (!entry) throw new Error(`no scripted reply matches: ${lastUser?.content.slice(0, 80)}`);
+    const queue = entry[1];
+    // Consume one per model call; the last entry repeats so re-asks cannot
+    // crash the router.
+    return ["```ts", queue.length > 1 ? queue.shift()! : queue[0]!, "```"].join("\n");
   });
-
-  stack.use(
-    await fixture.interceptAi(async (call) => {
-      if (call.source !== "agent-turn") throw new Error(`unexpected source: ${call.source}`);
-      const lastUser = [...call.body.messages].reverse().find((m) => m.role === "user");
-      const entry = Object.entries(scripts).find(([key]) => lastUser?.content.includes(key));
-      if (!entry) throw new Error(`no scripted reply matches: ${lastUser?.content.slice(0, 80)}`);
-      const value = entry[1];
-      const script = Array.isArray(value) ? (value.length > 1 ? value.shift()! : value[0]!) : value;
-      return ["```ts", script, "```"].join("\n");
-    }),
-  );
 
   const warmPath = `/agents/warm-${crypto.randomUUID().slice(0, 8)}`;
-  const warmAgent = stack.use(project.agents.get(warmPath));
+  using warmAgent = project.agents.get(warmPath);
   await warmAgent.create();
   await warmAgent.append({
     type: "events.iterate.com/agent/configured",
-    payload: { config: { llm: { model }, llmRequestDebounceMs: 250 } },
+    payload: { config: { llm: { model: "intercepted/typed" }, llmRequestDebounceMs: 250 } },
   });
   await warmAgent.ask({ message: "warm up", timeoutMs: 90_000 }).catch(() => {});
 
@@ -337,20 +314,20 @@ async function interceptedChat(input: {
   const composer = page.getByPlaceholder("Message this agent");
   const send = page.getByRole("button", { name: "Send message" });
 
-  const sendExpecting = async (message: string, expected: string) => {
-    await composer.fill(message);
+  await spinnerWaiter.settings.run({ spinnerTimeout: 60_000 }, async () => {
+    await composer.fill("prime factorize 8633");
     await send.click();
-    // timeout: polling instead of a locator wait because the working indicator stays up through long turns and the spinnerWaiter's stuck ceiling would fail them; post-warm-up turns settle in seconds, 60s is margin.
-    await expect
-      .poll(async () => await page.getByText(expected).count(), { timeout: 60_000 })
-      .toBeGreaterThan(0);
-  };
-
-  return {
-    agentPath,
-    sendExpecting,
-    async [Symbol.asyncDispose]() {
-      await stack.disposeAsync();
-    },
-  };
-}
+    await page.getByText("factors of 8633: 89 × 97").waitFor();
+  });
+  await spinnerWaiter.settings.run({ spinnerTimeout: 60_000 }, async () => {
+    await composer.fill("now do 10403");
+    await send.click();
+    await page.getByText("Result is 101 × 103").waitFor();
+  });
+  // The wrong attempt was consumed (the router keeps only the repeatable
+  // last entry) — the gate really rejected it and the agent loop delivered
+  // the corrective retry, which alone sends the final message.
+  if (nowDoQueue.length !== 1) {
+    throw new Error(`expected only the corrective retry to remain; ${nowDoQueue.length} left`);
+  }
+});

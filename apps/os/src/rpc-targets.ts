@@ -6220,19 +6220,40 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     // and edits were given, fall back to edits-first: that order cures the
     // opposite trap, a DUPLICATE of the value literal that an edit removes.
     // Both orders are deterministic; whichever succeeds wins.
-    let transformed: ReturnType<typeof reparameterizeScript>;
-    let finalCode: string;
+    const parameterizeFirst = () => {
+      const transformed = reparameterizeScript({ code, parameters });
+      return {
+        transformed,
+        finalCode:
+          input.edits === undefined
+            ? transformed.code
+            : applyScriptEdits(transformed.code, input.edits),
+      };
+    };
+    // An edit written against the ORIGINAL script may target text that
+    // aliasing consumed, and a duplicate value literal blocks exactly-once
+    // until an edit removes it — both cured by applying edits first.
+    const editsFirst = () => {
+      const transformed = reparameterizeScript({
+        code: applyScriptEdits(code, input.edits!),
+        parameters,
+      });
+      return { transformed, finalCode: transformed.code };
+    };
+    let outcome: ReturnType<typeof parameterizeFirst>;
     try {
-      transformed = reparameterizeScript({ code, parameters });
-      finalCode =
-        input.edits === undefined
-          ? transformed.code
-          : applyScriptEdits(transformed.code, input.edits);
-    } catch (parameterizeFirstError) {
-      if (input.edits === undefined) throw parameterizeFirstError;
-      transformed = reparameterizeScript({ code: applyScriptEdits(code, input.edits), parameters });
-      finalCode = transformed.code;
+      outcome = parameterizeFirst();
+    } catch (primaryError) {
+      if (input.edits === undefined) throw primaryError;
+      try {
+        outcome = editsFirst();
+      } catch {
+        // Both orders failed: the parameterize-first error names the primary
+        // problem (a genuinely absent literal or a never-matching edit).
+        throw primaryError;
+      }
     }
+    const { transformed, finalCode } = outcome;
     // A reused script that still mentions an old value outside the swapped
     // expression (message prose, a label) will state stale facts when run.
     // Observed live: the model reused correctly but sent the old number in
