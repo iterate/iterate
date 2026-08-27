@@ -203,57 +203,6 @@ export async function agentSmoke(options: AgentSmokeOptions) {
   process.exit(0);
 }
 
-type EvalAuditOptions = {
-  /** OS base URL. Defaults to APP_CONFIG_BASE_URL. */
-  baseUrl?: string;
-  /** Eval project slug or project id. */
-  project: string;
-};
-
-/** Report every agent stream and aggregate model usage for one eval project. */
-export async function evalAudit(options: EvalAuditOptions) {
-  const projectReference = options.project.trim();
-  if (!projectReference) throw new Error("--project is required.");
-
-  using root = await connectItxReady(adminConnection(options), initialConnectionRetryOptions());
-  using project = root.projects.get(projectReference);
-  const [identity, agents] = await Promise.all([project.identity(), project.agents.list()]);
-  const agentStreams = await Promise.all(
-    agents.map(async (agent) => {
-      const snapshot = await project.agents.get(agent.path).processor.snapshot();
-      const usage = snapshot.state.tokenUsage;
-      return {
-        createdAt: agent.createdAt,
-        inputTokens: usage.totalInputTokens,
-        outputTokens: usage.totalOutputTokens,
-        cachedInputTokens: usage.totalCachedInputTokens,
-        reasoningOutputTokens: usage.totalReasoningOutputTokens,
-        path: agent.path,
-        title: agent.title || null,
-        totalTokens: usage.totalInputTokens + usage.totalOutputTokens,
-      };
-    }),
-  );
-  const totals = agentStreams.reduce(
-    (sum, stream) => ({
-      cachedInputTokens: sum.cachedInputTokens + stream.cachedInputTokens,
-      inputTokens: sum.inputTokens + stream.inputTokens,
-      outputTokens: sum.outputTokens + stream.outputTokens,
-      reasoningOutputTokens: sum.reasoningOutputTokens + stream.reasoningOutputTokens,
-      totalTokens: sum.totalTokens + stream.totalTokens,
-    }),
-    {
-      cachedInputTokens: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-      reasoningOutputTokens: 0,
-      totalTokens: 0,
-    },
-  );
-
-  process.stdout.write(`${JSON.stringify({ project: identity, agentStreams, totals }, null, 2)}\n`);
-}
-
 function adminConnection(options: { baseUrl?: string }) {
   const baseUrl =
     options.baseUrl ??

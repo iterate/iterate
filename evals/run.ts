@@ -1,14 +1,85 @@
 import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import process from "node:process";
 
 import { existsSync } from "node:fs";
 import dedent from "dedent";
 import { createCli } from "trpc-cli";
+import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
+import { connectItxReady } from "iterate/node";
+import { readDevServerInfo } from "../apps/os/scripts/lib/dev-server-info.ts";
 
 export async function list() {
   const list = await fs.readdir(import.meta.dirname);
   return list.filter((item) => existsSync(path.join(import.meta.dirname, item, "eval.md")));
+}
+
+type AuditOptions = {
+  /** OS base URL. Defaults to APP_CONFIG_BASE_URL or this worktree's live dev server. */
+  baseUrl?: string;
+};
+
+/** Report every agent stream and aggregate model usage for one eval project. */
+export async function audit(project: string, options?: AuditOptions) {
+  const projectReference = project.trim();
+  if (!projectReference) throw new Error("Project slug or id is required.");
+
+  const baseUrl =
+    options?.baseUrl ||
+    process.env.APP_CONFIG_BASE_URL?.trim() ||
+    readDevServerInfo(path.join(import.meta.dirname, "..", "apps", "os"), {
+      requireLive: true,
+    })?.baseUrl.replace(/\/+$/, "");
+  if (!baseUrl) {
+    throw new Error(
+      "No base URL: pass --base-url, set APP_CONFIG_BASE_URL, or start the local dev server.",
+    );
+  }
+  const secret = process.env.APP_CONFIG_ADMIN_API_SECRET?.trim() || "";
+  if (!secret) throw new Error("APP_CONFIG_ADMIN_API_SECRET is required.");
+
+  using root = await connectItxReady({
+    auth: { type: "admin-secret", secret },
+    baseUrl,
+    headers: cloudflareWorkerVersionOverrideHeaders(process.env),
+  });
+  using projectItx = root.projects.get(projectReference);
+  const [identity, agents] = await Promise.all([projectItx.identity(), projectItx.agents.list()]);
+  const agentStreams = await Promise.all(
+    agents.map(async (agent) => {
+      const snapshot = await projectItx.agents.get(agent.path).processor.snapshot();
+      const usage = snapshot.state.tokenUsage;
+      return {
+        createdAt: agent.createdAt,
+        inputTokens: usage.totalInputTokens,
+        outputTokens: usage.totalOutputTokens,
+        cachedInputTokens: usage.totalCachedInputTokens,
+        reasoningOutputTokens: usage.totalReasoningOutputTokens,
+        path: agent.path,
+        title: agent.title || null,
+        totalTokens: usage.totalInputTokens + usage.totalOutputTokens,
+      };
+    }),
+  );
+  const totals = agentStreams.reduce(
+    (sum, stream) => ({
+      cachedInputTokens: sum.cachedInputTokens + stream.cachedInputTokens,
+      inputTokens: sum.inputTokens + stream.inputTokens,
+      outputTokens: sum.outputTokens + stream.outputTokens,
+      reasoningOutputTokens: sum.reasoningOutputTokens + stream.reasoningOutputTokens,
+      totalTokens: sum.totalTokens + stream.totalTokens,
+    }),
+    {
+      cachedInputTokens: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      reasoningOutputTokens: 0,
+      totalTokens: 0,
+    },
+  );
+
+  return { project: identity, agentStreams, totals };
 }
 
 export default async function run(
@@ -50,7 +121,7 @@ export default async function run(
 
     Include in ${resultFile} every agent stream created in the eval project and the total token usage. You can write helper tools in the \`evals/\` directory. Track a helper in git only if it will help future evals; otherwise give it a gitignored filename.
 
-    Once you know the eval project's slug or id, collect this accounting with \`cd apps/os && doppler run --config <config> -- pnpm cli itx eval-audit --project <slug-or-id>\`. It reports every agent stream plus per-stream and project-wide token usage.
+    Once you know the eval project's slug or id, collect this accounting with \`doppler run --project os --config <config> -- pnpm eval audit <slug-or-id>\`. It reports every agent stream plus per-stream and project-wide token usage.
 
     Also include the coding agent session id in the result so it can be resumed later.
 
