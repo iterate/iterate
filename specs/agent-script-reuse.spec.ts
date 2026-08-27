@@ -55,17 +55,31 @@ test("a repeat request reuses the previous turn's journaled script instead of re
   // turn keeps the assertions about the feature, not the environment.
   await using recovery = new AsyncDisposableStack();
   const sendExpecting = async (message: string, expected: string) => {
+    // Baseline BEFORE the send: the diagnosis below must only see THIS turn's
+    // events — an earlier recovered failure must not poison a later turn, and
+    // a full head window must not hide a fresh one. (The baseline read falls
+    // back to a fresh connection when the previous turn killed this one.)
+    const baseline = await agent.processor
+      .snapshot()
+      .then((snapshot) => snapshot.offset)
+      .catch(async () => {
+        const freshAdmin = recovery.use(await connectAdminItx(baseURL));
+        const freshAgent = freshAdmin.projects.get(fixture.project.id).agents.get(agentPath);
+        return (await freshAgent.processor.snapshot()).offset;
+      });
     await composer.fill(message);
     await send.click();
     try {
       await page.getByText(expected).waitFor();
     } catch {
       // Diagnose before acting: only a journaled "No AI interceptor" failure
-      // means the interceptor died; a merely slow turn gets more waiting, not
-      // a duplicate send.
+      // in THIS turn means the interceptor died; a merely slow turn gets more
+      // waiting, not a duplicate send.
       const freshAdmin = recovery.use(await connectAdminItx(baseURL));
       const freshProject = freshAdmin.projects.get(fixture.project.id);
-      const events = await freshProject.agents.get(agentPath).stream.getEvents({ limit: 300 });
+      const events = await freshProject.agents
+        .get(agentPath)
+        .stream.getEvents({ afterOffset: baseline, limit: 500 });
       const interceptorLost = events.some(
         (event: { type: string; payload: unknown }) =>
           event.type === "events.iterate.com/agent/llm-request-settled" &&
