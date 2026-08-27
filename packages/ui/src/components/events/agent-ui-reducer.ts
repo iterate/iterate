@@ -809,8 +809,22 @@ function reduceAgentUiEvent(
               status: "done",
               outcome:
                 status === "succeeded" ? "completed" : status === "failed" ? "failed" : "cancelled",
+              // partialText is the authoritative superset: it accrued per
+              // provider chunk, while responseText only holds FLUSHED windows
+              // — an interrupt can strand up to one coalescing window's tail
+              // in the buffer. Adopt it whenever it extends what streamed;
+              // the suffix becomes a final window so the reveal animates it.
               ...(partialText !== null &&
-                step.responseText === "" && { responseText: partialText }),
+              partialText.length > step.responseText.length &&
+              partialText.startsWith(step.responseText)
+                ? {
+                    responseText: partialText,
+                    responseWindows: [
+                      ...step.responseWindows,
+                      partialText.slice(step.responseText.length),
+                    ],
+                  }
+                : {}),
               ...(typeof payload.durationMs === "number"
                 ? { durationMs: payload.durationMs }
                 : status === "cancelled"

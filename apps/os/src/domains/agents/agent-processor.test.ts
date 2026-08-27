@@ -270,6 +270,32 @@ describe("AgentProcessor turn lifecycle", () => {
     await h.play(() => h.llm.respond("done"));
   });
 
+  it("a failed tail flush is swallowed: the completed turn still settles succeeded", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("Stream some code")],
+      ["advanceTime", 11_000],
+    );
+
+    const realAppend = h.stream.append.bind(h.stream);
+    h.stream.append = async (...inputs) => {
+      const flush = inputs.find((input) => input.type === RESPONSE_CHUNKS);
+      // The tail flush (sequence 1) dies; the ephemeral signal is lost, the
+      // completed turn must not be.
+      if (flush?.payload?.sequence === 1) throw new Error("journal hiccup");
+      return realAppend(...inputs);
+    };
+
+    await h.play(() => h.llm.calls[0]!.onChunk?.("const answer = "));
+    await h.play(() => h.llm.calls[0]!.onChunk?.("42;"));
+    await h.play(() => h.llm.respond("const answer = 42;"));
+
+    expect(h.events(RESPONSE_CHUNKS)).toMatchObject([{ payload: { sequence: 0 } }]);
+    expect(h.events(SETTLED)).toMatchObject([
+      { payload: { result: { status: "succeeded", text: "const answer = 42;" } } },
+    ]);
+  });
+
   it("backpressures chunk flushes so append order stays provider order", async () => {
     const h = makeAgentHarness();
     await h.play(

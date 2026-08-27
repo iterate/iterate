@@ -226,7 +226,10 @@ export class AgentLlmRequest {
         // recorded, and must not drop a response already delivered whole.
         if (!inFlight.controller.signal.aborted) {
           inFlight.partialText = completion.text;
-          await flushChunkBuffer();
+          // Best-effort: a failed ephemeral flush must not throw a COMPLETED
+          // turn into the failure settle — the success settle below carries
+          // the full text regardless.
+          await flushChunkBuffer().catch(() => {});
         }
         const usage = completion.usage;
         await appendUnlessLostIdempotencyRace(args.append, [

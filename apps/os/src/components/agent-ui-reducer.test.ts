@@ -162,6 +162,51 @@ describe("agent-ui reducer", () => {
     });
   });
 
+  test("a cancelled settle's partialText extends streamed windows with the unflushed tail", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: { role: "user", actor: { type: "user", origin: "web" }, content: "go" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 10,
+        payload: { model: "gpt-test" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-response-chunks",
+        payload: {
+          llmRequestOffset: 10,
+          sequence: 0,
+          chunks: [{ choices: [{ delta: { content: "The lighthouse" } }] }],
+        },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-settled",
+        payload: {
+          requestOffset: 10,
+          result: {
+            status: "cancelled",
+            reason: "interrupted-by-user-input",
+            // The interrupt stranded " keeper" in the coalescing buffer — it
+            // never flushed, but the settled fact carries the full partial.
+            partialText: "The lighthouse keeper",
+          },
+        },
+      },
+    ]);
+
+    const step =
+      state.live?.steps[0] ??
+      state.items.flatMap((item) => (item.kind === "activity" ? item.steps : []))[0];
+    expect(step).toMatchObject({
+      kind: "llm",
+      outcome: "cancelled",
+      responseText: "The lighthouse keeper",
+      responseWindows: ["The lighthouse", " keeper"],
+    });
+  });
+
   test("settles the activity into items when all work completes", () => {
     const state = reduceAll([
       {
