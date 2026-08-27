@@ -130,7 +130,7 @@ describe("renderScriptReuseEnvelope", () => {
     expect(() => render({})).toThrowError(/missing: \[input\]/);
     expect(() => render({ input: 1n, other: 2n })).toThrowError(/unexpected: \[other\]/);
     // The typecheck gate enforces this statically for agent scripts; the
-    // runtime check covers the gate-free lanes with the same message.
+    // runtime check covers runtimes without the gate (CLI, direct RPC).
     expect(() => render({ input: "5489334582393292300937n" })).toThrowError(
       /must be a bigint.*got string/,
     );
