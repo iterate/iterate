@@ -24,7 +24,7 @@ export function failingTest(
   options: { failure: RegExp; timeout?: number },
   name: string,
   body: () => Promise<unknown>,
-): void {
+) {
   test(
     name,
     options.timeout === undefined ? {} : { timeout: options.timeout },
@@ -33,10 +33,7 @@ export function failingTest(
 }
 
 /** The assertion core of {@link failingTest}, callable directly in unit tests. */
-export async function expectFailure(
-  options: { failure: RegExp },
-  body: () => Promise<unknown>,
-): Promise<void> {
+export async function expectFailure(options: { failure: RegExp }, body: () => Promise<unknown>) {
   try {
     await body();
   } catch (error) {
