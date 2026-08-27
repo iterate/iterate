@@ -5,6 +5,7 @@ export type GithubAiLinterRule = {
   files: string[];
   invariant: string;
   severity: "error" | "warning";
+  suggestions: "allowed" | "forbidden";
 };
 
 /**
@@ -26,6 +27,7 @@ const RuleMetadata = z.object({
   files: z.array(z.string().min(1)).min(1),
   id: z.string().regex(/^[a-z0-9-]+(?:\/[a-z0-9-]+)*$/),
   severity: z.enum(["error", "warning"]),
+  suggestions: z.enum(["allowed", "forbidden"]).default("allowed"),
 });
 
 type RulesProject = {
@@ -72,6 +74,7 @@ export async function loadGithubAiLinterRules(
       files: rule.files,
       invariant: rule.invariant,
       severity: rule.severity,
+      suggestions: rule.suggestions,
     };
   }
   return { commitOid: firstFile.commitOid, rules };

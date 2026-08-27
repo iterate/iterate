@@ -546,7 +546,11 @@ test("seeded GitHub AI linter reads editable rules shipped in the config repo", 
     path.startsWith("rules/"),
   );
   expect(rulePaths).toEqual([
-    "rules/structure/no-small-single-use-helper.md",
+    "rules/structure/no-lame-helpers.md",
+    "rules/structure/prefer-clear-conditionals.md",
+    "rules/structure/simplify-truthiness-checks.md",
+    "rules/structure/validate-unknown-shapes.md",
+    "rules/terminology/no-metaphorical-lane-door-seam.md",
     "rules/typescript/explain-type-cast.md",
     "rules/typescript/no-inferable-type-annotation.md",
   ]);

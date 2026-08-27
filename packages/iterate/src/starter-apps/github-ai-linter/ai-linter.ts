@@ -650,14 +650,18 @@ function githubAiLinterReviewComments(analysis: GithubAiLinterPublicationAnalysi
   return analysis.diagnostics
     .filter(({ suppression }) => suppression === null)
     .map(({ classification, diagnostic }) => {
-      const span = diagnostic.fix?.span ?? diagnostic.labels[0]!.span;
+      const fix =
+        analysis.request.rules[diagnostic.ruleName]?.suggestions === "forbidden"
+          ? undefined
+          : diagnostic.fix;
+      const span = fix?.span || diagnostic.labels[0]!.span;
       const body = [
         `**[${diagnostic.ruleName}]**${classification === null ? "" : ` _${classification}_`}`,
         diagnostic.message,
         diagnostic.help,
-        diagnostic.fix === undefined
+        fix === undefined
           ? undefined
-          : `${suggestionFence(diagnostic.fix.content)}suggestion\n${diagnostic.fix.content}\n${suggestionFence(diagnostic.fix.content)}`,
+          : `${suggestionFence(fix.content)}suggestion\n${fix.content}\n${suggestionFence(fix.content)}`,
       ]
         .filter((part) => part !== undefined)
         .join("\n\n");

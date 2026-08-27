@@ -7,6 +7,16 @@ import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
 import { parsePromptSections } from "iterate/processors";
 import { TodoApp } from "iterate/starter-apps/todo";
 
+const githubAiLinterRulePaths = [
+  "rules/structure/no-lame-helpers.md",
+  "rules/structure/prefer-clear-conditionals.md",
+  "rules/structure/simplify-truthiness-checks.md",
+  "rules/structure/validate-unknown-shapes.md",
+  "rules/terminology/no-metaphorical-lane-door-seam.md",
+  "rules/typescript/explain-type-cast.md",
+  "rules/typescript/no-inferable-type-annotation.md",
+];
+
 // An iterate project is, in the abstract, just a fetch function.
 // HTTP clients on the internet can send us Requests, and we will send responses and
 // occasionally send HTTP requests outwards to the world to take influence on it.
@@ -19,13 +29,9 @@ import { TodoApp } from "iterate/starter-apps/todo";
 
 export default class ProjectWorker extends IterateWorkerEntrypoint {
   #aiLintApp = GithubAiLinter.create(this.env, {
-    policyVersion: "2",
+    policyVersion: "5",
     rules: {
-      paths: [
-        "rules/structure/no-small-single-use-helper.md",
-        "rules/typescript/explain-type-cast.md",
-        "rules/typescript/no-inferable-type-annotation.md",
-      ],
+      paths: githubAiLinterRulePaths,
       repoPath: "/repos/config",
     },
   });
