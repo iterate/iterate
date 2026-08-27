@@ -1200,23 +1200,17 @@ export class StreamEventSender {
   }
 
   /**
-   * A halted subscription's only automatic way back: the antidote deploy.
-   * The halt records the deploy version that gave up; a send check under a
-   * DIFFERENT version appends one `subscription-delivery-resumed`, giving the
-   * receiver a fresh bounded ladder — a receiver fixed by the deploy recovers
-   * with no operator, and a still-broken one re-halts under the new version
-   * and stays quiet until the next deploy. Halts recorded before the version
-   * stamp existed are grandfathered: without a recorded version, "same deploy
-   * that just gave up" and "antidote deploy" are indistinguishable, and
-   * guessing would loop a same-version halt — those still need an operator's
-   * explicit resumeSubscription call. Mirrors the keepalive crash-loop breaker's version reset
-   * (docs/writing-stream-processors.md): a halt is a breaker, and a version
-   * change is the antidote that earns exactly one immediate retry.
+   * Auto-resume a halted subscription after a deploy. The halt remembers
+   * which deploy version gave up; when a send check runs under a different
+   * version, resume once. If the new deploy fixed the receiver, delivery
+   * just works again; if not, it halts again and waits for the next deploy.
+   * Halts with no recorded version are left alone — we can't tell "new
+   * deploy" from "the deploy that just gave up", and guessing wrong would
+   * loop — so those still need an operator to call resumeSubscription.
    *
-   * Without this, a halt was forever unless a human noticed the one red row:
-   * the 2026-08-12 preview_8 media incident halted a project-worker feed
-   * ~30 seconds after a redeploy and every later append stalled silently —
-   * runtime state even looks clean because the halt clears the backoff ladder.
+   * Before this, a halt was permanent unless a human spotted it: on
+   * 2026-08-12 a preview_8 media feed halted ~30s after a redeploy and
+   * silently dropped everything after, while runtime state looked clean.
    */
   #resumeHaltFromAntidoteDeploy(
     name: string,
