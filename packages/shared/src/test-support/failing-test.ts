@@ -1,10 +1,21 @@
-import { test } from "vitest";
-
 /**
- * A pinned-bug test: the body asserts the DESIRED behavior, and while the bug
- * exists it must fail with an error matching `failure`. Three outcomes:
+ * Pinned-bug tests: the body asserts the DESIRED behavior, and while the bug
+ * exists it must fail with an error matching the given pattern.
  *
- * - body fails matching `failure` → the test passes (the bug is still pinned)
+ * `failing` wraps any test-registering function — vitest's `test`,
+ * playwright's `test`, their `.only`/`.skip` variants — and returns one with
+ * the same shape, so fixtures, options objects, and timeouts pass straight
+ * through:
+ *
+ * ```ts
+ * const fail = failing(test, /SAME-BOOT STALENESS/);
+ * fail("a userspace facet rebuilds on a source commit", { timeout: 240_000 }, async () => {
+ *   // asserts the DESIRED behavior; today it throws the matched error
+ * });
+ * ```
+ *
+ * Three outcomes:
+ * - body fails matching the pattern → the test passes (the bug is still pinned)
  * - body fails with anything else → the test fails, naming both errors — this
  *   is what a bare `test.fails` cannot do: there, a body that starts failing
  *   for an unrelated reason (infra, typo) stays silently green and the pin
@@ -20,19 +31,26 @@ import { test } from "vitest";
  * apps/os/e2e/vitest/userspace-facet-source-version.e2e.test.ts for the
  * worked example (its predecessor `test.fails` false-alarmed 7+ times).
  */
-export function failingTest(
-  options: { failure: RegExp; timeout?: number },
-  name: string,
-  body: () => Promise<unknown>,
-) {
-  test(
-    name,
-    options.timeout === undefined ? {} : { timeout: options.timeout },
-    async () => await expectFailure(options, body),
-  );
+export function failing<TestFn extends (...args: any[]) => any>(
+  test: TestFn,
+  failure: RegExp,
+): TestFn {
+  const register = (...args: any[]) => {
+    const body = args.at(-1);
+    if (typeof body !== "function") {
+      throw new Error("failing(test, pattern): the last argument must be the test body");
+    }
+    // The body's own arguments pass through untouched — playwright fixtures
+    // ({ page, ... }, testInfo), vitest context — whatever the wrapped test
+    // function provides.
+    const wrapped = async (...bodyArgs: any[]) =>
+      await expectFailure({ failure }, async () => await body(...bodyArgs));
+    return test(...args.slice(0, -1), wrapped);
+  };
+  return register as TestFn;
 }
 
-/** The assertion core of {@link failingTest}, callable directly in unit tests. */
+/** The assertion core of {@link failing}, callable directly in unit tests. */
 export async function expectFailure(options: { failure: RegExp }, body: () => Promise<unknown>) {
   try {
     await body();
@@ -48,6 +66,6 @@ export async function expectFailure(options: { failure: RegExp }, body: () => Pr
   // mistaken for a candidate failure.
   throw new Error(
     `The test should have failed with /${options.failure.source}/ but it succeeded. ` +
-      `If the pinned bug is fixed, delete the failingTest wrapper and keep the body as a plain test.`,
+      `If the pinned bug is fixed, delete the failing() wrapper and keep the body as a plain test.`,
   );
 }

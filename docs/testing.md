@@ -534,17 +534,26 @@ PR remain ordinary blockers. For an unrelated test:
 Once the remaining CI is green, the quarantine is explicit coverage debt, not
 a reason to keep the unrelated PR open indefinitely.
 
-### Pinned bugs: `failingTest`, not bare `test.fails`
+### Pinned bugs: `failing(test, …)`, not bare `test.fails`
 
-For a KNOWN bug held open on purpose, use
-`failingTest({ failure: /REGEX/ }, name, body)` from
-`@iterate-com/shared/test-support/failing-test`: the body asserts the desired
-behavior and must fail with an error matching the regex. A different failure
-goes red naming both errors (a bare `test.fails` stays silently green when
-the body starts failing for an unrelated reason), and a succeeding body goes
-red with delete-the-wrapper instructions. Write the body so the bug throws a
-distinctive message, and so conditions that prove nothing (a coincidental
-restart masking the bug for one observation) retry instead of succeeding —
+For a KNOWN bug held open on purpose, wrap the runner's own test function
+with `failing` from `@iterate-com/shared/test-support/failing-test` — it
+works for vitest and playwright alike, passing fixtures and options through:
+
+```ts
+const fail = failing(test, /SAME-BOOT STALENESS/);
+fail("a userspace facet rebuilds on a source commit", { timeout: 240_000 }, async () => {
+  // asserts the DESIRED behavior; today it throws the matched error
+});
+```
+
+The body asserts the desired behavior and must fail with an error matching
+the pattern. A different failure goes red naming both errors (a bare
+`test.fails` stays silently green when the body starts failing for an
+unrelated reason), and a succeeding body goes red with delete-the-wrapper
+instructions. Write the body so the bug throws a distinctive message, and so
+conditions that prove nothing (a coincidental restart masking the bug for
+one observation) retry instead of succeeding —
 `apps/os/e2e/vitest/userspace-facet-source-version.e2e.test.ts` is the
 worked example; its `test.fails` predecessor false-alarmed 7+ times.
 
