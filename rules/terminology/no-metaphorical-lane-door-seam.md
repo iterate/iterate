@@ -25,4 +25,5 @@ A generic comment that merely restates the metaphor is not an excuse.
 Do not attach a suggested-change patch or propose a replacement identifier.
 The metaphor often means the surrounding model or explanation is unclear, and
 the right fix may rename several related concepts or rewrite a whole paragraph.
-State what is unclear and leave the scope and wording of the fix to the author.
+State what is unclear without telling the author what to change. Leave the
+scope and wording of the fix to the author.

@@ -7,7 +7,7 @@ import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
 import { parsePromptSections } from "iterate/processors";
 import { TodoApp } from "iterate/starter-apps/todo";
 
-const reviewLane = [
+const githubAiLinterRulePaths = [
   "rules/structure/no-lame-helpers.md",
   "rules/structure/prefer-clear-conditionals.md",
   "rules/structure/simplify-truthiness-checks.md",
@@ -29,9 +29,9 @@ const reviewLane = [
 
 export default class ProjectWorker extends IterateWorkerEntrypoint {
   #aiLintApp = GithubAiLinter.create(this.env, {
-    policyVersion: "4",
+    policyVersion: "5",
     rules: {
-      paths: reviewLane,
+      paths: githubAiLinterRulePaths,
       repoPath: "/repos/config",
     },
   });

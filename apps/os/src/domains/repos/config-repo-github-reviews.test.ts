@@ -337,7 +337,7 @@ describe("userspace GitHub pull-request routing", () => {
         type: "events.iterate.com/agent/configured",
       },
       {
-        idempotencyKey: "github-ai-linter/agent-policy:v4",
+        idempotencyKey: "github-ai-linter/agent-policy:v5",
         payload: {
           key: "github-ai-linter/policy",
           llmRequestPolicy: { behaviour: "dont-trigger-request" },
@@ -399,14 +399,14 @@ describe("userspace GitHub pull-request routing", () => {
       {
         type: "events.iterate.com/github-ai-linter/analysis-requested",
         idempotencyKey:
-          "github-ai-linter/analysis:install-789:iterate:101:acme/widgets:7:2:4:rules-abc:base-abc:head-abc",
+          "github-ai-linter/analysis:install-789:iterate:101:acme/widgets:7:2:5:rules-abc:base-abc:head-abc",
         payload: {
           appSlug: "iterate",
           baseSha: "base-abc",
           connection: "install-789",
           headSha: "head-abc",
           policyVersion: "2",
-          promptVersion: "4",
+          promptVersion: "5",
           pullRequestNumber: 7,
           repository: { id: 101, owner: "acme", repo: "widgets" },
           rules,
@@ -433,6 +433,7 @@ describe("userspace GitHub pull-request routing", () => {
     expect(task).toContain("diagnosticKey");
     expect(task).toContain('\\"kind\\": \\"suggestion\\"');
     expect(task).toContain('suggestions: \\"forbidden\\"');
+    expect(task).toContain("do not tell the author what to change");
     expect(task).toContain("the right fix may require renaming related concepts");
     expect(task).toContain("iterate-lint-disable");
     expect(task).toContain("iterate-lint-enable");
@@ -532,9 +533,9 @@ describe("userspace GitHub pull-request routing", () => {
       ({ type }) => type === "events.iterate.com/github-ai-linter/analysis-requested",
     );
     expect(analyses.map(({ idempotencyKey }) => idempotencyKey)).toEqual([
-      "github-ai-linter/analysis:install-789:iterate:101:acme/widgets:7:2:4:rules-abc:base-abc:head-one",
-      "github-ai-linter/analysis:install-789:iterate:101:acme/widgets:7:2:4:rules-abc:base-abc:head-two",
-      "github-ai-linter/analysis:install-789:iterate:101:acme/widgets:7:2:4:rules-abc:base-abc:head-two",
+      "github-ai-linter/analysis:install-789:iterate:101:acme/widgets:7:2:5:rules-abc:base-abc:head-one",
+      "github-ai-linter/analysis:install-789:iterate:101:acme/widgets:7:2:5:rules-abc:base-abc:head-two",
+      "github-ai-linter/analysis:install-789:iterate:101:acme/widgets:7:2:5:rules-abc:base-abc:head-two",
     ]);
     const tasks = eventsFor(test.agentAppendBatches, linterPath).filter(({ idempotencyKey }) =>
       idempotencyKey?.startsWith("github-ai-linter/task:"),
@@ -603,7 +604,7 @@ describe("userspace GitHub pull-request routing", () => {
       ),
     ).toMatchObject({
       idempotencyKey:
-        "github-ai-linter/analysis:install-789:iterate:101:renamed/widgets-next:7:2:4:rules-abc:base-abc:head-abc",
+        "github-ai-linter/analysis:install-789:iterate:101:renamed/widgets-next:7:2:5:rules-abc:base-abc:head-abc",
       payload: { repository: { id: 101, owner: "renamed", repo: "widgets-next" } },
     });
     expect(JSON.stringify(linterAgentEvents)).toContain(

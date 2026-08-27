@@ -30,6 +30,29 @@ const analysisRequest = (headSha: string): GithubAiLinterAnalysisRequested => ({
 });
 
 describe("GithubAiLinterProcessor", () => {
+  it("replays analysis requests written before per-rule suggestion policy", async () => {
+    const historicalRequest = analysisRequest("head-abc");
+    delete (historicalRequest.rules["structure/example-rule"] as any).suggestions;
+    const h = makeProcessorHarness<GithubAiLinterProcessorContract, GithubAiLinterProcessor>({
+      createProcessor: (deps) =>
+        new GithubAiLinterProcessor({
+          path: deps.path,
+          projectId: deps.projectId,
+          publishReview: vi.fn(),
+          stream: deps.stream,
+        }),
+    });
+
+    await h.append({
+      type: githubAiLinterEventTypes.analysisRequested,
+      payload: historicalRequest,
+    });
+
+    expect(h.state().currentAnalysis?.request.rules).toMatchObject({
+      "structure/example-rule": { suggestions: "allowed" },
+    });
+  });
+
   it("publishes visible diagnostics as one comment review and skips a suppressed-only result", async () => {
     const createCheckRun = vi.fn(async () => ({
       data: {
@@ -334,16 +357,17 @@ describe("GithubAiLinterProcessor", () => {
         {
           classification: "new",
           diagnostic: {
-            diagnosticKey: "terminology/no-metaphorical-lane-door-seam:src/example.ts:review-lane",
+            diagnosticKey:
+              "terminology/no-metaphorical-lane-door-seam:src/example.ts:unclear-identifier",
             filename: "src/example.ts",
             fix: {
               content: "const reviewQueue = rules;",
               kind: "suggestion",
               span: { endLine: 10, startLine: 10 },
             },
-            help: "Explain the actual role of this value and rename the surrounding concepts.",
+            help: "The surrounding concepts do not make this identifier's role clear.",
             labels: [{ span: { endLine: 10, startLine: 10 } }],
-            message: "`reviewLane` uses lane as a metaphor.",
+            message: "The identifier uses a banned metaphor.",
             ruleName: "terminology/no-metaphorical-lane-door-seam",
             severity: "error",
           },
@@ -371,8 +395,8 @@ describe("GithubAiLinterProcessor", () => {
           {
             body: [
               "**[terminology/no-metaphorical-lane-door-seam]** _new_",
-              "`reviewLane` uses lane as a metaphor.",
-              "Explain the actual role of this value and rename the surrounding concepts.",
+              "The identifier uses a banned metaphor.",
+              "The surrounding concepts do not make this identifier's role clear.",
             ].join("\n\n"),
             line: 10,
             path: "src/example.ts",

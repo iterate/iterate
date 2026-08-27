@@ -863,7 +863,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "Do not attach a suggested-change patch or propose a replacement identifier.\n" +
       "The metaphor often means the surrounding model or explanation is unclear, and\n" +
       "the right fix may rename several related concepts or rewrite a whole paragraph.\n" +
-      "State what is unclear and leave the scope and wording of the fix to the author.\n",
+      "State what is unclear without telling the author what to change. Leave the\n" +
+      "scope and wording of the fix to the author.\n",
   },
   {
     path: "rules/typescript/explain-type-cast.md",
@@ -932,7 +933,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "import { parsePromptSections } from \"iterate/processors\";\n" +
       "import { TodoApp } from \"iterate/starter-apps/todo\";\n" +
       "\n" +
-      "const reviewLane = [\n" +
+      "const githubAiLinterRulePaths = [\n" +
       "  \"rules/structure/no-lame-helpers.md\",\n" +
       "  \"rules/structure/prefer-clear-conditionals.md\",\n" +
       "  \"rules/structure/simplify-truthiness-checks.md\",\n" +
@@ -954,9 +955,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "export default class ProjectWorker extends IterateWorkerEntrypoint {\n" +
       "  #aiLintApp = GithubAiLinter.create(this.env, {\n" +
-      "    policyVersion: \"4\",\n" +
+      "    policyVersion: \"5\",\n" +
       "    rules: {\n" +
-      "      paths: reviewLane,\n" +
+      "      paths: githubAiLinterRulePaths,\n" +
       "      repoPath: \"/repos/config\",\n" +
       "    },\n" +
       "  });\n" +
