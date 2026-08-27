@@ -11,6 +11,9 @@
 // roll-ups whose thinking/code text streams token-by-token while the agent
 // works. A header toggle flips to the raw event feed for debugging.
 //
+// A `seed` param opens the composer with text already in it but UNSENT — how
+// /notes starts a conversation about a note.
+//
 // A brand-new chat is just this screen pointed at a fresh /agents/mobile/<ts>
 // path: reading lazily initializes the underlying stream, but the platform
 // requires an explicit agent.create() before the first message lands
@@ -77,10 +80,14 @@ import { buildStreamViewerUrl } from "../../../lib/stream-url.ts";
 import { colors, radius, spacing } from "../../../lib/theme.ts";
 
 export default function ChatScreen() {
-  const { projectId, slug, path } = useLocalSearchParams<{
+  const { projectId, slug, path, seed } = useLocalSearchParams<{
     projectId: string;
     slug?: string;
     path: string;
+    /** Text to open the composer with, unsent. The /notes screen uses it to
+     * hand a note-chat its pointer to the note (lib/notes.ts noteChatSeed) —
+     * the question underneath it is the human's to write. */
+    seed?: string;
   }>();
 
   // The thread query is keyed by base URL (live pushes land under the same
@@ -140,7 +147,7 @@ export default function ChatScreen() {
     enabled: baseUrl !== undefined,
   });
 
-  const [draft, setDraft] = useState("");
+  const [draft, setDraft] = useState(seed || "");
   const [attachments, setAttachments] = useState<PickedImage[]>([]);
   const [viewMode, setViewMode] = useState<"chat" | "events">("chat");
   const copyStreamUrl = useMutation({

@@ -7,9 +7,16 @@ import type {
 import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { waitForPreviewRolloutBeforeProjectCreation } from "@iterate-com/shared/test-support/preview-rollout-gate";
-import { connectItxReady, type ItxInitialConnectionRetry } from "iterate/node";
+import {
+  connectItxReady,
+  type ItxInitialConnectionRetry,
+  type ProjectAiInterceptor,
+} from "iterate/node";
 import { doppler } from "../../apps/os/scripts/dev.ts";
 import { mintForgedAccessToken, mintForgedIdToken } from "../../scripts/auth/forge-token.ts";
+// Lazy circular import (function-call-time only): the helper dials its
+// dedicated session through connectAdminItx below.
+import { installResilientAiInterceptor } from "./resilient-ai-interceptor.ts";
 
 type OsPlaywrightAuthConfig = {
   adminApiSecret: string;
@@ -120,6 +127,17 @@ export async function createProjectFixture(
       project: projectFixtures[0]!.project,
       projects: projectFixtures.map(({ project }) => project),
       session,
+      /** Admin itx for the fixture's deployment; dispose with `using`. */
+      connectAdmin: () => connectAdminItx(baseUrl),
+      /** Churn-surviving `intercepted/*` handler for the fixture's first
+       * project — `installResilientAiInterceptor` on a dedicated connection.
+       * Dispose with `await using`. Guide: docs/intercepted-models.md. */
+      interceptAi: (handler: ProjectAiInterceptor) =>
+        installResilientAiInterceptor({
+          baseUrl,
+          projectId: projectFixtures[0]!.project.id,
+          handler,
+        }),
       async [Symbol.asyncDispose]() {
         await Promise.all(projectFixtures.map((fixture) => fixture[Symbol.asyncDispose]()));
       },
@@ -133,11 +151,16 @@ export async function createProjectFixture(
 /**
  * Admin itx handle for specs that drive a fixture project server-side (e.g.
  * append events and assert the browser repaints from the push). Dispose with
- * `using` — the handle owns its WebSocket.
+ * `using` — the handle owns its WebSocket. `onWebSocketClose` observes the
+ * socket dying, however it dies — the hook a reconnect loop hangs off (see
+ * resilient-ai-interceptor.ts).
  */
-export async function connectAdminItx(baseUrl: string) {
+export async function connectAdminItx(
+  baseUrl: string,
+  options?: { onWebSocketClose?: (close: { code: number; reason: string }) => void },
+) {
   const config = await resolveOsPlaywrightAuthConfig();
-  return connectPlaywrightAdminItx({ baseUrl, config });
+  return connectPlaywrightAdminItx({ baseUrl, config, ...options });
 }
 
 /** The OS admin API secret, for specs that dial project-scoped itx handles directly. */
@@ -174,6 +197,7 @@ async function createAdminProjectAfterPreviewRollout(input: {
 async function connectPlaywrightAdminItx(input: {
   baseUrl: string;
   config: OsPlaywrightAuthConfig;
+  onWebSocketClose?: (close: { code: number; reason: string }) => void;
 }) {
   return test.step("connect admin itx", () =>
     connectItxReady(
@@ -181,6 +205,9 @@ async function connectPlaywrightAdminItx(input: {
         auth: { type: "admin-secret", secret: input.config.adminApiSecret },
         baseUrl: input.baseUrl,
         headers: cloudflareWorkerVersionOverrideHeaders(process.env),
+        ...(input.onWebSocketClose === undefined
+          ? {}
+          : { onWebSocketClose: input.onWebSocketClose }),
       },
       {
         retryInitialConnection: {

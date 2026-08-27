@@ -1,8 +1,9 @@
 import { describe, expect, test } from "vitest";
+import { parsePromptSections } from "iterate/processors";
 import {
   AGENT_INITIAL_DEBOUNCE_MS,
   agentCreationForPath,
-  agentSystemPromptContextEvent,
+  agentSystemPromptContextEvents,
   DEFAULT_AGENT_SYSTEM_PROMPT,
 } from "./agent-defaults.ts";
 
@@ -87,20 +88,46 @@ describe("agentCreationForPath", () => {
       idempotencyKey: `agent/model-configured:v2:${PROJECT_ID}:/agents/demo`,
       payload: { config: { llm: { model: "openai/gpt-5.6-terra" } } },
     });
-    expect(
-      defaults.events.find(
-        (event) =>
-          event.type === "events.iterate.com/agents/context-added" &&
-          event.payload.key === "agent/system-prompt",
-      )?.payload,
-    ).toEqual({
-      role: "system",
-      key: "agent/system-prompt",
+    // The sectionized default prompt file, parsed at append time — ONE
+    // keyed event per <section key>, tags stripped, in file order (the
+    // batch commits atomically in input order, so file order becomes
+    // offset order becomes document order).
+    const promptEvents = defaults.events.filter(
+      (event) =>
+        event.type === "events.iterate.com/agents/context-added" &&
+        event.payload.key !== undefined &&
+        event.payload.key !== "agent/boot-context",
+    );
+    expect(promptEvents.map((event) => event.payload)).toEqual(
+      parsePromptSections({
+        content: DEFAULT_AGENT_SYSTEM_PROMPT,
+        fallbackKey: "agent/system-prompt",
+      }).map((section) => ({
+        role: "system",
+        key: section.key,
+        content: section.content,
+        // The flat context payload defaults the policy on every role; the
+        // processor ignores it on system items.
+        llmRequestPolicy: { behaviour: "after-current-request" },
+      })),
+    );
+  });
+
+  test("the shipped prompt file parses cleanly into arbitrary-keyed sections", () => {
+    // Keys are authoring conventions the kernel never interprets — but the
+    // codemode-tag template targets "output-formatting" by that convention,
+    // so the shipped file must keep defining it.
+    const sections = parsePromptSections({
       content: DEFAULT_AGENT_SYSTEM_PROMPT,
-      // The flat context payload defaults the policy on every role; the
-      // processor ignores it on system items.
-      llmRequestPolicy: { behaviour: "after-current-request" },
+      fallbackKey: "agent/system-prompt",
     });
+    expect(sections.length).toBeGreaterThanOrEqual(4);
+    expect(sections.map((section) => section.key)).toContain("output-formatting");
+    // Tags are authoring syntax: none survive into model-visible content.
+    for (const section of sections) {
+      expect(section.content).not.toContain("<section");
+      expect(section.content).not.toContain("</section>");
+    }
   });
 
   test("lets a routed agent choose one initial prompt without changing birth", () => {
@@ -121,10 +148,12 @@ describe("agentCreationForPath", () => {
     );
 
     expect(creation.birthCertificate.payload).toEqual({});
+    // An untagged prompt parses to one "agent/system-prompt" section (an
+    // authoring convention — keys are arbitrary strings to the kernel).
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toMatchObject({
-      idempotencyKey: `agent/system-prompt:slack:v7:${PROJECT_ID}:/agents/slack/test`,
-      payload: { content: "Slack execution contract" },
+      idempotencyKey: `agent/system-prompt-section:v3:slack:v7:${PROJECT_ID}:/agents/slack/test:0:agent/system-prompt`,
+      payload: { key: "agent/system-prompt", content: "Slack execution contract" },
     });
   });
 
@@ -144,8 +173,8 @@ describe("agentCreationForPath", () => {
     const first = promptEvent("1", "first policy");
     expect(promptEvent("1", "first policy")).toEqual(first);
     expect(promptEvent("2", "changed policy")).toMatchObject({
-      idempotencyKey: `agent/system-prompt:routed:v2:${PROJECT_ID}:/agents/routed/test`,
-      payload: { content: "changed policy", key: "agent/system-prompt" },
+      idempotencyKey: `agent/system-prompt-section:v3:routed:v2:${PROJECT_ID}:/agents/routed/test:0:agent/system-prompt`,
+      payload: { key: "agent/system-prompt", content: "changed policy" },
     });
   });
 
@@ -213,25 +242,31 @@ describe("agentCreationForPath", () => {
   });
 });
 
-describe("agentSystemPromptContextEvent", () => {
-  test("keeps logical context identity separate from durable policy revision", () => {
-    const first = agentSystemPromptContextEvent({
+describe("agentSystemPromptContextEvents", () => {
+  test("keeps logical context identity separate from durable policy revision, per section", () => {
+    const first = agentSystemPromptContextEvents({
       content: "first policy",
-      idempotencyKey: "agent/test-system-prompt:v1",
+      idempotencyKeyBase: "agent/test-system-prompt:v1",
     });
-    const retry = agentSystemPromptContextEvent({
+    const retry = agentSystemPromptContextEvents({
       content: "first policy",
-      idempotencyKey: "agent/test-system-prompt:v1",
+      idempotencyKeyBase: "agent/test-system-prompt:v1",
     });
-    const changed = agentSystemPromptContextEvent({
+    const changed = agentSystemPromptContextEvents({
       content: "changed policy",
-      idempotencyKey: "agent/test-system-prompt:v2",
+      idempotencyKeyBase: "agent/test-system-prompt:v2",
     });
 
     expect(retry).toEqual(first);
-    expect(first.idempotencyKey).toBe("agent/test-system-prompt:v1");
-    expect(changed.idempotencyKey).toBe("agent/test-system-prompt:v2");
-    expect(changed.payload).toMatchObject({ key: "agent/system-prompt", role: "system" });
+    expect(first.map((event) => event.idempotencyKey)).toEqual([
+      "agent/test-system-prompt:v1:0:agent/system-prompt",
+    ]);
+    expect(changed).toMatchObject([
+      {
+        idempotencyKey: "agent/test-system-prompt:v2:0:agent/system-prompt",
+        payload: { role: "system", key: "agent/system-prompt", content: "changed policy" },
+      },
+    ]);
   });
 });
 

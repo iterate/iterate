@@ -33,7 +33,7 @@ import { AgentBinding, AgentSummary, AgentSummaryUpdated } from "./agent-presenc
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "6.0.0",
+  version: "7.0.0",
   description:
     "Maintains model-visible history, schedules debounced offset-identified LLM turns, runs " +
     "them through the Workers AI transport, and executes scripts through the capability host. " +
@@ -179,22 +179,86 @@ export const AgentProcessorContract = defineProcessorContract({
       .meta({ description: "The agent's complete configuration, every knob defaulted." }),
     contextItems: z
       .array(
-        z.object({
-          offset: z.number().int().positive().meta({
-            description: "Stream offset of the context-added event this item reduced from.",
+        z.discriminatedUnion("kind", [
+          z.object({
+            kind: z.literal("request").meta({
+              description:
+                "A send stamp: the llm-request-requested event, rendered permanently at " +
+                'its position as the "Requested at:" line.',
+            }),
+            offset: z.number().int().positive().meta({
+              description: "Stream offset of the llm-request-requested event.",
+            }),
+            requestedAt: z.iso.datetime().meta({
+              description: "The requested event's own journaled createdAt.",
+            }),
           }),
-          payload: agentContextItemSchema(),
-        }),
+          z.object({
+            kind: z.literal("section").meta({
+              description:
+                "A keyed section occurrence. The STANDING DOCUMENT is derived at render: " +
+                "the collection's leading run of section items (up to the first message, " +
+                "request stamp, or superseding occurrence) merges into ONE tagged system " +
+                "message; every later section item renders at its position as a " +
+                "<section key> block.",
+            }),
+            offset: z
+              .number()
+              .int()
+              .positive()
+              .meta({
+                description:
+                  "Stream offset of the event whose content this occurrence holds — updated " +
+                  "in place when an un-sent occurrence coalesces.",
+              }),
+            key: z
+              .string()
+              .min(1)
+              .meta({
+                description:
+                  "The section's stable identity — an arbitrary string the kernel never " +
+                  "interprets. Re-adding a key IS the update; agents/context-rewritten " +
+                  "addresses it for deliberate rewrites.",
+              }),
+            supersedes: z
+              .number()
+              .int()
+              .positive()
+              .optional()
+              .meta({
+                description:
+                  "Offset of the key's prior occurrence — stamped by the fold when an " +
+                  "update lands after the prior occurrence was sent; absent on a first " +
+                  "occurrence. Everything above a superseding occurrence visibly predates " +
+                  "it, and the whole prefix stays byte-stable.",
+              }),
+            payload: agentContextItemSchema(),
+          }),
+          z.object({
+            kind: z.literal("message").meta({
+              description: "A plain conversation item at its offset.",
+            }),
+            offset: z.number().int().positive().meta({
+              description: "Stream offset of the context-added event this item reduced from.",
+            }),
+            payload: agentContextItemSchema(),
+          }),
+        ]),
       )
       .default([])
       .meta({
         description:
-          "The reduced conversation: ONE ordered list of every model-visible item (system items " +
-          "sit in place — providers accept system/developer content mid-history). A keyed item " +
-          "no request has covered yet is replaced in place by an update with the same key; a " +
-          "covered one appends a new occurrence (see lastLlmRequestOffset). Compaction " +
-          "restructures the list: system items move to the front (latest occurrence per key), " +
-          "the summary follows, then everything after the barrier.",
+          "Every model-visible item, one offset-ordered collection: section occurrences, " +
+          "conversation messages, and the permanent per-request send stamps. A keyed add " +
+          "whose latest occurrence no request has sent yet edits that item in place (the " +
+          "birth window — free); otherwise it appends at the tail with `supersedes` " +
+          "pointing at the prior occurrence. On an unforked project the derived standing " +
+          "document is byte-identical to the authored prompt file, whose sections keep " +
+          "their file order. Keys are arbitrary strings; authors control placement through " +
+          "append order (a worker's hot content, e.g. AGENTS.md, lands after the birth " +
+          "batch and so renders last in the document). Compaction rebuilds the collection: " +
+          "each key's newest occurrence in first-appearance order, unkeyed system facts, " +
+          "the summary, then everything after the barrier.",
       }),
     lastLlmRequestOffset: z
       .number()
@@ -204,9 +268,9 @@ export const AgentProcessorContract = defineProcessorContract({
       .meta({
         description:
           "Offset of the newest llm-request-requested event (bumped at least to the barrier " +
-          "by a compaction item). Context items at or below it have been covered by a " +
-          "request: a keyed update to a covered item appends instead of replacing in place, " +
-          "keeping every covered prompt reconstructible.",
+          "by a compaction item) — barrier bookkeeping. Its one remaining behavioral job is " +
+          "the legacy keyed-vocabulary mapping: a keyed update to a section whose latest " +
+          "occurrence a request has covered appends as latest instead of collapsing.",
       }),
     latestExternalTriggerOffset: z
       .number()
@@ -296,9 +360,23 @@ export const AgentProcessorContract = defineProcessorContract({
           "Consecutive agent-loop-triggered turns; reset by any external trigger and by " +
           "agent/resumed.",
       }),
-    activeScriptExecutionIds: z.array(z.string()).default([]).meta({
-      description: "Capability-host executions this agent requested and has not seen settle.",
-    }),
+    activeScriptExecutions: z
+      .array(
+        z.object({
+          executionId: z.string().meta({ description: "The capability-host execution." }),
+          requestedAt: z.iso.datetime().meta({
+            description:
+              "The script-run-requested event's own journaled createdAt. Settlement " +
+              "rendering derives the script's duration from this and the settled event's " +
+              "createdAt — deterministic (both journaled), never wall clock — so slow " +
+              "operations become knowable to the model.",
+          }),
+        }),
+      )
+      .default([])
+      .meta({
+        description: "Capability-host executions this agent requested and has not seen settle.",
+      }),
     summary: AgentSummary.prefault({}).meta({
       description:
         "Human- or agent-written presentation summary. Every writer appends the same " +
@@ -345,8 +423,56 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agents/context-added": {
       description:
         "Model-visible context arrived (user message, developer note, assistant output, system " +
-        "item). The single source of truth for what the LLM sees.",
+        "item) — the everyday event, the only one most authors ever use. With `key`: keyed " +
+        "standing content, one event per section, and RE-ADDING A KEY IS THE UPDATE — an " +
+        "occurrence no request has sent yet coalesces in place (free; the whole birth " +
+        "window), a sent one appends at the tail at its moment in time with `supersedes` " +
+        "stamped by the fold. A multi-section write (a parsed prompt file) is a BATCH of " +
+        "these, one per section: the batch commits atomically in input order, so file order " +
+        "becomes offset order becomes document order. Without a key: one turn at its offset.",
       payloadSchema: agentContextItemSchema(),
+    },
+    "events.iterate.com/agents/context-rewritten": {
+      description:
+        "Deliberate HISTORY REWRITING — rare, audited, named to discourage casual use: it " +
+        "changes what PAST render positions contain, busting the provider cache from the " +
+        "standing document down, and a replaced covered behavioral rule leaves visible " +
+        "history contradicting the instruction (the scenario-3a anti-pattern in " +
+        "docs/prompt-sections-demo.html). For redaction (the author supplies the replacement " +
+        "text) and un-saying; the everyday update is re-adding the key on " +
+        'agents/context-added. `key: "*"` with delete removes EVERYTHING — standing ' +
+        "document and timeline both — " +
+        "(guidance: don't, unless you want a lobotomised agent; the event's audit trail is " +
+        "the safeguard). Never triggers a turn by itself.",
+      payloadSchema: z
+        .strictObject({
+          op: z.enum(["replace", "delete"]).meta({ description: "The operation." }),
+          key: z
+            .string()
+            .min(1)
+            .meta({ description: 'The section to rewrite, or "*" (delete only) for everything.' }),
+          content: z
+            .string()
+            .optional()
+            .meta({ description: "Replacement content (replace only)." }),
+        })
+        .superRefine((payload, ctx) => {
+          if (payload.op === "replace") {
+            if (payload.content === undefined) {
+              ctx.addIssue({ code: "custom", path: ["content"], message: "replace needs content" });
+            }
+            if (payload.key === "*") {
+              ctx.addIssue({
+                code: "custom",
+                path: ["key"],
+                message: 'replace targets one section; "*" is delete-only',
+              });
+            }
+          }
+          if (payload.op === "delete" && payload.content !== undefined) {
+            ctx.addIssue({ code: "custom", path: ["op"], message: "delete carries no content" });
+          }
+        }),
     },
     "events.iterate.com/agent/created": {
       description: "The agent exists. Payload is open — provenance may ride along.",
@@ -416,6 +542,16 @@ export const AgentProcessorContract = defineProcessorContract({
         "request already is open — a late debounced intent is a harmless stream fact.",
       payloadSchema: z.object({
         model: z.string().meta({ description: "Model pinned for this turn." }),
+        contractVersion: z
+          .string()
+          .optional()
+          .meta({
+            description:
+              "The agent contract version whose fold built (and will rebuild) this request. " +
+              "A replay under a DIFFERENT current version is a reconstruction under the " +
+              "current fold, not byte-exact — the inspector labels it so. Absent on " +
+              "pre-7.0.0 requests, which are reconstructions by definition.",
+          }),
         expiresAt: z.number().meta({
           description:
             "Absolute epoch-ms horizon (trigger time + llmRequestExpiryMs — deterministic, " +
@@ -593,6 +729,7 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/created",
     "events.iterate.com/agent/configured",
     "events.iterate.com/agents/context-added",
+    "events.iterate.com/agents/context-rewritten",
     "events.iterate.com/agents/web-message-sent",
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/agent/llm-request-settled",
@@ -645,7 +782,16 @@ export type AgentProcessorState = ProcessorState<AgentProcessorContract>;
 
 /** One model-visible context item's payload — the wire contract for every
  * committed `agents/context-added` event. */
-export type AgentContextAddedPayload = AgentProcessorState["contextItems"][number]["payload"];
+export type AgentContextAddedPayload = z.infer<typeof AgentContextAddedPayload>;
+
+/** One shared schema instance, so the payload type above infers by plain
+ * z.infer (the itx-api generator resolves that; type-level indexing into the
+ * state union does not travel). */
+const AgentContextAddedPayload = agentContextItemSchema();
+
+/** One reduced context item: a keyed section occurrence, a plain
+ * conversation item, or a permanent send stamp. */
+export type AgentContextItem = AgentProcessorState["contextItems"][number];
 
 /** A file attached to an agent context item: content type, filename, project
  * file-storage path, size, and the signed public URL minted at attach time
@@ -667,9 +813,9 @@ export const AgentLiveState = z.strictObject({
 export type AgentLiveState = z.infer<typeof AgentLiveState>;
 
 /**
- * The context-item payload — used twice in the contract (the
- * `agents/context-added` event and the state's `contextItems`), so it lives in
- * this hoisted function instead of inline. One flat object for every role; the
+ * The context-item payload — used repeatedly in the contract (the
+ * `agents/context-added` event and the state's context items), so it
+ * lives in this hoisted function instead of inline. One flat object for every role; the
  * role-specific fields are optional and documented per-field. `refs` and the
  * actor union are how the slack/telegram/email/github integrations attach
  * provenance and source coordinates; `compaction` marks the structural
@@ -689,8 +835,11 @@ function agentContextItemSchema() {
         .optional()
         .meta({
           description:
-            "Stable logical identity: a keyed item no request has covered is REPLACED in " +
-            "place by an update with the same key; a covered one appends a new occurrence.",
+            "The section's stable identity — THE addressing mechanism: re-adding a key IS " +
+            "the update. An occurrence no request has sent yet is edited in place " +
+            "(coalesced, free); a sent one appends at the tail of the timeline with " +
+            "`supersedes` stamped by the fold. Existing streams' keyed events already mean " +
+            "exactly this.",
         }),
       files: z
         .array(agentFileAttachmentSchema())

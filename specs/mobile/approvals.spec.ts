@@ -1,15 +1,19 @@
 // The phone approver, end to end in a browser — and entirely INSIDE the
-// conversation: `/script` typed into the chat composer runs a burst
-// deterministically, the requests park at the egress door as ONE batch, and
-// the approval dialog appears in-thread where the human is already looking.
-// Approve all behind the Face ID stand-in (the web build gates authenticated
-// key reads behind `confirm()`), then a second burst rejected with a typed
-// reason the script's 403 body carries back into the thread.
+// conversation: a plain chat message ("Run the approve-me burst") reaches an
+// agent on an intercepted/* model, served by THIS spec's itx.ai.intercept
+// handler pairing each command with a codemode script. The script runs a
+// burst deterministically, the requests park at the egress approval gate as ONE
+// batch, and the approval dialog appears in-thread where the human is
+// already looking. Approve all behind the Face ID stand-in (the web build
+// gates authenticated key reads behind `confirm()`), then a second burst
+// rejected with a typed reason the script's 403 body carries back into the
+// thread.
 //
-// ZERO model turns, asserted: the scripts narrate their own outcomes with
-// `itx.chat.sendMessage(...)` and return nothing, so the settled result
-// render has nothing to append and no LLM request ever opens. Every event in
-// the thread is deterministic.
+// DETERMINISTIC turns, asserted from the journal: every llm-request in the
+// thread names model intercepted/driver — a model no real provider can serve, only
+// the handler in this process. The scripts narrate their own outcomes with
+// `itx.chat.sendMessage(...)` and return nothing, so each turn's script ends
+// the loop and no second request follows.
 //
 // No spinner-waiter escapes anywhere: the running-code activity spinner is
 // honest product UI spanning command → run → parked-at-the-door → decision,
@@ -38,6 +42,14 @@ import { withApprovalDeliveryDiagnostic } from "./approval-delivery-diagnostics.
 const DEVICE_ID = "spec-web-approver";
 
 test("approve and reject script bursts from inside the chat thread", async ({ page }, testInfo) => {
+  // timeout: this spec now runs two REAL agent turns (command → intercepted
+  // model → codemode burst) on top of the signup + cold-itx-WebSocket costs
+  // every mobile spec pays. Measured on preview runners (2026-08-26): the
+  // pre-conversion spec ran ~80s cold, the turns add ~10-12s, so the 90s
+  // default trips deterministically while everything inside passes; the
+  // outwait/warm-up overlap already reclaimed the serial slack. 120s covers
+  // the measured worst case; locally the spec runs in ~28s.
+  test.setTimeout(120_000);
   const osBaseUrl = await resolveOsBaseUrl();
   const echo = await startEgressEcho();
   try {
@@ -124,31 +136,85 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
       notificationsStatus: "granted",
       platform: "ios",
     });
-    // Outwait the egress gate's ~5s rules cache before the first burst —
-    // marked dead air so the rendered video skips the on-screen idle.
-    const outwaitRulesCache = () => new Promise((resolve) => setTimeout(resolve, 6_000));
-    await (page.videoMode ? page.videoMode.deadAir(outwaitRulesCache) : outwaitRulesCache());
+    // Outwait the egress gate's ~5s rules cache before the first burst. The
+    // spec's total budget is tight on cold previews (two real turns now live
+    // inside it), so the wait STARTS here and is only awaited after the chat
+    // setup below has absorbed most of it.
+    const rulesCacheOutwaited = new Promise((resolve) => setTimeout(resolve, 6_000));
 
     // ── Into the conversation: everything below happens in ONE chat thread.
     await page.getByText("New chat").click();
     await page.getByPlaceholder("Message").waitFor();
     const agentPath = decodeURIComponent(new URL(page.url()).searchParams.get("path")!);
-    // The script narrates its own outcome (success or error) and returns
-    // nothing — an undefined settlement result appends no context, so no
-    // model turn follows. The thread stays 100% deterministic. Before the
-    // burst, the script maintains the agent status exactly the way a real
-    // agent turn would (AGENT_SUMMARY_INSTRUCTION): summary-updated appends,
-    // fields updating independently — the status the approvals screen pins
-    // to this batch's card.
-    const burstCommand = (marker: string, statusUpdates: object[]) =>
-      `/script ${statusUpdates
-        .map(
-          (update) =>
-            `await itx.agent.append({ type: "events.iterate.com/agent/summary-updated", payload: ${JSON.stringify(update)} }); `,
-        )
-        .join(
-          "",
-        )}const burst = async () => { const responses = await Promise.all(Array.from({length: 3}, (_, index) => fetch(${JSON.stringify(echo.url)} + "?${marker}=" + index, {method: "POST", body: "${marker} " + index}))); const outcomes = await Promise.all(responses.map(async (response) => ({status: response.status, body: await response.json()}))); return "${marker} outcomes: " + JSON.stringify(outcomes); }; await itx.chat.sendMessage(await burst().catch(String));`;
+    // Point the chat's agent at an intercepted/* model (an ordinary journaled config
+    // event) and drop the newborn debounce so each command's turn opens fast.
+    // The client defers creation to the first message, so birth the agent
+    // explicitly first (get-or-create, the same create call the client uses).
+    using agent = itx.agents.get(agentPath);
+    await agent.create();
+    // Cold script isolates on a fresh preview deploy take many seconds before
+    // script-run-started, and no spinner covers that window (a known product
+    // latency, documented in notifications.spec.ts). One throwaway run pays
+    // the cold start now — concurrent with the config append, awaited before
+    // the first command. The settle poll below filters to agent-authored
+    // executions so this run stays invisible to the count.
+    const scriptIsolateWarm = agent.capabilityHost.runScript("async () => 'warm'");
+    await agent.append({
+      type: "events.iterate.com/agent/configured",
+      payload: { config: { llm: { model: "intercepted/driver" }, llmRequestDebounceMs: 250 } },
+    });
+    await scriptIsolateWarm;
+    // Any rules-cache time the setup didn't absorb passes as marked dead air
+    // so the rendered video skips the idle.
+    await (page.videoMode
+      ? page.videoMode.deadAir(() => rulesCacheOutwaited)
+      : rulesCacheOutwaited);
+
+    // Each script narrates its own outcome (success or error) and returns
+    // nothing — an undefined script result ends the turn loop, so no second
+    // request follows. Before the burst, the script maintains the agent
+    // status exactly the way a real agent turn would
+    // (AGENT_SUMMARY_INSTRUCTION): summary-updated appends, fields updating
+    // independently — the status the approvals screen pins to this batch's
+    // card.
+    const burstScript = (marker: string, statusUpdates: object[]) =>
+      [
+        "```ts",
+        `async (itx) => { ${statusUpdates
+          .map(
+            (update) =>
+              `await itx.agent.append({ type: "events.iterate.com/agent/summary-updated", payload: ${JSON.stringify(update)} }); `,
+          )
+          .join(
+            "",
+          )}const burst = async () => { const responses = await Promise.all(Array.from({length: 3}, (_, index) => fetch(${JSON.stringify(echo.url)} + "?${marker}=" + index, {method: "POST", body: "${marker} " + index}))); const outcomes = await Promise.all(responses.map(async (response) => ({status: response.status, body: await response.json()}))); return "${marker} outcomes: " + JSON.stringify(outcomes); }; await itx.chat.sendMessage(await burst().catch(String)); }`,
+        "```",
+      ].join("\n");
+
+    // The "model": commands pair with scripts right here, in-test, over the
+    // live capnweb hop — the interception this repo grew for exactly this.
+    const bursts: Record<string, { marker: string; statusUpdates: object[] }> = {
+      "Run the approve-me burst": {
+        marker: "approve-me",
+        statusUpdates: [
+          { title: "Refund sweep", activity: "Emailing 3 customers about order refunds" },
+        ],
+      },
+      "Run the reject-me burst": {
+        marker: "reject-me",
+        statusUpdates: [
+          { title: "Invoice chase", activity: "Preparing payment reminders" },
+          { activity: "Requesting payment for 3 overdue invoices" },
+        ],
+      },
+    };
+    using _interception = await itx.ai.intercept(async ({ source, body }) => {
+      if (source !== "agent-turn") throw new Error(`unexpected source: ${source}`);
+      const message = [...body.messages].reverse().find((m) => m.role === "user")?.content ?? "";
+      const burst = bursts[message.trim()];
+      if (!burst) throw new Error(`unexpected message: ${message}`);
+      return burstScript(burst.marker, burst.statusUpdates);
+    });
 
     const readOutcomeMessages = async () =>
       (
@@ -159,15 +225,31 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
         .map((event) => (event.payload as { message: string }).message)
         .filter((message) => message.includes(" outcomes: "));
 
-    // Approve lane: the command runs deterministically (no model turn), the
+    // The command's turn (debounce, interceptor round trip, codemode
+    // extraction) happens BEFORE any UI the batch-card wait can extend
+    // against, and on a cold preview it eats enough of that wait's budget to
+    // starve the park → approval → paint chain it exists to cover. So each
+    // burst synchronizes on its script START itx-side first; the UI wait then
+    // budgets exactly what it budgeted before the turn existed.
+    const awaitAgentScriptStart = async (afterOffset: number) =>
+      itx.streams.get(agentPath).waitForEvent({
+        afterOffset,
+        eventTypes: ["events.iterate.com/capability-host/script-run-started"],
+        predicate: (event) =>
+          String((event.payload as { executionId?: string }).executionId).startsWith(
+            "agent-output:",
+          ),
+        timeoutMs: 60_000,
+      });
+    const lastAgentOffset = async () =>
+      (await itx.streams.get(agentPath).getEvents({ limit: 500 })).at(-1)?.offset ?? 0;
+
+    // The approve burst: the command's turn is served by the handler above, the
     // burst parks as one batch, and the dialog appears in-thread while the
     // working indicator honestly spins — no spinner-waiter escapes needed.
-    await sendChatMessage(
-      page,
-      burstCommand("approve-me", [
-        { title: "Refund sweep", activity: "Emailing 3 customers about order refunds" },
-      ]),
-    );
+    const beforeApprove = await lastAgentOffset();
+    await sendChatMessage(page, "Run the approve-me burst");
+    await awaitAgentScriptStart(beforeApprove);
     await waitForBatchCardButton({
       agentPaths: [agentPath],
       deviceId: DEVICE_ID,
@@ -181,7 +263,8 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     // is the upper bound of batch 1's thread-context fold (asserted on the
     // approvals screen below), so lane 2's status appends must land after
     // it. Settlement also implies run 1's narration already appended — the
-    // script sends it before returning.
+    // script sends it before returning. Agent-authored executions only: the
+    // warm-up run above settles on this stream too.
     await expect
       .poll(
         async () =>
@@ -189,6 +272,10 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
             await itx.streams.get(agentPath).getEvents({
               eventTypes: ["events.iterate.com/capability-host/script-run-settled"],
             })
+          ).filter((event) =>
+            String((event.payload as { executionId?: string }).executionId).startsWith(
+              "agent-output:",
+            ),
           ).length,
       )
       .toBe(1);
@@ -197,13 +284,9 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     // the first append sets title + activity, then an activity-only update
     // as the phase changes (the fold must keep the standing title).
     const reason = "wrong recipient — use the staging address";
-    await sendChatMessage(
-      page,
-      burstCommand("reject-me", [
-        { title: "Invoice chase", activity: "Preparing payment reminders" },
-        { activity: "Requesting payment for 3 overdue invoices" },
-      ]),
-    );
+    const beforeReject = await lastAgentOffset();
+    await sendChatMessage(page, "Run the reject-me burst");
+    await awaitAgentScriptStart(beforeReject);
     await waitForBatchCardButton({
       agentPaths: [agentPath],
       deviceId: DEVICE_ID,
@@ -231,13 +314,17 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     expect(outcomes["reject-me"]!.map((entry) => entry.status)).toEqual([403, 403, 403]);
     expect(outcomes["reject-me"]![0]!.body).toMatchObject({ deniedBy: "human", reason });
 
-    // The headline guarantee: the ENTIRE conversation — two commands, two
-    // bursts, two decisions, two narrated outcomes — never opened a single
-    // LLM request.
+    // The headline guarantee, journal-certified: the ENTIRE conversation —
+    // two commands, two bursts, two decisions, two narrated outcomes — opened
+    // exactly two LLM requests, both on intercepted/driver, a model only THIS spec's
+    // handler can serve. Nothing nondeterministic ever ran.
     const llmRequests = await itx.streams.get(agentPath).getEvents({
       eventTypes: ["events.iterate.com/agent/llm-request-requested"],
     });
-    expect(llmRequests).toEqual([]);
+    expect(llmRequests.map((event) => (event.payload as { model: string }).model)).toEqual([
+      "intercepted/driver",
+      "intercepted/driver",
+    ]);
 
     // A decision releases the script immediately, while the notification
     // intent is projected by a separate root-stream processor. Synchronize

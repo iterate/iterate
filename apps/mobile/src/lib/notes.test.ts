@@ -6,6 +6,8 @@ import {
   deriveNotesList,
   filterNotes,
   latestNoteFactOffset,
+  noteChatPath,
+  noteChatSeed,
   noteFilePath,
   parseNoteFile,
   parseNoteListItem,
@@ -116,4 +118,46 @@ test("event builders + fact offset", () => {
   expect(buildDeletedEvent(path)).toMatchObject({ idempotencyKey: `notes-deleted-${path}` });
   expect(latestNoteFactOffset([{ offset: 3 }, { offset: 9 }, { offset: 5 }] as any)).toBe(9);
   expect(latestNoteFactOffset([])).toBe(0);
+});
+
+test("the chat about a note is the same conversation every time you open it", () => {
+  const path = "/repos/notes/2026-08-12T15-01-20-841Z-x7ab.md";
+  // Lowercase: the platform PARSES agent paths (AgentPath in apps/os
+  // .../agent-presence.ts) and rejects the stamp's uppercase T and Z outright.
+  expect(noteChatPath(path)).toBe("/agents/mobile/note-2026-08-12t15-01-20-841z-x7ab");
+  expect(noteChatPath(path)).toMatch(/^\/agents\/[a-z0-9_-]+(?:\/[a-z0-9_-]+)*$/);
+  // Same note, same thread — tapping 💬 twice must not litter the chat list.
+  expect(noteChatPath(path)).toBe(noteChatPath(path));
+});
+
+test("the note-chat opens with the note quoted and room to ask the question", () => {
+  const seed = noteChatSeed({
+    path: "/repos/notes/2026-08-12T15-01-20-841Z-x7ab.md",
+    text: "Standing desk height: 76cm\nfelt right at the office",
+    displayTitle: "Standing desk height",
+  });
+  expect(seed).toBe(
+    "About my note `/repos/notes/2026-08-12T15-01-20-841Z-x7ab.md`:\n\n" +
+      "> Standing desk height: 76cm\n> felt right at the office\n\n",
+  );
+});
+
+test("a note with no text of its own still quotes something recognizable", () => {
+  // Photo-only captures have an empty body; the derived title is all there is.
+  const seed = noteChatSeed({
+    path: "/repos/notes/2026-08-12T15-01-20-841Z-x7ab.md",
+    text: "   ",
+    displayTitle: "Trenitalia ticket to Florence",
+  });
+  expect(seed).toContain("> Trenitalia ticket to Florence");
+});
+
+test("a long note gets pointed at rather than pasted in full", () => {
+  const seed = noteChatSeed({
+    path: "/repos/notes/2026-08-12T15-01-20-841Z-x7ab.md",
+    text: "x".repeat(1000),
+    displayTitle: "long one",
+  });
+  expect(seed).toContain("> " + "x".repeat(400) + "\n");
+  expect(seed).not.toContain("x".repeat(401));
 });

@@ -217,7 +217,7 @@ async function runByokAttempt(input: {
 
 /** Bump to invalidate every cached response at once (prompt-format overhauls,
  * masking-rule changes). */
-const CLOUDFLARE_AI_GATEWAY_RESPONSE_CACHE_KEY_VERSION = "cloudflare-ai-gateway-response-cache-v3";
+const CLOUDFLARE_AI_GATEWAY_RESPONSE_CACHE_KEY_VERSION = "cloudflare-ai-gateway-response-cache-v5";
 
 /**
  * The custom `cf-aig-cache-key` for one request body: a hash of the body with
@@ -245,17 +245,22 @@ export async function cloudflareAiGatewayResponseCacheKey(body: unknown): Promis
  * LlmTransportConfig — and would otherwise defeat the cross-fixture cache it
  * rides inside). */
 export function maskCloudflareAiGatewayResponseCacheEntropy(serialized: string): string {
-  return serialized
-    .replace(/prj_[0-9a-f]{32}/g, "prj_MASKED")
-    .replace(/Current date and time \(UTC\): [^"\\]*/g, "Current date and time (UTC): MASKED")
-    .replace(
-      /- Project: \\"(?:[^"\\]|\\.)*?\\" \(slug [^)]*\)(?: — the project worker\/website serves [^"\\]*)?/g,
-      "- Project: MASKED",
-    )
-    .replace(/"content":"@\d+(?= |\\n)/g, '"content":"@OFFSET')
-    .replace(/\/agents\/[A-Za-z0-9._/-]*/g, "/agents/MASKED")
-    .replace(/([?&](?:signature|sig|expires|exp|token|key)=)[^"&\\\s]+/gi, "$1MASKED")
-    .replace(/"prompt_cache_key":"[^"]*"/g, '"prompt_cache_key":"MASKED"');
+  return (
+    serialized
+      .replace(/prj_[0-9a-f]{32}/g, "prj_MASKED")
+      // The permanent send stamps: every request embeds its own and all prior
+      // requests' timestamps, so they are per-run entropy exactly like the old
+      // render-time tail was.
+      .replace(/Requested at: [^"\\]*/g, "Requested at: MASKED")
+      .replace(
+        /- Project: \\"(?:[^"\\]|\\.)*?\\" \(slug [^)]*\)(?: — the project worker\/website serves [^"\\]*)?/g,
+        "- Project: MASKED",
+      )
+      .replace(/"content":"@\d+(?= |\\n)/g, '"content":"@OFFSET')
+      .replace(/\/agents\/[A-Za-z0-9._/-]*/g, "/agents/MASKED")
+      .replace(/([?&](?:signature|sig|expires|exp|token|key)=)[^"&\\\s]+/gi, "$1MASKED")
+      .replace(/"prompt_cache_key":"[^"]*"/g, '"prompt_cache_key":"MASKED"')
+  );
 }
 
 /**

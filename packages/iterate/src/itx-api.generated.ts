@@ -389,8 +389,31 @@ export interface Ai {
    * read (`run<{ response?: string }>(…)`); uninstantiated it stays the honest
    * `unknown`. The optional third argument is the binding's own options object
    * — e.g. `{ gateway: { id: "default", skipCache: true } }` — passed through
-   * to `env.AI.run`; its `gateway` wins over any constructor-provided one. */
+   * to `env.AI.run`; its `gateway` wins over any constructor-provided one.
+   * An `intercepted/*` model never reaches Cloudflare: the live interceptor installed
+   * with `intercept(handler)` serves it, and its return value comes back
+   * verbatim (no handler installed → a loud error). */
   run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T>;
+  /** Install a live handler for `intercepted/*` models (last writer wins); returns a
+   * release handle. For deterministic testing: an agent configured with
+   * `model: "intercepted/<x>"` and every `run("intercepted/<x>", …)` call are served by your
+   * handler — an in-memory function on YOUR side of the connection — instead
+   * of a real provider. The handler receives
+   * `{ source: "agent-turn" | "ai-run", model, body }`; for agent turns it
+   * returns assistant text (a string, or `{ text, usage? }`), for ai-run its
+   * return value is handed back verbatim. Live means session-bound, with the
+   * mount invariant: the interception lives exactly as long as your session
+   * connection, and if the platform's half dies while your socket is open,
+   * the socket closes (4901) — reconnect and intercept() again.
+   *
+   * Under the hood this is sugar over the capability machinery: the handler
+   * mounts as a LIVE capability at the root scope's `aiInterceptor` path,
+   * behind the shipped hibernating Provider Pager — which is where all of the
+   * above lifecycle comes from. Provide-at-same-path replaces (the last
+   * writer wins), and the returned handle revokes exactly its own mount,
+   * never a newer one. Non-fake models are never interceptable — a journaled
+   * `openai/*` turn is always the real provider. */
+  intercept(handler: ProjectAiInterceptor): Promise<ProjectAiIntercept>;
   /** Calling with no arguments lists the file formats the converter accepts. */
   toMarkdown(): Promise<CfMarkdownSupportedFormat[]>;
   /** Convert one document (`{ name, blob }`) to Markdown — `blob` accepts
@@ -650,15 +673,54 @@ export interface CapabilityHost {
    * for unknown executions and for scripts that failed.
    */
   getScriptResult(executionId: string): Promise<{ executionId: string; data: unknown }>;
+  /**
+   * Reuse a previously journaled script as a parameterized helper:
+   * `previousScriptHelper({ ...results[0], parameterize: { n: 123n } })`.
+   * Spread a results row in — `scriptOffset` (the run's script-run-requested
+   * event offset) addresses the script, and spreading copies only enumerable
+   * props, so a large row's loader plumbing stays behind. `parameterize`
+   * names the VALUES the original script used inline (primitives only:
+   * string/number/boolean/bigint) that should become parameters — each
+   * literal must appear exactly once in that script and is swapped OUT for a
+   * generated identifier. Optional `edits` ([pattern, replacement] pairs;
+   * every pattern must match) then rewrite what remains — prose hardcoding
+   * an old input, a stale label; they run AFTER parameterization, so an edit
+   * can never clobber a value literal parameterize needs. The returned handle's `run(vars)` re-executes the
+   * script with new values as a journaled child script run; `vars` is typed
+   * from the parameterize object (`{ n: 123n }` → `run({ n: bigint })`), and
+   * the result type is best-effort inferred from the row's `data`/`load`
+   * when present (the SHAPE of the old result, not its values).
+   */
+  previousScriptHelper<Result, P extends Record<string, ScriptReuseValue>>(input: {
+    scriptOffset: number;
+    parameterize: P;
+    edits?: ScriptReuseEdit[];
+    load: (itx: never) => Promise<Result>;
+  }): Promise<Omit<ReusableScript, "run"> & { run(vars: P): Promise<Result> }>;
+  previousScriptHelper<Result, P extends Record<string, ScriptReuseValue>>(input: {
+    scriptOffset: number;
+    parameterize: P;
+    edits?: ScriptReuseEdit[];
+    data: Result;
+  }): Promise<Omit<ReusableScript, "run"> & { run(vars: P): Promise<Result> }>;
+  previousScriptHelper<P extends Record<string, ScriptReuseValue>>(input: {
+    scriptOffset: number;
+    parameterize: P;
+    edits?: ScriptReuseEdit[];
+  }): Promise<Omit<ReusableScript, "run"> & { run(vars: P): Promise<unknown> }>;
   /** Explicit dynamic dispatch; the dotted-path fallback (`itx.foo.bar(...)`) compiles to exactly this call. */
   invokeCapability(call: { args?: unknown[]; path: string[] }): Promise<unknown>;
   /** Includes `capabilities`: everything reachable at this scope — own mounts plus inherited ones, tagged with their declaring scope. */
   __describe(): Promise<Description & { capabilities: CapabilityDescription[]; path: string }>;
-  /** Run an `async (itx) => { … }` script in this scope; the execution is journaled on the scope stream. */
+  /** Run an `async (itx) => { … }` script in this scope; the execution is
+   * journaled on the scope stream. `scriptEvent` is the journaled
+   * script-run-requested event — its offset is the reuse handle
+   * (previousScriptHelper's scriptOffset). */
   runScript(code: string): Promise<{
     completedEvent: StreamEvent;
     executionId: string;
     result: unknown;
+    scriptEvent: StreamEvent;
   }>;
   /** Restart this scope's server-side objects (the stream and its hosted
    * facets die together); the next request boots them fresh. */
@@ -1542,6 +1604,30 @@ export interface StreamProcessorRpc<State = unknown> {
   getRuntimeState(): Promise<ProcessorRuntimeState<State>>;
   snapshot(): Promise<ProcessorSnapshot<State>>;
   waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void>;
+}
+
+/** Disposable handle for one live AI interception. */
+export interface ProjectAiIntercept extends Disposable {
+  release(): Promise<void>;
+}
+
+/**
+ * A previously journaled script, re-parameterized into a reusable helper —
+ * returned by `itx.previousScriptHelper`. `run(vars)` executes it with new
+ * values as a journaled child script run in the same scope.
+ */
+export interface ReusableScript {
+  __describe(): Promise<Description>;
+  /** The re-parameterized script text (for inspection; `run` executes it). */
+  code: string;
+  /** The executionId of the journaled run this helper was derived from. */
+  sourceExecutionId: string;
+  /**
+   * Execute the reused script with new values for the declared parameters —
+   * real values, not code text (`123n` not `"123n"`). Runs as a journaled
+   * child script run and resolves to its result.
+   */
+  run(vars: Record<string, unknown>): Promise<unknown>;
 }
 
 /** Disposable handle for one live project egress interception. */
@@ -2501,6 +2587,15 @@ export type CfAiRunOptions = {
   returnRawResponse?: boolean;
 };
 
+/**
+ * Live replacement for intercepted/* model calls. For `source: "agent-turn"` the
+ * return value must be assistant text — a plain string, or
+ * `{ text, usage? }` to also report token usage (report inflated numbers to
+ * drive compaction deterministically). For `source: "ai-run"` the return value
+ * is handed back to the `itx.ai.run` caller verbatim.
+ */
+export type ProjectAiInterceptor = (input: ProjectAiInterceptorInput) => Promise<unknown>;
+
 /** One file format the markdown converter accepts (extension plus MIME type);
  * `ai.toMarkdown()` with no arguments returns the full list. */
 export type CfMarkdownSupportedFormat = {
@@ -2598,53 +2693,117 @@ export type AgentProcessorState = {
     compactionTriggerFraction: number;
     interpretResponses: boolean;
   };
-  contextItems: {
-    offset: number;
-    payload: {
-      role: "assistant" | "developer" | "system" | "user";
-      content: string;
-      key?: string | undefined;
-      files?:
-        | { contentType: string; filename: string; path: string; size: number; url: string }[]
-        | undefined;
-      refs?:
-        | (
-            | { type: "event"; streamPath: string; offset: number; eventType?: string | undefined }
-            | { type: "user"; userId: string }
-            | { type: "file"; path: string }
-            | { type: "git-commit"; repoPath: string; commitOid: string }
-          )[]
-        | undefined;
-      actor?:
-        | { type: "user"; origin: "mcp" | "web"; userId?: string | undefined }
-        | { type: "agent"; path: string }
-        | { type: "script"; executionId: string }
-        | { type: "integration"; name: string }
-        | { type: "slack"; userId?: string | undefined; botName?: string | undefined }
-        | { type: "telegram"; userId?: string | undefined; username?: string | undefined }
-        | { type: "email"; address?: string | undefined; name?: string | undefined }
-        | { type: "github"; login?: string | undefined; senderType?: string | undefined }
-        | undefined;
-      llmRequestPolicy:
-        | { behaviour: "dont-trigger-request" }
-        | { behaviour: "interrupt-current-request" }
-        | { behaviour: "after-current-request" };
-      llmRequestOffset?: number | undefined;
-      compaction?:
-        | {
-            replacesHistoryThrough: number;
-            usage?:
-              | {
-                  inputTokens: number;
-                  outputTokens: number;
-                  cachedInputTokens?: number | undefined;
-                  reasoningOutputTokens?: number | undefined;
-                }
-              | undefined;
-          }
-        | undefined;
-    };
-  }[];
+  contextItems: (
+    | { kind: "request"; offset: number; requestedAt: string }
+    | {
+        kind: "section";
+        offset: number;
+        key: string;
+        supersedes?: number | undefined;
+        payload: {
+          role: "assistant" | "developer" | "system" | "user";
+          content: string;
+          key?: string | undefined;
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          refs?:
+            | (
+                | {
+                    type: "event";
+                    streamPath: string;
+                    offset: number;
+                    eventType?: string | undefined;
+                  }
+                | { type: "user"; userId: string }
+                | { type: "file"; path: string }
+                | { type: "git-commit"; repoPath: string; commitOid: string }
+              )[]
+            | undefined;
+          actor?:
+            | { type: "user"; origin: "mcp" | "web"; userId?: string | undefined }
+            | { type: "agent"; path: string }
+            | { type: "script"; executionId: string }
+            | { type: "integration"; name: string }
+            | { type: "slack"; userId?: string | undefined; botName?: string | undefined }
+            | { type: "telegram"; userId?: string | undefined; username?: string | undefined }
+            | { type: "email"; address?: string | undefined; name?: string | undefined }
+            | { type: "github"; login?: string | undefined; senderType?: string | undefined }
+            | undefined;
+          llmRequestPolicy:
+            | { behaviour: "dont-trigger-request" }
+            | { behaviour: "interrupt-current-request" }
+            | { behaviour: "after-current-request" };
+          llmRequestOffset?: number | undefined;
+          compaction?:
+            | {
+                replacesHistoryThrough: number;
+                usage?:
+                  | {
+                      inputTokens: number;
+                      outputTokens: number;
+                      cachedInputTokens?: number | undefined;
+                      reasoningOutputTokens?: number | undefined;
+                    }
+                  | undefined;
+              }
+            | undefined;
+        };
+      }
+    | {
+        kind: "message";
+        offset: number;
+        payload: {
+          role: "assistant" | "developer" | "system" | "user";
+          content: string;
+          key?: string | undefined;
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          refs?:
+            | (
+                | {
+                    type: "event";
+                    streamPath: string;
+                    offset: number;
+                    eventType?: string | undefined;
+                  }
+                | { type: "user"; userId: string }
+                | { type: "file"; path: string }
+                | { type: "git-commit"; repoPath: string; commitOid: string }
+              )[]
+            | undefined;
+          actor?:
+            | { type: "user"; origin: "mcp" | "web"; userId?: string | undefined }
+            | { type: "agent"; path: string }
+            | { type: "script"; executionId: string }
+            | { type: "integration"; name: string }
+            | { type: "slack"; userId?: string | undefined; botName?: string | undefined }
+            | { type: "telegram"; userId?: string | undefined; username?: string | undefined }
+            | { type: "email"; address?: string | undefined; name?: string | undefined }
+            | { type: "github"; login?: string | undefined; senderType?: string | undefined }
+            | undefined;
+          llmRequestPolicy:
+            | { behaviour: "dont-trigger-request" }
+            | { behaviour: "interrupt-current-request" }
+            | { behaviour: "after-current-request" };
+          llmRequestOffset?: number | undefined;
+          compaction?:
+            | {
+                replacesHistoryThrough: number;
+                usage?:
+                  | {
+                      inputTokens: number;
+                      outputTokens: number;
+                      cachedInputTokens?: number | undefined;
+                      reasoningOutputTokens?: number | undefined;
+                    }
+                  | undefined;
+              }
+            | undefined;
+        };
+      }
+  )[];
   lastLlmRequestOffset: number;
   latestExternalTriggerOffset: number;
   pendingLlmRequestTrigger: {
@@ -2656,7 +2815,7 @@ export type AgentProcessorState = {
   consecutiveLlmFailures: number;
   paused: { reason?: string | undefined; atOffset: number } | null;
   autonomousTurnCount: number;
-  activeScriptExecutionIds: string[];
+  activeScriptExecutions: { executionId: string; requestedAt: string }[];
   summary: {
     title?: string | undefined;
     description?: string | undefined;
@@ -2725,7 +2884,7 @@ export type AgentEventInput =
   | TypedConsumedEventInput<"events.iterate.com/agent/created", { [x: string]: unknown }>
   | TypedConsumedEventInput<
       "events.iterate.com/agent/llm-request-requested",
-      { model: string; expiresAt: number }
+      { model: string; contractVersion?: string | undefined; expiresAt: number }
     >
   | TypedConsumedEventInput<
       "events.iterate.com/agent/llm-request-settled",
@@ -2834,6 +2993,10 @@ export type AgentEventInput =
             }
           | undefined;
       }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/agents/context-rewritten",
+      { op: "delete" | "replace"; key: string; content?: string | undefined }
     >
   | TypedConsumedEventInput<
       "events.iterate.com/agents/web-message-sent",
@@ -2956,6 +3119,17 @@ export type SetPreambleInput = {
   key: string;
   code: string;
 };
+
+/** A reusable-script parameter value: a primitive whose literal text can be
+ * located in the script. Objects/arrays never appear as one inline literal
+ * reliably, so they are excluded on purpose. */
+export type ScriptReuseValue = string | number | boolean | bigint;
+
+/** One textual edit to apply to the reused script before parameterization:
+ * a pattern (string = replace every occurrence; RegExp honors its own flags)
+ * and its replacement. This is how a reuse call fixes text that is not a
+ * parameter value — message prose hardcoding an old input, a stale label. */
+export type ScriptReuseEdit = [RegExp | string, string];
 
 /** Target shape for a live capability that wants to receive flattened paths. */
 export type FlattenedCapabilityTarget = {
@@ -4386,6 +4560,26 @@ export type LiveStatePatch =
   | { fields?: Record<string, LiveStatePatch>; drop?: string[] };
 
 /**
+ * One intercepted/* invocation as the interceptor sees it. `source` discriminates the
+ * two egress paths: an agent conversation turn carries the provider-neutral
+ * chat projection, a direct `itx.ai.run` call carries the caller's body
+ * argument verbatim (honestly `unknown` — the caller chose its shape).
+ */
+export type ProjectAiInterceptorInput =
+  | {
+      source: "agent-turn";
+      model: string;
+      body: {
+        messages: { role: "system" | "developer" | "user" | "assistant"; content: string }[];
+      };
+    }
+  | {
+      source: "ai-run";
+      model: string;
+      body: unknown;
+    };
+
+/**
  * A durable processor input. Wake processors never receive ephemeral events, so
  * a domain object's processor-typed append door must not claim that they do.
  */
@@ -4405,7 +4599,50 @@ export type JsonValue =
 
 /** One model-visible context item's payload — the wire contract for every
  * committed `agents/context-added` event. */
-export type AgentContextAddedPayload = AgentProcessorState["contextItems"][number]["payload"];
+export type AgentContextAddedPayload = {
+  role: "assistant" | "developer" | "system" | "user";
+  content: string;
+  key?: string | undefined;
+  files?:
+    | { contentType: string; filename: string; path: string; size: number; url: string }[]
+    | undefined;
+  refs?:
+    | (
+        | { type: "event"; streamPath: string; offset: number; eventType?: string | undefined }
+        | { type: "user"; userId: string }
+        | { type: "file"; path: string }
+        | { type: "git-commit"; repoPath: string; commitOid: string }
+      )[]
+    | undefined;
+  actor?:
+    | { type: "user"; origin: "mcp" | "web"; userId?: string | undefined }
+    | { type: "agent"; path: string }
+    | { type: "script"; executionId: string }
+    | { type: "integration"; name: string }
+    | { type: "slack"; userId?: string | undefined; botName?: string | undefined }
+    | { type: "telegram"; userId?: string | undefined; username?: string | undefined }
+    | { type: "email"; address?: string | undefined; name?: string | undefined }
+    | { type: "github"; login?: string | undefined; senderType?: string | undefined }
+    | undefined;
+  llmRequestPolicy:
+    | { behaviour: "dont-trigger-request" }
+    | { behaviour: "interrupt-current-request" }
+    | { behaviour: "after-current-request" };
+  llmRequestOffset?: number | undefined;
+  compaction?:
+    | {
+        replacesHistoryThrough: number;
+        usage?:
+          | {
+              inputTokens: number;
+              outputTokens: number;
+              cachedInputTokens?: number | undefined;
+              reasoningOutputTokens?: number | undefined;
+            }
+          | undefined;
+      }
+    | undefined;
+};
 
 /** Dynamic invocation envelope used by flattened live capabilities. */
 export type FlattenedCapabilityInvocation = {

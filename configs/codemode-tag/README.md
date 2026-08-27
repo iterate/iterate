@@ -24,10 +24,12 @@ debounce (60s) — that window exists exactly so a project's worker can shape
 the agent before its first turn. `worker.ts` here is the interpreter:
 
 1. On each agent's birth (`agent/created`), one atomic batch turns default
-   parsing off (`config.interpretResponses: false`), supersedes the keyed
-   system-prompt slot with `prompts/agent-system-prompt.md`, and lowers the
-   debounce to the ordinary 250ms — the done-configuring signal, which
-   releases a held first turn immediately.
+   parsing off (`config.interpretResponses: false`), replaces ONLY the
+   `#output-formatting` section of the platform prompt with
+   `prompts/agent-system-prompt.md` (an `agents/context-updated` op — the
+   rest of the platform prompt stands), and lowers the debounce to the
+   ordinary 250ms — the done-configuring signal, which releases a held first
+   turn immediately.
 2. It injects `AGENTS.md` as standing context, and re-syncs both it and the
    prompt on every config-repo commit.
 3. On assistant output events (stamped by the agent processor), it parses
@@ -55,7 +57,7 @@ rendering — is a commit to this repo. No platform deploy.**
   answers with the platform's fenced-ts defaults — coherent, just not the
   codemode dialect — until the next deploy's `project/worker-updated` sweep
   converts it.
-- Slash commands (`/example`, `/script`) are platform interpretation and are
+- Slash commands (`/example`) are platform interpretation and are
   inert on converted agents.
 - Web agents only: slack/telegram/email agent paths are excluded from the
   conversion and keep the classic fenced format.

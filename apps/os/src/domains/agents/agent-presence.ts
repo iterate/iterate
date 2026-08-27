@@ -253,24 +253,22 @@ export function foldAgentSummaryUpdated({
 }
 
 type AgentRuntimeSource = {
-  activeScriptExecutionIds: readonly string[];
-  contextItems: readonly { payload: { role: string; key?: string } }[];
+  activeScriptExecutions: readonly unknown[];
+  contextItems: readonly { kind: string; payload?: { role: string } }[];
   openRequest: null | { requestedAtOffset: number };
   pendingLlmRequestTrigger: null | { offset: number };
 };
 
-export function deriveAgentRuntime(
-  state: AgentRuntimeSource,
-  systemPromptContextKey: string,
-): AgentRuntimeRecord {
+export function deriveAgentRuntime(state: AgentRuntimeSource): AgentRuntimeRecord {
   const pending = state.pendingLlmRequestTrigger === null ? 0 : 1;
-  const runnable =
-    pending === 1 &&
-    state.contextItems.some(
-      (item) => item.payload.role === "system" && item.payload.key === systemPromptContextKey,
-    )
-      ? 1
-      : 0;
+  // Key-agnostic (the kernel knows no section key by name): a pending
+  // trigger counts as runnable once ANY system-role section exists. Purely
+  // a presentation facet; the turn loop itself no longer gates on it (every
+  // creation path ships prompt content in the birth batch).
+  const promptExists = state.contextItems.some(
+    (item) => item.kind === "section" && item.payload?.role === "system",
+  );
+  const runnable = pending === 1 && promptExists ? 1 : 0;
   return {
     triggers: { pending, runnable },
     // The offset-identified request model has no scheduled/started phases:
@@ -282,7 +280,7 @@ export function deriveAgentRuntime(
       requested: state.openRequest === null ? 0 : 1,
       started: 0,
     },
-    runningScripts: state.activeScriptExecutionIds.length,
+    runningScripts: state.activeScriptExecutions.length,
   };
 }
 

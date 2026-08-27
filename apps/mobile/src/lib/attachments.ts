@@ -9,6 +9,12 @@ import { sniffImageContentType } from "./image-format.ts";
 import { normalizedImageFilename } from "./media.ts";
 
 export type PickedImage = {
+  /** The photo library's own id for this image, when it has one. The
+   * composer's camera-roll strip uses it to know which tiles are already
+   * going into this note — including photos picked through the + button,
+   * which iOS also identifies by asset id. Null for anything the library
+   * cannot name (web fallbacks, future non-library sources). */
+  assetId: string | null;
   filename: string;
   contentType: string;
   /** Base64 payload from the picker; decoded to bytes at send time. */
@@ -55,6 +61,7 @@ export async function pickImages(options: { selectionLimit: number }): Promise<P
     );
     return [
       {
+        assetId: asset.assetId || null,
         filename,
         contentType,
         base64: asset.base64,

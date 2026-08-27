@@ -85,6 +85,11 @@ export type LlmRequestReplay = {
   /** From the llm-request-requested event at the replayed offset. */
   model: string;
   requestedAt: string;
+  /** True when the request was built by a DIFFERENT fold version than the one
+   * replaying it (the requested event's contractVersion stamp differs, or —
+   * for pre-stamp requests — is absent): the messages shown are a
+   * reconstruction under the current fold, not byte-exact. */
+  reconstructed: boolean;
   /** Null when nothing has streamed or settled for this request yet. */
   response: LlmRequestReplayResponse | null;
   stats: LlmRequestReplayStats;
@@ -99,7 +104,10 @@ export type LlmRequestReplay = {
 // Display slices of the lifecycle payloads (the contract's schemas stay the
 // source of truth; these read just the fields the panel shows). Loose on
 // purpose: a payload that grew fields must still replay.
-const RequestedPayloadSlice = z.looseObject({ model: z.string() });
+const RequestedPayloadSlice = z.looseObject({
+  model: z.string(),
+  contractVersion: z.string().optional(),
+});
 /** A chunk row's back-reference to its request — the probe replayStats
  * scopes chunk events with. */
 const RequestScopedPayloadSlice = z.looseObject({ llmRequestOffset: z.number() });
@@ -179,6 +187,7 @@ export function replayLlmRequest(input: {
     })),
     model: requested.data.model,
     requestedAt: requestedEvent.createdAt,
+    reconstructed: requested.data.contractVersion !== AgentProcessorContract.version,
     response: replayResponse({ events, chunkEvents, llmRequestOffset: input.llmRequestOffset }),
     stats: replayStats({
       events,

@@ -203,6 +203,19 @@ Draft proposal for the two gaps, keeping vanilla CLIs:
   specs side if a spec ever needs a dimension; don't build it until one
   does.
 
+The free-and-deterministic alternative to paying for turns is the `intercepted/*`
+model lane: `itx.ai.intercept(handler)` installs a live handler (an in-memory
+function in the test process, session-bound over capnweb) that serves every
+model under `intercepted/` — both `itx.ai.run("intercepted/…")` calls and full agent
+conversation turns for agents configured with `model: "intercepted/<x>"`. The whole
+loop runs for real — debounce, journaled llm-request events, chunk streaming,
+codemode, chat reply — with the test scripting each response. Non-fake models
+are never interceptable, so a journaled `openai/*` turn is always the real
+provider. Reach for a paid `.llm.` test only when the point IS real-model
+integration. Usage guide (handler contract, the session-bound lifetime and
+4901 recovery contract, spec/node recipes):
+[Intercepted models](intercepted-models.md).
+
 Open questions for the next grilling round: is the filename the right home
 for cost (vs a lint-enforced import rule alone)? Should third-party reach
 be visible in filenames too, or is env-gating enough? Does "slow" deserve
@@ -344,6 +357,22 @@ the credentialed, lane-specific pieces at the edges that need them. The
 `apps/os/e2e/test-support/wait-for-condition.ts` stays L2 until a Playwright
 spec actually needs it: "needed by both lanes" is proven by a consumer, not
 predicted.
+
+## Data fixtures with regenerable outputs
+
+`apps/os/src/domains/agents/prompt-scenarios/` is the pattern reference: one
+markdown file per scenario holds input events (YAML fence) and output fences
+computed by the real prompt fold. Plain runs assert the outputs (and the
+generated `explainers/prompt-sections.html`) are byte-fresh; refresh with:
+
+```bash
+cd apps/os && pnpm vitest run prompt-scenarios -u
+```
+
+Commentary lives in an `annotations.yaml` fence ({request, find, comment});
+the harness re-weaves `#` comment lines into regenerated outputs, and an
+annotation matching nothing fails the test. See `fixture-helpers.ts` for the
+format.
 
 ## Video mode: recorded spec demos for PRs
 

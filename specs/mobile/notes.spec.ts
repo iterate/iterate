@@ -1,12 +1,13 @@
 // The notes feature through the real phone-sized web build: the GLOBAL
 // capture composer (visible the moment the project opens — the feature's
 // whole premise), a real capture appended to /notes with no AI in the path,
-// the ✕→📝-pill collapse, and the /notes screen's list, search, and inline
-// delete confirm. The title/tags analysis obligation runs server-side and is
+// the ✕→📝-pill collapse, the /notes screen's list, search, inline edit and
+// delete confirm, and the 💬 hand-off into a conversation about a note. The title/tags analysis obligation runs server-side and is
 // covered by apps/mobile/e2e/notes.e2e.test.ts (AI-dependent); assertions
 // here stick to the note's own text, which is stable whether or not the
 // derived title has landed yet.
 
+import { expect } from "@playwright/test";
 import { localOsDevServer } from "../../apps/os/scripts/dev.ts";
 import { signUpWithEmailOtp, uniqueSignupEmail } from "../test-support/email-otp-signup.ts";
 import { test } from "../test-support/test.ts";
@@ -68,6 +69,30 @@ test("captures a note from the global composer and manages it on /notes", async 
     .getByText(/confirmed at home/)
     .first()
     .waitFor();
+
+  // 💬 opens the conversation ABOUT this note: its own thread, with a pointer
+  // to the note already typed into the composer — the question under it is
+  // the human's to write, so nothing is sent on the way in.
+  await page.getByLabel("Chat about this note").click();
+  // inputValue() does the waiting; expect only checks the string it returned.
+  expect(await page.getByPlaceholder("Message").inputValue()).toMatch(
+    /About my note `\/repos\/notes\/.*\.md`:[\s\S]*confirmed at home/,
+  );
+
+  // Send it. This is the step that makes the platform PARSE the derived agent
+  // path (create() + message()), so a path it would reject — the note's
+  // filename stamp carries an uppercase T and Z — fails here instead of on a
+  // phone. Only the echo of our own message is asserted; whatever the agent
+  // says back is its own business.
+  await page.getByLabel("Send").click();
+  await page
+    .getByText(/About my note/)
+    .first()
+    .waitFor();
+
+  // Back on /notes the note is untouched, and its row is still open — the
+  // notes screen stayed mounted underneath the pushed chat.
+  await page.goBack();
 
   // Inline two-step delete confirm → tombstone empties the list over the
   // live stream.
