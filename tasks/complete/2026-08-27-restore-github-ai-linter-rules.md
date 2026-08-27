@@ -1,13 +1,13 @@
-status: in-progress
+status: complete
 size: medium
 branch: fix/restore-ai-linter-rules
 
 # Restore GitHub AI lint reviews
 
-Status: Latest `main` is merged. `iterate[bot]` proved the rule end to end, the
-temporary probe is removed, and historical events now replay with the new
-suggestion policy. The full local test, typecheck, lint, Knip, and format gate is
-green; fresh GitHub checks and review cleanup remain.
+Status: Complete. Latest `main` is merged, `iterate[bot]` proved the rule end to
+end, and the temporary probe is removed. Historical events replay with the new
+suggestion policy, production policy v8 is live, and the full local and GitHub
+test/static gates are green.
 
 ## Goal
 
@@ -38,7 +38,7 @@ explains why the word is literal or justified.
 - [x] Preserve replay compatibility for events written before suggestion policy existed. _The event schema defaults missing `suggestions` to `allowed`; a processor regression test replays the historical payload shape._
 - [x] Remove the deliberate offense after the live proof. _Renamed `reviewLane` to `githubAiLinterRulePaths` and refreshed the generated config template._
 - [x] Run focused tests and checks for every changed code/config surface. _After merging latest `main`, the full tests, typecheck, lint, Knip, format check, template typecheck, and focused linter/config tests all pass._
-- [ ] Move this task to `tasks/complete/` once the live proof and CI are green.
+- [x] Move this task to `tasks/complete/` once the live proof and CI are green. _Completed after production policy v8 was ingested and the full test/static gate passed locally and in GitHub._
 
 ## Implementation log
 
@@ -86,3 +86,7 @@ explains why the word is literal or justified.
   describe what is unclear and never tell the author what to change. Removed
   the deliberate `reviewLane` probe after its live proof and completed the full
   local gate successfully.
+- 2026-08-27: Production ingested private config commit `c80df28`, which pins
+  this PR's current package and activates policy v8. Resolved every historical
+  proof thread and the Cursor replay report before the final current-head bot
+  pass.
