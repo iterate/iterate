@@ -182,6 +182,14 @@ Supporting changes:
 - Codex eval round 3: SUCCESS — two failed attempts (caught by the new
   teaching errors), one small results inspection, then a 265-char reuse
   script; old-number prose corrected in a follow-up message per criteria.
+- Codex eval rounds 6-8 (edits, post-review): round 6 FAILED under the new
+  strict criteria (reuse worked but no `edits` — stale message sent, then
+  corrected; the criteria no longer accept that), driving the stale-leftover
+  guard. Round 7 FAILED on the ordering trap (a broad prose edit ran before
+  parameterization and clobbered the value literal), driving edits-after-
+  parameterize. Round 8 (`1787816789588`): **SUCCESS** — reuse via
+  parameterize + edits in a 251-char script, no incorrect message ever
+  emitted, no re-derivation.
 - Codex eval round 5 (typed value-form, run `1787771786047`): FAILURE on the
   strict criterion — the 373-char reuse script and platform child both
   succeeded **first-attempt**, but the agent then wrote a fresh 2,097-char
