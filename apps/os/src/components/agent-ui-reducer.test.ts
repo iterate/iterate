@@ -77,27 +77,27 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test" },
       },
       {
-        type: "events.iterate.com/agent/llm-response-chunk",
+        type: "events.iterate.com/agent/llm-response-chunks",
         payload: {
           llmRequestOffset: 10,
           sequence: 0,
-          chunk: { choices: [{ delta: { reasoning_content: "Reading the stream" } }] },
+          chunks: [{ choices: [{ delta: { reasoning_content: "Reading the stream" } }] }],
         },
       },
       {
-        type: "events.iterate.com/agent/llm-response-chunk",
+        type: "events.iterate.com/agent/llm-response-chunks",
         payload: {
           llmRequestOffset: 10,
           sequence: 1,
-          chunk: { choices: [{ delta: { content: "const n = await " } }] },
+          chunks: [{ choices: [{ delta: { content: "const n = await " } }] }],
         },
       },
       {
-        type: "events.iterate.com/agent/llm-response-chunk",
+        type: "events.iterate.com/agent/llm-response-chunks",
         payload: {
           llmRequestOffset: 10,
           sequence: 2,
-          chunk: { choices: [{ delta: { content: "stream.count();" } }] },
+          chunks: [{ choices: [{ delta: { content: "stream.count();" } }] }],
         },
       },
     ]);
@@ -112,6 +112,132 @@ describe("agent-ui reducer", () => {
       model: "gpt-test",
       thinkingText: "Reading the stream",
       responseText: "const n = await stream.count();",
+    });
+  });
+
+  test("streams coalesced multi-chunk windows (llm-response-chunks) into the live llm step", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "user",
+          actor: { type: "user", origin: "web" },
+          content: "count the inputs",
+        },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 10,
+        payload: { model: "gpt-test" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-response-chunks",
+        payload: {
+          llmRequestOffset: 10,
+          sequence: 0,
+          chunks: [
+            { choices: [{ delta: { reasoning_content: "Reading the stream" } }] },
+            { choices: [{ delta: { content: "const n = await " } }] },
+          ],
+        },
+      },
+      {
+        type: "events.iterate.com/agent/llm-response-chunks",
+        payload: {
+          llmRequestOffset: 10,
+          sequence: 1,
+          chunks: [{ choices: [{ delta: { content: "stream.count();" } }] }],
+        },
+      },
+    ]);
+
+    expect(state.live?.steps[0]).toMatchObject({
+      kind: "llm",
+      status: "running",
+      thinkingText: "Reading the stream",
+      responseText: "const n = await stream.count();",
+      // One entry per window whose chunks carried response text — the UI's
+      // token-reveal stagger animates each window as a unit.
+      responseWindows: ["const n = await ", "stream.count();"],
+    });
+  });
+
+  test("committed assistant text extends streamed windows when the tail flush was lost", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: { role: "user", actor: { type: "user", origin: "web" }, content: "go" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 10,
+        payload: { model: "gpt-test" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-response-chunks",
+        payload: {
+          llmRequestOffset: 10,
+          sequence: 0,
+          chunks: [{ choices: [{ delta: { content: "The lighthouse" } }] }],
+        },
+      },
+      // The tail flush was swallowed; the committed assistant item carries
+      // the full text the windows never received.
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: { role: "assistant", content: "The lighthouse keeper", llmRequestOffset: 10 },
+      },
+    ]);
+
+    expect(state.live?.steps[0]).toMatchObject({
+      kind: "llm",
+      responseText: "The lighthouse keeper",
+      responseWindows: ["The lighthouse", " keeper"],
+    });
+  });
+
+  test("a cancelled settle's partialText extends streamed windows with the unflushed tail", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: { role: "user", actor: { type: "user", origin: "web" }, content: "go" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 10,
+        payload: { model: "gpt-test" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-response-chunks",
+        payload: {
+          llmRequestOffset: 10,
+          sequence: 0,
+          chunks: [{ choices: [{ delta: { content: "The lighthouse" } }] }],
+        },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-settled",
+        payload: {
+          requestOffset: 10,
+          result: {
+            status: "cancelled",
+            reason: "interrupted-by-user-input",
+            // The interrupt stranded " keeper" in the coalescing buffer — it
+            // never flushed, but the settled fact carries the full partial.
+            partialText: "The lighthouse keeper",
+          },
+        },
+      },
+    ]);
+
+    const step =
+      state.live?.steps[0] ??
+      state.items.flatMap((item) => (item.kind === "activity" ? item.steps : []))[0];
+    expect(step).toMatchObject({
+      kind: "llm",
+      outcome: "cancelled",
+      responseText: "The lighthouse keeper",
+      responseWindows: ["The lighthouse", " keeper"],
     });
   });
 
@@ -573,7 +699,7 @@ describe("agent-ui reducer", () => {
     });
   });
 
-  test("accumulates agent llm-response-chunk deltas", () => {
+  test("accumulates agent llm-response-chunks deltas", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -581,19 +707,19 @@ describe("agent-ui reducer", () => {
         payload: { model: "test-model" },
       },
       {
-        type: "events.iterate.com/agent/llm-response-chunk",
-        payload: { llmRequestOffset: 3, sequence: 0, chunk: { response: "Hel" } },
+        type: "events.iterate.com/agent/llm-response-chunks",
+        payload: { llmRequestOffset: 3, sequence: 0, chunks: [{ response: "Hel" }] },
       },
       {
-        type: "events.iterate.com/agent/llm-response-chunk",
-        payload: { llmRequestOffset: 3, sequence: 1, chunk: { response: "lo" } },
+        type: "events.iterate.com/agent/llm-response-chunks",
+        payload: { llmRequestOffset: 3, sequence: 1, chunks: [{ response: "lo" }] },
       },
       {
-        type: "events.iterate.com/agent/llm-response-chunk",
+        type: "events.iterate.com/agent/llm-response-chunks",
         payload: {
           llmRequestOffset: 3,
           sequence: 2,
-          chunk: { choices: [{ delta: { reasoning_content: "hmm" } }] },
+          chunks: [{ choices: [{ delta: { reasoning_content: "hmm" } }] }],
         },
       },
     ]);
@@ -1216,11 +1342,11 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test" },
       },
       {
-        type: "events.iterate.com/agent/llm-response-chunk",
+        type: "events.iterate.com/agent/llm-response-chunks",
         payload: {
           llmRequestOffset: 7,
           sequence: 0,
-          chunk: { choices: [{ delta: { content: "old partial" } }] },
+          chunks: [{ choices: [{ delta: { content: "old partial" } }] }],
         },
       },
       {
@@ -1243,11 +1369,11 @@ describe("agent-ui reducer", () => {
         },
       },
       {
-        type: "events.iterate.com/agent/llm-response-chunk",
+        type: "events.iterate.com/agent/llm-response-chunks",
         payload: {
           llmRequestOffset: 7,
           sequence: 1,
-          chunk: { choices: [{ delta: { content: " stale chunk" } }] },
+          chunks: [{ choices: [{ delta: { content: " stale chunk" } }] }],
         },
       },
       {

@@ -12,7 +12,7 @@ import { AgentProcessor, type AgentProcessorDeps } from "./agent-processor-imple
 
 const REQUESTED = "events.iterate.com/agent/llm-request-requested";
 const SETTLED = "events.iterate.com/agent/llm-request-settled";
-const RESPONSE_CHUNK = "events.iterate.com/agent/llm-response-chunk";
+const RESPONSE_CHUNKS = "events.iterate.com/agent/llm-response-chunks";
 
 test("an intercepted/* turn is served by the interceptor: prompt in, text out, usage estimated, chunks journaled", async () => {
   const seen: { source: string; model: string; body: { messages: { content: string }[] } }[] = [];
@@ -45,9 +45,12 @@ test("an intercepted/* turn is served by the interceptor: prompt in, text out, u
   expect(h.events("events.iterate.com/agent/token-usage-reported")).toMatchObject([
     { payload: { model: "intercepted/main", outputTokens: 13 } },
   ]);
-  // Word-split chunk delivery kept journaled chunk events flowing.
-  const chunks = h.events(RESPONSE_CHUNK);
-  expect(chunks.length).toBeGreaterThan(1);
+  // Word-split chunk delivery kept journaled chunks flowing — coalesced into
+  // windowed llm-response-chunks events.
+  const chunkWindows = h.events(RESPONSE_CHUNKS);
+  expect(chunkWindows.flatMap((event) => event.payload.chunks as unknown[]).length).toBeGreaterThan(
+    1,
+  );
 });
 
 test("a handler returning { text, usage } reports that usage verbatim", async () => {

@@ -32,9 +32,13 @@ it("a mid-stream stall (chunks, then silence) settles the request within 60s of 
   expect(h.llm.calls).toHaveLength(1);
   expect(h.state().openRequest).not.toBeNull();
 
-  // The transport streams a few deltas and then goes quiet forever.
+  // The transport streams a few deltas and then goes quiet forever. A second
+  // of time-to-first-token elapses the coalescing window, so the first chunk
+  // flushes its own llm-response-chunks event; the rest sit in the buffer,
+  // which never flushes on a stream that never ends.
+  await h.play(["advanceTime", 1000]);
   await h.play(() => h.llm.streamChunks(["Hel", "lo ", "the"]));
-  expect(h.events(RESPONSE_CHUNK)).toHaveLength(3);
+  expect(h.events(RESPONSE_CHUNKS)).toMatchObject([{ payload: { chunks: ["Hel"], sequence: 0 } }]);
 
   // 60 seconds of silence, no deliveries. The watchdog trips at 45s idle
   // and settles the attempt failed — self-driven, from the processor side.
@@ -107,7 +111,7 @@ it("a slow but chunking attempt is never tripped by the watchdog", async () => {
 type AgentEventInput = ConsumedInput<AgentProcessorContract>;
 
 const SETTLED = "events.iterate.com/agent/llm-request-settled";
-const RESPONSE_CHUNK = "events.iterate.com/agent/llm-response-chunk";
+const RESPONSE_CHUNKS = "events.iterate.com/agent/llm-response-chunks";
 const REVIVED = "events.iterate.com/stream/processor-revived";
 
 const NEW_AGENT_EVENTS = [
