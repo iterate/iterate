@@ -111,6 +111,8 @@ const AMBIENT_NAMES = new Set([
   "URL",
   "Error",
   "Symbol",
+  // The `edits` pairs on previousScriptHelper carry RegExp patterns.
+  "RegExp",
 ]);
 
 /** One opened compiler session over the apps/os project. Dispose to stop the server. */
@@ -428,6 +430,7 @@ export function generateItxApi(): string {
 
   const emitClass = (publicName: string, cls: ClassDeclaration) => {
     const lines: string[] = [];
+    const memberTypeParams = new Set<string>();
     const classDoc = jsDocOf(cls);
     if (classDoc) lines.push(classDoc);
     // Overloaded methods: TypeScript's rule is that only the body-less
@@ -477,6 +480,10 @@ export function generateItxApi(): string {
         const typeParams = member.typeParameters
           ? `<${[...member.typeParameters].map((tp) => tp.getText()).join(", ")}>`
           : "";
+        // Method-level generics are in scope for their own signature — they
+        // must not read as leaked type names (multi-letter ones especially;
+        // single letters are already allowed by the leak scan).
+        for (const tp of member.typeParameters ?? []) memberTypeParams.add(tp.name.text);
         const params = [...member.parameters].map(paramText).filter(Boolean).join(", ");
         const returnText = member.type?.getText() ?? printReturnType(member);
         if (doc) lines.push(doc);
@@ -510,7 +517,9 @@ export function generateItxApi(): string {
     }
 
     lines.push("}");
-    interfaceChunks.push(rewriteAndCollect(lines.join("\n"), `interface ${publicName}`));
+    interfaceChunks.push(
+      rewriteAndCollect(lines.join("\n"), `interface ${publicName}`, memberTypeParams),
+    );
   };
 
   const emitNamedDecl = (name: string, decl: TypeAliasDeclaration | InterfaceDeclaration) => {

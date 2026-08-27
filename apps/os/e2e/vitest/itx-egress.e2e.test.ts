@@ -537,19 +537,20 @@ test("Project egress substitutes path-addressed secrets for explicit and project
     await waitForCondition(
       async () =>
         (await agentProcessor.snapshot()).state.contextItems.some(
-          (item) => item.payload.key === "agent/boot-context",
+          (item) => item.kind === "section" && item.key === "agent/boot-context",
         ),
       {
-        description: "agent boot context to fold into system context",
+        description: "agent boot context to fold into the standing document",
         timeoutMs: 30_000,
       },
     );
     expect((await agentProcessor.snapshot()).state).toMatchObject({
       contextItems: expect.arrayContaining([
         expect.objectContaining({
+          kind: "section",
+          key: "agent/boot-context",
           payload: expect.objectContaining({
             role: "system",
-            key: "agent/boot-context",
             content: expect.stringContaining(`Your agent stream path: ${agentPath}`),
           }),
         }),

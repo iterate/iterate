@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { AgentProcessorContract } from "../domains/agents/agent-processor-contract.ts";
 import { replayLlmRequest } from "./llm-request-replay.ts";
 
 // Raw rows exactly as the browser mirror returns them: the full committed
@@ -81,17 +82,18 @@ describe("replayLlmRequest", () => {
       },
       {
         id: "3:1",
+        // The standing document: one system message of tagged sections.
         role: "system",
-        content: '@1 key="agent/system-prompt"\nYou are **demo**.',
+        content: '<section key="agent/system-prompt">\nYou are **demo**.\n</section>',
       },
-      { id: "3:2", role: "user", content: "@2 actor=user:web\nhello" },
+      { id: "3:2", role: "user", content: "hello" },
       {
         id: "3:3",
         role: "developer",
-        // The clock rides as the LAST message (prompt-cache prefix safety),
-        // stamped from the llm-request-requested event's own append time —
-        // replay reproduces it exactly.
-        content: "Current date and time (UTC): 2026-07-11T00:00:03.000Z",
+        // The request's own permanent send stamp, from the
+        // llm-request-requested event's journaled append time — replay
+        // reproduces it exactly, and every later request is a superset.
+        content: "Requested at: 2026-07-11T00:00:03.000Z",
       },
     ]);
     // Settled by the settled event that points back at this offset.
@@ -104,10 +106,10 @@ describe("replayLlmRequest", () => {
       "system",
       "system",
       "user",
+      "developer", // request 3's permanent send stamp
       "assistant",
       "user",
-      // The trailing clock stamp (prompt-cache-safe tail position).
-      "developer",
+      "developer", // this request's own send stamp
     ]);
     const lastMessage = replay?.messages.at(-2);
     expect(lastMessage?.content).toContain("look at this");
@@ -398,6 +400,30 @@ describe("replayLlmRequest", () => {
     expect(replay?.response).toBeNull();
   });
 
+  it("labels a request sent by an older fold as reconstructed; a current-version stamp is byte-exact", () => {
+    // conversationRows' requested events carry no contractVersion stamp —
+    // pre-migration requests, rebuilt under the current fold.
+    const oldFold = replayLlmRequest({ rawEventJsons: conversationRows(), llmRequestOffset: 3 });
+    expect(oldFold?.reconstructed).toBe(true);
+
+    const stamped = replayLlmRequest({
+      rawEventJsons: [
+        ...conversationRows().slice(0, 2),
+        row(
+          "events.iterate.com/agent/llm-request-requested",
+          {
+            model: "openai/gpt-5.5",
+            contractVersion: AgentProcessorContract.version,
+            expiresAt: Date.parse("2026-07-11T00:01:00.000Z"),
+          },
+          3,
+        ),
+      ],
+      llmRequestOffset: 3,
+    });
+    expect(stamped?.reconstructed).toBe(false);
+  });
+
   it("returns null when the offset has no llm-request-requested event", () => {
     expect(replayLlmRequest({ rawEventJsons: conversationRows(), llmRequestOffset: 2 })).toBeNull();
     expect(
@@ -412,7 +438,7 @@ describe("replayLlmRequest", () => {
     expect(replay?.messages.at(-2)).toEqual({
       id: "3:2",
       role: "user",
-      content: "@2 actor=user:web\nhello",
+      content: "hello",
     });
   });
 });

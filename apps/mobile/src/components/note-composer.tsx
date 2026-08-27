@@ -11,6 +11,11 @@
 // store pending notes whenever a project is opened. Photo attachments upload
 // to itx.files and double-append onto /media with source "note" so the media
 // pipeline analyzes them for free.
+//
+// Photos arrive two ways: the camera-roll strip above the text field
+// (components/recent-photos-strip.tsx — one tap on a recent photo) and the +
+// button's full-screen system picker, for anything older. Both produce the
+// same PickedImage, and the strip checks a tile whichever way it got there.
 
 import { useRef, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -58,6 +63,11 @@ import { queryClient } from "../lib/query.ts";
 import { DEFAULT_SERVER } from "../lib/servers.ts";
 import { getServerBaseUrl } from "../lib/storage.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
+import { RecentPhotosStrip } from "./recent-photos-strip.tsx";
+
+/** How far the sheet's background hangs below its content — enough to sit
+ * behind the virtual keyboard's rounded top corners. */
+const KEYBOARD_CORNER_SKIRT = 24;
 
 /** Backgrounded longer than this → the composer re-expands on return: you
  * probably came back to capture something. */
@@ -363,6 +373,13 @@ export function NoteCaptureOverlay() {
   }
 
   const canSend = draft.trim() !== "" || attachments.length > 0;
+  const pickMore = async () => {
+    // Resolve the picker BEFORE touching state: it can stay open for many
+    // seconds, and a snapshot taken at press time would overwrite any strip
+    // tile whose transcode finished meanwhile.
+    const picked = await pickImages({ selectionLimit: 4 });
+    setAttachments((prev) => [...prev, ...picked]);
+  };
   const feedback =
     capture.data === "pending"
       ? "Saved on this phone — you'll be asked to store it when you open a project"
@@ -376,7 +393,12 @@ export function NoteCaptureOverlay() {
       pointerEvents="box-none"
       style={styles.overlay}
     >
-      <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}>
+      <View
+        style={[
+          styles.sheet,
+          { paddingBottom: Math.max(insets.bottom, spacing.sm) + KEYBOARD_CORNER_SKIRT },
+        ]}
+      >
         {attachments.length > 0 ? (
           <View style={styles.attachmentStrip}>
             {attachments.map((image) => (
@@ -407,13 +429,17 @@ export function NoteCaptureOverlay() {
             <Text style={styles.close}>✕</Text>
           </Pressable>
         </View>
+        <RecentPhotosStrip
+          attachments={attachments}
+          disabled={capture.isPending}
+          onAttachmentsChange={setAttachments}
+          onPickMore={pickMore}
+        />
         <View style={styles.composerRow}>
           <Pressable
             accessibilityLabel="Attach photos"
             disabled={capture.isPending}
-            onPress={async () =>
-              setAttachments([...attachments, ...(await pickImages({ selectionLimit: 4 }))])
-            }
+            onPress={pickMore}
             style={styles.attach}
           >
             <Text style={styles.attachText}>+</Text>
@@ -511,6 +537,14 @@ const styles = StyleSheet.create({
   },
   pillBadgeText: { color: colors.background, fontSize: 11, fontWeight: "700" },
   sheet: {
+    // Pulls the sheet's bottom edge below where its content ends; the extra
+    // paddingBottom at the call site puts the content back where it was. The
+    // point is purely the background: with the keyboard up, the sheet ends
+    // exactly at the keyboard's top edge, and the keyboard's rounded corners
+    // then reveal the page behind it in a visibly different colour. The skirt
+    // fills those corners with the sheet's own colour, and hangs harmlessly
+    // off the bottom of the screen when the keyboard is down.
+    marginBottom: -KEYBOARD_CORNER_SKIRT,
     backgroundColor: colors.surfaceRaised,
     borderTopColor: colors.border,
     borderTopWidth: 1,

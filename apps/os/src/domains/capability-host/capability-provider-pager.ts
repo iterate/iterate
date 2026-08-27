@@ -12,6 +12,7 @@
 import { RpcTarget } from "cloudflare:workers";
 import { z } from "zod";
 import { HibernatablePagers } from "../hibernatable-pager.ts";
+import { capabilityOfflineError } from "./capability-unserved.ts";
 import type { CapabilityRecord } from "./types.ts";
 import { deepRetainRpcStubs } from "./live-capability.ts";
 
@@ -186,7 +187,7 @@ export class CapabilityProviderPagers {
       this.#pagers.page(entry.ws, { type: "retire", providedAtOffset: key });
     }
     this.#disposeActive(key, "removal");
-    this.#failPending(key, new Error(`capability "${record.path.join(".")}" is offline`));
+    this.#failPending(key, capabilityOfflineError(record.path));
   }
 
   /** Retire every mount owned by one disconnected Pager. */
@@ -197,7 +198,7 @@ export class CapabilityProviderPagers {
     }
     for (const [key, pending] of this.#pendingProviders) {
       if (pending.record.providerPager.connectedAtOffset !== connectedAtOffset) continue;
-      this.#failPending(key, new Error(`capability "${pending.record.path.join(".")}" is offline`));
+      this.#failPending(key, capabilityOfflineError(pending.record.path));
     }
   }
 
@@ -225,7 +226,7 @@ export class CapabilityProviderPagers {
 
   #requestProvider(record: LiveCapabilityRecord): PendingProvider {
     const entry = this.#entryFor(record.providerPager.connectedAtOffset);
-    if (entry === undefined) throw new Error(`capability "${record.path.join(".")}" is offline`);
+    if (entry === undefined) throw capabilityOfflineError(record.path);
     const key = record.providedAtOffset;
     const { promise, reject, resolve } = Promise.withResolvers<void>();
     const pending: PendingProvider = {

@@ -19,6 +19,11 @@ on:
       - envs.ts
       - scripts/lib/**
       - apps/os/**
+      # New-project template seeding pins github references to the DEPLOYED
+      # revision's SHA, so a template content change is unreachable until the
+      # OS app redeploys and moves its pin (same reasoning as the preview
+      # workflow's configs/** entry).
+      - configs/**
       - packages/iterate/**
       - apps/auth/**
       - apps/auth-contract/**

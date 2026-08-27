@@ -29,6 +29,15 @@ console.log(`[vitest] run slug: ${vitestRunSlug}`);
 
 const ci = process.env.CI === "true";
 
+declare module "vitest" {
+  interface ProvidedContext {
+    [E2E_RUN_ROOT_KEY]: string;
+    [E2E_PROJECT_ROOT_KEY]: string;
+    [E2E_RUN_SLUG_KEY]: string;
+    [E2E_REPO_ROOT_KEY]: string;
+  }
+}
+
 const sharedProvide = {
   [E2E_RUN_ROOT_KEY]: vitestRunRoot,
   [E2E_PROJECT_ROOT_KEY]: e2eRoot,

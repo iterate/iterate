@@ -8,6 +8,7 @@
 // Budgets are in characters (no tokenizer in-repo); ~4 chars/token, so the
 // 3,000-token ceiling on the default prompt is 12,000 chars.
 import { expect, test } from "vitest";
+import { parsePromptSections } from "iterate/processors";
 import { ITX_API_DECLARATIONS } from "../../itx-api-graph.generated.ts";
 import { ITX_EXAMPLES } from "../../itx/examples.ts";
 import {
@@ -48,7 +49,11 @@ const CHARS_PER_TOKEN = 4;
 // 4200 → 4250 (2026-08-06): the script preamble shipped — the fresh-scripts
 // bullet now teaches `results` (prior outcomes in scope, typed) and
 // setPreamble; without the teach the injected symbols are dead weight.
-const DEFAULT_PROMPT_TOKEN_CEILING = 4_250;
+// 4250 → 4350 (2026-08-26): previousScriptAsHelperFunction shipped — one
+// bullet teaches reusing a journaled script with new inputs instead of
+// re-deriving it; the whole point is saving repeat-request output tokens, and
+// without the teach the helper is undiscoverable.
+const DEFAULT_PROMPT_TOKEN_CEILING = 4_350;
 
 const AGENT_PROMPTS: Record<string, string> = {
   default: DEFAULT_AGENT_SYSTEM_PROMPT,
@@ -72,9 +77,14 @@ const CHANNEL_PROMPTS: Record<string, string> = {
 };
 
 test(`the default prompt stays under ${DEFAULT_PROMPT_TOKEN_CEILING} tokens`, () => {
-  expect(DEFAULT_AGENT_SYSTEM_PROMPT.length).toBeLessThanOrEqual(
-    DEFAULT_PROMPT_TOKEN_CEILING * CHARS_PER_TOKEN,
-  );
+  // Measured on the MODEL-VISIBLE content: the file's <section id> tags are
+  // authoring syntax, stripped by the append-time parser — they never ride a
+  // request, so they don't count against the budget.
+  const modelVisibleChars = parsePromptSections({
+    content: DEFAULT_AGENT_SYSTEM_PROMPT,
+    fallbackKey: "agent/system-prompt",
+  }).reduce((sum, section) => sum + section.content.length, 0);
+  expect(modelVisibleChars).toBeLessThanOrEqual(DEFAULT_PROMPT_TOKEN_CEILING * CHARS_PER_TOKEN);
 });
 
 test("the default prompt teaches agents to share workspace files through Docs", () => {

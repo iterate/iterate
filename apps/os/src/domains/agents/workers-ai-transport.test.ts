@@ -432,7 +432,7 @@ describe("cloudflareAiGatewayResponseCacheKey", () => {
     expect(masked).not.toContain("deadbeef123");
   });
 
-  it("masks the clock stamp and the boot-context project line — birth turns share a key across projects", () => {
+  it("masks the send stamps and the boot-context project line — birth turns share a key across projects", () => {
     // Two projects' identical turns differ ONLY in per-project boot facts
     // and the per-request clock; the response cache must see them as equal
     // (the preview-burn protection from the response-cache work).
@@ -444,7 +444,7 @@ describe("cloudflareAiGatewayResponseCacheKey", () => {
             role: "user",
             content: `Platform context for this agent:\n- Project: "${name}" (slug ${slug}, id prj_${"0".repeat(32)}) — the project worker/website serves https://${slug}.iterate-preview-4.app\n- Your agent stream path: /agents/cache-probe`,
           },
-          { role: "system", content: `Current date and time (UTC): ${at}` },
+          { role: "developer", content: `Requested at: ${at}` },
         ],
       });
     const maskedA = maskCloudflareAiGatewayResponseCacheEntropy(
@@ -454,7 +454,7 @@ describe("cloudflareAiGatewayResponseCacheKey", () => {
       bodyFor("Crossword Helper", "crossword", "2026-07-12T18:30:00.000Z"),
     );
     expect(maskedA).toBe(maskedB);
-    expect(maskedA).toContain("Current date and time (UTC): MASKED");
+    expect(maskedA).toContain("Requested at: MASKED");
     expect(maskedA).toContain("- Project: MASKED");
     expect(maskedA).not.toContain("snake");
   });

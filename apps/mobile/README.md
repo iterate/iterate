@@ -32,7 +32,9 @@ When `apps/mobile/package.json` gains a native module, the already-installed
 client cannot load it from Metro. Build and install a new development client
 before testing that change. The repo workspace's native Markdown renderer is
 one such module; a client built before it landed will fail when opening chat or
-a Markdown preview.
+a Markdown preview. The note composer's camera-roll strip is another:
+it re-encodes the tapped photo through `expo-image-manipulator`, so on an older
+client the strip is simply absent and the `+` picker is the only way in.
 
 This repository does not contain Apple or Expo credentials. The first signed
 physical-device development build completed through the linked
@@ -210,13 +212,13 @@ testable from the phone alone. The runner shipped in PR #2059.
 
 ## Verification
 
-| Lane                                                          | What it proves                                                                                                                                                                                                  |
-| ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm --dir apps/mobile test`                                 | Pure logic: chat reducer, merge, path conventions (runs in root CI)                                                                                                                                             |
-| `pnpm spec --project=mobile`                                  | Real Expo Router + React Native Web behavior at a phone-sized viewport and one visible interaction; no Xcode/native build                                                                                       |
-| `doppler run --config dev -- pnpm --dir apps/mobile test:e2e` | Live round-trip through `iterate/node`: bearer auth → new mobile chat → real agent reply → live connection. Point it at a preview by switching the Doppler config. Needs `pnpm dev` running for the dev config. |
-| `npx expo export` / `npx expo prebuild`                       | The bundle builds; app config is sane                                                                                                                                                                           |
-| Iterate development build on a phone                          | Native integration: the in-app browser OAuth hop, Keychain/Face ID, APNs enrollment, and device-specific behavior                                                                                               |
+| Lane                                                          | What it proves                                                                                                                                                                                                                                              |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm --dir apps/mobile test`                                 | Pure logic: chat reducer, merge, path conventions (runs in root CI)                                                                                                                                                                                         |
+| `pnpm spec --project=mobile`                                  | Real Expo Router + React Native Web behavior at a phone-sized viewport and one visible interaction; no Xcode/native build. A browser has no camera roll, so the note composer's strip reads a fixture library the spec injects (`src/lib/recent-photos.ts`) |
+| `doppler run --config dev -- pnpm --dir apps/mobile test:e2e` | Live round-trip through `iterate/node`: bearer auth → new mobile chat → real agent reply → live connection. Point it at a preview by switching the Doppler config. Needs `pnpm dev` running for the dev config.                                             |
+| `npx expo export` / `npx expo prebuild`                       | The bundle builds; app config is sane                                                                                                                                                                                                                       |
+| Iterate development build on a phone                          | Native integration: the in-app browser OAuth hop, Keychain/Face ID, APNs enrollment, and device-specific behavior                                                                                                                                           |
 
 ## Layout
 
@@ -231,6 +233,7 @@ testable from the phone alone. The runner shipped in PR #2059.
 | `src/lib/approver.ts`          | Face-ID-gated Keychain storage binding for approver-core.ts                             |
 | `src/lib/approvals.ts`         | Egress-approval protocol: grant/reject/reconcile, ported from the CLI's approve-core.ts |
 | `src/lib/examples.ts`          | Filters the shared itx example catalogue to phone-runnable entries                      |
+| `src/lib/recent-photos.ts`     | The note composer's camera-roll strip: permission, recent assets, tap → JPEG attachment |
 | `src/app/`                     | expo-router screens: sign-in → projects → chat list → thread, approvals, examples       |
 
 `pnpm typecheck` / `pnpm test` run in root CI; nothing native does.

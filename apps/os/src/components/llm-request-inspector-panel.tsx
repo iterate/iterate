@@ -141,7 +141,12 @@ export function LlmRequestInspectorContent({
           Copy JSON
         </Button>
         <span className="ml-auto text-[10px] text-muted-foreground/70">
-          durable replay + live transient tail
+          {displayedReplay?.reconstructed
+            ? // Sent by an older fold: the shown messages are rebuilt under the
+              // current fold, not the bytes the model saw (decision 10 in
+              // tasks/prompt-sections-tree.md).
+              "reconstructed under the current fold (sent by an older fold — not byte-exact)"
+            : "durable replay + live transient tail"}
         </span>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto border-t">

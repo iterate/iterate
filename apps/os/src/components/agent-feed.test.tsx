@@ -434,10 +434,13 @@ test("the Meta yaml carries the round stats and the replayed prompt", () => {
       durationMs: 2_000,
       expiresAtMs: startedAtMs + 60_000,
     },
-    [
-      { role: "system", content: "You are an agent." },
-      { role: "user", content: "Line one\nLine two" },
-    ],
+    {
+      messages: [
+        { role: "system", content: "You are an agent." },
+        { role: "user", content: "Line one\nLine two" },
+      ],
+      reconstructed: false,
+    },
   );
 
   expect(yaml).toContain("model: openai/gpt-5.6-sol");
