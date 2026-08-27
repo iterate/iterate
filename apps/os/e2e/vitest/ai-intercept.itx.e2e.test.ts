@@ -28,13 +28,12 @@ test("itx.ai.run('intercepted/…') is served by the live interceptor; releasing
   );
 });
 
-// SPIKE: the interceptor is a live capability mount on the root scope, so
-// churn recovery is the shipped mount invariant, not a bespoke lane. The DO
+// The interceptor is a live capability mount on the root scope, so
+// churn recovery is the shipped mount invariant — no interceptor-specific transport exists. The DO
 // whose death matters is the ROOT STREAM DO (capability host + Pager parent):
 // killing it closes the installing session with the existing pager-lost 4901,
 // and the client's one recovery loop — reconnect, intercept() again —
-// restores service. Consult-latency is also measured here, crudely, for the
-// spike's verdict.
+// restores service. Consult latency is also logged here, crudely.
 test("a root stream DO restart closes the installing session with 4901; reconnect + re-install restores interception", async () => {
   using driver = withItxSession();
   using itx = driver.authenticate({ type: "admin-secret", secret: adminSecret() });
@@ -85,7 +84,7 @@ test("a root stream DO restart closes the installing session with 4901; reconnec
   expect(await project.ai.run("intercepted/echo", {})).toMatchObject({ servedBy: "re-install" });
 });
 
-// SPIKE: last-writer-wins maps to provide-at-same-path replacement, and the
+// Last-writer-wins maps to provide-at-same-path replacement, and the
 // loser's offset-keyed handle can never revoke the winner's mount.
 test("a newer intercept() supersedes the older one; the older handle's release cannot evict it", async () => {
   using driver = withItxSession();

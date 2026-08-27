@@ -810,8 +810,10 @@ export class ProjectDurableObject extends DurableObject<Env> {
    */
   async consultAiInterceptor(input: ProjectAiInterceptorInput): Promise<unknown> {
     // Safe: the root stream's facet composition hosts the capability-host
-    // processor, and its facade carries invokeCapability — the same narrow
-    // hand-declared subset seam the reduced-state facade above uses.
+    // processor, and its facade carries invokeCapability. As with the
+    // reduced-state facade above, the cast narrows the generated facade stub
+    // to the one method this caller dials; a facet composition lacking it
+    // rejects at call time.
     const facade = (await this.env.STREAM.getByName(
       DurableObjectNameCodec.stringify({ path: "/", projectId: this.#name.projectId }),
     ).processorFacade({ name: CapabilityHostProcessorContract.slug })) as unknown as {
