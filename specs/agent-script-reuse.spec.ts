@@ -1,5 +1,6 @@
 import { expect } from "@playwright/test";
 import dedent from "dedent";
+import type { ProjectAiInterceptor } from "iterate/node";
 import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
@@ -269,30 +270,32 @@ test("run() return values are typed from the reused row's data, through the real
 
 // -----------------------------------------------------------------------------
 // One intercepted-chat fixture per test: agent + interceptor + cold-deployment
-// warm-up + turn driving with interceptor-loss recovery.
+// warm-up + turn driving.
 // -----------------------------------------------------------------------------
 
 /**
  * Create an agent on an intercepted/* model whose turns are served from
  * `scripts` — inline codemode sources keyed by a substring of the user
  * message; an array value is a queue consumed one model call at a time (the
- * last entry repeats if the queue empties, so environment-driven re-sends
- * cannot crash the router).
+ * last entry repeats if the queue empties).
  *
- * The fixture also absorbs the cold-deployment cost before any UI assertion
- * (the first intercepted turn on a fresh deployment runs 35-65s of platform
- * churn and can lose the interceptor to a durable-object revival — filed for
- * a platform fix): a throwaway agent takes that hit at the itx level, where
- * waits carry no playwright budget, reconnecting and re-installing the
- * interceptor if the warm-up loses it.
+ * Interceptor churn is the platform/test-support contract's problem now:
+ * `fixture.interceptAi` installs the handler through the resilient loop
+ * (reconnect-and-reinstall on the 4901 pager-lost close), so this fixture
+ * carries no recovery machinery of its own. The warm-up turn stays: the
+ * FIRST intercepted turn on a cold deployment runs 35-65s of platform churn,
+ * and a throwaway agent absorbs that at the itx level, where waits carry no
+ * playwright budget.
  *
  * `sendExpecting(message, expected)` drives one chat turn and waits for the
- * expected reply by polling; on a timeout it re-sends ONLY when the agent
- * journal shows a "No AI interceptor" failure for this turn.
+ * expected reply by polling.
  */
 async function interceptedChat(input: {
   baseURL: string;
-  fixture: { project: { id: string; slug: string } };
+  fixture: {
+    project: { id: string; slug: string };
+    interceptAi: (handler: ProjectAiInterceptor) => Promise<AsyncDisposable>;
+  };
   page: import("@playwright/test").Page;
   model: string;
   scripts: Record<string, string | string[]>;
@@ -309,19 +312,17 @@ async function interceptedChat(input: {
     payload: { config: { llm: { model }, llmRequestDebounceMs: 250 } },
   });
 
-  const interceptor = async (call: {
-    source: string;
-    body: { messages: { role: string; content: string }[] };
-  }) => {
-    if (call.source !== "agent-turn") throw new Error(`unexpected source: ${call.source}`);
-    const lastUser = [...call.body.messages].reverse().find((m) => m.role === "user");
-    const entry = Object.entries(scripts).find(([key]) => lastUser?.content.includes(key));
-    if (!entry) throw new Error(`no scripted reply matches: ${lastUser?.content.slice(0, 80)}`);
-    const value = entry[1];
-    const script = Array.isArray(value) ? (value.length > 1 ? value.shift()! : value[0]!) : value;
-    return ["```ts", script, "```"].join("\n");
-  };
-  stack.use(await project.ai.intercept(interceptor));
+  stack.use(
+    await fixture.interceptAi(async (call) => {
+      if (call.source !== "agent-turn") throw new Error(`unexpected source: ${call.source}`);
+      const lastUser = [...call.body.messages].reverse().find((m) => m.role === "user");
+      const entry = Object.entries(scripts).find(([key]) => lastUser?.content.includes(key));
+      if (!entry) throw new Error(`no scripted reply matches: ${lastUser?.content.slice(0, 80)}`);
+      const value = entry[1];
+      const script = Array.isArray(value) ? (value.length > 1 ? value.shift()! : value[0]!) : value;
+      return ["```ts", script, "```"].join("\n");
+    }),
+  );
 
   const warmPath = `/agents/warm-${crypto.randomUUID().slice(0, 8)}`;
   const warmAgent = stack.use(project.agents.get(warmPath));
@@ -330,60 +331,19 @@ async function interceptedChat(input: {
     type: "events.iterate.com/agent/configured",
     payload: { config: { llm: { model }, llmRequestDebounceMs: 250 } },
   });
-  await warmAgent.ask({ message: "warm up", timeoutMs: 90_000 }).catch(async () => {
-    const freshAdmin = stack.use(await connectAdminItx(baseURL));
-    const freshProject = freshAdmin.projects.get(fixture.project.id);
-    stack.use(await freshProject.ai.intercept(interceptor));
-    await freshProject.agents
-      .get(warmPath)
-      .ask({ message: "warm up", timeoutMs: 45_000 })
-      .catch(() => {});
-  });
+  await warmAgent.ask({ message: "warm up", timeoutMs: 90_000 }).catch(() => {});
 
   await page.goto(`/projects/${fixture.project.slug}/agents/streams${agentPath}`);
   const composer = page.getByPlaceholder("Message this agent");
   const send = page.getByRole("button", { name: "Send message" });
 
   const sendExpecting = async (message: string, expected: string) => {
-    // Baseline BEFORE the send: the loss diagnosis must only see THIS turn's
-    // events. (Falls back to a fresh connection when a previous turn killed
-    // this one.)
-    const baseline = await agent.processor
-      .snapshot()
-      .then((snapshot) => snapshot.offset)
-      .catch(async () => {
-        const freshAdmin = stack.use(await connectAdminItx(baseURL));
-        const freshAgent = freshAdmin.projects.get(fixture.project.id).agents.get(agentPath);
-        return (await freshAgent.processor.snapshot()).offset;
-      });
-    const pollForReply = () =>
-      // timeout: polling instead of a locator wait because the working indicator stays up through long turns and the spinnerWaiter's stuck ceiling would fail them; post-warm-up turns settle in seconds, 60s is margin.
-      expect
-        .poll(async () => await page.getByText(expected).count(), { timeout: 60_000 })
-        .toBeGreaterThan(0);
     await composer.fill(message);
     await send.click();
-    try {
-      await pollForReply();
-    } catch (error) {
-      // Diagnose before acting: only a journaled "No AI interceptor" failure
-      // in THIS turn means the interceptor died and a re-send is warranted.
-      const freshAdmin = stack.use(await connectAdminItx(baseURL));
-      const freshProject = freshAdmin.projects.get(fixture.project.id);
-      const events = await freshProject.agents
-        .get(agentPath)
-        .stream.getEvents({ afterOffset: baseline, limit: 500 });
-      const interceptorLost = events.some(
-        (event: { type: string; payload: unknown }) =>
-          event.type === "events.iterate.com/agent/llm-request-settled" &&
-          JSON.stringify(event.payload).includes("No AI interceptor"),
-      );
-      if (!interceptorLost) throw error;
-      stack.use(await freshProject.ai.intercept(interceptor));
-      await composer.fill(message);
-      await send.click();
-      await pollForReply();
-    }
+    // timeout: polling instead of a locator wait because the working indicator stays up through long turns and the spinnerWaiter's stuck ceiling would fail them; post-warm-up turns settle in seconds, 60s is margin.
+    await expect
+      .poll(async () => await page.getByText(expected).count(), { timeout: 60_000 })
+      .toBeGreaterThan(0);
   };
 
   return {
