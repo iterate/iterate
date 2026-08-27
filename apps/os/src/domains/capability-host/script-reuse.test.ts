@@ -1,5 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { renderScriptReuseEnvelope, reparameterizeScript } from "./script-reuse.ts";
+import {
+  applyScriptEdits,
+  renderScriptReuseEnvelope,
+  reparameterizeScript,
+} from "./script-reuse.ts";
 
 const FACTORIZE = `async (itx) => {
   const target = 23409823948238439732889n;
@@ -52,6 +56,17 @@ test("the value's literal must appear exactly once, with boundary-aware matching
     parameters: { answer: 42 },
   });
   expect(result.code).toBe("async (itx) => 142 + 42.5 + x42 + __reuse_answer");
+});
+
+test("edits rewrite prose the parameters cannot reach, and must match", () => {
+  const code = "async (itx) => itx.chat.sendMessage(`42 = ${answer}`)";
+  expect(applyScriptEdits(code, [["42 =", "76 ="]])).toBe(
+    "async (itx) => itx.chat.sendMessage(`76 = ${answer}`)",
+  );
+  expect(applyScriptEdits(code, [[/\d+ =/g, "76 ="]])).toBe(
+    "async (itx) => itx.chat.sendMessage(`76 = ${answer}`)",
+  );
+  expect(() => applyScriptEdits(code, [["not present", "x"]])).toThrowError(/matches nothing/);
 });
 
 test("underscore-grouped numeric spellings are chased", () => {

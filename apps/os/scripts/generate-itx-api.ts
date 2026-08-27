@@ -111,6 +111,8 @@ const AMBIENT_NAMES = new Set([
   "URL",
   "Error",
   "Symbol",
+  // The `edits` pairs on previousScriptHelper carry RegExp patterns.
+  "RegExp",
 ]);
 
 /** One opened compiler session over the apps/os project. Dispose to stop the server. */

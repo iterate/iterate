@@ -301,9 +301,11 @@ import {
 import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "./domains/capability-host/capability-host-processor-contract.ts";
 import { runCapabilityHostScript } from "./domains/capability-host/capability-host-script-run.ts";
 import {
+  applyScriptEdits,
   renderScriptReuseEnvelope,
   reparameterizeScript,
   type ReuseParameterBinding,
+  type ScriptReuseEdit,
   type ScriptReuseValue,
 } from "./domains/capability-host/script-reuse.ts";
 import {
@@ -6094,7 +6096,10 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
    * names the VALUES the original script used inline (primitives only:
    * string/number/boolean/bigint) that should become parameters — each
    * literal must appear exactly once in that script and is swapped OUT for a
-   * generated identifier. The returned handle's `run(vars)` re-executes the
+   * generated identifier. Optional `edits` ([pattern, replacement] pairs;
+   * every pattern must match) rewrite script text that is NOT a parameter
+   * value — prose hardcoding an old input, a stale label — before
+   * parameterization. The returned handle's `run(vars)` re-executes the
    * script with new values as a journaled child script run; `vars` is typed
    * from the parameterize object (`{ n: 123n }` → `run({ n: bigint })`), and
    * the result type is best-effort inferred from the row's `data`/`load`
@@ -6103,20 +6108,24 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
   async previousScriptHelper<Result, P extends Record<string, ScriptReuseValue>>(input: {
     scriptOffset: number;
     parameterize: P;
+    edits?: ScriptReuseEdit[];
     load: (itx: never) => Promise<Result>;
   }): Promise<Omit<ReusableScriptRpcTarget, "run"> & { run(vars: P): Promise<Result> }>;
   async previousScriptHelper<Result, P extends Record<string, ScriptReuseValue>>(input: {
     scriptOffset: number;
     parameterize: P;
+    edits?: ScriptReuseEdit[];
     data: Result;
   }): Promise<Omit<ReusableScriptRpcTarget, "run"> & { run(vars: P): Promise<Result> }>;
   async previousScriptHelper<P extends Record<string, ScriptReuseValue>>(input: {
     scriptOffset: number;
     parameterize: P;
+    edits?: ScriptReuseEdit[];
   }): Promise<Omit<ReusableScriptRpcTarget, "run"> & { run(vars: P): Promise<unknown> }>;
   async previousScriptHelper(input: {
     scriptOffset: number;
     parameterize: Record<string, ScriptReuseValue>;
+    edits?: ScriptReuseEdit[];
   }): Promise<ReusableScriptRpcTarget> {
     const eventOffset = input.scriptOffset;
     const parameters = input.parameterize;
@@ -6161,7 +6170,11 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
       );
     }
     const { code } = requested.payload as { code: string };
-    const transformed = reparameterizeScript({ code, parameters });
+    // Edits first, on the original text; parameterize then locates values in
+    // the EDITED script. Edits are for text that is not a parameter value —
+    // message prose hardcoding an old input, a stale label.
+    const edited = input.edits === undefined ? code : applyScriptEdits(code, input.edits);
+    const transformed = reparameterizeScript({ code: edited, parameters });
     return new ReusableScriptRpcTarget({
       code: transformed.code,
       parameters: transformed.parameters,
@@ -6209,11 +6222,15 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     });
   }
 
-  /** Run an `async (itx) => { … }` script in this scope; the execution is journaled on the scope stream. */
+  /** Run an `async (itx) => { … }` script in this scope; the execution is
+   * journaled on the scope stream. `scriptEvent` is the journaled
+   * script-run-requested event — its offset is the reuse handle
+   * (previousScriptHelper's scriptOffset). */
   async runScript(code: string): Promise<{
     completedEvent: StreamEvent;
     executionId: string;
     result: unknown;
+    scriptEvent: StreamEvent;
   }> {
     const command = {
       code,

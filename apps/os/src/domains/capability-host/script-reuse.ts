@@ -44,6 +44,33 @@ export type ReuseParameterBinding = {
   name: string;
 };
 
+/** One textual edit to apply to the reused script before parameterization:
+ * a pattern (string = replace every occurrence; RegExp honors its own flags)
+ * and its replacement. This is how a reuse call fixes text that is not a
+ * parameter value — message prose hardcoding an old input, a stale label. */
+export type ScriptReuseEdit = [RegExp | string, string];
+
+/** Apply `edits` to the script text. Every pattern must match — an edit that
+ * changes nothing is a mistake worth failing loudly on. */
+export function applyScriptEdits(code: string, edits: ScriptReuseEdit[]): string {
+  for (const [pattern, replacement] of edits) {
+    const matched =
+      typeof pattern === "string"
+        ? code.includes(pattern)
+        : new RegExp(pattern.source, pattern.flags).test(code);
+    if (!matched) {
+      throw new Error(
+        `Edit pattern ${String(pattern)} matches nothing in the script — every edit must change something.`,
+      );
+    }
+    code =
+      typeof pattern === "string"
+        ? code.replaceAll(pattern, replacement)
+        : code.replace(pattern, replacement);
+  }
+  return code;
+}
+
 export function reparameterizeScript(input: {
   code: string;
   parameters: Record<string, ScriptReuseValue>;
