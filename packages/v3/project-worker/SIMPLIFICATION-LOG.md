@@ -410,3 +410,13 @@ toExpression/parseCapabilityPath + types). The MATCHER + EVALUATOR (`match`, `st
 engine behind `evaluate`/`invokePath`/`apply`; `zod` left the codec entirely (`ExpressionSchema`
 moved next to its only consumer, `config.ts`). Typecheck clean; suite 286 passed / 30 xf; behavior
 identical. (expression.ts arc this session: 479 → 331 [JSON5] → 99 [split].)
+
+### Two-block codec tests + fix
+
+`core/expression.test.ts` is now exactly two `test.each` blocks (parse direction, print direction)
+over ONE table of plausible itx expressions (getter path, no-arg call, chains, multi-arg, object +
+nested array/object args, primitives). The matcher + evaluator tests moved to `core/dispatch.test.ts`
+(they test `dispatch.ts` now); `expression.failing.test.ts` (all edge cases of the deleted
+hand-rolled parser) is gone. Fixed one carried-over TS control-flow nit in the picked `parse` (a
+`never`-returning `fail` must be a function DECLARATION, and `args` is initialised so try/catch
+definite-assignment is happy). expression.ts final: **99 lines**. Suite 277 passed / 30 xf.

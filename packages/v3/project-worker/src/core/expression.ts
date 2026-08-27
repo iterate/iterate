@@ -38,9 +38,9 @@ export function parse(source: string): Expression {
   const s = source.trim();
   const steps: Expression = [];
   let i = 0;
-  const fail = (m: string): never => {
-    throw new Error(`expression: ${m} in ${JSON.stringify(source)}`);
-  };
+  function fail(m: string): never {
+    throw new Error(`expression: ${m} in ${JSON.stringify(source)}`); // decl, not arrow: TS never-narrows
+  }
   const readName = (): string => {
     const m = IDENT.exec(s.slice(i));
     if (!m) fail(`name expected at ${i}`);
@@ -56,9 +56,9 @@ export function parse(source: string): Expression {
     else if (c === "(") {
       const end = matchingParen(s, i);
       const inner = s.slice(i + 1, end).trim();
-      let args: unknown[];
+      let args: unknown[] = [];
       try {
-        args = inner === "" ? [] : (JSON5.parse(`[${inner}]`) as unknown[]);
+        if (inner !== "") args = JSON5.parse(`[${inner}]`) as unknown[];
       } catch (e) {
         fail(`call args are not JSON5 (${(e as Error).message})`);
       }
