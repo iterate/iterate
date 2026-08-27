@@ -9,21 +9,19 @@ import { test } from "./test-support/test.ts";
 // scripts EXECUTE for real — the child run re-runs turn 1's algorithm with
 // the new number — and the spec opens each turn's codemode snippet in the
 // feed to show the shortcut.
-// On 2026-08-27 this spec failed 3/3 consecutive preview runs (Depot
-// w1hcwnlc3q, bqk06tf2kc, p2blkx8cx5) — including runs of THIS spec text
-// with its warm-up turn intact, one of them stalling on turn 2. The
-// journals show the turns complete in 150-183s: the in-flight intercepted
-// LLM request is severed by processor eviction churn, and a hung re-dial is
-// invisible until a 30-40s staleness wake (the expected-fail spec in
-// apps/os/src/domains/agents/agent-llm-stall.test.ts pins the mechanism).
-// Un-skip when attempt-progress deadlines land (that task's fix direction,
-// threads 1-2) and a preview run passes with the warm-up REMOVED (#2529).
-// Quarantined with tasks/platform-stall-repros.md.
-test.skip("a repeat request reuses the previous turn's journaled script instead of re-deriving it", async ({
+// UN-QUARANTINED here (was skipped with tasks/platform-stall-repros.md after
+// failing 3/3 preview runs on 2026-08-27): the attempt-progress watchdog on
+// this branch bounds a churn-severed turn, and this PR's preview runs — with
+// the warm-up turn REMOVED — are the quarantine's own exit-criteria proof.
+test("a repeat request reuses the previous turn's journaled script instead of re-deriving it", async ({
   helpers,
   page,
   baseURL,
 }) => {
+  // Turn 1 wears the whole cold-deployment cost on the clock (see its
+  // spinner budget below), so the default 90s spec budget cannot hold the
+  // full flow — heavy tier, same as agent-chat.spec.ts.
+  test.setTimeout(240_000);
   await using fixture = await helpers.createFixture("agent-script-reuse");
   if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
 
@@ -38,11 +36,6 @@ test.skip("a repeat request reuses the previous turn's journaled script instead 
   });
 
   const scripts: Record<string, string> = {
-    "warm up": dedent`
-      async (itx) => {
-        await itx.chat.sendMessage("warmed");
-      }
-    `,
     "prime factorize": dedent`
       async (itx) => {
         const n = 52479543428582704627n;
@@ -135,19 +128,6 @@ test.skip("a repeat request reuses the previous turn's journaled script instead 
     return ["```ts", entry[1], "```"].join("\n");
   });
 
-  // Absorb the cold-deployment cost before the UI assertions: the FIRST
-  // intercepted turn on a fresh deployment runs 35-65s of platform churn; a
-  // throwaway agent takes that hit at the itx level, where waits carry no
-  // playwright budget.
-  const warmPath = `/agents/warm-${crypto.randomUUID().slice(0, 8)}`;
-  using warmAgent = project.agents.get(warmPath);
-  await warmAgent.create();
-  await warmAgent.append({
-    type: "events.iterate.com/agent/configured",
-    payload: { config: { llm: { model: "intercepted/factorizer" }, llmRequestDebounceMs: 250 } },
-  });
-  await warmAgent.ask({ message: "warm up", timeoutMs: 90_000 }).catch(() => {});
-
   await page.goto(`/projects/${fixture.project.slug}/agents/streams${agentPath}`);
   const composer = page.getByPlaceholder("Message this agent");
   const send = page.getByRole("button", { name: "Send message" });
@@ -155,7 +135,12 @@ test.skip("a repeat request reuses the previous turn's journaled script instead 
   // Turn 1: the long way. The script really runs; the answer is computed.
   // The working indicator stays up while the turn runs server-side — a slow
   // turn is healthy, so give the spinner more room instead of failing it.
-  await spinnerWaiter.settings.run({ spinnerTimeout: 60_000 }, async () => {
+  // This turn also pays the deployment's one-time cold costs (DO spin-up +
+  // journal hydration, the tswasm sidecar's first compile, dynamic isolate
+  // creation — 35-65s on a fresh preview), hence the doubled budget here
+  // only. The spinner-waiter keeps this honest: it bails the moment the
+  // working indicator disappears, so the wide budget never hides a blank UI.
+  await spinnerWaiter.settings.run({ spinnerTimeout: 120_000 }, async () => {
     await composer.fill("prime factorize 52479543428582704627");
     await send.click();
     await page.getByText("52479543428582704627 = 6203868971 × 8459163737").waitFor();
@@ -211,10 +196,11 @@ test.skip("a repeat request reuses the previous turn's journaled script instead 
 // blocks only provable errors (syntax + near-miss typos), and satisfies
 // failures are TS1360, in the syntax range — plain TS2322 annotation
 // mismatches deliberately never block.
-// Quarantined with tasks/platform-stall-repros.md — same churn-wedge class
-// as the first test (this one failed 1/3 of the 2026-08-27 preview runs, at
-// turn 2, past its warm-up); same exit criteria.
-test.skip("run() return values are typed from the reused row's data, through the real gate", async ({
+// UN-QUARANTINED here alongside the first test (same churn-wedge class, same
+// exit criteria — the watchdog on this branch). This test keeps its warm-up
+// turn: removing it is a follow-up once the first test's warm-up-free shape
+// proves out on preview.
+test("run() return values are typed from the reused row's data, through the real gate", async ({
   helpers,
   page,
   baseURL,
@@ -232,82 +218,90 @@ test.skip("run() return values are typed from the reused row's data, through the
     payload: { config: { llm: { model: "intercepted/typed" }, llmRequestDebounceMs: 250 } },
   });
 
-  const nowDoQueue = [
-    // Attempt 1 — the wrong satisfies; the gate must reject it and the
-    // marker message must never send. results[1]: results[0] is the
-    // send-result round's done row.
-    dedent`
-      async (itx) => {
-        const helper = await itx.capabilityHost.previousScriptHelper({
-          ...results[1],
-          parameterize: { n: 8633n },
-        });
-        const result = await helper.run({ n: 10403n });
-        result satisfies readonly number[];
-        await itx.chat.sendMessage(\`this should never send: \${result}\`);
+  const warmUpScript = dedent`
+    async (itx) => {
+      await itx.chat.sendMessage("warmed");
+    }
+  `;
+  // Round 1: RETURN the factors (JSON-serializable, so strings — bigints do
+  // not survive result serialization); the returned value becomes a data row
+  // typed by its literal.
+  const factorizeScript = dedent`
+    async (itx) => {
+      const target = 8633n;
+      let remaining = target;
+      const factors: bigint[] = [];
+      for (let candidate = 2n; candidate * candidate <= remaining; candidate += 1n) {
+        while (remaining % candidate === 0n) {
+          factors.push(candidate);
+          remaining /= candidate;
+        }
       }
-    `,
-    // Attempt 2 (after the gate's corrective feedback) — the satisfies
-    // matching the inferred type passes. results[2], not [1]: attempt 1's
-    // rejection settled as an ERROR row, shifting positions — the drift
-    // results.byOffset absorbs; a scripted retry can just count.
-    dedent`
-      async (itx) => {
-        const helper = await itx.capabilityHost.previousScriptHelper({
-          ...results[2],
-          parameterize: { n: 8633n },
-        });
-        const result = await helper.run({ n: 10403n });
-        result satisfies readonly string[];
-        await itx.chat.sendMessage(\`Result is \${result.join(" × ")}\`);
-      }
-    `,
-  ];
-  const scriptQueues: Record<string, string[]> = {
-    "warm up": [
-      dedent`
-        async (itx) => {
-          await itx.chat.sendMessage("warmed");
-        }
-      `,
-    ],
-    "prime factorize": [
-      // Round 1: RETURN the factors (JSON-serializable, so strings —
-      // bigints do not survive result serialization); the returned value
-      // becomes a data row typed by its literal.
-      dedent`
-        async (itx) => {
-          const target = 8633n;
-          let remaining = target;
-          const factors: bigint[] = [];
-          for (let candidate = 2n; candidate * candidate <= remaining; candidate += 1n) {
-            while (remaining % candidate === 0n) {
-              factors.push(candidate);
-              remaining /= candidate;
-            }
-          }
-          if (remaining > 1n) factors.push(remaining);
-          return factors.map(String);
-        }
-      `,
-      // Round 2: the settlement made the value results[0].data — send it.
-      dedent`
-        async (itx) => {
-          await itx.chat.sendMessage(\`factors of 8633: \${results[0].data.join(" × ")}\`);
-        }
-      `,
-    ],
-    "now do": nowDoQueue,
-  };
+      if (remaining > 1n) factors.push(remaining);
+      return factors.map(String);
+    }
+  `;
+  // Round 2: the settlement made the value results[0].data — send it.
+  const sendFactorsScript = dedent`
+    async (itx) => {
+      await itx.chat.sendMessage(\`factors of 8633: \${results[0].data.join(" × ")}\`);
+    }
+  `;
+  // Attempt 1 — the wrong satisfies; the gate must reject it and the marker
+  // message must never send. results[1]: results[0] is the send-result
+  // round's done row.
+  const wrongSatisfiesScript = dedent`
+    async (itx) => {
+      const helper = await itx.capabilityHost.previousScriptHelper({
+        ...results[1],
+        parameterize: { n: 8633n },
+      });
+      const result = await helper.run({ n: 10403n });
+      result satisfies readonly number[];
+      await itx.chat.sendMessage(\`this should never send: \${result}\`);
+    }
+  `;
+  // Attempt 2 (after the gate's corrective feedback) — the satisfies
+  // matching the inferred type passes. results[2], not [1]: attempt 1's
+  // rejection settled as an ERROR row, shifting positions — the drift
+  // results.byOffset absorbs; a scripted retry can just count.
+  const correctSatisfiesScript = dedent`
+    async (itx) => {
+      const helper = await itx.capabilityHost.previousScriptHelper({
+        ...results[2],
+        parameterize: { n: 8633n },
+      });
+      const result = await helper.run({ n: 10403n });
+      result satisfies readonly string[];
+      await itx.chat.sendMessage(\`Result is \${result.join(" × ")}\`);
+    }
+  `;
+  const wrongAttemptServes = { count: 0 };
   await using _interception = await fixture.interceptAi(async (call) => {
     if (call.source !== "agent-turn") throw new Error(`unexpected source: ${call.source}`);
-    const lastUser = [...call.body.messages].reverse().find((m) => m.role === "user");
-    const entry = Object.entries(scriptQueues).find(([key]) => lastUser?.content.includes(key));
-    if (!entry) throw new Error(`no scripted reply matches: ${lastUser?.content.slice(0, 80)}`);
-    const queue = entry[1];
-    // Consume one per model call; the last entry repeats so re-asks cannot
-    // crash the router.
-    return ["```ts", queue.length > 1 ? queue.shift()! : queue[0]!, "```"].join("\n");
+    const messages = call.body.messages;
+    const lastUser = [...messages].reverse().find((m) => m.role === "user");
+    // Routing DERIVES from committed context, never from call counts: the
+    // platform legitimately re-asks (the attempt-progress watchdog fails a
+    // churn-hung attempt and the retry ladder re-dials), and a retried
+    // request must be served the same script — a positional queue desyncs.
+    // An assistant message only lands when a reply actually settled, so its
+    // content marks exactly which scripts have delivered.
+    const assistantDelivered = (marker: string) =>
+      messages.some((m) => m.role === "assistant" && m.content.includes(marker));
+    const script = (() => {
+      if (lastUser?.content.includes("warm up")) return warmUpScript;
+      if (lastUser?.content.includes("prime factorize")) {
+        return assistantDelivered("factors.map(String)") ? sendFactorsScript : factorizeScript;
+      }
+      if (lastUser?.content.includes("now do")) {
+        if (assistantDelivered("should never send")) return correctSatisfiesScript;
+        wrongAttemptServes.count += 1;
+        return wrongSatisfiesScript;
+      }
+      throw new Error(`no scripted reply matches: ${lastUser?.content.slice(0, 80)}`);
+    })();
+    return ["```ts", script, "```"].join("\n");
   });
 
   const warmPath = `/agents/warm-${crypto.randomUUID().slice(0, 8)}`;
@@ -333,10 +327,12 @@ test.skip("run() return values are typed from the reused row's data, through the
     await send.click();
     await page.getByText("Result is 101 × 103").waitFor();
   });
-  // The wrong attempt was consumed (the router keeps only the repeatable
-  // last entry) — the gate really rejected it and the agent loop delivered
-  // the corrective retry, which alone sends the final message.
-  if (nowDoQueue.length !== 1) {
-    throw new Error(`expected only the corrective retry to remain; ${nowDoQueue.length} left`);
+  // The wrong attempt was really served, and — since the final message that
+  // only the corrective attempt sends arrived — really rejected by the gate.
+  // (If run()'s inference ever degraded to `any`, the wrong satisfies would
+  // pass, that script would run, and "Result is 101 × 103" would never
+  // appear — the wait above fails first.)
+  if (wrongAttemptServes.count < 1) {
+    throw new Error("the gate-rejected attempt was never served");
   }
 });
