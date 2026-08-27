@@ -13,16 +13,16 @@
 // and must stay. The gap: a TRANSIENT resolution failure is treated as terminal
 // with no retry, so a registry-propagation blip permanently kills the project.
 //
-// Desired behavior asserted here (false today, hence test.fails): a
-// dependency-version-resolution failure that succeeds on a prompt retry does
-// not kill the build — the build backend retries the install/bundle at least
-// once and returns the usable artifact. (One retry is a placeholder; the exact
-// retry policy is the fix's decision.) Genuine persistent failures must still
-// fail loudly after retries — see the companion assertion at the bottom.
+// The contract (was an expected-fail pin): a dependency-version-resolution
+// failure that succeeds on a prompt retry does not kill the build — the build
+// backend re-runs the install/bundle (RESOLUTION_RETRY_ATTEMPTS, resolution
+// shapes only) and returns the usable artifact. Genuine persistent failures
+// still fail loudly after the retries — see the companion assertion at the
+// bottom.
 import { expect, test } from "vitest";
 import { executeWorkerBuild } from "./build-backend.ts";
 
-test.fails("DESIRED: a transient registry-propagation failure is retried instead of killing the build", async () => {
+test("a transient registry-propagation failure is retried instead of killing the build", async () => {
   // Controllable fake bundler: the first install hits the propagation window,
   // the second (what a prompt retry would see) succeeds.
   const attempts: number[] = [];

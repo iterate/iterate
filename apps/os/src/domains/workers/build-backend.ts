@@ -33,6 +33,29 @@ const DEPENDENCY_INSTALL_FAILURE_WARNING_PATTERNS = [
 ] as const;
 
 /**
+ * The subset of install-failure shapes with a known TRANSIENT cause: the npm
+ * publish-propagation window (preview-13 project pr2512, 2026-08-24 — a
+ * freshly published exact-pin 404'd for minutes, then resolved fine;
+ * tasks/platform-stall-repros.md thread 4). Template builds are lockfile-less,
+ * so every bootstrap resolves latest and is exposed. These get the in-process
+ * retry below; parse errors and install crashes stay one-shot terminal.
+ */
+const TRANSIENT_RESOLUTION_WARNING_PATTERNS = [
+  /^Could not resolve version for\b/,
+  /^Version .+ not found for\b/,
+] as const;
+
+/**
+ * Total attempts when every failure so far is a transient-resolution shape.
+ * No artificial pause between attempts: each retry re-runs the whole
+ * install/bundle, which takes seconds by itself — that is the pacing. A
+ * propagation window measured in minutes is beyond any in-process retry and
+ * still fails loudly; parking the bootstrap saga with a retryAt for that
+ * case is deliberately out of scope here (see the task file).
+ */
+const RESOLUTION_RETRY_ATTEMPTS = 3;
+
+/**
  * Bare node builtins nodejs_compat provides at runtime (WORKER_COMPATIBILITY_FLAGS
  * above): imports of these legitimately stay external, everything else external
  * is a startup failure. Base names only — subpath imports like `stream/web` or
@@ -218,29 +241,49 @@ export async function executeWorkerBuild(input: {
     ref: input.iterateRepoPkgRef,
     specOverrides: input.iterateRepoPkgSpecOverrides,
   });
-  if ("createApp" in input.source) {
-    const { files: _files, ...options } = input.source.createApp;
-    return classifyBuildResult(
-      await input.workerBundler.createApp({
+  const buildOnce = async (): Promise<WorkerBuildBackendResult> => {
+    if ("createApp" in input.source) {
+      const { files: _files, ...options } = input.source.createApp;
+      return classifyBuildResult(
+        await input.workerBundler.createApp({
+          ...options,
+          files,
+        }),
+      );
+    }
+    const { files: _files, ...options } = input.source.createWorker;
+    const built = classifyBuildResult(
+      await input.workerBundler.createWorker({
         ...options,
         files,
       }),
     );
-  }
+    return built.ok
+      ? {
+          ok: true,
+          output: { assetManifest: {}, assets: {}, ...built.output },
+        }
+      : built;
+  };
 
-  const { files: _files, ...options } = input.source.createWorker;
-  const built = classifyBuildResult(
-    await input.workerBundler.createWorker({
-      ...options,
-      files,
-    }),
-  );
-  return built.ok
-    ? {
-        ok: true,
-        output: { assetManifest: {}, assets: {}, ...built.output },
-      }
-    : built;
+  let result = await buildOnce();
+  for (
+    let attempt = 2;
+    attempt <= RESOLUTION_RETRY_ATTEMPTS && isTransientResolutionFailure(result);
+    attempt++
+  ) {
+    result = await buildOnce();
+  }
+  return result;
+}
+
+/** A source failure whose every line is a version-resolution warning shape —
+ * the one class where re-running the install can honestly change the answer. */
+function isTransientResolutionFailure(result: WorkerBuildBackendResult): boolean {
+  if (result.ok) return false;
+  return result.failure.message
+    .split("\n")
+    .some((line) => TRANSIENT_RESOLUTION_WARNING_PATTERNS.some((pattern) => pattern.test(line)));
 }
 
 function classifyBuildResult<T>(
