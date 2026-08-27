@@ -1,4 +1,3 @@
-import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
 // The deterministic sibling of agent-chat.spec.ts: same UI journey (composer →
@@ -9,12 +8,10 @@ import { test } from "./test-support/test.ts";
 test("multi-turn chat with a sarcastic agent served by the spec's own fake-model interceptor", async ({
   helpers,
   page,
-  baseURL,
 }) => {
   await using fixture = await helpers.createFixture("agent-fake-chat");
-  if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
 
-  using admin = await connectAdminItx(baseURL);
+  using admin = await fixture.connectAdmin();
   using project = admin.projects.get(fixture.project.id);
   const agentPath = `/agents/sarcastic-${crypto.randomUUID().slice(0, 8)}`;
   using agent = project.agents.get(agentPath);
@@ -29,7 +26,7 @@ test("multi-turn chat with a sarcastic agent served by the spec's own fake-model
   // The "model": an in-memory function in THIS process, dialed back over
   // capnweb for every intercepted/* turn. It answers the agent contract's way — one
   // codemode script — sending a sarcastic rendering of whatever the user said.
-  using _interception = await project.ai.intercept(async (call) => {
+  await using _interception = await fixture.interceptAi(async (call) => {
     if (call.source !== "agent-turn") throw new Error(`unexpected source: ${call.source}`);
     const lastUser = [...call.body.messages].reverse().find((m) => m.role === "user");
     const reply = formatSarcasticResponse(stripXmlBlocks(lastUser?.content ?? ""));

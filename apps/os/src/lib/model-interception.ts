@@ -15,6 +15,14 @@ import { z } from "zod";
 /** The model-name namespace served by the live AI interceptor. */
 const INTERCEPTED_MODEL_PREFIX = "intercepted/";
 
+/**
+ * The root-scope capability path serving intercepted/* models. `ai.intercept`
+ * is sugar for mounting the handler as a LIVE capability here; both egress
+ * paths consult it through the root capability host. Provide-at-same-path
+ * replaces, which is what makes intercept() last-writer-wins.
+ */
+export const AI_INTERCEPTOR_CAPABILITY_NAME = "aiInterceptor";
+
 export function isInterceptedModel(model: string): boolean {
   return model.startsWith(INTERCEPTED_MODEL_PREFIX);
 }
