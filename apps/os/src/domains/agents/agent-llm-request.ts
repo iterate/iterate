@@ -31,6 +31,29 @@ import {
   type WorkersAiMessage,
 } from "./workers-ai-transport.ts";
 
+/**
+ * How long an in-flight attempt may show zero progress (no chunk since the
+ * dial, or chunks that stopped) before the watchdog settles it `failed` and
+ * hands re-dialing to the retry ladder. The number balances two real cases:
+ * big-prompt time-to-first-token on a slow provider (a false trip costs one
+ * ladder re-roll, 10-60s — annoying, recoverable) against a severed attempt
+ * on a churning preview, where every second here is user-visible "Waiting
+ * for a response" (observed 150-183s per turn at the old 30-40s staleness
+ * granularity, 15m10s worst case; tasks/platform-stall-repros.md). 45s
+ * comfortably clears observed provider inter-chunk gaps and sits under the
+ * stall specs' 60s settle budget.
+ */
+const LLM_ATTEMPT_IDLE_BUDGET_MS = 45_000;
+
+/** RUNTIME in-flight record — see #inFlightLlmCall. */
+type InFlightLlmCall = {
+  requestOffset: number;
+  controller: AbortController;
+  partialText: string;
+  /** Last observed progress (dial or chunk receipt), for the idle watchdog. */
+  lastProgressAtMs: number;
+};
+
 export class AgentLlmRequest {
   readonly #host: AgentHost;
 
@@ -43,11 +66,7 @@ export class AgentLlmRequest {
    * reduces the stream, finds the open request absent here, and runs it again
    * (adopt-based recovery).
    */
-  #inFlightLlmCall: {
-    requestOffset: number;
-    controller: AbortController;
-    partialText: string;
-  } | null = null;
+  #inFlightLlmCall: InFlightLlmCall | null = null;
 
   constructor(host: AgentHost) {
     this.#host = host;
@@ -155,10 +174,16 @@ export class AgentLlmRequest {
     open: NonNullable<AgentProcessorState["openRequest"]>,
   ) {
     const requestOffset = open.requestedAtOffset;
-    const inFlight = { requestOffset, controller: new AbortController(), partialText: "" };
+    const inFlight = {
+      requestOffset,
+      controller: new AbortController(),
+      partialText: "",
+      lastProgressAtMs: this.#host.now(),
+    };
     this.#inFlightLlmCall = inFlight;
-    const startedAtMs = this.#host.now();
+    const startedAtMs = inFlight.lastProgressAtMs;
     let chunkSequence = 0;
+    this.#watchAttemptProgress(args, inFlight, startedAtMs);
     args.runInBackground(async () => {
       try {
         const events = await this.readConsumedEvents();
@@ -175,6 +200,7 @@ export class AgentLlmRequest {
           deadlineMs: Math.max(1, open.expiresAt - this.#host.now()),
           onChunk: async (chunk) => {
             if (inFlight.controller.signal.aborted) return;
+            inFlight.lastProgressAtMs = this.#host.now();
             inFlight.partialText += extractChunkText(chunk);
             const sequence = chunkSequence;
             chunkSequence += 1;
@@ -247,40 +273,97 @@ export class AgentLlmRequest {
         // An aborted call is the interrupt path's story — it already settled
         // the request as cancelled.
         if (inFlight.controller.signal.aborted) return;
-        const errorMessage = stringifyError(error);
-        // Attempt arithmetic from the dispatch-time reduced state: this failure is
-        // attempt (consecutiveLlmFailures + 1). The settled event's reduce
-        // schedules the retry; the error-occurred event gets transcribed into
-        // context so the next turn sees what happened.
-        const attempt = args.state.consecutiveLlmFailures + 1;
-        const { maxAttempts } = args.state.config.llmRequestRetryPolicy;
-        await appendUnlessLostIdempotencyRace(args.append, [
-          {
-            type: "events.iterate.com/agent/llm-request-settled",
-            payload: {
-              requestOffset,
-              durationMs: Math.max(0, this.#host.now() - startedAtMs),
-              result: { status: "failed", errorMessage },
-            },
-            idempotencyKey: this.#host.idempotencyKey(`settle/${requestOffset}`),
-          },
-          {
-            type: "events.iterate.com/stream/error-occurred",
-            payload: {
-              message:
-                attempt < maxAttempts
-                  ? `LLM request @${requestOffset} failed (attempt ${attempt} of ${maxAttempts}): ${errorMessage}. Retrying.`
-                  : `LLM request @${requestOffset} failed (attempt ${attempt} of ${maxAttempts}): ${errorMessage}. Giving up; a new user message starts fresh.`,
-            },
-            idempotencyKey: this.#host.idempotencyKey(`failure-error/${requestOffset}`),
-          },
-        ]);
+        await this.#appendAttemptFailure(args, {
+          requestOffset,
+          startedAtMs,
+          errorMessage: stringifyError(error),
+        });
       } finally {
         if (this.#inFlightLlmCall?.requestOffset === requestOffset) {
           this.#inFlightLlmCall = null;
         }
       }
     });
+  }
+
+  /**
+   * The attempt-progress watchdog: an attempt that shows no progress (no
+   * chunk since the dial, or chunks that stopped) for
+   * LLM_ATTEMPT_IDLE_BUDGET_MS is settled `failed` from the processor's side
+   * — without waiting on the transport promise, which a severed pager socket
+   * or a hung provider read may never resolve (and may ignore its abort
+   * signal). The settle feeds the existing retry ladder, which owns
+   * re-dialing; the ladder never starts on its own because a hung attempt
+   * never FAILS (tasks/platform-stall-repros.md, threads 1-2).
+   *
+   * Deliberately in-memory and per-incarnation: every loss path is already
+   * covered — if this incarnation dies, the keepalive revives a successor
+   * whose at-head adopt re-dials and arms a fresh watchdog. `host.sleep` is
+   * the virtualized clock seam, so the harness drives this with
+   * `advanceTime`.
+   */
+  #watchAttemptProgress(
+    args: ProcessEventArgs<AgentProcessorContract>,
+    inFlight: InFlightLlmCall,
+    startedAtMs: number,
+  ): void {
+    args.runInBackground(async () => {
+      while (this.#inFlightLlmCall === inFlight && !inFlight.controller.signal.aborted) {
+        const idleMs = this.#host.now() - inFlight.lastProgressAtMs;
+        if (idleMs < LLM_ATTEMPT_IDLE_BUDGET_MS) {
+          await this.#host.sleep(LLM_ATTEMPT_IDLE_BUDGET_MS - idleMs);
+          continue;
+        }
+        // Append BEFORE aborting: the settle/<offset> idempotency key makes a
+        // race against a just-completed attempt collapse to one winner, and
+        // the abort afterwards silences the zombie closure (its
+        // signal.aborted guards skip both journaling and its own catch-path
+        // settle).
+        await this.#appendAttemptFailure(args, {
+          requestOffset: inFlight.requestOffset,
+          startedAtMs,
+          errorMessage: `no response progress for ${Math.round(idleMs / 1000)}s (attempt presumed severed or stalled)`,
+        });
+        this.abandonExpired(inFlight.requestOffset);
+        return;
+      }
+    });
+  }
+
+  /**
+   * A failed attempt's settlement: the settled event's reduce schedules the
+   * retry (attempt arithmetic from the dispatch-time reduced state — this
+   * failure is attempt consecutiveLlmFailures + 1); the error-occurred event
+   * gets transcribed into context so the next turn sees what happened.
+   */
+  async #appendAttemptFailure(
+    args: ProcessEventArgs<AgentProcessorContract>,
+    input: { requestOffset: number; startedAtMs: number; errorMessage: string },
+  ): Promise<void> {
+    const { requestOffset, startedAtMs, errorMessage } = input;
+    const attempt = args.state.consecutiveLlmFailures + 1;
+    const { maxAttempts } = args.state.config.llmRequestRetryPolicy;
+    await appendUnlessLostIdempotencyRace(args.append, [
+      {
+        type: "events.iterate.com/agent/llm-request-settled",
+        payload: {
+          requestOffset,
+          durationMs: Math.max(0, this.#host.now() - startedAtMs),
+          result: { status: "failed", errorMessage },
+        },
+        idempotencyKey: this.#host.idempotencyKey(`settle/${requestOffset}`),
+      },
+      {
+        type: "events.iterate.com/stream/error-occurred",
+        payload: {
+          message:
+            attempt < maxAttempts
+              ? `LLM request @${requestOffset} failed (attempt ${attempt} of ${maxAttempts}): ${errorMessage}. Retrying.`
+              : `LLM request @${requestOffset} failed (attempt ${attempt} of ${maxAttempts}): ${errorMessage}. Giving up; a new user message starts fresh.`,
+        },
+        idempotencyKey: this.#host.idempotencyKey(`failure-error/${requestOffset}`),
+      },
+    ]);
   }
 
   /**
