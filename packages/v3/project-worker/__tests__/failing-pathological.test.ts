@@ -45,21 +45,19 @@ test("a 64-deep nested-array payload (structured lane) appends and reads back by
   expect(JSON.stringify(page.events[0].payload)).toBe(JSON.stringify(payload));
 });
 
-test("string-half expressions: 58-deep parses and round-trips; 70-deep fails LOUDLY at the parse budget", async () => {
+test("string-half expressions: deeply nested payloads parse and round-trip (JSON5, no parse budget)", async () => {
   const itx = await harness.itx("prj_path_depthstr");
-  // Near the budget (the arg object + payload object already consume 2 of the 64 levels).
-  const [committed] = await itx.invoke(
-    `itx.stream.append({type:'deepstr',payload:{d:${nestedLiteral(58)}}})`,
-  );
-  const page = await itx.invokeCapability({
-    path: ["stream", "read"],
-    args: [committed.offset - 1, 1],
-  });
-  expect(JSON.stringify(page.events[0].payload)).toBe(JSON.stringify({ d: nested(58) }));
-  // Over the budget: a loud parse error naming the limit — never a hang or a stack overflow.
-  await expect(
-    itx.invoke(`itx.stream.append({type:'deepstr2',payload:{d:${nestedLiteral(70)}}})`),
-  ).rejects.toThrow(/64 levels/);
+  // JSON5 is iterative — there is no artificial parse budget; a deep arg parses and round-trips.
+  for (const depth of [58, 70]) {
+    const [committed] = await itx.invoke(
+      `itx.stream.append({type:'deepstr',payload:{d:${nestedLiteral(depth)}}})`,
+    );
+    const page = await itx.invokeCapability({
+      path: ["stream", "read"],
+      args: [committed.offset - 1, 1],
+    });
+    expect(JSON.stringify(page.events[0].payload)).toBe(JSON.stringify({ d: nested(depth) }));
+  }
 });
 
 test("FIXED (defect 22): idempotent RETRY of a 64-deep payload dedupes's depth error instead of deduping", async () => {

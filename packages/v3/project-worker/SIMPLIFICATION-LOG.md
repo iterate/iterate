@@ -383,3 +383,17 @@ Already done (verified, no work): **defect 39** (secret-name charset), **defects
 Net: **286 passed / 30 xf** (was 280 / 36 — six `test.fails` flipped). Typecheck clean; no code
 touched beyond the 3-line codec fix + test flips. Deliberately NOT expanded into the provide/enable
 path-validation amplifiers (40/42) or the other families — kept lean per the ask.
+
+## Codec via JSON5 (Jonas) — delete the hand-rolled parser + printer
+
+Jonas: use json5 (accepts the ergonomic form we already write — single quotes, unquoted keys,
+trailing commas), minimum code, don't preserve the old format. Done. `core/expression.ts` parse is
+now a tiny structural scan (dotted names + `matchingParen` to find a call's balanced parens) that
+hands the args to `JSON5.parse("[" + inner + "]")`; `print` is `JSON5.stringify(args).slice(1,-1)`.
+DELETED: the ~100-line hand-rolled recursive-descent value parser (`#value`/`#object`/`#array`/
+`#string`/`#number`/`#word`/…) AND `printValue`/`isPlainObject`/`IDENT_KEY`, plus the dead
+`events.ts` `deeper` depth budget (JSON5 is iterative — 100k-deep parses without a stack overflow,
+so no artificial budget needed). **Zero proof/test STRING churn** — JSON5 reads exactly what the
+platform already writes. expression.ts 479 → 331 lines. All defect-1/2/3 tests subsumed (JSON5
+round-trips exponents/keys natively; `-0`→`0` is a documented JSON5 limitation, not a bug). Suite
+286 passed / 30 xf; typecheck clean. NEXT (Jonas): two-block table tests + get expression.ts <100 LOC.

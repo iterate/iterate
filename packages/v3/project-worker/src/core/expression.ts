@@ -22,7 +22,7 @@
 
 import { codedError } from "./errors.ts";
 import { z } from "zod";
-import { deeper } from "./events.ts";
+import JSON5 from "json5";
 
 /** One step: a property read (string) or a call (`[method, ...args]`). Args are plain JSON. */
 type Step = string | [method: string, ...args: unknown[]];
@@ -47,215 +47,82 @@ export function parseCapabilityPath(source: string): CapabilityPath {
   return expr;
 }
 
-const isPlainObject = (v: unknown): v is Record<string, unknown> =>
-  typeof v === "object" && v !== null && !Array.isArray(v);
-
 // ─────────────────────────────────────────────── parse ───────────────────────────────────────────────
-// The string half: dotted identifier segments; call parens with JSON5-ish literals (single or
-// double quoted strings, numbers, true/false/null, objects, arrays). Hand-rolled recursive
-// descent — no dependencies (this package is pure-play).
+// The string half: dotted identifier segments and `.method(args)` calls. The args between a
+// call's parens are handed to JSON5.parse (wrapped as an array) — ONE mature parser for every
+// value, so the codec no longer hand-rolls number/string/object grammar (the source of the
+// print↔parse bug family, defects 1-4). JSON5 accepts the ergonomic form the platform already
+// writes: single OR double quotes, unquoted identifier keys, trailing commas — and is natively
+// safe against __proto__ pollution.
 
-export function parse(source: string): Expression {
-  const p = new Parser(source);
-  const expr = p.expression();
-  p.expectEnd();
-  return expr;
+const IDENT = /^[A-Za-z_$][A-Za-z0-9_$-]*/;
+const RESERVED = new Set(["__proto__", "constructor", "prototype"]);
+
+/** Index of the `)` that closes the `(` at `open`, tracking bracket depth and skipping string
+ *  contents (single OR double quoted) so a bracket inside a string arg never closes early. */
+function matchingParen(s: string, open: number): number {
+  let depth = 0;
+  for (let j = open; j < s.length; j++) {
+    const c = s[j];
+    if (c === '"' || c === "'") {
+      const q = c;
+      for (j++; j < s.length && s[j] !== q; j++) if (s[j] === "\\") j++;
+      continue;
+    }
+    if (c === "(" || c === "[" || c === "{") depth++;
+    else if (c === ")" || c === "]" || c === "}") if (--depth === 0) return j;
+  }
+  throw new Error(`expression: unbalanced "(" in ${JSON.stringify(s)}`);
 }
 
-class Parser {
-  #s: string;
-  #i = 0;
-
-  constructor(s: string) {
-    this.#s = s;
-  }
-
-  expression(): Expression {
-    const steps: Expression = [];
-    steps.push(this.#ident());
-    for (;;) {
-      this.#ws();
-      if (this.#peek() === "(") {
-        // turn the preceding property step into a call step
-        const name = steps.pop();
-        if (typeof name !== "string") throw this.#err("call must follow a name");
-        if (steps.length === 0)
-          throw this.#err("cannot call the scope symbol itself — name a capability first");
-        steps.push([name, ...this.#args()]);
-      } else if (this.#peek() === ".") {
-        this.#i++;
-        steps.push(this.#ident());
-      } else {
-        return steps;
-      }
-    }
-  }
-
-  #args(): unknown[] {
-    this.#expect("(");
-    const args: unknown[] = [];
-    this.#ws();
-    if (this.#peek() === ")") {
-      this.#i++;
-      return args;
-    }
-    for (;;) {
-      args.push(this.#value());
-      this.#ws();
-      if (this.#peek() === ",") {
-        this.#i++;
-        continue;
-      }
-      this.#expect(")");
-      return args;
-    }
-  }
-
-  #depth = 0;
-
-  /** One JSON5-ish value. */
-  #value(): unknown {
-    this.#depth = deeper(this.#depth, "parse");
-    try {
-      return this.#valueBody();
-    } finally {
-      this.#depth--;
-    }
-  }
-
-  #valueBody(): unknown {
-    this.#ws();
-    const c = this.#peek();
-    if (c === "'" || c === '"') return this.#string(c);
-    if (c === "{") return this.#object();
-    if (c === "[") return this.#array();
-    if (c === "-" || (c >= "0" && c <= "9")) {
-      const n = this.#number();
-      if (n === null) throw this.#err("number expected");
-      return n;
-    }
-    const word = this.#word();
-    if (word === "true") return true;
-    if (word === "false") return false;
-    if (word === "null") return null;
-    throw this.#err(`unexpected value ${JSON.stringify(word || c)}`);
-  }
-
-  #object(): Record<string, unknown> {
-    this.#expect("{");
-    const out: Record<string, unknown> = {};
-    this.#ws();
-    if (this.#peek() === "}") {
-      this.#i++;
-      return out;
-    }
-    for (;;) {
-      this.#ws();
-      const q = this.#peek();
-      const key = q === "'" || q === '"' ? this.#string(q) : this.#word();
-      this.#ws();
-      this.#expect(":");
-      // defineProperty stores a "__proto__" key as an own data property instead of invoking
-      // the prototype setter — closes the payload-driven prototype-pollution vector.
-      Object.defineProperty(out, key, {
-        value: this.#value(),
-        writable: true,
-        enumerable: true,
-        configurable: true,
-      });
-      this.#ws();
-      if (this.#peek() === ",") {
-        this.#i++;
-        continue;
-      }
-      this.#expect("}");
-      return out;
-    }
-  }
-
-  #array(): unknown[] {
-    this.#expect("[");
-    const out: unknown[] = [];
-    this.#ws();
-    if (this.#peek() === "]") {
-      this.#i++;
-      return out;
-    }
-    for (;;) {
-      out.push(this.#value());
-      this.#ws();
-      if (this.#peek() === ",") {
-        this.#i++;
-        continue;
-      }
-      this.#expect("]");
-      return out;
-    }
-  }
-
-  #string(quote: string): string {
-    this.#expect(quote);
-    let out = "";
-    while (this.#i < this.#s.length) {
-      const c = this.#s[this.#i++];
-      if (c === quote) return out;
-      if (c === "\\") {
-        const e = this.#s[this.#i++];
-        out += e === "n" ? "\n" : e === "t" ? "\t" : e; // \' \" \\ \n \t
-      } else out += c;
-    }
-    throw this.#err("unterminated string");
-  }
-
-  #number(): number | null {
-    // Exponent branch so `print`'s JSON.stringify output for |n| ≥ 1e21 / < 1e-6 (`1e+21`, `1e-7`)
-    // round-trips back through parse.
-    const m = /^-?\d+(\.\d+)?([eE][+-]?\d+)?/.exec(this.#s.slice(this.#i));
-    if (!m) return null;
-    this.#i += m[0].length;
-    return Number(m[0]);
-  }
-
-  #ident(): string {
-    this.#ws();
-    const w = this.#word();
-    if (!w) throw this.#err("name expected");
-    if (w === "__proto__" || w === "constructor" || w === "prototype")
-      throw this.#err(`reserved name "${w}"`);
-    return w;
-  }
-
-  #word(): string {
-    // Hyphens are legal in non-leading position: kebab-case slugs ("capability-table",
-    // "user-tally") are path segments throughout the platform, and this grammar has no binary
-    // minus to collide with (a number's minus is consumed by the value branch first).
-    const m = /^[A-Za-z_$][A-Za-z0-9_$-]*/.exec(this.#s.slice(this.#i));
-    if (!m) return "";
-    this.#i += m[0].length;
+export function parse(source: string): Expression {
+  const s = source.trim();
+  const steps: Expression = [];
+  let i = 0;
+  const readName = (): string => {
+    const m = IDENT.exec(s.slice(i));
+    if (!m) throw new Error(`expression: name expected at ${i} in ${JSON.stringify(source)}`);
+    if (RESERVED.has(m[0]))
+      throw new Error(`expression: reserved name "${m[0]}" in ${JSON.stringify(source)}`);
+    i += m[0].length;
     return m[0];
+  };
+  steps.push(readName()); // the scope root (itx)
+  while (i < s.length) {
+    const c = s[i];
+    if (/\s/.test(c)) {
+      i++;
+    } else if (c === ".") {
+      i++;
+      steps.push(readName());
+    } else if (c === "(") {
+      // A CALL: JSON5-parse the args between the balanced parens (wrapped as an array).
+      const end = matchingParen(s, i);
+      const inner = s.slice(i + 1, end).trim();
+      let args: unknown[];
+      try {
+        args = inner === "" ? [] : (JSON5.parse(`[${inner}]`) as unknown[]);
+      } catch (e) {
+        throw new Error(
+          `expression: call args are not JSON5 (${(e as Error).message}) in ${JSON.stringify(source)}`,
+        );
+      }
+      const name = steps.pop();
+      if (typeof name !== "string")
+        throw new Error(`expression: a call must follow a name in ${JSON.stringify(source)}`);
+      if (steps.length === 0)
+        throw new Error(
+          `expression: cannot call the scope symbol itself in ${JSON.stringify(source)}`,
+        );
+      steps.push([name, ...args]);
+      i = end + 1;
+    } else {
+      throw new Error(
+        `expression: unexpected ${JSON.stringify(c)} at ${i} in ${JSON.stringify(source)}`,
+      );
+    }
   }
-
-  #ws() {
-    while (this.#i < this.#s.length && /\s/.test(this.#s[this.#i])) this.#i++;
-  }
-  #peek(): string {
-    this.#ws();
-    return this.#s[this.#i] ?? "";
-  }
-  #expect(tok: string) {
-    this.#ws();
-    if (!this.#s.startsWith(tok, this.#i)) throw this.#err(`expected "${tok}"`);
-    this.#i += tok.length;
-  }
-  expectEnd() {
-    this.#ws();
-    if (this.#i < this.#s.length) throw this.#err("trailing input");
-  }
-  #err(msg: string): Error {
-    return new Error(
-      `expression parse error at ${this.#i}: ${msg} — in ${JSON.stringify(this.#s)}`,
-    );
-  }
+  return steps;
 }
 
 /** Accept either half anywhere an expression is accepted; normalize to the structured form. */
@@ -265,33 +132,18 @@ export function toExpression(input: string | Expression): Expression {
 
 // ─────────────────────────────────────────────── print ───────────────────────────────────────────────
 
-/** Canonical string form (single quotes, minimal spacing) — THE stored form: `print` runs at
- *  mount time to canonicalize programmatically built expressions into what the event carries.
- *  `parse(print(e))` round-trips. */
+/** Canonical string form — THE stored form: a dotted path with `.method(args)` calls, the args
+ *  `JSON5.stringify`ed (minus the outer array brackets). `parse(print(e))` round-trips over
+ *  JSON-serializable args (JSON5 semantics: `-0`→`0`, `undefined`→`null`). */
 export function print(expr: Expression): string {
   return expr
     .map((step, i) => {
       const dot = i === 0 ? "" : ".";
       if (typeof step === "string") return dot + step;
       const [method, ...args] = step;
-      return `${dot}${method}(${args.map(printValue).join(", ")})`;
+      return `${dot}${method}(${JSON5.stringify(args).slice(1, -1)})`;
     })
     .join("");
-}
-
-/** A bare (unquoted) object key must match what `#word` reads back; anything else is quoted. */
-const IDENT_KEY = /^[A-Za-z_$][A-Za-z0-9_$-]*$/;
-function printValue(v: unknown): string {
-  if (typeof v === "string") return `'${v.replaceAll("\\", "\\\\").replaceAll("'", "\\'")}'`;
-  if (Array.isArray(v)) return `[${v.map(printValue).join(", ")}]`;
-  if (isPlainObject(v))
-    return `{ ${Object.entries(v)
-      // Quote a key the parser could not read bare (a space, a dot, a leading digit) — the string
-      // form round-trips via #object's quoted-key branch; an identifier key stays bare.
-      .map(([k, val]) => `${IDENT_KEY.test(k) ? k : printValue(k)}: ${printValue(val)}`)
-      .join(", ")} }`;
-  if (Object.is(v, -0)) return "-0"; // JSON.stringify(-0) === "0" drops the sign #number preserves
-  return JSON.stringify(v);
 }
 
 // ─────────────────────────────────────────────── match ───────────────────────────────────────────────

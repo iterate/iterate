@@ -45,13 +45,14 @@ describe("parse ⇄ print", () => {
   });
 
   test("trailing garbage rejected", () => {
-    expect(() => parse("itx.kv extra")).toThrow(/trailing/);
+    expect(() => parse("itx.kv extra")).toThrow(/unexpected/);
   });
 
   test("placeholder syntax is GONE from the grammar (the increment-55 diet)", () => {
-    expect(() => parse("itx.f(?)")).toThrow(/unexpected value/);
-    expect(() => parse("itx.f(?0)")).toThrow(/unexpected value/);
-    expect(() => parse("itx.f(...?)")).toThrow(/unexpected value/);
+    // args are JSON5 — `?`, `?0`, `...?` are not valid values, so the call is rejected loudly.
+    expect(() => parse("itx.f(?)")).toThrow(/not JSON5/);
+    expect(() => parse("itx.f(?0)")).toThrow(/not JSON5/);
+    expect(() => parse("itx.f(...?)")).toThrow(/not JSON5/);
   });
 
   test("toExpression accepts either half", () => {
@@ -82,9 +83,9 @@ describe("parse ⇄ print", () => {
     });
   });
 
-  test("the depth budget: absurd nesting is a loud error, never a stack overflow", () => {
+  test("deeply nested args parse (JSON5 is iterative — no stack overflow, no artificial budget)", () => {
     const deep = "[".repeat(70) + "]".repeat(70);
-    expect(() => parse(`itx.f(${deep})`)).toThrow(/nesting exceeds/);
+    expect(() => parse(`itx.f(${deep})`)).not.toThrow();
   });
 
   test("bare call on the scope symbol is a loud error — both halves", () => {

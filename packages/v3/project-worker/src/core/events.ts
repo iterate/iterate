@@ -6,18 +6,6 @@
 import { z } from "zod";
 import type { EventDefinition, ProcessorContract } from "./processor.ts";
 
-/** ONE non-resetting depth budget for every recursive JSON walk in this package (parser values,
- *  substitution, hole scans, `jsonEqual`). Cycles are impossible (everything is parsed JSON, no
- *  custom serializers), so the only exposure is stack exhaustion from deeply-nested-but-acyclic
- *  input — and per the receiver-side-limits rule the budget must never reset at argument
- *  boundaries. 64 is far beyond any honest expression. */
-const MAX_VALUE_DEPTH = 64;
-export function deeper(depth: number, what: string): number {
-  if (depth >= MAX_VALUE_DEPTH)
-    throw new Error(`${what}: value nesting exceeds ${MAX_VALUE_DEPTH} levels`);
-  return depth + 1;
-}
-
 /** THE delivery policy — one spelling for every host of it (the subscribe inputs, the provide
  *  payload). Rides the capability-provided event itself, so subscription config is
  *  event-sourced, never silent kv. How a subscription mount is SERVED depends only on its
