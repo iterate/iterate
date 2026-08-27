@@ -815,16 +815,14 @@ function reduceAgentUiEvent(
               // in the buffer. Adopt it whenever it extends what streamed;
               // the suffix becomes a final window so the reveal animates it.
               ...(partialText !== null &&
-              partialText.length > step.responseText.length &&
-              partialText.startsWith(step.responseText)
-                ? {
-                    responseText: partialText,
-                    responseWindows: [
-                      ...step.responseWindows,
-                      partialText.slice(step.responseText.length),
-                    ],
-                  }
-                : {}),
+                partialText.length > step.responseText.length &&
+                partialText.startsWith(step.responseText) && {
+                  responseText: partialText,
+                  responseWindows: [
+                    ...step.responseWindows,
+                    partialText.slice(step.responseText.length),
+                  ],
+                }),
               ...(typeof payload.durationMs === "number"
                 ? { durationMs: payload.durationMs }
                 : status === "cancelled"
