@@ -32,7 +32,7 @@ export function RepoTemplatePanel({ repoPath }: { repoPath: string }) {
 }
 
 /** Human-readable provenance, or null when the repo has no template (imports). */
-function templateSourceLabel(createRequest: RepoProcessorState["createRequest"]): string | null {
+function templateSourceLabel(createRequest: RepoProcessorState["createRequest"]) {
   if (createRequest === null) return null;
   if (createRequest.type === "empty") return "iterate/iterate/configs/default (Default)";
   if (createRequest.type !== "github-public-template") return null;

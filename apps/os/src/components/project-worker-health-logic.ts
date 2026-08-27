@@ -95,38 +95,6 @@ export function selectStrugglingSubscriptions(
   });
 }
 
-/** A standing default-worker build failure, as the sidebar warning renders it. */
-export type WorkerBuildFailureFact = {
-  at: string;
-  commitOid: string;
-  error: string;
-};
-
-/**
- * The standing build failure from the project's reduced `worker` slot, or
- * null while the newest outcome is a successful update — the slot holds only
- * the latest outcome, so a later `project/worker-updated` supersedes a
- * recorded failure and clears the warning.
- */
-export function selectWorkerBuildFailure(
-  worker:
-    | {
-        at: string;
-        commitOid: string;
-        error: string | null;
-        status: "updated" | "update-failed";
-      }
-    | null
-    | undefined,
-): WorkerBuildFailureFact | null {
-  if (!worker || worker.status !== "update-failed") return null;
-  return {
-    at: worker.at,
-    commitOid: worker.commitOid,
-    error: worker.error || "The project worker build failed.",
-  };
-}
-
 /**
  * The events to append to unstick a subscription. `resume` clears the halt
  * (`subscription-delivery-resumed`) and kicks delivery from the existing

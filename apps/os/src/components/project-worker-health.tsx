@@ -23,9 +23,7 @@ import { useItx, useLiveState } from "iterate/sdk/itx/react";
 import {
   buildRedriveEvents,
   selectStrugglingSubscriptions,
-  selectWorkerBuildFailure,
   type SubscriptionHealth,
-  type WorkerBuildFailureFact,
 } from "./project-worker-health-logic.ts";
 
 /**
@@ -73,7 +71,9 @@ export function ProjectWorkerHealthWarning({
     [projectId],
     { slug: projectId ?? "", enabled: projectId !== null },
   ).value;
-  const buildFailure = selectWorkerBuildFailure(workerOutcome);
+  // The slot holds only the latest outcome, so a later worker-updated
+  // supersedes a recorded failure and clears the warning.
+  const buildFailure = workerOutcome?.status === "update-failed" ? workerOutcome : null;
 
   if (struggling.length === 0 && buildFailure === null) return null;
 
@@ -150,7 +150,7 @@ function StrugglingSubscriptionsSheet({
   projectId: string | null;
   projectSlug: string;
   struggling: SubscriptionHealth[];
-  buildFailure: WorkerBuildFailureFact | null;
+  buildFailure: { at: string; commitOid: string; error: string | null } | null;
   severe: boolean;
 }) {
   const itx = useItx(projectId ?? undefined);
@@ -210,7 +210,7 @@ function StrugglingSubscriptionsSheet({
                   </span>
                 </div>
                 <div className="text-xs break-words whitespace-pre-wrap text-destructive">
-                  {buildFailure.error}
+                  {buildFailure.error || "The project worker build failed."}
                 </div>
                 <div className="pt-1">
                   {/* The incident-shaped fix path: broken worker → open the
@@ -314,7 +314,7 @@ function StrugglingSubscriptionsSheet({
 }
 
 /** Compact "3d ago"-style age; falls back to the raw timestamp when unparsable. */
-function timeAgoLabel(at: string): string {
+function timeAgoLabel(at: string) {
   const thenMs = Date.parse(at);
   if (Number.isNaN(thenMs)) return at;
   const elapsedMs = Math.max(0, Date.now() - thenMs);
