@@ -1,5 +1,6 @@
 ---
-status: in-review
+status: blocked
+blocked-on: "#2530 fix direction (attempt-progress deadlines)"
 size: small
 ---
 
@@ -7,10 +8,19 @@ size: small
 
 ## Status summary
 
-Implemented and verified against a cold local environment (spec green with
-the spinner-visible path exercised); awaiting the preview CI lane, which
-runs the spec against a genuinely cold deployment — that's the decisive
-check. PR: #2529.
+Implemented, green locally — but the preview lane failed both attempts and
+the investigation found the real story: the warm-up wasn't absorbing a
+compute cost, it was absorbing a platform gap. On preview's churny first
+minutes, an in-flight LLM request whose processor gets evicted re-dials
+promptly, but a re-dial that hangs (dead pager path in the same churn
+window) is invisible until a staleness wake — first turns took 150s/183s
+end-to-end, past any honest spec budget. The UI is fine: screenshots prove
+the spinner stays up continuously with honest "processor revived" dividers.
+
+Reproified and consolidated with the other open stall repros in PR #2530
+(expected-fail spec + fix direction: attempt-progress deadlines). This PR
+stays parked until that fix lands; then the warm-up deletion becomes safe
+as-is. PR: #2529.
 
 ## Problem
 
@@ -57,7 +67,11 @@ bumped budget scoped to that one turn only:
 - [x] no `expect.poll`/retry reintroduced _diff is pure deletion + two
   budget lines_
 - [ ] spec passes on the preview lane in CI (runs there cold — the real
-  test)
+  test) _FAILED both attempts on run w1hcwnlc3q: "Spinner was still visible
+  after 120000ms". Server-side journals show both turns completed — in 150s
+  and 183s — after repeated processor evictions with a hung re-dial per
+  cycle. Blocked on the #2530 fix direction; see the investigation log
+  below_
 
 ## Scope notes / assumptions
 
@@ -97,3 +111,29 @@ bumped budget scoped to that one turn only:
 - Net effect vs before: the spec is now cheaper (one agent + one turn less)
   and slightly faster even on cold, since the warm-up previously paid the
   same cold cost at the itx level plus its own agent setup.
+
+## Preview-failure investigation (2026-08-27)
+
+- Preview lane run w1hcwnlc3q: both attempts failed with "Spinner was still
+  visible after 120000ms" — so the working indicator WAS continuous (no UI
+  dead gap; the screenshots even show honest "agent processor revived" /
+  "capability-host processor revived" dividers). The platform just didn't
+  deliver turn 1 in 120s.
+- Server-side journals (fixture projects persist on preview_6): attempt 1's
+  turn settled 150s after `llm-request-requested`, spanning one
+  `stream/processor-revived`; the retry's settled at 183s — after the whole
+  suite had ended — spanning four revivals. Pattern: request → silence →
+  30-40s staleness wake → revival → re-dial that ALSO hangs (same churn
+  window) → repeat until an attempt lands on a healthy path.
+- Harness probe (virtual time): eviction → revival + re-dial at +10s
+  (works, #2480), then a hung re-dial is invisible until the keepalive
+  wedge breaker at +15m10s. A hung attempt never FAILS, so the 10/20/40s
+  retry ladder never engages — the missing piece is an attempt-progress
+  deadline (#2510's gap, entered through the routine churn path).
+- The warm-up therefore wasn't masking slowness; it was a sacrificial agent
+  absorbing churn-window wedge risk behind a swallowed `.catch`.
+  Reproified + fix direction proposed in #2530 (which merged the other open
+  repro PRs #2518/#2513/#2486 and closed them).
+- Also seen that run, all pre-existing: the vitest lane failed on the known
+  facet source-version false alarm (#2518's subject), and mobile approvals
+  hit a 4901 pager close.
