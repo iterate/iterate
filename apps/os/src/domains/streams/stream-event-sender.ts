@@ -1208,8 +1208,8 @@ export class StreamEventSender {
    * and stays quiet until the next deploy. Halts recorded before the version
    * stamp existed are grandfathered: without a recorded version, "same deploy
    * that just gave up" and "antidote deploy" are indistinguishable, and
-   * guessing would loop a same-version halt — those still need the operator
-   * doors. Mirrors the keepalive crash-loop breaker's version reset
+   * guessing would loop a same-version halt — those still need an operator's
+   * explicit resumeSubscription call. Mirrors the keepalive crash-loop breaker's version reset
    * (docs/writing-stream-processors.md): a halt is a breaker, and a version
    * change is the antidote that earns exactly one immediate retry.
    *

@@ -64,7 +64,7 @@ then on the stall is silent and permanent by design:
 
 - appends never wake a halted subscription;
 - runtime state looks clean (halt clears attempt/nextAttemptAt/lastError);
-- the only recovery doors were operator `resumeSubscription` /
+- the only recovery paths were operator `resumeSubscription` /
   `setSubscriptionCursorAndResume`;
 - direct reads (`search`/`list`) heal the FOLD via pull catch-up — exactly
   the incident's "instant heal" — while the feed stays dead, so the system
@@ -93,7 +93,7 @@ docs/writing-stream-processors.md):
   version, so redeliveries and fresh incarnations converge). Fixed receivers
   recover unattended; still-broken ones re-halt under the new version and
   stay quiet until the next deploy (bounded: one ladder per deploy).
-- Version-less legacy halts are grandfathered to the operator doors (without
+- Version-less legacy halts still need the operator's explicit resume (without
   a recorded version, "the deploy that just gave up" and "the antidote" are
   indistinguishable — guessing would loop a same-version halt).
 

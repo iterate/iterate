@@ -93,6 +93,24 @@ The budgets (chunkIdleBudget, reprobeBackoff, retry caps) are product
 decisions the fix makes; the expected-fail specs deliberately pin
 placeholder numbers (60s) the same way #2510 did.
 
+### Live confirmation of the thesis: the halt fix's own edge
+
+Bugbot found (on the consolidation PR itself) that #2486's antidote-resume
+retry has this exact bug one level down: an interrupted resume append arms
+a bare in-memory alarm (`#resumeHaltFromAntidoteDeploy`), which
+`#armAlarmFromStore` — recomputing purely from durable rows, and skipping
+halted rows — can immediately clear. The owed retry then waits for an
+unrelated wake. Real, verified, and strictly-no-worse than pre-#2486
+("parked forever"), so it ships as-is; the fix belongs to the primitive:
+a halt whose `workerVersion` differs from the current one IS durable
+evidence of an owed resume, so the deadline derivation should produce a
+wake from that state directly, instead of trusting a bare `armAlarm`.
+Caution for the implementer: a naive durable `nextAttemptAt` on a halted
+row hot-loops the alarm against a *paused* stream (the resume append
+rejects while paused; the catch path deliberately defers to the unpause
+delivery) — the deadline must distinguish interrupted-append from
+rejected-while-paused.
+
 ## Checklist
 
 - [x] merge `facet-recycle-false-alarm-repro` (#2518) _clean merge_

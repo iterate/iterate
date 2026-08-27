@@ -508,8 +508,8 @@ export const CoreProcessorContract = defineProcessorContract({
                        * `subscription-delivery-resumed` (the antidote-deploy
                        * retry, mirroring the keepalive breaker's version
                        * reset). Absent on halts recorded before this field
-                       * existed — those are grandfathered to the operator
-                       * resume doors.
+                       * existed — those still require an operator's explicit
+                       * `resumeSubscription` call.
                        */
                       workerVersion: z.string().trim().min(1).optional(),
                     })
