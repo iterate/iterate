@@ -130,8 +130,12 @@ PR's diff:
 - `apps/os/e2e/vitest/userspace-facet-source-version.e2e.test.ts`: the
   documented coincidental-recycle false alarm fired twice more (7+ total).
   The blind-spot repro (`userspace-facet-recycle-false-alarm.e2e.test.ts`)
-  stays active. **Exit criteria:** facet rebuilds carry trigger provenance
-  (thread 5) and the pin's comparisons assert causality — un-skip then.
+  stays active. **Exit: achieved differently** (tasks/failing-test-helper.md)
+  — the pin is live again on `failingTest` with round-based coincidence
+  immunity: only same-boot evidence concludes; a recycle makes the round
+  inconclusive and a fresh revision is committed against the new boot.
+  Rebuild provenance (thread 5) is still a nice-to-have for the platform,
+  no longer this test's gate.
 
 ## Checklist
 
