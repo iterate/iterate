@@ -14,10 +14,6 @@ test("a repeat request reuses the previous turn's journaled script instead of re
   page,
   baseURL,
 }) => {
-  // Cold preview deployments run the first intercepted turn for up to ~65s
-  // and the recovery path can add a second full wait — triple the budget so
-  // the recovery gets to run before the spec watchdog.
-  test.slow();
   await using fixture = await helpers.createFixture("agent-script-reuse");
   if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
 
@@ -39,26 +35,44 @@ test("a repeat request reuses the previous turn's journaled script instead of re
   }) => {
     if (call.source !== "agent-turn") throw new Error(`unexpected source: ${call.source}`);
     const lastUser = [...call.body.messages].reverse().find((m) => m.role === "user");
-    const script = lastUser?.content.includes("now do") ? REUSE_SCRIPT : FACTORIZE_SCRIPT;
+    const script = lastUser?.content.includes("warm up")
+      ? WARM_SCRIPT
+      : lastUser?.content.includes("now do")
+        ? REUSE_SCRIPT
+        : FACTORIZE_SCRIPT;
     return ["```ts", script, "```"].join("\n");
   };
   using _interception = await project.ai.intercept(interceptor);
 
-  // Warm the typecheck sidecar before driving the UI: the first gate call on
-  // a cold deployment compiles the compiler wasm, which alone can outlast the
-  // stuck-spinner ceiling. Setup work, not an assertion.
-  await project.capabilityHosts.get("/").create();
-  await project.capabilityHosts.get("/").runScript("async (itx) => 1");
+  // Extra connections/interceptors from recovery paths live on this stack.
+  await using recovery = new AsyncDisposableStack();
+
+  // Absorb the cold-deployment cost BEFORE the UI assertions: the first
+  // intercepted turn on a fresh deployment runs 35-65s of platform churn (and
+  // can lose the interceptor to a durable-object revival). A throwaway agent
+  // takes that hit at the itx level, where waits carry no playwright budget;
+  // if the warm-up loses the interceptor, reconnect, re-install, retry once.
+  const warmPath = `/agents/warm-${crypto.randomUUID().slice(0, 8)}`;
+  using warmAgent = project.agents.get(warmPath);
+  await warmAgent.create();
+  await warmAgent.append({
+    type: "events.iterate.com/agent/configured",
+    payload: { config: { llm: { model: "intercepted/factorizer" }, llmRequestDebounceMs: 250 } },
+  });
+  await warmAgent.ask({ message: "warm up", timeoutMs: 180_000 }).catch(async () => {
+    const freshAdmin = recovery.use(await connectAdminItx(baseURL));
+    const freshProject = freshAdmin.projects.get(fixture.project.id);
+    recovery.use(await freshProject.ai.intercept(interceptor));
+    await freshProject.agents
+      .get(warmPath)
+      .ask({ message: "warm up", timeoutMs: 180_000 })
+      .catch(() => {});
+  });
 
   await page.goto(`/projects/${fixture.project.slug}/agents/streams${agentPath}`);
   const composer = page.getByPlaceholder("Message this agent");
   const send = page.getByRole("button", { name: "Send message" });
 
-  // A cold deployment can revive the agent's durable object mid-turn, which
-  // drops the session-bound interceptor ("No AI interceptor installed") — the
-  // documented recovery is reconnect and re-install. One guarded retry per
-  // turn keeps the assertions about the feature, not the environment.
-  await using recovery = new AsyncDisposableStack();
   const sendExpecting = async (message: string, expected: string) => {
     // Baseline BEFORE the send: the diagnosis below must only see THIS turn's
     // events — an earlier recovered failure must not poison a later turn.
@@ -77,9 +91,9 @@ test("a repeat request reuses the previous turn's journaled script instead of re
     // of HEALTHY server-side work with the working indicator up, so the
     // spinnerWaiter's stuck ceiling would fail a slow-but-fine turn.
     const pollForReply = () =>
-      // timeout: healthy first turns run up to ~65s server-side with the working indicator up, so the spinnerWaiter's stuck ceiling would fail them.
+      // timeout: polling instead of a locator wait because the working indicator stays up through long turns and the spinnerWaiter's stuck ceiling would fail them; post-warm-up turns settle in seconds, 60s is margin.
       expect
-        .poll(async () => await page.getByText(expected).count(), { timeout: 120_000 })
+        .poll(async () => await page.getByText(expected).count(), { timeout: 60_000 })
         .toBeGreaterThan(0);
     await composer.fill(message);
     await send.click();
@@ -159,10 +173,6 @@ test("run() return values are typed from the reused row's data, through the real
   page,
   baseURL,
 }) => {
-  // Cold preview deployments run the first intercepted turn for up to ~65s
-  // and the recovery path can add a second full wait — triple the budget so
-  // the recovery gets to run before the spec watchdog.
-  test.slow();
   await using fixture = await helpers.createFixture("agent-script-reuse-typed");
   if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
 
@@ -193,6 +203,8 @@ test("run() return values are typed from the reused row's data, through the real
   let modelCalls = 0;
   using _interception = await project.ai.intercept(async (call) => {
     if (call.source !== "agent-turn") throw new Error(`unexpected source: ${call.source}`);
+    const lastUser = [...call.body.messages].reverse().find((m) => m.role === "user");
+    if (lastUser?.content.includes("warm up")) return ["```ts", WARM_SCRIPT, "```"].join("\n");
     modelCalls += 1;
     const script = [
       RETURNING_SCRIPT,
@@ -204,11 +216,17 @@ test("run() return values are typed from the reused row's data, through the real
     return ["```ts", script, "```"].join("\n");
   });
 
-  // Warm the typecheck sidecar before driving the UI: the first gate call on
-  // a cold deployment compiles the compiler wasm, which alone can outlast the
-  // stuck-spinner ceiling. Setup work, not an assertion.
-  await project.capabilityHosts.get("/").create();
-  await project.capabilityHosts.get("/").runScript("async (itx) => 1");
+  // Same cold-deployment absorption as the first spec: a throwaway
+  // intercepted turn at the itx level. The router below serves WARM_SCRIPT
+  // for it without advancing the scripted call sequence.
+  const warmPath = `/agents/warm-${crypto.randomUUID().slice(0, 8)}`;
+  using warmAgent = project.agents.get(warmPath);
+  await warmAgent.create();
+  await warmAgent.append({
+    type: "events.iterate.com/agent/configured",
+    payload: { config: { llm: { model: "intercepted/typed" }, llmRequestDebounceMs: 250 } },
+  });
+  await warmAgent.ask({ message: "warm up", timeoutMs: 180_000 }).catch(() => {});
 
   await page.goto(`/projects/${fixture.project.slug}/agents/streams${agentPath}`);
   const composer = page.getByPlaceholder("Message this agent");
@@ -362,4 +380,10 @@ const CORRECTLY_ANNOTATED_REUSE_SCRIPT = `async (itx) => {
   const result = await helper.run({ n: 10403n });
   result satisfies readonly string[];
   await itx.chat.sendMessage(\`Result is \${result.join(" × ")}\`);
+}`;
+
+// The warm-up turn's scripted reply: trivial, but a REAL intercepted agent
+// turn, so it pays the cold-deployment platform costs before the assertions.
+const WARM_SCRIPT = `async (itx) => {
+  await itx.chat.sendMessage("warmed");
 }`;
