@@ -8,7 +8,8 @@ size: medium
 ## Status
 
 Spec settled via grill-you interview (transcript: [adaptive-chunk-flush.interview.md](./adaptive-chunk-flush.interview.md)),
-2026-08-28 bedtime run. Implementation not started.
+2026-08-28 bedtime run. Implementation, specs, and explainer complete; all
+checks green. Awaiting review.
 
 ## Problem
 
@@ -59,13 +60,13 @@ must not be allowed to SLOW the producer.
 
 ## Checklist
 
-- [ ] Spec: "a pending flush never blocks the drain: later chunks merge into the next window" (hold flush 0's append; chunks 2+3 consumed immediately, nothing new journals; release; next eligible chunk lands sequence 1 as one merged window in provider order)
-- [ ] Spec: "a rejected in-flight flush does not wedge the lane" (sequence gap, next window fires with next sequence, delivery never stalls, settle succeeds with full text)
-- [ ] Update the swallowed-tail spec for the new epilogue; retire the old "backpressures chunk flushes" spec (it pins the removed behavior)
-- [ ] Implement in `agent-llm-request.ts` `run()` per the design above
-- [ ] Explainer (committed, `explainers/`) covering the before/after under healthy and degraded DO
+- [x] Spec: "a pending flush never blocks the drain: later chunks merge into the next window" (hold flush 0's append; chunks 2+3 consumed immediately, nothing new journals; release; next eligible chunk lands sequence 1 as one merged window in provider order)
+- [x] Spec: "a rejected in-flight flush does not wedge the lane" (sequence gap, next window fires with next sequence, delivery never stalls, settle succeeds with full text)
+- [x] Update the swallowed-tail spec for the new epilogue; retire the old "backpressures chunk flushes" spec (it pins the removed behavior)
+- [x] Implement in `agent-llm-request.ts` `run()` per the design above
+- [x] Explainer (committed, `explainers/`) covering the before/after under healthy and degraded DO
 - [ ] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test`
-- [ ] Draft PR linking this file + the interview transcript
+- [x] Draft PR linking this file + the interview transcript
 
 ## Out of scope
 

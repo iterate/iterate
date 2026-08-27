@@ -1,0 +1,564 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Adaptive chunk flush — interactive</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/lib/codemirror.min.css"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/lib/codemirror.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/mode/yaml/yaml.min.js"></script>
+    <style>
+      :root {
+        --fg: #1a1a1a;
+        --muted: #666;
+        --line: #e5e5e5;
+        --code: #fafafa;
+        --accent: #b45309;
+        --sel: #fef3c7;
+        --bad: #dc2626;
+        --good: #16a34a;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #e5e5e5;
+          --muted: #999;
+          --line: #333;
+          --code: #191919;
+          --accent: #fbbf24;
+          --sel: #3b2f14;
+          --bad: #f87171;
+          --good: #4ade80;
+        }
+        body {
+          background: #111;
+        }
+        .CodeMirror {
+          background: var(--code);
+          color: var(--fg);
+        }
+        .CodeMirror .cm-comment {
+          color: #8a8a5c;
+        }
+        .CodeMirror .cm-atom,
+        .CodeMirror .cm-number {
+          color: #7fb4d8;
+        }
+        .CodeMirror .cm-meta {
+          color: #999;
+        }
+        .CodeMirror .cm-string {
+          color: #a8c98a;
+        }
+        .CodeMirror .cm-keyword {
+          color: #c586c0;
+        }
+        .CodeMirror-gutters {
+          background: var(--code);
+          border-color: var(--line);
+        }
+      }
+      body {
+        font:
+          14px/1.5 ui-sans-serif,
+          system-ui,
+          sans-serif;
+        color: var(--fg);
+        margin: 0;
+      }
+      header {
+        padding: 1rem 1.5rem 0.5rem;
+      }
+      header h1 {
+        margin: 0;
+        font-size: 1.3rem;
+      }
+      header p {
+        color: var(--muted);
+        margin: 0.3rem 0 0;
+        max-width: 62rem;
+      }
+      .opinion {
+        margin: 0 1.5rem;
+        border: 2px solid var(--accent);
+        border-radius: 8px;
+        padding: 0.7rem 1rem;
+        max-width: 60rem;
+      }
+      .opinion ol {
+        margin: 0.4rem 0 0.2rem 1.2rem;
+        padding: 0;
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(26rem, 48rem) minmax(26rem, 1fr);
+        gap: 1.5rem;
+        padding: 1rem 1.5rem 4rem;
+        align-items: start;
+      }
+      @media (max-width: 980px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+        .rendered {
+          position: static !important;
+          max-height: none !important;
+        }
+      }
+      h2 {
+        font-size: 1.05rem;
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 0.3rem;
+        margin: 2rem 0 0.5rem;
+      }
+      .scenario p {
+        max-width: 46rem;
+      }
+      .ev {
+        border: 1px solid var(--line);
+        border-left: 4px solid var(--line);
+        border-radius: 6px;
+        margin: 0.45rem 0;
+        cursor: pointer;
+      }
+      .ev:hover {
+        border-color: var(--accent);
+      }
+      .ev.selected {
+        background: var(--sel);
+        border-left-color: var(--accent);
+      }
+      .ev.elide {
+        border-style: dashed;
+      }
+      .ev .row {
+        display: flex;
+        align-items: baseline;
+        gap: 0.5em;
+        padding: 0.45rem 0.7rem 0.1rem;
+        font:
+          12.5px/1.45 ui-monospace,
+          monospace;
+      }
+      .ev .off {
+        color: var(--accent);
+        font-weight: 700;
+        white-space: nowrap;
+      }
+      .ev .type {
+        color: var(--fg);
+      }
+      .ev .t {
+        color: var(--muted);
+        font-size: 11px;
+        white-space: nowrap;
+        margin-left: auto;
+      }
+      .ev .badge {
+        color: var(--accent);
+        font-size: 11px;
+        background: var(--code);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 0 0.35em;
+        white-space: nowrap;
+      }
+      .ev .badge.bad {
+        color: var(--bad);
+      }
+      .ev .badge.good {
+        color: var(--good);
+      }
+      .ev .note {
+        font:
+          12px/1.4 ui-sans-serif,
+          system-ui,
+          sans-serif;
+        color: var(--muted);
+        padding: 0 0.7rem 0.45rem;
+      }
+      .ev .yaml {
+        display: none;
+        border-top: 1px solid var(--line);
+      }
+      .ev.expanded .yaml {
+        display: block;
+      }
+      .rendered {
+        position: sticky;
+        top: 0;
+        max-height: 100vh;
+        overflow: auto;
+        padding: 0.5rem 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .rendered h3 {
+        margin: 0.2rem 0 0.5rem;
+        font-size: 1rem;
+      }
+      .rendered h3 .off {
+        color: var(--accent);
+      }
+      .rendered .cmhost {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        overflow: hidden;
+      }
+      .CodeMirror {
+        height: auto;
+        font-size: 12px;
+      }
+      .rendered .CodeMirror {
+        height: calc(100vh - 5rem);
+      }
+      code {
+        background: var(--code);
+        padding: 0.1em 0.35em;
+        border-radius: 4px;
+        font-size: 0.92em;
+      }
+      .vocab {
+        margin: 1rem 1.5rem 0;
+        max-width: 60rem;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 0.2rem 1rem 0.6rem;
+      }
+      .vocab summary {
+        cursor: pointer;
+        font-weight: 600;
+        padding: 0.5rem 0;
+      }
+      .vocab table {
+        border-collapse: collapse;
+        font-size: 12.5px;
+        width: 100%;
+        margin: 0.3rem 0 0.8rem;
+      }
+      .vocab th,
+      .vocab td {
+        border: 1px solid var(--line);
+        padding: 0.35rem 0.55rem;
+        text-align: left;
+        vertical-align: top;
+      }
+      .vocab th {
+        color: var(--muted);
+        font-weight: 600;
+      }
+      .vocab td:first-child {
+        white-space: nowrap;
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Adaptive chunk flush: the ephemeral lane stops steering</h1>
+      <p>
+        Click any event card: it expands to detail (YAML) and the right pane shows the
+        <strong>state of the flush lane at that instant</strong>. Follow-up to #2531 (which
+        coalesced per-token journaling into ~150ms windows but still awaited each window's Durable
+        Object commit inside the drain). Times are realistic, not measured — except scenario 1's
+        constants, which match prod measurements from 2026-08-27.
+      </p>
+    </header>
+    <div class="opinion">
+      <strong>Takeaway — a lane that may LOSE data must never SLOW the producer.</strong>
+      <ol>
+        <li>
+          <strong>Before:</strong> the window flush was awaited inside <code>onChunk</code> —
+          delivery throughput = <code>window/(window + append latency)</code> of provider rate. Fine
+          at 60ms appends; degrades linearly with the DO.
+        </li>
+        <li>
+          <strong>After:</strong> the flush fires un-awaited, cap of one in flight. While it pends,
+          chunks keep flowing and simply widen the next window. A slow journal coarsens the UI
+          (bigger, rarer windows); it never throttles the stream.
+        </li>
+        <li>
+          <strong>The line is durable vs ephemeral</strong>: settle/context/usage stay awaited and
+          atomic. Chunk events are forcibly ephemeral — evictable, gap-tolerant, not truth — and now
+          behave like it end to end.
+        </li>
+      </ol>
+    </div>
+    <details class="vocab">
+      <summary>Reference — the moving parts</summary>
+      <table>
+        <tr>
+          <th>term</th>
+          <th>what it is</th>
+        </tr>
+        <tr>
+          <td>pendingFlush</td>
+          <td>
+            The single un-awaited append promise, or null. Swallow-wrapped at creation (no unhandled
+            rejection), cleared in a finally (a rejected append can't wedge the lane). Cap of one:
+            no new flush fires while it's non-null.
+          </td>
+        </tr>
+        <tr>
+          <td>flush trigger</td>
+          <td>
+            Chunk ARRIVAL only, when <code>pendingFlush === null</code> and the 150ms window (or
+            64KB) has elapsed. Never the pending append's settlement — that would make the DO commit
+            rate the cadence. Never a timer.
+          </td>
+        </tr>
+        <tr>
+          <td>merge</td>
+          <td>
+            Not a mechanism — an absence of one. flushChunkBuffer snapshots and resets the buffer
+            synchronously, so chunks arriving during a pending append land in the fresh buffer and
+            ride the next window.
+          </td>
+        </tr>
+        <tr>
+          <td>drainChunkLane</td>
+          <td>
+            Turn-end epilogue, identical on success and catch paths: await pendingFlush → fire the
+            tail → await it → then the atomic settle. One-time cost; keeps the no-chunk-after-settle
+            invariant.
+          </td>
+        </tr>
+        <tr>
+          <td>sequence gaps</td>
+          <td>
+            A rejected append loses its window's chunks; the sequence number is never reused.
+            Consumers dedupe/sort by sequence and already tolerate gaps (eviction creates them). The
+            committed assistant text extends the UI's windows to the full text at completion — total
+            lane loss self-heals.
+          </td>
+        </tr>
+        <tr>
+          <td>CHUNK_FLUSH_MAX_BYTES</td>
+          <td>
+            A flush trigger for a FREE lane, deliberately not a memory bound while one is busy: the
+            buffer never outgrows the response, which partialText already duplicates.
+          </td>
+        </tr>
+      </table>
+    </details>
+    <div class="layout">
+      <main id="scenarios"></main>
+      <aside class="rendered" id="rendered">
+        <h3 id="rtitle">Flush-lane state</h3>
+        <div class="cmhost" id="cmhost"></div>
+      </aside>
+    </div>
+    <script>
+      const ev = (t, type, badges, note, payload, state) => ({
+        t,
+        type,
+        badges,
+        note,
+        payload,
+        state,
+      });
+      const scenarios = [
+        {
+          id: "healthy",
+          title: "Scenario 1 — healthy DO: nothing changes",
+          intro:
+            "60ms appends, 150ms windows. The cap of one never binds: every flush settles long before the next window elapses. Cadence, event shapes, and UI behavior are identical to #2531.",
+          events: [
+            ev(
+              "2.00s",
+              "chunk → flush 0 fires",
+              ["seq=0", "un-awaited", "good"],
+              "first post-TTFT chunk; window elapsed; lane free → fire. onChunk returns without waiting",
+              "trigger: chunk arrival\ngate: elapsed 2000ms ≥ 150ms, pendingFlush === null\naction: fire append(seq 0), do NOT await",
+              "chunkBuffer: []            # snapshot-and-reset\npendingFlush: append(seq 0) # in flight ~60ms\ndrain: reading next frame   # NOT blocked\ncadence: 150ms window floor",
+            ),
+            ev(
+              "2.06s",
+              "append(seq 0) settles",
+              ["+60ms"],
+              "finally clears pendingFlush. Nothing else happens — settlement is never a flush trigger",
+              "pendingFlush: settled → null\nnote: no flush-on-settle — the cadence must not\n      become the DO commit rate",
+              'chunkBuffer: [" light", "house"]  # 3 tokens since fire\npendingFlush: null\nnextFlush: when a chunk arrives past t=2.15s',
+            ),
+            ev(
+              "2.16s",
+              "chunk → flush 1 fires",
+              ["seq=1", "chunks=8", "good"],
+              "identical to #2531's behavior: ~7 windows/sec, ~8 tokens each",
+              "trigger: chunk arrival\ngate: elapsed 160ms ≥ 150ms, lane free",
+              "delivered: ~55 tok/s (provider rate)\njournal: 1 append per ~150ms\nui: word-sized reveal steps, unchanged",
+            ),
+          ],
+        },
+        {
+          id: "degraded",
+          title: "Scenario 2 — degraded DO (500ms appends): coarsen, don't throttle",
+          intro:
+            "The scenario this change exists for. Before: delivery drops to window/(window+500ms) ≈ 23% of provider rate. After: delivery stays at provider rate; windows just get bigger.",
+          events: [
+            ev(
+              "2.00s",
+              "chunk → flush 0 fires",
+              ["seq=0", "append will take 500ms"],
+              "fired un-awaited; the drain keeps reading at provider speed",
+              "pendingFlush: append(seq 0) — will take 500ms",
+              "drain: unblocked, consuming ~50 tok/s\nchunkBuffer: refilling\nOLD BEHAVIOR: drain frozen 500ms here,\n  socket backlog growing, delivery 23%",
+            ),
+            ev(
+              "2.15s → 2.50s",
+              "window elapses; chunks keep arriving",
+              ["pendingFlush busy", "no fire"],
+              "the gate short-circuits on pendingFlush !== null — eligible chunks just widen the buffer",
+              "gate: pendingFlush !== null → return\nbuffer: growing (~25 tokens by 2.50s)\nnote: MAX_BYTES is not consulted while busy —\n      a trigger for a free lane, not a bound",
+              "chunkBuffer: ~25 tokens and growing\npendingFlush: still in flight\ndelivered to socket reader: EVERY token, on time\nui: no update yet (coarsening, not stalling)",
+            ),
+            ev(
+              "2.50s",
+              "append(seq 0) settles; next chunk fires flush 1",
+              ["seq=1", "chunks≈25", "good"],
+              "one big window instead of three small ones. UI updates at ~2/sec instead of ~7/sec; text speed unchanged",
+              "flush 1: ~25 chunks, one append\ncadence under degradation: ~1 per append latency\n  (still floored at 1 per window when healthy)",
+              "delivered: ~55 tok/s      # UNCHANGED\nui granularity: coarser    # the whole trade\njournal load: FEWER appends under stress\n  (backpressure inverted: sick DO gets less work)",
+            ),
+          ],
+        },
+        {
+          id: "rejected",
+          title: "Scenario 3 — a flush rejects: gap, not wedge",
+          intro:
+            "The append for seq 0 fails (DO hiccup). Its chunks are gone — a legal gap, like eviction. The swallow at creation prevents an unhandled rejection; the finally reopens the lane; the settle carries the full text regardless.",
+          events: [
+            ev(
+              "2.00s",
+              "flush 0 fires, append rejects",
+              ["seq=0", "lost", "bad"],
+              "swallowed at creation; finally clears pendingFlush — the lane is immediately usable again",
+              "append(seq 0): rejected (journal hiccup)\nhandling: .then(noop, noop).finally(clear)\nlost: that window's chunks, permanently\nsequence 0: consumed, never reused",
+              "pendingFlush: null (finally ran)\nlane: open\nui: missing seq-0 text — a gap, exactly like\n    an evicted ephemeral window",
+            ),
+            ev(
+              "2.20s",
+              "next chunk → flush 1 fires normally",
+              ["seq=1", "good"],
+              "sequence numbering shows the gap; consumers sort/dedupe by sequence and tolerate it",
+              "flush 1: fires with the merged buffer\njournal: [seq 1] — seq 0 absent",
+              "delivery: never stalled\nsettle (later): succeeded, FULL text\nui self-heal: committed assistant context-added\n  extends responseWindows to the full text",
+            ),
+          ],
+        },
+        {
+          id: "turn-end",
+          title: "Scenario 4 — turn end and interrupt: where awaiting is still right",
+          intro:
+            "The decoupling principle is about MID-STREAM delivery. At completion the producer is done, so one await is bookkeeping, not fate-sharing: drainChunkLane awaits the pending window, fires the tail, awaits that, THEN settles — so no chunk event ever lands after the settle. The interrupt path is the one deliberate exception.",
+          events: [
+            ev(
+              "22.0s",
+              "completion → drainChunkLane",
+              ["await pending", "tail flush", "settle"],
+              "identical epilogue on success and catch paths; both awaits swallow-wrapped — a dead lane cannot fail or block the settle",
+              "epilogue:\n  1. await pendingFlush   # ≤1 append latency\n  2. flushChunkBuffer()   # the tail, unconditional\n  3. await pendingFlush   # ≤1 append latency\n  4. atomic settle batch  # durable truth, awaited\ncost: ≤2 append latencies, ONCE per turn",
+              "invariant: no llm-response-chunks event after\n  llm-request-settled — consumers never grow a\n  post-settle rule",
+            ),
+            ev(
+              "(any time)",
+              "interrupt mid-flush",
+              ["abort", "floating append abandoned"],
+              "the closure returns early on signal.aborted WITHOUT awaiting — deliberately. Do not 'fix' this by adding an await",
+              "abort path: return, pendingFlush left floating\nloss mode: same as eviction-mid-flush (accepted)\ncovered by: cancelled settle's partialText —\n  accrued per chunk BEFORE buffering, always full",
+              "why not await: the interrupt path must tear\n  down fast; the floating append either lands\n  (harmless, status-gated) or dies (ephemeral)",
+            ),
+          ],
+        },
+      ];
+      let selectedEl = null,
+        stateCm = null;
+      const cmhost = document.getElementById("cmhost");
+      function showState(scenario, evnt, idx) {
+        document.getElementById("rtitle").innerHTML =
+          'Flush-lane state <span style="font-weight:400;color:var(--muted)">(' +
+          scenario.title.split(" — ")[0] +
+          " · t=" +
+          evnt.t +
+          ")</span>";
+        if (!stateCm)
+          stateCm = CodeMirror(cmhost, {
+            value: evnt.state,
+            mode: "yaml",
+            readOnly: true,
+            lineWrapping: true,
+            viewportMargin: Infinity,
+          });
+        else stateCm.setValue(evnt.state);
+        history.replaceState(null, "", "#" + scenario.id + "-" + idx);
+      }
+      function makeCard(scenario, evnt, idx) {
+        const d = document.createElement("div");
+        d.className = "ev";
+        d.id = "ev-" + scenario.id + "-" + idx;
+        const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+        const badges = evnt.badges
+          .filter((b) => b !== "good" && b !== "bad")
+          .map((b) => '<span class="badge">' + esc(b) + "</span>")
+          .join("");
+        const mood = evnt.badges.includes("good")
+          ? '<span class="badge good">✓</span>'
+          : evnt.badges.includes("bad")
+            ? '<span class="badge bad">✗</span>'
+            : "";
+        d.innerHTML =
+          '<div class="row"><span class="off">' +
+          esc(evnt.type) +
+          "</span>" +
+          badges +
+          mood +
+          '<span class="t">' +
+          esc(evnt.t) +
+          "</span></div>" +
+          (evnt.note ? '<div class="note">' + esc(evnt.note) + "</div>" : "") +
+          '<div class="yaml"></div>';
+        let cm = null;
+        d.addEventListener("click", () => {
+          if (selectedEl === d) {
+            d.classList.toggle("expanded");
+            return;
+          }
+          if (selectedEl) {
+            selectedEl.classList.remove("selected");
+            selectedEl.classList.remove("expanded");
+          }
+          selectedEl = d;
+          d.classList.add("selected");
+          d.classList.add("expanded");
+          if (!cm)
+            cm = CodeMirror(d.querySelector(".yaml"), {
+              value: evnt.payload,
+              mode: "yaml",
+              readOnly: true,
+              lineWrapping: true,
+              viewportMargin: Infinity,
+            });
+          else cm.refresh();
+          showState(scenario, evnt, idx);
+        });
+        return d;
+      }
+      const main = document.getElementById("scenarios");
+      for (const sc of scenarios) {
+        const h = document.createElement("section");
+        h.className = "scenario";
+        h.innerHTML = "<h2>" + sc.title + "</h2><p>" + sc.intro + "</p>";
+        sc.events.forEach((evnt, idx) => h.appendChild(makeCard(sc, evnt, idx)));
+        main.appendChild(h);
+      }
+      const dl = location.hash.match(/^#([\w-]+)-(\d+)$/);
+      const dlTarget = dl && document.getElementById("ev-" + dl[1] + "-" + dl[2]);
+      if (dlTarget) {
+        dlTarget.click();
+        dlTarget.scrollIntoView({ block: "center" });
+      } else document.getElementById("ev-degraded-1").click();
+    </script>
+  </body>
+</html>

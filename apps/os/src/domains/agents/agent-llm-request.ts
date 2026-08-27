@@ -184,20 +184,25 @@ export class AgentLlmRequest {
     const startedAtMs = inFlight.lastProgressAtMs;
     this.#watchAttemptProgress(args, inFlight, startedAtMs);
 
-    // COALESCED chunk journaling. Each append awaits a Durable Object commit
-    // (~60ms) and the transport drain awaits `onChunk` before reading the
-    // next provider frame — journaling every chunk individually therefore
-    // capped delivery at one token per commit round-trip (~17 tok/s in prd,
-    // measured 2026-08-27, regardless of model). Buffering a window and
-    // journaling it as ONE llm-response-chunks event amortizes the commit
-    // across the window; the awaited flush keeps provider order trivially.
-    // A flush that fails loses only its window's chunks — they are ephemeral
-    // UI signals, and the durable truth (settle/context) is untouched.
+    // COALESCED chunk journaling, DECOUPLED from delivery. Windows of ~150ms
+    // journal as ONE llm-response-chunks event each (#2531); the append fires
+    // WITHOUT being awaited, capped at one in flight — while it is pending,
+    // later chunks keep flowing to the buffer and simply widen the next
+    // window. Journal degradation therefore coarsens UI granularity instead
+    // of throttling delivery: chunk events are forcibly ephemeral (evictable,
+    // gap-tolerant, not truth), and a lane that may LOSE data must never SLOW
+    // the producer. Cap-of-one also serializes flushes by construction
+    // (window N+1 fires only after N's append settled), so provider order in
+    // commit order needs no await. A rejected append loses its window's
+    // chunks and its sequence number is never reused — gaps are legal, and
+    // the committed assistant context item extends the UI's windows to the
+    // full text at completion regardless.
     let flushSequence = 0;
     let chunkBuffer: unknown[] = [];
     let chunkBufferBytes = 0;
     let lastFlushAtMs = startedAtMs;
-    const flushChunkBuffer = async () => {
+    let pendingFlush: Promise<void> | null = null;
+    const flushChunkBuffer = () => {
       if (chunkBuffer.length === 0) return;
       const chunks = chunkBuffer;
       chunkBuffer = [];
@@ -205,10 +210,34 @@ export class AgentLlmRequest {
       lastFlushAtMs = this.#host.now();
       const sequence = flushSequence;
       flushSequence += 1;
-      await args.append({
-        type: "events.iterate.com/agent/llm-response-chunks",
-        payload: { chunks, llmRequestOffset: requestOffset, sequence },
-      });
+      pendingFlush = args
+        .append({
+          type: "events.iterate.com/agent/llm-response-chunks",
+          payload: { chunks, llmRequestOffset: requestOffset, sequence },
+        })
+        .then(
+          () => {},
+          // Swallow at creation: an un-awaited rejection would otherwise be
+          // an unhandled rejection, and a failed ephemeral append must never
+          // wedge the lane — the finally below reopens it either way.
+          () => {},
+        )
+        .finally(() => {
+          pendingFlush = null;
+        });
+    };
+    // The one-time turn-end bookkeeping, identical on the success and catch
+    // paths: wait out an in-flight window, fire the tail, wait that out too —
+    // so no chunk event ever lands after the settle. Both promises are
+    // swallow-wrapped at creation; a dead ephemeral lane can neither fail nor
+    // block the settle. The ABORT path deliberately skips this: an
+    // interrupt's floating flush is abandoned into the void (same accepted
+    // loss mode as eviction mid-flush; the cancelled settle's partialText
+    // carries the full text).
+    const drainChunkLane = async () => {
+      await pendingFlush;
+      flushChunkBuffer();
+      await pendingFlush;
     };
 
     args.runInBackground(async () => {
@@ -234,15 +263,22 @@ export class AgentLlmRequest {
             const compatible = jsonCompatible(chunk);
             chunkBuffer.push(compatible);
             chunkBufferBytes += JSON.stringify(compatible).length;
-            // The window is anchored at the request start, so the first chunk
-            // (arriving after time-to-first-token) flushes immediately.
+            // Only chunk ARRIVAL triggers a flush, and only while no append
+            // is in flight — never the pending append's settlement (that
+            // would make the DO commit rate the cadence). The window anchors
+            // at the request start, so the first chunk (after
+            // time-to-first-token) flushes immediately; the byte cap is a
+            // trigger for a free lane, deliberately NOT a bound while one is
+            // busy (the buffer never outgrows the response, which
+            // partialText already duplicates).
             if (
-              this.#host.now() - lastFlushAtMs < CHUNK_FLUSH_WINDOW_MS &&
-              chunkBufferBytes < CHUNK_FLUSH_MAX_BYTES
+              pendingFlush !== null ||
+              (this.#host.now() - lastFlushAtMs < CHUNK_FLUSH_WINDOW_MS &&
+                chunkBufferBytes < CHUNK_FLUSH_MAX_BYTES)
             ) {
               return;
             }
-            await flushChunkBuffer();
+            flushChunkBuffer();
           },
         });
         // A non-streaming transport reports no chunks, so its text exists
@@ -252,10 +288,7 @@ export class AgentLlmRequest {
         // recorded, and must not drop a response already delivered whole.
         if (!inFlight.controller.signal.aborted) {
           inFlight.partialText = completion.text;
-          // Best-effort: a failed ephemeral flush must not throw a COMPLETED
-          // turn into the failure settle — the success settle below carries
-          // the full text regardless.
-          await flushChunkBuffer().catch(() => {});
+          await drainChunkLane();
         }
         const usage = completion.usage;
         await appendUnlessLostIdempotencyRace(args.append, [
@@ -309,7 +342,7 @@ export class AgentLlmRequest {
         // Best-effort tail flush so the failure settle isn't missing the last
         // window of streamed text; a second failure here must not mask the
         // attempt's own error.
-        await flushChunkBuffer().catch(() => {});
+        await drainChunkLane();
         await this.#appendAttemptFailure(args, {
           requestOffset,
           startedAtMs,

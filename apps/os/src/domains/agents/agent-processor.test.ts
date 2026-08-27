@@ -296,7 +296,7 @@ describe("AgentProcessor turn lifecycle", () => {
     ]);
   });
 
-  it("backpressures chunk flushes so append order stays provider order", async () => {
+  it("a pending flush never blocks the drain: later chunks merge into the next window", async () => {
     const h = makeAgentHarness();
     await h.play(
       ["append", ...NEW_AGENT_EVENTS, userMessage("Stream some code")],
@@ -314,22 +314,56 @@ describe("AgentProcessor turn lifecycle", () => {
       return realAppend(...inputs);
     };
 
-    const streaming = (async () => {
-      await h.llm.calls[0]!.onChunk?.("const answer = ");
-      await h.llm.calls[0]!.onChunk?.("42;");
-    })();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Flush 0 fires (and is held mid-append). The next chunks are consumed
+    // IMMEDIATELY — the drain never waits on the pending append — and merge
+    // into the next window instead of firing a second append.
+    await h.play(() => h.llm.calls[0]!.onChunk?.("const "));
+    await h.play(() => h.llm.calls[0]!.onChunk?.("answer"));
+    await h.play(() => h.llm.calls[0]!.onChunk?.(" = "));
+    expect(h.events(RESPONSE_CHUNKS)).toEqual([]); // flush 0 still held, cap of one
 
-    // The transport must not deliver chunk 2 while flush 1 is still appending.
+    // Even a window/size-eligible chunk fires nothing while flush 0 pends.
+    await h.play(["advanceTime", 200]);
+    await h.play(() => h.llm.calls[0]!.onChunk?.("42"));
     expect(h.events(RESPONSE_CHUNKS)).toEqual([]);
 
     releaseFirstFlush();
-    await streaming;
-    await h.play(() => h.llm.respond("const answer = 42;"));
-    expect(h.events(RESPONSE_CHUNKS).map((event) => event.payload.sequence)).toEqual([0, 1]);
+    await h.play(() => h.llm.respond("const answer = 42"));
     expect(h.events(RESPONSE_CHUNKS).map((event) => event.payload.chunks)).toEqual([
-      ["const answer = "],
-      ["42;"],
+      ["const "],
+      ["answer", " = ", "42"], // one merged window, provider order
+    ]);
+    expect(h.events(RESPONSE_CHUNKS).map((event) => event.payload.sequence)).toEqual([0, 1]);
+    expect(h.events(SETTLED)).toMatchObject([{ payload: { result: { status: "succeeded" } } }]);
+  });
+
+  it("a rejected in-flight flush does not wedge the lane", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("Stream some code")],
+      ["advanceTime", 11_000],
+    );
+
+    const realAppend = h.stream.append.bind(h.stream);
+    h.stream.append = async (...inputs) => {
+      const flush = inputs.find((input) => input.type === RESPONSE_CHUNKS);
+      if (flush?.payload?.sequence === 0) throw new Error("journal hiccup");
+      return realAppend(...inputs);
+    };
+
+    // Flush 0 rejects: its chunks are gone and its sequence number is never
+    // reused — a legal gap, exactly like eviction.
+    await h.play(() => h.llm.calls[0]!.onChunk?.("lost "));
+    await h.play(["advanceTime", 200]);
+    await h.play(() => h.llm.calls[0]!.onChunk?.("kept"));
+    await h.play(() => h.llm.respond("lost kept"));
+
+    expect(h.events(RESPONSE_CHUNKS)).toMatchObject([
+      { payload: { chunks: ["kept"], sequence: 1 } },
+    ]);
+    // The durable truth is untouched by the ephemeral loss.
+    expect(h.events(SETTLED)).toMatchObject([
+      { payload: { result: { status: "succeeded", text: "lost kept" } } },
     ]);
   });
 
