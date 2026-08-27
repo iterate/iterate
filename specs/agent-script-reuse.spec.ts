@@ -9,16 +9,16 @@ import { test } from "./test-support/test.ts";
 // scripts EXECUTE for real — the child run re-runs turn 1's algorithm with
 // the new number — and the spec opens each turn's codemode snippet in the
 // feed to show the shortcut.
-// Quarantined with tasks/platform-stall-repros.md: on 2026-08-27 this spec
-// failed 3/3 consecutive preview runs (Depot w1hcwnlc3q, bqk06tf2kc,
-// p2blkx8cx5) — including runs of THIS spec text with its warm-up turn
-// intact, one of them stalling on turn 2. The journals show the turns
-// complete in 150-183s: the in-flight intercepted LLM request is severed by
-// processor eviction churn, and a hung re-dial is invisible until a 30-40s
-// staleness wake (the expected-fail spec in
+// On 2026-08-27 this spec failed 3/3 consecutive preview runs (Depot
+// w1hcwnlc3q, bqk06tf2kc, p2blkx8cx5) — including runs of THIS spec text
+// with its warm-up turn intact, one of them stalling on turn 2. The
+// journals show the turns complete in 150-183s: the in-flight intercepted
+// LLM request is severed by processor eviction churn, and a hung re-dial is
+// invisible until a 30-40s staleness wake (the expected-fail spec in
 // apps/os/src/domains/agents/agent-llm-stall.test.ts pins the mechanism).
 // Un-skip when attempt-progress deadlines land (that task's fix direction,
 // threads 1-2) and a preview run passes with the warm-up REMOVED (#2529).
+// Quarantined with tasks/platform-stall-repros.md.
 test.skip("a repeat request reuses the previous turn's journaled script instead of re-deriving it", async ({
   helpers,
   page,
