@@ -62,3 +62,4 @@ event per ~150ms window. The ~60ms commit amortizes over ~8 tokens → ceiling
 - [x] Replay lib (`apps/os/src/lib/llm-request-replay.ts`): reassemble from plural events (keep singular lane) — _windows deduped by flush sequence then flattened_
 - [x] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test` — _all green; one existing fake-model spec updated for the plural events_
 - [x] Draft PR with before/after tok/s numbers — _#2531_
+- [x] Smooth token reveal in the live feed — _CSS-staggered `TokenRevealText` over reducer-kept `responseWindows`; requested after Misha felt the 8-token jumps on preview-8_
