@@ -4,17 +4,13 @@ import type { StreamEvent } from "iterate/processors";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { parseConfig } from "../../config.ts";
 import { workerVersion, type Env } from "../../env.ts";
+import { ProjectEgressInterceptRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import {
-  ProjectAiInterceptRpcTarget,
-  ProjectEgressInterceptRpcTarget,
-  StreamRpcTarget,
-} from "../../rpc-targets.ts";
-import {
+  AI_INTERCEPTOR_CAPABILITY_NAME,
   noAiInterceptorError,
-  type ProjectAiIntercept,
-  type ProjectAiInterceptor,
   type ProjectAiInterceptorInput,
 } from "../../lib/model-interception.ts";
+import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { LiveStatePagers } from "../live-state-pager.ts";
 import { deepRetainRpcStubs } from "../capability-host/live-capability.ts";
@@ -66,9 +62,6 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
   #egressInterceptor?: ReturnType<typeof deepRetainRpcStubs<ProjectEgressInterceptor>>;
-  // The live handler slot serving intercepted/* models (itx.ai.intercept) — same
-  // last-writer-wins, session-bound semantics as the egress interceptor.
-  #aiInterceptor?: ReturnType<typeof deepRetainRpcStubs<ProjectAiInterceptor>>;
   // Last time #egressRules paid a facade snapshot — bounds rules staleness to ~5s.
   #egressRulesFreshAt = 0;
   // Demo (stateful live state): a counter every watcher of `itx.liveState` sees
@@ -803,37 +796,44 @@ export class ProjectDurableObject extends DurableObject<Env> {
     });
   }
 
-  interceptAi(handler: ProjectAiInterceptor): ProjectAiIntercept {
-    if (typeof handler !== "function") throw new Error("project AI interceptor must be a function");
-    const retained = deepRetainRpcStubs(handler);
-    if (this.#aiInterceptor !== undefined) {
-      console.warn("project AI interceptor overwritten", { projectId: this.#name.projectId });
-      this.#aiInterceptor[Symbol.dispose]();
-    }
-    this.#aiInterceptor = retained;
-
-    return new ProjectAiInterceptRpcTarget({
-      ctx: this.ctx,
-      release: () => {
-        if (this.#aiInterceptor !== retained) return;
-        retained[Symbol.dispose]();
-        this.#aiInterceptor = undefined;
-      },
-    });
-  }
-
   /**
-   * Serve one intercepted/* model invocation through the live AI interceptor. Both
-   * egress paths (`itx.ai.run` in the isolate, agent turns in the processor
-   * facet) land here, so the handler slot and its last-writer-wins story live
-   * in exactly one place. No interceptor → the canonical loud error; the
-   * caller's own failure handling (recorded attempt failure, RPC rejection)
-   * carries it from there.
+   * Serve one intercepted/* model invocation through the live AI interceptor —
+   * SPIKE VARIANT: the interceptor is a live capability mounted at the root
+   * scope (`ai.intercept` is sugar over provideCapability), so the consult
+   * invokes it through the root capability-host facade instead of reading a
+   * memory slot here. Both egress paths (`itx.ai.run` in the isolate, agent
+   * turns in the processor facet) still land here so the routing story lives
+   * in one place. No mount, or a mount whose provider Pager is away →
+   * the canonical loud error.
    */
   async consultAiInterceptor(input: ProjectAiInterceptorInput): Promise<unknown> {
-    const interceptor = this.#aiInterceptor;
-    if (interceptor === undefined) throw noAiInterceptorError(input.model);
-    return await interceptor.value(input);
+    // Safe: the root stream's facet composition hosts the capability-host
+    // processor, and its facade carries invokeCapability — the same narrow
+    // hand-declared subset seam the reduced-state facade above uses.
+    const facade = (await this.env.STREAM.getByName(
+      DurableObjectNameCodec.stringify({ path: "/", projectId: this.#name.projectId }),
+    ).processorFacade({ name: CapabilityHostProcessorContract.slug })) as unknown as {
+      invokeCapability(call: { args: unknown[]; path: string[] }): Promise<unknown>;
+    };
+    try {
+      return await facade.invokeCapability({
+        path: [AI_INTERCEPTOR_CAPABILITY_NAME],
+        args: [input],
+      });
+    } catch (error) {
+      // The two "nobody is serving this" shapes — never mounted (or revoked),
+      // and mounted-but-provider-away (Pager offline) — collapse to the one
+      // documented error; anything else (a handler throw included) surfaces
+      // verbatim as the attempt's failure.
+      const message = error instanceof Error ? error.message : String(error);
+      if (
+        message.includes(`no capability "${AI_INTERCEPTOR_CAPABILITY_NAME}"`) ||
+        message.includes(`capability "${AI_INTERCEPTOR_CAPABILITY_NAME}" is offline`)
+      ) {
+        throw noAiInterceptorError(input.model);
+      }
+      throw error;
+    }
   }
 }
 
