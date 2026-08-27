@@ -222,6 +222,7 @@ function makeHarness() {
       new VoiceAgentProcessor({
         ...deps,
         nowAtFacetMs: deps.now,
+        buildCacheKey: "test-build",
         /* The REAL dial, so the mocked `fetch` above is what stands in for the
          * provider — including the `response.webSocket ?? null` line that has
          * broken in production. */
@@ -983,8 +984,7 @@ describe("tools on the birth certificate", () => {
     const created: string[] = [];
     const briefs: { type: string; payload: { role?: string; content?: string } }[] = [];
     const subscriptions: { path: string; type: string; payload: any }[] = [];
-    const asked: string[] = [];
-    let resolveReply!: (reply: { payload: { message: string } }) => void;
+    const messaged: string[] = [];
     h.projectRoot.current = {
       agents: {
         get(path: string) {
@@ -996,11 +996,8 @@ describe("tools on the birth certificate", () => {
             append: async (event: (typeof briefs)[number]) => {
               briefs.push(event);
             },
-            ask: async ({ message }: { message: string }) => {
-              asked.push(message);
-              return new Promise((resolve) => {
-                resolveReply = resolve;
-              });
+            message: async (input: string) => {
+              messaged.push(input);
             },
           };
         },
@@ -1035,7 +1032,7 @@ describe("tools on the birth certificate", () => {
       session: { instructions?: string; tools?: { name: string }[] };
     };
     expect(update.session.tools!.map((tool) => tool.name)).toEqual(["note_to_self"]);
-    expect(update.session.instructions).toContain("fast half");
+    expect(update.session.instructions).toContain("backend");
 
     h.provider.push({
       type: "response.function_call_arguments.done",
@@ -1057,7 +1054,15 @@ describe("tools on the birth certificate", () => {
       path: "/agents/voice-notes/voice/test",
       type: "events.iterate.com/stream/subscription-configured",
       payload: {
-        filter: { eventTypes: ["events.iterate.com/agent/summary-updated"] },
+        filter: {
+          eventTypes: [
+            "events.iterate.com/agent/summary-updated",
+            "events.iterate.com/agent/llm-request-requested",
+            "events.iterate.com/capability-host/script-run-started",
+            "events.iterate.com/capability-host/script-run-settled",
+            "events.iterate.com/agents/web-message-sent",
+          ],
+        },
         receiver: { action: "copy-to-stream", receivingStreamPath: "/agents/voice/test" },
       },
     });
@@ -1067,26 +1072,37 @@ describe("tools on the birth certificate", () => {
     /* Born briefed, as a system context item that triggers no turn. */
     expect(briefs[0]!.type).toBe("events.iterate.com/agents/context-added");
     expect(briefs[0]!.payload.role).toBe("system");
-    expect(briefs[0]!.payload.content).toContain("careful, thinking half");
+    expect(briefs[0]!.payload.content).toContain("the backend of ONE assistant");
     /* The note carries its own reply-channel coda, because the platform
      * stamps a reply-routing label on the same message that points at a
      * path which is not an agent. */
-    expect(asked).toHaveLength(1);
-    expect(asked[0]).toMatch(/^look up the March invoice\n/);
-    expect(asked[0]).toContain("itx.chat.sendMessage");
+    expect(messaged).toHaveLength(1);
+    expect(messaged[0]).toMatch(/^look up the March invoice\n/);
+    expect(messaged[0]).toContain("itx.chat.sendMessage");
 
-    /* The reply lands mid-call: injected as a bracketed note, and the
-     * model is nudged to speak because the floor is free. */
-    resolveReply({ payload: { message: "The March invoice was never sent." } });
+    /* The reply arrives as a durable colleague-note (the copy-to-stream
+     * lane, not ask()): injected as a bracketed note, and the model is
+     * nudged to speak because the floor is free. */
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-note",
+      payload: { text: "The March invoice was never sent." },
+    });
     await h.settle();
     const items = h.provider.sentOfType("conversation.item.create") as {
       item: { type: string; content?: { text: string }[] };
     }[];
-    const note = items.find((entry) => entry.item.type === "message");
+    const note = items.find((entry) => entry.item.content?.[0]?.text.startsWith("[note from"));
     expect(note).toBeDefined();
     expect(note!.item.content![0]!.text).toBe(
-      "[note from your thinking half] The March invoice was never sent.",
+      "[note from your backend] The March invoice was never sent.",
     );
+    /* Dispatching the note was itself a status: the dead-air before the
+     * colleague's first narration has something honest in it. */
+    const opening = eventsOfType(h, "colleague-status");
+    expect(opening).toHaveLength(1);
+    expect(opening[0]!.payload).toMatchObject({
+      activity: "picking up a note from the frontend",
+    });
     expect(h.provider.sentOfType("response.create")).toHaveLength(1);
   });
 
@@ -1099,12 +1115,11 @@ describe("tools on the birth certificate", () => {
    * twice and spoken zero times. The colleague is per STREAM now, and its
    * late reply is spoken into whichever call is live when it arrives.
    */
-  it("a note reply that outlives its call is spoken into the next one", async () => {
+  it("a note that outlives its call reaches the next one — or its briefing", async () => {
     const h = makeHarness();
     const gotten: string[] = [];
     const created: string[] = [];
-    const asked: string[] = [];
-    let resolveReply!: (reply: { payload: { message: string } }) => void;
+    const messaged: string[] = [];
     h.projectRoot.current = {
       agents: {
         get(path: string) {
@@ -1114,11 +1129,8 @@ describe("tools on the birth certificate", () => {
               created.push(path);
             },
             append: async () => {},
-            ask: async ({ message }: { message: string }) => {
-              asked.push(message);
-              return new Promise((resolve) => {
-                resolveReply = resolve;
-              });
+            message: async (input: string) => {
+              messaged.push(input);
             },
           };
         },
@@ -1133,8 +1145,8 @@ describe("tools on the birth certificate", () => {
       arguments: JSON.stringify({ note: "factorize the first 23 digits of pi" }),
     });
     await h.settle();
-    expect(asked).toHaveLength(1);
-    expect(asked[0]).toMatch(/^factorize the first 23 digits of pi\n/);
+    expect(messaged).toHaveLength(1);
+    expect(messaged[0]).toMatch(/^factorize the first 23 digits of pi\n/);
     const firstSocket = h.provider;
 
     /* The person waits quietly for the answer, so the idle deadline kills
@@ -1143,6 +1155,16 @@ describe("tools on the birth certificate", () => {
     await h.settle();
     expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
 
+    /* The colleague's first reply lands BETWEEN calls — spoken to nobody,
+     * but durable: the fold keeps it for the next session's briefing. */
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-note",
+      payload: { text: "Early lead: the number is even, so 2 divides it." },
+    });
+    await h.settle();
+    await h.advanceTime(2_000);
+    await h.settle();
+
     /* They press again: a fresh call, a fresh socket, the SAME stream. */
     await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
     await h.settle();
@@ -1150,22 +1172,31 @@ describe("tools on the birth certificate", () => {
     await h.settle();
     expect(eventsOfType(h, "call-started")).toHaveLength(2);
     expect(h.provider).not.toBe(firstSocket);
+    const update = h.provider.sentOfType("session.update")[0] as {
+      session: { instructions?: string };
+    };
+    expect(update.session.instructions).toContain("Recent notes from your backend");
+    expect(update.session.instructions).toContain("the number is even, so 2 divides it");
 
-    /* The reply lands in the LIVE call, never the dead one. */
-    resolveReply({ payload: { message: "The factorization is done." } });
+    /* A note arriving DURING the new call lands in it, never the dead one. */
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-note",
+      payload: { text: "The factorization is done." },
+    });
     await h.settle();
     const items = h.provider.sentOfType("conversation.item.create") as {
       item: { type: string; content?: { text: string }[] };
     }[];
-    const note = items.find((entry) => entry.item.type === "message");
-    expect(note).toBeDefined();
-    expect(note!.item.content![0]!.text).toBe(
-      "[note from your thinking half] The factorization is done.",
+    const note = items.find((entry) =>
+      entry.item.content?.[0]?.text.startsWith("[note from your backend] The factorization"),
     );
+    expect(note).toBeDefined();
     const staleItems = firstSocket.sentOfType("conversation.item.create") as {
-      item: { type: string };
+      item: { type: string; content?: { text: string }[] };
     }[];
-    expect(staleItems.filter((entry) => entry.item.type === "message")).toHaveLength(0);
+    expect(
+      staleItems.filter((entry) => entry.item.content?.[0]?.text.startsWith("[note from")),
+    ).toHaveLength(0);
 
     /* A follow-up in the new call reaches the same desk: one colleague,
      * created and briefed once, remembering across the reconnect. */
@@ -1178,8 +1209,8 @@ describe("tools on the birth certificate", () => {
     await h.settle();
     expect(new Set(gotten)).toEqual(new Set(["/agents/voice-notes/voice/test"]));
     expect(created).toEqual(["/agents/voice-notes/voice/test"]);
-    expect(asked).toHaveLength(2);
-    expect(asked[1]).toMatch(/^now double-check it\n/);
+    expect(messaged).toHaveLength(2);
+    expect(messaged[1]).toMatch(/^now double-check it\n/);
   });
 
   /*
@@ -1270,10 +1301,10 @@ describe("tools on the birth certificate", () => {
         h.provider.sentOfType("conversation.item.create") as {
           item: { type: string; content?: { text: string }[] };
         }[]
-      ).filter((entry) => entry.item.content?.[0]?.text.startsWith("[your thinking half"));
+      ).filter((entry) => entry.item.content?.[0]?.text.startsWith("[backend status"));
     expect(whispers()).toHaveLength(1);
     expect(whispers()[0]!.item.content![0]!.text).toBe(
-      "[your thinking half's status: running the factorization script]",
+      "[backend status: running the factorization script]",
     );
     /* Quiet on purpose: knowing is not announcing. */
     expect(h.provider.sentOfType("response.create")).toHaveLength(0);
@@ -1285,13 +1316,32 @@ describe("tools on the birth certificate", () => {
     });
     await h.settle();
     expect(whispers()).toHaveLength(1);
-    /* …but a CHANGED activity is. */
+    /* Lifecycle phases whisper too — the OS UI's "writing code" / "running
+     * code" vocabulary, straight from the transform — and a failed script
+     * carries its error, which is what "say so, don't invent" runs on. */
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-status",
+      payload: { phase: "running code" },
+    });
+    await h.settle();
+    expect(whispers()).toHaveLength(2);
+    expect(whispers()[1]!.item.content![0]!.text).toBe("[backend status: running code]");
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-status",
+      payload: { phase: "a script failed", failure: "TypeError: cannot read digits of pi" },
+    });
+    await h.settle();
+    expect(whispers()).toHaveLength(3);
+    expect(whispers()[2]!.item.content![0]!.text).toBe(
+      "[backend status: a script failed — TypeError: cannot read digits of pi]",
+    );
+    /* …and a CHANGED activity is whispered as well. */
     await h.append({
       type: "events.iterate.com/voice-agent/colleague-status",
       payload: { activity: "writing up the answer" },
     });
     await h.settle();
-    expect(whispers()).toHaveLength(2);
+    expect(whispers()).toHaveLength(4);
 
     /* The reconnect's briefing carries the folded status, mid-task framing
      * and all — the line that stops a fresh session re-sending the note. */
@@ -1318,6 +1368,7 @@ describe("tools on the birth certificate", () => {
     await h.settle();
     expect(h.state().colleagueStatus).toEqual({
       activity: "done — answer delivered",
+      phase: "a script failed",
       waitingFor: "user_input",
     });
   });

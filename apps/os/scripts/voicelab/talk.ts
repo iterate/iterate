@@ -2,6 +2,7 @@
 // hold-to-talk. No ESP32 involved.
 //
 //   pnpm cli voicelab talk                # asks which environment and project
+//   pnpm cli voicelab talk --auto         # defaults for both prompts: default project, fresh stream
 //   pnpm cli voicelab talk --minutes 20
 //   pnpm cli voicelab talk --setup-only   # install the server side, play nothing
 //
@@ -37,7 +38,7 @@ import {
 } from "./connect.ts";
 import { installVoiceAgent } from "./deploy.ts";
 import { discardRpcResult, withRpcResult } from "./rpc-ownership.ts";
-import { voiceAgentEntrypointRef } from "./voice-agent-ref.ts";
+import { voiceAgentEntrypointRef, voiceAgentFacetRef } from "./voice-agent-ref.ts";
 
 /*
  * PRODUCTION, AND A PROJECT THAT EXISTS TOMORROW.
@@ -112,6 +113,13 @@ export interface TalkOptions extends Partial<VoicelabConnectOptions> {
   kitDir?: string;
   /** Install and report the server side, then stop without starting audio. */
   setupOnly?: boolean;
+  /**
+   * Accept every prompt's default without asking: the default project and a
+   * fresh timestamped stream. The two prompts exist so a run can rejoin a
+   * conversation by name; when the answer is always enter-enter, this is the
+   * flag that says so.
+   */
+  auto?: boolean;
   /**
    * Run unattended for this many minutes instead of hold-to-talk.
    *
@@ -227,12 +235,12 @@ const HEALTH_TIMEOUT_MS = 15_000;
 const HEALTH_RETRY_MS = 1_000;
 
 export async function talk(options: TalkOptions = {}) {
+  const defaultProject = process.env.ITERATE_PROJECT?.trim() || DEFAULT_PROJECT;
   const project =
     options.project ??
-    (await promptWithDefault(
-      "Project (slug or id)",
-      process.env.ITERATE_PROJECT?.trim() || DEFAULT_PROJECT,
-    ));
+    (options.auto === true
+      ? defaultProject
+      : await promptWithDefault("Project (slug or id)", defaultProject));
   const minutes = options.minutes ?? DEFAULT_MINUTES;
   if (!Number.isFinite(minutes) || minutes <= 0) {
     throw new Error(`--minutes must be greater than zero; received ${JSON.stringify(minutes)}`);
@@ -281,9 +289,32 @@ export async function talk(options: TalkOptions = {}) {
    * nobody can find again; a name you chose is one you can point setup, the
    * agent and a later look at the stream all at.
    */
-  const streamPath = options.streamPath ?? (await promptWithDefault("Stream", defaultStreamPath()));
+  const streamPath =
+    options.streamPath ??
+    (options.auto === true
+      ? defaultStreamPath()
+      : await promptWithDefault("Stream", defaultStreamPath()));
   if (!streamPath.startsWith("/")) {
     throw new Error(`stream path must be absolute; received ${JSON.stringify(streamPath)}`);
+  }
+  /*
+   * A CHANGED INSTALL MUST REACH THE RUNNING FACET. The facet is a STATEFUL
+   * durable worker: it keeps the bundle it booted with for as long as it
+   * stays warm, and back-to-back voicelab runs keep it warm indefinitely —
+   * measured on prd (2026-08-26 evening): three commits behind while the
+   * stateless entrypoint rebuilt every run, so setup wrote the new
+   * contract's delivery filter and the live facet installed the previous
+   * revision's colleague subscription. Killing the incarnation is the
+   * upgrade: the next dispatch boots the build this run just committed.
+   */
+  if (install.changed) {
+    using facetWorker = itx.workers.get(voiceAgentFacetRef(streamPath)) as unknown as {
+      kill(): Promise<void>;
+    } & Disposable;
+    /* The abort takes the killing RPC down with the incarnation — "kill
+     * requested" IS the success signal, so the rejection is swallowed. */
+    await facetWorker.kill().catch(() => {});
+    console.log(`restarted voice-agent facet worker for the new build`);
   }
   await refuseSilentPostureFlip(itx, streamPath, {
     intendedClientTakesTurns: options.openMic !== true,
