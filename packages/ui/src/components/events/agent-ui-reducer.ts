@@ -814,7 +814,7 @@ function reduceAgentUiEvent(
               // — an interrupt can strand up to one coalescing window's tail
               // in the buffer. Adopt it whenever it extends what streamed;
               // the suffix becomes a final window so the reveal animates it.
-              ...(partialText !== null &&
+              ...(partialText &&
                 partialText.length > step.responseText.length &&
                 partialText.startsWith(step.responseText) && {
                   responseText: partialText,
