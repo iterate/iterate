@@ -43,9 +43,15 @@ export function failing<TestFn extends (...args: any[]) => any>(
     // The body's own arguments pass through untouched — playwright fixtures
     // ({ page, ... }, testInfo), vitest context — whatever the wrapped test
     // function provides.
-    return test(...args.slice(0, -1), async (...bodyArgs: any[]) =>
-      expectFailure({ failure }, async () => await body(...bodyArgs)),
-    );
+    const wrapped = async (...bodyArgs: any[]) =>
+      expectFailure({ failure }, async () => await body(...bodyArgs));
+    // Playwright and vitest's test.extend decide WHICH fixtures to set up by
+    // parsing the test function's source for its destructured first
+    // parameter. A rest-args wrapper would hide the body's fixture names and
+    // the runner would instantiate none of them — so present the body's own
+    // source when the runner looks.
+    Object.defineProperty(wrapped, "toString", { value: () => body.toString() });
+    return test(...args.slice(0, -1), wrapped);
   };
   // The cast restates the contract the wrapper keeps by construction: it
   // forwards every argument unchanged except the trailing body, which it

@@ -21,6 +21,11 @@ test("options objects and body arguments pass through the wrapped test function"
   // The wrapped body forwards playwright-style fixtures and passes when the
   // pinned error is thrown.
   await registered[0]!.body({ page: "fake-page" });
+  // Runners discover fixtures by PARSING the test function's source for its
+  // destructured first parameter — the wrapper must present the body's own
+  // source or playwright/test.extend would instantiate no fixtures at all.
+  expect(String(registered[0]!.body)).toContain("fixtures");
+  expect(String(registered[0]!.body)).not.toContain("bodyArgs");
 });
 
 test("a body failing for a different reason fails, naming both errors", async () => {
