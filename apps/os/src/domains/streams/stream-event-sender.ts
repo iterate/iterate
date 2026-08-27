@@ -1253,8 +1253,11 @@ export class StreamEventSender {
     }
     if (!recorded) {
       // Lifecycle teardown interrupted the append. A fresh incarnation owns
-      // the retry (its attempted-set starts empty); arrange the wake it needs.
-      this.#hooks.armAlarm(this.#hooks.now() + LIFECYCLE_RETRY_DELAY_MS);
+      // the retry (its attempted-set starts empty), and the wake it needs is
+      // DERIVED, not armed here: #armAlarmFromStore sees the still-halted,
+      // stale-version state and arms the alarm from it. A bare armAlarm at
+      // this point was the parked-wake edge found on #2530 — the very next
+      // recomputation cleared it.
       return;
     }
     this.#antidoteResumesAttempted.add(idempotencyKey);
@@ -1605,6 +1608,25 @@ export class StreamEventSender {
         continue;
       }
       if (configured.deliveryHalted !== undefined) {
+        // A halt whose recorded deploy version differs from the current one
+        // IS durable evidence of an owed antidote resume that has not landed
+        // (the resumed event would have cleared the halt from reduced state).
+        // Derive the wake from that state — every incarnation recomputes it —
+        // instead of trusting an in-memory armAlarm that the next
+        // recomputation would clear (the parked-wake edge found on #2530).
+        // Paused streams deliberately derive NO wake: the resume append
+        // rejects while paused and the unpause event's own send check
+        // retries, so arming here would loop the alarm against the pause.
+        // The 1s pace matches the interrupted-halt-append lifecycle retry.
+        const halt = configured.deliveryHalted;
+        if (
+          halt.workerVersion !== undefined &&
+          halt.workerVersion !== this.#hooks.workerVersion() &&
+          !state.paused
+        ) {
+          const at = this.#hooks.now() + LIFECYCLE_RETRY_DELAY_MS;
+          if (next === null || at < next) next = at;
+        }
         continue;
       }
       if (row.inFlightDeadlineAt !== null) {
