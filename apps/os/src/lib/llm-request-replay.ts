@@ -24,10 +24,9 @@ import {
 export const LLM_REPLAY_EVENT_TYPES: readonly string[] = AgentProcessorContract.consumes;
 
 /**
- * The streamed-chunk event type for pure replay callers that already hold a
+ * The streamed-window event type for pure replay callers that already hold a
  * live or catch-up batch. Browser mirrors never persist these ephemeral events.
  */
-const LLM_RESPONSE_CHUNK_EVENT_TYPE = "events.iterate.com/agent/llm-response-chunk";
 const LLM_RESPONSE_CHUNKS_EVENT_TYPE = "events.iterate.com/agent/llm-response-chunks";
 
 export type LlmRequestReplayMessage = {
@@ -138,11 +137,6 @@ const OutputPayloadSlice = z.looseObject({
   content: z.string(),
   llmRequestOffset: z.number(),
 });
-const ChunkPayloadSlice = z.looseObject({
-  chunk: z.unknown(),
-  llmRequestOffset: z.number(),
-  sequence: z.number(),
-});
 const ChunksPayloadSlice = z.looseObject({
   chunks: z.array(z.unknown()),
   llmRequestOffset: z.number(),
@@ -158,7 +152,7 @@ const GatewayCacheSlice = z.looseObject({
  * Replays one LLM request's exact wire messages — and its response — from
  * mirrored raw events. `rawEventJsons` is the consumed subset
  * (LLM_REPLAY_EVENT_TYPES); `chunkEventJsons` is this request's streamed
- * chunks (LLM_RESPONSE_CHUNK_EVENT_TYPE), which fill in reasoning text and
+ * windows (LLM_RESPONSE_CHUNKS_EVENT_TYPE), which fill in reasoning text and
  * the partial response when no output ever committed. Rows that fail to
  * parse are skipped like the processor's own fold skips them (raw appends
  * are accepted by design; a malformed event is a fact of the log). Returns
@@ -241,25 +235,16 @@ function replayResponse(input: {
     break;
   }
 
-  // Deduped by sequence, first occurrence wins: a callback reconnect can
-  // redeliver a buffered chunk already present in the caller's in-memory
-  // batch. Concatenating both occurrences would double the text. A window
-  // (plural) event's sequence numbers flushes; the legacy singular lane's
-  // numbers chunks — a single response only ever rides one lane.
+  // Deduped by flush sequence, first occurrence wins: a callback reconnect
+  // can redeliver a buffered window already present in the caller's in-memory
+  // batch. Concatenating both occurrences would double the text.
   const windowsBySequence = new Map<number, unknown[]>();
   for (const event of input.chunkEvents) {
-    if (event.type === LLM_RESPONSE_CHUNK_EVENT_TYPE) {
-      const parsed = ChunkPayloadSlice.safeParse(event.payload);
-      if (!parsed.success || parsed.data.llmRequestOffset !== input.llmRequestOffset) continue;
-      if (!windowsBySequence.has(parsed.data.sequence)) {
-        windowsBySequence.set(parsed.data.sequence, [parsed.data.chunk]);
-      }
-    } else if (event.type === LLM_RESPONSE_CHUNKS_EVENT_TYPE) {
-      const parsed = ChunksPayloadSlice.safeParse(event.payload);
-      if (!parsed.success || parsed.data.llmRequestOffset !== input.llmRequestOffset) continue;
-      if (!windowsBySequence.has(parsed.data.sequence)) {
-        windowsBySequence.set(parsed.data.sequence, parsed.data.chunks);
-      }
+    if (event.type !== LLM_RESPONSE_CHUNKS_EVENT_TYPE) continue;
+    const parsed = ChunksPayloadSlice.safeParse(event.payload);
+    if (!parsed.success || parsed.data.llmRequestOffset !== input.llmRequestOffset) continue;
+    if (!windowsBySequence.has(parsed.data.sequence)) {
+      windowsBySequence.set(parsed.data.sequence, parsed.data.chunks);
     }
   }
   const windows = [...windowsBySequence.entries()]
@@ -317,12 +302,7 @@ function replayStats(input: {
     settledEvent === undefined ? undefined : SettledPayloadSlice.safeParse(settledEvent.payload);
 
   const chunks = input.chunkEvents.filter((event) => {
-    if (
-      event.type !== LLM_RESPONSE_CHUNK_EVENT_TYPE &&
-      event.type !== LLM_RESPONSE_CHUNKS_EVENT_TYPE
-    ) {
-      return false;
-    }
+    if (event.type !== LLM_RESPONSE_CHUNKS_EVENT_TYPE) return false;
     const parsed = RequestScopedPayloadSlice.safeParse(event.payload);
     return parsed.success && parsed.data.llmRequestOffset === input.llmRequestOffset;
   });

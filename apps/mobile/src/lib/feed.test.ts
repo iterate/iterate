@@ -47,13 +47,13 @@ test("streaming response text lands on the live activity while working", () => {
   const feed = reduceFeed(PATH, [
     event(1, "events.iterate.com/agents/context-added", { content: "go", role: "user" }),
     event(2, "events.iterate.com/agent/llm-request-requested", {}),
-    event(3, "events.iterate.com/agent/llm-response-chunk", {
+    event(3, "events.iterate.com/agent/llm-response-chunks", {
       llmRequestOffset: 2,
-      chunk: { choices: [{ delta: { content: "const x" } }] },
+      chunks: [{ choices: [{ delta: { content: "const x" } }] }],
     }),
-    event(4, "events.iterate.com/agent/llm-response-chunk", {
+    event(4, "events.iterate.com/agent/llm-response-chunks", {
       llmRequestOffset: 2,
-      chunk: { choices: [{ delta: { content: " = 1" } }] },
+      chunks: [{ choices: [{ delta: { content: " = 1" } }] }],
     }),
   ]);
   expect(feed).toMatchObject({

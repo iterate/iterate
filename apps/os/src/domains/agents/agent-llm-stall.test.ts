@@ -47,9 +47,11 @@ it.fails("a mid-stream stall (chunks, then silence) settles the request within 6
   expect(h.llm.calls).toHaveLength(1);
   expect(h.state().openRequest).not.toBeNull();
 
-  // The transport streams a few deltas and then goes quiet forever.
+  // The transport streams a few deltas and then goes quiet forever. The first
+  // chunk flushes its own window (the request opened >150ms ago); the rest sit
+  // in the coalescing buffer, which never flushes on a stream that never ends.
   await h.play(() => h.llm.streamChunks(["Hel", "lo ", "the"]));
-  expect(h.events(RESPONSE_CHUNK)).toHaveLength(3);
+  expect(h.events(RESPONSE_CHUNKS)).toMatchObject([{ payload: { chunks: ["Hel"], sequence: 0 } }]);
 
   // 60 seconds of silence, no deliveries. Today nothing wakes the stream:
   // the whole-phase transport deadline is the remaining expiry horizon
@@ -77,7 +79,7 @@ it.fails("a mid-stream stall (chunks, then silence) settles the request within 6
 type AgentEventInput = ConsumedInput<AgentProcessorContract>;
 
 const SETTLED = "events.iterate.com/agent/llm-request-settled";
-const RESPONSE_CHUNK = "events.iterate.com/agent/llm-response-chunk";
+const RESPONSE_CHUNKS = "events.iterate.com/agent/llm-response-chunks";
 
 const NEW_AGENT_EVENTS = [
   { type: "events.iterate.com/agent/created", payload: {} },

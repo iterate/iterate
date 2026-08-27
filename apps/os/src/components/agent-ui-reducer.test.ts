@@ -77,27 +77,27 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test" },
       },
       {
-        type: "events.iterate.com/agent/llm-response-chunk",
+        type: "events.iterate.com/agent/llm-response-chunks",
         payload: {
           llmRequestOffset: 10,
           sequence: 0,
-          chunk: { choices: [{ delta: { reasoning_content: "Reading the stream" } }] },
+          chunks: [{ choices: [{ delta: { reasoning_content: "Reading the stream" } }] }],
         },
       },
       {
-        type: "events.iterate.com/agent/llm-response-chunk",
+        type: "events.iterate.com/agent/llm-response-chunks",
         payload: {
           llmRequestOffset: 10,
           sequence: 1,
-          chunk: { choices: [{ delta: { content: "const n = await " } }] },
+          chunks: [{ choices: [{ delta: { content: "const n = await " } }] }],
         },
       },
       {
-        type: "events.iterate.com/agent/llm-response-chunk",
+        type: "events.iterate.com/agent/llm-response-chunks",
         payload: {
           llmRequestOffset: 10,
           sequence: 2,
-          chunk: { choices: [{ delta: { content: "stream.count();" } }] },
+          chunks: [{ choices: [{ delta: { content: "stream.count();" } }] }],
         },
       },
     ]);
@@ -620,7 +620,7 @@ describe("agent-ui reducer", () => {
     });
   });
 
-  test("accumulates agent llm-response-chunk deltas", () => {
+  test("accumulates agent llm-response-chunks deltas", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -628,19 +628,19 @@ describe("agent-ui reducer", () => {
         payload: { model: "test-model" },
       },
       {
-        type: "events.iterate.com/agent/llm-response-chunk",
-        payload: { llmRequestOffset: 3, sequence: 0, chunk: { response: "Hel" } },
+        type: "events.iterate.com/agent/llm-response-chunks",
+        payload: { llmRequestOffset: 3, sequence: 0, chunks: [{ response: "Hel" }] },
       },
       {
-        type: "events.iterate.com/agent/llm-response-chunk",
-        payload: { llmRequestOffset: 3, sequence: 1, chunk: { response: "lo" } },
+        type: "events.iterate.com/agent/llm-response-chunks",
+        payload: { llmRequestOffset: 3, sequence: 1, chunks: [{ response: "lo" }] },
       },
       {
-        type: "events.iterate.com/agent/llm-response-chunk",
+        type: "events.iterate.com/agent/llm-response-chunks",
         payload: {
           llmRequestOffset: 3,
           sequence: 2,
-          chunk: { choices: [{ delta: { reasoning_content: "hmm" } }] },
+          chunks: [{ choices: [{ delta: { reasoning_content: "hmm" } }] }],
         },
       },
     ]);
@@ -1263,11 +1263,11 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test" },
       },
       {
-        type: "events.iterate.com/agent/llm-response-chunk",
+        type: "events.iterate.com/agent/llm-response-chunks",
         payload: {
           llmRequestOffset: 7,
           sequence: 0,
-          chunk: { choices: [{ delta: { content: "old partial" } }] },
+          chunks: [{ choices: [{ delta: { content: "old partial" } }] }],
         },
       },
       {
@@ -1290,11 +1290,11 @@ describe("agent-ui reducer", () => {
         },
       },
       {
-        type: "events.iterate.com/agent/llm-response-chunk",
+        type: "events.iterate.com/agent/llm-response-chunks",
         payload: {
           llmRequestOffset: 7,
           sequence: 1,
-          chunk: { choices: [{ delta: { content: " stale chunk" } }] },
+          chunks: [{ choices: [{ delta: { content: " stale chunk" } }] }],
         },
       },
       {

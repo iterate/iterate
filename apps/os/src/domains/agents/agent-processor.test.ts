@@ -146,7 +146,6 @@ function makeAgentHarness(substrate?: HarnessSubstrate, extraDeps?: Partial<Agen
 const REQUESTED = "events.iterate.com/agent/llm-request-requested";
 const SETTLED = "events.iterate.com/agent/llm-request-settled";
 const CONTEXT_ADDED = "events.iterate.com/agents/context-added";
-const RESPONSE_CHUNK = "events.iterate.com/agent/llm-response-chunk";
 const RESPONSE_CHUNKS = "events.iterate.com/agent/llm-response-chunks";
 
 // =============================================================================
@@ -242,8 +241,7 @@ describe("AgentProcessor turn lifecycle", () => {
       { payload: { chunks: ["answer", " = ", "42"], sequence: 1 } },
     ]);
 
-    // A buffered tail is flushed before the settle commits; nothing is ever
-    // journaled on the legacy singular type.
+    // A buffered tail is flushed before the settle commits.
     await h.play(() => h.llm.calls[0]!.onChunk?.(";"));
     await h.play(() => h.llm.respond("const answer = 42;"));
     expect(h.events(RESPONSE_CHUNKS)).toMatchObject([
@@ -251,7 +249,6 @@ describe("AgentProcessor turn lifecycle", () => {
       { payload: { sequence: 1 } },
       { payload: { chunks: [";"], sequence: 2 } },
     ]);
-    expect(h.events(RESPONSE_CHUNK)).toEqual([]);
     expect(h.events(SETTLED)).toMatchObject([{ payload: { result: { status: "succeeded" } } }]);
   });
 
@@ -2143,16 +2140,16 @@ describe("AgentProcessor stream facts", () => {
     expect(h.llm.calls[1]!.model).toBe("better-model");
   });
 
-  it("llm-response-chunk is FORCIBLY ephemeral: absent defaults in, explicit false is rejected", () => {
+  it("llm-response-chunks is FORCIBLY ephemeral: absent defaults in, explicit false is rejected", () => {
     const built = AgentProcessorContract.buildEvent({
-      type: "events.iterate.com/agent/llm-response-chunk",
-      payload: { chunk: { response: "hi" }, llmRequestOffset: 1, sequence: 0 },
+      type: "events.iterate.com/agent/llm-response-chunks",
+      payload: { chunks: [{ response: "hi" }], llmRequestOffset: 1, sequence: 0 },
     });
     expect(built).toMatchObject({ ephemeral: true });
     expect(() =>
       AgentProcessorContract.buildEvent({
-        type: "events.iterate.com/agent/llm-response-chunk",
-        payload: { chunk: { response: "hi" }, llmRequestOffset: 1, sequence: 0 },
+        type: "events.iterate.com/agent/llm-response-chunks",
+        payload: { chunks: [{ response: "hi" }], llmRequestOffset: 1, sequence: 0 },
         // The envelope type already forbids `false` (`ephemeral?: true`); the
         // runtime parse must too, for untyped raw appends.
         // @ts-expect-error

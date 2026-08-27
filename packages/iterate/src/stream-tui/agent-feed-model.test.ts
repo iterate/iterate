@@ -58,13 +58,13 @@ describe("createAgentFeedModel", () => {
     const llmRequestOffset = requested.offset;
     model.applyEvents([
       requested,
-      event("events.iterate.com/agent/llm-response-chunk", {
+      event("events.iterate.com/agent/llm-response-chunks", {
         llmRequestOffset,
-        chunk: { response: "par" },
+        chunks: [{ response: "par" }],
       }),
-      event("events.iterate.com/agent/llm-response-chunk", {
+      event("events.iterate.com/agent/llm-response-chunks", {
         llmRequestOffset,
-        chunk: { response: "tial" },
+        chunks: [{ response: "tial" }],
       }),
     ]);
 

@@ -613,33 +613,6 @@ export const AgentProcessorContract = defineProcessorContract({
           .meta({ description: "How the request settled." }),
       }),
     },
-    "events.iterate.com/agent/llm-response-chunk": {
-      description:
-        "LEGACY: one streamed chunk received from the transport, verbatim. The platform now " +
-        "journals streamed chunks as coalesced llm-response-chunks (plural) events; this " +
-        "singular type remains a parse lane for in-flight clients and variant hosts. " +
-        "Ephemeral: it reaches open browser/TUI connections but is excluded from default " +
-        "reads and durable subscriptions, and may be evicted — the durable truth is the " +
-        "assistant context item / llm-request-settled pair.",
-      // FORCIBLY EPHEMERAL: the contract, not the append site, decides.
-      // Every append/parse lane built from this definition defaults the
-      // envelope's `ephemeral` flag to true and REJECTS `ephemeral: false`,
-      // so a chunk can never become a durable stream fact by accident.
-      ephemeral: true,
-      payloadSchema: z.object({
-        chunk: z.unknown().meta({ description: "The provider's chunk object, verbatim." }),
-        llmRequestOffset: z
-          .number()
-          .int()
-          .positive()
-          .meta({ description: "The in-flight request this chunk belongs to." }),
-        sequence: z
-          .number()
-          .int()
-          .nonnegative()
-          .meta({ description: "Chunk ordinal within the response." }),
-      }),
-    },
     "events.iterate.com/agent/llm-response-chunks": {
       description:
         "A coalescing window of streamed chunks received from the transport, verbatim and in " +
@@ -649,7 +622,10 @@ export const AgentProcessorContract = defineProcessorContract({
         "browser/TUI connections but is excluded from default reads and durable " +
         "subscriptions, and may be evicted — the durable truth is the assistant context " +
         "item / llm-request-settled pair.",
-      // FORCIBLY EPHEMERAL, same as the singular legacy lane above.
+      // FORCIBLY EPHEMERAL: the contract, not the append site, decides.
+      // Every append/parse lane built from this definition defaults the
+      // envelope's `ephemeral` flag to true and REJECTS `ephemeral: false`,
+      // so a chunk can never become a durable stream fact by accident.
       ephemeral: true,
       payloadSchema: z.object({
         chunks: z
@@ -787,7 +763,6 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agents/web-message-sent",
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/agent/llm-request-settled",
-    "events.iterate.com/agent/llm-response-chunk",
     "events.iterate.com/agent/llm-response-chunks",
     "events.iterate.com/agent/token-usage-reported",
     "events.iterate.com/agent/summary-updated",
