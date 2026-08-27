@@ -28,6 +28,7 @@ export const LLM_REPLAY_EVENT_TYPES: readonly string[] = AgentProcessorContract.
  * live or catch-up batch. Browser mirrors never persist these ephemeral events.
  */
 const LLM_RESPONSE_CHUNK_EVENT_TYPE = "events.iterate.com/agent/llm-response-chunk";
+const LLM_RESPONSE_CHUNKS_EVENT_TYPE = "events.iterate.com/agent/llm-response-chunks";
 
 export type LlmRequestReplayMessage = {
   /** Stable identity: a message IS its position in the replayed request (the
@@ -142,6 +143,11 @@ const ChunkPayloadSlice = z.looseObject({
   llmRequestOffset: z.number(),
   sequence: z.number(),
 });
+const ChunksPayloadSlice = z.looseObject({
+  chunks: z.array(z.unknown()),
+  llmRequestOffset: z.number(),
+  sequence: z.number(),
+});
 /** The transport stamps the gateway's `cf-aig-cache-status` header onto the
  * rawResponse it journals (BYOK lane); absent everywhere else. */
 const GatewayCacheSlice = z.looseObject({
@@ -237,21 +243,32 @@ function replayResponse(input: {
 
   // Deduped by sequence, first occurrence wins: a callback reconnect can
   // redeliver a buffered chunk already present in the caller's in-memory
-  // batch. Concatenating both occurrences would double the text.
-  const deltasBySequence = new Map<number, z.infer<typeof ChunkPayloadSlice>>();
+  // batch. Concatenating both occurrences would double the text. A window
+  // (plural) event's sequence numbers flushes; the legacy singular lane's
+  // numbers chunks — a single response only ever rides one lane.
+  const windowsBySequence = new Map<number, unknown[]>();
   for (const event of input.chunkEvents) {
-    if (event.type !== LLM_RESPONSE_CHUNK_EVENT_TYPE) continue;
-    const parsed = ChunkPayloadSlice.safeParse(event.payload);
-    if (!parsed.success || parsed.data.llmRequestOffset !== input.llmRequestOffset) continue;
-    if (!deltasBySequence.has(parsed.data.sequence)) {
-      deltasBySequence.set(parsed.data.sequence, parsed.data);
+    if (event.type === LLM_RESPONSE_CHUNK_EVENT_TYPE) {
+      const parsed = ChunkPayloadSlice.safeParse(event.payload);
+      if (!parsed.success || parsed.data.llmRequestOffset !== input.llmRequestOffset) continue;
+      if (!windowsBySequence.has(parsed.data.sequence)) {
+        windowsBySequence.set(parsed.data.sequence, [parsed.data.chunk]);
+      }
+    } else if (event.type === LLM_RESPONSE_CHUNKS_EVENT_TYPE) {
+      const parsed = ChunksPayloadSlice.safeParse(event.payload);
+      if (!parsed.success || parsed.data.llmRequestOffset !== input.llmRequestOffset) continue;
+      if (!windowsBySequence.has(parsed.data.sequence)) {
+        windowsBySequence.set(parsed.data.sequence, parsed.data.chunks);
+      }
     }
   }
-  const deltas = [...deltasBySequence.values()].sort((a, b) => a.sequence - b.sequence);
+  const windows = [...windowsBySequence.entries()]
+    .sort(([a], [b]) => a - b)
+    .flatMap(([, chunks]) => chunks);
   let streamedText = "";
   let thinkingText = "";
-  for (const delta of deltas) {
-    const { responseDelta, thinkingDelta } = extractCloudflareChunkDeltas(delta.chunk);
+  for (const chunk of windows) {
+    const { responseDelta, thinkingDelta } = extractCloudflareChunkDeltas(chunk);
     streamedText += responseDelta;
     thinkingText += thinkingDelta;
   }
@@ -300,7 +317,12 @@ function replayStats(input: {
     settledEvent === undefined ? undefined : SettledPayloadSlice.safeParse(settledEvent.payload);
 
   const chunks = input.chunkEvents.filter((event) => {
-    if (event.type !== LLM_RESPONSE_CHUNK_EVENT_TYPE) return false;
+    if (
+      event.type !== LLM_RESPONSE_CHUNK_EVENT_TYPE &&
+      event.type !== LLM_RESPONSE_CHUNKS_EVENT_TYPE
+    ) {
+      return false;
+    }
     const parsed = RequestScopedPayloadSlice.safeParse(event.payload);
     return parsed.success && parsed.data.llmRequestOffset === input.llmRequestOffset;
   });

@@ -147,6 +147,7 @@ const REQUESTED = "events.iterate.com/agent/llm-request-requested";
 const SETTLED = "events.iterate.com/agent/llm-request-settled";
 const CONTEXT_ADDED = "events.iterate.com/agents/context-added";
 const RESPONSE_CHUNK = "events.iterate.com/agent/llm-response-chunk";
+const RESPONSE_CHUNKS = "events.iterate.com/agent/llm-response-chunks";
 
 // =============================================================================
 // The turn lifecycle
@@ -211,21 +212,82 @@ describe("AgentProcessor turn lifecycle", () => {
     expect(h.state().tokenUsage).toMatchObject({ totalInputTokens: 10, totalOutputTokens: 2 });
   });
 
-  it("backpressures streamed response chunks so append order stays provider order", async () => {
+  it("coalesces streamed chunks into windowed llm-response-chunks events, tail flushed before settle", async () => {
     const h = makeAgentHarness();
     await h.play(
       ["append", ...NEW_AGENT_EVENTS, userMessage("Stream some code")],
       ["advanceTime", 10_000],
     );
 
+    // Time-to-first-token elapses the window, so the FIRST chunk journals
+    // immediately — the reader sees the first token without waiting out a
+    // fresh coalescing window.
+    await h.play(["advanceTime", 1000]);
+    await h.play(() => h.llm.calls[0]!.onChunk?.("const "));
+    expect(h.events(RESPONSE_CHUNKS)).toMatchObject([
+      { payload: { chunks: ["const "], sequence: 0 } },
+    ]);
+
+    // Inside the window: buffered, nothing journaled.
+    await h.play(() => h.llm.calls[0]!.onChunk?.("answer"));
+    await h.play(() => h.llm.calls[0]!.onChunk?.(" = "));
+    expect(h.events(RESPONSE_CHUNKS)).toHaveLength(1);
+
+    // The window elapses → the next chunk carries the whole buffer out, in
+    // provider order.
+    await h.play(["advanceTime", 200]);
+    await h.play(() => h.llm.calls[0]!.onChunk?.("42"));
+    expect(h.events(RESPONSE_CHUNKS)).toMatchObject([
+      { payload: { chunks: ["const "], sequence: 0 } },
+      { payload: { chunks: ["answer", " = ", "42"], sequence: 1 } },
+    ]);
+
+    // A buffered tail is flushed before the settle commits; nothing is ever
+    // journaled on the legacy singular type.
+    await h.play(() => h.llm.calls[0]!.onChunk?.(";"));
+    await h.play(() => h.llm.respond("const answer = 42;"));
+    expect(h.events(RESPONSE_CHUNKS)).toMatchObject([
+      { payload: { sequence: 0 } },
+      { payload: { sequence: 1 } },
+      { payload: { chunks: [";"], sequence: 2 } },
+    ]);
+    expect(h.events(RESPONSE_CHUNK)).toEqual([]);
+    expect(h.events(SETTLED)).toMatchObject([{ payload: { result: { status: "succeeded" } } }]);
+  });
+
+  it("flushes a window early when its buffered bytes exceed the size cap", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("Stream something huge")],
+      ["advanceTime", 10_000],
+    );
+
+    await h.play(["advanceTime", 1000]);
+    await h.play(() => h.llm.calls[0]!.onChunk?.("small"));
+    // Same virtual instant as the flush above — only the size cap can fire.
+    await h.play(() => h.llm.calls[0]!.onChunk?.("x".repeat(70_000)));
+    expect(h.events(RESPONSE_CHUNKS)).toMatchObject([
+      { payload: { chunks: ["small"], sequence: 0 } },
+      { payload: { sequence: 1 } },
+    ]);
+    await h.play(() => h.llm.respond("done"));
+  });
+
+  it("backpressures chunk flushes so append order stays provider order", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("Stream some code")],
+      ["advanceTime", 11_000],
+    );
+
     const realAppend = h.stream.append.bind(h.stream);
-    let releaseFirstChunk = () => {};
-    const firstChunkHeld = new Promise<void>((resolve) => {
-      releaseFirstChunk = resolve;
+    let releaseFirstFlush = () => {};
+    const firstFlushHeld = new Promise<void>((resolve) => {
+      releaseFirstFlush = resolve;
     });
     h.stream.append = async (...inputs) => {
-      const chunk = inputs.find((input) => input.type === RESPONSE_CHUNK);
-      if (chunk?.payload?.sequence === 0) await firstChunkHeld;
+      const flush = inputs.find((input) => input.type === RESPONSE_CHUNKS);
+      if (flush?.payload?.sequence === 0) await firstFlushHeld;
       return realAppend(...inputs);
     };
 
@@ -235,13 +297,17 @@ describe("AgentProcessor turn lifecycle", () => {
     })();
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    // The transport must not deliver chunk 2 while chunk 1 is still appending.
-    expect(h.events(RESPONSE_CHUNK)).toEqual([]);
+    // The transport must not deliver chunk 2 while flush 1 is still appending.
+    expect(h.events(RESPONSE_CHUNKS)).toEqual([]);
 
-    releaseFirstChunk();
+    releaseFirstFlush();
     await streaming;
-    await h.settle();
-    expect(h.events(RESPONSE_CHUNK).map((event) => event.payload.sequence)).toEqual([0, 1]);
+    await h.play(() => h.llm.respond("const answer = 42;"));
+    expect(h.events(RESPONSE_CHUNKS).map((event) => event.payload.sequence)).toEqual([0, 1]);
+    expect(h.events(RESPONSE_CHUNKS).map((event) => event.payload.chunks)).toEqual([
+      ["const answer = "],
+      ["42;"],
+    ]);
   });
 
   it("debounce coalesces a burst: two inputs, ONE open request covering both", async () => {

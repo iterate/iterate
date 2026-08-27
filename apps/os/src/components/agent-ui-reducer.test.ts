@@ -115,6 +115,50 @@ describe("agent-ui reducer", () => {
     });
   });
 
+  test("streams coalesced multi-chunk windows (llm-response-chunks) into the live llm step", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "user",
+          actor: { type: "user", origin: "web" },
+          content: "count the inputs",
+        },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 10,
+        payload: { model: "gpt-test" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-response-chunks",
+        payload: {
+          llmRequestOffset: 10,
+          sequence: 0,
+          chunks: [
+            { choices: [{ delta: { reasoning_content: "Reading the stream" } }] },
+            { choices: [{ delta: { content: "const n = await " } }] },
+          ],
+        },
+      },
+      {
+        type: "events.iterate.com/agent/llm-response-chunks",
+        payload: {
+          llmRequestOffset: 10,
+          sequence: 1,
+          chunks: [{ choices: [{ delta: { content: "stream.count();" } }] }],
+        },
+      },
+    ]);
+
+    expect(state.live?.steps[0]).toMatchObject({
+      kind: "llm",
+      status: "running",
+      thinkingText: "Reading the stream",
+      responseText: "const n = await stream.count();",
+    });
+  });
+
   test("settles the activity into items when all work completes", () => {
     const state = reduceAll([
       {

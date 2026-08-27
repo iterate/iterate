@@ -262,6 +262,44 @@ describe("replayLlmRequest", () => {
     expect(replay?.response).toEqual({ text: "hello world", thinkingText: "", source: "chunks" });
   });
 
+  it("re-assembles a partial response from coalesced llm-response-chunks windows", () => {
+    // Windows carry many chunks in provider order; flush sequence order wins
+    // even when rows arrive shuffled.
+    const chunkRows = [
+      row(
+        "events.iterate.com/agent/llm-response-chunks",
+        {
+          chunks: [{ choices: [{ delta: { content: "world" } }] }],
+          llmRequestOffset: 7,
+          sequence: 1,
+        },
+        60,
+      ),
+      row(
+        "events.iterate.com/agent/llm-response-chunks",
+        {
+          chunks: [
+            { choices: [{ delta: { reasoning_content: "hmm" } }] },
+            { choices: [{ delta: { content: "hello " } }] },
+          ],
+          llmRequestOffset: 7,
+          sequence: 0,
+        },
+        61,
+      ),
+    ];
+    const replay = replayLlmRequest({
+      rawEventJsons: conversationRows(),
+      chunkEventJsons: chunkRows,
+      llmRequestOffset: 7,
+    });
+    expect(replay?.response).toEqual({
+      text: "hello world",
+      thinkingText: "hmm",
+      source: "chunks",
+    });
+  });
+
   it("dedupes chunk rows by sequence (evicted-then-restreamed attempts leave two rows per sequence)", () => {
     // Chunk rows are ephemeral and evictable: a sweep mid-turn followed by a
     // retry re-appends the same sequences at new offsets, and the browser

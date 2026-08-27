@@ -158,7 +158,34 @@ export class AgentLlmRequest {
     const inFlight = { requestOffset, controller: new AbortController(), partialText: "" };
     this.#inFlightLlmCall = inFlight;
     const startedAtMs = this.#host.now();
-    let chunkSequence = 0;
+
+    // COALESCED chunk journaling. Each append awaits a Durable Object commit
+    // (~60ms) and the transport drain awaits `onChunk` before reading the
+    // next provider frame — journaling every chunk individually therefore
+    // capped delivery at one token per commit round-trip (~17 tok/s in prd,
+    // measured 2026-08-27, regardless of model). Buffering a window and
+    // journaling it as ONE llm-response-chunks event amortizes the commit
+    // across the window; the awaited flush keeps provider order trivially.
+    // A flush that fails loses only its window's chunks — they are ephemeral
+    // UI signals, and the durable truth (settle/context) is untouched.
+    let flushSequence = 0;
+    let chunkBuffer: unknown[] = [];
+    let chunkBufferBytes = 0;
+    let lastFlushAtMs = startedAtMs;
+    const flushChunkBuffer = async () => {
+      if (chunkBuffer.length === 0) return;
+      const chunks = chunkBuffer;
+      chunkBuffer = [];
+      chunkBufferBytes = 0;
+      lastFlushAtMs = this.#host.now();
+      const sequence = flushSequence;
+      flushSequence += 1;
+      await args.append({
+        type: "events.iterate.com/agent/llm-response-chunks",
+        payload: { chunks, llmRequestOffset: requestOffset, sequence },
+      });
+    };
+
     args.runInBackground(async () => {
       try {
         const events = await this.readConsumedEvents();
@@ -175,19 +202,21 @@ export class AgentLlmRequest {
           deadlineMs: Math.max(1, open.expiresAt - this.#host.now()),
           onChunk: async (chunk) => {
             if (inFlight.controller.signal.aborted) return;
+            // The partial accrues BEFORE buffering, so an interrupt keeps the
+            // full streamed text even when the window never flushed.
             inFlight.partialText += extractChunkText(chunk);
-            const sequence = chunkSequence;
-            chunkSequence += 1;
-            // Each append obtains a fresh Durable Object stub, so await the
-            // commit to preserve provider order across those RPCs.
-            await args.append({
-              type: "events.iterate.com/agent/llm-response-chunk",
-              payload: {
-                chunk: jsonCompatible(chunk),
-                llmRequestOffset: requestOffset,
-                sequence,
-              },
-            });
+            const compatible = jsonCompatible(chunk);
+            chunkBuffer.push(compatible);
+            chunkBufferBytes += JSON.stringify(compatible).length;
+            // The window is anchored at the request start, so the first chunk
+            // (arriving after time-to-first-token) flushes immediately.
+            if (
+              this.#host.now() - lastFlushAtMs < CHUNK_FLUSH_WINDOW_MS &&
+              chunkBufferBytes < CHUNK_FLUSH_MAX_BYTES
+            ) {
+              return;
+            }
+            await flushChunkBuffer();
           },
         });
         // A non-streaming transport reports no chunks, so its text exists
@@ -197,6 +226,7 @@ export class AgentLlmRequest {
         // recorded, and must not drop a response already delivered whole.
         if (!inFlight.controller.signal.aborted) {
           inFlight.partialText = completion.text;
+          await flushChunkBuffer();
         }
         const usage = completion.usage;
         await appendUnlessLostIdempotencyRace(args.append, [
@@ -247,6 +277,10 @@ export class AgentLlmRequest {
         // An aborted call is the interrupt path's story — it already settled
         // the request as cancelled.
         if (inFlight.controller.signal.aborted) return;
+        // Best-effort tail flush so the failure settle isn't missing the last
+        // window of streamed text; a second failure here must not mask the
+        // attempt's own error.
+        await flushChunkBuffer().catch(() => {});
         const errorMessage = stringifyError(error);
         // Attempt arithmetic from the dispatch-time reduced state: this failure is
         // attempt (consecutiveLlmFailures + 1). The settled event's reduce
@@ -551,6 +585,18 @@ export class AgentLlmRequest {
 
 /** Page size for full-stream reads (prompt building, compaction guards). */
 const CONSUMED_EVENTS_PAGE_SIZE = 500;
+
+/**
+ * Chunk-coalescing window: how much streamed provider output rides one
+ * llm-response-chunks append. 150ms ≈ 7 UI updates/sec, and amortizes the
+ * ~60ms Durable Object commit far below provider token cadence (the ceiling
+ * becomes ~window/(window+commit) of provider rate instead of ~17 tok/s).
+ */
+const CHUNK_FLUSH_WINDOW_MS = 150;
+
+/** Safety cap: a pathological burst flushes early rather than growing one
+ * oversized append. */
+const CHUNK_FLUSH_MAX_BYTES = 64_000;
 
 /** Race an un-abortable attempt promise against its abort signal: the caller
  * regains control immediately on interrupt while the orphaned work finishes

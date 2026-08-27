@@ -7,7 +7,12 @@ size: medium
 
 ## Status
 
-Spec approved via plannotator grill (2026-08-27). Implementation not started.
+Implementation complete, checks running. Contract gained the plural
+`llm-response-chunks` event; `agent-llm-request.ts` buffers and flushes;
+UI reducer and replay lib fold both lanes; specs cover window grouping,
+size-cap flush, backpressure ordering, and the interrupt partial. Contract
+`version` intentionally NOT bumped: it identifies the prompt fold (drives the
+replay "reconstructed" label) and the fold is byte-identical.
 
 ## Problem
 
@@ -50,10 +55,10 @@ event per ~150ms window. The ~60ms commit amortizes over ~8 tokens → ceiling
 
 ## Checklist
 
-- [ ] Contract: add `agent/llm-response-chunks` (ephemeral-forced), keep singular as legacy
-- [ ] Harness specs: window grouping, tail flush before settle, interrupt keeps partial, size-cap flush
-- [ ] `agent-llm-request.ts`: buffer + flush in `onChunk`, tail flush before settle
-- [ ] UI reducer (`packages/ui/.../agent-ui-reducer.ts`): fold plural events (keep singular lane)
-- [ ] Replay lib (`apps/os/src/lib/llm-request-replay.ts`): reassemble from plural events (keep singular lane)
-- [ ] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test`
-- [ ] Draft PR with before/after tok/s numbers
+- [x] Contract: add `agent/llm-response-chunks` (ephemeral-forced), keep singular as legacy — _`agent-processor-contract.ts`, singular marked LEGACY, plural added to `emits`_
+- [x] Harness specs: window grouping, tail flush before settle, interrupt keeps partial, size-cap flush — _three new/rewritten specs in `agent-processor.test.ts`; existing interrupt spec already covers the partial_
+- [x] `agent-llm-request.ts`: buffer + flush in `onChunk`, tail flush before settle — _window anchored at request start so the first post-TTFT chunk flushes immediately; best-effort tail flush on the failure path too_
+- [x] UI reducer (`packages/ui/.../agent-ui-reducer.ts`): fold plural events (keep singular lane) — _shared case iterates the window_
+- [x] Replay lib (`apps/os/src/lib/llm-request-replay.ts`): reassemble from plural events (keep singular lane) — _windows deduped by flush sequence then flattened_
+- [x] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test` — _all green; one existing fake-model spec updated for the plural events_
+- [x] Draft PR with before/after tok/s numbers — _#2531_

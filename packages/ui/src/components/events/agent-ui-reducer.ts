@@ -592,6 +592,7 @@ const AGENT_LLM_REQUEST_SETTLED = "events.iterate.com/agent/llm-request-settled"
 const AGENT_CONTEXT_ADDED = "events.iterate.com/agents/context-added";
 const AGENT_TOKEN_USAGE_REPORTED = "events.iterate.com/agent/token-usage-reported";
 const AGENT_LLM_RESPONSE_CHUNK = "events.iterate.com/agent/llm-response-chunk";
+const AGENT_LLM_RESPONSE_CHUNKS = "events.iterate.com/agent/llm-response-chunks";
 const SCRIPT_EXECUTION_REQUESTED = "events.iterate.com/capability-host/script-run-requested";
 const SCRIPT_EXECUTION_COMPLETED = "events.iterate.com/capability-host/script-run-settled";
 const SLACK_WEBHOOK_RECEIVED = "events.iterate.com/slack/webhook-received";
@@ -751,11 +752,26 @@ function reduceAgentUiEvent(
       return { ...ready, live: { ...live, steps: [...live.steps, step] } };
     }
 
-    case AGENT_LLM_RESPONSE_CHUNK: {
+    case AGENT_LLM_RESPONSE_CHUNK:
+    case AGENT_LLM_RESPONSE_CHUNKS: {
       const llmRequestOffset = readLlmRequestOffset(event);
-      const chunk = readPayloadRecord(event)?.chunk;
       if (llmRequestOffset == null) return state;
-      const { responseDelta, thinkingDelta } = extractCloudflareChunkDeltas(chunk);
+      const payload = readPayloadRecord(event);
+      // The plural (coalesced-window) event carries the window's chunks in
+      // provider order; the singular type is the legacy one-chunk lane.
+      const chunks =
+        event.type === AGENT_LLM_RESPONSE_CHUNKS
+          ? Array.isArray(payload?.chunks)
+            ? payload.chunks
+            : []
+          : [payload?.chunk];
+      let responseDelta = "";
+      let thinkingDelta = "";
+      for (const chunk of chunks) {
+        const deltas = extractCloudflareChunkDeltas(chunk);
+        responseDelta += deltas.responseDelta;
+        thinkingDelta += deltas.thinkingDelta;
+      }
       if (responseDelta === "" && thinkingDelta === "") return state;
       return updateLlmStep(state, llmRequestOffset, (step) => ({
         ...step,
