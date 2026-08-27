@@ -24,6 +24,10 @@ test.skip("a repeat request reuses the previous turn's journaled script instead 
   page,
   baseURL,
 }) => {
+  // Turn 1 wears the whole cold-deployment cost on the clock (see its
+  // spinner budget below), so the default 90s spec budget cannot hold the
+  // full flow — heavy tier, same as agent-chat.spec.ts.
+  test.setTimeout(240_000);
   await using fixture = await helpers.createFixture("agent-script-reuse");
   if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
 
@@ -38,11 +42,6 @@ test.skip("a repeat request reuses the previous turn's journaled script instead 
   });
 
   const scripts: Record<string, string> = {
-    "warm up": dedent`
-      async (itx) => {
-        await itx.chat.sendMessage("warmed");
-      }
-    `,
     "prime factorize": dedent`
       async (itx) => {
         const n = 52479543428582704627n;
@@ -135,19 +134,6 @@ test.skip("a repeat request reuses the previous turn's journaled script instead 
     return ["```ts", entry[1], "```"].join("\n");
   });
 
-  // Absorb the cold-deployment cost before the UI assertions: the FIRST
-  // intercepted turn on a fresh deployment runs 35-65s of platform churn; a
-  // throwaway agent takes that hit at the itx level, where waits carry no
-  // playwright budget.
-  const warmPath = `/agents/warm-${crypto.randomUUID().slice(0, 8)}`;
-  using warmAgent = project.agents.get(warmPath);
-  await warmAgent.create();
-  await warmAgent.append({
-    type: "events.iterate.com/agent/configured",
-    payload: { config: { llm: { model: "intercepted/factorizer" }, llmRequestDebounceMs: 250 } },
-  });
-  await warmAgent.ask({ message: "warm up", timeoutMs: 90_000 }).catch(() => {});
-
   await page.goto(`/projects/${fixture.project.slug}/agents/streams${agentPath}`);
   const composer = page.getByPlaceholder("Message this agent");
   const send = page.getByRole("button", { name: "Send message" });
@@ -155,7 +141,12 @@ test.skip("a repeat request reuses the previous turn's journaled script instead 
   // Turn 1: the long way. The script really runs; the answer is computed.
   // The working indicator stays up while the turn runs server-side — a slow
   // turn is healthy, so give the spinner more room instead of failing it.
-  await spinnerWaiter.settings.run({ spinnerTimeout: 60_000 }, async () => {
+  // This turn also pays the deployment's one-time cold costs (DO spin-up +
+  // journal hydration, the tswasm sidecar's first compile, dynamic isolate
+  // creation — 35-65s on a fresh preview), hence the doubled budget here
+  // only. The spinner-waiter keeps this honest: it bails the moment the
+  // working indicator disappears, so the wide budget never hides a blank UI.
+  await spinnerWaiter.settings.run({ spinnerTimeout: 120_000 }, async () => {
     await composer.fill("prime factorize 52479543428582704627");
     await send.click();
     await page.getByText("52479543428582704627 = 6203868971 × 8459163737").waitFor();
