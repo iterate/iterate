@@ -17,9 +17,11 @@ Interview log: [mobile-voice-client.interview.md](./mobile-voice-client.intervie
 
 ## Status summary
 
-Not started (spec just written). Native build must come from EAS via the
-mobile PR-preview CI (no local Xcode); on-phone verification happens via
-iPhone mirroring after ~2am.
+Implemented and live-proven from Node: the shipped voice modules held a real
+call against prd (say-synthesized speech up, answer audio + durable
+transcript back, 15s round trip). Remaining: the EAS native build (CI, in
+flight) and the ~2am on-phone check via iPhone mirroring. Explainer written
+(explainers/mobile-voice-client.html).
 
 ## Decisions (from the interview)
 
@@ -51,29 +53,32 @@ iPhone mirroring after ~2am.
 
 ## Checklist
 
-- [ ] Audio I/O module (`src/lib/voice-audio.ts`): react-native-audio-api
+- [x] Audio I/O module (`src/lib/voice-audio.ts`): react-native-audio-api
       capture (16kHz mono, Float32→Int16, per-frame RMS) + streaming PCM
-      playback; interface + injectable fake.
-- [ ] Voice call core (`src/lib/voice-call.ts`): state machine (idle →
+      playback; interface + injectable fake. _Interface in voice-audio.ts;
+      react-native-audio-api impl in voice-audio-native.ts (AudioRecorder
+      capture, AudioBufferQueueSourceNode playback, voiceChat AEC session)._
+- [x] Voice call core (`src/lib/voice-call.ts`): state machine (idle →
       setup → connecting → live → ended), ptt-start append, mic-frame
       uplink, spk-frame downlink with buffer policy, hang-up append,
       caption derivation from lifecycle + colleague-status/note events.
-      Pure TS, no RN imports, so it runs in node.
-- [ ] Setup marker logic (config hash in AsyncStorage) + `setupVoiceAgent`
+      Pure TS, no RN imports, so it runs in node. _Done as specced; 64ms
+      frames (1024 samples), ≤8 in-flight appends then drop._
+- [x] Setup marker logic _(voice-setup.ts: FNV-1a config hash, AsyncStorage marker via DI)_ (config hash in AsyncStorage) + `setupVoiceAgent`
       call via `itx.workers.get` (entrypoint ref mirrors
       `apps/os/scripts/voicelab/voice-agent-ref.ts`).
-- [ ] UI: voice button on the note pill/composer, pulsing with level; in-call
+- [x] UI: voice button _(components/voice-call-button.tsx, wired into note-composer overlay both collapsed and expanded)_ on the note pill/composer, pulsing with level; in-call
       sheet (pulse + hang-up + caption).
-- [ ] Expo config: react-native-audio-api plugin, NSMicrophoneUsageDescription,
+- [x] Expo config: react-native-audio-api plugin _(app.json; background/android modes off)_, NSMicrophoneUsageDescription,
       audio session (playAndRecord / voiceChat / defaultToSpeaker).
-- [ ] Unit tests: state machine, caption derivation, PCM conversion + RMS,
+- [x] Unit tests: state machine _(16 tests: voice-pcm/voice-setup/voice-call .test.ts)_, caption derivation, PCM conversion + RMS,
       setup-marker hash logic (vitest, fake audio via the DI seam).
-- [ ] Headless node wire-driver: run the shipped voice-call module against
+- [x] Headless node wire-driver _(e2e/voice-roundtrip.e2e.test.ts — PASSED against prd voicelab-eval, 15s)_: run the shipped voice-call module against
       prd `voicelab-eval` with WAV-fed fake audio; assert spk-frames arrive
       and durable transcripts land.
 - [ ] Native build via mobile PR-preview CI (fingerprint change → full-install
       QR in PR body).
-- [ ] Permanent explainer in `explainers/` (linked from PR; servable via
+- [x] Permanent explainer in `explainers/` _(mobile-voice-client.html; servable at iterate.iterate.app/explainers/mobile-voice-client?sha=mobile-voice-client)_ (linked from PR; servable via
       iterate.iterate.app/explainers/…).
 - [ ] ~2am: iPhone-mirroring test — capture spike first (non-empty frames +
       moving level), then a real conversation.
