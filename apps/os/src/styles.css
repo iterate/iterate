@@ -11,3 +11,20 @@
     background-color: rgb(250 204 21 / 0.35);
   }
 }
+
+/* Streamed-token reveal (TokenRevealText): `both` keeps a token invisible
+   until its animation-delay elapses, so a window's tokens fan in across the
+   ~150ms between coalesced chunk events. */
+@keyframes token-in {
+  from {
+    opacity: 0;
+  }
+}
+.animate-token-in {
+  animation: token-in 120ms both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-token-in {
+    animation: none;
+  }
+}

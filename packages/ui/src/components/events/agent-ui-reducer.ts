@@ -32,6 +32,10 @@ export type AgentUiLlmStep = {
   thinkingText: string;
   /** Streamed response text — for code-mode agents this is source code. */
   responseText: string;
+  /** responseText split at chunk-event boundaries (one entry per coalesced
+   * window), so the UI can stagger each window's tokens into view instead of
+   * jumping ~8 tokens per event. Concatenation always equals responseText. */
+  responseWindows: string[];
   /** Offset of the committed assistant context-added event carrying this
    * step's final text; links interpretation events back to the step. */
   assistantEventOffset?: number;
@@ -368,6 +372,7 @@ const AgentUiLlmStepSchema = z
     model: z.string().optional(),
     thinkingText: z.string(),
     responseText: z.string(),
+    responseWindows: z.array(z.string()),
     assistantEventOffset: z.number().int().positive().optional(),
     interpreted: z.boolean().optional(),
     inputTokens: z.number().int().nonnegative().optional(),
@@ -747,6 +752,7 @@ function reduceAgentUiEvent(
         ...(model == null ? {} : { model }),
         thinkingText: "",
         responseText: "",
+        responseWindows: [],
         startedAtMs: timestampMs,
       };
       return { ...ready, live: { ...live, steps: [...live.steps, step] } };
@@ -777,6 +783,10 @@ function reduceAgentUiEvent(
         ...step,
         responseText:
           step.status === "running" ? step.responseText + responseDelta : step.responseText,
+        responseWindows:
+          step.status === "running" && responseDelta !== ""
+            ? [...step.responseWindows, responseDelta]
+            : step.responseWindows,
         thinkingText:
           step.status === "running" ? step.thinkingText + thinkingDelta : step.thinkingText,
       }));

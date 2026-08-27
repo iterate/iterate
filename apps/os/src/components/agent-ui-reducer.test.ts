@@ -156,6 +156,9 @@ describe("agent-ui reducer", () => {
       status: "running",
       thinkingText: "Reading the stream",
       responseText: "const n = await stream.count();",
+      // One entry per window whose chunks carried response text — the UI's
+      // token-reveal stagger animates each window as a unit.
+      responseWindows: ["const n = await ", "stream.count();"],
     });
   });
 

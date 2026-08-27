@@ -18,6 +18,7 @@ const llm = (overrides: Partial<Extract<AgentUiStep, { kind: "llm" }>> = {}): Ag
   status: "running",
   thinkingText: "",
   responseText: "",
+  responseWindows: [],
   startedAtMs: 0,
   ...overrides,
 });
