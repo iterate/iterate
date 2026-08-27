@@ -502,6 +502,16 @@ export const CoreProcessorContract = defineProcessorContract({
                       afterOffset: z.number().int().nonnegative(),
                       attempts: z.number().int().positive(),
                       error: z.string().trim().min(1).optional(),
+                      /**
+                       * Deploy version that recorded the halt. A DIFFERENT
+                       * version appends one automatic
+                       * `subscription-delivery-resumed` (the antidote-deploy
+                       * retry, mirroring the keepalive breaker's version
+                       * reset). Absent on halts recorded before this field
+                       * existed — those are grandfathered to the operator
+                       * resume doors.
+                       */
+                      workerVersion: z.string().trim().min(1).optional(),
                     })
                     .optional(),
                 }),
@@ -630,7 +640,10 @@ export const CoreProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/stream/subscription-delivery-halted": {
       description:
-        "One subscription stopped after delivering matching source events exhausted the bounded retry count.",
+        "One subscription stopped after delivering matching source events exhausted the bounded retry count. " +
+        "A halt is not forever: the first send check under a LATER deploy version appends one automatic " +
+        "subscription-delivery-resumed (the antidote-deploy retry), so a receiver fixed by a deploy recovers " +
+        "without an operator.",
       payloadSchema: z.strictObject({
         name: z.string().trim().min(1),
         reason: SubscriptionHaltReason,
@@ -638,6 +651,8 @@ export const CoreProcessorContract = defineProcessorContract({
         afterOffset: z.number().int().min(0),
         attempts: z.number().int().positive(),
         error: z.string().trim().min(1).max(4_096).optional(),
+        /** Deploy version that recorded this halt — the antidote-retry comparison side. */
+        workerVersion: z.string().trim().min(1).optional(),
       }),
     },
     "events.iterate.com/stream/subscription-delivery-resumed": {
