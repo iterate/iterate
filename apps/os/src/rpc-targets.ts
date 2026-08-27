@@ -441,6 +441,11 @@ import { SlackProcessorContract } from "./domains/integrations/slack-processor-c
 import { WorkspaceProcessorContract } from "./domains/workspaces/workspace-processor-contract.ts";
 import { normalizeConfigRepoTemplateReference } from "./lib/config-repo-template-reference.ts";
 import {
+  dialInterceptorLiveness,
+  INTERCEPTOR_RELEASED_CLOSE_REASON,
+  watchInterceptorLiveness,
+} from "./domains/projects/interceptor-liveness.ts";
+import {
   isInterceptedModel,
   type ProjectAiIntercept,
   type ProjectAiInterceptor,
@@ -3343,7 +3348,13 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
     });
   }
 
-  constructor(readonly props: { projectId: string; gateway?: AiRunOptions["gateway"] }) {
+  constructor(
+    readonly props: {
+      ctx: CfExecutionContext;
+      projectId: string;
+      gateway?: AiRunOptions["gateway"];
+    },
+  ) {
     super();
   }
 
@@ -3394,11 +3405,48 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
    * of a real provider. The handler receives
    * `{ source: "agent-turn" | "ai-run", model, body }`; for agent turns it
    * returns assistant text (a string, or `{ text, usage? }`), for ai-run its
-   * return value is handed back verbatim. Live means session-bound: the
-   * interception dies with your connection. Non-fake models are never
-   * interceptable — a journaled `openai/*` turn is always the real provider. */
-  intercept(handler: ProjectAiInterceptor): Promise<ProjectAiIntercept> {
-    return projectStub(env.PROJECT, this.props.projectId).interceptAi(handler);
+   * return value is handed back verbatim. Live means session-bound, with the
+   * mount invariant: the interception lives exactly as long as your session
+   * connection. If the platform's half dies while your socket is open (Durable
+   * Object restart), the socket closes (4901) — reconnect and intercept()
+   * again. Non-fake models are never interceptable — a journaled `openai/*`
+   * turn is always the real provider. */
+  async intercept(handler: ProjectAiInterceptor): Promise<ProjectAiIntercept> {
+    const stub = projectStub(env.PROJECT, this.props.projectId);
+    const interceptId = crypto.randomUUID();
+    // Liveness socket first, then the install claims it: an installed
+    // interceptor provably has a live socket in the same DO incarnation, and
+    // a restart between the two calls rejects the install instead of leaving
+    // a silently unwatched slot (interceptor-liveness.ts).
+    const socket = await dialInterceptorLiveness({ interceptId, stub });
+    const watcher = watchInterceptorLiveness({ ctx: this.props.ctx, slot: "AI", socket });
+    let handle: ProjectAiIntercept;
+    try {
+      handle = await stub.interceptAi(handler, { interceptId });
+    } catch (error) {
+      watcher.markDeliberate();
+      try {
+        socket.close(1000, "interceptor install failed");
+      } catch {
+        // Already closed.
+      }
+      throw error;
+    }
+    return new ProjectAiInterceptRpcTarget({
+      ctx: this.props.ctx,
+      release: async () => {
+        watcher.markDeliberate();
+        try {
+          await handle.release();
+        } finally {
+          try {
+            socket.close(1000, INTERCEPTOR_RELEASED_CLOSE_REASON);
+          } catch {
+            // Already closed (normally by the release itself, DO-side).
+          }
+        }
+      },
+    });
   }
 
   /** Calling with no arguments lists the file formats the converter accepts. */
@@ -3586,7 +3634,7 @@ class CfVideosCapabilityRpcTarget extends IterateRpcTarget<"CfVideosCapability">
 
 /** Grouped first-party Cloudflare platform bindings under integrations.cf. */
 class CloudflareIntegrationsRpcTarget extends IterateRpcTarget<"CloudflareIntegrations"> {
-  constructor(readonly props: { projectId: string }) {
+  constructor(readonly props: { ctx: CfExecutionContext; projectId: string }) {
     super();
   }
 
@@ -3606,7 +3654,7 @@ class CloudflareIntegrationsRpcTarget extends IterateRpcTarget<"CloudflareIntegr
 
   /** Workers AI: run(), models(), toMarkdown(). */
   get ai(): AiRpcTarget {
-    return new AiRpcTarget({ projectId: this.props.projectId });
+    return new AiRpcTarget({ ctx: this.props.ctx, projectId: this.props.projectId });
   }
 
   /** Browser Run: quickAction() and raw fetch(). */
@@ -3850,7 +3898,10 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
    * Transformations. Like `parallel`, these ride the deployment's own
    * Cloudflare account — not a per-project connection. */
   get cf(): CloudflareIntegrationsRpcTarget {
-    return new CloudflareIntegrationsRpcTarget({ projectId: this.props.projectId });
+    return new CloudflareIntegrationsRpcTarget({
+      ctx: this.props.ctx,
+      projectId: this.props.projectId,
+    });
   }
 
   /** Dynamic provided-integration dispatch. The only selector is
@@ -7004,7 +7055,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
 
   /** Workers AI: run(model, body), models(). */
   get ai(): AiRpcTarget {
-    return new AiRpcTarget({ projectId: this.#projectId });
+    return new AiRpcTarget({ ctx: this.#props.ctx, projectId: this.#projectId });
   }
 
   /** Browser auth for project-host web apps. */
@@ -7108,6 +7159,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   /** Project-attributed outbound fetch (+ intercept). */
   get egress(): ProjectEgressRpcTarget {
     return new ProjectEgressRpcTarget({
+      ctx: this.#props.ctx,
       projectId: this.#projectId,
       streamContext: this.#streamContext,
     });
@@ -7801,7 +7853,9 @@ class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
     });
   }
 
-  constructor(readonly props: { projectId: string; streamContext: StreamContext }) {
+  constructor(
+    readonly props: { ctx: CfExecutionContext; projectId: string; streamContext: StreamContext },
+  ) {
     super();
   }
 
@@ -7815,9 +7869,41 @@ class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
     );
   }
 
-  /** Install a live egress interceptor (last writer wins); returns a release handle. */
-  intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept> {
-    return projectStub(env.PROJECT, this.props.projectId).interceptEgress(handler);
+  /** Install a live egress interceptor (last writer wins); returns a release
+   * handle. Same mount invariant as `ai.intercept`: platform-side loss closes
+   * your session (4901) instead of leaving it silently unintercepted. */
+  async intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept> {
+    const stub = projectStub(env.PROJECT, this.props.projectId);
+    const interceptId = crypto.randomUUID();
+    const socket = await dialInterceptorLiveness({ interceptId, stub });
+    const watcher = watchInterceptorLiveness({ ctx: this.props.ctx, slot: "egress", socket });
+    let handle: ProjectEgressIntercept;
+    try {
+      handle = await stub.interceptEgress(handler, { interceptId });
+    } catch (error) {
+      watcher.markDeliberate();
+      try {
+        socket.close(1000, "interceptor install failed");
+      } catch {
+        // Already closed.
+      }
+      throw error;
+    }
+    return new ProjectEgressInterceptRpcTarget({
+      ctx: this.props.ctx,
+      release: async () => {
+        watcher.markDeliberate();
+        try {
+          await handle.release();
+        } finally {
+          try {
+            socket.close(1000, INTERCEPTOR_RELEASED_CLOSE_REASON);
+          } catch {
+            // Already closed (normally by the release itself, DO-side).
+          }
+        }
+      },
+    });
   }
 }
 

@@ -32,6 +32,12 @@ import {
   SecretSubstitutionError,
 } from "../secrets/utils.ts";
 import { isRetryableDurableObjectAvailabilityError } from "../streams/stream-unavailable.ts";
+import {
+  INTERCEPTOR_LIVENESS_HEADER,
+  INTERCEPTOR_RELEASED_CLOSE_REASON,
+  INTERCEPTOR_SUPERSEDED_CLOSE_REASON,
+  InterceptorLivenessUpgrade,
+} from "./interceptor-liveness.ts";
 import type { ProjectEgressIntercept, ProjectEgressInterceptor } from "./egress.ts";
 import {
   buildApprovalMessage,
@@ -65,10 +71,14 @@ export class ProjectDurableObject extends DurableObject<Env> {
   }
 
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
-  #egressInterceptor?: ReturnType<typeof deepRetainRpcStubs<ProjectEgressInterceptor>>;
+  #egressInterceptor?: InstalledInterceptor<ProjectEgressInterceptor>;
   // The live handler slot serving intercepted/* models (itx.ai.intercept) — same
   // last-writer-wins, session-bound semantics as the egress interceptor.
-  #aiInterceptor?: ReturnType<typeof deepRetainRpcStubs<ProjectAiInterceptor>>;
+  #aiInterceptor?: InstalledInterceptor<ProjectAiInterceptor>;
+  // Liveness sockets dialed by a session about to install an interceptor,
+  // keyed by interceptId until the install call claims them
+  // (interceptor-liveness.ts explains the lane).
+  readonly #pendingInterceptorLiveness = new Map<string, WebSocket>();
   // Last time #egressRules paid a facade snapshot — bounds rules staleness to ~5s.
   #egressRulesFreshAt = 0;
   // Demo (stateful live state): a counter every watcher of `itx.liveState` sees
@@ -210,18 +220,86 @@ export class ProjectDurableObject extends DurableObject<Env> {
   }
 
   async fetch(request: Request): Promise<Response> {
-    // The liveState lane routes FIRST and never falls through on a bad token:
+    // The internal lanes route FIRST and never fall through on a bad token:
     // this same fetch serves egress requests whose headers user scripts
-    // control, and a request wearing the internal header must not egress.
+    // control, and a request wearing an internal header must not egress.
     const liveStateUpgrade = await this.#liveStatePagers.acceptUpgrade(request);
     if (liveStateUpgrade !== undefined) return liveStateUpgrade;
+    const livenessUpgrade = this.#acceptInterceptorLivenessUpgrade(request);
+    if (livenessUpgrade !== undefined) return livenessUpgrade;
     const taken = takeStreamContext(request);
     if (this.#egressInterceptor !== undefined) {
       // Egress interceptors run before secret substitution. They must never
       // receive raw secret material, only getSecret(...) placeholders.
-      return await this.#egressInterceptor.value(taken.request);
+      return await this.#egressInterceptor.retained.value(taken.request);
     }
     return this.#egressWithApprovalGate(taken.request, taken.streamContext);
+  }
+
+  /**
+   * Accept one interceptor liveness socket (interceptor-liveness.ts). PLAIN
+   * accept, deliberately not the hibernation API: the interceptor slots are
+   * in-memory, so this socket must die exactly when the incarnation's memory
+   * does — and while it is open, the runtime keeps the incarnation (and the
+   * slots) resident instead of hibernating them away.
+   */
+  #acceptInterceptorLivenessUpgrade(request: Request): Response | undefined {
+    const rawHeader = request.headers.get(INTERCEPTOR_LIVENESS_HEADER);
+    if (rawHeader === null) return undefined;
+    if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
+      return Response.json(
+        { error: "the interceptor liveness lane accepts only WebSocket upgrades" },
+        { status: 400 },
+      );
+    }
+    let interceptId: string;
+    try {
+      interceptId = InterceptorLivenessUpgrade.parse(JSON.parse(rawHeader)).interceptId;
+    } catch (error) {
+      return Response.json(
+        {
+          error: `invalid ${INTERCEPTOR_LIVENESS_HEADER} header: ${error instanceof Error ? error.message : String(error)}`,
+        },
+        { status: 400 },
+      );
+    }
+    const pair = new WebSocketPair();
+    const server = pair[1];
+    server.accept();
+    this.#pendingInterceptorLiveness.set(interceptId, server);
+    // A far-side close means the installing session died: forget the pending
+    // socket, and release any slot bound to it rather than keeping a retained
+    // stub whose return path is gone.
+    const lost = () => {
+      if (this.#pendingInterceptorLiveness.get(interceptId) === server) {
+        this.#pendingInterceptorLiveness.delete(interceptId);
+      }
+      if (this.#aiInterceptor?.liveness === server) {
+        const installed = this.#aiInterceptor;
+        this.#aiInterceptor = undefined;
+        installed.retained[Symbol.dispose]();
+      }
+      if (this.#egressInterceptor?.liveness === server) {
+        const installed = this.#egressInterceptor;
+        this.#egressInterceptor = undefined;
+        installed.retained[Symbol.dispose]();
+      }
+    };
+    server.addEventListener("close", lost);
+    server.addEventListener("error", lost);
+    return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+
+  /** The install call's claim on its dialed liveness socket — see interceptor-liveness.ts. */
+  #claimInterceptorLiveness(interceptId: string): WebSocket {
+    const socket = this.#pendingInterceptorLiveness.get(interceptId);
+    if (socket === undefined || socket.readyState !== WebSocket.OPEN) {
+      throw new Error(
+        "interceptor liveness socket not found — the Project Durable Object restarted between dial and install; retry intercept()",
+      );
+    }
+    this.#pendingInterceptorLiveness.delete(interceptId);
+    return socket;
   }
 
   /** Live State Pagers are one-way (this DO → relay); inbound frames are ignored. */
@@ -783,41 +861,48 @@ export class ProjectDurableObject extends DurableObject<Env> {
     });
   }
 
-  interceptEgress(handler: ProjectEgressInterceptor): ProjectEgressIntercept {
+  interceptEgress(
+    handler: ProjectEgressInterceptor,
+    opts: { interceptId: string },
+  ): ProjectEgressIntercept {
     if (typeof handler !== "function")
       throw new Error("project egress interceptor must be a function");
+    const liveness = this.#claimInterceptorLiveness(opts.interceptId);
     const retained = deepRetainRpcStubs(handler);
     if (this.#egressInterceptor !== undefined) {
       console.warn("project egress interceptor overwritten", { projectId: this.#name.projectId });
-      this.#egressInterceptor[Symbol.dispose]();
+      dropInstalledInterceptor(this.#egressInterceptor, INTERCEPTOR_SUPERSEDED_CLOSE_REASON);
     }
-    this.#egressInterceptor = retained;
+    const installed = { retained, liveness };
+    this.#egressInterceptor = installed;
 
     return new ProjectEgressInterceptRpcTarget({
       ctx: this.ctx,
       release: () => {
-        if (this.#egressInterceptor !== retained) return;
-        retained[Symbol.dispose]();
+        if (this.#egressInterceptor !== installed) return;
         this.#egressInterceptor = undefined;
+        dropInstalledInterceptor(installed, INTERCEPTOR_RELEASED_CLOSE_REASON);
       },
     });
   }
 
-  interceptAi(handler: ProjectAiInterceptor): ProjectAiIntercept {
+  interceptAi(handler: ProjectAiInterceptor, opts: { interceptId: string }): ProjectAiIntercept {
     if (typeof handler !== "function") throw new Error("project AI interceptor must be a function");
+    const liveness = this.#claimInterceptorLiveness(opts.interceptId);
     const retained = deepRetainRpcStubs(handler);
     if (this.#aiInterceptor !== undefined) {
       console.warn("project AI interceptor overwritten", { projectId: this.#name.projectId });
-      this.#aiInterceptor[Symbol.dispose]();
+      dropInstalledInterceptor(this.#aiInterceptor, INTERCEPTOR_SUPERSEDED_CLOSE_REASON);
     }
-    this.#aiInterceptor = retained;
+    const installed = { retained, liveness };
+    this.#aiInterceptor = installed;
 
     return new ProjectAiInterceptRpcTarget({
       ctx: this.ctx,
       release: () => {
-        if (this.#aiInterceptor !== retained) return;
-        retained[Symbol.dispose]();
+        if (this.#aiInterceptor !== installed) return;
         this.#aiInterceptor = undefined;
+        dropInstalledInterceptor(installed, INTERCEPTOR_RELEASED_CLOSE_REASON);
       },
     });
   }
@@ -833,7 +918,28 @@ export class ProjectDurableObject extends DurableObject<Env> {
   async consultAiInterceptor(input: ProjectAiInterceptorInput): Promise<unknown> {
     const interceptor = this.#aiInterceptor;
     if (interceptor === undefined) throw noAiInterceptorError(input.model);
-    return await interceptor.value(input);
+    return await interceptor.retained.value(input);
+  }
+}
+
+/**
+ * One installed live interceptor: the retained handler stub plus the claimed
+ * liveness socket whose open state IS the registration's continued existence
+ * (interceptor-liveness.ts).
+ */
+type InstalledInterceptor<T> = {
+  liveness: WebSocket;
+  retained: ReturnType<typeof deepRetainRpcStubs<T>>;
+};
+
+/** Deliberate slot teardown: dispose the handler, close the liveness socket
+ * with the reason the session side recognizes as non-loss. */
+function dropInstalledInterceptor(installed: InstalledInterceptor<unknown>, reason: string): void {
+  installed.retained[Symbol.dispose]();
+  try {
+    installed.liveness.close(1000, reason);
+  } catch {
+    // Already closed.
   }
 }
 

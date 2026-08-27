@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: implemented
 size: medium
 ---
 
@@ -7,10 +7,12 @@ size: medium
 
 ## Status summary
 
-Fleshed out, implementation not started. Decision made: no silent server-side
-re-install and no grace/queue — extend the existing mount invariant (4901
-close) to `itx.ai.intercept`, add a shared resilient spec helper, and prove
-the recovery with a deterministic e2e that kills the project DO.
+Implemented and verified: the liveness lane (both interceptor slots), 4901 on
+far-side loss, silent deliberate teardown, the shared resilient spec helper,
+and a deterministic e2e (kill the project DO → observe 4901 → re-install →
+serving again) — all passing locally against a real dev server, plus the
+pre-existing ai-intercept and itx-egress e2e suites and the fake-model spec.
+PR: https://github.com/iterate/iterate/pull/2527.
 
 ## Problem
 
@@ -53,7 +55,7 @@ Considered:
 Chosen: **extend the mount invariant to the interceptor slot** (the missing
 half of option 1), plus the shared client loop that option 1 presumes:
 
-- [ ] Project DO: accept a plain (non-hibernatable) "interceptor liveness"
+- [x] Project DO: accept a plain (non-hibernatable) "interceptor liveness"
       WebSocket via `fetch()`, dialed by the session isolate at install time
       and associated with the registration by a random `interceptId`. A plain
       accept means the socket's lifetime IS the incarnation's lifetime: DO
@@ -61,35 +63,50 @@ half of option 1), plus the shared client loop that option 1 presumes:
       memory slot. Install order: dial first, then `interceptAi(handler,
       {interceptId})`; an install that finds no matching socket rejects, so an
       installed interceptor provably has a live socket in the same
-      incarnation.
-- [ ] Session side (`AiRpcTarget.intercept` in rpc-targets.ts): on far-side
+      incarnation. _`#acceptInterceptorLivenessUpgrade` /
+      `#claimInterceptorLiveness` in project-durable-object.ts; lane constants
+      and helpers in `apps/os/src/domains/projects/interceptor-liveness.ts`._
+- [x] Session side (`AiRpcTarget.intercept` in rpc-targets.ts): on far-side
       socket close, close the itx session transport with the documented 4901
       (`closeItxSessionTransport`), same as the capability pager's
       `onPagerLost`. Deliberate teardown must stay silent: releasing the
       handle, and supersession by a later `intercept()` (last writer wins),
       close the socket with a recognizable reason and do NOT fire 4901 —
       otherwise a superseded session's reconnect loop would fight the new
-      interceptor forever.
-- [ ] DO side: when the liveness socket closes far-side (session isolate
+      interceptor forever. _`watchInterceptorLiveness` +
+      `dialInterceptorLiveness`; the session wraps the DO handle in its own
+      release-forwarding handle._
+- [x] DO side: when the liveness socket closes far-side (session isolate
       died), release the associated registration if still current — the slot
-      must not keep a broken stub.
-- [ ] Same treatment for the egress interceptor slot (`interceptEgress`) if it
+      must not keep a broken stub. _The `lost` listener in
+      `#acceptInterceptorLivenessUpgrade` clears both slots by socket
+      identity._
+- [x] Same treatment for the egress interceptor slot (`interceptEgress`) if it
       shares the machinery cheaply; otherwise leave a breadcrumb and keep this
-      PR AI-only.
-- [ ] Contract docs: update `noAiInterceptorError` and the `intercept()`
+      PR AI-only. _Shared cheaply — same lane, slot label "egress";
+      `ProjectEgressRpcTarget.intercept` mirrors the AI wiring._
+- [x] Contract docs: update `noAiInterceptorError` and the `intercept()`
       docstrings — "interception lives exactly as long as your session: if the
       platform's half dies while your socket is open, your socket closes
-      (4901); reconnect and intercept() again."
-- [ ] Shared spec helper (`specs/test-support/…`): install an interceptor on a
+      (4901); reconnect and intercept() again." _Docstrings + error message
+      updated; itx api regenerated._
+- [x] Shared spec helper (`specs/test-support/…`): install an interceptor on a
       DEDICATED admin itx connection that owns the reconnect-and-re-install
       loop (the node client is deliberately vanilla — `onWebSocketClose` is
       the documented hook). Specs stop writing bespoke recovery.
-- [ ] `specs/agent-fake-model-chat.spec.ts`: adopt the helper.
-- [ ] Deterministic e2e regression (`apps/os/e2e/vitest/ai-intercept.itx.e2e.test.ts`):
+      _`specs/test-support/resilient-ai-interceptor.ts`
+      (`installResilientAiInterceptor`); `connectAdminItx` gained an
+      `onWebSocketClose` option._
+- [x] `specs/agent-fake-model-chat.spec.ts`: adopt the helper. _Done; spec
+      passes locally against dev._
+- [x] Deterministic e2e regression (`apps/os/e2e/vitest/ai-intercept.itx.e2e.test.ts`):
       install → serve → kill the project DO (expose `kill()` on the project
       itx surface, mirroring `stream.kill()`) → assert the session closes with
       4901 → reconnect + re-install → serve again. Also: released-then-killed
-      stays released.
+      stays released. _`project.kill()` was already on the itx surface — no
+      new API. Two new tests: DO-restart recovery, and
+      supersession-stays-silent; both green, plus the pre-existing release
+      test and all 9 itx-egress e2e tests._
 
 Explicitly NOT doing (assumptions, delineated):
 
@@ -105,4 +122,32 @@ Explicitly NOT doing (assumptions, delineated):
 
 ## Implementation notes
 
-(log added during implementation)
+- Why a plain (non-hibernatable) accept and not `HibernatablePagers`: the
+  slots are memory, so the socket must die exactly when the incarnation's
+  memory does. A hibernatable accept would SURVIVE restarts (wrong signal) and
+  would also let the DO hibernate the slot away while the socket looked
+  healthy. The plain socket doubles as a residency pin — an installed
+  interceptor keeps the project DO resident, which is correct for a
+  short-lived testing feature.
+- Why not implement the interceptor as a live capability mount (full piggyback
+  on the Capability Provider Pager machinery): the slot lives on the Project
+  DO (shared by agent turns, `ai.run`, and the egress fetch hot path), mounts
+  live on stream-DO capability hosts and are project-visible/discoverable, and
+  every intercepted call would take a page-and-lend-a-leg hop. Hiding a
+  platform-only slot in that machinery costs more than the ~90-line lane.
+- Supersession closes the loser's socket with reason
+  `superseded by a newer interceptor` (1000); the session watcher recognizes
+  the deliberate reasons and stays silent — proven by the supersession e2e
+  (the superseded session answers a real round-trip afterwards).
+- `AiRpcTarget`, `CloudflareIntegrationsRpcTarget`, and
+  `ProjectEgressRpcTarget` now take `ctx` (threading the session's
+  ExecutionContext to `closeItxSessionTransport`); DO-side itx has no
+  transport registration, so the 4901 is a no-op there, same as capability
+  pagers.
+- Local verification quirk (not shipped): `pnpm dev start --detach` must run
+  with apps/os-scoped Doppler (cwd apps/os, or `doppler run --project os`) —
+  a root-cwd start boots a server with missing secrets whose `/api/health`
+  500s.
+- Once merged, PR #2525's spec can drop its bespoke warm-up re-install and
+  `sendExpecting` journal-diagnosis recovery in favor of
+  `installResilientAiInterceptor`.

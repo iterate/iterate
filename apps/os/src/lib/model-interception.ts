@@ -111,6 +111,6 @@ export function normalizeInterceptedTurnResult(input: {
 /** The error every path raises when an intercepted/* model has no live interceptor. */
 export function noAiInterceptorError(model: string): Error {
   return new Error(
-    `No AI interceptor installed for "${model}". Models under "${INTERCEPTED_MODEL_PREFIX}" are served by a live handler: itx.ai.intercept(handler). The handler died with its session, or was never installed.`,
+    `No AI interceptor installed for "${model}". Models under "${INTERCEPTED_MODEL_PREFIX}" are served by a live handler: itx.ai.intercept(handler). The handler was never installed, or its session died — install again over a fresh connection (an installing session whose platform half dies is closed with 4901 so its reconnect loop knows).`,
   );
 }

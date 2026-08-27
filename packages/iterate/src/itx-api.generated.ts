@@ -401,9 +401,12 @@ export interface Ai {
    * of a real provider. The handler receives
    * `{ source: "agent-turn" | "ai-run", model, body }`; for agent turns it
    * returns assistant text (a string, or `{ text, usage? }`), for ai-run its
-   * return value is handed back verbatim. Live means session-bound: the
-   * interception dies with your connection. Non-fake models are never
-   * interceptable — a journaled `openai/*` turn is always the real provider. */
+   * return value is handed back verbatim. Live means session-bound, with the
+   * mount invariant: the interception lives exactly as long as your session
+   * connection. If the platform's half dies while your socket is open (Durable
+   * Object restart), the socket closes (4901) — reconnect and intercept()
+   * again. Non-fake models are never interceptable — a journaled `openai/*`
+   * turn is always the real provider. */
   intercept(handler: ProjectAiInterceptor): Promise<ProjectAiIntercept>;
   /** Calling with no arguments lists the file formats the converter accepts. */
   toMarkdown(): Promise<CfMarkdownSupportedFormat[]>;
@@ -774,7 +777,9 @@ export interface ProjectEgress {
    * `x-iterate-secret-template: json` to replace exact `getSecret(...)` string
    * values in an `application/json` (or `+json`) body. */
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<EgressResponse>;
-  /** Install a live egress interceptor (last writer wins); returns a release handle. */
+  /** Install a live egress interceptor (last writer wins); returns a release
+   * handle. Same mount invariant as `ai.intercept`: platform-side loss closes
+   * your session (4901) instead of leaving it silently unintercepted. */
   intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept>;
 }
 

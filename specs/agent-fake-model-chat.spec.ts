@@ -1,4 +1,5 @@
 import { connectAdminItx } from "./test-support/forged-session.ts";
+import { installResilientAiInterceptor } from "./test-support/resilient-ai-interceptor.ts";
 import { test } from "./test-support/test.ts";
 
 // The deterministic sibling of agent-chat.spec.ts: same UI journey (composer →
@@ -29,15 +30,23 @@ test("multi-turn chat with a sarcastic agent served by the spec's own fake-model
   // The "model": an in-memory function in THIS process, dialed back over
   // capnweb for every intercepted/* turn. It answers the agent contract's way — one
   // codemode script — sending a sarcastic rendering of whatever the user said.
-  using _interception = await project.ai.intercept(async (call) => {
-    if (call.source !== "agent-turn") throw new Error(`unexpected source: ${call.source}`);
-    const lastUser = [...call.body.messages].reverse().find((m) => m.role === "user");
-    const reply = formatSarcasticResponse(stripXmlBlocks(lastUser?.content ?? ""));
-    return [
-      "```ts",
-      `async (itx) => {\n  await itx.chat.sendMessage(${JSON.stringify(reply)})\n}`,
-      "```",
-    ].join("\n");
+  // Installed through the resilient helper: platform churn (a Project DO
+  // restart mid-spec) closes the interceptor's dedicated session with 4901
+  // and the helper reconnects and re-installs; the turn's own retries do the
+  // rest.
+  await using _interception = await installResilientAiInterceptor({
+    baseUrl: baseURL,
+    projectId: fixture.project.id,
+    handler: async (call) => {
+      if (call.source !== "agent-turn") throw new Error(`unexpected source: ${call.source}`);
+      const lastUser = [...call.body.messages].reverse().find((m) => m.role === "user");
+      const reply = formatSarcasticResponse(stripXmlBlocks(lastUser?.content ?? ""));
+      return [
+        "```ts",
+        `async (itx) => {\n  await itx.chat.sendMessage(${JSON.stringify(reply)})\n}`,
+        "```",
+      ].join("\n");
+    },
   });
 
   await page.goto(`/projects/${fixture.project.slug}/agents/streams${agentPath}`);

@@ -133,11 +133,16 @@ export async function createProjectFixture(
 /**
  * Admin itx handle for specs that drive a fixture project server-side (e.g.
  * append events and assert the browser repaints from the push). Dispose with
- * `using` — the handle owns its WebSocket.
+ * `using` — the handle owns its WebSocket. `onWebSocketClose` observes the
+ * socket dying, however it dies — the hook a reconnect loop hangs off (see
+ * resilient-ai-interceptor.ts).
  */
-export async function connectAdminItx(baseUrl: string) {
+export async function connectAdminItx(
+  baseUrl: string,
+  options?: { onWebSocketClose?: (close: { code: number; reason: string }) => void },
+) {
   const config = await resolveOsPlaywrightAuthConfig();
-  return connectPlaywrightAdminItx({ baseUrl, config });
+  return connectPlaywrightAdminItx({ baseUrl, config, ...options });
 }
 
 /** The OS admin API secret, for specs that dial project-scoped itx handles directly. */
@@ -174,6 +179,7 @@ async function createAdminProjectAfterPreviewRollout(input: {
 async function connectPlaywrightAdminItx(input: {
   baseUrl: string;
   config: OsPlaywrightAuthConfig;
+  onWebSocketClose?: (close: { code: number; reason: string }) => void;
 }) {
   return test.step("connect admin itx", () =>
     connectItxReady(
@@ -181,6 +187,9 @@ async function connectPlaywrightAdminItx(input: {
         auth: { type: "admin-secret", secret: input.config.adminApiSecret },
         baseUrl: input.baseUrl,
         headers: cloudflareWorkerVersionOverrideHeaders(process.env),
+        ...(input.onWebSocketClose === undefined
+          ? {}
+          : { onWebSocketClose: input.onWebSocketClose }),
       },
       {
         retryInitialConnection: {
