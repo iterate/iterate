@@ -1,0 +1,957 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Parked states need a wake — the one gap wearing five hats</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/lib/codemirror.min.css"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/lib/codemirror.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/mode/yaml/yaml.min.js"></script>
+    <style>
+      :root {
+        --fg: #1a1a1a;
+        --muted: #666;
+        --line: #e5e5e5;
+        --code: #fafafa;
+        --accent: #b45309;
+        --sel: #fef3c7;
+        --bad: #b91c1c;
+        --good: #15803d;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #e5e5e5;
+          --muted: #999;
+          --line: #333;
+          --code: #191919;
+          --accent: #fbbf24;
+          --sel: #3b2f14;
+          --bad: #f87171;
+          --good: #4ade80;
+        }
+        body {
+          background: #111;
+        }
+        .CodeMirror {
+          background: var(--code);
+          color: var(--fg);
+        }
+        .CodeMirror .cm-comment {
+          color: #8a8a5c;
+        }
+        .CodeMirror .cm-atom,
+        .CodeMirror .cm-number {
+          color: #7fb4d8;
+        }
+        .CodeMirror .cm-meta {
+          color: #999;
+        }
+        .CodeMirror .cm-string {
+          color: #a8c98a;
+        }
+        .CodeMirror .cm-keyword {
+          color: #c586c0;
+        }
+        .CodeMirror-gutters {
+          background: var(--code);
+          border-color: var(--line);
+        }
+      }
+      body {
+        font:
+          14px/1.5 ui-sans-serif,
+          system-ui,
+          sans-serif;
+        color: var(--fg);
+        margin: 0;
+      }
+      header {
+        padding: 1rem 1.5rem 0.5rem;
+      }
+      header h1 {
+        margin: 0;
+        font-size: 1.3rem;
+      }
+      header p {
+        color: var(--muted);
+        margin: 0.3rem 0 0;
+        max-width: 62rem;
+      }
+      .opinion {
+        margin: 0 1.5rem;
+        border: 2px solid var(--accent);
+        border-radius: 8px;
+        padding: 0.7rem 1rem;
+        max-width: 60rem;
+      }
+      .opinion ol {
+        margin: 0.4rem 0 0.2rem 1.2rem;
+        padding: 0;
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(26rem, 48rem) minmax(24rem, 1fr);
+        gap: 1.5rem;
+        padding: 1rem 1.5rem 4rem;
+        align-items: start;
+      }
+      @media (max-width: 980px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+        .rendered {
+          position: static !important;
+          max-height: none !important;
+        }
+      }
+      h2 {
+        font-size: 1.05rem;
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 0.3rem;
+        margin: 2rem 0 0.5rem;
+      }
+      h2 .hat {
+        color: var(--muted);
+        font-weight: 400;
+        font-size: 0.85rem;
+      }
+      .scenario > p {
+        max-width: 46rem;
+      }
+      .ev {
+        border: 1px solid var(--line);
+        border-left: 4px solid var(--line);
+        border-radius: 6px;
+        margin: 0.45rem 0;
+        cursor: pointer;
+      }
+      .ev:hover {
+        border-color: var(--accent);
+      }
+      .ev.selected {
+        background: var(--sel);
+        border-left-color: var(--accent);
+      }
+      .ev.bad {
+        border-left-color: var(--bad);
+      }
+      .ev.good {
+        border-left-color: var(--good);
+      }
+      .ev .row {
+        display: flex;
+        align-items: baseline;
+        gap: 0.5em;
+        padding: 0.45rem 0.7rem 0.1rem;
+        font:
+          12.5px/1.45 ui-monospace,
+          monospace;
+      }
+      .ev .off {
+        color: var(--accent);
+        font-weight: 700;
+        white-space: nowrap;
+      }
+      .ev .type {
+        color: var(--fg);
+      }
+      .ev .t {
+        color: var(--muted);
+        font-size: 11px;
+        white-space: nowrap;
+        margin-left: auto;
+      }
+      .ev .badge {
+        color: var(--accent);
+        font-size: 11px;
+        background: var(--code);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 0 0.35em;
+        white-space: nowrap;
+      }
+      .ev .badge.bad {
+        color: var(--bad);
+      }
+      .ev .badge.good {
+        color: var(--good);
+      }
+      .ev .note {
+        font:
+          12px/1.4 ui-sans-serif,
+          system-ui,
+          sans-serif;
+        color: var(--muted);
+        padding: 0 0.7rem 0.45rem;
+      }
+      .gap {
+        color: var(--muted);
+        font:
+          italic 12px/1.4 ui-sans-serif,
+          system-ui,
+          sans-serif;
+        padding: 0.1rem 0.9rem;
+        border-left: 2px dotted var(--line);
+        margin: 0.2rem 0 0.2rem 1rem;
+      }
+      .gap b {
+        color: var(--bad);
+      }
+      .rendered {
+        position: sticky;
+        top: 0;
+        max-height: 100vh;
+        overflow: auto;
+        padding: 0.5rem 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .rendered h3 {
+        margin: 0.2rem 0 0.5rem;
+        font-size: 1rem;
+      }
+      .rendered .cmhost {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        overflow: hidden;
+      }
+      .CodeMirror {
+        height: auto;
+        font-size: 12px;
+      }
+      .rendered .CodeMirror {
+        height: calc(100vh - 5rem);
+      }
+      code {
+        background: var(--code);
+        padding: 0.1em 0.35em;
+        border-radius: 4px;
+        font-size: 0.92em;
+      }
+      .vocab,
+      .appendix {
+        margin: 1rem 1.5rem 0;
+        max-width: 60rem;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 0.2rem 1rem 0.6rem;
+      }
+      .vocab summary,
+      .appendix summary {
+        cursor: pointer;
+        font-weight: 600;
+        padding: 0.5rem 0;
+      }
+      .vocab table {
+        border-collapse: collapse;
+        font-size: 12.5px;
+        width: 100%;
+        margin: 0.3rem 0 0.8rem;
+      }
+      .vocab th,
+      .vocab td {
+        border: 1px solid var(--line);
+        padding: 0.35rem 0.55rem;
+        text-align: left;
+        vertical-align: top;
+      }
+      .vocab th {
+        color: var(--muted);
+        font-weight: 600;
+      }
+      .vocab td:first-child {
+        white-space: nowrap;
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+      }
+      details.more {
+        border: 1px dashed var(--line);
+        border-radius: 6px;
+        padding: 0.2rem 0.7rem;
+        margin: 0.45rem 0;
+        max-width: 46rem;
+      }
+      details.more > summary {
+        cursor: pointer;
+        color: var(--muted);
+        font-size: 12.5px;
+        padding: 0.25rem 0;
+      }
+      .fixtable {
+        border-collapse: collapse;
+        font-size: 12.5px;
+        margin: 0.5rem 0;
+      }
+      .fixtable th,
+      .fixtable td {
+        border: 1px solid var(--line);
+        padding: 0.35rem 0.55rem;
+        text-align: left;
+        vertical-align: top;
+      }
+      .fixtable th {
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Parked states need a wake</h1>
+      <p>
+        Click any event card to expand it; the right pane shows the event plus the system state
+        after it — what's durable, what's in-memory, what the user sees. Times are real where a
+        journal exists (preview_6, 2026-08-27) and realistic elsewhere. Red-edged cards are where
+        the system goes dark. Consolidated in
+        <a href="https://github.com/iterate/iterate/pull/2530">PR #2530</a>; task file
+        <code>tasks/platform-stall-repros.md</code>.
+      </p>
+    </header>
+
+    <div class="opinion">
+      <strong
+        >The takeaway — one gap, five hats: work parks with no wake condition, so progress waits for
+        luck.</strong
+      >
+      The platform re-drives work on <em>delivery</em> (an event arriving). A state that's waiting —
+      an in-flight LLM attempt, a halted subscription, a failed bootstrap — carries no deadline of
+      its own. If no event happens to arrive, nothing notices. The five hats:
+      <ol>
+        <li>
+          <strong>Mid-stream LLM stall</strong> (#2510) — hung attempt, never settled. Quiet stream:
+          dark ~15min.
+        </li>
+        <li>
+          <strong>Eviction-churn re-dial hang</strong> (new) — eviction recovers in 10s, but the
+          re-dial hangs too; each cycle burns a 30–40s staleness window. First turns took 150s/183s
+          on preview.
+        </li>
+        <li>
+          <strong>Halted subscription</strong> (#2486) — parked forever until an operator noticed.
+          Fixed for one wake (deploy); the fix's own retry has the same bug one level down.
+        </li>
+        <li>
+          <strong>Bootstrap killed by transient</strong> (#2513) — retryable failure classified
+          terminal. Parked permanently.
+        </li>
+        <li>
+          <strong>Facet pin false alarm</strong> (#2518) — the observability twin: state changes
+          with no recorded <em>why</em>, so a test can't tell cause from coincidence.
+        </li>
+      </ol>
+      <strong>The fix direction:</strong> every waiting state derives a
+      <code>nextDeadlineAt</code> from reduced state; the host arms its Durable Object alarm at the
+      minimum; firing runs ordinary reconcile. Derived-from-state means recomputed on revival — it
+      survives eviction by construction. Details in the last section.
+    </div>
+
+    <details class="vocab">
+      <summary>Reference — terms you need (skip if you live in this repo)</summary>
+      <table>
+        <tr>
+          <th>term</th>
+          <th>meaning</th>
+        </tr>
+        <tr>
+          <td>obligation</td>
+          <td>
+            Work a stream processor owes because of a journaled event — e.g. "open LLM request at
+            offset 44 needs an answer". Re-derived from reduced state on every catch-up.
+          </td>
+        </tr>
+        <tr>
+          <td>delivery-driven</td>
+          <td>
+            Obligations are only checked when an event delivery wakes the processor. No delivery →
+            no check → no progress. The villain of this explainer.
+          </td>
+        </tr>
+        <tr>
+          <td>incarnation / eviction / revival</td>
+          <td>
+            One in-memory life of a processor's Durable Object. Eviction kills it (memory pressure,
+            deploy — routine on loaded previews). A keepalive alarm boots a successor, which appends
+            a <code>processor-revived</code> fact — itself a delivery, which is what re-drives
+            obligations.
+          </td>
+        </tr>
+        <tr>
+          <td>keepalive alarm</td>
+          <td>
+            The DO alarm the durability layer keeps armed (~10s lead) so an evicted processor gets a
+            successor. The only self-driven clock the system has today.
+          </td>
+        </tr>
+        <tr>
+          <td>staleness wake</td>
+          <td>
+            <code>stream/woken</code> — a paced alarm-driven check that notices "nothing has
+            happened for a while". 30–40s granularity. Coarse by design; it was never meant to be
+            the attempt watchdog.
+          </td>
+        </tr>
+        <tr>
+          <td>wedge breaker</td>
+          <td>
+            Keepalive's crash-loop detector: ~90 busy refires × 10s ≈ 15min, then a forced revival.
+            Today it is the effective ceiling on a hung attempt in a quiet stream.
+          </td>
+        </tr>
+        <tr>
+          <td>retry ladder</td>
+          <td>
+            The agent's 3 LLM attempts spaced 10/20/40s (#1826). Starts only when an attempt
+            <em>fails</em>. A hung attempt never fails — the ladder never starts. Load-bearing
+            detail.
+          </td>
+        </tr>
+        <tr>
+          <td>intercepted model / pager</td>
+          <td>
+            <code>intercepted/*</code> models are served by a handler in the test's own process,
+            reached back over a hibernatable "pager" WebSocket to the project DO. Free deterministic
+            agent turns; also a long fragile wire during churn.
+          </td>
+        </tr>
+        <tr>
+          <td>halt / antidote</td>
+          <td>
+            A fan-out subscription whose receiver keeps failing is halted (stop skipping events).
+            #2486's fix: the halt records the deploy version; a send check under a
+            <em>different</em> version resumes it once.
+          </td>
+        </tr>
+        <tr>
+          <td>reduced state</td>
+          <td>
+            The fold of the journal. Anything derived from it is recomputed identically by any
+            incarnation — the property the fix leans on.
+          </td>
+        </tr>
+      </table>
+    </details>
+
+    <div class="layout">
+      <main id="scenarios"></main>
+      <aside class="rendered" id="rendered">
+        <h3 id="rtitle">Event + state</h3>
+        <div class="cmhost" id="cmhost"></div>
+      </aside>
+    </div>
+
+    <div class="appendix">
+      <details>
+        <summary>The fix direction, concretely</summary>
+        <p>
+          <strong>One rule:</strong> a processor's reduce exposes
+          <code>nextDeadlineAt(state)</code> — the earliest moment any waiting state stops being
+          acceptable. The host arms the DO alarm at <code>min(keepalive, nextDeadlineAt)</code>,
+          persists the desire next to the keepalive record, and on fire runs the ordinary
+          catch-up/reconcile. No new recovery entrypoint. This extends
+          <code>tasks/agent-llm-deadline-alarm.md</code> (which sketched it for the 10-min expiry
+          horizon — proven live by two prd requests that sat expired for four days).
+        </p>
+        <table class="fixtable">
+          <tr>
+            <th>hat</th>
+            <th>deadline derived from</th>
+            <th>on fire</th>
+          </tr>
+          <tr>
+            <td>1–2 LLM attempts</td>
+            <td>
+              <code>min(lastProgressAt + chunkIdleBudget, expiresAt)</code> — dial and chunks are
+              already journaled
+            </td>
+            <td>
+              abort in-flight slot, settle attempt <code>failed</code> → the 10/20/40s ladder owns
+              re-dialing
+            </td>
+          </tr>
+          <tr>
+            <td>3 halted subscription</td>
+            <td>
+              <code>haltedAt + reprobeBackoff</code>, plus the existing deploy antidote; a
+              stale-version halt IS durable evidence of an owed resume
+            </td>
+            <td>one paced resume attempt; re-halt if still broken</td>
+          </tr>
+          <tr>
+            <td>4 bootstrap saga</td>
+            <td>
+              classify registry-propagation failures transient → park with
+              <code>retryAt</code> instead of terminal
+            </td>
+            <td>retry the resolution step</td>
+          </tr>
+          <tr>
+            <td>5 facet pin</td>
+            <td>
+              n/a — provenance, not a deadline: rebuilds record their trigger ("source-commit
+              abc123" vs "cold-boot"), like halts now record <code>workerVersion</code>
+            </td>
+            <td>the pin asserts causality instead of coincidence</td>
+          </tr>
+        </table>
+        <p>
+          Why derived-from-state instead of "arm an alarm when you start waiting": an imperative arm
+          is in-memory intent — eviction loses it, and any recompute-from-durable-state pass clears
+          it (exactly the Bugbot edge in #2486's own retry). A derivation can't be lost: every
+          incarnation recomputes it from the same journal.
+        </p>
+        <p>
+          Budgets (chunkIdleBudget etc.) are product decisions the fix makes; the expected-fail
+          specs pin 60s placeholders, same convention as #2510.
+        </p>
+      </details>
+      <details>
+        <summary>Appendix — how other systems handle this</summary>
+        <p>
+          Every mature job system makes "waiting" carry a clock, none trusts the worker to report
+          its own death:
+        </p>
+        <ul>
+          <li>
+            <strong>SQS</strong>: visibility timeout — an unacked message reappears on its own. The
+            queue owns the deadline, not the consumer.
+          </li>
+          <li>
+            <strong>Temporal</strong>: every activity has start-to-close / heartbeat timeouts
+            enforced by the server; a silent worker's task is rescheduled at the deadline, from
+            durable state.
+          </li>
+          <li>
+            <strong>Sidekiq / Celery</strong>: ack-late + reaper processes that re-enqueue jobs
+            whose worker vanished, found by scanning durable in-progress sets on a timer.
+          </li>
+          <li>
+            <strong>Cloudflare DO alarms</strong>: the native primitive this fix uses — one durable
+            alarm per object, survives eviction, exactly-once-ish fire. The platform already pays
+            for it via keepalive; the fix widens what it watches.
+          </li>
+        </ul>
+        <p>
+          The common shape:
+          <em
+            >deadline lives with the durable record of the work, enforcement is the scheduler's
+            job</em
+          >. The consolidated fix is the same idea expressed in this repo's grain: the journal is
+          the durable record, reduce derives the deadline, the DO alarm enforces.
+        </p>
+      </details>
+    </div>
+
+    <script>
+      const S = [];
+      function sc(title, hat, intro, events) {
+        S.push({ title, hat, intro, events });
+      }
+      function ev(t, off, type, badges, note, cls, yaml, state) {
+        return { t, off, type, badges, note, cls, yaml, state };
+      }
+      function gap(text) {
+        return { gap: text };
+      }
+
+      // ---------- scenario 1: baseline ----------
+      sc(
+        "Healthy intercepted turn",
+        "baseline",
+        "What every turn should look like. Warm platform, the whole loop is ~2s.",
+        [
+          ev(
+            "14:00:00.0",
+            44,
+            "agent/llm-request-requested",
+            ["model=intercepted/factorizer"],
+            "User message debounce closed; the turn opens a request and dials the transport.",
+            "",
+            "type: agent/llm-request-requested\npayload:\n  model: intercepted/factorizer\n  expiresAt: +10min   # a comparison, not a timer — matters later",
+            "open request: offset 44\nin-flight attempt: 1 (dialing over the pager)\ndurable alarm: keepalive only\nuser sees: working spinner",
+          ),
+          ev(
+            "14:00:00.4",
+            45,
+            "agent/llm-response-chunk",
+            ["…x12"],
+            "Handler answered instantly; chunks stream back over the pager socket.",
+            "good",
+            "type: agent/llm-response-chunk\npayload: { delta: '```ts...' }",
+            "open request: offset 44\nattempt 1: streaming, lastProgress=now\nuser sees: spinner",
+          ),
+          ev(
+            "14:00:01.9",
+            58,
+            "agent/llm-request-settled",
+            ["status=success"],
+            "Attempt done. Script runs, reply sent. Total: ~2s.",
+            "good",
+            "type: agent/llm-request-settled\npayload: { result: { status: success } }",
+            "open request: none\nuser sees: the reply",
+          ),
+        ],
+      );
+
+      // ---------- scenario 2: hat 1 ----------
+      sc(
+        "Hat 1 — mid-stream stall (#2510, merged repro)",
+        "quiet stream: dark ~15min",
+        "Observed twice on preview-15 (2026-08-21): chunks, then silence. The transport hangs; nothing on the platform side has a deadline for 'chunks stopped'.",
+        [
+          ev(
+            "15:08:00.0",
+            44,
+            "agent/llm-request-requested",
+            ["model=onboarding"],
+            "Turn opens, dials.",
+            "",
+            "type: agent/llm-request-requested",
+            "open request: 44\nattempt 1: dialing",
+          ),
+          ev(
+            "15:08:01.3",
+            63,
+            "agent/llm-response-chunk",
+            ["19 chunks / 1.3s"],
+            "Streaming fine…",
+            "",
+            "type: agent/llm-response-chunk",
+            "attempt 1: streaming",
+          ),
+          ev(
+            "15:08:01.4",
+            64,
+            "— silence —",
+            ["no settle", "no failure"],
+            "The transport promise never resolves and ignores its abort signal. A hung attempt never FAILS, so the 10/20/40s retry ladder never starts. The 10-min expiry is a comparison made on delivery — and nothing is being delivered.",
+            "bad",
+            "# no event. that is the point.\n# - no chunk-idle deadline exists\n# - expiry check runs at-head, on delivery\n# - the in-flight slot is occupied, blocking re-run",
+            "open request: 44 (stuck)\nattempt 1: zombie, slot occupied\ndurable alarm: keepalive refires every ~10s\n  (keeps the DO alive; refires are NOT deliveries)\nuser sees: 'Waiting for a response 843.0s'",
+          ),
+          gap("≈15 minutes of nothing. Bisected under virtual time: still open at 14m50s."),
+          ev(
+            "15:23:10.0",
+            65,
+            "stream/processor-revived",
+            ["wedge breaker", "~90 refires"],
+            "Keepalive's crash-loop detector finally forces a revival. The revival fact is a DELIVERY — the first one — so the expiry settle finally runs.",
+            "",
+            "type: stream/processor-revived\n# appended by the keepalive wedge detection\n# (MAX_CONSECUTIVE_BUSY_REFIRES ≈ 90 × 10s)",
+            "delivery! obligations re-checked at head",
+          ),
+          ev(
+            "15:23:10.1",
+            66,
+            "agent/llm-request-settled",
+            ["status=cancelled/expired"],
+            "Settled — 15 minutes late, and only as a side effect of the crash-loop breaker.",
+            "bad",
+            "type: agent/llm-request-settled\npayload: { result: { status: cancelled } }",
+            "open request: none\nuser: gave up 14 minutes ago",
+          ),
+        ],
+      );
+
+      // ---------- scenario 3: hat 2 ----------
+      sc(
+        "Hat 2 — eviction churn, the routine path (new repro)",
+        "real journal: preview_6, 183s",
+        "Found deleting a spec warm-up (#2529). This is the retry attempt's ACTUAL journal — project agent-script-reuse-mtbkmi8q-b6f3c4e3. The deployment is 4min old and busy (16 parallel spec workers). Eviction recovery works; the hang detection doesn't exist.",
+        [
+          ev(
+            "13:41:19.9",
+            44,
+            "agent/llm-request-requested",
+            ["model=intercepted/factorizer"],
+            "Turn 1 sent from the browser. Attempt 1 dials over the pager to the spec process.",
+            "",
+            "type: agent/llm-request-requested\npayload: { model: intercepted/factorizer }",
+            "open request: 44\nattempt 1: dialing\nuser sees: spinner",
+          ),
+          gap(
+            "30s of nothing — the attempt's socket died in the churn, and nothing owns a deadline for it.",
+          ),
+          ev(
+            "13:41:49.9",
+            155,
+            "stream/woken",
+            ["staleness alarm"],
+            "The coarse staleness check is the first thing to notice.",
+            "bad",
+            "type: stream/woken\n# 30s granularity — this alarm was never meant\n# to be the attempt watchdog",
+            "open request: 44, zero progress for 30s\nuser sees: spinner",
+          ),
+          ev(
+            "13:41:51.4",
+            162,
+            "stream/processor-revived",
+            ["×2", "re-dial works"],
+            "Eviction recovery does its job (#2480): successor boots, adopts the open request, re-dials within ~10s of the crash. In the harness this is calls=2 at +10s. THIS PART WORKS.",
+            "good",
+            "type: stream/processor-revived\n# ×2 — agent processor and capability-host\n# both revive; UI shows honest dividers",
+            "attempt 2: dialing\nuser sees: spinner + 'agent processor revived' divider",
+          ),
+          gap(
+            "…but attempt 2 went out during the same churn window. Its pager path is broken too. It hangs — and a hung attempt is invisible (no failure → no ladder; no chunk-idle deadline).",
+          ),
+          ev(
+            "13:42:32.5",
+            167,
+            "stream/woken",
+            ["staleness again"],
+            "Another 40s burned to notice nothing happened.",
+            "bad",
+            "type: stream/woken",
+            "open request: 44\nattempt 2: zombie\nuser sees: spinner (continuously — verified by\n  spinner-waiter failing with 'still visible after 120000ms')",
+          ),
+          ev(
+            "13:43:03.5",
+            172,
+            "stream/processor-revived",
+            ["×2 again"],
+            "Second churn cycle. Each cycle costs a full detection window.",
+            "bad",
+            "type: stream/processor-revived",
+            "attempt 3: dialing",
+          ),
+          ev(
+            "13:44:11.7",
+            603,
+            "agent/llm-response-chunk",
+            ["finally a healthy path"],
+            "An attempt lands on a working pager route; chunks stream.",
+            "good",
+            "type: agent/llm-response-chunk",
+            "attempt 3: streaming",
+          ),
+          ev(
+            "13:44:17.2",
+            700,
+            "agent/llm-request-settled",
+            ["success", "T+183s"],
+            "Settled 183 seconds after the request — one minute AFTER the whole test suite gave up and went home. The first attempt's journal shows the same shape at 150s. Busy streams keep it to minutes; a quiet one goes to the 15m10s wedge breaker (measured in the harness).",
+            "bad",
+            "type: agent/llm-request-settled\npayload: { result: { status: success } }\n# correct answer, uselessly late",
+            "open request: none\nuser (the spec): failed at T+120s, twice\nquiet-stream worst case: T+15m10s",
+          ),
+        ],
+      );
+
+      // ---------- scenario 4: hat 3 ----------
+      sc(
+        "Hat 3 — halted subscription (#2486, fix carried into #2530)",
+        "parked forever → one wake",
+        "The 2026-08-12 preview_8 media incident. A deploy kills a receiver mid-delivery; it comes back broken; the sender halts the subscription (by design). The halt had no wake condition.",
+        [
+          ev(
+            "22:24:13.0",
+            88,
+            "deploy",
+            ["worker v7d84cf2"],
+            "Deploy kills the receiver worker mid-delivery.",
+            "",
+            "event: deploy (external)",
+            "subscription: delivering",
+          ),
+          ev(
+            "22:24:44.1",
+            102,
+            "stream/subscription-delivery-halted",
+            ["attempts=5", "reason=receiver-failing"],
+            "Receiver crashes on every delivery after boot; sender halts rather than skip-and-lose. Correct call. But the halt is a terminal park: new events don't wake it, nothing retries, runtime state looks clean because the halt clears the backoff.",
+            "bad",
+            "type: stream/subscription-delivery-halted\npayload:\n  afterOffset: 96\n  attempts: 5\n  workerVersion: 7d84cf2   # ← the #2486 fix adds this",
+            "subscription: HALTED\nwake condition: none (pre-fix)\nuser sees: uploads land, analysis silently never runs\nreads still work → poking at it 'fixes' nothing",
+          ),
+          gap("Pre-fix: forever, until a human runs resumeSubscription. Post-fix (#2486):"),
+          ev(
+            "09:40:48.6",
+            231,
+            "stream/subscription-delivery-resumed",
+            ["antidote deploy", "v9c11aa0 ≠ v7d84cf2"],
+            "Next deploy runs a send check under a DIFFERENT version → one automatic resume. A receiver fixed by the deploy recovers with no operator; a still-broken one re-halts under the new version. This is the fix generalized: the parked state learned ONE wake condition (environmental change).",
+            "good",
+            "type: stream/subscription-delivery-resumed\npayload: { name: media-analysis }\n# fired because halt.workerVersion !== current",
+            "subscription: delivering again\nremaining gaps:\n  - versionless legacy halts: still operator-only\n  - halt under an UNCHANGED deploy: still waits",
+          ),
+          ev(
+            "09:40:48.7",
+            232,
+            "the fix's own edge (Bugbot)",
+            ["meta"],
+            "If the resume append is interrupted, the retry is a bare in-memory armAlarm — which the alarm recomputation (durable rows only, halted rows skipped) can immediately clear. The fix for parked-states-without-wakes grew a parked-state-without-a-durable-wake. That's the proof the primitive is missing, not the author being sloppy.",
+            "bad",
+            "# resumeHaltFromAntidoteDeploy, !recorded branch:\n#   armAlarm(now + LIFECYCLE_RETRY_DELAY_MS)  # in-memory intent\n# armAlarmFromStore():\n#   skips halted rows, clearAlarm() when quiet  # wipes it\n# trap for the fixer: a durable nextAttemptAt on a halted\n# row would hot-loop against a PAUSED stream",
+            "owed retry: lost until an unrelated wake\nstrictly no worse than pre-fix, so it shipped;\nfix belongs to the primitive",
+          ),
+        ],
+      );
+
+      // ---------- scenario 5: hat 4 ----------
+      sc(
+        "Hat 4 — bootstrap killed by a transient (#2513)",
+        "terminal park",
+        "Project bootstrap npm-resolves the worker build through the registry. Propagation is eventually-consistent; a just-published version can 404 for seconds.",
+        [
+          ev(
+            "10:15:02.0",
+            12,
+            "worker-build/requested",
+            ["iterate@0.3.0"],
+            "Bootstrap saga resolves the SDK package.",
+            "",
+            "type: worker-build/requested",
+            "saga: resolving",
+          ),
+          ev(
+            "10:15:02.8",
+            13,
+            "registry 404",
+            ["transient", "propagation lag"],
+            "The registry hasn't propagated yet. Retryable by nature — retried by nothing.",
+            "bad",
+            "# npm resolution fails: 404 (published 20s ago)\n# classified: terminal",
+            "saga: FAILED, permanent\nwake condition: none\nretryAt: none\nuser sees: dead project; every later use fails",
+          ),
+          gap(
+            "The version becomes resolvable ~10s later. Nobody asks again. Same shape as the halt: a park with no clock.",
+          ),
+        ],
+      );
+
+      // ---------- scenario 6: hat 5 ----------
+      sc(
+        "Hat 5 — the observability twin: facet pin false alarm (#2518)",
+        "no recorded WHY",
+        "Not a liveness gap — the same disease on the read side. A test.fails pin guards 'a RUNNING facet never picks up a source commit'. It false-alarmed 7+ times (twice on 2026-08-27 alone), each flipping an unrelated PR red.",
+        [
+          ev(
+            "14:32:10.0",
+            40,
+            "config repo commit",
+            ["revision v2"],
+            "The pin commits new source, then polls the running facet.",
+            "",
+            "event: git commit to the config repo",
+            "pin expects: same-boot facet keeps serving v1 (the bug)",
+          ),
+          ev(
+            "14:32:31.5",
+            41,
+            "facet recycled",
+            ["coincidence", "eviction/deploy"],
+            "The facet recycles for its own reasons inside the 45s poll window. A cold facet always builds the newest source.",
+            "bad",
+            "# facet answers: revision=v2, new buildKey, new bootId\n# all four of the pin's comparisons pass\n# NOTHING records whether the rebuild was CAUSED\n# by the commit or by the recycle",
+            "pin verdict: 'bug fixed!' → test flips red\ntruth: coincidence — next run is back to\n  16 same-boot polls on the old key",
+          ),
+          gap(
+            "Same root, different symptom: state changed without recording why. #2486 hit this too — it had to stamp workerVersion on halts before 'was this deploy the antidote?' was even decidable. Fix: rebuilds carry their trigger; the pin asserts causality. Quarantined until then; the forced-recycle repro (#2518's test) keeps the blind spot pinned.",
+          ),
+        ],
+      );
+
+      // ---------- scenario 7: the fix ----------
+      sc(
+        "With the fix — hat 2 replayed",
+        "deadline fires at seconds scale",
+        "Same eviction churn as scenario 3, with the primitive in place: reduce derives nextDeadlineAt = min(lastProgressAt + chunkIdleBudget, expiresAt); host arms the DO alarm at min(keepalive, that).",
+        [
+          ev(
+            "13:41:19.9",
+            44,
+            "agent/llm-request-requested",
+            ["chunkIdle=10s armed"],
+            "Dial. The deadline derivation now yields lastProgress(=dial)+10s; the alarm is armed durably.",
+            "",
+            "type: agent/llm-request-requested\n# nextDeadlineAt = 13:41:29.9 (dial + chunkIdleBudget)\n# armed on the DO alarm, persisted next to keepalive",
+            "open request: 44\nattempt 1: dialing\ndurable alarm: 13:41:29.9",
+          ),
+          ev(
+            "13:41:29.9",
+            150,
+            "deadline fired",
+            ["no progress 10s"],
+            "Attempt made no progress. Abort the in-flight slot, settle the attempt failed. The ladder now owns it — this is the piece that turns 'hung' into 'failed', which the system already knows how to retry.",
+            "good",
+            "# alarm fires → ordinary catch-up/reconcile\n# attempt 1: aborted, settled failed\n# retry ladder: attempt 2 in 10s",
+            "attempt 1: failed (not zombie)\nnext dial: 13:41:39.9",
+          ),
+          ev(
+            "13:41:39.9",
+            151,
+            "attempt 2 dials",
+            ["ladder step 1"],
+            "Churn may still be live — suppose this one hangs too. Its own 10s deadline is armed; derived from state, so even an eviction right here changes nothing: the successor recomputes the same deadline.",
+            "",
+            "# same derivation, any incarnation",
+            "attempt 2: dialing, deadline 13:41:49.9",
+          ),
+          ev(
+            "13:41:59.9",
+            152,
+            "attempt 3 dials",
+            ["ladder step 2", "healthy path"],
+            "Third dial lands on a working route.",
+            "good",
+            "# attempt 2 settled failed at :49.9, +10s ladder",
+            "attempt 3: streaming",
+          ),
+          ev(
+            "13:42:01.5",
+            160,
+            "agent/llm-request-settled",
+            ["success", "T+42s"],
+            "Two severed attempts absorbed in 42s instead of 183s — and bounded: worst case per severance is chunkIdleBudget + ladder step, not a 30–40s staleness window or a 15-minute breaker. Spec budgets become honest; the #2529 warm-up deletion becomes safe; the four-day prd orphans become impossible.",
+            "good",
+            "type: agent/llm-request-settled\npayload: { result: { status: success } }",
+            "open request: none\nuser sees: reply at T+42s under the worst churn\nquiet-stream worst case: same (alarm ≠ delivery)",
+          ),
+        ],
+      );
+
+      // ---------- render ----------
+      const main = document.getElementById("scenarios");
+      let cm = null,
+        selected = null;
+      function yamlFor(item) {
+        return "# event\n" + item.yaml + "\n\n# system state after\n" + item.state;
+      }
+      S.forEach((s, si) => {
+        const sec = document.createElement("section");
+        sec.className = "scenario";
+        sec.innerHTML = `<h2>${si + 1}. ${s.title} <span class="hat">— ${s.hat}</span></h2><p>${s.intro}</p>`;
+        s.events.forEach((item, ei) => {
+          if (item.gap) {
+            const g = document.createElement("div");
+            g.className = "gap";
+            g.innerHTML = item.gap;
+            sec.appendChild(g);
+            return;
+          }
+          const d = document.createElement("div");
+          d.className = "ev " + (item.cls || "");
+          d.innerHTML = `<div class="row"><span class="off">@${item.off}</span><span class="type">${item.type}</span>${(item.badges || []).map((b) => `<span class="badge">${b}</span>`).join("")}<span class="t">${item.t}</span></div><div class="note">${item.note}</div>`;
+          d.addEventListener("click", () => {
+            if (selected) selected.classList.remove("selected");
+            selected = d;
+            d.classList.add("selected");
+            document.getElementById("rtitle").innerHTML =
+              `<span class="off">@${item.off}</span> ${item.type} <span style="color:var(--muted);font-weight:400">· ${s.title}</span>`;
+            cm.setValue(yamlFor(item));
+          });
+          sec.appendChild(d);
+        });
+        main.appendChild(sec);
+      });
+      cm = CodeMirror(document.getElementById("cmhost"), {
+        value: "click an event card →",
+        mode: "yaml",
+        readOnly: true,
+        lineNumbers: false,
+        lineWrapping: true,
+      });
+    </script>
+  </body>
+</html>

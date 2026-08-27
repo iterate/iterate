@@ -14,6 +14,9 @@ share plus a fix direction that covers all of them. Repro-only apart from
 the halt self-heal fix carried in from #2486. The three source PRs close in
 favor of this one.
 
+Interactive walkthrough (timelines for every hat, real journal timestamps,
+and the fix replayed): `explainers/parked-states-need-a-wake.html`.
+
 ## The five threads
 
 1. **Mid-stream LLM stall never settles** — #2510 (already merged):
