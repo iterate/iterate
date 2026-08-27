@@ -218,82 +218,90 @@ test("run() return values are typed from the reused row's data, through the real
     payload: { config: { llm: { model: "intercepted/typed" }, llmRequestDebounceMs: 250 } },
   });
 
-  const nowDoQueue = [
-    // Attempt 1 — the wrong satisfies; the gate must reject it and the
-    // marker message must never send. results[1]: results[0] is the
-    // send-result round's done row.
-    dedent`
-      async (itx) => {
-        const helper = await itx.capabilityHost.previousScriptHelper({
-          ...results[1],
-          parameterize: { n: 8633n },
-        });
-        const result = await helper.run({ n: 10403n });
-        result satisfies readonly number[];
-        await itx.chat.sendMessage(\`this should never send: \${result}\`);
+  const warmUpScript = dedent`
+    async (itx) => {
+      await itx.chat.sendMessage("warmed");
+    }
+  `;
+  // Round 1: RETURN the factors (JSON-serializable, so strings — bigints do
+  // not survive result serialization); the returned value becomes a data row
+  // typed by its literal.
+  const factorizeScript = dedent`
+    async (itx) => {
+      const target = 8633n;
+      let remaining = target;
+      const factors: bigint[] = [];
+      for (let candidate = 2n; candidate * candidate <= remaining; candidate += 1n) {
+        while (remaining % candidate === 0n) {
+          factors.push(candidate);
+          remaining /= candidate;
+        }
       }
-    `,
-    // Attempt 2 (after the gate's corrective feedback) — the satisfies
-    // matching the inferred type passes. results[2], not [1]: attempt 1's
-    // rejection settled as an ERROR row, shifting positions — the drift
-    // results.byOffset absorbs; a scripted retry can just count.
-    dedent`
-      async (itx) => {
-        const helper = await itx.capabilityHost.previousScriptHelper({
-          ...results[2],
-          parameterize: { n: 8633n },
-        });
-        const result = await helper.run({ n: 10403n });
-        result satisfies readonly string[];
-        await itx.chat.sendMessage(\`Result is \${result.join(" × ")}\`);
-      }
-    `,
-  ];
-  const scriptQueues: Record<string, string[]> = {
-    "warm up": [
-      dedent`
-        async (itx) => {
-          await itx.chat.sendMessage("warmed");
-        }
-      `,
-    ],
-    "prime factorize": [
-      // Round 1: RETURN the factors (JSON-serializable, so strings —
-      // bigints do not survive result serialization); the returned value
-      // becomes a data row typed by its literal.
-      dedent`
-        async (itx) => {
-          const target = 8633n;
-          let remaining = target;
-          const factors: bigint[] = [];
-          for (let candidate = 2n; candidate * candidate <= remaining; candidate += 1n) {
-            while (remaining % candidate === 0n) {
-              factors.push(candidate);
-              remaining /= candidate;
-            }
-          }
-          if (remaining > 1n) factors.push(remaining);
-          return factors.map(String);
-        }
-      `,
-      // Round 2: the settlement made the value results[0].data — send it.
-      dedent`
-        async (itx) => {
-          await itx.chat.sendMessage(\`factors of 8633: \${results[0].data.join(" × ")}\`);
-        }
-      `,
-    ],
-    "now do": nowDoQueue,
-  };
+      if (remaining > 1n) factors.push(remaining);
+      return factors.map(String);
+    }
+  `;
+  // Round 2: the settlement made the value results[0].data — send it.
+  const sendFactorsScript = dedent`
+    async (itx) => {
+      await itx.chat.sendMessage(\`factors of 8633: \${results[0].data.join(" × ")}\`);
+    }
+  `;
+  // Attempt 1 — the wrong satisfies; the gate must reject it and the marker
+  // message must never send. results[1]: results[0] is the send-result
+  // round's done row.
+  const wrongSatisfiesScript = dedent`
+    async (itx) => {
+      const helper = await itx.capabilityHost.previousScriptHelper({
+        ...results[1],
+        parameterize: { n: 8633n },
+      });
+      const result = await helper.run({ n: 10403n });
+      result satisfies readonly number[];
+      await itx.chat.sendMessage(\`this should never send: \${result}\`);
+    }
+  `;
+  // Attempt 2 (after the gate's corrective feedback) — the satisfies
+  // matching the inferred type passes. results[2], not [1]: attempt 1's
+  // rejection settled as an ERROR row, shifting positions — the drift
+  // results.byOffset absorbs; a scripted retry can just count.
+  const correctSatisfiesScript = dedent`
+    async (itx) => {
+      const helper = await itx.capabilityHost.previousScriptHelper({
+        ...results[2],
+        parameterize: { n: 8633n },
+      });
+      const result = await helper.run({ n: 10403n });
+      result satisfies readonly string[];
+      await itx.chat.sendMessage(\`Result is \${result.join(" × ")}\`);
+    }
+  `;
+  const wrongAttemptServes = { count: 0 };
   await using _interception = await fixture.interceptAi(async (call) => {
     if (call.source !== "agent-turn") throw new Error(`unexpected source: ${call.source}`);
-    const lastUser = [...call.body.messages].reverse().find((m) => m.role === "user");
-    const entry = Object.entries(scriptQueues).find(([key]) => lastUser?.content.includes(key));
-    if (!entry) throw new Error(`no scripted reply matches: ${lastUser?.content.slice(0, 80)}`);
-    const queue = entry[1];
-    // Consume one per model call; the last entry repeats so re-asks cannot
-    // crash the router.
-    return ["```ts", queue.length > 1 ? queue.shift()! : queue[0]!, "```"].join("\n");
+    const messages = call.body.messages;
+    const lastUser = [...messages].reverse().find((m) => m.role === "user");
+    // Routing DERIVES from committed context, never from call counts: the
+    // platform legitimately re-asks (the attempt-progress watchdog fails a
+    // churn-hung attempt and the retry ladder re-dials), and a retried
+    // request must be served the same script — a positional queue desyncs.
+    // An assistant message only lands when a reply actually settled, so its
+    // content marks exactly which scripts have delivered.
+    const assistantDelivered = (marker: string) =>
+      messages.some((m) => m.role === "assistant" && m.content.includes(marker));
+    const script = (() => {
+      if (lastUser?.content.includes("warm up")) return warmUpScript;
+      if (lastUser?.content.includes("prime factorize")) {
+        return assistantDelivered("factors.map(String)") ? sendFactorsScript : factorizeScript;
+      }
+      if (lastUser?.content.includes("now do")) {
+        if (assistantDelivered("should never send")) return correctSatisfiesScript;
+        wrongAttemptServes.count += 1;
+        return wrongSatisfiesScript;
+      }
+      throw new Error(`no scripted reply matches: ${lastUser?.content.slice(0, 80)}`);
+    })();
+    return ["```ts", script, "```"].join("\n");
   });
 
   const warmPath = `/agents/warm-${crypto.randomUUID().slice(0, 8)}`;
@@ -319,10 +327,12 @@ test("run() return values are typed from the reused row's data, through the real
     await send.click();
     await page.getByText("Result is 101 × 103").waitFor();
   });
-  // The wrong attempt was consumed (the router keeps only the repeatable
-  // last entry) — the gate really rejected it and the agent loop delivered
-  // the corrective retry, which alone sends the final message.
-  if (nowDoQueue.length !== 1) {
-    throw new Error(`expected only the corrective retry to remain; ${nowDoQueue.length} left`);
+  // The wrong attempt was really served, and — since the final message that
+  // only the corrective attempt sends arrived — really rejected by the gate.
+  // (If run()'s inference ever degraded to `any`, the wrong satisfies would
+  // pass, that script would run, and "Result is 101 × 103" would never
+  // appear — the wait above fails first.)
+  if (wrongAttemptServes.count < 1) {
+    throw new Error("the gate-rejected attempt was never served");
   }
 });
