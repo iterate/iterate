@@ -1,26 +1,26 @@
 ---
-status: blocked
-blocked-on: "#2530 fix direction (attempt-progress deadlines)"
+status: in-review
 size: small
+base: deadline-derived-wakes (#2532), itself stacked on platform-stall-repros (#2530)
 ---
 
 # Delete the warm-up turn from the script-reuse spec (first test)
 
 ## Status summary
 
-Implemented, green locally — but the preview lane failed both attempts and
-the investigation found the real story: the warm-up wasn't absorbing a
-compute cost, it was absorbing a platform gap. On preview's churny first
-minutes, an in-flight LLM request whose processor gets evicted re-dials
-promptly, but a re-dial that hangs (dead pager path in the same churn
-window) is invisible until a staleness wake — first turns took 150s/183s
-end-to-end, past any honest spec budget. The UI is fine: screenshots prove
-the spinner stays up continuously with honest "processor revived" dividers.
+Re-stacked as the final car of the merge train (#2530 repros → #2532 fix →
+this): `deadline-derived-wakes` is merged in, both script-reuse tests are
+UN-QUARANTINED, and the warm-up deletion stands. This PR's preview runs are
+the quarantine's own exit-criteria proof — the warm-up-free first turn
+under real churn, bounded by the attempt-progress watchdog (worst case two
+severed attempts: 45+10+45+20 = 120s = exactly the turn-1 spinner budget).
+PR: #2529.
 
-Reproified and consolidated with the other open stall repros in PR #2530
-(expected-fail spec + fix direction: attempt-progress deadlines). This PR
-stays parked until that fix lands; then the warm-up deletion becomes safe
-as-is. PR: #2529.
+The earlier investigation (below) found the warm-up wasn't absorbing a
+compute cost but a platform gap — an in-flight LLM request severed by
+eviction churn was invisible until a staleness wake; first turns took
+150s/183s. The UI was always fine (spinner continuous, honest "processor
+revived" dividers).
 
 ## Problem
 

@@ -9,17 +9,11 @@ import { test } from "./test-support/test.ts";
 // scripts EXECUTE for real — the child run re-runs turn 1's algorithm with
 // the new number — and the spec opens each turn's codemode snippet in the
 // feed to show the shortcut.
-// On 2026-08-27 this spec failed 3/3 consecutive preview runs (Depot
-// w1hcwnlc3q, bqk06tf2kc, p2blkx8cx5) — including runs of THIS spec text
-// with its warm-up turn intact, one of them stalling on turn 2. The
-// journals show the turns complete in 150-183s: the in-flight intercepted
-// LLM request is severed by processor eviction churn, and a hung re-dial is
-// invisible until a 30-40s staleness wake (the expected-fail spec in
-// apps/os/src/domains/agents/agent-llm-stall.test.ts pins the mechanism).
-// Un-skip when attempt-progress deadlines land (that task's fix direction,
-// threads 1-2) and a preview run passes with the warm-up REMOVED (#2529).
-// Quarantined with tasks/platform-stall-repros.md.
-test.skip("a repeat request reuses the previous turn's journaled script instead of re-deriving it", async ({
+// UN-QUARANTINED here (was skipped with tasks/platform-stall-repros.md after
+// failing 3/3 preview runs on 2026-08-27): the attempt-progress watchdog on
+// this branch bounds a churn-severed turn, and this PR's preview runs — with
+// the warm-up turn REMOVED — are the quarantine's own exit-criteria proof.
+test("a repeat request reuses the previous turn's journaled script instead of re-deriving it", async ({
   helpers,
   page,
   baseURL,
@@ -202,10 +196,11 @@ test.skip("a repeat request reuses the previous turn's journaled script instead 
 // blocks only provable errors (syntax + near-miss typos), and satisfies
 // failures are TS1360, in the syntax range — plain TS2322 annotation
 // mismatches deliberately never block.
-// Quarantined with tasks/platform-stall-repros.md — same churn-wedge class
-// as the first test (this one failed 1/3 of the 2026-08-27 preview runs, at
-// turn 2, past its warm-up); same exit criteria.
-test.skip("run() return values are typed from the reused row's data, through the real gate", async ({
+// UN-QUARANTINED here alongside the first test (same churn-wedge class, same
+// exit criteria — the watchdog on this branch). This test keeps its warm-up
+// turn: removing it is a follow-up once the first test's warm-up-free shape
+// proves out on preview.
+test("run() return values are typed from the reused row's data, through the real gate", async ({
   helpers,
   page,
   baseURL,
