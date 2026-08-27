@@ -674,9 +674,9 @@ export interface CapabilityHost {
    * string/number/boolean/bigint) that should become parameters — each
    * literal must appear exactly once in that script and is swapped OUT for a
    * generated identifier. Optional `edits` ([pattern, replacement] pairs;
-   * every pattern must match) rewrite script text that is NOT a parameter
-   * value — prose hardcoding an old input, a stale label — before
-   * parameterization. The returned handle's `run(vars)` re-executes the
+   * every pattern must match) then rewrite what remains — prose hardcoding
+   * an old input, a stale label; they run AFTER parameterization, so an edit
+   * can never clobber a value literal parameterize needs. The returned handle's `run(vars)` re-executes the
    * script with new values as a journaled child script run; `vars` is typed
    * from the parameterize object (`{ n: 123n }` → `run({ n: bigint })`), and
    * the result type is best-effort inferred from the row's `data`/`load`

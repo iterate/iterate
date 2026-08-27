@@ -6098,9 +6098,9 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
    * string/number/boolean/bigint) that should become parameters — each
    * literal must appear exactly once in that script and is swapped OUT for a
    * generated identifier. Optional `edits` ([pattern, replacement] pairs;
-   * every pattern must match) rewrite script text that is NOT a parameter
-   * value — prose hardcoding an old input, a stale label — before
-   * parameterization. The returned handle's `run(vars)` re-executes the
+   * every pattern must match) then rewrite what remains — prose hardcoding
+   * an old input, a stale label; they run AFTER parameterization, so an edit
+   * can never clobber a value literal parameterize needs. The returned handle's `run(vars)` re-executes the
    * script with new values as a journaled child script run; `vars` is typed
    * from the parameterize object (`{ n: 123n }` → `run({ n: bigint })`), and
    * the result type is best-effort inferred from the row's `data`/`load`
@@ -6171,18 +6171,23 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
       );
     }
     const { code } = requested.payload as { code: string };
-    // Edits first, on the original text; parameterize then locates values in
-    // the EDITED script. Edits are for text that is not a parameter value —
-    // message prose hardcoding an old input, a stale label.
-    const edited = input.edits === undefined ? code : applyScriptEdits(code, input.edits);
-    const transformed = reparameterizeScript({ code: edited, parameters });
+    // Parameterize FIRST: the value literals become identifiers before any
+    // edit runs, so a broad edit (a /oldDigits/g rewrite of message prose)
+    // cannot clobber the literal parameterize needs to locate — observed
+    // live when the orders were reversed. Edits then rewrite what remains:
+    // text that is not a parameter value, like prose naming the old input.
+    const transformed = reparameterizeScript({ code, parameters });
+    const finalCode =
+      input.edits === undefined
+        ? transformed.code
+        : applyScriptEdits(transformed.code, input.edits);
     // A reused script that still mentions an old value outside the swapped
     // expression (message prose, a label) will state stale facts when run.
     // Observed live: the model reused correctly but sent the old number in
     // the message. Omitting `edits` entirely means the caller has not
     // considered this; an explicit `edits` (even []) is the opt-out.
     if (input.edits === undefined) {
-      const leftovers = findStaleValueLeftovers(transformed.code, parameters);
+      const leftovers = findStaleValueLeftovers(finalCode, parameters);
       if (leftovers.length > 0) {
         const detail = leftovers.map(([name, bare]) => `${name} (${bare})`).join(", ");
         throw new Error(
@@ -6191,7 +6196,7 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
       }
     }
     return new ReusableScriptRpcTarget({
-      code: transformed.code,
+      code: finalCode,
       parameters: transformed.parameters,
       runScript: (envelope) => this.runScript(envelope),
       sourceExecutionId,
