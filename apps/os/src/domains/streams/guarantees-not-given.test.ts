@@ -446,6 +446,7 @@ describe("guarantees the subscription rewrite deliberately does not give", () =>
         appendDeliveryEvent: () => true,
         recordEgress: () => undefined,
         runtimeChanged: () => undefined,
+        workerVersion: () => "test-version",
         now: () => now,
         random: () => 0.5,
         armAlarm: () => undefined,

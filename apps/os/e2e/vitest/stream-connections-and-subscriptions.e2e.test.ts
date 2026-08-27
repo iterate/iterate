@@ -1226,6 +1226,76 @@ test("resumeSubscription restarts a halted rule at its existing cursor", async (
   ).not.toHaveProperty("deliveryHalted");
 });
 
+// The 2026-08-12 preview_8 media incident: a redeploy broke project-worker
+// deliveries long enough to halt the /media feed, and a halted subscription
+// had no retry story — every later append stalled silently until a human
+// found the one red row. The antidote-deploy contract closes that: a halt
+// recorded under a DIFFERENT deploy version earns one automatic resume on the
+// next send check, so a receiver fixed by a deploy recovers unattended.
+test("a halt recorded under an older deploy version auto-resumes without an operator", async () => {
+  const marker = crypto.randomUUID();
+  const sourcePath = `/e2e/subscriptions/antidote-resume/source/${marker}`;
+  const receivingStreamPath = `/e2e/subscriptions/antidote-resume/receiver/${marker}`;
+  const subscriptionName = `antidote-${marker}`;
+
+  using testProject = await openTestProject(marker);
+  const { project } = testProject;
+  using source = project.streams.get(sourcePath);
+  using receiver = project.streams.get(receivingStreamPath);
+
+  const configuredOffset = coreState(await source.runtimeState()).maxOffset + 1;
+  await appendTrustedCoreEvents(source, [
+    subscriptionConfigured({
+      name: subscriptionName,
+      filter: { eventTypes: [MATCHING_EVENT_TYPE] },
+      receiver: {
+        action: "copy-to-stream",
+        receivingStreamPath,
+        delivery: deliveryPolicy("now"),
+      },
+    }),
+    {
+      type: "events.iterate.com/stream/subscription-delivery-halted",
+      payload: {
+        name: subscriptionName,
+        reason: "delivery-failed",
+        afterOffset: configuredOffset,
+        attempts: 15,
+        error: "synthetic exhausted delivery retry ladder",
+        // Any string that is not the deployment's live version: the planted
+        // halt reads as recorded by an older deploy, so the current one is
+        // the antidote.
+        workerVersion: `e2e-previous-deploy-${marker.slice(0, 8)}`,
+      },
+    },
+  ]);
+
+  // One ordinary append is the only wake — no resumeSubscription call.
+  const [held] = await source.append({
+    type: MATCHING_EVENT_TYPE,
+    payload: { marker },
+  });
+
+  const delivered = await receiver.waitForEvent({
+    afterOffset: 0,
+    eventTypes: [MATCHING_EVENT_TYPE],
+    predicate: (event) => event.payload?.marker === marker,
+    timeoutMs: 15_000,
+  });
+  expect(delivered.source?.copiedFrom?.at(-1)?.offset).toBe(held!.offset);
+
+  const resumed = await source.waitForEvent({
+    afterOffset: 0,
+    eventTypes: ["events.iterate.com/stream/subscription-delivery-resumed"],
+    predicate: (event) => event.payload?.name === subscriptionName,
+    timeoutMs: 15_000,
+  });
+  expect(resumed.idempotencyKey).toContain("halt-antidote-resume");
+  expect(
+    coreState(await source.runtimeState()).subscriptions.outbound.byName[subscriptionName],
+  ).not.toHaveProperty("deliveryHalted");
+});
+
 // Stream copies: provenance, cursors, and end conditions.
 test("chains longer than five copies retain provenance, cycles terminate, and removal revokes both sides", async () => {
   const marker = crypto.randomUUID();
