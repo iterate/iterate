@@ -661,7 +661,22 @@ function reduceAgentUiEvent(
         if (llmRequestOffset == null) return contextState;
         return updateLlmStep(contextState, llmRequestOffset, (step) =>
           step.status === "running"
-            ? { ...step, responseText: text, assistantEventOffset: event.offset }
+            ? {
+                ...step,
+                responseText: text,
+                // Keep the reveal windows covering the full text: a swallowed
+                // tail flush leaves the last window's tokens unjournaled, and
+                // the live prose renders from windows. Extend with the missing
+                // suffix; on any divergence the committed text replaces the
+                // windows wholesale.
+                responseWindows:
+                  text === step.responseText
+                    ? step.responseWindows
+                    : text.startsWith(step.responseText)
+                      ? [...step.responseWindows, text.slice(step.responseText.length)]
+                      : [text],
+                assistantEventOffset: event.offset,
+              }
             : step,
         );
       }

@@ -162,6 +162,40 @@ describe("agent-ui reducer", () => {
     });
   });
 
+  test("committed assistant text extends streamed windows when the tail flush was lost", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: { role: "user", actor: { type: "user", origin: "web" }, content: "go" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 10,
+        payload: { model: "gpt-test" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-response-chunks",
+        payload: {
+          llmRequestOffset: 10,
+          sequence: 0,
+          chunks: [{ choices: [{ delta: { content: "The lighthouse" } }] }],
+        },
+      },
+      // The tail flush was swallowed; the committed assistant item carries
+      // the full text the windows never received.
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: { role: "assistant", content: "The lighthouse keeper", llmRequestOffset: 10 },
+      },
+    ]);
+
+    expect(state.live?.steps[0]).toMatchObject({
+      kind: "llm",
+      responseText: "The lighthouse keeper",
+      responseWindows: ["The lighthouse", " keeper"],
+    });
+  });
+
   test("a cancelled settle's partialText extends streamed windows with the unflushed tail", () => {
     const state = reduceAll([
       {
