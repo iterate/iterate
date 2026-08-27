@@ -51,16 +51,17 @@ export async function installResilientAiInterceptor(input: {
     const previous = current;
     current = undefined;
     if (previous !== undefined) disposeSession(previous.session);
-    const session = await connectAdminItx(input.baseUrl, {
-      onWebSocketClose: (close) => {
-        if (disposed || myGeneration !== generation) return;
-        console.warn(
-          `[resilient-ai-interceptor] session closed (${close.code} ${close.reason}); reconnecting`,
-        );
-        void runInstallLoop(Infinity);
-      },
-    });
+    let session: Awaited<ReturnType<typeof connectAdminItx>> | undefined;
     try {
+      session = await connectAdminItx(input.baseUrl, {
+        onWebSocketClose: (close) => {
+          if (disposed || myGeneration !== generation) return;
+          console.warn(
+            `[resilient-ai-interceptor] session closed (${close.code} ${close.reason}); reconnecting`,
+          );
+          void runInstallLoop(Infinity);
+        },
+      });
       const interception = await session.projects.get(input.projectId).ai.intercept(input.handler);
       if (disposed) {
         // Disposal raced this install: never leave the handler mounted after
@@ -71,10 +72,11 @@ export async function installResilientAiInterceptor(input: {
       }
       current = { session, interception };
     } catch (error) {
-      // This session is dead to us; retire its generation BEFORE throwing so
-      // its close event cannot start a second, competing recovery loop.
+      // This attempt's session is dead to us — whether the connect or the
+      // install failed. Retire its generation BEFORE throwing so a late close
+      // event from its socket cannot start a second, competing recovery loop.
       generation++;
-      disposeSession(session);
+      if (session !== undefined) disposeSession(session);
       throw error;
     }
   };
@@ -88,7 +90,12 @@ export async function installResilientAiInterceptor(input: {
         if (attempt > 1) console.warn(`[resilient-ai-interceptor] installed (attempt ${attempt})`);
         return;
       } catch (error) {
-        if (attempt >= maxAttempts) throw error;
+        if (attempt >= maxAttempts) {
+          // Terminal setup failure: the helper is dead, so no straggler close
+          // event may resurrect an uncancelable recovery loop afterwards.
+          disposed = true;
+          throw error;
+        }
         console.warn(`[resilient-ai-interceptor] install attempt ${attempt} failed: ${error}`);
         await new Promise((resolve) => setTimeout(resolve, Math.min(500 * attempt, 4_000)));
       }
