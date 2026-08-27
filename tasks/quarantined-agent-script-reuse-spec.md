@@ -20,8 +20,10 @@ the feature remains.
 
 Unquarantine when:
 
-- [ ] `ai.intercept` survives durable-object revivals (see the intercept
-  revival-resilience task), and
+- [x] `ai.intercept` survives durable-object revivals _done: main's
+  resilient interceptor loop (specs/test-support/resilient-ai-interceptor.ts,
+  fixture.interceptAi) owns reconnect-and-reinstall; the spec's hand-rolled
+  recovery was deleted after merging it_, and
 - [ ] first-intercepted-turn latency on a fresh deployment is bounded (the
   35–65s platform churn observed in preview journals), or the preview lane
   warms deployments before specs run.
