@@ -212,7 +212,9 @@ loop runs for real — debounce, journaled llm-request events, chunk streaming,
 codemode, chat reply — with the test scripting each response. Non-fake models
 are never interceptable, so a journaled `openai/*` turn is always the real
 provider. Reach for a paid `.llm.` test only when the point IS real-model
-integration.
+integration. Usage guide (handler contract, the session-bound lifetime and
+4901 recovery contract, spec/node recipes):
+[Intercepted models](intercepted-models.md).
 
 Open questions for the next grilling round: is the filename the right home
 for cost (vs a lint-enforced import rule alone)? Should third-party reach

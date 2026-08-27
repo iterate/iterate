@@ -49,6 +49,7 @@ export function deployedBaseUrl(): string | null {
 
 type ItxSessionInput = {
   onWebSocketMessage?: (message: ItxWebSocketMessage) => void;
+  onWebSocketClose?: (close: { code: number; reason: string }) => void;
 };
 
 type AuthenticatedItxSessionInput = ItxSessionInput & {

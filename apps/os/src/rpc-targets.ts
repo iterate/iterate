@@ -450,6 +450,7 @@ import { SlackProcessorContract } from "./domains/integrations/slack-processor-c
 import { WorkspaceProcessorContract } from "./domains/workspaces/workspace-processor-contract.ts";
 import { normalizeConfigRepoTemplateReference } from "./lib/config-repo-template-reference.ts";
 import {
+  AI_INTERCEPTOR_CAPABILITY_NAME,
   isInterceptedModel,
   type ProjectAiIntercept,
   type ProjectAiInterceptor,
@@ -3352,7 +3353,14 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
     });
   }
 
-  constructor(readonly props: { projectId: string; gateway?: AiRunOptions["gateway"] }) {
+  constructor(
+    readonly props: {
+      auth: ItxAuth;
+      ctx: CfExecutionContext;
+      projectId: string;
+      gateway?: AiRunOptions["gateway"];
+    },
+  ) {
     super();
   }
 
@@ -3403,11 +3411,37 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
    * of a real provider. The handler receives
    * `{ source: "agent-turn" | "ai-run", model, body }`; for agent turns it
    * returns assistant text (a string, or `{ text, usage? }`), for ai-run its
-   * return value is handed back verbatim. Live means session-bound: the
-   * interception dies with your connection. Non-fake models are never
-   * interceptable — a journaled `openai/*` turn is always the real provider. */
-  intercept(handler: ProjectAiInterceptor): Promise<ProjectAiIntercept> {
-    return projectStub(env.PROJECT, this.props.projectId).interceptAi(handler);
+   * return value is handed back verbatim. Live means session-bound, with the
+   * mount invariant: the interception lives exactly as long as your session
+   * connection, and if the platform's half dies while your socket is open,
+   * the socket closes (4901) — reconnect and intercept() again.
+   *
+   * Under the hood this is sugar over the capability machinery: the handler
+   * mounts as a LIVE capability at the root scope's `aiInterceptor` path,
+   * behind the shipped hibernating Provider Pager — which is where all of the
+   * above lifecycle comes from. Provide-at-same-path replaces (the last
+   * writer wins), and the returned handle revokes exactly its own mount,
+   * never a newer one. Non-fake models are never interceptable — a journaled
+   * `openai/*` turn is always the real provider. */
+  async intercept(handler: ProjectAiInterceptor): Promise<ProjectAiIntercept> {
+    if (typeof handler !== "function") throw new Error("project AI interceptor must be a function");
+    const host = new CapabilityHostRpcTarget({
+      auth: this.props.auth,
+      ctx: this.props.ctx,
+      path: "/",
+      projectId: this.props.projectId,
+    });
+    const provision = await host.provideCapability({
+      type: "live",
+      path: [AI_INTERCEPTOR_CAPABILITY_NAME],
+      instructions:
+        "Live intercepted/* model handler (itx.ai.intercept); last writer wins. Platform-consulted — not for direct invocation.",
+      capability: handler,
+    });
+    return new ProjectAiInterceptRpcTarget({
+      ctx: this.props.ctx,
+      release: () => provision.revoke(),
+    });
   }
 
   /** Calling with no arguments lists the file formats the converter accepts. */
@@ -3595,7 +3629,7 @@ class CfVideosCapabilityRpcTarget extends IterateRpcTarget<"CfVideosCapability">
 
 /** Grouped first-party Cloudflare platform bindings under integrations.cf. */
 class CloudflareIntegrationsRpcTarget extends IterateRpcTarget<"CloudflareIntegrations"> {
-  constructor(readonly props: { projectId: string }) {
+  constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
     super();
   }
 
@@ -3615,7 +3649,11 @@ class CloudflareIntegrationsRpcTarget extends IterateRpcTarget<"CloudflareIntegr
 
   /** Workers AI: run(), models(), toMarkdown(). */
   get ai(): AiRpcTarget {
-    return new AiRpcTarget({ projectId: this.props.projectId });
+    return new AiRpcTarget({
+      auth: this.props.auth,
+      ctx: this.props.ctx,
+      projectId: this.props.projectId,
+    });
   }
 
   /** Browser Run: quickAction() and raw fetch(). */
@@ -3859,7 +3897,11 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
    * Transformations. Like `parallel`, these ride the deployment's own
    * Cloudflare account — not a per-project connection. */
   get cf(): CloudflareIntegrationsRpcTarget {
-    return new CloudflareIntegrationsRpcTarget({ projectId: this.props.projectId });
+    return new CloudflareIntegrationsRpcTarget({
+      auth: this.props.auth,
+      ctx: this.props.ctx,
+      projectId: this.props.projectId,
+    });
   }
 
   /** Dynamic provided-integration dispatch. The only selector is
@@ -7208,7 +7250,11 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
 
   /** Workers AI: run(model, body), models(). */
   get ai(): AiRpcTarget {
-    return new AiRpcTarget({ projectId: this.#projectId });
+    return new AiRpcTarget({
+      auth: this.#props.auth,
+      ctx: this.#props.ctx,
+      projectId: this.#projectId,
+    });
   }
 
   /** Browser auth for project-host web apps. */
@@ -8069,7 +8115,7 @@ export class ProjectEgressInterceptRpcTarget<
  * Disposable ownership handle returned by `project.ai.intercept(...)` — the
  * egress handle's release semantics, pointed at the AI interceptor slot.
  */
-export class ProjectAiInterceptRpcTarget extends ProjectEgressInterceptRpcTarget<"ProjectAiIntercept"> {}
+class ProjectAiInterceptRpcTarget extends ProjectEgressInterceptRpcTarget<"ProjectAiIntercept"> {}
 
 /**
  * The read-only capability a hosting Durable Object hands out for one of its

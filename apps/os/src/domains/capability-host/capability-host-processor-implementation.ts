@@ -21,6 +21,7 @@ import {
   type AssembledPreamble,
 } from "./capability-host-preamble.ts";
 import { assertCapabilityPath, sameCapabilityPath } from "./capability-path.ts";
+import { capabilityOfflineError, noCapabilityError } from "./capability-unserved.ts";
 import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import { settleByDeadline } from "./execution-deadline.ts";
 import {
@@ -651,7 +652,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
       // re-exposes whatever the fallback host has at that path.
       const fallback = await this.#fallbackHost(state.birthCertificate.fallback);
       if (fallback) return await fallback.invokeCapability({ args, path });
-      throw new Error(`no capability "${path.join(".")}"`);
+      throw noCapabilityError(path);
     }
     // `__describe` on a mounted capability is answered HERE, from the mount's
     // durable metadata (instructions/types recorded at provide time) — the
@@ -675,7 +676,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
       // dedicated receiver-absent signal that PARKS a stream delivery
       // instead of failing it is future work — see
       // docs/stream-subscription-model-redesign.md.)
-      throw new Error(`capability "${hit.record.path.join(".")}" is offline`);
+      throw capabilityOfflineError(hit.record.path);
     }
     return await this.deps.invokeLiveCapability(hit.record, hit.rest, args);
   }
