@@ -61,7 +61,7 @@ test("a root stream DO restart closes the installing session with 4901; reconnec
   await project.streams
     .get("/")
     .kill()
-    .catch(() => undefined);
+    .catch(() => {});
 
   // The mount invariant, via the SHIPPED machinery: pager loss closes the
   // installing session — no interceptor-specific carrier exists at all.
