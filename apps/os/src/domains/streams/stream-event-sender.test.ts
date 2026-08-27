@@ -125,7 +125,7 @@ function harness(args: {
             configuration: { ...configuration, name: PROCESSOR_KEY },
             configuredAtOffset: 1,
             configuredAt: new Date(1).toISOString(),
-            ...(args.deliveryHalted === undefined ? {} : { deliveryHalted: args.deliveryHalted }),
+            deliveryHalted: args.deliveryHalted,
           },
         },
       },

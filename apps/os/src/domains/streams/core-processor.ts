@@ -549,10 +549,8 @@ export class StreamCoreProcessor {
                     reason: event.payload.reason,
                     afterOffset: event.payload.afterOffset,
                     attempts: event.payload.attempts,
-                    ...(event.payload.error === undefined ? {} : { error: event.payload.error }),
-                    ...(event.payload.workerVersion === undefined
-                      ? {}
-                      : { workerVersion: event.payload.workerVersion }),
+                    error: event.payload.error,
+                    workerVersion: event.payload.workerVersion,
                   },
                 },
               },
