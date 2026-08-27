@@ -6174,13 +6174,23 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     // Parameterize FIRST: the value literals become identifiers before any
     // edit runs, so a broad edit (a /oldDigits/g rewrite of message prose)
     // cannot clobber the literal parameterize needs to locate — observed
-    // live when the orders were reversed. Edits then rewrite what remains:
-    // text that is not a parameter value, like prose naming the old input.
-    const transformed = reparameterizeScript({ code, parameters });
-    const finalCode =
-      input.edits === undefined
-        ? transformed.code
-        : applyScriptEdits(transformed.code, input.edits);
+    // live when the orders were reversed. When parameterization itself fails
+    // and edits were given, fall back to edits-first: that order cures the
+    // opposite trap, a DUPLICATE of the value literal that an edit removes.
+    // Both orders are deterministic; whichever succeeds wins.
+    let transformed: ReturnType<typeof reparameterizeScript>;
+    let finalCode: string;
+    try {
+      transformed = reparameterizeScript({ code, parameters });
+      finalCode =
+        input.edits === undefined
+          ? transformed.code
+          : applyScriptEdits(transformed.code, input.edits);
+    } catch (parameterizeFirstError) {
+      if (input.edits === undefined) throw parameterizeFirstError;
+      transformed = reparameterizeScript({ code: applyScriptEdits(code, input.edits), parameters });
+      finalCode = transformed.code;
+    }
     // A reused script that still mentions an old value outside the swapped
     // expression (message prose, a label) will state stale facts when run.
     // Observed live: the model reused correctly but sent the old number in

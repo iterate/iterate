@@ -9,11 +9,19 @@ import { test } from "./test-support/test.ts";
 // scripts EXECUTE for real — the child run re-runs turn 1's algorithm with
 // the new number — and the spec opens each turn's codemode snippet in the
 // feed to show the shortcut.
+// Quarantined in CI (passes locally): cold-preview intercepted turns exceed
+// the lane budgets — see tasks/quarantined-agent-script-reuse-spec.md for
+// the unquarantine criteria. The typed-return test below covers the reuse
+// mechanism in CI meanwhile.
 test("a repeat request reuses the previous turn's journaled script instead of re-deriving it", async ({
   helpers,
   page,
   baseURL,
 }) => {
+  test.skip(
+    Boolean(process.env.CI),
+    "quarantined in CI: tasks/quarantined-agent-script-reuse-spec.md",
+  );
   await using fixture = await helpers.createFixture("agent-script-reuse");
   if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
 

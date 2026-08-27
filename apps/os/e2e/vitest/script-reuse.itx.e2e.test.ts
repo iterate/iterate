@@ -67,6 +67,30 @@ test(
       });
     expect(edited.success()).toEqual(["p101", "p103"]);
 
+    // A duplicate of the value literal (here in a comment) blocks
+    // exactly-once — unless an edit removes it: parameterize-first fails,
+    // the edits-first fallback cures it.
+    const withDuplicate = await script.execute(async function runScriptWithDuplicateLiteral(_itx) {
+      // reminder: 8633n was chosen because 8633n = 89 * 97
+      const target = 8633n;
+      return String(target * 2n);
+    });
+    expect(withDuplicate.success()).toBe("17266");
+    const duplicateOffset = withDuplicate.execution.scriptEvent.offset;
+    const dedupedReuse = await script
+      .vars({ eventOffset: duplicateOffset })
+      .execute(async function reuseCuringDuplicateWithEdit(itxInScript, vars) {
+        const helper = await itxInScript.capabilityHost.previousScriptHelper({
+          scriptOffset: vars.eventOffset,
+          parameterize: { target: 8633n },
+          edits: [
+            ["// reminder: 8633n was chosen because 8633n = 89 * 97", "// (reminder removed)"],
+          ],
+        });
+        return await helper.run({ target: 5n });
+      });
+    expect(dedupedReuse.success()).toBe("10");
+
     // Strict by design: any other event kind — here run 1's settle offset —
     // is rejected with the fix (pass a results row) named in the error.
     const settleRejection = script
