@@ -111,6 +111,25 @@ rejects while paused; the catch path deliberately defers to the unpause
 delivery) — the deadline must distinguish interrupted-append from
 rejected-while-paused.
 
+## Quarantines this task owns
+
+Applied on this branch per docs/testing.md#flaky-test-quarantine-protocol,
+after three consecutive 2026-08-27 preview runs (Depot w1hcwnlc3q on #2529,
+bqk06tf2kc and p2blkx8cx5 on #2530) went red on tests unrelated to either
+PR's diff:
+
+- `specs/agent-script-reuse.spec.ts` (both tests): failed 3/3 runs (test 1)
+  and 1/3 (test 2, at turn 2 — past its warm-up), always the churn-wedge
+  signature ("Spinner was still visible after N ms", turns completing
+  server-side in 150-183s). **Exit criteria:** attempt-progress deadlines
+  (threads 1-2) landed, and one preview run green with the warm-up removed
+  (#2529's change) — un-skip and merge #2529 together.
+- `apps/os/e2e/vitest/userspace-facet-source-version.e2e.test.ts`: the
+  documented coincidental-recycle false alarm fired twice more (7+ total).
+  The blind-spot repro (`userspace-facet-recycle-false-alarm.e2e.test.ts`)
+  stays active. **Exit criteria:** facet rebuilds carry trigger provenance
+  (thread 5) and the pin's comparisons assert causality — un-skip then.
+
 ## Checklist
 
 - [x] merge `facet-recycle-false-alarm-repro` (#2518) _clean merge_

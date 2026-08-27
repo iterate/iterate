@@ -69,7 +69,13 @@ const ECHO_PATH = "version-echo.js";
  * cannot see it: `userspace-facet-recycle-false-alarm.e2e.test.ts` forces
  * the recycle instead of waiting for it and pins that blind spot.
  */
-test.fails(
+// Quarantined with tasks/platform-stall-repros.md: the coincidental-recycle
+// false alarm above fired on at least 7 preview runs (twice on 2026-08-27
+// alone — Depot w1hcwnlc3q, p2blkx8cx5), each flipping an unrelated PR red.
+// The recycle-false-alarm repro next door keeps the mechanism pinned;
+// un-skip once rebuilds carry provenance so these comparisons can assert
+// causality (that task's fix direction, thread 5).
+test.skip(
   "a userspace facet rebuilds on a source commit and only on a source commit",
   // Ceiling for two cold facet builds plus four ping round-trips across two
   // kills. The expected run is ~40-90s.
