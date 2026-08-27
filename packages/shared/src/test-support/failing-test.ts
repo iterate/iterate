@@ -47,6 +47,12 @@ export function failing<TestFn extends (...args: any[]) => any>(
       expectFailure({ failure }, async () => await body(...bodyArgs)),
     );
   };
+  // The cast restates the contract the wrapper keeps by construction: it
+  // forwards every argument unchanged except the trailing body, which it
+  // replaces with a same-signature async body. No structural type can say
+  // "the wrapped function, body semantics aside" — the runners' own test
+  // types (vitest's overloads, playwright's fixture generics) are exactly
+  // what callers need preserved, and TestFn is that type verbatim.
   return register as TestFn;
 }
 
