@@ -14,10 +14,6 @@ test("a repeat request reuses the previous turn's journaled script instead of re
   page,
   baseURL,
 }) => {
-  test.skip(
-    Boolean(process.env.CI),
-    "quarantined in CI: tasks/quarantined-agent-script-reuse-spec.md",
-  );
   await using fixture = await helpers.createFixture("agent-script-reuse");
   if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
 
