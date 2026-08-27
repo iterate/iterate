@@ -38,4 +38,20 @@ for (const listedAgent of agents) {
   });
 }
 
-return { identity, agents: agentReports, streams };
+const totalTokenUsage = agentReports.reduce(
+  (total, report) => ({
+    totalInputTokens: total.totalInputTokens + report.tokenUsage.totalInputTokens,
+    totalOutputTokens: total.totalOutputTokens + report.tokenUsage.totalOutputTokens,
+    totalCachedInputTokens: total.totalCachedInputTokens + report.tokenUsage.totalCachedInputTokens,
+    totalReasoningOutputTokens:
+      total.totalReasoningOutputTokens + report.tokenUsage.totalReasoningOutputTokens,
+  }),
+  {
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    totalCachedInputTokens: 0,
+    totalReasoningOutputTokens: 0,
+  },
+);
+
+return { identity, agents: agentReports, streams, totalTokenUsage };
