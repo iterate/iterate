@@ -66,8 +66,8 @@ const ECHO_PATH = "version-echo.js";
  * from same-boot staleness in ANY round; the fix concludes only from a
  * commit-correlated replace in EVERY round (a single recycle just rolls
  * into the next round against the new boot).
- * `userspace-facet-recycle-false-alarm.e2e.test.ts` next door still pins the
- * old blind spot mechanically.
+ * The companion test `userspace-facet-recycle-false-alarm.e2e.test.ts`
+ * still demonstrates the old comparisons' blind spot by forcing a recycle.
  */
 failingTest(
   {
