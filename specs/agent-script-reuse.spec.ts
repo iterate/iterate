@@ -14,6 +14,10 @@ test("a repeat request reuses the previous turn's journaled script instead of re
   page,
   baseURL,
 }) => {
+  // Cold preview deployments run the first intercepted turn for up to ~65s
+  // and the recovery path can add a second full wait — triple the budget so
+  // the recovery gets to run before the spec watchdog.
+  test.slow();
   await using fixture = await helpers.createFixture("agent-script-reuse");
   if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
 
@@ -155,6 +159,10 @@ test("run() return values are typed from the reused row's data, through the real
   page,
   baseURL,
 }) => {
+  // Cold preview deployments run the first intercepted turn for up to ~65s
+  // and the recovery path can add a second full wait — triple the budget so
+  // the recovery gets to run before the spec watchdog.
+  test.slow();
   await using fixture = await helpers.createFixture("agent-script-reuse-typed");
   if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
 
