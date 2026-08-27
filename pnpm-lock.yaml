@@ -688,6 +688,9 @@ importers:
       react-native:
         specifier: 0.81.5
         version: 0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0)
+      react-native-audio-api:
+        specifier: ^0.13.3
+        version: 0.13.3(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
       react-native-enriched-markdown:
         specifier: 0.5.0
         version: 0.5.0(@expo/config-plugins@54.0.5)(katex@0.16.33)(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
@@ -11657,6 +11660,17 @@ packages:
 
   react-is@19.2.7:
     resolution: {integrity: sha512-kZFnouyVv7eP/Phmrlo9FK+zcAdriZJvzxXHF1Sl1P377WSGe2G/JxVolhTrB/jeV47lKImhNUsijjHAAbcl/A==}
+
+  react-native-audio-api@0.13.3:
+    resolution: {integrity: sha512-U2+vMo7N7CtwHTNNEWnnIckw1EhwhUEmXhQFCL4boo3Q4UfeI1mu2z3DR6BMRL5wWrGYVLNZXQyt5U85nAXntg==}
+    hasBin: true
+    peerDependencies:
+      react: '*'
+      react-native: '*'
+      react-native-worklets: '>= 0.6.0'
+    peerDependenciesMeta:
+      react-native-worklets:
+        optional: true
 
   react-native-enriched-markdown@0.5.0:
     resolution: {integrity: sha512-CYihNlcg8IjsrVbmypDjFHsDF6Z6vYO0yraw6CkR30SDsg99J6fcBrOkyWOItO8PIDD21jw8yD1eYP/0LBOCdA==}
@@ -26600,6 +26614,12 @@ snapshots:
   react-is@18.3.1: {}
 
   react-is@19.2.7: {}
+
+  react-native-audio-api@0.13.3(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0):
+    dependencies:
+      react: 19.1.0
+      react-native: 0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0)
+      semver: 7.8.1
 
   react-native-enriched-markdown@0.5.0(@expo/config-plugins@54.0.5)(katex@0.16.33)(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0):
     dependencies:
