@@ -7,9 +7,16 @@ import type {
 import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { waitForPreviewRolloutBeforeProjectCreation } from "@iterate-com/shared/test-support/preview-rollout-gate";
-import { connectItxReady, type ItxInitialConnectionRetry } from "iterate/node";
+import {
+  connectItxReady,
+  type ItxInitialConnectionRetry,
+  type ProjectAiInterceptor,
+} from "iterate/node";
 import { doppler } from "../../apps/os/scripts/dev.ts";
 import { mintForgedAccessToken, mintForgedIdToken } from "../../scripts/auth/forge-token.ts";
+// Lazy circular import (function-call-time only): the helper dials its
+// dedicated session through connectAdminItx below.
+import { installResilientAiInterceptor } from "./resilient-ai-interceptor.ts";
 
 type OsPlaywrightAuthConfig = {
   adminApiSecret: string;
@@ -120,6 +127,17 @@ export async function createProjectFixture(
       project: projectFixtures[0]!.project,
       projects: projectFixtures.map(({ project }) => project),
       session,
+      /** Admin itx for the fixture's deployment; dispose with `using`. */
+      connectAdmin: () => connectAdminItx(baseUrl),
+      /** Churn-surviving `intercepted/*` handler for the fixture's first
+       * project — `installResilientAiInterceptor` on a dedicated connection.
+       * Dispose with `await using`. Guide: docs/intercepted-models.md. */
+      interceptAi: (handler: ProjectAiInterceptor) =>
+        installResilientAiInterceptor({
+          baseUrl,
+          projectId: projectFixtures[0]!.project.id,
+          handler,
+        }),
       async [Symbol.asyncDispose]() {
         await Promise.all(projectFixtures.map((fixture) => fixture[Symbol.asyncDispose]()));
       },

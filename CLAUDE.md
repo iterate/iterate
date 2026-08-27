@@ -129,6 +129,7 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 - [TypeScript conventions](docs/typescript-conventions.md)
 - [Design system & React](docs/design-system.md)
 - [Testing](docs/testing.md) — test lanes, how to run them against any environment, and the retry/timeout policy (one retry layer, fail-fast watchdogs, retry telemetry)
+- [Intercepted models](docs/intercepted-models.md) — `intercepted/*` via `itx.ai.intercept(handler)`: deterministic agent/AI testing, the session-bound lifetime + 4901 recovery contract
 - [Vitest patterns](docs/vitest-patterns.md)
 - [Domain objects & stream processors](docs/domain-objects-and-stream-processors.md)
 - [Writing & testing stream processors](docs/writing-stream-processors.md) — side-effect guarantees, the obligation pattern, eviction recovery, staleness policy, and the node test harness

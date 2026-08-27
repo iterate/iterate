@@ -1,3 +1,4 @@
+import type { ProjectAiInterceptor } from "iterate/node";
 import { connectAdminItx } from "./forged-session.ts";
 
 /**
@@ -21,11 +22,7 @@ export async function installResilientAiInterceptor(input: {
   baseUrl: string;
   /** Project id or slug, as `session.projects.get` accepts. */
   projectId: string;
-  handler: (call: {
-    source: "agent-turn" | "ai-run";
-    model: string;
-    body: { messages: { role: string; content: string }[] };
-  }) => Promise<unknown>;
+  handler: ProjectAiInterceptor;
 }): Promise<AsyncDisposable> {
   let disposed = false;
   // A close event triggers recovery only when it belongs to the CURRENT
