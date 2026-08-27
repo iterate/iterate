@@ -10,10 +10,10 @@ fail("a body failing for the pinned reason passes", async () => {
 
 test("options objects and body arguments pass through the wrapped test function", async () => {
   const registered: { args: unknown[]; body: (...bodyArgs: unknown[]) => Promise<unknown> }[] = [];
-  const fakeTest = (...args: unknown[]) => {
-    registered.push({ args: args.slice(0, -1), body: args.at(-1) as any });
-  };
-  failing(fakeTest, /pinned/)("name", { timeout: 123 }, async (fixtures: any) => {
+  failing(
+    (...args: unknown[]) => registered.push({ args: args.slice(0, -1), body: args.at(-1) as any }),
+    /pinned/,
+  )("name", { timeout: 123 }, async (fixtures: any) => {
     throw new Error(`pinned, saw fixture ${fixtures.page}`);
   });
 

@@ -43,9 +43,9 @@ export function failing<TestFn extends (...args: any[]) => any>(
     // The body's own arguments pass through untouched — playwright fixtures
     // ({ page, ... }, testInfo), vitest context — whatever the wrapped test
     // function provides.
-    const wrapped = async (...bodyArgs: any[]) =>
-      await expectFailure({ failure }, async () => await body(...bodyArgs));
-    return test(...args.slice(0, -1), wrapped);
+    return test(...args.slice(0, -1), async (...bodyArgs: any[]) =>
+      expectFailure({ failure }, async () => await body(...bodyArgs)),
+    );
   };
   return register as TestFn;
 }
