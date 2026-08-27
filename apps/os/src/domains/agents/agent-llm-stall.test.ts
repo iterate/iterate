@@ -72,6 +72,64 @@ it.fails("a mid-stream stall (chunks, then silence) settles the request within 6
   expect(h.state().openRequest).toBeNull();
 });
 
+// Expected-fail sibling: the same missing progress deadline, entered through
+// EVICTION CHURN instead of a provider stall — the routine path on a loaded
+// preview deployment, not a rare provider hiccup.
+//
+// Observed on PR #2529's preview run (Depot w1hcwnlc3q, preview_6,
+// 2026-08-27): the spec suite's first agent turn took 150s and 183s
+// end-to-end on its two attempts. The journals (projects
+// agent-script-reuse-mtbkj6o8-c56ce7a9 and -mtbkmi8q-b6f3c4e3) show the
+// shape: llm-request-requested → silence → stream/woken (staleness alarm)
+// → processor-revived → the re-dial ALSO hangs (its pager path died in the
+// same churn window) → another silence → another wake — repeating until an
+// attempt lands on a healthy path. Each cycle burns a full detection
+// window, because a hung attempt never FAILS and the 10/20/40s retry
+// ladder (#1826) only starts from a failed one.
+//
+// This harness pins the quiet-stream worst case, measured here before
+// writing the assertion: eviction at t0 → revival + re-dial at t0+10s (the
+// adopt recovery works — #2480) → the hung re-dial is then invisible until
+// the keepalive wedge breaker at t0+15m10s. A busy stream shortens that to
+// minutes (deliveries run the expiry settle sooner), which is exactly the
+// 150-183s observed on preview.
+//
+// What this spec asserts (not true today): within 60s of the revival the
+// turn makes progress — the hung attempt is settled (a stall fix aborts it;
+// the retry ladder then owns re-dialing) or a fresh attempt is dialed. 60s
+// is the same placeholder budget as the mid-stream spec above; the product
+// decision belongs to the fix.
+it.fails("an attempt orphaned by eviction whose re-dial also hangs makes progress within 60s of the revival", async () => {
+  const h = makeStallHarness();
+  await h.play(
+    ["append", ...NEW_AGENT_EVENTS, userMessage("Hello there")],
+    ["advanceTime", 10_000], // debounce closes → request adopted → transport dialed
+  );
+  expect(h.llm.calls).toHaveLength(1);
+  expect(h.state().openRequest).not.toBeNull();
+
+  // Eviction mid-attempt. The successor incarnation stays detached until its
+  // first keepalive alarm (~10s) appends the revival fact; delivering that
+  // fact runs adopt recovery, which re-dials. This part works.
+  await h.play(["crash"], ["advanceTime", 10_000]);
+  expect(h.events(REVIVED)).toHaveLength(1);
+  expect(h.llm.calls).toHaveLength(2);
+
+  // The re-dial went out during the same churn window that evicted the
+  // incarnation, so its transport hangs too (dead pager socket: chunks never
+  // arrive, the promise never settles, the abort signal is ignored). A
+  // quiet minute passes — no deliveries.
+  await h.play(["advanceTime", 60_000]);
+
+  // "No progress" is exactly one shape: still the two dials, zero settles.
+  // Today that is what a minute later looks like — and stays looking like
+  // until the wedge breaker at ~15m10s after the eviction.
+  expect({
+    settled: h.events(SETTLED).length,
+    attemptsDialed: h.llm.calls.length,
+  }).not.toMatchObject({ settled: 0, attemptsDialed: 2 });
+});
+
 // -----------------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------------
@@ -80,6 +138,7 @@ type AgentEventInput = ConsumedInput<AgentProcessorContract>;
 
 const SETTLED = "events.iterate.com/agent/llm-request-settled";
 const RESPONSE_CHUNKS = "events.iterate.com/agent/llm-response-chunks";
+const REVIVED = "events.iterate.com/stream/processor-revived";
 
 const NEW_AGENT_EVENTS = [
   { type: "events.iterate.com/agent/created", payload: {} },
