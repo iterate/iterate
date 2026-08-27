@@ -888,33 +888,29 @@ describe("AgentProcessor recovery", () => {
     ]);
   });
 
-  it("expiry: a WEDGED in-flight attempt is abandoned at the horizon — the live incarnation settles expired instead of deferring to a hung promise forever", async () => {
+  it("expiry: a WEDGED in-flight attempt is settled failed by the progress watchdog long before the horizon", async () => {
     // The 2026-08-13 prd incident: the attempt hung (an un-deadlined await in
     // the run closure), the incarnation stayed alive on constant unrelated
     // deliveries, and the expiry branch deferred to isExecuting() for 28
-    // minutes. No crash here, deliberately — the same incarnation that dialed
-    // must expire its own wedge.
+    // minutes. #2498 made the horizon expiry unconditional (the adopt test
+    // above still covers it); the attempt-progress watchdog now catches the
+    // same wedge at 45s idle and settles it FAILED — handing the turn to the
+    // retry ladder instead of burning ten minutes to a cancelled/expired.
+    // No crash here, deliberately — the same incarnation that dialed must
+    // settle its own wedge.
     const h = makeAgentHarness();
     await h.play(["append", ...NEW_AGENT_EVENTS, userMessage("Hello")], ["advanceTime", 10_000]);
     expect(h.llm.calls).toHaveLength(1); // dialed and hung; the test never settles it
 
-    await h.play(
-      () => {
-        h.clock.now += 10 * 60_000 + 1;
-      },
-      // Any delivery at head (a watcher presence event in prd) re-runs the
-      // at-head pass; the expiry settle must not need an eviction first.
-      () => h.stream.append(REVIVED),
-    );
-
-    expect(h.events(SETTLED)).toMatchObject([
-      { payload: { result: { status: "cancelled", reason: "expired" } } },
-    ]);
-    expect(h.state().openRequest).toBeNull();
+    await h.play(["advanceTime", 46_000]);
+    expect(h.events(SETTLED)).toMatchObject([{ payload: { result: { status: "failed" } } }]);
     // The hung zombie was aborted, so it can neither keep streaming chunks
-    // nor journal a competing settlement; and the horizon never re-dials.
+    // nor journal a competing settlement.
     expect(h.llm.calls[0]!.signal.aborted).toBe(true);
-    expect(h.llm.calls).toHaveLength(1);
+    // The failed settle re-arms the fold's retry: the ladder re-dials after
+    // debounce + backoff, instead of the turn dying at the horizon.
+    await h.play(["advanceTime", 30_000]);
+    expect(h.llm.calls.length).toBeGreaterThanOrEqual(2);
   });
 
   it("a transient outage on the settlement append does not lose the turn", async () => {
@@ -1115,7 +1111,9 @@ describe("AgentProcessor failure policy", () => {
 
     // The fold's own retry (debounce + backoff) succeeds → streak zero — the
     // other half of the breaker arithmetic next to the user-input reset.
-    await h.play(["advanceTime", 120_000]);
+    // Advance just past the retry window and answer promptly: a manual-respond
+    // attempt left idle 45s+ would (correctly) trip the progress watchdog.
+    await h.play(["advanceTime", h.state().config.llmRequestDebounceMs + 10_000]);
     expect(h.llm.calls).toHaveLength(2);
     await h.play(() => h.llm.respond("ok"));
     expect(h.state().consecutiveLlmFailures).toBe(0);
@@ -1348,9 +1346,11 @@ describe("AgentProcessor script execution", () => {
     // Raw string result: no json fence label, no JSON escaping.
     expect(rendered!.payload.content).not.toContain("```json");
 
-    // A small result later does not spill.
+    // A small result later does not spill. (30s, not more: the follow-up
+    // attempt dials early in this window and a manual-respond attempt idle
+    // 45s+ would trip the progress watchdog.)
     const writesBefore = written.length;
-    await h.play(["advanceTime", 60_000], () =>
+    await h.play(["advanceTime", 30_000], () =>
       h.llm.respond("```ts\nasync (itx) => itx.small()\n```"),
     );
     const secondExecution = h.events("events.iterate.com/capability-host/script-run-requested")[1]!
