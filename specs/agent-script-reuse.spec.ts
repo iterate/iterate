@@ -59,13 +59,13 @@ test("a repeat request reuses the previous turn's journaled script instead of re
     type: "events.iterate.com/agent/configured",
     payload: { config: { llm: { model: "intercepted/factorizer" }, llmRequestDebounceMs: 250 } },
   });
-  await warmAgent.ask({ message: "warm up", timeoutMs: 180_000 }).catch(async () => {
+  await warmAgent.ask({ message: "warm up", timeoutMs: 90_000 }).catch(async () => {
     const freshAdmin = recovery.use(await connectAdminItx(baseURL));
     const freshProject = freshAdmin.projects.get(fixture.project.id);
     recovery.use(await freshProject.ai.intercept(interceptor));
     await freshProject.agents
       .get(warmPath)
-      .ask({ message: "warm up", timeoutMs: 180_000 })
+      .ask({ message: "warm up", timeoutMs: 45_000 })
       .catch(() => {});
   });
 
@@ -201,7 +201,10 @@ test("run() return values are typed from the reused row's data, through the real
   // TS2322 assignability mismatches deliberately never block — but satisfies
   // failures are TS1360, in the syntax range the gate does block on.
   let modelCalls = 0;
-  using _interception = await project.ai.intercept(async (call) => {
+  const interceptor = async (call: {
+    source: string;
+    body: { messages: { role: string; content: string }[] };
+  }) => {
     if (call.source !== "agent-turn") throw new Error(`unexpected source: ${call.source}`);
     const lastUser = [...call.body.messages].reverse().find((m) => m.role === "user");
     if (lastUser?.content.includes("warm up")) return ["```ts", WARM_SCRIPT, "```"].join("\n");
@@ -214,11 +217,17 @@ test("run() return values are typed from the reused row's data, through the real
     ][modelCalls - 1];
     if (!script) throw new Error(`unexpected model call #${modelCalls}`);
     return ["```ts", script, "```"].join("\n");
-  });
+  };
+  using _interception = await project.ai.intercept(interceptor);
+
+  // Extra connections/interceptors from recovery paths live on this stack.
+  await using recovery = new AsyncDisposableStack();
 
   // Same cold-deployment absorption as the first spec: a throwaway
-  // intercepted turn at the itx level. The router below serves WARM_SCRIPT
-  // for it without advancing the scripted call sequence.
+  // intercepted turn at the itx level (the router serves WARM_SCRIPT for it
+  // without advancing the scripted call sequence) — and the same recovery: a
+  // revival during the warm-up drops the interceptor, so reconnect,
+  // re-install, retry once.
   const warmPath = `/agents/warm-${crypto.randomUUID().slice(0, 8)}`;
   using warmAgent = project.agents.get(warmPath);
   await warmAgent.create();
@@ -226,7 +235,15 @@ test("run() return values are typed from the reused row's data, through the real
     type: "events.iterate.com/agent/configured",
     payload: { config: { llm: { model: "intercepted/typed" }, llmRequestDebounceMs: 250 } },
   });
-  await warmAgent.ask({ message: "warm up", timeoutMs: 180_000 }).catch(() => {});
+  await warmAgent.ask({ message: "warm up", timeoutMs: 90_000 }).catch(async () => {
+    const freshAdmin = recovery.use(await connectAdminItx(baseURL));
+    const freshProject = freshAdmin.projects.get(fixture.project.id);
+    recovery.use(await freshProject.ai.intercept(interceptor));
+    await freshProject.agents
+      .get(warmPath)
+      .ask({ message: "warm up", timeoutMs: 45_000 })
+      .catch(() => {});
+  });
 
   await page.goto(`/projects/${fixture.project.slug}/agents/streams${agentPath}`);
   const composer = page.getByPlaceholder("Message this agent");
