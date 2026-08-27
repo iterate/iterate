@@ -62,9 +62,10 @@ const ECHO_PATH = "version-echo.js";
  * times (quarantined 2026-08-27, tasks/platform-stall-repros.md thread 5) —
  * a facet that coincidentally recycled inside the poll window legitimately
  * builds the new source, which the old four comparisons could not tell from
- * a real fix. The rounds below make the coincidence inconclusive instead of
- * conclusive: only SAME-BOOT evidence ends the test in either direction. A
- * recycle mid-round just starts a fresh round against the new boot;
+ * a real fix. The rounds below use repetition instead: the bug concludes
+ * from same-boot staleness in ANY round; the fix concludes only from a
+ * commit-correlated replace in EVERY round (a single recycle just rolls
+ * into the next round against the new boot).
  * `userspace-facet-recycle-false-alarm.e2e.test.ts` next door still pins the
  * old blind spot mechanically.
  */
@@ -194,10 +195,14 @@ failingTest(
     // bug for one observation: a restarted facet always builds the newest
     // source, which proves nothing about the running-facet contract. Each
     // round commits a fresh revision and watches the facet that is running
-    // right now; only SAME-BOOT evidence ends the test. Same-boot pickup →
-    // the bug is fixed (return; the wrapper alerts). Same-boot staleness
-    // past the deadline → the pinned error. A changed boot id → the round
-    // proved nothing, run another against the new boot.
+    // right now. A facet cannot swap its own code within one boot, so the
+    // FIX's observable shape is a commit-correlated replace: the running
+    // facet is aborted and a new boot serves the committed revision. One
+    // round cannot tell that from a coincidental recycle (a restarted facet
+    // always builds newest) — three consecutive rounds can: a coincidence
+    // landing inside every 45s window is vanishingly unlikely, while the
+    // fix replaces the facet every single time. Same-boot staleness past
+    // any round's deadline is the pinned bug.
     let revision = 1;
     for (let round = 1; round <= 3; round++) {
       const baseline = await identify(`round-${round}-baseline`, 90_000);
@@ -219,21 +224,23 @@ failingTest(
       // a different (and much milder) thing than one that never happens.
       const deadline = Date.now() + 45_000;
       let sameBootPolls = 0;
-      let recycled = false;
-      while (!recycled) {
+      while (true) {
         const answer = await identify(`round-${round}-poll-${sameBootPolls}`, 60_000);
         if (answer.bootId !== baseline.bootId) {
-          recycled = true;
-          break;
+          if (answer.revision === committed) {
+            // A new facet serving what we just committed — this round is
+            // consistent with the fix (or with one coincidence); the next
+            // round re-tests against the new boot.
+            break;
+          }
+          // A new facet serving something OTHER than the latest commit:
+          // source resolution is broken in a way this pin does not cover.
+          throw new Error(
+            `a rebuilt facet serves ${answer.revision} after committing ${committed} — ` +
+              `source resolution or build cache is broken`,
+          );
         }
         sameBootPolls += 1;
-        if (answer.revision === committed) {
-          // Same-boot pickup: the running facet took the commit. Also check
-          // the marker really moved before declaring victory.
-          expect(answer).not.toMatchObject({ buildKey: baseline.buildKey });
-          expect(answer.buildKey).toMatch(/^[0-9a-f]{64}$/);
-          return;
-        }
         if (Date.now() >= deadline) {
           // Discriminator before concluding: a kill guarantees a facet built
           // from a freshly resolved class. If even THAT is stale, the source
@@ -256,9 +263,12 @@ failingTest(
         await new Promise((resolve) => setTimeout(resolve, 3_000));
       }
     }
-    throw new Error(
-      "INCONCLUSIVE: the facet recycled mid-round in all 3 rounds — same-boot behavior was never observable",
-    );
+    // Every round ended with the running facet replaced by one serving the
+    // just-committed revision — the fix's shape, three times in a row. The
+    // body succeeding here is what makes the failingTest wrapper raise the
+    // delete-me alert. (Residual risk: three independent coincidental
+    // recycles in a row would masquerade as the fix — roughly the cube of an
+    // already-uncommon event, and the next run self-corrects.)
   },
 );
 
