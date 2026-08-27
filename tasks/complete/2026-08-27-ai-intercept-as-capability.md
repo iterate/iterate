@@ -1,5 +1,5 @@
 ---
-status: spike-complete
+status: implemented
 size: medium
 base: main (deliberately a competitor to PR #2527, not stacked on it)
 ---
@@ -8,7 +8,10 @@ base: main (deliberately a competitor to PR #2527, not stacked on it)
 
 ## Status summary
 
-Spike complete and everything passes. Verdict: the mount design wins on the
+Promoted from spike to the real implementation (PR #2528, replacing closed
+PR #2527) — Misha picked this design. All spike gaps below are settled; the
+client half of #2527 (resilient spec helper, fixture.interceptAi, the
+intercepted-models guide) is ported and adapted. Everything passes. Verdict: the mount design wins on the
 evidence — roughly a quarter of #2527's server-side diff, zero new transport
 machinery, the same recovery contract (proven by the same-shape 4901 e2e),
 strictly better last-writer-wins semantics (offset-keyed handles: a
@@ -102,26 +105,24 @@ The evidence favors the mount design:
 - **Latency**: 6ms warm consult round-trip through the page-and-lend-a-leg
   dance (local dev) — noise against LLM-turn timescales.
 
-What a real (non-spike) version must still settle:
+Spike gaps, now settled:
 
-1. **Typed error mapping** — consult currently string-matches
-   "no capability" / "is offline" to produce `noAiInterceptorError`.
-2. **Discoverability** — the mount is a visible root capability: it appears
-   in `__describe` and an agent script could invoke `itx.aiInterceptor(...)`
-   directly. Either accept that (it is honest) or add a reserved/hidden path
-   concept to the capability host.
-3. **Trust boundary decision** — ANY capability provider (e.g. a config
-   worker) can mount `aiInterceptor` and serve intercepted/* models. That is
-   the durable-provider growth path arriving early; it should be a decision,
-   not an accident.
-4. **The egress interceptor** — still slot-based with the original
-   silent-loss hole. Either it migrates to a mount too (Request/Response over
-   capability legs — serialization needs checking) or it keeps #2527's
-   liveness lane, in which case part of #2527 merges anyway.
-5. **Port #2527's client half** — `installResilientAiInterceptor`,
-   `fixture.interceptAi`, and docs/intercepted-models.md apply verbatim to
-   this design (the reconnect loop and 4901 carrier are identical) and should
-   be cherry-picked onto whichever design wins.
+1. **Typed error mapping** — _done: the unserved-capability contract
+   (factories + RPC-safe predicate) lives in one module,
+   capability-host/capability-unserved.ts; every throw site and the consult
+   predicate use it._
+2. **Discoverability** — _accepted and documented
+   (docs/intercepted-models.md): the mount shows in `__describe` like any
+   capability; that is honest, not hidden._
+3. **Trust boundary** — _accepted and documented: any capability provider can
+   mount `aiInterceptor` — that IS the durable-provider growth path; the
+   real-model namespace rule is unchanged._
+4. **The egress interceptor** — _split out:
+   tasks/egress-interceptor-loss-contract.md (migrate to a mount, or revive
+   the closed #2527's liveness lane for egress only)._
+5. **Port #2527's client half** — _done: helper, fixture members, spec
+   migration, and the guide, with the guide's lifetime section rewritten for
+   the mount machinery._
 
 ## Implementation notes
 

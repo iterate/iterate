@@ -401,17 +401,18 @@ export interface Ai {
    * of a real provider. The handler receives
    * `{ source: "agent-turn" | "ai-run", model, body }`; for agent turns it
    * returns assistant text (a string, or `{ text, usage? }`), for ai-run its
-   * return value is handed back verbatim. Live means session-bound: the
-   * interception dies with your connection. Non-fake models are never
-   * interceptable — a journaled `openai/*` turn is always the real provider.
+   * return value is handed back verbatim. Live means session-bound, with the
+   * mount invariant: the interception lives exactly as long as your session
+   * connection, and if the platform's half dies while your socket is open,
+   * the socket closes (4901) — reconnect and intercept() again.
    *
-   * SPIKE VARIANT: sugar over the capability machinery — the handler mounts
-   * as a LIVE capability at the root scope's reserved path, behind the
-   * shipped hibernating Provider Pager. Loss therefore already has the mount
-   * invariant: the platform's half dying closes this session (4901), and the
-   * client's reconnect loop re-installs. Provide-at-same-path replaces, which
-   * is the last-writer-wins; the returned handle revokes exactly its own
-   * mount, never a newer one. */
+   * Under the hood this is sugar over the capability machinery: the handler
+   * mounts as a LIVE capability at the root scope's `aiInterceptor` path,
+   * behind the shipped hibernating Provider Pager — which is where all of the
+   * above lifecycle comes from. Provide-at-same-path replaces (the last
+   * writer wins), and the returned handle revokes exactly its own mount,
+   * never a newer one. Non-fake models are never interceptable — a journaled
+   * `openai/*` turn is always the real provider. */
   intercept(handler: ProjectAiInterceptor): Promise<ProjectAiIntercept>;
   /** Calling with no arguments lists the file formats the converter accepts. */
   toMarkdown(): Promise<CfMarkdownSupportedFormat[]>;

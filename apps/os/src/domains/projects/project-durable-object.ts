@@ -11,6 +11,7 @@ import {
   type ProjectAiInterceptorInput,
 } from "../../lib/model-interception.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
+import { isCapabilityUnservedError } from "../capability-host/capability-unserved.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { LiveStatePagers } from "../live-state-pager.ts";
 import { deepRetainRpcStubs } from "../capability-host/live-capability.ts";
@@ -797,14 +798,15 @@ export class ProjectDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * Serve one intercepted/* model invocation through the live AI interceptor —
-   * SPIKE VARIANT: the interceptor is a live capability mounted at the root
-   * scope (`ai.intercept` is sugar over provideCapability), so the consult
-   * invokes it through the root capability-host facade instead of reading a
-   * memory slot here. Both egress paths (`itx.ai.run` in the isolate, agent
-   * turns in the processor facet) still land here so the routing story lives
-   * in one place. No mount, or a mount whose provider Pager is away →
-   * the canonical loud error.
+   * Serve one intercepted/* model invocation through the live AI interceptor.
+   * The interceptor is a LIVE capability mounted at the root scope
+   * (`ai.intercept` is sugar over provideCapability), so the consult invokes
+   * it through the root capability-host facade — the shipped mount machinery
+   * (Pager, journaled provision, offset-keyed revocation) is the whole
+   * lifecycle story. Both egress paths (`itx.ai.run` in the isolate, agent
+   * turns in the processor facet) land here so the routing lives in one
+   * place. No mount, or a mount whose provider Pager is away → the canonical
+   * loud error.
    */
   async consultAiInterceptor(input: ProjectAiInterceptorInput): Promise<unknown> {
     // Safe: the root stream's facet composition hosts the capability-host
@@ -821,15 +823,11 @@ export class ProjectDurableObject extends DurableObject<Env> {
         args: [input],
       });
     } catch (error) {
-      // The two "nobody is serving this" shapes — never mounted (or revoked),
-      // and mounted-but-provider-away (Pager offline) — collapse to the one
-      // documented error; anything else (a handler throw included) surfaces
-      // verbatim as the attempt's failure.
-      const message = error instanceof Error ? error.message : String(error);
-      if (
-        message.includes(`no capability "${AI_INTERCEPTOR_CAPABILITY_NAME}"`) ||
-        message.includes(`capability "${AI_INTERCEPTOR_CAPABILITY_NAME}" is offline`)
-      ) {
+      // Both unserved shapes — never mounted (or revoked), and
+      // mounted-but-provider-away — collapse to the one documented error;
+      // anything else (a handler throw included) surfaces verbatim as the
+      // attempt's failure.
+      if (isCapabilityUnservedError(error, [AI_INTERCEPTOR_CAPABILITY_NAME])) {
         throw noAiInterceptorError(input.model);
       }
       throw error;
