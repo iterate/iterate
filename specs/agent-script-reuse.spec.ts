@@ -60,8 +60,22 @@ test("a repeat request reuses the previous turn's journaled script instead of re
     try {
       await page.getByText(expected).waitFor();
     } catch {
+      // Diagnose before acting: only a journaled "No AI interceptor" failure
+      // means the interceptor died; a merely slow turn gets more waiting, not
+      // a duplicate send.
       const freshAdmin = recovery.use(await connectAdminItx(baseURL));
-      recovery.use(await freshAdmin.projects.get(fixture.project.id).ai.intercept(interceptor));
+      const freshProject = freshAdmin.projects.get(fixture.project.id);
+      const events = await freshProject.agents.get(agentPath).stream.getEvents({ limit: 300 });
+      const interceptorLost = events.some(
+        (event: { type: string; payload: unknown }) =>
+          event.type === "events.iterate.com/agent/llm-request-settled" &&
+          JSON.stringify(event.payload).includes("No AI interceptor"),
+      );
+      if (!interceptorLost) {
+        await page.getByText(expected).waitFor();
+        return;
+      }
+      recovery.use(await freshProject.ai.intercept(interceptor));
       await composer.fill(message);
       await send.click();
       await page.getByText(expected).waitFor();
