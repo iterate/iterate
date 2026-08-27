@@ -46,7 +46,8 @@
           "iosMicrophonePermission": "Iterate uses the microphone for voice conversations with your project's assistant.",
           "iosBackgroundMode": false,
           "androidPermissions": [],
-          "androidForegroundService": false
+          "androidForegroundService": false,
+          "disableFFmpeg": true
         }
       ]
     ],
