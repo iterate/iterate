@@ -208,7 +208,9 @@ class Parser {
   }
 
   #number(): number | null {
-    const m = /^-?\d+(\.\d+)?/.exec(this.#s.slice(this.#i));
+    // Exponent branch so `print`'s JSON.stringify output for |n| ≥ 1e21 / < 1e-6 (`1e+21`, `1e-7`)
+    // round-trips back through parse.
+    const m = /^-?\d+(\.\d+)?([eE][+-]?\d+)?/.exec(this.#s.slice(this.#i));
     if (!m) return null;
     this.#i += m[0].length;
     return Number(m[0]);
@@ -277,13 +279,18 @@ export function print(expr: Expression): string {
     .join("");
 }
 
+/** A bare (unquoted) object key must match what `#word` reads back; anything else is quoted. */
+const IDENT_KEY = /^[A-Za-z_$][A-Za-z0-9_$-]*$/;
 function printValue(v: unknown): string {
   if (typeof v === "string") return `'${v.replaceAll("\\", "\\\\").replaceAll("'", "\\'")}'`;
   if (Array.isArray(v)) return `[${v.map(printValue).join(", ")}]`;
   if (isPlainObject(v))
     return `{ ${Object.entries(v)
-      .map(([k, val]) => `${k}: ${printValue(val)}`)
+      // Quote a key the parser could not read bare (a space, a dot, a leading digit) — the string
+      // form round-trips via #object's quoted-key branch; an identifier key stays bare.
+      .map(([k, val]) => `${IDENT_KEY.test(k) ? k : printValue(k)}: ${printValue(val)}`)
       .join(", ")} }`;
+  if (Object.is(v, -0)) return "-0"; // JSON.stringify(-0) === "0" drops the sign #number preserves
   return JSON.stringify(v);
 }
 

@@ -360,3 +360,26 @@ target-shape-dispatched loop (Agent B's −1-derivation/commit micro-opt).
 
 Every increment: typecheck + full suite + live deploy + proofs, zero regression throughout
 (perf held ~5200 ev/s / p50 ~210ms / 50× batching / zero pulls at every step).
+
+## Defect sweep (post-consolidation) — security gates + print↔parse authority loss
+
+Jonas: "do the ones you suggest, lean and minimal." Closed the two families I flagged first:
+
+- **Defects 38 + 39 — cross-project breach via `:`** ☠. Both gates already in place (projectId at
+  `DurableObjectNameCodec.parse`, secret name at `secrets.set`); FLIPPED their `test.fails` → passing
+  regression locks. A `:`-nested projectId now can't be materialized (the DO refuses the name), so the
+  kv/secret prefix wall can't be spelled around. (The loader-cacheKey half of this seam was already
+  closed by Inc 2's `facetLoaderOwner`; a path `:` is now benign.)
+- **Defects 1 + 2 + 3 — the print↔parse codec was not a bijection** ☠ (silent authority loss). Three
+  1-line fixes in `core/expression.ts`: `#number` gained an exponent branch (`1e+21` round-trips);
+  `printValue` emits `-0` (not `0`) and QUOTES non-identifier object keys (`'a b'`, `'a.b'`, `'3d'`)
+  so `#object`'s quoted-key branch reads them back. This ROOT fix also resolves the "silently dropped
+  mount" amplifier (defects at capability-table): a target carrying a big number / exotic key now
+  round-trips through print→reduce→parse and ROUTES instead of vanishing behind a success receipt.
+
+Already done (verified, no work): **defect 39** (secret-name charset), **defects 10/11** (the
+`consumes:["*"]` black hole — `consumesEvent` is extracted + shared across both lanes + the processor).
+
+Net: **286 passed / 30 xf** (was 280 / 36 — six `test.fails` flipped). Typecheck clean; no code
+touched beyond the 3-line codec fix + test flips. Deliberately NOT expanded into the provide/enable
+path-validation amplifiers (40/42) or the other families — kept lean per the ask.

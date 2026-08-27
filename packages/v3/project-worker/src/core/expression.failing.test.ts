@@ -23,10 +23,10 @@ describe("parse ⇄ print — numbers", () => {
     }
   });
 
-  test.fails("exponent-form numbers do NOT round-trip", () => {
-    // BUG: `print` renders large/small numbers with `JSON.stringify`, which emits exponent form
-    //      (`1e+21`, `1e-7`) for |n| ≥ 1e21 or < 1e-6, but the parser's #number regex is
-    //      /^-?\d+(\.\d+)?/ — it has no exponent branch.
+  test("exponent-form numbers round-trip (FIXED defect 1)", () => {
+    // FIXED: `print` renders large/small numbers with `JSON.stringify`, which emits exponent form
+    //      (`1e+21`, `1e-7`) for |n| ≥ 1e21 or < 1e-6; the parser's #number regex now has an
+    //      exponent branch `([eE][+-]?\d+)?`.
     // EXPECTED: parse(print(e)) === e for every number the codec can hold (the documented
     //      "parse(print(e)) round-trips" contract at the top of expression.ts / print's docstring).
     // ACTUAL: print([["f", 1e21]]) => "itx.f(1e+21)"; parse("itx.f(1e+21)") THROWS
@@ -40,7 +40,7 @@ describe("parse ⇄ print — numbers", () => {
     }
   });
 
-  test.fails("negative zero is lost on the round-trip", () => {
+  test("negative zero survives the round-trip (FIXED defect 2)", () => {
     // BUG: the parser accepts and PRODUCES -0 (Number("-0") === -0), but print emits
     //      JSON.stringify(-0) === "0", so re-parsing yields +0.
     // EXPECTED: a value parse can produce must survive parse(print(x)) unchanged.
@@ -74,7 +74,7 @@ describe("parse ⇄ print — object literals", () => {
     expect(Object.keys(obj)).toEqual(["constructor", "prototype"]);
   });
 
-  test.fails("object keys that are not identifiers do NOT round-trip", () => {
+  test("object keys that are not identifiers round-trip (quoted) (FIXED defect 3)", () => {
     // BUG: printValue emits object keys RAW (`${k}: ${printValue(val)}`), never quoting them, but
     //      #object only reads an unquoted key via #word (an identifier regex). A key with a space,
     //      a dot, or a leading digit prints unquoted and cannot be re-parsed.

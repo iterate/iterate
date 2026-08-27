@@ -48,25 +48,26 @@ const LIVE_STATE_CHANGED = "events.iterate.com/live-state/changed";
 
 // ═══════════ 1. prefixed-kv isolation — the ":"-joined key composition (S3) ═══════════
 
-test.fails("projects whose ids nest under the ':' delimiter still get DISJOINT kv namespaces", async () => {
-  // BUG: built-ins.ts scopes the shared ITX_KV with `${projectId}:` and plain concatenation
-  //      (`prefix + k`), and NOTHING rejects ":" in a projectId (the edge accepts any `?ctx=`;
-  //      DurableObjectNameCodec.parse takes everything before ".iterate" verbatim). So project
-  //      "prj_w2kv" writing key "x:leak" and project "prj_w2kv:x" reading key "leak" address the
-  //      SAME physical key "prj_w2kv:x:leak".
-  // EXPECTED: "the prefix IS the isolation" (built-ins.ts) — two distinct projectIds can never
-  //      observe each other's kv, whatever their spelling.
-  // ACTUAL: project "prj_w2kv:x" reads project "prj_w2kv"'s value verbatim (and its writes
-  //      overwrite them — the collision is bidirectional).
-  // WHY IT MATTERS (SHAPE S3 — unescaped-delimiter composition, the same family as the stateful
-  //      cacheKey collision in the unit sweep): kv is a per-project trust boundary backed by ONE
-  //      shared namespace; the prefix is the entire wall. The secrets store has the identical
-  //      seam (`secret:${projectId}:${name}` — see the next test). Fix shape: reject ":" in
-  //      projectIds at the name codec, or escape the prefix seam.
+// FIXED (defect 38): a ":" in a projectId is rejected at DurableObjectNameCodec.parse, so the
+// kv/secret isolation wall can never be spelled around.
+test("a projectId containing ':' is REJECTED (the kv/secret isolation wall holds)", async () => {
+  // BUG (was): built-ins.ts scopes the shared ITX_KV with `${projectId}:` and plain concatenation,
+  //      and NOTHING rejected ":" in a projectId — so project "prj_w2kv" writing key "x:leak" and
+  //      project "prj_w2kv:x" reading key "leak" addressed the SAME physical key.
+  // FIX: DurableObjectNameCodec.parse gates the projectId to [A-Za-z0-9_-] — the ONE place every
+  //      DO name is parsed, so the ":"-nested project can never be materialized at all, and the
+  //      prefix ("the prefix IS the isolation") stays the whole wall.
   const a = await harness.itx("prj_w2kv");
-  const b = await harness.itx("prj_w2kv:x");
   expect(await kvPut(a, "x:leak", "A-private")).toMatchObject({ ok: true });
-  expect(await kvGet(b, "leak")).toBeNull(); // ← reads "A-private" across the project wall
+  // "prj_w2kv:x" cannot exist: the DO refuses the invalid name at parse, so the session never
+  // materializes (surfaces as a failed connection) — the leak is unspellable. (Wrapped in a native
+  // promise — capnweb proxy rejections probe vacuously otherwise.)
+  await expect(
+    (async () => {
+      const b = await harness.itx("prj_w2kv:x");
+      await kvGet(b, "leak"); // never reached
+    })(),
+  ).rejects.toThrow();
 });
 
 // ═══════════ 2. secrets.set — success for a name the ONLY read path can never spell (S1) ═══════════

@@ -105,10 +105,9 @@ const setup = (extraConfigMounts: [string, string][] = []) => {
 // ─────────────── the codec asymmetry surfaces as a SILENTLY DROPPED MOUNT ───────────────
 
 describe("provide → print → reduce → parse: an un-round-trippable target vanishes", () => {
-  test.fails("a mount target with a large number literal is silently dropped", async () => {
-    // BUG: provide() canonicalizes the target through print(); print renders 1e21 as "1e+21"
-    //      (JSON.stringify), which the parser cannot read. reduce() re-parses the stored string,
-    //      throws, and CATCHES it as "malformed-mount.skipped" — the mount never enters the table.
+  test("a mount target with a large number literal ROUTES (FIXED defect 1)", async () => {
+    // FIXED: print renders 1e21 as "1e+21" (JSON.stringify), which the parser's #number now reads
+    //      (exponent branch) — the stored target re-parses on reduce and the mount enters the table.
     // EXPECTED: a target built from valid Expression data (a number is valid) mounts and routes.
     // ACTUAL: provide() RETURNS a providedAtOffset (the caller believes it succeeded), but every
     //      later resolve default-denies because the stored string `itx.connections.get('c').echo(1e+21)`
@@ -123,12 +122,13 @@ describe("provide → print → reduce → parse: an un-round-trippable target v
       target: ["itx", "connections", ["get", "c"], ["echo", 1e21]] as Expression,
     });
     expect(providedAtOffset).toBeGreaterThan(0);
-    expect(await invoke("itx.big()")).toBe(`echo:${1e21}`); // ← rejects: NO_CAPABILITY_MATCH
+    // Resolve the mount (its target is a complete call) — it ROUTES now instead of vanishing.
+    expect(await invoke("itx.big")).toBe(`echo:${1e21}`);
   });
 
-  test.fails("a mount target whose object arg has a non-identifier key is silently dropped", async () => {
-    // BUG: same print/parse asymmetry via object keys — print emits keys unquoted, so a key with a
-    //      space ("a b") produces `{ a b: ... }`, which the parser rejects on reduce.
+  test("a mount target with a non-identifier object key ROUTES (FIXED defect 3)", async () => {
+    // FIXED: print now QUOTES a non-identifier key (a space, dot, leading digit), so `{ 'a b': … }`
+    //      re-parses on reduce via #object's quoted-key branch — the mount routes.
     // EXPECTED: a target passing a structured object arg (any string keys) mounts and routes.
     // ACTUAL: provide() succeeds; reduce() skips the malformed re-parse; resolve default-denies.
     // WHY IT MATTERS: mount targets routinely carry structured args; a single exotic key key
@@ -140,7 +140,7 @@ describe("provide → print → reduce → parse: an un-round-trippable target v
     });
     expect(providedAtOffset).toBeGreaterThan(0);
     // openai.chat reads o.model (absent here) → "chat:undefined"; the point is it ROUTES at all.
-    expect(await invoke("itx.alias()")).toBe("chat:undefined"); // ← rejects: NO_CAPABILITY_MATCH
+    expect(await invoke("itx.alias")).toBe("chat:undefined");
   });
 });
 
