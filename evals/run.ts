@@ -34,6 +34,10 @@ export default async function run(
 
     Create a fresh project using the default template unless the eval says otherwise.
 
+    Choose the environment to match the eval: features not yet in production must run against an environment serving their branch — a preview environment deployed from that branch (generally preferred), or that branch's local dev server (\`pnpm dev status\` / \`pnpm dev restart --detach\` from the worktree, everything wrapped in \`doppler run --config dev -- …\` from apps/os). The eval names its branch when this applies.
+
+    An eval directory may ship helper scripts next to eval.md — itx script files run with \`cd apps/os && doppler run --config <env> -- pnpm cli itx run --file <path> --vars '<json>'\`. Prefer them over hand-rolling equivalents, and improve them in place when they fall short.
+
     The eval may link to one or more real streams. Inspect them to understand what happened and to source realistic external-system responses. The product evolves constantly, so the latest agent may make requests that do not exactly match historical calls. Use the stream evidence and your judgment to return coherent responses to whatever it asks now.
 
     Referenced streams are read-only evidence. Read their journaled events; never invoke the referenced project's integrations or spend its secrets — that hits real external services and can trip production egress approvals, paging a human. Anything you invoke live belongs in the fresh eval project, behind your broker.

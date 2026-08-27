@@ -301,6 +301,15 @@ import {
 import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "./domains/capability-host/capability-host-processor-contract.ts";
 import { runCapabilityHostScript } from "./domains/capability-host/capability-host-script-run.ts";
 import {
+  applyScriptEdits,
+  findStaleValueLeftovers,
+  renderScriptReuseEnvelope,
+  reparameterizeScript,
+  type ReuseParameterBinding,
+  type ScriptReuseEdit,
+  type ScriptReuseValue,
+} from "./domains/capability-host/script-reuse.ts";
+import {
   settleByDeadline,
   type DeadlineOutcome,
 } from "./domains/capability-host/execution-deadline.ts";
@@ -6121,6 +6130,152 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     return await (await this.#facade()).getScriptResult(executionId);
   }
 
+  /**
+   * Reuse a previously journaled script as a parameterized helper:
+   * `previousScriptHelper({ ...results[0], parameterize: { n: 123n } })`.
+   * Spread a results row in — `scriptOffset` (the run's script-run-requested
+   * event offset) addresses the script, and spreading copies only enumerable
+   * props, so a large row's loader plumbing stays behind. `parameterize`
+   * names the VALUES the original script used inline (primitives only:
+   * string/number/boolean/bigint) that should become parameters — each
+   * literal must appear exactly once in that script and is swapped OUT for a
+   * generated identifier. Optional `edits` ([pattern, replacement] pairs;
+   * every pattern must match) then rewrite what remains — prose hardcoding
+   * an old input, a stale label; they run AFTER parameterization, so an edit
+   * can never clobber a value literal parameterize needs. The returned handle's `run(vars)` re-executes the
+   * script with new values as a journaled child script run; `vars` is typed
+   * from the parameterize object (`{ n: 123n }` → `run({ n: bigint })`), and
+   * the result type is best-effort inferred from the row's `data`/`load`
+   * when present (the SHAPE of the old result, not its values).
+   */
+  async previousScriptHelper<Result, P extends Record<string, ScriptReuseValue>>(input: {
+    scriptOffset: number;
+    parameterize: P;
+    edits?: ScriptReuseEdit[];
+    load: (itx: never) => Promise<Result>;
+  }): Promise<Omit<ReusableScriptRpcTarget, "run"> & { run(vars: P): Promise<Result> }>;
+  async previousScriptHelper<Result, P extends Record<string, ScriptReuseValue>>(input: {
+    scriptOffset: number;
+    parameterize: P;
+    edits?: ScriptReuseEdit[];
+    data: Result;
+  }): Promise<Omit<ReusableScriptRpcTarget, "run"> & { run(vars: P): Promise<Result> }>;
+  async previousScriptHelper<P extends Record<string, ScriptReuseValue>>(input: {
+    scriptOffset: number;
+    parameterize: P;
+    edits?: ScriptReuseEdit[];
+  }): Promise<Omit<ReusableScriptRpcTarget, "run"> & { run(vars: P): Promise<unknown> }>;
+  async previousScriptHelper(input: {
+    scriptOffset: number;
+    parameterize: Record<string, ScriptReuseValue>;
+    edits?: ScriptReuseEdit[];
+  }): Promise<ReusableScriptRpcTarget> {
+    const eventOffset = input.scriptOffset;
+    const parameters = input.parameterize;
+    if (typeof eventOffset !== "number") {
+      throw new Error(
+        `previousScriptHelper needs a spread results row carrying scriptOffset (the run's script-run-requested event offset); got ${JSON.stringify(eventOffset)}.`,
+      );
+    }
+    const requested = await this.#stream.getEvent({ offset: eventOffset });
+    if (requested === undefined) {
+      throw new Error(`No event at offset ${eventOffset} on scope ${this.#props.path}.`);
+    }
+    // Strict by design: the request event holds the script, and the results
+    // array hands every script its request offset as `scriptOffset` — no
+    // guessing between settle/assistant offsets, no lenient resolution.
+    if (requested.type !== "events.iterate.com/capability-host/script-run-requested") {
+      throw new Error(
+        `Event at offset ${eventOffset} is ${JSON.stringify(requested.type)}, not a script-run-requested event. Pass a results row — every retained script result carries scriptOffset, the reuse handle.`,
+      );
+    }
+    // The casts below are pinned by the event-type guard above: a
+    // script-run-requested event's payload is RunScriptCommand
+    // ({ code, executionId, expiresAt } — capability-host contract), appended
+    // through the contract's own buildEvent. StreamEvent.payload is untyped
+    // at this read boundary (getEvent returns any journaled event), and
+    // re-parsing with the contract schema here would duplicate the append-side
+    // validation for no new guarantee.
+    const sourceExecutionId = (requested.payload as { executionId: string }).executionId;
+    // A failed run is (almost) never the intended source — observed live: a
+    // rejected reuse attempt becomes results[0], the model points the next
+    // attempt at it, and the reuse chain eats its own tail. Fail loudly with
+    // the right fix instead. (A not-yet-settled run stays reusable.)
+    const settledEvent = await this.#stream.getEvent({
+      idempotencyKey: `capability-host/script-run-settled@${sourceExecutionId}`,
+    });
+    const settlement = (
+      settledEvent?.payload as { settlement?: { status: string; error?: string } }
+    )?.settlement;
+    if (settlement?.status === "failed") {
+      throw new Error(
+        `The script run at offset ${eventOffset} (${sourceExecutionId}) FAILED (${(settlement.error || "unknown error").slice(0, 200)}). Reuse a run that succeeded — in the results array, pick the row of the original successful run, not a failed reuse attempt.`,
+      );
+    }
+    const { code } = requested.payload as { code: string };
+    // Parameterize FIRST: the value literals become identifiers before any
+    // edit runs, so a broad edit (a /oldDigits/g rewrite of message prose)
+    // cannot clobber the literal parameterize needs to locate — observed
+    // live when the orders were reversed. When parameterization itself fails
+    // and edits were given, fall back to edits-first: that order cures the
+    // opposite trap, a DUPLICATE of the value literal that an edit removes.
+    // Both orders are deterministic; whichever succeeds wins.
+    const parameterizeFirst = () => {
+      const transformed = reparameterizeScript({ code, parameters });
+      return {
+        transformed,
+        finalCode:
+          input.edits === undefined
+            ? transformed.code
+            : applyScriptEdits(transformed.code, input.edits),
+      };
+    };
+    // An edit written against the ORIGINAL script may target text that
+    // aliasing consumed, and a duplicate value literal blocks exactly-once
+    // until an edit removes it — both cured by applying edits first.
+    const editsFirst = () => {
+      const transformed = reparameterizeScript({
+        code: applyScriptEdits(code, input.edits!),
+        parameters,
+      });
+      return { transformed, finalCode: transformed.code };
+    };
+    let outcome: ReturnType<typeof parameterizeFirst>;
+    try {
+      outcome = parameterizeFirst();
+    } catch (primaryError) {
+      if (input.edits === undefined) throw primaryError;
+      try {
+        outcome = editsFirst();
+      } catch {
+        // Both orders failed: the parameterize-first error names the primary
+        // problem (a genuinely absent literal or a never-matching edit).
+        throw primaryError;
+      }
+    }
+    const { transformed, finalCode } = outcome;
+    // A reused script that still mentions an old value outside the swapped
+    // expression (message prose, a label) will state stale facts when run.
+    // Observed live: the model reused correctly but sent the old number in
+    // the message. Omitting `edits` entirely means the caller has not
+    // considered this; an explicit `edits` (even []) is the opt-out.
+    if (input.edits === undefined) {
+      const leftovers = findStaleValueLeftovers(finalCode, parameters);
+      if (leftovers.length > 0) {
+        const detail = leftovers.map(([name, bare]) => `${name} (${bare})`).join(", ");
+        throw new Error(
+          `The old value(s) of ${detail} still appear in the script outside the swapped expression — likely message prose that would state the OLD input. Pass edits: [[<pattern>, <replacement>], …] to rewrite that text (or edits: [] to keep it deliberately).`,
+        );
+      }
+    }
+    return new ReusableScriptRpcTarget({
+      code: finalCode,
+      parameters: transformed.parameters,
+      runScript: (envelope) => this.runScript(envelope),
+      sourceExecutionId,
+    });
+  }
+
   /** Explicit dynamic dispatch; the dotted-path fallback (`itx.foo.bar(...)`) compiles to exactly this call. */
   async invokeCapability(call: { args?: unknown[]; path: string[] }): Promise<unknown> {
     const { args = [], path } = call;
@@ -6151,6 +6306,8 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
         getPreamble: "The assembled preamble text the next script will see, plus the entry table.",
         getScriptResult:
           "Read one settled script result back by executionId (what results[N].load(itx) calls).",
+        previousScriptHelper:
+          "Reuse a journaled script by stream offset: parameters are the original inline values ({ n: 123n }); returns a handle whose typed run(vars) re-executes it with new values.",
       },
       parent: `project ${this.#props.projectId}; sibling scopes via capabilityHosts.get(path)`,
       capabilities,
@@ -6158,11 +6315,15 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     });
   }
 
-  /** Run an `async (itx) => { … }` script in this scope; the execution is journaled on the scope stream. */
+  /** Run an `async (itx) => { … }` script in this scope; the execution is
+   * journaled on the scope stream. `scriptEvent` is the journaled
+   * script-run-requested event — its offset is the reuse handle
+   * (previousScriptHelper's scriptOffset). */
   async runScript(code: string): Promise<{
     completedEvent: StreamEvent;
     executionId: string;
     result: unknown;
+    scriptEvent: StreamEvent;
   }> {
     const command = {
       code,
@@ -6189,6 +6350,70 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
    * facets die together); the next request boots them fresh. */
   kill(): Promise<void> {
     return Promise.resolve(this.#stream[STREAM_DURABLE_OBJECT_STUB].kill());
+  }
+}
+
+/**
+ * A previously journaled script, re-parameterized into a reusable helper —
+ * returned by `itx.previousScriptHelper`. `run(vars)` executes it with new
+ * values as a journaled child script run in the same scope.
+ */
+class ReusableScriptRpcTarget extends IterateRpcTarget<"ReusableScript"> {
+  async __describe(): Promise<Description> {
+    return describeNode({
+      instructions: `A reusable script (from run ${this.#props.sourceExecutionId}), parameterized over [${this.#props.parameters.map((binding) => binding.name).join(", ")}]: run(vars) re-executes it with new values as a journaled child script run.`,
+      children: {
+        run: "Execute the reused script with new values for the declared parameters.",
+        code: "The re-parameterized script text (inspection only).",
+      },
+      parent: "returned by previousScriptHelper",
+    });
+  }
+
+  readonly #props: {
+    code: string;
+    parameters: ReuseParameterBinding[];
+    runScript: (
+      envelope: string,
+    ) => Promise<{ completedEvent: StreamEvent; executionId: string; result: unknown }>;
+    sourceExecutionId: string;
+  };
+
+  constructor(props: {
+    code: string;
+    parameters: ReuseParameterBinding[];
+    runScript: (
+      envelope: string,
+    ) => Promise<{ completedEvent: StreamEvent; executionId: string; result: unknown }>;
+    sourceExecutionId: string;
+  }) {
+    super();
+    this.#props = props;
+  }
+
+  /** The re-parameterized script text (for inspection; `run` executes it). */
+  get code(): string {
+    return this.#props.code;
+  }
+
+  /** The executionId of the journaled run this helper was derived from. */
+  get sourceExecutionId(): string {
+    return this.#props.sourceExecutionId;
+  }
+
+  /**
+   * Execute the reused script with new values for the declared parameters —
+   * real values, not code text (`123n` not `"123n"`). Runs as a journaled
+   * child script run and resolves to its result.
+   */
+  async run(vars: Record<string, unknown>): Promise<unknown> {
+    const envelope = renderScriptReuseEnvelope({
+      code: this.#props.code,
+      parameters: this.#props.parameters,
+      vars,
+    });
+    const execution = await this.#props.runScript(envelope);
+    return execution.result;
   }
 }
 

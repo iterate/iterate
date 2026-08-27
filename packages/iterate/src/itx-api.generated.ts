@@ -673,15 +673,54 @@ export interface CapabilityHost {
    * for unknown executions and for scripts that failed.
    */
   getScriptResult(executionId: string): Promise<{ executionId: string; data: unknown }>;
+  /**
+   * Reuse a previously journaled script as a parameterized helper:
+   * `previousScriptHelper({ ...results[0], parameterize: { n: 123n } })`.
+   * Spread a results row in — `scriptOffset` (the run's script-run-requested
+   * event offset) addresses the script, and spreading copies only enumerable
+   * props, so a large row's loader plumbing stays behind. `parameterize`
+   * names the VALUES the original script used inline (primitives only:
+   * string/number/boolean/bigint) that should become parameters — each
+   * literal must appear exactly once in that script and is swapped OUT for a
+   * generated identifier. Optional `edits` ([pattern, replacement] pairs;
+   * every pattern must match) then rewrite what remains — prose hardcoding
+   * an old input, a stale label; they run AFTER parameterization, so an edit
+   * can never clobber a value literal parameterize needs. The returned handle's `run(vars)` re-executes the
+   * script with new values as a journaled child script run; `vars` is typed
+   * from the parameterize object (`{ n: 123n }` → `run({ n: bigint })`), and
+   * the result type is best-effort inferred from the row's `data`/`load`
+   * when present (the SHAPE of the old result, not its values).
+   */
+  previousScriptHelper<Result, P extends Record<string, ScriptReuseValue>>(input: {
+    scriptOffset: number;
+    parameterize: P;
+    edits?: ScriptReuseEdit[];
+    load: (itx: never) => Promise<Result>;
+  }): Promise<Omit<ReusableScript, "run"> & { run(vars: P): Promise<Result> }>;
+  previousScriptHelper<Result, P extends Record<string, ScriptReuseValue>>(input: {
+    scriptOffset: number;
+    parameterize: P;
+    edits?: ScriptReuseEdit[];
+    data: Result;
+  }): Promise<Omit<ReusableScript, "run"> & { run(vars: P): Promise<Result> }>;
+  previousScriptHelper<P extends Record<string, ScriptReuseValue>>(input: {
+    scriptOffset: number;
+    parameterize: P;
+    edits?: ScriptReuseEdit[];
+  }): Promise<Omit<ReusableScript, "run"> & { run(vars: P): Promise<unknown> }>;
   /** Explicit dynamic dispatch; the dotted-path fallback (`itx.foo.bar(...)`) compiles to exactly this call. */
   invokeCapability(call: { args?: unknown[]; path: string[] }): Promise<unknown>;
   /** Includes `capabilities`: everything reachable at this scope — own mounts plus inherited ones, tagged with their declaring scope. */
   __describe(): Promise<Description & { capabilities: CapabilityDescription[]; path: string }>;
-  /** Run an `async (itx) => { … }` script in this scope; the execution is journaled on the scope stream. */
+  /** Run an `async (itx) => { … }` script in this scope; the execution is
+   * journaled on the scope stream. `scriptEvent` is the journaled
+   * script-run-requested event — its offset is the reuse handle
+   * (previousScriptHelper's scriptOffset). */
   runScript(code: string): Promise<{
     completedEvent: StreamEvent;
     executionId: string;
     result: unknown;
+    scriptEvent: StreamEvent;
   }>;
   /** Restart this scope's server-side objects (the stream and its hosted
    * facets die together); the next request boots them fresh. */
@@ -1570,6 +1609,25 @@ export interface StreamProcessorRpc<State = unknown> {
 /** Disposable handle for one live AI interception. */
 export interface ProjectAiIntercept extends Disposable {
   release(): Promise<void>;
+}
+
+/**
+ * A previously journaled script, re-parameterized into a reusable helper —
+ * returned by `itx.previousScriptHelper`. `run(vars)` executes it with new
+ * values as a journaled child script run in the same scope.
+ */
+export interface ReusableScript {
+  __describe(): Promise<Description>;
+  /** The re-parameterized script text (for inspection; `run` executes it). */
+  code: string;
+  /** The executionId of the journaled run this helper was derived from. */
+  sourceExecutionId: string;
+  /**
+   * Execute the reused script with new values for the declared parameters —
+   * real values, not code text (`123n` not `"123n"`). Runs as a journaled
+   * child script run and resolves to its result.
+   */
+  run(vars: Record<string, unknown>): Promise<unknown>;
 }
 
 /** Disposable handle for one live project egress interception. */
@@ -3061,6 +3119,17 @@ export type SetPreambleInput = {
   key: string;
   code: string;
 };
+
+/** A reusable-script parameter value: a primitive whose literal text can be
+ * located in the script. Objects/arrays never appear as one inline literal
+ * reliably, so they are excluded on purpose. */
+export type ScriptReuseValue = string | number | boolean | bigint;
+
+/** One textual edit to apply to the reused script before parameterization:
+ * a pattern (string = replace every occurrence; RegExp honors its own flags)
+ * and its replacement. This is how a reuse call fixes text that is not a
+ * parameter value — message prose hardcoding an old input, a stale label. */
+export type ScriptReuseEdit = [RegExp | string, string];
 
 /** Target shape for a live capability that wants to receive flattened paths. */
 export type FlattenedCapabilityTarget = {
