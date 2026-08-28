@@ -521,3 +521,21 @@ races the async #connectionClosed). Needs a dispose()-signals-clean-end path. Le
 
 Session total: **10 defects closed** (41, 40, 19, 20, 43, 47, 6, 7, 15, 16); 1 deferred (14), 1 policy
 fork (34-sibling).
+
+### Defect sweep round 4 — processor 21 + egress 49
+
+Full suite **289 passed / 18 xf** (was 287/20), typecheck clean.
+
+- **Defect 21 — a non-contiguous push no longer drops its fresh named ephemerals** (`core/processor.ts`).
+  The non-contiguous branch blanket-called #catchUpBody (durable-only log repair), so a push carrying
+  fresh named ephemerals (voice/telemetry lanes — pushes are their ONLY delivery) lost them after any
+  one failed batch left the cursor behind. It now #repairThrough(scannedAfterOffset) — a BOUNDED
+  durable repair up to the push's start — then processes the PUSHED batch itself (ephemerals and all);
+  falls back to #catchUpBody only if the durable prefix genuinely can't be reached.
+- **Defect 49 — the egress terminal substitutes a secret placed in the URL** (`@v3/shared/egress`).
+  substituteHeaderSecrets rebuilt only Headers, so `?access_token={{secret:project:token}}` forwarded
+  the credential's NAME to the destination and the value nowhere. It now substitutes the URL too
+  (shared `subst` helper; WS-safe reconstruction preserves method/Upgrade/body). Body substitution is
+  a documented follow-up (needs buffering + content-length recompute).
+
+Session total: **12 defects closed** (41, 40, 19, 20, 43, 47, 6, 7, 15, 16, 21, 49).

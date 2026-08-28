@@ -238,7 +238,20 @@ export abstract class StreamProcessor<State> {
         const atHead = scannedOffsetRange.scannedThroughOffset >= (this.#pushedThroughOffset ?? 0);
         await this.#processBatch(events, scannedOffsetRange, atHead);
       } else if (scannedOffsetRange.scannedThroughOffset > progress.reducedThroughOffset) {
-        await this.#catchUpBody(); // gap (fresh incarnation, dropped push) — repair from the log
+        // Non-contiguous push: the cursor is behind this batch's start. Repair the durable gap from
+        // the cursor UP TO the push's scannedAfterOffset, then — if that closes the gap — process
+        // the PUSHED batch itself. Its fresh named ephemerals ride the push ONLY (reads are
+        // durable-only), so a blanket #catchUpBody repairs the durables but SILENTLY DROPS the
+        // deliverable ephemerals (defect 21). If the repair can't reach the push start (a durable
+        // row genuinely missing), fall back to the durable-only log repair.
+        await this.#repairThrough(scannedOffsetRange.scannedAfterOffset);
+        if (this.#loadProgress().reducedThroughOffset === scannedOffsetRange.scannedAfterOffset) {
+          const atHead =
+            scannedOffsetRange.scannedThroughOffset >= (this.#pushedThroughOffset ?? 0);
+          await this.#processBatch(events, scannedOffsetRange, atHead);
+        } else {
+          await this.#catchUpBody();
+        }
       } // else: a stale redelivery — the scannedOffsetRange is already behind us; nothing to do
     });
   }
@@ -421,6 +434,26 @@ export abstract class StreamProcessor<State> {
       );
       if (atHead) return;
       sawFullPage = true;
+    }
+  }
+
+  /** BOUNDED durable repair: reduce durable rows from the cursor UP TO `target` (inclusive), no
+   *  further — the prefix a non-contiguous push needs healed before its OWN batch (carrying fresh
+   *  ephemerals the log can't return) is processed. Never delivers caughtUp: the push, not this
+   *  repair, decides at-head. Stops early if the log can't reach `target` (the caller falls back). */
+  async #repairThrough(target: number): Promise<void> {
+    for (;;) {
+      const after = this.#loadProgress().reducedThroughOffset;
+      if (after >= target) return;
+      const page = await this.stream.read(after, 500);
+      if (page.scannedThroughOffset <= after) return; // nothing more durable to repair
+      const through = Math.min(page.scannedThroughOffset, target);
+      await this.#processBatch(
+        page.events.filter((e) => e.offset <= target),
+        { scannedAfterOffset: after, scannedThroughOffset: through },
+        false,
+      );
+      if (through >= target) return;
     }
   }
 

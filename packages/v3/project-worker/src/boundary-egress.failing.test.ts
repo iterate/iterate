@@ -88,7 +88,7 @@ test("a substituted value is never rescanned (no token injection through a secre
   expect(out.headers.get("x-a")).toBe("{{secret:project:inner}}"); // literal, not re-resolved
 });
 
-test.fails("the egress terminal's substitution never leaks a PRESENT project secret placed in the URL", async () => {
+test("the egress terminal substitutes a PRESENT project secret placed in the URL", async () => {
   // BUG: the DO egress terminal (stream-durable-object.ts fetch) substitutes secrets with
   //   `substituteHeaderSecrets(request, "project", …)`, which rebuilds ONLY Headers — the URL and
   //   body are never scanned. A project that spells its credential in the URL (a common shape:

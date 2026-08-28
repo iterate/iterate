@@ -573,7 +573,7 @@ describe("ephemeral windows and repair", () => {
     expect(mem.reads).toBeGreaterThan(readsBefore); // it really was a repair, not a blind fast path
   });
 
-  test.fails("BUG: fresh NAMED ephemerals riding a non-contiguous push are silently dropped by gap repair", async () => {
+  test("fresh NAMED ephemerals riding a non-contiguous push are delivered (repair the gap, then process the push)", async () => {
     // BUG: processEventBatch treats any non-contiguous range as "repair from the log" and
     //      IGNORES the pushed events entirely — including the batch's own fresh ephemeral
     //      events, which the log can never return (reads are durable-only).
