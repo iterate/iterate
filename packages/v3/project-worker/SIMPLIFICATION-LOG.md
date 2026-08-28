@@ -430,3 +430,33 @@ matcher/evaluator is `core/dispatch.ts`; importers pull dispatch symbols (`match
 capability-table-processor, built-ins, depth-reset-repro.test re-pointed). Also deleted the stray
 duplicate `evaluate.ts` (a copy-artifact — logically identical to dispatch.ts, comments only).
 Typecheck clean; suite 277 passed / 30 xf.
+
+### Defect sweep — 4 no-brainer correctness fixes (Jonas: "do anything not complicated that is a no brainer")
+
+Closed 4 `test.fails` with small, well-pinned, low-blast-radius fixes; full suite **281 passed / 26 xf**
+(was 277 / 30), typecheck clean, generated SDK rebuilt deterministically.
+
+- **Defect 41 — config array-path validated element-wise** (`core/config.ts`). `CapabilityPathInput`
+  round-tripped the array branch through `parseCapabilityPath(p.join("."))` but never checked the
+  result matched the input 1:1, so `["itx.kv"]` silently re-split into `["itx","kv"]` (a DIFFERENT
+  mount) instead of failing loud. Now a pre-split array must be one identifier per segment; `["itx.kv"]`
+  and `[]` both throw at boot. (wave2-sweep test flipped `test.fails`→`test`, + `[]` case.)
+- **Defect 40 — provide() rejects a mis-segmented array path** (`capability-table-processor.ts`). The
+  round-trip guard compared STRINGS only, so an array that re-splits (`["itx.kv"]`) slipped through
+  while `["itx","a b"]` already threw via the unparseable join. Added a length check
+  (`reparsedPath.length !== path.length`) so both are rejected at the door — never success + silent
+  drop. (wave2 test rewritten to assert `rejects.toThrow(/round-trip/)`.)
+- **Defect 19 — blocker-in-blocker holds the cursor** (`core/processor.ts` `runOne`). `await blockers`
+  latched the chain snapshot BEFORE a nested `blockProcessorWhile` (registered from inside a running
+  blocker) extended it, so the next event / batch commit could overtake still-in-flight blocking work
+  (rule 2 + rule 4 violation). Now drains to a FIXED POINT: re-await until `blockers` stops growing.
+- **Defect 20 — exact 500-multiple log delivers caughtUp** (`core/processor.ts` `#catchUpBody`).
+  `atHead = page.events.length < 500` judged a FULL page that ends at head as not-at-head; the next
+  empty read short-circuited before any `#processBatch`, so rule 5's at-head pass never ran on a log
+  whose length is a page multiple. Now remembers a full page and, when the next read finds nothing new
+  (at head), delivers the eventless at-head pass — no silent at-head stall for obligation sweeps / "am
+  I done" transitions.
+
+Deferred (NOT no-brainers): defect 21 (non-contiguous push drops named ephemerals — reshapes gap
+repair), defect 49 (egress URL/body secret leak), and the harness/workers-lane clusters (connections
+14/15/16, event-log 6/7, boundary 34-sibling/47/48, dotted-surface 24, chunking 25, WS 27/28).

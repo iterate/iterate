@@ -25,7 +25,14 @@ const ExpressionSchema = z.array(
 // mount that z.custom(() => true) waved through). Round-trip both forms through the grammar.
 const CapabilityPathInput = z.union([z.string(), z.array(z.string())]).transform((p, ctx) => {
   try {
-    return parseCapabilityPath(Array.isArray(p) ? p.join(".") : p);
+    const segs = parseCapabilityPath(Array.isArray(p) ? p.join(".") : p);
+    // An array is PRE-SPLIT segments: it must round-trip 1:1. ["itx.kv"] re-splits to two — reject
+    // the mis-segmentation loudly rather than silently reshaping it into a different mount.
+    if (Array.isArray(p) && (segs.length !== p.length || segs.some((s, i) => s !== p[i])))
+      throw new Error(
+        `capability path array must be one identifier per segment: ${JSON.stringify(p)}`,
+      );
+    return segs;
   } catch (e) {
     ctx.addIssue({ code: "custom", message: e instanceof Error ? e.message : String(e) });
     return z.NEVER;

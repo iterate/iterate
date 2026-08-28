@@ -123,22 +123,12 @@ describe("rule 2 — per-event barrier under slow blockers", () => {
     }
   });
 
-  test.fails("BUG: a blocker registered from INSIDE a blocker does not hold the cursor", async () => {
-    // BUG: `runOne` snapshots `await blockers` once; a blockProcessorWhile call made while a
-    //      blocker of the SAME event is running reassigns the local `blockers` chain that
-    //      nobody awaits anymore.
-    // EXPECTED: rule 2 — "this event's blockProcessorWhile work completes before the next
-    //      event's processEvent starts". Work registered mid-blocker is still THIS event's
-    //      blocking work (the API hands processEvent a callable with no expiry), so
-    //      `nested-done 1` must precede `start 2`.
-    // ACTUAL: event 2's processEvent starts as soon as the OUTER blocker of event 1 settles;
-    //      the nested blocker keeps running concurrently — and the batch can even COMMIT while
-    //      it is still in flight (rule 4's "after every event's blocking work settled" is
-    //      violated too).
-    // WHY IT MATTERS: a processor that discovers follow-up blocking work while doing blocking
-    //      work (fetch → then persist) silently loses the barrier; effects of event N+1 can
-    //      observe half-finished state work of event N, the exact interleaving rule 2 exists
-    //      to forbid.
+  test("a blocker registered from INSIDE a blocker holds the cursor (rule 2 fixed point)", async () => {
+    // FIXED: `runOne` used to snapshot `await blockers` once; a blockProcessorWhile call made
+    //   while a blocker of the SAME event was running reassigned the local `blockers` chain that
+    //   nobody awaited anymore. It now DRAINS to a fixed point, so work registered mid-blocker is
+    //   still THIS event's blocking work — `nested-done 1` precedes `start 2` (rule 2), and the
+    //   batch cannot commit while nested blocking work is in flight (rule 4).
     const mem = memoryStream();
     const trace: string[] = [];
     const Contract = contractOf("nested", "1", ["e"]);
@@ -319,21 +309,14 @@ describe("rule 5 — exactly one caughtUp per at-head batch", () => {
     expect(deliveries).toEqual([{ offset: null, caughtUp: true }]);
   });
 
-  test.fails("BUG: a catch-up whose log length is an exact page multiple (500) never delivers caughtUp", async () => {
-    // BUG: #catchUpBody passes `atHead = page.events.length < 500`; a FULL page that in fact
-    //      ends at the stream head is judged not-at-head, and the follow-up read returns an
-    //      empty page which short-circuits (`scannedThroughOffset <= after`) BEFORE any
-    //      #processBatch call — so rule 5's at-head pass never runs.
-    // EXPECTED: rule 5 — "a batch that reaches the head without one gets a single extra
-    //      processEvent({event: null, delivery: {caughtUp: true}})". A wake over a 500-event
-    //      log ends AT the head, so exactly one caughtUp must be delivered.
-    // ACTUAL: zero caughtUp deliveries for any log whose durable length is an exact multiple
-    //      of the 500-row page size; the processor only learns it is at head when the NEXT
-    //      append happens to arrive.
-    // WHY IT MATTERS: at-head is the trigger for recovery work (obligation sweeps, "am I
-    //      done" transitions). A processor evicted at offset 500/1000/1500 and woken by
-    //      snapshot()/waitUntilProcessed stalls its at-head logic indefinitely on a quiet
-    //      stream — exactly the silent-stall class the caughtUp contract exists to prevent.
+  test("a catch-up whose log length is an exact page multiple (500) still delivers caughtUp", async () => {
+    // FIXED: #catchUpBody used `atHead = page.events.length < 500`; a FULL page that in fact ended
+    //   at the stream head was judged not-at-head, and the follow-up empty read short-circuited
+    //   BEFORE any #processBatch call — so rule 5's at-head pass never ran, and the processor only
+    //   learned it was at head when the NEXT append arrived. #catchUpBody now remembers it saw a
+    //   full page and, when the next read finds nothing new (at head), delivers the eventless
+    //   at-head pass — so a log whose length is an exact multiple of the page size is not a silent
+    //   stall for the at-head-triggered recovery work (obligation sweeps, "am I done" transitions).
     const mem = memoryStream();
     const { Rec, deliveries } = deliveryRecorder("page500", ["tick"]);
     const p = new Rec({ stream: mem.stream, storage: memoryStorage(), path: "/", projectId: "p" });

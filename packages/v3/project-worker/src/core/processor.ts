@@ -397,16 +397,30 @@ export abstract class StreamProcessor<State> {
    *  a failed batch, a missed push, or a fresh incarnation can never skip a durable event. */
   async #catchUpBody(): Promise<void> {
     await this.#rereduceIfVersionChanged();
+    let sawFullPage = false;
     for (;;) {
       const after = this.#loadProgress().reducedThroughOffset;
       const page = await this.stream.read(after, 500);
-      const scannedOffsetRange = {
-        scannedAfterOffset: after,
-        scannedThroughOffset: page.scannedThroughOffset,
-      };
-      if (page.scannedThroughOffset <= after) return;
-      await this.#processBatch(page.events, scannedOffsetRange, page.events.length < 500);
-      if (page.events.length < 500) return;
+      if (page.scannedThroughOffset <= after) {
+        // No new contiguous events beyond the cursor → we are AT HEAD. An EXACT full page (500)
+        // was judged not-at-head and never got rule 5's caught-up pass; a log whose length is an
+        // exact page multiple must still learn it is caught up — deliver the eventless at-head pass.
+        if (sawFullPage)
+          await this.#processBatch(
+            [],
+            { scannedAfterOffset: after, scannedThroughOffset: after },
+            true,
+          );
+        return;
+      }
+      const atHead = page.events.length < 500;
+      await this.#processBatch(
+        page.events,
+        { scannedAfterOffset: after, scannedThroughOffset: page.scannedThroughOffset },
+        atHead,
+      );
+      if (atHead) return;
+      sawFullPage = true;
     }
   }
 
@@ -479,7 +493,14 @@ export abstract class StreamProcessor<State> {
         },
         delivery: { caughtUp },
       });
-      await blockers; // STRICT PER-EVENT ORDERING: this event's blocking work completes first
+      // STRICT PER-EVENT ORDERING (rule 2): drain the blocker chain to a FIXED POINT. A
+      // blockProcessorWhile called from INSIDE a running blocker extends the chain (still THIS
+      // event's blocking work), so re-await until it stops growing — latching the pre-nesting
+      // snapshot would let the next event's processEvent (and the batch commit) overtake it.
+      for (let awaited: Promise<unknown> | undefined; awaited !== blockers; ) {
+        awaited = blockers;
+        await awaited;
+      }
       if (caughtUp) caughtUpDelivered = true;
     };
 

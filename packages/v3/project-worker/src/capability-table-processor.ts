@@ -215,8 +215,10 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
     const pathString = path.join(".");
     const targetString = print(target);
     try {
+      const reparsedPath = parseCapabilityPath(pathString);
       if (
-        parseCapabilityPath(pathString).join(".") !== pathString ||
+        reparsedPath.length !== path.length || // a pre-split array like ["itx.kv"] re-splits — reject
+        reparsedPath.join(".") !== pathString ||
         print(parse(targetString)) !== targetString
       )
         throw new Error("re-parse diverged");

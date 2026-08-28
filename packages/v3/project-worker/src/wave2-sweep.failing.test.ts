@@ -88,24 +88,18 @@ test("two DIFFERENT facet identities never share one Worker Loader cacheKey (fac
 
 // ═══════════════ 2. parseAppConfig — the ARRAY path branch is a fabricated proof (S7) ═══════════════
 
-test.fails("a config mount whose ARRAY path smuggles a dot fails loudly at boot", () => {
-  // BUG: core/config.ts CapabilityPathInput pipes the array branch through
-  //      `z.custom<CapabilityPath>(() => true)` — a validator that validates NOTHING. The string
-  //      branch goes through parseCapabilityPath (segments are identifier-checked); the array
-  //      branch accepts any string[] verbatim.
-  // EXPECTED: parseAppConfig fail-louds on a mis-segmented path — its own docstring: "fail-loud
-  //      on malformed config — a typo must not boot a mis-wired project". `["itx.kv"]` is the
-  //      canonical typo: the author meant the 2-segment path "itx.kv" but produced ONE segment
-  //      "itx.kv", which can never match any call (match() compares call[0]==="itx" against the
-  //      segment "itx.kv") — the mount boots silently dead.
-  // ACTUAL: parseAppConfig returns the config with the dead mount; the same spelling in the
-  //      STRING half means something different (S5 inside S7: two input halves, two grammars).
-  //      The empty array [] is worse — it matches EVERY call at rank 0, a stealth default route.
-  // WHY IT MATTERS (SHAPE S7): the config is the project's whole topology; a "validated" config
-  //      whose validation is `() => true` is a fabricated proof at the boot gate the docstring
-  //      promises is loud.
+test("a config mount whose ARRAY path smuggles a dot fails loudly at boot", () => {
+  // FIXED (was S7, fabricated proof): core/config.ts CapabilityPathInput now round-trips the array
+  //   branch 1:1 through parseCapabilityPath — a segment must be ONE identifier. `["itx.kv"]` is
+  //   the canonical typo (the author meant the 2-segment path "itx.kv" but produced ONE segment
+  //   "itx.kv"); re-splitting it silently would boot a DIFFERENT mount, so the boot gate the
+  //   docstring promises is loud now rejects it. The empty array [] (a rank-0 stealth default)
+  //   fails the same gate (parseCapabilityPath("") throws "name expected").
   expect(() =>
     parseAppConfig(JSON.stringify({ configMounts: [{ path: ["itx.kv"], target: "kv" }] })),
+  ).toThrow();
+  expect(() =>
+    parseAppConfig(JSON.stringify({ configMounts: [{ path: [], target: "kv" }] })),
   ).toThrow();
 });
 
@@ -168,31 +162,21 @@ const setupTable = () => {
   return { host };
 };
 
-test.fails("a mount provided with an ARRAY path routes — or provide() must reject it (never both fail silently)", async () => {
-  // BUG: provide() validates the STRING path half (parseCapabilityPath) but takes the ARRAY
-  //      half VERBATIM (`typeof input.path === "string" ? parseCapabilityPath(...) : input.path`,
-  //      capability-table-processor.ts provide()). The event stores `path.join(".")`; reduce
-  //      re-parses that string with parseCapabilityPath — a segment like "a b" makes the stored
-  //      string unparseable, reduce SKIPS the mount as malformed (warn only), and the
-  //      providedAtOffset already handed back is a receipt for nothing.
-  // EXPECTED: either the mount lands and routes (the call below is spellable — the dotted door's
-  //      own split produces exactly these segments: invokeCapability("itx.a b") →
-  //      ["itx", ["a b"]]), or provide() throws at the door. Never success + silent drop.
-  // ACTUAL: providedAtOffset > 0 comes back; the resolve default-denies NO_CAPABILITY_MATCH.
-  // WHY IT MATTERS (SHAPE S1 — the path-side twin of wave-1 defect 5, NOT fixed by its
-  //      target-side round-trip fix): provideCapability({path: string[]}) is the public client
-  //      surface (itx-surface.ts Itx.provide / DO.provideCapability both forward arrays). One
-  //      exotic segment silently un-mounts the capability while the caller holds a success.
+test("a mount provided with a mis-segmented ARRAY path is REJECTED at the door (never success + silent drop)", async () => {
+  // FIXED (was S1, the path-side twin of wave-1 defect 5): provide() took the ARRAY path half
+  //   VERBATIM, stored `path.join(".")`, and reduce re-parsed it — a segment like "a b" made the
+  //   stored string unparseable, so reduce SKIPPED the mount (warn only) while the caller held a
+  //   providedAtOffset receipt for nothing. provide() now round-trips the stored path element-wise
+  //   at the door (parseCapabilityPath length + segments), so a mis-segmented array THROWS instead
+  //   of returning a success for a capability that never enters the table.
   const { host } = setupTable();
-  const { providedAtOffset } = await host.provide({
-    path: ["itx", "a b"],
-    target: "itx.whoami",
-  });
-  expect(providedAtOffset).toBeGreaterThan(0); // the receipt (this passes — the lie half)
-  expect(await host.resolveCurrent(["itx", ["a b"]] as Expression)).toEqual({
-    projectId: "prj_t",
-    path: "/",
-  }); // ← rejects: NO_CAPABILITY_MATCH — the mount never entered the table
+  // "a b" (a space) makes "itx.a b" unparseable; ["itx.kv"] re-splits to two — both fail the gate.
+  await expect(host.provide({ path: ["itx", "a b"], target: "itx.whoami" })).rejects.toThrow(
+    /round-trip/,
+  );
+  await expect(host.provide({ path: ["itx.kv"], target: "itx.whoami" })).rejects.toThrow(
+    /round-trip/,
+  );
 });
 
 // ═══════════════ 4. ProcessorFacet — configure() while warm serves the STALE identity (S1) ═══════════════
