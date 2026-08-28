@@ -1,12 +1,11 @@
 import dedent from "dedent";
 import { spinnerWaiter } from "middlewright";
 import { expect } from "@playwright/test";
-import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
 // Script reuse (itx.capabilityHost.previousScriptHelper) through the real
-// chat UI, deterministically: the "model" is this spec's own interceptor,
-// serving the inline scripts below keyed by the user message. Both turns'
+// chat UI, deterministically: the "model" is the fixture's interceptor,
+// serving the inline scripts below in turn order. Both turns'
 // scripts EXECUTE for real — the child run re-runs turn 1's algorithm with
 // the new number — and the spec opens each turn's codemode snippet in the
 // feed to show the shortcut.
@@ -17,115 +16,97 @@ import { test } from "./test-support/test.ts";
 test("a repeat request reuses the previous turn's journaled script instead of re-deriving it", async ({
   helpers,
   page,
-  baseURL,
 }) => {
   await using fixture = await helpers.createFixture("agent-script-reuse");
-  if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
 
-  using admin = await connectAdminItx(baseURL);
-  using project = admin.projects.get(fixture.project.id);
-  const agentPath = `/agents/factorizer-${crypto.randomUUID().slice(0, 8)}`;
-  using agent = project.agents.get(agentPath);
-  await agent.create();
-  await agent.append({
-    type: "events.iterate.com/agent/configured",
-    payload: { config: { llm: { model: "intercepted/factorizer" }, llmRequestDebounceMs: 250 } },
-  });
+  const agent = await fixture.createAgent({ infix: "factorizer" });
 
-  const scripts: Record<string, string> = {
-    "prime factorize": dedent`
-      async (itx) => {
-        const n = 52479543428582704627n;
-        const gcd = (a: bigint, b: bigint): bigint => {
-          while (b) [a, b] = [b, a % b];
-          return a;
-        };
-        const modPow = (a: bigint, e: bigint, m: bigint): bigint => {
-          let r = 1n;
-          a %= m;
-          while (e > 0n) {
-            if (e & 1n) r = (r * a) % m;
-            a = (a * a) % m;
-            e >>= 1n;
-          }
-          return r;
-        };
-        const isPrime = (x: bigint): boolean => {
-          if (x < 2n) return false;
-          for (const p of [2n, 3n, 5n, 7n, 11n, 13n, 17n, 19n, 23n, 29n, 31n, 37n]) {
-            if (x === p) return true;
-            if (x % p === 0n) return false;
-          }
-          let d = x - 1n;
-          let s = 0;
-          while ((d & 1n) === 0n) {
-            d >>= 1n;
-            s++;
-          }
-          for (const a of [2n, 325n, 9375n, 28178n, 450775n, 9780504n, 1795265022n]) {
-            if (a % x === 0n) continue;
-            let y = modPow(a, d, x);
-            if (y === 1n || y === x - 1n) continue;
-            let composite = true;
-            for (let r = 1; r < s; r++) {
-              y = (y * y) % x;
-              if (y === x - 1n) {
-                composite = false;
-                break;
-              }
+  const factorizeScript = dedent`
+    async (itx) => {
+      const n = 52479543428582704627n;
+      const gcd = (a: bigint, b: bigint): bigint => {
+        while (b) [a, b] = [b, a % b];
+        return a;
+      };
+      const modPow = (a: bigint, e: bigint, m: bigint): bigint => {
+        let r = 1n;
+        a %= m;
+        while (e > 0n) {
+          if (e & 1n) r = (r * a) % m;
+          a = (a * a) % m;
+          e >>= 1n;
+        }
+        return r;
+      };
+      const isPrime = (x: bigint): boolean => {
+        if (x < 2n) return false;
+        for (const p of [2n, 3n, 5n, 7n, 11n, 13n, 17n, 19n, 23n, 29n, 31n, 37n]) {
+          if (x === p) return true;
+          if (x % p === 0n) return false;
+        }
+        let d = x - 1n;
+        let s = 0;
+        while ((d & 1n) === 0n) {
+          d >>= 1n;
+          s++;
+        }
+        for (const a of [2n, 325n, 9375n, 28178n, 450775n, 9780504n, 1795265022n]) {
+          if (a % x === 0n) continue;
+          let y = modPow(a, d, x);
+          if (y === 1n || y === x - 1n) continue;
+          let composite = true;
+          for (let r = 1; r < s; r++) {
+            y = (y * y) % x;
+            if (y === x - 1n) {
+              composite = false;
+              break;
             }
-            if (composite) return false;
           }
-          return true;
-        };
-        const rho = (x: bigint): bigint => {
-          if (x % 2n === 0n) return 2n;
-          for (let c = 1n; ; c++) {
-            const f = (v: bigint) => (v * v + c) % x;
-            let a = 2n, b = 2n, d = 1n;
-            while (d === 1n) {
-              a = f(a);
-              b = f(f(b));
-              d = gcd(a > b ? a - b : b - a, x);
-            }
-            if (d !== x) return d;
+          if (composite) return false;
+        }
+        return true;
+      };
+      const rho = (x: bigint): bigint => {
+        if (x % 2n === 0n) return 2n;
+        for (let c = 1n; ; c++) {
+          const f = (v: bigint) => (v * v + c) % x;
+          let a = 2n, b = 2n, d = 1n;
+          while (d === 1n) {
+            a = f(a);
+            b = f(f(b));
+            d = gcd(a > b ? a - b : b - a, x);
           }
-        };
-        const factors: bigint[] = [];
-        const split = (x: bigint): void => {
-          if (x === 1n) return;
-          if (isPrime(x)) {
-            factors.push(x);
-            return;
-          }
-          const d = rho(x);
-          split(d);
-          split(x / d);
-        };
-        split(n);
-        factors.sort((p, q) => (p < q ? -1 : 1));
-        await itx.chat.sendMessage(\`\${n} = \${factors.join(" × ")}\`);
-      }
-    `,
-    "now do": dedent`
-      async (itx) => {
-        const helper = await itx.capabilityHost.previousScriptHelper({
-          ...results[0],
-          parameterize: { n: 52479543428582704627n },
-        });
-        await helper.run({ n: 66778601389380731119n });
-      }
-    `,
-  };
-  await using _interception = await fixture.interceptAi(async (call) => {
-    if (call.source !== "agent-turn") throw new Error(`unexpected source: ${call.source}`);
-    const lastUser = [...call.body.messages].reverse().find((m) => m.role === "user");
-    const entry = Object.entries(scripts).find(([key]) => lastUser?.content.includes(key));
-    if (!entry) throw new Error(`no scripted reply matches: ${lastUser?.content.slice(0, 80)}`);
-    return ["```ts", entry[1], "```"].join("\n");
-  });
+          if (d !== x) return d;
+        }
+      };
+      const factors: bigint[] = [];
+      const split = (x: bigint): void => {
+        if (x === 1n) return;
+        if (isPrime(x)) {
+          factors.push(x);
+          return;
+        }
+        const d = rho(x);
+        split(d);
+        split(x / d);
+      };
+      split(n);
+      factors.sort((p, q) => (p < q ? -1 : 1));
+      await itx.chat.sendMessage(\`\${n} = \${factors.join(" × ")}\`);
+    }
+  `;
 
-  await page.goto(`/projects/${fixture.project.slug}/agents/streams${agentPath}`);
+  const reuseScript = dedent`
+    async (itx) => {
+      const helper = await itx.capabilityHost.previousScriptHelper({
+        ...results[0],
+        parameterize: { n: 52479543428582704627n },
+      });
+      await helper.run({ n: 66778601389380731119n });
+    }
+  `;
+
+  await page.goto(agent.webUrl);
   const composer = page.getByPlaceholder("Message this agent");
   const send = page.getByRole("button", { name: "Send message" });
 
@@ -139,6 +120,7 @@ test("a repeat request reuses the previous turn's journaled script instead of re
   // working indicator disappears, so the wide budget never hides a blank UI.
   await spinnerWaiter.settings.run({ spinnerTimeout: 120_000 }, async () => {
     await composer.fill("prime factorize 52479543428582704627");
+    agent.responses.setOnce(factorizeScript);
     await send.click();
     await page.getByText("52479543428582704627 = 6203868971 × 8459163737").waitFor();
   });
@@ -147,6 +129,7 @@ test("a repeat request reuses the previous turn's journaled script instead of re
   // the new number — the correct product proves real execution, not prose.
   await spinnerWaiter.settings.run({ spinnerTimeout: 60_000 }, async () => {
     await composer.fill("now do 66778601389380731119");
+    agent.responses.setOnce(reuseScript);
     await send.click();
     await page.getByText("66778601389380731119 = 7316102869 × 9127619251").waitFor();
   });

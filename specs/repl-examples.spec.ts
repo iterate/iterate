@@ -3,7 +3,6 @@ import { spinnerWaiter } from "middlewright";
 import JSON5 from "json5";
 import { EXAMPLE_CASES } from "../apps/os/e2e/examples/example-cases.ts";
 import { ITX_EXAMPLES } from "../apps/os/src/itx/examples.ts";
-import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
 const REPL_EXAMPLES = Object.entries(EXAMPLE_CASES).flatMap(([id, exampleCase]) => {
@@ -18,7 +17,7 @@ const REPL_EXAMPLES = Object.entries(EXAMPLE_CASES).flatMap(([id, exampleCase]) 
 
 test.describe("itx REPL catalogue examples", () => {
   for (const { example, exampleCase } of REPL_EXAMPLES) {
-    test(`runs "${example.id}" through the project REPL`, async ({ baseURL, helpers, page }) => {
+    test(`runs "${example.id}" through the project REPL`, async ({ helpers, page }) => {
       // Cold-path examples declare their own completion budget (see
       // ExampleCase.completionTimeoutMs); the playwright test timeout must
       // not undercut it.
@@ -50,8 +49,7 @@ test.describe("itx REPL catalogue examples", () => {
       const cleanup = async () => {
         if (!exampleCase.cleanup) return;
         try {
-          using admin = await connectAdminItx(baseURL!);
-          using project = admin.projects.get(fixture.project.id);
+          const project = await fixture.itx();
           await exampleCase.cleanup(project, ctx);
         } catch (error) {
           console.warn(`example "${example.id}" cleanup failed (ignored):`, error);

@@ -1,6 +1,5 @@
 import { expect, type Page } from "@playwright/test";
 import { spinnerWaiter } from "middlewright";
-import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
 // Regression suite for the "stream feed wedges after browser suspend" bug:
@@ -17,7 +16,6 @@ import { test } from "./test-support/test.ts";
 // Assertions ride window.__streamRuntimeDebug() (stream-browser-store.ts's
 // debug registry) — transport-level truth, immune to UI-layer noise.
 
-const TEST_AGENT_PATH = "/agents/suspend-test";
 const MARKER_EVENT_TYPE = "events.iterate.test/spec/suspend-marker";
 const WEB_MESSAGE_SENT = "events.iterate.com/agents/web-message-sent";
 // This is the failure stimulus, not a recovery budget. The test arms an
@@ -42,23 +40,14 @@ const HEALTHY_DELIVERY_MS = 30_000;
 // a real wedge (the wedge is permanent; any finite window catches it).
 const RECOVERY_DELIVERY_MS = 90_000;
 
-test("control: appended event is delivered to a live stream feed", async ({
-  helpers,
-  page,
-  baseURL,
-}) => {
-  test.setTimeout(240_000);
+test("control: appended event is delivered to a live stream feed", async ({ helpers, page }) => {
   await using fixture = await helpers.createFixture("suspend-control");
-  if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
   const consoleLines = captureStreamConsole(page);
 
-  using admin = await connectAdminItx(baseURL);
-  using project = admin.projects.get(fixture.project.id);
-  using agent = project.agents.get(TEST_AGENT_PATH);
-  await agent.create();
+  const agent = await fixture.createAgent();
 
-  await page.goto(`/projects/${fixture.project.slug}/agents/streams/agents/suspend-test`);
-  const keys = runtimeDebugKeys(fixture.project.id);
+  await page.goto(agent.webUrl);
+  const keys = runtimeDebugKeys(fixture.project.id, agent.path);
   await waitForSubscribed(page, keys);
 
   const [marker] = await agent.stream.append({
@@ -79,24 +68,15 @@ test("control: appended event is delivered to a live stream feed", async ({
   ).toBe(true);
 });
 
-test("feed resumes after the /api WebSocket dies (clean close)", async ({
-  helpers,
-  page,
-  baseURL,
-}) => {
-  test.setTimeout(240_000);
+test("feed resumes after the /api WebSocket dies (clean close)", async ({ helpers, page }) => {
   await using fixture = await helpers.createFixture("suspend-socket");
-  if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
   await installSocketKillSwitch(page);
   const consoleLines = captureStreamConsole(page);
 
-  using admin = await connectAdminItx(baseURL);
-  using project = admin.projects.get(fixture.project.id);
-  using agent = project.agents.get(TEST_AGENT_PATH);
-  await agent.create();
+  const agent = await fixture.createAgent();
 
-  await page.goto(`/projects/${fixture.project.slug}/agents/streams/agents/suspend-test`);
-  const keys = runtimeDebugKeys(fixture.project.id);
+  await page.goto(agent.webUrl);
+  const keys = runtimeDebugKeys(fixture.project.id, agent.path);
   await waitForSubscribed(page, keys);
 
   // Kill the itx transport from inside the page — the "close event delivered"
@@ -133,22 +113,16 @@ test("feed resumes after the /api WebSocket dies (clean close)", async ({
 test("feed resumes after page freeze + socket death (mobile suspend shape)", async ({
   helpers,
   page,
-  baseURL,
 }) => {
-  test.setTimeout(240_000);
   await using fixture = await helpers.createFixture("suspend-freeze");
-  if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
   await installSocketKillSwitch(page);
   await installSuspendTimerProbe(page);
   const consoleLines = captureStreamConsole(page);
 
-  using admin = await connectAdminItx(baseURL);
-  using project = admin.projects.get(fixture.project.id);
-  using agent = project.agents.get(TEST_AGENT_PATH);
-  await agent.create();
+  const agent = await fixture.createAgent();
 
-  await page.goto(`/projects/${fixture.project.slug}/agents/streams/agents/suspend-test`);
-  const keys = runtimeDebugKeys(fixture.project.id);
+  await page.goto(agent.webUrl);
+  const keys = runtimeDebugKeys(fixture.project.id, agent.path);
   await waitForSubscribed(page, keys);
 
   // Mobile suspend ≈ suspended page script + the OS reaping the TCP
@@ -222,25 +196,25 @@ test("feed resumes after page freeze + socket death (mobile suspend shape)", asy
 test("feed resumes after the /api WebSocket goes half-open (no close frame)", async ({
   helpers,
   page,
-  baseURL,
 }) => {
   // The initial-reply wait (up to 120s) stacks on the probe window, the
   // paint wait (90s — see that step), and the two send assertions, so this
   // lane gets the heavy ceiling.
   test.setTimeout(360_000);
   await using fixture = await helpers.createFixture("suspend-halfopen");
-  if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
   await installSocketKillSwitch(page);
   const consoleLines = captureStreamConsole(page);
 
-  using admin = await connectAdminItx(baseURL);
-  using project = admin.projects.get(fixture.project.id);
-  using agent = project.agents.get(TEST_AGENT_PATH);
-  await agent.create();
+  const agent = await fixture.createAgent();
+  // A standing responder, not setOnce: this lane drives TWO turns — the primer
+  // below, and the mid-outage send further down that must eventually land.
+  agent.responses.set(
+    async () => '```ts\nasync (itx) => { await itx.chat.sendMessage("ready") }\n```',
+  );
   await agent.message("Reply with exactly: ready");
 
-  await page.goto(`/projects/${fixture.project.slug}/agents/streams/agents/suspend-test`);
-  const keys = runtimeDebugKeys(fixture.project.id);
+  await page.goto(agent.webUrl);
+  const keys = runtimeDebugKeys(fixture.project.id, agent.path);
   await waitForSubscribed(page, keys);
 
   // The composer initially renders a Send button before the initial reply's
@@ -412,8 +386,8 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
 // downloads once and fans out to the canonical processors (raw events cache +
 // feed projector). Its debug-registry key is `${projectId} ${streamPath}
 // browser-stream-processors` (stream-browser-store.ts).
-function runtimeDebugKeys(projectId: string) {
-  return [`${projectId} ${TEST_AGENT_PATH} browser-stream-processors`];
+function runtimeDebugKeys(projectId: string, agentPath: string) {
+  return [`${projectId} ${agentPath} browser-stream-processors`];
 }
 
 type RuntimeDebug = {

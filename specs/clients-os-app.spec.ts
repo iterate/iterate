@@ -1,5 +1,4 @@
 import { expect } from "@playwright/test";
-import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
 // The browser-adoption proof for projects.connect: every OS dashboard tab on a
@@ -9,18 +8,15 @@ import { test } from "./test-support/test.ts";
 // tab's SPA router INDEPENDENTLY through capabilities.browser.navigate.
 
 test("two dashboard tabs are two clients; an itx caller navigates each independently", async ({
-  baseURL,
   context,
   helpers,
   page,
 }) => {
   test.setTimeout(240_000);
   await using fixture = await helpers.createFixture("clients-os-app");
-  if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
   const slug = fixture.project.slug;
 
-  using admin = await connectAdminItx(baseURL);
-  using project = admin.projects.get(fixture.project.id);
+  const project = await fixture.itx();
 
   const connectedOsAppClients = async () => {
     const list = await project.clients.list();
