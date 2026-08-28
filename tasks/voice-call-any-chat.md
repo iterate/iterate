@@ -1,0 +1,113 @@
+---
+status: in-progress
+size: large
+base: mobile-voice-client
+---
+
+# Call any chat: per-chat voice lines, spoken status, the conversation on a real stream
+
+Builds on the mobile voice client (PR #2537) and the per-stream colleague
+(PR #2536). Misha's brief, verbatim in spirit:
+
+1. an *actual stream* for the frontend conversation
+2. the frontend should read out the backend's status-whispers — with
+   judgement, short, truthful, non-annoying; if the answer lands mid-status
+   it just says the answer right after
+3. a phone button on every chat in the mobile app — call any chat, in
+   frontend-backend mode
+4. the frontend should know both the *general* phase (writing code, running
+   code, llm-requesting — the #2543 vocabulary) and the *specific*
+   agent-set status (`summary-updated` activity), always concise
+
+## Status summary
+
+Spec committed first (bedtime protocol); implementation follows on this
+branch. Nothing built yet at spec time.
+
+## Decisions (my calls, flagged where they're guesses)
+
+- **"Actual stream" (ask 1) is delivered twice over, on the platform's
+  grain**:
+  - Calling a chat gives the call its own real stream per chat —
+    `/agents/voice/chat/<chat suffix>` — instead of everything sharing the
+    per-device line.
+  - The frontend conversation is *forwarded onto the colleague's stream* as
+    model-visible context: a copy-to-stream subscription on the voice
+    stream transforms `utterance-transcript`/`answer-transcript` into
+    `agents/context-added` (role `developer`, actor `{type: "agent", path:
+    <voice stream>}`, `dont-trigger-request`). The backend can now *read*
+    the call instead of being briefed second-hand, the chat thread keeps a
+    durable record of what was said, and a later text conversation
+    continues from the call. _Guess flagged: Misha may have meant only a
+    live transcript UI; that is included too (the call sheet grows a
+    scrollable live transcript fed by the durable events), so both readings
+    are covered._
+- **Phone button = chat header** (ask 3). One call at a time app-wide (a
+  phone). The chat screen's header gets a call icon; the in-call sheet is
+  the existing global overlay one. "Frontend-backend mode somehow" =
+  certificate gains `colleaguePath` (facet 18.0.0): when set, the facet
+  uses THAT agent as its colleague instead of minting
+  `/agents/voice-notes/...`. The chat agent is briefed (idempotent, keyed
+  context item) that a voice frontend exists and replies must be speakable.
+- **The colleague link is established at call time, not first-note time**:
+  `#ensureColleagueLink` runs when the call starts AND before the first
+  note, so the transcript flows to the chat even if `note_to_self` is
+  never called.
+- **Spoken status (asks 2+4)**: the whisper becomes a *combined* line from
+  the folded status — `[backend status: <phase> — <activity>]` — so the
+  model always knows both the lifecycle phase and the agent's own words.
+  On a *newsworthy* status (activity change or failure, never bare phase
+  churn), when the floor is free and ≥15s since the last spoken status,
+  the facet issues one `response.create` so the frontend can say a short
+  line ("it's running the code now") without being asked.
+  FAST_HALF_INSTRUCTIONS gains: status utterances are ONE short sentence,
+  ground-truth only, and skip the commentary if there's nothing new.
+- **Answer-after-status chaining (ask 2)**: a colleague note that lands
+  while an answer is streaming used to wait for the person's next press;
+  now it sets a pending flag and the facet issues `response.create` at
+  `response.done`, so "it's running the code" is followed straight by the
+  answer.
+- **Per-chat path is NOT per-device** — the chat's one phone line; two
+  devices calling the same chat share history (and can't call
+  concurrently, same as one voice stream ever could).
+- **Forwarded turns use role `developer`, not `user`**, deliberately:
+  user-role context items participate in turn accounting (queued/working
+  UI) and must not — a call transcript is testimony, not a prompt.
+
+## Checklist
+
+- [ ] Facet 18.0.0: `colleaguePath` on the certificate (state, configured
+      schema, SetupVoiceAgentOptions, fold)
+- [ ] Facet: extract `#ensureColleagueLink` (create + status subscription +
+      transcript subscription + brief + config), call it at call start and
+      note dispatch
+- [ ] Facet: transcript forwarding subscription (voice stream → colleague
+      stream, `context-added`, dont-trigger-request, rev const)
+- [ ] Facet: combined phase+activity whisper from folded state
+- [ ] Facet: spoken-status `response.create` (newsworthy + floor-free +
+      throttled) + instruction text for judgement/concision
+- [ ] Facet: note-at-response.done chaining
+- [ ] Facet unit tests (voice-agent.test.ts fake-provider harness)
+- [ ] Mobile: `chatVoiceStreamPath` + per-chat setup config (marker hashes
+      config incl. colleaguePath)
+- [ ] Mobile: phone button in the chat header starting a call against the
+      chat-derived stream
+- [ ] Mobile: call sheet transcript — live scrollable feed of
+      utterance/answer transcripts + notes + statuses over the durable
+      events
+- [ ] Mobile unit tests (voice-setup, transcript feed derivation)
+- [ ] Live e2e: extend voice-roundtrip to assert transcript context items
+      land on the colleague stream
+- [ ] Morning: on-device — call a chat from its header, watch the chat
+      thread fill with the call, hear a status line mid-task
+
+## Out of scope
+
+Android; web dashboard call button; multiple simultaneous calls; ending the
+colleague-brief context item when a chat "stops being" a voice backend;
+migrating existing per-device streams to chat lines; barge-in tuning.
+
+## Implementation log
+
+- Stack refreshed first: main (with #2543) merged → voice-colleague-per-stream
+  (12db13fba) → mobile-voice-client (19d742c4a); this branch starts there.
