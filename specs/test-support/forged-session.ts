@@ -186,6 +186,9 @@ export async function createProjectFixture(
           ) => Promise<string>;
         }> = [];
 
+        /** fingerprint -> script, so retries get the same script as last time */
+        previous: Map<string, (typeof this)["responders"][number]["fn"]> = new Map();
+
         set(script: Parameters<typeof this.setTimes>[1]) {
           this.setTimes(Infinity, script);
         }
@@ -202,10 +205,15 @@ export async function createProjectFixture(
           this.responders.push({ times, fn });
         }
 
-        take() {
+        take(call: ProjectAiInterceptorInput) {
+          const fingerprint = JSON.stringify(call);
+          const existing = this.previous.get(fingerprint);
+          if (existing) return existing;
+
           const next = this.responders[0];
           if (!next) return undefined;
           if (--next.times === 0) this.responders.shift();
+          this.previous.set(fingerprint, next.fn);
           return next.fn;
         }
       }
@@ -217,7 +225,7 @@ export async function createProjectFixture(
           payload: { config: { llm: { model: "intercepted/typed" }, llmRequestDebounceMs: 250 } },
         });
         await addAgentTurnInterceptor(path, async (call) => {
-          const next = responses.take();
+          const next = responses.take(call);
           if (!next) throw new Error(`No responses available for agent ${path}`);
           return await next(call as Extract<ProjectAiInterceptorInput, { source: "agent-turn" }>);
         });
@@ -265,7 +273,7 @@ export async function createProjectFixture(
        * Dispose with `await using`. Guide: docs/intercepted-models.md. */
       interceptAi,
       async [Symbol.asyncDispose]() {
-        resources.disposeAsync();
+        await resources.disposeAsync();
         await Promise.all(projectFixtures.map((fixture) => fixture[Symbol.asyncDispose]()));
       },
     };
