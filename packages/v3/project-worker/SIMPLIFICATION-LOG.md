@@ -559,3 +559,28 @@ processor-facet.ts) — the proofs that pinned the consolidation (ephemeralflood
 stateless workers or built-in facets, none of which import the SDK, so the gap went unproven. Fix
 belongs with whoever owns confinedWorker: either re-inject `processor.js` for SDK-importing loads, or
 seed it. Filed as a follow-up, distinct from the defect sweep.
+
+### Radical simplification — trusted-client model + mega-simple session lifecycle (Jonas)
+
+Two standing directives from Jonas turned defects into DELETIONS:
+
+- "We do not worry about malicious clients — anyone with project access is trusted to coordinate key
+  names/namespaces." → **Defect 34-sibling and defect 48 are WON'T-DO.** Removed the whole
+  reserved-key "fence bypass" cluster (the skip, the squat test, the sibling `test.fails`) and the
+  forged-provenance `test.fails` from `__tests__/failing-boundary-egress.test.ts` — all pure
+  malicious-client scenarios. No code fence added; revoke stays keyless (already simple).
+- "Network blips SHOULD show as session started + ended — mega simple, remove fake complexity." →
+  **Defect 14 dissolved by DELETION.** `itx-connection-directory.ts` lost the storm-rule machinery:
+  the absence timer (`ITX_CONNECTION_SESSION_ABSENCE_MS`), `lastActiveMs`, `endedNoLaterThan`, and the
+  clean-vs-dirty close-code distinction in `#connectionClosed`. New model: keyed attach → session-
+  started (a live transport SWAP continues the open one); the LAST transport's close → session-ended.
+  A drop-and-reconnect files ended then started. The `itx-surface.ts` onRpcBroken close code no longer
+  carries session meaning (comment updated). The dirty-death test now asserts `[STARTED, ENDED,
+STARTED]`; the ≥15-min-absence `test.todo` is gone.
+
+Net: −~40 LOC of speculative machinery, +clarity. Suite **289 passed / 15 xf** (was 289/18: the
+dirty-death test flipped to passing, three malicious `test.fails` deleted), typecheck clean.
+
+Also realigned `src/generated/processor-*.ts` — the committed bundle had drifted ~10KB behind source
+(deployments were unaffected: wrangler's custom build runs build-sdk.mjs fresh on every deploy). The
+build is deterministic; the committed artifact now matches source again.

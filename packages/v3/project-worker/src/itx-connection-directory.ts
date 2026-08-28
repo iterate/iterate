@@ -4,15 +4,15 @@
 //
 //   • IDENTITY: connectionId = String(connectedAtOffset) — the offset of the ephemeral
 //     connection-opened fact. No synthetic ids; the log names every connection.
-//   • THE SESSION RULE (crisp, timerless, storm-proof): two transports under one client-chosen
-//     connectionKey belong to the same ItxConnectionSession unless separated by a CLEAN final
-//     close or ≥ T of absence (T = 15 min). Decided at attach time from facts in hand: a
-//     crash-loop reconnect storm is ONE session and ONE durable fact; a dirty death ends
-//     nothing until superseded ("ended no later than…"). Durable connection-session-started/
-//     -ended facts answer who-was-connected-Tuesday; ephemeral connection-opened/-closed facts
-//     are the real-time notifications; `currentlyConnected()` is the runtime authority.
-//     Anonymous attaches (no key — parked live callbacks) file no session history: their
-//     durable trace is the capability mount that names them.
+//   • THE SESSION: one durable session per connectionKey — a session-started fact at the first
+//     transport's attach, a session-ended fact when the LAST transport for the key closes. A
+//     transport SWAP (a new attach while an old transport still holds the key) continues the same
+//     session; a full drop-and-reconnect files ended then started — a network blip IS two facts.
+//     No coalescing, no absence timer, no clean-vs-dirty distinction (deliberately mega-simple).
+//     Durable connection-session-started/-ended facts answer who-was-connected-Tuesday; ephemeral
+//     connection-opened/-closed facts are the real-time notifications; `currentlyConnected()` is
+//     the runtime authority. Anonymous attaches (no key — parked live callbacks) file no session
+//     history: their durable trace is the capability mount that names them.
 //   • THE VIEWS: invoke-by-key, each() fan-out, the currently connected clients, kick.
 //
 // Two-phase attach: the RPC mints the connectionId FIRST (it must append the opened fact to
@@ -29,12 +29,10 @@ import {
 import type { StreamEvent, StreamEventInput } from "./core/events.ts";
 import { codedError, reportIssue } from "./core/errors.ts";
 
-/** The ItxConnectionSession record for one connectionKey (kv `connection-session:<key>`) — the
- *  session rule's working memory. The durable truth is the session facts on the stream; this
- *  record carries only what deciding the rule needs. */
-type ItxConnectionSessionRecord = { sessionStartedAtOffset: number; lastActiveMs: number };
-/** The session rule's T. */
-const ITX_CONNECTION_SESSION_ABSENCE_MS = 15 * 60_000;
+/** The open ItxConnectionSession for one connectionKey (kv `connection-session:<key>`): just the
+ *  offset of its session-started fact, so the matching session-ended fact can name it. Present iff
+ *  a session is open; deleted when the last transport for the key closes. */
+type ItxConnectionSessionRecord = { sessionStartedAtOffset: number };
 
 /** Everything the directory needs from its stream, injected — no hidden reach. */
 type ItxConnectionDirectoryDeps = {
@@ -85,37 +83,24 @@ export class ItxConnectionDirectory {
       for (const r of this.#stubs.all())
         if (r.connectionKey === input.connectionKey) this.#stubs.drop(r.stubKey, "replaced");
       const sessionKey = `connection-session:${input.connectionKey}`;
-      const session = this.#deps.kv.get(sessionKey) as ItxConnectionSessionRecord | undefined;
-      if (session && Date.now() - session.lastActiveMs < ITX_CONNECTION_SESSION_ABSENCE_MS) {
-        sessionStartedAtOffset = session.sessionStartedAtOffset; // the same session continues
+      const open = this.#deps.kv.get(sessionKey) as ItxConnectionSessionRecord | undefined;
+      if (open) {
+        sessionStartedAtOffset = open.sessionStartedAtOffset; // a live transport swap continues it
       } else {
-        const facts: StreamEventInput[] = [];
-        if (session)
-          // A dirty death ended nothing at the time — settle it now, bounded by what we know.
-          facts.push({
-            type: "events.iterate.com/itx-connection/connection-session-ended",
-            payload: {
-              connectionKey: input.connectionKey,
-              sessionStartedAtOffset: session.sessionStartedAtOffset,
-              endedNoLaterThan: new Date(
-                session.lastActiveMs + ITX_CONNECTION_SESSION_ABSENCE_MS,
-              ).toISOString(),
-            },
-          });
-        facts.push({
+        // No open session (first attach, or a full drop-and-reconnect that already ended one) —
+        // start a fresh one.
+        const [started] = await this.#deps.append({
           type: "events.iterate.com/itx-connection/connection-session-started",
           payload: {
             connectionKey: input.connectionKey,
             ...(input.description ? { description: input.description } : {}),
           },
         });
-        const committed = await this.#deps.append(...facts);
-        sessionStartedAtOffset = committed[committed.length - 1].offset;
+        sessionStartedAtOffset = started.offset;
+        this.#deps.kv.put(sessionKey, {
+          sessionStartedAtOffset,
+        } satisfies ItxConnectionSessionRecord);
       }
-      this.#deps.kv.put(sessionKey, {
-        sessionStartedAtOffset,
-        lastActiveMs: Date.now(),
-      } satisfies ItxConnectionSessionRecord);
     }
     const [opened] = await this.#deps.append({
       type: "events.iterate.com/itx-connection/connection-opened",
@@ -215,24 +200,17 @@ export class ItxConnectionDirectory {
       },
     ];
     if (keyFinal) {
+      // The last transport for the key is gone — end the session NOW, clean close or dirty drop
+      // alike (a network blip files ended; the next attach files a fresh started). The next attach
+      // starts a new one.
       const sessionKey = `connection-session:${connectionKey}`;
-      const session = this.#deps.kv.get(sessionKey) as ItxConnectionSessionRecord | undefined;
-      if (session) {
-        if (code === 1000) {
-          // A clean, final end closes the session NOW — the next attach starts a fresh one.
-          facts.push({
-            type: "events.iterate.com/itx-connection/connection-session-ended",
-            payload: { connectionKey, sessionStartedAtOffset: session.sessionStartedAtOffset },
-          });
-          this.#deps.kv.delete(sessionKey);
-        } else {
-          // A dirty death ends nothing yet — stamp the absence clock; the next attach (or ≥T of
-          // absence) settles it ("ended no later than…").
-          this.#deps.kv.put(sessionKey, {
-            ...session,
-            lastActiveMs: Date.now(),
-          } satisfies ItxConnectionSessionRecord);
-        }
+      const open = this.#deps.kv.get(sessionKey) as ItxConnectionSessionRecord | undefined;
+      if (open) {
+        facts.push({
+          type: "events.iterate.com/itx-connection/connection-session-ended",
+          payload: { connectionKey, sessionStartedAtOffset: open.sessionStartedAtOffset },
+        });
+        this.#deps.kv.delete(sessionKey);
       }
     }
     await this.#deps.append(...facts);

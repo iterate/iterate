@@ -234,26 +234,11 @@ test("clean close ends the session: fact sequence started → ended → started 
   }).then((seq) => expect(seq).toEqual([STARTED, ENDED, STARTED]));
 });
 
-// BUG: a DIRTY client death is filed as a CLEAN session end — the session rule's storm clause
-//   is unreachable. itx-surface.ts closes the pager WebSocket with code 1000 on BOTH paths
-//   (onRpcBroken → close(1000, "provider session broke"); ProjectSession dispose →
-//   close(1000, "relay disposed")), and itx-connection-directory.ts#connectionClosed treats
-//   code 1000 as "a clean, final end closes the session NOW" (kv deleted, ended fact filed).
-// EXPECTED: per the directory's own header — "two transports under one client-chosen
-//   connectionKey belong to the same ItxConnectionSession unless separated by a CLEAN final
-//   close or ≥ T of absence… a crash-loop reconnect storm is ONE session and ONE durable fact;
-//   a dirty death ends nothing until superseded". Fact sequence for the key: [started].
-// ACTUAL: [started, ended, started] — the severed transport (no capnweb goodbye, the client
-//   could reconnect any second) immediately ends the session, and the reconnect seconds later
-//   mints a brand-new one.
-// WHY IT MATTERS: every network blip now files a durable ended+started pair per client — a
-//   crash-loop storm floods the durable log with exactly the facts the session rule exists to
-//   coalesce, and who-was-connected-Tuesday history splits one logical session into many.
-// DEFERRED (defect 14): the fix cannot come from the pager close code — a clean [Symbol.dispose]
-// and this dirty ws.close() sever the socket with the SAME code, so clean-vs-dirty is only knowable
-// from whether relay.dispose() is ALSO called (it fires after onRpcBroken and races the async
-// #connectionClosed). Needs a dispose()-signals-clean-end path; left failing until then.
-test.fails("dirty transport death + reconnect within seconds shares ONE ItxConnectionSession (the storm rule)", async () => {
+// A network blip IS two facts (deliberately mega-simple — no coalescing, no absence timer, no
+// clean-vs-dirty distinction): the severed transport is the last one for the key, so its close
+// ends the session; the reconnect starts a fresh one. Sequence for the key: [started, ended,
+// started].
+test("dirty transport death + reconnect files ended then started (a blip is two facts, no coalescing)", async () => {
   const ctx = c("dirty");
   const observer = await harness.itx(ctx);
   const { session: sA, ws: wsA } = rawSession(ctx);
@@ -288,8 +273,7 @@ test.fails("dirty transport death + reconnect within seconds shares ONE ItxConne
     }
   });
 
-  // Reconnect within seconds — the session rule: two transports under one key belong to the
-  // SAME session unless separated by a CLEAN final close or ≥15min of absence.
+  // Reconnect within seconds — with no coalescing, this starts a brand-new session.
   const s2 = harness.session(ctx);
   await s2.connect({
     connectionKey: "phoenix",
@@ -300,7 +284,7 @@ test.fails("dirty transport death + reconnect within seconds shares ONE ItxConne
     (await listConnections(observer)).some((r) => r.connectionKey === "phoenix"),
   );
   const seq = sessionFactsFor(await connectionFacts(observer), "phoenix").map((f) => f.type);
-  expect(seq).toEqual([STARTED]); // one session, one durable fact — a crash-loop storm files ONE
+  expect(seq).toEqual([STARTED, ENDED, STARTED]); // blip = ended + started, no coalescing
 });
 
 test("disposing a client session removes its connections promptly and auto-revokes its live-cap mounts", async () => {
@@ -469,7 +453,4 @@ test.todo(
 );
 test.todo(
   "a connectionKey that equals another connection's numeric connectionId makes find() ambiguous (connectionKey === key || stubKey === key scans in socket order) — needs a deterministic offset rig to force the collision",
-);
-test.todo(
-  "≥15min of absence settles a dirty session with 'endedNoLaterThan' at the NEXT attach — wall-clock infeasible here (ITX_CONNECTION_SESSION_ABSENCE_MS is a const, no injectable clock)",
 );

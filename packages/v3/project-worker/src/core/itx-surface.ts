@@ -122,13 +122,9 @@ async function startCapnwebCallbackRelay(
   const disposeRetained = () => disposeStub(retained);
   // The library's own death signal: the client's capnweb session broke → the retained callback
   // can never answer again. Close the pager WebSocket NOW so the DO reaps the connection
-  // immediately — without this the currently-connected list lies until a page times out (10s).
-  // NOTE (defect 14, deferred): this closes 1000, which #connectionClosed reads as a CLEAN final
-  // close and ends the session — so a DIRTY severance files an ended+started pair per network blip
-  // instead of coalescing (the storm rule). It cannot be fixed by the close code alone: a clean
-  // [Symbol.dispose] and a dirty ws.close() sever the socket with the SAME code, so clean-vs-dirty
-  // is only knowable from whether relay.dispose() below is ALSO called — which fires AFTER this and
-  // races the async #connectionClosed. The right fix is a dispose()-signals-clean-end path.
+  // immediately — without this the currently-connected list lies until a page times out (10s). The
+  // close code carries no session meaning: every last-transport close ends the session (see the
+  // itx-connection-directory header — a network blip is deliberately ended + started, no coalescing).
   (retained as { onRpcBroken?: (cb: () => void) => void }).onRpcBroken?.(() => {
     try {
       pagerWebSocket.close(1000, "provider session broke");
