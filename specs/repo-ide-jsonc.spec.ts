@@ -1,5 +1,4 @@
 import { expect } from "@playwright/test";
-import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 import { openRepoTreeFile } from "./test-support/repo-tree.ts";
 
@@ -16,12 +15,10 @@ import { openRepoTreeFile } from "./test-support/repo-tree.ts";
 test("a commented tsconfig still schema-validates (comments are tolerated)", async ({
   helpers,
   page,
-  baseURL,
 }) => {
   await using fixture = await helpers.createFixture("repo-ide-jsonc");
 
-  using itx = await connectAdminItx(baseURL!);
-  using project = itx.projects.get(fixture.project.id);
+  using project = await fixture.projectItx();
   await project.repos.get("/repos/ide").create({ type: "empty" });
   // A comment, a trailing comma, and a schema violation (`strict` must be a
   // boolean). json5 tolerates the first two; the schema flags the third.

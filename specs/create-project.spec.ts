@@ -118,9 +118,13 @@ test("the config template opens a proactive onboarding conversation for a new pr
   expect(
     createdEvent.find((event) => event.type === "events.iterate.com/agent/created")?.payload,
   ).toEqual({});
-  expect(
-    projectCreatedEvents.find((event) => event.type === "events.iterate.com/project/created")
-      ?.payload?.config?.configRepoTemplate,
-  ).toMatch(/^github:iterate\/iterate#(?:[0-9a-f]{40}&)?path:configs\/with-voice$/);
+  // `project/created` journals its payload as `{}` in the generated event
+  // types, so the config shape is not reachable through them yet.
+  const projectCreatedPayload: any = projectCreatedEvents.find(
+    (event) => event.type === "events.iterate.com/project/created",
+  )?.payload;
+  expect(projectCreatedPayload?.config?.configRepoTemplate).toMatch(
+    /^github:iterate\/iterate#(?:[0-9a-f]{40}&)?path:configs\/with-voice$/,
+  );
   expect(promptEvent?.payload?.content).toContain("# Voice Project Onboarding");
 });
