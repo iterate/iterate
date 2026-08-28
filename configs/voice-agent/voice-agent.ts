@@ -490,10 +490,56 @@ const COLLEAGUE_STATUS_TRANSFORM = [
  * keeps developer-role precedence through the platform's trust demotion
  * (agent-authored developer items keep their role).
  *
- * Installed by #ensureColleagueLink on THIS stream (the source); bump the
- * revision when the filter or transform changes.
+ * Installed by SETUP, not the facet: the first cut had #ensureColleagueLink
+ * append it from processEvent, the deployed platform rejected the payload
+ * (schema drift the facet cannot see), and the swallowed error took the
+ * colleague brief down with it — measured on prd, one silent evening.
+ * Setup's batch surfaces a refusal as a failed setup, and setup already
+ * owns this stream's subscriptions. Content-hash keyed like the facet
+ * subscription beside it.
+ *
+ * No `condition` on the filter, deliberately: deployed platforms reject
+ * unknown filter keys, and both transcript append sites already skip empty
+ * turns.
  */
-const COLLEAGUE_TRANSCRIPT_SUBSCRIPTION_REV = 1;
+function colleagueTranscriptSubscription(streamPath: string, colleaguePath: string) {
+  return {
+    name: "voice-frontend-transcript",
+    description: "Land the call's transcript on the colleague's stream as context.",
+    filter: {
+      eventTypes: [
+        "events.iterate.com/voice-agent/utterance-transcript",
+        "events.iterate.com/voice-agent/answer-transcript",
+      ],
+    },
+    receiver: {
+      action: "copy-to-stream",
+      receivingStreamPath: colleaguePath,
+      jsonataTransform: colleagueTranscriptTransform(streamPath),
+      delivery: { start: "now", onFailingEvent: "halt" },
+    },
+  };
+}
+
+/**
+ * Where a stream's colleague lives. The certificate wins: a `colleaguePath`
+ * names an EXISTING agent — a chat — as the backend (the "call any chat"
+ * mode). Otherwise the voice stream's own path is re-rooted under
+ * `/agents/voice-notes/`, a pure function of the path, so every
+ * conversation on the stream — and every incarnation — reaches the SAME
+ * desk, and a person who knows the call stream can type the colleague's
+ * path from memory. The common `/agents/` prefix is folded rather than
+ * repeated (`/agents/voice/x` → `/agents/voice-notes/voice/x`). Shared by
+ * the facet (notes, the colleague-side link) and setup (the transcript
+ * subscription's target).
+ */
+export function colleaguePathForStream(streamPath: string, certificatePath: string | null): string {
+  if (certificatePath !== null) return certificatePath;
+  const suffix = streamPath.startsWith("/agents/")
+    ? streamPath.slice("/agents/".length)
+    : streamPath.slice(1);
+  return `/agents/voice-notes/${suffix}`;
+}
 
 function colleagueTranscriptTransform(voiceStreamPath: string): string {
   return [
@@ -3635,22 +3681,9 @@ export class VoiceAgentProcessor extends StreamProcessor<
    * redelivery dedupe for the note whisper (see the colleague-note arm). */
   #lastInjectedNoteOffset = 0;
 
-  /**
-   * Where this stream's colleague lives. The certificate wins: a
-   * `colleaguePath` names an EXISTING agent — a chat — as the backend (the
-   * "call any chat" mode). Otherwise the voice stream's own path is
-   * re-rooted under `/agents/voice-notes/`, a pure function of `this.path`,
-   * so every conversation on the stream — and every incarnation — reaches
-   * the SAME desk, and a person who knows the call stream can type the
-   * colleague's path from memory. The common `/agents/` prefix is folded
-   * rather than repeated (`/agents/voice/x` → `/agents/voice-notes/voice/x`).
-   */
+  /** Where this stream's colleague lives — see colleaguePathForStream. */
   #colleaguePath(state: ProcessEventArgs<VoiceAgentContract>["state"]): string {
-    if (state.colleaguePath !== null) return state.colleaguePath;
-    const suffix = this.path.startsWith("/agents/")
-      ? this.path.slice("/agents/".length)
-      : this.path.slice(1);
-    return `/agents/voice-notes/${suffix}`;
+    return colleaguePathForStream(this.path, state.colleaguePath);
   }
 
   /**
@@ -3745,36 +3778,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
             },
           },
         });
-        /*
-         * THE TRANSCRIPT LANE, the other direction: both sides of the call
-         * land on the colleague's stream as readable developer context —
-         * see colleagueTranscriptTransform for why that shape. Installed on
-         * THIS stream (the source of the transcript events). The condition
-         * spares the colleague the empty turns the fold also skips.
-         */
-        await typedProject.streams.get(this.path).append({
-          type: "events.iterate.com/stream/subscription-configured",
-          idempotencyKey: this.idempotencyKey(
-            `colleague-transcript-subscription:${colleaguePath}:rev${COLLEAGUE_TRANSCRIPT_SUBSCRIPTION_REV}`,
-          ),
-          payload: {
-            name: "voice-frontend-transcript",
-            description: "Land the call's transcript on the colleague's stream as context.",
-            filter: {
-              eventTypes: [
-                "events.iterate.com/voice-agent/utterance-transcript",
-                "events.iterate.com/voice-agent/answer-transcript",
-              ],
-              condition: 'payload.text != ""',
-            },
-            receiver: {
-              action: "copy-to-stream",
-              receivingStreamPath: colleaguePath,
-              jsonataTransform: colleagueTranscriptTransform(this.path),
-              delivery: { start: "now", onFailingEvent: "halt" },
-            },
-          },
-        });
+        /* (The transcript lane — the other direction — is installed by
+         * SETUP, whose batch surfaces a refused append as a failed setup;
+         * see colleagueTranscriptSubscription for the silent-evening
+         * incident that moved it there.) */
         /* Keyed context item — re-adding the key IS the update — but the
          * append dedupes by idempotency key, so the key carries a revision:
          * bump it when the brief's text changes, or old streams keep the
@@ -4738,6 +4745,20 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
         },
       };
       const subscriptionKeyPrefix = `voice-agent/subscription:${streamPath}`;
+      /* THE TRANSCRIPT LANE rides the setup batch: the facet cannot append
+       * a subscription to its own stream (the RPC re-enters its own Durable
+       * Object), and setup already owns this stream's subscriptions. The
+       * colleague path is a pure function of the certificate, so setup
+       * knows the target without asking anybody. Skipped only when the
+       * colleague is explicitly off. */
+      const transcriptSubscriptionPayload =
+        options.colleague === false
+          ? null
+          : colleagueTranscriptSubscription(
+              streamPath,
+              colleaguePathForStream(streamPath, options.colleaguePath ?? null),
+            );
+      const transcriptKeyPrefix = `voice-agent/transcript-subscription:${streamPath}`;
       const committed = await stream.append(
         {
           type: "events.iterate.com/voice-agent/created",
@@ -4756,6 +4777,17 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
             : `${subscriptionKeyPrefix}:${contentHash(subscriptionPayload)}`,
           payload: subscriptionPayload,
         },
+        ...(transcriptSubscriptionPayload === null
+          ? []
+          : [
+              {
+                type: "events.iterate.com/stream/subscription-configured",
+                idempotencyKey: options.reinstall
+                  ? `${transcriptKeyPrefix}:reinstall:${crypto.randomUUID()}`
+                  : `${transcriptKeyPrefix}:${contentHash(transcriptSubscriptionPayload)}`,
+                payload: transcriptSubscriptionPayload,
+              },
+            ]),
       );
       /* The batch's HIGHEST offset is the barrier target: an idempotent
        * re-append returns the ORIGINAL committed events, so a re-run of setup

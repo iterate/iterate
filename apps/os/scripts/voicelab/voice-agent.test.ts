@@ -1047,10 +1047,11 @@ describe("tools on the birth certificate", () => {
      * same desk for every conversation the stream ever holds. */
     expect(gotten[0]).toBe("/agents/voice-notes/voice/test");
     expect(created).toEqual(["/agents/voice-notes/voice/test"]);
-    /* And the link wires BOTH lanes: the colleague's own narration forwarded
-     * here as colleague-status events, and the call's transcript forwarded
-     * THERE as readable developer context. */
-    expect(subscriptions).toHaveLength(2);
+    /* And the link wires the status lane: the colleague's own narration is
+     * forwarded to this stream as colleague-status events. (The transcript
+     * lane rides SETUP's batch — the facet cannot append a subscription to
+     * its own stream.) */
+    expect(subscriptions).toHaveLength(1);
     expect(subscriptions[0]).toMatchObject({
       path: "/agents/voice-notes/voice/test",
       type: "events.iterate.com/stream/subscription-configured",
@@ -1069,26 +1070,6 @@ describe("tools on the birth certificate", () => {
     });
     expect(subscriptions[0]!.payload.receiver.jsonataTransform).toContain(
       "voice-agent/colleague-status",
-    );
-    expect(subscriptions[1]).toMatchObject({
-      path: "/agents/voice/test",
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: {
-        filter: {
-          eventTypes: [
-            "events.iterate.com/voice-agent/utterance-transcript",
-            "events.iterate.com/voice-agent/answer-transcript",
-          ],
-        },
-        receiver: {
-          action: "copy-to-stream",
-          receivingStreamPath: "/agents/voice-notes/voice/test",
-        },
-      },
-    });
-    expect(subscriptions[1]!.payload.receiver.jsonataTransform).toContain("agents/context-added");
-    expect(subscriptions[1]!.payload.receiver.jsonataTransform).toContain(
-      '"llmRequestPolicy": { "behaviour": "dont-trigger-request" }',
     );
     /* Born briefed, as a system context item that triggers no turn. */
     expect(briefs[0]!.type).toBe("events.iterate.com/agents/context-added");
@@ -1574,21 +1555,13 @@ describe("tools on the birth certificate", () => {
 
     /* Linked at CALL START — before any note exists. */
     expect(created).toEqual(["/agents/mobile/1234"]);
-    expect(subscriptions).toHaveLength(2);
-    /* Status lane: the chat's narration and replies flow HERE. */
+    /* Status lane: the chat's narration and replies flow HERE. (The
+     * transcript lane the other way rides SETUP's batch, not the link.) */
+    expect(subscriptions).toHaveLength(1);
     expect(subscriptions[0]).toMatchObject({
       path: "/agents/mobile/1234",
       payload: { receiver: { receivingStreamPath: "/agents/voice/test" } },
     });
-    /* Transcript lane: the call's conversation flows THERE. */
-    expect(subscriptions[1]).toMatchObject({
-      path: "/agents/voice/test",
-      payload: {
-        receiver: { receivingStreamPath: "/agents/mobile/1234" },
-        filter: { condition: 'payload.text != ""' },
-      },
-    });
-    expect(subscriptions[1]!.payload.receiver.jsonataTransform).toContain('"role": "developer"');
     /* The brief lands; the chat's own configuration is NOT rewritten — no
      * debounce append for a desk this facet does not own. */
     expect(agentAppends.map((entry) => entry.type)).toEqual([

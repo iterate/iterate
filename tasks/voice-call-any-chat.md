@@ -21,8 +21,12 @@ Builds on the mobile voice client (PR #2537) and the per-stream colleague
 
 ## Status summary
 
-Spec committed first (bedtime protocol); implementation follows on this
-branch. Nothing built yet at spec time.
+Implemented, unit-tested (88 facet + 191 mobile tests green), and
+live-proven against prd: the e2e calls a chat on voicelab-eval (template
+18.0.0), gets answered, and the conversation lands on the chat's stream as
+`[voice call]` context items (13s round trip). Templates upgraded on
+voicelab-eval, misha, iterate. Remaining: the morning on-device box below
+(pure-JS change, so the existing build + OTA update should carry it).
 
 ## Decisions (my calls, flagged where they're guesses)
 
@@ -76,28 +80,27 @@ branch. Nothing built yet at spec time.
 
 ## Checklist
 
-- [ ] Facet 18.0.0: `colleaguePath` on the certificate (state, configured
-      schema, SetupVoiceAgentOptions, fold)
-- [ ] Facet: extract `#ensureColleagueLink` (create + status subscription +
-      transcript subscription + brief + config), call it at call start and
-      note dispatch
-- [ ] Facet: transcript forwarding subscription (voice stream → colleague
-      stream, `context-added`, dont-trigger-request, rev const)
-- [ ] Facet: combined phase+activity whisper from folded state
-- [ ] Facet: spoken-status `response.create` (newsworthy + floor-free +
-      throttled) + instruction text for judgement/concision
-- [ ] Facet: note-at-response.done chaining
-- [ ] Facet unit tests (voice-agent.test.ts fake-provider harness)
-- [ ] Mobile: `chatVoiceStreamPath` + per-chat setup config (marker hashes
-      config incl. colleaguePath)
-- [ ] Mobile: phone button in the chat header starting a call against the
-      chat-derived stream
-- [ ] Mobile: call sheet transcript — live scrollable feed of
+- [x] Facet 18.0.0: `colleaguePath` on the certificate (state, configured
+      schema, SetupVoiceAgentOptions, fold) _voice-agent.ts; certificate wins over the derived `/agents/voice-notes/...` path_
+- [x] Facet: extract `#ensureColleagueLink` (create + status subscription +
+      brief + config), call it at call start and note dispatch _memoized promise, reset on failure; debounce config skipped for an existing chat_
+- [x] Facet: transcript forwarding subscription (voice stream → colleague
+      stream, `context-added`, dont-trigger-request) _moved to setupVoiceAgent's batch after a live incident: the facet-side append was refused (prd rejects `filter.condition` — schema drift) and the swallowed error also ate the brief; setup surfaces refusals_
+- [x] Facet: combined phase+activity whisper from folded state _"[backend status: running code — Sweeping March refunds]"_
+- [x] Facet: spoken-status `response.create` (newsworthy + floor-free +
+      throttled) + instruction text for judgement/concision _15s gap, newsworthy = activity change or failure, never phase churn, `quiet` for the note-dispatch echo_
+- [x] Facet: note-at-response.done chaining _`pendingNoteResponse` drained at the response.done arm_
+- [x] Facet unit tests (voice-agent.test.ts fake-provider harness) _88 green, 3 new: spoken-status discipline, note chaining, colleaguePath link_
+- [x] Mobile: `chatVoiceStreamPath` + per-chat setup config (marker hashes
+      config incl. colleaguePath) _voice-setup.ts, marker v4_
+- [x] Mobile: phone button in the chat header starting a call against the
+      chat-derived stream _VoiceCallChatButton in chat.tsx headerRight; reopens the sheet while any call is live_
+- [x] Mobile: call sheet transcript — live scrollable feed of
       utterance/answer transcripts + notes + statuses over the durable
-      events
-- [ ] Mobile unit tests (voice-setup, transcript feed derivation)
-- [ ] Live e2e: extend voice-roundtrip to assert transcript context items
-      land on the colleague stream
+      events _CallTranscript in voice-call-button.tsx over useLiveEvents; pure `transcriptItems` derivation_
+- [x] Mobile unit tests (voice-setup, transcript feed derivation) _191 green across apps/mobile/src/lib_
+- [x] Live e2e: extend voice-roundtrip to assert transcript context items
+      land on the colleague stream _passed against prd voicelab-eval in 13s: answer audio + both speakers as `[voice call]` items on the chat_
 - [ ] Morning: on-device — call a chat from its header, watch the chat
       thread fill with the call, hear a status line mid-task
 
@@ -111,3 +114,16 @@ migrating existing per-device streams to chat lines; barge-in tuning.
 
 - Stack refreshed first: main (with #2543) merged → voice-colleague-per-stream
   (12db13fba) → mobile-voice-client (19d742c4a); this branch starts there.
+- Live incident during the e2e: the first cut installed the transcript
+  subscription from the facet (processEvent → withProject → append to its
+  own stream). prd refused the payload — `filter.condition` is not in the
+  deployed subscription schema yet — and because the whole link ran in one
+  swallowed-catch closure, the colleague brief silently died with it. Two
+  fixes: the subscription moved into setupVoiceAgent's batch (a refusal is
+  now a failed setup, loudly), and the `condition` was dropped (both
+  transcript append sites already skip empty turns).
+- prd templates upgraded to 18.0.0: voicelab-eval (e2e home), misha,
+  iterate — same routine as the 17.0.0 upgrades in #2537.
+- The debounce-250 append observed on chats comes from the platform config
+  worker's own done-configuring signal; the facet's gate (never rewrite an
+  existing chat's config) is correct and unit-tested.
