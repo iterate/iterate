@@ -1005,7 +1005,11 @@ export const VoiceAgentContract = defineProcessorContract({
    * hi when it picks up. On session.updated the facet plants a system item
    * and asks for one response; the transcript recap makes it "hi again" on
    * a stream that has history. Clean break as ever. */
-  version: "17.0.0",
+  /* 18.0.0: `colleagueStatus.failure` joins the fold (a reconnect's briefing
+   * should say WHAT failed). A required field on a strict schema means a
+   * persisted 17.0.0 fold no longer parses — the major bump is what tells
+   * the runner to re-reduce instead. Clean break as ever. */
+  version: "18.0.0",
   description: "Runs a voice call in the stream's own Durable Object, one flush watermark deep.",
   stateSchema: VoiceState,
   events: {
