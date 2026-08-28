@@ -128,9 +128,6 @@ export async function createProjectFixture(
     // fixture's asyncDispose drains it so specs need only `await using fixture`.
     const resources = new AsyncDisposableStack();
     let admin: Awaited<ReturnType<typeof connectAdminItx>> | undefined;
-    let itxHandle:
-      | ReturnType<Awaited<ReturnType<typeof connectAdminItx>>["projects"]["get"]>
-      | undefined;
 
     const connectAdmin = async () => {
       if (admin) return admin;
@@ -138,12 +135,15 @@ export async function createProjectFixture(
       return admin;
     };
 
-    /** Project-scoped itx (admin dial → `projects.get`). Cached on the fixture. */
-    const itx = async () => {
-      if (itxHandle) return itxHandle;
+    /**
+     * Project-scoped itx (admin dial → `projects.get`). Every call mints a
+     * FRESH stub the caller owns, so `using` at the call site is correct — the
+     * same reflex as every other capnweb stub in these specs. Only the
+     * underlying admin connection is cached and fixture-disposed.
+     */
+    const projectItx = async () => {
       const adminSession = await connectAdmin();
-      itxHandle = resources.use(adminSession.projects.get(project.id));
-      return itxHandle;
+      return adminSession.projects.get(project.id);
     };
 
     const interceptAi = (handler: ProjectAiInterceptor) =>
@@ -176,7 +176,7 @@ export async function createProjectFixture(
     const createAgent = async (params?: { infix?: string; useRealLlm?: boolean }) => {
       const slugParts = [slugPrefix, params?.infix, crypto.randomUUID().slice(0, 8)];
       const path = `/agents/${slugParts.filter(Boolean).join("-")}`;
-      const projectRpc = await itx();
+      const projectRpc = resources.use(await projectItx());
       const agent = resources.use(projectRpc.agents.get(path));
       class ResponseQueuer {
         responders: Array<{
@@ -262,9 +262,10 @@ export async function createProjectFixture(
       /**
        * Project-scoped itx for the fixture's first project — the handle mobile
        * specs currently dial with `connectItxReady({ projectId })`. Opens (and
-       * caches) admin as needed; disposed with the fixture.
+       * caches) the admin connection as needed. The returned stub is the
+       * CALLER's: `using project = await fixture.projectItx()`.
        */
-      itx,
+      projectItx,
       /**
        * Create an agent on the fixture project. Optional path defaults to
        * `/agents/<slugPrefix>-<random>`; the returned handle carries `.path`

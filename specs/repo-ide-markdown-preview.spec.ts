@@ -10,7 +10,7 @@ import { openRepoTreeFile } from "./test-support/repo-tree.ts";
 test("toggle a markdown file between Code and its rendered Preview", async ({ helpers, page }) => {
   await using fixture = await helpers.createFixture("repo-ide-md");
 
-  const project = await fixture.itx();
+  using project = await fixture.projectItx();
   await project.repos.get("/repos/ide").create({ type: "empty" });
   // Seed a small markdown file rather than opening the large template README:
   // a short buffer settles CodeMirror well inside the tight action budget, so

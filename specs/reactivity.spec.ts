@@ -140,7 +140,7 @@ test("reactivity page processor panel goes live and repaints from a server push"
   // Birth a brand-new child stream SERVER-SIDE (no page interaction at all):
   // that changes the project's folded state (streams[]), and the server must
   // push the new fold into the open page.
-  const adminProject = await projectFixture.itx();
+  using adminProject = await projectFixture.projectItx();
   using stream = adminProject.streams.get(`/spec-processor-push/${Date.now().toString(36)}`);
   await stream.append({
     type: "events.iterate.test/spec/processor-push",

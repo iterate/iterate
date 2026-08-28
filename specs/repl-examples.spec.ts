@@ -49,7 +49,7 @@ test.describe("itx REPL catalogue examples", () => {
       const cleanup = async () => {
         if (!exampleCase.cleanup) return;
         try {
-          const project = await fixture.itx();
+          using project = await fixture.projectItx();
           await exampleCase.cleanup(project, ctx);
         } catch (error) {
           console.warn(`example "${example.id}" cleanup failed (ignored):`, error);

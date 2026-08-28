@@ -11,7 +11,7 @@ import { openRepoTreeFile } from "./test-support/repo-tree.ts";
 test("toggle an svg file between Code and its sandboxed Preview", async ({ helpers, page }) => {
   await using fixture = await helpers.createFixture("repo-ide-svg");
 
-  const project = await fixture.itx();
+  using project = await fixture.projectItx();
   await project.repos.get("/repos/ide").create({ type: "empty" });
   await project.repos.get("/repos/ide").commitFiles({
     message: "Add icon.svg",
@@ -45,7 +45,7 @@ test("toggle an svg file between Code and its sandboxed Preview", async ({ helpe
 test("preview a staged snapshot from the readonly Index view", async ({ helpers, page }) => {
   await using fixture = await helpers.createFixture("repo-ide-index");
 
-  const project = await fixture.itx();
+  using project = await fixture.projectItx();
   await project.repos.get("/repos/ide").create({ type: "empty" });
   await project.repos.get("/repos/ide").commitFiles({
     message: "Add page.html",

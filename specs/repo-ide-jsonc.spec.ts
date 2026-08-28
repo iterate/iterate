@@ -18,7 +18,7 @@ test("a commented tsconfig still schema-validates (comments are tolerated)", asy
 }) => {
   await using fixture = await helpers.createFixture("repo-ide-jsonc");
 
-  const project = await fixture.itx();
+  using project = await fixture.projectItx();
   await project.repos.get("/repos/ide").create({ type: "empty" });
   // A comment, a trailing comma, and a schema violation (`strict` must be a
   // boolean). json5 tolerates the first two; the schema flags the third.

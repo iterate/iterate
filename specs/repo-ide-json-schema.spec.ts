@@ -13,7 +13,7 @@ import { openRepoTreeFile } from "./test-support/repo-tree.ts";
 test("flags a package.json schema violation with a red squiggle", async ({ helpers, page }) => {
   await using fixture = await helpers.createFixture("repo-ide-schema");
 
-  const project = await fixture.itx();
+  using project = await fixture.projectItx();
   await project.repos.get("/repos/ide").create({ type: "empty" });
   // `name` must be a string per the package.json schema — a number is a clear,
   // stable violation.

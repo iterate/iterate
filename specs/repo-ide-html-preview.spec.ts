@@ -10,7 +10,7 @@ import { openRepoTreeFile } from "./test-support/repo-tree.ts";
 test("toggle an html file between Code and its sandboxed Preview", async ({ helpers, page }) => {
   await using fixture = await helpers.createFixture("repo-ide-html");
 
-  const project = await fixture.itx();
+  using project = await fixture.projectItx();
   await project.repos.get("/repos/ide").create({ type: "empty" });
   // The template ships no html, so seed one — a heading and a script-driven
   // button, enough to show the sandbox actually runs the document.

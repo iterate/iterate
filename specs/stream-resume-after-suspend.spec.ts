@@ -206,7 +206,7 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
   const consoleLines = captureStreamConsole(page);
 
   const agent = await fixture.createAgent();
-  // A standing responder, not setOnce: this lane drives TWO turns — the primer
+  // A standing responder, not setOnce: this test drives TWO turns — the primer
   // below, and the mid-outage send further down that must eventually land.
   agent.responses.set(
     async () => '```ts\nasync (itx) => { await itx.chat.sendMessage("ready") }\n```',

@@ -19,7 +19,7 @@ test("markdown files get a sanitized Code | Preview toggle in the repo IDE", asy
   page,
 }) => {
   await using fixture = await helpers.createFixture("md-preview");
-  const project = await fixture.itx();
+  using project = await fixture.projectItx();
   const repo = project.repos.get("/repos/demo");
   await repo.create({ type: "empty" });
   await repo.commitFiles({

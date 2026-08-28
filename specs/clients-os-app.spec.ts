@@ -16,7 +16,7 @@ test("two dashboard tabs are two clients; an itx caller navigates each independe
   await using fixture = await helpers.createFixture("clients-os-app");
   const slug = fixture.project.slug;
 
-  const project = await fixture.itx();
+  using project = await fixture.projectItx();
 
   const connectedOsAppClients = async () => {
     const list = await project.clients.list();
@@ -107,6 +107,9 @@ test("two dashboard tabs are two clients; an itx caller navigates each independe
     const copiedKey = await pageTwo.evaluate(() =>
       window.sessionStorage.getItem("iterate-os-app-tab-key"),
     );
+    // Seeding `null` would silently test the wrong thing — tab three would mint
+    // a key normally instead of colliding with tab two's. Narrow, don't assert.
+    if (!copiedKey) throw new Error("tab two should have stored a client key to duplicate");
     const pageThree = await context.newPage();
     await pageThree.addInitScript((key) => {
       window.sessionStorage.setItem("iterate-os-app-tab-key", key);

@@ -7,7 +7,7 @@ import { test } from "./test-support/test.ts";
 // one stream, at the path the URL shows.
 test("the REPL creates no session stream until the first Run", async ({ helpers, page }) => {
   await using fixture = await helpers.createFixture("repl-lazy");
-  const project = await fixture.itx();
+  using project = await fixture.projectItx();
   const replStreams = async () =>
     (await project.streams.list())
       .map((stream) => stream.path)

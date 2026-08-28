@@ -15,7 +15,7 @@ test("edit, stage, inspect the Index, and commit through the repo IDE", async ({
   await using fixture = await helpers.createFixture("repo-ide");
 
   // Repos are template-seeded on create, so the IDE opens onto real files.
-  const project = await fixture.itx();
+  using project = await fixture.projectItx();
   await project.repos.get("/repos/ide").create({ type: "empty" });
 
   await page.goto(`/projects/${fixture.project.slug}/repos/ide`);
@@ -75,7 +75,7 @@ test("edit, stage, inspect the Index, and commit through the repo IDE", async ({
 test("discarding a new file confirms before permanently removing it", async ({ helpers, page }) => {
   await using fixture = await helpers.createFixture("repo-ide-discard");
 
-  const project = await fixture.itx();
+  using project = await fixture.projectItx();
   await project.repos.get("/repos/ide").create({ type: "empty" });
 
   await page.goto(`/projects/${fixture.project.slug}/repos/ide`);

@@ -7,7 +7,7 @@ test("empty agent feeds distinguish waiting from filtered zero matches", async (
   page,
 }) => {
   await using fixture = await helpers.createFixture("agent-initializing");
-  const project = await fixture.itx();
+  using project = await fixture.projectItx();
   const agentPath = `/agents/waiting-${crypto.randomUUID().slice(0, 8)}`;
   using agent = project.agents.get(agentPath);
 
@@ -55,7 +55,7 @@ test("a cold stream stays pending until its server history catches up", async ({
   page,
 }) => {
   await using fixture = await helpers.createFixture("stream-cold-history");
-  const project = await fixture.itx();
+  using project = await fixture.projectItx();
   const streamPath = `/spec/cold-history-${crypto.randomUUID().slice(0, 8)}`;
   using stream = project.streams.get(streamPath);
   await stream.append({ type: "events.iterate.com/spec/cold-history", payload: {} });
@@ -83,7 +83,7 @@ test("a cold stream stays pending until its server history catches up", async ({
 
 test("a cached stream opens before its live connection", async ({ helpers, page }) => {
   await using fixture = await helpers.createFixture("stream-cache");
-  const project = await fixture.itx();
+  using project = await fixture.projectItx();
   const streamPath = `/spec/cache-before-live-${crypto.randomUUID().slice(0, 8)}`;
   using stream = project.streams.get(streamPath);
   await stream.append({
