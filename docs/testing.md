@@ -547,13 +547,19 @@ fail("a userspace facet rebuilds on a source commit", { timeout: 240_000 }, asyn
 });
 ```
 
-The body asserts the desired behavior and must fail with an error matching
-the pattern. A different failure goes red naming both errors (a bare
-`test.fails` stays silently green when the body starts failing for an
-unrelated reason), and a succeeding body goes red with delete-the-wrapper
-instructions. Write the body so the bug throws a distinctive message, and so
-conditions that prove nothing (a coincidental restart masking the bug for
-one observation) retry instead of succeeding —
+`failing` registers through the runner's own expected-fail variant
+(vitest `test.fails`, playwright `test.fail`), so pins report natively —
+the "expected fail" summary count and telemetry's expected state need no
+extra plumbing. The wrapper filters WHICH failure satisfies that machinery:
+the body must fail matching the pattern. A different failure, a success, or
+a body still running after the wrapper's 30s deadline all come back as
+"success", which the expected-fail machinery rejects — red, with the actual
+reason in the adjacent `[failing-test]` log line. (A bare `test.fails`
+stays silently green in all three cases.) A pin that legitimately runs
+longer raises the deadline via `options.timeoutMs`, kept below the runner's
+test timeout. Write the body so the bug throws a distinctive message, and
+so conditions that prove nothing (a coincidental restart masking the bug
+for one observation) retry instead of succeeding —
 `apps/os/e2e/vitest/userspace-facet-source-version.e2e.test.ts` is the
 worked example; its `test.fails` predecessor false-alarmed 7+ times.
 

@@ -8,6 +8,7 @@ import { ZERO_AGENT_RUNTIME, type AgentRuntime } from "@iterate-com/shared/agent
 import type { Event } from "@iterate-com/ui/components/events/types";
 import {
   AGENT_UI_PROVISIONAL_ACTIVITY_LIMIT,
+  deriveAgentUiLiveStatus,
   initialAgentUiState,
   reduceAgentUi,
   reduceAgentUiRuntime,
@@ -1957,5 +1958,208 @@ describe("interpreted turn grouping", () => {
     expect(reduced.live?.steps.map((step) => step.kind)).toEqual(["llm", "code"]);
     // The prose deferred (the activity is working) instead of splitting it.
     expect(reduced.deferredAssistantMessages).toMatchObject([{ text: "Hi!" }]);
+  });
+});
+
+describe("live status derivation", () => {
+  const request = { type: "events.iterate.com/agent/llm-request-requested", payload: {} };
+  const requestSettled = (requestOffset: number) => ({
+    type: "events.iterate.com/agent/llm-request-settled",
+    payload: { requestOffset, result: { status: "succeeded", text: "await work()" } },
+  });
+  const scriptRequested = (executionId: string) => ({
+    type: "events.iterate.com/capability-host/script-run-requested",
+    payload: { executionId, code: "await work()", expiresAt: SCRIPT_EXPIRES_AT },
+  });
+
+  test("phases follow the running step: waiting → thinking → writing → running", () => {
+    const waiting = reduceAll([{ ...request, offset: 5 }]);
+    expect(deriveAgentUiLiveStatus(waiting)).toMatchObject({ phase: "waiting", statusText: null });
+
+    const thinking = reduceAll([
+      { ...request, offset: 5 },
+      {
+        type: "events.iterate.com/agent/llm-response-chunks",
+        payload: {
+          llmRequestOffset: 5,
+          sequence: 0,
+          chunks: [{ choices: [{ delta: { reasoning_content: "hmm" } }] }],
+        },
+      },
+    ]);
+    expect(deriveAgentUiLiveStatus(thinking)).toMatchObject({ phase: "thinking" });
+
+    const writing = reduceAll([
+      { ...request, offset: 5 },
+      {
+        type: "events.iterate.com/agent/llm-response-chunks",
+        payload: {
+          llmRequestOffset: 5,
+          sequence: 0,
+          chunks: [{ choices: [{ delta: { content: "await work()" } }] }],
+        },
+      },
+    ]);
+    expect(deriveAgentUiLiveStatus(writing)).toMatchObject({ phase: "writing" });
+
+    const running = reduceAll([{ ...request, offset: 5 }, scriptRequested("x1")]);
+    expect(deriveAgentUiLiveStatus(running)).toMatchObject({ phase: "running" });
+  });
+
+  test("a script that durably settled WITH a value means another round: processing", () => {
+    const state = reduceAll([
+      { ...request, offset: 5 },
+      requestSettled(5),
+      scriptRequested("x1"),
+      {
+        type: "events.iterate.com/capability-host/script-run-settled",
+        payload: { executionId: "x1", settlement: { status: "succeeded", result: 42 } },
+      },
+    ]);
+    expect(deriveAgentUiLiveStatus(state)).toMatchObject({ phase: "processing" });
+    // A value-less settle (`return;`) ends the turn — no round is owed.
+    const returned = reduceAll([
+      { ...request, offset: 5 },
+      requestSettled(5),
+      scriptRequested("x1"),
+      {
+        type: "events.iterate.com/capability-host/script-run-settled",
+        payload: { executionId: "x1", settlement: { status: "succeeded" } },
+      },
+    ]);
+    expect(deriveAgentUiLiveStatus(returned)).toMatchObject({ phase: "working" });
+    // A failed settle isn't a promise of another round either.
+    const failed = reduceAll([
+      { ...request, offset: 5 },
+      requestSettled(5),
+      scriptRequested("x1"),
+      {
+        type: "events.iterate.com/capability-host/script-run-settled",
+        payload: {
+          executionId: "x1",
+          settlement: {
+            status: "failed",
+            error: "boom",
+            failureKind: "runtime",
+            phase: "execution",
+            executionMayHaveOccurred: true,
+            cancellation: "not-applicable",
+          },
+        },
+      },
+    ]);
+    expect(deriveAgentUiLiveStatus(failed)).toMatchObject({ phase: "working" });
+  });
+
+  test("statusText is this turn's summary only — a previous turn's text stays generic", () => {
+    const turnOne = [
+      { ...request, offset: 5 },
+      requestSettled(5),
+      scriptRequested("x1"),
+      {
+        type: "events.iterate.com/agent/summary-updated",
+        payload: { activity: "Sweeping March refunds" },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-run-settled",
+        payload: { executionId: "x1", settlement: { status: "succeeded", result: 1 } },
+      },
+    ];
+    expect(deriveAgentUiLiveStatus(reduceAll(turnOne))).toMatchObject({
+      phase: "processing",
+      statusText: "Sweeping March refunds",
+    });
+
+    // A user message settles the turn; the next turn's live activity starts
+    // fresh — the stream's standing summary is stale for the live row (code
+    // steps still inherit it for round headers, unchanged).
+    const turnTwo = reduceAll([
+      ...turnOne,
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: { role: "user", actor: { type: "user", origin: "web" }, content: "and April?" },
+      },
+      { ...request, offset: 50 },
+    ]);
+    expect(turnTwo.summaryActivity).toBe("Sweeping March refunds");
+    expect(deriveAgentUiLiveStatus(turnTwo)).toMatchObject({ phase: "waiting", statusText: null });
+
+    const turnTwoUpdated = reduceAll([
+      ...turnOne,
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: { role: "user", actor: { type: "user", origin: "web" }, content: "and April?" },
+      },
+      { ...request, offset: 50 },
+      {
+        type: "events.iterate.com/agent/summary-updated",
+        payload: { activity: "Sweeping April refunds" },
+      },
+    ]);
+    expect(deriveAgentUiLiveStatus(turnTwoUpdated)).toMatchObject({
+      statusText: "Sweeping April refunds",
+    });
+  });
+
+  test("agent/paused settles an idle live activity from journal facts alone", () => {
+    // The processing gap's guard: the autonomous breaker parks the loop after
+    // a script returned a value — without this settle the "another round is
+    // owed" inference would spin forever on journal-only surfaces (mobile).
+    const state = reduceAll([
+      { ...request, offset: 5 },
+      requestSettled(5),
+      scriptRequested("x1"),
+      {
+        type: "events.iterate.com/capability-host/script-run-settled",
+        payload: { executionId: "x1", settlement: { status: "succeeded", result: 42 } },
+      },
+      {
+        type: "events.iterate.com/agent/paused",
+        payload: { reason: "autonomous turn limit reached" },
+      },
+    ]);
+    expect(state.live).toBeNull();
+    expect(state.items.map((item) => item.kind)).toEqual(["activity", "stream-paused"]);
+    expect(state.items[0]).toMatchObject({ kind: "activity", status: "done" });
+  });
+
+  test("agent/paused while a request is open keeps the live activity running", () => {
+    // Operator/script-appendable mid-request: the open request drains and
+    // settles normally, so the pause must not archive the running step.
+    const state = reduceAll([
+      { ...request, offset: 5 },
+      { type: "events.iterate.com/agent/paused", payload: { reason: "operator hold" } },
+    ]);
+    expect(state.items.map((item) => item.kind)).toEqual(["stream-paused"]);
+    expect(state.live?.steps).toMatchObject([{ kind: "llm", status: "running" }]);
+  });
+
+  test("a value-settled script on a PAUSED loop settles the activity — never processing", () => {
+    // The pause folded mid-request; the drained request's script then settles
+    // WITH a value. No follow-up round is coming and no second pause fact
+    // will arrive, so the settle itself must close the activity instead of
+    // leaving a permanent "processing" claim.
+    const state = reduceAll([
+      { ...request, offset: 5 },
+      { type: "events.iterate.com/agent/paused", payload: { reason: "operator hold" } },
+      requestSettled(5),
+      scriptRequested("x1"),
+      {
+        type: "events.iterate.com/capability-host/script-run-settled",
+        payload: { executionId: "x1", settlement: { status: "succeeded", result: 42 } },
+      },
+    ]);
+    expect(state.paused).toBe(true);
+    expect(state.live).toBeNull();
+    expect(state.items.filter((item) => item.kind === "activity")).toMatchObject([
+      { status: "done" },
+    ]);
+    // And resuming clears the flag for the next real turn.
+    const resumed = reduceAll([
+      { ...request, offset: 5 },
+      { type: "events.iterate.com/agent/paused", payload: {} },
+      { type: "events.iterate.com/agent/resumed", payload: {} },
+    ]);
+    expect(resumed.paused).toBe(false);
   });
 });
