@@ -402,7 +402,11 @@ function FeedList({
         // already looking.
         <View style={styles.bottomStack}>
           {approvals}
-          {sendPending || (feed.working && feed.live?.steps.length === 0) ? (
+          {/* working with no live steps covers BOTH owed-turn gaps: a live
+              activity with no steps yet, and the pending-turn debounce
+              window where no live activity exists at all (feed.ts
+              turnPending). */}
+          {sendPending || (feed.working && (feed.live === null || feed.live.steps.length === 0)) ? (
             <View style={styles.workingRow}>
               <ActivityIndicator accessibilityLabel="Loading" size="small" color={colors.working} />
               <Text style={styles.workingText}>working…</Text>

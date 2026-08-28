@@ -165,6 +165,33 @@ test("a reply that lands before a durable script's settlement still ends not-wor
   expect(feed.items[1]).toMatchObject({ kind: "activity", status: "done" });
 });
 
+test("a triggering user message keeps the feed working through the request debounce", () => {
+  // The window between a user message and its debounced llm-request event has
+  // no live activity, but the agent owes one — the working row must not flash
+  // idle across it.
+  const sent = [
+    event(1, "events.iterate.com/agents/context-added", { content: "go", role: "user" }),
+  ];
+  expect(reduceFeed(PATH, sent)).toMatchObject({ working: true, live: null });
+
+  // A non-triggering message owes nothing.
+  const noTrigger = [
+    event(1, "events.iterate.com/agents/context-added", {
+      content: "note",
+      role: "user",
+      llmRequestPolicy: { behaviour: "dont-trigger-request" },
+    }),
+  ];
+  expect(reduceFeed(PATH, noTrigger)).toMatchObject({ working: false });
+
+  // A paused agent owes nothing until resumed.
+  const whilePaused = [
+    event(1, "events.iterate.com/agent/paused", { reason: "operator hold" }),
+    event(2, "events.iterate.com/agents/context-added", { content: "go", role: "user" }),
+  ];
+  expect(reduceFeed(PATH, whilePaused)).toMatchObject({ working: false });
+});
+
 function event(offset: number, type: string, payload: Record<string, unknown>): StreamEvent {
   return {
     type,

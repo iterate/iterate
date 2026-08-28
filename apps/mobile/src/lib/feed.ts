@@ -75,7 +75,12 @@ export function reduceFeed(agentPath: string, events: StreamEvent[]): AgentFeed 
   // would flicker to "done" for the request debounce window mid-turn. A pause
   // fact (the autonomous breaker, an operator) settles the live activity in
   // the reducer, so this cannot wedge a spinner past the turn's real end.
-  const working = isAgentUiActivityWorking(state.live) || liveStatus?.phase === "processing";
+  // turnPending covers the other owed-but-not-journaled window: a triggering
+  // user message whose debounced llm request hasn't opened yet.
+  const working =
+    isAgentUiActivityWorking(state.live) ||
+    liveStatus?.phase === "processing" ||
+    turnPending(events);
   if (state.live !== null && !working) {
     const completed: AgentUiActivity = { ...state.live, status: "done" };
     const correctionIndex = settled.findIndex((item) => item.id === completed.id);
@@ -102,6 +107,45 @@ export function reduceFeed(agentPath: string, events: StreamEvent[]): AgentFeed 
     working,
     state,
   };
+}
+
+/**
+ * True when the journal's newest turn-relevant fact is a triggering user
+ * message: the agent owes an llm request that hasn't been journaled yet (the
+ * request debounce window). The working row reads this so it stays visible
+ * through that window instead of flashing idle between the send and the
+ * request opening. Pause facts suppress it — a paused agent owes nothing
+ * until resumed. Web-chat messages only (`agents/context-added`, role user):
+ * that is the one ingress this screen sends through.
+ */
+function turnPending(events: StreamEvent[]): boolean {
+  let pending = false;
+  let paused = false;
+  for (const event of events) {
+    const payload = event.payload as any;
+    switch (event.type) {
+      case "events.iterate.com/agents/context-added":
+        if (payload?.role !== "user") break;
+        if (payload?.llmRequestPolicy?.behaviour === "dont-trigger-request") break;
+        pending = true;
+        break;
+      case "events.iterate.com/agent/llm-request-requested":
+      case "events.iterate.com/capability-host/script-run-requested":
+        pending = false;
+        break;
+      case "events.iterate.com/agent/paused":
+      case "events.iterate.com/stream/paused":
+        paused = true;
+        break;
+      case "events.iterate.com/agent/resumed":
+      case "events.iterate.com/stream/resumed":
+        paused = false;
+        break;
+      default:
+        break;
+    }
+  }
+  return pending && !paused;
 }
 
 /** Replace each adjacent run of stream wakes with its final event and the run length. */
