@@ -54,10 +54,14 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
  * `test.fails` and every throw counted as the expected one. The
  * `failing(test, /PIN CANNOT TELL RECYCLE FROM REBUILD/)` wrapper now closes
  * that hole — only the tagged verdict counts, and a fall-over on the way goes
- * red naming both errors — but the log is still how you tell which phase a
- * run reached. A run proves something only if its log reaches `verdict`.
+ * red with the mismatched error in the `[failing-test]` log — but the phase
+ * log is still how you tell which phase a run reached. A run proves
+ * something only if its log reaches `verdict`.
  */
-failing(test, /PIN CANNOT TELL RECYCLE FROM REBUILD/)(
+// timeoutMs: the wrapper's hang deadline, kept just below the 180s runner
+// ceiling so a hung phase goes red as not-the-pin instead of riding the
+// runner's timeout into a vacuous expected-fail pass.
+failing(test, /PIN CANNOT TELL RECYCLE FROM REBUILD/, { timeoutMs: 170_000 })(
   "the source-version pin tells a facet that recycled from one the commit rebuilt",
   // Ceiling, not an expectation: ~6s against a warm local deployment, and the
   // pin's comparable scenario takes 50-75s on a busy preview. Matched to the

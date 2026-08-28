@@ -10,15 +10,17 @@
 // guarantees pinned below. Each test is written as if the guarantee EXISTED:
 // it exercises the real system and asserts the desirable behavior, and it
 // genuinely fails today because the system does not provide it. Each is
-// wrapped in `failing(test, /TAG/)` and asserts its pinned expectation with
-// that TAG as the message, so the suite stays green only while the guarantee
-// is un-given FOR THE PINNED REASON — a body that starts failing somewhere
-// else goes red naming both errors, which a bare `test.fails` cannot do.
+// wrapped in `failing(test, /TAG/)` — registered through vitest's own
+// `test.fails` underneath, so they report natively as expected fails — and
+// asserts its pinned expectation with that TAG as the message. The suite
+// stays green only while the guarantee is un-given FOR THE PINNED REASON;
+// a body that starts failing somewhere else goes red with the mismatched
+// error in the `[failing-test]` log, which a bare `test.fails` cannot do.
 //
-// If a change makes one of these tests pass, it fails with instructions to
-// delete the wrapper. Do not delete the test — drop the `failing(...)` call
-// and the TAG message, move it to the regular suites, and delete only its
-// entry here.
+// If a change makes one of these tests pass, it goes red with
+// delete-the-wrapper instructions in the log. Do not delete the test — drop
+// the `failing(...)` call and the TAG message, move it to the regular
+// suites, and delete only its entry here.
 
 import { DatabaseSync } from "node:sqlite";
 import type {
