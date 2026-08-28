@@ -207,7 +207,7 @@ test("run() return values are typed from the reused row's data, through the real
 
   const warmAgent = await fixture.createAgent({ infix: "warm" });
 
-  warmAgent.responses.enqueueScript(`async (itx) => {await itx.chat.sendMessage("warmed")}`);
+  warmAgent.responses.setOnce(`async (itx) => {await itx.chat.sendMessage("warmed")}`);
   await warmAgent.ask({ message: "warm up", timeoutMs: 90_000 }).catch(() => {});
 
   await page.goto(agent.webUrl);
@@ -217,7 +217,7 @@ test("run() return values are typed from the reused row's data, through the real
 
   await spinnerWaiter.settings.run({ spinnerTimeout: 60_000 }, async () => {
     await composer.fill("prime factorize 8633");
-    agent.responses.enqueueScript(`
+    agent.responses.setOnce(`
       async (itx) => {
         const target = 8633n;
         let remaining = target;
@@ -232,7 +232,7 @@ test("run() return values are typed from the reused row's data, through the real
         return factors.map(String);
       }
     `);
-    agent.responses.enqueueScript(dedent`
+    agent.responses.setOnce(dedent`
       async (itx) => {
         await itx.chat.sendMessage(\`factors of 8633: \${results[0].data.join(" × ")}\`);
       }
@@ -242,7 +242,7 @@ test("run() return values are typed from the reused row's data, through the real
   });
   await spinnerWaiter.settings.run({ spinnerTimeout: 60_000 }, async () => {
     await composer.fill("now do 10403");
-    agent.responses.enqueueScript(`
+    agent.responses.setOnce(`
       async (itx) => {
         const helper = await itx.capabilityHost.previousScriptHelper({
           ...results[1],
@@ -257,7 +257,7 @@ test("run() return values are typed from the reused row's data, through the real
     // matching the inferred type passes. results[2], not [1]: attempt 1's
     // rejection settled as an ERROR row, shifting positions — the drift
     // results.byOffset absorbs; a scripted retry can just count.
-    agent.responses.enqueueScript(`
+    agent.responses.setOnce(`
       async (itx) => {
         const helper = await itx.capabilityHost.previousScriptHelper({
           ...results[2],
@@ -272,5 +272,6 @@ test("run() return values are typed from the reused row's data, through the real
     await page.getByText("Result is 101 × 103").waitFor();
   });
 
-  expect(agent.responses.queue).toHaveLength(0); // make sure we consumed all responses
+  expect(agent.responses).toMatchObject({ responders: [] }); // make sure we consumed all responses
+  expect(warmAgent.responses).toMatchObject({ responders: [] }); // make sure we consumed all responses
 });

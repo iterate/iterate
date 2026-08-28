@@ -10,7 +10,6 @@ import { waitForPreviewRolloutBeforeProjectCreation } from "@iterate-com/shared/
 import {
   connectItxReady,
   type ItxInitialConnectionRetry,
-  type Project,
   type ProjectAiInterceptor,
   type ProjectAiInterceptorInput,
 } from "iterate/node";
@@ -180,17 +179,34 @@ export async function createProjectFixture(
       const projectRpc = await itx();
       const agent = resources.use(projectRpc.agents.get(path));
       class ResponseQueuer {
-        queue: Array<
-          (call: Extract<ProjectAiInterceptorInput, { source: "agent-turn" }>) => Promise<string>
-        > = [];
-        enqueueScript(script: string | ((itx: Project) => Promise<unknown>)) {
-          this.queue.push(async () => `\`\`\`ts\n${script.toString()}\n\`\`\``);
+        responders: Array<{
+          times: number;
+          fn: (
+            call: Extract<ProjectAiInterceptorInput, { source: "agent-turn" }>,
+          ) => Promise<string>;
+        }> = [];
+
+        set(script: Parameters<typeof this.setTimes>[1]) {
+          this.setTimes(Infinity, script);
         }
-        enqueueCustom(handler: (typeof this)["queue"][number]) {
-          this.queue.push(handler);
+
+        setOnce(script: Parameters<typeof this.setTimes>[1]) {
+          this.setTimes(1, script);
         }
+
+        setTimes(times: number, script: string | (typeof this)["responders"][number]["fn"]) {
+          const fn =
+            typeof script === "function"
+              ? script
+              : async () => `\`\`\`ts\n${script.toString()}\n\`\`\``;
+          this.responders.push({ times, fn });
+        }
+
         take() {
-          return this.queue.shift();
+          const next = this.responders[0];
+          if (!next) return undefined;
+          if (--next.times === 0) this.responders.shift();
+          return next.fn;
         }
       }
       const responses = new ResponseQueuer();

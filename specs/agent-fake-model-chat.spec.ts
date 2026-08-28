@@ -12,17 +12,15 @@ test("multi-turn chat with a sarcastic agent served by the spec's own fake-model
   await using fixture = await helpers.createFixture("agent-fake-chat");
 
   const agent = await fixture.createAgent();
-  for (let i = 0; i < 3; i++) {
-    agent.responses.enqueueCustom(async (call) => {
-      const lastUser = [...call.body.messages].reverse().find((m) => m.role === "user");
-      const reply = formatSarcasticResponse(stripXmlBlocks(lastUser?.content ?? ""));
-      return [
-        "```ts",
-        `async (itx) => {\n  await itx.chat.sendMessage(${JSON.stringify(reply)})\n}`,
-        "```",
-      ].join("\n");
-    });
-  }
+  agent.responses.set(async (call) => {
+    const lastUser = [...call.body.messages].reverse().find((m) => m.role === "user");
+    const reply = formatSarcasticResponse(stripXmlBlocks(lastUser?.content ?? ""));
+    return [
+      "```ts",
+      `async (itx) => {\n  await itx.chat.sendMessage(${JSON.stringify(reply)})\n}`,
+      "```",
+    ].join("\n");
+  });
 
   await page.goto(agent.webUrl);
   const composer = page.getByPlaceholder("Message this agent");
