@@ -167,7 +167,7 @@ function CollectSecretForm({
   // background refetch that fails leaves the answer we already have in place,
   // and must not take the button away from someone who has just come back
   // with a credential in their clipboard.
-  const checked = existing.data !== undefined;
+  const checked = !!existing.data;
   const canSave = material.length > 0 && baseUrl !== undefined && checked && !submit.isPending;
 
   return (
