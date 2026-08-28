@@ -63,7 +63,7 @@ function isSecretPath(value: string | null): value is string {
 }
 
 /** The agent to tell once the secret is stored. */
-function isAgentPath(value: string): boolean {
+function isAgentPath(value: string) {
   return value.startsWith("/agents/");
 }
 

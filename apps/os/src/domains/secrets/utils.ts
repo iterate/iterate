@@ -430,7 +430,7 @@ export async function substituteSecretRequest(
 }
 
 /** The `name=value` pairs of a raw query string (no leading `?`, no decoding). */
-function queryPairs(search: string): string[] {
+function queryPairs(search: string) {
   const query = search.startsWith("?") ? search.slice(1) : search;
   return query === "" ? [] : query.split("&");
 }

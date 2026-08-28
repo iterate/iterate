@@ -18,7 +18,7 @@
 
 /** The widest a photo frame — and so the widest a bubble carrying one — goes
  * on a screen this wide. */
-export function photoFrameMaxWidth(windowWidth: number): number {
+export function photoFrameMaxWidth(windowWidth: number) {
   return Math.min(280, Math.round(windowWidth * 0.72));
 }
 
