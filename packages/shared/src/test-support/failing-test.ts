@@ -31,10 +31,12 @@
  * The native machinery has one blind spot: a failure that never passes
  * through the body — chiefly a runner-level test timeout on a hung body —
  * counts as the expected one. The wrapper therefore races the body against
- * its own 60s deadline and reports a timeout as NOT-the-pinned-failure (red),
- * so a hang cannot vanish into a vacuous pass. A pin whose body legitimately
- * needs longer raises it via `options.timeoutMs` — kept BELOW the runner's
- * own test timeout, or the runner fires first and the blind spot returns.
+ * its own 30s deadline and reports a timeout as NOT-the-pinned-failure (red),
+ * so a hang cannot vanish into a vacuous pass. The default sits below every
+ * lane's runner timeout (apps/os unit: 45s; e2e: 120s) — it must, or the
+ * runner fires first and the blind spot returns. A pin whose body
+ * legitimately needs longer raises it via `options.timeoutMs`, still kept
+ * BELOW the runner's own test timeout for the same reason.
  *
  * Write the body so the pinned bug produces a DISTINCTIVE error (throw a
  * purpose-built message rather than relying on a generic assertion diff), and
@@ -49,7 +51,7 @@ export function failing<TestFn extends (...args: any[]) => any>(
   failure: RegExp,
   options?: { timeoutMs: number },
 ): TestFn {
-  const timeoutMs = options?.timeoutMs || 60_000;
+  const timeoutMs = options?.timeoutMs || 30_000;
   const failer: unknown = "fails" in test ? test.fails : "fail" in test ? test.fail : undefined;
   if (typeof failer !== "function") {
     throw new Error(
@@ -70,6 +72,9 @@ export function failing<TestFn extends (...args: any[]) => any>(
       // timeout fire, which the expected-fail machinery would count as the
       // pin holding.
       let timer: ReturnType<typeof setTimeout> | undefined;
+      // `as const` on the kinds: without it each arm's `kind` widens to
+      // `string`, the union stops discriminating, and `outcome.kind ===
+      // "failed"` below would not narrow to expose `.error`.
       const outcome = await Promise.race([
         (async () => body(...bodyArgs))().then(
           () => ({ kind: "succeeded" as const }),

@@ -552,7 +552,7 @@ fail("a userspace facet rebuilds on a source commit", { timeout: 240_000 }, asyn
 the "expected fail" summary count and telemetry's expected state need no
 extra plumbing. The wrapper filters WHICH failure satisfies that machinery:
 the body must fail matching the pattern. A different failure, a success, or
-a body still running after the wrapper's 60s deadline all come back as
+a body still running after the wrapper's 30s deadline all come back as
 "success", which the expected-fail machinery rejects — red, with the actual
 reason in the adjacent `[failing-test]` log line. (A bare `test.fails`
 stays silently green in all three cases.) A pin that legitimately runs
