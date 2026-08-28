@@ -70,6 +70,7 @@ export type AgentProcessorDeps = {
   cloudflareAiGatewayTransport?: () => CloudflareAiGatewayTransport;
   consultAiInterceptor?: (input: {
     source: "agent-turn";
+    agentPath: string;
     model: string;
     body: { messages: WorkersAiMessage[] };
   }) => Promise<unknown>;
@@ -84,6 +85,7 @@ export type AgentProcessorDeps = {
 };
 
 export type AgentHost = {
+  path: string;
   deps: AgentProcessorDeps;
   /**
    * Mints `agent/<suffix>` — the FIXED namespace: a userland interpreter

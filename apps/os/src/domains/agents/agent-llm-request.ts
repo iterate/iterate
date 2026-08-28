@@ -448,6 +448,7 @@ export class AgentLlmRequest {
         input.signal,
         consult({
           source: "agent-turn",
+          agentPath: this.#host.path,
           model: input.model,
           body: { messages: input.messages },
         }),

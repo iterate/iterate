@@ -10,7 +10,9 @@ import { waitForPreviewRolloutBeforeProjectCreation } from "@iterate-com/shared/
 import {
   connectItxReady,
   type ItxInitialConnectionRetry,
+  type Project,
   type ProjectAiInterceptor,
+  type ProjectAiInterceptorInput,
 } from "iterate/node";
 import { doppler } from "../../apps/os/scripts/dev.ts";
 import { mintForgedAccessToken, mintForgedIdToken } from "../../scripts/auth/forge-token.ts";
@@ -122,23 +124,132 @@ export async function createProjectFixture(
       },
     ]);
 
+    const project = projectFixtures[0]!.project;
+    // Sync RPC stubs (admin / project / agents) live on this stack; the
+    // fixture's asyncDispose drains it so specs need only `await using fixture`.
+    const resources = new AsyncDisposableStack();
+    let admin: Awaited<ReturnType<typeof connectAdminItx>> | undefined;
+    let itxHandle:
+      | ReturnType<Awaited<ReturnType<typeof connectAdminItx>>["projects"]["get"]>
+      | undefined;
+
+    const connectAdmin = async () => {
+      if (admin) return admin;
+      admin = resources.use(await connectAdminItx(baseUrl));
+      return admin;
+    };
+
+    /** Project-scoped itx (admin dial → `projects.get`). Cached on the fixture. */
+    const itx = async () => {
+      if (itxHandle) return itxHandle;
+      const adminSession = await connectAdmin();
+      itxHandle = resources.use(adminSession.projects.get(project.id));
+      return itxHandle;
+    };
+
+    const interceptAi = (handler: ProjectAiInterceptor) =>
+      installResilientAiInterceptor({
+        baseUrl,
+        projectId: project.id,
+        handler,
+      });
+
+    const agentTurnInterceptors: Map<string, ProjectAiInterceptor> = new Map();
+    const addAgentTurnInterceptor = async (agentPath: string, handler: ProjectAiInterceptor) => {
+      if (agentTurnInterceptors.size === 0) {
+        const handler: ProjectAiInterceptor = async (call) => {
+          if (call.source !== "agent-turn") {
+            throw new Error(
+              `unexpected source: ${call.source}, you will need to register a custom ai interceptor for agent turns`,
+            );
+          }
+          const interceptor = agentTurnInterceptors.get(call.agentPath);
+          if (!interceptor) {
+            throw new Error(`no interceptor registered for agent path: ${call.agentPath}`);
+          }
+          return await interceptor(call);
+        };
+        resources.use(await interceptAi(handler));
+      }
+      agentTurnInterceptors.set(agentPath, handler);
+    };
+
+    const createAgent = async (params?: { infix?: string; useRealLlm?: boolean }) => {
+      const slugParts = [slugPrefix, params?.infix, crypto.randomUUID().slice(0, 8)];
+      const path = `/agents/${slugParts.filter(Boolean).join("-")}`;
+      const projectRpc = await itx();
+      const agent = resources.use(projectRpc.agents.get(path));
+      class ResponseQueuer {
+        queue: Array<
+          (call: Extract<ProjectAiInterceptorInput, { source: "agent-turn" }>) => Promise<string>
+        > = [];
+        enqueueScript(script: string | ((itx: Project) => Promise<unknown>)) {
+          this.queue.push(async () => `\`\`\`ts\n${script.toString()}\n\`\`\``);
+        }
+        enqueueCustom(handler: (typeof this)["queue"][number]) {
+          this.queue.push(handler);
+        }
+        take() {
+          return this.queue.shift();
+        }
+      }
+      const responses = new ResponseQueuer();
+      await agent.create();
+      if (!params?.useRealLlm) {
+        await agent.append({
+          type: "events.iterate.com/agent/configured",
+          payload: { config: { llm: { model: "intercepted/typed" }, llmRequestDebounceMs: 250 } },
+        });
+        await addAgentTurnInterceptor(path, async (call) => {
+          const next = responses.take();
+          if (!next) throw new Error(`No responses available for agent ${path}`);
+          return await next(call as Extract<ProjectAiInterceptorInput, { source: "agent-turn" }>);
+        });
+      }
+      const webUrl = `/projects/${project.slug}/agents/streams${path}`;
+      // Cap'n Web stubs reject arbitrary property writes — proxy path/webUrl on.
+      // `then: never` stops `await createAgent()` unwrapping through the stub's
+      // Promise intersection and stripping path/webUrl from the type.
+      const extras = { path, webUrl, responses, then: null as never };
+      return new Proxy(agent as typeof agent & typeof extras, {
+        get(target, prop, receiver) {
+          if (prop in extras) return extras[prop as keyof typeof extras];
+          return Reflect.get(target, prop, receiver);
+        },
+        has(target, prop) {
+          return prop in extras || Reflect.has(target, prop);
+        },
+      });
+    };
+
     return {
       organization,
-      project: projectFixtures[0]!.project,
-      projects: projectFixtures.map(({ project }) => project),
+      project,
+      projects: projectFixtures.map(({ project: p }) => p),
       session,
-      /** Admin itx for the fixture's deployment; dispose with `using`. */
-      connectAdmin: () => connectAdminItx(baseUrl),
+      /**
+       * Admin itx for the fixture's deployment. Cached and disposed with the
+       * fixture — no `using` at the call site.
+       */
+      connectAdmin,
+      /**
+       * Project-scoped itx for the fixture's first project — the handle mobile
+       * specs currently dial with `connectItxReady({ projectId })`. Opens (and
+       * caches) admin as needed; disposed with the fixture.
+       */
+      itx,
+      /**
+       * Create an agent on the fixture project. Optional path defaults to
+       * `/agents/<slugPrefix>-<random>`; the returned handle carries `.path`
+       * and `.webUrl` for `page.goto`. Disposed with the fixture.
+       */
+      createAgent,
       /** Churn-surviving `intercepted/*` handler for the fixture's first
        * project — `installResilientAiInterceptor` on a dedicated connection.
        * Dispose with `await using`. Guide: docs/intercepted-models.md. */
-      interceptAi: (handler: ProjectAiInterceptor) =>
-        installResilientAiInterceptor({
-          baseUrl,
-          projectId: projectFixtures[0]!.project.id,
-          handler,
-        }),
+      interceptAi,
       async [Symbol.asyncDispose]() {
+        resources.disposeAsync();
         await Promise.all(projectFixtures.map((fixture) => fixture[Symbol.asyncDispose]()));
       },
     };

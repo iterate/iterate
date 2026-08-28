@@ -4568,6 +4568,7 @@ export type LiveStatePatch =
 export type ProjectAiInterceptorInput =
   | {
       source: "agent-turn";
+      agentPath: string;
       model: string;
       body: {
         messages: { role: "system" | "developer" | "user" | "assistant"; content: string }[];
