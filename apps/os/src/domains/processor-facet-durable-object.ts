@@ -542,6 +542,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
       // paths share one handler, and this hop only happens for intercepted/* models.
       consultAiInterceptor: (input: {
         source: "agent-turn";
+        agentPath: string;
         model: string;
         body: { messages: WorkersAiMessage[] };
       }) => projectStub(this.env.PROJECT, projectId).consultAiInterceptor(input),

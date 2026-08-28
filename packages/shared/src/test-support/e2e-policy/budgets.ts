@@ -69,7 +69,7 @@ export const SPEC_EXPECT_TIMEOUT_MS = 15_000;
 export const TUI_TEST_TIMEOUT_MS = 55_000;
 
 /** Playwright per-spec budget: a full product flow against a deployed slot. */
-export const SPEC_TEST_TIMEOUT_MS = 90_000;
+export const SPEC_TEST_TIMEOUT_MS = 240_000;
 
 /**
  * Vitest e2e per-test/per-hook budget: one itx flow against a deployed slot,

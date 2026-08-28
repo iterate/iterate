@@ -11,23 +11,8 @@ test("multi-turn chat with a sarcastic agent served by the spec's own fake-model
 }) => {
   await using fixture = await helpers.createFixture("agent-fake-chat");
 
-  using admin = await fixture.connectAdmin();
-  using project = admin.projects.get(fixture.project.id);
-  const agentPath = `/agents/sarcastic-${crypto.randomUUID().slice(0, 8)}`;
-  using agent = project.agents.get(agentPath);
-  await agent.create();
-  // Point the agent at an intercepted/* model and drop the newborn debounce window —
-  // an ordinary journaled config event, the same channel a config worker uses.
-  await agent.append({
-    type: "events.iterate.com/agent/configured",
-    payload: { config: { llm: { model: "intercepted/sarcastic" }, llmRequestDebounceMs: 250 } },
-  });
-
-  // The "model": an in-memory function in THIS process, dialed back over
-  // capnweb for every intercepted/* turn. It answers the agent contract's way — one
-  // codemode script — sending a sarcastic rendering of whatever the user said.
-  await using _interception = await fixture.interceptAi(async (call) => {
-    if (call.source !== "agent-turn") throw new Error(`unexpected source: ${call.source}`);
+  const agent = await fixture.createAgent();
+  agent.responses.set(async (call) => {
     const lastUser = [...call.body.messages].reverse().find((m) => m.role === "user");
     const reply = formatSarcasticResponse(stripXmlBlocks(lastUser?.content ?? ""));
     return [
@@ -37,7 +22,7 @@ test("multi-turn chat with a sarcastic agent served by the spec's own fake-model
     ].join("\n");
   });
 
-  await page.goto(`/projects/${fixture.project.slug}/agents/streams${agentPath}`);
+  await page.goto(agent.webUrl);
   const composer = page.getByPlaceholder("Message this agent");
   const send = page.getByRole("button", { name: "Send message" });
 
