@@ -1,0 +1,666 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>One assistant, two halves — the voice colleague overhaul</title>
+    <style>
+      :root {
+        --fg: #1a1a1a;
+        --muted: #666;
+        --line: #e5e5e5;
+        --code: #fafafa;
+        --accent: #b45309;
+        --ok: #15803d;
+        --warn: #b91c1c;
+        --phone: #1d4ed8;
+        --server: #7c3aed;
+        --backend: #0f766e;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #e5e5e5;
+          --muted: #999;
+          --line: #333;
+          --code: #191919;
+          --accent: #fbbf24;
+          --ok: #4ade80;
+          --warn: #f87171;
+          --phone: #93c5fd;
+          --server: #c4b5fd;
+          --backend: #5eead4;
+        }
+        body {
+          background: #111;
+        }
+      }
+      body {
+        font:
+          14px/1.55 ui-sans-serif,
+          system-ui,
+          sans-serif;
+        color: var(--fg);
+        margin: 0;
+      }
+      header {
+        padding: 1.2rem 1.5rem 0.4rem;
+        max-width: 64rem;
+      }
+      header h1 {
+        margin: 0;
+        font-size: 1.35rem;
+      }
+      header p {
+        color: var(--muted);
+        margin: 0.35rem 0 0;
+      }
+      .tldr {
+        margin: 1rem 1.5rem;
+        border: 2px solid var(--accent);
+        border-radius: 8px;
+        padding: 0.7rem 1rem;
+        max-width: 60rem;
+      }
+      .tldr b {
+        color: var(--accent);
+      }
+      main {
+        padding: 0 1.5rem 4rem;
+        max-width: 64rem;
+      }
+      h2 {
+        font-size: 1.08rem;
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 0.3rem;
+        margin: 2.2rem 0 0.6rem;
+      }
+      p {
+        max-width: 52rem;
+      }
+      .vocab {
+        margin: 1rem 0;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 0.2rem 1rem 0.6rem;
+      }
+      .vocab summary {
+        cursor: pointer;
+        font-weight: 600;
+        padding: 0.5rem 0;
+      }
+      .vocab table {
+        border-collapse: collapse;
+        font-size: 12.5px;
+        width: 100%;
+        margin: 0.3rem 0 0.8rem;
+      }
+      .vocab td {
+        border-top: 1px solid var(--line);
+        padding: 0.35rem 0.5rem;
+        vertical-align: top;
+      }
+      .vocab td:first-child {
+        white-space: nowrap;
+        font-family: ui-monospace, monospace;
+        color: var(--accent);
+      }
+      .ev {
+        border: 1px solid var(--line);
+        border-left: 4px solid var(--line);
+        border-radius: 6px;
+        margin: 0.45rem 0;
+      }
+      .ev.phone {
+        border-left-color: var(--phone);
+      }
+      .ev.server {
+        border-left-color: var(--server);
+      }
+      .ev.backend {
+        border-left-color: var(--backend);
+      }
+      .ev.bad {
+        border-left-color: var(--warn);
+      }
+      .ev summary {
+        display: flex;
+        align-items: baseline;
+        gap: 0.55em;
+        padding: 0.45rem 0.7rem;
+        font:
+          12.5px/1.45 ui-monospace,
+          monospace;
+        cursor: pointer;
+        list-style: none;
+        flex-wrap: wrap;
+      }
+      .ev summary::-webkit-details-marker {
+        display: none;
+      }
+      .ev .off {
+        color: var(--accent);
+        font-weight: 700;
+        white-space: nowrap;
+      }
+      .ev .who {
+        font-size: 11px;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 0 0.35em;
+        color: var(--muted);
+      }
+      .ev .t {
+        color: var(--muted);
+        font-size: 11px;
+        white-space: nowrap;
+        margin-left: auto;
+      }
+      .ev .badge {
+        color: var(--accent);
+        font-size: 11px;
+        background: var(--code);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 0 0.35em;
+      }
+      .ev .note {
+        font:
+          12.5px/1.45 ui-sans-serif,
+          system-ui,
+          sans-serif;
+        color: var(--muted);
+        padding: 0 0.7rem 0.5rem;
+        max-width: 50rem;
+      }
+      .ev pre {
+        margin: 0;
+        border-top: 1px solid var(--line);
+        background: var(--code);
+        padding: 0.6rem 0.8rem;
+        font:
+          12px/1.5 ui-monospace,
+          monospace;
+        overflow-x: auto;
+      }
+      .split {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1rem;
+        margin: 0.8rem 0;
+      }
+      @media (max-width: 900px) {
+        .split {
+          grid-template-columns: 1fr;
+        }
+      }
+      .state {
+        border: 1px dashed var(--line);
+        border-radius: 8px;
+        padding: 0.5rem 0.9rem;
+        font-size: 12.5px;
+      }
+      .state h4 {
+        margin: 0.3rem 0;
+        font-size: 12.5px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      code {
+        background: var(--code);
+        padding: 0.1em 0.35em;
+        border-radius: 4px;
+        font-size: 0.92em;
+      }
+      details.deep {
+        border: 1px dashed var(--line);
+        border-radius: 6px;
+        padding: 0.2rem 0.8rem;
+        margin: 0.6rem 0;
+        max-width: 52rem;
+      }
+      details.deep summary {
+        cursor: pointer;
+        color: var(--muted);
+        font-size: 12.5px;
+        padding: 0.3rem 0;
+      }
+      .legend {
+        font-size: 12px;
+        color: var(--muted);
+        margin: 0.4rem 0 0;
+      }
+      .legend span {
+        display: inline-block;
+        margin-right: 1em;
+      }
+      .dotp,
+      .dots,
+      .dotb {
+        display: inline-block;
+        width: 0.7em;
+        height: 0.7em;
+        border-radius: 2px;
+        vertical-align: baseline;
+        margin-right: 0.3em;
+      }
+      .dotp {
+        background: var(--phone);
+      }
+      .dots {
+        background: var(--server);
+      }
+      .dotb {
+        background: var(--backend);
+      }
+      .ladder {
+        border-collapse: collapse;
+        font-size: 12.5px;
+        margin: 0.6rem 0;
+      }
+      .ladder td,
+      .ladder th {
+        border: 1px solid var(--line);
+        padding: 0.35rem 0.6rem;
+        text-align: left;
+        vertical-align: top;
+      }
+      .ladder th {
+        background: var(--code);
+      }
+      .ladder td:first-child {
+        font-family: ui-monospace, monospace;
+        color: var(--accent);
+        white-space: nowrap;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>One assistant, two halves — the voice colleague overhaul</h1>
+      <p>
+        What PR #2536 changes and why, told through the real conversations that broke it and then
+        proved it. Click any timeline row for the event underneath. All times are from live
+        production runs on 2026-08-26.
+      </p>
+      <p class="legend">
+        <span><span class="dotp"></span>caller / client</span>
+        <span><span class="dots"></span>voice agent (the "fast half")</span>
+        <span><span class="dotb"></span>colleague (the "backend")</span>
+      </p>
+    </header>
+
+    <div class="tldr">
+      <b>Takeaway:</b> a voice assistant has ~200ms of judgement, so hard questions go to a
+      "colleague" — a full agent with tools and time. Before this PR the colleague was reborn with
+      amnesia on every reconnect, its replies raced a 3-minute deadline down a lane that lost them
+      three different ways, and nobody could see what it was doing. Now:
+      <b>one colleague per stream</b> (memory survives),
+      <b>every reply is a durable event</b> (nothing lost),
+      <b>progress statuses flow to the caller</b>, and each conversation leaves a
+      <b>readable transcript</b>. Merging is low-risk: the diff touches a per-project template, lab
+      tooling, evals and one C fix — <b>zero platform (apps/os/src) changes</b>; nothing deployed
+      changes until a project installs the template.
+    </div>
+
+    <main>
+      <details class="vocab">
+        <summary>Vocabulary — enough to read the timelines</summary>
+        <table>
+          <tr>
+            <td>stream</td>
+            <td>
+              An append-only event log with an address like <code>/agents/voice/2608261249</code>.
+              Everything below — audio, presses, transcripts, statuses — is an event on one.
+            </td>
+          </tr>
+          <tr>
+            <td>voice agent / fast half</td>
+            <td>
+              A processor living on the call's stream. It holds the realtime provider socket (OpenAI
+              voice), pumps audio both ways, and runs the tools. It is a mouth, ears, and quick
+              judgement — nothing more, by design.
+            </td>
+          </tr>
+          <tr>
+            <td>colleague / backend</td>
+            <td>
+              A full text agent on its own stream (<code>/agents/voice-notes/…</code>) that the
+              voice consults via a <code>note_to_self</code> tool for anything needing tools, files,
+              or time. The person hears one assistant; these are its two halves.
+            </td>
+          </tr>
+          <tr>
+            <td>durable vs ephemeral</td>
+            <td>
+              Durable events are stored forever and replayable; ephemeral ones (audio frames) reach
+              live connections and vanish. What should survive a crash must be durable.
+            </td>
+          </tr>
+          <tr>
+            <td>fold</td>
+            <td>
+              The processor's state, recomputed from the stream's durable events. Anything in the
+              fold survives the process being killed; anything in memory does not.
+            </td>
+          </tr>
+          <tr>
+            <td>idle deadline</td>
+            <td>
+              A call with no caller input for 60s is hung up server-side. This makes
+              <em>reconnects a routine event</em>, which is the pressure the whole overhaul answers.
+            </td>
+          </tr>
+          <tr>
+            <td>contract version</td>
+            <td>
+              The voice agent's schema version. Bumps are clean breaks: an old persisted fold is
+              recomputed from events rather than migrated. This PR walks it 11.0.0 → 17.0.0.
+            </td>
+          </tr>
+        </table>
+      </details>
+
+      <h2>Scenario 1 — the morning it all went wrong (before)</h2>
+      <p>
+        Real session, prd, 2026-08-26 ~12:50. The ask:
+        <em>“prime factorize the first 23 digits of pi.”</em> Under the old design the colleague was
+        minted <em>per conversation</em> and replies came back through <code>ask()</code> — append a
+        question, wait up to 180s for the next chat reply, matched by order.
+      </p>
+
+      <details class="ev phone">
+        <summary>
+          <span class="off">12:50</span> caller asks for the factorization
+          <span class="badge">note_to_self</span>
+          <span class="t">call&nbsp;1</span>
+        </summary>
+        <div class="note">
+          The voice says “let me look into that” and mints colleague #1 at
+          <code>/agents/voice-notes/conv_7bb6298f…</code> — a path named for the
+          <em>conversation</em>, not the stream. Remember that.
+        </div>
+      </details>
+      <details class="ev backend">
+        <summary>
+          <span class="off">12:51</span> colleague #1 starts working
+          <span class="badge">web search + bigint factorization</span>
+        </summary>
+        <div class="note">
+          It does the job properly — verifies the digits against NIST, computes 2³ × 233 × 138337 ×
+          200023 × 274521601. Correctly. Nobody will ever hear it.
+        </div>
+      </details>
+      <details class="ev bad">
+        <summary>
+          <span class="off">12:51–12:56</span> a platform stall freezes colleague #1
+          <span class="badge">separate incident</span>
+        </summary>
+        <div class="note">
+          A processor-host staleness window (investigated separately that day) froze the colleague
+          for 4½ minutes — which pushed its reply past the 180-second
+          <code>ask()</code> deadline. The deadline design turned a slow answer into a lost one.
+        </div>
+      </details>
+      <details class="ev server">
+        <summary>
+          <span class="off">12:53</span> idle deadline hangs up call&nbsp;1
+          <span class="badge">no input for 60s</span>
+        </summary>
+        <div class="note">
+          The caller was waiting quietly for the answer. Waiting quietly is indistinguishable from
+          being gone, so the server hung up. This is routine, and the design has to survive it.
+        </div>
+      </details>
+      <details class="ev phone">
+        <summary>
+          <span class="off">12:56</span> caller calls back: “what’s going on?”
+          <span class="t">call&nbsp;2</span>
+        </summary>
+        <div class="note">
+          New conversation → <b>new colleague</b> (#2), born with no memory of the question. Asked
+          “what’s going on”, it went spelunking through the platform to find out — and, finding
+          colleague #1 frozen, committed an “ops: redeploy” to the project’s config repo. Helpful.
+          Terrifying.
+        </div>
+      </details>
+      <details class="ev bad">
+        <summary>
+          <span class="off">12:58</span> colleague #1’s correct answer arrives — and is dropped
+          <span class="badge">ask() deadline passed</span>
+        </summary>
+        <pre>
+# the reply lane, before:
+ask():
+  matched: by order, not correlation   # two pending asks? first reply feeds both
+  deadline: 180s                        # a slow answer resolves nothing
+  unsolicited replies: lost             # no ask waiting = message vanishes</pre
+        >
+        <div class="note">
+          Three loss modes, all observed live that day. The answer was computed twice (calls 1 and
+          4, two amnesiac colleagues, two interpretations) and spoken zero times.
+        </div>
+      </details>
+
+      <div class="split">
+        <div class="state">
+          <h4>after scenario 1 — what the system knew</h4>
+          4 conversations, 4 colleagues, 0 answers delivered.<br />
+          No transcript existed: audio is ephemeral, so the calls left no readable record at all.<br />
+          The caller’s question: still unanswered.
+        </div>
+        <div class="state">
+          <h4>the three design faults</h4>
+          1. colleague per <em>conversation</em> → reconnect = amnesia<br />
+          2. replies ride <code>ask()</code> → three loss modes<br />
+          3. no durable record → no memory, no debugging, no evals
+        </div>
+      </div>
+
+      <h2>Scenario 2 — the same ask, after the overhaul</h2>
+      <p>
+        From the passing <code>evals/voicelab-first-cause</code> run and the evening sessions. Same
+        shape of question; every fault above has a specific counterpart fix.
+      </p>
+
+      <details class="ev phone">
+        <summary>
+          <span class="off">+0s</span> caller asks something hard
+          <span class="badge">note_to_self</span>
+        </summary>
+        <div class="note">
+          The note goes to the <b>stream’s</b> one colleague at
+          <code>/agents/voice-notes/voice/&lt;stream&gt;</code> — same desk for every call, ever
+          (contract 12.0.0). The facet also appends an instant “picking up a note” status, so the
+          next question has an answer even before the colleague’s first turn.
+        </div>
+      </details>
+      <details class="ev backend">
+        <summary>
+          <span class="off">+4s…</span> statuses stream back as the colleague works
+          <span class="badge">copy-to-stream</span>
+        </summary>
+        <pre>
+# forwarded from the colleague's own stream, transformed en route (15.0.0):
+colleague-status: { phase: writing code }
+colleague-status: { phase: running code }
+colleague-status: { activity: "Reading the requested codeword file" }
+colleague-status: { phase: a script failed, failure: "TypeError: …" }  # failures included</pre
+        >
+        <div class="note">
+          The same lifecycle the web UI shows (“writing code”, “running code”), pushed — never
+          polled — onto the call stream. The voice whispers each change into the model’s context
+          without speaking it, so “what’s it doing?” gets “it’s running the code now” instead of
+          vamping, and a failure gets said instead of invented around.
+        </div>
+      </details>
+      <details class="ev backend">
+        <summary>
+          <span class="off">+15s</span> the answer arrives as a durable event
+          <span class="badge">colleague-note · 16.0.0</span>
+        </summary>
+        <pre>
+# the reply lane, after: every chat message the colleague sends is copied
+# to the call stream as a durable colleague-note. No deadline. No order
+# matching. Solicited or not. Survives eviction. A note landing between
+# calls is folded and briefed into the next session.</pre
+        >
+      </details>
+      <details class="ev server">
+        <summary>
+          <span class="off">+15.5s</span> the voice speaks it
+          <span class="badge">answer-transcript</span>
+        </summary>
+        <div class="note">
+          And — new in 13.0.0 — both sides of every finished turn land as durable
+          <code>utterance-transcript</code> / <code>answer-transcript</code> events.
+          <code>pnpm cli voicelab transcript</code> prints any conversation after the fact; the
+          evals assert against it; the recap below is folded from it.
+        </div>
+      </details>
+
+      <h2>Scenario 3 — hang up, call back, it remembers</h2>
+      <details class="ev server">
+        <summary>
+          <span class="off">+60s</span> idle deadline hangs up — mid-task
+          <span class="badge">routine</span>
+        </summary>
+        <div class="note">
+          The colleague keeps working; its stream, memory, and pending statuses are unaffected.
+        </div>
+      </details>
+      <details class="ev phone">
+        <summary><span class="off">+90s</span> caller calls back</summary>
+        <pre>
+# the fresh provider session is briefed from the fold:
+- transcript recap        # "Said so far, oldest first: …" (13.0.0)
+- mid-task line           # "Your backend is mid-task — do not re-send the note" (14.0.0)
+- recent colleague notes  # replies that landed while nobody was on the line (16.0.0)</pre
+        >
+        <div class="note">
+          The reconnect is invisible: no fresh greeting, no repeated question, no duplicate note
+          (the observed reconnect bug where the model re-asked and the duplicate answer became
+          undeliverable). With <code>greeting</code> on the certificate (17.0.0) the model even
+          speaks first — “hi again” falls out of the recap for free.
+        </div>
+      </details>
+      <details class="ev backend">
+        <summary><span class="off">+2m</span> a late reply lands in whichever call is live</summary>
+        <div class="note">
+          Or, if no call is live, in the next session’s briefing. “Silence is always an option”
+          remains true — but losing an answer no longer is.
+        </div>
+      </details>
+
+      <h2>The contract ladder in this PR</h2>
+      <table class="ladder">
+        <tr>
+          <th>version</th>
+          <th>change</th>
+          <th>proven by</th>
+        </tr>
+        <tr>
+          <td>12.0.0</td>
+          <td>Colleague per stream, not per conversation; late replies join the live call</td>
+          <td>unit tests; the “hi again” behavior in every later scenario</td>
+        </tr>
+        <tr>
+          <td>13.0.0</td>
+          <td>Durable transcripts + reconnect recap; <code>voicelab transcript</code> CLI</td>
+          <td>
+            <code>evals/voicelab-roundtrip</code> (codeword spoken, then recalled post-reconnect)
+          </td>
+        </tr>
+        <tr>
+          <td>14–15.0.0</td>
+          <td>
+            Status forwarding (own narration + writing/running-code lifecycle + failures with their
+            error), opening status, transparency briefing (“never invent an explanation”)
+          </td>
+          <td>live prd runs; the caller-visible “backend: …” captions</td>
+        </tr>
+        <tr>
+          <td>16.0.0</td>
+          <td>
+            Reply lane = the subscription (durable <code>colleague-note</code>), ask() retired
+          </td>
+          <td><code>evals/voicelab-first-cause</code>; the filter-vs-transform postmortem below</td>
+        </tr>
+        <tr>
+          <td>17.0.0</td>
+          <td>
+            <code>greeting</code>: a ringing call says hi at pickup (suppressed if the caller is
+            already mid-sentence)
+          </td>
+          <td>facet unit test; the mobile client (PR #2537) live</td>
+        </tr>
+      </table>
+
+      <h2>Why it’s built this way</h2>
+      <details class="deep">
+        <summary>Why a subscription instead of fixing ask()’s deadline?</summary>
+        <p>
+          Any request/response lane needs correlation, a timeout, and a story for unsolicited
+          messages — three things to get wrong, and all three were observed wrong in one evening. A
+          durable event lane needs none of them: the platform already guarantees ordered,
+          at-least-once, replayable delivery, and “a reply that outlives its call” stops being an
+          edge case because the fold keeps it for the next briefing. The same copy-to-stream
+          subscription that forwards statuses forwards replies — one mechanism, not two.
+        </p>
+      </details>
+      <details class="deep">
+        <summary>Why whisper statuses instead of speaking them?</summary>
+        <p>
+          Statuses are injected as quiet context items, never spoken unprompted. The model knows;
+          the person asks if they care. The earlier “never mention your other half” secrecy rule was
+          dropped the same day — a model forbidden to mention its backend rounded every status down
+          to “I’m working on it”, and one that couldn’t admit a delay invented an explanation for
+          it. The briefing now says: statuses are ground truth, failures are to be said plainly.
+        </p>
+      </details>
+      <details class="deep">
+        <summary>The filter-vs-transform postmortem (why the eval exists)</summary>
+        <p>
+          The reply lane shipped with the transform handling <code>web-message-sent</code> but the
+          subscription <em>filter</em> not delivering it — dead code that looked alive, found only
+          because the end-to-end eval insisted on hearing the answer. The unit test had been written
+          from the same wrong list. Lesson encoded in the eval: assert on what the caller hears, not
+          on what the plumbing intends.
+        </p>
+      </details>
+      <details class="deep">
+        <summary>buildCacheKey — the diagnostic this PR leaves behind</summary>
+        <p>
+          Mid-overhaul, prod served a three-commit-old facet build beside a fresh entrypoint for ~2
+          hours (self-healed by isolate eviction before it could be pinned). The one missing
+          instrument was “which build is this live facet actually running?” — so
+          <code>health()</code> and the facet runtime bag now report the content-addressed build
+          key, turning the next such window into a two-second check.
+        </p>
+      </details>
+      <details class="deep">
+        <summary>What else rides along</summary>
+        <p>
+          The host CLI writes its report in attended mode too (it used to error on every quit);
+          <code>talk --auto</code> skips both prompts; two self-contained evals
+          (<code>voicelab-roundtrip</code>, <code>voicelab-first-cause</code>) drive the real prd
+          pipeline with <code>say</code>-synthesized speech and assert against durable transcripts.
+        </p>
+      </details>
+
+      <h2>Is it safe to merge?</h2>
+      <p>
+        The diff is 10 files: the voice-agent <em>template</em> (<code>configs/voice-agent/</code>),
+        voicelab tooling and tests (<code>apps/os/scripts/voicelab/</code>), two evals, task files,
+        and one attended-mode fix in the C host CLI. There are no changes under
+        <code>apps/os/src</code> — merging deploys nothing and changes no running system. The
+        template reaches a project only when something installs it (<code>voicelab talk</code>, or
+        the mobile app’s setup), and the 17.0.0 contract is already live on the
+        <code>iterate</code>, <code>misha</code>, and <code>voicelab-eval</code> prd projects plus
+        the PR‑2537 preview, where it has been exercised all day. The boards’ event surface
+        (presses, audio frames, speaker policy) is untouched. Riskiest line: the colleague-mint
+        block’s revision-keyed subscription install — covered by unit tests and both evals.
+      </p>
+    </main>
+  </body>
+</html>

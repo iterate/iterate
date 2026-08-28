@@ -222,6 +222,7 @@ function makeHarness() {
       new VoiceAgentProcessor({
         ...deps,
         nowAtFacetMs: deps.now,
+        buildCacheKey: "test-build",
         /* The REAL dial, so the mocked `fetch` above is what stands in for the
          * provider — including the `response.webSocket ?? null` line that has
          * broken in production. */
@@ -977,13 +978,13 @@ describe("tools on the birth certificate", () => {
     expect(h.provider.sentOfType("response.create")).toHaveLength(0);
   });
 
-  it("note_to_self mints the conversation's colleague and reads its reply back", async () => {
+  it("note_to_self mints the stream's colleague and reads its reply back", async () => {
     const h = makeHarness();
     const gotten: string[] = [];
     const created: string[] = [];
     const briefs: { type: string; payload: { role?: string; content?: string } }[] = [];
-    const asked: string[] = [];
-    let resolveReply!: (reply: { payload: { message: string } }) => void;
+    const subscriptions: { path: string; type: string; payload: any }[] = [];
+    const messaged: string[] = [];
     h.projectRoot.current = {
       agents: {
         get(path: string) {
@@ -995,11 +996,17 @@ describe("tools on the birth certificate", () => {
             append: async (event: (typeof briefs)[number]) => {
               briefs.push(event);
             },
-            ask: async ({ message }: { message: string }) => {
-              asked.push(message);
-              return new Promise((resolve) => {
-                resolveReply = resolve;
-              });
+            message: async (input: string) => {
+              messaged.push(input);
+            },
+          };
+        },
+      },
+      streams: {
+        get(path: string) {
+          return {
+            append: async (event: any) => {
+              subscriptions.push({ path, ...event });
             },
           };
         },
@@ -1018,9 +1025,6 @@ describe("tools on the birth certificate", () => {
     await h.settle();
     h.provider.completeHandshake();
     await h.settle();
-    const conversationId = (
-      eventsOfType(h, "call-started")[0]!.payload as { conversationId: string }
-    ).conversationId;
 
     /* The certificate had no tools; the colleague flag alone arms the one
      * injected tool and the fast-half framing. */
@@ -1028,7 +1032,7 @@ describe("tools on the birth certificate", () => {
       session: { instructions?: string; tools?: { name: string }[] };
     };
     expect(update.session.tools!.map((tool) => tool.name)).toEqual(["note_to_self"]);
-    expect(update.session.instructions).toContain("fast half");
+    expect(update.session.instructions).toContain("backend");
 
     h.provider.push({
       type: "response.function_call_arguments.done",
@@ -1039,28 +1043,382 @@ describe("tools on the birth certificate", () => {
     await h.settle();
     /* The debt settles NOW; the model keeps the floor. */
     expect(toolOutputs(h)[0]!.output).toContain("noted");
-    /* One colleague, on ITS OWN fresh agent stream named for the call. */
-    expect(gotten[0]).toBe(`/agents/voice-notes/${conversationId}`);
-    expect(created).toEqual([`/agents/voice-notes/${conversationId}`]);
+    /* One colleague, on ITS OWN agent stream named for THIS stream — the
+     * same desk for every conversation the stream ever holds. */
+    expect(gotten[0]).toBe("/agents/voice-notes/voice/test");
+    expect(created).toEqual(["/agents/voice-notes/voice/test"]);
+    /* And the mint wires the status lane: the colleague's own narration is
+     * forwarded to this stream as colleague-status events. */
+    expect(subscriptions).toHaveLength(1);
+    expect(subscriptions[0]).toMatchObject({
+      path: "/agents/voice-notes/voice/test",
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: {
+        filter: {
+          eventTypes: [
+            "events.iterate.com/agent/summary-updated",
+            "events.iterate.com/agent/llm-request-requested",
+            "events.iterate.com/capability-host/script-run-started",
+            "events.iterate.com/capability-host/script-run-settled",
+            "events.iterate.com/agents/web-message-sent",
+          ],
+        },
+        receiver: { action: "copy-to-stream", receivingStreamPath: "/agents/voice/test" },
+      },
+    });
+    expect(subscriptions[0]!.payload.receiver.jsonataTransform).toContain(
+      "voice-agent/colleague-status",
+    );
     /* Born briefed, as a system context item that triggers no turn. */
     expect(briefs[0]!.type).toBe("events.iterate.com/agents/context-added");
     expect(briefs[0]!.payload.role).toBe("system");
-    expect(briefs[0]!.payload.content).toContain("careful, thinking half");
-    expect(asked).toEqual(["look up the March invoice"]);
+    expect(briefs[0]!.payload.content).toContain("the backend of ONE assistant");
+    /* The note carries its own reply-channel coda, because the platform
+     * stamps a reply-routing label on the same message that points at a
+     * path which is not an agent. */
+    expect(messaged).toHaveLength(1);
+    expect(messaged[0]).toMatch(/^look up the March invoice\n/);
+    expect(messaged[0]).toContain("itx.chat.sendMessage");
 
-    /* The reply lands mid-call: injected as a bracketed note, and the
-     * model is nudged to speak because the floor is free. */
-    resolveReply({ payload: { message: "The March invoice was never sent." } });
+    /* The reply arrives as a durable colleague-note (the copy-to-stream
+     * lane, not ask()): injected as a bracketed note, and the model is
+     * nudged to speak because the floor is free. */
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-note",
+      payload: { text: "The March invoice was never sent." },
+    });
     await h.settle();
     const items = h.provider.sentOfType("conversation.item.create") as {
       item: { type: string; content?: { text: string }[] };
     }[];
-    const note = items.find((entry) => entry.item.type === "message");
+    const note = items.find((entry) => entry.item.content?.[0]?.text.startsWith("[note from"));
     expect(note).toBeDefined();
     expect(note!.item.content![0]!.text).toBe(
-      "[note from your thinking half] The March invoice was never sent.",
+      "[note from your backend] The March invoice was never sent.",
     );
+    /* Dispatching the note was itself a status: the dead-air before the
+     * colleague's first narration has something honest in it. */
+    const opening = eventsOfType(h, "colleague-status");
+    expect(opening).toHaveLength(1);
+    expect(opening[0]!.payload).toMatchObject({
+      activity: "picking up a note from the frontend",
+    });
     expect(h.provider.sentOfType("response.create")).toHaveLength(1);
+  });
+
+  /*
+   * THE REPLY THAT OUTLIVES ITS CALL, which is every hard question's shape:
+   * the idle deadline (60s) is shorter than the note deadline (180s), so a
+   * person who asks something slow and then waits quietly gets hung up on
+   * before the answer exists. Measured live (prd, 2026-08-26): four calls,
+   * four amnesiac per-conversation colleagues, a correct answer computed
+   * twice and spoken zero times. The colleague is per STREAM now, and its
+   * late reply is spoken into whichever call is live when it arrives.
+   */
+  it("a note that outlives its call reaches the next one — or its briefing", async () => {
+    const h = makeHarness();
+    const gotten: string[] = [];
+    const created: string[] = [];
+    const messaged: string[] = [];
+    h.projectRoot.current = {
+      agents: {
+        get(path: string) {
+          gotten.push(path);
+          return {
+            create: async () => {
+              created.push(path);
+            },
+            append: async () => {},
+            message: async (input: string) => {
+              messaged.push(input);
+            },
+          };
+        },
+      },
+      streams: { get: () => ({ append: async () => {} }) },
+    };
+    await callIsLive(h, CLIENT_TAKES_TURNS);
+    h.provider.push({
+      type: "response.function_call_arguments.done",
+      call_id: "call_10",
+      name: "note_to_self",
+      arguments: JSON.stringify({ note: "factorize the first 23 digits of pi" }),
+    });
+    await h.settle();
+    expect(messaged).toHaveLength(1);
+    expect(messaged[0]).toMatch(/^factorize the first 23 digits of pi\n/);
+    const firstSocket = h.provider;
+
+    /* The person waits quietly for the answer, so the idle deadline kills
+     * the call while the colleague is still thinking. */
+    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
+    await h.settle();
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
+
+    /* The colleague's first reply lands BETWEEN calls — spoken to nobody,
+     * but durable: the fold keeps it for the next session's briefing. */
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-note",
+      payload: { text: "Early lead: the number is even, so 2 divides it." },
+    });
+    await h.settle();
+    await h.advanceTime(2_000);
+    await h.settle();
+
+    /* They press again: a fresh call, a fresh socket, the SAME stream. */
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
+    expect(eventsOfType(h, "call-started")).toHaveLength(2);
+    expect(h.provider).not.toBe(firstSocket);
+    const update = h.provider.sentOfType("session.update")[0] as {
+      session: { instructions?: string };
+    };
+    expect(update.session.instructions).toContain("Recent notes from your backend");
+    expect(update.session.instructions).toContain("the number is even, so 2 divides it");
+
+    /* A note arriving DURING the new call lands in it, never the dead one. */
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-note",
+      payload: { text: "The factorization is done." },
+    });
+    await h.settle();
+    const items = h.provider.sentOfType("conversation.item.create") as {
+      item: { type: string; content?: { text: string }[] };
+    }[];
+    const note = items.find((entry) =>
+      entry.item.content?.[0]?.text.startsWith("[note from your backend] The factorization"),
+    );
+    expect(note).toBeDefined();
+    const staleItems = firstSocket.sentOfType("conversation.item.create") as {
+      item: { type: string; content?: { text: string }[] };
+    }[];
+    expect(
+      staleItems.filter((entry) => entry.item.content?.[0]?.text.startsWith("[note from")),
+    ).toHaveLength(0);
+
+    /* A follow-up in the new call reaches the same desk: one colleague,
+     * created and briefed once, remembering across the reconnect. */
+    h.provider.push({
+      type: "response.function_call_arguments.done",
+      call_id: "call_11",
+      name: "note_to_self",
+      arguments: JSON.stringify({ note: "now double-check it" }),
+    });
+    await h.settle();
+    expect(new Set(gotten)).toEqual(new Set(["/agents/voice-notes/voice/test"]));
+    expect(created).toEqual(["/agents/voice-notes/voice/test"]);
+    expect(messaged).toHaveLength(2);
+    expect(messaged[1]).toMatch(/^now double-check it\n/);
+  });
+
+  /*
+   * THE RECONNECT IS INVISIBLE, OR IT IS AMNESIA. A fresh provider session
+   * starts from instructions alone, and the idle deadline manufactures fresh
+   * sessions mid-conversation — so without a durable transcript folded back
+   * into the next dial's briefing, every reconnect greeted the listener as a
+   * stranger (measured on prd, 2026-08-26: "what's going on?" after a
+   * reconnect drew a blank). The transcript events are also the stream's only
+   * readable record of what was actually said, which is what an eval asserts
+   * on.
+   */
+  it("finished turns land durably and brief the next dial's session", async () => {
+    const h = makeHarness();
+    await callIsLive(h, CLIENT_TAKES_TURNS);
+
+    /* The listener's side, transcribed by the provider. */
+    h.provider.push({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "item_user_1",
+      transcript: "what is the capital of France?",
+    });
+    /* The model's side: transcript rides its own done event. */
+    h.provider.responseCreated();
+    h.provider.answerAudio(400);
+    h.provider.push({
+      type: "response.output_audio_transcript.done",
+      item_id: "item_fake",
+      transcript: "The capital of France is Paris.",
+    });
+    h.provider.answerComplete();
+    await playOutEverything(h, 600);
+
+    const utterances = eventsOfType(h, "utterance-transcript");
+    expect(utterances).toHaveLength(1);
+    expect(utterances[0]!.payload).toMatchObject({ text: "what is the capital of France?" });
+    const answers = eventsOfType(h, "answer-transcript");
+    expect(answers).toHaveLength(1);
+    expect(answers[0]!.payload).toMatchObject({ text: "The capital of France is Paris." });
+    /* And the fold carries both turns — the recap below hangs off this. */
+    expect(h.state().transcript).toEqual([
+      { role: "listener", text: "what is the capital of France?" },
+      { role: "assistant", text: "The capital of France is Paris." },
+    ]);
+
+    /* The call dies of silence; the next press dials a FRESH session. The
+     * extra beat before the press clears the 1.5s dying-breath mint
+     * cooldown — a press in the same instant as the obituary is treated as
+     * the dead call's own drained input, by design. */
+    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
+    await h.settle();
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
+    await h.advanceTime(2_000);
+    await h.settle();
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
+
+    /* And that session is briefed with what was said before it existed. */
+    const update = h.provider.sentOfType("session.update")[0] as {
+      session: { instructions?: string };
+    };
+    expect(update.session.instructions).toContain("RESUMES an earlier conversation");
+    expect(update.session.instructions).toContain("Listener: what is the capital of France?");
+    expect(update.session.instructions).toContain("You: The capital of France is Paris.");
+  });
+
+  /*
+   * THE STATUS WHISPER. The colleague's own narration (forwarded onto this
+   * stream as colleague-status events) reaches the live session as a quiet
+   * context item — the model KNOWS what stage the work is at without ever
+   * announcing it unprompted — and the folded latest status survives into
+   * the next session's briefing, which is what tells a reconnect that its
+   * note is still being worked rather than lost.
+   */
+  it("colleague status whispers into the live session and briefs the reconnect", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-status",
+      payload: { activity: "running the factorization script" },
+    });
+    await h.settle();
+    const whispers = () =>
+      (
+        h.provider.sentOfType("conversation.item.create") as {
+          item: { type: string; content?: { text: string }[] };
+        }[]
+      ).filter((entry) => entry.item.content?.[0]?.text.startsWith("[backend status"));
+    expect(whispers()).toHaveLength(1);
+    expect(whispers()[0]!.item.content![0]!.text).toBe(
+      "[backend status: running the factorization script]",
+    );
+    /* Quiet on purpose: knowing is not announcing. */
+    expect(h.provider.sentOfType("response.create")).toHaveLength(0);
+
+    /* A redelivered or waitingFor-only patch is not whispered twice… */
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-status",
+      payload: { activity: "running the factorization script" },
+    });
+    await h.settle();
+    expect(whispers()).toHaveLength(1);
+    /* Lifecycle phases whisper too — the OS UI's "writing code" / "running
+     * code" vocabulary, straight from the transform — and a failed script
+     * carries its error, which is what "say so, don't invent" runs on. */
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-status",
+      payload: { phase: "running code" },
+    });
+    await h.settle();
+    expect(whispers()).toHaveLength(2);
+    expect(whispers()[1]!.item.content![0]!.text).toBe("[backend status: running code]");
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-status",
+      payload: { phase: "a script failed", failure: "TypeError: cannot read digits of pi" },
+    });
+    await h.settle();
+    expect(whispers()).toHaveLength(3);
+    expect(whispers()[2]!.item.content![0]!.text).toBe(
+      "[backend status: a script failed — TypeError: cannot read digits of pi]",
+    );
+    /* …and a CHANGED activity is whispered as well. */
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-status",
+      payload: { activity: "writing up the answer" },
+    });
+    await h.settle();
+    expect(whispers()).toHaveLength(4);
+
+    /* The reconnect's briefing carries the folded status, mid-task framing
+     * and all — the line that stops a fresh session re-sending the note. */
+    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
+    await h.settle();
+    await h.advanceTime(2_000);
+    await h.settle();
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
+    const update = h.provider.sentOfType("session.update")[0] as {
+      session: { instructions?: string };
+    };
+    expect(update.session.instructions).toContain("mid-task right now");
+    expect(update.session.instructions).toContain('"writing up the answer"');
+    expect(update.session.instructions).toContain("do not send another note");
+
+    /* Once the colleague reports itself idle, the framing retires. */
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-status",
+      payload: { activity: "done — answer delivered", waitingFor: "user_input" },
+    });
+    await h.settle();
+    expect(h.state().colleagueStatus).toEqual({
+      activity: "done — answer delivered",
+      phase: "a script failed",
+      /* The failure travels with its phase: an activity-only patch keeps
+       * both until a new phase supersedes them. */
+      failure: "TypeError: cannot read digits of pi",
+      waitingFor: "user_input",
+    });
+  });
+
+  it("greeting on the certificate makes the model speak first at pickup — unless the caller already did", async () => {
+    const h = makeHarness();
+    await h.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: { clientTakesTurns: CLIENT_TAKES_TURNS, greeting: true },
+    });
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
+    const items = h.provider.sentOfType("conversation.item.create") as {
+      item: { content?: { text: string }[] };
+    }[];
+    expect(items.some((i) => i.item.content?.[0]?.text.includes("call just connected"))).toBe(true);
+    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
+
+    /* A caller mid-sentence is not welcomed over: held frames suppress it. */
+    const busy = makeHarness();
+    await busy.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: { clientTakesTurns: CLIENT_TAKES_TURNS, greeting: true },
+    });
+    await busy.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await busy.append(micFrame(1));
+    await busy.settle();
+    busy.provider.completeHandshake();
+    await busy.settle();
+    const busyItems = busy.provider.sentOfType("conversation.item.create") as {
+      item: { content?: { text: string }[] };
+    }[];
+    expect(busyItems.some((i) => i.item.content?.[0]?.text.includes("call just connected"))).toBe(
+      false,
+    );
+
+    /* And absent from the certificate, nobody speaks first. */
+    const plain = makeHarness();
+    await callIsLive(plain, CLIENT_TAKES_TURNS);
+    const plainItems = plain.provider.sentOfType("conversation.item.create") as {
+      item: { content?: { text: string }[] };
+    }[];
+    expect(plainItems.some((i) => i.item.content?.[0]?.text.includes("call just connected"))).toBe(
+      false,
+    );
   });
 
   it("a press during the goodbye un-decides the hang-up", async () => {
