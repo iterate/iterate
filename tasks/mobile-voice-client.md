@@ -76,8 +76,7 @@ flight) and the ~2am on-phone check via iPhone mirroring. Explainer written
 - [x] Headless node wire-driver _(e2e/voice-roundtrip.e2e.test.ts — PASSED against prd voicelab-eval, 15s)_: run the shipped voice-call module against
       prd `voicelab-eval` with WAV-fed fake audio; assert spk-frames arrive
       and durable transcripts land.
-- [ ] Native build via mobile PR-preview CI (fingerprint change → full-install
-      QR in PR body).
+- [x] Native build via mobile PR-preview CI _(finished: EAS build 7be698bb, after two pod fixes — reanimated + worklets are hard deps of react-native-audio-api; ffmpeg disabled)_
 - [x] Permanent explainer in `explainers/` _(mobile-voice-client.html; servable at iterate.iterate.app/explainers/mobile-voice-client?sha=mobile-voice-client)_ (linked from PR; servable via
       iterate.iterate.app/explainers/…).
 - [ ] ~2am: iPhone-mirroring test — capture spike first (non-empty frames +
