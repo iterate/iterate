@@ -578,3 +578,53 @@ the branch:
 Also folded in: `projects.tsx` sign-out now goes through `useSignOut` (the
 session cache has one owner; knip doesn't cover apps/mobile, so its dead
 exports don't get flagged), and `readSession` is no longer exported.
+
+## Field test (Misha's phone, 2026-08-28 evening)
+
+Misha scanned the real install QR for this PR and hit a compound failure the
+re-audit missed. His trace, decoded:
+
+1. First boot: the old jargon Alert about a cleared `mobile-voice-client`
+   override — word salad, two mystery buttons. (The alert predates this
+   branch's later commits; the binary embeds JS from build-trigger time.)
+2. "A newer update is available" right after installing — correct, not a bug:
+   the binary compiled at the trigger commit while the branch kept moving;
+   the banner is the catch-up. Surprising without explanation though.
+3. Tapped **Switch to main (preview)** → "nothing happened": main publishes
+   for a different runtime (it doesn't have this PR's fingerprint change), so
+   there was nothing to pull — but the override to `preview` persisted.
+4. Kill + relaunch → expo-updates found nothing runnable for `preview` and
+   fell back to the EMBEDDED bundle — older JS than he'd been running.
+5. Build info then showed **Default for this build = preview**: at the native
+   layer `Updates.channel` is `requestHeaders["expo-channel-name"]` with the
+   persisted override merged in at launch (verified in expo-updates'
+   AppController.swift / UpdatesConfigOverride.swift; the plist's original
+   headers never cross the bridge). So the app computed "not overridden, main
+   binary" → unwatched, no reset button, no way back.
+
+### Fixes (same branch)
+
+- **Baked channel learned, not assumed.** The stored override is captured at
+  import time (before the guard or any tap can rewrite it); on a boot that
+  launched override-free, `Updates.channel` is trustworthy and gets cached
+  per binary id. Until one clean boot happens the default is honestly
+  unknown (`null`) — and unknown counts as watched, since the
+  just-installed boot is exactly when freshness matters.
+- **Build info replaces the Alert.** New-binary first boot opens Build info,
+  with the cleared override (if any) as a plain-words note. The screen's
+  labeled rows and buttons ARE the explanation; no modal.
+- **Explicit switches revert on no-update.** Build info's switch-to-main
+  undoes the override when the target serves nothing this binary can run,
+  with copy saying why ("native code differs; resolves when the PR merges").
+  The QR flow stays sticky on purpose — there, CI is about to publish for
+  your runtime and the copy says the override sticks.
+- With defaultChannel honest, the stuck state itself self-heals: overridden
+  computes true against an unknown default, so "Reset to this build's own
+  channel" renders and recovers in one tap.
+
+### Recovery for the currently-stuck phone
+
+Scan the PR's OTA QR once — it re-points the override at `mobile-build-state`
+and pulls latest (which includes all of the above). Reinstalling would NOT
+help: same binary id, the guard stays quiet and the `preview` override
+persists.

@@ -43,6 +43,35 @@ const LAST_SEEN_INSTALL_KEY = "native-install.last-seen";
 const overrideKey = ["build-state", "channel-override"];
 const checkKey = ["build-state", "update-check"];
 const installedAtKey = ["build-state", "installed-at"];
+const bakedChannelKey = ["build-state", "baked-channel"];
+
+const binaryId = () =>
+  `${Application.nativeApplicationVersion}/${Application.nativeBuildVersion}/${Updates.runtimeVersion}`;
+
+// Updates.channel is NOT the baked channel: natively it reads
+// requestHeaders["expo-channel-name"] off the config as merged AT LAUNCH, and
+// a persisted override wins that merge (AppController.toModuleConstantsMap /
+// UpdatesConfigOverride.load in expo-updates). Restart with an override set
+// and Updates.channel reports the override — which made Build info claim a
+// PR binary's "default" was whatever it was overridden to, hiding every
+// route back. The plist's original headers never cross the bridge, so the
+// baked channel has to be learned: on a boot that LAUNCHED override-free,
+// Updates.channel is trustworthy — cache it per binary and use the cache on
+// polluted boots. Until one clean boot has happened it is simply unknown.
+//
+// Captured at import time, before anything in this session can rewrite the
+// stored override (the install guard clears it; screen taps change it).
+const overrideAtLaunch: Promise<string | null> = AsyncStorage.getItem(OVERRIDE_KEY);
+
+async function resolveBakedChannel(): Promise<string | null> {
+  if (!Updates.isEnabled || Updates.channel === null) return null;
+  const key = `baked-channel.${binaryId()}`;
+  const cached = await AsyncStorage.getItem(key);
+  if (cached !== null) return cached;
+  if ((await overrideAtLaunch) !== null) return null;
+  await AsyncStorage.setItem(key, Updates.channel);
+  return Updates.channel;
+}
 
 // ---------------------------------------------------------------------------
 // Stored state
@@ -97,7 +126,7 @@ export async function resetChannelOverrideForNewInstall(): Promise<{
   const nothing = { binaryChanged: false, clearedOverride: null };
   // Web has no installs; Metro dev bundles have no OTA for an override to hijack.
   if (Platform.OS === "web" || !Updates.isEnabled) return nothing;
-  const id = `${Application.nativeApplicationVersion}/${Application.nativeBuildVersion}/${Updates.runtimeVersion}`;
+  const id = binaryId();
   const seen = await AsyncStorage.getItem(LAST_SEEN_INSTALL_KEY);
   if (seen === id) return nothing;
   await AsyncStorage.setItem(LAST_SEEN_INSTALL_KEY, id);
@@ -144,6 +173,11 @@ export type LiveBuildState = BuildState & { ready: boolean };
 
 export function useBuildState(): LiveBuildState {
   const override = useQuery({ queryKey: overrideKey, queryFn: getChannelOverride });
+  const baked = useQuery({
+    queryKey: bakedChannelKey,
+    queryFn: resolveBakedChannel,
+    staleTime: Infinity,
+  });
   const installedAt = useQuery({
     queryKey: installedAtKey,
     // Unavailable on web; the row shows "—" there.
@@ -157,7 +191,7 @@ export function useBuildState(): LiveBuildState {
       updatesEnabled: Updates.isEnabled,
       isDevBundle: typeof __DEV__ !== "undefined" && __DEV__,
       isEmbeddedLaunch: Updates.isEmbeddedLaunch,
-      defaultChannel: Updates.channel,
+      defaultChannel: baked.data || null,
       channelOverride: override.data || null,
       runtimeVersion: Updates.runtimeVersion,
       updateId: Updates.updateId,
@@ -211,10 +245,21 @@ export async function fetchLatestUpdateAndReload() {
   return "reloading" as const;
 }
 
+export type SwitchChannelInput = {
+  /** null = back to the build's own channel. */
+  channel: string | null;
+  /** Undo the switch when the target has nothing this binary can run. The QR
+   * flow keeps a sticky override (CI is about to publish for this runtime);
+   * Build info's explicit switches revert — a persisted override with
+   * nothing runnable behind it makes the next RESTART fall back to the
+   * embedded bundle, silently running older JS than before the switch. */
+  revertOnNoUpdate: boolean;
+};
+
 export type BuildActions = {
-  /** Point the app at a channel (null = back to the build's own), then pull
-   * whatever it has. Only "reloading" actually restarts the app. */
-  switchChannel: (channel: string | null) => Promise<"reloading" | "no-update">;
+  /** Point the app at a channel, then pull whatever it has. Only "reloading"
+   * actually restarts the app. */
+  switchChannel: (input: SwitchChannelInput) => Promise<"reloading" | "no-update">;
   switchChannelPending: boolean;
   /** The last switch's outcome, for feedback ("no-update" deserves words —
    * a reload speaks for itself). */
@@ -229,9 +274,13 @@ export type BuildActions = {
 export function useBuildActions(): BuildActions {
   const queryClient = useQueryClient();
   const switchChannel = useMutation({
-    mutationFn: async (channel: string | null) => {
+    mutationFn: async ({ channel, revertOnNoUpdate }: SwitchChannelInput) => {
+      const previous = await getChannelOverride();
       await setChannelOverride(channel);
       const result = await fetchLatestUpdateAndReload();
+      if (result === "up-to-date" && revertOnNoUpdate) {
+        await setChannelOverride(previous);
+      }
       return result === "up-to-date" ? ("no-update" as const) : result;
     },
     onSuccess: () => {

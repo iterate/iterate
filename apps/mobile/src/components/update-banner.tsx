@@ -40,7 +40,7 @@ export function UpdateBanner() {
             {updateHeadline(state.update)}
           </Text>
           <Text numberOfLines={1} style={styles.sub}>
-            {state.channel}
+            {state.channel || "this build's channel"}
           </Text>
         </View>
         <Pressable

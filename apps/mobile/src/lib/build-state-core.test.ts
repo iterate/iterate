@@ -33,6 +33,28 @@ test("a binary built for a PR is watched with no override at all", () => {
   expect(isOverridden(state)).toBe(false);
 });
 
+test("an unknown baked channel is watched, and claims no default", () => {
+  // The boot right after an install: the override was set at launch (so
+  // Updates.channel is polluted and the baked channel can't be learned yet)
+  // and the guard has just cleared it. Freshness matters most exactly here —
+  // the embedded JS is from build-trigger time.
+  const state = describeBuildState(facts({ defaultChannel: null, channelOverride: null }));
+  expect(state).toMatchObject({
+    channel: null,
+    watched: true,
+    binary: { defaultChannel: null },
+  });
+  expect(isOverridden(state)).toBe(false);
+
+  // With an override on top of an unknown default, the way back must show:
+  // overridden is true, so Build info renders its reset control.
+  const overriddenState = describeBuildState(
+    facts({ defaultChannel: null, channelOverride: "preview" }),
+  );
+  expect(overriddenState).toMatchObject({ channel: "preview", watched: true });
+  expect(isOverridden(overriddenState)).toBe(true);
+});
+
 test("a Metro bundle has no channel, no watch, and says why", () => {
   const state = describeBuildState(
     facts({ updatesEnabled: false, defaultChannel: null, isEmbeddedLaunch: false }),

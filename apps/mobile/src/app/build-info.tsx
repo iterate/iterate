@@ -6,7 +6,7 @@
 //
 // A dumb view: every fact and every action comes from lib/build-state.ts.
 
-import { Stack, useRouter } from "expo-router";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import {
   buildStamp,
@@ -20,6 +20,9 @@ import { colors, radius, spacing } from "../lib/theme.ts";
 
 export default function BuildInfoScreen() {
   const router = useRouter();
+  // Set by the root layout when it opens this screen on the first boot of a
+  // freshly installed binary that had a channel override left over.
+  const { clearedOverride } = useLocalSearchParams<{ clearedOverride?: string }>();
   const state = useBuildState();
   const actions = useBuildActions();
   const overridden = isOverridden(state);
@@ -27,6 +30,12 @@ export default function BuildInfoScreen() {
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Stack.Screen options={{ title: "Build info" }} />
+      {clearedOverride ? (
+        <Text style={styles.note}>
+          New build installed. It was still pointed at the update branch "{clearedOverride}" from
+          before — that's been cleared, so updates now come from this build's own branch, below.
+        </Text>
+      ) : null}
       {/* Channel first: it is the answer to "am I on the right thing?", and
           the two rows together say whether you got here by scanning a QR or
           by installing this build. */}
@@ -79,30 +88,36 @@ export default function BuildInfoScreen() {
       )}
       {overridden ? (
         <Button
-          label={`Reset to ${state.binary.defaultChannel || "the default channel"}`}
+          label={`Reset to ${state.binary.defaultChannel || "this build's own channel"}`}
           pending={actions.switchChannelPending}
           pendingLabel="Resetting…"
-          onPress={() => void actions.switchChannel(null)}
+          onPress={() => void actions.switchChannel({ channel: null, revertOnNoUpdate: false })}
         />
       ) : null}
       {/* A per-PR binary's OWN channel is its PR — and once that PR merges,
           cleanup deletes the channel. "Reset to default" can't get such a
           phone back to main; this explicit override to the main channel can.
-          Hidden on main binaries, where reset-to-default IS main. */}
+          Hidden on main binaries, where reset-to-default IS main. Reverts on
+          no-update: before its PR merges, a PR binary's native code is newer
+          than main's, main serves nothing it can run, and a stuck override
+          would make the next restart fall back to the embedded (older) JS. */}
       {state.update.kind !== "unsupported" &&
-      state.binary.defaultChannel !== null &&
       state.binary.defaultChannel !== MAIN_CHANNEL &&
       state.channel !== MAIN_CHANNEL ? (
         <Button
           label={`Switch to main (${MAIN_CHANNEL})`}
           pending={actions.switchChannelPending}
           pendingLabel="Switching…"
-          onPress={() => void actions.switchChannel(MAIN_CHANNEL)}
+          onPress={() =>
+            void actions.switchChannel({ channel: MAIN_CHANNEL, revertOnNoUpdate: true })
+          }
         />
       ) : null}
       {actions.switchChannelResult === "no-update" ? (
         <Text style={styles.note}>
-          Channel switched — it has nothing newer this binary can run right now, so no restart.
+          That channel has no update this build can run — its native code differs. Staying on{" "}
+          {state.channel || "this build's own channel"}. For main that resolves itself once the PR
+          merges; until then, use main's own build.
         </Text>
       ) : null}
       <Section title="App">

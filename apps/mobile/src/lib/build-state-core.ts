@@ -111,7 +111,8 @@ export type BuildState = {
     defaultChannel: string | null;
   };
   /** Where updates actually come from: the override, else the build's own
-   * channel. Null only for a Metro bundle, which has neither. */
+   * channel. Null for a Metro bundle (which has neither) and on a boot where
+   * the baked channel is still unknown and no override is set. */
   channel: string | null;
   update: UpdateStatus;
   /** Worth checking on every open: an overridden channel, or a binary built
@@ -127,7 +128,12 @@ export function isOverridden(state: BuildState): boolean {
 export function describeBuildState(facts: BuildFacts): BuildState {
   const channel = facts.channelOverride || facts.defaultChannel;
   const overridden = channel !== null && channel !== facts.defaultChannel;
-  const nonMainBinary = facts.defaultChannel !== null && facts.defaultChannel !== MAIN_CHANNEL;
+  // Unknown (null) counts as non-main: the boot right after an install is
+  // exactly when the baked channel can't be known yet AND when a freshness
+  // check matters most — the binary embeds JS from build-trigger time, and
+  // the branch has usually moved since. One possibly-redundant check on a
+  // main binary's first clean boot is the cost.
+  const nonMainBinary = facts.defaultChannel !== MAIN_CHANNEL;
   const canOta = facts.updatesEnabled && !facts.isDevBundle;
 
   return {

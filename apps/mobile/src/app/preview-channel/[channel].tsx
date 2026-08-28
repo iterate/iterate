@@ -142,7 +142,10 @@ export default function PreviewChannelScreen() {
       // changes), where auto-continuing would both hide that message and
       // apply the old bundle's plan. Take the consent back.
       await setAutoContinueChannel(channel);
-      const result = await actions.switchChannel(channel);
+      // Sticky on purpose (no revert): CI publishes for this runtime, so an
+      // override with nothing runnable YET is a wait, not a dead end — the
+      // copy below says so.
+      const result = await actions.switchChannel({ channel, revertOnNoUpdate: false });
       if (result === "no-update") await clearAutoContinueChannel();
       return result;
     },
