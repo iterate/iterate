@@ -257,7 +257,7 @@ export function deriveAgentUiLiveStatus(state: AgentUiState): AgentUiLiveStatus 
     state.summaryActivityUpdatedAtMs >= live.startedAtMs
       ? state.summaryActivity
       : null;
-  const phase = (): AgentUiLivePhase => {
+  const phase = () => {
     const current = live.steps.findLast((step) => step.status === "running");
     if (current?.kind === "code") return "running";
     if (current?.kind === "llm" && current.responseText !== "") return "writing";
