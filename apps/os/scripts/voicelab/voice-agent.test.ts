@@ -1416,6 +1416,11 @@ describe("tools on the birth certificate", () => {
     });
     await h.settle();
     expect(h.provider.sentOfType("response.create")).toHaveLength(1);
+    /* The provider answers the drawn line (created clears the follow-up
+     * flag; done settles the answer) — the floor is free again. */
+    h.provider.responseCreated();
+    h.provider.answerComplete();
+    await h.settle();
 
     /* New words straight after: whispered, but inside the gap — throttled. */
     await h.append({
@@ -1442,6 +1447,9 @@ describe("tools on the birth certificate", () => {
     });
     await h.settle();
     expect(h.provider.sentOfType("response.create")).toHaveLength(2);
+    h.provider.responseCreated();
+    h.provider.answerComplete();
+    await h.settle();
 
     /* The facet's own note-dispatch echo wears `quiet`: never spoken. */
     await h.advanceTime(16_000);
