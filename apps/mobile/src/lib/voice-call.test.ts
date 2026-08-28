@@ -2,7 +2,12 @@
 // handle and the audio session (the same interfaces the phone, the Node e2e,
 // and a future library swap use; nothing here mocks internals).
 import { expect, test } from "vitest";
-import { captionForEvent, startVoiceCall, type VoiceCallStatus } from "./voice-call.ts";
+import {
+  captionForEvent,
+  startVoiceCall,
+  transcriptItems,
+  type VoiceCallStatus,
+} from "./voice-call.ts";
 
 const SPK = "events.iterate.com/voice-agent/spk-frame";
 const ENDED = "events.iterate.com/voice-agent/conversation-ended";
@@ -223,6 +228,77 @@ test("captionForEvent stays quiet for events a glancing human does not need", ()
   expect(
     captionForEvent("events.iterate.com/voice-agent/colleague-note", { text: "y".repeat(200) }),
   ).toMatch(/…$/);
+});
+
+test("transcriptItems: both sides, notes, deduped statuses, empties skipped", () => {
+  const items = transcriptItems([
+    {
+      type: "events.iterate.com/voice-agent/utterance-transcript",
+      offset: 1,
+      payload: { text: "what's the weather?" },
+    },
+    {
+      type: "events.iterate.com/voice-agent/answer-transcript",
+      offset: 2,
+      payload: { text: "Let me check." },
+    },
+    /* The facet's quiet opening status, then the same folded line twice —
+     * one status row, not three. */
+    {
+      type: "events.iterate.com/voice-agent/colleague-status",
+      offset: 3,
+      payload: { activity: "checking the forecast" },
+    },
+    {
+      type: "events.iterate.com/voice-agent/colleague-status",
+      offset: 4,
+      payload: { activity: "checking the forecast" },
+    },
+    /* A waitingFor-only patch says nothing a glancing human needs. */
+    {
+      type: "events.iterate.com/voice-agent/colleague-status",
+      offset: 5,
+      payload: { waitingFor: null },
+    },
+    {
+      type: "events.iterate.com/voice-agent/colleague-note",
+      offset: 6,
+      payload: { text: "Sunny, 24 degrees." },
+    },
+    /* An interrupted answer keeps its words, marked. */
+    {
+      type: "events.iterate.com/voice-agent/answer-transcript",
+      offset: 7,
+      payload: { text: "It's sunny and", cancelled: true },
+    },
+    /* Silence heard as a turn is not a row. */
+    {
+      type: "events.iterate.com/voice-agent/utterance-transcript",
+      offset: 8,
+      payload: { text: "" },
+    },
+    /* Machinery events are not conversation. */
+    { type: "events.iterate.com/voice-agent/ptt-start", offset: 9, payload: {} },
+  ]);
+  expect(items).toEqual([
+    { key: "e1", kind: "you", text: "what's the weather?" },
+    { key: "e2", kind: "voice", text: "Let me check." },
+    { key: "e3", kind: "status", text: "checking the forecast" },
+    { key: "e6", kind: "backend", text: "Sunny, 24 degrees." },
+    { key: "e7", kind: "voice", text: "It's sunny and —" },
+  ]);
+});
+
+test("transcriptItems: a failed script's status carries its error", () => {
+  expect(
+    transcriptItems([
+      {
+        type: "events.iterate.com/voice-agent/colleague-status",
+        offset: 1,
+        payload: { phase: "a script failed", failure: "TypeError: no ledger" },
+      },
+    ]),
+  ).toEqual([{ key: "e1", kind: "status", text: "a script failed — TypeError: no ledger" }]);
 });
 
 /* ------------------------------------------------------------- harness --- */

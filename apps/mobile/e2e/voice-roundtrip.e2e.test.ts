@@ -18,14 +18,14 @@ import path from "node:path";
 import { expect, test } from "vitest";
 import { connectItx } from "iterate/node";
 import { startVoiceCall, type VoiceCallStatus } from "../src/lib/voice-call.ts";
-import { ensureVoiceAgentSetup, mobileVoiceStreamPath } from "../src/lib/voice-setup.ts";
+import { chatVoiceStreamPath, ensureVoiceAgentSetup } from "../src/lib/voice-setup.ts";
 import { pcm16Base64ToFloat32, pulseLevel } from "../src/lib/voice-pcm.ts";
 import { uint8ArrayToBase64 } from "../src/lib/encoding.ts";
 import { requireEnv, resolveBaseUrl } from "./e2e-helpers.ts";
 
 const VOICE_E2E_PROJECT = process.env.VOICE_E2E_PROJECT || "voicelab-eval";
 
-test("a phone-shaped call: speak, be answered, leave a transcript", async () => {
+test("calling a chat: speak, be answered, and the conversation lands on the chat's stream", async () => {
   const baseUrl = resolveBaseUrl();
   using session = connectItx({
     baseUrl,
@@ -39,10 +39,11 @@ test("a phone-shaped call: speak, be answered, leave a transcript", async () => 
     projectId,
   });
 
-  /* A fresh device identity per run: the point is the phone's own path
-   * scheme and setup flow, not colleague continuity across e2e runs. */
-  const deviceId = `e2e-${Date.now().toString(36)}`;
-  const streamPath = mobileVoiceStreamPath(deviceId);
+  /* A fresh "chat" per run — the per-chat mode covers strictly more than
+   * the device line did: the certificate's colleaguePath, the call-start
+   * colleague link, and the transcript lane onto the chat's stream. */
+  const chatPath = `/agents/mobile/e2e-${Date.now().toString(36)}`;
+  const streamPath = chatVoiceStreamPath(chatPath);
   const markers = new Map<string, string>();
 
   const statuses: VoiceCallStatus[] = [];
@@ -57,6 +58,7 @@ test("a phone-shaped call: speak, be answered, leave a transcript", async () => 
       ensureVoiceAgentSetup({
         workers: { get: (ref) => (project as any).workers.get(ref) },
         streamPath,
+        colleaguePath: chatPath,
         readMarker: async (p) => markers.get(p) ?? null,
         writeMarker: async (p, marker) => {
           markers.set(p, marker);
@@ -97,7 +99,32 @@ test("a phone-shaped call: speak, be answered, leave a transcript", async () => 
   expect(audio.playedMs()).toBeGreaterThan(400);
   expect(answers.length).toBeGreaterThan(0);
   expect(String(answers[0].payload.text).length).toBeGreaterThan(0);
-}, 150_000);
+
+  /* THE CONVERSATION ON THE CHAT'S STREAM: the transcript lane copies both
+   * sides onto the colleague (the chat) as developer context items. The
+   * listener's transcription can lag the answer, so poll for both sides. */
+  let voiceLines: string[] = [];
+  const copyDeadline = Date.now() + 60_000;
+  while (Date.now() < copyDeadline) {
+    const contextItems = await (project as any).streams.get(chatPath).getEvents({
+      afterOffset: 0,
+      eventTypes: ["events.iterate.com/agents/context-added"],
+      limit: 100,
+    });
+    voiceLines = contextItems
+      .map((event: any) => String(event.payload?.content ?? ""))
+      .filter((content: string) => content.startsWith("[voice call"));
+    if (
+      voiceLines.some((line) => line.includes("the person said")) &&
+      voiceLines.some((line) => line.includes("you said"))
+    ) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+  }
+  expect(voiceLines.some((line) => line.includes("the person said"))).toBe(true);
+  expect(voiceLines.some((line) => line.includes("you said"))).toBe(true);
+}, 210_000);
 
 /* ------------------------------------------------------------- fixtures --- */
 

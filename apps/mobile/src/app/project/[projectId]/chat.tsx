@@ -75,6 +75,7 @@ import {
 } from "../../../lib/approvals.ts";
 import { approverKeyStatus } from "../../../lib/approver.ts";
 import { InThreadApprovalCard } from "../../../components/in-thread-approval.tsx";
+import { VoiceCallChatButton } from "../../../components/voice-call-button.tsx";
 import { useClaimReplyPresented } from "../../../lib/reply-presented.ts";
 import { useLiveEvents } from "../../../lib/use-live-events.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
@@ -247,14 +248,21 @@ export default function ChatScreen() {
           // (still one tap away in the ••• menu) until then.
           title: latestAgentTitle(events.data || []) || path.replace(/^\/agents\//, ""),
           headerRight: () => (
-            <Pressable
-              accessibilityLabel="Stream actions"
-              accessibilityRole="button"
-              onPress={showStreamMenu}
-              style={styles.streamMenu}
-            >
-              <Text style={styles.modeToggle}>•••</Text>
-            </Pressable>
+            <View style={styles.headerActions}>
+              {/* Call this chat: its agent becomes the voice call's backend
+                  and the conversation lands right here in the thread. */}
+              {baseUrl ? (
+                <VoiceCallChatButton baseUrl={baseUrl} path={path} projectId={projectId} />
+              ) : null}
+              <Pressable
+                accessibilityLabel="Stream actions"
+                accessibilityRole="button"
+                onPress={showStreamMenu}
+                style={styles.streamMenu}
+              >
+                <Text style={styles.modeToggle}>•••</Text>
+              </Pressable>
+            </View>
           ),
         }}
       />
@@ -622,6 +630,11 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: spacing.md,
     padding: spacing.lg,
+  },
+  headerActions: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.sm,
   },
   streamMenu: {
     alignItems: "center",

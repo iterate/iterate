@@ -16,27 +16,57 @@
 // State lives in the query cache (the composer's precedent — no
 // useState/useEffect); the live call handle and the pulse Animated.Value are
 // module singletons because a call outlives any mount.
+import { useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
-import { Animated, Linking, Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import {
+  Animated,
+  Linking,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { getMobileDeviceId } from "../lib/device-identity.ts";
 import { getProjectItx } from "../lib/itx.ts";
 import { queryClient } from "../lib/query.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
+import { useLiveEvents } from "../lib/use-live-events.ts";
 import { createNativeVoiceAudio } from "../lib/voice-audio-native.ts";
 import type { VoiceAudioSession } from "../lib/voice-audio.ts";
 import { ringTonePcm16Base64 } from "../lib/voice-pcm.ts";
-import { startVoiceCall, type VoiceCallHandle, type VoiceCallStatus } from "../lib/voice-call.ts";
-import { ensureVoiceAgentSetup, mobileVoiceStreamPath } from "../lib/voice-setup.ts";
+import {
+  startVoiceCall,
+  transcriptItems,
+  TRANSCRIPT_EVENT_TYPES,
+  type VoiceCallHandle,
+  type VoiceCallStatus,
+} from "../lib/voice-call.ts";
+import {
+  chatVoiceStreamPath,
+  ensureVoiceAgentSetup,
+  mobileVoiceStreamPath,
+} from "../lib/voice-setup.ts";
 
 const statusKey = ["voice-call", "status"];
 const sheetKey = ["voice-call", "sheet-open"];
 const outputKey = ["voice-call", "output"];
+const targetKey = ["voice-call", "target"];
 const SETUP_MARKER_STORAGE_PREFIX = "voice-setup-marker:";
 
 /** null = no call has ever run this app session. */
 type VoiceUiStatus = (VoiceCallStatus & { micDenied?: boolean }) | null;
+
+/** Which line the active (or last) call is on. The device's own line when
+ * started from the floating button; a chat's line when started from a chat
+ * header — the sheet's transcript feed reads this. */
+interface VoiceCallTarget {
+  streamPath: string;
+  colleaguePath: string | null;
+}
 
 let activeCall: VoiceCallHandle | null = null;
 let activeSession: VoiceAudioSession | null = null;
@@ -46,7 +76,11 @@ let ringTonePcm: string | null = null;
  * animation — never through React state (16 Hz re-renders for a glow). */
 const pulse = new Animated.Value(0);
 
-async function beginCall(baseUrl: string, projectId: string): Promise<void> {
+async function beginCall(
+  baseUrl: string,
+  projectId: string,
+  target: VoiceCallTarget | null,
+): Promise<void> {
   const audio = createNativeVoiceAudio();
   if ((await audio.requestPermission()) !== "granted") {
     const denied: VoiceUiStatus = {
@@ -58,9 +92,14 @@ async function beginCall(baseUrl: string, projectId: string): Promise<void> {
     return;
   }
   const project = await getProjectItx(baseUrl, projectId);
-  const streamPath = mobileVoiceStreamPath(await getMobileDeviceId());
+  const resolved: VoiceCallTarget = target ?? {
+    streamPath: mobileVoiceStreamPath(await getMobileDeviceId()),
+    colleaguePath: null,
+  };
+  const { streamPath } = resolved;
   const session = audio.createSession();
   activeSession = session;
+  queryClient.setQueryData<VoiceCallTarget>(targetKey, resolved);
   queryClient.setQueryData(sheetKey, true);
   /* Every call starts on the loudspeaker — hold-to-talk means the phone is
    * in front of you, not on your ear. */
@@ -78,6 +117,7 @@ async function beginCall(baseUrl: string, projectId: string): Promise<void> {
             get: (ref) => (project as any).workers.get(ref),
           },
           streamPath,
+          colleaguePath: resolved.colleaguePath,
           /* Keyed by PROJECT too, not just stream path: the path is the
            * same on every project, so a marker written against one project
            * must not convince another that its stream already has a
@@ -140,7 +180,7 @@ export function VoiceCallButton(props: { baseUrl: string; projectId: string }) {
     initialData: "speaker",
   });
   const start = useMutation({
-    mutationFn: () => beginCall(props.baseUrl, props.projectId),
+    mutationFn: () => beginCall(props.baseUrl, props.projectId, null),
   });
 
   const inCall = status !== null && status.phase !== "ended";
@@ -178,6 +218,7 @@ export function VoiceCallButton(props: { baseUrl: string; projectId: string }) {
           />
           <View pointerEvents="box-none" style={styles.modalAnchor}>
             <View style={styles.sheet}>
+              <CallTranscript baseUrl={props.baseUrl} projectId={props.projectId} />
               <View style={styles.levelTrack}>
                 <Animated.View style={[styles.levelFill, { width: levelWidth }]} />
               </View>
@@ -272,7 +313,126 @@ export function VoiceCallButton(props: { baseUrl: string; projectId: string }) {
   );
 }
 
+/**
+ * The frontend conversation, live, off the stream's own durable events —
+ * what was said (both sides), the backend's notes, and its status line.
+ * The same events brief reconnects and land on the colleague's stream, so
+ * this view IS the record. Last dozen lines, pinned to the tail.
+ */
+function CallTranscript(props: { baseUrl: string; projectId: string }) {
+  const { data: target } = useQuery<VoiceCallTarget | null>({
+    queryKey: targetKey,
+    queryFn: () => null,
+    staleTime: Infinity,
+    initialData: null,
+  });
+  const streamPath = target?.streamPath || "";
+  const events = useLiveEvents({
+    queryKey: ["voice-transcript", props.baseUrl, props.projectId, streamPath],
+    read: async () => {
+      const project = await getProjectItx(props.baseUrl, props.projectId);
+      return await (project as any).streams.get(streamPath).getEvents({});
+    },
+    enabled: streamPath !== "",
+    eventTypes: TRANSCRIPT_EVENT_TYPES,
+    projectId: props.projectId,
+    streamPath,
+  });
+  const scroll = useRef<ScrollView | null>(null);
+  const items = transcriptItems(events.data || []).slice(-12);
+  if (items.length === 0) return null;
+  return (
+    <ScrollView
+      onContentSizeChange={() => scroll.current?.scrollToEnd({ animated: false })}
+      ref={scroll}
+      style={styles.transcript}
+    >
+      {items.map((item) => (
+        <Text
+          key={item.key}
+          style={[
+            styles.transcriptLine,
+            item.kind === "you" && styles.transcriptYou,
+            item.kind === "status" && styles.transcriptStatus,
+            item.kind === "backend" && styles.transcriptBackend,
+          ]}
+        >
+          {item.kind === "you" ? "you · " : item.kind === "backend" ? "backend · " : ""}
+          {item.text}
+        </Text>
+      ))}
+    </ScrollView>
+  );
+}
+
+/**
+ * The phone button a chat header wears: call THIS chat — its agent becomes
+ * the call's backend (the certificate's colleaguePath), the conversation
+ * lands on its stream. One call at a time app-wide, like a phone: while any
+ * call is live the button just reopens the sheet (the floating overlay owns
+ * the in-call UI).
+ */
+export function VoiceCallChatButton(props: { baseUrl: string; projectId: string; path: string }) {
+  const cache = useQueryClient();
+  const { data: status } = useQuery<VoiceUiStatus>({
+    queryKey: statusKey,
+    queryFn: () => null,
+    staleTime: Infinity,
+    initialData: null,
+  });
+  const start = useMutation({
+    mutationFn: () =>
+      beginCall(props.baseUrl, props.projectId, {
+        streamPath: chatVoiceStreamPath(props.path),
+        colleaguePath: props.path,
+      }),
+  });
+  const inCall = status !== null && status.phase !== "ended";
+  return (
+    <Pressable
+      accessibilityLabel={inCall ? "Show voice call" : "Call this chat"}
+      accessibilityRole="button"
+      onPress={() => {
+        if (inCall) {
+          cache.setQueryData(sheetKey, true);
+          return;
+        }
+        if (!start.isPending) start.mutate();
+      }}
+      style={styles.headerCall}
+    >
+      <Ionicons color={inCall ? colors.accent : colors.text} name="call" size={20} />
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
+  headerCall: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  transcript: {
+    alignSelf: "stretch",
+    maxHeight: 170,
+    marginBottom: spacing.md,
+  },
+  transcriptLine: {
+    color: colors.text,
+    fontSize: 12,
+    lineHeight: 17,
+    marginBottom: 2,
+  },
+  transcriptYou: {
+    color: colors.textMuted,
+  },
+  transcriptBackend: {
+    color: colors.accent,
+  },
+  transcriptStatus: {
+    color: colors.textMuted,
+    fontStyle: "italic",
+    fontSize: 11,
+  },
   buttonSlot: {
     alignSelf: "flex-end",
     marginRight: spacing.md,

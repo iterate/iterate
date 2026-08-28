@@ -14,6 +14,7 @@
 import type { VoiceAudioSession } from "./voice-audio.ts";
 
 const EVENT = {
+  answerTranscript: "events.iterate.com/voice-agent/answer-transcript",
   callStarted: "events.iterate.com/voice-agent/call-started",
   colleagueNote: "events.iterate.com/voice-agent/colleague-note",
   colleagueStatus: "events.iterate.com/voice-agent/colleague-status",
@@ -23,6 +24,7 @@ const EVENT = {
   pttEnd: "events.iterate.com/voice-agent/ptt-end",
   pttStart: "events.iterate.com/voice-agent/ptt-start",
   spkFrame: "events.iterate.com/voice-agent/spk-frame",
+  utteranceTranscript: "events.iterate.com/voice-agent/utterance-transcript",
 };
 
 export type VoiceCallPhase = "connecting" | "live" | "ended";
@@ -101,6 +103,69 @@ export function captionForEvent(type: string, payload: unknown): string | null {
       return null;
   }
 }
+
+/** One line of the call sheet's live transcript. */
+export interface VoiceTranscriptItem {
+  key: string;
+  kind: "you" | "voice" | "backend" | "status";
+  text: string;
+}
+
+/**
+ * The sheet's transcript, derived pure from the stream's durable events —
+ * the same events that brief reconnects and land on the colleague's stream,
+ * so what the sheet shows IS the record, not a parallel guess. Consecutive
+ * duplicate status lines collapse (phase churn re-whispers the same fold).
+ */
+export function transcriptItems(
+  events: { type: string; offset: number; payload?: unknown }[],
+): VoiceTranscriptItem[] {
+  const items: VoiceTranscriptItem[] = [];
+  for (const event of events) {
+    const p = (event.payload ?? {}) as Record<string, unknown>;
+    const text = typeof p.text === "string" ? p.text : "";
+    switch (event.type) {
+      case EVENT.utteranceTranscript:
+        if (text !== "") items.push({ key: `e${event.offset}`, kind: "you", text });
+        break;
+      case EVENT.answerTranscript:
+        if (text !== "") {
+          items.push({
+            key: `e${event.offset}`,
+            kind: "voice",
+            text: p.cancelled === true ? `${text} —` : text,
+          });
+        }
+        break;
+      case EVENT.colleagueNote:
+        if (text !== "") items.push({ key: `e${event.offset}`, kind: "backend", text });
+        break;
+      case EVENT.colleagueStatus: {
+        const status =
+          (typeof p.activity === "string" && p.activity) ||
+          (typeof p.phase === "string" && p.phase);
+        if (status === false || status === "") break;
+        const line = `${status}${typeof p.failure === "string" && p.failure !== "" ? ` — ${p.failure}` : ""}`;
+        const last = items[items.length - 1];
+        if (last?.kind === "status" && last.text === line) break;
+        items.push({ key: `e${event.offset}`, kind: "status", text: line });
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  return items;
+}
+
+/** The durable event types the sheet transcript reads — module-level so a
+ * live-events hook can fold it into stable connection deps. */
+export const TRANSCRIPT_EVENT_TYPES = [
+  EVENT.utteranceTranscript,
+  EVENT.answerTranscript,
+  EVENT.colleagueNote,
+  EVENT.colleagueStatus,
+] as const;
 
 export async function startVoiceCall(deps: {
   stream: VoiceCallStream;

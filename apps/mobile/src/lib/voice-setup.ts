@@ -16,6 +16,20 @@ export function mobileVoiceStreamPath(deviceId: string): string {
   return `/agents/voice/mobile-${deviceId}`;
 }
 
+/**
+ * Where a CHAT's calls live: one line per chat, shared by every device —
+ * the chat's phone number, not the phone's. `/agents/mobile/173…` →
+ * `/agents/voice/chat/mobile/173…`; the certificate's `colleaguePath` (the
+ * chat itself) is what makes the chat agent the backend, so the derived
+ * voice-notes path never comes into play.
+ */
+export function chatVoiceStreamPath(chatPath: string): string {
+  const suffix = chatPath.startsWith("/agents/")
+    ? chatPath.slice("/agents/".length)
+    : chatPath.replace(/^\//, "");
+  return `/agents/voice/chat/${suffix}`;
+}
+
 /** Mirrors apps/os/scripts/voicelab/voice-agent-ref.ts — the guest
  * entrypoint committed by `voicelab deploy`/`talk`, never worker.ts. */
 export const voiceAgentEntrypointRef = {
@@ -55,15 +69,27 @@ export const MOBILE_VOICE_SETUP = {
   ],
 };
 
-/** Bump to force one re-setup on every device after changing MOBILE_VOICE_SETUP
- * semantics that the hash alone would not capture. */
-const SETUP_MARKER_VERSION = 3;
+/**
+ * The certificate for one call target. The per-device line takes the base
+ * config; a per-chat line adds `colleaguePath` (facet 18.0.0), which is
+ * what flips the arrangement to "this chat's agent is the backend".
+ */
+export function voiceSetupConfig(colleaguePath: string | null): Record<string, unknown> {
+  return colleaguePath === null
+    ? { ...MOBILE_VOICE_SETUP }
+    : { ...MOBILE_VOICE_SETUP, colleaguePath };
+}
+
+/** Bump to force one re-setup on every device after changing the setup
+ * semantics in a way the config hash alone would not capture (marker v4:
+ * facet 18.0.0 — call-start colleague link + transcript lane). */
+const SETUP_MARKER_VERSION = 4;
 
 /** FNV-1a over the exact payload we would send — pure, no crypto import, and
  * two devices/app-versions agree iff they would send identical setups. */
-export function setupMarker(streamPath: string): string {
+export function setupMarker(streamPath: string, config: Record<string, unknown>): string {
   const material = JSON.stringify({
-    config: MOBILE_VOICE_SETUP,
+    config,
     streamPath,
     version: SETUP_MARKER_VERSION,
   });
@@ -90,13 +116,16 @@ export interface VoiceSetupWorkers {
 export async function ensureVoiceAgentSetup(deps: {
   workers: VoiceSetupWorkers;
   streamPath: string;
+  /** The chat this line calls (per-chat mode), or null for the device's own line. */
+  colleaguePath: string | null;
   readMarker: (streamPath: string) => Promise<string | null>;
   writeMarker: (streamPath: string, marker: string) => Promise<void>;
 }): Promise<void> {
-  const marker = setupMarker(deps.streamPath);
+  const config = voiceSetupConfig(deps.colleaguePath);
+  const marker = setupMarker(deps.streamPath, config);
   if ((await deps.readMarker(deps.streamPath)) === marker) return;
   await deps.workers
     .get(voiceAgentEntrypointRef)
-    .setupVoiceAgent({ streamPath: deps.streamPath, ...MOBILE_VOICE_SETUP });
+    .setupVoiceAgent({ streamPath: deps.streamPath, ...config });
   await deps.writeMarker(deps.streamPath, marker);
 }
