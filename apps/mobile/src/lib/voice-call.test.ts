@@ -174,6 +174,25 @@ test("the ring tone plays through the speaker path until PICKUP, then the queue 
   expect(h.audioLog.at(-1)).toBe("clear");
 });
 
+test("ringing times out into an actionable caption when nobody picks up", async () => {
+  const h = makeHarness();
+  await startVoiceCall({ ...h.deps, ringTimeoutMs: 5 });
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  expect(h.statuses.at(-1)!.phase).toBe("ended");
+  expect(h.statuses.at(-1)!.caption).toMatch(/^no answer/);
+});
+
+test("pickup cancels the no-answer timeout", async () => {
+  const h = makeHarness();
+  await startVoiceCall({ ...h.deps, ringTimeoutMs: 15 });
+  h.deliver({
+    type: "events.iterate.com/voice-agent/conversation-accepted",
+    payload: { conversationId: "conv_x", handshakeTookMs: 900, heldMicFrames: 0 },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 35));
+  expect(h.statuses.at(-1)!.phase).toBe("live");
+});
+
 test("captionForEvent stays quiet for events a glancing human does not need", () => {
   expect(captionForEvent("events.iterate.com/voice-agent/spk-frame", { pcm: "x" })).toBeNull();
   expect(

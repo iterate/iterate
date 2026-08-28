@@ -112,6 +112,10 @@ export async function startVoiceCall(deps: {
   /** Played through the audio session on repeat while ringing (voice-pcm's
    * ringTonePcm16Base64) — doubling as a built-in speaker check. */
   ringPcmBase64?: string;
+  /** Give up ringing after this long with no pickup (default 25s). A missing
+   * facet — a recycled preview backend, an unprovisioned project — otherwise
+   * rings forever at a press nobody consumes. */
+  ringTimeoutMs?: number;
   now(): number;
 }): Promise<VoiceCallHandle> {
   let ended = false;
@@ -122,11 +126,14 @@ export async function startVoiceCall(deps: {
   let spkFramesHeard = 0;
   let spkMsHeard = 0;
   let ringTimer: ReturnType<typeof setInterval> | null = null;
+  let noAnswerTimer: ReturnType<typeof setTimeout> | null = null;
   const startedAtMs = deps.now();
 
   const stopRinging = () => {
     if (ringTimer !== null) clearInterval(ringTimer);
     ringTimer = null;
+    if (noAnswerTimer !== null) clearTimeout(noAnswerTimer);
+    noAnswerTimer = null;
   };
 
   const finish = (caption: string) => {
@@ -260,6 +267,13 @@ export async function startVoiceCall(deps: {
    * pickup), where the live caption takes over.
    */
   await deps.stream.append({ type: EVENT.pttStart, payload: { t: 0 } });
+  /* A press nobody consumes must not ring forever: no pickup in time ends
+   * the call with a caption a person can act on. Seen live when a preview
+   * backend recycled under the app — fresh project, no facet, eternal
+   * ring. */
+  noAnswerTimer = setTimeout(() => {
+    finish("no answer — the project may need voice set up; try again");
+  }, deps.ringTimeoutMs ?? 25_000);
 
   return {
     setTalking: (next: boolean) => {
