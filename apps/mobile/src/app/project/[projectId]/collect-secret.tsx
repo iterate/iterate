@@ -14,7 +14,7 @@
 // told it is ready. The agent never sees the value on either path.
 
 import { useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import {
   ActivityIndicator,
@@ -74,6 +74,7 @@ function CollectSecretForm({
 }) {
   const [material, setMaterial] = useState("");
   const [revealed, setRevealed] = useState(false);
+  const queryClient = useQueryClient();
   const server = useQuery({
     queryKey: ["server"],
     queryFn: async () => (await getServerBaseUrl()) || DEFAULT_SERVER,
@@ -94,6 +95,11 @@ function CollectSecretForm({
       return await project.secrets.get(request.path).__describe();
     },
     enabled: baseUrl !== undefined,
+    // A stored secret is exactly what this screen changes, so the default
+    // 15s staleness window is wrong here: reopening the same link after
+    // saving must ask again, or the "this replaces an existing secret"
+    // warning would be missing on the visit where it matters most.
+    staleTime: 0,
   });
 
   const submit = useMutation({
@@ -108,7 +114,14 @@ function CollectSecretForm({
       // Material and egress land in one birth or update, so the secret is
       // pinned to its hosts — no window where it exists but cannot be used.
       const input = { material: value, egress: { urls: request.egress } };
-      if (existing.data?.created === true) await secret.update(input);
+      // Which verb to use is decided HERE, from a fresh read — never from the
+      // query above. create() over an existing secret with the same policy is
+      // a deliberate no-op that KEEPS the old material (rotation is update()'s
+      // job), and the stored-material check below cannot tell the difference,
+      // because the old material is material. So a stale "does it exist?"
+      // answer would silently drop the value the user just typed and still
+      // report success to them and to the agent.
+      if ((await secret.__describe()).created) await secret.update(input);
       else await secret.create(input);
       // describe() is read-your-writes, so one assertion is the honest
       // "stored and usable" check before anything is announced.
@@ -132,12 +145,21 @@ function CollectSecretForm({
         return "notify-failed";
       }
     },
+    // What we just wrote is what the existence query answers, so its cached
+    // answer is now wrong.
+    onSuccess: () =>
+      queryClient.invalidateQueries({
+        queryKey: ["collect-secret", baseUrl || "", projectId, request.path],
+      }),
   });
 
   if (submit.data !== undefined) return <Saved outcome={submit.data} path={request.path} />;
 
-  // No submitting before there is somewhere to submit to, or twice.
-  const canSave = material.length > 0 && baseUrl !== undefined && !submit.isPending;
+  // No submitting before there is somewhere to submit to, before we know
+  // whether this replaces an existing secret (the warning above is a promise
+  // — it has to be on screen before you can commit), or twice.
+  const canSave =
+    material.length > 0 && baseUrl !== undefined && existing.isSuccess && !submit.isPending;
 
   return (
     <KeyboardAvoidingView
@@ -214,14 +236,14 @@ function CollectSecretForm({
           onPress={() => submit.mutate(material)}
           style={[styles.save, !canSave && styles.saveDisabled]}
         >
-          {submit.isPending ? (
+          {submit.isPending || !existing.isSuccess ? (
             <View style={styles.savingRow}>
               <ActivityIndicator
                 accessibilityLabel="Loading"
                 color={colors.background}
                 size="small"
               />
-              <Text style={styles.saveText}>Saving…</Text>
+              <Text style={styles.saveText}>{submit.isPending ? "Saving…" : "Checking…"}</Text>
             </View>
           ) : (
             <Text style={styles.saveText}>Save secret</Text>

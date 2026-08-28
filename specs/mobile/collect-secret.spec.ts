@@ -86,6 +86,25 @@ test("provides a secret from the thread, with no browser in the way", async ({
 
   await page.getByLabel("Back to chat").click();
   await page.getByText("I need your Stripe key.").waitFor();
+
+  // ── Rotation. The same link over an existing secret must REPLACE the
+  // material, and say so first. This is the failure the create/update choice
+  // guards: create() over an existing secret with the same policy is a no-op
+  // that keeps the old value, and the stored-material check cannot tell the
+  // difference — the screen and the agent would both report a rotation that
+  // never happened.
+  await page.getByText("Provide it here").click();
+  await page.getByText("This replaces an existing secret").waitFor();
+  await page.getByLabel("Value", { exact: true }).fill("sk_test_rotated");
+  await page.getByLabel("Save secret").click();
+  await page.getByText("Secret saved").waitFor();
+
+  // Material is write-only, so "did it actually change?" is answered by the
+  // secret's own stream: a rotation appends secret/updated, a no-op create
+  // appends nothing.
+  using secretStream = itx.streams.get(SECRET_PATH);
+  const events = await secretStream.getEvents({});
+  expect(events.map((event) => event.type)).toContain("events.iterate.com/secret/updated");
 });
 
 async function signUpToProject(
