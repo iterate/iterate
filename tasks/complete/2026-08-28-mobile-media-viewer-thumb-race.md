@@ -1,12 +1,13 @@
 ---
-status: in-progress
+status: done
 size: small
 ---
 
 # Mobile media: full-screen tap dead while the signed URL loads
 
-**Status summary**: diagnosed from the Depot CI artifacts (run 62rpqlxqj3); fix
-is a small render-gating change in two mobile components. Spec unchanged.
+**Status summary**: done. Fix landed on PR #2545; the previously-failing spec
+passed on the PR's own Cloudflare preview run first-attempt (28.0s). Spec
+unchanged.
 
 `specs/mobile/media.spec.ts` ("renders, searches, and views seeded media")
 fails deterministically on Cloudflare-preview CI at line 81 — after clicking
