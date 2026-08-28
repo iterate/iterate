@@ -7,16 +7,24 @@ There is no read lane, no reveal lane, no compute lane (`hmac`/`sign`/
 `matches`), and no cross-secret chaining. The Secret Durable Object's only
 material-touching verb is `fetch()`: substitute `getSecret(...)` placeholders
 in trusted DO code and dispatch to a host on the secret's egress allowlist.
-Substitution reaches headers and the request URL PATH (added for Telegram,
-whose Bot API authenticates in the path `/bot<token>/…`). Callers may also
-explicitly mark an `application/json` or `+json` body with
+Substitution reaches headers, the request URL PATH (added for Telegram, whose
+Bot API authenticates in the path `/bot<token>/…`), and URL QUERY VALUES
+(added for the many APIs that only take their credential as `?api_key=…`).
+Callers may also explicitly mark an `application/json` or `+json` body with
 `x-iterate-secret-template: json`; the cell parses it and substitutes only
 complete string values that are exact `getSecret(...)` references before
 re-encoding the JSON. It never scans ordinary bodies, interpolates references
-inside longer JSON strings, substitutes object keys, or substitutes URL query
-strings. A placeholder elsewhere in the URL is rejected loudly rather than
-passed through. The marker is consumed before vendor egress. One request
-references one secret.
+inside longer JSON strings, or substitutes object keys — and a query parameter
+NAME follows the object-key rule. A placeholder in a parameter name, the
+fragment, userinfo or the host is rejected loudly rather than passed through.
+The marker is consumed before vendor egress. One request references one
+secret.
+
+A credential in a query string lands in the provider's access logs in a way a
+header does not. That is the caller's trade to make by writing the placeholder
+there, and it does not weaken the cell on our side: the `secret/used` audit
+event records the request URL BEFORE substitution, so what we keep is the
+`getSecret(...)` reference, never the material.
 
 The egress pin is part of the material's authenticated context. Ciphertext is
 bound to its project, secret path, exact effective origins, and the offset of

@@ -7,8 +7,20 @@ size: medium
 
 ## Status
 
-Not started. Spec below is the fleshed-out version of a five-item mobile UI/UX
-ask; assumptions marked **[assumption]** were made without the requester
+All five items implemented. Remaining: capture PR media (a recording of the
+collect-secret spec at phone size, and a before/after of the photo bubbles)
+and get CI green.
+
+- **Done:** the mini-page contract on both sides (`returnTo` + status, with an
+  app-scheme-only allowlist), the eye toggle, the compacted collect-secret
+  page, Telegram-style photo bubbles, and `getSecret(...)` in query values.
+- **Covered by:** `specs/collect-secret.spec.ts` (the page end-to-end at
+  390×844, including the two-thirds-of-a-screen budget), plus unit tests for
+  the two contract modules, the photo frame maths, and the substitution rules.
+- **Not done here:** the first ad-hoc "collect some info" mini page — the
+  contract is what this PR lands.
+
+Assumptions marked **[assumption]** below were made without the requester
 present.
 
 ## What's being asked
@@ -38,55 +50,69 @@ Five bundled items, four mobile-facing plus one platform one:
 
 ### 1. Mini page contract (web + mobile)
 
-- [ ] `apps/os/src/lib/mini-page.ts` — the shared contract, generic from day
+- [x] `apps/os/src/lib/mini-page.ts` — the shared contract, generic from day
       one: a `returnTo` search param a native client appends, an allowlist of
       schemes it may point at (the app scheme only), and the helper that
-      builds the redirect a finished mini page navigates to.
-- [ ] `/collect-secret/$projectSlug` accepts `returnTo` and, on a successful
+      builds the redirect a finished mini page navigates to. _`MiniPageSearch`
+      + `miniPageReturnUrl`._
+- [x] `/collect-secret/$projectSlug` accepts `returnTo` and, on a successful
       save, navigates to it with the outcome in its params. Still renders the
       success card underneath, so a browser that does not auto-dismiss (or a
-      `returnTo`-less desktop visit) is not left blank.
-- [ ] `returnTo` values that are not the app scheme are ignored, not
+      `returnTo`-less desktop visit) is not left blank. _The card also carries
+      a "Back to the app" link — the manual way back, and what the spec
+      asserts, since Chromium cannot follow `iterate://`._
+- [x] `returnTo` values that are not the app scheme are ignored, not
       followed — the page is org-member-gated but the param is attacker-
       supplyable in a pasted link, and an open redirect out of an
-      authenticated page is not something to ship.
-- [ ] `apps/mobile/src/lib/mini-page.ts` — pure resolver: which same-origin
+      authenticated page is not something to ship. _`iterate:` and `exp:`
+      only; every http(s) form returns null._
+- [x] `apps/mobile/src/lib/mini-page.ts` — pure resolver: which same-origin
       URLs open as a mini page (path allowlist, starting with
       `/collect-secret`), how the `returnTo` is added, and how the returned
-      URL is read back into an outcome.
-- [ ] Chat markdown link handling consults the mini-page resolver after the
+      URL is read back into an outcome. _The browser opener is injected, so
+      the module stays out of React Native's way in the node test lane._
+- [x] Chat markdown link handling consults the mini-page resolver after the
       existing in-app route resolver, before falling through to
-      `Linking.openURL`.
+      `Linking.openURL`. _`components/markdown.tsx`; success needs no toast
+      (the agent's reply lands in the thread), a stored-but-unannounced
+      secret gets an alert._
 
 ### 2. Show/hide on the Value field
 
-- [ ] Eye toggle inside the input, labelled for screen readers, defaulting to
-      hidden.
+- [x] Eye toggle inside the input, labelled for screen readers, defaulting to
+      hidden. _`InputGroup` + `InputGroupButton`, "Show value"/"Hide value"._
 
 ### 3. Compact the collect-secret page
 
-- [ ] Fits an iPhone viewport with room to spare (target: the whole card
-      under ~2/3 of a 390×844 screen with the keyboard closed).
-- [ ] Nothing load-bearing removed: the description, the destination path,
-      the egress pin, and the overwrite warning all still show.
+- [x] Fits an iPhone viewport with room to spare (target: the whole card
+      under ~2/3 of a 390×844 screen with the keyboard closed). _Asserted in
+      the spec, so it cannot drift back._
+- [x] Nothing load-bearing removed: the description, the destination path,
+      the egress pin, and the overwrite warning all still show. _Header
+      separator and the footer's project line went; the project name moved
+      into the header sentence._
 
 ### 4. Telegram-style photo bubbles
 
-- [ ] Photo renders flush to the bubble's edges with the bubble's corner
-      radius.
-- [ ] Aspect ratio preserved; frame height capped so a tall screenshot does
-      not eat the thread.
-- [ ] A photo narrower than the frame sits on a blurred, cover-scaled copy of
-      itself instead of a black letterbox.
-- [ ] Layout maths lives in a pure module with unit tests.
+- [x] Photo renders flush to the bubble's edges with the bubble's corner
+      radius. _The bubble lost its padding and clips its children; text
+      children bring their own inset._
+- [x] Aspect ratio preserved; frame height capped so a tall screenshot does
+      not eat the thread. _280pt wide, 340pt tall at most._
+- [x] A photo narrower than the frame sits on a blurred, cover-scaled copy of
+      itself instead of a black letterbox. _React Native's own `blurRadius`,
+      no new dependency._
+- [x] Layout maths lives in a pure module with unit tests. _`lib/photo-layout.ts`._
 
 ### 5. `getSecret(...)` in query params
 
-- [ ] Substitution covers query parameter **values**.
-- [ ] Query parameter **names** still throw — same rule as JSON object keys.
-- [ ] Fragment, userinfo and host still throw.
-- [ ] A query with no placeholder stays byte-identical (the existing ratchet).
-- [ ] Docs updated: `apps/os/docs/integrations-and-secrets-design.md` §1 and
+- [x] Substitution covers query parameter **values**.
+- [x] Query parameter **names** still throw — same rule as JSON object keys.
+- [x] Fragment, userinfo and host still throw.
+- [x] A query with no placeholder stays byte-identical (the existing ratchet).
+      _Path and query now track their hits separately, so a path placeholder
+      no longer re-encodes an innocent query either._
+- [x] Docs updated: `apps/os/docs/integrations-and-secrets-design.md` §1 and
       `apps/os/docs/adr/0005-the-secret-cell-invariant.md`, including the
       caveat that a credential in a query string lands in provider access
       logs.

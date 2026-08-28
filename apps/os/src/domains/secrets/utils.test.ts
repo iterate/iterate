@@ -429,20 +429,61 @@ describe("substituteSecretRequest", () => {
     );
   });
 
-  // The URL ratchet: substitution covers the PATH only — exactly what
-  // Telegram's /bot<token>/ shape needs. A placeholder in the query must fail
-  // LOUDLY here; silently passing the literal placeholder through to the
-  // provider would leak the reference string and answer as a confusing
-  // provider-side 401.
-  test("a placeholder in the query string throws instead of passing through", async () => {
+  // The `?api_key=` shape: plenty of APIs take their credential nowhere else.
+  // Our own audit keeps the placeholder (the `secret/used` event records the
+  // pre-substitution URL); it is the provider's access log that sees the
+  // value, which is the caller's call to make by writing it here.
+  test("a query-value placeholder substitutes, and its material is percent-encoded", async () => {
     const request = new Request(
-      'https://api.example.com/v1/lookup?token=getSecret("/secrets/example")',
+      'https://api.example.com/v1/lookup?id=7&token=getSecret("/secrets/example")',
+    );
+    // Material carrying query delimiters must not restructure the query.
+    const substituted = await substituteSecretRequest(request, () => "a&b=c#d");
+    const url = new URL(substituted.url);
+    expect(url.searchParams.get("token")).toBe("a&b=c#d");
+    expect(url.searchParams.get("id")).toBe("7");
+    expect(url.hash).toBe("");
+  });
+
+  test("a query-value placeholder substitutes while the path stays byte-identical", async () => {
+    const request = new Request(
+      'https://api.example.com/v1/files/a%2Fb?token=getSecret("/secrets/example")',
+    );
+    const substituted = await substituteSecretRequest(request, () => "tok");
+    expect(substituted.url).toBe("https://api.example.com/v1/files/a%2Fb?token=tok");
+  });
+
+  test("a field-selecting placeholder works in the query too", async () => {
+    const request = new Request(
+      'https://api.example.com/v1/lookup?key=getSecret("/secrets/example", { field: "apiKey" })',
+    );
+    const substituted = await substituteSecretRequest(request, (reference) =>
+      reference.field === "apiKey" ? "k123" : "wrong",
+    );
+    expect(substituted.url).toBe("https://api.example.com/v1/lookup?key=k123");
+  });
+
+  // The remaining URL ratchet. A parameter NAME follows the JSON object-key
+  // rule (never substituted), and fragment/userinfo/host never reach the
+  // provider as sent. All must fail LOUDLY; silently passing the literal
+  // placeholder through would leak the reference string and answer as a
+  // confusing provider-side 401.
+  test("a placeholder in a query parameter name throws instead of passing through", async () => {
+    const request = new Request(
+      'https://api.example.com/v1/lookup?getSecret("/secrets/example")=1',
     );
     await expect(substituteSecretRequest(request, () => "tok")).rejects.toThrow(
       SecretSubstitutionError,
     );
     await expect(substituteSecretRequest(request, () => "tok")).rejects.toThrow(
-      /secret_reference_outside_url_path.*query/,
+      /secret_reference_outside_url_path.*query parameter name/,
+    );
+  });
+
+  test("a placeholder in the fragment throws instead of passing through", async () => {
+    const request = new Request('https://api.example.com/v1/lookup#getSecret("/secrets/example")');
+    await expect(substituteSecretRequest(request, () => "tok")).rejects.toThrow(
+      /secret_reference_outside_url_path.*fragment/,
     );
   });
 });
