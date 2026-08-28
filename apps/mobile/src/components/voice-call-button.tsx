@@ -203,11 +203,16 @@ export function VoiceCallButton(props: { baseUrl: string; projectId: string }) {
                     cache.setQueryData(outputKey, next);
                     activeSession?.setOutput(next);
                   }}
-                  style={styles.sheetSecondary}
+                  style={[
+                    styles.sheetSecondary,
+                    /* One speaker icon, WhatsApp-style: lit pill = on
+                     * loudspeaker, dark = earpiece. */
+                    output === "speaker" && styles.sheetSecondaryActive,
+                  ]}
                 >
                   <Ionicons
-                    color={colors.textMuted}
-                    name={output === "speaker" ? "volume-high" : "ear"}
+                    color={output === "speaker" ? colors.background : colors.textMuted}
+                    name="volume-high"
                     size={18}
                   />
                 </Pressable>
@@ -385,6 +390,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     alignItems: "center",
     justifyContent: "center",
+  },
+  sheetSecondaryActive: {
+    backgroundColor: colors.text,
+    borderColor: colors.text,
   },
   hangUp: {
     width: 52,

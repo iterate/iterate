@@ -35,6 +35,15 @@ import { pcm16Base64ToFloat32 } from "./voice-pcm.ts";
 
 const CAPTURE_BUFFER_SAMPLES = 1024;
 
+/**
+ * Playback make-up gain. voiceChat mode engages Apple's VoiceProcessingIO —
+ * the AEC this whole posture depends on — and VP attenuates playback output
+ * noticeably (reported on-device as "very quiet even on speaker"). 2x is
+ * make-up, not loudness war: provider speech is conservatively levelled, and
+ * the hardware volume rocker still sits on top.
+ */
+const PLAYBACK_GAIN = 2;
+
 export function createNativeVoiceAudio(): VoiceAudio {
   return {
     requestPermission: async () => {
@@ -58,7 +67,10 @@ export function createNativeVoiceAudio(): VoiceAudio {
            * nothing. resume() is a no-op when already running. */
           await context.resume();
           queue = context.createBufferQueueSource();
-          queue.connect(context.destination);
+          const gain = context.createGain();
+          gain.gain.value = PLAYBACK_GAIN;
+          queue.connect(gain);
+          gain.connect(context.destination);
           /* (0, 0), never bare: the library's own default is `offset = -1`
            * (a "no offset" sentinel) which its own range check then throws
            * on — a bare start() ALWAYS throws "offset must be a finite
