@@ -98,7 +98,11 @@ function CollectSecretForm({
     // A stored secret is exactly what this screen changes, so the default
     // 15s staleness window is wrong here: reopening the same link after
     // saving must ask again, or the "this replaces an existing secret"
-    // warning would be missing on the visit where it matters most.
+    // warning would be missing on the visit where it matters most. That is
+    // about remounting, though — NOT about focus. Leaving the app to fetch
+    // the credential from a password manager is the main way this screen is
+    // used, and coming back is no reason to re-ask.
+    refetchOnWindowFocus: false,
     staleTime: 0,
   });
 
@@ -158,8 +162,13 @@ function CollectSecretForm({
   // No submitting before there is somewhere to submit to, before we know
   // whether this replaces an existing secret (the warning above is a promise
   // — it has to be on screen before you can commit), or twice.
-  const canSave =
-    material.length > 0 && baseUrl !== undefined && existing.isSuccess && !submit.isPending;
+  //
+  // Gated on HAVING an answer, not on the query's current status: a
+  // background refetch that fails leaves the answer we already have in place,
+  // and must not take the button away from someone who has just come back
+  // with a credential in their clipboard.
+  const checked = existing.data !== undefined;
+  const canSave = material.length > 0 && baseUrl !== undefined && checked && !submit.isPending;
 
   return (
     <KeyboardAvoidingView
@@ -224,6 +233,22 @@ function CollectSecretForm({
           never readable by an agent, an API, or a person.
         </Text>
 
+        {checked || !existing.isError ? null : (
+          <View style={styles.warning}>
+            <Text style={styles.warningTitle}>Could not check this secret</Text>
+            <Text style={styles.warningBody}>
+              We could not tell whether {request.path} already exists, so saving is held until we
+              can — a value entered now might replace one you cannot see.
+            </Text>
+            <Pressable
+              accessibilityLabel="Try again"
+              onPress={() => void existing.refetch()}
+              style={styles.retry}
+            >
+              <Text style={styles.retryText}>Try again</Text>
+            </Pressable>
+          </View>
+        )}
         {submit.error === null ? null : (
           <Text data-type="error" style={styles.error}>
             {submit.error instanceof Error ? submit.error.message : String(submit.error)}
@@ -236,7 +261,7 @@ function CollectSecretForm({
           onPress={() => submit.mutate(material)}
           style={[styles.save, !canSave && styles.saveDisabled]}
         >
-          {submit.isPending || !existing.isSuccess ? (
+          {submit.isPending || !checked ? (
             <View style={styles.savingRow}>
               <ActivityIndicator
                 accessibilityLabel="Loading"
@@ -295,6 +320,16 @@ const styles = StyleSheet.create({
     padding: spacing.sm,
   },
   warningTitle: { color: colors.danger, fontSize: 13, fontWeight: "600" },
+  retry: {
+    alignSelf: "flex-start",
+    borderColor: colors.border,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    marginTop: 4,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+  },
+  retryText: { color: colors.text, fontSize: 13 },
   warningBody: { color: colors.textMuted, fontSize: 12, lineHeight: 17 },
   fieldLabel: { color: colors.text, fontSize: 13, fontWeight: "600" },
   inputRow: { alignItems: "center", flexDirection: "row", gap: spacing.sm },
