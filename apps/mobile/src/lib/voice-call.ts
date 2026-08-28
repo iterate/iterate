@@ -20,6 +20,7 @@ const EVENT = {
   conversationAccepted: "events.iterate.com/voice-agent/conversation-accepted",
   conversationEnded: "events.iterate.com/voice-agent/conversation-ended",
   micFrame: "events.iterate.com/voice-agent/mic-frame",
+  pttEnd: "events.iterate.com/voice-agent/ptt-end",
   pttStart: "events.iterate.com/voice-agent/ptt-start",
   spkFrame: "events.iterate.com/voice-agent/spk-frame",
 } as const;
@@ -59,6 +60,15 @@ export interface VoiceCallStream {
 
 export interface VoiceCallHandle {
   hangUp(): Promise<void>;
+  /**
+   * The hold-to-talk button's two edges. Press appends the durable
+   * ptt-start (the FIRST press is also the mint that dials the provider —
+   * the facet holds mic frames through the handshake and commits the held
+   * turn on release, so speaking immediately works); release appends the
+   * ephemeral ptt-end that commits the turn and asks for the answer. Mic
+   * frames flow only while talking.
+   */
+  setTalking(talking: boolean): void;
 }
 
 /** The caption one event contributes, or null when it says nothing a
@@ -68,7 +78,10 @@ export function captionForEvent(type: string, payload: unknown): string | null {
   switch (type) {
     case EVENT.callStarted:
     case EVENT.conversationAccepted:
-      return "listening";
+      /* Lifecycle captions are LOCAL state (ringing / hold to talk /
+       * listening) — the accepted event lands mid-first-hold and must not
+       * overwrite "listening…" under the caller's thumb. */
+      return null;
     case EVENT.colleagueStatus: {
       const status =
         (typeof p.activity === "string" && p.activity) || (typeof p.phase === "string" && p.phase);
@@ -119,7 +132,7 @@ export async function startVoiceCall(deps: {
     }
   };
 
-  deps.onStatus({ phase: "connecting", caption: "setting up…" });
+  deps.onStatus({ phase: "connecting", caption: "ringing…" });
   await deps.ensureSetup();
 
   /* From the head, not the beginning: this stream is the device's ONE
@@ -166,52 +179,83 @@ export async function startVoiceCall(deps: {
     },
   });
 
-  /* The one durable press that mints the call — the server dials the
-   * provider on it; everything after rides ephemeral lanes. */
-  await deps.stream.append({ type: EVENT.pttStart, payload: { t: startedAtMs } });
-  if (!ended) deps.onStatus({ phase: "connecting", caption: "connecting…" });
-
-  await deps.audio.start((frame) => {
-    deps.onLevel(frame.level);
-    if (ended || inflightMicAppends >= MAX_INFLIGHT_MIC_APPENDS) return;
-    inflightMicAppends++;
-    deps.stream
-      .append({
-        type: EVENT.micFrame,
-        ephemeral: true,
-        payload: {
-          pcm: frame.pcmBase64,
-          deviceMicFrameSeq: ++deviceMicFrameSeq,
-          capturedAtDeviceMs: deps.now() - startedAtMs,
-        },
-      })
-      .catch(() => {
-        /* A dropped mic frame is a moment of lost audio, not an error the
-         * person can act on; the connection's own failure surfaces are the
-         * real signal. */
-      })
-      .finally(() => {
-        inflightMicAppends--;
-      });
-  });
+  /*
+   * PUSH-TO-TALK: no press yet, no call yet. The mic opens now (so the
+   * pulse is alive and the first hold has zero start-up latency), but
+   * frames flow — and the mint press goes out — only while the button is
+   * held. The recorder failing is fatal ON PURPOSE, and cleanly: without
+   * this, the first on-device session minted a call whose microphone never
+   * started — "call failed" on screen, a deaf, mute call live server-side
+   * until the idle deadline reaped it, and a hang-up button wired to null.
+   */
+  let talking = false;
+  try {
+    await deps.audio.start((frame) => {
+      deps.onLevel(talking ? frame.level : 0);
+      if (!talking || ended || inflightMicAppends >= MAX_INFLIGHT_MIC_APPENDS) return;
+      inflightMicAppends++;
+      deps.stream
+        .append({
+          type: EVENT.micFrame,
+          ephemeral: true,
+          payload: {
+            pcm: frame.pcmBase64,
+            deviceMicFrameSeq: ++deviceMicFrameSeq,
+            capturedAtDeviceMs: deps.now() - startedAtMs,
+          },
+        })
+        .catch(() => {
+          /* A dropped mic frame is a moment of lost audio, not an error the
+           * person can act on; the connection's own failure surfaces are the
+           * real signal. */
+        })
+        .finally(() => {
+          inflightMicAppends--;
+        });
+    });
+  } catch (error) {
+    finish("microphone failed");
+    throw error;
+  }
+  if (!ended) deps.onStatus({ phase: "live", caption: "hold the mic to talk" });
 
   return {
+    setTalking: (next: boolean) => {
+      if (ended || talking === next) return;
+      talking = next;
+      if (!next) deps.onLevel(0);
+      /* Durable press, ephemeral release — the press is the event whose
+       * loss strands a caller (the FIRST one mints the call), the release
+       * costs a turn at worst; exactly the boards' durability split. */
+      deps.stream
+        .append(
+          next
+            ? { type: EVENT.pttStart, payload: { t: deps.now() - startedAtMs } }
+            : { type: EVENT.pttEnd, ephemeral: true, payload: { t: deps.now() - startedAtMs } },
+        )
+        .catch(() => {
+          /* The connection's own failure surfaces carry this. */
+        });
+      if (next && !ended) deps.onStatus({ phase: "live", caption: "listening…" });
+    },
     hangUp: async () => {
       if (ended) return;
-      /* The device-appended obituary — same as a board's hang-up button.
-       * With no conversationId yet (hung up mid-handshake) there is nothing
-       * to bury; the facet's idle deadline reaps the mint. */
-      if (conversationId !== null) {
+      const buriedConversationId = conversationId;
+      /* END LOCALLY FIRST. The obituary rides a socket that may be wedged —
+       * awaiting it before updating the UI turned the hang-up button into a
+       * no-op on the first on-device session. */
+      finish("call ended");
+      if (buriedConversationId !== null) {
         await deps.stream
           .append({
             type: EVENT.conversationEnded,
-            payload: { conversationId, reason: "hang-up button" },
+            payload: { conversationId: buriedConversationId, reason: "hang-up button" },
           })
           .catch(() => {
-            /* Ending locally still ends locally. */
+            /* Ending locally still ended locally; the idle deadline is the
+             * server's backstop for a lost obituary. */
           });
       }
-      finish("call ended");
     },
   };
 }

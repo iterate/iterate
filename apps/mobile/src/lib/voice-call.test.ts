@@ -7,26 +7,40 @@ import { captionForEvent, startVoiceCall, type VoiceCallStatus } from "./voice-c
 const SPK = "events.iterate.com/voice-agent/spk-frame";
 const ENDED = "events.iterate.com/voice-agent/conversation-ended";
 
-test("a call mints with one durable press, then pumps ephemeral mic frames with a device sequence", async () => {
+test("push-to-talk: the press mints and opens the mic; release commits the turn", async () => {
   const h = makeHarness();
-  await startVoiceCall(h.deps);
+  const call = await startVoiceCall(h.deps);
+  /* No press yet, no events yet — and captured frames go nowhere. */
+  h.captureFrame("AAAA", 0.4);
+  await settle();
+  expect(h.appends).toHaveLength(0);
+  expect(h.levels).toEqual([0]);
+
+  call.setTalking(true);
+  h.captureFrame("BBBB", 0.5);
+  h.captureFrame("CCCC", 0.6);
+  call.setTalking(false);
+  await settle();
+
   expect(h.appends[0]).toMatchObject({
     type: "events.iterate.com/voice-agent/ptt-start",
-    payload: { t: 1000 },
+    payload: {},
   });
+  /* The press is DURABLE (its loss strands the mint); the release is not. */
   expect(h.appends[0]!.ephemeral).toBeUndefined();
-
-  h.captureFrame("AAAA", 0.4);
-  h.captureFrame("BBBB", 0.6);
-  await settle();
   const micFrames = h.appends.filter((a) => a.type.endsWith("mic-frame"));
   expect(micFrames).toHaveLength(2);
   expect(micFrames[0]).toMatchObject({
     ephemeral: true,
-    payload: { pcm: "AAAA", deviceMicFrameSeq: 1 },
+    payload: { pcm: "BBBB", deviceMicFrameSeq: 1 },
   });
   expect(micFrames[1]!.payload).toMatchObject({ deviceMicFrameSeq: 2 });
-  expect(h.levels).toEqual([0.4, 0.6]);
+  expect(h.appends.at(-1)).toMatchObject({
+    type: "events.iterate.com/voice-agent/ptt-end",
+    ephemeral: true,
+  });
+  /* Held frames metered, release zeroes the bar. */
+  expect(h.levels).toEqual([0, 0.5, 0.6, 0]);
 });
 
 test("the connection starts at the stream head, so history cannot end a fresh call", async () => {
@@ -48,7 +62,7 @@ test("the speaker lane's buffer policy: clear before frame, then play", async ()
 
 test("lifecycle and the colleague lanes share the caption; ended stops audio and closes", async () => {
   const h = makeHarness();
-  await startVoiceCall(h.deps);
+  const call = await startVoiceCall(h.deps);
   h.deliver({
     type: "events.iterate.com/voice-agent/call-started",
     payload: { conversationId: "conv_1" },
@@ -61,13 +75,16 @@ test("lifecycle and the colleague lanes share the caption; ended stops audio and
     type: "events.iterate.com/voice-agent/colleague-note",
     payload: { text: "The codeword is walrus trumpet." },
   });
+  call.setTalking(true);
   h.deliver({ type: ENDED, payload: { conversationId: "conv_1", reason: "idle" } });
   expect(h.statuses.map((s) => `${s.phase}:${s.caption}`)).toEqual([
-    "connecting:setting up…",
-    "connecting:connecting…",
-    "live:listening",
+    "connecting:ringing…",
+    "live:hold the mic to talk",
+    /* call-started deliberately adds NO caption — the accepted event lands
+     * mid-first-hold and must not overwrite "listening…". */
     "live:backend: running code",
     "live:backend: The codeword is walrus trumpet.",
+    "live:listening…",
     "ended:call ended — idle",
   ]);
   expect(h.audioLog.at(-1)).toBe("stop");
@@ -90,34 +107,47 @@ test("another call's stale obituary does not end this one", async () => {
   expect(h.statuses.at(-1)!.phase).toBe("live");
 });
 
-test("hang up appends the device obituary for the minted conversation", async () => {
-  const h = makeHarness();
+test("hang up ends locally FIRST, then appends the obituary — a wedged socket cannot eat the button", async () => {
+  const h = makeHarness({ stallObituary: true });
   const call = await startVoiceCall(h.deps);
   h.deliver({
     type: "events.iterate.com/voice-agent/call-started",
     payload: { conversationId: "conv_9" },
   });
-  await call.hangUp();
+  /* Do not await: the stalled obituary must not delay the local end. */
+  void call.hangUp();
+  await settle();
+  expect(h.statuses.at(-1)).toMatchObject({ phase: "ended", caption: "call ended" });
+  expect(h.audioLog.at(-1)).toBe("stop");
   expect(h.appends.at(-1)).toMatchObject({
     type: ENDED,
     payload: { conversationId: "conv_9", reason: "hang-up button" },
   });
-  expect(h.audioLog.at(-1)).toBe("stop");
+});
+
+test("a microphone that will not start ends the call cleanly instead of leaving a deaf mint", async () => {
+  const h = makeHarness({ failAudioStart: true });
+  await expect(startVoiceCall(h.deps)).rejects.toThrow("no mic");
+  expect(h.statuses.at(-1)).toMatchObject({ phase: "ended", caption: "microphone failed" });
+  expect(h.closed).toBe(true);
 });
 
 test("a stalled socket drops mic frames instead of queueing the past", async () => {
   const h = makeHarness({ stallAppends: true });
-  await startVoiceCall(h.deps);
+  const call = await startVoiceCall(h.deps);
+  call.setTalking(true);
   for (let i = 0; i < 20; i++) h.captureFrame("XXXX", 0.5);
   await settle();
   const micFrames = h.appends.filter((a) => a.type.endsWith("mic-frame"));
-  /* ptt-start consumed one stalled slot too; the cap is 8 in-flight. */
   expect(micFrames.length).toBeLessThanOrEqual(8);
   expect(micFrames.length).toBeGreaterThan(0);
 });
 
 test("captionForEvent stays quiet for events a glancing human does not need", () => {
   expect(captionForEvent("events.iterate.com/voice-agent/spk-frame", { pcm: "x" })).toBeNull();
+  expect(
+    captionForEvent("events.iterate.com/voice-agent/call-started", { conversationId: "c" }),
+  ).toBeNull();
   expect(
     captionForEvent("events.iterate.com/voice-agent/colleague-status", { waitingFor: null }),
   ).toBeNull();
@@ -130,7 +160,14 @@ test("captionForEvent stays quiet for events a glancing human does not need", ()
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-function makeHarness(options: { streamMaxOffset?: number; stallAppends?: boolean } = {}) {
+function makeHarness(
+  options: {
+    streamMaxOffset?: number;
+    stallAppends?: boolean;
+    stallObituary?: boolean;
+    failAudioStart?: boolean;
+  } = {},
+) {
   const appends: { type: string; ephemeral?: true; payload: any }[] = [];
   const statuses: VoiceCallStatus[] = [];
   const levels: number[] = [];
@@ -161,9 +198,10 @@ function makeHarness(options: { streamMaxOffset?: number; stallAppends?: boolean
       stream: {
         append: (...events: any[]) => {
           appends.push(...events);
-          /* Stall only the mic lane: the durable press must mint (a stalled
-           * mint is the transport's own failure surface, not this test's). */
-          const stalled = options.stallAppends && events[0]?.type?.endsWith("mic-frame");
+          const type: string = events[0]?.type ?? "";
+          const stalled =
+            (options.stallAppends && type.endsWith("mic-frame")) ||
+            (options.stallObituary && type.endsWith("conversation-ended"));
           return stalled ? new Promise(() => {}) : Promise.resolve([]);
         },
         openConnection: async (args: any) => {
@@ -180,6 +218,7 @@ function makeHarness(options: { streamMaxOffset?: number; stallAppends?: boolean
       },
       audio: {
         start: async (cb: (frame: { pcmBase64: string; level: number }) => void) => {
+          if (options.failAudioStart) throw new Error("no mic");
           onFrame = cb;
           audioLog.push("start");
         },

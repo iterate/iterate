@@ -44,7 +44,13 @@ export function createNativeVoiceAudio(): VoiceAudio {
           context = new AudioContext({ sampleRate: VOICE_SAMPLE_RATE });
           queue = context.createBufferQueueSource();
           queue.connect(context.destination);
-          queue.start();
+          /* (0, 0), never bare: the library's own default is `offset = -1`
+           * (a "no offset" sentinel) which its own range check then throws
+           * on — a bare start() ALWAYS throws "offset must be a finite
+           * non-negative number: -1" (react-native-audio-api 0.13.3,
+           * AudioBufferQueueSourceNode.start). Found the hard way on the
+           * first physical-device call. */
+          queue.start(0, 0);
           recorder = new AudioRecorder();
           recorder.onAudioReady(
             {
@@ -64,14 +70,24 @@ export function createNativeVoiceAudio(): VoiceAudio {
         },
         play: (pcmBase64: string) => {
           if (context === null || queue === null) return;
-          const samples = pcm16Base64ToFloat32(pcmBase64);
-          if (samples.length === 0) return;
-          const buffer = context.createBuffer(1, samples.length, VOICE_SAMPLE_RATE);
-          buffer.copyToChannel(samples, 0);
-          queue.enqueueBuffer(buffer);
+          try {
+            const samples = pcm16Base64ToFloat32(pcmBase64);
+            if (samples.length === 0) return;
+            const buffer = context.createBuffer(1, samples.length, VOICE_SAMPLE_RATE);
+            buffer.copyToChannel(samples, 0);
+            queue.enqueueBuffer(buffer);
+          } catch {
+            /* One bad frame must cost that frame, not the call: this runs
+             * inside the stream connection's delivery callback, and a throw
+             * there takes the whole socket down — both directions. */
+          }
         },
         clearPlayback: () => {
-          queue?.clearBuffers();
+          try {
+            queue?.clearBuffers();
+          } catch {
+            /* An empty queue that objects is an empty queue. */
+          }
         },
         stop: async () => {
           try {

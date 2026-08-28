@@ -1,15 +1,17 @@
-// The voice button on the floating note overlay — press to start an
-// open-mic voice call with the project's voice agent (the phone as the third
-// dumb client of the voice-agent facet), pulsing with LOCAL mic level while
-// you speak (grill Q1: the pulse is VU feedback, never a turn control; local
-// so the latency is zero).
+// The voice button on the floating note overlay — tap to start a
+// PUSH-TO-TALK voice call with the project's voice agent (the phone as the
+// third dumb client of the voice-agent facet). The first on-device session
+// demoted open-mic to push-to-talk: hold the big mic to speak (ptt-start /
+// mic frames / ptt-end, the C client's space bar with a thumb), release to
+// let the model answer. The level bar above the mic throbs with LOCAL mic
+// level while you hold — VU feedback only, zero latency, never a turn
+// control.
 //
-// In-call it expands to a compact sheet: the pulse, a hang-up control, and
-// ONE caption line shared by call lifecycle and the colleague status/note
-// lane (grill Q6 — the novel bit of the voice branch is that the phone can
-// SHOW "backend: running code" while you wait). ✕ collapses the sheet; the
-// call keeps going in the floating, pulsing button. No transcript, no
-// scrollback.
+// The sheet: level bar, the hold-to-talk mic, and ONE caption line shared
+// by call lifecycle (ringing / hold to talk / listening) and the colleague
+// status/note lane (grill Q6 — the phone can SHOW "backend: running code"
+// while you wait). ✕ collapses the sheet; the call keeps going behind the
+// floating button. No transcript, no scrollback.
 //
 // State lives in the query cache (the composer's precedent — no
 // useState/useEffect); the live call handle and the pulse Animated.Value are
@@ -72,7 +74,11 @@ async function beginCall(baseUrl: string, projectId: string): Promise<void> {
         queryClient.setQueryData<VoiceUiStatus>(statusKey, status);
       },
       onLevel: (level) => {
-        Animated.timing(pulse, { toValue: level, duration: 90, useNativeDriver: true }).start();
+        /* JS-driven on purpose: the sheet's level bar animates WIDTH (a
+         * layout prop the native driver rejects), and one Animated.Value
+         * cannot serve both drivers. ~11 updates/s of a 6px bar is nothing
+         * for the JS driver. */
+        Animated.timing(pulse, { toValue: level, duration: 90, useNativeDriver: false }).start();
       },
       now: () => Date.now(),
     });
@@ -123,22 +129,25 @@ export function VoiceCallButton(props: { baseUrl: string; projectId: string }) {
 
   const glowScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.9] });
   const glowOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.15, 0.5] });
+  const levelWidth = pulse.interpolate({ inputRange: [0, 1], outputRange: ["4%", "100%"] });
 
   return (
     <View pointerEvents="box-none">
       {inCall && sheetOpen ? (
         <View style={styles.sheet}>
-          <View style={styles.sheetPulseSlot}>
-            <Animated.View
-              style={[
-                styles.sheetGlow,
-                { opacity: glowOpacity, transform: [{ scale: glowScale }] },
-              ]}
-            />
-            <View style={styles.sheetMicCircle}>
-              <Ionicons color={colors.text} name="mic" size={26} />
-            </View>
+          <View style={styles.levelTrack}>
+            <Animated.View style={[styles.levelFill, { width: levelWidth }]} />
           </View>
+          <Pressable
+            accessibilityLabel="Hold to talk"
+            accessibilityRole="button"
+            onPressIn={() => activeCall?.setTalking(true)}
+            onPressOut={() => activeCall?.setTalking(false)}
+            style={({ pressed }) => [styles.talkButton, pressed && styles.talkButtonHeld]}
+          >
+            <Ionicons color={colors.text} name="mic" size={34} />
+            <Text style={styles.talkHint}>hold to talk</Text>
+          </Pressable>
           <Text numberOfLines={2} style={styles.caption}>
             {status.caption}
           </Text>
@@ -178,7 +187,15 @@ export function VoiceCallButton(props: { baseUrl: string; projectId: string }) {
           <Ionicons color={inCall ? colors.background : colors.text} name="mic" size={22} />
         </Pressable>
         {!inCall && status?.phase === "ended" && status.caption !== "call ended" ? (
-          <Pressable onPress={onPressButton} style={styles.endedNote}>
+          <Pressable
+            accessibilityLabel={status.micDenied ? "Open Settings" : "Dismiss"}
+            onPress={() =>
+              status.micDenied
+                ? void Linking.openSettings()
+                : cache.setQueryData<VoiceUiStatus>(statusKey, null)
+            }
+            style={styles.endedNote}
+          >
             <Text numberOfLines={2} style={styles.endedNoteText}>
               {status.caption}
             </Text>
@@ -238,7 +255,7 @@ const styles = StyleSheet.create({
     alignSelf: "flex-end",
     marginRight: spacing.md,
     marginBottom: spacing.sm,
-    width: 250,
+    width: 300,
     padding: spacing.md,
     borderRadius: radius.lg,
     backgroundColor: colors.surface,
@@ -250,28 +267,36 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.4,
     shadowRadius: 16,
   },
-  sheetPulseSlot: {
-    width: 72,
-    height: 72,
-    alignItems: "center",
-    justifyContent: "center",
+  levelTrack: {
+    alignSelf: "stretch",
+    height: 6,
+    borderRadius: radius.full,
+    backgroundColor: colors.surfaceRaised,
+    overflow: "hidden",
+    marginBottom: spacing.md,
   },
-  sheetGlow: {
-    position: "absolute",
-    width: 56,
-    height: 56,
+  levelFill: {
+    height: 6,
     borderRadius: radius.full,
     backgroundColor: colors.accent,
   },
-  sheetMicCircle: {
-    width: 56,
-    height: 56,
+  talkButton: {
+    width: 104,
+    height: 104,
     borderRadius: radius.full,
     backgroundColor: colors.surfaceRaised,
     borderColor: colors.accent,
-    borderWidth: 1,
+    borderWidth: 2,
     alignItems: "center",
     justifyContent: "center",
+  },
+  talkButtonHeld: {
+    backgroundColor: colors.accent,
+  },
+  talkHint: {
+    color: colors.textMuted,
+    fontSize: 10,
+    marginTop: 2,
   },
   caption: {
     color: colors.textMuted,

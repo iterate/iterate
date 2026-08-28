@@ -109,3 +109,35 @@ voice-agent contract change; transcript/scrollback UI; resurrecting PR
 - ~64ms uplink frames: unmeasured sweet spot, 40–100ms band acceptable.
 - Lifecycle states share the caption slot so the sheet never looks dead.
 - Playwright expo-web scenario deprioritized below the node wire-driver.
+
+## On-device round 1 (morning, Misha's phone)
+
+First physical test found one library bug with five symptoms:
+react-native-audio-api 0.13.3's `AudioBufferQueueSourceNode.start()` throws
+on its OWN default parameter (`offset = -1` sentinel vs its `offset < 0`
+range check) — so playback setup always threw, after the call was already
+minted server-side: "call failed" flashed, live captions overwrote it with
+"listening", the server heard zero mic frames (deaf call), hang-up was wired
+to a null handle, and the 60s idle deadline reaped it.
+
+Fixes + the push-to-talk pivot (Misha's call):
+
+- [x] `queue.start(0, 0)` dodges the sentinel bug; play/clear hardened so a
+      bad frame can never take down the delivery callback (and with it the
+      socket). _voice-audio-native.ts_
+- [x] Audio-start failure now ends the call cleanly (connection closed, no
+      deaf mint); hang-up ends locally FIRST, obituary appended after — a
+      wedged socket cannot eat the button. _voice-call.ts_
+- [x] Push-to-talk: `clientTakesTurns: true` (marker v2 re-runs setup and
+      flips existing device streams), handle gains `setTalking()`; durable
+      ptt-start per press (first press mints), ephemeral ptt-end commits the
+      turn; mic frames flow only while held. Captions: "ringing…" → "hold
+      the mic to talk" → "listening…" while held. _voice-setup.ts,
+      voice-call.ts_
+- [x] Sheet rework: big hold-to-talk mic button, slim level bar above it
+      (JS-driven — width is not native-animatable), ✕ collapse, ended-note
+      now dismisses instead of restarting. _voice-call-button.tsx_
+- [x] Unit tests reworked for PTT (9 call-core tests incl. wedged-socket
+      hang-up and failed-mic cleanup); live e2e reworked to drive the press/
+      release edges — passed against prd in 20s.
+- [x] `misha` project provisioned (template a3a86480 + openai secret).

@@ -30,14 +30,16 @@ export const voiceAgentEntrypointRef = {
 } as const;
 
 /**
- * The birth certificate this app asserts. Open-mic (the boards' posture —
- * server VAD owns the turns, full duplex, barge-in), colleague on, and the
- * same hang_up tool talk.ts arms — the model saying goodbye is one of the
- * three ways a call ends (tap, hang_up, 60s idle).
+ * The birth certificate this app asserts. Push-to-talk (clientTakesTurns:
+ * the phone segments turns with the hold-to-talk button — the first
+ * on-device session showed open-mic needs AEC tuning this demo lane hasn't
+ * earned yet), colleague on, and the same hang_up tool talk.ts arms — the
+ * model saying goodbye is one of the three ways a call ends (tap, hang_up,
+ * 60s idle).
  */
 export const MOBILE_VOICE_SETUP = {
   instructions: "You are Iterate, a voice assistant on a phone. Keep replies short and natural.",
-  clientTakesTurns: false,
+  clientTakesTurns: true,
   colleague: true,
   tools: [
     {
@@ -52,7 +54,7 @@ export const MOBILE_VOICE_SETUP = {
 
 /** Bump to force one re-setup on every device after changing MOBILE_VOICE_SETUP
  * semantics that the hash alone would not capture. */
-const SETUP_MARKER_VERSION = 1;
+const SETUP_MARKER_VERSION = 2;
 
 /** FNV-1a over the exact payload we would send — pure, no crypto import, and
  * two devices/app-versions agree iff they would send identical setups. */

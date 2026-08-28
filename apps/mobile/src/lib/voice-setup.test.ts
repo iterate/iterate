@@ -39,7 +39,7 @@ test("a missing marker runs setup with the full config, then records the marker"
   expect(calls).toHaveLength(1);
   expect(calls[0]).toMatchObject({
     streamPath: "/agents/voice/mobile-device-1",
-    clientTakesTurns: false,
+    clientTakesTurns: true,
     colleague: true,
     instructions: MOBILE_VOICE_SETUP.instructions,
   });

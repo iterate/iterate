@@ -67,6 +67,13 @@ test("a phone-shaped call: speak, be answered, leave a transcript", async () => 
     now: () => Date.now(),
   });
 
+  /* Push-to-talk: hold for the whole utterance (the FIRST press is the mint
+   * — the facet holds mic frames through the provider handshake and commits
+   * the held turn on release), release once it has been spoken. */
+  call.setTalking(true);
+  await audio.utteranceDone();
+  call.setTalking(false);
+
   /* Let the answer FINISH before hanging up — a hang-up mid-answer drops
    * the provider socket before its transcript.done edge, so the durable
    * transcript (what the phone's caption lane and the transcript CLI read)
@@ -85,7 +92,8 @@ test("a phone-shaped call: speak, be answered, leave a transcript", async () => 
   await call.hangUp();
 
   expect(statuses[0]).toMatchObject({ phase: "connecting" });
-  expect(statuses.some((s) => s.caption === "listening")).toBe(true);
+  expect(statuses.some((s) => s.caption === "hold the mic to talk")).toBe(true);
+  expect(statuses.some((s) => s.caption === "listening…")).toBe(true);
   expect(audio.playedMs()).toBeGreaterThan(400);
   expect(answers.length).toBeGreaterThan(0);
   expect(String(answers[0].payload.text).length).toBeGreaterThan(0);
@@ -94,28 +102,40 @@ test("a phone-shaped call: speak, be answered, leave a transcript", async () => 
 /* ------------------------------------------------------------- fixtures --- */
 
 /**
- * The audio seam fed by macOS `say` instead of a microphone: one spoken
- * utterance in ~64ms frames at real-time cadence, then continuous silence —
- * exactly what an open mic does, and what server VAD needs to close the turn.
- * `play` counts decoded milliseconds instead of making sound.
+ * The audio seam fed by macOS `say` instead of a microphone: the recorder
+ * "hears" the utterance in ~64ms frames at real-time cadence and silence
+ * after it — the call core decides which frames go to the wire (only while
+ * the PTT button is held, like a real mic). `utteranceDone` resolves when
+ * the spoken part has fully played out, which is when the driver releases
+ * the button. `play` counts decoded milliseconds instead of making sound.
  */
 function makeSpeechFedAudio(text: string) {
   const utterance = synthesizePcm16(text);
   const frameSamples = 1024;
   let playedSamples = 0;
   let timer: ReturnType<typeof setInterval> | null = null;
+  let resolveUtteranceDone!: () => void;
+  const utteranceDone = new Promise<void>((resolve) => {
+    resolveUtteranceDone = resolve;
+  });
 
   return {
     playedMs: () => playedSamples / 16,
+    utteranceDone: () => utteranceDone,
     session: {
       start: async (onFrame: (frame: { pcmBase64: string; level: number }) => void) => {
         let cursor = 0;
         timer = setInterval(() => {
-          const bytes =
-            cursor < utterance.length
-              ? utterance.subarray(cursor, cursor + frameSamples * 2)
-              : new Uint8Array(frameSamples * 2); /* open-mic silence */
+          const spoken = cursor < utterance.length;
+          const bytes = spoken
+            ? utterance.subarray(cursor, cursor + frameSamples * 2)
+            : new Uint8Array(frameSamples * 2); /* an idle mic hears silence */
           cursor += frameSamples * 2;
+          if (!spoken && cursor >= utterance.length + frameSamples * 2 * 8) {
+            /* ~half a second of trailing silence sent while still held, so
+             * the committed turn does not end mid-word. */
+            resolveUtteranceDone();
+          }
           onFrame({
             pcmBase64: uint8ArrayToBase64(bytes),
             level: pulseLevel(pcm16Base64ToFloat32(uint8ArrayToBase64(bytes))),
