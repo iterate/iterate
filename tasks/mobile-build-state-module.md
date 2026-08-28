@@ -1,5 +1,5 @@
 ---
-status: needs-annotation
+status: in-progress
 size: large
 ---
 
@@ -7,7 +7,15 @@ size: large
 
 ## Status
 
-Not started. This is a plan for annotation, not a log.
+Both halves implemented on `mobile-build-state`
+([#2542](https://github.com/iterate/iterate/pull/2542)). Done: the module and
+its 11 unit tests, the app-global session, the rewritten Build info and QR
+screens, the update banner, per-PR builds with the channel baked in, and the
+docs. Not done: stamping the available update's commit message into app config
+`extra` (see "corrections" — the cheap half of it landed, the config change did
+not), and a device pass.
+
+**Two plan claims turned out to be wrong. See [Corrections](#corrections).**
 
 Two halves:
 
@@ -144,6 +152,51 @@ shown; the **available** update's commit message is not shown at all, because
 nothing looks at it.
 
 ---
+
+## Corrections
+
+Both found while implementing, both change the design rather than the goal.
+
+### 1. `eas.json` IS a fingerprint source
+
+The plan said the channel was safe in `eas.json` because fingerprint never
+reads it. Wrong — `expo-updates fingerprint:generate` lists it explicitly:
+
+```
+{"type":"file","filePath":"eas.json","reasons":["easBuild"],"hash":"331eee28…"}
+```
+
+Measured: changing one profile's `channel` moves the fingerprint from
+`fdfdff89` to `793605ca`. Rewriting `eas.json` per PR would therefore have
+given each PR's build its own runtime version — and that build would refuse
+the very updates the PR publishes. The exact failure the plan claimed to be
+avoiding.
+
+(`preview` and `production` share a runtime today only because they live in
+the *same file*: the bytes don't differ per profile.)
+
+**Fix:** `fingerprint.config.js` gains `ignorePaths: ["eas.json"]`. Measured
+again with the ignore in place: the channel change leaves the hash
+byte-identical (`fca56340` both times).
+
+Two consequences, both accepted:
+
+- The baseline hash moves once (`fdfdff89` → `fca56340`), so every installed
+  binary needs one rebuild. CI already triggers one when no build matches.
+- `eas.json`'s other fields (`distribution`, `developmentClient`, `simulator`)
+  stop bumping the runtime. They shape which *binary* you get, not which JS a
+  binary can run, and each already lives on its own channel.
+
+### 2. There is no honest "incompatible" update status
+
+The plan wanted the app to distinguish "you're current" from "the channel has
+newer JS your binary can't run". It can't. `checkForUpdateAsync` answers
+`noUpdateAvailableOnServer` for both, because the update server filters by
+runtime version *before* it replies.
+
+Same reason the app can't say how many commits behind you are — only that
+something newer exists. So the copy is "You're on the latest update this build
+can run", and the banner names the commit instead of counting.
 
 ## The module
 
@@ -361,22 +414,22 @@ is checkable.
 
 ## Work
 
-- [ ] `src/lib/build-state.ts`: pure `describeBuildState` + `BuildState` type, with unit tests for every `update.status` branch
-- [ ] Fold in `build-info.ts`, `preview-channel.ts`, `native-install-guard.ts`; delete them
-- [ ] `useBuildState` / `useBuildActions` over one query key
-- [ ] Rewrite `build-info.tsx` as a dumb view; add the channel/update rows
-- [ ] Rewrite `preview-channel/[channel].tsx` against the module; keep the confirm + auto-pull behaviour and every existing spec green
-- [ ] `src/lib/session.ts` + adopt it in `index.tsx`, `projects.tsx`, `chat.tsx`, the QR screen
-- [ ] Reword the mismatch card so it never claims you are signed out of the app
-- [ ] `UpdateWatcher` + AppState foreground check + stale banner
-- [ ] Stamp into app config `extra.buildInfo`; `app.json` → `app.config.js`; add `ExpoConfigExtraSection` to `sourceSkips`; **verify the fingerprint does not move**
-- [ ] Read the available update's stamp off `manifest.extra.expoClient.extra`
-- [ ] `eas.json`: add a `preview-pr` profile; CI rewrites its `channel` per PR before building
-- [ ] `ensureBuildForPr({channel, runtime})`: match on channel too, prefer finished builds, report in-progress ones honestly
-- [ ] Confirm the runtime fingerprint does **not** move when only `eas.json`'s channel changes (`expo-updates fingerprint:generate` either side)
-- [ ] `renderPreviewSection`: say what each QR now guarantees; the install one is no longer a half-measure
-- [ ] Web specs: stale banner, "1 behind" row, the reworded mismatch card (the `build-info-override` localStorage seam already supports this)
-- [ ] Update `apps/mobile/README.md` — the "Per-PR channels" section still says installing gets you a main binary
+- [x] `src/lib/build-state.ts`: pure `describeBuildState` + `BuildState` type, with unit tests for every `update.status` branch — *split `build-state-core.ts` (pure, 11 tests) + `build-state.ts` (Expo/query binding), following the repo's existing `*-core.ts` idiom so the node lane can cover the rules*
+- [x] Fold in `build-info.ts`, `preview-channel.ts`, `native-install-guard.ts`; delete them
+- [x] `useBuildState` / `useBuildActions`
+- [x] Rewrite `build-info.tsx` as a dumb view; add the channel/update rows
+- [x] Rewrite `preview-channel/[channel].tsx` against the module; confirm + auto-pull behaviour intact, specs green
+- [x] `src/lib/session.ts` + adopt it in `index.tsx`, `projects.tsx`, `chat.tsx`, the QR screen
+- [x] Reword the mismatch card so it never claims you are signed out of the app — *`none on preview 3 → pr…` plus the real session underneath*
+- [x] Stale banner + on-open check — *`components/update-banner.tsx`; the foreground trigger is react-query's `focusManager`, which `query.ts` already wires to AppState, so no listener of our own*
+- [ ] Stamp into app config `extra.buildInfo`; `app.json` → `app.config.js`; add `ExpoConfigExtraSection` to `sourceSkips`; **verify the fingerprint does not move** — *not done; the reader below is in and falls back cleanly, so this is the only thing standing between "something newer exists" and "…and here's its commit message"*
+- [x] Read the available update's stamp off `manifest.extra.expoClient.extra` — *`stampFromManifest`, shape-checked; returns `{}` until the config change above lands*
+- [x] `eas.json`: add a `preview-pr` profile; CI rewrites its `channel` per PR before building
+- [x] `ensureBuildForPr({channel, runtime})`: match on channel too, prefer finished builds, report in-progress ones honestly
+- [x] Confirm the runtime fingerprint does **not** move when only `eas.json`'s channel changes — *it did move; see [Corrections](#corrections). `ignorePaths: ["eas.json"]` fixes it, measured either side*
+- [x] `renderPreviewSection`: say what each QR now guarantees; the install one is no longer a half-measure
+- [x] Web specs: the reworded mismatch card. ~~stale banner, "1 behind" row~~ — *web bundles report `update: unsupported`, so neither renders there; the rules behind them are covered in the node lane instead*
+- [x] Update `apps/mobile/README.md` — the "Per-PR channels" section still said installing gets you a main binary
 
 ## Decisions I made without asking
 
@@ -400,3 +453,28 @@ is checkable.
   A phone tracking main stays silent, as now.
 - **Build-per-PR cost:** accepted. A cleverer compromise (only build when the
   fingerprint actually differs) can come later if the wait bites.
+
+## Implementation log
+
+- `build-state-core.ts` is pure and `build-state.ts` is its Expo binding —
+  the repo's existing `*-core.ts` split (`approver-core.ts`,
+  `recent-photos-core.ts`, `media-sync-core.ts`). One conceptual owner, and
+  the rules stay node-testable. `expected-backend.ts` reads the stamp from
+  the core, so it stays Expo-free too.
+- The banner component lives in `src/components/`, not exported from the
+  module, matching where every other component lives.
+- `BuildState.channel` is `string | null`, not `string`: a Metro bundle
+  genuinely has no channel and the pure function shouldn't invent one.
+- `isOverridden(state)` is a helper over `channel !== binary.defaultChannel`
+  rather than stored state, per the annotation.
+- The dead-sign-in redirect moved to the query cache's `onError` in
+  `query.ts` — one place, and it now covers every screen rather than the two
+  that happened to catch it.
+
+### Still open
+
+- No device pass yet. The web lane can't exercise OTA at all
+  (`Updates.isEnabled` is false), so the banner, the on-open check and the
+  install-then-run flow are unproven on hardware.
+- The first PR to run this triggers a fresh EAS build, which is also the
+  first real test of the channel-baking.

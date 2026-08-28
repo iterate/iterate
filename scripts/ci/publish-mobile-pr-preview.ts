@@ -1,8 +1,10 @@
 // Per-PR mobile previews: publishes the PR's JS bundle to an EAS Update
-// channel named after its branch, then maintains a managed PR-body section
-// with two QR codes — an OTA link into the installed app and a full-install
-// link — expanding whichever the runtime-fingerprint heuristic says Misha
-// needs. Runs on PRs touching apps/mobile
+// channel named after its branch, makes sure a native build exists that BOOTS
+// on that channel, then maintains a managed PR-body section with two QR codes
+// — an OTA link into the installed app and a full-install link — expanding
+// whichever the runtime-fingerprint heuristic says Misha needs. Both are
+// individually correct now, so guessing wrong costs a scan rather than
+// leaving you on main. Runs on PRs touching apps/mobile
 // (.depot/workflows/mobile-pr-preview.yml); EXPO_TOKEN via Doppler like the
 // merge-to-main publish (scripts/ci/publish-mobile-update.ts).
 // Section rendering/QR/eas plumbing: scripts/ci/mobile-preview.ts.
@@ -16,7 +18,7 @@ import { getOctokit, getRepo, readEventPayload } from "./github.ts";
 import {
   channelForBranch,
   easJson,
-  ensureBuildForRuntime,
+  ensureBuildForPr,
   latestInstalledRuntime,
   mobileDir,
   planPreview,
@@ -107,7 +109,9 @@ async function publishMobilePrPreview() {
   );
 
   const installedRuntime = latestInstalledRuntime();
-  const installBuild = ensureBuildForRuntime(publishedRuntime);
+  // A build that boots on THIS channel, not just one with a matching runtime:
+  // installing it is being on the PR's JS, with no second scan.
+  const installBuild = ensureBuildForPr({ channel, runtime: publishedRuntime });
 
   const plan = planPreview({
     baseUrl: prdBaseUrl,
@@ -116,6 +120,7 @@ async function publishMobilePrPreview() {
     publishedRuntime,
     installedRuntime,
     installUrl: `https://expo.dev/accounts/${owner}/projects/${slug}/builds/${installBuild.id}`,
+    installReady: installBuild.finished,
   });
 
   const [deepLinkQrUrl, installQrUrl] = await Promise.all([

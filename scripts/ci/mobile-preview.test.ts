@@ -1,6 +1,11 @@
 import { expect, test } from "vitest";
 import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annotator.ts";
-import { channelForBranch, planPreview, renderPreviewSection } from "./mobile-preview.ts";
+import {
+  channelForBranch,
+  easJsonWithChannel,
+  planPreview,
+  renderPreviewSection,
+} from "./mobile-preview.ts";
 import { bundleStampForPr } from "./publish-mobile-pr-preview.ts";
 
 test("branch names become valid EAS channel names", () => {
@@ -18,6 +23,7 @@ test("links go through the https interstitial, never a raw iterate:// href", () 
     publishedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
     installedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
     installUrl: "https://expo.dev/accounts/o/projects/p/builds/build-1",
+    installReady: true,
   });
   expect(plan).toMatchObject({
     runtimeMatchesInstalled: true,
@@ -54,6 +60,7 @@ test("a runtime-matching PR renders with the OTA details open and install collap
     publishedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
     installedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
     installUrl: "https://expo.dev/accounts/o/projects/p/builds/build-1",
+    installReady: true,
   });
   const section = renderPreviewSection({
     variant: "pr",
@@ -80,6 +87,7 @@ test("a native-change PR flips the expanded details to the install QR", () => {
     publishedRuntime: "aaaa000000000000000000000000000000000000",
     installedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
     installUrl: "https://expo.dev/accounts/o/projects/p/builds/build-2",
+    installReady: true,
   });
   expect(plan).toMatchObject({ runtimeMatchesInstalled: false });
 
@@ -105,6 +113,7 @@ test("the main variant reads as a switch-back, not a PR switch", () => {
     publishedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
     installedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
     installUrl: "https://expo.dev/accounts/o/projects/p/builds/build-1",
+    installReady: true,
   });
   const section = renderPreviewSection({
     variant: "main",
@@ -130,6 +139,7 @@ test("no finished preview build at all counts as a runtime mismatch", () => {
     publishedRuntime: "aaaa000000000000000000000000000000000000",
     installedRuntime: undefined,
     installUrl: "https://expo.dev/accounts/o/projects/p/builds/build-3",
+    installReady: true,
   });
   expect(plan).toMatchObject({ runtimeMatchesInstalled: false });
 });
@@ -165,4 +175,69 @@ test("bundleStampForPr stamps nothing without a leased preview slot", () => {
     MOBILE_EXPECTED_BACKEND_ENV: "",
     MOBILE_TEST_LOGIN_EMAIL: "",
   });
+});
+
+test("a PR's install QR promises the PR's channel, not just a compatible binary", () => {
+  const plan = planPreview({
+    baseUrl: "https://os.iterate.com",
+    scheme: "iterate",
+    channel: "add-native-module",
+    publishedRuntime: "aaaa000000000000000000000000000000000000",
+    installedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
+    installUrl: "https://expo.dev/accounts/o/projects/p/builds/build-2",
+    installReady: true,
+  });
+  const section = renderPreviewSection({
+    variant: "pr",
+    plan,
+    deepLinkQrUrl: "https://example.test/ota.png",
+    installQrUrl: "https://example.test/install.png",
+    headSha: "abcdef1234567890",
+    installBuildSha: "abcdef1234567890",
+    publishedRuntime: "aaaa000000000000000000000000000000000000",
+  });
+  // The old copy sent you back to the OTA QR after installing, because the
+  // binary booted on main. Builds are made for their channel now.
+  expect(section).toContain(
+    "This build boots on <code>add-native-module</code> — installing it is all you need.",
+  );
+  expect(section).not.toContain("then use the OTA link above");
+});
+
+test("a build that hasn't finished says so instead of offering a dead install link", () => {
+  const plan = planPreview({
+    baseUrl: "https://os.iterate.com",
+    scheme: "iterate",
+    channel: "brand-new-branch",
+    publishedRuntime: "aaaa000000000000000000000000000000000000",
+    installedRuntime: undefined,
+    installUrl: "https://expo.dev/accounts/o/projects/p/builds/build-9",
+    installReady: false,
+  });
+  const section = renderPreviewSection({
+    variant: "pr",
+    plan,
+    deepLinkQrUrl: "https://example.test/ota.png",
+    installQrUrl: "https://example.test/install.png",
+    headSha: "abcdef1234567890",
+    installBuildSha: undefined,
+    publishedRuntime: "aaaa000000000000000000000000000000000000",
+  });
+  expect(section).toContain("Build still running — the install page fills in when it finishes");
+});
+
+test("the PR channel is written into its own build profile, leaving the rest alone", () => {
+  const raw = JSON.stringify(
+    { build: { preview: { channel: "preview" }, "preview-pr": { channel: "preview" } } },
+    null,
+    2,
+  );
+  const written = JSON.parse(easJsonWithChannel(raw, "preview-pr", "my-branch"));
+  expect(written.build).toEqual({
+    preview: { channel: "preview" },
+    "preview-pr": { channel: "my-branch" },
+  });
+  // A profile that doesn't exist is a CI bug, not something to paper over —
+  // silently adding one would produce a build on a channel nobody serves.
+  expect(() => easJsonWithChannel(raw, "nope", "my-branch")).toThrow(/no build profile "nope"/);
 });

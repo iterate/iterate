@@ -16,7 +16,7 @@ import { isMainModule } from "../../packages/shared/src/dev/is-main-module.ts";
 import { getOctokit, getRepo } from "./github.ts";
 import {
   easJson,
-  ensureBuildForRuntime,
+  ensureBuildForPr,
   latestInstalledRuntime,
   mobileDir,
   planPreview,
@@ -59,7 +59,7 @@ async function publishMobileUpdate() {
   // the newest finished build like the PR flow, so a fingerprint-changing
   // merge renders as "native changes" until its fresh build finishes.
   const installedRuntime = latestInstalledRuntime();
-  const installBuild = ensureBuildForRuntime(runtimeVersion);
+  const installBuild = ensureBuildForPr({ channel: "preview", runtime: runtimeVersion });
 
   const sha = process.env.GITHUB_SHA || run("git", ["rev-parse", "HEAD"], repoRoot).trim();
   const appConfig = JSON.parse(readFileSync(path.join(mobileDir, "app.json"), "utf8"));
@@ -71,6 +71,7 @@ async function publishMobileUpdate() {
     publishedRuntime: runtimeVersion,
     installedRuntime,
     installUrl: `https://expo.dev/accounts/${owner}/projects/${slug}/builds/${installBuild.id}`,
+    installReady: installBuild.finished,
     // Main's bundle stamps no expected backend (write-build-info.mjs ran
     // without the MOBILE_* env vars above): phones default to prd, and never
     // get a test sign-in offer (prd has no test OTP).
