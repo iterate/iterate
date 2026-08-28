@@ -7,18 +7,32 @@ size: medium
 
 ## Status
 
-All five items implemented. Remaining: capture PR media (a recording of the
-collect-secret spec at phone size, and a before/after of the photo bubbles)
-and get CI green.
+Done, awaiting merge — [PR #2538](https://github.com/iterate/iterate/pull/2538).
+All five items shipped, CI green, every review thread resolved.
 
 - **Done:** the mini-page contract on both sides (`returnTo` + status, with an
   app-scheme-only allowlist), the eye toggle, the compacted collect-secret
   page, Telegram-style photo bubbles, and `getSecret(...)` in query values.
 - **Covered by:** `specs/collect-secret.spec.ts` (the page end-to-end at
-  390×844, including the two-thirds-of-a-screen budget), plus unit tests for
-  the two contract modules, the photo frame maths, and the substitution rules.
+  390×844, including the two-thirds-of-a-screen budget) and
+  `specs/mobile/chat-photos.spec.ts` (both halves of the photo rule on the real
+  build), plus unit tests for the two contract modules, the frame maths, and
+  the substitution rules.
+- **Review changed two rules.** Bugbot found that a caption longer than its
+  photo stretched the bubble past it, which reopened the very gap this was
+  meant to close; the fix made the frame width a constant every photo and its
+  caption share, which also retired the separate "small images keep their own
+  size" case. It also found that `URLSearchParams` reads a literal `+` as a
+  space, so a secret path containing one routed correctly at discovery and then
+  400d — query pairs now come off the raw query text.
+- **Declined:** two `no-inferable-type-annotation` suggestions. The annotations
+  they object to are the prevailing style in the same files (~488 repo-wide),
+  nothing enforces the rule, and both functions are single sources of truth
+  where the annotation is what fails the build if a body drifts. Reasoning is
+  in the threads; if the repo does want that direction it is a codemod plus a
+  lint rule.
 - **Not done here:** the first ad-hoc "collect some info" mini page — the
-  contract is what this PR lands.
+  contract is what this PR lands, and the next page needs no new plumbing.
 
 Assumptions marked **[assumption]** below were made without the requester
 present.
