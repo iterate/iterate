@@ -1,20 +1,13 @@
 // core/expression.ts — THE expression codec: the STRING half (itx.streams.get("/logs")) ⇄ the
 // STRUCTURED half (["itx", "streams", ["get", "/logs"]]). Args are ONE JSON5 grammar (no hand-rolled
 // number/object parser; __proto__-safe); expressions are persisted NAMES, so deleting one IS
-// revocation. The capability-path MATCHER + EVALUATOR/DISPATCHER live in ./evaluate.ts, re-exported.
-import { z } from "zod";
+// revocation. The capability-path matcher + evaluator/dispatcher are ./dispatch.ts.
 import JSON5 from "json5";
-export { apply, evaluate, invokePath, match, pathProxy, stepGet } from "./evaluate.ts";
-export type { Match } from "./evaluate.ts";
 
 /** One step: a property read (string) or a call (`[method, ...args]`). Args are plain JSON. */
 type Step = string | [method: string, ...args: unknown[]];
 /** A call written as data: a scope-root name then get/call steps. */
 export type Expression = Step[];
-/** Wire schema for the structured half — reduced-state checkpoints validate against this spelling. */
-export const ExpressionSchema = z.array(
-  z.union([z.string(), z.tuple([z.string()]).rest(z.unknown())]),
-) as z.ZodType<Expression>;
 /** A capability path — a mount's left side: plain dotted segments, no calls, no args. */
 export type CapabilityPath = string[];
 const IDENT = /^[A-Za-z_$][A-Za-z0-9_$-]*/;

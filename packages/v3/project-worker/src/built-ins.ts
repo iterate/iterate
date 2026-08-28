@@ -11,7 +11,8 @@ import {
   type WorkerSource,
 } from "./core/agent-runtime.ts";
 import { itxEntrypointFor } from "./itx-entrypoint.ts";
-import { pathProxy, toExpression, type Expression } from "./core/expression.ts";
+import { toExpression, type Expression } from "./core/expression.ts";
+import { pathProxy } from "./core/dispatch.ts";
 import type { Context } from "./core/stream.ts";
 import type { StreamEventInput } from "./core/events.ts";
 import { hashSource } from "./core/hash.ts";

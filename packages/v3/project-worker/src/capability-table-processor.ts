@@ -28,17 +28,14 @@ import { codedError } from "./core/errors.ts";
 import { createLogger } from "./core/logs.ts";
 import { defineProcessorContract, type DeliveryPolicy } from "./core/events.ts";
 import {
-  apply,
-  match,
   parse,
   parseCapabilityPath,
-  pathProxy,
   print,
   toExpression,
   type CapabilityPath,
   type Expression,
-  type Match,
 } from "./core/expression.ts";
+import { apply, match, pathProxy, type Match } from "./core/dispatch.ts";
 import type { ProcessorStream, ReduceArgs, ReduceOnlyProcessor } from "./core/processor.ts";
 
 const tableLog = createLogger("capability-table");

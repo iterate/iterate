@@ -48,14 +48,8 @@ import {
   type StreamEvent,
   type StreamEventInput,
 } from "./core/events.ts";
-import {
-  invokePath,
-  parse,
-  pathProxy,
-  print,
-  toExpression,
-  type Expression,
-} from "./core/expression.ts";
+import { parse, print, toExpression, type Expression } from "./core/expression.ts";
+import { invokePath, pathProxy } from "./core/dispatch.ts";
 import { hashSource } from "./core/hash.ts";
 import { localContext } from "./core/stream.ts";
 import { ItxConnectionDirectory } from "./itx-connection-directory.ts";

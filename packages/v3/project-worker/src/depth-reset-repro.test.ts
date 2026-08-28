@@ -4,7 +4,8 @@
 //   • roots-builder.ts line 219: `sibling.invoke(["itx", ...])` — NO depth argument;
 //   • stream-durable-object.ts line 745 / processor-facet.ts line 174: `invoke(call, depth = 0)`.
 import { expect, test } from "vitest";
-import { parse, parseCapabilityPath, pathProxy, type Expression } from "./core/expression.ts";
+import { parse, parseCapabilityPath, type Expression } from "./core/expression.ts";
+import { pathProxy } from "./core/dispatch.ts";
 import { CapabilityTableProcessor } from "./capability-table-processor.ts";
 import { type ProcessorStream } from "./core/processor.ts";
 import { type StreamEvent, type StreamEventInput } from "./core/events.ts";

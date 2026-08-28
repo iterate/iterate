@@ -420,3 +420,13 @@ nested array/object args, primitives). The matcher + evaluator tests moved to `c
 hand-rolled parser) is gone. Fixed one carried-over TS control-flow nit in the picked `parse` (a
 `never`-returning `fail` must be a function DECLARATION, and `args` is initialised so try/catch
 definite-assignment is happy). expression.ts final: **99 lines**. Suite 277 passed / 30 xf.
+
+### No re-export — maximally clean (Jonas: "im anti re-exports here")
+
+Killed the re-export facade. `core/expression.ts` (now **92 lines**) is PURE codec — no
+`export … from "./dispatch"`, no `zod`, no dead `ExpressionSchema` (config.ts has its own). The
+matcher/evaluator is `core/dispatch.ts`; importers pull dispatch symbols (`match`/`apply`/`invokePath`/
+`pathProxy`/`stepGet`/`Match`) STRAIGHT from `./dispatch.ts` (stream-durable-object,
+capability-table-processor, built-ins, depth-reset-repro.test re-pointed). Also deleted the stray
+duplicate `evaluate.ts` (a copy-artifact — logically identical to dispatch.ts, comments only).
+Typecheck clean; suite 277 passed / 30 xf.
