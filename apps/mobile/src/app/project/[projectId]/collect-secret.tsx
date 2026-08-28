@@ -249,17 +249,17 @@ function CollectSecretForm({
             </Pressable>
           </View>
         )}
-        {!submit.isPending ? null : (
+        {submit.isPending ? (
           // A page-level busy row, not just a button that changed label:
           // storing a secret is several round trips, and the person who just
-          // pasted a credential should be told what is happening to it. The
-          // "Loading" label is also what middlewright's spinner-waiter looks
-          // for — the button's own indicator was not being credited.
+          // pasted a credential should be told what is happening to it. (This
+          // does NOT buy the spec anything — the spinner-waiter was measured
+          // not to credit it either way, which is why that spec polls.)
           <View accessibilityLabel="Loading" style={styles.savingNotice}>
             <ActivityIndicator color={colors.textMuted} size="small" />
             <Text style={styles.hint}>Storing the secret…</Text>
           </View>
-        )}
+        ) : null}
         {submit.error === null ? null : (
           <Text data-type="error" style={styles.error}>
             {submit.error instanceof Error ? submit.error.message : String(submit.error)}
