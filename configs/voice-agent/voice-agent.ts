@@ -878,6 +878,9 @@ const VoiceState = z.object({
        * one of activity/phase is always non-null — a status carrying
        * neither is never folded. */
       phase: z.string().nullable(),
+      /** A failed script's error, kept so a reconnect's briefing can say
+       * WHAT failed — the live whisper already carries it. */
+      failure: z.string().nullable(),
       waitingFor: z.string().nullable(),
     })
     .nullable()
@@ -1886,35 +1889,35 @@ export class VoiceAgentProcessor extends StreamProcessor<
           ? state
           : { ...state, call: null };
 
-      case "events.iterate.com/voice-agent/utterance-transcript":
+      case "events.iterate.com/voice-agent/utterance-transcript": {
         /* An empty transcription is a turn the provider heard as silence;
          * folding it would spend a recap slot saying nothing. */
-        return event.payload.text === ""
-          ? state
-          : {
-              ...state,
-              transcript: foldTranscriptTurn(state.transcript, {
-                role: "listener",
-                text: event.payload.text,
-              }),
-            };
+        if (event.payload.text === "") return state;
+        return {
+          ...state,
+          transcript: foldTranscriptTurn(state.transcript, {
+            role: "listener",
+            text: event.payload.text,
+          }),
+        };
+      }
 
-      case "events.iterate.com/voice-agent/answer-transcript":
-        return event.payload.text === ""
-          ? state
-          : {
-              ...state,
-              transcript: foldTranscriptTurn(
-                state.transcript,
-                { role: "assistant", text: event.payload.text },
-                /* A barged answer's text is what was GENERATED; the recap
-                 * marks it so the model does not treat words nobody heard as
-                 * common ground. */
-                event.payload.cancelled === true
-                  ? " (the listener interrupted this answer partway)"
-                  : "",
-              ),
-            };
+      case "events.iterate.com/voice-agent/answer-transcript": {
+        if (event.payload.text === "") return state;
+        return {
+          ...state,
+          transcript: foldTranscriptTurn(
+            state.transcript,
+            { role: "assistant", text: event.payload.text },
+            /* A barged answer's text is what was GENERATED; the recap
+             * marks it so the model does not treat words nobody heard as
+             * common ground. */
+            event.payload.cancelled === true
+              ? " (the listener interrupted this answer partway)"
+              : "",
+          ),
+        };
+      }
 
       case "events.iterate.com/voice-agent/colleague-status": {
         /* A status is a PATCH — an absent field means "unchanged" — and it
@@ -1929,6 +1932,12 @@ export class VoiceAgentProcessor extends StreamProcessor<
           colleagueStatus: {
             activity,
             phase,
+            /* Failure follows its phase: a status event that moves past the
+             * failed step clears the stale error rather than merging it. */
+            failure:
+              event.payload.phase === undefined
+                ? (state.colleagueStatus?.failure ?? null)
+                : (event.payload.failure ?? null),
             waitingFor:
               event.payload.waitingFor === undefined
                 ? (state.colleagueStatus?.waitingFor ?? null)
@@ -1937,21 +1946,21 @@ export class VoiceAgentProcessor extends StreamProcessor<
         };
       }
 
-      case "events.iterate.com/voice-agent/colleague-note":
-        return event.payload.text === ""
-          ? state
-          : {
-              ...state,
-              colleagueNotes: [
-                ...state.colleagueNotes,
-                {
-                  text:
-                    event.payload.text.length > COLLEAGUE_NOTE_MAX_CHARS
-                      ? `${event.payload.text.slice(0, COLLEAGUE_NOTE_MAX_CHARS)}…`
-                      : event.payload.text,
-                },
-              ].slice(-COLLEAGUE_NOTES_MAX),
-            };
+      case "events.iterate.com/voice-agent/colleague-note": {
+        if (event.payload.text === "") return state;
+        return {
+          ...state,
+          colleagueNotes: [
+            ...state.colleagueNotes,
+            {
+              text:
+                event.payload.text.length > COLLEAGUE_NOTE_MAX_CHARS
+                  ? `${event.payload.text.slice(0, COLLEAGUE_NOTE_MAX_CHARS)}…`
+                  : event.payload.text,
+            },
+          ].slice(-COLLEAGUE_NOTES_MAX),
+        };
+      }
 
       default:
         return state;
@@ -2266,6 +2275,11 @@ export class VoiceAgentProcessor extends StreamProcessor<
       }
 
       case "events.iterate.com/voice-agent/colleague-note": {
+        /* At-least-once delivery can hand the same note twice; injecting it
+         * twice makes the model repeat itself. Offsets are monotonic, so
+         * one high-water mark is the whole dedupe. */
+        if (event.offset <= this.#lastInjectedNoteOffset) return;
+        this.#lastInjectedNoteOffset = event.offset;
         /*
          * THE REPLY EVENT. Every chat message the colleague sends arrives
          * here, durably — solicited or not — and is read into whichever
@@ -2291,8 +2305,16 @@ export class VoiceAgentProcessor extends StreamProcessor<
         );
         /* Same floor discipline as a tool follow-up: speak the note only
          * when nothing else holds the floor; otherwise it waits in context
-         * for the model's next turn, which is what a note is. */
-        if (dial.openToolCallIds.size === 0 && dial.answer.phase === "settled") {
+         * for the model's next turn, which is what a note is. The pending
+         * flag closes a race the phase alone cannot: `answer.phase` flips
+         * only when the provider echoes response.created, so two quick
+         * triggers (a greeting, then a note landing mid-handshake) would
+         * both read "settled" and stack two response.creates. */
+        if (
+          dial.openToolCallIds.size === 0 &&
+          dial.answer.phase === "settled" &&
+          !dial.followUpResponsePending
+        ) {
           dial.followUpResponsePending = true;
           this.#sendControl(dial, { type: "response.create" }, append);
         }
@@ -2500,8 +2522,11 @@ export class VoiceAgentProcessor extends StreamProcessor<
                       state.colleagueStatus.waitingFor === null
                         ? [
                             `Your backend is mid-task right now — its latest status: ` +
-                              `"${state.colleagueStatus.activity || state.colleagueStatus.phase}". ` +
-                              `Its reply will arrive as a bracketed note; do not send another ` +
+                              `"${state.colleagueStatus.activity || state.colleagueStatus.phase}"` +
+                              (state.colleagueStatus.failure === null
+                                ? ""
+                                : ` (a script failed: ${state.colleagueStatus.failure})`) +
+                              `. Its reply will arrive as a bracketed note; do not send another ` +
                               `note for the same request.`,
                           ]
                         : []),
@@ -2664,8 +2689,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
                 },
                 append,
               );
-              dial.followUpResponsePending = true;
-              this.#sendControl(dial, { type: "response.create" }, append);
+              if (!dial.followUpResponsePending) {
+                dial.followUpResponsePending = true;
+                this.#sendControl(dial, { type: "response.create" }, append);
+              }
             }
             return;
           }
@@ -3430,6 +3457,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
    */
   #colleagueBriefed = false;
 
+  /** Highest colleague-note offset already injected into a session — the
+   * redelivery dedupe for the note whisper (see the colleague-note arm). */
+  #lastInjectedNoteOffset = 0;
+
   /**
    * Where this stream's colleague lives: the voice stream's own path,
    * re-rooted under `/agents/voice-notes/`. A pure function of `this.path`,
@@ -3468,16 +3499,23 @@ export class VoiceAgentProcessor extends StreamProcessor<
      * it re-sent the note. Dispatching a note is itself a status. Its own
      * background closure, so a refused append cannot cost the note.
      */
+    /* The key is minted BEFORE the closure: a retried closure must retry
+     * the SAME append, not mint a sibling status per attempt. */
+    const openingStatusKey = this.idempotencyKey(`note-sent:${crypto.randomUUID()}`);
     runInBackground(() =>
       append({
         type: "events.iterate.com/voice-agent/colleague-status",
-        idempotencyKey: this.idempotencyKey(`note-sent:${crypto.randomUUID()}`),
+        idempotencyKey: openingStatusKey,
         payload: { activity: "picking up a note from the frontend", waitingFor: null },
       }),
     );
     runInBackground(async () => {
       try {
         await this.deps.withProject(async (project) => {
+          /* withProject hands over the project root untyped: its generated
+           * client type lives in apps/os and a config-repo template cannot
+           * import it, so the shape is asserted to exactly the calls made
+           * here — a wrong assertion fails loudly at the RPC boundary. */
           const typedProject = project as {
             agents: {
               get(path: string): {

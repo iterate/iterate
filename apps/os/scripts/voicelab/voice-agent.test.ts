@@ -1369,6 +1369,9 @@ describe("tools on the birth certificate", () => {
     expect(h.state().colleagueStatus).toEqual({
       activity: "done — answer delivered",
       phase: "a script failed",
+      /* The failure travels with its phase: an activity-only patch keeps
+       * both until a new phase supersedes them. */
+      failure: "TypeError: cannot read digits of pi",
       waitingFor: "user_input",
     });
   });

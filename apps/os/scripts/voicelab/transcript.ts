@@ -46,6 +46,10 @@ export async function transcript(options: TranscriptOptions): Promise<void> {
     throw new Error(`--path must be absolute; received ${JSON.stringify(options.path)}`);
   }
   using itx = await connectProject(options);
+  /* connectProject returns the session untyped (the generated client type
+   * is not exported through the voicelab connect helper); the shape is
+   * asserted to exactly the one read this command performs — the same
+   * pattern as probe-audio.ts's StreamHandle. */
   const stream = (
     itx as {
       streams: {
