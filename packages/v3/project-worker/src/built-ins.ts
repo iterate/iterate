@@ -166,8 +166,18 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         await kv().delete(prefix + k);
         return { ok: true };
       },
-      keys: async (start = "") =>
-        (await kv().list({ prefix: prefix + start })).keys.map((x) => x.name.slice(prefix.length)),
+      keys: async (start = "") => {
+        // Paginate on the cursor: Cloudflare KV caps ONE list page at 1000 keys, so a single
+        // `list()` would silently present page 1 as the whole truth (sweep/GC over it would leave
+        // key 1001+ as permanent orphans). Drain every page.
+        const out: string[] = [];
+        for (let cursor: string | undefined; ; ) {
+          const page = await kv().list({ prefix: prefix + start, ...(cursor ? { cursor } : {}) });
+          for (const k of page.keys) out.push(k.name.slice(prefix.length));
+          if (page.list_complete) return out;
+          cursor = page.cursor;
+        }
+      },
     };
   };
   const projectKv = prefixedKv(kvPrefix, "kv");

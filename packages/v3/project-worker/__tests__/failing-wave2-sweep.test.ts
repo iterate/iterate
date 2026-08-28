@@ -207,17 +207,12 @@ test("a processor enabled by its MOUNT alone (the documented event-sourced door)
 
 // ═══════════ 7. kv list — the first KV page presented as the whole truth (S7) ═══════════
 
-test.fails("kv list returns EVERY key, not silently the first 1000", async () => {
-  // BUG: built-ins.ts prefixedKv.keys() does ONE `kv().list({ prefix })` and maps `.keys` —
-  //      ignoring `list_complete`/`cursor`. Cloudflare KV caps a list page at 1000 keys, so key
-  //      1001 onward silently vanishes from every list() answer.
-  // EXPECTED: list() answers with all keys under the prefix (paginate on the cursor), or at
-  //      minimum surfaces truncation instead of presenting page 1 as everything.
-  // ACTUAL: exactly 1000 names come back for 1001 stored keys — no error, no marker.
-  // WHY IT MATTERS (SHAPE S7 — a claim wider than what was checked, the read-side twin of
-  //      wave-1 defect 9): callers doing sweep/GC/inventory over kv treat the answer as
-  //      exhaustive; the 1001st key is invisible AND unaffected by any cleanup based on the
-  //      listing, which is how orphans become permanent.
+test("kv list returns EVERY key, not silently the first 1000", async () => {
+  // FIXED (was S7, a claim wider than what was checked): built-ins.ts prefixedKv.keys() now
+  //   paginates on the `cursor` until `list_complete` instead of doing ONE `kv().list({ prefix })`.
+  //   Cloudflare KV caps a list page at 1000 keys, so the single-page version presented page 1 as
+  //   the whole truth and key 1001+ silently vanished — permanent orphans for any sweep/GC/inventory
+  //   caller. Draining every page makes list() exhaustive again.
   const itx = await harness.itx("prj_w2list");
   const total = 1001;
   const names = Array.from({ length: total }, (_, i) => `k${String(i).padStart(4, "0")}`);

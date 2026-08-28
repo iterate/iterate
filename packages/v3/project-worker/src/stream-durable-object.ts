@@ -250,10 +250,15 @@ class StreamEventLog {
       scannedAfterOffset: number,
       nextOffset: number,
     ) => void,
-  ): { committed: StreamEvent[]; scannedAfterOffset: number; nextOffset: number } {
+  ): {
+    committed: StreamEvent[];
+    distinct: StreamEvent[];
+    scannedAfterOffset: number;
+    nextOffset: number;
+  } {
     this.touch();
     const scannedAfterOffset = this.highestAssignedOffset();
-    const { committed, nextOffset } = this.#storage.transactionSync(() => {
+    const { committed, distinct, nextOffset } = this.#storage.transactionSync(() => {
       const committed: StreamEvent[] = [];
       let nextOffset = scannedAfterOffset;
       for (const input of inputs) {
@@ -295,14 +300,21 @@ class StreamEventLog {
         }
         committed.push({ ...body, offset: nextOffset, path: this.#path } as StreamEvent);
       }
+      // A dedupe hit echoes the OFFSET of the row it matched; when that row was inserted earlier
+      // IN THIS batch (a retry beside its original), `committed` holds two entries for one offset.
+      // `distinct` keeps one per offset (first wins) so the inline reduce AND the facet-drive /
+      // connected delivery act on each durable event ONCE — while `committed` keeps the per-input
+      // shape the RPC answer echoes back (each input still gets its own receipt).
+      const seen = new Set<number>();
+      const distinct = committed.filter((e) => !seen.has(e.offset) && (seen.add(e.offset), true));
       if (nextOffset > scannedAfterOffset) {
         this.#storage.kv.put("maxAssignedOffset", nextOffset); // THE one deliberate write
-        reduceAtCommit(committed, scannedAfterOffset, nextOffset);
+        reduceAtCommit(distinct, scannedAfterOffset, nextOffset);
       }
-      return { committed, nextOffset };
+      return { committed, distinct, nextOffset };
     });
     if (nextOffset > scannedAfterOffset) this.#highestAssignedOffsetCache = nextOffset;
-    return { committed, scannedAfterOffset, nextOffset };
+    return { committed, distinct, scannedAfterOffset, nextOffset };
   }
 
   read(afterOffset = 0, limit = 500): { events: StreamEvent[]; scannedThroughOffset: number } {
@@ -409,7 +421,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     // state are atomically exact as of the last committed event, always — the pump-races-the-
     // provide class is unspellable, not carefully avoided. (Reduce errors are caught per
     // event; a bad event skips, it never aborts the commit.)
-    const { committed, scannedAfterOffset, nextOffset } = this.#eventLog.append(
+    const { committed, distinct, scannedAfterOffset, nextOffset } = this.#eventLog.append(
       inputs,
       (justCommitted, after, next) => this.#reduceInlineAtCommit(justCommitted, after, next),
     );
@@ -430,7 +442,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       // reduce, a skipped live-state offset is exactly an ephemeral hole, which ranges already
       // express. Without the widened range, the skip broke contiguity and gap repair silently
       // dropped deliverable named ephemerals between two live-state changes (proof-caught).
-      const drivable = committed.filter((e) => e.type !== "events.iterate.com/live-state/changed");
+      const drivable = distinct.filter((e) => e.type !== "events.iterate.com/live-state/changed");
       if (drivable.length > 0)
         for (const { slug } of this.#facetEntries()) {
           this.#facetWorkInFlight++;
@@ -457,7 +469,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       // CONNECTED subscription mounts get the batch pushed one-directionally, right now, from
       // the commit path — a synchronous fire-and-forget WebSocket send, no RPC, no await.
       // (ABSENT targets ride the subscription-forwarder facet, which is one of the drives above.)
-      this.#deliverToConnectedSubscriptions(committed, scannedAfterOffset, nextOffset);
+      this.#deliverToConnectedSubscriptions(distinct, scannedAfterOffset, nextOffset);
     }
     this.#noteActivity();
     return committed;

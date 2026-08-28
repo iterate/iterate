@@ -460,3 +460,33 @@ Closed 4 `test.fails` with small, well-pinned, low-blast-radius fixes; full suit
 Deferred (NOT no-brainers): defect 21 (non-contiguous push drops named ephemerals — reshapes gap
 repair), defect 49 (egress URL/body secret leak), and the harness/workers-lane clusters (connections
 14/15/16, event-log 6/7, boundary 34-sibling/47/48, dotted-surface 24, chunking 25, WS 27/28).
+
+### Defect sweep round 2 — 3 more no-brainers + one policy fork surfaced
+
+Full suite **284 passed / 23 xf** (was 281 / 26), typecheck clean.
+
+- **Defect 43 — kv.list paginates on the cursor** (`built-ins.ts` prefixedKv.keys). One
+  `kv().list({prefix})` presented page 1 (Cloudflare's 1000-key cap) as the whole truth; key 1001+
+  silently vanished from every listing (permanent orphans for sweep/GC/inventory). Now drains every
+  page until `list_complete`.
+- **Defect 47 — empty/whitespace event type** (already covered): the append door's guard
+  `typeof type !== "string" || type.trim() === ""` is the sole enforcement and already rejects `""`
+  / `"   "`; the `test.fails` was stale — converted to a positive rejection test.
+- **Defect 6 — in-batch idempotency dedupe reduced ONCE** (`stream-durable-object.ts` StreamEventLog
+  - append). A dedupe hit echoes the matched row's offset; when that row was inserted earlier IN THE
+    SAME batch, `committed` held two entries for one offset — reduced twice (double breaker spend,
+    double capability-table apply, double facet + connected delivery), and the inline checkpoint no
+    longer rebuilt bit-identically from the log. append now derives a per-offset `distinct` view
+    (first-wins) that feeds the inline reduce AND both delivery lanes, while `committed` keeps one
+    receipt per input for the RPC answer.
+
+**Policy fork surfaced, NOT taken (deferred to Jonas): defect 34-sibling.** A `capability-table/`
+idempotencyKey namespace fence at the one append door WOULD close the sibling-append angle, but it
+CONTRADICTS the shipped strategy: revoke is KEYLESS (defect 46), so squatting `capability-table/revoke:N`
+is already harmless — a passing test + a `test.skip` both pin "the fence was REMOVED, nothing to
+squat". Adding the fence re-opens a door the codebase deliberately closed and breaks that passing
+test. Left as `test.fails` with the fork documented. Choice for Jonas: defense-in-depth fence at the
+door vs keyless-revoke as-is.
+
+Session total: **7 defects closed** (41, 40, 19, 20, 43, 47, 6); throughput/delivery unchanged (the
+`distinct` view equals `committed` for every batch without an in-batch duplicate).

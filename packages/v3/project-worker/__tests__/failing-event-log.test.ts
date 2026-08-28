@@ -53,18 +53,16 @@ async function rejection(p: Promise<unknown>): Promise<Error & { code?: string }
 
 // ── confirmed bugs (test.fails: the CORRECT assertion, failing against current code) ──
 
-test.fails("an in-batch idempotency dedupe hit is reduced ONCE, not twice", async () => {
-  // BUG: StreamEventLog.append pushes a dedupe hit into `committed` carrying the offset of the
-  //   row it matched. When the matched row was inserted EARLIER IN THE SAME BATCH (a retry
-  //   landing beside its original), that offset is > scannedAfterOffset — so the
-  //   `e.offset <= scannedAfterOffset` skip in #reduceInlineAtCommit does not fire and the ONE
-  //   durable event is reduced TWICE through every inline processor.
-  // EXPECTED: one durable event = one reduce = one breaker token spent (tokens ≈ capacity − 1).
-  // ACTUAL: the core reduce spends TWO tokens (tokens ≈ capacity − 2); the same double-apply
-  //   hits the capability table, and the facet drives deliver the event twice in one batch.
-  // WHY IT MATTERS: the inline checkpoint no longer rebuilds bit-identically from the log — a
-  //   replay after eviction reduces the row ONCE (one row in SQLite), so checkpointed state and
-  //   rebuilt state diverge, which is the exact invariant inline hosting is built on.
+test("an in-batch idempotency dedupe hit is reduced ONCE, not twice", async () => {
+  // FIXED: StreamEventLog.append pushed a dedupe hit into `committed` carrying the offset of the
+  //   row it matched; when that row was inserted EARLIER IN THE SAME BATCH (a retry beside its
+  //   original), the offset is > scannedAfterOffset, so the `e.offset <= scannedAfterOffset` skip
+  //   in #reduceInlineAtCommit did not fire and the ONE durable event was reduced TWICE through
+  //   every inline processor (double breaker spend, double capability-table apply, double facet
+  //   delivery). append now derives a per-offset `distinct` view (first-wins) that feeds the inline
+  //   reduce AND the facet-drive / connected delivery, so each durable event is processed ONCE —
+  //   while the returned `committed` keeps one receipt per input. One durable event = one reduce =
+  //   one token spent, and the inline checkpoint rebuilds bit-identically from the log again.
   const itx = await harness.itx("prj_bug_dupbatch");
   await append(itx, breakerConfigured(10, 0.000001));
   const pair = await append(

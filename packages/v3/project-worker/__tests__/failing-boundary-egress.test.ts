@@ -107,16 +107,12 @@ test("FIXED (defect 46): a capability cannot be pinned unrevocable by squatting 
 });
 
 test.fails("DO.append rejects a public reserved-namespace idempotencyKey on a SIBLING context too", async () => {
-  // BUG: the same missing fence, second angle — `itx.contexts.get('/agents/bot').append(...)`
-  //   reaches the SIBLING stream DO's append (env.CONTEXT.getByName(...).append over Workers RPC).
-  //   DO.append has no input type-check at all (validate removed); the reserved-key check is a
-  //   runtime string test that lives solely in the `stream` built-in, so the sibling append
-  //   accepts the reserved key.
-  // EXPECTED: no public append — on any context — may carry a `capability-table/` idempotencyKey.
-  // ACTUAL (verified): the event lands on the sibling's log (offset 1, path "/agents/bot"),
-  //   pre-poisoning the sibling's future revoke:99 exactly as in the own-context case.
-  // WHY IT MATTERS (☠): the bypass is not own-context-specific; it is simply that the fence is on
-  //   the wrong layer. A client can pin capabilities in ANY context of its project it can address.
+  // POLICY FORK (deferred, not a no-brainer): this wants a `capability-table/` namespace fence at
+  //   the ONE append door. But the shipped strategy is KEYLESS REVOKE (defect 46) — revoke uses no
+  //   deterministic idempotencyKey, so squatting `capability-table/revoke:N` is HARMLESS (the
+  //   passing test below + the `test.skip` above pin that: "the fence was REMOVED, nothing to
+  //   squat"). Adding the fence re-introduces the door the codebase deliberately closed and
+  //   contradicts those tests. Reserve the choice for Jonas: defense-in-depth fence vs keyless.
   const itx = await harness.itx("prj_be_fence_sibling");
   const err = await rejection(
     contextsAppend(itx, "/agents/bot", {
@@ -144,22 +140,14 @@ test("boundary: the runtime typeless guard still rejects a non-string type; ephe
   expect(committed.type).toBe("eph-false");
 });
 
-test.fails("stream.append rejects an empty event type (StreamEventInput.type is z.string().trim().min(1))", async () => {
-  // BUG: core/events.ts declares `type: z.string().trim().min(1)`, but no code path runs
-  //   `StreamEventInput.parse()` on the append hot path (the runtime guard rejects a fully blank
-  //   type, but the schema's full `.min(1)`/`.trim()` contract — and every other refinement — is
-  //   not enforced at the boundary; capnweb-validate, which policed the coarse TS type, was removed).
-  // EXPECTED: `stream.append({ type: "" })` is rejected — an empty/whitespace type is a loud input
-  //   error, per the schema the envelope advertises.
-  // ACTUAL (verified): the event commits with `type: ""` and is readable back from the log.
-  // WHY IT MATTERS (⚠, boundary bypass): the schema is the contract every processor keys off
-  //   `event.type`; a typeless event is an un-routable log entry the door swore it would reject.
-  //   The zod refinements on the envelope are decorative — only the coarse TS type is enforced.
+test("stream.append rejects an empty or whitespace-only event type", async () => {
+  // FIXED (⚠, boundary bypass): the append door's runtime guard is `typeof type !== "string" ||
+  //   type.trim() === ""` (StreamDurableObject.append) — it covers the schema's `.trim().min(1)`
+  //   contract, so a "" or "   " type is a loud input error instead of committing a typeless,
+  //   un-routable log entry. (This is the SOLE enforcement — capnweb-validate was removed.)
   const itx = await harness.itx("prj_be_emptytype");
-  // Resolve-and-inspect (not .rejects) so the fail is the STORED empty type, not an assertion
-  // shape: append resolves with a committed event whose type is "" (verified), then read it back.
-  const [committed] = await streamAppend(itx, { type: "" });
-  expect(String(committed.type).length).toBeGreaterThan(0); // ← ACTUAL: "" — a typeless log entry
+  expect((await rejection(streamAppend(itx, { type: "" }))).message).toMatch(/non-empty type/i);
+  expect((await rejection(streamAppend(itx, { type: "   " }))).message).toMatch(/non-empty type/i);
 });
 
 test.fails("stream.append does not let a client STAMP a forged processor provenance (source is runner-only)", async () => {
