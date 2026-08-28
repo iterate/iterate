@@ -458,17 +458,22 @@ function NoteThumb({
     },
     staleTime: Infinity,
   });
+  const uri = imageUrl.data;
+  if (uri === undefined) {
+    // No pressable (and no label) until the tap works — a labelled-but-
+    // disabled pressable swallowed taps while the URL loaded (see MediaRow
+    // in media.tsx, where preview CI caught the same pattern).
+    return (
+      <View style={[styles.thumb, styles.thumbPlaceholder]}>
+        {imageUrl.isPending ? (
+          <ActivityIndicator accessibilityLabel="Loading" color={colors.textMuted} size="small" />
+        ) : null}
+      </View>
+    );
+  }
   return (
-    <Pressable
-      accessibilityLabel={`View ${attachment.filename}`}
-      disabled={imageUrl.data === undefined}
-      onPress={() => imageUrl.data && onViewImage(imageUrl.data)}
-    >
-      {imageUrl.data ? (
-        <Image source={{ uri: imageUrl.data }} style={styles.thumb} />
-      ) : (
-        <View style={[styles.thumb, styles.thumbPlaceholder]} />
-      )}
+    <Pressable accessibilityLabel={`View ${attachment.filename}`} onPress={() => onViewImage(uri)}>
+      <Image source={{ uri }} style={styles.thumb} />
     </Pressable>
   );
 }
@@ -534,7 +539,11 @@ const styles = StyleSheet.create({
   },
   thumbRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
   thumb: { borderRadius: radius.sm, height: 72, width: 72 },
-  thumbPlaceholder: { backgroundColor: colors.border },
+  thumbPlaceholder: {
+    alignItems: "center",
+    backgroundColor: colors.border,
+    justifyContent: "center",
+  },
   rowTags: { alignItems: "center", flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
   rowTag: {
     backgroundColor: colors.background,

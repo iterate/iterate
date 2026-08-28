@@ -749,17 +749,22 @@ function MediaRow({
 
   return (
     <Pressable onPress={() => setExpanded(!expanded)} style={styles.row}>
-      <Pressable
-        accessibilityLabel="View full screen"
-        disabled={imageUri === null}
-        onPress={() => imageUri && onViewImage(imageUri)}
-      >
-        {imageUri ? (
+      {imageUri ? (
+        // The label appears only once the tap works. A labelled-but-disabled
+        // pressable here let taps fall through to the row pressable (expanding
+        // the row instead of opening the viewer) while the signed URL was
+        // still loading — how preview CI caught this; the spinner below covers
+        // that window.
+        <Pressable accessibilityLabel="View full screen" onPress={() => onViewImage(imageUri)}>
           <Image source={{ uri: imageUri }} style={styles.thumb} />
-        ) : (
-          <View style={[styles.thumb, styles.thumbPlaceholder]} />
-        )}
-      </Pressable>
+        </Pressable>
+      ) : (
+        <View style={[styles.thumb, styles.thumbPlaceholder]}>
+          {imageUrl.isPending ? (
+            <ActivityIndicator accessibilityLabel="Loading" color={colors.textMuted} size="small" />
+          ) : null}
+        </View>
+      )}
       <View style={styles.rowBody}>
         {item.payload.title ? (
           <Text numberOfLines={expanded ? undefined : 1} style={styles.rowTitle}>
@@ -983,7 +988,11 @@ const styles = StyleSheet.create({
   },
   rowError: { borderColor: colors.danger },
   thumb: { borderRadius: radius.sm, height: 96, width: 54 },
-  thumbPlaceholder: { backgroundColor: colors.border },
+  thumbPlaceholder: {
+    alignItems: "center",
+    backgroundColor: colors.border,
+    justifyContent: "center",
+  },
   rowBody: { flex: 1, gap: spacing.xs },
   rowTitle: { color: colors.text, fontSize: 14, fontWeight: "600" },
   markdown: { color: colors.text, fontSize: 13, lineHeight: 18 },
