@@ -6,8 +6,11 @@ import { Alert } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { initialWindowMetrics, SafeAreaProvider } from "react-native-safe-area-context";
 import { NoteCaptureOverlay } from "../components/note-composer.tsx";
-import { resetChannelOverrideForNewInstall } from "../lib/native-install-guard.ts";
-import { fetchLatestUpdateAndReload } from "../lib/preview-channel.ts";
+import { UpdateBanner } from "../components/update-banner.tsx";
+import {
+  fetchLatestUpdateAndReload,
+  resetChannelOverrideForNewInstall,
+} from "../lib/build-state.ts";
 import { queryClient } from "../lib/query.ts";
 import { routeInitialNotification } from "../lib/push-device.ts";
 import { colors } from "../lib/theme.ts";
@@ -23,6 +26,9 @@ export default function RootLayout() {
           {/* Global capture composer — floats above every screen (chat
               excepted); see components/note-composer.tsx. */}
           <NoteCaptureOverlay />
+          {/* "There's newer JS on this channel" — only ever shown for a
+              watched build; see components/update-banner.tsx. */}
+          <UpdateBanner />
         </QueryClientProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
@@ -36,7 +42,7 @@ function RootStack() {
   // override that predates this binary's install is cleared — installing a
   // build means wanting THAT build, not whatever an old override OTA-pulls
   // over it. Force-clear plus a notice, per the "native installs overpower
-  // the OTA setting" rule (lib/native-install-guard.ts).
+  // the OTA setting" rule (lib/build-state.ts).
   useQuery({
     queryKey: ["native-install-guard"],
     queryFn: async () => {

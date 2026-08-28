@@ -1,122 +1,94 @@
-// What am I running? Branch/commit/author of the JS bundle (stamped into
-// build-info.json at publish time), the EAS Update state (channel, runtime
-// fingerprint, embedded vs OTA), and native install facts — plus a button to
-// pull the latest update immediately instead of waiting for next launch.
-// Exists because dev and preview builds overwrite each other on the phone by
-// design, so "which one is this?" needs a first-class answer.
+// What am I running? Which channel the JS comes from, which channel this
+// binary was built for, the branch/commit/message of the running bundle, and
+// whether the channel has anything newer. Exists because dev and preview
+// builds overwrite each other on the phone by design, so "which one is this?"
+// needs a first-class answer.
+//
+// A dumb view: every fact and every action comes from lib/build-state.ts.
 
-import { useMutation, useQuery } from "@tanstack/react-query";
-import * as Application from "expo-application";
-import Constants from "expo-constants";
 import { Stack, useRouter } from "expo-router";
-import * as Updates from "expo-updates";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import { buildInfo } from "../lib/build-info.ts";
 import {
-  fetchLatestUpdateAndReload,
-  getPreviewChannelOverride,
-  switchChannelAndReload,
-} from "../lib/preview-channel.ts";
+  buildStamp,
+  isOverridden,
+  updateHeadline,
+  useBuildActions,
+  useBuildState,
+} from "../lib/build-state.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
 
 export default function BuildInfoScreen() {
   const router = useRouter();
-  const installedAt = useQuery({
-    queryKey: ["app-install-time"],
-    // Unavailable on web; the row shows "—" there.
-    queryFn: () => Application.getInstallationTimeAsync().catch(() => null),
-    staleTime: Infinity,
-  });
-  const channelOverride = useQuery({
-    queryKey: ["preview-channel-override"],
-    queryFn: getPreviewChannelOverride,
-  });
-  const resetChannel = useMutation({
-    mutationFn: async () => {
-      const result = await switchChannelAndReload(null);
-      await channelOverride.refetch();
-      return result === "no-update"
-        ? "Override cleared — no newer update on the default channel"
-        : "Restarting…";
-    },
-  });
-  const check = useMutation({
-    mutationFn: async () => {
-      const result = await fetchLatestUpdateAndReload();
-      return result === "up-to-date" ? "Already up to date" : "Restarting…";
-    },
-  });
-
-  const bundleSource = !Updates.isEnabled
-    ? "Metro dev server"
-    : Updates.isEmbeddedLaunch
-      ? "embedded in the binary"
-      : "OTA update";
+  const state = useBuildState();
+  const actions = useBuildActions();
+  const overridden = isOverridden(state);
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Stack.Screen options={{ title: "Build info" }} />
-      <Section title="Bundle">
-        <Row label="Branch" value={buildInfo.branch} />
-        <Row label="Commit" value={buildInfo.commit.slice(0, 7)} />
-        <Row label="Message" value={buildInfo.message} />
+      {/* Channel first: it is the answer to "am I on the right thing?", and
+          the two rows together say whether you got here by scanning a QR or
+          by installing this build. */}
+      <Section title="Channel">
+        <Row
+          label="Current"
+          value={state.channel}
+          note={overridden ? "switched by a QR scan" : undefined}
+        />
+        <Row
+          label="Default for this build"
+          value={state.binary.defaultChannel}
+          note={overridden ? undefined : "this build's own channel"}
+        />
+      </Section>
+      <Section title="Running JS">
+        <Row label="Branch" value={state.running.branch} />
+        <Row label="Commit" value={state.running.commit.slice(0, 7)} />
+        <Row label="Message" value={state.running.message} />
         <Row
           label="Built by"
-          value={buildInfo.builtBy && `${buildInfo.builtBy}@${buildInfo.machine}`}
+          value={state.running.builtBy && `${state.running.builtBy}@${state.running.machine}`}
         />
-        <Row label="Bundled at" value={formatTime(buildInfo.builtAt)} />
-        <Row label="Source" value={bundleSource} />
+        <Row label="Published" value={formatTime(state.running.publishedAt)} />
+        <Row label="Source" value={sourceLabel[state.running.source]} />
+        <Row label="Update id" value={state.updateId} />
         {/* What this bundle was published to talk to (empty on main/local
             bundles) — the first thing to check when a preview looks wrong. */}
-        <Row label="Expected backend" value={buildInfo.expectedBackendEnv} />
-        <Row label="Test login" value={buildInfo.testLoginEmail} />
+        <Row label="Expected backend" value={buildStamp.expectedBackendEnv} />
+        <Row label="Test login" value={buildStamp.testLoginEmail} />
       </Section>
-      <Section title="Updates">
-        <Row label="Channel" value={Updates.channel} />
-        <Row label="Channel override" value={channelOverride.data} />
-        <Row label="Runtime version" value={Updates.runtimeVersion} />
-        <Row label="Update id" value={Updates.updateId} />
-        <Row label="Update published" value={formatTime(Updates.createdAt?.toISOString())} />
+      <Section title="Update">
+        <Row label="Status" value={updateHeadline(state.update)} />
+        {state.update.kind === "behind" ? (
+          <>
+            <Row label="Latest commit" value={state.update.commit.slice(0, 7)} />
+            <Row label="Published" value={formatTime(state.update.publishedAt)} />
+          </>
+        ) : null}
       </Section>
-      {/* Both update actions live together, right under the Updates card. */}
-      {Updates.isEnabled ? (
-        <Pressable
-          accessibilityRole="button"
-          disabled={check.isPending}
-          onPress={() => check.mutate()}
-          style={[styles.button, check.isPending && styles.buttonDisabled]}
-        >
-          <Text style={styles.buttonLabel}>
-            {check.isPending ? "Checking…" : "Check for update"}
-          </Text>
-        </Pressable>
-      ) : (
-        <Text style={styles.note}>
-          OTA updates are off in this bundle — it came from a Metro dev server.
-        </Text>
+      {state.update.kind === "unsupported" ? null : (
+        <Button
+          label={state.update.kind === "behind" ? "Update now" : "Check for update"}
+          pending={actions.updateNowPending || state.update.kind === "checking"}
+          pendingLabel={state.update.kind === "behind" ? "Updating…" : "Checking…"}
+          onPress={() =>
+            state.update.kind === "behind" ? void actions.updateNow() : void actions.checkNow()
+          }
+        />
       )}
-      {check.data ? <Text style={styles.note}>{check.data}</Text> : null}
-      {check.error ? <Text style={styles.errorNote}>{String(check.error)}</Text> : null}
-      {channelOverride.data ? (
-        <Pressable
-          accessibilityRole="button"
-          disabled={resetChannel.isPending}
-          onPress={() => resetChannel.mutate()}
-          style={[styles.button, resetChannel.isPending && styles.buttonDisabled]}
-        >
-          <Text style={styles.buttonLabel}>
-            {resetChannel.isPending ? "Resetting…" : "Reset to default channel"}
-          </Text>
-        </Pressable>
-      ) : null}
-      {resetChannel.data ? <Text style={styles.note}>{resetChannel.data}</Text> : null}
-      {resetChannel.error ? (
-        <Text style={styles.errorNote}>{String(resetChannel.error)}</Text>
+      {overridden ? (
+        <Button
+          label={`Reset to ${state.binary.defaultChannel || "the default channel"}`}
+          pending={actions.switchChannelPending}
+          pendingLabel="Resetting…"
+          onPress={() => void actions.switchChannel(null)}
+        />
       ) : null}
       <Section title="App">
-        <Row label="Version" value={Constants.expoConfig?.version} />
-        <Row label="Native build" value={Application.nativeBuildVersion} />
-        <Row label="Installed" value={formatTime(installedAt.data?.toISOString())} />
+        <Row label="Version" value={state.binary.version} />
+        <Row label="Native build" value={state.binary.buildNumber} />
+        <Row label="Runtime" value={state.binary.runtimeVersion} />
+        <Row label="Installed" value={formatTime(state.binary.installedAt)} />
       </Section>
       {!router.canGoBack() ? (
         // Deep-link flows (preview-channel switch) replace into this screen
@@ -133,8 +105,32 @@ export default function BuildInfoScreen() {
   );
 }
 
+const sourceLabel = {
+  metro: "Metro dev server",
+  embedded: "embedded in the binary",
+  ota: "OTA update",
+} as const;
+
 function formatTime(iso: string | null | undefined) {
   return iso ? new Date(iso).toLocaleString() : "";
+}
+
+function Button(props: {
+  label: string;
+  pendingLabel: string;
+  pending: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      disabled={props.pending}
+      onPress={props.onPress}
+      style={[styles.button, props.pending && styles.buttonDisabled]}
+    >
+      <Text style={styles.buttonLabel}>{props.pending ? props.pendingLabel : props.label}</Text>
+    </Pressable>
+  );
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -146,10 +142,21 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function Row({ label, value }: { label: string; value: string | null | undefined }) {
+function Row({
+  label,
+  value,
+  note,
+}: {
+  label: string;
+  value: string | null | undefined;
+  note?: string;
+}) {
   return (
     <View style={styles.row}>
-      <Text style={styles.rowLabel}>{label}</Text>
+      <View style={styles.rowLabelColumn}>
+        <Text style={styles.rowLabel}>{label}</Text>
+        {note ? <Text style={styles.rowNote}>{note}</Text> : null}
+      </View>
       <Text selectable style={styles.rowValue}>
         {value || "—"}
       </Text>
@@ -183,7 +190,9 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingVertical: 12,
   },
+  rowLabelColumn: { flexShrink: 0 },
   rowLabel: { color: colors.textMuted, fontSize: 14 },
+  rowNote: { color: colors.textFaint, fontSize: 11, marginTop: 1 },
   rowValue: {
     color: colors.text,
     flexShrink: 1,
@@ -203,6 +212,4 @@ const styles = StyleSheet.create({
   buttonLabel: { color: colors.text, fontSize: 16, fontWeight: "600" },
   linkButton: { alignItems: "center", paddingVertical: 8 },
   linkLabel: { color: colors.textMuted, fontSize: 14 },
-  note: { color: colors.textMuted, fontSize: 13, textAlign: "center" },
-  errorNote: { color: colors.danger, fontSize: 13, textAlign: "center" },
 });

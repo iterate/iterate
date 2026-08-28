@@ -9,7 +9,7 @@ import { router, Stack, useLocalSearchParams } from "expo-router";
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import type { ProjectListEntry } from "iterate/sdk/itx/react";
 import { AppDrawerButton } from "../components/project-drawer.tsx";
-import { SignInRequiredError, signOut } from "../lib/auth.ts";
+import { signOut } from "../lib/auth.ts";
 import { disconnectItxSession, getItxSession } from "../lib/itx.ts";
 import { backfillProjectIfMissing } from "../lib/open-project.ts";
 import { revokeEnrolledPushDevices } from "../lib/push-device.ts";
@@ -28,28 +28,23 @@ export default function ProjectsScreen() {
     queryKey: ["projects", { autoOpen: Boolean(autoOpen) }],
     queryFn: async () => {
       const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
-      try {
-        const itx = await getItxSession(baseUrl);
-        const list = await itx.projects.list({ scope: "mine" });
-        // Navigate from the query, not render (same rationale as the
-        // sign-in redirect below) — and from HERE rather than the sign-in
-        // mutation so the cold-itx first list gets this query's retries.
-        if (autoOpen && list.length === 1) {
-          const project = list[0];
-          await backfillProjectIfMissing(itx, project);
-          await setLastProject(baseUrl, { id: project.id, slug: project.slug });
-          router.replace({
-            pathname: "/project/[projectId]",
-            params: { projectId: project.id, slug: project.slug },
-          });
-        }
-        return { baseUrl, list };
-      } catch (error) {
-        // Redirect from the async failure, not render: render-time
-        // navigation re-fires on every re-render while the error persists.
-        if (error instanceof SignInRequiredError) router.replace("/");
-        throw error;
+      const itx = await getItxSession(baseUrl);
+      const list = await itx.projects.list({ scope: "mine" });
+      // Navigate from the query, not render — and from HERE rather than the
+      // sign-in mutation so the cold-itx first list gets this query's
+      // retries. A dead sign-in drops back to the sign-in screen from the
+      // query cache's error handler (lib/query.ts): app-global, not per
+      // screen.
+      if (autoOpen && list.length === 1) {
+        const project = list[0];
+        await backfillProjectIfMissing(itx, project);
+        await setLastProject(baseUrl, { id: project.id, slug: project.slug });
+        router.replace({
+          pathname: "/project/[projectId]",
+          params: { projectId: project.id, slug: project.slug },
+        });
       }
+      return { baseUrl, list };
     },
   });
 

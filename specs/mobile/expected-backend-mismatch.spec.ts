@@ -2,7 +2,7 @@
 // signed out, running a bundle stamped for preview_3 + a test identity must
 // SEE what differs (backend + identity) and get the one-tap fix. The stamp
 // comes from the dev-only build-info override (the web dev bundle is
-// unstamped — apps/mobile/src/lib/build-info.ts). Web-lane only exercises
+// unstamped — apps/mobile/src/lib/build-state-core.ts). Web-lane only exercises
 // rendering and the planner wiring — the tap itself opens a real OAuth flow
 // (covered by expected-backend-signin.spec.ts's deployed lane) and real OTA
 // freshness needs a device (Updates.isEnabled is false in web bundles; the
@@ -30,7 +30,11 @@ test("a mismatched phone sees the differences and a one-tap sign-in fix", async 
   // The mismatch card names both differences…
   await page.getByText("This bundle expects a different setup").waitFor();
   await page.getByText("os.iterate.com → preview 3").waitFor();
-  await page.getByText(`not signed in → ${HINT_EMAIL}`).waitFor();
+  // …naming the server each one is about. The old copy said a bare
+  // "not signed in", which reads as a claim about the APP's session rather
+  // than about a deployment the phone has never signed in to.
+  await page.getByText(`none on preview 3 → ${HINT_EMAIL}`).waitFor();
+  await page.getByText("not signed in").waitFor({ state: "hidden" });
   // …and the single fixing action rides Continue as a default-checked
   // checkbox, keeping Continue/Cancel as the only buttons.
   await page.getByRole("checkbox", { name: /Sign in on preview 3/, checked: true }).waitFor();
