@@ -5,7 +5,7 @@
 // at the egress door). Expanded (tap only): the run organized into
 // ROUNDS — the llm step that writes a script and the code step that runs it.
 // A single round shows its content directly; several rounds each collapse to
-// a "Round N · <summary status>" header (tap to expand; a running round
+// an "N · <summary status>" header (tap to expand; a running round
 // streams open) — where each code step is a tabbed view: Script | Approvals
 // | Result | Meta. The Approvals tab renders the SAME shared
 // ApprovalBatchBody the
@@ -25,7 +25,13 @@ import {
   type RequestedPayload,
   type ResolvedBatch,
 } from "../lib/approvals.ts";
-import type { AgentUiActivity, AgentUiCodeStep, AgentUiLlmStep, AgentUiStep } from "../lib/feed.ts";
+import type {
+  AgentUiActivity,
+  AgentUiCodeStep,
+  AgentUiLiveStatus,
+  AgentUiLlmStep,
+  AgentUiStep,
+} from "../lib/feed.ts";
 import { groupActivityRounds, summarizeActivity } from "../lib/feed.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
 import {
@@ -47,10 +53,16 @@ export type ActivityApprovalContext = {
 export function ActivityCard({
   activity,
   approvals,
+  liveStatus,
   threadEvents,
 }: {
   activity: AgentUiActivity;
   approvals: ActivityApprovalContext;
+  /** The feed's live-status derivation, when THIS card is the live activity
+   * (null for settled cards): the phase drives the glyph next to the
+   * spinner, and an agent-set status from this turn replaces the generic
+   * "writing code…"/"running code…" text. */
+  liveStatus: AgentUiLiveStatus | null;
   /** The thread's own event window — the Meta tab replays each llm request's
    * exact prompt from it (same pure fold as the os trace panel). */
   threadEvents: StreamEvent[];
@@ -83,8 +95,9 @@ export function ActivityCard({
         ) : (
           <Text style={styles.chevron}>{expanded ? "▾" : "▸"}</Text>
         )}
+        {isLive ? <PhaseGlyph phase={liveStatus?.phase} /> : null}
         <Text style={styles.summary} numberOfLines={1}>
-          {isLive ? liveSummary(activity) : summarizeActivity(activity)}
+          {isLive ? liveSummary(activity, liveStatus) : summarizeActivity(activity)}
         </Text>
         <ApprovalGlyphs outcomes={outcomes} />
       </Pressable>
@@ -107,7 +120,7 @@ export function ActivityCard({
 
 /**
  * One round of the expanded card. A single round renders its content
- * directly; several rounds each collapse to a "Round N · <status> ·
+ * directly; several rounds each collapse to an "N · <status> ·
  * <duration>" header row so the per-round summary statuses read as a list —
  * the os feed's AgentActivityRoundRow shape
  * (apps/os/src/components/agent-activity-rounds.tsx). A round whose code
@@ -141,7 +154,7 @@ function RoundView({
       {collapsible ? (
         <Pressable style={styles.roundHeader} onPress={() => setToggled(!expanded)}>
           <Text style={styles.chevron}>{expanded ? "▾" : "▸"}</Text>
-          <Text style={styles.roundLabel}>Round {index + 1}</Text>
+          <Text style={styles.roundLabel}>{index + 1}</Text>
           {/* The agent's summary status as of this round (the reducer stamps
               the latest agent/summary-updated fold onto each code step).
               Summaries aren't forced short — one line, ellipsized. */}
@@ -238,7 +251,42 @@ function roundHeaderMeta(round: { llm: AgentUiLlmStep | null; code: AgentUiCodeS
   ].join(" · ");
 }
 
-function liveSummary(activity: AgentUiActivity): string {
+/**
+ * The collapsed live card's second mark, after the spinner: what KIND of
+ * waiting this is. Text glyphs like ApprovalGlyphs, not vector icons — the
+ * summary row already speaks that language. Phases with nothing stronger to
+ * say than "working" (queued, waiting, thinking) show no glyph.
+ */
+function PhaseGlyph({ phase }: { phase: AgentUiLiveStatus["phase"] | undefined }) {
+  const glyph =
+    phase === "writing"
+      ? { mark: "✎", label: "writing code" }
+      : phase === "running"
+        ? { mark: "▶", label: "running code" }
+        : phase === "processing"
+          ? { mark: "↻", label: "processing result" }
+          : null;
+  if (glyph === null) return null;
+  return (
+    <Text accessibilityLabel={glyph.label} style={styles.phaseGlyph} testID="live-phase-glyph">
+      {glyph.mark}
+    </Text>
+  );
+}
+
+function liveSummary(activity: AgentUiActivity, liveStatus: AgentUiLiveStatus | null): string {
+  // An agent-set status from this turn beats the generic phase text —
+  // whether it came from the running script's first line or an earlier
+  // round of the same turn.
+  if (liveStatus?.statusText) return liveStatus.statusText;
+  const phase = liveStatus?.phase;
+  if (phase === "running") return "running code…";
+  if (phase === "writing") return "writing code…";
+  if (phase === "thinking") return "thinking…";
+  if (phase === "waiting") return "waiting for a response…";
+  if (phase === "processing") return "working…";
+  // No feed-level status (a caller without the live derivation): the old
+  // steps-only fallback keeps the card honest.
   const current = activity.steps.findLast((step) => step.status === "running");
   if (current?.kind === "code") return "running code…";
   if (current?.kind === "llm" && current.responseText !== "") return "writing code…";
@@ -649,6 +697,7 @@ const styles = StyleSheet.create({
   roundMeta: { color: colors.textFaint, fontSize: 11, flexShrink: 1 },
   glyphRow: { flexDirection: "row", gap: 4, marginLeft: "auto" },
   glyph: { fontSize: 12, fontWeight: "700" },
+  phaseGlyph: { color: colors.working, fontSize: 12, fontWeight: "700" },
   glyphOpen: { color: colors.working },
   glyphApproved: { color: colors.accent },
   glyphRejected: { color: colors.danger },

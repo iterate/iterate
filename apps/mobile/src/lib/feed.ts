@@ -6,6 +6,7 @@
 // are small enough to just reduce everything from offset 0 on each update.
 
 import {
+  deriveAgentUiLiveStatus,
   formatAgentUiActivitySummary,
   formatAgentUiDuration,
   summarizeAgentUiActivity,
@@ -14,6 +15,7 @@ import {
   reduceAgentUi,
   type AgentUiActivity,
   type AgentUiItem,
+  type AgentUiLiveStatus,
   type AgentUiState,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import type { StreamEvent } from "iterate/sdk/itx/react";
@@ -23,6 +25,8 @@ export type {
   AgentUiCodeStep,
   AgentUiFileAttachment,
   AgentUiItem,
+  AgentUiLivePhase,
+  AgentUiLiveStatus,
   AgentUiLlmStep,
   AgentUiMessageItem,
   AgentUiStep,
@@ -37,6 +41,8 @@ export type AgentFeed = {
   items: AgentUiItem[];
   /** The in-flight activity (streaming thinking/code), also last in `items`. */
   live: AgentUiActivity | null;
+  /** The live activity's phase + this turn's agent-set status text. */
+  liveStatus: AgentUiLiveStatus | null;
   /** True while the agent owes visible progress — drives the working row. */
   working: boolean;
   state: AgentUiState;
@@ -63,7 +69,13 @@ export function reduceFeed(agentPath: string, events: StreamEvent[]): AgentFeed 
       else settled[correctionIndex] = item;
     }
   }
-  const working = isAgentUiActivityWorking(state.live);
+  const liveStatus = deriveAgentUiLiveStatus(state);
+  // "processing" counts as working: the script settled with a returned value,
+  // so another LLM round is owed but not yet journaled. Without it the card
+  // would flicker to "done" for the request debounce window mid-turn. A pause
+  // fact (the autonomous breaker, an operator) settles the live activity in
+  // the reducer, so this cannot wedge a spinner past the turn's real end.
+  const working = isAgentUiActivityWorking(state.live) || liveStatus?.phase === "processing";
   if (state.live !== null && !working) {
     const completed: AgentUiActivity = { ...state.live, status: "done" };
     const correctionIndex = settled.findIndex((item) => item.id === completed.id);
@@ -72,6 +84,7 @@ export function reduceFeed(agentPath: string, events: StreamEvent[]): AgentFeed 
     return {
       items: [...settled, ...state.deferredAssistantMessages, ...state.queuedUserMessages],
       live: null,
+      liveStatus: null,
       working: false,
       state: {
         ...state,
@@ -85,6 +98,7 @@ export function reduceFeed(agentPath: string, events: StreamEvent[]): AgentFeed 
   return {
     items,
     live: state.live,
+    liveStatus,
     working,
     state,
   };

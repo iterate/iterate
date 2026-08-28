@@ -8,7 +8,9 @@ branch: mobile-live-status
 
 ## Status summary
 
-Fleshed-out spec, implementation not started yet.
+Implementation done and green locally: reducer derivation + tests, mobile
+card/feed wiring, and a passing Playwright spec that holds every phase open
+deterministically. Remaining: PR video, CI, review.
 
 ## What
 
@@ -48,51 +50,48 @@ sub-state, drop that sub-state (the default "nothing" icon is always allowed).
   check, see below).
 - `SCRIPT_EXECUTION_COMPLETED` (`capability-host/script-run-settled`) records
   `result` on the code step only when the settlement carried one
-  (`Object.hasOwn(settlement, "result")`, reducer ~line 1455). Codemode
-  contract: returning a value ⇒ another LLM round follows; `return;` ⇒ turn
-  over. So "processing" = live activity, no running step, last step is a
-  done code step (durable outcome) whose settlement carried a result.
+  (`Object.hasOwn(settlement, "result")`). Codemode contract: returning a
+  value ⇒ another LLM round follows; `return;` ⇒ turn over. So "processing" =
+  live activity, no running step, last step is a done code step (durable
+  outcome) whose settlement carried a result.
 - The generic texts live in `liveSummary()` in activity-card.tsx; the mobile
   fold entry point is `reduceFeed` in `apps/mobile/src/lib/feed.ts`.
-- Today `reduceFeed` marks the activity done the moment no step is running —
-  so the mid-turn gap (script settled with value → next request) shows a
-  brief flicker to the settled card. Keeping the card live through that gap
-  is what makes the "processing" icon visible at all.
+- Before this branch `reduceFeed` marked the activity done the moment no step
+  was running — the mid-turn gap (script settled with value → next request)
+  flickered the card to settled and back.
 
 ## Checklist
 
-- [ ] Phase derivation helper (pure, exported next to the reducer in
-      `packages/ui` so web/TUI can adopt later): live activity →
-      `"queued" | "thinking" | "writing" | "running" | "processing"`.
-      "processing" per the definition above, durable outcomes only
-      (`outcomeSource === "durable"`).
-- [ ] Track "status was set this turn" in the reducer projection (e.g. stamp
-      the fold state with the timestamp/offset of the last summary-updated
-      and compare against `live.startedAtMs`). Client-side fold field only —
-      not a new event.
-- [ ] Mobile `reduceFeed`: keep the activity live/working through the
-      "processing" gap (last step = done code step with result value).
-      Guard against a stuck spinner: any terminal/pausing fact
-      (`agent/paused`, stream paused, a following llm settle, queued user
-      message flush) must still settle the card as today.
-- [ ] Activity card summary row: spinner stays; add the phase glyph
-      (consistent with the existing text-glyph pattern in `ApprovalGlyphs` —
-      e.g. ✎ / ▶ / ⋯ — or Feather icons as in repo.tsx if glyphs render
-      poorly; pick one, keep it subtle).
-- [ ] Activity card summary text: this-turn `summaryActivity` when present,
-      else existing fallbacks.
-- [ ] Round header: "Round {n}" → "{n}".
-- [ ] Reducer/derivation unit tests (precedent:
-      `apps/os/src/components/agent-ui-reducer.test.ts`).
-- [ ] Playwright mobile spec (`specs/mobile/live-status.spec.ts`) driving an
-      `intercepted/*` model via the forged-session/`itx.ai.intercept`
-      machinery (pattern: `specs/mobile/approvals.spec.ts`,
-      `docs/intercepted-models.md`): a script whose first line is the
-      summary-updated append then holds on a spec-controlled egress echo →
-      assert status text + running glyph; release → script returns a value →
-      second round. Assert the states that can be held deterministically;
-      don't build flaky waits around transient ones (chunk-level "writing"
-      may be one — verify what the interceptor emits before asserting).
+- [x] Phase derivation helper _(`deriveAgentUiLiveStatus` exported from the
+      reducer: `working | waiting | thinking | writing | running |
+      processing` + this-turn statusText; durable-outcome + result-present
+      gate for "processing")_
+- [x] Track "status was set this turn" _(new `summaryActivityUpdatedAtMs`
+      fold field, compared against `live.startedAtMs`; AgentUiStateSchema is
+      deliberately strict, so old persisted web snapshots invalidate and
+      rebuild — cache data, not a migration surface)_
+- [x] Mobile `reduceFeed`: keep the activity live through the processing gap
+      _(working ||= phase === "processing"; stuck-spinner guard: the reducer
+      now settles an idle live activity on `agent/paused`/`stream/paused` —
+      the autonomous breaker appends agent/paused, so the journal alone ends
+      the gap)_
+- [x] Activity card phase glyph _(text glyphs beside the spinner, matching
+      the ApprovalGlyphs pattern: ✎ writing, ▶ running, ↻ processing;
+      aria-labels "writing code"/"running code"/"processing result")_
+- [x] Activity card status text _(this-turn `statusText` beats the generic
+      fallbacks in `liveSummary`)_
+- [x] Round header "Round {n}" → "{n}" _(activity-card.tsx roundLabel)_
+- [x] Reducer/derivation unit tests _(agent-ui-reducer.test.ts: phase ladder,
+      processing vs `return;` vs failed, this-turn statusText gating, pause
+      settles idle live / keeps running steps live)_
+- [x] Playwright mobile spec _(specs/mobile/live-status.spec.ts, passing in
+      ~12s locally: intercepted/status model; "running" pinned by a
+      withTunnel fetch the spec releases; "processing" pinned by
+      llmRequestDebounceMs=4s; round-2 "waiting" pinned by gating the
+      interceptor handler; settled card asserts bare "1"/"2" round headers.
+      The chunk-level "writing" phase is asserted in unit tests only — the
+      interceptor contract returns full text, word-split server-side, so its
+      window can't be held open deterministically from a spec)_
 
 ## Assumptions made (Misha was AFK)
 
@@ -106,7 +105,19 @@ sub-state, drop that sub-state (the default "nothing" icon is always allowed).
   (that's the default/queued state).
 - Web/TUI feeds are out of scope; the derivation helper lives in packages/ui
   so they can adopt later.
+- Glyphs are text characters (✎ ▶ ↻), not @expo/vector-icons — consistent
+  with the card's existing ◷ ✓ ✗ approval glyphs.
 
 ## Implementation log
 
-(append as you go)
+- Reducer: `summaryActivityUpdatedAtMs` fold field; `deriveAgentUiLiveStatus`;
+  pause events now run `settleActivityAtBoundary` (idle live settles, running
+  steps survive — matching the operator-pause-mid-request contract).
+- Mobile: `reduceFeed` exposes `liveStatus` and counts "processing" as
+  working; chat.tsx passes it to the live card only; card renders glyph +
+  status text; round labels bare numbers.
+- Spec discovery: the approvals-style isolate warm-up (`runScript`) journals
+  onto the agent stream and renders as a stray second activity card — dropped
+  it here (itx-side event waits bridge cold starts) and left a comment.
+- Lint: middlewright(prefer-locator-waits) rewrote every
+  `expect(locator).toBeVisible()` to `locator.waitFor()`.

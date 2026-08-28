@@ -419,7 +419,12 @@ function FeedList({
         </View>
       }
       renderItem={({ item }) => (
-        <FeedItem activityApprovals={activityApprovals} item={item} threadEvents={threadEvents} />
+        <FeedItem
+          activityApprovals={activityApprovals}
+          item={item}
+          liveStatus={item.id === feed.live?.id ? feed.liveStatus : null}
+          threadEvents={threadEvents}
+        />
       )}
     />
   );
@@ -428,16 +433,23 @@ function FeedList({
 function FeedItem({
   activityApprovals,
   item,
+  liveStatus,
   threadEvents,
 }: {
   activityApprovals: ActivityApprovalContext;
   item: MobileFeedItem;
+  liveStatus: ReturnType<typeof reduceFeed>["liveStatus"];
   threadEvents: StreamEvent[];
 }) {
   switch (item.kind) {
     case "activity":
       return (
-        <ActivityCard activity={item} approvals={activityApprovals} threadEvents={threadEvents} />
+        <ActivityCard
+          activity={item}
+          approvals={activityApprovals}
+          liveStatus={liveStatus}
+          threadEvents={threadEvents}
+        />
       );
     case "stream-woken":
       return (
