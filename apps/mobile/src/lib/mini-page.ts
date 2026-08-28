@@ -49,9 +49,11 @@ export function resolveMiniPageUrl(url: string, context: { baseUrl: string | und
 }
 
 /** The slice of an in-app browser session's result this contract needs.
- * Declared structurally rather than imported from expo-web-browser so this
- * module — and its test — never pull React Native into a pure-node lane;
- * `WebBrowser.openAuthSessionAsync` satisfies it as-is. */
+ * Written out here rather than imported from expo-web-browser: these unit
+ * tests run in plain Node, and importing that package at runtime pulls in
+ * React Native, whose source is Flow and does not parse there. Typing the
+ * result structurally keeps the import out; `WebBrowser.openAuthSessionAsync`
+ * satisfies this shape as-is. */
 type BrowserSessionResult = { type: string; url?: string };
 
 /**

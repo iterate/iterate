@@ -30,7 +30,7 @@ export function photoFrame(input: {
   const natural = input.natural;
   // Nothing measured yet: hold a plain 4:3 box so the thread does not reflow
   // around a zero-height row and then jump.
-  if (natural === undefined || natural.width <= 0 || natural.height <= 0) {
+  if (!natural || natural.width <= 0 || natural.height <= 0) {
     return { backdrop: false, height: Math.round(input.maxWidth * 0.75), width: input.maxWidth };
   }
   // Small images keep their own size rather than being blown up to bubble
