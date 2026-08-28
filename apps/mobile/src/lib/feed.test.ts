@@ -190,6 +190,22 @@ test("a triggering user message keeps the feed working through the request debou
     event(2, "events.iterate.com/agents/context-added", { content: "go", role: "user" }),
   ];
   expect(reduceFeed(PATH, whilePaused)).toMatchObject({ working: false });
+
+  // A reply with no llm round in between (a directly-handled command) ends
+  // the wait — the row must not spin after the answer is on screen.
+  const answeredDirectly = [
+    event(1, "events.iterate.com/agents/context-added", { content: "go", role: "user" }),
+    event(2, "events.iterate.com/agents/web-message-sent", { message: "done already" }),
+  ];
+  expect(reduceFeed(PATH, answeredDirectly)).toMatchObject({ working: false });
+
+  // A stream error after the message means the turn machinery crashed; the
+  // owed-turn claim ends with it rather than spinning forever.
+  const crashed = [
+    event(1, "events.iterate.com/agents/context-added", { content: "go", role: "user" }),
+    event(2, "events.iterate.com/stream/error-occurred", { message: "boom" }),
+  ];
+  expect(reduceFeed(PATH, crashed)).toMatchObject({ working: false });
 });
 
 function event(offset: number, type: string, payload: Record<string, unknown>): StreamEvent {

@@ -2133,4 +2133,33 @@ describe("live status derivation", () => {
     expect(state.items.map((item) => item.kind)).toEqual(["stream-paused"]);
     expect(state.live?.steps).toMatchObject([{ kind: "llm", status: "running" }]);
   });
+
+  test("a value-settled script on a PAUSED loop settles the activity — never processing", () => {
+    // The pause folded mid-request; the drained request's script then settles
+    // WITH a value. No follow-up round is coming and no second pause fact
+    // will arrive, so the settle itself must close the activity instead of
+    // leaving a permanent "processing" claim.
+    const state = reduceAll([
+      { ...request, offset: 5 },
+      { type: "events.iterate.com/agent/paused", payload: { reason: "operator hold" } },
+      requestSettled(5),
+      scriptRequested("x1"),
+      {
+        type: "events.iterate.com/capability-host/script-run-settled",
+        payload: { executionId: "x1", settlement: { status: "succeeded", result: 42 } },
+      },
+    ]);
+    expect(state.paused).toBe(true);
+    expect(state.live).toBeNull();
+    expect(state.items.filter((item) => item.kind === "activity")).toMatchObject([
+      { status: "done" },
+    ]);
+    // And resuming clears the flag for the next real turn.
+    const resumed = reduceAll([
+      { ...request, offset: 5 },
+      { type: "events.iterate.com/agent/paused", payload: {} },
+      { type: "events.iterate.com/agent/resumed", payload: {} },
+    ]);
+    expect(resumed.paused).toBe(false);
+  });
 });

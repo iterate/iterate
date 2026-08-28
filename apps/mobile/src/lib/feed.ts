@@ -129,8 +129,15 @@ function turnPending(events: StreamEvent[]): boolean {
         if (payload?.llmRequestPolicy?.behaviour === "dont-trigger-request") break;
         pending = true;
         break;
+      // A reply or a stream error after the message, with no request in
+      // between, also ends the wait (the last two cases): the message was
+      // answered without an llm round (a directly-handled command), or the
+      // turn machinery crashed — either way no request is owed and the row
+      // must not spin forever.
       case "events.iterate.com/agent/llm-request-requested":
       case "events.iterate.com/capability-host/script-run-requested":
+      case "events.iterate.com/agents/web-message-sent":
+      case "events.iterate.com/stream/error-occurred":
         pending = false;
         break;
       case "events.iterate.com/agent/paused":

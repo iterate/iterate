@@ -265,6 +265,10 @@ export function deriveAgentUiLiveStatus(state: AgentUiState): AgentUiLiveStatus 
     if (current?.kind === "llm") return "waiting";
     const last = live.steps.at(-1);
     if (
+      // A paused loop owes no follow-up round, whatever the last script
+      // returned — a pause folded mid-request must not leave a permanent
+      // "processing" claim after that request's script settles.
+      !state.paused &&
       last?.kind === "code" &&
       last.status === "done" &&
       last.outcomeSource === "durable" &&
@@ -420,6 +424,10 @@ export type AgentUiState = {
    * to tell a this-turn status from stale previous-turn text (code steps
    * inherit `summaryActivity` at birth regardless of age). */
   summaryActivityUpdatedAtMs: number | null;
+  /** The stream/agent is paused (agent/paused or stream/paused, uncleared by
+   * a resume). A paused loop owes no follow-up round, so the "processing"
+   * inference must not claim one. */
+  paused: boolean;
 };
 
 const AgentUiLlmStepSchema = z
@@ -545,6 +553,7 @@ export const AgentUiStateSchema = z
     provisionalActivities: z.record(z.string(), AgentUiActivitySchema),
     summaryActivity: z.string().nullable(),
     summaryActivityUpdatedAtMs: z.number().finite().nullable(),
+    paused: z.boolean(),
   })
   .superRefine((state, context) => {
     for (const [id, activity] of Object.entries(state.provisionalActivities)) {
@@ -585,6 +594,7 @@ export function initialAgentUiState(): AgentUiState {
     provisionalActivities: {},
     summaryActivity: null,
     summaryActivityUpdatedAtMs: null,
+    paused: false,
   };
 }
 
@@ -981,9 +991,14 @@ function reduceAgentUiEvent(
       // fact — nothing running, no follow-up round — no later event exists to
       // flush it, and the runtime-transition flush is a transient overlay on
       // a lane that can lag or wedge independently. Journal facts alone must
-      // surface a sent message: settle the activity here and flush.
+      // surface a sent message: settle the activity here and flush. A paused
+      // loop is the same situation even with no deferred messages: the pause
+      // fact already landed (possibly mid-request), no follow-up round is
+      // coming, and no second pause will arrive to close the activity.
       if (
-        (next.deferredAssistantMessages.length > 0 || next.queuedUserMessages.length > 0) &&
+        (next.deferredAssistantMessages.length > 0 ||
+          next.queuedUserMessages.length > 0 ||
+          next.paused) &&
         !steps.some((candidate) => candidate.status === "running")
       ) {
         return flushDeferredMessages(settleLive(next, timestampMs, items), items);
@@ -1193,7 +1208,7 @@ function reduceAgentUiEvent(
     // open, and that request settles normally.
     case STREAM_PAUSED:
     case AGENT_PAUSED: {
-      const settled = settleActivityAtBoundary(state, timestampMs, items);
+      const settled = settleActivityAtBoundary({ ...state, paused: true }, timestampMs, items);
       const flushed = settled.live === null ? flushDeferredMessages(settled, items) : settled;
       return emitItem(flushed, items, {
         kind: "stream-paused",
@@ -1206,7 +1221,7 @@ function reduceAgentUiEvent(
 
     case STREAM_RESUMED:
     case AGENT_RESUMED:
-      return emitItem(state, items, {
+      return emitItem({ ...state, paused: false }, items, {
         kind: "stream-resumed",
         id: `stream-resumed-${event.offset}`,
         text: "Agent resumed",
