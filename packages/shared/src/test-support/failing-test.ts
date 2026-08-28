@@ -33,7 +33,7 @@
  * counts as the expected one. The wrapper therefore races the body against
  * its own 30s deadline and reports a timeout as NOT-the-pinned-failure (red),
  * so a hang cannot vanish into a vacuous pass. The default sits below every
- * lane's runner timeout (apps/os unit: 45s; e2e: 120s) — it must, or the
+ * test lane's runner timeout (apps/os unit: 45s; e2e: 120s) — it must, or the
  * runner fires first and the blind spot returns. A pin whose body
  * legitimately needs longer raises it via `options.timeoutMs`, still kept
  * BELOW the runner's own test timeout for the same reason.
