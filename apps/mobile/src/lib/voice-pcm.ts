@@ -1,6 +1,6 @@
 // PCM arithmetic for the voice client — pure and Node-importable, like
 // encoding.ts: the capture callback hands us Float32 [-1, 1] and the wire
-// speaks base64 PCM16 mono 16 kHz (the only encoding the voice lane carries —
+// speaks base64 PCM16 mono 16 kHz (the only encoding the voice protocol carries —
 // see apps/os/scripts/voicelab/README.md), so these four functions ARE the
 // audio boundary's math. Kept off the native module so vitest and the live
 // e2e exercise the exact shipped conversion.

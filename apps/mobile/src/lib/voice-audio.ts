@@ -1,12 +1,12 @@
-// The audio seam: everything the voice call needs from a microphone and a
+// The audio interface: everything the voice call needs from a microphone and a
 // speaker, in wire terms (base64 PCM16 mono 16 kHz both directions — the
 // protocol's only encoding), plus a per-frame level for the pulse.
 //
 // AN INTERFACE ON PURPOSE, with the react-native-audio-api implementation in
-// voice-audio-native.ts and fakes in tests/the live e2e. The seam exists for
-// a real second reason beyond testing (grill Q2): react-native-audio-api has
-// an open capture issue on some physical-iOS configs (#721), and if it bites
-// on-device the swap to @siteed/audio-studio is this one file's
+// voice-audio-native.ts and fakes in tests/the live e2e. The interface exists
+// for a real second reason beyond testing (grill Q2): react-native-audio-api
+// has an open capture issue on some physical-iOS configs (#721), and if it
+// bites on-device the swap to @siteed/audio-studio is this one file's
 // implementation, nothing else.
 
 export interface VoiceMicFrame {

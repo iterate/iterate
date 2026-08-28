@@ -9,7 +9,7 @@
 //
 // The sheet: level bar, the hold-to-talk mic, and ONE caption line shared
 // by call lifecycle (ringing / hold to talk / listening) and the colleague
-// status/note lane (grill Q6 — the phone can SHOW "backend: running code"
+// status/note events (grill Q6 — the phone can SHOW "backend: running code"
 // while you wait). ✕ collapses the sheet; the call keeps going behind the
 // floating button. No transcript, no scrollback.
 //
@@ -67,6 +67,9 @@ async function beginCall(baseUrl: string, projectId: string): Promise<void> {
   queryClient.setQueryData(outputKey, "speaker");
   try {
     activeCall = await startVoiceCall({
+      /* `as any` (here and for workers below): the itx project handle is a
+       * dynamic RPC proxy with no generated types in the app — the same
+       * treatment every other mobile itx callsite gives it. */
       stream: (project as any).streams.get(streamPath),
       audio: session,
       ensureSetup: () =>
@@ -75,9 +78,14 @@ async function beginCall(baseUrl: string, projectId: string): Promise<void> {
             get: (ref) => (project as any).workers.get(ref),
           },
           streamPath,
-          readMarker: (path) => AsyncStorage.getItem(`${SETUP_MARKER_STORAGE_PREFIX}${path}`),
+          /* Keyed by PROJECT too, not just stream path: the path is the
+           * same on every project, so a marker written against one project
+           * must not convince another that its stream already has a
+           * certificate (it would ring out as "no answer"). */
+          readMarker: (path) =>
+            AsyncStorage.getItem(`${SETUP_MARKER_STORAGE_PREFIX}${projectId}:${path}`),
           writeMarker: (path, marker) =>
-            AsyncStorage.setItem(`${SETUP_MARKER_STORAGE_PREFIX}${path}`, marker),
+            AsyncStorage.setItem(`${SETUP_MARKER_STORAGE_PREFIX}${projectId}:${path}`, marker),
         }),
       onStatus: (status) => {
         if (status.phase === "ended") {
@@ -127,7 +135,7 @@ export function VoiceCallButton(props: { baseUrl: string; projectId: string }) {
   });
   const { data: output } = useQuery<"speaker" | "earpiece">({
     queryKey: outputKey,
-    queryFn: () => "speaker" as const,
+    queryFn: () => "speaker",
     staleTime: Infinity,
     initialData: "speaker",
   });

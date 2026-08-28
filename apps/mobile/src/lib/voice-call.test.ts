@@ -1,6 +1,6 @@
-// The call core against fakes at its two real seams — the stream handle and
-// the audio session (the same seams the phone, the Node e2e, and a future
-// library swap use; nothing here mocks internals).
+// The call core against fakes of its two injected dependencies — the stream
+// handle and the audio session (the same interfaces the phone, the Node e2e,
+// and a future library swap use; nothing here mocks internals).
 import { expect, test } from "vitest";
 import { captionForEvent, startVoiceCall, type VoiceCallStatus } from "./voice-call.ts";
 
@@ -56,7 +56,7 @@ test("the connection starts at the stream head, so history cannot end a fresh ca
   expect(h.openedWith).toMatchObject({ replayAfterOffset: 4242 });
 });
 
-test("the speaker lane's buffer policy: clear before frame, then play", async () => {
+test("the spk-frame buffer policy: clear before frame, then play", async () => {
   const h = makeHarness();
   await startVoiceCall(h.deps);
   h.deliver({ type: SPK, payload: { pcm: "QUJD", deviceSpeakerFrameSeq: 1 } });
@@ -67,7 +67,7 @@ test("the speaker lane's buffer policy: clear before frame, then play", async ()
   expect(h.audioLog).toEqual(["start", "play:QUJD", "clear", "play:REVG"]);
 });
 
-test("lifecycle and the colleague lanes share the caption; ended stops audio and closes", async () => {
+test("lifecycle and the colleague events share the caption; ended stops audio and closes", async () => {
   const h = makeHarness();
   const call = await startVoiceCall(h.deps);
   h.deliver({
@@ -105,6 +105,25 @@ test("lifecycle and the colleague lanes share the caption; ended stops audio and
   h.captureFrame("CCCC", 0.2);
   await settle();
   expect(h.appends.length).toBe(before);
+});
+
+test("a colleague event during ringing captions but does not fake a pickup", async () => {
+  const h = makeHarness();
+  await startVoiceCall({ ...h.deps, ringTimeoutMs: 15 });
+  h.deliver({
+    type: "events.iterate.com/voice-agent/colleague-status",
+    payload: { phase: "writing code" },
+  });
+  /* Still connecting: the hold-to-talk button must stay hidden and the
+   * no-answer timer must stay armed — only conversation-accepted is a
+   * pickup. */
+  expect(h.statuses.at(-1)).toMatchObject({
+    phase: "connecting",
+    caption: "backend: writing code",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 35));
+  expect(h.statuses.at(-1)!.phase).toBe("ended");
+  expect(h.statuses.at(-1)!.caption).toMatch(/^no answer/);
 });
 
 test("another call's stale obituary does not end this one", async () => {

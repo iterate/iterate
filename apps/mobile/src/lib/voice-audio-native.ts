@@ -1,4 +1,4 @@
-// The react-native-audio-api implementation of the voice-audio seam — the
+// The react-native-audio-api implementation of the voice-audio interface — the
 // only file that knows the native library (grill Q2: if capture issue #721
 // bites on a physical device, the swap to @siteed/audio-studio replaces this
 // file and nothing else).
@@ -7,7 +7,7 @@
 // 1024-sample buffers (~64 ms, grill Q5) — the ACTUAL delivered size is
 // device-dependent and the protocol accepts any length, so no reslicing.
 // Playback: AudioBufferQueueSourceNode, whose enqueue/clearBuffers IS the
-// speaker lane's buffer policy — the server paces delivery, so appending to
+// spk-frame buffer policy — the server paces delivery, so appending to
 // the queue is the entire client.
 //
 // AEC: iosMode "voiceChat" engages Apple's VoiceProcessingIO (grill Q1's

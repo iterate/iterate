@@ -1,12 +1,12 @@
 // One voice call, as the third dumb client of the voice-agent facet speaks
 // it (after the C host CLI and the ESP32 boards): open a live stream
 // connection, append one durable ptt-start to mint the call, pump ephemeral
-// base64 PCM16 mic-frames up, and obey the speaker lane's three-line buffer
+// base64 PCM16 mic-frames up, and obey the spk-frame three-line buffer
 // policy coming down — clear-before-frame throws the queue away, pcm is
 // appended to playback, and that is the entire client (see
 // apps/os/scripts/voicelab/README.md).
 //
-// Pure TypeScript with every effect injected (audio seam, stream handle,
+// Pure TypeScript with every effect injected (audio session, stream handle,
 // clock), so the SAME module runs on the phone, under vitest with fakes, and
 // in the live Node e2e against a real deployment — the grill's "headless
 // wire-driver runs the shipped code" requirement, not a parallel
@@ -23,14 +23,14 @@ const EVENT = {
   pttEnd: "events.iterate.com/voice-agent/ptt-end",
   pttStart: "events.iterate.com/voice-agent/ptt-start",
   spkFrame: "events.iterate.com/voice-agent/spk-frame",
-} as const;
+};
 
 export type VoiceCallPhase = "connecting" | "live" | "ended";
 
 export interface VoiceCallStatus {
   phase: VoiceCallPhase;
   /** One quiet line under the pulse — call lifecycle and the colleague
-   * status/note lane share it (grill Q6): the sheet never looks dead. */
+   * status/note events share it (grill Q6): the sheet never looks dead. */
   caption: string;
 }
 
@@ -74,6 +74,8 @@ export interface VoiceCallHandle {
 /** The caption one event contributes, or null when it says nothing a
  * glancing human needs. Exported pure for tests. */
 export function captionForEvent(type: string, payload: unknown): string | null {
+  /* Cast, not parse: the payload is unvalidated wire JSON and every read
+   * below typeof-narrows its own field before trusting it. */
   const p = (payload ?? {}) as Record<string, unknown>;
   switch (type) {
     case EVENT.callStarted:
@@ -119,6 +121,7 @@ export async function startVoiceCall(deps: {
   now(): number;
 }): Promise<VoiceCallHandle> {
   let ended = false;
+  let accepted = false;
   let conversationId: string | null = null;
   let connection: unknown;
   let inflightMicAppends = 0;
@@ -140,7 +143,7 @@ export async function startVoiceCall(deps: {
     if (ended) return;
     ended = true;
     stopRinging();
-    /* The heard tally rides the obituary caption ON PURPOSE (demo-lane
+    /* The heard tally rides the obituary caption ON PURPOSE (demo
      * diagnostics): round 2 on-device was "no response" with the server
      * provably answering — this line splits "frames never arrived" from
      * "arrived but played silently" at a glance. */
@@ -220,6 +223,8 @@ export async function startVoiceCall(deps: {
     ],
     processEventBatch: (batch) => {
       for (const event of batch.events ?? []) {
+        /* Same cast-then-narrow as captionForEvent: unvalidated wire JSON,
+         * typeof-checked per field where it is read. */
         const payload = (event.payload ?? {}) as Record<string, unknown>;
         if (event.type === EVENT.spkFrame) {
           /* The three-line buffer policy, lines one and two. Line three
@@ -240,6 +245,7 @@ export async function startVoiceCall(deps: {
         if (event.type === EVENT.conversationAccepted && !ended) {
           /* Picked up: stop ringing mid-burst (never into the call) and
            * hand the caption to the live state. */
+          accepted = true;
           stopRinging();
           deps.audio.clearPlayback();
           deps.onStatus({ phase: "live", caption: "hold the mic to talk" });
@@ -255,7 +261,13 @@ export async function startVoiceCall(deps: {
           continue;
         }
         const caption = captionForEvent(event.type, payload);
-        if (caption !== null && !ended) deps.onStatus({ phase: "live", caption });
+        if (caption !== null && !ended) {
+          /* A colleague event can land while still RINGING (the recap runs
+           * during the handshake): its caption may show, but only pickup
+           * flips the phase — "live" here would reveal hold-to-talk while
+           * the ring and the no-answer timer are still running. */
+          deps.onStatus({ phase: accepted ? "live" : "connecting", caption });
+        }
       }
     },
   });

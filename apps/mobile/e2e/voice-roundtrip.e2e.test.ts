@@ -1,9 +1,9 @@
 // The phone's voice call, live from Node — the grill's headless wire-driver:
 // the SAME shipped modules (voice-call.ts, voice-setup.ts, voice-pcm.ts) run
-// against a real deployment's voice-agent facet, with the audio seam faked
+// against a real deployment's voice-agent facet, with the audio session faked
 // from `say`-synthesized speech instead of a microphone. Proves everything
 // except native audio before a phone build exists: setup, the durable press,
-// the ephemeral mic lane, real spk-frames coming back, and the durable
+// the ephemeral mic-frames, real spk-frames coming back, and the durable
 // transcript landing.
 //
 //   doppler run --config prd -- pnpm --dir apps/mobile test:e2e -- voice-roundtrip
@@ -40,7 +40,7 @@ test("a phone-shaped call: speak, be answered, leave a transcript", async () => 
   });
 
   /* A fresh device identity per run: the point is the phone's own path
-   * scheme and setup lane, not colleague continuity across e2e runs. */
+   * scheme and setup flow, not colleague continuity across e2e runs. */
   const deviceId = `e2e-${Date.now().toString(36)}`;
   const streamPath = mobileVoiceStreamPath(deviceId);
   const markers = new Map<string, string>();
@@ -76,7 +76,7 @@ test("a phone-shaped call: speak, be answered, leave a transcript", async () => 
 
   /* Let the answer FINISH before hanging up — a hang-up mid-answer drops
    * the provider socket before its transcript.done edge, so the durable
-   * transcript (what the phone's caption lane and the transcript CLI read)
+   * transcript (what the phone's captions and the transcript CLI read)
    * only exists for completed turns. The poll therefore proves both the
    * downlink audio AND the finished turn's durable record. */
   let answers: any[] = [];
@@ -102,7 +102,7 @@ test("a phone-shaped call: speak, be answered, leave a transcript", async () => 
 /* ------------------------------------------------------------- fixtures --- */
 
 /**
- * The audio seam fed by macOS `say` instead of a microphone. The "mic"
+ * The audio session fed by macOS `say` instead of a microphone. The "mic"
  * hears silence until `speakUtterance()` is called — which matters because
  * the call core now opens the mic during RINGING (for the ring tone's
  * output path), long before the driver holds the button; a fake that

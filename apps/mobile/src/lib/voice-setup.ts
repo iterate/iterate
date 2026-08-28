@@ -27,12 +27,12 @@ export const voiceAgentEntrypointRef = {
     },
   },
   type: "stateless",
-} as const;
+};
 
 /**
  * The birth certificate this app asserts. Push-to-talk (clientTakesTurns:
  * the phone segments turns with the hold-to-talk button — the first
- * on-device session showed open-mic needs AEC tuning this demo lane hasn't
+ * on-device session showed open-mic needs AEC tuning this demo hasn't
  * earned yet), colleague on, and the same hang_up tool talk.ts arms — the
  * model saying goodbye is one of the three ways a call ends (tap, hang_up,
  * 60s idle).
@@ -53,7 +53,7 @@ export const MOBILE_VOICE_SETUP = {
         "ends after you finish speaking.",
     },
   ],
-} as const;
+};
 
 /** Bump to force one re-setup on every device after changing MOBILE_VOICE_SETUP
  * semantics that the hash alone would not capture. */
