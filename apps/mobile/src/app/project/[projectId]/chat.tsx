@@ -39,6 +39,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -60,6 +61,7 @@ import {
   type MobileFeedItem,
 } from "../../../lib/feed.ts";
 import { awaitingAgentActivity, latestAgentTitle } from "../../../lib/chat.ts";
+import { photoFrame, photoFrameMaxWidth, PHOTO_MAX_HEIGHT } from "../../../lib/photo-layout.ts";
 import { getProjectItx } from "../../../lib/itx.ts";
 // APPROVAL_STREAM_EVENT_TYPES is module-level (identity-stable) on purpose:
 // useLiveEvents folds eventTypes into its connection-hook deps, so an inline
@@ -467,20 +469,35 @@ function FeedItem({
 
 function MessageBubble({ message }: { message: AgentUiMessageItem }) {
   const isUser = message.kind === "user";
+  const window = useWindowDimensions();
+  // A photo frame is exactly this wide, while a bubble would otherwise grow to
+  // 85% of the screen — so a caption longer than the photo would stretch the
+  // bubble past it and reopen the gap at the photo's edge. Cap the caption at
+  // the frame's width and the bubble stays the photo's size.
+  const photoWidth = message.files?.some((file) => file.contentType.startsWith("image/"))
+    ? photoFrameMaxWidth(window.width)
+    : null;
   return (
     <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAssistant]}>
-      {message.text !== "" ? (
-        isUser ? (
-          <Text style={styles.bubbleUserText} selectable>
-            {message.text}
-          </Text>
-        ) : (
-          <Markdown markdown={message.text} />
-        )
-      ) : null}
+      {/* Photos above their caption, the way every chat app puts them — and
+          the bubble carries no padding of its own, so a photo reaches its
+          edges instead of floating in a frame. Text brings its own inset. */}
       {message.files?.map((file) => (
         <MessageAttachment key={file.path} file={file} />
       ))}
+      {message.text !== "" ? (
+        <View
+          style={[styles.bubbleTextInset, photoWidth === null ? null : { maxWidth: photoWidth }]}
+        >
+          {isUser ? (
+            <Text style={styles.bubbleUserText} selectable>
+              {message.text}
+            </Text>
+          ) : (
+            <Markdown markdown={message.text} />
+          )}
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -489,18 +506,61 @@ function MessageAttachment({ file }: { file: AgentUiFileAttachment }) {
   // Signed public URL minted when the file was attached — same source the
   // web's <img> and the LLM use.
   const open = () => void WebBrowser.openBrowserAsync(file.url);
-  if (file.contentType.startsWith("image/")) {
-    return (
-      <Pressable onPress={open}>
-        <Image source={{ uri: file.url }} style={styles.attachmentImage} resizeMode="contain" />
-      </Pressable>
-    );
-  }
+  if (file.contentType.startsWith("image/")) return <MessagePhoto file={file} onPress={open} />;
   return (
     <Pressable onPress={open} style={styles.fileChip}>
       <Text style={styles.fileChipText} numberOfLines={1}>
         📎 {file.filename} · {formatFileSize(file.size)}
       </Text>
+    </Pressable>
+  );
+}
+
+/** Photo attachments, Telegram-style: flush to the bubble's edges at their own
+ * aspect ratio, and — when a tall screenshot hits the height cap and no longer
+ * fills the frame — sitting on a blurred copy of themselves rather than black
+ * bars. Frame maths and its reasoning: lib/photo-layout.ts. */
+function MessagePhoto({ file, onPress }: { file: AgentUiFileAttachment; onPress: () => void }) {
+  const window = useWindowDimensions();
+  // Dimensions come from the loaded image, not the attachment record (which
+  // carries none) — one lookup per URL, cached for the thread's lifetime.
+  const natural = useQuery({
+    queryKey: ["image-size", file.url],
+    queryFn: () =>
+      new Promise<{ height: number; width: number }>((resolve, reject) =>
+        Image.getSize(file.url, (width, height) => resolve({ height, width }), reject),
+      ),
+    staleTime: Infinity,
+    retry: false,
+  });
+  const frame = photoFrame({
+    maxHeight: PHOTO_MAX_HEIGHT,
+    maxWidth: photoFrameMaxWidth(window.width),
+    natural: natural.data,
+  });
+  return (
+    <Pressable
+      accessibilityLabel={file.filename}
+      onPress={onPress}
+      style={{ height: frame.height, width: frame.width }}
+    >
+      {natural.data === undefined ? (
+        // Until the image reports its dimensions the frame is a plain box at a
+        // guessed aspect ratio. Say so: it is a real loading state, a screen
+        // reader should announce it, and it is what the spec's spinner waiter
+        // holds its budget open on instead of racing the first paint.
+        <View accessibilityLabel="Loading" style={StyleSheet.absoluteFill} />
+      ) : null}
+      {frame.backdrop ? (
+        <Image
+          source={{ uri: file.url }}
+          style={StyleSheet.absoluteFill}
+          resizeMode="cover"
+          blurRadius={18}
+          testID="photo-backdrop"
+        />
+      ) : null}
+      <Image source={{ uri: file.url }} style={StyleSheet.absoluteFill} resizeMode="contain" />
     </Pressable>
   );
 }
@@ -572,9 +632,12 @@ const styles = StyleSheet.create({
   bubble: {
     maxWidth: "85%",
     borderRadius: radius.lg,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 10,
+    // No padding, and clipped: a photo child fills the bubble corner to
+    // corner. Text children inset themselves (bubbleTextInset).
+    gap: 2,
+    overflow: "hidden",
   },
+  bubbleTextInset: { paddingHorizontal: spacing.md, paddingVertical: 10 },
   bubbleUser: { alignSelf: "flex-end", backgroundColor: colors.text },
   bubbleAssistant: {
     alignSelf: "flex-start",
@@ -596,20 +659,14 @@ const styles = StyleSheet.create({
   eventRow: { gap: 4 },
   eventType: { color: colors.textFaint, fontSize: 11, fontFamily: "Menlo" },
   wakeMarker: { color: colors.textFaint, fontSize: 11, textAlign: "center" },
-  attachmentImage: {
-    width: 220,
-    height: 160,
-    borderRadius: radius.sm,
-    backgroundColor: colors.background,
-    marginTop: 4,
-  },
   fileChip: {
     borderColor: colors.border,
     borderWidth: 1,
     borderRadius: radius.full,
     paddingHorizontal: spacing.sm,
     paddingVertical: 4,
-    marginTop: 4,
+    marginHorizontal: spacing.md,
+    marginVertical: 4,
     alignSelf: "flex-start",
   },
   fileChipText: { color: colors.textMuted, fontSize: 12 },

@@ -38,17 +38,21 @@ allowlist, an optional refresh strategy, an audit record.
 - `fetch(request)` — the only lane material travels. Every request must carry
   at least one `getSecret("/secrets/…")` or
   `getSecret("/secrets/…", { field: "…" })` placeholder for THIS secret in
-  its headers, URL path, or explicitly marked JSON body (one request, one secret); the DO substitutes
+  its headers, URL path, URL query, or explicitly marked JSON body (one request, one secret); the DO substitutes
   from decrypted material and dispatches, after checking the destination
-  origin against the pin. Substitution reaches headers plus the URL PATH
-  (added for Telegram, whose Bot API authenticates in the path
-  `/bot<token>/…`). JSON body substitution requires
+  origin against the pin. Substitution reaches headers, the URL PATH (added
+  for Telegram, whose Bot API authenticates in the path `/bot<token>/…`), and
+  URL QUERY VALUES (for APIs that only take `?api_key=…`; the credential then
+  shows up in the provider's access logs, which is the caller's trade — our
+  `secret/used` audit records the pre-substitution URL, so it keeps the
+  placeholder). JSON body substitution requires
   `x-iterate-secret-template: json` plus an `application/json` or `+json`
   content type, and replaces only complete string values that are exact
   references. Ordinary bodies, embedded references, object keys, and query
-  strings are never substituted; malformed opted-in JSON and placeholders
-  elsewhere in the URL are rejected loudly rather than passed through. The
-  internal template marker is removed before dispatch.
+  parameter NAMES are never substituted; malformed opted-in JSON and
+  placeholders in the fragment, userinfo or host are rejected loudly rather
+  than passed through. The internal template marker is removed before
+  dispatch.
 - Credential-bearing fetches follow at most five same-origin redirects, with
   every hop requested manually and revalidated before rebuilding the request.
   Cross-origin redirects are rejected rather than forwarding headers or bodies.
