@@ -42,11 +42,11 @@ export function parseCollectSecretLink(url: string): CollectSecretRequest | null
   const path = parsed.searchParams.get("path");
   const egress = jsonParam(parsed.searchParams.get("egress"));
   const notify = parsed.searchParams.get("notify");
-  if (!projectSlug || !path?.startsWith("/secrets/")) return null;
-  if (!Array.isArray(egress) || egress.length === 0) return null;
-  if (!egress.every((entry) => typeof entry === "string")) return null;
-  if (notify !== null && !notify.startsWith("/agents/")) return null;
   const description = jsonParam(parsed.searchParams.get("description"));
+  if (!projectSlug) return null;
+  if (!isSecretPath(path)) return null;
+  if (!isEgressPin(egress)) return null;
+  if (notify !== null && !isAgentPath(notify)) return null;
   return {
     description: typeof description === "string" ? description : undefined,
     egress,
@@ -54,6 +54,26 @@ export function parseCollectSecretLink(url: string): CollectSecretRequest | null
     path,
     projectSlug,
   };
+}
+
+/** Where the submitted value lands. Anything else addresses a different kind
+ * of node, and this screen only ever writes secrets. */
+function isSecretPath(value: string | null): value is string {
+  return value !== null && value.startsWith("/secrets/");
+}
+
+/** The agent to tell once the secret is stored. */
+function isAgentPath(value: string): boolean {
+  return value.startsWith("/agents/");
+}
+
+/** The origins the secret is born pinned to. Must be a non-empty list of
+ * strings: a secret pinned to nothing could never be substituted into any
+ * request, so a link carrying one does not describe a usable request. */
+function isEgressPin(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) && value.length > 0 && value.every((entry) => typeof entry === "string")
+  );
 }
 
 /** A JSON-encoded search param, or the raw string when it is not JSON — the

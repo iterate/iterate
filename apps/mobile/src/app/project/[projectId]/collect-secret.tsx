@@ -86,7 +86,11 @@ function CollectSecretForm({
   const existing = useQuery({
     queryKey: ["collect-secret", baseUrl || "", projectId, request.path],
     queryFn: async () => {
-      const project = await getProjectItx(baseUrl!, projectId);
+      // Narrowed rather than asserted: `enabled` already keeps this from
+      // running before the stored server URL is read, so the branch is
+      // unreachable — but a real check keeps it that way if `enabled` changes.
+      if (baseUrl === undefined) throw new Error("No server selected.");
+      const project = await getProjectItx(baseUrl, projectId);
       return await project.secrets.get(request.path).__describe();
     },
     enabled: baseUrl !== undefined,
@@ -94,7 +98,12 @@ function CollectSecretForm({
 
   const submit = useMutation({
     mutationFn: async (value: string): Promise<SavedOutcome> => {
-      const project = await getProjectItx(baseUrl!, projectId);
+      // Nothing guarded this before: the form renders while the stored server
+      // URL is still being read, so a fast paste-and-save could reach here
+      // with none. Save now waits for it (below), and this is the check that
+      // says so rather than an assertion hoping it holds.
+      if (baseUrl === undefined) throw new Error("No server selected.");
+      const project = await getProjectItx(baseUrl, projectId);
       const secret = project.secrets.get(request.path);
       // Material and egress land in one birth or update, so the secret is
       // pinned to its hosts — no window where it exists but cannot be used.
@@ -126,6 +135,9 @@ function CollectSecretForm({
   });
 
   if (submit.data !== undefined) return <Saved outcome={submit.data} path={request.path} />;
+
+  // No submitting before there is somewhere to submit to, or twice.
+  const canSave = material.length > 0 && baseUrl !== undefined && !submit.isPending;
 
   return (
     <KeyboardAvoidingView
@@ -198,9 +210,9 @@ function CollectSecretForm({
 
         <Pressable
           accessibilityLabel="Save secret"
-          disabled={material.length === 0 || submit.isPending}
+          disabled={!canSave}
           onPress={() => submit.mutate(material)}
-          style={[styles.save, (material.length === 0 || submit.isPending) && styles.saveDisabled]}
+          style={[styles.save, !canSave && styles.saveDisabled]}
         >
           {submit.isPending ? (
             <View style={styles.savingRow}>
