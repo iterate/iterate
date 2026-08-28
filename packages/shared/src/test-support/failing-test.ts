@@ -2,10 +2,12 @@
  * Pinned-bug tests: the body asserts the DESIRED behavior, and while the bug
  * exists it must fail with an error matching the given pattern.
  *
- * `failing` wraps any test-registering function — vitest's `test`,
- * playwright's `test`, their `.only`/`.skip` variants — and returns one with
- * the same shape, so fixtures, options objects, and timeouts pass straight
- * through:
+ * `failing` registers the test through the runner's own expected-fail variant
+ * — vitest spells it `test.fails`, playwright `test.fail` — so the pin is
+ * native as far as reporting goes: it shows up in the "expected fail" summary
+ * count, telemetry classifies it as expected-to-fail, and nothing downstream
+ * needs to know the wrapper exists. The wrapper's only job is filtering WHICH
+ * failure is allowed to satisfy that machinery:
  *
  * ```ts
  * const fail = failing(test, /SAME-BOOT STALENESS/);
@@ -15,13 +17,26 @@
  * ```
  *
  * Three outcomes:
- * - body fails matching the pattern → the test passes (the bug is still pinned)
- * - body fails with anything else → the test fails, naming both errors — this
- *   is what a bare `test.fails` cannot do: there, a body that starts failing
- *   for an unrelated reason (infra, typo) stays silently green and the pin
- *   stops pinning anything
- * - body succeeds → the test fails with instructions to delete the wrapper —
- *   the bug appears fixed, so the body should become a plain test
+ * - body fails matching the pattern → the error is rethrown, the runner's
+ *   expected-fail machinery is satisfied → green (the bug is still pinned)
+ * - body fails with anything else → the wrapper logs the mismatch and returns
+ *   SUCCESS, which the expected-fail machinery rejects → red. The runner's own
+ *   message is generic ("Expect test to fail" / "passed unexpectedly"); the
+ *   actual reason sits in the adjacent `[failing-test]` log line. A bare
+ *   `test.fails` would have stayed silently green here — that is the whole
+ *   point of the wrapper.
+ * - body succeeds → same mechanism: logged, returned, red — with instructions
+ *   to delete the wrapper, since the bug appears fixed.
+ *
+ * The native machinery has one blind spot: a failure that never passes
+ * through the body — chiefly a runner-level test timeout on a hung body —
+ * counts as the expected one. The wrapper therefore races the body against
+ * its own 30s deadline and reports a timeout as NOT-the-pinned-failure (red),
+ * so a hang cannot vanish into a vacuous pass. The default sits below every
+ * test lane's runner timeout (apps/os unit: 45s; e2e: 120s) — it must, or the
+ * runner fires first and the blind spot returns. A pin whose body
+ * legitimately needs longer raises it via `options.timeoutMs`, still kept
+ * BELOW the runner's own test timeout for the same reason.
  *
  * Write the body so the pinned bug produces a DISTINCTIVE error (throw a
  * purpose-built message rather than relying on a generic assertion diff), and
@@ -29,12 +44,20 @@
  * masks the bug for one observation — retry or fail with a NON-matching
  * error instead of succeeding. See
  * apps/os/e2e/vitest/userspace-facet-source-version.e2e.test.ts for the
- * worked example (its predecessor `test.fails` false-alarmed 7+ times).
+ * worked example (its predecessor bare `test.fails` false-alarmed 7+ times).
  */
 export function failing<TestFn extends (...args: any[]) => any>(
   test: TestFn,
   failure: RegExp,
+  options?: { timeoutMs: number },
 ): TestFn {
+  const timeoutMs = options?.timeoutMs || 30_000;
+  const failer: unknown = "fails" in test ? test.fails : "fail" in test ? test.fail : undefined;
+  if (typeof failer !== "function") {
+    throw new Error(
+      "failing(test, pattern): test has neither .fails (vitest) nor .fail (playwright)",
+    );
+  }
   const register = (...args: any[]) => {
     const body = args.at(-1);
     if (typeof body !== "function") {
@@ -43,15 +66,57 @@ export function failing<TestFn extends (...args: any[]) => any>(
     // The body's own arguments pass through untouched — playwright fixtures
     // ({ page, ... }, testInfo), vitest context — whatever the wrapped test
     // function provides.
-    const wrapped = async (...bodyArgs: any[]) =>
-      expectFailure({ failure }, async () => await body(...bodyArgs));
+    const wrapped = async (...bodyArgs: any[]) => {
+      // Race the body against the wrapper's own deadline: a hung body must
+      // fail as NOT-the-pinned-failure rather than letting the runner's test
+      // timeout fire, which the expected-fail machinery would count as the
+      // pin holding.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      // `as const` on the kinds: without it each arm's `kind` widens to
+      // `string`, the union stops discriminating, and `outcome.kind ===
+      // "failed"` below would not narrow to expose `.error`.
+      const outcome = await Promise.race([
+        (async () => body(...bodyArgs))().then(
+          () => ({ kind: "succeeded" as const }),
+          (error: unknown) => ({ kind: "failed" as const, error }),
+        ),
+        new Promise<{ kind: "timed-out" }>((resolve) => {
+          timer = setTimeout(() => resolve({ kind: "timed-out" }), timeoutMs);
+        }),
+      ]).finally(() => clearTimeout(timer));
+
+      if (outcome.kind === "failed") {
+        // The ONLY throw allowed out: the pinned failure, which satisfies the
+        // runner's expected-fail machinery.
+        if (failure.test(String(outcome.error))) throw outcome.error;
+        console.error(
+          `[failing-test] Expected failure to match /${failure.source}/, got a different failure — ` +
+            `this run proves nothing about the pinned bug:`,
+          outcome.error,
+        );
+        return; // "success" here is what makes test.fails / test.fail go red
+      }
+      if (outcome.kind === "timed-out") {
+        console.error(
+          `[failing-test] The body is still running after ${timeoutMs}ms — a hang is not the ` +
+            `pinned failure. Raise failing()'s options.timeoutMs (keeping it below the runner's ` +
+            `test timeout) if the pin legitimately needs longer.`,
+        );
+        return; // same inversion: success → the expected-fail machinery goes red
+      }
+      console.error(
+        `[failing-test] The test should have failed with /${failure.source}/ but it succeeded. ` +
+          `If the pinned bug is fixed, delete the failing() wrapper and keep the body as a plain test.`,
+      );
+      // Fall through to success for the same reason as above.
+    };
     // Playwright and vitest's test.extend decide WHICH fixtures to set up by
     // parsing the test function's source for its destructured first
     // parameter. A rest-args wrapper would hide the body's fixture names and
     // the runner would instantiate none of them — so present the body's own
     // source when the runner looks.
     Object.defineProperty(wrapped, "toString", { value: () => body.toString() });
-    return test(...args.slice(0, -1), wrapped);
+    return failer(...args.slice(0, -1), wrapped);
   };
   // The cast restates the contract the wrapper keeps by construction: it
   // forwards every argument unchanged except the trailing body, which it
@@ -62,7 +127,11 @@ export function failing<TestFn extends (...args: any[]) => any>(
   return register as TestFn;
 }
 
-/** The assertion core of {@link failing}, callable directly in unit tests. */
+/**
+ * Assert that a body fails for exactly the given reason — the standalone
+ * sibling of {@link failing} for use INSIDE a plain test, where throwing (not
+ * inverted success) is the right failure signal.
+ */
 export async function expectFailure(options: { failure: RegExp }, body: () => Promise<unknown>) {
   try {
     await body();

@@ -1,7 +1,8 @@
+import { failing } from "@iterate-com/shared/test-support/failing-test";
 import { test } from "vitest";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
-test.fails(
+failing(test, /CONCURRENT CREATE SPLITS IDENTITY/)(
   "DESIRED: concurrent creates of one slug adopt the same project identity",
   { retry: 0 },
   async ({ expect }) => {
@@ -19,7 +20,7 @@ test.fails(
       second.identity(),
     ]);
 
-    expect(secondIdentity).toEqual(firstIdentity);
+    expect(secondIdentity, "CONCURRENT CREATE SPLITS IDENTITY").toEqual(firstIdentity);
     expect(firstIdentity).toMatchObject({ organizationId: null, slug });
     await first.waitUntilCreated();
   },
