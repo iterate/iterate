@@ -141,3 +141,24 @@ Fixes + the push-to-talk pivot (Misha's call):
       hang-up and failed-mic cleanup); live e2e reworked to drive the press/
       release edges — passed against prd in 20s.
 - [x] `misha` project provisioned (template a3a86480 + openai secret).
+
+## On-device round 3+4 (it works!)
+
+Round 3 (ring + playback fixes) confirmed working on-device. Round 4 polish,
+all from live feedback:
+
+- [x] ✕ removed; the sheet is a transparent Modal — tapping anywhere outside
+      minimises it (call keeps going behind the floating button).
+- [x] Output selector: speaker ↔ earpiece toggle on the sheet (AVAudioSession
+      defaultToSpeaker flip — the library exposes no output-device API).
+      Every call starts on speaker: hold-to-talk means the phone is in front
+      of you.
+- [x] The call says hi at pickup: `greeting` on the certificate (facet
+      17.0.0, on the base branch) — session.updated plants one system item +
+      response.create; the transcript recap makes it "hi again" for a
+      returning caller, free. Suppressed when the caller is already
+      mid-sentence. The mobile mint press moved back to call start so the
+      dial happens during the ring, and the ring now sounds until
+      conversation-accepted (the actual pickup).
+- [x] Templates upgraded to 17.0.0 on voicelab-eval, pr2537 (preview_2),
+      misha, iterate; e2e green against the greeting flow.

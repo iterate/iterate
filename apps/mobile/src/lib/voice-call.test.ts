@@ -7,13 +7,20 @@ import { captionForEvent, startVoiceCall, type VoiceCallStatus } from "./voice-c
 const SPK = "events.iterate.com/voice-agent/spk-frame";
 const ENDED = "events.iterate.com/voice-agent/conversation-ended";
 
-test("push-to-talk: the press mints and opens the mic; release commits the turn", async () => {
+test("push-to-talk: the mint press dials at call start; holds gate the mic; release commits", async () => {
   const h = makeHarness();
   const call = await startVoiceCall(h.deps);
-  /* No press yet, no events yet — and captured frames go nowhere. */
+  /* The mint press went out at start (the greeting needs the dial before
+   * any hold) — but captured frames still go nowhere until a hold. */
+  expect(h.appends).toHaveLength(1);
+  expect(h.appends[0]).toMatchObject({
+    type: "events.iterate.com/voice-agent/ptt-start",
+    payload: { t: 0 },
+  });
+  expect(h.appends[0]!.ephemeral).toBeUndefined();
   h.captureFrame("AAAA", 0.4);
   await settle();
-  expect(h.appends).toHaveLength(0);
+  expect(h.appends).toHaveLength(1);
   expect(h.levels).toEqual([0]);
 
   call.setTalking(true);
@@ -22,12 +29,12 @@ test("push-to-talk: the press mints and opens the mic; release commits the turn"
   call.setTalking(false);
   await settle();
 
-  expect(h.appends[0]).toMatchObject({
+  expect(h.appends[1]).toMatchObject({
     type: "events.iterate.com/voice-agent/ptt-start",
     payload: {},
   });
-  /* The press is DURABLE (its loss strands the mint); the release is not. */
-  expect(h.appends[0]!.ephemeral).toBeUndefined();
+  /* The press is DURABLE like the mint; the release is not. */
+  expect(h.appends[1]!.ephemeral).toBeUndefined();
   const micFrames = h.appends.filter((a) => a.type.endsWith("mic-frame"));
   expect(micFrames).toHaveLength(2);
   expect(micFrames[0]).toMatchObject({
@@ -57,8 +64,7 @@ test("the speaker lane's buffer policy: clear before frame, then play", async ()
     type: SPK,
     payload: { pcm: "REVG", deviceSpeakerFrameSeq: 2, clearSpeakerBufferBeforeFrame: true },
   });
-  /* The leading clear is the go-live ring flush — always runs, ring or not. */
-  expect(h.audioLog).toEqual(["start", "clear", "play:QUJD", "clear", "play:REVG"]);
+  expect(h.audioLog).toEqual(["start", "play:QUJD", "clear", "play:REVG"]);
 });
 
 test("lifecycle and the colleague lanes share the caption; ended stops audio and closes", async () => {
@@ -67,6 +73,10 @@ test("lifecycle and the colleague lanes share the caption; ended stops audio and
   h.deliver({
     type: "events.iterate.com/voice-agent/call-started",
     payload: { conversationId: "conv_1" },
+  });
+  h.deliver({
+    type: "events.iterate.com/voice-agent/conversation-accepted",
+    payload: { conversationId: "conv_x", handshakeTookMs: 900, heldMicFrames: 0 },
   });
   h.deliver({
     type: "events.iterate.com/voice-agent/colleague-status",
@@ -80,9 +90,9 @@ test("lifecycle and the colleague lanes share the caption; ended stops audio and
   h.deliver({ type: ENDED, payload: { conversationId: "conv_1", reason: "idle" } });
   expect(h.statuses.map((s) => `${s.phase}:${s.caption}`)).toEqual([
     "connecting:ringing…",
+    /* Live only at PICKUP (conversation-accepted) — the ring covers the
+     * dial and handshake. */
     "live:hold the mic to talk",
-    /* call-started deliberately adds NO caption — the accepted event lands
-     * mid-first-hold and must not overwrite "listening…". */
     "live:backend: running code",
     "live:backend: The codeword is walrus trumpet.",
     "live:listening…",
@@ -103,6 +113,10 @@ test("another call's stale obituary does not end this one", async () => {
   h.deliver({
     type: "events.iterate.com/voice-agent/call-started",
     payload: { conversationId: "conv_mine" },
+  });
+  h.deliver({
+    type: "events.iterate.com/voice-agent/conversation-accepted",
+    payload: { conversationId: "conv_x", handshakeTookMs: 900, heldMicFrames: 0 },
   });
   h.deliver({ type: ENDED, payload: { conversationId: "conv_other", reason: "idle" } });
   expect(h.statuses.at(-1)!.phase).toBe("live");
@@ -146,13 +160,17 @@ test("a stalled socket drops mic frames instead of queueing the past", async () 
   expect(micFrames.length).toBeGreaterThan(0);
 });
 
-test("the ring tone plays through the speaker path while ringing, then stops before the call", async () => {
+test("the ring tone plays through the speaker path until PICKUP, then the queue is flushed", async () => {
   const h = makeHarness();
   await startVoiceCall({ ...h.deps, ringPcmBase64: "RING" });
-  /* Rang at least once through the same play path answers use, and the
-   * queue was cleared when the call went live so no burst leaks into it. */
   expect(h.audioLog[0]).toBe("start");
   expect(h.audioLog).toContain("play:RING");
+  h.deliver({
+    type: "events.iterate.com/voice-agent/conversation-accepted",
+    payload: { conversationId: "conv_x", handshakeTookMs: 900, heldMicFrames: 0 },
+  });
+  /* Accepted = picked up: ringing stops and the queue is flushed so no
+   * queued burst plays into the greeting. */
   expect(h.audioLog.at(-1)).toBe("clear");
 });
 
@@ -237,6 +255,7 @@ function makeHarness(
         },
         play: (pcm: string) => audioLog.push(`play:${pcm}`),
         clearPlayback: () => audioLog.push("clear"),
+        setOutput: () => {},
         stop: async () => {
           audioLog.push("stop");
         },

@@ -28,6 +28,9 @@ export interface VoiceAudioSession {
   /** `clearSpeakerBufferBeforeFrame`: throw away everything still queued —
    * the server decided the listener must not hear it (barge-in). */
   clearPlayback(): void;
+  /** Route answers to the loudspeaker (hold-to-talk's default — the phone
+   * is in front of you, not on your ear) or the earpiece. */
+  setOutput(route: "speaker" | "earpiece"): void;
   /** Tear down mic and speaker. Idempotent. */
   stop(): Promise<void>;
 }

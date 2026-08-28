@@ -16,6 +16,19 @@
 // audible; the earpiece fallback, if AEC disappoints, is an AVAudioSession
 // port override — session-level, not library-level.
 import { AudioContext, AudioManager, AudioRecorder } from "react-native-audio-api";
+
+/** The session options in one place: output routing is the only knob that
+ * moves (defaultToSpeaker in or out — the library exposes no output-device
+ * API, and on iOS this AVAudioSession option IS the speaker/earpiece
+ * switch, applied live). */
+function applySessionOptions(route: "speaker" | "earpiece"): void {
+  AudioManager.setAudioSessionOptions({
+    iosCategory: "playAndRecord",
+    iosMode: "voiceChat",
+    iosOptions:
+      route === "speaker" ? ["defaultToSpeaker", "allowBluetoothHFP"] : ["allowBluetoothHFP"],
+  });
+}
 import type { VoiceAudio, VoiceAudioSession, VoiceMicFrame } from "./voice-audio.ts";
 import { float32ToPcm16Base64, pulseLevel, VOICE_SAMPLE_RATE } from "./voice-pcm.ts";
 import { pcm16Base64ToFloat32 } from "./voice-pcm.ts";
@@ -30,16 +43,13 @@ export function createNativeVoiceAudio(): VoiceAudio {
     },
     createSession: (): VoiceAudioSession => {
       let context: AudioContext | null = null;
+      let route: "speaker" | "earpiece" = "speaker";
       let queue: ReturnType<AudioContext["createBufferQueueSource"]> | null = null;
       let recorder: AudioRecorder | null = null;
 
       return {
         start: async (onFrame: (frame: VoiceMicFrame) => void) => {
-          AudioManager.setAudioSessionOptions({
-            iosCategory: "playAndRecord",
-            iosMode: "voiceChat",
-            iosOptions: ["defaultToSpeaker", "allowBluetoothHFP"],
-          });
+          applySessionOptions(route);
           await AudioManager.setAudioSessionActivity(true);
           context = new AudioContext({ sampleRate: VOICE_SAMPLE_RATE });
           /* Web Audio contexts may be born suspended; a suspended context
@@ -76,11 +86,7 @@ export function createNativeVoiceAudio(): VoiceAudio {
            * own session management around recorder start, and losing
            * defaultToSpeaker there re-routes answers to the earpiece —
            * "no response" with the phone at arm's length. */
-          AudioManager.setAudioSessionOptions({
-            iosCategory: "playAndRecord",
-            iosMode: "voiceChat",
-            iosOptions: ["defaultToSpeaker", "allowBluetoothHFP"],
-          });
+          applySessionOptions(route);
         },
         play: (pcmBase64: string) => {
           if (context === null || queue === null) return;
@@ -102,6 +108,10 @@ export function createNativeVoiceAudio(): VoiceAudio {
           } catch {
             /* An empty queue that objects is an empty queue. */
           }
+        },
+        setOutput: (next: "speaker" | "earpiece") => {
+          route = next;
+          applySessionOptions(next);
         },
         stop: async () => {
           try {

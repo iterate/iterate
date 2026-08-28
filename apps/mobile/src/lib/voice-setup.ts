@@ -41,6 +41,9 @@ export const MOBILE_VOICE_SETUP = {
   instructions: "You are Iterate, a voice assistant on a phone. Keep replies short and natural.",
   clientTakesTurns: true,
   colleague: true,
+  /** The phone rings, so the other end picks up (facet 17.0.0): the model
+   * greets first — "hi again" on a stream with history, via the recap. */
+  greeting: true,
   tools: [
     {
       name: "hang_up",
@@ -54,7 +57,7 @@ export const MOBILE_VOICE_SETUP = {
 
 /** Bump to force one re-setup on every device after changing MOBILE_VOICE_SETUP
  * semantics that the hash alone would not capture. */
-const SETUP_MARKER_VERSION = 2;
+const SETUP_MARKER_VERSION = 3;
 
 /** FNV-1a over the exact payload we would send — pure, no crypto import, and
  * two devices/app-versions agree iff they would send identical setups. */

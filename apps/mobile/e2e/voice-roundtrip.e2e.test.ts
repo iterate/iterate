@@ -157,6 +157,7 @@ function makeSpeechFedAudio(text: string) {
         playedSamples += pcm16Base64ToFloat32(pcmBase64).length;
       },
       clearPlayback: () => {},
+      setOutput: () => {},
       stop: async () => {
         if (timer !== null) clearInterval(timer);
         timer = null;

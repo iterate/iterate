@@ -230,6 +230,14 @@ export async function startVoiceCall(deps: {
         if (event.type === EVENT.callStarted && typeof payload.conversationId === "string") {
           conversationId = payload.conversationId;
         }
+        if (event.type === EVENT.conversationAccepted && !ended) {
+          /* Picked up: stop ringing mid-burst (never into the call) and
+           * hand the caption to the live state. */
+          stopRinging();
+          deps.audio.clearPlayback();
+          deps.onStatus({ phase: "live", caption: "hold the mic to talk" });
+          continue;
+        }
         if (event.type === EVENT.conversationEnded) {
           /* Ours or unattributed — a fresh connection past the head only
            * sees this call's lifecycle, but the id check keeps a racing
@@ -245,10 +253,13 @@ export async function startVoiceCall(deps: {
     },
   });
 
-  /* Connected: the ring stops mid-burst rather than playing into the call. */
-  stopRinging();
-  deps.audio.clearPlayback();
-  if (!ended) deps.onStatus({ phase: "live", caption: "hold the mic to talk" });
+  /*
+   * The mint press goes out NOW, before any hold: with `greeting` on the
+   * certificate the provider dials during the ring and says hi at pickup —
+   * the ring keeps sounding until conversation-accepted (the actual
+   * pickup), where the live caption takes over.
+   */
+  await deps.stream.append({ type: EVENT.pttStart, payload: { t: 0 } });
 
   return {
     setTalking: (next: boolean) => {
