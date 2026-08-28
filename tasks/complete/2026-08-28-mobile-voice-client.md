@@ -12,7 +12,7 @@ floating note pill that starts an open-mic voice call, pulsing with local mic
 level. Same protocol, same backend (contract 16.0.0 on the base branch), zero
 server changes.
 
-Interview log: [mobile-voice-client.interview.md](./mobile-voice-client.interview.md)
+Interview log: [mobile-voice-client.interview.md](./2026-08-28-mobile-voice-client.interview.md)
 (grill-you, 8 questions, all decisions below trace to it).
 
 ## Status summary
