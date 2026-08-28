@@ -185,14 +185,13 @@ type BuildState = {
     buildNumber: string;
     runtimeVersion: string;
     installedAt: Date | null;
-    /** The channel baked in at build time — "the default OTA branch for my build". */
+    /** The channel baked in at build time — "the default OTA branch for my
+     *  build", and with per-PR builds also the branch the binary was made for. */
     defaultChannel: string;
   };
-  channel: {
-    /** What updates are actually fetched from — override, else default. */
-    current: string;
-    isOverride: boolean;
-  };
+  /** What updates are actually fetched from — the override, else
+   *  binary.defaultChannel. "Overridden" is just current !== defaultChannel. */
+  channel: string;
   update:
     | { status: "current" }
     | { status: "behind"; latest: { commit: string; message: string; publishedAt: Date } }
@@ -201,7 +200,7 @@ type BuildState = {
     | { status: "unsupported"; why: "metro" | "dev" }
     | { status: "checking" }
     | { status: "error"; message: string };
-  /** Non-default binary, or a channel override: watch this one on every open. */
+  /** Not on the binary's own channel, or not a main binary: watch on every open. */
   watched: boolean;
   /** From expected-backend.ts — what this bundle wants the app pointed at. */
   expectation: Recommendation;
@@ -246,8 +245,8 @@ update was published 12 minutes ago" from `manifest.createdAt` alone.
 
   ```
   CHANNEL
-    Current            specs-create-agent-sweep   (override)
-    Default for build  preview
+    Current            specs-create-agent-sweep
+    Default for build  specs-create-agent-sweep   (this build is the PR's)
   RUNNING JS
     Branch             specs/create-agent-sweep
     Commit             3f0e48f  Playwright sweep: adopt createAgent
@@ -269,45 +268,68 @@ update was published 12 minutes ago" from `manifest.createdAt` alone.
 
 ## The four fixes
 
-### 1. One QR that always works
+### 1. Per-PR native builds, so the install QR lands on the PR's channel
 
-Replace the two mutually-exclusive QRs with **one**, encoding an https
-interstitial that carries the channel *and* the build:
+The install QR keeps pointing straight at the EAS install page and the OTA QR
+keeps being a bare `iterate://` link. What changes is the **binary**: a PR's
+build gets that PR's channel baked in, so installing it *is* being on the PR's
+JS. No interstitial, no second scan, no ordering to get wrong.
 
-```
-https://os.iterate.com/m/pr/<channel>?build=<easBuildId>
-```
+**Where the channel can live.** Not in app config. `@expo/fingerprint`
+normalizes the Expo config and strips nothing under `updates` except
+`updates.url`, so putting `updates.requestHeaders["expo-channel-name"]` in
+`app.config.js` would move the runtime fingerprint on every PR — which would
+break the OTA path for every PR with no native changes. The channel has to
+stay where it is today: **`eas.json`**, which fingerprint never reads. (That
+is exactly why the `preview` and `development` profiles share a runtime
+version today.)
 
-The page (extending `m.preview-channel.$channel.ts`):
+`eas build` has no `--channel` flag (checked against eas-cli 21.0.1), so CI
+sets it the same way it already sets the bundle stamp: write the working tree,
+build, don't commit.
 
-1. immediately attempts `iterate://preview-channel/<channel>`;
-2. if still visible after ~1.5s, the app isn't installed — show a large
-   **Install this build** button pointing at the EAS page;
-3. *always* keep an **Open in app** button on screen, so the post-install
-   return trip is one tap on a page already open in Safari.
+1. Add a `preview-pr` profile to `eas.json`, a copy of `preview`.
+2. Before triggering, `publish-mobile-pr-preview.ts` rewrites that profile's
+   `channel` to the PR's channel. `eas-cli` uploads the working tree, so the
+   value travels with the job — same mechanism as `src/build-info.json`.
+3. `eas build --profile preview-pr --no-wait`.
 
-Scan → install if needed → tap Open → confirm → on the PR's channel. No
-heuristic about what is on your phone, no collapsed section, no wrong order to
-get wrong. The runtime-fingerprint comparison stays, demoted to a label
-("this PR changes native code — you'll need the install step").
+**One build per PR branch, not per push.** `ensureBuildForRuntime` becomes
+`ensureBuildForPr({ channel, runtime })`: reuse a build whose runtime *and*
+channel both match, otherwise trigger one. So the first push to a mobile PR
+costs a build (~15–20 min, EAS build minutes — worth watching); every later
+push reuses it and rides OTA. A mid-PR fingerprint change triggers a fresh
+one, as today.
 
-`ensureBuildForRuntime` also gets fixed to prefer a **finished** build and to
-say "build in progress" rather than linking a queued one as if it were
-installable.
+**Both QRs become individually correct.**
 
-Keep a collapsed second block with the raw EAS link for when you want it.
+| QR | Gets you | Correct when |
+| --- | --- | --- |
+| OTA (`iterate://preview-channel/<channel>`) | the PR's JS on the binary you already have | your binary's runtime matches |
+| Install (EAS build page) | a binary whose *own* channel is the PR's | always |
 
-> **Alternative worth arguing about:** bake the PR's channel into a per-PR
-> native build so a fresh install boots straight onto the PR's JS. Correct in
-> one step, but it is a full EAS build per PR (~15–20 min, no reuse across
-> branches) and it likely moves the fingerprint per PR. I don't think it's
-> worth it — say if you disagree.
+So the expansion heuristic stops mattering: pick wrong and you lose a scan,
+not an afternoon. `latestInstalledRuntime()` stays only as the label that
+decides which to expand.
+
+**The new-install guard stops being a footgun.**
+`resetChannelOverrideForNewInstall()` clears any override on the first boot of
+a new binary. Today that means installing a PR build drops you onto main.
+Once the binary's own channel *is* the PR's, clearing the override lands you
+exactly where you wanted — the guard becomes purely protective. No change
+needed to it, which is the point.
+
+**Also fix while in here:** `ensureBuildForPr` should prefer a *finished*
+build and render "build in progress — install link appears when it's done"
+rather than linking a queued build as though it were installable.
 
 ### 2. Check on open
 
 `UpdateWatcher`, mounted at the root:
 
-- runs when `watched` is true (`isOverride || defaultChannel !== "preview"`);
+- runs when `watched` is true (`channel !== binary.defaultChannel ||
+  binary.defaultChannel !== "preview"` — an override, or a non-main binary,
+  which with per-PR builds is now most of them);
 - runs on mount **and** on `AppState` returning to `active`, so the check
   happens on every open rather than every cold start;
 - shows a non-blocking banner — `1 behind: "fix the drawer glyph" · Update
@@ -349,11 +371,12 @@ is checkable.
 - [ ] `UpdateWatcher` + AppState foreground check + stale banner
 - [ ] Stamp into app config `extra.buildInfo`; `app.json` → `app.config.js`; add `ExpoConfigExtraSection` to `sourceSkips`; **verify the fingerprint does not move**
 - [ ] Read the available update's stamp off `manifest.extra.expoClient.extra`
-- [ ] `m/pr/<channel>?build=<id>` interstitial with deep-link-then-install fallback
-- [ ] `renderPreviewSection`: one primary QR; install link demoted to a collapsed block
-- [ ] `ensureBuildForRuntime`: prefer finished builds, report in-progress ones honestly
+- [ ] `eas.json`: add a `preview-pr` profile; CI rewrites its `channel` per PR before building
+- [ ] `ensureBuildForPr({channel, runtime})`: match on channel too, prefer finished builds, report in-progress ones honestly
+- [ ] Confirm the runtime fingerprint does **not** move when only `eas.json`'s channel changes (`expo-updates fingerprint:generate` either side)
+- [ ] `renderPreviewSection`: say what each QR now guarantees; the install one is no longer a half-measure
 - [ ] Web specs: stale banner, "1 behind" row, the reworded mismatch card (the `build-info-override` localStorage seam already supports this)
-- [ ] Update `apps/mobile/README.md` — the "Per-PR channels" section describes the two-QR flow being removed
+- [ ] Update `apps/mobile/README.md` — the "Per-PR channels" section still says installing gets you a main binary
 
 ## Decisions I made without asking
 
@@ -364,13 +387,16 @@ is checkable.
 - **Session is its own module**, not part of `build-state`. Different
   lifetime, different invalidation, and every screen needs it while only three
   need build state.
-- **No per-PR native builds** (see the alternative above).
+- **Per-PR native builds** over an https interstitial, per your call. If the
+  build cost or latency turns out to be annoying, the interstitial
+  (deep-link-then-install on one page) is still there as a fallback.
 
-## Open questions
+## Answered (annotation round 2)
 
-1. Which screen were you on when it said "not signed in"? If it was the QR
-   confirm screen, fix 3 covers it; anywhere else and there's a second bug.
-2. Do you want the stale banner on main/preview too, or only on overridden
-   channels and non-preview binaries as specified?
-3. Is one QR per PR right, or do you want the raw EAS install link kept
-   visible rather than collapsed?
+- **Where the "not signed in" was seen:** don't remember — assume the QR
+  confirm screen, i.e. covered by fix 3. If it shows up again after this
+  lands, it's a second bug and gets its own hunt.
+- **Stale banner scope:** overridden channels and non-`preview` binaries only.
+  A phone tracking main stays silent, as now.
+- **Build-per-PR cost:** accepted. A cleverer compromise (only build when the
+  fingerprint actually differs) can come later if the wait bites.
