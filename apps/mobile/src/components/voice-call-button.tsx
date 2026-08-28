@@ -39,7 +39,6 @@ type VoiceUiStatus = (VoiceCallStatus & { micDenied?: boolean }) | null;
 let activeCall: VoiceCallHandle | null = null;
 /** Generated once, lazily (~1s of PCM as base64). */
 let ringTonePcm: string | null = null;
-const ringTone = () => (ringTonePcm ??= ringTonePcm16Base64());
 /** Mic loudness 0..1, driven at capture-frame rate straight into the
  * animation — never through React state (16 Hz re-renders for a glow). */
 const pulse = new Animated.Value(0);
@@ -77,7 +76,7 @@ async function beginCall(baseUrl: string, projectId: string): Promise<void> {
         if (status.phase === "ended") activeCall = null;
         queryClient.setQueryData<VoiceUiStatus>(statusKey, status);
       },
-      ringPcmBase64: ringTone(),
+      ringPcmBase64: (ringTonePcm ??= ringTonePcm16Base64()),
       onLevel: (level) => {
         /* JS-driven on purpose: the sheet's level bar animates WIDTH (a
          * layout prop the native driver rejects), and one Animated.Value
