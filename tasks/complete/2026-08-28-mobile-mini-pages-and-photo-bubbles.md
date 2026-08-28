@@ -50,6 +50,35 @@ with the sheet — nothing else consumed it.
 Assumptions marked **[assumption]** below were made without the requester
 present.
 
+### Late findings (after the native rework)
+
+Review and the preview lane turned up four defects in the native screen, all of
+one shape — **the screen asserting a state it had not confirmed**:
+
+- Saving over an existing secret from a stale "does it exist?" answer took the
+  `create()` path, which keeps the old material, while the stored-material
+  check reported success. A rotation that silently did not happen. (Bugbot,
+  High.)
+- Gating Save on the query's *status* meant a failed background refetch took
+  the button away — triggered by leaving to a password manager, this screen's
+  main flow. (Bugbot, Medium.)
+- A bare `Pressable` renders as a plain `div`, so nothing outside React could
+  tell Save was disabled: assistive tech announces it as pressable, and the
+  preview lane tapped a no-op then waited 30s for a save that never started.
+  This was the red CI, not the spinner-waiter it was first blamed on.
+- Reopening the link after a save served the pre-save existence answer, so the
+  overwrite warning was missing on the visit where it matters most.
+
+Reproduced locally by slowing the existence check to 5s — worth keeping as the
+technique for this screen, since a fast local save hides all of it.
+
+Two things I got wrong along the way, recorded so they are not repeated:
+middlewright's spinner-waiter DOES honour an explicitly passed `{ timeout }`
+(it passes straight through; only the no-timeout path gets the 1ms fast-fail),
+and its `spinnerSelectors` are adjustable per-call via
+`spinnerWaiter.settings.run` — as `specs/mobile/chat-titles.spec.ts` already
+does. Neither was the problem here, and I asserted both without checking.
+
 ## What's being asked
 
 Five bundled items, four mobile-facing plus one platform one:
