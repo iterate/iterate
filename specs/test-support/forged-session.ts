@@ -206,7 +206,10 @@ export async function createProjectFixture(
         }
 
         take(call: ProjectAiInterceptorInput) {
-          const fingerprint = JSON.stringify(call);
+          const fingerprint = JSON.stringify(call).replace(
+            /Requested at: [:\w-.]+\b/,
+            "Requested at: <timestamp>",
+          );
           const existing = this.previous.get(fingerprint);
           if (existing) return existing;
 
