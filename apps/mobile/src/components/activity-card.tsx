@@ -5,7 +5,7 @@
 // at the egress door). Expanded (tap only): the run organized into
 // ROUNDS — the llm step that writes a script and the code step that runs it.
 // A single round shows its content directly; several rounds each collapse to
-// a "Round N · <summary status>" header (tap to expand; a running round
+// an "N · <summary status>" header (tap to expand; a running round
 // streams open) — where each code step is a tabbed view: Script | Approvals
 // | Result | Meta. The Approvals tab renders the SAME shared
 // ApprovalBatchBody the
@@ -25,7 +25,13 @@ import {
   type RequestedPayload,
   type ResolvedBatch,
 } from "../lib/approvals.ts";
-import type { AgentUiActivity, AgentUiCodeStep, AgentUiLlmStep, AgentUiStep } from "../lib/feed.ts";
+import type {
+  AgentUiActivity,
+  AgentUiCodeStep,
+  AgentUiLiveStatus,
+  AgentUiLlmStep,
+  AgentUiStep,
+} from "../lib/feed.ts";
 import { groupActivityRounds, summarizeActivity } from "../lib/feed.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
 import {
@@ -47,10 +53,16 @@ export type ActivityApprovalContext = {
 export function ActivityCard({
   activity,
   approvals,
+  liveStatus,
   threadEvents,
 }: {
   activity: AgentUiActivity;
   approvals: ActivityApprovalContext;
+  /** The feed's live-status derivation, when THIS card is the live activity
+   * (null for settled cards): the phase drives the glyph next to the
+   * spinner, and an agent-set status from this turn replaces the generic
+   * "writing code…"/"running code…" text. */
+  liveStatus: AgentUiLiveStatus | null;
   /** The thread's own event window — the Meta tab replays each llm request's
    * exact prompt from it (same pure fold as the os trace panel). */
   threadEvents: StreamEvent[];
@@ -77,14 +89,24 @@ export function ActivityCard({
 
   return (
     <View style={[styles.card, isLive && styles.cardLive]} testID={`activity-card-${activity.id}`}>
+      {/* Live and settled summary rows share one geometry: a 14px lead slot
+          (spinner scaled down / chevron) then a 14px glyph slot (phase glyph
+          / spacer), so the card keeps its size and the text its position
+          when the run settles. */}
       <Pressable style={styles.summaryRow} onPress={() => setToggled(!expanded)}>
         {isLive && activity.status === "running" ? (
-          <ActivityIndicator accessibilityLabel="Loading" size="small" color={colors.working} />
+          <ActivityIndicator
+            accessibilityLabel="Loading"
+            size="small"
+            color={colors.working}
+            style={styles.spinnerFit}
+          />
         ) : (
           <Text style={styles.chevron}>{expanded ? "▾" : "▸"}</Text>
         )}
+        {isLive ? <PhaseGlyph phase={liveStatus?.phase} /> : <View style={styles.phaseGlyphSlot} />}
         <Text style={styles.summary} numberOfLines={1}>
-          {isLive ? liveSummary(activity) : summarizeActivity(activity)}
+          {isLive ? liveSummary(activity, liveStatus) : summarizeActivity(activity)}
         </Text>
         <ApprovalGlyphs outcomes={outcomes} />
       </Pressable>
@@ -107,7 +129,7 @@ export function ActivityCard({
 
 /**
  * One round of the expanded card. A single round renders its content
- * directly; several rounds each collapse to a "Round N · <status> ·
+ * directly; several rounds each collapse to an "N · <status> ·
  * <duration>" header row so the per-round summary statuses read as a list —
  * the os feed's AgentActivityRoundRow shape
  * (apps/os/src/components/agent-activity-rounds.tsx). A round whose code
@@ -141,7 +163,7 @@ function RoundView({
       {collapsible ? (
         <Pressable style={styles.roundHeader} onPress={() => setToggled(!expanded)}>
           <Text style={styles.chevron}>{expanded ? "▾" : "▸"}</Text>
-          <Text style={styles.roundLabel}>Round {index + 1}</Text>
+          <Text style={styles.roundLabel}>{index + 1}</Text>
           {/* The agent's summary status as of this round (the reducer stamps
               the latest agent/summary-updated fold onto each code step).
               Summaries aren't forced short — one line, ellipsized. */}
@@ -238,7 +260,68 @@ function roundHeaderMeta(round: { llm: AgentUiLlmStep | null; code: AgentUiCodeS
   ].join(" · ");
 }
 
-function liveSummary(activity: AgentUiActivity): string {
+/**
+ * The turn-owed indicator for moments with no live activity yet (the send →
+ * first-request window): the SAME card the live activity renders as, so the
+ * loading affordance never changes box, border, or text position when the
+ * real card takes over — it just starts filling in.
+ */
+export function WorkingCard() {
+  return (
+    <View style={[styles.card, styles.cardLive]}>
+      <View style={styles.summaryRow}>
+        <ActivityIndicator
+          accessibilityLabel="Loading"
+          size="small"
+          color={colors.working}
+          style={styles.spinnerFit}
+        />
+        <PhaseGlyph phase="working" />
+        <Text style={styles.summary} numberOfLines={1}>
+          working…
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+/**
+ * The collapsed live card's second mark, after the spinner: what KIND of
+ * waiting this is. Text glyphs like ApprovalGlyphs, not vector icons — the
+ * summary row already speaks that language.
+ */
+function PhaseGlyph({ phase }: { phase: AgentUiLiveStatus["phase"] | undefined }) {
+  // Monochrome text glyphs only — an emoji here renders full-width and in
+  // color, jumping the row's layout and style. ⧗ (U+29D7) and ⋯ (U+22EF) are
+  // math symbols with no emoji presentation.
+  let glyph: { mark: string; label: string };
+  if (phase === "writing") glyph = { mark: "✎", label: "writing code" };
+  else if (phase === "running") glyph = { mark: "▶", label: "running code" };
+  else if (phase === "processing") glyph = { mark: "↻", label: "processing result" };
+  else if (phase === "thinking") glyph = { mark: "⋯", label: "thinking" };
+  else if (phase === "working") glyph = { mark: "⧗", label: "working" };
+  else if (phase === "waiting") glyph = { mark: "⧗", label: "waiting for a response" };
+  else glyph = { mark: "⧗", label: "waiting for a response" };
+  return (
+    <Text accessibilityLabel={glyph.label} style={styles.phaseGlyph} testID="live-phase-glyph">
+      {glyph.mark}
+    </Text>
+  );
+}
+
+function liveSummary(activity: AgentUiActivity, liveStatus: AgentUiLiveStatus | null): string {
+  // An agent-set status from this turn beats the generic phase text —
+  // whether it came from the running script's first line or an earlier
+  // round of the same turn.
+  if (liveStatus?.statusText) return liveStatus.statusText;
+  const phase = liveStatus?.phase;
+  if (phase === "running") return "running code…";
+  if (phase === "writing") return "writing code…";
+  if (phase === "thinking") return "thinking…";
+  if (phase === "waiting") return "waiting for a response…";
+  if (phase === "processing") return "working…";
+  // No feed-level status (a caller without the live derivation): the old
+  // steps-only fallback keeps the card honest.
   const current = activity.steps.findLast((step) => step.status === "running");
   if (current?.kind === "code") return "running code…";
   if (current?.kind === "llm" && current.responseText !== "") return "writing code…";
@@ -649,6 +732,22 @@ const styles = StyleSheet.create({
   roundMeta: { color: colors.textFaint, fontSize: 11, flexShrink: 1 },
   glyphRow: { flexDirection: "row", gap: 4, marginLeft: "auto" },
   glyph: { fontSize: 12, fontWeight: "700" },
+  // Fixed width like the chevron: glyphs differ slightly in advance width,
+  // and the status text must not shift as phases change.
+  phaseGlyph: {
+    color: colors.working,
+    fontSize: 12,
+    fontWeight: "700",
+    width: 14,
+    textAlign: "center",
+  },
+  // The settled row's stand-in for the glyph: same 14px, keeps the summary
+  // text in the exact place it held while live.
+  phaseGlyphSlot: { width: 14 },
+  // The stock small spinner is 20px — taller than the chevron's line, which
+  // made the LIVE card the bigger of the two. Scale it into the settled
+  // card's 14px lead slot instead (layout box first, visual scale second).
+  spinnerFit: { width: 14, height: 16, transform: [{ scale: 0.7 }] },
   glyphOpen: { color: colors.working },
   glyphApproved: { color: colors.accent },
   glyphRejected: { color: colors.danger },

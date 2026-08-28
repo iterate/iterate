@@ -223,6 +223,84 @@ export function isAgentUiActivityWorking(
   );
 }
 
+/** What the live activity is doing right now, from journal facts alone. */
+export type AgentUiLivePhase =
+  | "working"
+  | "waiting"
+  | "thinking"
+  | "writing"
+  | "running"
+  | "processing";
+
+export type AgentUiLiveStatus = {
+  phase: AgentUiLivePhase;
+  /** Agent-authored `activity` text set during THIS turn (a summary-updated
+   * folded since the live activity started), or null — code steps inherit
+   * `summaryActivity` at birth, so their stamp alone can be stale
+   * previous-turn text and is deliberately not used here. */
+  statusText: string | null;
+};
+
+/**
+ * The live activity's current phase plus this turn's agent-set status text.
+ * "processing" covers the two owed-but-not-yet-journaled gaps, both derived
+ * from facts already in the journal — no timer debounce, no new events:
+ * - the last step is a script that durably settled WITH a returned value
+ *   (codemode contract: a returned value means another LLM round follows);
+ * - the last step is a COMPLETED llm response whose text carries a codemode
+ *   script block — the extraction's script-run-requested event is coming,
+ *   and without this the card flashed settled between "writing code" and
+ *   "running code".
+ */
+export function deriveAgentUiLiveStatus(state: AgentUiState): AgentUiLiveStatus | null {
+  const live = state.live;
+  if (live == null) return null;
+  const statusText =
+    state.summaryActivity !== null &&
+    state.summaryActivityUpdatedAtMs !== null &&
+    state.summaryActivityUpdatedAtMs >= live.startedAtMs
+      ? state.summaryActivity
+      : null;
+  const phase = () => {
+    const current = live.steps.findLast((step) => step.status === "running");
+    if (current?.kind === "code") return "running";
+    if (current?.kind === "llm" && current.responseText !== "") return "writing";
+    if (current?.kind === "llm" && current.thinkingText !== "") return "thinking";
+    if (current?.kind === "llm") return "waiting";
+    const last = live.steps.at(-1);
+    // A paused loop owes no follow-up, whatever the last step promised — a
+    // pause folded mid-request must not leave a permanent claim after that
+    // request's outcome lands.
+    if (!state.paused && last?.kind === "code") {
+      if (
+        last.status === "done" &&
+        last.outcomeSource === "durable" &&
+        last.success === true &&
+        last.result !== undefined
+      ) {
+        return "processing";
+      }
+    }
+    if (!state.paused && last?.kind === "llm") {
+      // The response finished and visibly contains a script: what follows is
+      // a journal fact either way — script-run-requested when it extracts,
+      // or the format's rejection feedback driving another llm request — so
+      // the turn is not over. Line-anchored, matching the fenced-ts format's
+      // own rule (agent-response-format.ts): a ``` mentioned mid-prose is
+      // not a script and must not hold the card open.
+      if (
+        last.status === "done" &&
+        last.outcome === "completed" &&
+        (/^[ \t]*```/m.test(last.responseText) || last.responseText.includes("<codemode"))
+      ) {
+        return "processing";
+      }
+    }
+    return "working";
+  };
+  return { phase: phase(), statusText };
+}
+
 /** A file attachment shown alongside a user message in the agent UI. */
 export type AgentUiFileAttachment = {
   contentType: string;
@@ -361,6 +439,14 @@ export type AgentUiState = {
   provisionalActivities: Record<string, AgentUiActivity>;
   /** Latest agent/summary-updated `activity` text — stamped onto code steps. */
   summaryActivity: string | null;
+  /** When that text was folded. Compared against the live activity's start
+   * to tell a this-turn status from stale previous-turn text (code steps
+   * inherit `summaryActivity` at birth regardless of age). */
+  summaryActivityUpdatedAtMs: number | null;
+  /** The stream/agent is paused (agent/paused or stream/paused, uncleared by
+   * a resume). A paused loop owes no follow-up round, so the "processing"
+   * inference must not claim one. */
+  paused: boolean;
 };
 
 const AgentUiLlmStepSchema = z
@@ -485,6 +571,8 @@ export const AgentUiStateSchema = z
     tokenUsage: AgentUiTokenUsageSchema,
     provisionalActivities: z.record(z.string(), AgentUiActivitySchema),
     summaryActivity: z.string().nullable(),
+    summaryActivityUpdatedAtMs: z.number().finite().nullable(),
+    paused: z.boolean(),
   })
   .superRefine((state, context) => {
     for (const [id, activity] of Object.entries(state.provisionalActivities)) {
@@ -524,6 +612,8 @@ export function initialAgentUiState(): AgentUiState {
     tokenUsage: initialAgentUiTokenUsage(),
     provisionalActivities: {},
     summaryActivity: null,
+    summaryActivityUpdatedAtMs: null,
+    paused: false,
   };
 }
 
@@ -920,9 +1010,14 @@ function reduceAgentUiEvent(
       // fact — nothing running, no follow-up round — no later event exists to
       // flush it, and the runtime-transition flush is a transient overlay on
       // a lane that can lag or wedge independently. Journal facts alone must
-      // surface a sent message: settle the activity here and flush.
+      // surface a sent message: settle the activity here and flush. A paused
+      // loop is the same situation even with no deferred messages: the pause
+      // fact already landed (possibly mid-request), no follow-up round is
+      // coming, and no second pause will arrive to close the activity.
       if (
-        (next.deferredAssistantMessages.length > 0 || next.queuedUserMessages.length > 0) &&
+        (next.deferredAssistantMessages.length > 0 ||
+          next.queuedUserMessages.length > 0 ||
+          next.paused) &&
         !steps.some((candidate) => candidate.status === "running")
       ) {
         return flushDeferredMessages(settleLive(next, timestampMs, items), items);
@@ -942,9 +1037,14 @@ function reduceAgentUiEvent(
             ? { ...step, activitySummary: activity }
             : step,
         );
-        return { ...state, summaryActivity: activity, live: { ...state.live, steps } };
+        return {
+          ...state,
+          summaryActivity: activity,
+          summaryActivityUpdatedAtMs: timestampMs,
+          live: { ...state.live, steps },
+        };
       }
-      return { ...state, summaryActivity: activity };
+      return { ...state, summaryActivity: activity, summaryActivityUpdatedAtMs: timestampMs };
     }
 
     case AGENT_TOKEN_USAGE_REPORTED: {
@@ -1118,20 +1218,29 @@ function reduceAgentUiEvent(
 
     // The stream-level facts (the whole stream stops accepting appends) and
     // the agent-level facts (the turn loop parks — the autonomous breaker, or
-    // an operator) render as the same pause/resume marker rows.
+    // an operator) render as the same pause/resume marker rows. A pause is
+    // also a run boundary: no more work is coming, so an idle live activity
+    // (e.g. mid-turn after a script returned a value — the "processing" gap)
+    // settles from this journal fact alone instead of waiting on the
+    // runtime-transition overlay. A still-running step keeps the activity
+    // live: agent/paused is operator/script-appendable while a request is
+    // open, and that request settles normally.
     case STREAM_PAUSED:
-    case AGENT_PAUSED:
-      return emitItem(state, items, {
+    case AGENT_PAUSED: {
+      const settled = settleActivityAtBoundary({ ...state, paused: true }, timestampMs, items);
+      const flushed = settled.live === null ? flushDeferredMessages(settled, items) : settled;
+      return emitItem(flushed, items, {
         kind: "stream-paused",
         id: `stream-paused-${event.offset}`,
         text: "Agent paused",
         ...readOptionalReason(event),
         timestampMs,
       });
+    }
 
     case STREAM_RESUMED:
     case AGENT_RESUMED:
-      return emitItem(state, items, {
+      return emitItem({ ...state, paused: false }, items, {
         kind: "stream-resumed",
         id: `stream-resumed-${event.offset}`,
         text: "Agent resumed",

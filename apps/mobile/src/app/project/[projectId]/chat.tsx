@@ -48,6 +48,7 @@ import type { Agent, StreamEvent } from "iterate/sdk/itx/react";
 import {
   ActivityCard,
   CodeBlock,
+  WorkingCard,
   type ActivityApprovalContext,
 } from "../../../components/activity-card.tsx";
 import { Markdown } from "../../../components/markdown.tsx";
@@ -402,11 +403,13 @@ function FeedList({
         // already looking.
         <View style={styles.bottomStack}>
           {approvals}
-          {sendPending || (feed.working && feed.live?.steps.length === 0) ? (
-            <View style={styles.workingRow}>
-              <ActivityIndicator accessibilityLabel="Loading" size="small" color={colors.working} />
-              <Text style={styles.workingText}>working…</Text>
-            </View>
+          {/* working with no live steps covers BOTH owed-turn gaps: a live
+              activity with no steps yet, and the pending-turn debounce
+              window where no live activity exists at all (feed.ts
+              turnPending). Rendered as the SAME card the live activity uses,
+              so the box doesn't jump when the real card takes over. */}
+          {sendPending || (feed.working && (feed.live === null || feed.live.steps.length === 0)) ? (
+            <WorkingCard />
           ) : null}
         </View>
       }
@@ -419,7 +422,12 @@ function FeedList({
         </View>
       }
       renderItem={({ item }) => (
-        <FeedItem activityApprovals={activityApprovals} item={item} threadEvents={threadEvents} />
+        <FeedItem
+          activityApprovals={activityApprovals}
+          item={item}
+          liveStatus={item.id === feed.live?.id ? feed.liveStatus : null}
+          threadEvents={threadEvents}
+        />
       )}
     />
   );
@@ -428,16 +436,23 @@ function FeedList({
 function FeedItem({
   activityApprovals,
   item,
+  liveStatus,
   threadEvents,
 }: {
   activityApprovals: ActivityApprovalContext;
   item: MobileFeedItem;
+  liveStatus: ReturnType<typeof reduceFeed>["liveStatus"];
   threadEvents: StreamEvent[];
 }) {
   switch (item.kind) {
     case "activity":
       return (
-        <ActivityCard activity={item} approvals={activityApprovals} threadEvents={threadEvents} />
+        <ActivityCard
+          activity={item}
+          approvals={activityApprovals}
+          liveStatus={liveStatus}
+          threadEvents={threadEvents}
+        />
       );
     case "stream-woken":
       return (
@@ -648,14 +663,6 @@ const styles = StyleSheet.create({
   bubbleUserText: { color: colors.background, fontSize: 15, lineHeight: 21 },
   bubbleAssistantText: { color: colors.text, fontSize: 15, lineHeight: 21 },
   bottomStack: { gap: spacing.sm },
-  workingRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-  },
-  workingText: { color: colors.working, fontSize: 13 },
   eventRow: { gap: 4 },
   eventType: { color: colors.textFaint, fontSize: 11, fontFamily: "Menlo" },
   wakeMarker: { color: colors.textFaint, fontSize: 11, textAlign: "center" },
