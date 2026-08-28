@@ -116,6 +116,7 @@ async function beginCall(
           workers: {
             get: (ref) => (project as any).workers.get(ref),
           },
+          repo: (project as any).repo,
           streamPath,
           colleaguePath: resolved.colleaguePath,
           /* Keyed by PROJECT too, not just stream path: the path is the

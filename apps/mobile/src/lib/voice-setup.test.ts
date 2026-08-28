@@ -1,12 +1,22 @@
 import { expect, test } from "vitest";
 import {
   chatVoiceStreamPath,
+  ensureVoiceAgentInstalled,
   ensureVoiceAgentSetup,
   mobileVoiceStreamPath,
   setupMarker,
   voiceSetupConfig,
   MOBILE_VOICE_SETUP,
 } from "./voice-setup.ts";
+import { VOICE_AGENT_TEMPLATE_FILES } from "./voice-template.generated.ts";
+
+/** A repo that already has the template — the common case. */
+const repoWithTemplate = {
+  readFile: async () => ({ content: "// installed" }),
+  commitFiles: async () => {
+    throw new Error("must not commit over an installed template");
+  },
+};
 
 test("the marker is stable for one stream and distinct across streams and configs", () => {
   const base = voiceSetupConfig(null);
@@ -38,6 +48,7 @@ test("a matching marker skips setup entirely", async () => {
   const calls: unknown[] = [];
   await ensureVoiceAgentSetup({
     workers: { get: () => ({ setupVoiceAgent: async (o: unknown) => calls.push(o) }) },
+    repo: repoWithTemplate,
     streamPath: "/agents/voice/mobile-x",
     colleaguePath: null,
     readMarker: async () => setupMarker("/agents/voice/mobile-x", voiceSetupConfig(null)),
@@ -54,6 +65,7 @@ test("a missing marker runs setup with the full config, then records the marker"
   const streamPath = mobileVoiceStreamPath("device-1");
   await ensureVoiceAgentSetup({
     workers: { get: () => ({ setupVoiceAgent: async (o: unknown) => calls.push(o) }) },
+    repo: repoWithTemplate,
     streamPath,
     colleaguePath: null,
     readMarker: async () => null,
@@ -77,6 +89,7 @@ test("a per-chat setup sends the chat as colleaguePath", async () => {
   const streamPath = chatVoiceStreamPath("/agents/mobile/42");
   await ensureVoiceAgentSetup({
     workers: { get: () => ({ setupVoiceAgent: async (o: unknown) => calls.push(o) }) },
+    repo: repoWithTemplate,
     streamPath,
     colleaguePath: "/agents/mobile/42",
     readMarker: async () => null,
@@ -99,6 +112,7 @@ test("a failed setup writes no marker, so the next tap retries", async () => {
           },
         }),
       },
+      repo: repoWithTemplate,
       streamPath: "/agents/voice/mobile-x",
       colleaguePath: null,
       readMarker: async () => null,
@@ -108,4 +122,30 @@ test("a failed setup writes no marker, so the next tap retries", async () => {
     }),
   ).rejects.toThrow("secret missing");
   expect(written).toEqual([]);
+});
+
+test("a project with no voice agent gets the embedded template committed, once", async () => {
+  const commits: any[] = [];
+  const empty = {
+    readFile: async () => null,
+    commitFiles: async (input: any) => {
+      commits.push(input);
+      return {};
+    },
+  };
+  await ensureVoiceAgentInstalled(empty);
+  expect(commits).toHaveLength(1);
+  expect(commits[0].changes.map((c: any) => c.path)).toContain("voice-agent.ts");
+  /* The embedded template is the deploy walk's result: entry point plus
+   * every relative import, flat. */
+  expect(VOICE_AGENT_TEMPLATE_FILES.map((f) => f.path).sort()).toEqual([
+    "face.ts",
+    "pcm.ts",
+    "viseme-model.generated.ts",
+    "viseme.ts",
+    "voice-agent.ts",
+  ]);
+  /* And a present template is never overwritten — voicelab deploy owns
+   * upgrades; an app must not downgrade. */
+  await ensureVoiceAgentInstalled(repoWithTemplate);
 });

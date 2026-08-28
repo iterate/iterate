@@ -57,6 +57,7 @@ test("calling a chat: speak, be answered, and the conversation lands on the chat
     ensureSetup: () =>
       ensureVoiceAgentSetup({
         workers: { get: (ref) => (project as any).workers.get(ref) },
+        repo: (project as any).repo,
         streamPath,
         colleaguePath: chatPath,
         readMarker: async (p) => markers.get(p) ?? null,

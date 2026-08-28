@@ -5,9 +5,13 @@
 // setup pays an occurrence-keyed append plus a warm barrier, dead latency on
 // every tap if repeated; a content-hash marker is the cheap idempotence).
 //
-// No template install and no posture-flip guard, deliberately: the guest
-// worker is installed project-wide by the voicelab tooling, and this device
-// owns its UUID'd path and only ever sends one posture.
+// No posture-flip guard, deliberately: each line owns its path and only
+// ever sends one posture. The template DOES auto-install now (absent only
+// — see ensureVoiceAgentInstalled): a project that has never seen voice
+// gets the embedded guest worker committed during the ring, instead of an
+// eternal ring ending in a "needs setup" caption.
+
+import { VOICE_AGENT_TEMPLATE_FILES } from "./voice-template.generated.ts";
 
 /** Where a phone's calls live: stable per device (grill Q3) — the boards'
  * pattern — so the per-stream colleague and the reconnect recap give the
@@ -108,6 +112,34 @@ export interface VoiceSetupWorkers {
   };
 }
 
+/** The slice of the config-repo handle the auto-install dials — the same
+ * two calls apps/os/scripts/voicelab/deploy.ts makes. */
+export interface VoiceSetupRepo {
+  readFile(input: { path: string }): Promise<{ content?: string } | string | null>;
+  commitFiles(input: {
+    changes: { content: string; path: string }[];
+    message: string;
+  }): Promise<unknown>;
+}
+
+/**
+ * Put the embedded voice-agent template into the project's config repo when
+ * it has none — the fresh/recycled-project case that used to be an eternal
+ * ring ending in "the project may need voice set up" (Misha, on-device,
+ * 2026-08-28). ABSENT ONLY: a present voice-agent.ts is left alone whatever
+ * its version — `voicelab deploy` owns upgrades, and an app must never
+ * downgrade a project's template to the one it happened to ship with.
+ */
+export async function ensureVoiceAgentInstalled(repo: VoiceSetupRepo): Promise<void> {
+  const existing = await repo.readFile({ path: "voice-agent.ts" }).catch(() => null);
+  const content = typeof existing === "string" ? existing : existing?.content;
+  if (typeof content === "string" && content !== "") return;
+  await repo.commitFiles({
+    changes: VOICE_AGENT_TEMPLATE_FILES,
+    message: "mobile: auto-install the voice-agent template (first call)",
+  });
+}
+
 /**
  * Assert the stream's certificate unless the stored marker says this exact
  * config already was. A failed setup NEVER writes the marker — the next tap
@@ -115,6 +147,7 @@ export interface VoiceSetupWorkers {
  */
 export async function ensureVoiceAgentSetup(deps: {
   workers: VoiceSetupWorkers;
+  repo: VoiceSetupRepo;
   streamPath: string;
   /** The chat this line calls (per-chat mode), or null for the device's own line. */
   colleaguePath: string | null;
@@ -124,6 +157,9 @@ export async function ensureVoiceAgentSetup(deps: {
   const config = voiceSetupConfig(deps.colleaguePath);
   const marker = setupMarker(deps.streamPath, config);
   if ((await deps.readMarker(deps.streamPath)) === marker) return;
+  /* Inside the marker miss on purpose: one repo read per config change,
+   * not per call — and the ring covers the install when it does happen. */
+  await ensureVoiceAgentInstalled(deps.repo);
   await deps.workers
     .get(voiceAgentEntrypointRef)
     .setupVoiceAgent({ streamPath: deps.streamPath, ...config });

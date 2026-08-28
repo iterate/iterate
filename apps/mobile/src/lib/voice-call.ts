@@ -347,9 +347,11 @@ export async function startVoiceCall(deps: {
   /* A press nobody consumes must not ring forever: no pickup in time ends
    * the call with a caption a person can act on. Seen live when a preview
    * backend recycled under the app — fresh project, no facet, eternal
-   * ring. */
+   * ring. Setup now auto-installs a missing template (and a missing secret
+   * fails setup with its own message before the mint), so this caption no
+   * longer speculates about setup. */
   noAnswerTimer = setTimeout(() => {
-    finish("no answer — the project may need voice set up; try again");
+    finish("no answer — try again");
   }, deps.ringTimeoutMs ?? 25_000);
 
   return {
