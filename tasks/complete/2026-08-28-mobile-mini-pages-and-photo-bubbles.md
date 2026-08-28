@@ -10,29 +10,42 @@ size: medium
 Done, awaiting merge — [PR #2538](https://github.com/iterate/iterate/pull/2538).
 All five items shipped, CI green, every review thread resolved.
 
-- **Done:** the mini-page contract on both sides (`returnTo` + status, with an
-  app-scheme-only allowlist), the eye toggle, the compacted collect-secret
-  page, Telegram-style photo bubbles, and `getSecret(...)` in query values.
-- **Covered by:** `specs/collect-secret.spec.ts` (the page end-to-end at
-  390×844, including the two-thirds-of-a-screen budget) and
-  `specs/mobile/chat-photos.spec.ts` (both halves of the photo rule on the real
-  build), plus unit tests for the two contract modules, the frame maths, and
-  the substitution rules.
+**The mini-page approach was abandoned mid-review, on purpose.** The first
+build opened the collect-secret page in an in-app browser sheet that closed
+itself. It worked, but it carried iOS's "Iterate wants to use iterate.com to
+sign in" consent prompt — and that prompt asks about something that is not even
+true here: the app authenticates itx with a bearer token, so no browser's
+cookies decide whether you are signed in. Checking that also ruled out a
+WKWebView (its own cookie jar means a fresh login inside the popup). The app
+can do everything the page does over the session it already holds, so it now
+renders the request natively: no browser, no prompt, no second sign-in, no app
+switch, one hop fewer than the web path. The `returnTo` contract was deleted
+with the sheet — nothing else consumed it.
+
+- **Done:** the native collect-secret screen and its link parser, the eye
+  toggle and compaction on the web page (which still serves desktop, Slack and
+  email), Telegram-style photo bubbles, and `getSecret(...)` in query values.
+- **Covered by:** `specs/mobile/collect-secret.spec.ts` (the whole round trip
+  on the real build, driven by a link from the production builder),
+  `specs/collect-secret.spec.ts` (the web page, including its size budget),
+  `specs/mobile/chat-photos.spec.ts`, plus unit tests for the link parser, the
+  photo frame maths, and the substitution rules.
 - **Review changed two rules.** Bugbot found that a caption longer than its
-  photo stretched the bubble past it, which reopened the very gap this was
-  meant to close; the fix made the frame width a constant every photo and its
-  caption share, which also retired the separate "small images keep their own
-  size" case. It also found that `URLSearchParams` reads a literal `+` as a
-  space, so a secret path containing one routed correctly at discovery and then
-  400d — query pairs now come off the raw query text.
-- **Declined:** two `no-inferable-type-annotation` suggestions. The annotations
-  they object to are the prevailing style in the same files (~488 repo-wide),
-  nothing enforces the rule, and both functions are single sources of truth
-  where the annotation is what fails the build if a body drifts. Reasoning is
-  in the threads; if the repo does want that direction it is a codemod plus a
-  lint rule.
-- **Not done here:** the first ad-hoc "collect some info" mini page — the
-  contract is what this PR lands, and the next page needs no new plumbing.
+  photo stretched the bubble past it, reopening the very gap this was meant to
+  close; the fix made the frame width a constant every photo and its caption
+  share, which also retired the separate "small images keep their own size"
+  case. It also found that `URLSearchParams` reads a literal `+` as a space, so
+  a secret path containing one routed correctly at discovery and then 400d —
+  query pairs now come off the raw query text.
+- **Declined:** two `no-inferable-type-annotation` suggestions (raised twice).
+  The annotations they object to are the prevailing style in the same files
+  (~488 repo-wide), nothing enforces the rule, and both functions are single
+  sources of truth where the annotation is what fails the build if a body
+  drifts. Reasoning is in the threads; if the repo wants that direction it is a
+  codemod plus a lint rule.
+- **Next:** ad-hoc "collect some info" screens. The native path makes this a
+  different shape than the abandoned web contract — the app would render a
+  described form rather than open a page — so it wants its own task.
 
 Assumptions marked **[assumption]** below were made without the requester
 present.
@@ -141,23 +154,24 @@ Five bundled items, four mobile-facing plus one platform one:
 
 ## Decisions taken while specifying
 
-**Mini-page auto-close mechanism: `WebBrowser.openAuthSessionAsync`.**
-`expo-web-browser` is already a dependency and already used for OAuth. Its
-auth-session mode dismisses the browser by itself the moment the page
-navigates to a URL with the app's scheme, and it hands the resulting URL back
-to the caller — which is exactly "watch for page state, then close", and it
-gives the app the outcome rather than just a dismissal. **[assumption]** The
-cost is iOS's one-time "Iterate wants to use iterate.com to sign in" consent
-sheet. The alternative — `openBrowserAsync` plus a deep-link handler calling
-`dismissBrowser()` — dodges that sheet but loses the result and needs a global
-link listener. Taking the consent sheet.
+**~~Mini-page auto-close via `WebBrowser.openAuthSessionAsync`~~ — superseded.**
+Built and then removed. The consent sheet was judged an acceptable cost here;
+it was not, and the reasoning behind accepting it was wrong: the sheet asks
+about a browser sign-in that has nothing to do with how the app authenticates.
+See the status note above.
 
-**The generic contract is `returnTo` + status params.** A mini page is any
-page that (a) reads a `returnTo` app-scheme URL from its search params and
-(b) navigates to it when its job is done, with `status=` describing how. The
-mobile side needs to know nothing about what the page collected. Ad-hoc
-"collect some info" pages implement the same two things and get the same
-auto-close for free.
+**~~The generic contract is `returnTo` + status params~~ — superseded.** Deleted
+with the sheet, since nothing else consumed it. The reuse it was meant to buy
+(ad-hoc "collect some info" pages) is still wanted, but the native path makes
+it a different shape: the app renders a described form rather than opening a
+page.
+
+**The app writes the secret itself.** The collect-secret page only ever did
+three things — describe the secret, write material and egress in one update,
+message the agent that asked — and the app holds an authenticated itx session
+that can do all three. Rendering the request natively removes the browser, the
+consent prompt, the cookie jar and the app switch in one move, and shortens the
+path the material travels. The web page stays for links followed anywhere else.
 
 **Query-param secrets: doing it, with the caveat written down.** The
 reason to hesitate is real but it is the caller's to weigh, not the
