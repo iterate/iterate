@@ -18,6 +18,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import {
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -149,15 +150,26 @@ function CollectSecretForm({
         return "notify-failed";
       }
     },
-    // What we just wrote is what the existence query answers, so its cached
-    // answer is now wrong.
-    onSuccess: () =>
-      queryClient.invalidateQueries({
+    onSuccess: (outcome) => {
+      // What we just wrote is what the existence query answers, so its cached
+      // answer is now wrong.
+      void queryClient.invalidateQueries({
         queryKey: ["collect-secret", baseUrl || "", projectId, request.path],
-      }),
+      });
+      // Straight back to the thread. The agent's own "I submitted the secret
+      // at …" message lands there as you arrive, which is the confirmation —
+      // an interstitial saying the same thing is one more tap for nothing.
+      if (outcome === "notify-failed") {
+        // The exception: stored, but nobody was told. Only the user can
+        // unstick that, so it cannot be a message they might scroll past.
+        Alert.alert(
+          "Saved, but the agent wasn't told",
+          `The secret at ${request.path} is stored. Send a message saying it's ready.`,
+        );
+      }
+      router.back();
+    },
   });
-
-  if (submit.data !== undefined) return <Saved outcome={submit.data} path={request.path} />;
 
   // No submitting before there is somewhere to submit to, before we know
   // whether this replaces an existing secret (the warning above is a promise
@@ -167,7 +179,13 @@ function CollectSecretForm({
   // background refetch that fails leaves the answer we already have in place,
   // and must not take the button away from someone who has just come back
   // with a credential in their clipboard.
-  const checked = !!existing.data;
+  // Answered, and not currently re-asking. Presence alone is not enough:
+  // reopening the link after a save serves the copy taken BEFORE it, so the
+  // screen would look ready and quietly omit the overwrite warning on exactly
+  // the visit where it matters. While we are asking, we say we are asking.
+  // (Nothing refetches in the background any more — see refetchOnWindowFocus
+  // above — so this cannot take Save away from someone who has an answer.)
+  const checked = !!existing.data && !existing.isFetching;
   const canSave = material.length > 0 && baseUrl !== undefined && checked && !submit.isPending;
 
   return (
@@ -222,6 +240,7 @@ function CollectSecretForm({
               you check you pasted the key and not your shopping list. */}
           <Pressable
             accessibilityLabel={revealed ? "Hide value" : "Show value"}
+            accessibilityRole="button"
             onPress={() => setRevealed(!revealed)}
             style={styles.reveal}
           >
@@ -242,6 +261,7 @@ function CollectSecretForm({
             </Text>
             <Pressable
               accessibilityLabel="Try again"
+              accessibilityRole="button"
               onPress={() => void existing.refetch()}
               style={styles.retry}
             >
@@ -268,6 +288,12 @@ function CollectSecretForm({
 
         <Pressable
           accessibilityLabel="Save secret"
+          // Role and state, not just `disabled`: a bare Pressable renders as a
+          // plain div, so nothing outside React can tell the button is not
+          // ready — a screen reader announces it as pressable, and a test taps
+          // a no-op and waits forever for something that never started.
+          accessibilityRole="button"
+          accessibilityState={{ disabled: !canSave }}
           disabled={!canSave}
           onPress={() => submit.mutate(material)}
           style={[styles.save, !canSave && styles.saveDisabled]}
@@ -287,28 +313,6 @@ function CollectSecretForm({
         </Pressable>
       </ScrollView>
     </KeyboardAvoidingView>
-  );
-}
-
-function Saved({ outcome, path }: { outcome: SavedOutcome; path: string }) {
-  return (
-    <View style={styles.centered}>
-      <Text style={styles.title}>Secret saved</Text>
-      <Text style={styles.muted}>
-        {outcome === "notified"
-          ? "The agent that asked for it has been notified and will pick up from here."
-          : outcome === "notify-failed"
-            ? `The secret is stored, but the agent that asked could not be notified. Tell it the secret at ${path} is ready.`
-            : "It is stored and ready to use."}
-      </Text>
-      <Pressable
-        accessibilityLabel="Back to chat"
-        onPress={() => router.back()}
-        style={styles.save}
-      >
-        <Text style={styles.saveText}>Back to chat</Text>
-      </Pressable>
-    </View>
   );
 }
 

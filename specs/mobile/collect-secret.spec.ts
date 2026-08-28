@@ -51,6 +51,9 @@ test("provides a secret from the thread, with no browser in the way", async ({
       egress: ["https://api.stripe.com"],
       path: SECRET_PATH,
       description: "Stripe restricted key — Developers → API keys",
+      // What collectFromUser sets when an agent scope mints the link: the
+      // agent to tell once the secret is stored.
+      notify: agentPath,
     },
   });
   // web-message-sent is the agent's reply into the thread — the same event a
@@ -77,19 +80,22 @@ test("provides a secret from the thread, with no browser in the way", async ({
   expect(await value.getAttribute("type")).not.toBe("password");
 
   await page.getByLabel("Save secret").click();
-  // Storing a secret is several real round trips on a preview deployment, and
-  // waitFor cannot express that here: the plugin overwrites any timeout passed
-  // to it, so polling is what the spec guidance leaves.
-  // timeout: the spinner-waiter fast-fails this wait at 1ms.
-  await expect.poll(() => page.getByText("Secret saved").count(), { timeout: 30_000 }).toBe(1);
+
+  // Saving returns you straight to the thread, where the agent has been told —
+  // as a message from you, the same one the web page sends. That message
+  // arriving IS the confirmation, so it is what the spec waits for.
+  // timeout: the spinner-waiter cannot see a wait that spans a screen pop.
+  await expect
+    .poll(() => page.getByText(`I submitted the secret at "${SECRET_PATH}"`).count(), {
+      timeout: 30_000,
+    })
+    .toBe(1);
+  await page.getByText("I need your Stripe key.").waitFor();
 
   // Stored write-only and already pinned — checked at the source rather than
-  // taken from the sheet's own success copy.
+  // taken from the app's own copy.
   const secret = await itx.secrets.get(SECRET_PATH).__describe();
   expect(secret).toMatchObject({ hasMaterial: true, egress: { urls: ["https://api.stripe.com"] } });
-
-  await page.getByLabel("Back to chat").click();
-  await page.getByText("I need your Stripe key.").waitFor();
 
   // ── Rotation. The same link over an existing secret must REPLACE the
   // material, and say so first. This is the failure the create/update choice
@@ -101,8 +107,13 @@ test("provides a secret from the thread, with no browser in the way", async ({
   await page.getByText("This replaces an existing secret").waitFor();
   await page.getByLabel("Value", { exact: true }).fill("sk_test_rotated");
   await page.getByLabel("Save secret").click();
-  // timeout: the spinner-waiter fast-fails this wait too — as the first save.
-  await expect.poll(() => page.getByText("Secret saved").count(), { timeout: 30_000 }).toBe(1);
+  // Back in the thread again, now with two of those messages.
+  // timeout: the spinner-waiter cannot see a wait that spans a screen pop.
+  await expect
+    .poll(() => page.getByText(`I submitted the secret at "${SECRET_PATH}"`).count(), {
+      timeout: 30_000,
+    })
+    .toBe(2);
 
   // Material is write-only, so "did it actually change?" is answered by the
   // secret's own stream: a rotation appends secret/updated, a no-op create
