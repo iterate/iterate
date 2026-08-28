@@ -539,3 +539,23 @@ Full suite **289 passed / 18 xf** (was 287/20), typecheck clean.
   a documented follow-up (needs buffering + content-length recompute).
 
 Session total: **12 defects closed** (41, 40, 19, 20, 43, 47, 6, 7, 15, 16, 21, 49).
+
+### Live proof of all 12 fixes (deploy 308b3044)
+
+- **prove_push** — ALL PASS (subscription-forwarder lane: subscribe, stateless-worker digest, HALT +
+  audit, resume, auto-enable). Exercises processor gap-repair + connected delivery.
+- **prove_ephemeralflood** — ALL PASS: 2000/2000 no loss, no dup, ScannedOffsetRanges CHAIN (zero
+  pulls), 50× batching, ~4684 ev/s p50 221ms — the defect-6 `distinct` change held delivery + perf.
+- **prove_crisp1** — ALL PASS: connections.list / get(key) reaches ONE client / each() fans out —
+  validates the defect 15/16 connection-lifecycle changes live.
+
+**PRE-EXISTING gap surfaced (NOT this session's regression): userspace processors that import the SDK
+can't load on the deployment.** prove_livestate + prove_hibernate3 fail with `No such module
+"processor.js" imported from "cap.js"`. Root cause is the maximal consolidation's "no auto-SDK
+injection" in confinedWorker: `chatroom.js`/`chunky.js`/`user-tally.js` all `import from
+"./processor.js"`, but `seedSources` seeds only the source files — nothing provides the SDK module to
+the loader anymore. This session touched none of the SDK-provision path (agent-runtime.ts / sdk.ts /
+processor-facet.ts) — the proofs that pinned the consolidation (ephemeralflood/slack/crisp1/push) use
+stateless workers or built-in facets, none of which import the SDK, so the gap went unproven. Fix
+belongs with whoever owns confinedWorker: either re-inject `processor.js` for SDK-importing loads, or
+seed it. Filed as a follow-up, distinct from the defect sweep.
