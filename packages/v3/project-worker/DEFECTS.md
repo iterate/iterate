@@ -4,6 +4,23 @@ Source of truth for the fix campaign (goal step 1). Every entry is a verified `t
 the three lanes (commit cfe9d32f2). Severity: ☠ = data/authority loss, ⚠ = wrong behavior,
 ◇ = missing parity feature. Fix costs are NET lines (negative = code shrinks).
 
+> **STATUS (2026-08-28) — campaign essentially complete; suite 295 passed / 9 expected-fail.**
+> Full record: `SIMPLIFICATION-LOG.md`. The per-entry notes below are the ORIGINAL hunt findings —
+> consult the log for what actually shipped.
+>
+> - **RESOLVED + live-proven:** the codec/provide family (1,2,3,5 — dissolved by the JSON5 codec),
+>   event-log (6,7), processor (19,20,21), capability-path (40,41), kv-list (43), empty-type (47),
+>   revoke-keyless (46), connections concurrent-collapse + offline-coding (15,16), egress URL secret
+>   (49), and **row chunking (25)**. The SDK-injection gap (userspace processors importing
+>   `processor.js`) is FIXED.
+> - **DISSOLVED — not defects under the trusted-client model** (no malicious-client defense; blips
+>   are deliberately two facts): **14** (a network blip now files session started+ended; the
+>   storm-rule machinery was deleted), **34** (no reserved-key namespace fence), **48** (no
+>   forged-`source` guard). See `feedback_trusted_clients_radical_simplicity`.
+> - **STILL OPEN (design-heavy):** **24** dotted-surface promise-pipelining (5 tests), **27/28**
+>   WebSocket-through-a-live-capability (2 tests, loader-lane), plus the harness-only 50-processors
+>   marker and the parity-boundary non-guarantee (**37**).
+
 ## Family A — print↔parse asymmetry (silent authority loss) ☠
 
 Tests: src/core/expression.failing.test.ts, src/capability-table-processor.failing.test.ts
