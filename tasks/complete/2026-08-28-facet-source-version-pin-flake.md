@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: medium
 ---
 
@@ -69,9 +69,11 @@ fixed-run can produce identical observable traces.
 - [x] Update the `failing()` docs _determinism rule added to
   failing-test.ts and docs/testing.md; worked-example pointers moved to
   project-create-concurrency + guarantees-not-given_
-- [ ] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format`, one green
+- [x] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format`, one green
   run of the reworked test against a live deployment, PR CI green
-  _static checks green locally; live run in progress_
+  _static checks green; test green twice against local dev (20s/18s) and on
+  the PR's preview run with no retry (Depot `qb5hz39k67`, 35.6s); full CI
+  green on #2546_
 
 ## Assumptions made while AFK
 

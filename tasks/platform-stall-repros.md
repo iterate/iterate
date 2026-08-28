@@ -146,7 +146,7 @@ PR's diff:
   but the abort/reattach race resolving commit-correlated, three rounds in
   a row. Pin and blind-spot repro removed; deterministic contract kept as a
   plain test; the race is `tasks/facet-commit-pickup-race.md`
-  (see `tasks/facet-source-version-pin-flake.md` for the full story)._
+  (see `tasks/complete/2026-08-28-facet-source-version-pin-flake.md` for the full story)._
 
 ## Checklist
 

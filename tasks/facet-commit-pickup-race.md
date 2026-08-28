@@ -15,7 +15,7 @@ the parent incarnation — indefinitely, for a stream that never hibernates
 live voice call holds). This used to be pinned by a
 `failing(test, /SAME-BOOT STALENESS/)` test; the pin was removed because a
 racy bug cannot be pinned deterministically
-(tasks/facet-source-version-pin-flake.md has that story). The fix work
+(tasks/complete/2026-08-28-facet-source-version-pin-flake.md has that story). The fix work
 lives here now.
 
 ## The mechanism
@@ -80,7 +80,7 @@ old code with no signal anywhere that it did.
 
 Do not re-add a `failing()` pin for the stale side of the race — that is
 the flake generator this task replaced
-(tasks/facet-source-version-pin-flake.md). The deterministic surrounding
+(tasks/complete/2026-08-28-facet-source-version-pin-flake.md). The deterministic surrounding
 contract (marker stable while unchanged; fresh facet after a kill serves
 the committed source) is covered by
 `apps/os/e2e/vitest/userspace-facet-source-version.e2e.test.ts`. Once a fix
