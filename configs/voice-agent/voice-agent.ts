@@ -844,6 +844,14 @@ const VoiceState = z.object({
    * `colleague: false` on the certificate.
    */
   colleague: z.boolean().default(true),
+  /**
+   * Greet on pickup: when the handshake completes, the model speaks FIRST —
+   * "hi" (or "hi again", which falls out of the transcript recap naturally)
+   * — instead of waiting for a turn. Made for push-to-talk clients whose
+   * ringing UX promises somebody on the other end; off by default because
+   * the boards' open-mic rooms did not ask to be greeted.
+   */
+  greeting: z.boolean().default(false),
   /** Tools the model may call — see {@link VoiceTool}. */
   tools: z.array(VoiceTool).default([]),
   /**
@@ -989,7 +997,11 @@ export const VoiceAgentContract = defineProcessorContract({
    * resolution, deadline expiry, unsolicited messages vanishing) go with
    * it. The fast half may nudge and forward the person's pushback without
    * being asked, and may read notes out verbatim. Clean break as ever. */
-  version: "16.0.0",
+  /* 17.0.0: `greeting` on the certificate — a call that "rings" should say
+   * hi when it picks up. On session.updated the facet plants a system item
+   * and asks for one response; the transcript recap makes it "hi again" on
+   * a stream that has history. Clean break as ever. */
+  version: "17.0.0",
   description: "Runs a voice call in the stream's own Durable Object, one flush watermark deep.",
   stateSchema: VoiceState,
   events: {
@@ -1014,6 +1026,8 @@ export const VoiceAgentContract = defineProcessorContract({
         turnDetection: z.looseObject({ type: z.string() }).optional(),
         visemes: z.boolean().optional(),
         colleague: z.boolean().optional(),
+        /** Speak first when a call connects — see the fold field. */
+        greeting: z.boolean().optional(),
         tools: z.array(VoiceTool).optional(),
       }),
     },
@@ -1819,6 +1833,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
           turnDetection: event.payload.turnDetection ?? null,
           visemes: event.payload.visemes ?? false,
           colleague: event.payload.colleague ?? true,
+          greeting: event.payload.greeting ?? false,
           tools: event.payload.tools ?? [],
         };
 
@@ -2598,6 +2613,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
              * buffer and waits, for ever, for an instruction that was thrown
              * away sixty seconds earlier.
              */
+            const turnEndedDuringThisHandshake = this.#turnEndedDuringHandshake;
             if (
               this.#turnEndedDuringHandshake &&
               state.clientTakesTurns &&
@@ -2621,6 +2637,35 @@ export class VoiceAgentProcessor extends StreamProcessor<
                 },
               }),
             );
+            /*
+             * THE PICKUP GREETING. Only when nobody has spoken yet: a caller
+             * already mid-sentence (held frames, or a whole turn ended
+             * during the handshake) came to talk, not to be welcomed over.
+             */
+            if (state.greeting && heldMicFrames === 0 && !turnEndedDuringThisHandshake) {
+              this.#sendControl(
+                dial,
+                {
+                  type: "conversation.item.create",
+                  item: {
+                    type: "message",
+                    role: "system",
+                    content: [
+                      {
+                        type: "input_text",
+                        text:
+                          "[the call just connected — greet the person briefly, a few words. " +
+                          "If the conversation record above shows you have spoken before, greet " +
+                          "them like the returning caller they are.]",
+                      },
+                    ],
+                  },
+                },
+                append,
+              );
+              dial.followUpResponsePending = true;
+              this.#sendControl(dial, { type: "response.create" }, append);
+            }
             return;
           }
 
@@ -4259,6 +4304,8 @@ export interface SetupVoiceAgentOptions {
   turnDetection?: Record<string, unknown> & { type: string };
   /** Classify the answer into mouth shapes for a face-rendering client. */
   visemes?: boolean;
+  /** Speak first when a call connects (contract 17.0.0). */
+  greeting?: boolean;
   /** `note_to_self` writes to the stream's one colleague agent (per stream,
    * not per conversation — contract 12.0.0) and its chat replies are read
    * back into whichever call is live. ON unless explicitly false — every

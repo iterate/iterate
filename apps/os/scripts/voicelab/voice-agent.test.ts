@@ -1373,6 +1373,51 @@ describe("tools on the birth certificate", () => {
     });
   });
 
+  it("greeting on the certificate makes the model speak first at pickup — unless the caller already did", async () => {
+    const h = makeHarness();
+    await h.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: { clientTakesTurns: CLIENT_TAKES_TURNS, greeting: true },
+    });
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
+    const items = h.provider.sentOfType("conversation.item.create") as {
+      item: { content?: { text: string }[] };
+    }[];
+    expect(items.some((i) => i.item.content?.[0]?.text.includes("call just connected"))).toBe(true);
+    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
+
+    /* A caller mid-sentence is not welcomed over: held frames suppress it. */
+    const busy = makeHarness();
+    await busy.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: { clientTakesTurns: CLIENT_TAKES_TURNS, greeting: true },
+    });
+    await busy.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await busy.append(micFrame(1));
+    await busy.settle();
+    busy.provider.completeHandshake();
+    await busy.settle();
+    const busyItems = busy.provider.sentOfType("conversation.item.create") as {
+      item: { content?: { text: string }[] };
+    }[];
+    expect(busyItems.some((i) => i.item.content?.[0]?.text.includes("call just connected"))).toBe(
+      false,
+    );
+
+    /* And absent from the certificate, nobody speaks first. */
+    const plain = makeHarness();
+    await callIsLive(plain, CLIENT_TAKES_TURNS);
+    const plainItems = plain.provider.sentOfType("conversation.item.create") as {
+      item: { content?: { text: string }[] };
+    }[];
+    expect(plainItems.some((i) => i.item.content?.[0]?.text.includes("call just connected"))).toBe(
+      false,
+    );
+  });
+
   it("a press during the goodbye un-decides the hang-up", async () => {
     const h = makeHarness();
     await callWithTools(h, [HANG_UP]);
