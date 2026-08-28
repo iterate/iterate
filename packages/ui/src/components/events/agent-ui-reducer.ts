@@ -282,13 +282,16 @@ export function deriveAgentUiLiveStatus(state: AgentUiState): AgentUiLiveStatus 
       }
     }
     if (!state.paused && last?.kind === "llm") {
-      // The response finished and visibly contains a script: extraction
-      // appends script-run-requested momentarily. (A completed prose-only
-      // response gets no such promise and settles as before.)
+      // The response finished and visibly contains a script: what follows is
+      // a journal fact either way — script-run-requested when it extracts,
+      // or the format's rejection feedback driving another llm request — so
+      // the turn is not over. Line-anchored, matching the fenced-ts format's
+      // own rule (agent-response-format.ts): a ``` mentioned mid-prose is
+      // not a script and must not hold the card open.
       if (
         last.status === "done" &&
         last.outcome === "completed" &&
-        (last.responseText.includes("```") || last.responseText.includes("<codemode"))
+        (/^[ \t]*```/m.test(last.responseText) || last.responseText.includes("<codemode"))
       ) {
         return "processing";
       }
