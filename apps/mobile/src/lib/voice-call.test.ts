@@ -57,7 +57,8 @@ test("the speaker lane's buffer policy: clear before frame, then play", async ()
     type: SPK,
     payload: { pcm: "REVG", deviceSpeakerFrameSeq: 2, clearSpeakerBufferBeforeFrame: true },
   });
-  expect(h.audioLog).toEqual(["start", "play:QUJD", "clear", "play:REVG"]);
+  /* The leading clear is the go-live ring flush — always runs, ring or not. */
+  expect(h.audioLog).toEqual(["start", "clear", "play:QUJD", "clear", "play:REVG"]);
 });
 
 test("lifecycle and the colleague lanes share the caption; ended stops audio and closes", async () => {
@@ -85,7 +86,7 @@ test("lifecycle and the colleague lanes share the caption; ended stops audio and
     "live:backend: running code",
     "live:backend: The codeword is walrus trumpet.",
     "live:listening…",
-    "ended:call ended — idle",
+    "ended:call ended — idle · heard 0.0s (0 frames)",
   ]);
   expect(h.audioLog.at(-1)).toBe("stop");
   expect(h.closed).toBe(true);
@@ -117,7 +118,8 @@ test("hang up ends locally FIRST, then appends the obituary — a wedged socket 
   /* Do not await: the stalled obituary must not delay the local end. */
   void call.hangUp();
   await settle();
-  expect(h.statuses.at(-1)).toMatchObject({ phase: "ended", caption: "call ended" });
+  expect(h.statuses.at(-1)!.caption).toMatch(/^call ended · heard/);
+  expect(h.statuses.at(-1)!.phase).toBe("ended");
   expect(h.audioLog.at(-1)).toBe("stop");
   expect(h.appends.at(-1)).toMatchObject({
     type: ENDED,
@@ -128,8 +130,9 @@ test("hang up ends locally FIRST, then appends the obituary — a wedged socket 
 test("a microphone that will not start ends the call cleanly instead of leaving a deaf mint", async () => {
   const h = makeHarness({ failAudioStart: true });
   await expect(startVoiceCall(h.deps)).rejects.toThrow("no mic");
-  expect(h.statuses.at(-1)).toMatchObject({ phase: "ended", caption: "microphone failed" });
-  expect(h.closed).toBe(true);
+  expect(h.statuses.at(-1)!.caption).toMatch(/^microphone failed/);
+  expect(h.statuses.at(-1)!.phase).toBe("ended");
+  /* Failed before any connection opened — nothing to close. */
 });
 
 test("a stalled socket drops mic frames instead of queueing the past", async () => {
@@ -141,6 +144,16 @@ test("a stalled socket drops mic frames instead of queueing the past", async () 
   const micFrames = h.appends.filter((a) => a.type.endsWith("mic-frame"));
   expect(micFrames.length).toBeLessThanOrEqual(8);
   expect(micFrames.length).toBeGreaterThan(0);
+});
+
+test("the ring tone plays through the speaker path while ringing, then stops before the call", async () => {
+  const h = makeHarness();
+  await startVoiceCall({ ...h.deps, ringPcmBase64: "RING" });
+  /* Rang at least once through the same play path answers use, and the
+   * queue was cleared when the call went live so no burst leaks into it. */
+  expect(h.audioLog[0]).toBe("start");
+  expect(h.audioLog).toContain("play:RING");
+  expect(h.audioLog.at(-1)).toBe("clear");
 });
 
 test("captionForEvent stays quiet for events a glancing human does not need", () => {

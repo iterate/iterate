@@ -109,6 +109,9 @@ export async function startVoiceCall(deps: {
   /** Per-capture-frame loudness for the pulse — high-frequency on purpose,
    * so it must not re-render anything heavy. */
   onLevel(level: number): void;
+  /** Played through the audio session on repeat while ringing (voice-pcm's
+   * ringTonePcm16Base64) — doubling as a built-in speaker check. */
+  ringPcmBase64?: string;
   now(): number;
 }): Promise<VoiceCallHandle> {
   let ended = false;
@@ -116,12 +119,28 @@ export async function startVoiceCall(deps: {
   let connection: unknown;
   let inflightMicAppends = 0;
   let deviceMicFrameSeq = 0;
+  let spkFramesHeard = 0;
+  let spkMsHeard = 0;
+  let ringTimer: ReturnType<typeof setInterval> | null = null;
   const startedAtMs = deps.now();
+
+  const stopRinging = () => {
+    if (ringTimer !== null) clearInterval(ringTimer);
+    ringTimer = null;
+  };
 
   const finish = (caption: string) => {
     if (ended) return;
     ended = true;
-    deps.onStatus({ phase: "ended", caption });
+    stopRinging();
+    /* The heard tally rides the obituary caption ON PURPOSE (demo-lane
+     * diagnostics): round 2 on-device was "no response" with the server
+     * provably answering — this line splits "frames never arrived" from
+     * "arrived but played silently" at a glance. */
+    deps.onStatus({
+      phase: "ended",
+      caption: `${caption} · heard ${(spkMsHeard / 1000).toFixed(1)}s (${spkFramesHeard} frames)`,
+    });
     void deps.audio.stop();
     const open = connection as { close?: () => unknown } & Partial<Disposable>;
     try {
@@ -133,60 +152,12 @@ export async function startVoiceCall(deps: {
   };
 
   deps.onStatus({ phase: "connecting", caption: "ringing…" });
-  await deps.ensureSetup();
-
-  /* From the head, not the beginning: this stream is the device's ONE
-   * ongoing conversation, so its history holds every previous call's
-   * lifecycle events — replayed, last week's conversation-ended would end
-   * this call before it starts. */
-  const head = (await deps.stream.getEventPage({ afterOffset: 0, limit: 1 })).streamMaxOffset;
-  connection = await deps.stream.openConnection({
-    replayAfterOffset: head,
-    eventTypes: [
-      EVENT.spkFrame,
-      EVENT.callStarted,
-      EVENT.conversationAccepted,
-      EVENT.conversationEnded,
-      EVENT.colleagueStatus,
-      EVENT.colleagueNote,
-    ],
-    processEventBatch: (batch) => {
-      for (const event of batch.events ?? []) {
-        const payload = (event.payload ?? {}) as Record<string, unknown>;
-        if (event.type === EVENT.spkFrame) {
-          /* The three-line buffer policy, lines one and two. Line three
-           * (lastFrameOfAnswer) exists for half-duplex clients releasing a
-           * fence; an open-mic phone has no fence to release. */
-          if (payload.clearSpeakerBufferBeforeFrame === true) deps.audio.clearPlayback();
-          if (typeof payload.pcm === "string" && payload.pcm !== "") deps.audio.play(payload.pcm);
-          continue;
-        }
-        if (event.type === EVENT.callStarted && typeof payload.conversationId === "string") {
-          conversationId = payload.conversationId;
-        }
-        if (event.type === EVENT.conversationEnded) {
-          /* Ours or unattributed — a fresh connection past the head only
-           * sees this call's lifecycle, but the id check keeps a racing
-           * stale obituary from ending the wrong call. */
-          if (conversationId === null || payload.conversationId === conversationId) {
-            finish(captionForEvent(event.type, payload) ?? "call ended");
-          }
-          continue;
-        }
-        const caption = captionForEvent(event.type, payload);
-        if (caption !== null && !ended) deps.onStatus({ phase: "live", caption });
-      }
-    },
-  });
 
   /*
-   * PUSH-TO-TALK: no press yet, no call yet. The mic opens now (so the
-   * pulse is alive and the first hold has zero start-up latency), but
-   * frames flow — and the mint press goes out — only while the button is
-   * held. The recorder failing is fatal ON PURPOSE, and cleanly: without
-   * this, the first on-device session minted a call whose microphone never
-   * started — "call failed" on screen, a deaf, mute call live server-side
-   * until the idle deadline reaped it, and a hang-up button wired to null.
+   * AUDIO FIRST, wire second. The mic runs from here (no frames leak —
+   * `talking` gates the wire) so the ring tone has a live output path and
+   * the first hold has zero start-up latency; a recorder that will not
+   * start fails the call before any server-side mint exists.
    */
   let talking = false;
   try {
@@ -217,6 +188,66 @@ export async function startVoiceCall(deps: {
     finish("microphone failed");
     throw error;
   }
+  if (deps.ringPcmBase64 !== undefined) {
+    const ring = deps.ringPcmBase64;
+    deps.audio.play(ring);
+    ringTimer = setInterval(() => deps.audio.play(ring), 3_000);
+  }
+
+  await deps.ensureSetup();
+
+  /* From the head, not the beginning: this stream is the device's ONE
+   * ongoing conversation, so its history holds every previous call's
+   * lifecycle events — replayed, last week's conversation-ended would end
+   * this call before it starts. */
+  const head = (await deps.stream.getEventPage({ afterOffset: 0, limit: 1 })).streamMaxOffset;
+  connection = await deps.stream.openConnection({
+    replayAfterOffset: head,
+    eventTypes: [
+      EVENT.spkFrame,
+      EVENT.callStarted,
+      EVENT.conversationAccepted,
+      EVENT.conversationEnded,
+      EVENT.colleagueStatus,
+      EVENT.colleagueNote,
+    ],
+    processEventBatch: (batch) => {
+      for (const event of batch.events ?? []) {
+        const payload = (event.payload ?? {}) as Record<string, unknown>;
+        if (event.type === EVENT.spkFrame) {
+          /* The three-line buffer policy, lines one and two. Line three
+           * (lastFrameOfAnswer) exists for half-duplex clients releasing a
+           * fence; an open-mic phone has no fence to release. */
+          if (payload.clearSpeakerBufferBeforeFrame === true) deps.audio.clearPlayback();
+          if (typeof payload.pcm === "string" && payload.pcm !== "") {
+            spkFramesHeard++;
+            /* Base64 length → decoded ms without decoding (32 bytes/ms). */
+            spkMsHeard += Math.floor((payload.pcm.length / 4) * 3) / 32;
+            deps.audio.play(payload.pcm);
+          }
+          continue;
+        }
+        if (event.type === EVENT.callStarted && typeof payload.conversationId === "string") {
+          conversationId = payload.conversationId;
+        }
+        if (event.type === EVENT.conversationEnded) {
+          /* Ours or unattributed — a fresh connection past the head only
+           * sees this call's lifecycle, but the id check keeps a racing
+           * stale obituary from ending the wrong call. */
+          if (conversationId === null || payload.conversationId === conversationId) {
+            finish(captionForEvent(event.type, payload) ?? "call ended");
+          }
+          continue;
+        }
+        const caption = captionForEvent(event.type, payload);
+        if (caption !== null && !ended) deps.onStatus({ phase: "live", caption });
+      }
+    },
+  });
+
+  /* Connected: the ring stops mid-burst rather than playing into the call. */
+  stopRinging();
+  deps.audio.clearPlayback();
   if (!ended) deps.onStatus({ phase: "live", caption: "hold the mic to talk" });
 
   return {
@@ -236,7 +267,9 @@ export async function startVoiceCall(deps: {
         .catch(() => {
           /* The connection's own failure surfaces carry this. */
         });
-      if (next && !ended) deps.onStatus({ phase: "live", caption: "listening…" });
+      if (!ended) {
+        deps.onStatus({ phase: "live", caption: next ? "listening…" : "hold the mic to talk" });
+      }
     },
     hangUp: async () => {
       if (ended) return;

@@ -25,6 +25,7 @@ import { getProjectItx } from "../lib/itx.ts";
 import { queryClient } from "../lib/query.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
 import { createNativeVoiceAudio } from "../lib/voice-audio-native.ts";
+import { ringTonePcm16Base64 } from "../lib/voice-pcm.ts";
 import { startVoiceCall, type VoiceCallHandle, type VoiceCallStatus } from "../lib/voice-call.ts";
 import { ensureVoiceAgentSetup, mobileVoiceStreamPath } from "../lib/voice-setup.ts";
 
@@ -36,6 +37,9 @@ const SETUP_MARKER_STORAGE_PREFIX = "voice-setup-marker:";
 type VoiceUiStatus = (VoiceCallStatus & { micDenied?: boolean }) | null;
 
 let activeCall: VoiceCallHandle | null = null;
+/** Generated once, lazily (~1s of PCM as base64). */
+let ringTonePcm: string | null = null;
+const ringTone = () => (ringTonePcm ??= ringTonePcm16Base64());
 /** Mic loudness 0..1, driven at capture-frame rate straight into the
  * animation — never through React state (16 Hz re-renders for a glow). */
 const pulse = new Animated.Value(0);
@@ -73,6 +77,7 @@ async function beginCall(baseUrl: string, projectId: string): Promise<void> {
         if (status.phase === "ended") activeCall = null;
         queryClient.setQueryData<VoiceUiStatus>(statusKey, status);
       },
+      ringPcmBase64: ringTone(),
       onLevel: (level) => {
         /* JS-driven on purpose: the sheet's level bar animates WIDTH (a
          * layout prop the native driver rejects), and one Animated.Value
@@ -138,16 +143,24 @@ export function VoiceCallButton(props: { baseUrl: string; projectId: string }) {
           <View style={styles.levelTrack}>
             <Animated.View style={[styles.levelFill, { width: levelWidth }]} />
           </View>
-          <Pressable
-            accessibilityLabel="Hold to talk"
-            accessibilityRole="button"
-            onPressIn={() => activeCall?.setTalking(true)}
-            onPressOut={() => activeCall?.setTalking(false)}
-            style={({ pressed }) => [styles.talkButton, pressed && styles.talkButtonHeld]}
-          >
-            <Ionicons color={colors.text} name="mic" size={34} />
-            <Text style={styles.talkHint}>hold to talk</Text>
-          </Pressable>
+          {status.phase === "live" ? (
+            <Pressable
+              accessibilityLabel="Hold to talk"
+              accessibilityRole="button"
+              onPressIn={() => activeCall?.setTalking(true)}
+              onPressOut={() => activeCall?.setTalking(false)}
+              style={({ pressed }) => [styles.talkButton, pressed && styles.talkButtonHeld]}
+            >
+              <Ionicons color={colors.text} name="mic" size={34} />
+              <Text style={styles.talkHint}>hold to talk</Text>
+            </Pressable>
+          ) : (
+            /* Ringing: no turn to take yet — the mic waits until the call
+             * is live so "push to talk" never shows beside "ringing…". */
+            <View style={[styles.talkButton, styles.talkButtonRinging]}>
+              <Ionicons color={colors.textMuted} name="call" size={34} />
+            </View>
+          )}
           <Text numberOfLines={2} style={styles.caption}>
             {status.caption}
           </Text>
@@ -292,6 +305,10 @@ const styles = StyleSheet.create({
   },
   talkButtonHeld: {
     backgroundColor: colors.accent,
+  },
+  talkButtonRinging: {
+    borderColor: colors.border,
+    borderStyle: "dashed",
   },
   talkHint: {
     color: colors.textMuted,

@@ -67,11 +67,11 @@ test("a phone-shaped call: speak, be answered, leave a transcript", async () => 
     now: () => Date.now(),
   });
 
-  /* Push-to-talk: hold for the whole utterance (the FIRST press is the mint
-   * — the facet holds mic frames through the provider handshake and commits
-   * the held turn on release), release once it has been spoken. */
+  /* Push-to-talk: hold, speak the whole utterance (the FIRST press is the
+   * mint — the facet holds mic frames through the provider handshake and
+   * commits the held turn on release), release. */
   call.setTalking(true);
-  await audio.utteranceDone();
+  await audio.speakUtterance();
   call.setTalking(false);
 
   /* Let the answer FINISH before hanging up — a hang-up mid-answer drops
@@ -102,39 +102,50 @@ test("a phone-shaped call: speak, be answered, leave a transcript", async () => 
 /* ------------------------------------------------------------- fixtures --- */
 
 /**
- * The audio seam fed by macOS `say` instead of a microphone: the recorder
- * "hears" the utterance in ~64ms frames at real-time cadence and silence
- * after it — the call core decides which frames go to the wire (only while
- * the PTT button is held, like a real mic). `utteranceDone` resolves when
- * the spoken part has fully played out, which is when the driver releases
- * the button. `play` counts decoded milliseconds instead of making sound.
+ * The audio seam fed by macOS `say` instead of a microphone. The "mic"
+ * hears silence until `speakUtterance()` is called — which matters because
+ * the call core now opens the mic during RINGING (for the ring tone's
+ * output path), long before the driver holds the button; a fake that
+ * started talking at start() spent the whole utterance into a closed mic.
+ * `speakUtterance` plays the utterance in ~64ms frames at real-time
+ * cadence plus half a second of trailing silence, then resolves — that is
+ * when the driver releases. `play` counts decoded milliseconds instead of
+ * making sound.
  */
 function makeSpeechFedAudio(text: string) {
   const utterance = synthesizePcm16(text);
   const frameSamples = 1024;
   let playedSamples = 0;
   let timer: ReturnType<typeof setInterval> | null = null;
-  let resolveUtteranceDone!: () => void;
-  const utteranceDone = new Promise<void>((resolve) => {
-    resolveUtteranceDone = resolve;
-  });
+  let cursor: number | null = null; /* null = idle mic (silence) */
+  let resolveSpoken: (() => void) | null = null;
 
   return {
     playedMs: () => playedSamples / 16,
-    utteranceDone: () => utteranceDone,
+    speakUtterance: () =>
+      new Promise<void>((resolve) => {
+        cursor = 0;
+        resolveSpoken = resolve;
+      }),
     session: {
       start: async (onFrame: (frame: { pcmBase64: string; level: number }) => void) => {
-        let cursor = 0;
         timer = setInterval(() => {
-          const spoken = cursor < utterance.length;
-          const bytes = spoken
-            ? utterance.subarray(cursor, cursor + frameSamples * 2)
-            : new Uint8Array(frameSamples * 2); /* an idle mic hears silence */
-          cursor += frameSamples * 2;
-          if (!spoken && cursor >= utterance.length + frameSamples * 2 * 8) {
-            /* ~half a second of trailing silence sent while still held, so
-             * the committed turn does not end mid-word. */
-            resolveUtteranceDone();
+          let bytes: Uint8Array;
+          if (cursor === null) {
+            bytes = new Uint8Array(frameSamples * 2); /* an idle mic hears silence */
+          } else {
+            bytes =
+              cursor < utterance.length
+                ? utterance.subarray(cursor, cursor + frameSamples * 2)
+                : new Uint8Array(frameSamples * 2);
+            cursor += frameSamples * 2;
+            if (cursor >= utterance.length + frameSamples * 2 * 8) {
+              /* Spoken plus ~half a second of trailing silence while still
+               * held, so the committed turn does not end mid-word. */
+              cursor = null;
+              resolveSpoken?.();
+              resolveSpoken = null;
+            }
           }
           onFrame({
             pcmBase64: uint8ArrayToBase64(bytes),

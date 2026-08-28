@@ -48,3 +48,33 @@ export function pulseLevel(samples: Float32Array): number {
   const rms = Math.sqrt(sumSquares / samples.length);
   return Math.min(1, rms / 0.15);
 }
+
+/**
+ * One "dring-dring" as wire-shaped PCM — played through the SAME playback
+ * path as answer audio while the call rings, which makes it a built-in
+ * speaker test: hear the ring, and the downlink's playback is known good.
+ * Classic ring: 400+450 Hz, two 400 ms bursts with a 200 ms gap.
+ */
+export function ringTonePcm16Base64(): string {
+  const pattern = [
+    { durationMs: 400, on: true },
+    { durationMs: 200, on: false },
+    { durationMs: 400, on: true },
+  ];
+  const totalSamples =
+    (pattern.reduce((ms, seg) => ms + seg.durationMs, 0) * VOICE_SAMPLE_RATE) / 1000;
+  const samples = new Float32Array(totalSamples);
+  let index = 0;
+  for (const segment of pattern) {
+    const segmentSamples = (segment.durationMs * VOICE_SAMPLE_RATE) / 1000;
+    for (let i = 0; i < segmentSamples; i++, index++) {
+      if (!segment.on) continue;
+      const t = index / VOICE_SAMPLE_RATE;
+      /* Short fade at each burst edge so it clicks like a bell, not a relay. */
+      const edge = Math.min(1, i / 160, (segmentSamples - i) / 160);
+      samples[index] =
+        0.18 * edge * (Math.sin(2 * Math.PI * 400 * t) + Math.sin(2 * Math.PI * 450 * t));
+    }
+  }
+  return float32ToPcm16Base64(samples);
+}

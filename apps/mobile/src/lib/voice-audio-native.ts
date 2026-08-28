@@ -42,6 +42,11 @@ export function createNativeVoiceAudio(): VoiceAudio {
           });
           await AudioManager.setAudioSessionActivity(true);
           context = new AudioContext({ sampleRate: VOICE_SAMPLE_RATE });
+          /* Web Audio contexts may be born suspended; a suspended context
+           * swallows every enqueued buffer silently — round 2 on-device was
+           * a server that provably answered and a phone that played
+           * nothing. resume() is a no-op when already running. */
+          await context.resume();
           queue = context.createBufferQueueSource();
           queue.connect(context.destination);
           /* (0, 0), never bare: the library's own default is `offset = -1`
@@ -67,6 +72,15 @@ export function createNativeVoiceAudio(): VoiceAudio {
           if (started.status === "error") {
             throw new Error(`microphone did not start: ${started.message}`);
           }
+          /* Re-asserted AFTER the recorder spins up: the library does its
+           * own session management around recorder start, and losing
+           * defaultToSpeaker there re-routes answers to the earpiece —
+           * "no response" with the phone at arm's length. */
+          AudioManager.setAudioSessionOptions({
+            iosCategory: "playAndRecord",
+            iosMode: "voiceChat",
+            iosOptions: ["defaultToSpeaker", "allowBluetoothHFP"],
+          });
         },
         play: (pcmBase64: string) => {
           if (context === null || queue === null) return;
