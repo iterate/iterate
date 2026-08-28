@@ -494,13 +494,13 @@ function foldTranscriptTurn(
  * the note goes as a fire-and-forget message to a full agent minted on its
  * own `/agents/voice-notes/...` stream — ONE COLLEAGUE PER VOICE STREAM,
  * its memory shared by every conversation the stream ever holds — and
- * EVERY chat message that agent ever sends comes back over the same
- * copy-to-stream lane as its statuses, as a durable `colleague-note` event
- * on this stream.
+ * EVERY chat message that agent ever sends comes back through the same
+ * copy-to-stream subscription as its statuses, as a durable
+ * `colleague-note` event on this stream.
  *
- * THE REPLY LANE IS THE SUBSCRIPTION, NOT ask(). It was ask() — append the
- * note, wait for the agent's next chat reply, 180s deadline — and one real
- * conversation showed every seam at once (prd, 2026-08-26 evening): asks
+ * REPLIES ARRIVE AS EVENTS THROUGH THE SUBSCRIPTION, NOT ask(). It was
+ * ask() — append the note, wait for the agent's next chat reply, 180s
+ * deadline — and one real conversation showed every failure mode at once (prd, 2026-08-26 evening): asks
  * resolve by ORDER, so two pending notes were both answered by whichever
  * reply came first; a reply after the deadline resolved nothing; and an
  * UNSOLICITED backend message — "here are the verified results", sent with
@@ -989,8 +989,9 @@ export const VoiceAgentContract = defineProcessorContract({
    * to be openly transparent about its backend — relay statuses, admit
    * failures, never invent an explanation for a delay. Clean break as
    * ever. */
-  /* 16.0.0: the reply lane is the subscription, not ask(). Every chat
-   * message the colleague sends is forwarded as a durable `colleague-note`
+  /* 16.0.0: replies arrive as events through the copy-to-stream
+   * subscription, not ask(). Every chat message the colleague sends is
+   * forwarded as a durable `colleague-note`
    * event — solicited or not, no deadline, no order-matching, nothing lost
    * to eviction — read into whichever call is live and folded (bounded) for
    * the reconnect briefing. ask()'s three observed loss modes (order-mixed
@@ -1106,7 +1107,7 @@ export const VoiceAgentContract = defineProcessorContract({
     /*
      * THE DURABLE TRANSCRIPT — what was actually said, in words, one event
      * per finished turn per side. Everything else on this stream is either
-     * ephemeral (audio, the provider lane) or lifecycle, so until these a
+     * ephemeral (audio, the mirrored provider events) or lifecycle, so until these a
      * conversation left no readable record and a re-dialled provider session
      * started with total amnesia: the reconnect the idle deadline
      * manufactures every time a listener waits quietly erased the whole
@@ -1161,7 +1162,7 @@ export const VoiceAgentContract = defineProcessorContract({
     "events.iterate.com/voice-agent/colleague-note": {
       description:
         "One chat message from the colleague, copied (transformed) from its stream's " +
-        "web-message-sent feed — THE reply lane. Durable, ordered, uncorrelated: every " +
+        "web-message-sent feed — this is how every reply reaches the call. Durable, ordered, uncorrelated: every " +
         "message the colleague ever sends arrives here, solicited or not.",
       payloadSchema: z.looseObject({ text: z.string() }),
     },
@@ -2266,7 +2267,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
 
       case "events.iterate.com/voice-agent/colleague-note": {
         /*
-         * THE REPLY LANE. Every chat message the colleague sends arrives
+         * THE REPLY EVENT. Every chat message the colleague sends arrives
          * here, durably — solicited or not — and is read into whichever
          * call is live. No call (or a dial mid-handshake, whose
          * #sendControl no-ops): nothing is lost — the fold kept the note
@@ -2886,6 +2887,8 @@ export class VoiceAgentProcessor extends StreamProcessor<
                 idempotencyKey: this.idempotencyKey(`answer-transcript:${itemId}`),
                 payload: {
                   conversationId,
+                  /* Narrowed by the typeof guard above; the narrowing dies
+                   * at this closure boundary, so the cast restates it. */
                   text: grok.transcript as string,
                   ...(cancelled && { cancelled: true }),
                 },
@@ -2901,6 +2904,8 @@ export class VoiceAgentProcessor extends StreamProcessor<
               append({
                 type: "events.iterate.com/voice-agent/utterance-transcript",
                 idempotencyKey: this.idempotencyKey(`utterance-transcript:${itemId}`),
+                /* Same shape as above: guarded by typeof at the case's top;
+                 * the closure boundary loses the narrowing. */
                 payload: { conversationId, text: grok.transcript as string },
               }),
             );
@@ -3447,7 +3452,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
    * handling here: every chat message the colleague ever sends comes back
    * as a durable `colleague-note` event through the copy-to-stream
    * subscription installed below, and the processEvent arm reads it into
-   * whichever call is live — see the header block for the ask() lane this
+   * whichever call is live — see the header block for the ask() flow this
    * replaced and the three ways it lost replies.
    */
   #noteToColleague(
@@ -3499,7 +3504,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
           if (!this.#colleagueBriefed) {
             await agent.create({});
             /*
-             * THE STATUS LANE. The colleague already narrates itself —
+             * STATUS FORWARDING. The colleague already narrates itself —
              * `agent/summary-updated` is mandatory beside its work, and an
              * itx script can append its own — so forwarding that feed is
              * the whole feature: a copy-to-stream subscription on the
@@ -3528,7 +3533,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
                     "events.iterate.com/agent/llm-request-requested",
                     "events.iterate.com/capability-host/script-run-started",
                     "events.iterate.com/capability-host/script-run-settled",
-                    /* The REPLY LANE rides this same subscription: without
+                    /* Replies ride this same subscription: without
                      * this entry the transform's web-message-sent branch is
                      * dead code and every colleague reply silently never
                      * leaves its stream — measured, embarrassingly, for an
@@ -4346,7 +4351,10 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
       ok: true,
       projectId: await project.projectId,
       /* Which build answered — comparable against the facet's runtime bag,
-       * because the two lanes have been observed running different builds. */
+       * because the stateless entrypoint and the stateful facet have been
+       * observed running different builds. The cast: ITERATE_WORKER_VERSION
+       * is injected by the platform's worker loader at load time, so the
+       * guest's generated env type cannot know it. */
       buildCacheKey: String(
         (this.env as Record<string, unknown>).ITERATE_WORKER_VERSION ?? "unknown",
       ),
@@ -4529,7 +4537,9 @@ export class VoiceAgentFacet extends StreamProcessorFacet {
       nowAtFacetMs: () => Date.now(),
       /* The loader bakes the build's content-addressed key into the env
        * (worker-loader.ts: ITERATE_WORKER_VERSION); surfacing it is the only
-       * way to tell which build a LIVE facet is running. */
+       * way to tell which build a LIVE facet is running. The cast exists
+       * because the key is loader-injected at load time, so the guest's
+       * generated env type cannot know the field. */
       buildCacheKey: String(
         (this.env as Record<string, unknown>).ITERATE_WORKER_VERSION ?? "unknown",
       ),

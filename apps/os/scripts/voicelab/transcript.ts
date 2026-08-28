@@ -108,6 +108,8 @@ export async function transcript(options: TranscriptOptions): Promise<void> {
     console.log(JSON.stringify(rows, null, 2));
     return;
   }
+  /* `as const` keeps `boundary` a literal discriminant — widened to plain
+   * boolean, the "boundary" in entry check below would not narrow. */
   const column = [...rows, ...boundaries.map((b) => ({ ...b, boundary: true as const }))].sort(
     (a, b) => a.offset - b.offset,
   );

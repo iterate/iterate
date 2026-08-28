@@ -308,6 +308,9 @@ export async function talk(options: TalkOptions = {}) {
    * upgrade: the next dispatch boots the build this run just committed.
    */
   if (install.changed) {
+    /* kill() is the platform's RPC on every stateful dynamic worker handle;
+     * the generated capability type carries only the guest's own exported
+     * methods, so the platform verb has to be asserted on. */
     using facetWorker = itx.workers.get(voiceAgentFacetRef(streamPath)) as unknown as {
       kill(): Promise<void>;
     } & Disposable;
