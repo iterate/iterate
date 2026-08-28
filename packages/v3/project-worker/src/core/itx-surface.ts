@@ -25,6 +25,7 @@ import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
 import type { DeliveryPolicy } from "./events.ts";
 import { print, type Expression } from "./expression.ts";
 import { disposeStub, openStubPagerWebSocket } from "./hibernatable-rpc-stub.ts";
+import { codedError } from "./errors.ts";
 import { installPrototypeInvokeCapabilityFallback } from "./dotted-path-proxy.ts";
 import { canonicalName, DurableObjectNameCodec, normalizePath } from "./durable-object-names.ts";
 import type { StreamDurableObject } from "../stream-durable-object.ts";
@@ -60,17 +61,34 @@ interface ProvideLiveInput {
  *  stream reaches the client's actual function over the capnweb WebSocket. */
 class RetainedCallbackInvoker extends WorkersRpcTarget {
   #provider: RetainedProviderStub;
+  /** Set the instant the provider's capnweb session breaks. capnweb fires onRpcBroken BEFORE it
+   *  rejects the in-flight import, so a call caught below sees this already true — no race. */
+  #broken = false;
   constructor(provider: RetainedProviderStub) {
     super();
     this.#provider = provider;
+    (provider as { onRpcBroken?: (cb: (e: unknown) => void) => void }).onRpcBroken?.(() => {
+      this.#broken = true;
+    });
   }
   async invoke(capPath: string[], args: unknown[]): Promise<unknown> {
-    // Empty path = the provider IS the callable (a bare callback parked as a capability).
-    if (capPath.length === 0)
-      return await (this.#provider as unknown as (...a: unknown[]) => unknown)(...args);
-    let recv = this.#provider as unknown as Record<string, unknown>;
-    for (let i = 0; i < capPath.length - 1; i++) recv = recv[capPath[i]] as Record<string, unknown>;
-    return await (recv[capPath[capPath.length - 1]] as (...a: unknown[]) => unknown)(...args);
+    try {
+      // Empty path = the provider IS the callable (a bare callback parked as a capability).
+      if (capPath.length === 0)
+        return await (this.#provider as unknown as (...a: unknown[]) => unknown)(...args);
+      let recv = this.#provider as unknown as Record<string, unknown>;
+      for (let i = 0; i < capPath.length - 1; i++)
+        recv = recv[capPath[i]] as Record<string, unknown>;
+      return await (recv[capPath[capPath.length - 1]] as (...a: unknown[]) => unknown)(...args);
+    } catch (e) {
+      // The provider died mid-call: capnweb throws its raw, UNCODED close error here. Re-code
+      // LOCALLY to CONNECTION_OFFLINE so the CODE (never a message) crosses the Workers-RPC hop
+      // back to the caller — the same condition the offline pre-call paths throw (core/errors.ts:
+      // classify by code across a hop). A genuine app error from a live client propagates untouched.
+      if (this.#broken)
+        throw codedError("CONNECTION_OFFLINE", "itx connection provider went offline mid-invoke");
+      throw e;
+    }
   }
 }
 
@@ -105,6 +123,12 @@ async function startCapnwebCallbackRelay(
   // The library's own death signal: the client's capnweb session broke → the retained callback
   // can never answer again. Close the pager WebSocket NOW so the DO reaps the connection
   // immediately — without this the currently-connected list lies until a page times out (10s).
+  // NOTE (defect 14, deferred): this closes 1000, which #connectionClosed reads as a CLEAN final
+  // close and ends the session — so a DIRTY severance files an ended+started pair per network blip
+  // instead of coalescing (the storm rule). It cannot be fixed by the close code alone: a clean
+  // [Symbol.dispose] and a dirty ws.close() sever the socket with the SAME code, so clean-vs-dirty
+  // is only knowable from whether relay.dispose() below is ALSO called — which fires AFTER this and
+  // races the async #connectionClosed. The right fix is a dispose()-signals-clean-end path.
   (retained as { onRpcBroken?: (cb: () => void) => void }).onRpcBroken?.(() => {
     try {
       pagerWebSocket.close(1000, "provider session broke");

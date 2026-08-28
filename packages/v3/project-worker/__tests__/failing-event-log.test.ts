@@ -80,17 +80,14 @@ test("an in-batch idempotency dedupe hit is reduced ONCE, not twice", async () =
   expect(state.breaker.tokens).toBeCloseTo(9, 1);
 });
 
-test.fails("an idempotent retry dedupes even when the breaker bucket is empty", async () => {
-  // BUG: append's breaker enforcement counts every non-ephemeral input as durable growth
-  //   (`counted = nonControl.filter(i => !i.ephemeral).length`) BEFORE the commit point gets to
-  //   dedupe it — a retry of an already-committed idempotencyKey is refused with
-  //   STREAM_BREAKER_OPEN even though committing it would write zero rows and spend zero tokens.
-  // EXPECTED: the retry dedupes (returns the original committed event, same offset) — the
-  //   breaker meters DURABLE LOG GROWTH (its own doc) and a dedupe hit grows nothing.
-  // ACTUAL: STREAM_BREAKER_OPEN.
-  // WHY IT MATTERS: idempotency keys exist exactly for retry storms; a tight breaker is exactly
-  //   when retries happen. Refusing the reconciling retry turns at-least-once delivery into
-  //   cannot-confirm-delivery right when the stream is under pressure.
+test("an idempotent retry dedupes even when the breaker bucket is empty", async () => {
+  // FIXED: append's breaker gate counted every non-ephemeral input as durable growth BEFORE the
+  //   commit point could dedupe it — a retry of an already-committed idempotencyKey was refused with
+  //   STREAM_BREAKER_OPEN even though committing it writes zero rows and spends zero tokens. On the
+  //   about-to-trip path the gate now re-counts excluding inputs whose idempotencyKey is already
+  //   committed (StreamEventLog.hasIdempotencyKey), so the reconciling retry dedupes instead of
+  //   tripping — the breaker meters DURABLE LOG GROWTH, and a dedupe hit grows nothing. (Retry
+  //   storms are exactly when idempotency keys and a tight breaker coincide.)
   const itx = await harness.itx("prj_bug_retrybreaker");
   await append(itx, breakerConfigured(3, 0.000001));
   const [orig] = await append(itx, {

@@ -346,6 +346,23 @@ class StreamEventLog {
       events.length === limit ? events[events.length - 1].offset : this.highestAssignedOffset();
     return { events, scannedThroughOffset };
   }
+
+  /** Does a durable row already carry this idempotencyKey? A cheap existence probe so the breaker
+   *  need not tax a retry that will DEDUPE to zero durable growth (never creates the events table —
+   *  a virgin stream has no keys). */
+  hasIdempotencyKey(key: string): boolean {
+    const tableExists =
+      this.#storageReady ||
+      this.#storage.sql
+        .exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'events'")
+        .toArray().length > 0;
+    if (!tableExists) return false;
+    return (
+      this.#storage.sql
+        .exec("SELECT 1 FROM events WHERE idempotency_key = ? LIMIT 1", key)
+        .toArray().length > 0
+    );
+  }
 }
 
 /** The capability host's slug — hosted INLINE (see the inline-core section below). */
@@ -410,12 +427,23 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (nonControl.length > 0) {
       const core = this.#inline("core").state as CoreState;
       if (core.paused) throw codedError("STREAM_PAUSED", `stream paused: ${core.paused.reason}`);
-      const counted = nonControl.filter((i) => !i.ephemeral).length;
-      if (counted > 0 && breakerRemaining(core, Date.now()) < counted)
-        throw codedError(
-          "STREAM_BREAKER_OPEN",
-          `stream circuit breaker open — ${counted} durable event(s) exceed the bucket`,
-        );
+      let counted = nonControl.filter((i) => !i.ephemeral).length;
+      if (counted > 0 && breakerRemaining(core, Date.now()) < counted) {
+        // Before refusing: a retry of an ALREADY-COMMITTED idempotencyKey will dedupe to zero
+        // durable growth, and the breaker meters GROWTH — don't tax the reconciling retry (retry
+        // storms are exactly when the bucket is tight). Re-count excluding sure dedupe hits; the
+        // probe runs only on the about-to-trip path, so the common case pays no extra SELECT.
+        counted = nonControl.filter(
+          (i) =>
+            !i.ephemeral &&
+            !(i.idempotencyKey && this.#eventLog.hasIdempotencyKey(i.idempotencyKey)),
+        ).length;
+        if (counted > 0 && breakerRemaining(core, Date.now()) < counted)
+          throw codedError(
+            "STREAM_BREAKER_OPEN",
+            `stream circuit breaker open — ${counted} durable event(s) exceed the bucket`,
+          );
+      }
     }
     // THE INLINE REDUCES run INSIDE the log's transaction: the routing table and the core
     // state are atomically exact as of the last committed event, always — the pump-races-the-

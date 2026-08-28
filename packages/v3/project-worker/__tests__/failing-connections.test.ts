@@ -249,6 +249,10 @@ test("clean close ends the session: fact sequence started → ended → started 
 // WHY IT MATTERS: every network blip now files a durable ended+started pair per client — a
 //   crash-loop storm floods the durable log with exactly the facts the session rule exists to
 //   coalesce, and who-was-connected-Tuesday history splits one logical session into many.
+// DEFERRED (defect 14): the fix cannot come from the pager close code — a clean [Symbol.dispose]
+// and this dirty ws.close() sever the socket with the SAME code, so clean-vs-dirty is only knowable
+// from whether relay.dispose() is ALSO called (it fires after onRpcBroken and races the async
+// #connectionClosed). Needs a dispose()-signals-clean-end path; left failing until then.
 test.fails("dirty transport death + reconnect within seconds shares ONE ItxConnectionSession (the storm rule)", async () => {
   const ctx = c("dirty");
   const observer = await harness.itx(ctx);
@@ -353,7 +357,7 @@ test("disposing a client session removes its connections promptly and auto-revok
 //   regex across a hop; check the code". A caller that handles CONNECTION_OFFLINE (retry,
 //   heal-by-pull, fall back) cannot recognize this rejection as the same condition without the
 //   forbidden message-sniffing; it also leaks another client's transport internals.
-test.fails("killing the provider session mid-invoke rejects the in-flight call promptly with code CONNECTION_OFFLINE", async () => {
+test("killing the provider session mid-invoke rejects the in-flight call promptly with code CONNECTION_OFFLINE", async () => {
   const ctx = c("midinvoke");
   const observer = await harness.itx(ctx);
   const hangTools = new HangTools();
@@ -440,7 +444,7 @@ test("anonymous subscribe callbacks file NO session facts (their durable trace i
 //   duplicate; and when one duplicate later closes cleanly it is keyFinal=false (a sibling
 //   still carries the key), when the LAST one closes it clean-ends a session other transports
 //   thought they shared — the exact storm the attach-time replace was built to prevent.
-test.fails("concurrent connects under one connectionKey collapse to ONE live transport", async () => {
+test("concurrent connects under one connectionKey collapse to ONE live transport", async () => {
   const ctx = c("race");
   const observer = await harness.itx(ctx);
   // Four sessions dial in at once under one key. The directory's own contract: "reconnect under

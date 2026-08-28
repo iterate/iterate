@@ -153,6 +153,17 @@ export class ItxConnectionDirectory {
     if (response.status === 101) {
       this.#pendingConnectionRecords.delete(pagingConnectionId);
       this.#stubs.attach(pagingConnectionId, record);
+      // ONE transport per key, enforced at the moment a transport becomes VISIBLE. attach() (which
+      // runs BEFORE the pager opens) can only drop predecessors already in #stubs.all(); a
+      // CONCURRENT connect under the same key is still opening its own pager then, invisible to that
+      // scan — so N concurrent connects would all linger. When THIS pager opens, drop every OTHER
+      // same-key transport now (the newest transport wins). "replaced" ⇒ a transport swap, not a
+      // session end — the keyed session continues on the survivor (defect 15).
+      const key = record.connectionKey as string | undefined;
+      if (typeof key === "string")
+        for (const r of this.#stubs.all())
+          if (r.connectionKey === key && r.stubKey !== pagingConnectionId)
+            this.#stubs.drop(r.stubKey, "replaced");
     }
     return response;
   }

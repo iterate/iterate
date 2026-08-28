@@ -124,6 +124,9 @@ export class HibernatableRpcStubManager {
     const retained = await this.#pageIn(stubKey);
     retained.inFlight += 1;
     try {
+      // A provider that dies mid-call is re-coded to CONNECTION_OFFLINE at the RELAY
+      // (RetainedCallbackInvoker.invoke), where the break is LOCAL — so the CODE, never a message,
+      // crosses this hop (core/errors.ts).
       return await retained.invoker.invoke(path, args);
     } finally {
       retained.inFlight -= 1;

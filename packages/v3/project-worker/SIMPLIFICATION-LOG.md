@@ -490,3 +490,34 @@ door vs keyless-revoke as-is.
 
 Session total: **7 defects closed** (41, 40, 19, 20, 43, 47, 6); throughput/delivery unchanged (the
 `distinct` view equals `committed` for every batch without an in-batch duplicate).
+
+### Defect sweep round 3 — event-log 7 + connections 15/16 (14 deferred)
+
+Full suite **287 passed / 20 xf** (was 284/23), typecheck clean. Baseline (the committed 7) was
+live-proven first: deploy d868b2a4, prove_push ALL PASS, prove_ephemeralflood 2000/2000 no-loss
+no-dup, 4684 ev/s p50 221ms 50× batching (≈ the historical baseline — no commit-core regression).
+
+- **Defect 7 — breaker no longer taxes an idempotent retry** (`stream-durable-object.ts`). The
+  breaker gate counted every non-ephemeral input as durable growth BEFORE dedupe, so a retry of an
+  already-committed idempotencyKey tripped STREAM_BREAKER_OPEN even though it writes zero rows. On
+  the about-to-trip path the gate now re-counts excluding sure dedupe hits (new cheap
+  `StreamEventLog.hasIdempotencyKey` probe, run only when the naive count would trip).
+- **Defect 16 — an in-flight invoke on a dying provider now rejects CONNECTION_OFFLINE**
+  (`itx-surface.ts` RetainedCallbackInvoker). The call leaked capnweb's raw, uncoded close error.
+  capnweb fires onRpcBroken BEFORE it rejects the pending import, so a `#broken` flag set there is
+  already true in the invoke catch — re-code to CONNECTION_OFFLINE LOCALLY (at the relay), so the
+  CODE (never a message) crosses the Workers-RPC hop (core/errors.ts). No race, no message-sniffing.
+- **Defect 15 — concurrent connects under one key collapse to ONE transport**
+  (`itx-connection-directory.ts`). attach() drops same-key predecessors by scanning #stubs.all(),
+  but a concurrent connect is still opening its pager then — invisible to that scan, so N concurrent
+  connects all lingered. The one-transport-per-key invariant is now ALSO enforced at pager-open
+  (fetch/101): a newly-visible keyed transport drops every OTHER same-key transport ("replaced" — a
+  swap, not a session end). Additive; only touches same-key concurrency.
+
+**Deferred: defect 14** (dirty transport death coalesces to ONE session). Not fixable by the pager
+close code — a clean [Symbol.dispose] and a dirty ws.close() sever the socket with the SAME code, so
+clean-vs-dirty is only knowable from whether relay.dispose() is ALSO called (fires after onRpcBroken,
+races the async #connectionClosed). Needs a dispose()-signals-clean-end path. Left as test.fails.
+
+Session total: **10 defects closed** (41, 40, 19, 20, 43, 47, 6, 7, 15, 16); 1 deferred (14), 1 policy
+fork (34-sibling).
