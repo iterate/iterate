@@ -16,6 +16,8 @@ docs. Not done: stamping the available update's commit message into app config
 not), and a device pass.
 
 **Two plan claims turned out to be wrong. See [Corrections](#corrections).**
+**A later re-audit on a stronger model found five more defects and one missed
+requirement. See [Re-audit](#re-audit).**
 
 Two halves:
 
@@ -478,3 +480,101 @@ is checkable.
   install-then-run flow are unproven on hardware.
 - The first PR to run this triggers a fresh EAS build, which is also the
   first real test of the channel-baking.
+
+## Record
+
+Planning and implementation up to commit `d778360b0` ran on a weaker model.
+Misha then asked for the request/plan/feedback/takeaways to be captured and
+for the whole thing to be re-thought from the top on the assumption the
+earlier work was flawed. This section is that capture; the re-audit's
+findings follow it.
+
+### The initial request (2026-08-28, paraphrased tightly)
+
+- The mobile-PR QR codes "aren't really working well". The native-build QR
+  should ALWAYS work: correct build AND corresponding OTA branch. It should
+  keep landing on the page with the Install button. **After installing, the
+  app should show a screen** (Build Info or other) with: current OTA branch,
+  the build's default OTA branch, and commit messages.
+- On every app open, if on a non-main native build OR any custom OTA branch,
+  check whether it's on the latest commit of the relevant branch.
+- Stop saying "not signed in" outside a project — signed-in state is
+  app-global.
+- All these queries/mutations are "jumbled up and spread all over the place";
+  organize them into a single module/class, with Build Info and the update
+  UIs as simple dumb views.
+- Process: plannotator the plan, including an explanation of how it
+  currently works.
+
+### The plan, and the annotation feedback
+
+Plan v1 proposed: the module (`build-state`), a session module, an on-open
+check with a banner, and — for the QR — a smarter https interstitial carrying
+channel + build id. Misha's annotations:
+
+1. `isOverride` should be derived (`defaultChannel !== current`), not stored.
+2. **No interstitial.** `iterate://` straight to the app for OTA; the native
+   build straight to the install page. Do the "alternative": per-PR native
+   builds with the PR's channel baked in.
+3. Per-PR builds accepted ("if it's annoying we'll do the interstitial
+   later"); round 2: assume the "not signed in" sighting is the QR screen;
+   stale banner only on overridden channels + non-preview binaries;
+   build-per-PR cost is fine.
+
+### Takeaways
+
+- **Misha's annotations consistently removed indirection** — derived over
+  stored, direct links over interstitials, the structural fix (build for the
+  channel) over the compensating fix (smarter landing page). Propose the
+  grain-following variant first.
+- **Measure claims, don't argue them.** The plan's one measured claim
+  (fingerprint vs `eas.json`) was FALSE despite sounding authoritative; the
+  measurement was the only thing that caught it. See
+  [Corrections](#corrections).
+- **Each sentence of the request is a checklist item.** "After I install it
+  it should show me a screen" is a behaviour (present the screen after
+  install), not an existence claim (the screen exists). The weaker model
+  read it as the latter; the re-audit caught it.
+- **Green CI is not an audit.** All checks were green while the
+  check-for-update button was dead on the most common phone state.
+
+## Re-audit
+
+A from-scratch review of the shipped branch (request re-read literally, code
+re-read with no trust). Five defects and one missed requirement, all fixed on
+the branch:
+
+1. **Dead "Check for update" button on main phones** (the common case).
+   `checkNow` used `refetchQueries` on a query that is *disabled* for
+   unwatched builds — react-query skips disabled queries, silent no-op — and
+   the `!armed → idle` mapping would have discarded the result anyway.
+   Fixed: imperative `fetchQuery` into the same cache (disabled observers
+   still receive cache updates), and the mapping no longer gates on `armed`.
+2. **No way back to main on a per-PR binary.** The per-PR-builds design
+   changed what "Reset to default channel" means — the default IS the PR
+   channel, which cleanup deletes on merge, stranding the phone. The PR-body
+   footer still promised the old behaviour. Fixed: Build info grows a
+   "Switch to main (preview)" button on non-main binaries; footer copy
+   updated (+ test).
+3. **Stale update verdict across channel switches.** `switchChannel` never
+   touched the check cache, so Build info could report the old channel's
+   freshness. Fixed: `removeQueries` on switch (remove, not invalidate — on
+   an unwatched build nothing would refetch, and stale-but-displayed is the
+   bug).
+4. **Override-read race on the QR screen.** Until the AsyncStorage read
+   lands, `channel` falls back to the binary's default, so the screen could
+   flash "You're on this channel" and fire the freshness pull — and its
+   reload — against the wrong channel. Fixed: `ready` flag on the hook; the
+   QR screen gates `alreadyOnTarget` on it.
+5. **Answerless taps.** `updateNow` → "up-to-date" changed nothing visibly;
+   a "no-update" channel switch likewise. Fixed: the up-to-date verdict is
+   recorded as a check result, and the switch outcome is exposed and shown.
+6. **Missed requirement: show the screen after install.** The install guard
+   already detects "first boot of a new binary"; it now also reports that,
+   and the root layout opens Build info on it — the install is followed by
+   the screen naming the channel and commit you landed on. Inert on first
+   ever run (a new user's first open must not detour through Build info).
+
+Also folded in: `projects.tsx` sign-out now goes through `useSignOut` (the
+session cache has one owner; knip doesn't cover apps/mobile, so its dead
+exports don't get flagged), and `readSession` is no longer exported.

@@ -74,31 +74,37 @@ export const getAutoContinueChannel = () => AsyncStorage.getItem(AUTO_CONTINUE_K
 export const clearAutoContinueChannel = () => AsyncStorage.removeItem(AUTO_CONTINUE_KEY);
 
 /**
- * Clears a channel override left over from before this binary was installed;
- * returns the cleared channel (to show the user), or null when nothing
- * changed. Installing a build means wanting THAT build, not whatever an old
- * override OTA-pulls over it. The binary identity is version/build-number/
- * runtime — an EAS install changes at least one of them. Deliberately inert
- * when the stored identity is missing (first run after this shipped, or a
- * truly fresh install where there's no override anyway): only an observed
- * CHANGE of binary proves the override predates the install.
+ * First boot of a NEW binary: clear any channel override left over from
+ * before it was installed, and say that a new binary was observed at all —
+ * the layout presents Build info off that, so an install is followed by the
+ * screen naming the channel and commit you just landed on.
  *
- * With CI building per PR — the binary's own channel IS the PR's — this is
- * purely protective: clearing the override now lands you on the channel you
+ * Installing a build means wanting THAT build, not whatever an old override
+ * OTA-pulls over it. The binary identity is version/build-number/runtime —
+ * an EAS install changes at least one of them. Deliberately inert when the
+ * stored identity is missing (first run after this shipped, or a truly fresh
+ * install — a brand-new user's first open must not detour through Build
+ * info): only an observed CHANGE of binary proves anything.
+ *
+ * With CI building per PR — the binary's own channel IS the PR's — the
+ * override-clear is purely protective: it lands you on the channel you
  * installed for, rather than dropping you back onto main.
  */
-export async function resetChannelOverrideForNewInstall(): Promise<string | null> {
+export async function resetChannelOverrideForNewInstall(): Promise<{
+  binaryChanged: boolean;
+  clearedOverride: string | null;
+}> {
+  const nothing = { binaryChanged: false, clearedOverride: null };
   // Web has no installs; Metro dev bundles have no OTA for an override to hijack.
-  if (Platform.OS === "web" || !Updates.isEnabled) return null;
+  if (Platform.OS === "web" || !Updates.isEnabled) return nothing;
   const id = `${Application.nativeApplicationVersion}/${Application.nativeBuildVersion}/${Updates.runtimeVersion}`;
   const seen = await AsyncStorage.getItem(LAST_SEEN_INSTALL_KEY);
-  if (seen === id) return null;
+  if (seen === id) return nothing;
   await AsyncStorage.setItem(LAST_SEEN_INSTALL_KEY, id);
-  if (seen === null) return null;
+  if (seen === null) return nothing;
   const override = await getChannelOverride();
-  if (!override) return null;
-  await setChannelOverride(null);
-  return override;
+  if (override) await setChannelOverride(null);
+  return { binaryChanged: true, clearedOverride: override };
 }
 
 // ---------------------------------------------------------------------------
@@ -129,7 +135,14 @@ async function checkForUpdate(): Promise<UpdateCheck> {
  * "check every time the app is opened" behaviour, without an AppState listener
  * of our own.
  */
-export function useBuildState(): BuildState {
+/** BuildState plus the binding's own loading fact: `ready` is false until
+ * the stored channel override has been read, during which `channel` is only
+ * a guess (it falls back to the binary's default). Anything that ACTS on the
+ * channel — the QR confirm screen above all — must wait for it; display-only
+ * consumers can render the guess. */
+export type LiveBuildState = BuildState & { ready: boolean };
+
+export function useBuildState(): LiveBuildState {
   const override = useQuery({ queryKey: overrideKey, queryFn: getChannelOverride });
   const installedAt = useQuery({
     queryKey: installedAtKey,
@@ -167,15 +180,19 @@ export function useBuildState(): BuildState {
     retry: false,
   });
 
-  return withoutCheck(
-    !armed
-      ? { kind: "idle" }
-      : check.isFetching
+  // No `armed` guard here: an unwatched build's check data can still arrive
+  // via checkNow's imperative fetch (the disabled observer stays subscribed
+  // to the cache), and hiding it would make the manual button look dead.
+  return {
+    ...withoutCheck(
+      check.isFetching
         ? { kind: "checking" }
         : check.isError
           ? { kind: "error", message: String(check.error) }
           : check.data || { kind: "idle" },
-  );
+    ),
+    ready: override.isSuccess,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -199,6 +216,9 @@ export type BuildActions = {
    * whatever it has. Only "reloading" actually restarts the app. */
   switchChannel: (channel: string | null) => Promise<"reloading" | "no-update">;
   switchChannelPending: boolean;
+  /** The last switch's outcome, for feedback ("no-update" deserves words —
+   * a reload speaks for itself). */
+  switchChannelResult: "reloading" | "no-update" | undefined;
   /** Ask the server again now, without waiting for a foreground. */
   checkNow: () => Promise<unknown>;
   /** Fetch the newer update and restart into it. */
@@ -214,13 +234,33 @@ export function useBuildActions(): BuildActions {
       const result = await fetchLatestUpdateAndReload();
       return result === "up-to-date" ? ("no-update" as const) : result;
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: overrideKey }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: overrideKey });
+      // The cached check verdict described the OLD channel; drop it rather
+      // than let Build info report the wrong channel's freshness. (Remove,
+      // not invalidate: on an unwatched build nothing would refetch, and
+      // stale-but-displayed is exactly the bug.)
+      queryClient.removeQueries({ queryKey: checkKey });
+    },
   });
-  const updateNow = useMutation({ mutationFn: fetchLatestUpdateAndReload });
+  const updateNow = useMutation({
+    mutationFn: fetchLatestUpdateAndReload,
+    onSuccess: (result) => {
+      // "up-to-date" IS a check verdict — record it so the status row says
+      // so instead of leaving the tap visibly answerless.
+      if (result === "up-to-date") queryClient.setQueryData(checkKey, { kind: "current" });
+    },
+  });
   return {
     switchChannel: switchChannel.mutateAsync,
     switchChannelPending: switchChannel.isPending,
-    checkNow: () => queryClient.refetchQueries({ queryKey: checkKey }),
+    switchChannelResult: switchChannel.data,
+    // fetchQuery, not refetchQueries: refetch skips DISABLED queries, and the
+    // check query is disabled on every unwatched build (a main phone — the
+    // common case), which made this button a silent no-op there. An
+    // imperative fetch populates the same cache and the observer re-renders.
+    checkNow: () =>
+      queryClient.fetchQuery({ queryKey: checkKey, queryFn: checkForUpdate, staleTime: 0 }),
     updateNow: updateNow.mutateAsync,
     updateNowPending: updateNow.isPending,
   };

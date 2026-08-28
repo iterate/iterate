@@ -4,21 +4,21 @@
 // OS-side bootstrap first (see lib/open-project.ts). Shared subscription hooks
 // own their teardown when sign-out replaces this route.
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import type { ProjectListEntry } from "iterate/sdk/itx/react";
 import { AppDrawerButton } from "../components/project-drawer.tsx";
-import { signOut } from "../lib/auth.ts";
-import { disconnectItxSession, getItxSession } from "../lib/itx.ts";
+import { getItxSession } from "../lib/itx.ts";
 import { backfillProjectIfMissing } from "../lib/open-project.ts";
 import { revokeEnrolledPushDevices } from "../lib/push-device.ts";
+import { useSignOut } from "../lib/session.ts";
 import { DEFAULT_SERVER } from "../lib/servers.ts";
 import { getServerBaseUrl, setLastProject } from "../lib/storage.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
 
 export default function ProjectsScreen() {
-  const queryClient = useQueryClient();
+  const signOut = useSignOut();
   // Set by the sign-in screen's post-login navigation: an account with
   // exactly one project skips the picker — a single-item list is a pointless
   // tap. Only fresh sign-ins carry it, so Back from a project (plain
@@ -80,9 +80,9 @@ export default function ProjectsScreen() {
                 await revokeEnrolledPushDevices(baseUrl).catch((error) => {
                   console.log(`[auth] push revocation skipped on sign-out: ${String(error)}`);
                 });
-                await signOut(baseUrl);
-                disconnectItxSession();
-                queryClient.clear();
+                // Session teardown (keychain, itx disconnect, cache drop)
+                // belongs to lib/session.ts — one owner for signed-in state.
+                await signOut.mutateAsync(baseUrl);
                 router.replace("/");
               }}
             >

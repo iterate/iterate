@@ -59,8 +59,11 @@ export default function PreviewChannelScreen() {
   // re-opening this deep link, or (with CI building per PR) because the binary
   // you installed was built for this channel in the first place. Deliberately
   // NOT a silent redirect: scanning a QR for the channel you're already on
-  // should SHOW you that rather than leave you wondering.
-  const alreadyOnTarget = state.channel === channel;
+  // should SHOW you that rather than leave you wondering. Gated on `ready`:
+  // until the stored override is read, `channel` is only the binary's default,
+  // and acting on that guess could fire the freshness pull — and its reload —
+  // against a channel the phone isn't actually on.
+  const alreadyOnTarget = state.ready && state.channel === channel;
   const otaSupported = state.update.kind !== "unsupported";
 
   // Scanning always means "the latest": once the channel matches, pull its

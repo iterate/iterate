@@ -11,6 +11,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import {
   buildStamp,
   isOverridden,
+  MAIN_CHANNEL,
   updateHeadline,
   useBuildActions,
   useBuildState,
@@ -83,6 +84,26 @@ export default function BuildInfoScreen() {
           pendingLabel="Resetting…"
           onPress={() => void actions.switchChannel(null)}
         />
+      ) : null}
+      {/* A per-PR binary's OWN channel is its PR — and once that PR merges,
+          cleanup deletes the channel. "Reset to default" can't get such a
+          phone back to main; this explicit override to the main channel can.
+          Hidden on main binaries, where reset-to-default IS main. */}
+      {state.update.kind !== "unsupported" &&
+      state.binary.defaultChannel !== null &&
+      state.binary.defaultChannel !== MAIN_CHANNEL &&
+      state.channel !== MAIN_CHANNEL ? (
+        <Button
+          label={`Switch to main (${MAIN_CHANNEL})`}
+          pending={actions.switchChannelPending}
+          pendingLabel="Switching…"
+          onPress={() => void actions.switchChannel(MAIN_CHANNEL)}
+        />
+      ) : null}
+      {actions.switchChannelResult === "no-update" ? (
+        <Text style={styles.note}>
+          Channel switched — it has nothing newer this binary can run right now, so no restart.
+        </Text>
       ) : null}
       <Section title="App">
         <Row label="Version" value={state.binary.version} />
@@ -212,4 +233,5 @@ const styles = StyleSheet.create({
   buttonLabel: { color: colors.text, fontSize: 16, fontWeight: "600" },
   linkButton: { alignItems: "center", paddingVertical: 8 },
   linkLabel: { color: colors.textMuted, fontSize: 14 },
+  note: { color: colors.textMuted, fontSize: 13, textAlign: "center" },
 });

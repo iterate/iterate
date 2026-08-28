@@ -21,7 +21,7 @@ export type Session = {
 
 export const sessionKey = ["session"];
 
-export async function readSession(): Promise<Session> {
+async function readSession(): Promise<Session> {
   const serverBaseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
   const signedIn = await hasSignIn(serverBaseUrl);
   return {

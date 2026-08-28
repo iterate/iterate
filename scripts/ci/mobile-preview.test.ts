@@ -241,3 +241,28 @@ test("the PR channel is written into its own build profile, leaving the rest alo
   // silently adding one would produce a build on a channel nobody serves.
   expect(() => easJsonWithChannel(raw, "nope", "my-branch")).toThrow(/no build profile "nope"/);
 });
+
+test("the PR footer routes back to main via the explicit switch, not reset-to-default", () => {
+  // A per-PR binary's default channel IS its PR — and cleanup deletes that
+  // channel on merge. "Reset to default channel" can no longer promise main.
+  const plan = planPreview({
+    baseUrl: "https://os.iterate.com",
+    scheme: "iterate",
+    channel: "my-feature",
+    publishedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
+    installedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
+    installUrl: "https://expo.dev/accounts/o/projects/p/builds/build-1",
+    installReady: true,
+  });
+  const section = renderPreviewSection({
+    variant: "pr",
+    plan,
+    deepLinkQrUrl: "https://example.test/ota.png",
+    installQrUrl: "https://example.test/install.png",
+    headSha: "abcdef1234567890",
+    installBuildSha: "0123456789abcdef",
+    publishedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
+  });
+  expect(section).toContain("Build info → Switch to main");
+  expect(section).not.toContain("Reset to default channel");
+});

@@ -288,7 +288,7 @@ export const renderPreviewSection = (input: {
     "",
     forMain
       ? `<sub>Posted by mobile-eas-update on merges touching apps/mobile.</sub>`
-      : `<sub>Back to main inside the app: Build info → Reset to default channel. Republishes on every push to this PR.</sub>`,
+      : `<sub>Back to main inside the app: Build info → Switch to main. Republishes on every push to this PR.</sub>`,
   ].join("\n");
 };
 
