@@ -10,6 +10,7 @@ import {
   resolveSource,
   type WorkerSource,
 } from "./core/agent-runtime.ts";
+import { PROCESSOR_SDK_MODULE } from "./generated/processor-sdk.ts";
 import { itxEntrypointFor } from "./itx-entrypoint.ts";
 import { toExpression, type Expression } from "./core/expression.ts";
 import { pathProxy } from "./core/dispatch.ts";
@@ -112,7 +113,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         env,
         { kind: "code", owner: contextName, contentHash: hashSource(JSON.stringify(modules)) },
         "run.js",
-        { "run.js": CODE_CAP_RUNNER, ...modules },
+        { "run.js": CODE_CAP_RUNNER, "processor.js": PROCESSOR_SDK_MODULE, ...modules },
         itxEntrypointFor(deps.hostCtx, contextName),
       );
       return (props !== undefined

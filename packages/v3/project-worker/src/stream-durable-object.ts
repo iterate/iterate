@@ -940,9 +940,10 @@ export class StreamDurableObject extends DurableObject<Env> {
   /** Load a class as a FACET of this stream — the ONE loader for both roles: a userspace
    *  `StreamProcessor` (role "processor", behind the `runner.js` adapter + SDK, commit-driven) and
    *  a raw stateful `DurableObject` class (role "stateful", loaded directly and called). Shared:
-   *  `resolveSource` → contentHash → `confinedWorker` (kind "facet") → `versionedFacet`; the two
-   *  roles differ ONLY in whether the SDK + runner adapter ride the module set. The loader `owner`
-   *  is composed collision-free (`facetLoaderOwner`). */
+   *  `resolveSource` → contentHash → `confinedWorker` (kind "facet") → `versionedFacet`; the SDK
+   *  (`processor.js`) rides BOTH roles (every userspace load may `import "./processor.js"`), so the
+   *  two roles differ ONLY in whether the `runner.js` adapter (and its mainModule) rides. The loader
+   *  `owner` is composed collision-free (`facetLoaderOwner`). */
   async #durableFacet(opts: {
     source: WorkerSource;
     role: "processor" | "stateful";
@@ -970,7 +971,7 @@ export class StreamDurableObject extends DurableObject<Env> {
             "processor.js": PROCESSOR_SDK_MODULE,
             "runner.js": PROCESSOR_RUNNER_MODULE,
           }
-        : userModules,
+        : { ...userModules, "processor.js": PROCESSOR_SDK_MODULE },
       itxEntrypointFor(this.ctx, this.#address.name),
     );
     return versionedFacet(this.ctx, {

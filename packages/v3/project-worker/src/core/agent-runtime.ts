@@ -98,9 +98,10 @@ export function confinedWorker(
     // handle back — every chain member needs the flag (see iterate-context-entrypoint.ts).
     compatibilityFlags: ["allow_irrevocable_stub_storage"],
     mainModule,
-    // itx.js rides every confined isolate. The processor SDK (~330KB) is NOT injected here — the
-    // CALLER includes "processor.js" only where a StreamProcessor actually lives (#durableFacet's
-    // processor role), so a stateless code cap AND a raw stateful DO both skip the dead weight.
+    // itx.js rides every confined isolate. The processor SDK ("processor.js", ~330KB) is NOT
+    // injected here — the CALLER includes it on every userspace load (stateless code cap, raw
+    // stateful DO, AND processor facet) so any loaded user code may `import "./processor.js"`
+    // uniformly; only the "runner.js" adapter stays processor-role-only (#durableFacet).
     modules: {
       "itx.js": ITX_SURFACE_MODULE,
       ...modules,
