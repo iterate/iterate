@@ -77,12 +77,11 @@ test("provides a secret from the thread, with no browser in the way", async ({
   expect(await value.getAttribute("type")).not.toBe("password");
 
   await page.getByLabel("Save secret").click();
-  // The Save button does swap to a spinner for the whole write — this is not a
-  // screen missing loading UI. Measured: a deliberately 6s-long save was still
-  // given only the base budget, so the spinner-waiter is not crediting it, and
-  // a preview save (several real round trips) cannot fit in that.
-  // timeout: spinner-waiter does not credit this screen's Save spinner.
-  await page.getByText("Secret saved").waitFor({ timeout: 30_000 });
+  // Storing a secret is several real round trips on a preview deployment, and
+  // waitFor cannot express that here: the plugin overwrites any timeout passed
+  // to it, so polling is what the spec guidance leaves.
+  // timeout: the spinner-waiter fast-fails this wait at 1ms.
+  await expect.poll(() => page.getByText("Secret saved").count(), { timeout: 30_000 }).toBe(1);
 
   // Stored write-only and already pinned — checked at the source rather than
   // taken from the sheet's own success copy.
@@ -102,8 +101,8 @@ test("provides a secret from the thread, with no browser in the way", async ({
   await page.getByText("This replaces an existing secret").waitFor();
   await page.getByLabel("Value", { exact: true }).fill("sk_test_rotated");
   await page.getByLabel("Save secret").click();
-  // timeout: spinner-waiter does not credit this screen's Save spinner, as above.
-  await page.getByText("Secret saved").waitFor({ timeout: 30_000 });
+  // timeout: the spinner-waiter fast-fails this wait too — as the first save.
+  await expect.poll(() => page.getByText("Secret saved").count(), { timeout: 30_000 }).toBe(1);
 
   // Material is write-only, so "did it actually change?" is answered by the
   // secret's own stream: a rotation appends secret/updated, a no-op create
