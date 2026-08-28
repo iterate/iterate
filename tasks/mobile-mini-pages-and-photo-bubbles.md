@@ -101,7 +101,11 @@ Five bundled items, four mobile-facing plus one platform one:
       not eat the thread. _280pt wide, 340pt tall at most._
 - [x] A photo narrower than the frame sits on a blurred, cover-scaled copy of
       itself instead of a black letterbox. _React Native's own `blurRadius`,
-      no new dependency._
+      no new dependency. Two ways a photo ends up narrower: the height cap, and
+      an image too small to fill the width (never scaled up)._
+- [x] A caption can never stretch the bubble wider than its photo — that would
+      put bubble fill along the photo's edge. _Bugbot found it; the frame width
+      is now a constant (`photoFrameMaxWidth`) that the bubble's caption shares._
 - [x] Layout maths lives in a pure module with unit tests. _`lib/photo-layout.ts`._
 
 ### 5. `getSecret(...)` in query params
@@ -109,6 +113,10 @@ Five bundled items, four mobile-facing plus one platform one:
 - [x] Substitution covers query parameter **values**.
 - [x] Query parameter **names** still throw — same rule as JSON object keys.
 - [x] Fragment, userinfo and host still throw.
+- [x] A literal `+` in a query placeholder stays a `+`. _Bugbot found it:
+      `URLSearchParams` decodes form-urlencoded, so `/secrets/a+b` routed
+      correctly at discovery and then 400d as `/secrets/a b`. Query pairs are
+      split from the raw text now._
 - [x] A query with no placeholder stays byte-identical (the existing ratchet).
       _Path and query now track their hits separately, so a path placeholder
       no longer re-encodes an innocent query either._
