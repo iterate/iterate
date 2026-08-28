@@ -49,7 +49,11 @@ test("photos fill their bubble, and a tall one sits on its own blurred backdrop"
       ),
       filename,
     })),
-    message: "Here are their instructions",
+    // Long enough to wrap: a caption must not be able to stretch the bubble
+    // wider than its photo, which would put bubble fill along the photo's
+    // edge — the exact gap this layout exists to remove.
+    message:
+      "Here are their instructions, and a caption long enough that it has to wrap onto several lines inside the bubble",
   });
 
   // 390×844 fixture: 606pt tall at bubble width, so it is capped at 340 and no
@@ -67,10 +71,14 @@ test("photos fill their bubble, and a tall one sits on its own blurred backdrop"
   await expect.poll(async () => (await landscape.boundingBox())?.height).toBe(187);
   expect(await landscape.getByTestId("photo-backdrop").count()).toBe(0);
 
-  // The caption sits under its photos, the way every chat app stacks them.
-  const caption = page.getByText("Here are their instructions");
+  // The caption sits under its photos, the way every chat app stacks them,
+  // and never wider than them.
+  const caption = page.getByText("Here are their instructions,");
   await caption.waitFor();
-  expect((await caption.boundingBox())!.y).toBeGreaterThan((await landscape.boundingBox())!.y);
+  const captionBox = (await caption.boundingBox())!;
+  const landscapeBox = (await landscape.boundingBox())!;
+  expect(captionBox.y).toBeGreaterThan(landscapeBox.y);
+  expect(captionBox.width).toBeLessThanOrEqual(landscapeBox.width);
 });
 
 async function signUpToProject(

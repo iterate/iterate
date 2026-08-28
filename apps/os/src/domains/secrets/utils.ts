@@ -395,28 +395,44 @@ export async function substituteSecretRequest(
   // placeholder must not quietly re-encode an innocent query, or vice versa.
   const path = substituteSecretPlaceholders(decodedUrl(url.pathname), resolve);
 
-  // Query params are rewritten value-by-value rather than over the raw query
-  // string: material may contain `&`, `=` or `#`, which would otherwise
-  // restructure the query. URLSearchParams hands values back decoded (so the
-  // placeholder's quotes are already unescaped) and re-encodes on the way out.
+  // Query params are rewritten pair by pair over the RAW query text, not
+  // through URLSearchParams. Two reasons, both about `+`: that decoder is
+  // form-urlencoded, so it reads a literal `+` as a space — which would
+  // rewrite the path a placeholder names (`/secrets/a+b` → `/secrets/a b`)
+  // and 400 on a path that works fine in a header, while discovery, which
+  // reads the URL as RFC 3986, had already routed the request to the real
+  // secret. And re-serialising through it would flip `%20` to `+` in
+  // untouched params. Splitting the text keeps every pair we do not rewrite
+  // byte-identical.
   let queryHasPlaceholder = false;
-  const query = new URLSearchParams();
-  for (const [name, value] of url.searchParams) {
-    if (decodedUrl(name).match(SECRET_REFERENCE) !== null) {
+  const rewrittenPairs = queryPairs(url.search).map((pair) => {
+    const equals = pair.indexOf("=");
+    if (decodedUrl(equals === -1 ? pair : pair.slice(0, equals)).match(SECRET_REFERENCE) !== null) {
       throw new SecretSubstitutionError(
         "secret_reference_outside_url_path",
         "getSecret(...) placeholders in a request URL are only substituted in the path and query values; found one in a query parameter name",
       );
     }
-    const substitutedValue = substituteSecretPlaceholders(value, resolve);
-    queryHasPlaceholder ||= substitutedValue.hasPlaceholder;
-    query.append(name, substitutedValue.value);
-  }
+    if (equals === -1) return pair;
+    const value = substituteSecretPlaceholders(decodedUrl(pair.slice(equals + 1)), resolve);
+    if (!value.hasPlaceholder) return pair;
+    queryHasPlaceholder = true;
+    // `+` is escaped explicitly: encodeURIComponent leaves it alone, and a
+    // provider reading the query as form-urlencoded would take a literal `+`
+    // in the material for a space.
+    return `${pair.slice(0, equals)}=${encodeURIComponent(value.value).replaceAll("+", "%2B")}`;
+  });
 
   if (!path.hasPlaceholder && !queryHasPlaceholder) return substituted;
   if (path.hasPlaceholder) url.pathname = path.value;
-  if (queryHasPlaceholder) url.search = query.toString();
+  if (queryHasPlaceholder) url.search = rewrittenPairs.join("&");
   return new Request(url.toString(), substituted);
+}
+
+/** The `name=value` pairs of a raw query string (no leading `?`, no decoding). */
+function queryPairs(search: string): string[] {
+  const query = search.startsWith("?") ? search.slice(1) : search;
+  return query === "" ? [] : query.split("&");
 }
 
 /** Substitute every `getSecret(...)` placeholder in one already-decoded

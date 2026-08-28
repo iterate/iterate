@@ -1,15 +1,29 @@
 // How a photo sits in its chat bubble, Telegram-style.
 //
-// Two rules do all the work:
+// Three rules do all the work:
 //
-// 1. The bubble is the photo. The frame takes the photo's own aspect ratio up
-//    to the widest a bubble may be, so the image reaches the bubble's edges
-//    instead of floating inside padding with dead space around it.
-// 2. A phone screenshot is far too tall to show whole, so the frame's height
-//    is capped. Past the cap the photo is fitted inside the frame instead of
-//    cropped — it ends up narrower than the frame, and the caller fills what
-//    is left with a blurred, cover-scaled copy of the same photo rather than
-//    black bars.
+// 1. The frame is always the full bubble width. That is what makes a photo
+//    reach the bubble's edges instead of floating inside padding — and it is
+//    why the bubble a photo lives in is capped at the same width (a caption
+//    wide enough to stretch the bubble would reopen the gap at the photo's
+//    edge).
+// 2. The photo is never scaled up. A small image stays its own size rather
+//    than being blown up to bubble width and going soft.
+// 3. A phone screenshot is far too tall to show whole, so the frame's height
+//    is capped. Past the cap the photo is fitted rather than cropped.
+//
+// Rules 2 and 3 both leave the photo narrower than its frame; the caller
+// fills what is left with a blurred, cover-scaled copy of the same photo
+// rather than black bars.
+
+/** The widest a photo frame — and so the widest a bubble carrying one — goes
+ * on a screen this wide. */
+export function photoFrameMaxWidth(windowWidth: number): number {
+  return Math.min(280, Math.round(windowWidth * 0.72));
+}
+
+/** The tallest any photo gets: one message should not take a whole screen. */
+export const PHOTO_MAX_HEIGHT = 340;
 
 /** The frame a photo is drawn into, and whether it needs the blurred backdrop. */
 export type PhotoFrame = {
@@ -33,12 +47,12 @@ export function photoFrame(input: {
   if (!natural || natural.width <= 0 || natural.height <= 0) {
     return { backdrop: false, height: Math.round(input.maxWidth * 0.75), width: input.maxWidth };
   }
-  // Small images keep their own size rather than being blown up to bubble
-  // width — an 80px sticker should look like an 80px sticker.
-  const width = Math.min(input.maxWidth, natural.width);
-  const height = (natural.height * width) / natural.width;
-  if (height <= input.maxHeight) {
-    return { backdrop: false, height: Math.round(height), width: Math.round(width) };
-  }
-  return { backdrop: true, height: input.maxHeight, width: Math.round(width) };
+  // Fit inside the frame, and never past 1:1 — the photo may end up narrower
+  // than the frame from either constraint, and the backdrop covers both.
+  const scale = Math.min(input.maxWidth / natural.width, input.maxHeight / natural.height, 1);
+  return {
+    backdrop: natural.width * scale < input.maxWidth,
+    height: Math.round(natural.height * scale),
+    width: input.maxWidth,
+  };
 }

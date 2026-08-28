@@ -61,7 +61,7 @@ import {
   type MobileFeedItem,
 } from "../../../lib/feed.ts";
 import { awaitingAgentActivity, latestAgentTitle } from "../../../lib/chat.ts";
-import { photoFrame } from "../../../lib/photo-layout.ts";
+import { photoFrame, photoFrameMaxWidth, PHOTO_MAX_HEIGHT } from "../../../lib/photo-layout.ts";
 import { getProjectItx } from "../../../lib/itx.ts";
 // APPROVAL_STREAM_EVENT_TYPES is module-level (identity-stable) on purpose:
 // useLiveEvents folds eventTypes into its connection-hook deps, so an inline
@@ -469,6 +469,14 @@ function FeedItem({
 
 function MessageBubble({ message }: { message: AgentUiMessageItem }) {
   const isUser = message.kind === "user";
+  const window = useWindowDimensions();
+  // A photo frame is exactly this wide, while a bubble would otherwise grow to
+  // 85% of the screen — so a caption longer than the photo would stretch the
+  // bubble past it and reopen the gap at the photo's edge. Cap the caption at
+  // the frame's width and the bubble stays the photo's size.
+  const photoWidth = message.files?.some((file) => file.contentType.startsWith("image/"))
+    ? photoFrameMaxWidth(window.width)
+    : null;
   return (
     <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAssistant]}>
       {/* Photos above their caption, the way every chat app puts them — and
@@ -478,7 +486,9 @@ function MessageBubble({ message }: { message: AgentUiMessageItem }) {
         <MessageAttachment key={file.path} file={file} />
       ))}
       {message.text !== "" ? (
-        <View style={styles.bubbleTextInset}>
+        <View
+          style={[styles.bubbleTextInset, photoWidth === null ? null : { maxWidth: photoWidth }]}
+        >
           {isUser ? (
             <Text style={styles.bubbleUserText} selectable>
               {message.text}
@@ -525,7 +535,7 @@ function MessagePhoto({ file, onPress }: { file: AgentUiFileAttachment; onPress:
   });
   const frame = photoFrame({
     maxHeight: PHOTO_MAX_HEIGHT,
-    maxWidth: Math.min(PHOTO_MAX_WIDTH, Math.round(window.width * 0.72)),
+    maxWidth: photoFrameMaxWidth(window.width),
     natural: natural.data,
   });
   return (
@@ -534,6 +544,13 @@ function MessagePhoto({ file, onPress }: { file: AgentUiFileAttachment; onPress:
       onPress={onPress}
       style={{ height: frame.height, width: frame.width }}
     >
+      {natural.data === undefined ? (
+        // Until the image reports its dimensions the frame is a plain box at a
+        // guessed aspect ratio. Say so: it is a real loading state, a screen
+        // reader should announce it, and it is what the spec's spinner waiter
+        // holds its budget open on instead of racing the first paint.
+        <View accessibilityLabel="Loading" style={StyleSheet.absoluteFill} />
+      ) : null}
       {frame.backdrop ? (
         <Image
           source={{ uri: file.url }}
@@ -547,12 +564,6 @@ function MessagePhoto({ file, onPress }: { file: AgentUiFileAttachment; onPress:
     </Pressable>
   );
 }
-
-/** The widest a photo bubble goes on a big phone, and the tallest any photo
- * gets before it is fitted onto its own blurred backdrop — one message should
- * not take a whole screen. */
-const PHOTO_MAX_WIDTH = 280;
-const PHOTO_MAX_HEIGHT = 340;
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;

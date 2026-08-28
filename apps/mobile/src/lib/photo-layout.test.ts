@@ -1,7 +1,14 @@
 import { expect, test } from "vitest";
-import { photoFrame } from "./photo-layout.ts";
+import { photoFrame, photoFrameMaxWidth } from "./photo-layout.ts";
 
 const bubble = { maxHeight: 340, maxWidth: 280 };
+
+test("the frame width is also the bubble's cap, so a caption cannot outgrow the photo", () => {
+  // A big phone: the 280 ceiling wins. A small one: 72% of the screen.
+  expect(photoFrameMaxWidth(430)).toBe(280);
+  expect(photoFrameMaxWidth(390)).toBe(280);
+  expect(photoFrameMaxWidth(320)).toBe(230);
+});
 
 test("a landscape photo fills the bubble width at its own aspect ratio", () => {
   expect(photoFrame({ ...bubble, natural: { height: 1080, width: 1920 } })).toEqual({
@@ -30,11 +37,13 @@ test("a photo shorter than the cap needs no backdrop even when it is portrait", 
   });
 });
 
-test("a small image keeps its own size instead of being blown up", () => {
+test("a small image keeps its own size, and the backdrop fills the frame around it", () => {
+  // Never scaled up — an 80px sticker stays 80px — but the frame is still the
+  // bubble's width, so the bubble hugs nothing and the photo stays flush.
   expect(photoFrame({ ...bubble, natural: { height: 80, width: 80 } })).toEqual({
-    backdrop: false,
+    backdrop: true,
     height: 80,
-    width: 80,
+    width: 280,
   });
 });
 

@@ -463,6 +463,23 @@ describe("substituteSecretRequest", () => {
     expect(substituted.url).toBe("https://api.example.com/v1/lookup?key=k123");
   });
 
+  // `+` is a legal character in a secret path, and works in headers and the
+  // URL path. The query must not be the one place it silently means something
+  // else — form-urlencoded decoding reads `+` as a space, which would rewrite
+  // the path the placeholder names and 400 on a path that was always fine.
+  test("a secret path containing + survives in a query value", async () => {
+    const path = "/secrets/a+b";
+    // Written raw, the way a caller writes a URL: `+` is a literal plus under
+    // RFC 3986, which is also how header and path discovery read it.
+    const request = new Request(`https://api.example.com/v1/lookup?token=getSecret("${path}")`);
+    expect((await secretReferencePathsFromRequest(request)).paths).toEqual([path]);
+    const substituted = await substituteSecretRequest(request, (reference) => {
+      expect(reference.path).toBe(path);
+      return "tok";
+    });
+    expect(substituted.url).toBe("https://api.example.com/v1/lookup?token=tok");
+  });
+
   // The remaining URL ratchet. A parameter NAME follows the JSON object-key
   // rule (never substituted), and fragment/userinfo/host never reach the
   // provider as sent. All must fail LOUDLY; silently passing the literal
