@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { MiniPageSearch } from "./mini-page.ts";
 
 // The collect-secret deep link: one URL that carries everything the
 // chrome-free collection page needs. Built server-side by
@@ -11,14 +10,10 @@ import { MiniPageSearch } from "./mini-page.ts";
 // falls back to the raw string. `path` and `notify` always start with "/" —
 // never valid JSON — so they ride raw. `egress` is JSON so the array
 // round-trips. `description` is free text and MUST be JSON-encoded: raw
-// "12345" would come back as a number and kill the link on zod. `returnTo` is
-// an app-scheme URL ("iterate://…") — also never valid JSON, so also raw.
+// "12345" would come back as a number and kill the link on zod.
 
-/** Search params of `/collect-secret/$projectSlug`. `returnTo` comes from
- * {@link MiniPageSearch}: it is added by the native client opening the link in
- * an in-app browser, never by the agent minting it, so `buildCollectSecretUrl`
- * does not write it. */
-export const CollectSecretSearch = MiniPageSearch.extend({
+/** Search params of `/collect-secret/$projectSlug`. */
+export const CollectSecretSearch = z.object({
   /** The normalized `/secrets/…` path the submitted value lands at. */
   path: z.string().startsWith("/secrets/"),
   /** Egress origins the secret is born pinned to — shown to the user as the

@@ -10,18 +10,34 @@ export type InAppLink =
   | { pathname: "/project/[projectId]/media"; params: { projectId: string; q?: string } }
   | { pathname: "/project/[projectId]/repo"; params: { projectId: string; repoPath: string } }
   | { pathname: "/project/[projectId]/repos"; params: { projectId: string } }
-  | { pathname: "/project/[projectId]/integrations"; params: { projectId: string } };
+  | { pathname: "/project/[projectId]/integrations"; params: { projectId: string } }
+  | {
+      pathname: "/project/[projectId]/collect-secret";
+      params: { link: string; projectId: string };
+    };
 
 const SPECIAL_PATHS: {
   prefix: string;
-  resolve: (path: string, projectId: string) => InAppLink;
+  resolve: (url: URL, projectId: string) => InAppLink;
 }[] = [
   {
+    prefix: "/collect-secret",
+    // The secret-collection page, rendered natively instead of opened. The
+    // app already holds an authenticated itx session, so it can store the
+    // secret itself — no browser, no second sign-in, no leaving the thread.
+    // The whole link rides through; the screen parses and vets it, and shows
+    // the same malformed-link card the web page would for a mangled one.
+    resolve: (url, projectId) => ({
+      pathname: "/project/[projectId]/collect-secret",
+      params: { link: url.toString(), projectId },
+    }),
+  },
+  {
     prefix: "/media",
-    resolve: (path, projectId) => {
+    resolve: (url, projectId) => {
       // A media file's path is /media/<sha256>-<original-filename>; search
       // by the original filename part, which uniquely finds the item.
-      const last = path.slice("/media".length).split("/").at(-1) || "";
+      const last = url.pathname.slice("/media".length).split("/").at(-1) || "";
       const filename = last.replace(/^[0-9a-f]{32,}-/, "");
       return {
         pathname: "/project/[projectId]/media",
@@ -31,17 +47,17 @@ const SPECIAL_PATHS: {
   },
   {
     prefix: "/integrations",
-    resolve: (_path, projectId) => ({
+    resolve: (_url, projectId) => ({
       pathname: "/project/[projectId]/integrations",
       params: { projectId },
     }),
   },
   {
     prefix: "/repos",
-    resolve: (path, projectId): InAppLink => {
+    resolve: (url, projectId): InAppLink => {
       // Repo paths are /repos/<name>[/file...]; the repo screen owns file
       // selection, so route to the repo itself. Bare /repos is the list.
-      const repoPath = path.split("/").slice(0, 3).join("/");
+      const repoPath = url.pathname.split("/").slice(0, 3).join("/");
       if (repoPath === "/repos") {
         return { pathname: "/project/[projectId]/repos", params: { projectId } };
       }
@@ -73,5 +89,5 @@ export function resolveInAppLink(
     ({ prefix }) => parsed.pathname === prefix || parsed.pathname.startsWith(`${prefix}/`),
   );
   if (!entry) return null;
-  return entry.resolve(parsed.pathname, context.projectId);
+  return entry.resolve(parsed, context.projectId);
 }

@@ -1,7 +1,8 @@
 // The secret-collection page: where a human hands over a credential an agent
-// must never see. It is a MINI PAGE — the mobile app opens it in an in-app
-// browser sheet — so it is spec'd at phone size, and its two jobs are to fit
-// there and to tell the app when it is done.
+// must never see. Phones render this request natively instead (see
+// specs/mobile/collect-secret.spec.ts), so this page serves a link followed
+// from a desktop, Slack or email — still spec'd at phone size, because that
+// is often where such a link is read.
 //
 // The link is stateless (apps/os/src/lib/collect-secret-link.ts builds it from
 // nothing but search params), so the spec can hold one directly instead of
@@ -60,32 +61,4 @@ test("a person provides a secret from a phone-sized sheet", async ({ baseURL, he
   using project = admin.projects.get(fixture.project.id);
   const secret = await project.secrets.get("/secrets/integrations/stripe/api-key").__describe();
   expect(secret).toMatchObject({ hasMaterial: true, egress: { urls: ["https://api.stripe.com"] } });
-});
-
-test("a mini page hands the outcome back to the app that opened it", async ({
-  baseURL,
-  helpers,
-  page,
-}) => {
-  await using fixture = await helpers.createFixture("collect-secret-return");
-
-  const link = buildCollectSecretUrl({
-    baseUrl: baseURL!,
-    projectSlug: fixture.project.slug,
-    search: { egress: ["https://api.stripe.com"], path: "/secrets/mini-page/api-key" },
-  });
-  // What apps/mobile/src/lib/mini-page.ts appends before handing the URL to
-  // the in-app browser. Navigating to it is what makes the sheet close.
-  await page.goto(`${link}&returnTo=${encodeURIComponent("iterate://mini-page")}`);
-
-  await page.getByLabel("Value", { exact: true }).fill("sk_test_notarealkey");
-  await page.getByRole("button", { name: "Save secret" }).click();
-
-  // Chromium cannot follow `iterate://`, so the page's own auto-navigation is
-  // invisible here — but the same URL is on the fallback link, which is what
-  // a user taps when a browser sheet declines to dismiss itself. `no-notify`
-  // because this link names no agent to tell.
-  await page
-    .locator('a[href="iterate://mini-page?path=%2Fsecrets%2Fmini-page%2Fapi-key&status=no-notify"]')
-    .waitFor();
 });

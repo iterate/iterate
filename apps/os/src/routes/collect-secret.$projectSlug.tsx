@@ -9,7 +9,7 @@ import {
   TriangleAlertIcon,
 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@iterate-com/ui/components/alert";
-import { Button, buttonVariants } from "@iterate-com/ui/components/button";
+import { Button } from "@iterate-com/ui/components/button";
 import {
   Card,
   CardContent,
@@ -25,11 +25,9 @@ import {
   InputGroupInput,
 } from "@iterate-com/ui/components/input-group";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { cn } from "@iterate-com/ui/lib/utils";
 import { ProjectScope, useItx, useItxQuery } from "iterate/sdk/itx/react";
 import { requireOrganizationMemberForSession } from "../lib/auth.ts";
 import { CollectSecretSearch } from "~/lib/collect-secret-link.ts";
-import { miniPageReturnUrl } from "~/lib/mini-page.ts";
 import { getProjectBySlugServerFn } from "~/lib/project-server-fns.ts";
 import { ItxResourceLoading } from "~/components/itx-boundary.tsx";
 
@@ -40,11 +38,12 @@ import { ItxResourceLoading } from "~/components/itx-boundary.tsx";
 // the same org-membership gate, so following the link signs the user in
 // first and returns here.
 //
-// It is also the first MINI PAGE (lib/mini-page.ts): a native client opens it
-// in an in-app browser sheet with a `returnTo` deep link, and the page
-// navigates there on success so the sheet closes itself. Everything on it is
-// sized for that sheet — a phone screen with a browser bar on top — so keep
-// it short.
+// The phone does NOT open this page: the app renders the same request
+// natively over the itx session it already holds
+// (apps/mobile/src/app/project/[projectId]/collect-secret.tsx), so nobody on
+// a phone signs in twice. This page serves everyone else — a link followed
+// from a desktop, Slack, or email — and is still sized for a small screen,
+// because that is often where it is read.
 export const Route = createFileRoute("/collect-secret/$projectSlug")({
   validateSearch: CollectSecretSearch,
   // ProjectScope dials a WebSocket and throws during SSR — same shape as the
@@ -106,8 +105,7 @@ function CollectSecretPage() {
 /** How the submit ended: stored + agent told, stored but the notify failed
  * (the one partial state — the user must relay by hand), or stored with no
  * agent to tell. The secret itself is never half-stored: material + egress
- * land in one update. Doubles as the mini-page `status` handed back to a
- * native client. */
+ * land in one update. */
 type SavedOutcome = "notified" | "notify-failed" | "no-notify";
 
 function CollectSecretCard() {
@@ -156,14 +154,6 @@ function CollectSecretCard() {
         console.error(`collect-secret: failed to notify ${search.notify}`, error);
         return "notify-failed";
       }
-    },
-    onSuccess: (outcome) => {
-      // The mini-page half of the contract: hand the outcome back to whoever
-      // opened us. An in-app browser sheet dismisses itself on this
-      // navigation, which is the whole point — the user never left the app,
-      // so they should not have to tap their way back into it.
-      const returnUrl = miniPageReturnUrl(search.returnTo, { path: search.path, status: outcome });
-      if (returnUrl !== null) window.location.replace(returnUrl);
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
   });
@@ -270,10 +260,6 @@ function CollectSecretCard() {
 
 function SavedCard({ outcome }: { outcome: SavedOutcome }) {
   const search = Route.useSearch();
-  // Rendered even when the return navigation above already fired: an in-app
-  // browser that does not dismiss itself must not leave the user staring at a
-  // blank page, and the link is their way back if it doesn't.
-  const returnUrl = miniPageReturnUrl(search.returnTo, { path: search.path, status: outcome });
   return (
     <Card size="sm" className="w-full max-w-md">
       <CardHeader className="text-center">
@@ -281,19 +267,12 @@ function SavedCard({ outcome }: { outcome: SavedOutcome }) {
         <CardTitle>Secret saved</CardTitle>
         <CardDescription>
           {outcome === "notified"
-            ? "The agent that asked for it has been notified and will pick up from here."
+            ? "The agent that asked for it has been notified and will pick up from here. You can close this tab."
             : outcome === "notify-failed"
               ? `The secret is stored, but the agent that asked for it could not be notified. Tell it the secret at ${search.path} is ready.`
               : "You can close this tab."}
         </CardDescription>
       </CardHeader>
-      {returnUrl === null ? null : (
-        <CardContent>
-          <a className={cn(buttonVariants(), "w-full")} href={returnUrl}>
-            Back to the app
-          </a>
-        </CardContent>
-      )}
     </Card>
   );
 }
