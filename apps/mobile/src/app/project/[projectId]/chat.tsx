@@ -48,6 +48,7 @@ import type { Agent, StreamEvent } from "iterate/sdk/itx/react";
 import {
   ActivityCard,
   CodeBlock,
+  WorkingCard,
   type ActivityApprovalContext,
 } from "../../../components/activity-card.tsx";
 import { Markdown } from "../../../components/markdown.tsx";
@@ -405,12 +406,10 @@ function FeedList({
           {/* working with no live steps covers BOTH owed-turn gaps: a live
               activity with no steps yet, and the pending-turn debounce
               window where no live activity exists at all (feed.ts
-              turnPending). */}
+              turnPending). Rendered as the SAME card the live activity uses,
+              so the box doesn't jump when the real card takes over. */}
           {sendPending || (feed.working && (feed.live === null || feed.live.steps.length === 0)) ? (
-            <View style={styles.workingRow}>
-              <ActivityIndicator accessibilityLabel="Loading" size="small" color={colors.working} />
-              <Text style={styles.workingText}>working…</Text>
-            </View>
+            <WorkingCard />
           ) : null}
         </View>
       }
@@ -664,14 +663,6 @@ const styles = StyleSheet.create({
   bubbleUserText: { color: colors.background, fontSize: 15, lineHeight: 21 },
   bubbleAssistantText: { color: colors.text, fontSize: 15, lineHeight: 21 },
   bottomStack: { gap: spacing.sm },
-  workingRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-  },
-  workingText: { color: colors.working, fontSize: 13 },
   eventRow: { gap: 4 },
   eventType: { color: colors.textFaint, fontSize: 11, fontFamily: "Menlo" },
   wakeMarker: { color: colors.textFaint, fontSize: 11, textAlign: "center" },

@@ -243,10 +243,14 @@ export type AgentUiLiveStatus = {
 
 /**
  * The live activity's current phase plus this turn's agent-set status text.
- * "processing": nothing is running but the last step is a script that
- * durably settled WITH a returned value — under the codemode contract a
- * returned value means the agent owes another LLM round, so the turn is
- * still in flight even though no request event has been journaled yet.
+ * "processing" covers the two owed-but-not-yet-journaled gaps, both derived
+ * from facts already in the journal — no timer debounce, no new events:
+ * - the last step is a script that durably settled WITH a returned value
+ *   (codemode contract: a returned value means another LLM round follows);
+ * - the last step is a COMPLETED llm response whose text carries a codemode
+ *   script block — the extraction's script-run-requested event is coming,
+ *   and without this the card flashed settled between "writing code" and
+ *   "running code".
  */
 export function deriveAgentUiLiveStatus(state: AgentUiState): AgentUiLiveStatus | null {
   const live = state.live;
@@ -264,18 +268,30 @@ export function deriveAgentUiLiveStatus(state: AgentUiState): AgentUiLiveStatus 
     if (current?.kind === "llm" && current.thinkingText !== "") return "thinking";
     if (current?.kind === "llm") return "waiting";
     const last = live.steps.at(-1);
-    if (
-      // A paused loop owes no follow-up round, whatever the last script
-      // returned — a pause folded mid-request must not leave a permanent
-      // "processing" claim after that request's script settles.
-      !state.paused &&
-      last?.kind === "code" &&
-      last.status === "done" &&
-      last.outcomeSource === "durable" &&
-      last.success === true &&
-      last.result !== undefined
-    ) {
-      return "processing";
+    // A paused loop owes no follow-up, whatever the last step promised — a
+    // pause folded mid-request must not leave a permanent claim after that
+    // request's outcome lands.
+    if (!state.paused && last?.kind === "code") {
+      if (
+        last.status === "done" &&
+        last.outcomeSource === "durable" &&
+        last.success === true &&
+        last.result !== undefined
+      ) {
+        return "processing";
+      }
+    }
+    if (!state.paused && last?.kind === "llm") {
+      // The response finished and visibly contains a script: extraction
+      // appends script-run-requested momentarily. (A completed prose-only
+      // response gets no such promise and settles as before.)
+      if (
+        last.status === "done" &&
+        last.outcome === "completed" &&
+        (last.responseText.includes("```") || last.responseText.includes("<codemode"))
+      ) {
+        return "processing";
+      }
     }
     return "working";
   };

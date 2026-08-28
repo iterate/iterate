@@ -261,6 +261,31 @@ function roundHeaderMeta(round: { llm: AgentUiLlmStep | null; code: AgentUiCodeS
 }
 
 /**
+ * The turn-owed indicator for moments with no live activity yet (the send →
+ * first-request window): the SAME card the live activity renders as, so the
+ * loading affordance never changes box, border, or text position when the
+ * real card takes over — it just starts filling in.
+ */
+export function WorkingCard() {
+  return (
+    <View style={[styles.card, styles.cardLive]}>
+      <View style={styles.summaryRow}>
+        <ActivityIndicator
+          accessibilityLabel="Loading"
+          size="small"
+          color={colors.working}
+          style={styles.spinnerFit}
+        />
+        <PhaseGlyph phase="working" />
+        <Text style={styles.summary} numberOfLines={1}>
+          working…
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+/**
  * The collapsed live card's second mark, after the spinner: what KIND of
  * waiting this is. Text glyphs like ApprovalGlyphs, not vector icons — the
  * summary row already speaks that language.
