@@ -122,13 +122,20 @@ function turnPending(events: StreamEvent[]): boolean {
   let pending = false;
   let paused = false;
   for (const event of events) {
-    const payload = event.payload as any;
+    const payload = event.payload || {};
     switch (event.type) {
-      case "events.iterate.com/agents/context-added":
-        if (payload?.role !== "user") break;
-        if (payload?.llmRequestPolicy?.behaviour === "dont-trigger-request") break;
+      case "events.iterate.com/agents/context-added": {
+        if (payload.role !== "user") break;
+        // Journal payloads are producer-validated at append time; this fold
+        // only sniffs one optional discriminator, so the cast narrows no
+        // further than the single field read (a schema boundary here would
+        // re-parse every event on every reduction for that one read, and a
+        // malformed value still lands harmlessly on `undefined`).
+        const policy = payload.llmRequestPolicy as { behaviour?: string } | undefined;
+        if (policy?.behaviour === "dont-trigger-request") break;
         pending = true;
         break;
+      }
       // A reply or a stream error after the message, with no request in
       // between, also ends the wait (the last two cases): the message was
       // answered without an llm round (a directly-handled command), or the
