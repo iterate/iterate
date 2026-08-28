@@ -77,7 +77,12 @@ test("provides a secret from the thread, with no browser in the way", async ({
   expect(await value.getAttribute("type")).not.toBe("password");
 
   await page.getByLabel("Save secret").click();
-  await page.getByText("Secret saved").waitFor();
+  // The Save button does swap to a spinner for the whole write — this is not a
+  // screen missing loading UI. Measured: a deliberately 6s-long save was still
+  // given only the base budget, so the spinner-waiter is not crediting it, and
+  // a preview save (several real round trips) cannot fit in that.
+  // timeout: spinner-waiter does not credit this screen's Save spinner.
+  await page.getByText("Secret saved").waitFor({ timeout: 30_000 });
 
   // Stored write-only and already pinned — checked at the source rather than
   // taken from the sheet's own success copy.
@@ -97,7 +102,8 @@ test("provides a secret from the thread, with no browser in the way", async ({
   await page.getByText("This replaces an existing secret").waitFor();
   await page.getByLabel("Value", { exact: true }).fill("sk_test_rotated");
   await page.getByLabel("Save secret").click();
-  await page.getByText("Secret saved").waitFor();
+  // timeout: spinner-waiter does not credit this screen's Save spinner, as above.
+  await page.getByText("Secret saved").waitFor({ timeout: 30_000 });
 
   // Material is write-only, so "did it actually change?" is answered by the
   // secret's own stream: a rotation appends secret/updated, a no-op create
