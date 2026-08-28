@@ -23,10 +23,13 @@ Builds on the mobile voice client (PR #2537) and the per-stream colleague
 
 Implemented, unit-tested (88 facet + 191 mobile tests green), and
 live-proven against prd: the e2e calls a chat on voicelab-eval (template
-18.0.0), gets answered, and the conversation lands on the chat's stream as
-`[voice call]` context items (13s round trip). Templates upgraded on
-voicelab-eval, misha, iterate. Remaining: the morning on-device box below
-(pure-JS change, so the existing build + OTA update should carry it).
+19.0.0), gets answered, and the conversation lands on the chat's stream as
+`[voice call]` context items (21s round trip). Mid-flight, #2536 merged to
+main carrying its own final 18.0.0 (colleagueStatus.failure on the fold,
+follow-up race guards, note dedupe) — this branch was rebuilt on the
+rebased base and the facet changes renumbered **19.0.0**. Templates
+upgraded on voicelab-eval, misha, iterate. Remaining: the morning
+on-device box below (pure-JS app change, OTA-able).
 
 ## Decisions (my calls, flagged where they're guesses)
 
@@ -122,8 +125,16 @@ migrating existing per-device streams to chat lines; barge-in tuning.
   fixes: the subscription moved into setupVoiceAgent's batch (a refusal is
   now a failed setup, loudly), and the `condition` was dropped (both
   transcript append sites already skip empty turns).
-- prd templates upgraded to 18.0.0: voicelab-eval (e2e home), misha,
+- prd templates upgraded (finally at 19.0.0): voicelab-eval (e2e home), misha,
   iterate — same routine as the 17.0.0 upgrades in #2537.
 - The debounce-250 append observed on chats comes from the platform config
   worker's own done-configuring signal; the facet's gate (never rewrite an
   existing chat's config) is correct and unit-tested.
+- Mid-implementation, #2536 merged to main; GitHub force-rebased
+  mobile-voice-client and #2537 retargeted to main. Its final squash
+  carried a competing 18.0.0 (failure on the fold, !followUpResponsePending
+  guards, note-offset dedupe). Rebuilt this branch by cherry-picking onto
+  the rebased base; the two 18.0.0s merged semantically (whisper now reads
+  the FOLDED failure; the spoken-status gate adopts the race guard) and
+  this work became 19.0.0. Force-with-lease push — the stacked-PR reapply
+  playbook, nobody had built on this branch.
