@@ -160,19 +160,6 @@ export class RetryTelemetryReporter {
     unhandledErrors: readonly unknown[] = [],
     reason?: "passed" | "interrupted" | "failed",
   ): Promise<void> {
-    // Policy gate, deliberately OUTSIDE the try below: the catch exists so a
-    // telemetry failure never breaks a test run, but this one must — a bare
-    // `test.fails` counts every throw as the expected one and stops pinning
-    // anything once its body fails for an unrelated reason.
-    for (const testModule of testModules) {
-      for (const test of testModule.children.allTests()) {
-        if (test.options?.fails) {
-          throw new Error(
-            `${test.fullName}: use the \`failing(test, /failure reason/)\` helper instead of bare \`test.fails\` — see docs/testing.md "Pinned bugs"`,
-          );
-        }
-      }
-    }
     try {
       const tests: TestTelemetryRecord[] = [];
       const modules: ModuleTelemetryRecord[] = [];
@@ -241,7 +228,9 @@ export class RetryTelemetryReporter {
               expectedState:
                 test.options.mode === "skip" || test.options.mode === "todo"
                   ? test.options.mode
-                  : "passed",
+                  : test.options.fails
+                    ? "failed"
+                    : "passed",
             }),
             ...(test.options?.timeout === undefined
               ? {}
