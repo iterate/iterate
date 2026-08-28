@@ -159,13 +159,29 @@ function CollectSecretForm({
       // Straight back to the thread. The agent's own "I submitted the secret
       // at …" message lands there as you arrive, which is the confirmation —
       // an interstitial saying the same thing is one more tap for nothing.
+      //
+      // But that only works if the message is actually there. The thread's
+      // events are cached with staleTime: Infinity and normally kept current
+      // by the live connection; a thread that unmounted or whose socket
+      // dropped while this screen was open would never refetch, and the user
+      // would land back on a thread showing nothing at all. So say the cached
+      // thread is out of date — we just added to it.
+      if (request.notify !== undefined) {
+        void queryClient.invalidateQueries({
+          queryKey: ["thread-events", baseUrl || "", projectId, request.notify],
+        });
+      }
       if (outcome === "notify-failed") {
         // The exception: stored, but nobody was told. Only the user can
-        // unstick that, so it cannot be a message they might scroll past.
+        // unstick that, so it cannot be a message they might scroll past —
+        // and the pop waits for them to acknowledge it. Alerting and
+        // navigating in the same tick loses the alert to the unmount.
         Alert.alert(
           "Saved, but the agent wasn't told",
           `The secret at ${request.path} is stored. Send a message saying it's ready.`,
+          [{ text: "OK", onPress: () => router.back() }],
         );
+        return;
       }
       router.back();
     },
