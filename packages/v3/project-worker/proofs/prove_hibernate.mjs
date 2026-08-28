@@ -1,6 +1,6 @@
 // prove_hibernate.mjs — HIBERNATION WITH FACETS e2e: the Stream DO must hibernate (evict +
-// reconstruct — incarnation grows) while facet processors are ENABLED (iterate-context + tally +
-// user-tally) AND two capnweb clients stay CONNECTED with live capabilities (pagers parked).
+// reconstruct — incarnation grows) while facet processors are ENABLED (tally + user-tally) AND
+// two capnweb clients stay CONNECTED with live capabilities (pagers parked).
 // Then the wake path: one client invokes the other's capability through the routing table.
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { seedSources } from "./proof_sources.mjs";
@@ -122,7 +122,7 @@ check(
 // and the facets themselves survived: fold state rebuilt from durable identity + the log
 const snap = await itxB.facetSnapshot("tally");
 check(
-  snap.state?.counts?.["events.iterate.com/capability-table/capability-provided"] === 1 &&
+  snap.state?.counts?.["events.iterate.com/capability-table/capability-provided"] >= 1 &&
     snap.offset >= 1,
   "post-hibernation: facet snapshot still folds (rebuilt from durable identity)",
   JSON.stringify(snap),

@@ -35,9 +35,6 @@ afterAll(async () => {
 const streamAppend = (itx: any, ...events: unknown[]): Promise<any[]> =>
   itx.invokeCapability({ path: ["stream", "append"], args: events });
 
-const readAll = async (itx: any): Promise<any[]> =>
-  (await itx.invokeCapability({ path: ["stream", "read"], args: [0, 500] })).events;
-
 /** Await a promise that MUST reject; hand back the error for inspection. */
 async function rejection(p: Promise<unknown>): Promise<Error & { code?: string }> {
   try {

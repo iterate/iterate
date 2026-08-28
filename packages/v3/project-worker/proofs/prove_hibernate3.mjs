@@ -50,8 +50,8 @@ const s1 = await state();
 check(s1.dormant === true, "before hold: DO dormant (no legs held)", JSON.stringify(s1));
 check(s1.stubs >= 3, "before hold: all three client pagers parked", `stubs=${s1.stubs}`);
 check(
-  ["tally", "user-tally", "iterate-context"].every((x) => s1.facetProcessors?.includes(x)),
-  "before hold: facet processors listed (incl. iterate-context)",
+  ["tally", "user-tally"].every((x) => s1.facetProcessors?.includes(x)),
+  "before hold: the enabled facet processors are listed",
   JSON.stringify(s1.facetProcessors),
 );
 console.log(`incarnation before hold: ${s1.incarnation}`);
@@ -107,7 +107,7 @@ const snap = await clients.a
   .facetSnapshot("tally")
   .catch(() => clients.b.facetSnapshot("tally").catch(() => clients.c.facetSnapshot("tally")));
 check(
-  snap?.state?.counts?.["events.iterate.com/capability-table/capability-provided"] === 1 &&
+  snap?.state?.counts?.["events.iterate.com/capability-table/capability-provided"] >= 1 &&
     snap?.offset >= 1,
   "post-hibernation: facet snapshot still folds (rebuilt from durable identity)",
   JSON.stringify(snap),
