@@ -69,7 +69,9 @@ const ECHO_PATH = "version-echo.js";
  * The companion test `userspace-facet-recycle-false-alarm.e2e.test.ts`
  * still demonstrates the old comparisons' blind spot by forcing a recycle.
  */
-failing(test, /SAME-BOOT STALENESS/)(
+// timeoutMs: the wrapper's own hang deadline, just below the runner ceiling —
+// the expected run is ~60-110s, well past failing()'s 60s default.
+failing(test, /SAME-BOOT STALENESS/, { timeoutMs: 230_000 })(
   "a userspace facet rebuilds on a source commit and only on a source commit",
   // Ceiling for the cold build, the two stability kills, and up to three
   // 45s observation rounds. The expected run (bug present, no recycles)

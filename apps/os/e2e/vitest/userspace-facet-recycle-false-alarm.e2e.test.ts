@@ -1,3 +1,4 @@
+import { failing } from "@iterate-com/shared/test-support/failing-test";
 import { expect, test } from "vitest";
 import type { StreamEventInput } from "iterate/processors";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
@@ -14,7 +15,7 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
 /*
  * Why the adjacent pin goes red for no reason.
  *
- * `userspace-facet-source-version.e2e.test.ts` is a `test.fails`: it asserts
+ * `userspace-facet-source-version.e2e.test.ts` is a pinned-bug test: it asserts
  * the FIX ("a source commit reaches the RUNNING facet"), so it stays green
  * only while the bug survives and goes red the moment somebody fixes it. Its
  * whole verdict is four comparisons between the probe answer from before the
@@ -48,13 +49,19 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
  * the commit is what replaced the facet. That is a separate change; this test
  * only holds the bug still.
  *
- * The `[facet-recycle]` phase log is not decoration. `test.fails` reports
- * every throw as the expected one, so a green pin says nothing about whether
- * the pinned thing happened — the same blind spot this file is about. Three
- * runs of this test "passed" while never reaching the assertion at all. A run
- * proves something only if its log reaches `verdict`.
+ * The `[facet-recycle]` phase log is not decoration. Three runs of this test
+ * "passed" while never reaching the assertion at all, back when it was a bare
+ * `test.fails` and every throw counted as the expected one. The
+ * `failing(test, /PIN CANNOT TELL RECYCLE FROM REBUILD/)` wrapper now closes
+ * that hole — only the tagged verdict counts, and a fall-over on the way goes
+ * red with the mismatched error in the `[failing-test]` log — but the phase
+ * log is still how you tell which phase a run reached. A run proves
+ * something only if its log reaches `verdict`.
  */
-test.fails(
+// timeoutMs: the wrapper's hang deadline, kept just below the 180s runner
+// ceiling so a hung phase goes red as not-the-pin instead of riding the
+// runner's timeout into a vacuous expected-fail pass.
+failing(test, /PIN CANNOT TELL RECYCLE FROM REBUILD/, { timeoutMs: 170_000 })(
   "the source-version pin tells a facet that recycled from one the commit rebuilt",
   // Ceiling, not an expectation: ~6s against a warm local deployment, and the
   // pin's comparable scenario takes 50-75s on a busy preview. Matched to the
@@ -62,9 +69,8 @@ test.fails(
   // hitting it here would be absorbed as a vacuous pass rather than reported.
   { timeout: 180_000 },
   async () => {
-    // `test.fails` reports every throw as the expected one, so the phase log
-    // is the only way to tell a run that measured something from one that
-    // fell over on the way. Every step announces itself.
+    // The phase log is how you tell a run that measured something from one
+    // that fell over on the way. Every step announces itself.
     const log = (phase: string, detail?: unknown) =>
       console.log(`[facet-recycle] ${phase}`, detail ?? "");
 
@@ -143,8 +149,9 @@ test.fails(
         });
       } catch (error) {
         // A build failure surfaces as a `subscription-delivery-halted` event on
-        // the stream. `test.fails` would swallow that silently, so make the
-        // stream give its own account of the run before rethrowing.
+        // the stream. That throw no longer counts as the pinned failure (it
+        // carries no tag), but the stream should still give its own account of
+        // the run before rethrowing.
         const events = await stream.getEvents({});
         log(
           "stream events at timeout",
@@ -205,7 +212,7 @@ test.fails(
       buildKeyWellFormed: /^[0-9a-f]{64}$/.test(recycled.buildKey),
       bootIdMoved: recycled.bootId !== beforeCommit.bootId,
     };
-    expect(pinVerdict).not.toMatchObject({
+    expect(pinVerdict, "PIN CANNOT TELL RECYCLE FROM REBUILD").not.toMatchObject({
       revisionIsNewSource: true,
       buildKeyMoved: true,
       buildKeyWellFormed: true,
