@@ -1,41 +1,26 @@
 // agent-runtime.ts — code injected into every loaded agent's confined isolate.
 //
-// `ITX_SURFACE_MODULE` is injected as `itx.js`. It wraps the raw `env.ITX` host stub in the ergonomic, dotted
-// `itx.a.b(args)` surface (target-core §4.2/§4.3, the client-side hop): each call compiles to
-// `stub.invokeCapability("itx.a.b", [args])`. This is a plain accumulating Proxy in the AGENT's own isolate
-// (it never crosses a wire, so the workerd#6873 brand-check doesn't apply). Promise-pipelining of chained
-// calls is a later refinement — today each call is one round trip to the host.
-
-const ITX_SURFACE_MODULE = /* js */ `
-export function itxFromStub(stub) {
-  const build = (parts) =>
-    new Proxy(function () {}, {
-      get(_t, prop) {
-        // not a thenable, and don't treat symbol/probe reads as capability segments
-        if (prop === "then" || typeof prop === "symbol") return undefined;
-        return build([...parts, prop]);
-      },
-      apply(_t, _thisArg, args) {
-        return stub.invokeCapability(parts.join("."), args);
-      },
-    });
-  return build(["itx"]);
-}
-`;
+// A loaded worker's `env.ITX` is a Workers-RPC service binding to the `ItxEntrypoint`. It reaches
+// the genuine itx scope with `env.ITX.get()` — a real `Itx` RpcTarget — and then writes plain
+// dotted access (`itx.demo.timer.callLater(cb)`), identical to what a capnweb client writes after
+// `session.get()`. There is no client-side wrapper: the scope IS a real RpcTarget, so mid-chain
+// handles and callbacks pipeline natively over both lanes (no accumulating Proxy, no fold shim).
 
 // Wraps a repo file so the host can run it confined as a STATELESS dynamic worker. ONE wrapper,
 // ONE isolate, ONE billed loader identity for both lanes: `run(...args)` is a real RPC method
 // (rich values — callbacks, Dates, bytes, stubs — ride Workers RPC natively; the old JSON fetch
 // tunnel silently mangled them, the owner's hard NO), and `fetch` forwards to the source's own
-// fetch when it has one. `cap.js` is the repo file; `itx.js` is the surface above.
+// fetch when it has one. `cap.js` is the repo file; the itx scope arrives via `env.ITX.get()`.
 export const CODE_CAP_RUNNER = /* js */ `
 import { WorkerEntrypoint } from "cloudflare:workers";
 import cap from "./cap.js";
-import { itxFromStub } from "./itx.js";
 export default class CodeCap extends WorkerEntrypoint {
   async run(...args) {
     if (typeof cap !== "function") throw new Error("this source has no callable default export");
-    return await cap(itxFromStub(this.env.ITX), ...args);
+    // env.ITX is a service binding to the ItxEntrypoint; .get() hands back the genuine itx scope
+    // (an RpcTarget) so the cap writes plain dotted access — itx.demo.timer.callLater(cb) — and
+    // mid-chain handles pipeline natively, exactly like a capnweb client after session.get().
+    return await cap(await this.env.ITX.get(), ...args);
   }
   fetch(request) {
     if (typeof cap?.fetch === "function") return cap.fetch(request, this.env, this.ctx);
@@ -49,11 +34,11 @@ export default class CodeCap extends WorkerEntrypoint {
 // `DurableObject` class DIRECTLY and calls its methods — no `__HostedActor` fetch-tunnel wrapper.)
 
 /** Load a confined dynamic worker — THE one loader wiring (stateless code caps, userspace facet
- *  processors, the stateful runner all ride it). The confinement contract, stated once: `itx.js`
- *  (the dotted surface above) is always injected, and the worker's WHOLE world — `env.ITX` and
- *  every global fetch — is its owning context, so sibling calls and egress route through the
- *  host's dispatch with no second path. Callers version their `cacheKey` themselves (content
- *  hash + deploy id — see the stale-isolate learning on versionedFacet below).
+ *  processors, the stateful runner all ride it). The confinement contract, stated once: the
+ *  worker's WHOLE world — `env.ITX` (a service binding to the ItxEntrypoint; `.get()` yields the
+ *  real itx scope) and every global fetch — is its owning context, so sibling calls and egress
+ *  route through the host's dispatch with no second path. Callers version their `cacheKey`
+ *  themselves (content hash + deploy id — see the stale-isolate learning on versionedFacet below).
  *
  *  ═══════════════════════════════════════════════════════════════════════════════════════════
  *  ⚠️  THE cacheKey IS A DOLLAR AMOUNT — one of the most cost-sensitive levers in the system.
@@ -98,14 +83,12 @@ export function confinedWorker(
     // handle back — every chain member needs the flag (see iterate-context-entrypoint.ts).
     compatibilityFlags: ["allow_irrevocable_stub_storage"],
     mainModule,
-    // itx.js rides every confined isolate. The processor SDK ("processor.js", ~330KB) is NOT
-    // injected here — the CALLER includes it on every userspace load (stateless code cap, raw
-    // stateful DO, AND processor facet) so any loaded user code may `import "./processor.js"`
-    // uniformly; only the "runner.js" adapter stays processor-role-only (#durableFacet).
-    modules: {
-      "itx.js": ITX_SURFACE_MODULE,
-      ...modules,
-    },
+    // The processor SDK ("processor.js", ~330KB) is NOT injected here — the CALLER includes it on
+    // every userspace load (stateless code cap, raw stateful DO, AND processor facet) so any loaded
+    // user code may `import "./processor.js"` uniformly; only the "runner.js" adapter stays
+    // processor-role-only (#durableFacet). The itx scope is reached via `env.ITX.get()`, not an
+    // injected module.
+    modules,
     env: { ITX: host },
     globalOutbound: host,
   }));

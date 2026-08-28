@@ -602,3 +602,24 @@ Closed all 6 chunking `test.fails` (`__tests__/failing-pathological.test.ts`); s
   dense, and a limit-N read page counts EVENTS with scannedThroughOffset on an event offset (never a
   chunk boundary). Proven: 5MB + 3MiB round-trip byte-identically, dense offsets, chunked dedupe,
   same-batch-conflict rollback, honest read paging.
+
+### env.ITX.get() — the WorkerEntrypoint→scope handoff (drop itxFromStub)
+
+Loaded workers reached itx through `itxFromStub(env.ITX)` — a client-side accumulating Proxy that
+FOLDED every `itx.a.b.c(x)` into one `env.ITX.invokeCapability("itx.a.b.c", [x])`. That's fine for
+terminal calls but yields a value, never a live handle. Replaced it with the apps/os shape: a
+loaded worker's `env.ITX` is a service binding to `ItxEntrypoint`, and **`env.ITX.get()` now returns
+the genuine `Itx` scope RpcTarget** (`itxForHost` in itx-surface.ts, built with the DO as host + an
+empty relay set — a loaded worker's callbacks ride as Workers-RPC stubs, not the capnweb pager).
+Because `Itx extends RpcTarget from "capnweb"` — which IS the native `cloudflare:workers` RpcTarget
+on workerd — the same `Itx` is a branded, pipelinable RpcTarget on BOTH lanes.
+
+`CODE_CAP_RUNNER` now injects `await env.ITX.get()` as the cap's `itx`; the dead `ITX_SURFACE_MODULE`
+(itx.js) constant + its per-isolate injection are removed. So a loaded worker writes exactly what a
+capnweb client writes after `session.get()` — plain dotted access, real handles, native callbacks.
+
+**Live-proven (deploy 8c984bf9, prove_calllater.mjs — the "get demo → RpcTarget → callLater(ms, cb)"
+shape):** a `Demo`/`Timer` provided at `itx.demo`, and `itx.demo.timer.callLater(cb)` invoked BOTH
+from a capnweb client AND from a **dynamic worker via `env.ITX.get()`** — in both, the callback fires
+back in the caller's isolate (the worker's callback appended to its own stream). Callbacks retained
+with `cb.dup()`. Suite 295/9, prove_push + prove_ephemeralflood held (5025 ev/s), no regression.

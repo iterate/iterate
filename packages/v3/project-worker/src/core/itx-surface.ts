@@ -30,7 +30,7 @@ import { installPrototypeInvokeCapabilityFallback } from "./dotted-path-proxy.ts
 import { canonicalName, DurableObjectNameCodec, normalizePath } from "./durable-object-names.ts";
 import type { StreamDurableObject } from "../stream-durable-object.ts";
 
-type ItxHostStub = DurableObjectStub<StreamDurableObject>;
+export type ItxHostStub = DurableObjectStub<StreamDurableObject>;
 
 /** A retained provider stub (capnweb) from the client. ON THE WIRE it is a callable stub
  *  Proxy (`typeof === "function"` — capnweb pipelines property access through it), so a
@@ -225,7 +225,7 @@ export class ProjectSession extends RpcTarget {
 /** The iterate context (`itx`). Dotted capability calls + the built-in collections forward to the DO over
  *  Workers RPC. capnweb terminates upstream in `/api`, so a client stub `itx.a.b(x)` never touches the DO's
  *  transport — it lands here and becomes `DO.invokeCapability("itx.a.b", [x])`. */
-class Itx extends RpcTarget {
+export class Itx extends RpcTarget {
   readonly #host: ItxHostStub;
   readonly #relays: Set<CapnwebCallbackRelay>;
   readonly #waitUntil: (p: Promise<unknown>) => void;
@@ -408,6 +408,16 @@ class Itx extends RpcTarget {
 // core/dotted-path-proxy.ts for the workerd brand-check reason this is a prototype hop and not a
 // Proxy AROUND the instance.
 installPrototypeInvokeCapabilityFallback(Itx);
+
+/** Build the itx scope for a context reached over Workers-RPC — the `ItxEntrypoint` / loaded-worker
+ *  lane. It is the SAME genuine `Itx` RpcTarget the capnweb client gets from `session.get()`
+ *  (`Itx extends RpcTarget from "capnweb"`, which IS the native `cloudflare:workers` RpcTarget on
+ *  workerd), so a loaded worker holds a real, pipelinable scope and writes exactly what a capnweb
+ *  client writes: `const itx = await env.ITX.get(); itx.demo.timer.callLater(cb)`. No capnweb relays
+ *  — a loaded worker's callbacks ride as Workers-RPC stubs through the call args, not the pager. */
+export function itxForHost(host: ItxHostStub, waitUntil: (p: Promise<unknown>) => void): Itx {
+  return new Itx(host, new Set<CapnwebCallbackRelay>(), waitUntil);
+}
 
 /** Ownership handle for one `itx.provideCapability()`. */
 class CapabilityProvision extends RpcTarget {

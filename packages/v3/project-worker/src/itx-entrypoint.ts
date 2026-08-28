@@ -15,12 +15,13 @@
 //     want stored itx capabilities, `[restore]` lands on this class and resolves through the
 //     ROUTED door, keeping deletion-is-revocation for stored stubs.
 //
-// The surface is exactly what loaded code speaks: the dotted door (`invokeCapability` via the
-// injected itx.js), the full-expression door (`invoke`), the SDK runner's stream verbs
-// (`append`/`read`), and `fetch` (globalOutbound egress → the DO's secret-substituting
-// terminal).
+// The surface is exactly what loaded code speaks: `get()` (hand back the real `Itx` scope — the
+// dotted door), the raw `invokeCapability`/`invoke` doors the scope forwards to, the SDK runner's
+// stream verbs (`append`/`read`), and `fetch` (globalOutbound egress → the DO's secret-
+// substituting terminal).
 
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { itxForHost } from "./core/itx-surface.ts";
 import type { Expression } from "./core/expression.ts";
 import type { StreamEvent, StreamEventInput } from "./core/events.ts";
 import type { StreamDurableObject } from "./stream-durable-object.ts";
@@ -36,6 +37,14 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env> {
     if (!props?.contextName)
       throw new Error("ItxEntrypoint requires props.contextName (mint via ctx.exports)");
     return this.env.CONTEXT.getByName(props.contextName);
+  }
+
+  /** THE handoff for the Workers-RPC lane: hand back the genuine itx scope (an `Itx` RpcTarget), so
+   *  loaded code writes plain dotted access — `const itx = await env.ITX.get(); itx.demo.timer.x(…)`
+   *  — identical to a capnweb client after `session.get()`, and mid-chain handles pipeline natively.
+   *  A service binding addresses THIS entrypoint class; `.get()` bridges it to the scope. */
+  get(): unknown {
+    return itxForHost(this.#host(), (p) => this.ctx.waitUntil(p));
   }
 
   invokeCapability(callPath: string, args: unknown[] = []): Promise<unknown> {
