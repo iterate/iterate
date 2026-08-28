@@ -185,12 +185,21 @@ class StreamAlarmArmer {
   }
 }
 
+/** A serialized body longer than this (JSON string chars) is split across `event_chunks` rows
+ *  instead of one SQLite TEXT cell (which caps around 2MB — SQLITE_TOOBIG). 512KiB matches apps/os;
+ *  a body at or under it stays single-cell (the fast path — no chunk join on read). */
+const EVENT_CHUNK_SIZE = 512 * 1024;
+
 /** THE EVENT LOG — the commit point, isolated (the apps/os StreamEventLog, adapted): SQLite
  *  rows + ONE kv high-water mark, idempotency at the door, offsets assigned from one shared
  *  sequence (ephemeral events consume offsets, never rows — after a reboot their offsets
- *  survive as valid gaps). Deliberately storage-lazy: a log that never writes must never mint
- *  backing storage (workerd auto-deletes empty objects; a probed /state or typo'd ctx must
- *  leave nothing behind — the Kenton PR #6101 doctrine). */
+ *  survive as valid gaps). A body over EVENT_CHUNK_SIZE is chunked into `event_chunks` rows keyed
+ *  (offset, chunk_index) — INVISIBLE to the events table, so a chunked event is still ONE row at
+ *  ONE offset (dense allocation, honest read paging); reads and idempotency-dedupe reassemble it,
+ *  and the one transactionSync rolls back every chunk row with its event row on any mid-batch
+ *  throw. Deliberately storage-lazy: a log that never writes must never mint backing storage
+ *  (workerd auto-deletes empty objects; a probed /state or typo'd ctx must leave nothing behind —
+ *  the Kenton PR #6101 doctrine). */
 class StreamEventLog {
   readonly #storage: DurableObjectStorage;
   readonly #path: string;
@@ -218,6 +227,16 @@ class StreamEventLog {
          offset INTEGER PRIMARY KEY,
          body TEXT NOT NULL,
          idempotency_key TEXT UNIQUE
+       )`,
+    );
+    // Overflow rows for a large body: the events row keeps an EMPTY body as the "chunked" marker
+    // (a real body is always non-empty JSON), and the pieces live here, ordered by chunk_index.
+    this.#storage.sql.exec(
+      `CREATE TABLE IF NOT EXISTS event_chunks (
+         offset INTEGER NOT NULL,
+         chunk_index INTEGER NOT NULL,
+         chunk TEXT NOT NULL,
+         PRIMARY KEY (offset, chunk_index)
        )`,
     );
     this.#incarnation = ((this.#storage.kv.get("incarnation") as number | undefined) ?? 0) + 1;
@@ -272,7 +291,10 @@ class StreamEventLog {
             .exec("SELECT offset, body FROM events WHERE idempotency_key = ?", input.idempotencyKey)
             .toArray()[0];
           if (hit) {
-            const existing = JSON.parse(String(hit.body)) as StreamEventInput;
+            // Reassemble the stored body (it may be chunked) before the structural compare.
+            const existing = JSON.parse(
+              this.#reassemble(Number(hit.offset), String(hit.body)),
+            ) as StreamEventInput;
             if (sameIdempotentEvent(existing, input)) {
               committed.push({
                 ...existing,
@@ -290,14 +312,8 @@ class StreamEventLog {
         }
         nextOffset += 1;
         const body = { ...input, createdAt: new Date().toISOString() };
-        if (!input.ephemeral) {
-          this.#storage.sql.exec(
-            "INSERT INTO events (offset, body, idempotency_key) VALUES (?, ?, ?)",
-            nextOffset,
-            JSON.stringify(body),
-            input.idempotencyKey ?? null,
-          );
-        }
+        if (!input.ephemeral)
+          this.#storeEvent(nextOffset, JSON.stringify(body), input.idempotencyKey ?? null);
         committed.push({ ...body, offset: nextOffset, path: this.#path } as StreamEvent);
       }
       // A dedupe hit echoes the OFFSET of the row it matched; when that row was inserted earlier
@@ -333,11 +349,18 @@ class StreamEventLog {
         limit,
       )
       .toArray()
-      .map((r) => ({
-        ...(JSON.parse(String(r.body)) as StreamEventInput & { createdAt: string }),
-        offset: Number(r.offset),
-        path: this.#path,
-      }));
+      .map((r) => {
+        const offset = Number(r.offset);
+        // Chunk rows never enter this SELECT, so the page counts EVENTS and its scannedThroughOffset
+        // is an event offset — never a chunk boundary. Reassemble each body for the caller.
+        return {
+          ...(JSON.parse(this.#reassemble(offset, String(r.body))) as StreamEventInput & {
+            createdAt: string;
+          }),
+          offset,
+          path: this.#path,
+        };
+      });
     // The scanned-offset-range proof: a FULL page is only contiguously known through its last
     // row; a short page proves the read scanned to the HEAD (ephemeral holes and all). Never
     // beyond the head — a beyond-head afterOffset must not fabricate a scan of unassigned
@@ -345,6 +368,44 @@ class StreamEventLog {
     const scannedThroughOffset =
       events.length === limit ? events[events.length - 1].offset : this.highestAssignedOffset();
     return { events, scannedThroughOffset };
+  }
+
+  /** Insert one durable event row. A body over EVENT_CHUNK_SIZE rides `event_chunks` behind an
+   *  empty marker cell; both writes are the caller's transaction, so a later throw rolls back the
+   *  chunk rows with the event row (no orphans, no half a body). */
+  #storeEvent(offset: number, serialized: string, idempotencyKey: string | null): void {
+    if (serialized.length <= EVENT_CHUNK_SIZE) {
+      this.#storage.sql.exec(
+        "INSERT INTO events (offset, body, idempotency_key) VALUES (?, ?, ?)",
+        offset,
+        serialized,
+        idempotencyKey,
+      );
+      return;
+    }
+    this.#storage.sql.exec(
+      "INSERT INTO events (offset, body, idempotency_key) VALUES (?, '', ?)",
+      offset,
+      idempotencyKey,
+    );
+    for (let i = 0, idx = 0; i < serialized.length; i += EVENT_CHUNK_SIZE, idx++)
+      this.#storage.sql.exec(
+        "INSERT INTO event_chunks (offset, chunk_index, chunk) VALUES (?, ?, ?)",
+        offset,
+        idx,
+        serialized.slice(i, i + EVENT_CHUNK_SIZE),
+      );
+  }
+
+  /** The full body for an event row: the cell itself when single-cell, else its chunk rows joined
+   *  in order (an EMPTY cell is the chunked marker — a real body is never empty JSON). */
+  #reassemble(offset: number, cell: string): string {
+    if (cell !== "") return cell;
+    return this.#storage.sql
+      .exec("SELECT chunk FROM event_chunks WHERE offset = ? ORDER BY chunk_index", offset)
+      .toArray()
+      .map((r) => String(r.chunk))
+      .join("");
   }
 
   /** Does a durable row already carry this idempotencyKey? A cheap existence probe so the breaker

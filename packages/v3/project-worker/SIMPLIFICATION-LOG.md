@@ -584,3 +584,21 @@ dirty-death test flipped to passing, three malicious `test.fails` deleted), type
 Also realigned `src/generated/processor-*.ts` — the committed bundle had drifted ~10KB behind source
 (deployments were unaffected: wrangler's custom build runs build-sdk.mjs fresh on every deploy). The
 build is deterministic; the committed artifact now matches source again.
+
+### Chunking — arbitrary-size payloads (defect 25)
+
+Closed all 6 chunking `test.fails` (`__tests__/failing-pathological.test.ts`); suite **295 passed / 9 xf**
+(was 289/15), typecheck clean. Implemented the apps/os row-chunking contract in `StreamEventLog`:
+
+- New `event_chunks (offset, chunk_index, chunk)` table. A serialized body over EVENT_CHUNK_SIZE
+  (512KiB) is split across chunk rows behind an EMPTY marker cell in `events.body` (a real body is
+  never empty JSON); a body at or under it stays single-cell (the fast path — no chunk join on read).
+- `#storeEvent` writes the event row + chunk rows in the caller's ONE transactionSync, so a mid-batch
+  throw (an idempotency conflict) rolls back every chunk row with its event row — no orphans, no half
+  a body, and the offset allocator never advances (dense continuation).
+- `#reassemble` rebuilds the body (single cell, or chunk rows joined by index) for BOTH read and the
+  idempotency-dedupe structural compare — so a chunked retry dedupes to the same offset.
+- Chunk rows never enter the events SELECT, so a chunked event is ONE row at ONE offset: offsets stay
+  dense, and a limit-N read page counts EVENTS with scannedThroughOffset on an event offset (never a
+  chunk boundary). Proven: 5MB + 3MiB round-trip byte-identically, dense offsets, chunked dedupe,
+  same-batch-conflict rollback, honest read paging.

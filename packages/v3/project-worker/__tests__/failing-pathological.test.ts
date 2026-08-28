@@ -191,7 +191,7 @@ describe("arbitrary-size payloads (row chunking — the apps/os contract)", () =
     return page.events[0];
   };
 
-  test.fails("BUG: a 5MB payload append must commit and round-trip byte-identically", async () => {
+  test("a 5MB payload append commits and round-trip byte-identically", async () => {
     // BUG: StreamEventLog.append stores the whole serialized event as ONE SQLite TEXT cell;
     //      anything over the ~2MB cell cap rejects with "string or blob too big:
     //      SQLITE_TOOBIG" (verified on this harness) instead of being chunked.
@@ -223,7 +223,7 @@ describe("arbitrary-size payloads (row chunking — the apps/os contract)", () =
     expect(back.payload.blob === blob).toBe(true);
   }, 60_000);
 
-  test.fails("BUG: a just-over-the-cell-cap (3MiB) payload must commit and round-trip", async () => {
+  test("a just-over-the-cell-cap (3MiB) payload commits and round-trip", async () => {
     // BUG: same root cause as the 5MB case — this pins the boundary: 2MiB commits (control
     //      above), 3MiB rejects with "string or blob too big: SQLITE_TOOBIG", so the first
     //      thing chunking must handle is a ~3MiB body (≈6 of apps/os's 512KiB chunk rows —
@@ -239,7 +239,7 @@ describe("arbitrary-size payloads (row chunking — the apps/os contract)", () =
     expect(back.payload.blob === blob).toBe(true);
   }, 60_000);
 
-  test.fails("BUG: offsets stay dense around a chunked event — the NEXT event is exactly +1", async () => {
+  test("offsets stay dense around a chunked event — the NEXT event is exactly +1", async () => {
     // BUG: unassertable today — the big append in the middle rejects (SQLITE_TOOBIG).
     // EXPECTED (apps/os contract): a chunked event is ONE event at ONE offset; its chunk
     //      rows are addressed by (offset, chunk_index) and never touch the allocator
@@ -266,7 +266,7 @@ describe("arbitrary-size payloads (row chunking — the apps/os contract)", () =
     expect(page.events[0].payload.blob === blob).toBe(true);
   }, 60_000);
 
-  test.fails("BUG: an idempotent RETRY of a large chunked payload dedupes to the same offset", async () => {
+  test("an idempotent RETRY of a large chunked payload dedupes to the same offset", async () => {
     // BUG: unassertable today — the first large append already rejects (SQLITE_TOOBIG).
     // EXPECTED (apps/os contract): dedupe reassembles the FULL stored body from its chunk
     //      rows (getByIdempotencyKey, stream-storage.ts:177-185) and compares it
@@ -288,7 +288,7 @@ describe("arbitrary-size payloads (row chunking — the apps/os contract)", () =
     expect(back.payload.blob === blob).toBe(true);
   }, 60_000);
 
-  test.fails("BUG: a chunked append followed by an idempotency CONFLICT in the same batch rolls back ALL chunk rows", async () => {
+  test("a chunked append followed by an idempotency CONFLICT in the same batch rolls back ALL chunk rows", async () => {
     // BUG: unassertable today — the batch dies on SQLITE_TOOBIG at the big event, BEFORE
     //      the conflict is even evaluated, so the rejection carries the wrong error.
     // EXPECTED (apps/os contract): the batch reaches the conflicting input and rejects
@@ -317,7 +317,7 @@ describe("arbitrary-size payloads (row chunking — the apps/os contract)", () =
     expect(next.offset).toBe(pin.offset + 1);
   }, 60_000);
 
-  test.fails("BUG: read paging across a chunked event keeps the scanned-offset-range proof honest", async () => {
+  test("read paging across a chunked event keeps the scanned-offset-range proof honest", async () => {
     // BUG: unassertable today — the chunked event in the middle cannot commit.
     // EXPECTED (apps/os contract): chunk rows are invisible to paging — a limit-N page
     //      counts EVENTS, its scannedThroughOffset is the last EVENT row's offset when the
