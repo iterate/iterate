@@ -54,31 +54,24 @@ fixed-run can produce identical observable traces.
   Observability on `os-preview-9`, code path in
   `stream-durable-object.ts` (`#dialProcessorFacet` /
   `#abortFacetOnVersionChange`) _race confirmed; evidence above_
-- [ ] Rework `userspace-facet-source-version.e2e.test.ts` into a plain
-  (non-`failing()`) test asserting only the deterministic contract:
-  - unchanged source keeps one build key across parent incarnations
-    (kill × 2, marker must not move)
-  - a commit moves `resolveWorkerSource` immediately (stateless echo)
-  - after a commit + kill, the freshly built facet serves the committed
-    revision
-  - explicitly document (comments) that running-facet pickup is racy and
-    deliberately not asserted, pointing at the new bug task
-- [ ] Delete `userspace-facet-recycle-false-alarm.e2e.test.ts` — it pinned
-  the OLD pin's blind spot (its four comparisons), which no longer exists;
-  it can never flip red on a platform fix, and it flakes on cold-build
-  latency
-- [ ] New bug task `tasks/facet-commit-pickup-race.md`: the racy pickup is
-  a real product bug (a stream that never hibernates — e.g. a live voice
-  call — sometimes never picks up a config commit); carry the fix
-  direction from `tasks/platform-stall-repros.md` thread 5
-- [ ] Update `tasks/platform-stall-repros.md` thread-5 exit note: the
-  round-based pin also false-alarmed; demoted per this task
-- [ ] Update the `failing()` docs (`failing-test.ts` doc comment,
-  `docs/testing.md` pinned-bugs section): a pin is only valid for a bug
-  that reproduces deterministically; a racy bug cannot be pinned — record
-  it in a task instead. Point the worked example at a surviving pin.
-- [ ] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format`, PR, CI
-  green
+- [x] Rework `userspace-facet-source-version.e2e.test.ts` into a plain
+  (non-`failing()`) test asserting only the deterministic contract
+  _same probe instrument; keeps the marker-stability half verbatim, adds
+  commit → kill → fresh-facet-serves-v2, documents the unasserted race_
+- [x] Delete `userspace-facet-recycle-false-alarm.e2e.test.ts` _it pinned
+  the OLD pin's blind spot, which no longer exists, and could never flip
+  red on a platform fix_
+- [x] New bug task `tasks/facet-commit-pickup-race.md` _evidence, workerd
+  race mechanism, fix directions carried from platform-stall-repros
+  thread 5_
+- [x] Update `tasks/platform-stall-repros.md` thread-5 exit note _dated
+  follow-up notes appended in both places_
+- [x] Update the `failing()` docs _determinism rule added to
+  failing-test.ts and docs/testing.md; worked-example pointers moved to
+  project-create-concurrency + guarantees-not-given_
+- [ ] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format`, one green
+  run of the reworked test against a live deployment, PR CI green
+  _static checks green locally; live run in progress_
 
 ## Assumptions made while AFK
 

@@ -541,8 +541,8 @@ with `failing` from `@iterate-com/shared/test-support/failing-test` — it
 works for vitest and playwright alike, passing fixtures and options through:
 
 ```ts
-const fail = failing(test, /SAME-BOOT STALENESS/);
-fail("a userspace facet rebuilds on a source commit", { timeout: 240_000 }, async () => {
+const fail = failing(test, /CONCURRENT CREATE SPLITS IDENTITY/);
+fail("concurrent creates of one slug adopt the same identity", async () => {
   // asserts the DESIRED behavior; today it throws the matched error
 });
 ```
@@ -560,8 +560,19 @@ longer raises the deadline via `options.timeoutMs`, kept below the runner's
 test timeout. Write the body so the bug throws a distinctive message, and
 so conditions that prove nothing (a coincidental restart masking the bug
 for one observation) retry instead of succeeding —
-`apps/os/e2e/vitest/userspace-facet-source-version.e2e.test.ts` is the
-worked example; its `test.fails` predecessor false-alarmed 7+ times.
+`apps/os/e2e/vitest/project-create-concurrency.regression.e2e.test.ts` is a
+worked example, and `apps/os/src/domains/streams/guarantees-not-given.test.ts`
+holds a whole family of pins.
+
+**Only deterministic bugs can be pinned.** A racy bug — one that sometimes
+simply doesn't manifest — makes every race-won run an inverted success and
+a red flake, and no repetition inside the body fixes that: a bug-run and a
+fixed-run can produce identical observable traces. Record racy bugs in a
+task file with their evidence instead. (Learned twice from the facet
+source-version pin: its bare `test.fails` predecessor false-alarmed 7+
+times on coincidental restarts, and the round-based `failing()` rewrite
+false-alarmed on a commit-correlated race — see
+`tasks/facet-commit-pickup-race.md`.)
 
 ### Parked tests expire
 

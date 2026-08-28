@@ -45,6 +45,11 @@ and the fix replayed): `explainers/parked-states-need-a-wake.html`.
    `userspace-facet-recycle-false-alarm.e2e.test.ts`. A coincidental
    recycle is indistinguishable from the commit-triggered rebuild because
    rebuilds carry no provenance (no "why did I rebuild").
+   _2026-08-28 update: it was worse than coincidence — the "recycles" were
+   the abort/reattach race resolving in the facet's favor, commit-correlated,
+   so the round-based pin false-alarmed too. Pin removed; the racy pickup
+   bug now lives in `tasks/facet-commit-pickup-race.md`, which carries this
+   thread's provenance fix direction forward._
 
 ## The common mechanism
 
@@ -136,6 +141,12 @@ PR's diff:
   inconclusive and a fresh revision is committed against the new boot.
   Rebuild provenance (thread 5) is still a nice-to-have for the platform,
   no longer this test's gate.
+  _2026-08-28: the round-based pin false-alarmed anyway (Depot
+  `4pfjnjw0gn` on #2543) — the replaces were not independent coincidences
+  but the abort/reattach race resolving commit-correlated, three rounds in
+  a row. Pin and blind-spot repro removed; deterministic contract kept as a
+  plain test; the race is `tasks/facet-commit-pickup-race.md`
+  (see `tasks/facet-source-version-pin-flake.md` for the full story)._
 
 ## Checklist
 

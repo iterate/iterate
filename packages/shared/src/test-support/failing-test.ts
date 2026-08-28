@@ -10,8 +10,8 @@
  * failure is allowed to satisfy that machinery:
  *
  * ```ts
- * const fail = failing(test, /SAME-BOOT STALENESS/);
- * fail("a userspace facet rebuilds on a source commit", { timeout: 240_000 }, async () => {
+ * const fail = failing(test, /CONCURRENT CREATE SPLITS IDENTITY/);
+ * fail("concurrent creates of one slug adopt the same identity", async () => {
  *   // asserts the DESIRED behavior; today it throws the matched error
  * });
  * ```
@@ -42,9 +42,17 @@
  * purpose-built message rather than relying on a generic assertion diff), and
  * so that conditions which prove nothing — e.g. a coincidental restart that
  * masks the bug for one observation — retry or fail with a NON-matching
- * error instead of succeeding. See
- * apps/os/e2e/vitest/userspace-facet-source-version.e2e.test.ts for the
- * worked example (its predecessor bare `test.fails` false-alarmed 7+ times).
+ * error instead of succeeding.
+ *
+ * Only pin a bug that manifests DETERMINISTICALLY. A racy bug — one that
+ * sometimes simply doesn't happen — cannot be pinned: every run where the
+ * race resolves the other way is an inverted "success" and a red flake, and
+ * no amount of repetition inside the body fixes that, because a bug-run and
+ * a fixed-run can produce identical observable traces. Record racy bugs in
+ * a task file with their evidence instead. (The lesson of the facet
+ * source-version pin, 2026-08-28: its rounds design survived coincidental
+ * restarts but not a commit-correlated race that replaced the facet three
+ * rounds in a row — tasks/facet-commit-pickup-race.md.)
  */
 export function failing<TestFn extends (...args: any[]) => any>(
   test: TestFn,

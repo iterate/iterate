@@ -1,12 +1,10 @@
 /**
- * The instrument both facet-source-version suites use: a userspace facet that
- * reports which instance answered, which build it was loaded from, and which
- * source revision that build came from.
- *
- * Shared rather than copied so `userspace-facet-source-version.e2e.test.ts`
- * (the pin) and `userspace-facet-recycle-false-alarm.e2e.test.ts` (why the pin
- * false-alarms) measure the same facet the same way — the only difference
- * between them is what they DO to it.
+ * The instrument `userspace-facet-source-version.e2e.test.ts` uses: a
+ * userspace facet that reports which instance answered, which build it was
+ * loaded from, and which source revision that build came from. Kept as its own
+ * module because the probe is a measuring device with its own contract, not
+ * part of the test's story — and because the facet-lifecycle work tracked in
+ * tasks/facet-commit-pickup-race.md will want the same instrument.
  */
 
 export const PING = "events.iterate.test/facet-version/ping";

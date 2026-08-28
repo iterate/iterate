@@ -1,5 +1,4 @@
 import { expect, test } from "vitest";
-import { failing } from "@iterate-com/shared/test-support/failing-test";
 import type { StreamEventInput } from "iterate/processors";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import {
@@ -12,70 +11,51 @@ import {
 } from "./facet-version-probe.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
-// The source-change contract for a userspace processor FACET, in both
-// directions.
+// The source-change contract for a userspace processor FACET — the
+// deterministic parts.
 //
 // `#dialProcessorFacet` calls `#abortFacetOnVersionChange` before every
 // `ctx.facets.get`. The marker it compares is `{ className, cacheKey }`, where
 // `cacheKey` is the dynamic worker's content-addressed build key, so the whole
 // lifecycle rests on that key: identical for unchanged source (or every wake
 // kills the facet, taking its in-memory state and in-flight work with it), and
-// different after a source commit (or the facet keeps serving stale code
-// forever, because `ctx.facets.get` reuses a running facet and ignores the new
-// startup class).
+// different after a source commit. Only a real deployment can answer this: the
+// key comes from the repo Durable Object's head record and the KV artifact
+// store, neither of which a unit test observes. The facet reports its own key —
+// worker-loader.ts publishes it into the loaded isolate's env as
+// `ITERATE_WORKER_VERSION` — plus a per-instance boot id and the source
+// revision it was built from.
 //
-// Only a real deployment can answer this: the key comes from the repo Durable
-// Object's head record and the KV artifact store, neither of which a unit test
-// observes. The facet reports its own key — worker-loader.ts publishes it into
-// the loaded isolate's env as `ITERATE_WORKER_VERSION`, verbatim the `cacheKey`
-// half of the marker — plus a per-instance boot id and the source revision it
-// was built from.
+// Three assertions, all deterministic:
+//  1. Unchanged source keeps ONE build key across parent incarnations
+//     (two kills, three facet lifetimes, one key).
+//  2. A source commit moves `resolveWorkerSource` immediately — proven by a
+//     stateless echo worker on the same repo, which caches nothing.
+//  3. A facet built AFTER the commit (the kill forces one) serves the
+//     committed revision: resolution, build cache, and the startup class
+//     agree end to end.
+//
+// What this test deliberately does NOT assert: whether a commit reaches a
+// facet that is ALREADY RUNNING. That behavior is a race, with both outcomes
+// observed on one deployment minutes apart (preview-9, 2026-08-28, Depot run
+// 4pfjnjw0gn: attempt 1 replaced the running facet promptly after every
+// commit; attempt 2 had a facet serve stale code for 45s+). The marker abort
+// always fires — server logs show `stream facet source changed; aborting`
+// commit-correlated every time — but whether `ctx.facets.get` then reattaches
+// the aborted-but-running facet or builds fresh is decided inside workerd.
+// This file used to hold a `failing(test, /SAME-BOOT STALENESS/)` pin on the
+// stale side of that race; a racy bug cannot be pinned (the pin flip-flopped
+// exactly as often as the race resolved the other way), so the pin was
+// removed. The bug is real and tracked: tasks/facet-commit-pickup-race.md.
 
 const WOKEN = "events.iterate.com/stream/woken";
 
 const ECHO_PATH = "version-echo.js";
 
-/*
- * A PINNED BUG, held by `failing(test, …)`: the body asserts the desired contract,
- * and while the bug exists it must fail with the SAME-BOOT STALENESS error
- * the wrapper matches. The moment somebody fixes the bug, the body succeeds
- * and the wrapper goes red with delete-me instructions.
- *
- * What is broken, reproduced 5/5 against a real deployment: a RUNNING
- * userspace facet never picks up a source commit. `resolveWorkerSource` sees
- * the new revision immediately — a stateless echo worker on the same repo
- * moves build keys at once — while the facet answers 15-172 consecutive
- * deliveries over 45s from the same boot id, on the same old key, running the
- * old code. One `stream.kill()` and it comes back rebuilt.
- *
- * `ctx.facets.get` reuses a running facet and ignores the startup class, and
- * `ctx.facets.abort` does not make it let go within the parent's incarnation.
- * For a stream that never hibernates — and an open outbound WebSocket blocks
- * hibernation, which is exactly what a live voice call holds — "the life of
- * the incarnation" is indefinite, so a config-repo commit silently does
- * nothing. Two fixes were deployed and measured against this test (abort plus
- * a scheduler yield; marker write plus abort plus storage sync plus
- * `this.ctx.abort()`); neither worked, and both were reverted rather than
- * shipped on hope.
- *
- * History: this pin used to be a bare `test.fails` and false-alarmed red 7+
- * times (quarantined 2026-08-27, tasks/platform-stall-repros.md thread 5) —
- * a facet that coincidentally recycled inside the poll window legitimately
- * builds the new source, which the old four comparisons could not tell from
- * a real fix. The rounds below use repetition instead: the bug concludes
- * from same-boot staleness in ANY round; the fix concludes only from a
- * commit-correlated replace in EVERY round (a single recycle just rolls
- * into the next round against the new boot).
- * The companion test `userspace-facet-recycle-false-alarm.e2e.test.ts`
- * still demonstrates the old comparisons' blind spot by forcing a recycle.
- */
-// timeoutMs: the wrapper's own hang deadline, just below the runner ceiling —
-// the expected run is ~60-110s, well past failing()'s 60s default.
-failing(test, /SAME-BOOT STALENESS/, { timeoutMs: 230_000 })(
-  "a userspace facet rebuilds on a source commit and only on a source commit",
-  // Ceiling for the cold build, the two stability kills, and up to three
-  // 45s observation rounds. The expected run (bug present, no recycles)
-  // is ~60-110s.
+test(
+  "a facet keeps one build key while its source is unchanged and rebuilds from a commit on restart",
+  // Ceiling, not an expectation: cold build plus three kills lands around
+  // 60-90s against a busy preview.
   { timeout: 240_000 },
   async () => {
     using session = withItxSession();
@@ -87,7 +67,8 @@ failing(test, /SAME-BOOT STALENESS/, { timeoutMs: 230_000 })(
 
     const streamPath = "/facet-version";
     // Must equal the probe contract's slug: a facet-processor subscription
-    // named anything else is silently delivered nothing.
+    // named anything else is silently delivered nothing — no error, no
+    // halted-delivery event, just a facet that never answers.
     const subscriptionName = PROBE_CONTRACT_SLUG;
 
     await project.repo.commitFiles({
@@ -149,7 +130,18 @@ failing(test, /SAME-BOOT STALENESS/, { timeoutMs: 230_000 })(
     /** Ping the facet and return the answer it committed. */
     const identify = async (label: string, timeoutMs: number): Promise<FacetProbeAnswer> => {
       const id = `${label}-${crypto.randomUUID().slice(0, 8)}`;
-      await stream.append({ type: PING, payload: { id } } satisfies StreamEventInput);
+      // A ping issued just after a kill can land while the Durable Object is
+      // still being reset. That is the platform, not the measurement, so give
+      // the append a few goes before giving up on the whole run.
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await stream.append({ type: PING, payload: { id } } satisfies StreamEventInput);
+          break;
+        } catch (error) {
+          if (attempt === 4) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 2_000));
+        }
+      }
       await waitForCondition(
         async () => (await answers()).some((answer) => answer.id === id),
         // A build failure surfaces as a `subscription-delivery-halted` event on
@@ -162,11 +154,11 @@ failing(test, /SAME-BOOT STALENESS/, { timeoutMs: 230_000 })(
     };
 
     // First contact forces the cold build and starts the facet.
-    const first = await identify("first", 90_000);
+    const first = await identify("first", 120_000);
     expect(first).toMatchObject({ revision: "v1" });
     expect(first.buildKey).toMatch(/^[0-9a-f]{64}$/);
 
-    // ---- Half one: unchanged source must NOT move the marker ---------------
+    // ---- Unchanged source must NOT move the marker --------------------------
     // Kill the Stream DO. The parent incarnation and its facet both go; the
     // next append boots a fresh incarnation, which re-resolves the source and
     // re-runs `#abortFacetOnVersionChange` against the stored marker.
@@ -189,85 +181,46 @@ failing(test, /SAME-BOOT STALENESS/, { timeoutMs: 230_000 })(
     expect(second).toMatchObject({ buildKey: first.buildKey });
     expect(third).toMatchObject({ buildKey: first.buildKey });
 
-    // ---- Half two: a source commit MUST reach the RUNNING facet -----------
-    // Rounds, because a coincidental recycle (deploy, eviction) can mask the
-    // bug for one observation: a restarted facet always builds the newest
-    // source, which proves nothing about the running-facet contract. Each
-    // round commits a fresh revision and watches the facet that is running
-    // right now. A facet cannot swap its own code within one boot, so the
-    // FIX's observable shape is a commit-correlated replace: the running
-    // facet is aborted and a new boot serves the committed revision. One
-    // round cannot tell that from a coincidental recycle (a restarted facet
-    // always builds newest) — three consecutive rounds can: a coincidence
-    // landing inside every 45s window is vanishingly unlikely, while the
-    // fix replaces the facet every single time. Same-boot staleness past
-    // any round's deadline is the pinned bug.
-    let revision = 1;
-    for (let round = 1; round <= 3; round++) {
-      const baseline = await identify(`round-${round}-baseline`, 90_000);
-      const repoKeyBefore = await resolvedRepoBuildKey();
-      revision += 1;
-      const committed = `v${revision}`;
-      await project.repo.commitFiles({
-        changes: [{ content: probeFacetSource(committed), path: PROBE_PATH }],
-        message: `Change the probe facet's source (round ${round})`,
-      });
-      // The commit landed and the source resolution sees it — so staleness
-      // below is the facet lifecycle, not the repo write or the build cache.
-      expect((await project.repo.readFile({ path: PROBE_PATH }))?.content).toContain(
-        `revision: "${committed}"`,
-      );
-      expect(await resolvedRepoBuildKey()).not.toBe(repoKeyBefore);
+    // ---- A commit must reach the next facet build ---------------------------
+    const repoKeyBefore = await resolvedRepoBuildKey();
+    await project.repo.commitFiles({
+      changes: [{ content: probeFacetSource("v2"), path: PROBE_PATH }],
+      message: "Change the probe facet's source",
+    });
+    // The commit landed and source resolution sees it immediately — so a stale
+    // facet below would be the facet lifecycle, not the repo write or the
+    // build cache.
+    expect((await project.repo.readFile({ path: PROBE_PATH }))?.content).toContain(
+      'revision: "v2"',
+    );
+    expect(await resolvedRepoBuildKey()).not.toBe(repoKeyBefore);
 
-      // Poll rather than ping once: a rebuild that merely LAGS the commit is
-      // a different (and much milder) thing than one that never happens.
-      const deadline = Date.now() + 45_000;
-      let sameBootPolls = 0;
-      while (true) {
-        const answer = await identify(`round-${round}-poll-${sameBootPolls}`, 60_000);
-        if (answer.bootId !== baseline.bootId) {
-          if (answer.revision === committed) {
-            // A new facet serving what we just committed — this round is
-            // consistent with the fix (or with one coincidence); the next
-            // round re-tests against the new boot.
-            break;
-          }
-          // A new facet serving something OTHER than the latest commit:
-          // source resolution is broken in a way this pin does not cover.
-          throw new Error(
-            `a rebuilt facet serves ${answer.revision} after committing ${committed} — ` +
-              `source resolution or build cache is broken`,
-          );
-        }
-        sameBootPolls += 1;
-        if (Date.now() >= deadline) {
-          // Discriminator before concluding: a kill guarantees a facet built
-          // from a freshly resolved class. If even THAT is stale, the source
-          // resolution is broken — a different bug, reported with a
-          // non-matching error so the wrapper turns it red.
-          await stream.kill().catch(() => undefined);
-          const afterKill = await identify(`round-${round}-after-kill`, 90_000);
-          if (afterKill.revision !== committed) {
-            throw new Error(
-              `source resolution never saw the commit: a freshly built facet still serves ` +
-                `${afterKill.revision} after committing ${committed}`,
-            );
-          }
-          throw new Error(
-            `SAME-BOOT STALENESS: facet boot ${answer.bootId} answered ${sameBootPolls} polls ` +
-              `over 45s still serving ${answer.revision} on buildKey ${answer.buildKey.slice(0, 8)}… ` +
-              `after committing ${committed} (a fresh facet serves it fine)`,
-          );
-        }
-        await new Promise((resolve) => setTimeout(resolve, 3_000));
+    // Force a fresh facet: the kill takes the parent incarnation and the
+    // facet with it, and the replacement cold-builds from a fresh resolution.
+    // (Whether the RUNNING facet would have picked the commit up is the race
+    // documented above — not asserted here.)
+    await stream.kill().catch(() => undefined);
+
+    // The first pings after the kill can race the reset and be answered from
+    // events delivered to the outgoing incarnation, so poll to the committed
+    // revision rather than asserting the very first answer.
+    const deadline = Date.now() + 60_000;
+    let rebuilt = await identify("after-commit-0", 120_000);
+    for (let attempt = 1; rebuilt.revision !== "v2"; attempt++) {
+      if (Date.now() > deadline) {
+        throw new Error(
+          `a freshly built facet still serves ${rebuilt.revision} after committing v2 — ` +
+            `source resolution or the build cache is broken: ${JSON.stringify(rebuilt)}`,
+        );
       }
+      await new Promise((resolve) => setTimeout(resolve, 3_000));
+      rebuilt = await identify(`after-commit-${attempt}`, 60_000);
     }
-    // Every round ended with the running facet replaced by one serving the
-    // just-committed revision — the fix's shape, three times in a row. The
-    // body succeeding here is what makes the failing() wrapper raise the
-    // delete-me alert. (Residual risk: three independent coincidental
-    // recycles in a row would masquerade as the fix — roughly the cube of an
-    // already-uncommon event, and the next run self-corrects.)
+
+    // A new build of the new source, on a new facet instance.
+    expect(rebuilt.buildKey).toMatch(/^[0-9a-f]{64}$/);
+    expect(rebuilt).not.toMatchObject({ buildKey: first.buildKey });
+    expect(rebuilt).not.toMatchObject({ bootId: third.bootId });
   },
 );
 
