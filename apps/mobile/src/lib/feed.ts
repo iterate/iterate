@@ -136,14 +136,15 @@ function turnPending(events: StreamEvent[]): boolean {
         pending = true;
         break;
       }
-      // A reply or a stream error after the message, with no request in
-      // between, also ends the wait (the last two cases): the message was
-      // answered without an llm round (a directly-handled command), or the
-      // turn machinery crashed — either way no request is owed and the row
-      // must not spin forever.
+      // A stream error also ends the wait: the turn machinery crashed, and
+      // whether it recovers is ambiguous — err toward not spinning (a retry's
+      // own request event re-covers the row). Deliberately NOT in this list:
+      // agents/web-message-sent. Replies come from scripts, scripts only run
+      // inside turns, so a reply can never be the first turn-fact after a
+      // triggering message — the only message a mid-turn reply could clear is
+      // a NEWER queued one that still owes its own request.
       case "events.iterate.com/agent/llm-request-requested":
       case "events.iterate.com/capability-host/script-run-requested":
-      case "events.iterate.com/agents/web-message-sent":
       case "events.iterate.com/stream/error-occurred":
         pending = false;
         break;

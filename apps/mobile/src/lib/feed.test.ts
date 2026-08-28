@@ -191,14 +191,6 @@ test("a triggering user message keeps the feed working through the request debou
   ];
   expect(reduceFeed(PATH, whilePaused)).toMatchObject({ working: false });
 
-  // A reply with no llm round in between (a directly-handled command) ends
-  // the wait — the row must not spin after the answer is on screen.
-  const answeredDirectly = [
-    event(1, "events.iterate.com/agents/context-added", { content: "go", role: "user" }),
-    event(2, "events.iterate.com/agents/web-message-sent", { message: "done already" }),
-  ];
-  expect(reduceFeed(PATH, answeredDirectly)).toMatchObject({ working: false });
-
   // A stream error after the message means the turn machinery crashed; the
   // owed-turn claim ends with it rather than spinning forever.
   const crashed = [
@@ -206,6 +198,31 @@ test("a triggering user message keeps the feed working through the request debou
     event(2, "events.iterate.com/stream/error-occurred", { message: "boom" }),
   ];
   expect(reduceFeed(PATH, crashed)).toMatchObject({ working: false });
+
+  // A message QUEUED mid-turn still owes its own request after the turn ends.
+  // The running script's reply answers the PREVIOUS message — it must not
+  // clear the queued one's pending claim (the debounce window between the
+  // turn settling and the next request opening would lose its working row).
+  const queuedMidTurn = [
+    event(1, "events.iterate.com/agents/context-added", { content: "first", role: "user" }),
+    event(2, "events.iterate.com/agent/llm-request-requested", {}),
+    event(3, "events.iterate.com/agent/llm-request-settled", {
+      requestOffset: 2,
+      result: { status: "succeeded", text: "ok" },
+    }),
+    event(4, "events.iterate.com/capability-host/script-run-requested", {
+      executionId: "s1",
+      code: "1",
+      expiresAt: Date.UTC(2026, 0, 1, 0, 2),
+    }),
+    event(5, "events.iterate.com/agents/context-added", { content: "second", role: "user" }),
+    event(6, "events.iterate.com/agents/web-message-sent", { message: "answer to first" }),
+    event(7, "events.iterate.com/capability-host/script-run-settled", {
+      executionId: "s1",
+      settlement: { status: "succeeded" },
+    }),
+  ];
+  expect(reduceFeed(PATH, queuedMidTurn)).toMatchObject({ working: true, live: null });
 });
 
 function event(offset: number, type: string, payload: Record<string, unknown>): StreamEvent {
