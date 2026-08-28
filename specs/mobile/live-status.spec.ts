@@ -21,7 +21,7 @@
 // Through all of it the card's text is the AGENT-SET status (the
 // summary-updated append on each running script's first line), not the
 // generic "running code…", and the phase glyph next to the spinner tracks
-// ▶ running → ↻ processing → (nothing) waiting. After the turn settles, the
+// ▶ running → ↻ processing → ⧗ waiting. After the turn settles, the
 // expanded card's three rounds wear bare "1"/"2"/"3" headers.
 //
 // Every wait is a UI wait: the working row now spans the request debounce
@@ -63,6 +63,7 @@ test("the live card wears the agent-set status and a phase glyph per round", asy
     llmRequestDebounceMs: 4_000,
   });
   await page.goto(agent.mobileUrl);
+  page.videoMode?.setStartTime();
 
   // The turn's three scripts, queued in order. Each opens with the status
   // append a real turn opens with (AGENT_SUMMARY_INSTRUCTION); the first two
@@ -81,9 +82,9 @@ test("the live card wears the agent-set status and a phase glyph per round", asy
   `);
   // Round 2 stays "waiting" until the spec resolves this gate — the window
   // where the card knows nothing stronger than "a request is open".
-  const roundTwoGate = Promise.withResolvers<void>();
+  const roundTwoHold = Promise.withResolvers<void>();
   agent.responses.setOnce(async () => {
-    await roundTwoGate.promise;
+    await roundTwoHold.promise;
     return [
       "```ts",
       `async (itx) => {
@@ -130,14 +131,14 @@ test("the live card wears the agent-set status and a phase glyph per round", asy
   await card.getByText("Getting API documentation").waitFor();
 
   // ── The debounce elapses, round 2's request opens, and its responder is
-  // parked: nothing stronger than "waiting" is known, so the glyph retires
-  // and the status text carries the row alone.
-  await page.getByTestId("live-phase-glyph").waitFor({ state: "hidden" });
+  // parked: nothing stronger than "waiting" is known, so the glyph falls
+  // back to ⧗ while the status text holds its ground.
+  await card.getByLabel("waiting for a response").waitFor();
   await card.getByText("Getting API documentation").waitFor();
 
   // ── Round 2 answers and its script hangs on the held POST: the status
   // advances to the sweep and the ▶ glyph returns.
-  roundTwoGate.resolve();
+  roundTwoHold.resolve();
   await card.getByText("Sweeping March refunds").waitFor();
   await card.getByLabel("running code").waitFor();
 

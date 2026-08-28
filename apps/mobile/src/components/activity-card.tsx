@@ -89,13 +89,22 @@ export function ActivityCard({
 
   return (
     <View style={[styles.card, isLive && styles.cardLive]} testID={`activity-card-${activity.id}`}>
+      {/* Live and settled summary rows share one geometry: a 14px lead slot
+          (spinner scaled down / chevron) then a 14px glyph slot (phase glyph
+          / spacer), so the card keeps its size and the text its position
+          when the run settles. */}
       <Pressable style={styles.summaryRow} onPress={() => setToggled(!expanded)}>
         {isLive && activity.status === "running" ? (
-          <ActivityIndicator accessibilityLabel="Loading" size="small" color={colors.working} />
+          <ActivityIndicator
+            accessibilityLabel="Loading"
+            size="small"
+            color={colors.working}
+            style={styles.spinnerFit}
+          />
         ) : (
           <Text style={styles.chevron}>{expanded ? "▾" : "▸"}</Text>
         )}
-        {isLive ? <PhaseGlyph phase={liveStatus?.phase} /> : null}
+        {isLive ? <PhaseGlyph phase={liveStatus?.phase} /> : <View style={styles.phaseGlyphSlot} />}
         <Text style={styles.summary} numberOfLines={1}>
           {isLive ? liveSummary(activity, liveStatus) : summarizeActivity(activity)}
         </Text>
@@ -254,19 +263,20 @@ function roundHeaderMeta(round: { llm: AgentUiLlmStep | null; code: AgentUiCodeS
 /**
  * The collapsed live card's second mark, after the spinner: what KIND of
  * waiting this is. Text glyphs like ApprovalGlyphs, not vector icons — the
- * summary row already speaks that language. Phases with nothing stronger to
- * say than "working" (queued, waiting, thinking) show no glyph.
+ * summary row already speaks that language.
  */
 function PhaseGlyph({ phase }: { phase: AgentUiLiveStatus["phase"] | undefined }) {
-  const glyph =
-    phase === "writing"
-      ? { mark: "✎", label: "writing code" }
-      : phase === "running"
-        ? { mark: "▶", label: "running code" }
-        : phase === "processing"
-          ? { mark: "↻", label: "processing result" }
-          : null;
-  if (glyph === null) return null;
+  // Monochrome text glyphs only — an emoji here renders full-width and in
+  // color, jumping the row's layout and style. ⧗ (U+29D7) and ⋯ (U+22EF) are
+  // math symbols with no emoji presentation.
+  let glyph: { mark: string; label: string };
+  if (phase === "writing") glyph = { mark: "✎", label: "writing code" };
+  else if (phase === "running") glyph = { mark: "▶", label: "running code" };
+  else if (phase === "processing") glyph = { mark: "↻", label: "processing result" };
+  else if (phase === "thinking") glyph = { mark: "⋯", label: "thinking" };
+  else if (phase === "working") glyph = { mark: "⧗", label: "working" };
+  else if (phase === "waiting") glyph = { mark: "⧗", label: "waiting for a response" };
+  else glyph = { mark: "⧗", label: "waiting for a response" };
   return (
     <Text accessibilityLabel={glyph.label} style={styles.phaseGlyph} testID="live-phase-glyph">
       {glyph.mark}
@@ -697,7 +707,22 @@ const styles = StyleSheet.create({
   roundMeta: { color: colors.textFaint, fontSize: 11, flexShrink: 1 },
   glyphRow: { flexDirection: "row", gap: 4, marginLeft: "auto" },
   glyph: { fontSize: 12, fontWeight: "700" },
-  phaseGlyph: { color: colors.working, fontSize: 12, fontWeight: "700" },
+  // Fixed width like the chevron: glyphs differ slightly in advance width,
+  // and the status text must not shift as phases change.
+  phaseGlyph: {
+    color: colors.working,
+    fontSize: 12,
+    fontWeight: "700",
+    width: 14,
+    textAlign: "center",
+  },
+  // The settled row's stand-in for the glyph: same 14px, keeps the summary
+  // text in the exact place it held while live.
+  phaseGlyphSlot: { width: 14 },
+  // The stock small spinner is 20px — taller than the chevron's line, which
+  // made the LIVE card the bigger of the two. Scale it into the settled
+  // card's 14px lead slot instead (layout box first, visual scale second).
+  spinnerFit: { width: 14, height: 16, transform: [{ scale: 0.7 }] },
   glyphOpen: { color: colors.working },
   glyphApproved: { color: colors.accent },
   glyphRejected: { color: colors.danger },
