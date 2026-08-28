@@ -1,19 +1,13 @@
 import { expect } from "@playwright/test";
-import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
 // Sessions are lazy: waking a Stream Durable Object BIRTHS it, so the REPL
 // must not touch a session stream until the first Run. Merely visiting the
 // REPL (bare or via New REPL) creates nothing; the first Run births exactly
 // one stream, at the path the URL shows.
-test("the REPL creates no session stream until the first Run", async ({
-  baseURL,
-  helpers,
-  page,
-}) => {
+test("the REPL creates no session stream until the first Run", async ({ helpers, page }) => {
   await using fixture = await helpers.createFixture("repl-lazy");
-  using admin = await connectAdminItx(baseURL!);
-  using project = admin.projects.get(fixture.project.id);
+  using project = await fixture.projectItx();
   const replStreams = async () =>
     (await project.streams.list())
       .map((stream) => stream.path)

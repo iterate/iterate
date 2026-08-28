@@ -57,7 +57,7 @@ rendering — is a commit to this repo. No platform deploy.**
   answers with the platform's fenced-ts defaults — coherent, just not the
   codemode dialect — until the next deploy's `project/worker-updated` sweep
   converts it.
-- Slash commands (`/example`, `/script`) are platform interpretation and are
+- Slash commands (`/example`) are platform interpretation and are
   inert on converted agents.
 - Web agents only: slack/telegram/email agent paths are excluded from the
   conversion and keep the classic fenced format.

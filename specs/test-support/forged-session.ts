@@ -7,9 +7,17 @@ import type {
 import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { waitForPreviewRolloutBeforeProjectCreation } from "@iterate-com/shared/test-support/preview-rollout-gate";
-import { connectItxReady, type ItxInitialConnectionRetry } from "iterate/node";
+import {
+  connectItxReady,
+  type ItxInitialConnectionRetry,
+  type ProjectAiInterceptor,
+  type ProjectAiInterceptorInput,
+} from "iterate/node";
 import { doppler } from "../../apps/os/scripts/dev.ts";
 import { mintForgedAccessToken, mintForgedIdToken } from "../../scripts/auth/forge-token.ts";
+// Lazy circular import (function-call-time only): the helper dials its
+// dedicated session through connectAdminItx below.
+import { installResilientAiInterceptor } from "./resilient-ai-interceptor.ts";
 
 type OsPlaywrightAuthConfig = {
   adminApiSecret: string;
@@ -115,12 +123,161 @@ export async function createProjectFixture(
       },
     ]);
 
+    const project = projectFixtures[0]!.project;
+    // Sync RPC stubs (admin / project / agents) live on this stack; the
+    // fixture's asyncDispose drains it so specs need only `await using fixture`.
+    const resources = new AsyncDisposableStack();
+    let admin: Awaited<ReturnType<typeof connectAdminItx>> | undefined;
+
+    const connectAdmin = async () => {
+      if (admin) return admin;
+      admin = resources.use(await connectAdminItx(baseUrl));
+      return admin;
+    };
+
+    /**
+     * Project-scoped itx (admin dial → `projects.get`). Every call mints a
+     * FRESH stub the caller owns, so `using` at the call site is correct — the
+     * same reflex as every other capnweb stub in these specs. Only the
+     * underlying admin connection is cached and fixture-disposed.
+     */
+    const projectItx = async () => {
+      const adminSession = await connectAdmin();
+      return adminSession.projects.get(project.id);
+    };
+
+    const interceptAi = (handler: ProjectAiInterceptor) =>
+      installResilientAiInterceptor({
+        baseUrl,
+        projectId: project.id,
+        handler,
+      });
+
+    const agentTurnInterceptors: Map<string, ProjectAiInterceptor> = new Map();
+    const addAgentTurnInterceptor = async (agentPath: string, handler: ProjectAiInterceptor) => {
+      if (agentTurnInterceptors.size === 0) {
+        const handler: ProjectAiInterceptor = async (call) => {
+          if (call.source !== "agent-turn") {
+            throw new Error(
+              `unexpected source: ${call.source}, you will need to register a custom ai interceptor for agent turns`,
+            );
+          }
+          const interceptor = agentTurnInterceptors.get(call.agentPath);
+          if (!interceptor) {
+            throw new Error(`no interceptor registered for agent path: ${call.agentPath}`);
+          }
+          return await interceptor(call);
+        };
+        resources.use(await interceptAi(handler));
+      }
+      agentTurnInterceptors.set(agentPath, handler);
+    };
+
+    const createAgent = async (params?: { infix?: string; useRealLlm?: boolean }) => {
+      const slugParts = [slugPrefix, params?.infix, crypto.randomUUID().slice(0, 8)];
+      const path = `/agents/${slugParts.filter(Boolean).join("-")}`;
+      const projectRpc = resources.use(await projectItx());
+      const agent = resources.use(projectRpc.agents.get(path));
+      class ResponseQueuer {
+        responders: Array<{
+          times: number;
+          fn: (
+            call: Extract<ProjectAiInterceptorInput, { source: "agent-turn" }>,
+          ) => Promise<string>;
+        }> = [];
+
+        /** fingerprint -> script, so retries get the same script as last time */
+        previous: Map<string, (typeof this)["responders"][number]["fn"]> = new Map();
+
+        set(script: Parameters<typeof this.setTimes>[1]) {
+          this.setTimes(Infinity, script);
+        }
+
+        setOnce(script: Parameters<typeof this.setTimes>[1]) {
+          this.setTimes(1, script);
+        }
+
+        setTimes(times: number, script: string | (typeof this)["responders"][number]["fn"]) {
+          const fn =
+            typeof script === "function"
+              ? script
+              : async () => `\`\`\`ts\n${script.toString()}\n\`\`\``;
+          this.responders.push({ times, fn });
+        }
+
+        take(call: ProjectAiInterceptorInput) {
+          const fingerprint = JSON.stringify(call).replace(
+            /Requested at: [:\w-.]+\b/,
+            "Requested at: <timestamp>",
+          );
+          const existing = this.previous.get(fingerprint);
+          if (existing) return existing;
+
+          const next = this.responders[0];
+          if (!next) return undefined;
+          if (--next.times === 0) this.responders.shift();
+          this.previous.set(fingerprint, next.fn);
+          return next.fn;
+        }
+      }
+      const responses = new ResponseQueuer();
+      await agent.create();
+      if (!params?.useRealLlm) {
+        await agent.append({
+          type: "events.iterate.com/agent/configured",
+          payload: { config: { llm: { model: "intercepted/typed" }, llmRequestDebounceMs: 250 } },
+        });
+        await addAgentTurnInterceptor(path, async (call) => {
+          const next = responses.take(call);
+          if (!next) throw new Error(`No responses available for agent ${path}`);
+          return await next(call as Extract<ProjectAiInterceptorInput, { source: "agent-turn" }>);
+        });
+      }
+      const webUrl = `/projects/${project.slug}/agents/streams${path}`;
+      // Cap'n Web stubs reject arbitrary property writes — proxy path/webUrl on.
+      // `then: never` stops `await createAgent()` unwrapping through the stub's
+      // Promise intersection and stripping path/webUrl from the type.
+      const extras = { path, webUrl, responses, then: null as never };
+      return new Proxy(agent as typeof agent & typeof extras, {
+        get(target, prop, receiver) {
+          if (prop in extras) return extras[prop as keyof typeof extras];
+          return Reflect.get(target, prop, receiver);
+        },
+        has(target, prop) {
+          return prop in extras || Reflect.has(target, prop);
+        },
+      });
+    };
+
     return {
       organization,
-      project: projectFixtures[0]!.project,
-      projects: projectFixtures.map(({ project }) => project),
+      project,
+      projects: projectFixtures.map(({ project: p }) => p),
       session,
+      /**
+       * Admin itx for the fixture's deployment. Cached and disposed with the
+       * fixture — no `using` at the call site.
+       */
+      connectAdmin,
+      /**
+       * Project-scoped itx for the fixture's first project — the handle mobile
+       * specs currently dial with `connectItxReady({ projectId })`. Opens (and
+       * caches) the admin connection as needed. The returned stub is the
+       * CALLER's: `using project = await fixture.projectItx()`.
+       */
+      projectItx,
+      /**
+       * Create an agent on the fixture project. Optional path defaults to
+       * `/agents/<slugPrefix>-<random>`; the returned handle carries `.path`
+       * and `.webUrl` for `page.goto`. Disposed with the fixture.
+       */
+      createAgent,
+      /** Churn-surviving `intercepted/*` handler for the fixture's first
+       * project — `installResilientAiInterceptor` on a dedicated connection.
+       * Dispose with `await using`. Guide: docs/intercepted-models.md. */
+      interceptAi,
       async [Symbol.asyncDispose]() {
+        await resources.disposeAsync();
         await Promise.all(projectFixtures.map((fixture) => fixture[Symbol.asyncDispose]()));
       },
     };
@@ -133,11 +290,16 @@ export async function createProjectFixture(
 /**
  * Admin itx handle for specs that drive a fixture project server-side (e.g.
  * append events and assert the browser repaints from the push). Dispose with
- * `using` — the handle owns its WebSocket.
+ * `using` — the handle owns its WebSocket. `onWebSocketClose` observes the
+ * socket dying, however it dies — the hook a reconnect loop hangs off (see
+ * resilient-ai-interceptor.ts).
  */
-export async function connectAdminItx(baseUrl: string) {
+export async function connectAdminItx(
+  baseUrl: string,
+  options?: { onWebSocketClose?: (close: { code: number; reason: string }) => void },
+) {
   const config = await resolveOsPlaywrightAuthConfig();
-  return connectPlaywrightAdminItx({ baseUrl, config });
+  return connectPlaywrightAdminItx({ baseUrl, config, ...options });
 }
 
 /** The OS admin API secret, for specs that dial project-scoped itx handles directly. */
@@ -174,6 +336,7 @@ async function createAdminProjectAfterPreviewRollout(input: {
 async function connectPlaywrightAdminItx(input: {
   baseUrl: string;
   config: OsPlaywrightAuthConfig;
+  onWebSocketClose?: (close: { code: number; reason: string }) => void;
 }) {
   return test.step("connect admin itx", () =>
     connectItxReady(
@@ -181,6 +344,9 @@ async function connectPlaywrightAdminItx(input: {
         auth: { type: "admin-secret", secret: input.config.adminApiSecret },
         baseUrl: input.baseUrl,
         headers: cloudflareWorkerVersionOverrideHeaders(process.env),
+        ...(input.onWebSocketClose === undefined
+          ? {}
+          : { onWebSocketClose: input.onWebSocketClose }),
       },
       {
         retryInitialConnection: {

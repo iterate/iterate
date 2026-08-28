@@ -58,12 +58,22 @@ export type AgentLlmTransport = (args: {
  *   results fall back to inline truncation.
  * - `callLlm` overrides the whole Workers AI path when provided — the test
  *   seam (see AgentLlmTransport).
+ * - `consultAiInterceptor` serves `intercepted/*` model attempts through the
+ *   project's live AI interceptor (`itx.ai.intercept`): production hosts
+ *   provide the project-DO hop; a host without it fails intercepted/* attempts with
+ *   a recorded error, like any other attempt failure.
  * - `now`/`sleep`: injectable clock — virtual time in tests, real time in
  *   production.
  */
 export type AgentProcessorDeps = {
   ai?: WorkersAiBinding;
   cloudflareAiGatewayTransport?: () => CloudflareAiGatewayTransport;
+  consultAiInterceptor?: (input: {
+    source: "agent-turn";
+    agentPath: string;
+    model: string;
+    body: { messages: WorkersAiMessage[] };
+  }) => Promise<unknown>;
   resolveModelFileUrl?: (file: AgentFileAttachment) => Promise<string>;
   writeWorkspaceFile?: (input: {
     content: string;
@@ -75,6 +85,7 @@ export type AgentProcessorDeps = {
 };
 
 export type AgentHost = {
+  path: string;
   deps: AgentProcessorDeps;
   /**
    * Mints `agent/<suffix>` — the FIXED namespace: a userland interpreter

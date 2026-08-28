@@ -613,29 +613,35 @@ export const AgentProcessorContract = defineProcessorContract({
           .meta({ description: "How the request settled." }),
       }),
     },
-    "events.iterate.com/agent/llm-response-chunk": {
+    "events.iterate.com/agent/llm-response-chunks": {
       description:
-        "One streamed chunk received from the transport, verbatim. Ephemeral: it reaches " +
-        "open browser/TUI connections but is excluded from default reads and durable subscriptions, " +
-        "and may be evicted — the durable truth is the assistant " +
-        "context item / llm-request-settled pair.",
+        "A coalescing window of streamed chunks received from the transport, verbatim and in " +
+        "provider order. One event per flush (~150ms of streaming), not per chunk: journaling " +
+        "each chunk individually awaited a Durable Object commit per token and capped " +
+        "streaming at the append round-trip (~17 tok/s). Ephemeral: it reaches open " +
+        "browser/TUI connections but is excluded from default reads and durable " +
+        "subscriptions, and may be evicted — the durable truth is the assistant context " +
+        "item / llm-request-settled pair.",
       // FORCIBLY EPHEMERAL: the contract, not the append site, decides.
       // Every append/parse lane built from this definition defaults the
       // envelope's `ephemeral` flag to true and REJECTS `ephemeral: false`,
       // so a chunk can never become a durable stream fact by accident.
       ephemeral: true,
       payloadSchema: z.object({
-        chunk: z.unknown().meta({ description: "The provider's chunk object, verbatim." }),
+        chunks: z
+          .array(z.unknown())
+          .min(1)
+          .meta({ description: "The window's provider chunk objects, verbatim, in order." }),
         llmRequestOffset: z
           .number()
           .int()
           .positive()
-          .meta({ description: "The in-flight request this chunk belongs to." }),
+          .meta({ description: "The in-flight request these chunks belong to." }),
         sequence: z
           .number()
           .int()
           .nonnegative()
-          .meta({ description: "Chunk ordinal within the response." }),
+          .meta({ description: "Flush ordinal within the response." }),
       }),
     },
     "events.iterate.com/agent/token-usage-reported": {
@@ -757,7 +763,7 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agents/web-message-sent",
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/agent/llm-request-settled",
-    "events.iterate.com/agent/llm-response-chunk",
+    "events.iterate.com/agent/llm-response-chunks",
     "events.iterate.com/agent/token-usage-reported",
     "events.iterate.com/agent/summary-updated",
     "events.iterate.com/agent/paused",

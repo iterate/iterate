@@ -1,5 +1,4 @@
 import { expect } from "@playwright/test";
-import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 import { openRepoTreeFile } from "./test-support/repo-tree.ts";
 
@@ -9,15 +8,10 @@ import { openRepoTreeFile } from "./test-support/repo-tree.ts";
  * rides along into the readonly Index view — so a staged snapshot can be
  * previewed, not just the working buffer.
  */
-test("toggle an svg file between Code and its sandboxed Preview", async ({
-  helpers,
-  page,
-  baseURL,
-}) => {
+test("toggle an svg file between Code and its sandboxed Preview", async ({ helpers, page }) => {
   await using fixture = await helpers.createFixture("repo-ide-svg");
 
-  using itx = await connectAdminItx(baseURL!);
-  using project = itx.projects.get(fixture.project.id);
+  using project = await fixture.projectItx();
   await project.repos.get("/repos/ide").create({ type: "empty" });
   await project.repos.get("/repos/ide").commitFiles({
     message: "Add icon.svg",
@@ -48,15 +42,10 @@ test("toggle an svg file between Code and its sandboxed Preview", async ({
   await expect(preview).toHaveAttribute("srcdoc", /<circle/);
 });
 
-test("preview a staged snapshot from the readonly Index view", async ({
-  helpers,
-  page,
-  baseURL,
-}) => {
+test("preview a staged snapshot from the readonly Index view", async ({ helpers, page }) => {
   await using fixture = await helpers.createFixture("repo-ide-index");
 
-  using itx = await connectAdminItx(baseURL!);
-  using project = itx.projects.get(fixture.project.id);
+  using project = await fixture.projectItx();
   await project.repos.get("/repos/ide").create({ type: "empty" });
   await project.repos.get("/repos/ide").commitFiles({
     message: "Add page.html",

@@ -1,5 +1,4 @@
 import { expect } from "@playwright/test";
-import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 import { openRepoTreeFile } from "./test-support/repo-tree.ts";
 
@@ -11,15 +10,10 @@ import { openRepoTreeFile } from "./test-support/repo-tree.ts";
  * being reachable (the feature's real dependency — it degrades to no
  * diagnostics if the fetch fails).
  */
-test("flags a package.json schema violation with a red squiggle", async ({
-  helpers,
-  page,
-  baseURL,
-}) => {
+test("flags a package.json schema violation with a red squiggle", async ({ helpers, page }) => {
   await using fixture = await helpers.createFixture("repo-ide-schema");
 
-  using itx = await connectAdminItx(baseURL!);
-  using project = itx.projects.get(fixture.project.id);
+  using project = await fixture.projectItx();
   await project.repos.get("/repos/ide").create({ type: "empty" });
   // `name` must be a string per the package.json schema — a number is a clear,
   // stable violation.

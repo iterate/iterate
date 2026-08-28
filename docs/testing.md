@@ -203,6 +203,19 @@ Draft proposal for the two gaps, keeping vanilla CLIs:
   specs side if a spec ever needs a dimension; don't build it until one
   does.
 
+The free-and-deterministic alternative to paying for turns is the `intercepted/*`
+model lane: `itx.ai.intercept(handler)` installs a live handler (an in-memory
+function in the test process, session-bound over capnweb) that serves every
+model under `intercepted/` — both `itx.ai.run("intercepted/…")` calls and full agent
+conversation turns for agents configured with `model: "intercepted/<x>"`. The whole
+loop runs for real — debounce, journaled llm-request events, chunk streaming,
+codemode, chat reply — with the test scripting each response. Non-fake models
+are never interceptable, so a journaled `openai/*` turn is always the real
+provider. Reach for a paid `.llm.` test only when the point IS real-model
+integration. Usage guide (handler contract, the session-bound lifetime and
+4901 recovery contract, spec/node recipes):
+[Intercepted models](intercepted-models.md).
+
 Open questions for the next grilling round: is the filename the right home
 for cost (vs a lint-enforced import rule alone)? Should third-party reach
 be visible in filenames too, or is env-gating enough? Does "slow" deserve
@@ -520,6 +533,29 @@ PR remain ordinary blockers. For an unrelated test:
 
 Once the remaining CI is green, the quarantine is explicit coverage debt, not
 a reason to keep the unrelated PR open indefinitely.
+
+### Pinned bugs: `failing(test, …)`, not bare `test.fails`
+
+For a KNOWN bug held open on purpose, wrap the runner's own test function
+with `failing` from `@iterate-com/shared/test-support/failing-test` — it
+works for vitest and playwright alike, passing fixtures and options through:
+
+```ts
+const fail = failing(test, /SAME-BOOT STALENESS/);
+fail("a userspace facet rebuilds on a source commit", { timeout: 240_000 }, async () => {
+  // asserts the DESIRED behavior; today it throws the matched error
+});
+```
+
+The body asserts the desired behavior and must fail with an error matching
+the pattern. A different failure goes red naming both errors (a bare
+`test.fails` stays silently green when the body starts failing for an
+unrelated reason), and a succeeding body goes red with delete-the-wrapper
+instructions. Write the body so the bug throws a distinctive message, and so
+conditions that prove nothing (a coincidental restart masking the bug for
+one observation) retry instead of succeeding —
+`apps/os/e2e/vitest/userspace-facet-source-version.e2e.test.ts` is the
+worked example; its `test.fails` predecessor false-alarmed 7+ times.
 
 ### Parked tests expire
 

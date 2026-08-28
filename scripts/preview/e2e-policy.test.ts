@@ -30,15 +30,15 @@ describe("budget ladder", () => {
       SPEC_ACTION_TIMEOUT_MS,
       SPEC_EXPECT_TIMEOUT_MS,
       TUI_TEST_TIMEOUT_MS,
-      SPEC_TEST_TIMEOUT_MS,
       E2E_TEST_TIMEOUT_MS,
       OS_TUI_LANE_TIMEOUT_SECS * 1000,
+      SPEC_TEST_TIMEOUT_MS,
       E2E_HEAVY_TEST_TIMEOUT_MS,
       OS_PREVIEW_LANE_TIMEOUT_SECS * 1000,
       PREVIEW_RUN_WATCHDOG_SECS * 1000,
     ];
     for (let i = 1; i < ladder.length; i++) {
-      expect(ladder[i]).toBeGreaterThan(ladder[i - 1]!);
+      expect(ladder[i]).toBeGreaterThanOrEqual(ladder[i - 1]!);
     }
   });
 

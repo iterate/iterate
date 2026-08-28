@@ -10,6 +10,7 @@
 // decides WHEN a normal request runs and calls `run()`/`abortInFlight()`.
 
 import type { EmittedInput, ProcessEventArgs, StreamEvent } from "iterate/processors";
+import * as modelInterception from "../../lib/model-interception.ts";
 import { appendUnlessLostIdempotencyRace, stringifyError, type AgentHost } from "./agent-host.ts";
 import {
   AgentProcessorContract,
@@ -30,6 +31,29 @@ import {
   type WorkersAiMessage,
 } from "./workers-ai-transport.ts";
 
+/**
+ * How long an in-flight attempt may show zero progress (no chunk since the
+ * dial, or chunks that stopped) before the watchdog settles it `failed` and
+ * hands re-dialing to the retry ladder. The number balances two real cases:
+ * big-prompt time-to-first-token on a slow provider (a false trip costs one
+ * ladder re-roll, 10-60s — annoying, recoverable) against a severed attempt
+ * on a churning preview, where every second here is user-visible "Waiting
+ * for a response" (observed 150-183s per turn at the old 30-40s staleness
+ * granularity, 15m10s worst case; tasks/platform-stall-repros.md). 45s
+ * comfortably clears observed provider inter-chunk gaps and sits under the
+ * stall specs' 60s settle budget.
+ */
+const LLM_ATTEMPT_IDLE_BUDGET_MS = 45_000;
+
+/** RUNTIME in-flight record — see #inFlightLlmCall. */
+type InFlightLlmCall = {
+  requestOffset: number;
+  controller: AbortController;
+  partialText: string;
+  /** Last observed progress (dial or chunk receipt), for the idle watchdog. */
+  lastProgressAtMs: number;
+};
+
 export class AgentLlmRequest {
   readonly #host: AgentHost;
 
@@ -42,11 +66,7 @@ export class AgentLlmRequest {
    * reduces the stream, finds the open request absent here, and runs it again
    * (adopt-based recovery).
    */
-  #inFlightLlmCall: {
-    requestOffset: number;
-    controller: AbortController;
-    partialText: string;
-  } | null = null;
+  #inFlightLlmCall: InFlightLlmCall | null = null;
 
   constructor(host: AgentHost) {
     this.#host = host;
@@ -154,10 +174,43 @@ export class AgentLlmRequest {
     open: NonNullable<AgentProcessorState["openRequest"]>,
   ) {
     const requestOffset = open.requestedAtOffset;
-    const inFlight = { requestOffset, controller: new AbortController(), partialText: "" };
+    const inFlight = {
+      requestOffset,
+      controller: new AbortController(),
+      partialText: "",
+      lastProgressAtMs: this.#host.now(),
+    };
     this.#inFlightLlmCall = inFlight;
-    const startedAtMs = this.#host.now();
-    let chunkSequence = 0;
+    const startedAtMs = inFlight.lastProgressAtMs;
+    this.#watchAttemptProgress(args, inFlight, startedAtMs);
+
+    // COALESCED chunk journaling. Each append awaits a Durable Object commit
+    // (~60ms) and the transport drain awaits `onChunk` before reading the
+    // next provider frame — journaling every chunk individually therefore
+    // capped delivery at one token per commit round-trip (~17 tok/s in prd,
+    // measured 2026-08-27, regardless of model). Buffering a window and
+    // journaling it as ONE llm-response-chunks event amortizes the commit
+    // across the window; the awaited flush keeps provider order trivially.
+    // A flush that fails loses only its window's chunks — they are ephemeral
+    // UI signals, and the durable truth (settle/context) is untouched.
+    let flushSequence = 0;
+    let chunkBuffer: unknown[] = [];
+    let chunkBufferBytes = 0;
+    let lastFlushAtMs = startedAtMs;
+    const flushChunkBuffer = async () => {
+      if (chunkBuffer.length === 0) return;
+      const chunks = chunkBuffer;
+      chunkBuffer = [];
+      chunkBufferBytes = 0;
+      lastFlushAtMs = this.#host.now();
+      const sequence = flushSequence;
+      flushSequence += 1;
+      await args.append({
+        type: "events.iterate.com/agent/llm-response-chunks",
+        payload: { chunks, llmRequestOffset: requestOffset, sequence },
+      });
+    };
+
     args.runInBackground(async () => {
       try {
         const events = await this.readConsumedEvents();
@@ -174,19 +227,22 @@ export class AgentLlmRequest {
           deadlineMs: Math.max(1, open.expiresAt - this.#host.now()),
           onChunk: async (chunk) => {
             if (inFlight.controller.signal.aborted) return;
+            inFlight.lastProgressAtMs = this.#host.now();
+            // The partial accrues BEFORE buffering, so an interrupt keeps the
+            // full streamed text even when the window never flushed.
             inFlight.partialText += extractChunkText(chunk);
-            const sequence = chunkSequence;
-            chunkSequence += 1;
-            // Each append obtains a fresh Durable Object stub, so await the
-            // commit to preserve provider order across those RPCs.
-            await args.append({
-              type: "events.iterate.com/agent/llm-response-chunk",
-              payload: {
-                chunk: jsonCompatible(chunk),
-                llmRequestOffset: requestOffset,
-                sequence,
-              },
-            });
+            const compatible = jsonCompatible(chunk);
+            chunkBuffer.push(compatible);
+            chunkBufferBytes += JSON.stringify(compatible).length;
+            // The window is anchored at the request start, so the first chunk
+            // (arriving after time-to-first-token) flushes immediately.
+            if (
+              this.#host.now() - lastFlushAtMs < CHUNK_FLUSH_WINDOW_MS &&
+              chunkBufferBytes < CHUNK_FLUSH_MAX_BYTES
+            ) {
+              return;
+            }
+            await flushChunkBuffer();
           },
         });
         // A non-streaming transport reports no chunks, so its text exists
@@ -196,6 +252,10 @@ export class AgentLlmRequest {
         // recorded, and must not drop a response already delivered whole.
         if (!inFlight.controller.signal.aborted) {
           inFlight.partialText = completion.text;
+          // Best-effort: a failed ephemeral flush must not throw a COMPLETED
+          // turn into the failure settle — the success settle below carries
+          // the full text regardless.
+          await flushChunkBuffer().catch(() => {});
         }
         const usage = completion.usage;
         await appendUnlessLostIdempotencyRace(args.append, [
@@ -246,40 +306,101 @@ export class AgentLlmRequest {
         // An aborted call is the interrupt path's story — it already settled
         // the request as cancelled.
         if (inFlight.controller.signal.aborted) return;
-        const errorMessage = stringifyError(error);
-        // Attempt arithmetic from the dispatch-time reduced state: this failure is
-        // attempt (consecutiveLlmFailures + 1). The settled event's reduce
-        // schedules the retry; the error-occurred event gets transcribed into
-        // context so the next turn sees what happened.
-        const attempt = args.state.consecutiveLlmFailures + 1;
-        const { maxAttempts } = args.state.config.llmRequestRetryPolicy;
-        await appendUnlessLostIdempotencyRace(args.append, [
-          {
-            type: "events.iterate.com/agent/llm-request-settled",
-            payload: {
-              requestOffset,
-              durationMs: Math.max(0, this.#host.now() - startedAtMs),
-              result: { status: "failed", errorMessage },
-            },
-            idempotencyKey: this.#host.idempotencyKey(`settle/${requestOffset}`),
-          },
-          {
-            type: "events.iterate.com/stream/error-occurred",
-            payload: {
-              message:
-                attempt < maxAttempts
-                  ? `LLM request @${requestOffset} failed (attempt ${attempt} of ${maxAttempts}): ${errorMessage}. Retrying.`
-                  : `LLM request @${requestOffset} failed (attempt ${attempt} of ${maxAttempts}): ${errorMessage}. Giving up; a new user message starts fresh.`,
-            },
-            idempotencyKey: this.#host.idempotencyKey(`failure-error/${requestOffset}`),
-          },
-        ]);
+        // Best-effort tail flush so the failure settle isn't missing the last
+        // window of streamed text; a second failure here must not mask the
+        // attempt's own error.
+        await flushChunkBuffer().catch(() => {});
+        await this.#appendAttemptFailure(args, {
+          requestOffset,
+          startedAtMs,
+          errorMessage: stringifyError(error),
+        });
       } finally {
         if (this.#inFlightLlmCall?.requestOffset === requestOffset) {
           this.#inFlightLlmCall = null;
         }
       }
     });
+  }
+
+  /**
+   * The attempt-progress watchdog: an attempt that shows no progress (no
+   * chunk since the dial, or chunks that stopped) for
+   * LLM_ATTEMPT_IDLE_BUDGET_MS is settled `failed` from the processor's side
+   * — without waiting on the transport promise, which a severed pager socket
+   * or a hung provider read may never resolve (and may ignore its abort
+   * signal). The settle feeds the existing retry ladder, which owns
+   * re-dialing; the ladder never starts on its own because a hung attempt
+   * never FAILS (tasks/platform-stall-repros.md, threads 1-2).
+   *
+   * Deliberately in-memory and per-incarnation: every loss path is already
+   * covered — if this incarnation dies, the keepalive revives a successor
+   * whose at-head adopt re-dials and arms a fresh watchdog. `host.sleep` and
+   * `host.now` are injectable, so the test harness controls this watchdog's
+   * clock with `advanceTime`.
+   */
+  #watchAttemptProgress(
+    args: ProcessEventArgs<AgentProcessorContract>,
+    inFlight: InFlightLlmCall,
+    startedAtMs: number,
+  ): void {
+    args.runInBackground(async () => {
+      while (this.#inFlightLlmCall === inFlight && !inFlight.controller.signal.aborted) {
+        const idleMs = this.#host.now() - inFlight.lastProgressAtMs;
+        if (idleMs < LLM_ATTEMPT_IDLE_BUDGET_MS) {
+          await this.#host.sleep(LLM_ATTEMPT_IDLE_BUDGET_MS - idleMs);
+          continue;
+        }
+        // Append BEFORE aborting: the settle/<offset> idempotency key makes a
+        // race against a just-completed attempt collapse to one winner, and
+        // the abort afterwards silences the zombie closure (its
+        // signal.aborted guards skip both journaling and its own catch-path
+        // settle).
+        await this.#appendAttemptFailure(args, {
+          requestOffset: inFlight.requestOffset,
+          startedAtMs,
+          errorMessage: `no response progress for ${Math.round(idleMs / 1000)}s (attempt presumed severed or stalled)`,
+        });
+        this.abandonExpired(inFlight.requestOffset);
+        return;
+      }
+    });
+  }
+
+  /**
+   * A failed attempt's settlement: the settled event's reduce schedules the
+   * retry (attempt arithmetic from the dispatch-time reduced state — this
+   * failure is attempt consecutiveLlmFailures + 1); the error-occurred event
+   * gets transcribed into context so the next turn sees what happened.
+   */
+  async #appendAttemptFailure(
+    args: ProcessEventArgs<AgentProcessorContract>,
+    input: { requestOffset: number; startedAtMs: number; errorMessage: string },
+  ): Promise<void> {
+    const { requestOffset, startedAtMs, errorMessage } = input;
+    const attempt = args.state.consecutiveLlmFailures + 1;
+    const { maxAttempts } = args.state.config.llmRequestRetryPolicy;
+    await appendUnlessLostIdempotencyRace(args.append, [
+      {
+        type: "events.iterate.com/agent/llm-request-settled",
+        payload: {
+          requestOffset,
+          durationMs: Math.max(0, this.#host.now() - startedAtMs),
+          result: { status: "failed", errorMessage },
+        },
+        idempotencyKey: this.#host.idempotencyKey(`settle/${requestOffset}`),
+      },
+      {
+        type: "events.iterate.com/stream/error-occurred",
+        payload: {
+          message:
+            attempt < maxAttempts
+              ? `LLM request @${requestOffset} failed (attempt ${attempt} of ${maxAttempts}): ${errorMessage}. Retrying.`
+              : `LLM request @${requestOffset} failed (attempt ${attempt} of ${maxAttempts}): ${errorMessage}. Giving up; a new user message starts fresh.`,
+        },
+        idempotencyKey: this.#host.idempotencyKey(`failure-error/${requestOffset}`),
+      },
+    ]);
   }
 
   /**
@@ -319,6 +440,35 @@ export class AgentLlmRequest {
         signal: input.signal,
         onChunk: (text) => input.onChunk(text),
       });
+    }
+    if (modelInterception.isInterceptedModel(input.model)) {
+      const consult = this.#host.deps.consultAiInterceptor;
+      if (consult === undefined) throw modelInterception.noAiInterceptorError(input.model);
+      const result = await raceAbort(
+        input.signal,
+        consult({
+          source: "agent-turn",
+          agentPath: this.#host.path,
+          model: input.model,
+          body: { messages: input.messages },
+        }),
+      );
+      const normalized = modelInterception.normalizeInterceptedTurnResult({
+        result,
+        model: input.model,
+        inputCharacters: input.messages.reduce((sum, message) => sum + message.content.length, 0),
+      });
+      // Word-split delivery keeps journaled chunk events flowing. An
+      // abort mid-delivery fails the attempt like the real transport's
+      // raceAbort-over-the-drain does — a succeeded completion must never
+      // race the interrupt's cancelled settle on the shared idempotency key.
+      for (const chunk of normalized.text.split(/\b/)) {
+        if (chunk.length === 0) continue;
+        if (input.signal.aborted) break;
+        await input.onChunk(chunk);
+      }
+      if (input.signal.aborted) throw new Error("Interception attempt aborted mid-response.");
+      return { text: normalized.text, usage: normalized.usage, rawResponse: result };
     }
     const ai = this.#host.deps.ai;
     if (ai === undefined) {
@@ -522,6 +672,18 @@ export class AgentLlmRequest {
 
 /** Page size for full-stream reads (prompt building, compaction guards). */
 const CONSUMED_EVENTS_PAGE_SIZE = 500;
+
+/**
+ * Chunk-coalescing window: how much streamed provider output rides one
+ * llm-response-chunks append. 150ms ≈ 7 UI updates/sec, and amortizes the
+ * ~60ms Durable Object commit far below provider token cadence (the ceiling
+ * becomes ~window/(window+commit) of provider rate instead of ~17 tok/s).
+ */
+const CHUNK_FLUSH_WINDOW_MS = 150;
+
+/** Safety cap: a pathological burst flushes early rather than growing one
+ * oversized append. */
+const CHUNK_FLUSH_MAX_BYTES = 64_000;
 
 /** Race an un-abortable attempt promise against its abort signal: the caller
  * regains control immediately on interrupt while the orphaned work finishes

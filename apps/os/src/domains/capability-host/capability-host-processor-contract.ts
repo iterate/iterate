@@ -34,7 +34,12 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
   slug: "capability-host",
   // 0.6.0: two parallel 0.5.0 claims merged — main's provider pagers and this
   // branch's preamble (preamble-set/removed events, retained script results).
-  version: "0.6.0",
+  // 0.7.0: void-returning successes retain a payload-free "done" row, so
+  // every settled script keeps an offset handle in `results`; re-reduces
+  // from offset 0.
+  // 0.8.0: retained rows carry `scriptOffset` (the run's script-run-requested
+  // offset) — the handle previousScriptHelper demands; re-reduces from 0.
+  version: "0.8.0",
   description: "A tiny dynamic capability table and script execution stream.",
   stateSchema: z.object({
     birthCertificate: capabilityHostBirthCertificateSchema()
@@ -259,6 +264,16 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
                 description: "A small result, retained verbatim for inline embedding.",
               }),
               executionId: z.string(),
+              scriptOffset: z
+                .number()
+                .int()
+                .nonnegative()
+                .optional()
+                .meta({
+                  description:
+                    "The run's script-run-requested event offset — the reuse handle " +
+                    "previousScriptHelper demands. Absent when no request was reduced.",
+                }),
               settledAtOffset: z.number().int().nonnegative(),
               resultJson: z.string().meta({
                 description:
@@ -274,6 +289,16 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
                   "settlement event.",
               }),
               executionId: z.string(),
+              scriptOffset: z
+                .number()
+                .int()
+                .nonnegative()
+                .optional()
+                .meta({
+                  description:
+                    "The run's script-run-requested event offset — the reuse handle " +
+                    "previousScriptHelper demands. Absent when no request was reduced.",
+                }),
               settledAtOffset: z.number().int().nonnegative(),
               typeText: z.string().meta({
                 description: "The inferred TypeScript type of the result (inferJsonType).",
@@ -282,8 +307,38 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
             z.strictObject({
               kind: z.literal("error").meta({ description: "A failed script." }),
               executionId: z.string(),
+              scriptOffset: z
+                .number()
+                .int()
+                .nonnegative()
+                .optional()
+                .meta({
+                  description:
+                    "The run's script-run-requested event offset — the reuse handle " +
+                    "previousScriptHelper demands. Absent when no request was reduced.",
+                }),
               settledAtOffset: z.number().int().nonnegative(),
               error: z.string().meta({ description: "The settlement error, truncated." }),
+            }),
+            z.strictObject({
+              kind: z.literal("done").meta({
+                description:
+                  "A successful script that returned no (JSON-serializable) value. No payload " +
+                  "to reference, but the offset stays addressable — the reuse handle for " +
+                  "previousScriptAsHelperFunction.",
+              }),
+              executionId: z.string(),
+              scriptOffset: z
+                .number()
+                .int()
+                .nonnegative()
+                .optional()
+                .meta({
+                  description:
+                    "The run's script-run-requested event offset — the reuse handle " +
+                    "previousScriptHelper demands. Absent when no request was reduced.",
+                }),
+              settledAtOffset: z.number().int().nonnegative(),
             }),
           ])
           .meta({

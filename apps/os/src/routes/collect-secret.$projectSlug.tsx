@@ -1,20 +1,29 @@
 import { Suspense, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation } from "@tanstack/react-query";
-import { CheckCircle2Icon, KeyRoundIcon, TriangleAlertIcon } from "lucide-react";
+import {
+  CheckCircle2Icon,
+  EyeIcon,
+  EyeOffIcon,
+  KeyRoundIcon,
+  TriangleAlertIcon,
+} from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@iterate-com/ui/components/alert";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   Card,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@iterate-com/ui/components/card";
 import { Field, FieldDescription, FieldLabel } from "@iterate-com/ui/components/field";
-import { Input } from "@iterate-com/ui/components/input";
-import { Separator } from "@iterate-com/ui/components/separator";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@iterate-com/ui/components/input-group";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { ProjectScope, useItx, useItxQuery } from "iterate/sdk/itx/react";
 import { requireOrganizationMemberForSession } from "../lib/auth.ts";
@@ -28,6 +37,13 @@ import { ItxResourceLoading } from "~/components/itx-boundary.tsx";
 // layout on purpose — no sidebar, no palette, just the form — but behind
 // the same org-membership gate, so following the link signs the user in
 // first and returns here.
+//
+// The phone does NOT open this page: the app renders the same request
+// natively over the itx session it already holds
+// (apps/mobile/src/app/project/[projectId]/collect-secret.tsx), so nobody on
+// a phone signs in twice. This page serves everyone else — a link followed
+// from a desktop, Slack, or email — and is still sized for a small screen,
+// because that is often where it is read.
 export const Route = createFileRoute("/collect-secret/$projectSlug")({
   validateSearch: CollectSecretSearch,
   // ProjectScope dials a WebSocket and throws during SSR — same shape as the
@@ -56,7 +72,7 @@ export const Route = createFileRoute("/collect-secret/$projectSlug")({
 
 function MalformedLinkCard() {
   return (
-    <Card className="w-full max-w-md">
+    <Card size="sm" className="w-full max-w-md">
       <CardHeader>
         <CardTitle>This link is malformed</CardTitle>
         <CardDescription>
@@ -71,7 +87,7 @@ function CollectSecretPage() {
   const { project } = Route.useRouteContext();
   const search = Route.useSearch();
   return (
-    <main className="flex min-h-screen items-center justify-center p-4">
+    <main className="flex min-h-screen items-start justify-center p-4">
       {search.egress.length === 0 ? (
         // A pin to nothing can never be used — say so before dialing anything.
         <MalformedLinkCard />
@@ -97,7 +113,7 @@ function CollectSecretCard() {
   const { projectSlug } = Route.useParams();
   const itx = useItx();
   const [material, setMaterial] = useState("");
-  const [saved, setSaved] = useState<SavedOutcome | null>(null);
+  const [revealed, setRevealed] = useState(false);
   // An unsigned link can point at an EXISTING secret — an org member pasting
   // a value here would silently replace its material and repin its egress.
   // Describe the path up front and say so before they type anything.
@@ -139,69 +155,55 @@ function CollectSecretCard() {
         return "notify-failed";
       }
     },
-    onSuccess: (outcome) => setSaved(outcome),
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
   });
 
-  if (saved !== null) {
-    return (
-      <Card className="w-full max-w-md">
-        <CardHeader className="text-center">
-          <CheckCircle2Icon className="mx-auto size-8 text-green-600" />
-          <CardTitle>Secret saved</CardTitle>
-          <CardDescription>
-            {saved === "notified"
-              ? "The agent that asked for it has been notified and will pick up from here. You can close this tab."
-              : saved === "notify-failed"
-                ? `The secret is stored, but the agent that asked for it could not be notified. Tell it the secret at ${search.path} is ready.`
-                : "You can close this tab."}
-          </CardDescription>
-        </CardHeader>
-      </Card>
-    );
+  if (submit.data !== undefined) {
+    return <SavedCard outcome={submit.data} />;
   }
 
   return (
-    <Card className="w-full max-w-md">
-      <CardHeader className="text-center">
-        <KeyRoundIcon className="mx-auto size-6 text-muted-foreground" />
-        <CardTitle className="text-xl">Provide a secret</CardTitle>
+    <Card size="sm" className="w-full max-w-md">
+      <CardHeader className="grid-cols-[auto_1fr] items-center gap-x-3">
+        <KeyRoundIcon className="row-span-2 size-5 text-muted-foreground" />
+        <CardTitle>Provide a secret</CardTitle>
         <CardDescription>
-          Someone in this project asked for a credential only you have.
+          Someone in {projectSlug} asked for a credential only you have.
         </CardDescription>
       </CardHeader>
-      <Separator />
-      <CardContent className="space-y-4 pt-6">
+      <CardContent className="space-y-3">
         {search.description === undefined ? null : (
-          <div className="space-y-1 text-sm">
-            <div className="text-muted-foreground">The requester says</div>
-            <div>{search.description}</div>
-          </div>
+          <p className="text-sm text-muted-foreground">{search.description}</p>
         )}
-        <div className="space-y-1 text-sm">
-          <div className="text-muted-foreground">Stored at</div>
-          <code className="text-xs">{search.path}</code>
-        </div>
-        <div className="space-y-1 text-sm">
-          <div className="text-muted-foreground">Can only ever be sent to</div>
-          <ul className="space-y-0.5">
-            {search.egress.map((url) => (
-              <li key={url}>
-                <code className="text-xs">{url}</code>
-              </li>
-            ))}
-          </ul>
-        </div>
+        <dl className="space-y-1 text-xs">
+          <div className="flex gap-2">
+            <dt className="shrink-0 text-muted-foreground">Stored at</dt>
+            <dd className="min-w-0 truncate">
+              <code>{search.path}</code>
+            </dd>
+          </div>
+          <div className="flex gap-2">
+            <dt className="shrink-0 text-muted-foreground">Only ever sent to</dt>
+            <dd className="min-w-0 break-all">
+              {search.egress.map((url, index) => (
+                <span key={url}>
+                  {index === 0 ? null : ", "}
+                  <code>{url}</code>
+                </span>
+              ))}
+            </dd>
+          </div>
+        </dl>
         {existing.hasMaterial ? (
-          <Alert variant="destructive">
+          <Alert variant="destructive" className="py-2">
             <TriangleAlertIcon className="size-4" />
-            <AlertTitle>This replaces an existing secret</AlertTitle>
-            <AlertDescription>
-              {`A secret already exists at ${search.path}`}
+            <AlertTitle className="text-sm">This replaces an existing secret</AlertTitle>
+            <AlertDescription className="text-xs">
+              Saving overwrites the value at {search.path} and its allowed hosts
               {existing.egress.urls.length > 0
-                ? `, currently pinned to ${existing.egress.urls.join(", ")}`
+                ? ` (currently ${existing.egress.urls.join(", ")})`
                 : ""}
-              . Saving overwrites its value and its allowed hosts.
+              .
             </AlertDescription>
           </Alert>
         ) : null}
@@ -213,30 +215,64 @@ function CollectSecretCard() {
         >
           <Field>
             <FieldLabel htmlFor="secret-material">Value</FieldLabel>
-            <Input
-              id="secret-material"
-              type="password"
-              autoComplete="off"
-              value={material}
-              onChange={(event) => setMaterial(event.currentTarget.value)}
-            />
-            <FieldDescription>
-              Stored write-only and encrypted — no agent, API, or person can ever read it back; it
-              is only substituted into requests to the hosts above.
+            <InputGroup>
+              <InputGroupInput
+                id="secret-material"
+                type={revealed ? "text" : "password"}
+                autoComplete="off"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                value={material}
+                onChange={(event) => setMaterial(event.currentTarget.value)}
+              />
+              <InputGroupAddon align="inline-end">
+                {/* Pasting a credential on a phone is a blind action — the
+                    submitter should be able to check they pasted the key and
+                    not, say, their clipboard's previous occupant. */}
+                <InputGroupButton
+                  aria-label={revealed ? "Hide value" : "Show value"}
+                  aria-pressed={revealed}
+                  onClick={() => setRevealed(!revealed)}
+                  size="icon-xs"
+                >
+                  {revealed ? <EyeOffIcon /> : <EyeIcon />}
+                </InputGroupButton>
+              </InputGroupAddon>
+            </InputGroup>
+            <FieldDescription className="text-xs">
+              Stored write-only and encrypted — only ever substituted into requests to the hosts
+              above, never readable by an agent, an API, or a person.
             </FieldDescription>
           </Field>
           <Button
             type="submit"
-            className="mt-4 w-full"
+            className="mt-3 w-full"
             disabled={material.length === 0 || submit.isPending}
           >
             {submit.isPending ? "Saving..." : "Save secret"}
           </Button>
         </form>
       </CardContent>
-      <CardFooter className="justify-center text-xs text-muted-foreground">
-        Project: {projectSlug}
-      </CardFooter>
+    </Card>
+  );
+}
+
+function SavedCard({ outcome }: { outcome: SavedOutcome }) {
+  const search = Route.useSearch();
+  return (
+    <Card size="sm" className="w-full max-w-md">
+      <CardHeader className="text-center">
+        <CheckCircle2Icon className="mx-auto size-6 text-green-600" />
+        <CardTitle>Secret saved</CardTitle>
+        <CardDescription>
+          {outcome === "notified"
+            ? "The agent that asked for it has been notified and will pick up from here. You can close this tab."
+            : outcome === "notify-failed"
+              ? `The secret is stored, but the agent that asked for it could not be notified. Tell it the secret at ${search.path} is ready.`
+              : "You can close this tab."}
+        </CardDescription>
+      </CardHeader>
     </Card>
   );
 }

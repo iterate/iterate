@@ -1,5 +1,4 @@
 import { expect } from "@playwright/test";
-import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 import { openRepoTreeFile } from "./test-support/repo-tree.ts";
 
@@ -12,13 +11,11 @@ import { openRepoTreeFile } from "./test-support/repo-tree.ts";
 test("edit, stage, inspect the Index, and commit through the repo IDE", async ({
   helpers,
   page,
-  baseURL,
 }) => {
   await using fixture = await helpers.createFixture("repo-ide");
 
   // Repos are template-seeded on create, so the IDE opens onto real files.
-  using itx = await connectAdminItx(baseURL!);
-  using project = itx.projects.get(fixture.project.id);
+  using project = await fixture.projectItx();
   await project.repos.get("/repos/ide").create({ type: "empty" });
 
   await page.goto(`/projects/${fixture.project.slug}/repos/ide`);
@@ -75,15 +72,10 @@ test("edit, stage, inspect the Index, and commit through the repo IDE", async ({
   await page.getByRole("button", { name: "README.md" }).waitFor();
 });
 
-test("discarding a new file confirms before permanently removing it", async ({
-  helpers,
-  page,
-  baseURL,
-}) => {
+test("discarding a new file confirms before permanently removing it", async ({ helpers, page }) => {
   await using fixture = await helpers.createFixture("repo-ide-discard");
 
-  using itx = await connectAdminItx(baseURL!);
-  using project = itx.projects.get(fixture.project.id);
+  using project = await fixture.projectItx();
   await project.repos.get("/repos/ide").create({ type: "empty" });
 
   await page.goto(`/projects/${fixture.project.slug}/repos/ide`);

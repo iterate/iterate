@@ -1,0 +1,790 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>PR #2532 — the attempt-progress watchdog, from first principles</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/lib/codemirror.min.css"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/lib/codemirror.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/mode/yaml/yaml.min.js"></script>
+    <style>
+      :root {
+        --fg: #1a1a1a;
+        --muted: #666;
+        --line: #e5e5e5;
+        --code: #fafafa;
+        --accent: #b45309;
+        --sel: #fef3c7;
+        --bad: #b91c1c;
+        --good: #15803d;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #e5e5e5;
+          --muted: #999;
+          --line: #333;
+          --code: #191919;
+          --accent: #fbbf24;
+          --sel: #3b2f14;
+          --bad: #f87171;
+          --good: #4ade80;
+        }
+        body {
+          background: #111;
+        }
+        .CodeMirror {
+          background: var(--code);
+          color: var(--fg);
+        }
+        .CodeMirror .cm-comment {
+          color: #8a8a5c;
+        }
+        .CodeMirror .cm-atom,
+        .CodeMirror .cm-number {
+          color: #7fb4d8;
+        }
+        .CodeMirror .cm-meta {
+          color: #999;
+        }
+        .CodeMirror .cm-string {
+          color: #a8c98a;
+        }
+        .CodeMirror .cm-keyword {
+          color: #c586c0;
+        }
+        .CodeMirror-gutters {
+          background: var(--code);
+          border-color: var(--line);
+        }
+      }
+      body {
+        font:
+          14px/1.55 ui-sans-serif,
+          system-ui,
+          sans-serif;
+        color: var(--fg);
+        margin: 0;
+      }
+      header {
+        padding: 1rem 1.5rem 0.5rem;
+      }
+      header h1 {
+        margin: 0;
+        font-size: 1.3rem;
+      }
+      header p {
+        color: var(--muted);
+        margin: 0.3rem 0 0;
+        max-width: 62rem;
+      }
+      .story {
+        margin: 0 1.5rem;
+        max-width: 60rem;
+      }
+      .story h2 {
+        font-size: 1.05rem;
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 0.3rem;
+        margin: 1.6rem 0 0.5rem;
+      }
+      .story p {
+        max-width: 56rem;
+      }
+      .opinion {
+        border: 2px solid var(--accent);
+        border-radius: 8px;
+        padding: 0.7rem 1rem;
+        margin: 0.8rem 0;
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(26rem, 48rem) minmax(24rem, 1fr);
+        gap: 1.5rem;
+        padding: 1rem 1.5rem 4rem;
+        align-items: start;
+      }
+      @media (max-width: 980px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+        .rendered {
+          position: static !important;
+          max-height: none !important;
+        }
+      }
+      .layout h2 {
+        font-size: 1.05rem;
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 0.3rem;
+        margin: 2rem 0 0.5rem;
+      }
+      .layout h2 .hat {
+        color: var(--muted);
+        font-weight: 400;
+        font-size: 0.85rem;
+      }
+      .scenario > p {
+        max-width: 46rem;
+      }
+      .ev {
+        border: 1px solid var(--line);
+        border-left: 4px solid var(--line);
+        border-radius: 6px;
+        margin: 0.45rem 0;
+        cursor: pointer;
+      }
+      .ev:hover {
+        border-color: var(--accent);
+      }
+      .ev.selected {
+        background: var(--sel);
+        border-left-color: var(--accent);
+      }
+      .ev.bad {
+        border-left-color: var(--bad);
+      }
+      .ev.good {
+        border-left-color: var(--good);
+      }
+      .ev .row {
+        display: flex;
+        align-items: baseline;
+        gap: 0.5em;
+        padding: 0.45rem 0.7rem 0.1rem;
+        font:
+          12.5px/1.45 ui-monospace,
+          monospace;
+      }
+      .ev .off {
+        color: var(--accent);
+        font-weight: 700;
+        white-space: nowrap;
+      }
+      .ev .type {
+        color: var(--fg);
+      }
+      .ev .t {
+        color: var(--muted);
+        font-size: 11px;
+        white-space: nowrap;
+        margin-left: auto;
+      }
+      .ev .badge {
+        color: var(--accent);
+        font-size: 11px;
+        background: var(--code);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 0 0.35em;
+        white-space: nowrap;
+      }
+      .ev .note {
+        font:
+          12px/1.4 ui-sans-serif,
+          system-ui,
+          sans-serif;
+        color: var(--muted);
+        padding: 0 0.7rem 0.45rem;
+      }
+      .gap {
+        color: var(--muted);
+        font:
+          italic 12px/1.4 ui-sans-serif,
+          system-ui,
+          sans-serif;
+        padding: 0.1rem 0.9rem;
+        border-left: 2px dotted var(--line);
+        margin: 0.2rem 0 0.2rem 1rem;
+      }
+      .rendered {
+        position: sticky;
+        top: 0;
+        max-height: 100vh;
+        overflow: auto;
+        padding: 0.5rem 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .rendered h3 {
+        margin: 0.2rem 0 0.5rem;
+        font-size: 1rem;
+      }
+      .rendered .cmhost {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        overflow: hidden;
+      }
+      .CodeMirror {
+        height: auto;
+        font-size: 12px;
+      }
+      .rendered .CodeMirror {
+        height: calc(100vh - 5rem);
+      }
+      code {
+        background: var(--code);
+        padding: 0.1em 0.35em;
+        border-radius: 4px;
+        font-size: 0.92em;
+      }
+      pre.graph {
+        background: var(--code);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 0.8rem 1rem;
+        font:
+          12px/1.55 ui-monospace,
+          monospace;
+        overflow-x: auto;
+      }
+      pre.graph b {
+        color: var(--accent);
+        font-weight: 700;
+      }
+      pre.graph i {
+        color: var(--muted);
+        font-style: normal;
+      }
+      .vocab {
+        margin: 0.8rem 0;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 0.2rem 1rem 0.6rem;
+      }
+      .vocab summary {
+        cursor: pointer;
+        font-weight: 600;
+        padding: 0.5rem 0;
+      }
+      .vocab table {
+        border-collapse: collapse;
+        font-size: 12.5px;
+        width: 100%;
+        margin: 0.3rem 0 0.8rem;
+      }
+      .vocab th,
+      .vocab td {
+        border: 1px solid var(--line);
+        padding: 0.35rem 0.55rem;
+        text-align: left;
+        vertical-align: top;
+      }
+      .vocab th {
+        color: var(--muted);
+        font-weight: 600;
+      }
+      .vocab td:first-child {
+        white-space: nowrap;
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+      }
+      details.more {
+        border: 1px dashed var(--line);
+        border-radius: 6px;
+        padding: 0.2rem 0.7rem;
+        margin: 0.45rem 0;
+      }
+      details.more > summary {
+        cursor: pointer;
+        color: var(--muted);
+        font-size: 12.5px;
+        padding: 0.25rem 0;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>PR #2532: the attempt-progress watchdog</h1>
+      <p>
+        Read the story top to bottom — it assumes nothing. Then the timelines: click any card and
+        the right pane shows the log entry plus who-holds-what at that moment.
+      </p>
+    </header>
+
+    <div class="story">
+      <h2>1. What this system is, in five sentences</h2>
+      <p>
+        A user sends a chat message to an agent. The platform must call an LLM and stream the answer
+        back. The machine doing this work is a Cloudflare Durable Object, and Cloudflare is allowed
+        to <b>kill it at any moment</b> — memory pressure, deploys, whim. So the rule of the whole
+        codebase is: <b>nothing that matters lives only in memory</b>. Every fact gets appended to a
+        per-agent <b>log</b> (the codebase calls it a stream, and its entries events), and the
+        current state of the world is always recomputed by replaying that log — a killed machine
+        loses nothing, because its replacement reads the same log.
+      </p>
+
+      <h2>2. So what does "call an LLM" look like here?</h2>
+      <p>Three steps, two durable and one fragile:</p>
+      <pre class="graph">
+1. append to the log:  "llm-request-requested"      <i>durable — "someone owes an answer for message X"</i>
+2. actually call the LLM, in memory                  <i>fragile — this is the "attempt"</i>
+3. append to the log:  "llm-request-settled"         <i>durable — the ending: succeeded / failed / cancelled</i>
+</pre>
+      <p>
+        Step 1's log entry is called the <b>request</b>; its position in the log (its <i>offset</i>,
+        e.g. @44) is its name forever. Step 2 is an <b>attempt</b> — one in-memory try at answering
+        it. The distinction matters because a request can take several attempts: retries are new
+        attempts (in fact new requests — more later), but the user-visible question "did message X
+        get answered?" is about the request.
+      </p>
+      <p>
+        Recovery is free by design: if the machine dies between 1 and 3, the replacement replays the
+        log, sees "requested, never settled", and just runs another attempt. This is called
+        <i>adopting</i> the open request.
+      </p>
+
+      <h2>3. One more rule, and then the bug is obvious</h2>
+      <p>
+        When does the code check "do I owe anything?" — replaying the log is not free, so it happens
+        when a <b>new entry lands in the log</b> (a "delivery"). Every append wakes the machinery,
+        which catches up and, at the head of the log, runs its obligations check
+        (<code>#atHead</code>): expire overdue things, adopt open requests, open new ones. No new
+        entry → no check. The codebase calls this being <b>delivery-driven</b>.
+      </p>
+      <p class="opinion">
+        <b>The bug (what #2530 diagnosed):</b> suppose the in-memory attempt <i>hangs</i> — the
+        network path to the LLM is severed mid-call, the promise never resolves, and (worst case) it
+        even ignores cancellation. Then: no success entry, no failure entry,
+        <b>no log entry at all</b>. And because checks are delivery-driven, nothing ever asks "is
+        that attempt okay?". The log says "request open" forever; the user watches a spinner. On
+        busy systems some unrelated entry eventually lands and wakes things (30–40s later); on a
+        quiet one the only guaranteed wake is a crash-detector ~15 minutes out. Measured on preview:
+        first replies taking 150–183 seconds. A hung attempt never <i>fails</i> — and only a written
+        failure triggers a retry.
+      </p>
+
+      <h2>4. The fix: a watchdog per attempt</h2>
+      <p>
+        When an attempt starts, start a <b>second</b> in-memory task next to it whose only job is to
+        watch the first. Both share one little record (<code>#inFlightLlmCall</code>) holding the
+        request's name, a cancel button (<code>AbortController</code>), and a timestamp
+        <code>lastProgressAtMs</code>. Every streamed chunk from the LLM refreshes the timestamp.
+        The watchdog loops: "any progress in the last 45 seconds? sleep until the deadline. None?
+        <b>write the failure entry to the log myself</b>, then cancel the attempt." That one log
+        write is the whole cure — it is a delivery, so it wakes the machinery, and it is a
+        <i>failure</i>, so the retry logic engages.
+      </p>
+      <p>
+        That's the whole job of <b><code>#appendAttemptFailure</code></b
+        >: "write the failed ending to the log, properly". It writes two entries in one atomic
+        append — the ending itself, plus a human-readable error line ("attempt 1 of 3 … Retrying.")
+        that ends up visible in the agent's context. It's a shared helper because exactly two
+        callers need to write a failed ending: the attempt's own <code>catch</code> (the LLM call
+        threw) and the watchdog (the LLM call hung). Note what it does <i>not</i> do: it never
+        schedules the retry. Retrying works like everything else here — by log replay:
+      </p>
+      <pre class="graph">
+#appendAttemptFailure writes:  llm-request-settled { status: failed }   <i>+ the visible error line</i>
+        ↓ that entry replays through the state recompute (the "fold")
+fold:   open request → closed;  failure count += 1;  count &lt; 3? → note "we owe another try"
+        ↓ next obligations check (woken by this very entry!)
+after a pause (10s, then 20s, then 40s — the "retry ladder"):
+        append a NEW llm-request-requested → new attempt + new watchdog
+</pre>
+
+      <h2>5. The two dangers, and the two tricks that handle them</h2>
+      <p>
+        <b>Danger A — duplicate endings.</b> Five different pieces of code can try to end the same
+        request: the attempt succeeding, the attempt erroring, the watchdog giving up, a user
+        interrupt, and a 10-minute-overdue backstop. Two of them can fire in the same instant
+        (attempt finishes at 44.9s of silence; watchdog wakes at 45.0s). The trick: every ending is
+        appended with the <b>same dedupe key</b>, <code>settle/&lt;request-offset&gt;</code>. The
+        log accepts the first write with a given key and silently ignores the rest (<code
+          >appendUnlessLostIdempotencyRace</code
+        >
+        — the name says it: append, unless you lost the race). So the journal always holds exactly
+        one ending, no matter who raced.
+      </p>
+      <p>
+        <b>Danger B — the watchdog killing a healthy attempt.</b> Ordering, inside the watchdog:
+        <b>append first, cancel second</b>. If it cancelled first and then lost the dedupe race to a
+        just-completed success — fine, cancelling a finished thing is a no-op. But the reverse order
+        could cancel an attempt that was about to succeed while the watchdog's own write then failed
+        → nothing ends the request at all. Append-first means an ending is durably decided before
+        anything gets cancelled. (And the cancelled attempt can't make a mess afterwards: every one
+        of its writes checks the cancel signal first.)
+      </p>
+      <p>
+        <b>What if the machine dies with both tasks in it?</b> That's the beauty of keeping the
+        watchdog in memory: it can only be lost together with the very attempt it watches. A
+        heartbeat mechanism (the <i>keepalive</i>) notices the dead machine, boots a replacement,
+        and appends a "processor revived" entry to the log — a delivery! — which triggers the
+        obligations check → adopt the open request → new attempt, new watchdog. There is no
+        reachable state where an attempt runs unwatched.
+      </p>
+
+      <details class="vocab">
+        <summary>Translation table — plain word → codebase word</summary>
+        <table>
+          <tr>
+            <th>plain</th>
+            <th>codebase</th>
+          </tr>
+          <tr>
+            <td>the log</td>
+            <td>the stream / journal; entries are events; a position is an offset (@44)</td>
+          </tr>
+          <tr>
+            <td>recompute state by replay</td>
+            <td>
+              the fold / reduce (<code>agent-prompt-fold.ts</code>); its output is reduced state
+              (<code>openRequest</code>, <code>consecutiveLlmFailures</code>…)
+            </td>
+          </tr>
+          <tr>
+            <td>a machine's one lifetime</td>
+            <td>
+              an incarnation of the Durable Object; killing it is eviction; the replacement
+              appending its arrival is a revival
+            </td>
+          </tr>
+          <tr>
+            <td>new log entry wakes the code</td>
+            <td>
+              a delivery; the obligations check at the end is <code>AgentTurnLoop.#atHead</code>
+            </td>
+          </tr>
+          <tr>
+            <td>the ending</td>
+            <td>the settle / settlement (<code>llm-request-settled</code>)</td>
+          </tr>
+          <tr>
+            <td>dedupe key</td>
+            <td>idempotency key (<code>settle/&lt;offset&gt;</code>)</td>
+          </tr>
+          <tr>
+            <td>shared record of the running attempt</td>
+            <td>
+              <code>#inFlightLlmCall</code> in <code>agent-llm-request.ts</code> — "the in-flight
+              slot"
+            </td>
+          </tr>
+          <tr>
+            <td>cancel the attempt + free the record</td>
+            <td><code>abandonExpired(offset)</code> (abort + clear, from PR #2498)</td>
+          </tr>
+          <tr>
+            <td>retry pauses 10/20/40s</td>
+            <td>the retry ladder (max 3 attempts, backoff folded into the debounce window)</td>
+          </tr>
+          <tr>
+            <td>heartbeat that reboots dead machines</td>
+            <td>the keepalive (its last-resort crash detector is the ~15min "wedge breaker")</td>
+          </tr>
+        </table>
+      </details>
+
+      <h2>6. The full call graph of <code>agent-llm-request.ts</code></h2>
+      <pre class="graph">
+a new log entry lands (any entry at all)
+└─ AgentTurnLoop.<b>#atHead</b>                       <i>"do I owe anything?" — only runs on deliveries</i>
+   ├─ open request 10min overdue → cancel + write settled{cancelled/expired}   <i>the backstop</i>
+   ├─ open request, no attempt running here → <b>run(args, open)</b>            <i>first dial, adopt after a death, ladder retry</i>
+   └─ owed a new request &amp; pause elapsed → append llm-request-requested        <i>which opens one</i>
+
+<b>run(args, open)</b>
+├─ inFlight = { requestOffset, controller, partialText, lastProgressAtMs: now }
+├─ start <b>watchdog</b> (task ①):
+│    loop while (record still mine AND not cancelled):
+│      quiet &lt; 45s → sleep the remainder            <i>each chunk pushes the deadline back</i>
+│      quiet ≥ 45s → <b>#appendAttemptFailure</b>     <i>write the ending FIRST…</i>
+│                    abandonExpired(offset)          <i>…then cancel + free the record</i>
+└─ start <b>attempt</b> (task ②):
+     ├─ rebuild the prompt from the log's committed history
+     ├─ call the LLM;  each chunk → refresh lastProgressAtMs + append llm-response-chunk
+     ├─ success → append [assistant message, settled{succeeded}, token usage]   <i>one atomic write, key settle/&lt;offset&gt;</i>
+     ├─ error   → cancelled? do nothing (someone else ended it)
+     │           else <b>#appendAttemptFailure</b>
+     └─ finally → free the record (if still mine)
+
+<b>#appendAttemptFailure</b>   <i>the shared "write a failed ending" — used by attempt-error and watchdog</i>
+├─ attempt number = failures-so-far + 1              <i>read from replayed state, not a counter in memory</i>
+└─ atomic append, dedupe key settle/&lt;offset&gt;:
+     llm-request-settled { failed, errorMessage }
+     stream/error-occurred { "…failed (attempt N of 3): … Retrying." }
+</pre>
+    </div>
+
+    <div class="layout">
+      <main id="scenarios"></main>
+      <aside class="rendered" id="rendered">
+        <h3 id="rtitle">Log entry + state</h3>
+        <div class="cmhost" id="cmhost"></div>
+      </aside>
+    </div>
+
+    <div class="story" style="padding-bottom: 3rem">
+      <details class="more">
+        <summary>Appendix: why this shape and not the obvious alternatives</summary>
+        <ul>
+          <li>
+            <b>Why not just give the LLM call a timeout?</b> Because the failure case that hurt was
+            a severed network path whose promise never resolves and which ignores cancellation. Any
+            fix that waits on that promise inherits its hang. The watchdog ends the request from the
+            outside, without ever awaiting the attempt.
+          </li>
+          <li>
+            <b>Why 45 seconds?</b> A slow model legitimately pauses between chunks; killing it too
+            eagerly costs a retry (10–60s wasted). Too lazily, and users stare at a spinner. 45s
+            clears every observed healthy pause, and a false trip is cheap because retries are safe
+            by construction.
+          </li>
+          <li>
+            <b>Why is an in-memory watchdog acceptable in a nothing-lives-in-memory codebase?</b>
+            Because it protects something equally in-memory. Both die together; the keepalive + log
+            replay resurrect both together. Durability is only required for facts, and the
+            watchdog's one fact — "this attempt failed" — is written to the log at the moment it
+            matters.
+          </li>
+          <li>
+            <b>Why are retries new requests instead of re-running the old one?</b> Same reason as
+            everything: the log is the truth. A new request entry gives the retry its own name, its
+            own visible history, and its own ending — replay tells the whole story without hidden
+            state.
+          </li>
+        </ul>
+      </details>
+    </div>
+
+    <script>
+      const S = [];
+      function sc(title, hat, intro, events) {
+        S.push({ title, hat, intro, events });
+      }
+      function ev(t, off, type, badges, note, cls, yaml, state) {
+        return { t, off, type, badges, note, cls, yaml, state };
+      }
+      function gap(text) {
+        return { gap: text };
+      }
+
+      sc(
+        "Happy path",
+        "~2 seconds, watchdog never speaks",
+        "A message, an answer. Watch the two tasks: the watchdog arms, sleeps, and exits without doing anything.",
+        [
+          ev(
+            "0.000s",
+            44,
+            "llm-request-requested",
+            ["the request — name = @44"],
+            "The durable 'someone owes an answer'. The next obligations check sees it open with no attempt running, and dials.",
+            "",
+            "type: agent/llm-request-requested\npayload: { model: … }\n# offset 44 is this request's name forever",
+            "log: request @44 open\nmemory: nothing yet",
+          ),
+          ev(
+            "0.050s",
+            "—",
+            "run() — two tasks start",
+            ["task ① watchdog", "task ② attempt"],
+            "One shared record: { requestOffset: 44, controller, lastProgressAtMs: now }. The watchdog sleeps toward now+45s; the attempt dials the LLM.",
+            "",
+            "# in-memory only — never journaled\ninFlight:\n  requestOffset: 44\n  lastProgressAtMs: t0",
+            "watchdog: sleeping\nattempt: calling the LLM",
+          ),
+          ev(
+            "0.400s",
+            45,
+            "llm-response-chunk ×12",
+            ["each one refreshes lastProgressAtMs"],
+            "Chunks stream back. Every chunk lands in the log AND pushes the watchdog's deadline forward — a slow-but-talking model is never killed.",
+            "good",
+            "type: agent/llm-response-chunk\npayload: { chunk, llmRequestOffset: 44, sequence: 0 }",
+            "watchdog deadline: keeps moving right",
+          ),
+          ev(
+            "1.900s",
+            58,
+            "llm-request-settled { succeeded }",
+            ["ending written by task ②", "key settle/44"],
+            "One atomic write: the assistant's message, the ending, token usage. The attempt's finally frees the record; the watchdog's next loop check sees the record is gone and exits silently. It never wrote a thing.",
+            "good",
+            "type: agent/llm-request-settled\npayload: { requestOffset: 44, result: { status: succeeded } }\nidempotencyKey: agent/settle/44",
+            "log: request @44 CLOSED, exactly one ending\nmemory: empty again",
+          ),
+        ],
+      );
+
+      sc(
+        "The hang — why the watchdog exists",
+        "45s to recovery instead of 15min",
+        "The network path to the LLM is severed mid-call. The promise will never resolve and ignores cancellation. Before this PR, this state could last 15 minutes.",
+        [
+          ev(
+            "0.0s",
+            44,
+            "llm-request-requested",
+            [],
+            "Dial as before.",
+            "",
+            "type: agent/llm-request-requested",
+            "both tasks running",
+          ),
+          ev(
+            "1.3s",
+            63,
+            "llm-response-chunk (the last one)",
+            ["lastProgressAtMs = 1.3s"],
+            "19 chunks arrive in ~1.3s, then the wire goes dead.",
+            "",
+            "type: agent/llm-response-chunk",
+            "watchdog deadline: 46.3s",
+          ),
+          gap(
+            "44 seconds of nothing. Task ② is parked on a promise that will never settle. Crucially: it writes NO log entry — and log entries are the only thing that wakes the obligations check. Without the watchdog, this is the wedge: open request, silent log, spinner.",
+          ),
+          ev(
+            "46.3s",
+            "—",
+            "watchdog trips",
+            ["no progress ≥ 45s", "append FIRST, cancel second"],
+            "Task ① wakes, sees 45s of silence, and calls #appendAttemptFailure — writing the ending BEFORE cancelling, so an ending is durably decided before anything is torn down.",
+            "bad",
+            "# decision, in memory:\nidle: 45s ≥ budget\n1: #appendAttemptFailure   # fight for key settle/44\n2: abandonExpired(44)      # cancel + free the record\n3: return",
+            "task ② never learns anything — it stays parked;\nits cancel-signal now blocks any late write it tries",
+          ),
+          ev(
+            "46.4s",
+            65,
+            "llm-request-settled { failed } + error line",
+            ["attempt 1 of 3 … Retrying."],
+            "The failed ending replays through the state recompute: request closed, failure count 1, 'we owe another try' noted. This very entry is also the delivery that wakes the obligations check. Nobody called a retry function — the log write IS the retry trigger.",
+            "good",
+            'type: agent/llm-request-settled\npayload:\n  requestOffset: 44\n  result:\n    status: failed\n    errorMessage: "no response progress for 45s (attempt presumed severed or stalled)"\nidempotencyKey: agent/settle/44',
+            "replayed state:\n  open request: none\n  failures: 1 (of max 3)\n  owed: a new try, after a 10s pause",
+          ),
+          ev(
+            "56.7s",
+            66,
+            "llm-request-requested (NEW, @66)",
+            ["the retry — a fresh request"],
+            "After the 10s ladder pause, a new request opens under its own name. run() again: fresh record, fresh attempt, fresh watchdog. If this one hangs too — same dance, 20s pause next.",
+            "good",
+            "type: agent/llm-request-requested\n# retries are new requests: the log tells the\n# whole story with no hidden state",
+            "the test pinning this: agent-llm-stall.test.ts",
+          ),
+        ],
+      );
+
+      sc(
+        "The machine dies — both tasks vanish, nothing is lost",
+        "real timestamps, preview_6 2026-08-27",
+        "Cloudflare kills the Durable Object mid-attempt. Everything in memory — record, attempt, watchdog — is simply gone.",
+        [
+          ev(
+            "13:41:19.9",
+            44,
+            "llm-request-requested",
+            [],
+            "Turn dials; both tasks live in this machine.",
+            "",
+            "type: agent/llm-request-requested",
+            "log: @44 open · memory: record + 2 tasks",
+          ),
+          ev(
+            "13:41:30",
+            "—",
+            "eviction",
+            ["memory wiped"],
+            "No goodbye, no log entry. But the log still says: requested, never settled. That durable fact is the entire recovery plan.",
+            "bad",
+            "# nothing is written — the machine is just gone",
+            "log: @44 still open (truth survives)\nmemory: nothing",
+          ),
+          ev(
+            "13:41:51.4",
+            162,
+            "stream/processor-revived",
+            ["keepalive reboot", "a delivery!"],
+            "The heartbeat notices, boots a replacement, and appends this entry — which wakes the obligations check: '@44 open, nobody running it' → adopt → run() → new attempt AND new watchdog. The watchdog being in-memory cost nothing: it died with its patient and was reborn with it.",
+            "good",
+            "type: stream/processor-revived",
+            "attempt #2 dialing — over a network path that\nis STILL broken (that's why the machine died)",
+          ),
+          gap(
+            "Before this PR: the hung re-dial wrote nothing, so recovery waited for lucky unrelated log entries — 150-183s per reply measured on preview. With the watchdog:",
+          ),
+          ev(
+            "13:42:36",
+            "—",
+            "watchdog #2 trips at 45s",
+            ["bounded: 45s + ladder pause per severed attempt"],
+            "Failure written, ladder engaged, attempt #3 dials whichever path is healthy by then.",
+            "good",
+            "# with #2532: settled{failed} + a new request here",
+            "worst case per severance: 45s + one ladder rung\n(previously: unbounded, up to ~15min)",
+          ),
+        ],
+      );
+
+      sc(
+        "The photo finish — two writers, one ending",
+        "why nothing can double-settle",
+        "The attempt completes after 44.9s of silence; the watchdog wakes at 45.0s. Both try to end request @44.",
+        [
+          ev(
+            "44.9s",
+            58,
+            "llm-request-settled { succeeded }",
+            ["task ② commits first"],
+            "The success batch lands under key settle/44.",
+            "good",
+            "idempotencyKey: agent/settle/44   # committed — the key is now taken",
+            "log: one ending, succeeded",
+          ),
+          ev(
+            "45.0s",
+            "—",
+            "watchdog wakes — and loses politely",
+            ["dedupe key + no-op cancel"],
+            "Usually its loop guard already sees the record freed and exits. Even if it races past that: its append finds settle/44 taken → ignored; its cancel hits an already-finished attempt → nothing. The append-before-cancel ordering guarantees it can never have cancelled a healthy attempt without an ending existing somewhere.",
+            "",
+            "# loser's writes:\nappend settled{failed} → key taken → silently dropped\nabandonExpired(44)    → record already freed → no-op",
+            "log: STILL exactly one ending.\nThis invariant holds for all five possible enders:\nsuccess, error, watchdog, user interrupt, 10-min backstop",
+          ),
+        ],
+      );
+
+      const main = document.getElementById("scenarios");
+      let cm = null,
+        selected = null;
+      S.forEach((s, si) => {
+        const sec = document.createElement("section");
+        sec.className = "scenario";
+        sec.innerHTML = `<h2>${si + 1}. ${s.title} <span class="hat">— ${s.hat}</span></h2><p>${s.intro}</p>`;
+        s.events.forEach((item) => {
+          if (item.gap) {
+            const g = document.createElement("div");
+            g.className = "gap";
+            g.innerHTML = item.gap;
+            sec.appendChild(g);
+            return;
+          }
+          const d = document.createElement("div");
+          d.className = "ev " + (item.cls || "");
+          d.innerHTML = `<div class="row"><span class="off">@${item.off}</span><span class="type">${item.type}</span>${(item.badges || []).map((b) => `<span class="badge">${b}</span>`).join("")}<span class="t">${item.t}</span></div><div class="note">${item.note}</div>`;
+          d.addEventListener("click", () => {
+            if (selected) selected.classList.remove("selected");
+            selected = d;
+            d.classList.add("selected");
+            document.getElementById("rtitle").innerHTML =
+              `<span style="color:var(--accent)">@${item.off}</span> ${item.type} <span style="color:var(--muted);font-weight:400">· ${s.title}</span>`;
+            cm.setValue("# log entry\n" + item.yaml + "\n\n# who holds what, after\n" + item.state);
+          });
+          sec.appendChild(d);
+        });
+        main.appendChild(sec);
+      });
+      cm = CodeMirror(document.getElementById("cmhost"), {
+        value: "click an event card →",
+        mode: "yaml",
+        readOnly: true,
+        lineNumbers: false,
+        lineWrapping: true,
+      });
+    </script>
+  </body>
+</html>

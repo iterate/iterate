@@ -1,16 +1,13 @@
 import { expect, type WebSocketRoute } from "@playwright/test";
 import { spinnerWaiter } from "middlewright";
-import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
 test("empty agent feeds distinguish waiting from filtered zero matches", async ({
-  baseURL,
   helpers,
   page,
 }) => {
   await using fixture = await helpers.createFixture("agent-initializing");
-  using admin = await connectAdminItx(baseURL!);
-  using project = admin.projects.get(fixture.project.id);
+  using project = await fixture.projectItx();
   const agentPath = `/agents/waiting-${crypto.randomUUID().slice(0, 8)}`;
   using agent = project.agents.get(agentPath);
 
@@ -54,13 +51,11 @@ test("empty agent feeds distinguish waiting from filtered zero matches", async (
 });
 
 test("a cold stream stays pending until its server history catches up", async ({
-  baseURL,
   helpers,
   page,
 }) => {
   await using fixture = await helpers.createFixture("stream-cold-history");
-  using admin = await connectAdminItx(baseURL!);
-  using project = admin.projects.get(fixture.project.id);
+  using project = await fixture.projectItx();
   const streamPath = `/spec/cold-history-${crypto.randomUUID().slice(0, 8)}`;
   using stream = project.streams.get(streamPath);
   await stream.append({ type: "events.iterate.com/spec/cold-history", payload: {} });
@@ -86,10 +81,9 @@ test("a cold stream stays pending until its server history catches up", async ({
     .waitFor({ timeout: 30_000 }); // timeout: same deliberate 1s-per-frame WS throttle, outside the spinner-waiter's remit
 });
 
-test("a cached stream opens before its live connection", async ({ baseURL, helpers, page }) => {
+test("a cached stream opens before its live connection", async ({ helpers, page }) => {
   await using fixture = await helpers.createFixture("stream-cache");
-  using admin = await connectAdminItx(baseURL!);
-  using project = admin.projects.get(fixture.project.id);
+  using project = await fixture.projectItx();
   const streamPath = `/spec/cache-before-live-${crypto.randomUUID().slice(0, 8)}`;
   using stream = project.streams.get(streamPath);
   await stream.append({

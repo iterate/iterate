@@ -33,6 +33,7 @@
 // the end state. `apps/os/scripts/generate-itx-examples.ts` (the examples
 // catalogue generator) is the first step on that path.
 
+import { measureE2ePhase } from "@iterate-com/shared/test-support/measure-e2e-phase";
 import type { CapabilityHost, Project } from "../../src/itx-api.generated.ts";
 
 /** Anything that can run an `async (itx) => …` script: `project.capabilityHost`,
@@ -41,15 +42,26 @@ export type RunScriptHost = Pick<CapabilityHost, "runScript">;
 
 /** A typed script builder against one capability-host scope. The default
  * script-side `itx` surface is the project handle; widen it for dynamic
- * capabilities with `.context<...>()`. */
-export function itxScript(host: RunScriptHost) {
-  return new ItxScriptBuilder<Project, {}>(host, {});
+ * capabilities with `.context<...>()`. Pass `annotate` (the vitest fixture)
+ * and NAMED script functions get an e2e phase measurement automatically —
+ * `execute(async function reuseViaSettledOffset(itx) { … })` shows up as
+ * the "reuse via settled offset" phase with no wrapper boilerplate. */
+export function itxScript(host: RunScriptHost, options: { annotate?: MeasureAnnotate } = {}) {
+  return new ItxScriptBuilder<Project, {}>(host, {}, options.annotate);
+}
+
+type MeasureAnnotate = Parameters<typeof measureE2ePhase>[0];
+
+/** "reuseViaSettledOffset" -> "reuse via settled offset" for phase labels. */
+function phaseNameFromFunctionName(name: string): string {
+  return name.replaceAll(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase();
 }
 
 export class ItxScriptBuilder<Ctx, Vars extends Record<string, unknown>> {
   constructor(
     readonly host: RunScriptHost,
     readonly scriptVars: Vars,
+    readonly annotate?: MeasureAnnotate,
   ) {}
 
   /** Type-only: extend (or replace) the script-side `itx` surface — e.g. a
@@ -65,7 +77,11 @@ export class ItxScriptBuilder<Ctx, Vars extends Record<string, unknown>> {
    * second parameter. The only sound way to get test-file values in — the
    * function cannot close over them. */
   vars<NewVars extends Record<string, unknown>>(vars: NewVars) {
-    return new ItxScriptBuilder<Ctx, Vars & NewVars>(this.host, { ...this.scriptVars, ...vars });
+    return new ItxScriptBuilder<Ctx, Vars & NewVars>(
+      this.host,
+      { ...this.scriptVars, ...vars },
+      this.annotate,
+    );
   }
 
   /** The exact `async (itx) => …` source `execute()` would run, plus phantom
@@ -98,7 +114,16 @@ export class ItxScriptBuilder<Ctx, Vars extends Record<string, unknown>> {
   }
 
   async execute<Result>(fn: (itx: Ctx, vars: Vars) => Promise<Result>) {
-    return await this.#run<Result>(this.define(fn).code);
+    const run = () => this.#run<Result>(this.define(fn).code);
+    if (this.annotate && fn.name) {
+      return await measureE2ePhase(
+        this.annotate,
+        phaseNameFromFunctionName(fn.name),
+        "operation",
+        run,
+      );
+    }
+    return await run();
   }
 
   /**

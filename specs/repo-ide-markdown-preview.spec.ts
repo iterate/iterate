@@ -1,4 +1,3 @@
-import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 import { openRepoTreeFile } from "./test-support/repo-tree.ts";
 
@@ -8,15 +7,10 @@ import { openRepoTreeFile } from "./test-support/repo-tree.ts";
  * from the live working-tree text. Toggling back to Code returns the editable
  * CodeMirror buffer.
  */
-test("toggle a markdown file between Code and its rendered Preview", async ({
-  helpers,
-  page,
-  baseURL,
-}) => {
+test("toggle a markdown file between Code and its rendered Preview", async ({ helpers, page }) => {
   await using fixture = await helpers.createFixture("repo-ide-md");
 
-  using itx = await connectAdminItx(baseURL!);
-  using project = itx.projects.get(fixture.project.id);
+  using project = await fixture.projectItx();
   await project.repos.get("/repos/ide").create({ type: "empty" });
   // Seed a small markdown file rather than opening the large template README:
   // a short buffer settles CodeMirror well inside the tight action budget, so

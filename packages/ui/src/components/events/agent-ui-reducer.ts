@@ -32,6 +32,10 @@ export type AgentUiLlmStep = {
   thinkingText: string;
   /** Streamed response text — for code-mode agents this is source code. */
   responseText: string;
+  /** responseText split at chunk-event boundaries (one entry per coalesced
+   * window), so the UI can stagger each window's tokens into view instead of
+   * jumping ~8 tokens per event. Concatenation always equals responseText. */
+  responseWindows: string[];
   /** Offset of the committed assistant context-added event carrying this
    * step's final text; links interpretation events back to the step. */
   assistantEventOffset?: number;
@@ -368,6 +372,7 @@ const AgentUiLlmStepSchema = z
     model: z.string().optional(),
     thinkingText: z.string(),
     responseText: z.string(),
+    responseWindows: z.array(z.string()),
     assistantEventOffset: z.number().int().positive().optional(),
     interpreted: z.boolean().optional(),
     inputTokens: z.number().int().nonnegative().optional(),
@@ -591,7 +596,7 @@ const AGENT_LLM_REQUEST_REQUESTED = "events.iterate.com/agent/llm-request-reques
 const AGENT_LLM_REQUEST_SETTLED = "events.iterate.com/agent/llm-request-settled";
 const AGENT_CONTEXT_ADDED = "events.iterate.com/agents/context-added";
 const AGENT_TOKEN_USAGE_REPORTED = "events.iterate.com/agent/token-usage-reported";
-const AGENT_LLM_RESPONSE_CHUNK = "events.iterate.com/agent/llm-response-chunk";
+const AGENT_LLM_RESPONSE_CHUNKS = "events.iterate.com/agent/llm-response-chunks";
 const SCRIPT_EXECUTION_REQUESTED = "events.iterate.com/capability-host/script-run-requested";
 const SCRIPT_EXECUTION_COMPLETED = "events.iterate.com/capability-host/script-run-settled";
 const SLACK_WEBHOOK_RECEIVED = "events.iterate.com/slack/webhook-received";
@@ -656,7 +661,22 @@ function reduceAgentUiEvent(
         if (llmRequestOffset == null) return contextState;
         return updateLlmStep(contextState, llmRequestOffset, (step) =>
           step.status === "running"
-            ? { ...step, responseText: text, assistantEventOffset: event.offset }
+            ? {
+                ...step,
+                responseText: text,
+                // Keep the reveal windows covering the full text: a swallowed
+                // tail flush leaves the last window's tokens unjournaled, and
+                // the live prose renders from windows. Extend with the missing
+                // suffix; on any divergence the committed text replaces the
+                // windows wholesale.
+                responseWindows:
+                  text === step.responseText
+                    ? step.responseWindows
+                    : text.startsWith(step.responseText)
+                      ? [...step.responseWindows, text.slice(step.responseText.length)]
+                      : [text],
+                assistantEventOffset: event.offset,
+              }
             : step,
         );
       }
@@ -746,21 +766,34 @@ function reduceAgentUiEvent(
         ...(model == null ? {} : { model }),
         thinkingText: "",
         responseText: "",
+        responseWindows: [],
         startedAtMs: timestampMs,
       };
       return { ...ready, live: { ...live, steps: [...live.steps, step] } };
     }
 
-    case AGENT_LLM_RESPONSE_CHUNK: {
+    case AGENT_LLM_RESPONSE_CHUNKS: {
       const llmRequestOffset = readLlmRequestOffset(event);
-      const chunk = readPayloadRecord(event)?.chunk;
       if (llmRequestOffset == null) return state;
-      const { responseDelta, thinkingDelta } = extractCloudflareChunkDeltas(chunk);
+      const payload = readPayloadRecord(event);
+      // One coalesced window: the provider chunks it carries, in order.
+      const chunks = Array.isArray(payload?.chunks) ? payload.chunks : [];
+      let responseDelta = "";
+      let thinkingDelta = "";
+      for (const chunk of chunks) {
+        const deltas = extractCloudflareChunkDeltas(chunk);
+        responseDelta += deltas.responseDelta;
+        thinkingDelta += deltas.thinkingDelta;
+      }
       if (responseDelta === "" && thinkingDelta === "") return state;
       return updateLlmStep(state, llmRequestOffset, (step) => ({
         ...step,
         responseText:
           step.status === "running" ? step.responseText + responseDelta : step.responseText,
+        responseWindows:
+          step.status === "running" && responseDelta !== ""
+            ? [...step.responseWindows, responseDelta]
+            : step.responseWindows,
         thinkingText:
           step.status === "running" ? step.thinkingText + thinkingDelta : step.thinkingText,
       }));
@@ -791,8 +824,20 @@ function reduceAgentUiEvent(
               status: "done",
               outcome:
                 status === "succeeded" ? "completed" : status === "failed" ? "failed" : "cancelled",
-              ...(partialText !== null &&
-                step.responseText === "" && { responseText: partialText }),
+              // partialText is the authoritative superset: it accrued per
+              // provider chunk, while responseText only holds FLUSHED windows
+              // — an interrupt can strand up to one coalescing window's tail
+              // in the buffer. Adopt it whenever it extends what streamed;
+              // the suffix becomes a final window so the reveal animates it.
+              ...(partialText &&
+                partialText.length > step.responseText.length &&
+                partialText.startsWith(step.responseText) && {
+                  responseText: partialText,
+                  responseWindows: [
+                    ...step.responseWindows,
+                    partialText.slice(step.responseText.length),
+                  ],
+                }),
               ...(typeof payload.durationMs === "number"
                 ? { durationMs: payload.durationMs }
                 : status === "cancelled"

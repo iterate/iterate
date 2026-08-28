@@ -1,5 +1,4 @@
 import { expect, type Page } from "@playwright/test";
-import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
 // Post-append delivery waits get an explicit backstop in addition to the
@@ -123,7 +122,6 @@ test("reactivity page delivers an appended event to another open tab", async ({
 });
 
 test("reactivity page processor panel goes live and repaints from a server push", async ({
-  baseURL,
   helpers,
   page,
 }) => {
@@ -142,8 +140,7 @@ test("reactivity page processor panel goes live and repaints from a server push"
   // Birth a brand-new child stream SERVER-SIDE (no page interaction at all):
   // that changes the project's folded state (streams[]), and the server must
   // push the new fold into the open page.
-  using adminSession = await connectAdminItx(baseURL!);
-  using adminProject = adminSession.projects.get(projectFixture.project.id);
+  using adminProject = await projectFixture.projectItx();
   using stream = adminProject.streams.get(`/spec-processor-push/${Date.now().toString(36)}`);
   await stream.append({
     type: "events.iterate.test/spec/processor-push",

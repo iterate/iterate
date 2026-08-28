@@ -146,7 +146,7 @@ function makeAgentHarness(substrate?: HarnessSubstrate, extraDeps?: Partial<Agen
 const REQUESTED = "events.iterate.com/agent/llm-request-requested";
 const SETTLED = "events.iterate.com/agent/llm-request-settled";
 const CONTEXT_ADDED = "events.iterate.com/agents/context-added";
-const RESPONSE_CHUNK = "events.iterate.com/agent/llm-response-chunk";
+const RESPONSE_CHUNKS = "events.iterate.com/agent/llm-response-chunks";
 
 // =============================================================================
 // The turn lifecycle
@@ -211,21 +211,106 @@ describe("AgentProcessor turn lifecycle", () => {
     expect(h.state().tokenUsage).toMatchObject({ totalInputTokens: 10, totalOutputTokens: 2 });
   });
 
-  it("backpressures streamed response chunks so append order stays provider order", async () => {
+  it("coalesces streamed chunks into windowed llm-response-chunks events, tail flushed before settle", async () => {
     const h = makeAgentHarness();
     await h.play(
       ["append", ...NEW_AGENT_EVENTS, userMessage("Stream some code")],
       ["advanceTime", 10_000],
     );
 
+    // Time-to-first-token elapses the window, so the FIRST chunk journals
+    // immediately — the reader sees the first token without waiting out a
+    // fresh coalescing window.
+    await h.play(["advanceTime", 1000]);
+    await h.play(() => h.llm.calls[0]!.onChunk?.("const "));
+    expect(h.events(RESPONSE_CHUNKS)).toMatchObject([
+      { payload: { chunks: ["const "], sequence: 0 } },
+    ]);
+
+    // Inside the window: buffered, nothing journaled.
+    await h.play(() => h.llm.calls[0]!.onChunk?.("answer"));
+    await h.play(() => h.llm.calls[0]!.onChunk?.(" = "));
+    expect(h.events(RESPONSE_CHUNKS)).toHaveLength(1);
+
+    // The window elapses → the next chunk carries the whole buffer out, in
+    // provider order.
+    await h.play(["advanceTime", 200]);
+    await h.play(() => h.llm.calls[0]!.onChunk?.("42"));
+    expect(h.events(RESPONSE_CHUNKS)).toMatchObject([
+      { payload: { chunks: ["const "], sequence: 0 } },
+      { payload: { chunks: ["answer", " = ", "42"], sequence: 1 } },
+    ]);
+
+    // A buffered tail is flushed before the settle commits.
+    await h.play(() => h.llm.calls[0]!.onChunk?.(";"));
+    await h.play(() => h.llm.respond("const answer = 42;"));
+    expect(h.events(RESPONSE_CHUNKS)).toMatchObject([
+      { payload: { sequence: 0 } },
+      { payload: { sequence: 1 } },
+      { payload: { chunks: [";"], sequence: 2 } },
+    ]);
+    expect(h.events(SETTLED)).toMatchObject([{ payload: { result: { status: "succeeded" } } }]);
+  });
+
+  it("flushes a window early when its buffered bytes exceed the size cap", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("Stream something huge")],
+      ["advanceTime", 10_000],
+    );
+
+    await h.play(["advanceTime", 1000]);
+    await h.play(() => h.llm.calls[0]!.onChunk?.("small"));
+    // Same virtual instant as the flush above — only the size cap can fire.
+    await h.play(() => h.llm.calls[0]!.onChunk?.("x".repeat(70_000)));
+    expect(h.events(RESPONSE_CHUNKS)).toMatchObject([
+      { payload: { chunks: ["small"], sequence: 0 } },
+      { payload: { sequence: 1 } },
+    ]);
+    await h.play(() => h.llm.respond("done"));
+  });
+
+  it("a failed tail flush is swallowed: the completed turn still settles succeeded", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("Stream some code")],
+      ["advanceTime", 11_000],
+    );
+
     const realAppend = h.stream.append.bind(h.stream);
-    let releaseFirstChunk = () => {};
-    const firstChunkHeld = new Promise<void>((resolve) => {
-      releaseFirstChunk = resolve;
+    h.stream.append = async (...inputs) => {
+      const flush = inputs.find((input) => input.type === RESPONSE_CHUNKS);
+      // The tail flush (sequence 1) dies; the ephemeral signal is lost, the
+      // completed turn must not be.
+      if (flush?.payload?.sequence === 1) throw new Error("journal hiccup");
+      return realAppend(...inputs);
+    };
+
+    await h.play(() => h.llm.calls[0]!.onChunk?.("const answer = "));
+    await h.play(() => h.llm.calls[0]!.onChunk?.("42;"));
+    await h.play(() => h.llm.respond("const answer = 42;"));
+
+    expect(h.events(RESPONSE_CHUNKS)).toMatchObject([{ payload: { sequence: 0 } }]);
+    expect(h.events(SETTLED)).toMatchObject([
+      { payload: { result: { status: "succeeded", text: "const answer = 42;" } } },
+    ]);
+  });
+
+  it("backpressures chunk flushes so append order stays provider order", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("Stream some code")],
+      ["advanceTime", 11_000],
+    );
+
+    const realAppend = h.stream.append.bind(h.stream);
+    let releaseFirstFlush = () => {};
+    const firstFlushHeld = new Promise<void>((resolve) => {
+      releaseFirstFlush = resolve;
     });
     h.stream.append = async (...inputs) => {
-      const chunk = inputs.find((input) => input.type === RESPONSE_CHUNK);
-      if (chunk?.payload?.sequence === 0) await firstChunkHeld;
+      const flush = inputs.find((input) => input.type === RESPONSE_CHUNKS);
+      if (flush?.payload?.sequence === 0) await firstFlushHeld;
       return realAppend(...inputs);
     };
 
@@ -235,13 +320,17 @@ describe("AgentProcessor turn lifecycle", () => {
     })();
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    // The transport must not deliver chunk 2 while chunk 1 is still appending.
-    expect(h.events(RESPONSE_CHUNK)).toEqual([]);
+    // The transport must not deliver chunk 2 while flush 1 is still appending.
+    expect(h.events(RESPONSE_CHUNKS)).toEqual([]);
 
-    releaseFirstChunk();
+    releaseFirstFlush();
     await streaming;
-    await h.settle();
-    expect(h.events(RESPONSE_CHUNK).map((event) => event.payload.sequence)).toEqual([0, 1]);
+    await h.play(() => h.llm.respond("const answer = 42;"));
+    expect(h.events(RESPONSE_CHUNKS).map((event) => event.payload.sequence)).toEqual([0, 1]);
+    expect(h.events(RESPONSE_CHUNKS).map((event) => event.payload.chunks)).toEqual([
+      ["const answer = "],
+      ["42;"],
+    ]);
   });
 
   it("debounce coalesces a burst: two inputs, ONE open request covering both", async () => {
@@ -799,33 +888,29 @@ describe("AgentProcessor recovery", () => {
     ]);
   });
 
-  it("expiry: a WEDGED in-flight attempt is abandoned at the horizon — the live incarnation settles expired instead of deferring to a hung promise forever", async () => {
+  it("expiry: a WEDGED in-flight attempt is settled failed by the progress watchdog long before the horizon", async () => {
     // The 2026-08-13 prd incident: the attempt hung (an un-deadlined await in
     // the run closure), the incarnation stayed alive on constant unrelated
     // deliveries, and the expiry branch deferred to isExecuting() for 28
-    // minutes. No crash here, deliberately — the same incarnation that dialed
-    // must expire its own wedge.
+    // minutes. #2498 made the horizon expiry unconditional (the adopt test
+    // above still covers it); the attempt-progress watchdog now catches the
+    // same wedge at 45s idle and settles it FAILED — handing the turn to the
+    // retry ladder instead of burning ten minutes to a cancelled/expired.
+    // No crash here, deliberately — the same incarnation that dialed must
+    // settle its own wedge.
     const h = makeAgentHarness();
     await h.play(["append", ...NEW_AGENT_EVENTS, userMessage("Hello")], ["advanceTime", 10_000]);
     expect(h.llm.calls).toHaveLength(1); // dialed and hung; the test never settles it
 
-    await h.play(
-      () => {
-        h.clock.now += 10 * 60_000 + 1;
-      },
-      // Any delivery at head (a watcher presence event in prd) re-runs the
-      // at-head pass; the expiry settle must not need an eviction first.
-      () => h.stream.append(REVIVED),
-    );
-
-    expect(h.events(SETTLED)).toMatchObject([
-      { payload: { result: { status: "cancelled", reason: "expired" } } },
-    ]);
-    expect(h.state().openRequest).toBeNull();
+    await h.play(["advanceTime", 46_000]);
+    expect(h.events(SETTLED)).toMatchObject([{ payload: { result: { status: "failed" } } }]);
     // The hung zombie was aborted, so it can neither keep streaming chunks
-    // nor journal a competing settlement; and the horizon never re-dials.
+    // nor journal a competing settlement.
     expect(h.llm.calls[0]!.signal.aborted).toBe(true);
-    expect(h.llm.calls).toHaveLength(1);
+    // The failed settle re-arms the fold's retry: the ladder re-dials after
+    // debounce + backoff, instead of the turn dying at the horizon.
+    await h.play(["advanceTime", 30_000]);
+    expect(h.llm.calls.length).toBeGreaterThanOrEqual(2);
   });
 
   it("a transient outage on the settlement append does not lose the turn", async () => {
@@ -1026,7 +1111,9 @@ describe("AgentProcessor failure policy", () => {
 
     // The fold's own retry (debounce + backoff) succeeds → streak zero — the
     // other half of the breaker arithmetic next to the user-input reset.
-    await h.play(["advanceTime", 120_000]);
+    // Advance just past the retry window and answer promptly: a manual-respond
+    // attempt left idle 45s+ would (correctly) trip the progress watchdog.
+    await h.play(["advanceTime", h.state().config.llmRequestDebounceMs + 10_000]);
     expect(h.llm.calls).toHaveLength(2);
     await h.play(() => h.llm.respond("ok"));
     expect(h.state().consecutiveLlmFailures).toBe(0);
@@ -1259,9 +1346,11 @@ describe("AgentProcessor script execution", () => {
     // Raw string result: no json fence label, no JSON escaping.
     expect(rendered!.payload.content).not.toContain("```json");
 
-    // A small result later does not spill.
+    // A small result later does not spill. (30s, not more: the follow-up
+    // attempt dials early in this window and a manual-respond attempt idle
+    // 45s+ would trip the progress watchdog.)
     const writesBefore = written.length;
-    await h.play(["advanceTime", 60_000], () =>
+    await h.play(["advanceTime", 30_000], () =>
       h.llm.respond("```ts\nasync (itx) => itx.small()\n```"),
     );
     const secondExecution = h.events("events.iterate.com/capability-host/script-run-requested")[1]!
@@ -2077,16 +2166,16 @@ describe("AgentProcessor stream facts", () => {
     expect(h.llm.calls[1]!.model).toBe("better-model");
   });
 
-  it("llm-response-chunk is FORCIBLY ephemeral: absent defaults in, explicit false is rejected", () => {
+  it("llm-response-chunks is FORCIBLY ephemeral: absent defaults in, explicit false is rejected", () => {
     const built = AgentProcessorContract.buildEvent({
-      type: "events.iterate.com/agent/llm-response-chunk",
-      payload: { chunk: { response: "hi" }, llmRequestOffset: 1, sequence: 0 },
+      type: "events.iterate.com/agent/llm-response-chunks",
+      payload: { chunks: [{ response: "hi" }], llmRequestOffset: 1, sequence: 0 },
     });
     expect(built).toMatchObject({ ephemeral: true });
     expect(() =>
       AgentProcessorContract.buildEvent({
-        type: "events.iterate.com/agent/llm-response-chunk",
-        payload: { chunk: { response: "hi" }, llmRequestOffset: 1, sequence: 0 },
+        type: "events.iterate.com/agent/llm-response-chunks",
+        payload: { chunks: [{ response: "hi" }], llmRequestOffset: 1, sequence: 0 },
         // The envelope type already forbids `false` (`ephemeral?: true`); the
         // runtime parse must too, for untyped raw appends.
         // @ts-expect-error
@@ -2148,60 +2237,19 @@ describe("AgentProcessor stream facts", () => {
 // =============================================================================
 
 describe("AgentProcessor slash commands", () => {
-  it("a resolving /script runs deterministically and delegates its result append to the script", async () => {
+  it("a resolving /example runs deterministically and renders its successful settlement", async () => {
     const h = makeAgentHarness();
     await h.play(
-      ["append", ...NEW_AGENT_EVENTS, userMessage("/script await itx.__describe()")],
+      ["append", ...NEW_AGENT_EVENTS, userMessage("/example describe-project")],
       ["advanceTime", 10_000], // would close the turn debounce if a turn were owed
     );
 
-    const scriptRequests = h.events("events.iterate.com/capability-host/script-run-requested");
-    expect(scriptRequests).toHaveLength(1);
-    const commandOffset = h
-      .events(CONTEXT_ADDED)
-      .find((event) =>
-        (event.payload as { content?: string }).content?.startsWith("/script"),
-      )!.offset;
-    expect(scriptRequests[0]!.payload).toMatchObject({
-      executionId: `slash-command:script:${commandOffset}`,
-    });
-    expect(scriptRequests[0]!.payload.code).toContain(
-      "const result = await (async () => {\nreturn await (itx.__describe()\n);\n})();",
-    );
-    expect(scriptRequests[0]!.payload.code).toContain(
-      "User ran `/script await itx.__describe()` command with the following result",
-    );
-    expect(scriptRequests[0]!.payload.code).toContain(
-      'llmRequestPolicy: { behaviour: "interrupt-current-request" }',
-    );
-    // The command IS the action — the model's turn comes later, from the
-    // context item appended by the script, not from the command message.
-    expect(h.llm.calls).toHaveLength(0);
-    expect(h.events(REQUESTED)).toHaveLength(0);
-
-    const itemsBeforeSettlement = conversationMessages(h.state()).length;
-    await h.play([
-      "append",
-      {
-        type: "events.iterate.com/capability-host/script-run-settled",
-        payload: {
-          executionId: `slash-command:script:${commandOffset}`,
-          settlement: { status: "succeeded", result: { projectId: "project-1" } },
-        },
-      },
-    ]);
-    // The generated script already appended this result. Its successful
-    // settlement only preserves the value for `results`; it must not append a
-    // second context item.
-    expect(conversationMessages(h.state())).toHaveLength(itemsBeforeSettlement);
-  });
-
-  it("a resolving /example still renders its successful settlement", async () => {
-    const h = makeAgentHarness();
-    await h.play(["append", ...NEW_AGENT_EVENTS, userMessage("/example describe-project")]);
-
     const scriptRequest = h.events("events.iterate.com/capability-host/script-run-requested")[0]!;
     expect(scriptRequest.payload.executionId).toMatch(/^slash-command:example:/);
+    // The command IS the action — the model's turn comes later, from the
+    // rendered settlement, not from the command message.
+    expect(h.llm.calls).toHaveLength(0);
+    expect(h.events(REQUESTED)).toHaveLength(0);
 
     await h.play(
       [
@@ -2226,7 +2274,7 @@ describe("AgentProcessor slash commands", () => {
     expect(h.llm.calls).toHaveLength(1);
   });
 
-  it("a /script mid-turn runs as a side-band action: no interrupt, no lost command", async () => {
+  it("a slash command mid-turn runs as a side-band action: no interrupt, no lost command", async () => {
     const h = makeAgentHarness();
     await h.play(
       ["append", ...NEW_AGENT_EVENTS, userMessage("Hello there")],
@@ -2236,7 +2284,7 @@ describe("AgentProcessor slash commands", () => {
 
     await h.play([
       "append",
-      userMessage("/script await itx.__describe()", { behaviour: "interrupt-current-request" }),
+      userMessage("/example describe-project", { behaviour: "interrupt-current-request" }),
     ]);
 
     // The command ran; the in-flight turn was NOT cancelled by it.
@@ -2275,7 +2323,7 @@ describe("AgentProcessor summary", () => {
         type: "events.iterate.com/agent/summary-updated",
         payload: { waitingFor: "user_input" },
       },
-      userMessage("/script await itx.__describe()"),
+      userMessage("/example describe-project"),
     ]);
     // The command ran (script requested) but the agent still awaits a real
     // answer — no clear was appended.
