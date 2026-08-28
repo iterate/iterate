@@ -104,6 +104,8 @@ on-device box below (pure-JS app change, OTA-able).
 - [x] Mobile unit tests (voice-setup, transcript feed derivation) _191 green across apps/mobile/src/lib_
 - [x] Live e2e: extend voice-roundtrip to assert transcript context items
       land on the colleague stream _passed against prd voicelab-eval in 13s: answer audio + both speakers as `[voice call]` items on the chat_
+- [x] Auto-install the voice template on first call (Misha's PR comment,
+      live from his phone) _voice-setup.ts `ensureVoiceAgentInstalled` + lint-codegen-embedded template (voice-template.generated.ts); absent-only, never a downgrade; ring covers the install_
 - [ ] Morning: on-device — call a chat from its header, watch the chat
       thread fill with the call, hear a status line mid-task
 
@@ -138,3 +140,9 @@ migrating existing per-device streams to chat lines; barge-in tuning.
   the FOLDED failure; the spoken-status gate adopts the race guard) and
   this work became 19.0.0. Force-with-lease push — the stacked-PR reapply
   playbook, nobody had built on this branch.
+- Misha tested live from his phone mid-bedtime and asked (PR comment) for
+  template auto-install instead of the "needs setup" dead-end — done via a
+  codegen-embedded copy of configs/voice-agent committed on first call.
+  Two parser-stack overflows found on the way: a 5600-term string `+`
+  chain broke both esbuild and oxlint; the generated module now emits a
+  flat array join.
