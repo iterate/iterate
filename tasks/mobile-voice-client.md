@@ -17,11 +17,12 @@ Interview log: [mobile-voice-client.interview.md](./mobile-voice-client.intervie
 
 ## Status summary
 
-Implemented and live-proven from Node: the shipped voice modules held a real
-call against prd (say-synthesized speech up, answer audio + durable
-transcript back, 15s round trip). Remaining: the EAS native build (CI, in
-flight) and the ~2am on-phone check via iPhone mirroring. Explainer written
-(explainers/mobile-voice-client.html).
+Done except one box: the physical-phone check. Implemented, unit-tested (16
+tests), live-proven from Node against prd (real answer audio + durable
+transcript, 15s round trip), EAS native build green (7be698bb, install QR in
+PR #2537), all CI green, explainer published. The 02:00 iPhone-mirroring
+attempt was blocked on the screen-control approval dialog — first tap in the
+morning is the capture spike.
 
 ## Decisions (from the interview)
 
@@ -80,7 +81,14 @@ flight) and the ~2am on-phone check via iPhone mirroring. Explainer written
 - [x] Permanent explainer in `explainers/` _(mobile-voice-client.html; servable at iterate.iterate.app/explainers/mobile-voice-client?sha=mobile-voice-client)_ (linked from PR; servable via
       iterate.iterate.app/explainers/…).
 - [ ] ~2am: iPhone-mirroring test — capture spike first (non-empty frames +
-      moving level), then a real conversation.
+      moving level), then a real conversation. _Attempted 02:00: computer-use
+      access to iPhone Mirroring came back user_denied (nobody awake to
+      approve), so the on-phone check is the ONE remaining box. Morning path:
+      scan the full-install QR in PR #2537's body (build 7be698bb), open a
+      project, tap the mic button, say something — then
+      `pnpm cli voicelab transcript --project iterate --path /agents/voice/mobile-<deviceId>`
+      shows what the phone heard. Everything up to the native audio layer is
+      already live-proven from Node._
 
 ## Out of scope
 
