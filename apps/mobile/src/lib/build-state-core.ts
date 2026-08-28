@@ -138,7 +138,15 @@ export function describeBuildState(facts: BuildFacts): BuildState {
       builtBy: facts.stamp.builtBy,
       machine: facts.stamp.machine,
       publishedAt: facts.publishedAt,
-      source: !facts.updatesEnabled ? "metro" : facts.isEmbeddedLaunch ? "embedded" : "ota",
+      // A dev bundle comes off Metro whatever expo-updates reports: on expo
+      // web `isEnabled` is true while every check throws, and calling that
+      // "OTA update" contradicts the update row right below it.
+      source:
+        !facts.updatesEnabled || facts.isDevBundle
+          ? "metro"
+          : facts.isEmbeddedLaunch
+            ? "embedded"
+            : "ota",
     },
     updateId: facts.updateId,
     binary: {

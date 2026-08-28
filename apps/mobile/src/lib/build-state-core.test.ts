@@ -50,7 +50,13 @@ test("a dev bundle reports updates enabled but still can't check", () => {
   const state = describeBuildState(
     facts({ isDevBundle: true, defaultChannel: "spec-chan", channelOverride: "spec-chan" }),
   );
-  expect(state).toMatchObject({ watched: false, update: { kind: "unsupported", why: "dev" } });
+  expect(state).toMatchObject({
+    watched: false,
+    update: { kind: "unsupported", why: "dev" },
+    // Not "ota": expo web sets isEnabled while every check throws, and the
+    // Build info source row must not contradict the update row under it.
+    running: { source: "metro" },
+  });
 });
 
 test("an available update carries the commit message off its manifest", () => {
