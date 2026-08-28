@@ -146,6 +146,9 @@ test("feed resumes after page freeze + socket death (mobile suspend shape)", asy
       (window as unknown as { __armSuspendTimerProbe: () => void }).__armSuspendTimerProbe(),
     );
     await cdp.send("Emulation.setScriptExecutionDisabled", { value: true });
+    // This sleep IS the suspend stimulus: wall-clock passing while the page
+    // is frozen (scripts disabled), so there is no UI to wait on.
+    // timeout: the stimulus itself — nothing for the spinner-waiter here
     await page.waitForTimeout(SUSPEND_STIMULUS_MS);
     await page.context().setOffline(false);
     await cdp.send("Emulation.setScriptExecutionDisabled", { value: false });
@@ -417,6 +420,7 @@ async function waitForSubscribed(page: Page, keys: string[], timeoutMs = 90_000)
         `Timed out waiting for runtimes ${keys.join(", ")} to reach "receiving-events". Last __streamRuntimeDebug:\n${JSON.stringify(last, null, 2)}`,
       );
     }
+    // timeout: poll pacing on a debug-snapshot read the spinner-waiter can't extend
     await page.waitForTimeout(500);
   }
 }
@@ -429,6 +433,7 @@ async function pollDelivered(page: Page, keys: string[], offset: number, timeout
     last = await readDebugSnapshot(page);
     const delivered = keys.every((key) => (last[key]?.lastDeliveredOffset ?? -1) >= offset);
     if (delivered || Date.now() > deadline) return { delivered, snapshot: last };
+    // timeout: poll pacing on a debug-snapshot read the spinner-waiter can't extend
     await page.waitForTimeout(1_000);
   }
 }

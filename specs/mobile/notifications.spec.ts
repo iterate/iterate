@@ -233,6 +233,9 @@ test("the approval push is suppressed in the watched thread and sent when you're
     await expect
       .poll(async () => {
         const before = (await notificationsItem.boundingBox())!.x;
+        // Motion probe: two position samples a beat apart detect the
+        // drawer still animating; a transform shows no spinner.
+        // timeout: sampling interval, invisible to the spinner-waiter
         await page.waitForTimeout(120);
         const after = (await notificationsItem.boundingBox())!.x;
         return after - before;

@@ -26,7 +26,9 @@ test("the REPL creates no session stream until the first Run", async ({ helpers,
     await page.getByTestId("itx-repl-new-session").click();
     await expect.poll(() => new URL(page.url()).pathname).toMatch(/\/repl\/20[\w-]+z$/);
     // Deliberate settle window: an accidental wake (a read connection, a
-    // preamble fetch) would journal stream/created within this.
+    // preamble fetch) would journal stream/created within this. Proving
+    // ABSENCE needs wall-clock — there is no UI to wait for.
+    // timeout: absence window, nothing for the spinner-waiter to extend
     await page.waitForTimeout(1_500);
     await expect.poll(replStreams, { timeout: 5_000 }).toEqual([]); // timeout: poll budget — expect.poll is outside the spinner-waiter's reach
   });
