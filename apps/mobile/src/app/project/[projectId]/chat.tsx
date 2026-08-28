@@ -540,6 +540,7 @@ function MessagePhoto({ file, onPress }: { file: AgentUiFileAttachment; onPress:
           style={StyleSheet.absoluteFill}
           resizeMode="cover"
           blurRadius={18}
+          testID="photo-backdrop"
         />
       ) : null}
       <Image source={{ uri: file.url }} style={StyleSheet.absoluteFill} resizeMode="contain" />
