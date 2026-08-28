@@ -64,6 +64,7 @@ import { DEFAULT_SERVER } from "../lib/servers.ts";
 import { getServerBaseUrl } from "../lib/storage.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
 import { RecentPhotosStrip } from "./recent-photos-strip.tsx";
+import { VoiceCallButton } from "./voice-call-button.tsx";
 
 /** How far the sheet's background hangs below its content — enough to sit
  * behind the virtual keyboard's rounded top corners. */
@@ -355,6 +356,9 @@ export function NoteCaptureOverlay() {
         pointerEvents="box-none"
         style={[styles.overlay, { paddingBottom: insets.bottom + spacing.md }]}
       >
+        {/* Voice rides the note overlay (grill: "associated with the floating
+            note component") but needs a project to call into. */}
+        {inProject && baseUrl ? <VoiceCallButton baseUrl={baseUrl} projectId={projectId} /> : null}
         <Pressable
           accessibilityLabel="Capture a note"
           accessibilityRole="button"
@@ -393,6 +397,7 @@ export function NoteCaptureOverlay() {
       pointerEvents="box-none"
       style={styles.overlay}
     >
+      {inProject && baseUrl ? <VoiceCallButton baseUrl={baseUrl} projectId={projectId} /> : null}
       <View
         style={[
           styles.sheet,

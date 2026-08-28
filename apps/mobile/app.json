@@ -39,6 +39,16 @@
         {
           "photosPermission": "Iterate shows your recent photos above the note composer and syncs the ones you pick into your project, so you can search them by what they show."
         }
+      ],
+      [
+        "react-native-audio-api",
+        {
+          "iosMicrophonePermission": "Iterate uses the microphone for voice conversations with your project's assistant.",
+          "iosBackgroundMode": false,
+          "androidPermissions": [],
+          "androidForegroundService": false,
+          "disableFFmpeg": true
+        }
       ]
     ],
     "experiments": {
