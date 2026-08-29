@@ -293,7 +293,6 @@ test("disposing a client session removes its connections promptly and auto-revok
   const sA = harness.session(ctx);
   const itxA = await sA.connect({ connectionKey: "prov", capabilities: new Tools("prov") });
   await itxA.provideCapability({
-    type: "live",
     path: ["ghosttool"],
     capability: new Tools("ghost"),
   });

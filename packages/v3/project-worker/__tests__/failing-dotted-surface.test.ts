@@ -128,7 +128,6 @@ async function slackRig(ctx: string) {
   const sdkCalls: Array<[string, Record<string, unknown>]> = [];
   const bridgeItx = await harness.itx(ctx);
   await bridgeItx.provideCapability({
-    type: "live",
     path: ["slack"],
     capability: new SlackReplayTarget(sdkCalls),
     instructions: "slack sdk bridge (test)",

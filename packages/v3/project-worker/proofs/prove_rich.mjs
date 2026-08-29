@@ -46,7 +46,7 @@ const itxA = await sessionA.authenticate().connect({
 const sessionB = newWebSocketRpcSession(`wss://${BASE}/api?ctx=${CTX}`);
 const itxB = await sessionB.authenticate().get();
 await seedSources(itxB, ["probe"]);
-await itxA.provideCapability({ type: "live", path: ["tools"], capability: new ToolsA() });
+await itxA.provideCapability({ path: ["tools"], capability: new ToolsA() });
 
 // 1. a Date through the whole path
 const probed = await attempt("Date through invoke → live cap", () =>
@@ -125,7 +125,6 @@ class ToolsRich extends RpcTarget {
   }
 }
 const provRich = await itxA.provideCapability({
-  type: "live",
   path: ["rich"],
   capability: new ToolsRich(),
 });

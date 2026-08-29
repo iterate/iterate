@@ -278,7 +278,6 @@ test("pipelining: provideCapability(...).revoke() on the UNRESOLVED provision = 
   {
     // The returned CapabilityProvision is used BEFORE it resolves: .revoke() rides the same burst.
     using provisionPromise = itx.provideCapability({
-      type: "live",
       path: ["piptool"],
       capability: (x: number) => x + 1,
     });
@@ -478,7 +477,6 @@ test("disposal: `using` on a CapabilityProvision auto-revokes its mount at scope
   const itx = await w.session.authenticate().get();
   {
     using provision = await itx.provideCapability({
-      type: "live",
       path: ["scopedtool"],
       capability: new Tools("scopedtool"),
     });

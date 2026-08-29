@@ -61,7 +61,6 @@ check(got === "hi-crisp", "kv round-trip via seed", String(got));
 
 // 3. live capability: provide from A (park + alias desugar), invoke from B
 const provision = await itxA.provideCapability({
-  type: "live",
   path: ["tools"],
   capability: new ToolsA(),
 });
@@ -78,12 +77,10 @@ check(
 
 // 4. THE SHADOW STACK: same pattern mounted twice — newest wins; revoke restores
 const provA = await itxA.provideCapability({
-  type: "live",
   path: ["greeter"],
   capability: new ToolsA(),
 });
 const provB = await itxB.provideCapability({
-  type: "live",
   path: ["greeter"],
   capability: new ToolsB(),
 });

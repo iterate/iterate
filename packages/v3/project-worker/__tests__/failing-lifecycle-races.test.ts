@@ -90,9 +90,7 @@ test("shadow stack: 10 concurrent provides on ONE path end deterministic (newest
   const itx = await harness.itx("prj_lr_race");
   // ten distinguishable live capabilities to alias at the contested path
   for (let i = 0; i < 10; i++)
-    keep.push(
-      await itx.provideCapability({ type: "live", path: [`probe${i}`], capability: () => i }),
-    );
+    keep.push(await itx.provideCapability({ path: [`probe${i}`], capability: () => i }));
   const race = () => itx.invokeCapability({ path: ["race"], args: [] });
 
   // wave 1: five concurrent provides at itx.race

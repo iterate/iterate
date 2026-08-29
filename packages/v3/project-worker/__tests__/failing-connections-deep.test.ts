@@ -144,7 +144,6 @@ test("provideCapability + handle.revoke(): the parked connection is reaped exact
   const ctx = c("handle-revoke");
   const observer = await harness.itx(ctx);
   const prov = await observer.provideCapability({
-    type: "live",
     path: ["h1"],
     capability: new Tools("h1"),
   });
@@ -171,7 +170,7 @@ test("provideCapability + handle.revoke(): the parked connection is reaped exact
 test("provideCapability + itx.revoke({path}): revoking by PATH (not the handle) also reaps the parked connection (defect 31)", async () => {
   const ctx = c("path-revoke");
   const observer = await harness.itx(ctx);
-  await observer.provideCapability({ type: "live", path: ["h2"], capability: new Tools("h2") });
+  await observer.provideCapability({ path: ["h2"], capability: new Tools("h2") });
   expect(await observer.invokeCapability({ path: ["h2", "hello"], args: [] })).toBe(
     "hello-from-h2",
   );
@@ -221,7 +220,6 @@ test("storm of connect/provide/revoke/subscribe/unsubscribe/disconnect returns t
     await observer.unsubscribe({ name: sub.name });
     // (b) provideCapability then revoke via its handle.
     const prov = await observer.provideCapability({
-      type: "live",
       path: [`cap${i}`],
       capability: new Tools(`s${i}`),
     });
@@ -247,7 +245,7 @@ test("reconnect under the same key leaves a SEPARATE anonymous provision (even m
   const sA = harness.session(ctx);
   const itxA = await sA.connect({ connectionKey: "rk", capabilities: new Tools("rk1") });
   // An EXTRA provision from the SAME (old) transport's session → a separate anonymous connection.
-  await itxA.provideCapability({ type: "live", path: ["slow"], capability: hangTools });
+  await itxA.provideCapability({ path: ["slow"], capability: hangTools });
   await until("the keyed transport and the extra anon provision are both listed", async () => {
     const list = await listConnections(observer);
     return (
@@ -303,7 +301,6 @@ test("FIXED (Finding B): revoking a provision via its handle must NOT drop a con
   const ctx = c("handle-bypasses-named-elsewhere");
   const observer = await harness.itx(ctx);
   const prov = await observer.provideCapability({
-    type: "live",
     path: ["dual"],
     capability: new Tools("dual"),
   });

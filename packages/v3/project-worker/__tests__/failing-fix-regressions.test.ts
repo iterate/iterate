@@ -58,7 +58,7 @@ test("reap guard: a connection named by TWO mounts survives revoking one; the la
   const base = await doState(ctx);
 
   // Park ONE live callback and mount it at itx.cb1 (one anonymous connection, one mount).
-  await itx.provideCapability({ type: "live", path: ["cb1"], capability: () => "alive" });
+  await itx.provideCapability({ path: ["cb1"], capability: () => "alive" });
   const afterPark = await doState(ctx);
   expect(afterPark.stubs).toBe(base.stubs + 1);
 

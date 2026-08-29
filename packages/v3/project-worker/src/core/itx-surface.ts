@@ -52,7 +52,6 @@ interface ConnectOpts {
   capabilities?: ProviderStub;
 }
 interface ProvideLiveInput {
-  type: "live";
   path: string[];
   capability: ProviderStub;
   instructions?: string;
@@ -417,8 +416,6 @@ export class Itx extends RpcTarget {
    *  the alias `path ⇒ itx.connections.get(connectionId)` (an ordinary capability-table row,
    *  shadowable/revocable, auto-revoked when the connection closes). */
   async provideCapability(input: ProvideLiveInput): Promise<CapabilityProvision> {
-    if (input.type !== "live")
-      throw new Error("itx.provideCapability here only mounts live capabilities");
     const parked = await this.#parkAsTarget(
       input.capability as RetainedProviderStub,
       input.instructions ?? "",

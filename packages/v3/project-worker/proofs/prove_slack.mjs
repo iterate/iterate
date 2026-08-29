@@ -72,7 +72,6 @@ const replayOnto = (sdk) =>
 const bridgeSession = newWebSocketRpcSession(`wss://${BASE}/api?ctx=${CTX}`);
 const bridgeItx = await bridgeSession.authenticate().get();
 const provision = await bridgeItx.provideCapability({
-  type: "live",
   path: ["slack"],
   capability: new SlackReplayTarget(),
   instructions: "slack sdk bridge (node script)",
@@ -126,7 +125,6 @@ check(
 
 // 4. the SAME thing with ZERO declarations: replay literally onto the SDK instance
 const provision2 = await bridgeItx.provideCapability({
-  type: "live",
   path: ["slack2"],
   capability: replayOnto(slackSdk),
   instructions: "slack sdk bridge, zero-declaration replay",

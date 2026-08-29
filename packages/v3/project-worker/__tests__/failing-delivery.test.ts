@@ -72,7 +72,7 @@ const keep: unknown[] = [];
  *  subscription lane's point of view (NOT itx.connections.get(...)), so a subscription naming
  *  it rides the subscription-forwarder facet, yet still calls back into this test process. */
 async function mountHook(itx: any, name: string, fn: (...args: any[]) => unknown): Promise<string> {
-  keep.push(await itx.provideCapability({ type: "live", path: [name], capability: fn }));
+  keep.push(await itx.provideCapability({ path: [name], capability: fn }));
   return `itx.${name}`;
 }
 

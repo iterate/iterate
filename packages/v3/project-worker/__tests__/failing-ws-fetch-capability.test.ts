@@ -235,9 +235,7 @@ test("live capability HTTP fetch: an eyeball POST reaches the Node provider's fe
   const provider = harness.session(ctx);
   const itxA = await provider.authenticate().get();
   const device = new HttpDevice();
-  keep.push(
-    await itxA.provideCapability({ type: "live", path: ["ws-device"], capability: device }),
-  );
+  keep.push(await itxA.provideCapability({ path: ["ws-device"], capability: device }));
 
   const res = await fetch(capUrl(ctx, "itx.ws-device", "http"), {
     method: "POST",
@@ -298,9 +296,7 @@ test("upgrade REQUEST forwarding: the eyeball's ws upgrade reaches the Node prov
   const provider = harness.session(ctx);
   const itxA = await provider.authenticate().get();
   const device = new WsDevice();
-  keep.push(
-    await itxA.provideCapability({ type: "live", path: ["ws-device"], capability: device }),
-  );
+  keep.push(await itxA.provideCapability({ path: ["ws-device"], capability: device }));
   // Sanity: the mount answers plain HTTP (so everything below is about the UPGRADE, not the mount).
   const plain = await fetch(capUrl(ctx, "itx.ws-device", "http"));
   expect(await plain.text()).toBe("http-fallback");
@@ -349,9 +345,7 @@ test.fails("live capability WebSocket fetch: a plain eyeball WebSocket opens (10
   const provider = harness.session(ctx);
   const itxA = await provider.authenticate().get();
   const device = new WsDevice();
-  keep.push(
-    await itxA.provideCapability({ type: "live", path: ["ws-device"], capability: device }),
-  );
+  keep.push(await itxA.provideCapability({ path: ["ws-device"], capability: device }));
   // THE CORRECT BEHAVIOR: the eyeball's WebSocket opens, echoes, closes.
   const ws = await wsRoundTrip(capUrl(ctx, "itx.ws-device", "ws"), "hello-device");
   console.log("[wsfetch] ws round trip:", JSON.stringify(ws));

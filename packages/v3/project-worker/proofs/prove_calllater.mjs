@@ -41,7 +41,6 @@ class Demo extends RpcTarget {
 const bridge = newWebSocketRpcSession(`wss://${BASE}/api?ctx=${CTX}`);
 const bridgeItx = await bridge.authenticate().get();
 const provision = await bridgeItx.provideCapability({
-  type: "live",
   path: ["demo"],
   capability: new Demo(),
   instructions: "demo/timer/callLater bridge (node script)",
