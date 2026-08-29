@@ -24,10 +24,8 @@ type ConnectionsView = {
   /** One connection by connectionKey or connectionId: a method proxy over its retained callback
    *  (wake → RetainedCallbackInvoker leg → invoke). Deep dots walk; throws when offline. */
   get(key: string): unknown;
-  /** Fan out one (dotted) method call over EVERY connection attached to this context
-   *  (allSettled; a dead connection drops out of the results). */
-  each(method: string, ...args: unknown[]): Promise<unknown[]>;
-  /** The currently connected clients of this context. */
+  /** The currently connected clients of this context. Fan-out is `list()` + map over `get(key)`
+   *  (no built-in `each` — the caller owns the allSettled over live members). */
   list(): unknown[] | Promise<unknown[]>;
   /** Close a connection's stub pager WebSocket (idempotent — unknown keys are a no-op). */
   close(key: string): { ok: true } | Promise<{ ok: true }>;

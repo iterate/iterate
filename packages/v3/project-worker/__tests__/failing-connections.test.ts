@@ -364,21 +364,34 @@ test("killing the provider session mid-invoke rejects the in-flight call promptl
   expect(codeOf(err)).toBe("CONNECTION_OFFLINE");
 });
 
-test("connections.each() drops dead members (allSettled) and still answers from the alive one", async () => {
+// Fan-out is NOT a built-in (`each` is gone): the caller lists connections and maps over them,
+// owning the allSettled. This pins that the list()+get(key) pattern drops dead members AND a parked
+// subscriber with no matching method — the exact coverage the old `each` had.
+test("fan-out via connections.list() + map drops dead members and the no-hello subscriber", async () => {
   const ctx = c("each");
   const observer = await harness.itx(ctx);
   const sAlive = harness.session(ctx);
   await sAlive.connect({ connectionKey: "alive", capabilities: new Tools("alive") });
   const { session: sDead, ws: wsDead } = rawSession(ctx);
   await sDead.connect({ connectionKey: "doomed", capabilities: new Tools("doomed") });
-  // An anonymous parked subscriber with NO hello() — allSettled must drop it silently too.
+  // An anonymous parked subscriber with NO hello() — the caller's allSettled drops it silently too.
   await observer.subscribe({ target: () => undefined });
-  await until("both keyed transports listed", async () => {
-    const keys = (await listConnections(observer)).map((r) => r.connectionKey);
-    return keys.includes("alive") && keys.includes("doomed");
-  });
-  await until("each('hello') answers from BOTH live members", async () => {
-    const fans: unknown[] = await observer.invoke("itx.connections.each('hello')");
+
+  /** fan-out = list() → map get(key).hello() → allSettled (dead / no-hello members drop out). */
+  const fanOut = async (): Promise<unknown[]> => {
+    const rows = await listConnections(observer);
+    const settled = await Promise.allSettled(
+      rows.map((r) =>
+        observer.invoke(`itx.connections.get('${r.connectionKey ?? r.connectionId}').hello()`),
+      ),
+    );
+    return settled
+      .filter((s): s is PromiseFulfilledResult<unknown> => s.status === "fulfilled")
+      .map((s) => s.value);
+  };
+
+  await until("both keyed transports answer the fan-out", async () => {
+    const fans = await fanOut();
     return fans.includes("hello-from-alive") && fans.includes("hello-from-doomed");
   });
 
@@ -387,8 +400,8 @@ test("connections.each() drops dead members (allSettled) and still answers from 
     "'doomed' left the currently-connected list",
     async () => !(await listConnections(observer)).some((r) => r.connectionKey === "doomed"),
   );
-  const fans = await until("each('hello') = exactly the alive answer", async () => {
-    const f: unknown[] = await observer.invoke("itx.connections.each('hello')");
+  const fans = await until("fan-out = exactly the alive answer", async () => {
+    const f = await fanOut();
     return f.length === 1 && f[0] === "hello-from-alive" ? f : undefined;
   });
   expect(fans).toEqual(["hello-from-alive"]);

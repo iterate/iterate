@@ -612,7 +612,6 @@ export class StreamDurableObject extends DurableObject<Env> {
         // Proxy (#6873). The fold is identical: `.hello()` → invoke(key, ['hello'], []).
         get: (key) =>
           new InvokeHandle((path, args) => this.#itxConnections.invoke(key, path, args)),
-        each: (method, ...args) => this.#itxConnections.fanOut(String(method).split("."), args),
         list: () => this.#itxConnections.currentlyConnected(),
         close: (key) => this.#itxConnections.close(key),
       },

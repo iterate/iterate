@@ -237,8 +237,8 @@ export class ProjectSession extends RpcTarget {
 
   /** Attach an ItxConnection to a context (the root by default) and return that context's itx.
    *  With `capabilities`, the callback is retained relay-side and the connection is addressable
-   *  through the context's `connections` view (`itx.connections.get(connectionKey)`,
-   *  `.each(...)` fan-out). Without, this is pure addressing into the named context. */
+   *  through the context's `connections` view (`itx.connections.get(connectionKey)`; fan-out is
+   *  `connections.list()` + map). Without, this is pure addressing into the named context. */
   async connect(opts: ConnectOpts = {}): Promise<Itx> {
     const host = this.#contextHost(opts.context);
     if (opts.capabilities) {

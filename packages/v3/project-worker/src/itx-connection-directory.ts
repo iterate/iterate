@@ -232,17 +232,6 @@ export class ItxConnectionDirectory {
     return this.#stubs.invoke(record.stubKey, segments, args);
   }
 
-  /** Fan out one dotted method call over EVERY connection attached to this context
-   *  (allSettled — a dead connection drops out of the results). */
-  async fanOut(method: string[], args: unknown[]): Promise<unknown[]> {
-    const settled = await Promise.allSettled(
-      this.#stubs.all().map((r) => this.#stubs.invoke(r.stubKey, method, args)),
-    );
-    return settled
-      .filter((r): r is PromiseFulfilledResult<unknown> => r.status === "fulfilled")
-      .map((r) => r.value);
-  }
-
   /** The currently connected clients of this context. */
   currentlyConnected(): Record<string, unknown>[] {
     return this.#stubs.all().map((r) => ({

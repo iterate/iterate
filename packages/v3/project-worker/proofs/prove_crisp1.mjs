@@ -162,10 +162,18 @@ check(
 );
 const single = await itxA.invoke("itx.connections.get('b').hello()");
 check(single === "from B", "connections.get(key) reaches ONE client", String(single));
-const fans = await itxA.invoke("itx.connections.each('hello')");
+// fan-out is list() + map over get(key) — no built-in `each`; the caller owns the allSettled.
+const connKeys = (await itxA.invoke("itx.connections.list()")).map(
+  (r) => r.connectionKey ?? r.connectionId,
+);
+const fans = (
+  await Promise.all(
+    connKeys.map((k) => itxA.invoke(`itx.connections.get('${k}').hello()`).catch(() => undefined)),
+  )
+).filter((v) => v !== undefined);
 check(
-  Array.isArray(fans) && fans.includes("from B") && fans.includes("from A"),
-  "connections.each() fans out over every attached connection",
+  fans.includes("from B") && fans.includes("from A"),
+  "fan-out via connections.list() + map (no each) reaches every attached connection",
   JSON.stringify(fans),
 );
 
