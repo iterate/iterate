@@ -106,6 +106,11 @@ on-device box below (pure-JS app change, OTA-able).
       land on the colleague stream _passed against prd voicelab-eval in 13s: answer audio + both speakers as `[voice call]` items on the chat_
 - [x] Auto-install the voice template on first call (Misha's PR comment,
       live from his phone) _voice-setup.ts `ensureVoiceAgentInstalled` + lint-codegen-embedded template (voice-template.generated.ts); absent-only, never a downgrade; ring covers the install_
+- [x] Morning feedback round (Misha's PR comment, from real calls):
+      chat recap at dial ("hi again, mid-project"), durable
+      session-configured record, <voice-turn>/<voice-note> tags + mobile
+      rendering (italic sided bubbles, collapsed notes), call UI floating
+      on chat screens during a live call _214a535c4; recap live-proven on prd — the greeting literally said "welcome back — picking up right where we left off"_
 - [ ] Morning: on-device — call a chat from its header, watch the chat
       thread fill with the call, hear a status line mid-task
 
