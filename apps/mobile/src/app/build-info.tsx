@@ -31,10 +31,14 @@ export default function BuildInfoScreen() {
     <ScrollView contentContainerStyle={styles.container}>
       <Stack.Screen options={{ title: "Build info" }} />
       {clearedOverride ? (
-        <Text style={styles.note}>
-          New build installed. It was still pointed at the update branch "{clearedOverride}" from
-          before — that's been cleared, so updates now come from this build's own branch, below.
-        </Text>
+        <View style={styles.calloutCard}>
+          <Text style={styles.calloutTitle}>New build installed</Text>
+          <Text style={styles.calloutBody}>
+            This phone had been fetching its JS from "{clearedOverride}". That's from before the
+            install, so it's been un-set. From now on JS comes from this build's own branch — see
+            Channel below.
+          </Text>
+        </View>
       ) : null}
       {/* Channel first: it is the answer to "am I on the right thing?", and
           the two rows together say whether you got here by scanning a QR or
@@ -82,7 +86,9 @@ export default function BuildInfoScreen() {
           pending={actions.updateNowPending || state.update.kind === "checking"}
           pendingLabel={state.update.kind === "behind" ? "Updating…" : "Checking…"}
           onPress={() =>
-            state.update.kind === "behind" ? void actions.updateNow() : void actions.checkNow()
+            state.update.kind === "behind"
+              ? void actions.updateNow().catch(() => {})
+              : void actions.checkNow().catch(() => {})
           }
         />
       )}
@@ -91,7 +97,9 @@ export default function BuildInfoScreen() {
           label={`Reset to ${state.binary.defaultChannel || "this build's own channel"}`}
           pending={actions.switchChannelPending}
           pendingLabel="Resetting…"
-          onPress={() => void actions.switchChannel({ channel: null, revertOnNoUpdate: false })}
+          onPress={() =>
+            actions.switchChannel({ channel: null, revertOnNoUpdate: false }).catch(() => {})
+          }
         />
       ) : null}
       {/* A per-PR binary's OWN channel is its PR — and once that PR merges,
@@ -109,16 +117,38 @@ export default function BuildInfoScreen() {
           pending={actions.switchChannelPending}
           pendingLabel="Switching…"
           onPress={() =>
-            void actions.switchChannel({ channel: MAIN_CHANNEL, revertOnNoUpdate: true })
+            actions.switchChannel({ channel: MAIN_CHANNEL, revertOnNoUpdate: true }).catch(() => {})
           }
         />
       ) : null}
+      {/* Outcomes are cards, not fine print: a tap whose only feedback is
+          small grey text reads as "nothing happened" (it did, in the field). */}
       {actions.switchChannelResult === "no-update" ? (
-        <Text style={styles.note}>
-          That channel has no update this build can run — its native code differs. Staying on{" "}
-          {state.channel || "this build's own channel"}. For main that resolves itself once the PR
-          merges; until then, use main's own build.
-        </Text>
+        actions.switchChannelInput?.channel === MAIN_CHANNEL ? (
+          <View style={styles.calloutCard}>
+            <Text style={styles.calloutTitle}>Can't switch to main from this build</Text>
+            <Text style={styles.calloutBody}>
+              This build contains native code main doesn't have yet, so main has no JS it can run.
+              Nothing was changed — still on {state.channel || "this build's branch"}. Once the PR
+              merges, main catches up and this switch works. To run main today, install a main
+              build.
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.calloutCard}>
+            <Text style={styles.calloutTitle}>Switched — nothing new to download</Text>
+            <Text style={styles.calloutBody}>
+              Now following {state.channel || "this build's own branch"}, and already running the
+              freshest JS it has for this build. No restart needed.
+            </Text>
+          </View>
+        )
+      ) : null}
+      {actions.switchChannelError ? (
+        <Text style={styles.errorNote}>{actions.switchChannelError}</Text>
+      ) : null}
+      {actions.updateNowError ? (
+        <Text style={styles.errorNote}>{actions.updateNowError}</Text>
       ) : null}
       <Section title="App">
         <Row label="Version" value={state.binary.version} />
@@ -249,4 +279,15 @@ const styles = StyleSheet.create({
   linkButton: { alignItems: "center", paddingVertical: 8 },
   linkLabel: { color: colors.textMuted, fontSize: 14 },
   note: { color: colors.textMuted, fontSize: 13, textAlign: "center" },
+  errorNote: { color: colors.danger, fontSize: 13, textAlign: "center" },
+  calloutCard: {
+    backgroundColor: colors.surface,
+    borderColor: colors.textFaint,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    gap: 4,
+    padding: spacing.md,
+  },
+  calloutTitle: { color: colors.text, fontSize: 14, fontWeight: "600" },
+  calloutBody: { color: colors.textMuted, fontSize: 13, lineHeight: 19 },
 });

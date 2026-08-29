@@ -264,11 +264,19 @@ export type BuildActions = {
   /** The last switch's outcome, for feedback ("no-update" deserves words —
    * a reload speaks for itself). */
   switchChannelResult: "reloading" | "no-update" | undefined;
+  /** What the last switch was asked to do — lets the view word the outcome
+   * ("main can't run here" vs "already on the freshest"). */
+  switchChannelInput: SwitchChannelInput | undefined;
+  /** A failed switch must be SHOWN: these buttons fire-and-forget, so a
+   * swallowed rejection is indistinguishable from "nothing happened" —
+   * which is exactly what it looked like in the field. */
+  switchChannelError: string | null;
   /** Ask the server again now, without waiting for a foreground. */
   checkNow: () => Promise<unknown>;
   /** Fetch the newer update and restart into it. */
   updateNow: () => Promise<"reloading" | "up-to-date">;
   updateNowPending: boolean;
+  updateNowError: string | null;
 };
 
 export function useBuildActions(): BuildActions {
@@ -301,9 +309,14 @@ export function useBuildActions(): BuildActions {
     },
   });
   return {
+    // mutate, not mutateAsync: callers fire-and-forget, and an unhandled
+    // rejection from mutateAsync is invisible on a phone. The error state
+    // below is the visible channel for failures.
     switchChannel: switchChannel.mutateAsync,
     switchChannelPending: switchChannel.isPending,
     switchChannelResult: switchChannel.data,
+    switchChannelInput: switchChannel.variables,
+    switchChannelError: switchChannel.error ? String(switchChannel.error) : null,
     // fetchQuery, not refetchQueries: refetch skips DISABLED queries, and the
     // check query is disabled on every unwatched build (a main phone — the
     // common case), which made this button a silent no-op there. An
@@ -312,5 +325,6 @@ export function useBuildActions(): BuildActions {
       queryClient.fetchQuery({ queryKey: checkKey, queryFn: checkForUpdate, staleTime: 0 }),
     updateNow: updateNow.mutateAsync,
     updateNowPending: updateNow.isPending,
+    updateNowError: updateNow.error ? String(updateNow.error) : null,
   };
 }

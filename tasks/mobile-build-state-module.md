@@ -628,3 +628,29 @@ Scan the PR's OTA QR once — it re-points the override at `mobile-build-state`
 and pulls latest (which includes all of the above). Reinstalling would NOT
 help: same binary id, the guard stays quiet and the `preview` override
 persists.
+
+## Follow-up (requested, on hold until Misha says go)
+
+- [ ] On PR merge: collapse the PR's QR section, and when main's build for the
+  new fingerprint finishes, a CI job finds the merged PR and puts MAIN's QR
+  code(s) into its body — so getting onto latest main never means hunting
+  commit comments. (Asked 2026-08-29; explicitly "don't do that yet".)
+
+## Field test round 2 (2026-08-29)
+
+Misha reinstalled the PR build and hit the OLD alert again + a mislabeled
+banner. Why: the binary is reused per branch by design, so its EMBEDDED JS is
+frozen at build-trigger time (4cdeb36) — first-boot UX comes from that old
+bundle no matter what's published since. One Update-now later the alert is
+gone for good on this binary (it fires once per binary change).
+
+Real gaps in head code this exposed, fixed here:
+
+- Build info's switch/update buttons swallowed rejections (`void mutateAsync`)
+  and rendered no error — a failed tap was pixel-identical to "nothing
+  happened". Errors now render.
+- The no-update outcome was one line of small grey text — functionally
+  invisible. Outcomes are now cards, with per-case copy: switching to main on
+  a native-changed PR binary says plainly that main has no JS this build can
+  run, nothing changed, and it resolves on merge.
+- The install note copy tightened again ("bro" pass).
