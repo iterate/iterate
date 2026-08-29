@@ -143,7 +143,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     },
   };
 
-  const { itxKv, secretsKv } = { itxKv: env.ITX_KV, secretsKv: env.SECRETS_KV };
+  const itxKv = env.ITX_KV;
   const kvPrefix = `${projectId}:`;
   const own = () => deps.context(path);
 
@@ -187,19 +187,6 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       put: projectKv.put,
       delete: projectKv.delete,
       list: async (start = "") => ({ keys: await projectKv.keys(start) }),
-    },
-    /** Write-only secret store. Values come back out ONLY as `{{secret:NAME}}` substitution at
-     *  the egress terminal — never through a read here. */
-    secrets: {
-      set: async (name: string, value: string) => {
-        if (!secretsKv) throw new Error("secrets: no SECRETS_KV bound");
-        // The name feeds `secret:${projectId}:${name}` AND is read back only through the egress
-        // token grammar — a ":" is both a cross-project write primitive and an unreadable value.
-        if (!/^[A-Za-z0-9._-]+$/.test(name))
-          throw new Error(`invalid secret name ${JSON.stringify(name)}: only [A-Za-z0-9._-]`);
-        await secretsKv.put(`secret:${projectId}:${name}`, String(value));
-        return { ok: true };
-      },
     },
     /** MY OWN stream — a deliberate, chosen surface (append/read), never the raw DO stub. */
     stream: {

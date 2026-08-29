@@ -55,7 +55,6 @@ type AppConfig = z.infer<typeof AppConfig>;
 export const DEFAULT_CONFIG_MOUNTS: { path: string; target: string }[] = [
   { path: "itx.whoami", target: "whoami" },
   { path: "itx.kv", target: "kv" },
-  { path: "itx.secrets", target: "secrets" },
   /** MY stream (append/read — the commonest write is dotted-door spellable). */
   { path: "itx.stream", target: "stream" },
   /** Navigate to a sibling context, ROUTED — each is a whole context, not just a log. */
