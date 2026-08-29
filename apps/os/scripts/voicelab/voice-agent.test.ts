@@ -213,8 +213,29 @@ function makeHarness() {
   });
 
   /* What a tool expression walks: a stand-in for the project root that a
-   * test replaces with whatever capabilities its tool needs. */
-  const projectRoot: { current: unknown } = { current: {} };
+   * test replaces with whatever capabilities its tool needs. The DEFAULT
+   * quietly accepts the colleague link's calls (create, subscribe, brief,
+   * message, recap reads) — a working desk is every unrelated test's
+   * reality, and a failing one now leaves a durable "backend link error"
+   * status that would shift every event count. */
+  const projectRoot: { current: unknown } = {
+    current: {
+      agents: {
+        get: () => ({
+          create: async () => {},
+          append: async () => {},
+          message: async () => {},
+        }),
+      },
+      streams: {
+        get: () => ({
+          append: async () => {},
+          getEventPage: async () => ({ streamMaxOffset: 0 }),
+          getEvents: async () => [],
+        }),
+      },
+    },
+  };
 
   const harness = makeProcessorHarness<VoiceAgentContract, VoiceAgentProcessor>({
     path: "/agents/voice/test",
@@ -1048,14 +1069,21 @@ describe("tools on the birth certificate", () => {
     expect(gotten[0]).toBe("/agents/voice-notes/voice/test");
     expect(created).toEqual(["/agents/voice-notes/voice/test"]);
     /* And the link wires the status lane: the colleague's own narration is
-     * forwarded to this stream as colleague-status events. (The transcript
-     * lane rides SETUP's batch — the facet cannot append a subscription to
-     * its own stream.) */
-    expect(subscriptions).toHaveLength(1);
+     * forwarded to this stream as colleague-status events, under a name
+     * OWNED BY THIS LINE (two lines sharing a desk must not fight over one
+     * name), with the legacy shared name removed. (The transcript lane
+     * rides SETUP's batch — the facet cannot append a subscription to its
+     * own stream.) */
+    expect(subscriptions).toHaveLength(2);
+    expect(subscriptions[1]).toMatchObject({
+      type: "events.iterate.com/stream/subscription-removed",
+      payload: { name: "voice-colleague-status" },
+    });
     expect(subscriptions[0]).toMatchObject({
       path: "/agents/voice-notes/voice/test",
       type: "events.iterate.com/stream/subscription-configured",
       payload: {
+        name: "voice-colleague-status:/agents/voice/test",
         filter: {
           eventTypes: [
             "events.iterate.com/agent/summary-updated",
@@ -1611,12 +1639,16 @@ describe("tools on the birth certificate", () => {
     expect((configuredSessions[0]!.payload as { instructions: string }).instructions).toContain(
       "continues an ongoing TEXT conversation",
     );
-    /* Status lane: the chat's narration and replies flow HERE. (The
-     * transcript lane the other way rides SETUP's batch, not the link.) */
-    expect(subscriptions).toHaveLength(1);
+    /* Status lane: the chat's narration and replies flow HERE, under this
+     * line's own name. (The transcript lane the other way rides SETUP's
+     * batch, not the link.) */
+    expect(subscriptions.filter((s) => s.type.endsWith("subscription-configured"))).toHaveLength(1);
     expect(subscriptions[0]).toMatchObject({
       path: "/agents/mobile/1234",
-      payload: { receiver: { receivingStreamPath: "/agents/voice/test" } },
+      payload: {
+        name: "voice-colleague-status:/agents/voice/test",
+        receiver: { receivingStreamPath: "/agents/voice/test" },
+      },
     });
     /* The brief lands; the chat's own configuration is NOT rewritten — no
      * debounce append for a desk this facet does not own. */
@@ -1635,6 +1667,56 @@ describe("tools on the birth certificate", () => {
     await h.settle();
     expect(messaged).toHaveLength(1);
     expect(messaged[0]).toMatch(/^<voice-note>\ncheck the calendar\n/);
+  });
+
+  /*
+   * A BROKEN DESK IS NEWS, NOT SILENCE. The link and the note dispatch
+   * used to swallow their failures whole; a caller then heard "it's
+   * picking up the note" forever while four notes in a row went nowhere,
+   * and the mid-task briefing turned the stale status into a wall of
+   * refusals (observed live, 2026-08-29). Now both failures land as
+   * durable "backend link error" statuses — whispered, newsworthy, and
+   * carried into the next session's briefing like any other status.
+   */
+  it("a failed colleague link or note lands as a backend link error status", async () => {
+    const h = makeHarness();
+    h.projectRoot.current = {}; /* no agents, no streams — everything throws */
+    await h.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: {
+        providerBaseUrl: "https://fake.provider.test/v1/realtime",
+        provider: "grok",
+        clientTakesTurns: CLIENT_TAKES_TURNS,
+      },
+    });
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
+    /* The call-start link failure is on the record. */
+    const linkFailures = eventsOfType(h, "colleague-status").filter(
+      (event) => (event.payload as { phase?: string }).phase === "backend link error",
+    );
+    expect(linkFailures.length).toBeGreaterThanOrEqual(1);
+    expect(linkFailures[0]!.payload).toMatchObject({
+      activity: "connecting to the backend failed",
+    });
+
+    /* And a note that cannot be delivered says so too. */
+    h.provider.push({
+      type: "response.function_call_arguments.done",
+      call_id: "call_30",
+      name: "note_to_self",
+      arguments: JSON.stringify({ note: "look this up" }),
+    });
+    await h.settle();
+    const noteFailures = eventsOfType(h, "colleague-status").filter(
+      (event) =>
+        (event.payload as { activity?: string }).activity ===
+        "the last note FAILED to reach the backend",
+    );
+    expect(noteFailures).toHaveLength(1);
+    expect((noteFailures[0]!.payload as { failure: string }).failure).not.toBe("");
   });
 
   it("greeting on the certificate makes the model speak first at pickup — unless the caller already did", async () => {

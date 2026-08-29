@@ -251,8 +251,12 @@ export default function ChatScreen() {
           headerRight: () => (
             <View style={styles.headerActions}>
               {/* Call this chat: its agent becomes the voice call's backend
-                  and the conversation lands right here in the thread. */}
-              {baseUrl ? (
+                  and the conversation lands right here in the thread. Voice
+                  machinery streams (lines, voice-notes desks) are not
+                  callable — calling a desk wires a voice line to another
+                  voice line's backend, a hall of mirrors that ate an
+                  afternoon (2026-08-29). */}
+              {baseUrl && !path.startsWith("/agents/voice") ? (
                 <VoiceCallChatButton baseUrl={baseUrl} path={path} projectId={projectId} />
               ) : null}
               <Pressable

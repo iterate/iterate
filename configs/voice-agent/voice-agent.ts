@@ -406,6 +406,14 @@ const CHAT_RECAP_MAX_TURNS = 12;
 const CHAT_RECAP_TURN_MAX_CHARS = 240;
 const CHAT_RECAP_DEADLINE_MS = 2_500;
 
+/** The colleague link's own deadline. A hung platform call inside the link
+ * used to hang the memoized promise FOREVER — every note then awaited it
+ * silently until the DO was evicted, with nothing on the record (measured
+ * on prd, 2026-08-29: a fresh desk's create left no trace and no error).
+ * A timeout converts the hang into a reported failure and resets the memo,
+ * so the next call or note retries. */
+const COLLEAGUE_LINK_DEADLINE_MS = 25_000;
+
 /**
  * The colleague chat's recent text conversation, as briefing lines — pure,
  * from the chat stream's own events. `web-message-sent` is the chat's every
@@ -497,7 +505,7 @@ const SPOKEN_STATUS_MIN_GAP_MS = 15_000;
  */
 /** Bump when the status subscription's filter or transform changes — see
  * the keyed append at the install site. */
-const COLLEAGUE_STATUS_SUBSCRIPTION_REV = 4;
+const COLLEAGUE_STATUS_SUBSCRIPTION_REV = 5;
 
 const COLLEAGUE_STATUS_TRANSFORM = [
   'type = "events.iterate.com/agents/web-message-sent"',
@@ -2592,7 +2600,13 @@ export class VoiceAgentProcessor extends StreamProcessor<
         ) {
           dial.followUpResponsePending = true;
           this.#sendControl(dial, { type: "response.create" }, append);
-        } else if (dial.answer.phase !== "settled" || dial.openToolCallIds.size > 0) {
+        } else {
+          /* ALWAYS pend when we did not create. The note item goes out
+           * AFTER any in-flight response.create, so it never rides that
+           * response — assuming it would left an answered note unspoken
+           * until the caller pressed again (observed live, 2026-08-29:
+           * "the backend says it's answered... I'm waiting for the actual
+           * note", with the note already in context). */
           dial.pendingNoteResponse = true;
         }
         return;
@@ -2673,7 +2687,28 @@ export class VoiceAgentProcessor extends StreamProcessor<
      * colleague's stream. Background and swallowed — the note path retries
      * it, and a call must not fail because the desk was unreachable. */
     if (state.colleague) {
-      runInBackground(() => this.#ensureColleagueLink(state).catch(() => {}));
+      runInBackground(() =>
+        this.#ensureColleagueLink(state).catch((error: unknown) =>
+          /* ON THE RECORD, not swallowed: a silently failed link left a
+           * caller hearing "it's picking up the note" forever while four
+           * notes in a row went nowhere (misha's desk-as-chat call,
+           * 2026-08-29). The failure status is whispered AND newsworthy,
+           * so the voice can SAY the backend is unreachable. */
+          append({
+            type: "events.iterate.com/voice-agent/colleague-status",
+            idempotencyKey: this.idempotencyKey(`link-failed:${crypto.randomUUID()}`),
+            payload: {
+              phase: "backend link error",
+              activity: "connecting to the backend failed",
+              failure: String(error).slice(0, 200),
+              /* NOT mid-task: the don't-resend briefing must retire, or the
+               * caller's retry gets refused on the strength of a link that
+               * never stood (the 2026-08-29 refusal wall). */
+              waitingFor: "user_input",
+            },
+          }),
+        ),
+      );
     }
     const dialStartedAtFacetMs = this.deps.nowAtFacetMs();
     /* THIS DIAL'S OWN IDENTITY, for keys that must not collide with the
@@ -3913,7 +3948,8 @@ export class VoiceAgentProcessor extends StreamProcessor<
      * existing chat named by the certificate has its own configuration and
      * a call must not rewrite it. */
     const configureDebounce = state.colleaguePath === null;
-    const link = this.deps
+    const timedOut = Symbol("colleague link deadline");
+    const work = this.deps
       .withProject(async (project) => {
         const typedProject = project as {
           agents: {
@@ -3956,13 +3992,20 @@ export class VoiceAgentProcessor extends StreamProcessor<
          * or transform changes is the whole upgrade path — and a
          * certificate that re-points `colleaguePath` gets a fresh install
          * the same way. */
+        /* NAMED PER VOICE LINE, because a name is an identity: two lines
+         * sharing one desk (the device line and a desk-called-as-a-chat,
+         * observed 2026-08-29) used to fight over the single
+         * "voice-colleague-status" name — last caller wins, and the other
+         * line silently stops hearing replies. Each line now owns its own
+         * forwarder; the shared-name legacy subscription is removed below
+         * so nobody gets a double feed. */
         await typedProject.streams.get(colleaguePath).append({
           type: "events.iterate.com/stream/subscription-configured",
           idempotencyKey: this.idempotencyKey(
             `colleague-status-subscription:${colleaguePath}:rev${COLLEAGUE_STATUS_SUBSCRIPTION_REV}`,
           ),
           payload: {
-            name: "voice-colleague-status",
+            name: `voice-colleague-status:${this.path}`,
             description: "Forward the colleague's progress narration to the voice call.",
             filter: {
               eventTypes: [
@@ -3987,6 +4030,20 @@ export class VoiceAgentProcessor extends StreamProcessor<
             },
           },
         });
+        try {
+          /* Cleanup, not a dependency: removing a name that is not there
+           * must never cost the link. */
+          await typedProject.streams.get(colleaguePath).append({
+            type: "events.iterate.com/stream/subscription-removed",
+            idempotencyKey: this.idempotencyKey(
+              `colleague-status-subscription-legacy-removed:${colleaguePath}`,
+            ),
+            payload: { name: "voice-colleague-status" },
+          });
+        } catch {
+          /* An absent legacy name, or a platform that refuses the removal —
+           * either way the per-line subscription above already stands. */
+        }
         /* (The transcript lane — the other direction — is installed by
          * SETUP, whose batch surfaces a refused append as a failed setup;
          * see colleagueTranscriptSubscription for the silent-evening
@@ -4022,6 +4079,23 @@ export class VoiceAgentProcessor extends StreamProcessor<
         if (this.#colleagueLink === link) this.#colleagueLink = null;
         throw error;
       });
+    /* The deadline wraps the WORK, and the memo holds the RACED promise:
+     * a hung create must not strand every future note behind it. */
+    const link: Promise<void> = Promise.race([
+      work,
+      this.deps.sleep(COLLEAGUE_LINK_DEADLINE_MS).then(() => timedOut as unknown),
+    ]).then((result) => {
+      if (result === timedOut) {
+        void work.catch(() => {});
+        if (this.#colleagueLink === link) this.#colleagueLink = null;
+        throw new Error(
+          `the colleague link did not complete within ${COLLEAGUE_LINK_DEADLINE_MS}ms`,
+        );
+      }
+    });
+    /* Swallow the catch-reset path's rejection when nobody has awaited the
+     * memo yet — callers attach their own handlers. */
+    link.catch(() => {});
     this.#colleagueLink = link;
     return link;
   }
@@ -4091,8 +4165,25 @@ export class VoiceAgentProcessor extends StreamProcessor<
                 `create it.)`,
             );
         });
-      } catch {
-        /* A lost note is a colleague who was never asked. */
+      } catch (error) {
+        /* A lost note is a colleague who was never asked — and the CALLER
+         * must hear that, or the stale "picking up a note" status becomes
+         * a wall of truthful-sounding refusals (observed live,
+         * 2026-08-29). Durable and newsworthy: whispered, and speakable. */
+        runInBackground(() =>
+          append({
+            type: "events.iterate.com/voice-agent/colleague-status",
+            idempotencyKey: this.idempotencyKey(`note-failed:${crypto.randomUUID()}`),
+            payload: {
+              phase: "backend link error",
+              activity: "the last note FAILED to reach the backend",
+              failure: String(error).slice(0, 200),
+              /* NOT mid-task — same reasoning as the link-failure status:
+               * a failed note is exactly when re-sending is right. */
+              waitingFor: "user_input",
+            },
+          }),
+        );
       }
     });
   }
