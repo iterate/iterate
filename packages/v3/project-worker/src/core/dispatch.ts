@@ -54,7 +54,7 @@ const INHERITED_BUILTINS = new Set<unknown>(
 );
 
 /** Resolve one step's property as capability surface — `undefined` for anything only inherited. */
-export function stepGet(value: object, key: string): unknown {
+function stepGet(value: object, key: string): unknown {
   if (key === "__proto__" || key === "constructor" || key === "prototype") return undefined;
   const resolved = Reflect.get(value, key);
   return INHERITED_BUILTINS.has(resolved) ? undefined : resolved;

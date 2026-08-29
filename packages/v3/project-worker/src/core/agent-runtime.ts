@@ -101,7 +101,7 @@ export function confinedWorker(
 /** A source expression may evaluate to a modules record ({ name: code }) or to ONE module
  *  string (plain kv — increment 57 killed the files root); normalize to the loader's shape.
  *  Anything else is a loud error, not an empty worker. */
-export function asModules(result: unknown, what: string): Record<string, string> {
+function asModules(result: unknown, what: string): Record<string, string> {
   if (typeof result === "string") return { "cap.js": result };
   if (result && typeof result === "object" && !Array.isArray(result))
     return result as Record<string, string>;
