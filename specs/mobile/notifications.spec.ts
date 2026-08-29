@@ -233,9 +233,9 @@ test("the approval push is suppressed in the watched thread and sent when you're
       .poll(() =>
         page
           .getByTestId("project-drawer-panel")
-          .evaluate((panel) => getComputedStyle(panel).transform),
+          .evaluate((panel) => panel.getBoundingClientRect().x),
       )
-      .toMatch(/^(none|matrix\(1, 0, 0, 1, 0, 0\))$/);
+      .toBe(0);
     await notificationsItem.click();
     await page.getByText("Skipped — already on screen").waitFor();
     // The orphan batch is already here — nothing on this device's stream
