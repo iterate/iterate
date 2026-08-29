@@ -52,7 +52,7 @@ import {
   type ActivityApprovalContext,
 } from "../../../components/activity-card.tsx";
 import { Markdown } from "../../../components/markdown.tsx";
-import { useDebouncedLiveStatus } from "../../../lib/use-debounced-live-status.ts";
+import { useDebouncedValue } from "../../../lib/use-debounced-value.ts";
 import { base64ToUint8Array, pickImages, type PickedImage } from "../../../lib/attachments.ts";
 import { SignInRequiredError } from "../../../lib/auth.ts";
 import {
@@ -446,8 +446,14 @@ function FeedItem({
   threadEvents: StreamEvent[];
 }) {
   // Displayed phase lags the derived one by a 250ms quiet window so
-  // sub-100ms journal ripples can't flash the glyph (see the hook).
-  const debouncedLiveStatus = useDebouncedLiveStatus(item.id, liveStatus);
+  // sub-100ms journal ripples can't flash the glyph (see the hook). The
+  // content key treats phase + statusText as one display identity.
+  const debouncedLiveStatus = useDebouncedValue({
+    scope: item.id,
+    contentKey: liveStatus === null ? null : `${liveStatus.phase}|${liveStatus.statusText || ""}`,
+    value: liveStatus,
+    debounceMs: 250,
+  });
   switch (item.kind) {
     case "activity":
       return (
