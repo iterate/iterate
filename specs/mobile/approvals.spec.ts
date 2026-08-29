@@ -347,10 +347,10 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     });
 
     // ── The run's approvals read IN CONTEXT: each settled "ran code" card
-    // wears a status icon while collapsed (a check for the approved lane, an
-    // x for the rejected one — located by their accessible labels, the
-    // stable handle now the marks are Feather icons), and its code step
-    // expands into Script | Approvals
+    // wears a status icon while collapsed (a check on the card whose burst
+    // was approved, an x on the card whose burst was rejected — located by
+    // their accessible labels, the stable handle now the marks are Feather
+    // icons), and its code step expands into Script | Approvals
     // tabs — the Approvals tab rendering the batch through the same shared
     // body as the Notifications expansion, decision badge and policy
     // included.
