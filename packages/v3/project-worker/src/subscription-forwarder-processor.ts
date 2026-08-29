@@ -76,36 +76,26 @@ const activeMounts = (state: ForwarderState): AbsentTargetSubscriptionMount[] =>
 
 export class SubscriptionForwarderProcessor extends StreamProcessor<ForwarderState> {
   readonly contract = SubscriptionForwarderContract;
-  /** THE one declared dependency: every delivery mechanic (cursor read-loop, watchdog, backoff
-   *  ladder, halt) lives in the pump; the processor only decides WHEN it runs. */
-  readonly #pump: SubscriptionDeliveryPump;
+  // Every delivery mechanic — cursor read-loop, watchdog, backoff ladder, halt — lives on THIS
+  // class (no injected pump: the collaborators are the ones the processor already holds).
+  readonly #parent: FacetProcessorArgs["parent"];
+  readonly #storage: FacetProcessorArgs["storage"];
+  readonly #deliveriesInFlight = new Set<number>();
 
   constructor(args: FacetProcessorArgs) {
     super(args);
-    this.#pump = new SubscriptionDeliveryPump({
-      read: (afterOffset, limit) => this.stream.read(afterOffset, limit),
-      deliver: (row, events, scannedOffsetRange) =>
-        args.parent().deliverToSubscriptionMount({
-          providedAtOffset: row.providedAtOffset,
-          args: [events, scannedOffsetRange],
-        }),
-      armRetry: (atMs) => args.parent().armSubscriptionRetry({ atMs }),
-      onHalt: (row, reason) =>
-        Promise.resolve(
-          this.stream.append({
-            type: "events.iterate.com/stream/subscription-delivery-halted",
-            payload: { name: row.name, reason },
-          }),
-        ),
-      progress: {
-        get: (providedAtOffset) =>
-          args.storage.get(`subscription-delivery-progress:${providedAtOffset}`),
-        put: (providedAtOffset, record) =>
-          args.storage.put(`subscription-delivery-progress:${providedAtOffset}`, record),
-        delete: (providedAtOffset) =>
-          args.storage.delete?.(`subscription-delivery-progress:${providedAtOffset}`),
-      },
-    });
+    this.#parent = args.parent;
+    this.#storage = args.storage;
+  }
+
+  // ── the per-mount delivery cursor + failure ladder record (facet storage, keyed by offset) ──
+  #progress(off: number): SubscriptionDeliveryProgress | undefined {
+    return this.#storage.get(`subscription-delivery-progress:${off}`) as
+      | SubscriptionDeliveryProgress
+      | undefined;
+  }
+  #putProgress(off: number, record: SubscriptionDeliveryProgress): void {
+    this.#storage.put(`subscription-delivery-progress:${off}`, record);
   }
 
   protected override reduce({ event, state }: ReduceArgs<ForwarderState>) {
@@ -162,12 +152,14 @@ export class SubscriptionForwarderProcessor extends StreamProcessor<ForwarderSta
     switch (event?.type) {
       case "events.iterate.com/capability-table/capability-revoked":
         // Revoke doubles as cursor GC (the reduce above already dropped the row).
-        this.#pump.forget((event.payload as { providedAtOffset: number }).providedAtOffset);
+        this.#storage.delete?.(
+          `subscription-delivery-progress:${(event.payload as { providedAtOffset: number }).providedAtOffset}`,
+        );
         break;
       case "events.iterate.com/stream/subscription-resumed": {
         const { name, afterOffset } = event.payload as { name: string; afterOffset?: number };
         const row = activeMounts(state).find((r) => r.name === name);
-        if (row) this.#pump.reset(row, afterOffset);
+        if (row) this.#reset(row, afterOffset);
         break;
       }
       default:
@@ -182,80 +174,21 @@ export class SubscriptionForwarderProcessor extends StreamProcessor<ForwarderSta
     return undefined;
   }
 
-  /** The one non-event entry (facets have no alarms — workerd#6810): the parent's alarm calls
-   *  this when a retry backoff comes due. */
+  /** The one non-event entry (facets have no alarms — workerd#6810): the parent's alarm calls this
+   *  when a retry backoff comes due. Pump every active row once (serialized per row, concurrent
+   *  across rows — the ONE failure policy: bounded retries 1s·2^n, cap 30 min, ±20% jitter,
+   *  `maxAttempts` total default 15, then HALT + audit fact). */
   async pumpSubscriptionDeliveries(): Promise<{ ok: true }> {
     const { state } = await this.snapshot();
-    await this.#pump.run(activeMounts(state));
+    await Promise.allSettled(activeMounts(state).map((row) => this.#pumpRow(row)));
     return { ok: true };
   }
-}
 
-// ─────────────────────── THE SUBSCRIPTION DELIVERY PUMP ───────────────────────
-
-/** The per-mount delivery cursor + failure ladder record (facet storage, keyed by the mount's
- *  providedAtOffset). `rev` is the reset generation: an in-flight delivery that started before
- *  a reset must not clobber the reset cursor (compare-and-swap before every write). */
-type SubscriptionDeliveryProgress = {
-  confirmedOffset: number;
-  attempt: number;
-  nextAttemptAtMs?: number;
-  halted?: { reason: string };
-  rev?: number;
-};
-
-/** Everything the pump needs, injected — no hidden reach back into the processor. */
-type SubscriptionDeliveryPumpDeps = {
-  /** Durable events after an offset, with the scanned-offset-range proof. */
-  read(
-    afterOffset: number,
-    limit: number,
-  ): Promise<{ events: StreamEvent[]; scannedThroughOffset: number }>;
-  /** Deliver one batch BY ROW IDENTITY; the awaited resolve IS the ack. */
-  deliver(
-    row: AbsentTargetSubscriptionMount,
-    events: StreamEvent[],
-    scannedOffsetRange: ScannedOffsetRange,
-  ): Promise<unknown>;
-  /** The parent's alarm proxy: call pumpSubscriptionDeliveries again no earlier than atMs. */
-  armRetry(atMs: number): Promise<unknown>;
-  /** Append the durable halt audit fact. */
-  onHalt(row: AbsentTargetSubscriptionMount, reason: string): Promise<unknown>;
-  /** The per-row SubscriptionDeliveryProgress records (the processor's facet storage). */
-  progress: {
-    get(providedAtOffset: number): SubscriptionDeliveryProgress | undefined;
-    put(providedAtOffset: number, record: SubscriptionDeliveryProgress): void;
-    delete(providedAtOffset: number): void;
-  };
-};
-
-/** Pumps each subscription mount's cursor toward the head: read a batch, apply the consumes
- *  filter, deliver, advance — with the ONE failure policy (bounded retries 1s·2^n, cap 30 min,
- *  ±20% jitter, `maxAttempts` total, default 15, then HALT + audit fact). One delivery in
- *  flight per row; rows pump concurrently. */
-class SubscriptionDeliveryPump {
-  readonly #deps: SubscriptionDeliveryPumpDeps;
-  readonly #deliveriesInFlight = new Set<number>();
-
-  constructor(deps: SubscriptionDeliveryPumpDeps) {
-    this.#deps = deps;
-  }
-
-  /** Pump every row once (serialized per row, concurrent across rows). */
-  async run(rows: AbsentTargetSubscriptionMount[]): Promise<void> {
-    await Promise.allSettled(rows.map((row) => this.#pumpRow(row)));
-  }
-
-  /** A row was revoked — its cursor goes with it. */
-  forget(providedAtOffset: number): void {
-    this.#deps.progress.delete(providedAtOffset);
-  }
-
-  /** The subscription-resumed command: clear the failure state (halt included), optionally move
-   *  the cursor, pump. The rev bump makes any in-flight delivery's writes lose. */
-  reset(row: AbsentTargetSubscriptionMount, afterOffset?: number): void {
-    const progress = this.#deps.progress.get(row.providedAtOffset);
-    this.#deps.progress.put(row.providedAtOffset, {
+  /** The subscription-resumed command: clear the failure state (halt included), optionally move the
+   *  cursor, pump. The rev bump makes any in-flight delivery's writes lose. */
+  #reset(row: AbsentTargetSubscriptionMount, afterOffset?: number): void {
+    const progress = this.#progress(row.providedAtOffset);
+    this.#putProgress(row.providedAtOffset, {
       confirmedOffset: afterOffset ?? progress?.confirmedOffset ?? row.providedAtOffset,
       attempt: 0,
       rev: (progress?.rev ?? 0) + 1,
@@ -270,21 +203,21 @@ class SubscriptionDeliveryPump {
     this.#deliveriesInFlight.add(row.providedAtOffset);
     try {
       for (;;) {
-        let progress = this.#deps.progress.get(row.providedAtOffset);
+        let progress = this.#progress(row.providedAtOffset);
         if (!progress) {
           // Minted LAZILY on first pump — rows are derived from the reduce, nothing mints them.
           progress = {
             confirmedOffset: row.start === "beginning" ? 0 : row.providedAtOffset,
             attempt: 0,
           };
-          this.#deps.progress.put(row.providedAtOffset, progress);
+          this.#putProgress(row.providedAtOffset, progress);
         }
         if (progress.halted) return;
         if (progress.nextAttemptAtMs && Date.now() < progress.nextAttemptAtMs) {
-          await this.#deps.armRetry(progress.nextAttemptAtMs);
+          await this.#parent().armSubscriptionRetry({ atMs: progress.nextAttemptAtMs });
           return;
         }
-        const page = await this.#deps.read(progress.confirmedOffset, 100);
+        const page = await this.stream.read(progress.confirmedOffset, 100);
         if (page.scannedThroughOffset <= progress.confirmedOffset) return; // caught up
         const scannedOffsetRange = {
           scannedAfterOffset: progress.confirmedOffset,
@@ -293,18 +226,21 @@ class SubscriptionDeliveryPump {
         const events = page.events.filter((e) => consumesEvent(row.consumes, e));
         if (events.length === 0) {
           // everything in the range was filtered — confirm through it, no call
-          this.#deps.progress.put(row.providedAtOffset, {
+          this.#putProgress(row.providedAtOffset, {
             ...progress,
             confirmedOffset: scannedOffsetRange.scannedThroughOffset,
           });
           continue;
         }
-        // The awaited call IS the ack. The watchdog timer is CLEARED on the happy path — a
-        // leaked 20s timer per delivery pins the facet's isolate for nothing.
+        // The awaited call IS the ack. The watchdog is CLEARED on the happy path — a leaked 20s
+        // timer per delivery pins the facet's isolate for nothing.
         let deliveryWatchdog: ReturnType<typeof setTimeout> | undefined;
         try {
           await Promise.race([
-            this.#deps.deliver(row, events, scannedOffsetRange),
+            this.#parent().deliverToSubscriptionMount({
+              providedAtOffset: row.providedAtOffset,
+              args: [events, scannedOffsetRange],
+            }),
             new Promise((_, reject) => {
               deliveryWatchdog = setTimeout(
                 () => reject(new Error(`subscription "${row.name}": delivery timed out after 20s`)),
@@ -312,15 +248,14 @@ class SubscriptionDeliveryPump {
               );
             }),
           ]);
-          // CAS on the reset generation: if a subscription-resumed landed while we were
-          // delivering, the reset cursor wins (the delivered batch may redeliver — exactly what
-          // a replay request asks for).
-          const fresh = this.#deps.progress.get(row.providedAtOffset);
-          // Revoked mid-delivery → forget() deleted the record; abandon (never re-mint it, which
-          // would resurrect the row and try to deliver the revoke fact itself — the ghost halt).
+          // CAS on the reset generation: if a subscription-resumed landed while we were delivering,
+          // the reset cursor wins (the delivered batch may redeliver — exactly what a replay asks).
+          const fresh = this.#progress(row.providedAtOffset);
+          // Revoked mid-delivery → the record was deleted; abandon (never re-mint it, which would
+          // resurrect the row and try to deliver the revoke fact itself — the ghost halt).
           if (fresh === undefined) return;
           if ((fresh.rev ?? 0) !== (progress.rev ?? 0)) continue;
-          this.#deps.progress.put(row.providedAtOffset, {
+          this.#putProgress(row.providedAtOffset, {
             confirmedOffset: scannedOffsetRange.scannedThroughOffset,
             attempt: 0,
             rev: progress.rev,
@@ -344,7 +279,7 @@ class SubscriptionDeliveryPump {
   ): Promise<void> {
     // The same CAS as the success path: a reset (or revoke) mid-delivery wins over the failure.
     // A DELETED record means the row was revoked — abandon silently, NO spurious halt audit fact.
-    const fresh = this.#deps.progress.get(row.providedAtOffset);
+    const fresh = this.#progress(row.providedAtOffset);
     if (fresh === undefined || (fresh.rev ?? 0) !== (progress.rev ?? 0)) return;
     const attempt = progress.attempt + 1;
     const message = error instanceof Error ? error.message : String(error);
@@ -360,20 +295,36 @@ class SubscriptionDeliveryPump {
       const reason = neverRetryable
         ? `delivery failed with retryable: false (${message})`
         : `${attempt} delivery attempts failed (last: ${message})`;
-      this.#deps.progress.put(row.providedAtOffset, {
+      this.#putProgress(row.providedAtOffset, {
         confirmedOffset: progress.confirmedOffset,
         attempt: 0,
         halted: { reason },
         rev: progress.rev,
       });
-      await this.#deps.onHalt(row, reason);
+      await this.stream.append({
+        type: "events.iterate.com/stream/subscription-delivery-halted",
+        payload: { name: row.name, reason },
+      });
       return;
     }
     const jittered = Math.round(
       Math.min(1000 * 2 ** (attempt - 1), 1_800_000) * (0.8 + Math.random() * 0.4),
     );
     const nextAttemptAtMs = Date.now() + jittered;
-    this.#deps.progress.put(row.providedAtOffset, { ...progress, attempt, nextAttemptAtMs });
-    await this.#deps.armRetry(nextAttemptAtMs);
+    this.#putProgress(row.providedAtOffset, { ...progress, attempt, nextAttemptAtMs });
+    await this.#parent().armSubscriptionRetry({ atMs: nextAttemptAtMs });
   }
 }
+
+// ── the per-mount delivery cursor + failure record ──
+
+/** The per-mount delivery cursor + failure ladder record (facet storage, keyed by the mount's
+ *  providedAtOffset). `rev` is the reset generation: an in-flight delivery that started before
+ *  a reset must not clobber the reset cursor (compare-and-swap before every write). */
+type SubscriptionDeliveryProgress = {
+  confirmedOffset: number;
+  attempt: number;
+  nextAttemptAtMs?: number;
+  halted?: { reason: string };
+  rev?: number;
+};
