@@ -37,9 +37,7 @@ import {
 import type { BuiltInsEnv } from "./built-ins.ts";
 import { SubscriptionForwarderProcessor } from "./subscription-forwarder-processor.ts";
 
-interface Env extends BuiltInsEnv {
-  APP_CONFIG?: string;
-}
+type Env = BuiltInsEnv;
 
 /** The identity a facet is configured with — plain data, durable in the facet's own kv.
  *  `className` names the userspace exported StreamProcessor subclass for loader-hosted

@@ -1,10 +1,10 @@
 // BUG-HUNT SPEC for the capability table (reduce / provide / revoke / resolve / route / shadow
-// stack / provenance). Every test asserts CORRECT behavior. `test.fails(...)` marks a case
+// stack / built-ins-first). Every test asserts CORRECT behavior. `test.fails(...)` marks a case
 // VERIFIED failing today (each body opens with BUG/EXPECTED/ACTUAL/WHY IT MATTERS). Plain
 // `test(...)` cases already pass and document correct behavior. No production code is touched.
 // Helpers are copied (not imported) from capability-table-processor.test.ts per the brief.
 import { describe, expect, test } from "vitest";
-import { parse, parseCapabilityPath, type Expression } from "./core/expression.ts";
+import { parse, type Expression } from "./core/expression.ts";
 import { CapabilityTableProcessor } from "./capability-table-processor.ts";
 import { type ProcessorStream } from "./core/processor.ts";
 import {
@@ -75,21 +75,14 @@ const fakeBuiltIns = () => {
   };
 };
 
-const setup = (extraConfigMounts: [string, string][] = []) => {
+const setup = () => {
   const { stream, events } = memoryStream();
   const builtIns = fakeBuiltIns();
+  // whoami/kv/rpcStubs/openai are KEYS in fakeBuiltIns() → `itx.<root>…` resolves DIRECTLY
+  // (built-ins first, unshadowable); no config, no base mounts.
   const host = new CapabilityTableProcessor({
     stream,
     builtIns: builtIns as unknown as Record<string, unknown>,
-    configMounts: [
-      ...[
-        ["itx.whoami", "whoami"],
-        ["itx.kv", "kv"],
-        ["itx.rpcStubs", "rpcStubs"],
-        ["itx.openai", "openai"],
-      ],
-      ...extraConfigMounts,
-    ].map(([path, target]) => ({ path: parseCapabilityPath(path), target: parse(target) })),
   });
   const reduceAll = () =>
     events.reduce(
@@ -146,28 +139,16 @@ describe("provide → print → reduce → parse: an un-round-trippable target v
 
 // ─────────────── shadow stack / config fallback / revoke (already correct) ───────────────
 
-describe("shadow stack + revoke", () => {
-  test("an event mount shadows a CONFIG mount; revoke restores the config mount", async () => {
-    const { host, invoke, builtIns } = setup();
-    builtIns._connect("tab-1", { get: (k: unknown) => `conn:${k}` });
-    // config already mounts itx.kv ⇒ kv; shadow it with an event mount at the SAME path.
-    const prov = await host.provide({ path: "itx.kv", target: "itx.rpcStubs.get('tab-1')" });
-    expect(await invoke("itx.kv.get('a')")).toBe("conn:a"); // event mount wins over config
-    await host.revoke({ providedAtOffset: prov.providedAtOffset });
-    // the config kv is restored (not lost) — write then read the real built-in store.
-    await invoke("itx.kv.put('a', 'restored')");
-    expect(await invoke("itx.kv.get('a')")).toBe("restored");
-  });
-
+describe("built-ins-first + revoke", () => {
   test("revoking an offset that was never provided is a silent no-op; the table still resolves", async () => {
     const { host, invoke } = setup();
     await expect(host.revoke({ providedAtOffset: 999 })).resolves.toBeUndefined();
     expect(await invoke("itx.whoami()")).toEqual({ projectId: "prj_t", path: "/" });
   });
 
-  test("config mounts are unrevocable — a revoke naming any offset leaves them intact", async () => {
+  test("built-ins are unrevocable — a revoke naming any offset leaves them intact", async () => {
     const { host, invoke } = setup();
-    // config mounts carry no providedAtOffset, so no revoke event can ever pop one.
+    // built-ins carry no providedAtOffset (they are not mounts), so no revoke event can pop one.
     await host.revoke({ providedAtOffset: 1 });
     await host.revoke({ providedAtOffset: 2 });
     expect(await invoke("itx.kv.put('a', '1')")).toEqual({ ok: true });
@@ -230,15 +211,4 @@ describe("deliverTo", () => {
     const { host, reduceAll } = setup();
     await expect(host.deliverTo(reduceAll(), 424242, [])).rejects.toThrow(/no subscription mount/);
   });
-});
-
-// ─────────────── speculative / unspecified (not yet a verified bug) ───────────────
-
-describe("open questions", () => {
-  // Two CONFIG mounts at the same path: event mounts break ties by offset (newest wins), but
-  // config mounts all carry providedAtOffset === undefined, so route() keeps the FIRST considered.
-  // Whether "later config overrides earlier" (CSS-like) or "first wins" is the intended rule is
-  // unspecified in the code — characterized as first-wins in scratch, but no spec to assert
-  // against. Left as a todo rather than a fabricated verdict.
-  test.todo("precedence between two same-path CONFIG mounts is unspecified (currently first-wins)");
 });

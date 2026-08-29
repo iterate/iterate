@@ -1,6 +1,6 @@
 // wave2-sweep.failing.test.ts — BUG-HUNT WAVE 2, unit lane: the wave-1 DEFECT SHAPES hunted in
-// the files wave 1 didn't reach (agent-runtime cacheKey composition, config parsing, the
-// capability table's ARRAY-path door, ProcessorFacet identity durability, shared egress).
+// the files wave 1 didn't reach (agent-runtime cacheKey composition, the capability table's
+// ARRAY-path door, ProcessorFacet identity durability, shared egress).
 //
 // Every test asserts CORRECT behavior. `test.fails(...)` marks a case VERIFIED failing by
 // running this file (each body opens with BUG/EXPECTED/ACTUAL/WHY IT MATTERS + its SHAPE).
@@ -29,9 +29,8 @@ vi.mock("cloudflare:workers", () => ({
 
 import { substituteHeaderSecrets } from "@v3/shared/egress";
 import { confinedWorker, facetLoaderOwner } from "./core/agent-runtime.ts";
-import { parseAppConfig } from "./core/config.ts";
 import { DurableObjectNameCodec } from "./core/durable-object-names.ts";
-import { parse, parseCapabilityPath, type Expression } from "./core/expression.ts";
+import { type Expression } from "./core/expression.ts";
 import {
   idempotencyConflictMessage,
   sameIdempotentEvent,
@@ -86,24 +85,7 @@ test("two DIFFERENT facet identities never share one Worker Loader cacheKey (fac
   expect(new Set(keys).size).toBe(2); // distinct — the length-prefix makes the split unambiguous
 });
 
-// ═══════════════ 2. parseAppConfig — the ARRAY path branch is a fabricated proof (S7) ═══════════════
-
-test("a config mount whose ARRAY path smuggles a dot fails loudly at boot", () => {
-  // FIXED (was S7, fabricated proof): core/config.ts CapabilityPathInput now round-trips the array
-  //   branch 1:1 through parseCapabilityPath — a segment must be ONE identifier. `["itx.kv"]` is
-  //   the canonical typo (the author meant the 2-segment path "itx.kv" but produced ONE segment
-  //   "itx.kv"); re-splitting it silently would boot a DIFFERENT mount, so the boot gate the
-  //   docstring promises is loud now rejects it. The empty array [] (a rank-0 stealth default)
-  //   fails the same gate (parseCapabilityPath("") throws "name expected").
-  expect(() =>
-    parseAppConfig(JSON.stringify({ configMounts: [{ path: ["itx.kv"], target: "kv" }] })),
-  ).toThrow();
-  expect(() =>
-    parseAppConfig(JSON.stringify({ configMounts: [{ path: [], target: "kv" }] })),
-  ).toThrow();
-});
-
-// ═══════════════ 3. provide() ARRAY-path door — success returned, mount dropped (S1) ═══════════════
+// ═══════════════ 2. provide() ARRAY-path door — success returned, mount dropped (S1) ═══════════════
 
 // memoryStream + wiring copied from capability-table-processor.failing.test.ts (per the brief:
 // helpers are copied, not imported).
@@ -146,11 +128,11 @@ function memoryStream(path = "/") {
 
 const setupTable = () => {
   const { stream, events } = memoryStream();
+  // whoami is a KEY in builtIns → `itx.whoami` resolves DIRECTLY (built-ins first); no config.
   const builtIns = { whoami: () => ({ projectId: "prj_t", path: "/" }) };
   const host = new CapabilityTableProcessor({
     stream,
     builtIns: builtIns as unknown as Record<string, unknown>,
-    configMounts: [{ path: parseCapabilityPath("itx.whoami"), target: parse("whoami") }],
   });
   const reduceAll = () =>
     events.reduce(
@@ -179,7 +161,7 @@ test("a mount provided with a mis-segmented ARRAY path is REJECTED at the door (
   );
 });
 
-// ═══════════════ 4. ProcessorFacet — configure() while warm serves the STALE identity (S1) ═══════════════
+// ═══════════════ 3. ProcessorFacet — configure() while warm serves the STALE identity (S1) ═══════════════
 
 const makeFacetHarness = () => {
   const kv = new Map<string, unknown>();
@@ -244,7 +226,7 @@ test("a COLD facet (fresh incarnation) picks up the last-configured identity", a
   expect((kv.get("identity") as { slug: string }).slug).toBe("subscription-forwarder");
 });
 
-// ═══════════════ 5. shared egress — substitution arithmetic pins (correct today) ═══════════════
+// ═══════════════ 4. shared egress — substitution arithmetic pins (correct today) ═══════════════
 
 test("egress: resolved, missing, and other-scope tokens in ONE header substitute exactly the resolvable one", async () => {
   // Pins the splice arithmetic: an unresolved token BETWEEN two resolved ones must survive with
@@ -283,7 +265,7 @@ test("egress: substitution never rescans substituted VALUES (no token injection 
   expect(out.headers.get("x-auth")).toBe("{{secret:project:inner}}"); // literal, not re-resolved
 });
 
-// ═══════════════ 6. suspected, not verifiable in this lane ═══════════════
+// ═══════════════ 5. suspected, not verifiable in this lane ═══════════════
 
 test.todo(
   "S4 — egress terminal conflates 'not my scope' with 'missing secret': a {{secret:project:X}} " +

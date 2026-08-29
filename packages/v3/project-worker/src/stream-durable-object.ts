@@ -32,7 +32,6 @@ import {
   versionedFacet,
   type WorkerSource,
 } from "./core/agent-runtime.ts";
-import { parseAppConfig } from "./core/config.ts";
 import { createLogger } from "./core/logs.ts";
 import {
   breakerRemaining,
@@ -70,10 +69,8 @@ import { buildBuiltIns } from "./built-ins.ts";
 import { BUILT_IN_PROCESSOR_SLUGS, type FacetIdentity } from "./processor-facet.ts";
 
 // The parent hosts the INLINE CORE (host scope + routing table + core reduce), so it needs the
-// full roots env the facet used to inherit, plus the config seeds.
-interface Env extends BuiltInsEnv {
-  APP_CONFIG?: string;
-}
+// full roots env the facet used to inherit.
+type Env = BuiltInsEnv;
 
 /** One enabled facet-hosted processor: a built-in slug, or — with `ref` — USERSPACE code (a
  *  source expression resolved to modules + which export is the StreamProcessor subclass). */
@@ -341,7 +338,6 @@ export class StreamDurableObject extends DurableObject<Env> {
         append: (...events) => this.append(...events),
         read: (after, limit) => Promise.resolve(this.read(after, limit)),
       },
-      configMounts: parseAppConfig(this.env.APP_CONFIG).configMounts,
       builtIns,
     });
     proc.resolveCurrent = (call, depth) => this.invoke(call, depth);
@@ -918,7 +914,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     return this.invoke([...segments.slice(0, -1), [last, ...args]] as Expression);
   }
 
-  /** Mount a capability (event provenance — built-in targets are config-mount-only). A
+  /** Mount a userspace capability (its target recurses through itx; built-ins resolve directly). A
    *  subscription mount with an ABSENT target auto-enables the subscription-forwarder facet
    *  FIRST, so the mount's own commit already drives the forwarder. liveState demands a
    *  CONNECTED target: an absent target holds no revision chain, so a dropped payload could

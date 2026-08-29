@@ -1,7 +1,7 @@
-// The capability table's executable spec — shadow stack, provenance gate, default-deny,
+// The capability table's executable spec — shadow stack, built-ins-first, default-deny,
 // recursion, string-at-rest payloads, delivery + processor policies riding the mount event.
 import { describe, expect, test } from "vitest";
-import { parse, parseCapabilityPath, type Expression } from "./core/expression.ts";
+import { parse, type Expression } from "./core/expression.ts";
 import { CapabilityTableProcessor } from "./capability-table-processor.ts";
 import { type ProcessorStream } from "./core/processor.ts";
 import {
@@ -71,21 +71,14 @@ const throwOffline = (key: string): never => {
   throw new Error(`client "${key}" is offline`);
 };
 
-const setup = (extraConfigMounts: [string, string][] = []) => {
+const setup = () => {
   const { stream, events } = memoryStream();
   const builtIns = fakeBuiltIns();
+  // No config, no base mounts: whoami/kv/rpcStubs/openai are KEYS in fakeBuiltIns(), so
+  // `itx.<root>…` resolves DIRECTLY against the physical scope (built-ins first, unshadowable).
   const host = new CapabilityTableProcessor({
     stream,
     builtIns: builtIns as unknown as Record<string, unknown>,
-    configMounts: [
-      ...[
-        ["itx.whoami", "whoami"],
-        ["itx.kv", "kv"],
-        ["itx.rpcStubs", "rpcStubs"],
-        ["itx.openai", "openai"],
-      ],
-      ...extraConfigMounts,
-    ].map(([path, target]) => ({ path: parseCapabilityPath(path), target: parse(target) })),
   });
   // INLINE HOSTING, exactly like the parent: reduce the durable log per call.
   const reduceAll = () =>
@@ -99,8 +92,8 @@ const setup = (extraConfigMounts: [string, string][] = []) => {
   return { stream, events, host, builtIns, invoke, reduceAll };
 };
 
-describe("config mounts (config provenance)", () => {
-  test("built-ins route through their config mounts", async () => {
+describe("built-in resolution + default-deny", () => {
+  test("built-ins resolve directly (no mount, no config)", async () => {
     const { invoke } = setup();
     expect(await invoke("itx.whoami()")).toEqual({ projectId: "prj_t", path: "/" });
     expect(await invoke("itx.kv.put('a', '1')")).toEqual({ ok: true });
@@ -114,7 +107,7 @@ describe("config mounts (config provenance)", () => {
     );
   });
 
-  test("a provided capability may NOT name a built-in (provenance gate at provide time)", async () => {
+  test("a provided capability may NOT name a bare built-in (target must be rooted at itx)", async () => {
     const { host } = setup();
     await expect(host.provide({ path: "itx.evil", target: "kv" })).rejects.toThrow(
       /must be rooted at "itx"/,
@@ -199,7 +192,7 @@ describe("event mounts + the shadow stack", () => {
     await host.provide({ path: "itx", target: "itx.rpcStubs.get('platform')" });
     expect(await invoke("itx.anything('x')")).toBe("handled upstream");
     expect(osCalls).toEqual(["anything(x)"]);
-    // config mounts still win over the default route for what they claim (more specific)
+    // built-ins still resolve BEFORE the default route (built-in-first, unshadowable)
     expect(await invoke("itx.whoami()")).toEqual({ projectId: "prj_t", path: "/" });
   });
 

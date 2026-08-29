@@ -3,25 +3,23 @@
 // host the same way). Its reduced state IS the table:
 //
 //   ┌───────────────── the capability table (per context) ─────────────────┐
-//   │  event mounts   (capability-provided/-revoked; SHADOW STACK:         │  longest path wins;
-//   │                  newest same-path wins; revoke-by-offset pops        │  ties → recency;
-//   │                  exactly that entry)                                 │  one winner;
-//   │  config mounts  (APP_CONFIG, bottom of every stack; the ONLY         │  no match =
-//   │                  provenance whose targets may name the built-ins)    │  DEFAULT-DENY
-//   └──────────────────────────────────────────────────────────────────────┘
+//   │  BUILT-INS      (kv, stream, cd, rpcStubs, …; resolved DIRECTLY —     │  built-ins first;
+//   │                  no mount, no config; unshadowable physical layer)    │  then longest
+//   │  userspace      (capability-provided/-revoked; SHADOW STACK: newest   │  path wins, ties
+//   │  mounts          same-path wins; revoke-by-offset pops that entry)    │  → recency; else
+//   └──────────────────────────────────────────────────────────────────────┘  DEFAULT-DENY
 //
 // A MOUNT binds a CAPABILITY PATH ("itx.chat") to a TARGET EXPRESSION, optionally carrying a
 // DELIVERY policy (subscriptions) or a PROCESSOR policy (facet-processor enablement) — every
-// attachment to a stream is a mount, all event-sourced, all shadowable/revocable. STRING AT
-// REST: the event payload stores both sides in the string half of the codec (the log reads like
+// userspace attachment to a stream is a mount, all event-sourced, all shadowable/revocable. STRING
+// AT REST: the event payload stores both sides in the string half of the codec (the log reads like
 // what a human wrote); reduce parses ONCE into the structured in-memory table.
 //
-// Resolution of a call: match every mount's path → pick the winner (longest, then newest,
-// config mounts last) → evaluate the target against the scope → apply the caller's boundary
-// args → replay the remainder on the result. The scope's `itx` symbol re-enters THIS resolver
-// (so alias mounts compose, and a default route `itx ⇒ itx.os` forwards whole missed calls with
-// zero special machinery); the built-ins exist ONLY while resolving a config-provenance mount —
-// event mounts literally cannot spell the physical layer.
+// Resolution of a call: `itx.<root>…` where `<root>` is a BUILT-IN resolves directly against the
+// physical scope (as if by an implicit mount `itx.<root> ⇒ <root>`). Otherwise, match every
+// userspace mount's path → pick the winner (longest, then newest) → evaluate the target against
+// `{ itx }` → apply boundary args → replay the remainder. The scope's `itx` symbol re-enters THIS
+// resolver (so alias mounts compose); a userspace target names a built-in by recursing through it.
 
 import { z } from "zod";
 import { codedError } from "./core/errors.ts";
@@ -134,19 +132,14 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
   readonly contract = CapabilityTableContract;
   /** The parent's own append/read, in-process. */
   readonly stream: ProcessorStream;
-  /** Config mounts (bottom of every stack). ONLY their targets see the built-ins. */
-  readonly #configMounts: { path: CapabilityPath; target: Expression }[];
-  /** The built-ins: a plain record whose keys (kv, stream, contexts, connections, …) are the
-   *  expression roots that exist only for config-provenance targets. Never contains `itx`. */
+  /** The built-ins: a plain record whose keys (kv, stream, cd, rpcStubs, …) are the physical-layer
+   *  roots. A call `itx.<root>…` resolves DIRECTLY against these (no config, no mount) — see
+   *  `resolve`. Userspace `provide` mounts (event-sourced) name NEW paths and their targets recurse
+   *  through the `itx` symbol; they cannot spell a bare root, so the built-ins are unshadowable. */
   readonly #builtIns: Record<string, unknown>;
 
-  constructor(args: {
-    stream: ProcessorStream;
-    configMounts: { path: CapabilityPath; target: Expression }[];
-    builtIns: Record<string, unknown>;
-  }) {
+  constructor(args: { stream: ProcessorStream; builtIns: Record<string, unknown> }) {
     this.stream = args.stream;
-    this.#configMounts = args.configMounts;
     this.#builtIns = args.builtIns;
   }
 
@@ -206,7 +199,7 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
     const target = toExpression(input.target);
     if (target[0] !== "itx")
       throw new Error(
-        `a provided capability's target must be rooted at "itx" (the built-ins are config-mount-only)`,
+        `a provided capability's target must be rooted at "itx" (a bare built-in root is unspellable — targets recurse through the itx symbol)`,
       );
     // ROUND-TRIP THE STORED STRINGS NOW. The event stores strings; reduce re-parses them and
     // SKIPS anything that won't parse (a bad object key, an exponent number) — which would make
@@ -257,7 +250,7 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
 
   /**
    * Resolve + run one call against the CURRENT table state. The winner is the LONGEST matching
-   * path; ties → recency (event mounts by offset; config mounts oldest of all); nothing
+   * path; ties → recency (newest mount by offset); nothing
    * matches → default-deny with a readable error naming the call.
    */
   async resolve(
@@ -271,24 +264,35 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
     if (depth > 32)
       throw new Error(`capability resolution exceeded depth 32 — self-referential mount?`);
     const expr = toExpression(call);
+    if (typeof expr[0] !== "string")
+      throw new Error("cannot call the scope symbol itself — name a capability first");
+    const itx = this.#itxAtDepth(depth + 1);
+    // BUILT-IN FIRST: `itx.<root>…` where `<root>` is a physical-layer built-in resolves DIRECTLY —
+    // as if by an implicit mount `itx.<root> ⇒ <root>` (`match` consumes the boundary/remainder the
+    // same way a config mount used to). The built-ins are the ONLY targets that see the physical
+    // scope; `itx` spreads LAST so no root shadows the resolver's recursion symbol.
+    const root = typeof expr[1] === "string" ? expr[1] : Array.isArray(expr[1]) ? expr[1][0] : null;
+    if (expr[0] === "itx" && typeof root === "string" && Object.hasOwn(this.#builtIns, root)) {
+      const m = match(["itx", root], expr)!;
+      return await apply(
+        { ...this.#builtIns, itx },
+        [root],
+        { boundaryArgs: m.boundaryArgs, remainder: m.remainder },
+        extraArgs,
+      );
+    }
+    // USERSPACE: a `provide` mount (event-sourced). Its target recurses through `itx` — which lands
+    // back here, on a built-in or another mount.
     const winner = this.route(state, expr);
     if (!winner)
       throw codedError(
         "NO_CAPABILITY_MATCH",
-        `no capability matches ${JSON.stringify(print(expr))} (default-deny; mount one or add a config mount)`,
+        `no capability matches ${JSON.stringify(print(expr))} (default-deny; provide a capability first)`,
       );
-    const { row, m, provenance } = winner;
-    // THE PROVENANCE GATE is a scope-KEY-SET decision: config-mount targets see the built-ins,
-    // event-mount targets see only `itx`. Not policed — the keys are simply absent. `itx`
-    // spreads LAST so no built-in key can ever shadow the resolver's recursion symbol.
-    const scope =
-      provenance === "config"
-        ? { ...this.#builtIns, itx: this.#itxAtDepth(depth + 1) }
-        : { itx: this.#itxAtDepth(depth + 1) };
     return await apply(
-      scope,
-      row.target,
-      { boundaryArgs: m.boundaryArgs, remainder: m.remainder },
+      { itx },
+      winner.row.target,
+      { boundaryArgs: winner.m.boundaryArgs, remainder: winner.m.remainder },
       extraArgs,
     );
   }
@@ -314,39 +318,26 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
     return this.resolve(state, call, [request]);
   }
 
-  /** Pure routing: the winning mount for a call, or null. */
+  /** Pure routing: the winning userspace `provide` mount for a call, or null (built-ins are
+   *  resolved before this — see `resolve`). Longest matching path wins; ties → newest mount. */
   route(
     state: State,
     call: Expression,
-  ): {
-    row: Pick<CapabilityMount, "path" | "target">;
-    m: Match;
-    provenance: "config" | "event";
-    providedAtOffset?: number;
-  } | null {
-    // A call whose first step invokes the scope symbol itself ([["itx", …]]) is malformed —
-    // parser and pathProxy already reject it; this closes the hand-crafted-Expression door.
+  ): { row: Pick<CapabilityMount, "path" | "target">; m: Match; providedAtOffset: number } | null {
     if (typeof call[0] !== "string")
       throw new Error("cannot call the scope symbol itself — name a capability first");
     let best: ReturnType<CapabilityTableProcessor["route"]> = null;
-    const consider = (
-      row: Pick<CapabilityMount, "path" | "target">,
-      provenance: "config" | "event",
-      providedAtOffset?: number,
-    ) => {
-      const m = match(row.path, call);
-      if (!m) return;
-      // THE ranking rule, whole: longest matching path wins; ties go to the newest mount.
+    for (const mount of state.mounts) {
+      const m = match(mount.path, call);
+      if (!m) continue;
       if (
         best === null ||
         m.matchedSegments > best.m.matchedSegments ||
         (m.matchedSegments === best.m.matchedSegments &&
-          (providedAtOffset ?? -1) > (best.providedAtOffset ?? -1))
+          mount.providedAtOffset > best.providedAtOffset)
       )
-        best = { row, m, provenance, providedAtOffset };
-    };
-    for (const configMount of this.#configMounts) consider(configMount, "config");
-    for (const mount of state.mounts) consider(mount, "event", mount.providedAtOffset);
+        best = { row: mount, m, providedAtOffset: mount.providedAtOffset };
+    }
     return best;
   }
 

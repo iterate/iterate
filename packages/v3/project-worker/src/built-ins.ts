@@ -1,8 +1,8 @@
-// built-ins.ts — THE BUILT-INS: a plain record whose KEYS are the expression roots that exist
-// ONLY for config-provenance targets (the provenance gate is a scope-KEY-SET decision — config
-// mounts resolve against { ...builtIns, itx }, event mounts against { itx } alone; nothing is
-// policed, the keys are simply absent). Config-mount targets read `kv`, `stream`,
-// `cd('/x')`, `bindings.get('FALLBACK')` — the vocabulary, unbundled.
+// built-ins.ts — THE BUILT-INS: a plain record whose KEYS are the physical-layer roots (`whoami`,
+// `kv`, `stream`, `cd`, `rpcStubs`, `facets`, `workers`, `runScript`). A call `itx.<root>…`
+// resolves DIRECTLY against these (capability-table-processor.ts `resolve`, built-in first) — no
+// config, no mount. Userspace `provide` mounts resolve against `{ itx }` alone and recurse through
+// the `itx` symbol to reach a root; a bare root is unspellable, so the built-ins are unshadowable.
 
 import {
   CODE_CAP_RUNNER,
@@ -213,13 +213,6 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     /** Run stateless code in this context — sugar for `workers.get({type:'stateless',source}).run(…)`. */
     runScript: (source: unknown, ...args: unknown[]) =>
       statelessHandle(source as WorkerSource).run(...args),
-    /** The forker door: any wrangler service binding, referenced by name from a config seed. */
-    bindings: {
-      get: (name: string) => {
-        if (name !== "FALLBACK") throw new Error(`bindings.get: no binding "${name}"`);
-        return env.FALLBACK;
-      },
-    },
   };
   if (Object.hasOwn(scope, "itx")) throw new Error("host scope must never register 'itx'");
   return scope;

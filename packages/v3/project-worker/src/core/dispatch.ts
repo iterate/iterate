@@ -115,10 +115,10 @@ export async function invokePath(
 }
 
 /**
- * Walk a CONCRETE expression against named scope roots (`itx`, plus config-provenance built-ins;
- * event provenance simply lacks the built-ins in scope — unspellable, not policed). `Object.hasOwn`,
- * not `in`: scope absence IS the provenance gate, and `in` would leak Object.prototype names as
- * phantom roots.
+ * Walk a CONCRETE expression against named scope roots (`itx`, plus the built-ins when the caller
+ * passes them — a userspace target sees only `{ itx }`, so a bare root is unspellable, not policed).
+ * `Object.hasOwn`, not `in`: scope absence IS the gate, and `in` would leak Object.prototype names
+ * as phantom roots.
  */
 export async function evaluate(
   scope: Record<string, unknown>,
