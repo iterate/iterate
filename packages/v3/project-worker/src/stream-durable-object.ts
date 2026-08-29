@@ -111,20 +111,18 @@ type SubscriptionMount = DeliveryPolicy & {
   processor?: ProcessorPolicy;
 };
 
-/** Match a CONNECTED target: `itx.connections.get('<key>')` plus an optional trailing dotted
- *  path (which callable on the retained callback receives the delivery; `[]` = the callback IS
- *  the function). Anything else is an ABSENT target — the forwarder's lane. */
-const connectedTarget = (t?: Expression): { key: string; path: string[] } | undefined => {
+/** Match a CONNECTED target: `itx.connections.get('<key>')`, optionally followed by a trailing
+ *  dotted path (which callable on the retained callback receives the delivery — `apply()` walks
+ *  the raw target expression for that). Only the `key` is needed here (routing + reap identity);
+ *  a trailing CALL step means an ABSENT target — the forwarder's lane. */
+const connectedTarget = (t?: Expression): { key: string } | undefined => {
   if (!t || t.length < 3 || t[0] !== "itx" || t[1] !== "connections") return undefined;
   const call = t[2];
   if (!Array.isArray(call) || call.length !== 2 || call[0] !== "get" || typeof call[1] !== "string")
     return undefined;
-  const path: string[] = [];
-  for (const step of t.slice(3)) {
-    if (typeof step !== "string") return undefined;
-    path.push(step);
-  }
-  return { key: call[1], path };
+  // A trailing CALL step (non-string) names a method, not a delivery callable → an absent target.
+  if (t.slice(3).some((step) => typeof step !== "string")) return undefined;
+  return { key: call[1] };
 };
 
 /** Match a FACET target: `itx.facets.get('<slug>')` — a subscriber whose target is a co-located

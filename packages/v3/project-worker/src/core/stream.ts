@@ -17,7 +17,7 @@ import type { StreamEvent, StreamEventInput } from "./events.ts";
 
 /** One page of the log: the events after an offset, plus how far the scan reached (the range a
  *  client chains for contiguity). Structurally identical to StreamDurableObject.read's return. */
-export interface StreamPage {
+interface StreamPage {
   events: StreamEvent[];
   scannedThroughOffset: number;
 }

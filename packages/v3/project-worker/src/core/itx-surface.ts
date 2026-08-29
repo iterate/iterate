@@ -30,7 +30,7 @@ import { installPrototypeInvokeCapabilityFallback } from "./dotted-path-proxy.ts
 import { canonicalName, DurableObjectNameCodec, normalizePath } from "./durable-object-names.ts";
 import type { StreamDurableObject } from "../stream-durable-object.ts";
 
-export type ItxHostStub = DurableObjectStub<StreamDurableObject>;
+type ItxHostStub = DurableObjectStub<StreamDurableObject>;
 
 /** A retained provider stub (capnweb) from the client. ON THE WIRE it is a callable stub
  *  Proxy (`typeof === "function"` — capnweb pipelines property access through it), so a

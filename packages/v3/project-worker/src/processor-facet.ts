@@ -81,7 +81,6 @@ export type FacetProcessorArgs = {
   storage: ProcessorStorage;
   path: string;
   projectId: string;
-  identity: FacetIdentity;
   props?: Record<string, unknown>;
   parent: () => {
     /** Deliver a batch to a subscription mount BY ROW IDENTITY (never by name through the
@@ -186,7 +185,6 @@ export class ProcessorFacet extends DurableObject<Env> {
       storage,
       path: identity.path,
       projectId: identity.projectId,
-      identity,
       props: identity.props,
       parent,
     });
