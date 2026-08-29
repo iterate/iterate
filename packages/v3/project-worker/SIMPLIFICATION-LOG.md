@@ -660,3 +660,25 @@ with a callback that fires back inside B. Proven on both consumer lanes (capnweb
 3 dotted-surface `test.fails` flipped green; full board green (prove_crisp1/calllater/livestate/push/
 rich/slack/facet1/hibernate/… ALL PASS); unit+harness suite 298 passed, perf held. STILL DEFERRED:
 the isPathMiss miss-grammar (defect 24b) and the WS-through-live-capability loader lane (27/28).
+
+## Reconnect-and-resume: the property behind "hibernation survival" (2026-08-29)
+
+Research (3 agents) settled that the live hibernation proofs are inherently flaky and CANNOT be
+fixed: the client capnweb WS terminates at a STATELESS `/api` worker, and a plain worker cannot
+durably hold a WebSocket (Cloudflare: "if the isolate is evicted, the connection is lost… use
+Durable Objects with the Hibernation API"). capnweb can't hibernate inside a DO today — the open
+workerd#6087 — whose OWN suggested workaround is a stateless proxy worker, i.e. exactly this design.
+So the architecture is correct; a dropped provider socket is EXPECTED and the answer is RECONNECT.
+
+The property that actually matters (Jonas): a capability provider can go OFFLINE and reconnect under
+the SAME connectionKey, and its capability is callable again. Proven deterministically — we control
+the disconnect, no Cloudflare timing:
+• `__tests__/reconnect-same-key.test.ts` — CI, ~0.3s: connect key 'p' → callable →
+dispose the provider session (WS closes, DO reaps 'p') → key goes offline → reconnect 'p' →
+callable again (resolves to the new provider).
+• `proofs/prove_reconnect.mjs` — same, live against the deployment. ALL PASS.
+
+This is the server-side half of the 2026 durable-connection pattern (the client auto-reconnect LOOP
+— re-dial, re-connect, re-provide, heal-by-pull — is app-layer client code, not built here; the
+platform now provably ENABLES it). The live hibernation proofs stay off the reliable board (deterministic
+coverage is `__workers-tests__/hibernation-at-scale.test.ts` via evictDurableObject).
