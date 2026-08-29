@@ -49,7 +49,8 @@ import {
   type StreamEventInput,
 } from "./core/events.ts";
 import { parse, print, toExpression, type Expression } from "./core/expression.ts";
-import { invokePath, pathProxy } from "./core/dispatch.ts";
+import { invokePath } from "./core/dispatch.ts";
+import { InvokeHandle } from "./core/invoke-handle.ts";
 import { hashSource } from "./core/hash.ts";
 import { localContext } from "./core/stream.ts";
 import { ItxConnectionDirectory } from "./itx-connection-directory.ts";
@@ -600,16 +601,17 @@ export class StreamDurableObject extends DurableObject<Env> {
       // The connections + facets views are PARENT-LOCAL — the pager sockets and facets
       // live here and can never move (workerd#6702: sockets never leave the parent).
       connections: {
+        // A GENUINE RpcTarget (not a bare pathProxy) so `itx.connections.get('b').hello()`
+        // pipelines the mid-chain `.hello()` on every lane — workerd's classifier rejects a
+        // Proxy (#6873). The fold is identical: `.hello()` → invoke(key, ['hello'], []).
         get: (key) =>
-          pathProxy((segments, args) => this.#itxConnections.invoke(key, segments, args), {
-            allowRootCall: true,
-          }),
+          new InvokeHandle((path, args) => this.#itxConnections.invoke(key, path, args)),
         each: (method, ...args) => this.#itxConnections.fanOut(String(method).split("."), args),
         list: () => this.#itxConnections.currentlyConnected(),
         close: (key) => this.#itxConnections.close(key),
       },
       facets: {
-        get: (slug) => pathProxy((segments, args) => this.facetInvoke(slug, segments, args)),
+        get: (slug) => new InvokeHandle((path, args) => this.facetInvoke(slug, path, args)),
       },
       statefulWorkers: {
         invoke: (ref, segments, args) => this.#statefulWorkerInvoke(ref, segments, args),
@@ -834,11 +836,21 @@ export class StreamDurableObject extends DurableObject<Env> {
     scannedAfterOffset: number,
     nextOffset: number,
   ): void {
+    const state = this.#inline(CAPABILITY_TABLE_SLUG).state as CapabilityTable;
+    // Deliver by EVALUATING the row's itx-expression target and applying the delivery args — the
+    // SAME door the forwarder uses (deliverTo → apply → the dotted call chain on an rpc stub). No
+    // parallel invoke-by-key path: connected vs forwarder differ ONLY in POLICY (this lane is
+    // fire-and-forget from the commit path; the forwarder facet owns cursor + bounded retry), never
+    // in HOW the target is reached. A CONNECTION_OFFLINE on a closing race is the benign heal-by-pull
+    // case — swallow it; anything else is a real drop worth a line.
+    const fire = (row: SubscriptionMount, args: unknown[], onDrop: (err: unknown) => void) =>
+      void this.#capabilityTableProcessor()
+        .deliverTo(state, row.providedAtOffset, args)
+        .catch((err) => {
+          if (errorCode(err) !== "CONNECTION_OFFLINE") onDrop(err);
+        });
     for (const row of this.#activeSubscriptionMounts()) {
-      const conn = connectedTarget(row.target);
-      if (!conn) continue; // absent target — the forwarder's lane
-      const record = this.#itxConnections.find(conn.key);
-      if (!record) continue; // closing race — auto-revoke is on its way
+      if (!connectedTarget(row.target)) continue; // absent target — the forwarder facet's lane
       if (row.liveState) {
         // State mode: forward each committed change payload for the watched key, raw (no
         // in-flight tracking, no latest-wins queue — the owner's no-coalescing decision; a
@@ -846,14 +858,9 @@ export class StreamDurableObject extends DurableObject<Env> {
         for (const e of committed) {
           if (e.type !== LIVE_STATE_CHANGED) continue;
           if ((e.payload as { key?: string } | undefined)?.key !== row.liveState.key) continue;
-          void this.#itxConnections
-            .invokeConnection(record.stubKey, conn.path, [e.payload])
-            .catch((err) =>
-              console.error(
-                `live-state "${row.name}" delivery failed (client re-seeds on gap)`,
-                err,
-              ),
-            );
+          fire(row, [e.payload], (err) =>
+            console.error(`live-state "${row.name}" delivery failed (client re-seeds on gap)`, err),
+          );
         }
         continue;
       }
@@ -865,22 +872,23 @@ export class StreamDurableObject extends DurableObject<Env> {
       const deliveredAfter =
         this.#subscriptionDeliveredThrough.get(row.providedAtOffset) ?? scannedAfterOffset;
       this.#subscriptionDeliveredThrough.set(row.providedAtOffset, nextOffset);
-      void this.#itxConnections
-        .invokeConnection(record.stubKey, conn.path, [
+      fire(
+        row,
+        [
           events,
           {
             scannedAfterOffset: Math.min(deliveredAfter, scannedAfterOffset),
             scannedThroughOffset: nextOffset,
           } satisfies ScannedOffsetRange,
-        ])
-        .catch((err) =>
-          // Survivable by design — the client sees the range gap and heals by pull.
+        ],
+        // Survivable by design — the client sees the range gap and heals by pull.
+        (err) =>
           streamLog.warn("event-batch delivery dropped", {
             event: "delivery.event-batch.dropped",
             subscriptionName: row.name,
             error: err,
           }),
-        );
+      );
     }
   }
 

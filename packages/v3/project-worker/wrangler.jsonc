@@ -28,28 +28,11 @@
   "durable_objects": {
     "bindings": [{ "name": "CONTEXT", "class_name": "StreamDurableObject" }],
   },
-  "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["ItxDurableObject"] },
-    { "tag": "v2", "new_sqlite_classes": ["StreamDurableObject"] },
-    { "tag": "v3", "new_sqlite_classes": ["StatefulWorkerDurableObject"] },
-    // crisp-1: the merge — ItxDurableObject + StreamDurableObject dissolve into IterateContextDurableObject
-    // (prod is resettable; their data goes with them). Deleting a class is a two-deploy dance
-    // (API 10061): v4 introduces the new class with the old ones as unbound stubs; v5 deletes.
-    { "tag": "v4", "new_sqlite_classes": ["IterateContextDurableObject"] },
-    { "tag": "v5", "deleted_classes": ["ItxDurableObject", "StreamDurableObject"] },
-    // Jonas: itx is short for IterateContext — the class says so.
-    {
-      "tag": "v6",
-      "renamed_classes": [{ "from": "ContextDurableObject", "to": "IterateContextDurableObject" }],
-    },
-    // Jonas: the DO is the STREAM; the iterate context is a PROCESSOR on it.
-    {
-      "tag": "v7",
-      "renamed_classes": [{ "from": "IterateContextDurableObject", "to": "StreamDurableObject" }],
-    },
-    // Increment 57: stateful loaded classes are FACETS of the stream; the dedicated runner dies.
-    { "tag": "v8", "deleted_classes": ["StatefulWorkerDurableObject"] },
-  ],
+  // RESET (2026-08-29): the worker + its DOs were destroyed and redeployed from a clean slate, so
+  // the old v1→v8 chain (which renamed classes that never exist in a fresh namespace) is dead
+  // history — collapsed to ONE fresh migration for the sole live class. This mirrors what
+  // wrangler.test.jsonc always did for fresh pool storage. prod is resettable by design.
+  "migrations": [{ "tag": "reset-1", "new_sqlite_classes": ["StreamDurableObject"] }],
 
   // The DO's fallback (target-core §4.4). SELF-HOST/HOSTED: a service binding to the real control-plane shell
   // worker (deployed from packages/v3/control-plane-shell). SOLO would instead bind

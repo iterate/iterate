@@ -17,9 +17,21 @@ the three lanes (commit cfe9d32f2). Severity: ☠ = data/authority loss, ⚠ = w
 >   are deliberately two facts): **14** (a network blip now files session started+ended; the
 >   storm-rule machinery was deleted), **34** (no reserved-key namespace fence), **48** (no
 >   forged-`source` guard). See `feedback_trusted_clients_radical_simplicity`.
-> - **STILL OPEN (design-heavy):** **24** dotted-surface promise-pipelining (5 tests), **27/28**
->   WebSocket-through-a-live-capability (2 tests, loader-lane), plus the harness-only 50-processors
->   marker and the parity-boundary non-guarantee (**37**).
+> - **24 mid-chain promise-pipelining — FIXED + live-proven (2026-08-29, deploy 88602ac6).**
+>   `connections.get(k)` / `facets.get(slug)` / `contexts.get(p)` / `workers.get(ref)` now return a
+>   genuine, branded `InvokeHandle` RpcTarget (`src/core/invoke-handle.ts`) instead of a bare
+>   `pathProxy`, so `itx.connections.get('b').hello()` and `itx.workers.get(ref).demo.timer.callLater(cb)`
+>   pipeline the mid-chain call on EVERY lane (capnweb client AND dynamic-worker → dynamic-worker via
+>   `env.ITX.get()`; new `proofs/prove_dw2dw.mjs`). Enabled a broader unification (owner's rule "one
+>   invocation path — everything points at itx expressions"): `ItxConnectionDirectory.invokeConnection`
+>   DELETED, and the connected-subscription delivery lane now delivers through the SAME `deliverTo` →
+>   `apply` expression door the forwarder uses (no parallel invoke-by-key path); one `callOn` bridge
+>   root-calls an `InvokeHandle` at its empty path (the parked-callback delivery shape). 3 dotted-surface
+>   tests flipped green; delivery + perf held (298 passed, prove_livestate/push/crisp1/calllater live).
+> - **STILL OPEN (design-heavy):** **24(b)** the isPathMiss miss-grammar (2 tests — capability-table
+>   REPLAY vocabulary, independent of the surface), **27/28** WebSocket-through-a-live-capability
+>   (2 tests, loader-lane), plus the harness-only 50-processors marker and the parity-boundary
+>   non-guarantee (**37**).
 
 ## Family A — print↔parse asymmetry (silent authority loss) ☠
 
@@ -110,11 +122,15 @@ Fallback` + `createInvokeCapabilityPathProxy` into `src/core/dotted-path-proxy.t
     so the workaround was reverted: `get()`/`connect()` return a plain `Itx` and the hop dispatches
     natively, no allow-list to dodge. PROVEN: `itx.whoami()`, `itx.kv.put/get`,
     `itx.stream.append`, `itx.slack.chat.postMessage` all pass end-to-end (4 tests flipped) + 14
-    unit tests. **Still deferred (2 clusters, precise diagnoses in the test file):** (a) mid-chain
-    `connections.get(id).method()` — the DO returns a `pathProxy` (Proxy-over-function =
-    NonPipelinable over Workers RPC); needs the connections view to return a genuine hopped
-    RpcTarget AND capnweb-pipelining bridged across the /api→DO boundary; working alternative today
-    is the `invoke` expression door. (b) the isPathMissMessage miss-grammar — capability-table
+    unit tests. **(a) mid-chain `connections.get(id).method()` — FIXED (2026-08-29, deploy
+    88602ac6).** The connections/facets/contexts/workers views return a genuine branded
+    `InvokeHandle` RpcTarget (`src/core/invoke-handle.ts`, prototype-hop installed, dispatch →
+    `#itxConnections.invoke` / `facetInvoke` / stateful invoke) instead of a `pathProxy`, so workerd's
+    pipeline classifier accepts it and capnweb pipelines the mid-chain call across the /api→DO boundary
+    (2 hops) AND across the dynamic-worker → DO lane. 3 dotted-surface tests flipped; new
+    `proofs/prove_dw2dw.mjs` proves worker→worker. Fold-out: `invokeConnection` deleted, connected
+    delivery unified onto the `deliverTo`/`apply` expression door, one `callOn`→InvokeHandle empty-path
+    bridge. **(b) STILL DEFERRED — the isPathMissMessage miss-grammar** (2 tests): capability-table
     REPLAY vocabulary, independent of the surface.
 25. Row chunking for arbitrary-size payloads (6 tests, apps/os EVENT_CHUNK_SIZE contract):
     event_chunks table, 512KiB JS-side split, offset-per-event, reassembly validation,

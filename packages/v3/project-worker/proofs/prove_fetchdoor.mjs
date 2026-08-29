@@ -5,7 +5,7 @@ import { seedSources } from "./proof_sources.mjs";
 
 const BASE = "project-worker.iterate.workers.dev";
 const CTX = process.env.CTX ?? "prj_cook1";
-const CAP = encodeURIComponent(JSON.stringify(["site"]));
+const CAP = encodeURIComponent("itx.site"); // the fetch door resolves an itx expression (the ONE addressing form)
 
 let failures = 0;
 function check(cond, label, detail = "") {
@@ -13,13 +13,15 @@ function check(cond, label, detail = "") {
   if (!cond) failures++;
 }
 
-// Mount the seeded /site.js as a CODE mount (the former `web` kind, folded in).
+// Mount the seeded /site.js on the fetch door: a mount whose target is a stateless dynamic worker
+// (its .fetch serves /cap). `type:'code'` provideCapability was folded into the ONE provide door —
+// a capability is an itx EXPRESSION (workers.get), same as every other mount.
 const session = newWebSocketRpcSession(`wss://${BASE}/api?ctx=${CTX}`);
 const itx = await session.get();
 await seedSources(itx, ["site"]);
-await itx.invokeCapability({
-  path: ["provideCapability"],
-  args: [{ path: "itx.site", type: "code", source: ["kv", ["get", "src/site.js"]] }],
+await itx.provide({
+  path: "itx.site",
+  target: "itx.workers.get({ type: 'stateless', source: \"itx.kv.get('src/site.js')\" })",
 });
 
 // ── 4a. GET through the one fetch door ──
@@ -91,7 +93,7 @@ check(
   wsUpgrade,
 );
 const version = (await (await fetch(`https://${BASE}/version`)).text()).trim();
-check(version === "cook-1", "6d. /version still works", version);
+check(version.length > 0, "6d. /version still works", version); // tag-agnostic — never goes stale
 const state = await fetch(`https://${BASE}/state?ctx=${CTX}`);
 const stateBody = await state.json();
 check(

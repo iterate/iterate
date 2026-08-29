@@ -223,16 +223,13 @@ export class ItxConnectionDirectory {
     return this.#stubs.all().find((r) => r.connectionKey === key || r.stubKey === key);
   }
 
-  /** Invoke one connection's retained callback by connectionKey/connectionId. */
+  /** Invoke one connection's retained callback by connectionKey/connectionId — the ONE door for
+   *  both the consumer dotted path (`connections.get(key).method()` → an InvokeHandle) and the
+   *  commit pump's one-directional delivery (empty path = the bare subscriber callback itself). */
   invoke(key: string, segments: string[], args: unknown[]): Promise<unknown> {
     const record = this.find(key);
     if (!record) throw codedError("CONNECTION_OFFLINE", `itx connection "${key}" is offline`);
     return this.#stubs.invoke(record.stubKey, segments, args);
-  }
-
-  /** The delivery leg: by stubKey directly (the caller already held the record). */
-  invokeConnection(stubKey: string, path: string[], args: unknown[]): Promise<unknown> {
-    return this.#stubs.invoke(stubKey, path, args);
   }
 
   /** Fan out one dotted method call over EVERY connection attached to this context

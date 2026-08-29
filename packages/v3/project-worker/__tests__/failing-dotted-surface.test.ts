@@ -233,29 +233,15 @@ test("dotted write, explicit read: itx.stream.append lands in the ONE log", asyn
   expect(page.events.some((e: any) => e.type === "mark")).toBe(true);
 });
 
-// BUG (post-hop, the DEEP one): the prototype-hop dotted surface now LANDS (whoami/kv/stream/
-//   slack all pass) — but a mid-path CALL that returns a HANDLE you then call a method on cannot
-//   pipeline. `itx.connections.get('b')` bottoms out at ONE invokeCapability({path:["connections",
-//   "get"],args:["b"]}); the DO answers with a `pathProxy` (core/expression.ts — a
-//   Proxy-over-function). That crosses DO→/api over Workers RPC, where workerd's pipeline
-//   classifier brand-checks it and a JS Proxy can never pass (NonPipelinable; cloudflare/workerd
-//   #6873 — the SAME reason utils.ts uses a prototype hop, not an instance Proxy). So capnweb
-//   cannot attach `.hello()` to it.
-// EXPECTED (apps/os/src/domains/itx/utils.ts:283-312; live guard
-//   apps/os/e2e/vitest/agent-handle-pipelining.itx.e2e.test.ts): the dotted chain answers
-//   "hello-from-b", same as the string door `itx.invoke("itx.connections.get('b').hello()")` which
-//   this rig proves working FIRST — and which is the WORKING spelling today (mid-path args can't
-//   ride a single invokeCapability path anyway; that is what `invoke` is for).
-// ACTUAL: rejects with `TypeError: The RPC receiver does not implement the method "hello".`
-//   (capnweb serialize.ts) — the hop delivered `connections.get('b')`, but the returned handle is
-//   not a pipelinable RpcTarget.
-// WHY STILL FAILING / WHAT IT NEEDS (DO-side, separate session): the connections view must return
-//   a GENUINE RpcTarget (prototype-hop installed, invokerFor → #itxConnections.invoke(key,path,
-//   args)) instead of a pathProxy, AND capnweb must pipeline that method across the /api→DO Workers
-//   -RPC boundary to the client relay (2 hops). The clean room's hard rule "capnweb terminates only
-//   at /api" is exactly what makes this a capnweb-pipelining-over-Workers-RPC bridging job, not a
-//   surface fix. Deferred with a working alternative (the `invoke` expression door).
-test.fails("mid-chain call: itx.connections.get('b').hello() answers from a live connection", async () => {
+// FIXED: `itx.connections.get('b')` now returns a genuine, pipelinable RpcTarget
+//   (core/invoke-handle.ts — `InvokeHandle`, prototype-hop installed, dispatch →
+//   #itxConnections.invoke(key,path,args)) instead of a bare `pathProxy`. workerd's pipeline
+//   classifier accepts a real RpcTarget on both lanes (capnweb's RpcTarget IS the native
+//   cloudflare:workers RpcTarget), so capnweb pipelines `.hello()` across the /api→DO boundary to
+//   the client relay (2 hops). The fold is identical (`.hello()` → invoke(key, ['hello'], [])); the
+//   only change is the pipelinable brand. Was: `TypeError: The RPC receiver does not implement the
+//   method "hello"` (a Proxy is NonPipelinable; cloudflare/workerd#6873).
+test("mid-chain call: itx.connections.get('b').hello() answers from a live connection", async () => {
   const itx = await connectedRig(c("conn"), "b");
   expect(await itx.connections.get("b").hello()).toBe("hello-from-b");
 });
@@ -347,10 +333,10 @@ test.fails("a leaf miss through the EXPLICIT door keeps the same miss grammar", 
 // WHY IT MATTERS: real client code parks chain nodes in variables, logs them, and awaits them
 //   mid-chain (apps/os pinned this after `await stub` bugs turned every await into a dispatch);
 //   a surface where mid-chain awaits throw forces callers into single-expression gymnastics.
-// POST-HOP: the hop lands `itx.connections.get("b9")` as a dispatcher, but this asserts
-// `node.hello()` too — same DO-side mid-chain deferral as above (the connection handle must be a
-// pipelinable RpcTarget). The await-safety half (then stays absent) already holds via the hop.
-test.fails("an unawaited dotted chain is await-safe: awaiting mid-chain yields a live handle", async () => {
+// FIXED: the connection handle is now a pipelinable `InvokeHandle` (RpcTarget), so `node.hello()`
+// answers after the await. The await-safety half (`then` stays absent → await settles to the
+// handle, never dispatches) holds via the RpcTarget prototype hop.
+test("an unawaited dotted chain is await-safe: awaiting mid-chain yields a live handle", async () => {
   const itx = await connectedRig(c("await"), "b9");
   const node = itx.connections.get("b9"); // unawaited dotted chain — no call yet
   const handle: any = await node; // must settle (never treat `then` as a path segment)
@@ -384,10 +370,10 @@ test("awaiting the root itx stub again neither hangs nor dispatches (then-safety
 // WHY IT MATTERS: apps/os learned this twice — a truthy-Promise `asymmetricMatch` made vitest
 //   equalities SPURIOUSLY PASS, and stringify of a logged mount fired live invokes at depth ≥ 1
 //   after the first hop-level fix.
-// POST-HOP: the stringify-safety half now holds (the hop's path proxies block toJSON — proven in
-// core/dotted-path-proxy.test.ts), but this also asserts `node.hello()` — same DO-side mid-chain
-// deferral (the connection handle must be a pipelinable RpcTarget).
-test.fails("JSON.stringify of a dangling chain node must not dispatch, and the node stays live", async () => {
+// FIXED: stringify-safety holds (the hop's path proxies block toJSON — proven in
+// core/dotted-path-proxy.test.ts) AND `node.hello()` answers — the connection handle is now a
+// pipelinable `InvokeHandle` (RpcTarget).
+test("JSON.stringify of a dangling chain node must not dispatch, and the node stays live", async () => {
   const itx = await connectedRig(c("json"), "rec");
   const node = itx.connections.get("rec"); // a dangling dispatcher (a logged handle, a report object)
   const out = JSON.stringify({ node }); // probes toJSON — must NOT fire a live capability call

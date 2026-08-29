@@ -7,6 +7,7 @@
 
 import { codedError } from "./errors.ts";
 import type { Expression } from "./expression.ts";
+import { InvokeHandle } from "./invoke-handle.ts";
 
 /** A successful claim of a call by a capability path. */
 export type Match = {
@@ -130,11 +131,15 @@ export async function evaluate(
 }
 
 /** Apply `args` to a resolved value on its carried receiver, or a LOUD error if it is not callable
- *  (never the silent arg-drop apps/os shipped). */
+ *  (never the silent arg-drop apps/os shipped). An `InvokeHandle` (a mid-chain capability handle —
+ *  `itx.connections.get(k)`, a parked-callback alias the forwarder delivers to) is NOT a JS function
+ *  (it is a real RpcTarget so dotted access pipelines — core/invoke-handle.ts), so ROOT-calling it
+ *  means dispatching those args at its EMPTY path: `handle(events,range)` ⇒ the bare callback the
+ *  handle fronts. This is the one bridge between "callable capability" and "pipelinable RpcTarget". */
 async function callOn(value: unknown, receiver: unknown, args: unknown[]): Promise<unknown> {
-  if (typeof value !== "function")
-    throw new Error(`mount target is not callable but ${args.length} arg(s) were passed`);
-  return Reflect.apply(value, receiver, args);
+  if (typeof value === "function") return Reflect.apply(value, receiver, args);
+  if (value instanceof InvokeHandle) return value.invokeCapability({ path: [], args });
+  throw new Error(`mount target is not callable but ${args.length} arg(s) were passed`);
 }
 
 /**
@@ -158,18 +163,15 @@ export async function apply(
 /** The dotted surface as a runtime Proxy — the programmatic write-half of the codec: property gets
  *  accumulate path segments, calling hands `(segments, args)` to `call`. `then`/symbol probes return
  *  undefined so a proxy is never mistaken for a thenable mid-await. Calling the BARE root is a loud
- *  error (mirroring the parser) unless `allowRootCall` — a PROVIDER proxy whose parked bare callback
- *  IS the callable. */
-export function pathProxy(
-  call: (segments: string[], args: unknown[]) => unknown,
-  opts?: { allowRootCall?: boolean },
-): unknown {
+ *  error (mirroring the parser). Mid-chain CAPABILITY handles that must survive an RPC boundary use
+ *  `InvokeHandle` (a real RpcTarget) instead — a bare Proxy is NonPipelinable over Workers RPC. */
+export function pathProxy(call: (segments: string[], args: unknown[]) => unknown): unknown {
   const build = (segments: string[]): unknown =>
     new Proxy(function () {} as object, {
       get: (_t, p) =>
         p === "then" || typeof p === "symbol" ? undefined : build([...segments, p as string]),
       apply: (_t, _this, args) => {
-        if (segments.length === 0 && !opts?.allowRootCall)
+        if (segments.length === 0)
           throw new Error("cannot call the scope symbol itself — name a capability first");
         return call(segments, args as unknown[]);
       },

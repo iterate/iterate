@@ -3,6 +3,10 @@
 // invoke can run between whichever two survived the hold (workers.dev recycles idle stateless
 // edge isolates on the same timescale as actor eviction, killing that relay's client socket AND
 // its pager — observed ~50% per ~340s idle, always alongside an eviction window).
+//
+// ⚠️ INHERENTLY UNRELIABLE — NOT part of the reliable board (same CF-eviction-vs-socket-recycle
+// tension as prove_hibernate.mjs; see its header). The deterministic proof is
+// __workers-tests__/hibernation-at-scale.test.ts (evictDurableObject). Run this manually.
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { seedSources } from "./proof_sources.mjs";
 

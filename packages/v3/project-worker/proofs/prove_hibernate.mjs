@@ -2,6 +2,15 @@
 // reconstruct — incarnation grows) while facet processors are ENABLED (tally + user-tally) AND
 // two capnweb clients stay CONNECTED with live capabilities (pagers parked).
 // Then the wake path: one client invokes the other's capability through the routing table.
+//
+// ⚠️ INHERENTLY UNRELIABLE — NOT part of the reliable board (run manually, expect occasional fail).
+// The hibernation PROPERTY is proven DETERMINISTICALLY in __workers-tests__/hibernation-at-scale.
+// test.ts via cloudflare:test's evictDurableObject(). This LIVE proof instead waits for CF's OWN
+// eviction, which is non-deterministic and slow (minutes), and it races a fundamental tension with
+// no fix: with NO client traffic the edge WebSocket is recycled (~5-8min idle, peer close 1006)
+// dropping a parked stub BEFORE eviction; with ANY keepalive traffic the DO never evicts at all.
+// So a run can fail with "incarnation did not grow" (CF didn't evict in the window) or "stubs=1 /
+// connection offline" (a socket recycled). Neither is a code bug — rely on the harness for CI.
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { seedSources } from "./proof_sources.mjs";
 

@@ -42,7 +42,9 @@ type RetainedProviderStub = { dup(): RetainedProviderStub; [k: string]: unknown 
 
 /** A `.connect` input: which context to attach to (default the root), the client-chosen
  *  connectionKey (reconnects under the same key share an ItxConnectionSession), and the live
- *  `capabilities` callback the connection offers. */
+ *  `capabilities` the connection offers. A capability is any capnweb stub — an RpcTarget with
+ *  methods (reached as `itx.connections.get(key).method()`, pipelinable via core/invoke-handle.ts)
+ *  OR a bare callback (root-called `itx.<mount>(args)` — the delivery/subscriber shape). */
 interface ConnectOpts {
   context?: string;
   connectionKey?: string;

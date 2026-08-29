@@ -623,3 +623,40 @@ shape):** a `Demo`/`Timer` provided at `itx.demo`, and `itx.demo.timer.callLater
 from a capnweb client AND from a **dynamic worker via `env.ITX.get()`** — in both, the callback fires
 back in the caller's isolate (the worker's callback appended to its own stream). Callbacks retained
 with `cb.dup()`. Suite 295/9, prove_push + prove_ephemeralflood held (5025 ev/s), no regression.
+
+## Mid-chain pipelining: `InvokeHandle`, and ONE invocation path (2026-08-29)
+
+`itx.connections.get('b').hello()` — get a live sub-capability, then call a method on it — is a
+MID-CHAIN call: `get('b')` returns a handle, `.hello()` is called on the RESULT. The views
+(`connections`/`facets`/`contexts`/`workers.get` stateful) returned a bare `pathProxy`
+(Proxy-over-function). It folds dotted access fine, but workerd's promise-pipeline classifier
+brand-checks a method's RESULT and a JS Proxy can never pass (NonPipelinable; cloudflare/workerd
+#6873), so over Workers RPC the `.hello()` died with "The RPC receiver does not implement the method".
+
+**Fix — `src/core/invoke-handle.ts`:** a genuine, branded `InvokeHandle extends RpcTarget` with the
+apps/os prototype-hop installed (`installPrototypeInvokeCapabilityFallback`). Unknown dotted members
+fold into ONE `invokeCapability({ path, args })` → a `dispatch(path,args)` closure (the SAME fold the
+pathProxy did), but now carried on a real RpcTarget brand that workerd AND capnweb both accept, so the
+mid-chain call pipelines on every lane. The four views return an `InvokeHandle`; providers are
+UNCHANGED (still a plain `RpcTarget` like `new Demo()` — which capnweb already requires to pass a
+capability by reference); the client is UNCHANGED (still just capnweb).
+
+**ONE invocation path (owner's rule — "everything points at itx expressions; no parallel ways").**
+An `InvokeHandle` is not a JS function (an RpcTarget can't be), so ROOT-calling it (`handle(events,
+range)` — the parked-callback delivery shape) is bridged in the ONE place that calls a resolved
+capability: `callOn` dispatches the args at the handle's EMPTY path. That let the delivery lanes
+UNIFY: `ItxConnectionDirectory.invokeConnection` (the by-stubKey bypass) is DELETED, and the connected-
+subscription delivery lane now delivers through the SAME `deliverTo` → `apply` expression door the
+forwarder uses — evaluate the row's itx-expression target (`itx.connections.get(connId)`) and apply
+the batch. Connected vs forwarder now differ ONLY in POLICY (fire-and-forget from the commit path
+vs the forwarder facet's cursor+retry), never in HOW the target is reached. `allowRootCall` (dead)
+removed from `pathProxy`. `#itxConnections.invoke` is now reached ONLY via the `InvokeHandle`.
+
+**Live-proven (deploy f2ef870a, on a DESTROYED-AND-REBUILT deployment — worker+DOs deleted, KV wiped,
+migrations collapsed to one fresh `reset-1` class).** New `proofs/prove_dw2dw.mjs`: worker A is a
+stateful DO with `get demo → Demo, get timer → Timer, callLater(ms, cb)`; worker B reaches it via
+`env.ITX.get().workers.get(aRef).demo.timer.callLater(cb)` — dynamic-worker → dynamic-worker mid-chain
+with a callback that fires back inside B. Proven on both consumer lanes (capnweb client + worker B).
+3 dotted-surface `test.fails` flipped green; full board green (prove_crisp1/calllater/livestate/push/
+rich/slack/facet1/hibernate/… ALL PASS); unit+harness suite 298 passed, perf held. STILL DEFERRED:
+the isPathMiss miss-grammar (defect 24b) and the WS-through-live-capability loader lane (27/28).

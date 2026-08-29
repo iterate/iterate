@@ -13,7 +13,7 @@ import {
 import { PROCESSOR_SDK_MODULE } from "./generated/processor-sdk.ts";
 import { itxEntrypointFor } from "./itx-entrypoint.ts";
 import { toExpression, type Expression } from "./core/expression.ts";
-import { pathProxy } from "./core/dispatch.ts";
+import { InvokeHandle } from "./core/invoke-handle.ts";
 import type { Context } from "./core/stream.ts";
 import type { StreamEventInput } from "./core/events.ts";
 import { hashSource } from "./core/hash.ts";
@@ -135,7 +135,10 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         // a top-level `.fetch` forwards to the facet's own fetch (101s pass, no header protocol).
         const source = toExpression(ref.source as string | Expression);
         const className = ref.className;
-        return pathProxy((segments, args) => {
+        // A GENUINE RpcTarget (not a bare pathProxy) so a mid-chain call on a stateful loaded
+        // class pipelines — `itx.workers.get(ref).demo.timer.callLater(cb)` from one dynamic
+        // worker to another rides one round trip (workerd#6873; see core/invoke-handle.ts).
+        return new InvokeHandle((segments, args) => {
           if (segments.length === 1 && segments[0] === "fetch")
             return deps.statefulWorkers.fetch({ source, className }, args[0] as Request);
           return deps.statefulWorkers.invoke({ source, className }, segments, args);
@@ -216,7 +219,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
      *  path — the log door needs no routing). Codec-named, so only THIS project is reachable. */
     contexts: {
       get: (siblingPath: string) =>
-        pathProxy((segments, args) => {
+        new InvokeHandle((segments, args) => {
           const sibling = deps.context(siblingPath); // a Context — no cast (real-typed seam)
           if (segments.length === 1 && (segments[0] === "append" || segments[0] === "read"))
             return segments[0] === "append"
