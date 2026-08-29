@@ -5,26 +5,20 @@
 // chat list (the whole point of the app is cold-open → typing in seconds).
 
 import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Redirect, router, Stack } from "expo-router";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { AppDrawerButton } from "../components/project-drawer.tsx";
-import { hasSignIn, signIn } from "../lib/auth.ts";
 import { bundleRecommendation } from "../lib/expected-backend.ts";
-import { getItxSession, reconnectItxSession } from "../lib/itx.ts";
+import { getItxSession } from "../lib/itx.ts";
 import { backfillProjectIfMissing, rememberedProjectInScope } from "../lib/open-project.ts";
 import { DEFAULT_SERVER, PRODUCTION_PRESET } from "../lib/servers.ts";
-import {
-  clearLastProject,
-  getLastProject,
-  getServerBaseUrl,
-  setServerBaseUrl,
-} from "../lib/storage.ts";
+import { useSession, useSignIn } from "../lib/session.ts";
+import { clearLastProject, getLastProject } from "../lib/storage.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
 
 export default function SignInScreen() {
-  const queryClient = useQueryClient();
   // The running bundle's expectation (lib/expected-backend.ts): a PR bundle
   // names its leased preview slot and per-PR test identity, a main/local
   // bundle names nothing. Suggestions only — they preselect the server and
@@ -32,12 +26,15 @@ export default function SignInScreen() {
   const expectation = bundleRecommendation();
   const recommended = expectation.server;
   const hintedEmail = expectation.email;
-  // Persisted server + sign-in state decide whether to skip this screen.
+  // The app-global session decides whether to skip this screen; this query
+  // only resolves WHERE a signed-in boot should land.
+  const session = useSession();
   const bootstrap = useQuery({
-    queryKey: ["bootstrap"],
+    queryKey: ["bootstrap", session.data?.serverBaseUrl, session.data?.signedIn],
+    enabled: session.isSuccess,
     queryFn: async () => {
-      const server = (await getServerBaseUrl()) || DEFAULT_SERVER;
-      const signedIn = await hasSignIn(server);
+      const server = session.data!.serverBaseUrl;
+      const signedIn = session.data!.signedIn;
       let lastProject = signedIn ? await getLastProject(server) : null;
       // The boot redirect below skips the project picker entirely — the
       // ONLY other place a project gets opened is projects.tsx's own tap
@@ -65,11 +62,7 @@ export default function SignInScreen() {
           lastProject = null;
         }
       }
-      return {
-        server,
-        signedIn,
-        lastProject,
-      };
+      return { lastProject };
     },
     staleTime: 0,
   });
@@ -77,26 +70,24 @@ export default function SignInScreen() {
   const [editedServer, setEditedServer] = useState<string | null>(null);
   // A recommended backend from a preview deep link preselects the server —
   // the user's own edits always win.
-  const server = editedServer || recommended?.baseUrl || bootstrap.data?.server || DEFAULT_SERVER;
+  const server =
+    editedServer || recommended?.baseUrl || session.data?.serverBaseUrl || DEFAULT_SERVER;
 
+  const signIn = useSignIn();
   const login = useMutation({
     mutationFn: async () => {
       const baseUrl = normalizeBaseUrl(server);
-      await setServerBaseUrl(baseUrl);
       // The test-identity hint only accompanies its own backend: signing in
       // anywhere else (say prd, where the test OTP is off) must not suggest a
       // mailbox nobody can read.
       const loginHint =
         hintedEmail !== null && recommended !== null && baseUrl === recommended.baseUrl
-          ? { loginHint: hintedEmail }
-          : {};
-      await signIn(baseUrl, loginHint);
-      return baseUrl;
+          ? hintedEmail
+          : null;
+      return signIn.mutateAsync({ baseUrl, loginHint });
     },
-    onSuccess: (baseUrl) => {
+    onSuccess: () => {
       setEditedServer(null);
-      reconnectItxSession(baseUrl);
-      queryClient.clear();
       // autoOpen: fresh sign-ins skip the picker when the account has exactly
       // one project (projects.tsx) — the first list can ride a cold itx
       // WebSocket, so the decision lives in the picker's retrying query, not
@@ -105,7 +96,7 @@ export default function SignInScreen() {
     },
   });
 
-  if (bootstrap.isPending) {
+  if (session.isPending || bootstrap.isPending) {
     return (
       <View style={styles.loading}>
         <ActivityIndicator accessibilityLabel="Loading" color={colors.textMuted} />
@@ -117,8 +108,8 @@ export default function SignInScreen() {
   // is the one surface that offers the backend/identity switch, and this
   // screen only SUGGESTS (preselected server + login_hint) when you land on
   // it signed out anyway.
-  if (bootstrap.data?.signedIn && editedServer === null) {
-    const last = bootstrap.data.lastProject;
+  if (session.data?.signedIn && editedServer === null) {
+    const last = bootstrap.data?.lastProject;
     if (last) {
       return (
         <Redirect

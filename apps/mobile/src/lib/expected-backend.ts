@@ -8,9 +8,9 @@
 // URL you scanned rather than the JS you're running.
 //
 // Pure on purpose (no Expo/RN imports) — the node vitest lane covers every
-// branch. The AsyncStorage-backed once-per-bundle claim lives in
-// new-bundle-boot.ts.
-import { buildInfo } from "./build-info.ts";
+// branch. The stamp itself is read by build-state-core.ts, which is pure for
+// the same reason.
+import { buildStamp } from "./build-state-core.ts";
 import { serverPresetForEnvKey } from "./servers.ts";
 
 /** Only per-PR test addresses are ever suggested; anything else stamped (or
@@ -34,10 +34,10 @@ export type Recommendation = { server: RecommendedServer | null; email: string |
  * whenever the server is.
  */
 export function bundleRecommendation(): Recommendation {
-  const server = buildInfo.expectedBackendEnv
-    ? serverPresetForEnvKey(buildInfo.expectedBackendEnv)
+  const server = buildStamp.expectedBackendEnv
+    ? serverPresetForEnvKey(buildStamp.expectedBackendEnv)
     : null;
-  return { server, email: server ? validatedTestEmail(buildInfo.testLoginEmail) : null };
+  return { server, email: server ? validatedTestEmail(buildStamp.testLoginEmail) : null };
 }
 
 // ---------------------------------------------------------------------------

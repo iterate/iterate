@@ -63,8 +63,9 @@ install pages ([EAS builds list](https://expo.dev/accounts/mishanustom/projects/
   channel (`.depot/workflows/mobile-eas-update.yml` →
   `scripts/ci/publish-mobile-update.ts`) and the installed app pulls it on
   next launch. The drawer's **Build info** screen shows what's running
-  (branch, commit, who built it, update channel/time) and has a
-  check-for-update-now button.
+  — the channel it pulls from vs the channel this build was made for, the
+  running branch/commit/message, and whether anything newer is published —
+  and has a check/update button.
 
 The runtime version uses the fingerprint policy: a merge that changes native
 code (new native module, Expo upgrade) produces updates old binaries ignore.
@@ -94,16 +95,33 @@ The `preview` channel is main-only; publishing PR work to it would be
 last-write-wins chaos. PRs touching `apps/mobile/**` get their own channel
 named after the branch: CI (`.depot/workflows/mobile-pr-preview.yml` →
 `scripts/ci/publish-mobile-pr-preview.ts`) publishes on every push and
-maintains a PR-body section with two tappable QR codes — an
-`iterate://preview-channel/<channel>` deep link that switches the installed
-app to the PR's channel (confirm screen, then fetch + reload), and the
-matching build's install page for when the runtime differs or the app isn't
-installed. Whichever the fingerprint heuristic says you need is expanded.
-The switch persists across restarts; get back with **Build info → Reset to
-default channel**. Installing a native build overpowers that persistence:
-the first boot of a new binary force-clears any pre-existing channel
-override (with a notice), so the build you installed is the build you run
-(`src/lib/native-install-guard.ts`).
+maintains a PR-body section with two tappable QR codes. Either one lands you
+on the PR — pick by what your phone already has:
+
+- **OTA** — an `iterate://preview-channel/<channel>` deep link that points the
+  installed app at the PR's channel (confirm screen, then fetch + reload).
+  Needs a binary whose runtime already matches.
+- **Full install** — the EAS install page for a build made _for this PR's
+  channel_. Installing it is all you need; there is no second scan. One build
+  per PR branch, reused across pushes, so the first push to a mobile PR waits
+  ~15–20 minutes for it (the section says "build still running" until then).
+
+The fingerprint heuristic still decides which one is expanded, but getting it
+wrong now costs a scan rather than leaving you on main.
+
+Baking a PR's channel into its build means writing the build profile's
+`channel` before `eas build` — eas-cli has no `--channel` flag — which is why
+`fingerprint.config.js` ignores `eas.json`. Without that ignore the rewritten
+file moves the runtime fingerprint and the resulting binary refuses the very
+updates the PR publishes.
+
+A channel switch persists across restarts; get back with **Build info → Reset
+to default channel**. Installing a native build overpowers that persistence:
+the first boot of a new binary force-clears any pre-existing channel override
+(with a notice), so the build you installed is the build you run
+(`resetChannelOverrideForNewInstall` in `src/lib/build-state.ts`). With builds
+made per PR that guard is now purely protective — clearing the override lands
+you on the channel you installed for.
 
 Lifecycle: closing a PR deletes its channel, update branch, and QR assets
 (`.depot/workflows/mobile-pr-preview-cleanup.yml`). Channel discovery is the
@@ -224,6 +242,9 @@ testable from the phone alone. The runner shipped in PR #2059.
 
 | Path                           | What                                                                                    |
 | ------------------------------ | --------------------------------------------------------------------------------------- |
+| `src/lib/build-state-core.ts`  | Pure: which channel am I on, is this build watched, what does an update check mean      |
+| `src/lib/build-state.ts`       | Expo/react-query binding for the above: channel override, install guard, update actions |
+| `src/lib/session.ts`           | The app-global "am I signed in, where, and as whom?"                                    |
 | `src/lib/itx.ts`               | Mobile deployment/OAuth binding for the shared `iterate/sdk/itx/react` keeper           |
 | `src/lib/auth.ts`              | Issuer discovery, dynamic registration, PKCE, rotation-safe token refresh               |
 | `src/lib/chat.ts`              | Pure: stream events → bubbles + working flag; agent path conventions                    |

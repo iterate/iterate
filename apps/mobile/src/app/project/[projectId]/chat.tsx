@@ -24,7 +24,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { router, Stack, useLocalSearchParams } from "expo-router";
+import { Stack, useLocalSearchParams } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import {
   ActionSheetIOS,
@@ -52,8 +52,8 @@ import {
   type ActivityApprovalContext,
 } from "../../../components/activity-card.tsx";
 import { Markdown } from "../../../components/markdown.tsx";
+import { useDebouncedValue } from "../../../lib/use-debounced-value.ts";
 import { base64ToUint8Array, pickImages, type PickedImage } from "../../../lib/attachments.ts";
-import { SignInRequiredError } from "../../../lib/auth.ts";
 import {
   collapseConsecutiveStreamWakes,
   reduceFeed,
@@ -107,15 +107,10 @@ export default function ChatScreen() {
   const events = useLiveEvents({
     queryKey: ["thread-events", baseUrl || "", projectId, path],
     read: async () => {
-      try {
-        const project = await getProjectItx(baseUrl!, projectId);
-        return await project.streams.get(path).getEvents({});
-      } catch (error) {
-        // Redirect from the async failure, not render: render-time
-        // navigation re-fires on every re-render while the error persists.
-        if (error instanceof SignInRequiredError) router.replace("/");
-        throw error;
-      }
+      // A dead sign-in drops back to the sign-in screen from the query
+      // cache's error handler (lib/query.ts) — app-global, not per screen.
+      const project = await getProjectItx(baseUrl!, projectId);
+      return await project.streams.get(path).getEvents({});
     },
     enabled: baseUrl !== undefined,
     eventTypes: undefined,
@@ -457,13 +452,22 @@ function FeedItem({
   liveStatus: ReturnType<typeof reduceFeed>["liveStatus"];
   threadEvents: StreamEvent[];
 }) {
+  // Displayed phase lags the derived one by a 250ms quiet window so
+  // sub-100ms journal ripples can't flash the glyph (see the hook). The
+  // content key treats phase + statusText as one display identity.
+  const debouncedLiveStatus = useDebouncedValue({
+    scope: item.id,
+    contentKey: liveStatus === null ? null : `${liveStatus.phase}|${liveStatus.statusText || ""}`,
+    value: liveStatus,
+    debounceMs: 250,
+  });
   switch (item.kind) {
     case "activity":
       return (
         <ActivityCard
           activity={item}
           approvals={activityApprovals}
-          liveStatus={liveStatus}
+          liveStatus={debouncedLiveStatus}
           threadEvents={threadEvents}
         />
       );

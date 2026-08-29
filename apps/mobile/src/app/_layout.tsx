@@ -1,14 +1,13 @@
 import "react-native-url-polyfill/auto";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { Stack, useSegments } from "expo-router";
+import { router, Stack, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { Alert } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { initialWindowMetrics, SafeAreaProvider } from "react-native-safe-area-context";
 import { NoteCaptureOverlay } from "../components/note-composer.tsx";
+import { UpdateBanner } from "../components/update-banner.tsx";
 import { VoiceCallBanner } from "../components/voice-call-banner.tsx";
-import { resetChannelOverrideForNewInstall } from "../lib/native-install-guard.ts";
-import { fetchLatestUpdateAndReload } from "../lib/preview-channel.ts";
+import { resetChannelOverrideForNewInstall } from "../lib/build-state.ts";
 import { queryClient } from "../lib/query.ts";
 import { routeInitialNotification } from "../lib/push-device.ts";
 import { colors } from "../lib/theme.ts";
@@ -27,6 +26,9 @@ export default function RootLayout() {
           {/* Global capture composer — floats above every screen (chat
               excepted); see components/note-composer.tsx. */}
           <NoteCaptureOverlay />
+          {/* "There's newer JS on this channel" — only ever shown for a
+              watched build; see components/update-banner.tsx. */}
+          <UpdateBanner />
         </QueryClientProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
@@ -39,23 +41,21 @@ function RootStack() {
   // session (the preview-channel confirm screen most of all): a channel
   // override that predates this binary's install is cleared — installing a
   // build means wanting THAT build, not whatever an old override OTA-pulls
-  // over it. Force-clear plus a notice, per the "native installs overpower
-  // the OTA setting" rule (lib/native-install-guard.ts).
+  // over it. A new binary's first boot then opens Build info, which explains
+  // itself: the channel rows say where JS comes from now, the update row
+  // says whether anything newer exists, and its buttons are labeled — no
+  // modal with mystery actions. Queries run post-mount, so the router is up.
   useQuery({
     queryKey: ["native-install-guard"],
     queryFn: async () => {
-      const cleared = await resetChannelOverrideForNewInstall();
-      if (cleared !== null) {
-        Alert.alert(
-          "New build installed",
-          `Cleared the preview-channel override "${cleared}" — this install runs its own default channel. Scan a PR's QR to point it at a preview channel again.`,
-          [
-            { text: "OK" },
-            { text: "Pull latest now", onPress: () => void fetchLatestUpdateAndReload() },
-          ],
-        );
+      const result = await resetChannelOverrideForNewInstall();
+      if (result.binaryChanged) {
+        router.push({
+          pathname: "/build-info",
+          params: result.clearedOverride ? { clearedOverride: result.clearedOverride } : {},
+        });
       }
-      return cleared;
+      return result;
     },
     retry: false,
     staleTime: Infinity,

@@ -20,6 +20,10 @@
       "distribution": "internal",
       "channel": "preview"
     },
+    "preview-pr": {
+      "distribution": "internal",
+      "channel": "preview"
+    },
     "production": {
       "channel": "production"
     }
