@@ -410,32 +410,36 @@ function readDebugSnapshot(page: Page): Promise<DebugSnapshot> {
 }
 
 async function waitForSubscribed(page: Page, keys: string[], timeoutMs = 90_000) {
-  const deadline = Date.now() + timeoutMs;
-  let last: DebugSnapshot = {};
-  for (;;) {
-    last = await readDebugSnapshot(page);
-    if (keys.every((key) => last[key]?.connectionStatus === "receiving-events")) return last;
-    if (Date.now() > deadline) {
-      throw new Error(
-        `Timed out waiting for runtimes ${keys.join(", ")} to reach "receiving-events". Last __streamRuntimeDebug:\n${JSON.stringify(last, null, 2)}`,
-      );
-    }
-    // timeout: poll pacing on a debug-snapshot read the spinner-waiter can't extend
-    await page.waitForTimeout(500);
-  }
+  await expect
+    .poll(() => readDebugSnapshot(page), {
+      message: `runtimes ${keys.join(", ")} should reach "receiving-events"`,
+      // timeout: cold-project subscription budget — a debug-snapshot read the spinner-waiter can't extend
+      timeout: timeoutMs,
+    })
+    .toMatchObject(
+      Object.fromEntries(keys.map((key) => [key, { connectionStatus: "receiving-events" }])),
+    );
 }
 
-/** Poll until every runtime's lastDeliveredOffset reaches `offset`. Never throws. */
+/** Poll until every runtime's lastDeliveredOffset reaches `offset`. Never
+ * throws: callers dump the evidence before asserting the verdict. */
 async function pollDelivered(page: Page, keys: string[], offset: number, timeoutMs: number) {
-  const deadline = Date.now() + timeoutMs;
-  let last: DebugSnapshot = {};
-  for (;;) {
-    last = await readDebugSnapshot(page);
-    const delivered = keys.every((key) => (last[key]?.lastDeliveredOffset ?? -1) >= offset);
-    if (delivered || Date.now() > deadline) return { delivered, snapshot: last };
-    // timeout: poll pacing on a debug-snapshot read the spinner-waiter can't extend
-    await page.waitForTimeout(1_000);
-  }
+  let snapshot: DebugSnapshot = {};
+  const delivered = await expect
+    .poll(
+      async () => {
+        snapshot = await readDebugSnapshot(page);
+        return keys.filter((key) => (snapshot[key]?.lastDeliveredOffset ?? -1) < offset);
+      },
+      // timeout: delivery-recovery budget — a debug-snapshot read the spinner-waiter can't extend
+      { timeout: timeoutMs },
+    )
+    .toEqual([])
+    .then(
+      () => true,
+      () => false,
+    );
+  return { delivered, snapshot };
 }
 
 function installSuspendTimerProbe(page: Page) {

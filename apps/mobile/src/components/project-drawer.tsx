@@ -111,6 +111,7 @@ function DrawerButton({ project }: { project: { projectId: string; projectSlug: 
           />
           <Animated.View
             style={[styles.drawer, { width: drawerWidth, transform: [{ translateX }] }]}
+            testID="project-drawer-panel"
           >
             <View
               style={[

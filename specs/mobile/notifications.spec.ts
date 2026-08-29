@@ -225,22 +225,17 @@ test("the approval push is suppressed in the watched thread and sent when you're
     // The drawer slides in over ~180ms and the press works mid-slide — but
     // clicking then bakes a half-open drawer into the recording (video-mode
     // freezes the click-moment screenshot under its synthetic pointer, which
-    // reads as a clipped drawer to a reviewer). The product is fine: given a
-    // beat, the panel settles at translateX(0) at this exact viewport. Wait
-    // for the item to stop moving before pressing.
+    // reads as a clipped drawer to a reviewer). Wait for the panel to settle
+    // at its open position (translateX(0)) before pressing.
     const notificationsItem = page.getByRole("button", { name: "/notifications" });
     await notificationsItem.waitFor();
     await expect
-      .poll(async () => {
-        const before = (await notificationsItem.boundingBox())!.x;
-        // Motion probe: two position samples a beat apart detect the
-        // drawer still animating; a transform shows no spinner.
-        // timeout: sampling interval, invisible to the spinner-waiter
-        await page.waitForTimeout(120);
-        const after = (await notificationsItem.boundingBox())!.x;
-        return after - before;
-      })
-      .toBe(0);
+      .poll(() =>
+        page
+          .getByTestId("project-drawer-panel")
+          .evaluate((panel) => getComputedStyle(panel).transform),
+      )
+      .toMatch(/^(none|matrix\(1, 0, 0, 1, 0, 0\))$/);
     await notificationsItem.click();
     await page.getByText("Skipped — already on screen").waitFor();
     // The orphan batch is already here — nothing on this device's stream
