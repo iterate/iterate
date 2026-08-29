@@ -7,9 +7,10 @@ size: medium
 
 ## Status
 
-Spec committed first for review; implementation follows on this branch.
-Stacked on `mobile-build-state` (#2542) — it reuses that PR's
-`ensureBuildForPr` / `installReady` helpers in `scripts/ci/mobile-preview.ts`.
+Implemented. Was to be stacked on `mobile-build-state` (#2542), which merged
+mid-flight — so this rides main and reuses its `ensureBuildForPr` /
+`installReady` helpers. #2542's own merged body is the first real test
+subject: it currently shows exactly the broken-QR state this fixes.
 
 ## The problem
 
@@ -54,17 +55,22 @@ Three touches, all riding existing machinery (the managed
 
 ## Checklist
 
-- [ ] `cleanup-mobile-pr-preview.ts`: rewrite the body section on close
+- [x] `cleanup-mobile-pr-preview.ts`: rewrite the body section on close
   (merged vs not), pure-planner tested, skip if already main-flavored
-- [ ] `publish-mobile-update.ts`: find merged PRs for the pushed commit,
-  write the main section into each body that has one
-- [ ] `refresh-mobile-main-qr.ts`: poll main's install build to FINISHED,
-  re-render the PR sections (and the commit comment) with the live link
-- [ ] `mobile-eas-update.yml`: concurrency to the publish job; add the
-  refresh job (needs: publish, gets build id + PR numbers via outputs)
-- [ ] Tests alongside the existing pure planners in
-  `mobile-preview.test.ts` / `cleanup-mobile-pr-preview.test.ts`
-- [ ] README: "Per-PR channels" lifecycle paragraph mentions the swap
+- [x] `publish-mobile-update.ts`: find merged PRs for the pushed commit,
+  write the main section into each body that has one — *via a shared
+  `syncMainPreviewSection` in mobile-preview.ts that also owns the commit
+  comment, so publisher and refresher write through one door*
+- [x] `refresh-mobile-main-qr.ts`: poll main's install build to FINISHED,
+  re-render the PR sections (and the commit comment) with the live link —
+  *bounded at 40m; a failed/canceled build logs loudly and leaves the
+  pending link, whose page shows what happened*
+- [x] `mobile-eas-update.yml`: concurrency to the publish job; add the
+  refresh job (needs: publish, `install_ready`/`build_id` via outputs; PR
+  discovery re-derived from the sha rather than passed — idempotent)
+- [x] Tests alongside the existing pure planners in
+  `cleanup-mobile-pr-preview.test.ts`
+- [x] README: "Per-PR channels" lifecycle paragraph mentions the swap
 
 ## Decisions made without asking
 

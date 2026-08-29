@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import QRCode from "qrcode";
+import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annotator.ts";
 import { envs } from "../../envs.ts";
 import { getOctokit, getRepo } from "./github.ts";
 
@@ -291,6 +292,65 @@ export const renderPreviewSection = (input: {
       : `<sub>Back to main inside the app: Build info → Switch to main. Republishes on every push to this PR.</sub>`,
   ].join("\n");
 };
+
+/** markdownAnnotator label for the managed PR-body preview section. Lives
+ * here (not in the PR publisher) so the cleanup and merge-push writers can
+ * import it without a cycle. */
+export const bodySectionLabel = "mobile-pr-preview";
+
+/** Marker making main-section commit-comment updates idempotent across
+ * re-runs. Lives here so the merge-push publisher and the build-completion
+ * refresher write through one door. */
+export const commitCommentMarker = "<!-- mobile-preview -->";
+
+/** True when a PR-body section already carries the main variant — the guard
+ * that keeps the close-event cleanup from clobbering a merge-push publish
+ * that won the race. */
+export const isMainFlavoredSection = (current: string) => current.includes("Mobile preview — main");
+
+/**
+ * Write main's rendered section into every place a merged commit should
+ * surface it: the commit comment, and the body section of each MERGED PR the
+ * commit belongs to (skipping PRs that never had a mobile preview). Runs
+ * from the merge-push publisher and again from the build-completion
+ * refresher, so it is idempotent by construction.
+ */
+export async function syncMainPreviewSection(input: { sha: string; section: string }) {
+  const github = getOctokit();
+  const repo = getRepo();
+  const body = `${commitCommentMarker}\n${input.section}`;
+  const { data: existing } = await github.rest.repos.listCommentsForCommit({
+    ...repo,
+    commit_sha: input.sha,
+  });
+  const mine = existing.find((c) => c.body?.includes(commitCommentMarker));
+  if (mine) {
+    await github.rest.repos.updateCommitComment({ ...repo, comment_id: mine.id, body });
+    console.log(`updated commit comment on ${input.sha.slice(0, 9)}`);
+  } else {
+    await github.rest.repos.createCommitComment({ ...repo, commit_sha: input.sha, body });
+    console.log(`posted commit comment on ${input.sha.slice(0, 9)}`);
+  }
+
+  const { data: assocPrs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+    ...repo,
+    commit_sha: input.sha,
+  });
+  for (const pr of assocPrs) {
+    if (!pr.merged_at) continue;
+    // Fresh body — the association payload's copy may be stale.
+    const { data: fresh } = await github.rest.pulls.get({ ...repo, pull_number: pr.number });
+    const annotator = markdownAnnotator(fresh.body || "", bodySectionLabel);
+    // Only PRs that had a mobile preview get the swap; others are untouched.
+    if (annotator.current === null) continue;
+    await github.rest.pulls.update({
+      ...repo,
+      pull_number: pr.number,
+      body: annotator.update(input.section),
+    });
+    console.log(`wrote main's preview section into merged PR #${pr.number}`);
+  }
+}
 
 export async function uploadQrAsset(name: string, url: string) {
   const dir = mkdtempSync(path.join(tmpdir(), "mobile-pr-qr-"));
