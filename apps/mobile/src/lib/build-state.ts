@@ -160,8 +160,23 @@ export async function resetChannelOverrideForNewInstall(): Promise<{
  * can't OTA. */
 const canOta = () => Updates.isEnabled && !__DEV__;
 
+// expo-updates' state machine refuses to re-enter "checking", so a second
+// in-flight checkForUpdateAsync REJECTS — and two callers genuinely overlap
+// here: after a switch settles, the QR screen's freshness pull and the
+// watched-build check arm in the same render. Everyone shares one native
+// call instead.
+let checkInFlight: ReturnType<typeof Updates.checkForUpdateAsync> | null = null;
+function sharedCheckForUpdateAsync() {
+  if (!checkInFlight) {
+    checkInFlight = Updates.checkForUpdateAsync().finally(() => {
+      checkInFlight = null;
+    });
+  }
+  return checkInFlight;
+}
+
 async function checkForUpdate(): Promise<UpdateCheck> {
-  const result = await Updates.checkForUpdateAsync();
+  const result = await sharedCheckForUpdateAsync();
   if (!result.isAvailable) return { kind: "current" };
   return {
     kind: "available",
@@ -266,7 +281,7 @@ export function useBuildState(): LiveBuildState {
  * update, so calling this again right after the reload finds nothing and
  * terminates. */
 export async function fetchLatestUpdateAndReload() {
-  const result = await Updates.checkForUpdateAsync();
+  const result = await sharedCheckForUpdateAsync();
   if (!result.isAvailable) return "up-to-date" as const;
   await Updates.fetchUpdateAsync();
   await Updates.reloadAsync();
@@ -325,12 +340,22 @@ export function useBuildActions(): BuildActions {
       }
       if (result === "up-to-date" && revertOnNoUpdate) {
         await setChannelOverride(previous);
+        return { outcome: "no-update" as const, effective: previous };
       }
-      return result === "up-to-date" ? ("no-update" as const) : result;
+      return {
+        outcome: result === "up-to-date" ? ("no-update" as const) : result,
+        effective: channel,
+      };
     },
     // Settled, not success: the error path REVERTED the override, and the
     // cache must reflect that too.
-    onSettled: (_data, error) => {
+    onSettled: (data, error) => {
+      // Write the landed value synchronously first — the settle paints the
+      // outcome card in the same tick, and an invalidate-only refresh would
+      // let it name the PREVIOUS channel until the refetch lands. Then
+      // reconcile with storage anyway (the error path restored a value this
+      // scope doesn't hold).
+      if (data) queryClient.setQueryData(overrideKey, data.effective);
       void invalidateChannelOverride();
       // The cached check verdict described the OLD channel; drop it rather
       // than let Build info report the wrong channel's freshness. (Remove,
@@ -352,9 +377,10 @@ export function useBuildActions(): BuildActions {
     // mutate, not mutateAsync: callers fire-and-forget, and an unhandled
     // rejection from mutateAsync is invisible on a phone. The error state
     // below is the visible channel for failures.
-    switchChannel: switchChannel.mutateAsync,
+    switchChannel: (input: SwitchChannelInput) =>
+      switchChannel.mutateAsync(input).then((landed) => landed.outcome),
     switchChannelPending: switchChannel.isPending,
-    switchChannelResult: switchChannel.data,
+    switchChannelResult: switchChannel.data?.outcome,
     switchChannelInput: switchChannel.variables,
     switchChannelError: switchChannel.error ? String(switchChannel.error) : null,
     // fetchQuery, not refetchQueries: refetch skips DISABLED queries, and the
