@@ -196,7 +196,8 @@ function RoundView({
 /**
  * The collapsed card's approval marks: a clock while any batch awaits its
  * human (and is still decidable — an expired-undecided batch already counts
- * as rejected, where the door's expiry decision will land it), a check when
+ * as rejected, matching the rejection the egress approval gate records for
+ * it when the expiry lands), a check when
  * a batch was fully approved, an x when one was rejected or mixed — so "did
  * that run get its approvals?" reads without expanding anything. No batches,
  * no glyphs. Feather icons, not text characters: dingbats render from
