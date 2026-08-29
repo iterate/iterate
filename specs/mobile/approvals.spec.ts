@@ -347,17 +347,19 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     });
 
     // ── The run's approvals read IN CONTEXT: each settled "ran code" card
-    // wears a status glyph while collapsed (✓ for the approved lane, ✗ for
-    // the rejected one), and its code step expands into Script | Approvals
+    // wears a status icon while collapsed (a check for the approved lane, an
+    // x for the rejected one — located by their accessible labels, the
+    // stable handle now the marks are Feather icons), and its code step
+    // expands into Script | Approvals
     // tabs — the Approvals tab rendering the batch through the same shared
     // body as the Notifications expansion, decision badge and policy
     // included.
     const approvedCard = page
       .getByTestId(/^activity-card-/)
-      .filter({ has: page.getByText("✓", { exact: true }) });
+      .filter({ has: page.getByLabel("approved", { exact: true }) });
     const rejectedCard = page
       .getByTestId(/^activity-card-/)
-      .filter({ has: page.getByText("✗", { exact: true }) });
+      .filter({ has: page.getByLabel("rejected", { exact: true }) });
     await approvedCard.waitFor();
     await rejectedCard.waitFor();
     await approvedCard.click();
@@ -365,7 +367,7 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     await approvedCard.getByText("Approved", { exact: true }).waitFor();
     await approvedCard.getByText("The mobile approvals spec holds these for a human").waitFor();
     // Collapse it back so the thread reads clean for the next act.
-    await approvedCard.getByText("✓", { exact: true }).click();
+    await approvedCard.getByLabel("approved", { exact: true }).click();
 
     // ── The context travels to the NOTIFICATIONS view — the approvals
     // surface now that the standalone screen is retired: each batch's row

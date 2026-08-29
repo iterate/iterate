@@ -13,7 +13,8 @@
 // the archive; Meta holds the step stat lines (model, duration, tokens) that
 // used to sit above the tab bar.
 
-import { useId, useMemo, useState } from "react";
+import { useId, useMemo, useState, type ComponentProps } from "react";
+import Feather from "@expo/vector-icons/Feather";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Document, Scalar, visit } from "yaml";
@@ -193,11 +194,14 @@ function RoundView({
 }
 
 /**
- * The collapsed card's approval marks: ◷ while any batch awaits its human
- * (and is still decidable — an expired-undecided batch already counts as ✗,
- * where the door's expiry decision will land it), ✓ when a batch was fully
- * approved, ✗ when one was rejected or mixed — so "did that run get its
- * approvals?" reads without expanding anything. No batches, no glyphs.
+ * The collapsed card's approval marks: a clock while any batch awaits its
+ * human (and is still decidable — an expired-undecided batch already counts
+ * as rejected, where the door's expiry decision will land it), a check when
+ * a batch was fully approved, an x when one was rejected or mixed — so "did
+ * that run get its approvals?" reads without expanding anything. No batches,
+ * no glyphs. Feather icons, not text characters: dingbats render from
+ * per-glyph fallback fonts on iOS whose vertical metrics differ, so text
+ * marks ride high or low per character; vector icons center geometrically.
  */
 function ApprovalGlyphs({
   outcomes,
@@ -206,22 +210,27 @@ function ApprovalGlyphs({
 }) {
   const glyphs = [
     ...(outcomes.open > 0
-      ? [{ mark: "◷", style: styles.glyphOpen, label: "approval pending" }]
+      ? [{ name: "clock" as const, color: colors.working, label: "approval pending" }]
       : []),
     ...(outcomes.approved > 0
-      ? [{ mark: "✓", style: styles.glyphApproved, label: "approved" }]
+      ? [{ name: "check" as const, color: colors.accent, label: "approved" }]
       : []),
     ...(outcomes.rejected + outcomes.mixed > 0
-      ? [{ mark: "✗", style: styles.glyphRejected, label: "rejected" }]
+      ? [{ name: "x" as const, color: colors.danger, label: "rejected" }]
       : []),
   ];
   if (glyphs.length === 0) return null;
   return (
     <View style={styles.glyphRow}>
       {glyphs.map((glyph) => (
-        <Text accessibilityLabel={glyph.label} key={glyph.mark} style={[styles.glyph, glyph.style]}>
-          {glyph.mark}
-        </Text>
+        <Feather
+          accessibilityLabel={glyph.label}
+          color={glyph.color}
+          key={glyph.label}
+          name={glyph.name}
+          size={12}
+          style={styles.rowIcon}
+        />
       ))}
     </View>
   );
@@ -291,21 +300,23 @@ export function WorkingCard() {
  * summary row already speaks that language.
  */
 function PhaseGlyph({ phase }: { phase: AgentUiLiveStatus["phase"] | undefined }) {
-  // Monochrome text glyphs only — an emoji here renders full-width and in
-  // color, jumping the row's layout and style. ⧗ (U+29D7) and ⋯ (U+22EF) are
-  // math symbols with no emoji presentation.
-  let glyph: { mark: string; label: string };
-  if (phase === "writing") glyph = { mark: "✎", label: "writing code" };
-  else if (phase === "running") glyph = { mark: "▶", label: "running code" };
-  else if (phase === "processing") glyph = { mark: "↻", label: "processing result" };
-  else if (phase === "thinking") glyph = { mark: "⋯", label: "thinking" };
-  else if (phase === "working") glyph = { mark: "⧗", label: "working" };
-  else if (phase === "waiting") glyph = { mark: "⧗", label: "waiting for a response" };
-  else glyph = { mark: "⧗", label: "waiting for a response" };
+  // Feather icons, not text characters — see ApprovalGlyphs for why.
+  let icon: { name: ComponentProps<typeof Feather>["name"]; label: string };
+  if (phase === "writing") icon = { name: "edit-2", label: "writing code" };
+  else if (phase === "running") icon = { name: "play", label: "running code" };
+  else if (phase === "processing") icon = { name: "rotate-cw", label: "processing result" };
+  else if (phase === "thinking") icon = { name: "more-horizontal", label: "thinking" };
+  else if (phase === "working") icon = { name: "loader", label: "working" };
+  else icon = { name: "loader", label: "waiting for a response" };
   return (
-    <Text accessibilityLabel={glyph.label} style={styles.phaseGlyph} testID="live-phase-glyph">
-      {glyph.mark}
-    </Text>
+    <Feather
+      accessibilityLabel={icon.label}
+      color={colors.working}
+      name={icon.name}
+      size={12}
+      style={styles.rowIcon}
+      testID="live-phase-glyph"
+    />
   );
 }
 
@@ -717,8 +728,14 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     paddingVertical: 4,
   },
-  chevron: { color: colors.textFaint, fontSize: 12, width: 14, textAlign: "center" },
-  summary: { color: colors.textMuted, fontSize: 13, flexShrink: 1 },
+  chevron: {
+    color: colors.textFaint,
+    fontSize: 12,
+    lineHeight: 18,
+    width: 14,
+    textAlign: "center",
+  },
+  summary: { color: colors.textMuted, fontSize: 13, lineHeight: 18, flexShrink: 1 },
   step: {
     borderTopColor: colors.border,
     borderTopWidth: StyleSheet.hairlineWidth,
@@ -731,26 +748,17 @@ const styles = StyleSheet.create({
   roundLabel: { color: colors.text, fontSize: 12, fontWeight: "700" },
   roundMeta: { color: colors.textFaint, fontSize: 11, flexShrink: 1 },
   glyphRow: { flexDirection: "row", gap: 4, marginLeft: "auto" },
-  glyph: { fontSize: 12, fontWeight: "700" },
-  // Fixed width like the chevron: glyphs differ slightly in advance width,
-  // and the status text must not shift as phases change.
-  phaseGlyph: {
-    color: colors.working,
-    fontSize: 12,
-    fontWeight: "700",
-    width: 14,
-    textAlign: "center",
-  },
+  // One geometry for every icon in the summary row: fixed width so the text
+  // never shifts as icons change, and the row's shared 18px line so the ink
+  // centers identically alongside the 13px summary text.
+  rowIcon: { width: 14, textAlign: "center", lineHeight: 18 },
   // The settled row's stand-in for the glyph: same 14px, keeps the summary
   // text in the exact place it held while live.
   phaseGlyphSlot: { width: 14 },
   // The stock small spinner is 20px — taller than the chevron's line, which
   // made the LIVE card the bigger of the two. Scale it into the settled
   // card's 14px lead slot instead (layout box first, visual scale second).
-  spinnerFit: { width: 14, height: 16, transform: [{ scale: 0.7 }] },
-  glyphOpen: { color: colors.working },
-  glyphApproved: { color: colors.accent },
-  glyphRejected: { color: colors.danger },
+  spinnerFit: { width: 14, height: 18, transform: [{ scale: 0.7 }] },
   // A flat TAB bar, deliberately unlike any status badge: full-width
   // baseline rule, the active tab marked by a neutral-foreground underline
   // (never the accent — that is the approval badges' color), inactive
