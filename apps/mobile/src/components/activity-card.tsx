@@ -105,7 +105,20 @@ export function ActivityCard({
         ) : (
           <Text style={styles.chevron}>{expanded ? "▾" : "▸"}</Text>
         )}
-        {isLive ? <PhaseGlyph phase={liveStatus?.phase} /> : <View style={styles.phaseGlyphSlot} />}
+        {/* Settled cards wear a faint check in the same 14px slot — the turn
+            finished — in the chevron's muted color so it can't be confused
+            with the accent-colored approval check on the right. */}
+        {isLive ? (
+          <PhaseGlyph phase={liveStatus?.phase} />
+        ) : (
+          <Feather
+            accessibilityLabel="done"
+            color={colors.textFaint}
+            name="check"
+            size={12}
+            style={styles.rowIcon}
+          />
+        )}
         <Text style={styles.summary} numberOfLines={1}>
           {isLive ? liveSummary(activity, liveStatus) : summarizeActivity(activity)}
         </Text>
@@ -305,11 +318,12 @@ function PhaseGlyph({ phase }: { phase: AgentUiLiveStatus["phase"] | undefined }
   let icon: { name: ComponentProps<typeof Feather>["name"]; label: string };
   if (phase === "writing") icon = { name: "edit-2", label: "writing code" };
   else if (phase === "running") icon = { name: "play", label: "running code" };
-  else if (phase === "processing") icon = { name: "rotate-cw", label: "processing result" };
-  // Ellipsis for all three nothing-concrete-yet phases: the loader icon read
-  // as a second spinner next to the real one (a circle of dashes IS a
-  // spinner glyph), and thinking/working/waiting are the same visual promise
-  // — something's underway, nothing to show yet.
+  // Ellipsis for every phase without concrete progress to depict
+  // (processing/thinking/working/waiting): distinct icons here either read
+  // as a second spinner (loader is a circle of dashes) or a reload arrow
+  // (rotate-cw), and all four make the same visual promise — something's
+  // underway, nothing to show yet. Only the labels differ.
+  else if (phase === "processing") icon = { name: "more-horizontal", label: "processing result" };
   else if (phase === "thinking") icon = { name: "more-horizontal", label: "thinking" };
   else if (phase === "working") icon = { name: "more-horizontal", label: "working" };
   else icon = { name: "more-horizontal", label: "waiting for a response" };
@@ -759,7 +773,6 @@ const styles = StyleSheet.create({
   rowIcon: { width: 14, textAlign: "center", lineHeight: 18 },
   // The settled row's stand-in for the glyph: same 14px, keeps the summary
   // text in the exact place it held while live.
-  phaseGlyphSlot: { width: 14 },
   // The stock small spinner is 20px — taller than the chevron's line, which
   // made the LIVE card the bigger of the two. Scale it into the settled
   // card's 14px lead slot instead (layout box first, visual scale second).
