@@ -13,13 +13,6 @@
 
 import { VOICE_AGENT_TEMPLATE_FILES } from "./voice-template.generated.ts";
 
-/** Where a phone's calls live: stable per device (grill Q3) — the boards'
- * pattern — so the per-stream colleague and the reconnect recap give the
- * phone ONE ongoing voice relationship instead of an amnesiac per call. */
-export function mobileVoiceStreamPath(deviceId: string): string {
-  return `/agents/voice/mobile-${deviceId}`;
-}
-
 /**
  * Where a CHAT's calls live: one line per chat, shared by every device —
  * the chat's phone number, not the phone's. `/agents/mobile/173…` →

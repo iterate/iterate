@@ -1,24 +1,21 @@
-// The voice button on the floating note overlay — tap to start a
-// PUSH-TO-TALK voice call with the project's voice agent (the phone as the
-// third dumb client of the voice-agent facet). The first on-device session
-// demoted open-mic to push-to-talk: hold the big mic to speak (ptt-start /
-// mic frames / ptt-end, the C client's space bar with a thumb), release to
-// let the model answer. The level bar above the mic throbs with LOCAL mic
-// level while you hold — VU feedback only, zero latency, never a turn
-// control.
+// The in-call UI: every call is a PHONE CALL TO A CHAT (the chat's agent
+// is the backend via the certificate's colleaguePath; there is no separate
+// device line any more). Calls start from a chat's header phone button or
+// the chat list's "new phone chat" button — startChatCall is the one entry
+// point — and the floating mic + sheet here float over the call's own chat
+// (the root layout's VoiceCallBanner covers every other screen).
 //
-// The sheet: level bar, the hold-to-talk mic, and ONE caption line shared
-// by call lifecycle (ringing / hold to talk / listening) and the colleague
-// status/note events (grill Q6 — the phone can SHOW "backend: running code"
-// while you wait). ✕ collapses the sheet; the call keeps going behind the
-// floating button. No transcript, no scrollback.
+// PUSH-TO-TALK: hold the big mic to speak (ptt-start / mic frames /
+// ptt-end), release to let the model answer; the level bar throbs with
+// LOCAL mic level — VU feedback only, never a turn control. The sheet also
+// carries the live transcript (both sides + backend notes/statuses) off
+// the stream's durable events; tap outside to minimise.
 //
 // State lives in the query cache (the composer's precedent — no
 // useState/useEffect); the live call handle and the pulse Animated.Value are
 // module singletons because a call outlives any mount.
 import { useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import {
   Animated,
@@ -30,132 +27,23 @@ import {
   Text,
   View,
 } from "react-native";
-import { getMobileDeviceId } from "../lib/device-identity.ts";
 import { getProjectItx } from "../lib/itx.ts";
-import { queryClient } from "../lib/query.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
 import { useLiveEvents } from "../lib/use-live-events.ts";
-import { createNativeVoiceAudio } from "../lib/voice-audio-native.ts";
-import type { VoiceAudioSession } from "../lib/voice-audio.ts";
-import { ringTonePcm16Base64 } from "../lib/voice-pcm.ts";
+import { transcriptItems, TRANSCRIPT_EVENT_TYPES } from "../lib/voice-call.ts";
 import {
-  startVoiceCall,
-  transcriptItems,
-  TRANSCRIPT_EVENT_TYPES,
-  type VoiceCallHandle,
-} from "../lib/voice-call.ts";
+  getActiveCall,
+  getActiveSession,
+  pulse,
+  startChatCall,
+  voiceCallOutputKey as outputKey,
+  voiceCallSheetKey as sheetKey,
+} from "../lib/voice-call-session.ts";
 import {
-  chatVoiceStreamPath,
-  ensureVoiceAgentSetup,
-  mobileVoiceStreamPath,
-} from "../lib/voice-setup.ts";
-import { voiceCallStatusKey as statusKey, type VoiceUiStatus } from "../lib/voice-call-state.ts";
-
-const sheetKey = ["voice-call", "sheet-open"];
-const outputKey = ["voice-call", "output"];
-const targetKey = ["voice-call", "target"];
-const SETUP_MARKER_STORAGE_PREFIX = "voice-setup-marker:";
-
-/** Which line the active (or last) call is on. The device's own line when
- * started from the floating button; a chat's line when started from a chat
- * header — the sheet's transcript feed reads this. */
-interface VoiceCallTarget {
-  streamPath: string;
-  colleaguePath: string | null;
-}
-
-let activeCall: VoiceCallHandle | null = null;
-let activeSession: VoiceAudioSession | null = null;
-/** Generated once, lazily (~1s of PCM as base64). */
-let ringTonePcm: string | null = null;
-/** Mic loudness 0..1, driven at capture-frame rate straight into the
- * animation — never through React state (16 Hz re-renders for a glow). */
-const pulse = new Animated.Value(0);
-
-async function beginCall(
-  baseUrl: string,
-  projectId: string,
-  target: VoiceCallTarget | null,
-): Promise<void> {
-  const audio = createNativeVoiceAudio();
-  if ((await audio.requestPermission()) !== "granted") {
-    const denied: VoiceUiStatus = {
-      phase: "ended",
-      caption: "microphone access needed — tap to open Settings",
-      micDenied: true,
-    };
-    queryClient.setQueryData<VoiceUiStatus>(statusKey, denied);
-    return;
-  }
-  const project = await getProjectItx(baseUrl, projectId);
-  const resolved: VoiceCallTarget = target ?? {
-    streamPath: mobileVoiceStreamPath(await getMobileDeviceId()),
-    colleaguePath: null,
-  };
-  const { streamPath } = resolved;
-  const session = audio.createSession();
-  activeSession = session;
-  queryClient.setQueryData<VoiceCallTarget>(targetKey, resolved);
-  queryClient.setQueryData(sheetKey, true);
-  /* Every call starts on the loudspeaker — hold-to-talk means the phone is
-   * in front of you, not on your ear. */
-  queryClient.setQueryData(outputKey, "speaker");
-  try {
-    activeCall = await startVoiceCall({
-      /* `as any` (here and for workers below): the itx project handle is a
-       * dynamic RPC proxy with no generated types in the app — the same
-       * treatment every other mobile itx callsite gives it. */
-      stream: (project as any).streams.get(streamPath),
-      audio: session,
-      ensureSetup: () =>
-        ensureVoiceAgentSetup({
-          workers: {
-            get: (ref) => (project as any).workers.get(ref),
-          },
-          repo: (project as any).repo,
-          streamPath,
-          colleaguePath: resolved.colleaguePath,
-          /* Keyed by PROJECT too, not just stream path: the path is the
-           * same on every project, so a marker written against one project
-           * must not convince another that its stream already has a
-           * certificate (it would ring out as "no answer"). */
-          readMarker: (path) =>
-            AsyncStorage.getItem(`${SETUP_MARKER_STORAGE_PREFIX}${projectId}:${path}`),
-          writeMarker: (path, marker) =>
-            AsyncStorage.setItem(`${SETUP_MARKER_STORAGE_PREFIX}${projectId}:${path}`, marker),
-        }),
-      onStatus: (status) => {
-        if (status.phase === "ended") {
-          activeCall = null;
-          activeSession = null;
-        }
-        queryClient.setQueryData<VoiceUiStatus>(statusKey, status);
-      },
-      ringPcmBase64: (ringTonePcm ??= ringTonePcm16Base64()),
-      onLevel: (level) => {
-        /* JS-driven on purpose: the sheet's level bar animates WIDTH (a
-         * layout prop the native driver rejects), and one Animated.Value
-         * cannot serve both drivers. ~11 updates/s of a 6px bar is nothing
-         * for the JS driver. */
-        Animated.timing(pulse, { toValue: level, duration: 90, useNativeDriver: false }).start();
-      },
-      now: () => Date.now(),
-    });
-  } catch (error) {
-    activeCall = null;
-    activeSession = null;
-    await session.stop();
-    const failed: VoiceUiStatus = {
-      phase: "ended",
-      caption: `call failed — ${error instanceof Error ? error.message : String(error)}`.slice(
-        0,
-        140,
-      ),
-    };
-    queryClient.setQueryData<VoiceUiStatus>(statusKey, failed);
-  }
-}
-
+  voiceCallStatusKey as statusKey,
+  useVoiceCallTarget,
+  type VoiceUiStatus,
+} from "../lib/voice-call-state.ts";
 export function VoiceCallButton(props: { baseUrl: string; projectId: string }) {
   const cache = useQueryClient();
   const { data: status } = useQuery<VoiceUiStatus>({
@@ -176,21 +64,13 @@ export function VoiceCallButton(props: { baseUrl: string; projectId: string }) {
     staleTime: Infinity,
     initialData: "speaker",
   });
-  const start = useMutation({
-    mutationFn: () => beginCall(props.baseUrl, props.projectId, null),
-  });
-
   const inCall = status !== null && status.phase !== "ended";
   const onPressButton = () => {
     if (status?.micDenied) {
       void Linking.openSettings();
       return;
     }
-    if (inCall) {
-      cache.setQueryData(sheetKey, true);
-      return;
-    }
-    if (!start.isPending) start.mutate();
+    if (inCall) cache.setQueryData(sheetKey, true);
   };
 
   const glowScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.9] });
@@ -223,8 +103,8 @@ export function VoiceCallButton(props: { baseUrl: string; projectId: string }) {
                 <Pressable
                   accessibilityLabel="Hold to talk"
                   accessibilityRole="button"
-                  onPressIn={() => activeCall?.setTalking(true)}
-                  onPressOut={() => activeCall?.setTalking(false)}
+                  onPressIn={() => getActiveCall()?.setTalking(true)}
+                  onPressOut={() => getActiveCall()?.setTalking(false)}
                   style={({ pressed }) => [styles.talkButton, pressed && styles.talkButtonHeld]}
                 >
                   <Ionicons color={colors.text} name="mic" size={34} />
@@ -247,7 +127,7 @@ export function VoiceCallButton(props: { baseUrl: string; projectId: string }) {
                   onPress={() => {
                     const next = output === "speaker" ? "earpiece" : "speaker";
                     cache.setQueryData(outputKey, next);
-                    activeSession?.setOutput(next);
+                    getActiveSession()?.setOutput(next);
                   }}
                   style={[
                     styles.sheetSecondary,
@@ -265,7 +145,7 @@ export function VoiceCallButton(props: { baseUrl: string; projectId: string }) {
                 <Pressable
                   accessibilityLabel="Hang up"
                   accessibilityRole="button"
-                  onPress={() => void activeCall?.hangUp()}
+                  onPress={() => void getActiveCall()?.hangUp()}
                   style={styles.hangUp}
                 >
                   <Ionicons color={colors.text} name="call" size={20} style={styles.hangUpIcon} />
@@ -283,7 +163,7 @@ export function VoiceCallButton(props: { baseUrl: string; projectId: string }) {
           />
         ) : null}
         <Pressable
-          accessibilityLabel={inCall ? "Show voice call" : "Start a voice chat"}
+          accessibilityLabel="Show voice call"
           accessibilityRole="button"
           onPress={onPressButton}
           style={[styles.button, inCall && styles.buttonLive]}
@@ -317,12 +197,7 @@ export function VoiceCallButton(props: { baseUrl: string; projectId: string }) {
  * this view IS the record. Last dozen lines, pinned to the tail.
  */
 function CallTranscript(props: { baseUrl: string; projectId: string }) {
-  const { data: target } = useQuery<VoiceCallTarget | null>({
-    queryKey: targetKey,
-    queryFn: () => null,
-    staleTime: Infinity,
-    initialData: null,
-  });
+  const target = useVoiceCallTarget();
   const streamPath = target?.streamPath || "";
   const events = useLiveEvents({
     queryKey: ["voice-transcript", props.baseUrl, props.projectId, streamPath],
@@ -378,11 +253,7 @@ export function VoiceCallChatButton(props: { baseUrl: string; projectId: string;
     initialData: null,
   });
   const start = useMutation({
-    mutationFn: () =>
-      beginCall(props.baseUrl, props.projectId, {
-        streamPath: chatVoiceStreamPath(props.path),
-        colleaguePath: props.path,
-      }),
+    mutationFn: () => startChatCall(props.baseUrl, props.projectId, props.path),
   });
   const inCall = status !== null && status.phase !== "ended";
   return (

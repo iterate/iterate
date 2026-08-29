@@ -3,7 +3,6 @@ import {
   chatVoiceStreamPath,
   ensureVoiceAgentInstalled,
   ensureVoiceAgentSetup,
-  mobileVoiceStreamPath,
   setupMarker,
   voiceSetupConfig,
   MOBILE_VOICE_SETUP,
@@ -62,7 +61,7 @@ test("a matching marker skips setup entirely", async () => {
 test("a missing marker runs setup with the full config, then records the marker", async () => {
   const calls: any[] = [];
   const written: [string, string][] = [];
-  const streamPath = mobileVoiceStreamPath("device-1");
+  const streamPath = chatVoiceStreamPath("/agents/mobile/device-1");
   await ensureVoiceAgentSetup({
     workers: { get: () => ({ setupVoiceAgent: async (o: unknown) => calls.push(o) }) },
     repo: repoWithTemplate,
@@ -75,7 +74,7 @@ test("a missing marker runs setup with the full config, then records the marker"
   });
   expect(calls).toHaveLength(1);
   expect(calls[0]).toMatchObject({
-    streamPath: "/agents/voice/mobile-device-1",
+    streamPath: "/agents/voice/chat/mobile/device-1",
     clientTakesTurns: true,
     colleague: true,
     instructions: MOBILE_VOICE_SETUP.instructions,

@@ -63,7 +63,7 @@ import { queryClient } from "../lib/query.ts";
 import { DEFAULT_SERVER } from "../lib/servers.ts";
 import { getServerBaseUrl } from "../lib/storage.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
-import { useVoiceCallActive } from "../lib/voice-call-state.ts";
+import { useVoiceCallOverlayVisible, useVoiceCallTarget } from "../lib/voice-call-state.ts";
 import { RecentPhotosStrip } from "./recent-photos-strip.tsx";
 import { VoiceCallButton } from "./voice-call-button.tsx";
 
@@ -179,10 +179,11 @@ async function appendNoteToProject(
 
 export function NoteCaptureOverlay() {
   const segments = useSegments();
-  const params = useGlobalSearchParams<{ projectId?: string; slug?: string }>();
+  const params = useGlobalSearchParams<{ path?: string; projectId?: string; slug?: string }>();
   const insets = useSafeAreaInsets();
   const cache = useQueryClient();
-  const callActive = useVoiceCallActive();
+  const callOverlayVisible = useVoiceCallOverlayVisible();
+  const callTarget = useVoiceCallTarget();
   const projectId = typeof params.projectId === "string" ? params.projectId : "";
   // Widened: expo-router's typed segments omit the index route, but at
   // runtime the sign-in screen yields [].
@@ -351,12 +352,14 @@ export function NoteCaptureOverlay() {
   });
 
   if (onChatScreen) {
-    /* Chat has its own composer — never stack two inputs. But a LIVE call's
-     * overlay (floating button + hold-to-talk sheet) must follow you here:
-     * a call started from a chat's own header was otherwise untalkable
-     * until you left the chat (Misha, on-device, 2026-08-29). Idle, the
-     * chat stays uncluttered — its header already has the phone button. */
-    return inProject && baseUrl && callActive ? (
+    /* Chat has its own composer — never stack two inputs. The one thing
+     * that floats here is a call's own controls, and ONLY on the call's
+     * own chat (a call started from a chat's header was otherwise
+     * untalkable until you left the chat — Misha, on-device, 2026-08-29).
+     * Every other screen shows the root layout's banner instead. */
+    const onCallsOwnChat =
+      callOverlayVisible && callTarget !== null && params.path === callTarget.colleaguePath;
+    return inProject && baseUrl && onCallsOwnChat ? (
       <View
         pointerEvents="box-none"
         style={[styles.overlay, { paddingBottom: insets.bottom + spacing.md }]}
@@ -372,9 +375,6 @@ export function NoteCaptureOverlay() {
         pointerEvents="box-none"
         style={[styles.overlay, { paddingBottom: insets.bottom + spacing.md }]}
       >
-        {/* Voice rides the note overlay (grill: "associated with the floating
-            note component") but needs a project to call into. */}
-        {inProject && baseUrl ? <VoiceCallButton baseUrl={baseUrl} projectId={projectId} /> : null}
         <Pressable
           accessibilityLabel="Capture a note"
           accessibilityRole="button"
@@ -413,7 +413,6 @@ export function NoteCaptureOverlay() {
       pointerEvents="box-none"
       style={styles.overlay}
     >
-      {inProject && baseUrl ? <VoiceCallButton baseUrl={baseUrl} projectId={projectId} /> : null}
       <View
         style={[
           styles.sheet,

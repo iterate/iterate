@@ -111,6 +111,14 @@ on-device box below (pure-JS app change, OTA-able).
       session-configured record, <voice-turn>/<voice-note> tags + mobile
       rendering (italic sided bubbles, collapsed notes), call UI floating
       on chat screens during a live call _214a535c4; recap live-proven on prd — the greeting literally said "welcome back — picking up right where we left off"_
+- [x] Afternoon feedback: <voice-reply> collapsed backend replies; double
+      read-out root-caused (legacy+per-line subscription double feed via a
+      swallowed removal ZodError) and fixed three-deep _0884d958d_
+- [x] Retire the device line: every call is a chat call now. Floating mic
+      removed; "New chat 📞" starts a fresh phone chat; WhatsApp-style
+      green top banner while a call is live anywhere but its chat (tap to
+      jump back); hold-to-talk floats only over the call's own chat
+      _voice-call-session.ts + voice-call-banner.tsx; mobileVoiceStreamPath deleted; desk (/agents/voice-notes) is now legacy for boards/CLI only_
 - [ ] Morning: on-device — call a chat from its header, watch the chat
       thread fill with the call, hear a status line mid-task
 
