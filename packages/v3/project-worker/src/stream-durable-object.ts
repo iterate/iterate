@@ -7,12 +7,12 @@
 //   • the PROCESSORS — every enabled one a workerd FACET driven after each commit (built-ins by
 //     slug, userspace classes via the Worker Loader); the capability host (whose reduced state
 //     is the routing table) is the built-in first member, lazily enabled on first use;
-//   • the TRANSPORT — every hibernatable socket: each attached ItxConnection is a delivery
-//     WebSocket from the stateless relay (core/itx-connection-registry.ts), so ANY number of
-//     connected clients leave this DO free to hibernate. OUT is one-directional fire-and-forget
-//     delivery (event batches + state changes); IN borrows a short RetainedCallbackInvoker leg
-//     per wake burst. Connection identity = connectedAtOffset (the offset of the ephemeral
-//     connection-opened fact); the SESSION RULE files durable ItxConnectionSession history;
+//   • the TRANSPORT — every hibernatable socket: each held rpc stub is a delivery WebSocket from
+//     the stateless relay (rpc-stub-directory.ts), so ANY number of connected clients leave this
+//     DO free to hibernate. OUT is one-directional fire-and-forget delivery (event batches + state
+//     changes); IN borrows a short RetainedCallbackInvoker leg per wake burst. A stub is addressed
+//     by its caller-chosen key (`itx.rpcStubs.get(key)`); the registry is LIVE-ONLY (presence via
+//     list(), no durable session history — that "connections view" returns later);
 //   • the FETCH DOOR — the one place a 101 can enter: `x-itx-stub-pager` accepts a stub pager
 //     WebSocket, `x-itx-cap` resolves the fetch lane, anything else is EGRESS (secret
 //     placeholder substitution → the FALLBACK terminal).
@@ -48,7 +48,7 @@ import { InvokeHandle } from "./core/invoke-handle.ts";
 import { StreamAlarmArmer, StreamEventLog } from "./core/event-log.ts";
 import { hashSource } from "./core/hash.ts";
 import { localContext } from "./core/stream.ts";
-import { ItxConnectionDirectory } from "./itx-connection-directory.ts";
+import { RpcStubDirectory } from "./rpc-stub-directory.ts";
 import type { RetainedCallbackInvoker } from "./core/hibernatable-rpc-stub.ts";
 import { DurableObjectNameCodec } from "./core/durable-object-names.ts";
 import { itxEntrypointFor } from "./itx-entrypoint.ts";
@@ -111,12 +111,12 @@ type SubscriptionMount = DeliveryPolicy & {
   processor?: ProcessorPolicy;
 };
 
-/** Match a CONNECTED target: `itx.connections.get('<key>')`, optionally followed by a trailing
- *  dotted path (which callable on the retained callback receives the delivery — `apply()` walks
- *  the raw target expression for that). Only the `key` is needed here (routing + reap identity);
- *  a trailing CALL step means an ABSENT target — the forwarder's lane. */
-const connectedTarget = (t?: Expression): { key: string } | undefined => {
-  if (!t || t.length < 3 || t[0] !== "itx" || t[1] !== "connections") return undefined;
+/** Match an RPC-STUB target: `itx.rpcStubs.get('<key>')`, optionally followed by a trailing dotted
+ *  path (which callable on the retained callback receives the delivery — `apply()` walks the raw
+ *  target expression for that). Only the `key` is needed here (routing + auto-revoke identity); a
+ *  trailing CALL step means an ABSENT target — the forwarder's lane. */
+const rpcStubTarget = (t?: Expression): { key: string } | undefined => {
+  if (!t || t.length < 3 || t[0] !== "itx" || t[1] !== "rpcStubs") return undefined;
   const call = t[2];
   if (!Array.isArray(call) || call.length !== 2 || call[0] !== "get" || typeof call[1] !== "string")
     return undefined;
@@ -159,9 +159,9 @@ export class StreamDurableObject extends DurableObject<Env> {
    *  AND its canonical string form (`.name`). A stream is only ever reached `getByName`; an
    *  id-addressed instance fails right here in the constructor, before it can touch anything. */
   readonly #address = parseStreamDurableObjectName(this.ctx.id.name);
-  /** Every ItxConnection: identity from the log, the session rule, the views — the domain
-   *  layer over the hibernatable RPC stubs (see itx-connection-directory.ts). */
-  readonly #itxConnections = new ItxConnectionDirectory({
+  /** The live rpc-stub registry — the domain layer over the hibernatable RPC stubs (see
+   *  rpc-stub-directory.ts). Live-only: presence via list(), no durable session history. */
+  readonly #rpcStubs = new RpcStubDirectory({
     hooks: {
       acceptWebSocket: (ws, tags) => {
         this.ctx.acceptWebSocket(ws, tags);
@@ -172,24 +172,16 @@ export class StreamDurableObject extends DurableObject<Env> {
       },
       getWebSockets: (tag) => this.ctx.getWebSockets(tag),
     },
-    kv: {
-      get: (k) => this.ctx.storage.kv.get(k),
-      put: (k, v) => this.ctx.storage.kv.put(k, v),
-      delete: (k) => void this.ctx.storage.kv.delete(k),
-    },
-    append: (...facts) => this.append(...facts),
-    // AUTO-REVOKE: a mount whose target names the dead connection can never deliver again
-    // (by connectionId always; by connectionKey only when no replacement transport carries it).
-    onFinalClose: async ({ connectionId, connectionKey, keyFinal }) => {
+    // AUTO-REVOKE: when the LAST transport for a key is gone, a mount naming it can never deliver
+    // again — pop it. A transport SWAP (keyFinal false) leaves the mount serving the survivor.
+    onFinalClose: async ({ key, keyFinal }) => {
+      if (!keyFinal) return;
       const table = this.#inline(CAPABILITY_TABLE_SLUG).state as CapabilityTable;
-      for (const m of table.mounts) {
-        const conn = connectedTarget(m.target);
-        if (!conn) continue;
-        if (conn.key === connectionId || (keyFinal && conn.key === connectionKey))
+      for (const m of table.mounts)
+        if (rpcStubTarget(m.target)?.key === key)
           await this.revokeCapability({ providedAtOffset: m.providedAtOffset }).catch((e) =>
             reportIssue("stream-do.auto-revoke", e, { providedAtOffset: m.providedAtOffset }),
           );
-      }
     },
   });
   readonly #alarmArmer = new StreamAlarmArmer(this.ctx.storage);
@@ -325,16 +317,15 @@ export class StreamDurableObject extends DurableObject<Env> {
         p === path
           ? ownContext
           : this.env.CONTEXT.getByName(DurableObjectNameCodec.stringify({ projectId, path: p })),
-      // The connections + facets views are PARENT-LOCAL — the pager sockets and facets
+      // The rpcStubs + facets views are PARENT-LOCAL — the pager sockets and facets
       // live here and can never move (workerd#6702: sockets never leave the parent).
-      connections: {
-        // A GENUINE RpcTarget (not a bare pathProxy) so `itx.connections.get('b').hello()`
+      rpcStubs: {
+        // A GENUINE RpcTarget (not a bare pathProxy) so `itx.rpcStubs.get('b').hello()`
         // pipelines the mid-chain `.hello()` on every lane — workerd's classifier rejects a
         // Proxy (#6873). The fold is identical: `.hello()` → invoke(key, ['hello'], []).
-        get: (key) =>
-          new InvokeHandle((path, args) => this.#itxConnections.invoke(key, path, args)),
-        list: () => this.#itxConnections.currentlyConnected(),
-        close: (key) => this.#itxConnections.close(key),
+        get: (key) => new InvokeHandle((path, args) => this.#rpcStubs.invoke(key, path, args)),
+        list: () => this.#rpcStubs.list(),
+        close: (key) => this.#rpcStubs.close(key),
       },
       facets: {
         get: (slug) => new InvokeHandle((path, args) => this.facetInvoke(slug, path, args)),
@@ -508,14 +499,14 @@ export class StreamDurableObject extends DurableObject<Env> {
       this.#statefulFacetNames.clear();
       // Same doctrine for the paged-in RetainedCallbackInvoker stubs: retaining one pins this
       // actor awake, and a page always gets it back — dispose them with the idle facets.
-      this.#itxConnections.disposeRetainedStubs();
+      this.#rpcStubs.disposeRetainedStubs();
     } else {
       this.#alarmArmer.armNoLaterThan(this.#lastActivityMs + 60_000);
     }
   }
 
   // ── SUBSCRIPTION DELIVERY, connected lane: one-directional, from the commit path ──
-  // A CONNECTED subscription mount (target itx.connections.get(…)) is served by raw
+  // A CONNECTED subscription mount (target itx.rpcStubs.get(…)) is served by raw
   // fire-and-forget invokes on the connection's paged-in stub: the filtered batch plus the
   // GLOBAL ScannedOffsetRange. No acks, no server cursor, no retry ladder, no watchdogs, no
   // outbound coalescing (owner decision — the socket buffer is the only queue; overflow closes
@@ -576,7 +567,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           if (errorCode(err) !== "CONNECTION_OFFLINE") onDrop(err);
         });
     for (const row of this.#activeSubscriptionMounts()) {
-      if (!connectedTarget(row.target)) continue; // absent target — the forwarder facet's lane
+      if (!rpcStubTarget(row.target)) continue; // absent target — the forwarder facet's lane
       if (row.liveState) {
         // State mode: forward each committed change payload for the watched key, raw (no
         // in-flight tracking, no latest-wins queue — the owner's no-coalescing decision; a
@@ -643,7 +634,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   async resumeSubscription(input: { name: string; afterOffset?: number }): Promise<{ ok: true }> {
     const row = this.#activeSubscriptionMounts().find((r) => r.name === input.name);
     if (!row) throw new Error(`no subscription "${input.name}"`);
-    if (connectedTarget(row.target))
+    if (rpcStubTarget(row.target))
       throw new Error(
         `"${input.name}" delivers one-directionally to a connected client — there is no server cursor; the client heals itself with read(afterOffset)`,
       );
@@ -945,12 +936,12 @@ export class StreamDurableObject extends DurableObject<Env> {
     const targetExpr = toExpression(input.target);
     if (
       pathString.startsWith("itx.subscribers.") &&
-      !connectedTarget(targetExpr) &&
+      !rpcStubTarget(targetExpr) &&
       !facetTarget(targetExpr)
     ) {
       if (input.delivery?.liveState)
         throw new Error(
-          "a live-state subscription needs a CONNECTED target (itx.connections.get(…)) — an absent target has no revision chain to keep",
+          "a live-state subscription needs a live rpc-stub target (itx.rpcStubs.get(…)) — an absent target has no revision chain to keep",
         );
       if (!this.#facetEntries().some((e) => e.slug === SUBSCRIPTION_FORWARDER_SLUG))
         await this.enableProcessor(SUBSCRIPTION_FORWARDER_SLUG);
@@ -963,7 +954,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   async revokeCapability(input: {
     providedAtOffset?: number;
     path?: string | string[];
-  }): Promise<{ reapedConnectionId?: string }> {
+  }): Promise<void> {
     let providedAtOffset = input.providedAtOffset;
     if (providedAtOffset === undefined) {
       if (!input.path) throw new Error("revokeCapability: pass providedAtOffset or path");
@@ -975,29 +966,13 @@ export class StreamDurableObject extends DurableObject<Env> {
       if (!winner) throw new Error(`no mount at path ${JSON.stringify(pathString)}`);
       providedAtOffset = winner.providedAtOffset;
     }
-    // Capture the target BEFORE revoking so we can reap a now-unreferenced parked connection.
-    const table = this.#inline(CAPABILITY_TABLE_SLUG).state as CapabilityTable;
-    const revoked = table.mounts.find((m) => m.providedAtOffset === providedAtOffset);
     await this.#capabilityTableProcessor().revoke({ providedAtOffset });
     // Revoke doubles as GC for the delivered-through watermark keyed by the mount's identity.
     // (The forwarder GCs its own SubscriptionDeliveryProgress on the revoked event.)
     this.#subscriptionDeliveredThrough.delete(providedAtOffset);
-    // The mirror of onFinalClose: an ANONYMOUS parked connection whose LAST naming mount just
-    // went away has no durable trace left, so close its transport instead of leaking the pager
-    // socket + retained stub for the session's life (the unsubscribe leak).
-    const conn = connectedTarget(revoked?.target);
-    if (conn) {
-      const record = this.#itxConnections.find(conn.key);
-      const stillNamed = this.#inline(CAPABILITY_TABLE_SLUG).state as CapabilityTable;
-      const namedElsewhere = stillNamed.mounts.some(
-        (m) => connectedTarget(m.target)?.key === conn.key,
-      );
-      if (record && record.connectionKey === undefined && !namedElsewhere) {
-        this.#itxConnections.drop(conn.key, "last naming mount revoked");
-        return { reapedConnectionId: record.stubKey };
-      }
-    }
-    return {};
+    // NOTE: a mount naming an rpc stub is NOT reaped here — the stub's lifecycle is owned by its
+    // ProvidedStub handle (dispose it ⇒ the transport closes ⇒ onFinalClose auto-revokes its
+    // mounts). Revoking a mount just drops the alias; the stub stays until its holder disposes it.
   }
 
   // ── native fetch: the stub pager door, the fetch lane, observability, egress ──
@@ -1007,7 +982,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     // A relay opens an ItxConnection's stub pager WebSocket (partial fetch — the directory
     // owns the attach gate; undefined means "not this door's request").
-    const pagerResponse = this.#itxConnections.fetch(request);
+    const pagerResponse = this.#rpcStubs.fetch(request);
     if (pagerResponse) return pagerResponse;
 
     // THE FETCH LANE: `x-itx-cap` resolves against the inline reduce right here — a 101 flows
@@ -1050,13 +1025,13 @@ export class StreamDurableObject extends DurableObject<Env> {
         subscriptionMounts: this.#activeSubscriptionMounts().map((r) => ({
           name: r.name,
           providedAtOffset: r.providedAtOffset,
-          lane: connectedTarget(r.target)
+          lane: rpcStubTarget(r.target)
             ? r.liveState
               ? "connected-live-state"
               : "connected"
             : "forwarder",
         })),
-        ...this.#itxConnections.state(),
+        ...this.#rpcStubs.state(),
       });
 
     // EGRESS: substitute `{{secret:NAME}}` placeholders, then the FALLBACK terminal.
@@ -1072,32 +1047,31 @@ export class StreamDurableObject extends DurableObject<Env> {
     // A stub pager WebSocket is DO→relay only — inbound payloads carry nothing we act on.
   }
   webSocketClose(ws: WebSocket, code: number, reason: string): void {
-    this.#itxConnections.closed(ws, code, reason);
+    this.#rpcStubs.closed(ws, code, reason);
   }
   webSocketError(ws: WebSocket): void {
-    this.#itxConnections.closed(ws, 1006, "transport error");
+    this.#rpcStubs.closed(ws, 1006, "transport error");
   }
 
-  // ── the ItxConnection RPC verbs (the directory owns the lifecycle — see
-  // itx-connection-directory.ts; these are the relay-facing doors) ──
+  // ── the rpc-stub RPC verbs (the directory owns the lifecycle — see rpc-stub-directory.ts;
+  // these are the relay-facing doors) ──
 
-  attachItxConnection(input: {
-    connectionKey?: string;
-    description?: string;
-  }): Promise<{ connectionId: string; connectionKey?: string }> {
-    return this.#itxConnections.attach(input);
+  /** Reserve a transport for `key` — the relay calls this, then opens the pager carrying the
+   *  returned transportId. */
+  rpcStubAttach(input: { key: string; description?: string }): { transportId: string } {
+    return this.#rpcStubs.attach(input);
   }
 
   /** The page answer: the paged relay hands back a fresh RetainedCallbackInvoker stub, which
    *  stays warm until the idle quiesce disposes it (a page gets it back). */
-  activateItxConnection(input: {
-    connectionId: string;
+  rpcStubActivate(input: {
+    transportId: string;
     /** A Workers-RPC stub — a callable Proxy on the wire; structural validation is impossible
      *  by design, so it rides permissively and the directory types it at the seam. */
     invoker: unknown;
   }) {
-    return this.#itxConnections.activate({
-      connectionId: input.connectionId,
+    return this.#rpcStubs.activate({
+      transportId: input.transportId,
       invoker: input.invoker as RetainedCallbackInvoker,
     });
   }

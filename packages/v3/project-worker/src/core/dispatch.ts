@@ -132,7 +132,7 @@ export async function evaluate(
 
 /** Apply `args` to a resolved value on its carried receiver, or a LOUD error if it is not callable
  *  (never the silent arg-drop apps/os shipped). An `InvokeHandle` (a mid-chain capability handle —
- *  `itx.connections.get(k)`, a parked-callback alias the forwarder delivers to) is NOT a JS function
+ *  `itx.rpcStubs.get(k)`, a parked-callback alias the forwarder delivers to) is NOT a JS function
  *  (it is a real RpcTarget so dotted access pipelines — core/invoke-handle.ts), so ROOT-calling it
  *  means dispatching those args at its EMPTY path: `handle(events,range)` ⇒ the bare callback the
  *  handle fronts. This is the one bridge between "callable capability" and "pipelinable RpcTarget". */

@@ -1,7 +1,7 @@
 // prove_crisp1.mjs — the crisp-1 architecture proof against the deployed project-worker.
 // Covers: routing seeds, live-cap desugar (park+alias), THE SHADOW STACK (override → revoke →
 // restore), expression mounts running dynamic workers (stateless fetch+WS, stateful deep call),
-// connections view (get/each/list), default-deny, and the warm paged-in stub.
+// rpcStubs view (get/list), default-deny, and the warm paged-in stub.
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { seedSources } from "./proof_sources.mjs";
 
@@ -31,17 +31,11 @@ class ToolsB extends RpcTarget {
   }
 }
 const sessionA = newWebSocketRpcSession(API);
-const itxA = await sessionA.connect({
-  connectionKey: "a",
-  description: "prover A",
-  capabilities: new ToolsA(),
-});
+const itxA = await sessionA.get();
+await itxA.rpcStubs.provide(new ToolsA(), { key: "a", description: "prover A" });
 const sessionB = newWebSocketRpcSession(API);
-const itxB = await sessionB.connect({
-  connectionKey: "b",
-  description: "prover B",
-  capabilities: new ToolsB(),
-});
+const itxB = await sessionB.get();
+await itxB.rpcStubs.provide(new ToolsB(), { key: "b", description: "prover B" });
 await seedSources(itxA, ["site", "counter"]);
 
 // 1. whoami through the routing table (seed itx.whoami ⇒ roots.whoami) — via the ONE dispatch door
@@ -59,11 +53,10 @@ await itxA.invokeCapability({ path: ["kv", "put"], args: ["greet", "hi-crisp"] }
 const got = await itxA.invokeCapability({ path: ["kv", "get"], args: ["greet"] });
 check(got === "hi-crisp", "kv round-trip via seed", String(got));
 
-// 3. live capability: provide from A (park + alias desugar), invoke from B
-const provision = await itxA.provideCapability({
-  path: ["tools"],
-  capability: new ToolsA(),
-});
+// 3. live capability: provide from A (park an rpc stub under a key + mount it), invoke from B
+const toolsKey = crypto.randomUUID();
+await itxA.rpcStubs.provide(new ToolsA(), { key: toolsKey });
+await itxA.provide({ path: "itx.tools", target: `itx.rpcStubs.get('${toolsKey}')` });
 const echoed = await itxB.invokeCapability({ path: ["tools", "echo"], args: ["hello"] });
 check(echoed === "echo-A:hello", "live cap: B invokes A's provider", String(echoed));
 const s1 = await state();
@@ -75,21 +68,19 @@ check(
   JSON.stringify(s1),
 );
 
-// 4. THE SHADOW STACK: same pattern mounted twice — newest wins; revoke restores
-const provA = await itxA.provideCapability({
-  path: ["greeter"],
-  capability: new ToolsA(),
-});
-const provB = await itxB.provideCapability({
-  path: ["greeter"],
-  capability: new ToolsB(),
-});
+// 4. THE SHADOW STACK: same path mounted twice — newest wins; revoking the mount restores
+const greeterKeyA = crypto.randomUUID();
+await itxA.rpcStubs.provide(new ToolsA(), { key: greeterKeyA });
+await itxA.provide({ path: "itx.greeter", target: `itx.rpcStubs.get('${greeterKeyA}')` });
+const greeterKeyB = crypto.randomUUID();
+await itxB.rpcStubs.provide(new ToolsB(), { key: greeterKeyB });
+await itxB.provide({ path: "itx.greeter", target: `itx.rpcStubs.get('${greeterKeyB}')` });
 const winB = await itxA.invokeCapability({ path: ["greeter", "hello"], args: [] });
 check(winB === "from B", "shadow stack: newest mount wins", String(winB));
-await provB.revoke();
+await itxB.revoke({ path: "itx.greeter" });
 const winA = await itxA.invokeCapability({ path: ["greeter", "hello"], args: [] });
 check(winA === "from A", "shadow stack: revoke restores what was beneath", String(winA));
-await provA.revoke();
+await itxA.revoke({ path: "itx.greeter" });
 let denied = "";
 try {
   await itxA.invokeCapability({ path: ["greeter", "hello"], args: [] });
@@ -149,28 +140,25 @@ check(
   JSON.stringify(whoDeep),
 );
 
-// 7. the connections view: list (currently connected clients), single-target get, each() fan-out
-const currentlyConnected = await itxA.invoke("itx.connections.list()");
+// 7. the rpcStubs view: list (held stub keys), single-target get, fan-out via list() + map
+const heldStubs = await itxA.invoke("itx.rpcStubs.list()");
 check(
-  Array.isArray(currentlyConnected) &&
-    ["a", "b"].every((k) => currentlyConnected.some((c) => c.connectionKey === k)),
-  "connections.list shows both keyed clients",
-  JSON.stringify(currentlyConnected),
+  Array.isArray(heldStubs) && ["a", "b"].every((k) => heldStubs.some((c) => c.key === k)),
+  "rpcStubs.list shows both keyed stubs",
+  JSON.stringify(heldStubs),
 );
-const single = await itxA.invoke("itx.connections.get('b').hello()");
-check(single === "from B", "connections.get(key) reaches ONE client", String(single));
+const single = await itxA.invoke("itx.rpcStubs.get('b').hello()");
+check(single === "from B", "rpcStubs.get(key) reaches ONE stub", String(single));
 // fan-out is list() + map over get(key) — no built-in `each`; the caller owns the allSettled.
-const connKeys = (await itxA.invoke("itx.connections.list()")).map(
-  (r) => r.connectionKey ?? r.connectionId,
-);
+const stubKeys = (await itxA.invoke("itx.rpcStubs.list()")).map((r) => r.key);
 const fans = (
   await Promise.all(
-    connKeys.map((k) => itxA.invoke(`itx.connections.get('${k}').hello()`).catch(() => undefined)),
+    stubKeys.map((k) => itxA.invoke(`itx.rpcStubs.get('${k}').hello()`).catch(() => undefined)),
   )
 ).filter((v) => v !== undefined);
 check(
   fans.includes("from B") && fans.includes("from A"),
-  "fan-out via connections.list() + map (no each) reaches every attached connection",
+  "fan-out via rpcStubs.list() + map (no each) reaches every held stub",
   JSON.stringify(fans),
 );
 

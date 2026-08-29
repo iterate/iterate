@@ -115,18 +115,17 @@ async function quiesceLikeProduction(): Promise<void> {
 }
 
 beforeAll(async () => {
-  // ONE client session carrying all 200 connections (capnweb multiplexes; each connect() parks
+  // ONE client session carrying all 200 stubs (capnweb multiplexes; each rpcStubs.provide() parks
   // its own EchoTarget relay-side and opens its own stub pager WebSocket into the DO).
-  const clientSession = await openSession();
-  const BATCH = 25; // concurrent connects per wave — enough parallelism without a thundering herd
+  const clientItx = await (await openSession()).get();
+  const BATCH = 25; // concurrent provides per wave — enough parallelism without a thundering herd
   for (let base = 0; base < CLIENTS; base += BATCH) {
     await Promise.all(
       Array.from({ length: Math.min(BATCH, CLIENTS - base) }, (_, k) => {
         const i = base + k;
-        return clientSession.connect({
-          connectionKey: `c${i}`,
+        return clientItx.rpcStubs.provide(new EchoTarget(i), {
+          key: `c${i}`,
           description: `scale client ${i}`,
-          capabilities: new EchoTarget(i),
         });
       }),
     );
@@ -155,7 +154,7 @@ test("SCALE ATTACH: 200 clients park 200 stubs, the DO stays dormant, spot invok
   const picks = new Set<number>();
   while (picks.size < 5) picks.add(Math.floor(Math.random() * CLIENTS));
   for (const i of picks) {
-    const out = await callerItx.invoke(`itx.connections.get('c${i}').echo('x${i}')`);
+    const out = await callerItx.invoke(`itx.rpcStubs.get('c${i}').echo('x${i}')`);
     expect(out).toBe(`echo-${i}:x${i}`);
   }
 
@@ -183,7 +182,7 @@ test("EVICT THEN WAKE: eviction drops every in-memory stub; a call pages the rel
 
   // The wake path, several clients: page → fresh RetainedCallbackInvoker → invoke.
   for (const i of [3, 77, 141]) {
-    const out = await callerItx.invoke(`itx.connections.get('c${i}').echo('wake${i}')`);
+    const out = await callerItx.invoke(`itx.rpcStubs.get('c${i}').echo('wake${i}')`);
     expect(out).toBe(`echo-${i}:wake${i}`);
   }
   const paged = await state();
@@ -204,16 +203,13 @@ test("SCALE WAKE: after another eviction, a fan-out reaches ALL 200 clients", as
 
   const t0 = Date.now();
   // fan-out = list() + map over get(key).echo (no built-in `each`); the caller owns the allSettled.
-  const keys = (
-    (await callerItx.invoke("itx.connections.list()")) as {
-      connectionKey?: string;
-      connectionId: string;
-    }[]
-  ).map((r) => r.connectionKey ?? r.connectionId);
+  const keys = ((await callerItx.invoke("itx.rpcStubs.list()")) as { key: string }[]).map(
+    (r) => r.key,
+  );
   const answers = (
     await Promise.all(
       keys.map((k) =>
-        callerItx.invoke(`itx.connections.get('${k}').echo('hi')`).catch(() => undefined),
+        callerItx.invoke(`itx.rpcStubs.get('${k}').echo('hi')`).catch(() => undefined),
       ),
     )
   ).filter((v): v is string => v !== undefined);

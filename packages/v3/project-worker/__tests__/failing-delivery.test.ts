@@ -69,10 +69,12 @@ const HALTED = "events.iterate.com/stream/subscription-delivery-halted";
 const keep: unknown[] = [];
 
 /** Park a live callback and alias it at `itx.<name>` — an ABSENT target expression from the
- *  subscription lane's point of view (NOT itx.connections.get(...)), so a subscription naming
- *  it rides the subscription-forwarder facet, yet still calls back into this test process. */
+ *  subscription lane's point of view (NOT a direct itx.rpcStubs.get(...) target), so a subscription
+ *  naming it rides the subscription-forwarder facet, yet still calls back into this test process. */
 async function mountHook(itx: any, name: string, fn: (...args: any[]) => unknown): Promise<string> {
-  keep.push(await itx.provideCapability({ path: [name], capability: fn }));
+  const key = crypto.randomUUID();
+  keep.push(await itx.rpcStubs.provide(fn, { key }));
+  await itx.provide({ path: `itx.${name}`, target: `itx.rpcStubs.get('${key}')` });
   return `itx.${name}`;
 }
 
@@ -377,7 +379,7 @@ test("liveState subscribe with an ABSENT target is rejected loudly at provide", 
   const itx = await harness.itx("prj_fd_lsbad");
   await expect(
     itx.subscribe({ name: "lsbad", liveState: { key: "chat" }, target: "itx.wherever" }),
-  ).rejects.toThrow(/needs a CONNECTED target/);
+  ).rejects.toThrow(/needs a live rpc-stub target/);
   // and the rejected mount left nothing behind
   const state: any = await (await fetch(new URL(`/state?ctx=prj_fd_lsbad`, harness.url))).json();
   expect(state.subscriptionMounts).toEqual([]);

@@ -58,7 +58,7 @@ const fakeBuiltIns = () => {
       get: (k: string) => kv.get(k) ?? null,
       put: (k: string, v: string) => (kv.set(k, v), { ok: true }),
     },
-    connections: { get: (key: string) => connections.get(key) ?? throwOffline(key) },
+    rpcStubs: { get: (key: string) => connections.get(key) ?? throwOffline(key) },
     whoami: () => ({ projectId: "prj_t", path: "/" }),
     openai: { chat: (o: { model: string }) => (openaiCalls.push(o), `chat:${o.model}`) },
     openaiCalls,
@@ -81,7 +81,7 @@ const setup = (extraConfigMounts: [string, string][] = []) => {
       ...[
         ["itx.whoami", "whoami"],
         ["itx.kv", "kv"],
-        ["itx.connections", "connections"],
+        ["itx.rpcStubs", "rpcStubs"],
         ["itx.openai", "openai"],
       ],
       ...extraConfigMounts,
@@ -158,10 +158,10 @@ describe("event mounts + the shadow stack", () => {
 
   test("STRING AT REST: the mount event stores the string halves verbatim", async () => {
     const { host, events } = setup();
-    await host.provide({ path: "itx.db", target: ["itx", "connections", ["get", "tab-1"]] });
+    await host.provide({ path: "itx.db", target: ["itx", "rpcStubs", ["get", "tab-1"]] });
     const payload = events.at(-1)!.payload as { path: string; target: string };
     expect(payload.path).toBe("itx.db"); // human-readable in the log
-    expect(payload.target).toBe("itx.connections.get('tab-1')"); // print-canonicalized
+    expect(payload.target).toBe("itx.rpcStubs.get('tab-1')"); // print-canonicalized
   });
 
   test("shadowing: newest same-path mount wins; revoke-by-offset restores what's beneath", async () => {
@@ -170,11 +170,11 @@ describe("event mounts + the shadow stack", () => {
     builtIns._connect("tab-2", { hello: () => "from tab-2" });
     const first = await host.provide({
       path: "itx.greeter",
-      target: "itx.connections.get('tab-1')",
+      target: "itx.rpcStubs.get('tab-1')",
     });
     const second = await host.provide({
       path: "itx.greeter",
-      target: "itx.connections.get('tab-2')",
+      target: "itx.rpcStubs.get('tab-2')",
     });
     expect(await invoke("itx.greeter.hello()")).toBe("from tab-2"); // newest wins
     await host.revoke({ providedAtOffset: second.providedAtOffset });
@@ -196,7 +196,7 @@ describe("event mounts + the shadow stack", () => {
     builtIns._connect("platform", {
       anything: (...a: unknown[]) => (osCalls.push(`anything(${a.join(",")})`), "handled upstream"),
     });
-    await host.provide({ path: "itx", target: "itx.connections.get('platform')" });
+    await host.provide({ path: "itx", target: "itx.rpcStubs.get('platform')" });
     expect(await invoke("itx.anything('x')")).toBe("handled upstream");
     expect(osCalls).toEqual(["anything(x)"]);
     // config mounts still win over the default route for what they claim (more specific)
@@ -220,7 +220,7 @@ describe("event mounts + the shadow stack", () => {
     builtIns._connect("conn-42", { move: (n: unknown) => `moved ${n}` });
     const provision = await host.provide({
       path: "itx.robot",
-      target: "itx.connections.get('conn-42')",
+      target: "itx.rpcStubs.get('conn-42')",
     });
     expect(await invoke("itx.robot.move(10)")).toBe("moved 10");
     // socket death = the registry entry vanishes → calls fail; revoke pops the mount
@@ -234,7 +234,7 @@ describe("event mounts + the shadow stack", () => {
     const { host, reduceAll } = setup();
     await host.provide({
       path: "itx.subscribers.watcher",
-      target: "itx.connections.get('conn-1')",
+      target: "itx.rpcStubs.get('conn-1')",
       delivery: { consumes: ["mark"], liveState: undefined },
     });
     await host.provide({

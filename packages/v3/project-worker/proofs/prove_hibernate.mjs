@@ -59,7 +59,7 @@ class Tools extends RpcTarget {
 // (re)establish the provider under the durable key 'p' with its capability.
 const connectProvider = async () => {
   const s = newWebSocketRpcSession(API);
-  await s.connect({ connectionKey: "p", capabilities: new Tools() });
+  await s.get().rpcStubs.provide(new Tools(), { key: "p" });
   return s;
 };
 // a fresh consumer socket (never reuse one across the idle — it may have been recycled).
@@ -71,7 +71,7 @@ let itx = await freshConsumer();
 await itx.enableProcessor("tally"); // a built-in facet processor whose fold must survive reconstruction
 await itx.invokeCapability({ path: ["stream", "append"], args: [{ type: "mark", n: 0 }] });
 await until("provider online before idle", async () =>
-  (await itx.invoke("itx.connections.get('p').echo('a')")) === "echo:a" ? true : undefined,
+  (await itx.invoke("itx.rpcStubs.get('p').echo('a')")) === "echo:a" ? true : undefined,
 );
 const base = await stateOf();
 check(base.stubs >= 1, "before idle: provider pager parked", `stubs=${base.stubs}`);
@@ -91,7 +91,7 @@ await itx.invokeCapability({ path: ["stream", "append"], args: [{ type: "mark", 
 let reconnected = false;
 const echoed = await until("capability callable after wake (reconnect if needed)", async () => {
   try {
-    const r = await itx.invoke("itx.connections.get('p').echo('c')");
+    const r = await itx.invoke("itx.rpcStubs.get('p').echo('c')");
     return r === "echo:c" ? r : undefined;
   } catch {
     // provider socket dropped during the idle → reconnect under the same key and let the next poll retry

@@ -10,10 +10,7 @@ const TABLE: [string, Expression][] = [
   ["itx.kv.get('src/app.js')", ["itx", "kv", ["get", "src/app.js"]]],
   ["itx.kv.put('k','v')", ["itx", "kv", ["put", "k", "v"]]], // multiple args
   ["itx.facets.get('tally').snapshot()", ["itx", "facets", ["get", "tally"], ["snapshot"]]], // chain
-  [
-    "itx.connections.get('robot-arm-1').ping()",
-    ["itx", "connections", ["get", "robot-arm-1"], ["ping"]],
-  ],
+  ["itx.rpcStubs.get('robot-arm-1').ping()", ["itx", "rpcStubs", ["get", "robot-arm-1"], ["ping"]]],
   [
     "itx.workers.get({type:'stateful',className:'Counter'})",
     ["itx", "workers", ["get", { type: "stateful", className: "Counter" }]],

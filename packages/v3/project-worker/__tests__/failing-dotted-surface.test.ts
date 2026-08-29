@@ -13,7 +13,7 @@
 // RpcTarget answers only its fixed methods (invokeCapability / invoke / provide / …), so the
 // natural dotted spelling is expected to be MISSING today. Every test below asserts the
 // CORRECT (apps/os-proven) behavior, adapted to our built-ins (whoami / kv / stream /
-// connections) and our live-bridge shape (proofs/prove_slack.mjs); genuinely-failing ones are
+// rpcStubs) and our live-bridge shape (proofs/prove_slack.mjs); genuinely-failing ones are
 // `test.fails` with BUG/EXPECTED/ACTUAL/WHY blocks. Run:
 //   pnpm exec vitest run --config vitest.harness.config.ts __tests__/failing-dotted-surface.test.ts
 
@@ -123,15 +123,14 @@ class SlackReplayTarget extends RpcTarget {
 }
 
 /** Attach a slack bridge to `ctx` and hand back an ordinary second client (prove_slack.mjs:71-98
- *  shape: provider session + consumer session over the same context). */
+ *  shape: provider session + consumer session over the same context). The bridge is a LIVE rpc
+ *  stub under key 'slack', named at `itx.slack` by an ordinary by-value mount — so every other
+ *  client just speaks `itx.slack.chat.postMessage(...)`. */
 async function slackRig(ctx: string) {
   const sdkCalls: Array<[string, Record<string, unknown>]> = [];
   const bridgeItx = await harness.itx(ctx);
-  await bridgeItx.provideCapability({
-    path: ["slack"],
-    capability: new SlackReplayTarget(sdkCalls),
-    instructions: "slack sdk bridge (test)",
-  });
+  await bridgeItx.rpcStubs.provide(new SlackReplayTarget(sdkCalls), { key: "slack" });
+  await bridgeItx.provide({ path: "itx.slack", target: "itx.rpcStubs.get('slack')" });
   const itx = await harness.itx(ctx);
   // Sanity through the EXPLICIT door — the mount is live before any dotted attempt.
   await until("slack mount routable via the explicit door", async () => {
@@ -145,14 +144,14 @@ async function slackRig(ctx: string) {
   return { itx, sdkCalls };
 }
 
-/** Attach a Tools connection under `key` and wait until it answers via the STRING door (the
- *  door that provably works today — failing-connections.test.ts uses it throughout). */
+/** Provide a Tools rpc stub under `key` and wait until it answers via the STRING door (the door
+ *  that provably works today — reconnect-same-key.test.ts uses it throughout). */
 async function connectedRig(ctx: string, key: string) {
   const itx = await harness.itx(ctx);
   const s = harness.session(ctx);
-  await s.connect({ connectionKey: key, capabilities: new Tools(key) });
-  await until(`connection '${key}' answers via the string door`, async () => {
-    return (await itx.invoke(`itx.connections.get('${key}').hello()`)) === `hello-from-${key}`;
+  await s.get().rpcStubs.provide(new Tools(key), { key });
+  await until(`rpc stub '${key}' answers via the string door`, async () => {
+    return (await itx.invoke(`itx.rpcStubs.get('${key}').hello()`)) === `hello-from-${key}`;
   });
   return itx;
 }
@@ -232,17 +231,16 @@ test("dotted write, explicit read: itx.stream.append lands in the ONE log", asyn
   expect(page.events.some((e: any) => e.type === "mark")).toBe(true);
 });
 
-// FIXED: `itx.connections.get('b')` now returns a genuine, pipelinable RpcTarget
-//   (core/invoke-handle.ts — `InvokeHandle`, prototype-hop installed, dispatch →
-//   #itxConnections.invoke(key,path,args)) instead of a bare `pathProxy`. workerd's pipeline
-//   classifier accepts a real RpcTarget on both lanes (capnweb's RpcTarget IS the native
-//   cloudflare:workers RpcTarget), so capnweb pipelines `.hello()` across the /api→DO boundary to
-//   the client relay (2 hops). The fold is identical (`.hello()` → invoke(key, ['hello'], [])); the
-//   only change is the pipelinable brand. Was: `TypeError: The RPC receiver does not implement the
-//   method "hello"` (a Proxy is NonPipelinable; cloudflare/workerd#6873).
-test("mid-chain call: itx.connections.get('b').hello() answers from a live connection", async () => {
+// FIXED: `itx.rpcStubs.get('b')` returns a genuine, pipelinable RpcTarget (core/invoke-handle.ts —
+//   `InvokeHandle`, prototype-hop installed, dispatch → #rpcStubs.invoke(key,path,args)) instead of a
+//   bare `pathProxy`. workerd's pipeline classifier accepts a real RpcTarget on both lanes (capnweb's
+//   RpcTarget IS the native cloudflare:workers RpcTarget), so capnweb pipelines `.hello()` across the
+//   /api→DO boundary to the client relay (2 hops). The fold is identical (`.hello()` → invoke(key,
+//   ['hello'], [])); the only change is the pipelinable brand. Was: `TypeError: The RPC receiver does
+//   not implement the method "hello"` (a Proxy is NonPipelinable; cloudflare/workerd#6873).
+test("mid-chain call: itx.rpcStubs.get('b').hello() answers from a live rpc stub", async () => {
   const itx = await connectedRig(c("conn"), "b");
-  expect(await itx.connections.get("b").hello()).toBe("hello-from-b");
+  expect(await itx.rpcStubs.get("b").hello()).toBe("hello-from-b");
 });
 
 // BUG: the flagship use case — a WebClient-shaped SDK behind a live bridge — has no dotted
@@ -315,10 +313,10 @@ test("a leaf miss through the EXPLICIT door keeps the same miss grammar", async 
 });
 
 // BUG: awaiting a dangling dotted chain node rejects instead of settling to a usable handle —
-//   there is nothing at `connections` for the pull to resolve.
+//   there is nothing at `rpcStubs` for the pull to resolve.
 // EXPECTED (apps/os/src/domains/itx/path-proxy.test.ts:108-114 "awaiting an instance must not
 //   treat it as a thenable" + utils.ts:370-372 — `then` must stay absent so an await settles
-//   instead of dispatching): `await itx.connections.get('b9')` yields a truthy handle and the
+//   instead of dispatching): `await itx.rpcStubs.get('b9')` yields a truthy handle and the
 //   chain stays callable afterwards.
 // ACTUAL: the await REJECTS with TypeError: Cannot read properties of undefined (reading
 //   'get'). (The `then`-as-path-segment half is capnweb-native and fine — the rejection is the
@@ -326,12 +324,12 @@ test("a leaf miss through the EXPLICIT door keeps the same miss grammar", async 
 // WHY IT MATTERS: real client code parks chain nodes in variables, logs them, and awaits them
 //   mid-chain (apps/os pinned this after `await stub` bugs turned every await into a dispatch);
 //   a surface where mid-chain awaits throw forces callers into single-expression gymnastics.
-// FIXED: the connection handle is now a pipelinable `InvokeHandle` (RpcTarget), so `node.hello()`
+// FIXED: the rpc-stub handle is now a pipelinable `InvokeHandle` (RpcTarget), so `node.hello()`
 // answers after the await. The await-safety half (`then` stays absent → await settles to the
 // handle, never dispatches) holds via the RpcTarget prototype hop.
 test("an unawaited dotted chain is await-safe: awaiting mid-chain yields a live handle", async () => {
   const itx = await connectedRig(c("await"), "b9");
-  const node = itx.connections.get("b9"); // unawaited dotted chain — no call yet
+  const node = itx.rpcStubs.get("b9"); // unawaited dotted chain — no call yet
   const handle: any = await node; // must settle (never treat `then` as a path segment)
   expect(handle).toBeTruthy();
   expect(await node.hello()).toBe("hello-from-b9"); // the chain stays callable after the await
@@ -364,11 +362,11 @@ test("awaiting the root itx stub again neither hangs nor dispatches (then-safety
 //   equalities SPURIOUSLY PASS, and stringify of a logged mount fired live invokes at depth ≥ 1
 //   after the first hop-level fix.
 // FIXED: stringify-safety holds (the hop's path proxies block toJSON — proven in
-// core/dotted-path-proxy.test.ts) AND `node.hello()` answers — the connection handle is now a
+// core/dotted-path-proxy.test.ts) AND `node.hello()` answers — the rpc-stub handle is now a
 // pipelinable `InvokeHandle` (RpcTarget).
 test("JSON.stringify of a dangling chain node must not dispatch, and the node stays live", async () => {
   const itx = await connectedRig(c("json"), "rec");
-  const node = itx.connections.get("rec"); // a dangling dispatcher (a logged handle, a report object)
+  const node = itx.rpcStubs.get("rec"); // a dangling dispatcher (a logged handle, a report object)
   const out = JSON.stringify({ node }); // probes toJSON — must NOT fire a live capability call
   expect(typeof out).toBe("string");
   expect(await node.hello()).toBe("hello-from-rec"); // still a live handle afterwards

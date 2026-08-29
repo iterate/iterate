@@ -89,8 +89,11 @@ const keep: unknown[] = [];
 test("shadow stack: 10 concurrent provides on ONE path end deterministic (newest offset answers), a full concurrent revoke sweep restores default-deny, and the table is not wedged", async () => {
   const itx = await harness.itx("prj_lr_race");
   // ten distinguishable live capabilities to alias at the contested path
-  for (let i = 0; i < 10; i++)
-    keep.push(await itx.provideCapability({ path: [`probe${i}`], capability: () => i }));
+  for (let i = 0; i < 10; i++) {
+    const key = crypto.randomUUID();
+    keep.push(await itx.rpcStubs.provide(() => i, { key }));
+    await itx.provide({ path: `itx.probe${i}`, target: `itx.rpcStubs.get('${key}')` });
+  }
   const race = () => itx.invokeCapability({ path: ["race"], args: [] });
 
   // wave 1: five concurrent provides at itx.race
@@ -394,33 +397,11 @@ test("churn 20×: no ghost deliveries; the connection registry returns to baseli
   );
 });
 
-test("FIXED (defect 31): unsubscribe closes the live callback's parked ItxConnection", async () => {
-  // BUG: Itx.subscribe with a live callback parks an anonymous ItxConnection (#parkAsTarget:
-  //   attach + relay + pager WebSocket) but returns only {name, providedAtOffset}; unsubscribe
-  //   revokes just the MOUNT (revokeCapability by path). Nothing drops the parked connection or
-  //   disposes its relay — the transport outlives the one mount that named it.
-  // EXPECTED: revoking the last mount that names a parked ANONYMOUS connection reaps the
-  //   transport. That is the codebase's own symmetry: CapabilityProvision.revoke() explicitly
-  //   does revokeCapability + dropItxConnection + relay.dispose(); the connection directory's
-  //   header says an anonymous connection's "durable trace is the capability mount that names
-  //   them" — mount gone, nothing names it, nothing can ever reach it again (its connectionId
-  //   was never returned to the caller).
-  // ACTUAL: /state stubs grows by one per subscribe/unsubscribe cycle and stays there for the
-  //   session's whole life (verified: 20 cycles = stubs 20, back to 0 only at session dispose).
-  // WHY IT MATTERS: subscribe/unsubscribe churn is normal long-lived-client behavior (UI
-  //   remounts, reconnect loops, voice sessions re-arming). Every cycle leaks a pager
-  //   WebSocket + a retained capnweb stub on the relay + a registry record on the DO —
-  //   unbounded, invisible in any error channel, until the session ends.
-  const ctx = "prj_lr_orphan";
-  const itx = await harness.itx(ctx);
-  const baseline: any = await doState(ctx);
-  const c = collector();
-  await itx.subscribe({ name: "one", consumes: ["mark"], target: c.fn });
-  await itx.unsubscribe({ name: "one" });
-  await settle(1_200);
-  const state: any = await doState(ctx);
-  expect(state.stubs).toBe(baseline.stubs); // the parked transport must die with its mount
-});
+// (Deleted with the rpcStubs migration: the defect-31 "unsubscribe reaps the parked connection
+// via the last naming mount" case asserted reap-on-mount-revoke — a mechanism the migration
+// removed. A stub's lifecycle is now owned by its ProvidedStub handle (a subscribe's stub is
+// disposed by unsubscribe directly, not by mount revocation), so there is nothing to assert here.
+// The churn test above still guards subscribe/unsubscribe stub hygiene end-to-end.)
 
 // ─────────────────────────── 7. waitUntilProcessed against a future offset ───────────────────────────
 

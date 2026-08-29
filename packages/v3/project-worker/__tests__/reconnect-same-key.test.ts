@@ -7,9 +7,9 @@
 // workaround IS a stateless proxy worker). So a provider socket dropping is EXPECTED, and the
 // platform's answer is RECONNECT, not server-side durability.
 //
-// The `connectionKey` is the DURABLE identity. This pins the contract: a provider that goes OFFLINE
+// The rpc-stub `key` is the DURABLE identity. This pins the contract: a provider that goes OFFLINE
 // (its session drops) and reconnects under the SAME key is reachable again through
-// `itx.connections.get(key)` — its capability can be called later. Fully deterministic (we control
+// `itx.rpcStubs.get(key)` — its capability can be called later. Fully deterministic (we control
 // the disconnect), so it proves — reliably, in CI — the property the live hibernation proofs could
 // only race Cloudflare for. See reference: the live hibernation proofs are inherently flaky; THIS is
 // the property that actually matters in production.
@@ -69,36 +69,34 @@ test("a provider goes OFFLINE and reconnects under the SAME key — its capabili
   const ctx = c("samekey");
   const consumer = await harness.itx(ctx); // stays connected throughout; addresses the provider by key
 
-  // 1. provider connects under key 'p' with a live capability → callable through the key.
+  // 1. provider provides a live capability under key 'p' → callable through the key.
   let provider = harness.session(ctx);
-  await provider.connect({ connectionKey: "p", capabilities: new Tools("v1") });
+  await provider.get().rpcStubs.provide(new Tools("v1"), { key: "p" });
   const before = await until("callable while online", async () =>
-    (await consumer.invoke("itx.connections.get('p').echo('a')")) === "echo-v1:a"
-      ? "ok"
-      : undefined,
+    (await consumer.invoke("itx.rpcStubs.get('p').echo('a')")) === "echo-v1:a" ? "ok" : undefined,
   );
   expect(before).toBe("ok");
 
-  // 2. provider goes OFFLINE — dispose its capnweb session (the WS closes; the DO reaps connection
-  //    'p' when its last transport's pager closes). The consumer's own session is untouched.
+  // 2. provider goes OFFLINE — dispose its capnweb session (the WS closes; the DO drops stub 'p'
+  //    when its last transport's pager closes). The consumer's own session is untouched.
   (provider as Record<symbol, () => void>)[DISPOSE]?.();
   await until("provider is OFFLINE (the key stops answering)", async () => {
     try {
-      await consumer.invoke("itx.connections.get('p').echo('b')");
+      await consumer.invoke("itx.rpcStubs.get('p').echo('b')");
       return undefined; // still answering — keep polling until it goes offline
     } catch {
-      return true; // CONNECTION_OFFLINE — the reap landed
+      return true; // CONNECTION_OFFLINE — the drop landed
     }
   });
 
   // 3. provider RECONNECTS under the SAME key with a fresh capability instance.
   provider = harness.session(ctx);
-  await provider.connect({ connectionKey: "p", capabilities: new Tools("v2") });
+  await provider.get().rpcStubs.provide(new Tools("v2"), { key: "p" });
 
   // 4. THE CONTRACT: the capability is callable AGAIN through the same key — it now resolves to the
   //    reconnected provider (the v2 instance), no re-address needed by the caller.
   const after = await until("callable again after reconnect under the same key", async () => {
-    const r = await consumer.invoke("itx.connections.get('p').echo('c')");
+    const r = await consumer.invoke("itx.rpcStubs.get('p').echo('c')");
     return r === "echo-v2:c" ? r : undefined;
   });
   expect(after).toBe("echo-v2:c");

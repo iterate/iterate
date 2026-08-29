@@ -94,13 +94,9 @@ test.todo(
     "present-secret-in-URL half is pinned purely in src/boundary-egress.failing.test.ts.",
 );
 
-test.todo(
-  "CONNECTIONKEY / CONNECTIONID SHARED LOOKUP NAMESPACE: ItxConnectionDirectory.find(key) matches " +
-    "`r.connectionKey === key || r.stubKey === key`, and connectionId = String(connectedAtOffset) " +
-    "(a small integer string) while connectionKey is client-chosen and UNVALIDATED (attach() takes " +
-    "it verbatim). A client that reads a victim's connectionId from itx.connections.list() and then " +
-    "connect({connectionKey: '<that id>'}) collides the two namespaces: onFinalClose's auto-revoke " +
-    "(`conn.key === connectionKey` when keyFinal) then revokes the VICTIM's identity mount when the " +
-    "attacker's keyed connection closes clean. Intra-context integrity (⚠). Not verified here — " +
-    "needs two live-callback connections + a clean keyFinal close through the relay.",
-);
+// (Deleted with the rpcStubs migration: the "connectionKey / connectionId shared lookup namespace"
+// todo described an attack on the removed connection directory — connect({connectionKey}), the
+// dual connectionId/connectionKey namespace, and onFinalClose auto-revoke by connectionKey. The
+// rpcStubs registry keys stubs by a single client-chosen `key` (list() returns [{key}]); there is
+// no connectionId offset-string to collide with, so the defect is structurally gone. It was also a
+// malicious-client concern, which the trusted-client model does not defend against.)

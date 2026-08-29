@@ -212,7 +212,7 @@ test.fails("baseline: /cap serves HTTP and a 101 WebSocket echo from a LOADED-WO
 
 // ─────────────────────── 2. LIVE CAPABILITY, plain HTTP fetch (non-upgrade) ───────────────────────
 // The Request is minted by a REAL eyeball (not a capnweb client): eyeball → worker /cap → DO
-// fetch lane → capability table → connections.get alias → Workers RPC invoker → relay → capnweb
+// fetch lane → capability table → rpcStubs.get alias → Workers RPC invoker → relay → capnweb
 // → the NODE provider's fetch(). Its Response rides every hop back out. (prove_rich pinned
 // Request/Response over capnweb between two capnweb clients; this pins the EYEBALL-originated
 // path in the harness.)
@@ -235,7 +235,9 @@ test("live capability HTTP fetch: an eyeball POST reaches the Node provider's fe
   const provider = harness.session(ctx);
   const itxA = await provider.authenticate().get();
   const device = new HttpDevice();
-  keep.push(await itxA.provideCapability({ path: ["ws-device"], capability: device }));
+  const key = crypto.randomUUID();
+  keep.push(await itxA.rpcStubs.provide(device, { key }));
+  await itxA.provide({ path: "itx.ws-device", target: `itx.rpcStubs.get('${key}')` });
 
   const res = await fetch(capUrl(ctx, "itx.ws-device", "http"), {
     method: "POST",
@@ -296,7 +298,9 @@ test("upgrade REQUEST forwarding: the eyeball's ws upgrade reaches the Node prov
   const provider = harness.session(ctx);
   const itxA = await provider.authenticate().get();
   const device = new WsDevice();
-  keep.push(await itxA.provideCapability({ path: ["ws-device"], capability: device }));
+  const key = crypto.randomUUID();
+  keep.push(await itxA.rpcStubs.provide(device, { key }));
+  await itxA.provide({ path: "itx.ws-device", target: `itx.rpcStubs.get('${key}')` });
   // Sanity: the mount answers plain HTTP (so everything below is about the UPGRADE, not the mount).
   const plain = await fetch(capUrl(ctx, "itx.ws-device", "http"));
   expect(await plain.text()).toBe("http-fallback");
@@ -309,7 +313,7 @@ test("upgrade REQUEST forwarding: the eyeball's ws upgrade reaches the Node prov
   console.log("[wsfetch] provider observations:", JSON.stringify(device.observations));
 
   // POSITIVE PIN — request forwarding is NOT the blocker: the upgrade Request crossed eyeball →
-  // /cap → DO fetch lane → capability table → connections alias → Workers RPC invoker → relay →
+  // /cap → DO fetch lane → capability table → rpcStubs alias → Workers RPC invoker → relay →
   // capnweb → the NODE provider, Upgrade header intact.
   expect(device.observations).toContain('fetch invoked: GET upgrade="websocket"');
   // The provider cannot fabricate a 101 in Node — BOTH blockers, named by the runtime itself.
@@ -345,7 +349,9 @@ test.fails("live capability WebSocket fetch: a plain eyeball WebSocket opens (10
   const provider = harness.session(ctx);
   const itxA = await provider.authenticate().get();
   const device = new WsDevice();
-  keep.push(await itxA.provideCapability({ path: ["ws-device"], capability: device }));
+  const key = crypto.randomUUID();
+  keep.push(await itxA.rpcStubs.provide(device, { key }));
+  await itxA.provide({ path: "itx.ws-device", target: `itx.rpcStubs.get('${key}')` });
   // THE CORRECT BEHAVIOR: the eyeball's WebSocket opens, echoes, closes.
   const ws = await wsRoundTrip(capUrl(ctx, "itx.ws-device", "ws"), "hello-device");
   console.log("[wsfetch] ws round trip:", JSON.stringify(ws));

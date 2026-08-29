@@ -186,7 +186,7 @@ test("a processor enabled by its MOUNT alone (the documented event-sourced door)
   // BUG: stream-durable-object.ts documents "enablement IS a mount ... the mounts ARE the
   //      registry" (#facetEntries), and the capability-provided payload schema carries the
   //      processor policy for exactly this door. But only the enableProcessor VERB calls
-  //      facet.configure(); a mount provided directly (provideCapability at a facet-target
+  //      facet.configure(); a mount provided directly (provide at a facet-target
   //      itx.subscribers.<slug> — an ordinary, documented client verb) creates a registry entry
   //      whose facet was never configured: every drive and every snapshot throws "not configured".
   // EXPECTED: the two doors agree — a facet-target mount at itx.subscribers.tally is sufficient for

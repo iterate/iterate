@@ -4,8 +4,8 @@
 //
 // Target surface: StreamDurableObject.alarm()/#noteActivity/#alarmArmer/resurrection pass/
 // #facetWorkInFlight/quiesce-abort (src/stream-durable-object.ts), the subscription-forwarder
-// (src/subscription-forwarder-processor.ts), and the connection directory
-// (src/itx-connection-directory.ts).
+// (src/subscription-forwarder-processor.ts), and the rpc-stub directory
+// (src/rpc-stub-directory.ts).
 //
 // WHAT THIS FILE PINS (all runnable here) vs WHAT IT CANNOT (test.todo, with the VERIFIED
 // blocker named): the deferred DEFECTS.md quiesce items split by whether their manifestation
@@ -90,7 +90,7 @@ async function quiesce(ctx: string): Promise<Record<string, any>> {
   return stateOf(ctx);
 }
 
-// ── connections plumbing (for items 5 + 6) — the hibernation-at-scale pattern, minimized ──
+// ── rpc-stub plumbing (for items 5 + 6) — the hibernation-at-scale pattern, minimized ──
 
 class Echo extends RpcTarget {
   readonly #i: number;
@@ -207,9 +207,8 @@ test("PAGE-IN RACES THE QUIESCE ALARM: a connection invoke fired concurrently wi
   // pages a stub in while the 60s alarm fires resolves with the right per-client answer (the wake's
   // borrowed stub is not disposed out from under it).
   const ctx = "prj_pagein";
-  const client = await openSession(ctx);
-  for (let i = 0; i < 4; i++)
-    await client.connect({ connectionKey: `p${i}`, capabilities: new Echo(i) });
+  const clientItx = await (await openSession(ctx)).get();
+  for (let i = 0; i < 4; i++) await clientItx.rpcStubs.provide(new Echo(i), { key: `p${i}` });
   const caller = await (await openSession(ctx)).get();
 
   vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
@@ -217,7 +216,7 @@ test("PAGE-IN RACES THE QUIESCE ALARM: a connection invoke fired concurrently wi
   try {
     vi.setSystemTime(Date.now() + 61_000);
     const alarmP = runDurableObjectAlarm(stub(ctx));
-    const invokeP = caller.invoke("itx.connections.get('p2').echo('race')");
+    const invokeP = caller.invoke("itx.rpcStubs.get('p2').echo('race')");
     const [, inv] = await Promise.all([alarmP, invokeP]);
     raced = inv;
   } finally {
@@ -234,12 +233,11 @@ test("SCALE DROP + QUIESCE + EVICT + WAKE: a dropped connection stays dropped; t
   // forwarder facet — test.todo below.)
   const ctx = "prj_scale_drop";
   const K = 6;
-  const client = await openSession(ctx);
-  for (let i = 0; i < K; i++)
-    await client.connect({ connectionKey: `k${i}`, capabilities: new Echo(i) });
+  const clientItx = await (await openSession(ctx)).get();
+  for (let i = 0; i < K; i++) await clientItx.rpcStubs.provide(new Echo(i), { key: `k${i}` });
   const caller = await (await openSession(ctx)).get();
 
-  await caller.invoke("itx.connections.close('k3')"); // drop one
+  await caller.invoke("itx.rpcStubs.close('k3')"); // drop one
   const dropped = await stateOf(ctx);
   expect(dropped.stubs).toBe(K - 1);
 
@@ -250,17 +248,12 @@ test("SCALE DROP + QUIESCE + EVICT + WAKE: a dropped connection stays dropped; t
   expect(evicted.stubs).toBe(K - 1); // survivors' hibernatable sockets rode the eviction; k3 stayed gone
 
   // fan-out = list() + map over get(key).echo (no built-in `each`); the caller owns the allSettled.
-  const keys = (
-    (await caller.invoke("itx.connections.list()")) as {
-      connectionKey?: string;
-      connectionId: string;
-    }[]
-  ).map((r) => r.connectionKey ?? r.connectionId);
+  const keys = ((await caller.invoke("itx.rpcStubs.list()")) as { key: string }[]).map(
+    (r) => r.key,
+  );
   const answers = (
     await Promise.all(
-      keys.map((k) =>
-        caller.invoke(`itx.connections.get('${k}').echo('hi')`).catch(() => undefined),
-      ),
+      keys.map((k) => caller.invoke(`itx.rpcStubs.get('${k}').echo('hi')`).catch(() => undefined)),
     )
   ).filter((v): v is string => v !== undefined);
   const got = new Set(answers);

@@ -65,7 +65,7 @@ const fakeBuiltIns = () => {
       get: (k: unknown) => kv.get(String(k)) ?? null,
       put: (k: string, v: string) => (kv.set(k, v), { ok: true }),
     },
-    connections: { get: (key: string) => connections.get(key) ?? throwOffline(key) },
+    rpcStubs: { get: (key: string) => connections.get(key) ?? throwOffline(key) },
     whoami: () => ({ projectId: "prj_t", path: "/" }),
     openai: { chat: (o: { model: string }) => (openaiCalls.push(o), `chat:${o.model}`) },
     openaiCalls,
@@ -85,7 +85,7 @@ const setup = (extraConfigMounts: [string, string][] = []) => {
       ...[
         ["itx.whoami", "whoami"],
         ["itx.kv", "kv"],
-        ["itx.connections", "connections"],
+        ["itx.rpcStubs", "rpcStubs"],
         ["itx.openai", "openai"],
       ],
       ...extraConfigMounts,
@@ -110,7 +110,7 @@ describe("provide → print → reduce → parse: an un-round-trippable target v
     //      (exponent branch) — the stored target re-parses on reduce and the mount enters the table.
     // EXPECTED: a target built from valid Expression data (a number is valid) mounts and routes.
     // ACTUAL: provide() RETURNS a providedAtOffset (the caller believes it succeeded), but every
-    //      later resolve default-denies because the stored string `itx.connections.get('c').echo(1e+21)`
+    //      later resolve default-denies because the stored string `itx.rpcStubs.get('c').echo(1e+21)`
     //      fails to re-parse on reduce.
     // WHY IT MATTERS: a provide() that returns success while producing an unroutable table is a
     //      silent authority-loss. The offset handed back is a lie — revoke has nothing to pop and
@@ -119,7 +119,7 @@ describe("provide → print → reduce → parse: an un-round-trippable target v
     builtIns._connect("c", { echo: (n: unknown) => `echo:${n}` });
     const { providedAtOffset } = await host.provide({
       path: "itx.big",
-      target: ["itx", "connections", ["get", "c"], ["echo", 1e21]] as Expression,
+      target: ["itx", "rpcStubs", ["get", "c"], ["echo", 1e21]] as Expression,
     });
     expect(providedAtOffset).toBeGreaterThan(0);
     // Resolve the mount (its target is a complete call) — it ROUTES now instead of vanishing.
@@ -151,7 +151,7 @@ describe("shadow stack + revoke", () => {
     const { host, invoke, builtIns } = setup();
     builtIns._connect("tab-1", { get: (k: unknown) => `conn:${k}` });
     // config already mounts itx.kv ⇒ kv; shadow it with an event mount at the SAME path.
-    const prov = await host.provide({ path: "itx.kv", target: "itx.connections.get('tab-1')" });
+    const prov = await host.provide({ path: "itx.kv", target: "itx.rpcStubs.get('tab-1')" });
     expect(await invoke("itx.kv.get('a')")).toBe("conn:a"); // event mount wins over config
     await host.revoke({ providedAtOffset: prov.providedAtOffset });
     // the config kv is restored (not lost) — write then read the real built-in store.
@@ -217,7 +217,7 @@ describe("deliverTo", () => {
     builtIns._connect("conn-1", { onEvents: () => "ok" });
     const { providedAtOffset } = await host.provide({
       path: "itx.subscribers.plain",
-      target: "itx.connections.get('conn-1')", // evaluates to a plain object, not a function
+      target: "itx.rpcStubs.get('conn-1')", // evaluates to a plain object, not a function
       delivery: { consumes: ["mark"] },
     });
     void invoke; // (kept for parity with other tests' destructuring)

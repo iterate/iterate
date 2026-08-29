@@ -7,10 +7,10 @@
 // the platform's answer is RECONNECT under the same key, not server durability.
 //
 // This proves it against the real deployment: a provider goes OFFLINE (its session is disposed → the
-// WS closes → the DO reaps the connection) and reconnects under the SAME connectionKey, after which
-// its capability is callable AGAIN through `itx.connections.get(key)`. This is the property the live
-// hibernation proofs tried to force by waiting on Cloudflare — proven here deterministically by
-// controlling the disconnect.
+// WS closes → the DO drops the stub) and re-provides under the SAME key, after which its capability
+// is callable AGAIN through `itx.rpcStubs.get(key)`. This is the property the live hibernation proofs
+// tried to force by waiting on Cloudflare — proven here deterministically by controlling the
+// disconnect.
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 
 const BASE = "project-worker.iterate.workers.dev";
@@ -54,34 +54,34 @@ class Tools extends RpcTarget {
 const consumer = newWebSocketRpcSession(API);
 const itx = await consumer.get();
 
-// 1. provider connects under key 'p' with a live capability → callable through the key.
+// 1. provider provides a live capability under key 'p' → callable through the key.
 let provider = newWebSocketRpcSession(API);
-await provider.connect({ connectionKey: "p", capabilities: new Tools("v1") });
+await provider.get().rpcStubs.provide(new Tools("v1"), { key: "p" });
 await until("callable online", async () =>
-  (await itx.invoke("itx.connections.get('p').echo('a')")) === "echo-v1:a" ? true : undefined,
+  (await itx.invoke("itx.rpcStubs.get('p').echo('a')")) === "echo-v1:a" ? true : undefined,
 );
-check(true, "1. provider online: itx.connections.get('p').echo() answers");
+check(true, "1. provider online: itx.rpcStubs.get('p').echo() answers");
 
-// 2. provider goes OFFLINE — dispose its session (WS closes → the DO reaps connection 'p').
+// 2. provider goes OFFLINE — dispose its session (WS closes → the DO drops stub 'p').
 provider[DISPOSE]?.();
 await until("provider offline", async () => {
   try {
-    await itx.invoke("itx.connections.get('p').echo('b')");
+    await itx.invoke("itx.rpcStubs.get('p').echo('b')");
     return undefined; // still answering — keep polling
   } catch {
-    return true; // CONNECTION_OFFLINE — the reap landed
+    return true; // CONNECTION_OFFLINE — the drop landed
   }
 });
 check(true, "2. provider offline: the key stops answering after the session drops");
 
-// 3. provider RECONNECTS under the SAME key with a fresh capability instance.
+// 3. provider RE-PROVIDES under the SAME key with a fresh capability instance.
 provider = newWebSocketRpcSession(API);
-await provider.connect({ connectionKey: "p", capabilities: new Tools("v2") });
+await provider.get().rpcStubs.provide(new Tools("v2"), { key: "p" });
 
 // 4. THE CONTRACT: the capability is callable AGAIN through the same key — it resolves to the
 //    reconnected provider (v2), with no re-addressing by the caller.
 const after = await until("callable after reconnect", async () => {
-  const r = await itx.invoke("itx.connections.get('p').echo('c')");
+  const r = await itx.invoke("itx.rpcStubs.get('p').echo('c')");
   return r === "echo-v2:c" ? r : undefined;
 });
 check(

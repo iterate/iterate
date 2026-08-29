@@ -109,15 +109,14 @@ export class SubscriptionForwarderProcessor extends StreamProcessor<ForwarderSta
         const segments = path.split(".");
         if (segments.length !== 3 || segments[0] !== "itx" || segments[1] !== "subscribers")
           return undefined;
-        // Connected targets are the parent's lane; FACET targets are the pump's lane (a processor
-        // is a facet-target subscriber — including this forwarder itself); liveState never reaches
-        // an absent target (rejected at provide — this guard is the reduce's belt for raw appends).
+        // Connected (rpc-stub) targets are the parent's lane; FACET targets are the pump's lane (a
+        // processor is a facet-target subscriber — including this forwarder itself); liveState never
+        // reaches an absent target (rejected at provide — this guard is the reduce's belt for raw
+        // appends). THESE TWO NOUNS MUST TRACK rpcStubTarget/facetTarget in stream-durable-object.ts
+        // (this is a separate string-side copy across the facet-bundle boundary — a rename of either
+        // noun there MUST be mirrored here, or the two lanes disagree and double-deliver).
         const t = target.trim();
-        if (
-          /^itx\.connections\.get\(/.test(t) ||
-          /^itx\.facets\.get\(/.test(t) ||
-          delivery?.liveState
-        )
+        if (/^itx\.rpcStubs\.get\(/.test(t) || /^itx\.facets\.get\(/.test(t) || delivery?.liveState)
           return undefined;
         return {
           subscriptionMounts: [

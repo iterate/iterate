@@ -14,7 +14,7 @@ function check(cond, label, detail = "") {
 }
 
 // Mount the seeded /site.js on the fetch door: a mount whose target is a stateless dynamic worker
-// (its .fetch serves /cap). `type:'code'` provideCapability was folded into the ONE provide door —
+// (its .fetch serves /cap). `type:'code'` provisioning was folded into the ONE provide door —
 // a capability is an itx EXPRESSION (workers.get), same as every other mount.
 const session = newWebSocketRpcSession(`wss://${BASE}/api?ctx=${CTX}`);
 const itx = await session.get();

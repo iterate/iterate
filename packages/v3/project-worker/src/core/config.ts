@@ -60,7 +60,7 @@ export const DEFAULT_CONFIG_MOUNTS: { path: string; target: string }[] = [
   { path: "itx.stream", target: "stream" },
   /** Navigate to a sibling context, ROUTED — each is a whole context, not just a log. */
   { path: "itx.cd", target: "cd" },
-  { path: "itx.connections", target: "connections" },
+  { path: "itx.rpcStubs", target: "rpcStubs" },
   { path: "itx.facets", target: "facets" },
   { path: "itx.workers", target: "workers" },
   /** Run stateless code — sugar over `workers.get({type:'stateless',source}).run(…)`. */

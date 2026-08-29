@@ -71,11 +71,12 @@ const replayOnto = (sdk) =>
 // ── bridge session (the provider) + a second ordinary client ──
 const bridgeSession = newWebSocketRpcSession(`wss://${BASE}/api?ctx=${CTX}`);
 const bridgeItx = await bridgeSession.authenticate().get();
-const provision = await bridgeItx.provideCapability({
-  path: ["slack"],
-  capability: new SlackReplayTarget(),
-  instructions: "slack sdk bridge (node script)",
+const slackKey = crypto.randomUUID();
+const slackStub = await bridgeItx.rpcStubs.provide(new SlackReplayTarget(), {
+  key: slackKey,
+  description: "slack sdk bridge (node script)",
 });
+await bridgeItx.provide({ path: "itx.slack", target: `itx.rpcStubs.get('${slackKey}')` });
 
 const clientSession = newWebSocketRpcSession(`wss://${BASE}/api?ctx=${CTX}`);
 const itx = await clientSession.authenticate().get();
@@ -124,11 +125,12 @@ check(
 );
 
 // 4. the SAME thing with ZERO declarations: replay literally onto the SDK instance
-const provision2 = await bridgeItx.provideCapability({
-  path: ["slack2"],
-  capability: replayOnto(slackSdk),
-  instructions: "slack sdk bridge, zero-declaration replay",
+const slack2Key = crypto.randomUUID();
+const slack2Stub = await bridgeItx.rpcStubs.provide(replayOnto(slackSdk), {
+  key: slack2Key,
+  description: "slack sdk bridge, zero-declaration replay",
 });
+await bridgeItx.provide({ path: "itx.slack2", target: `itx.rpcStubs.get('${slack2Key}')` });
 const posted2 = await itx.invokeCapability({
   path: ["slack2", "chat", "postMessage"],
   args: [{ channel: "#zero", text: "no rpctarget declared" }],
@@ -139,10 +141,10 @@ check(
   "replayOnto(sdk): the LITERAL SDK instance replayed with no per-method declarations",
   JSON.stringify(posted2),
 );
-await provision2.revoke();
+await slack2Stub.revoke();
 
-// 5. revoke the provision → the mount is gone, default-deny answers
-await provision.revoke();
+// 5. revoke the provided stub → the stub goes offline and its mount auto-revokes, default-deny answers
+await slackStub.revoke();
 const denied = await until("revoke propagated", async () => {
   try {
     await itx.invokeCapability({
@@ -156,7 +158,7 @@ const denied = await until("revoke propagated", async () => {
 });
 check(
   /no capability matches|offline/.test(denied),
-  "after provision.revoke() the capability is gone (default-deny)",
+  "after slackStub.revoke() the capability is gone (default-deny)",
   denied.slice(0, 90),
 );
 

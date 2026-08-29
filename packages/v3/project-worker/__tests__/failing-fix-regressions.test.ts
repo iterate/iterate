@@ -17,13 +17,6 @@ afterAll(async () => {
   await harness?.stop();
 });
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const readAll = async (itx: any): Promise<any[]> =>
-  (await itx.invokeCapability({ path: ["stream", "read"], args: [0, 500] })).events;
-const settle = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const doState = async (ctx: string): Promise<any> =>
-  (await fetch(new URL(`/state?ctx=${ctx}`, harness.url))).json();
-
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // Charset gate at the EDGE (Phase 0 / defect 38). Idea (1): the gate is wired in worker.ts
 // (canonicalName) and ProjectSession — verify it does NOT reject a legitimate ctx, and DOES
@@ -47,42 +40,9 @@ test("charset gate: a ':' in the ctx is rejected at the edge (no DO is addressed
   expect(bad.status).toBeGreaterThanOrEqual(500);
 });
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-// Unsubscribe-close over-reap guard (Phase E / defect 31). The existing lifecycle test covers a
-// SINGLE mount reaped cleanly. Idea (6): a connection named by TWO mounts — revoking ONE must
-// NOT close it; only revoking the LAST mount reaps the transport.
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-test("reap guard: a connection named by TWO mounts survives revoking one; the last revoke reaps it", async () => {
-  const ctx = "prj_fixreg_tworef";
-  const itx = await harness.itx(ctx);
-  const base = await doState(ctx);
-
-  // Park ONE live callback and mount it at itx.cb1 (one anonymous connection, one mount).
-  await itx.provideCapability({ path: ["cb1"], capability: () => "alive" });
-  const afterPark = await doState(ctx);
-  expect(afterPark.stubs).toBe(base.stubs + 1);
-
-  // Add a SECOND mount naming the SAME parked connection (read its target off the log).
-  const provided = (await readAll(itx)).find(
-    (e) =>
-      e.type === "events.iterate.com/capability-table/capability-provided" &&
-      e.payload?.path === "itx.cb1",
-  );
-  const target: string = provided.payload.target; // itx.connections.get('<connId>')
-  expect(target).toMatch(/^itx\.connections\.get\('/);
-  await itx.provide({ path: "itx.cb2", target });
-  expect(await itx.invokeCapability({ path: ["cb2"], args: [] })).toBe("alive");
-
-  // Revoke the FIRST mount. The connection is named elsewhere (cb2) → it must NOT be reaped.
-  await itx.revoke({ path: "itx.cb1" });
-  await settle(600);
-  const afterFirst = await doState(ctx);
-  expect(afterFirst.stubs).toBe(base.stubs + 1); // still alive — cb2 still names it
-  expect(await itx.invokeCapability({ path: ["cb2"], args: [] })).toBe("alive"); // still delivers
-
-  // Revoke the LAST mount naming it → NOW the anonymous transport is reaped.
-  await itx.revoke({ path: "itx.cb2" });
-  await settle(600);
-  const afterLast = await doState(ctx);
-  expect(afterLast.stubs).toBe(base.stubs); // transport died with its last naming mount
-});
+// (Deleted with the rpcStubs migration: the "reap guard — a connection named by TWO mounts
+// survives revoking one; the last revoke reaps it" case asserted reap-on-mount-revoke, the very
+// mechanism the migration removed. A stub's lifecycle is now owned by its ProvidedStub handle, not
+// by the mounts naming it — revoking a mount does NOT touch the stub — so there is nothing to
+// assert here. It also read back an itx.connections.get('<connId>') target expression, a surface
+// that no longer exists.)

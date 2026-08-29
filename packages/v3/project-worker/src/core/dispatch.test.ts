@@ -51,9 +51,9 @@ describe("match", () => {
   });
 
   test("ranking: the longer path wins", () => {
-    const call = parse("itx.connections.abc.ping()");
-    const long = match(parseCapabilityPath("itx.connections.abc"), call)!;
-    const short = match(parseCapabilityPath("itx.connections"), call)!;
+    const call = parse("itx.rpcStubs.abc.ping()");
+    const long = match(parseCapabilityPath("itx.rpcStubs.abc"), call)!;
+    const short = match(parseCapabilityPath("itx.rpcStubs"), call)!;
     expect(long.matchedSegments).toBeGreaterThan(short.matchedSegments);
   });
 });
@@ -75,7 +75,7 @@ const scope = () => {
       openai: {
         chat: (o: { model: string; messages?: unknown[] }) => `chat(${o.model})`,
       },
-      connections: {
+      rpcStubs: {
         get: (key: string) => ({
           ping: () => `pong:${key}`,
           arm: { move: (n: number) => (log.push(`move ${n} @${key}`), "moved") },
@@ -103,7 +103,7 @@ describe("evaluate/apply", () => {
   test("alias mount end to end — remainder replays on the live stub", async () => {
     const s = scope();
     const m = match(parseCapabilityPath("itx.robot"), parse("itx.robot.arm.move(10)"))!;
-    const result = await apply(s, parse("itx.connections.get('robot-arm-1')"), m);
+    const result = await apply(s, parse("itx.rpcStubs.get('robot-arm-1')"), m);
     expect(result).toBe("moved");
     expect(s.log).toEqual(["move 10 @robot-arm-1"]);
   });

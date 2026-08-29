@@ -40,11 +40,12 @@ class Demo extends RpcTarget {
 // bridge session provides itx.demo as a LIVE Demo capability.
 const bridge = newWebSocketRpcSession(`wss://${BASE}/api?ctx=${CTX}`);
 const bridgeItx = await bridge.authenticate().get();
-const provision = await bridgeItx.provideCapability({
-  path: ["demo"],
-  capability: new Demo(),
-  instructions: "demo/timer/callLater bridge (node script)",
+const demoKey = crypto.randomUUID();
+const demoStub = await bridgeItx.rpcStubs.provide(new Demo(), {
+  key: demoKey,
+  description: "demo/timer/callLater bridge (node script)",
 });
+await bridgeItx.provide({ path: "itx.demo", target: `itx.rpcStubs.get('${demoKey}')` });
 
 // ── lane 1: a plain capnweb client ──
 const client = newWebSocketRpcSession(`wss://${BASE}/api?ctx=${CTX}`);
@@ -88,6 +89,6 @@ check(
   got?.type,
 );
 
-await provision.revoke();
+await demoStub.revoke();
 console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURES`);
 process.exit(failures === 0 ? 0 : 1);

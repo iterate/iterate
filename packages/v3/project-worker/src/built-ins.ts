@@ -18,16 +18,16 @@ import type { Context } from "./core/stream.ts";
 import type { StreamEventInput } from "./core/events.ts";
 import { hashSource } from "./core/hash.ts";
 
-/** The `connections` view every context has: the ItxConnectionRegistry, surfaced. One entry per
- *  attached ItxConnection (client callbacks and parked live capabilities — one registry). */
-type ConnectionsView = {
-  /** One connection by connectionKey or connectionId: a method proxy over its retained callback
-   *  (wake → RetainedCallbackInvoker leg → invoke). Deep dots walk; throws when offline. */
+/** The `rpcStubs` view every context has: the live-stub registry, surfaced. One entry per held
+ *  live capnweb stub (client callbacks and parked subscribers — one registry). */
+type RpcStubsView = {
+  /** One stub by key: a method proxy over its retained callback (wake → RetainedCallbackInvoker
+   *  leg → invoke). Deep dots walk; throws when offline. */
   get(key: string): unknown;
-  /** The currently connected clients of this context. Fan-out is `list()` + map over `get(key)`
-   *  (no built-in `each` — the caller owns the allSettled over live members). */
+  /** The keys currently held by this context. Fan-out is `list()` + map over `get(key)` (no
+   *  built-in `each` — the caller owns the allSettled over live members). */
   list(): unknown[] | Promise<unknown[]>;
-  /** Close a connection's stub pager WebSocket (idempotent — unknown keys are a no-op). */
+  /** Close a stub's pager WebSocket (idempotent — unknown keys are a no-op). */
   close(key: string): { ok: true } | Promise<{ ok: true }>;
 };
 
@@ -75,8 +75,8 @@ interface BuildBuiltInsDeps {
   /** A context stream by path — the own-path parent adapter same-isolate, by-name DO stubs
    *  facet-side. Both satisfy Context (uniform-async, real-typed — see core/stream.ts). */
   context: (path: string) => Context;
-  /** The connections view (parent-local closures over the HibernatableRpcStubManager). */
-  connections: ConnectionsView;
+  /** The rpcStubs view (parent-local closures over the HibernatableRpcStubManager). */
+  rpcStubs: RpcStubsView;
   facets: FacetsView;
   /** Host a stateful loaded class as a FACET of this stream (the dedicated runner DO died in
    *  increment 57 — accepted trade: a busy stateful worker pins its stream). */
@@ -220,7 +220,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         const last = segments[segments.length - 1] as string;
         return sibling.invoke(["itx", ...segments.slice(0, -1), [last, ...args]]);
       }),
-    connections: deps.connections,
+    rpcStubs: deps.rpcStubs,
     facets: deps.facets,
     workers,
     /** Run stateless code in this context — sugar for `workers.get({type:'stateless',source}).run(…)`. */

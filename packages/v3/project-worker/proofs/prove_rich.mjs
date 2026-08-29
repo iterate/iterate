@@ -38,15 +38,14 @@ class ToolsA extends RpcTarget {
 }
 
 const sessionA = newWebSocketRpcSession(`wss://${BASE}/api?ctx=${CTX}`);
-const itxA = await sessionA.authenticate().connect({
-  connectionKey: "a",
-  description: "rich provider",
-  capabilities: new ToolsA(),
-});
+const itxA = await sessionA.authenticate().get();
+await itxA.rpcStubs.provide(new ToolsA(), { key: "a", description: "rich provider" });
 const sessionB = newWebSocketRpcSession(`wss://${BASE}/api?ctx=${CTX}`);
 const itxB = await sessionB.authenticate().get();
 await seedSources(itxB, ["probe"]);
-await itxA.provideCapability({ path: ["tools"], capability: new ToolsA() });
+const toolsKey = crypto.randomUUID();
+await itxA.rpcStubs.provide(new ToolsA(), { key: toolsKey });
+await itxA.provide({ path: "itx.tools", target: `itx.rpcStubs.get('${toolsKey}')` });
 
 // 1. a Date through the whole path
 const probed = await attempt("Date through invoke → live cap", () =>
@@ -124,10 +123,9 @@ class ToolsRich extends RpcTarget {
     return new Response(`saw:${new URL(req.url).pathname}:${await req.text()}`, { status: 201 });
   }
 }
-const provRich = await itxA.provideCapability({
-  path: ["rich"],
-  capability: new ToolsRich(),
-});
+const richKey = crypto.randomUUID();
+await itxA.rpcStubs.provide(new ToolsRich(), { key: richKey });
+await itxA.provide({ path: "itx.rich", target: `itx.rpcStubs.get('${richKey}')` });
 const nbResult = await attempt("RpcTarget-with-methods as an arg", () =>
   itxB.invokeCapability({ path: ["rich", "useNotebook"], args: [new Notebook()] }),
 );

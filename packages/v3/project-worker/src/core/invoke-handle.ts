@@ -3,7 +3,7 @@
 //
 // These used to return a bare `pathProxy` (dispatch.ts) — a Proxy-over-function. It folds dotted
 // members fine, but it is NOT a native RpcTarget, and a mid-chain call returns it ACROSS an RPC
-// boundary: `itx.connections.get('b').hello()` is TWO dispatches — `get('b')` returns the handle,
+// boundary: `itx.rpcStubs.get('b').hello()` is TWO dispatches — `get('b')` returns the handle,
 // then `.hello()` is called ON it. workerd's promise-pipeline classifier brand-checks the return
 // of a method and a JS Proxy can NEVER pass (NonPipelinable; cloudflare/workerd#6873), so over
 // Workers RPC (DO→/api, and loaded-worker→DO) the `.hello()` died with "The RPC receiver does not

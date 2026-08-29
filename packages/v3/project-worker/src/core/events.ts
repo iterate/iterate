@@ -10,7 +10,7 @@ import type { EventDefinition, ProcessorContract } from "./processor.ts";
  *  payload). Rides the capability-provided event itself, so subscription config is
  *  event-sourced, never silent kv. How a subscription mount is SERVED depends only on its
  *  target's shape:
- *    • CONNECTED target (`itx.connections.get(…)`): fire-and-forget event batches over the
+ *    • CONNECTED target (`itx.rpcStubs.get(…)`): fire-and-forget event batches over the
  *      paged-in hibernatable RPC stub — no acks, no server cursor, no retries (the client
  *      heals by pull);
  *      `maxAttempts`/`start` are meaningless here and ignored.
