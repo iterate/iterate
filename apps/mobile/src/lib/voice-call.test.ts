@@ -173,6 +173,19 @@ test("a microphone that will not start ends the call cleanly instead of leaving 
   /* Failed before any connection opened — nothing to close. */
 });
 
+test("the keepalive heartbeat runs for the call's life and dies with it", async () => {
+  const h = makeHarness();
+  const call = await startVoiceCall({ ...h.deps, keepaliveIntervalMs: 4 });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const beats = () => h.appends.filter((a) => a.type.endsWith("/keepalive"));
+  expect(beats().length).toBeGreaterThan(1);
+  expect(beats()[0]).toMatchObject({ ephemeral: true });
+  await call.hangUp();
+  const after = beats().length;
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(beats().length).toBe(after);
+});
+
 test("a stalled socket drops mic frames instead of queueing the past", async () => {
   const h = makeHarness({ stallAppends: true });
   const call = await startVoiceCall(h.deps);

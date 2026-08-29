@@ -1258,6 +1258,14 @@ export const VoiceAgentContract = defineProcessorContract({
      * mints the call itself. One append per press is nothing; mic-frame and
      * ptt-end stay ephemeral because losing them costs a turn, not a call.
      */
+    "events.iterate.com/voice-agent/keepalive": {
+      description:
+        "The client's call UI is alive, said every ~20s: feeds the idle deadline so a caller " +
+        "who waits quietly — or steps away from the app with the call up — is not reaped at " +
+        "60s of mic silence. Stops when the client hangs up or dies, which re-arms the reaper.",
+      ...EPH,
+      payloadSchema: z.looseObject({ t: z.number().optional() }),
+    },
     "events.iterate.com/voice-agent/ptt-start": {
       description: "The user began speaking. Opens a call if one is not already up.",
       payloadSchema: z.looseObject({}),
@@ -1489,6 +1497,9 @@ export const VoiceAgentContract = defineProcessorContract({
     "events.iterate.com/voice-agent/ptt-start",
     "events.iterate.com/voice-agent/mic-frame",
     "events.iterate.com/voice-agent/ptt-end",
+    /* The client's "still here" heartbeat — consumed only for the idle
+     * stamp below; processEvent has no arm for it. */
+    "events.iterate.com/voice-agent/keepalive",
   ],
   emits: [
     "events.iterate.com/voice-agent/call-started",
@@ -2129,6 +2140,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
       case "events.iterate.com/voice-agent/ptt-start":
       case "events.iterate.com/voice-agent/mic-frame":
       case "events.iterate.com/voice-agent/ptt-end":
+      case "events.iterate.com/voice-agent/keepalive":
         /* Their BODIES never reach the fold — that would be state depending on
          * a queue no restart can replay — but their commit stamps are as
          * durable as any event's, and folding the newest is what makes the idle

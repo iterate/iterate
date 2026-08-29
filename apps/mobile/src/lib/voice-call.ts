@@ -15,6 +15,7 @@ import type { VoiceAudioSession } from "./voice-audio.ts";
 
 const EVENT = {
   answerTranscript: "events.iterate.com/voice-agent/answer-transcript",
+  keepalive: "events.iterate.com/voice-agent/keepalive",
   callStarted: "events.iterate.com/voice-agent/call-started",
   colleagueNote: "events.iterate.com/voice-agent/colleague-note",
   colleagueStatus: "events.iterate.com/voice-agent/colleague-status",
@@ -183,6 +184,12 @@ export async function startVoiceCall(deps: {
    * facet — a recycled preview backend, an unprovisioned project — otherwise
    * rings forever at a press nobody consumes. */
   ringTimeoutMs?: number;
+  /** How often to tell the server this call UI is still alive (default
+   * 20s). The facet's 60s idle reaper counts DEVICE INPUT; without the
+   * heartbeat, waiting quietly for a slow answer — or stepping away from
+   * the app with the call up — ends the call under you (observed live,
+   * 2026-08-29 evening). Injectable so tests need not wait 20 seconds. */
+  keepaliveIntervalMs?: number;
   now(): number;
 }): Promise<VoiceCallHandle> {
   let ended = false;
@@ -195,6 +202,7 @@ export async function startVoiceCall(deps: {
   let spkMsHeard = 0;
   let ringTimer: ReturnType<typeof setInterval> | null = null;
   let noAnswerTimer: ReturnType<typeof setTimeout> | null = null;
+  let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
   const startedAtMs = deps.now();
 
   const stopRinging = () => {
@@ -208,6 +216,8 @@ export async function startVoiceCall(deps: {
     if (ended) return;
     ended = true;
     stopRinging();
+    if (keepaliveTimer !== null) clearInterval(keepaliveTimer);
+    keepaliveTimer = null;
     /* The heard tally rides the obituary caption ON PURPOSE (demo
      * diagnostics): round 2 on-device was "no response" with the server
      * provably answering — this line splits "frames never arrived" from
@@ -353,6 +363,20 @@ export async function startVoiceCall(deps: {
   noAnswerTimer = setTimeout(() => {
     finish("no answer — try again");
   }, deps.ringTimeoutMs ?? 25_000);
+  /* The heartbeat runs for the call's whole life — it dies with finish(),
+   * so a dead app re-arms the server's reaper. Ephemeral: losing one costs
+   * nothing (the next is 20s away), and history is not presence. */
+  keepaliveTimer = setInterval(() => {
+    deps.stream
+      .append({
+        type: EVENT.keepalive,
+        ephemeral: true,
+        payload: { t: deps.now() - startedAtMs },
+      })
+      .catch(() => {
+        /* The connection's own failure surfaces carry this. */
+      });
+  }, deps.keepaliveIntervalMs ?? 20_000);
 
   return {
     setTalking: (next: boolean) => {

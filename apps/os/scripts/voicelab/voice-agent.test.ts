@@ -1716,6 +1716,29 @@ describe("tools on the birth certificate", () => {
   });
 
   /*
+   * THE HEARTBEAT HOLDS THE LINE. The idle reaper counts device input, and
+   * a caller waiting quietly for a slow answer — or away from the app with
+   * the call up — sends none. The client's keepalive stamps the same clock;
+   * when it stops (hang-up, dead app), the reaper re-arms.
+   */
+  it("keepalives defer the idle reaper; their absence re-arms it", async () => {
+    const h = makeHarness();
+    await callIsLive(h, CLIENT_TAKES_TURNS);
+    /* Two 40s stretches of silence, each bridged by a keepalive: 80s of
+     * no mic input and the call lives. */
+    for (let i = 0; i < 2; i++) {
+      await h.advanceTime(40_000);
+      await h.append({ type: "events.iterate.com/voice-agent/keepalive", payload: { t: i } });
+      await h.settle();
+    }
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(0);
+    /* The heartbeat stops; the reaper takes it from there. */
+    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
+    await h.settle();
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
+  });
+
+  /*
    * THE ANSWER OUTRANKS THE COMMENTARY. A status line the facet drew is
    * progress ping, not conversation — when the real note lands mid-status,
    * the status is cancelled (device silenced) and the note speaks the
