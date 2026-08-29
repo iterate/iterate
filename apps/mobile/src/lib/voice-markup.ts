@@ -9,11 +9,15 @@
 
 export type VoiceMarkup =
   | { kind: "turn"; speaker: "person" | "assistant"; interrupted: boolean; text: string }
-  | { kind: "note"; text: string };
+  | { kind: "note"; text: string }
+  | { kind: "reply"; text: string };
 
 const TURN_PATTERN =
   /^<voice-turn speaker="(person|assistant)"( interrupted="true")?>([\s\S]*?)<\/voice-turn>\s*$/;
 const NOTE_PATTERN = /<voice-note>\n?([\s\S]*?)\n?<\/voice-note>/;
+/* Anchored: the backend wraps the WHOLE reply, and prose that merely
+ * mentions the tag must not collapse. */
+const REPLY_PATTERN = /^\s*<voice-reply>\s*([\s\S]*?)\s*<\/voice-reply>\s*$/;
 
 export function parseVoiceMarkup(text: string): VoiceMarkup | null {
   const turn = TURN_PATTERN.exec(text);
@@ -30,5 +34,7 @@ export function parseVoiceMarkup(text: string): VoiceMarkup | null {
    * the only stable part. */
   const note = NOTE_PATTERN.exec(text);
   if (note !== null) return { kind: "note", text: note[1]!.trim() };
+  const reply = REPLY_PATTERN.exec(text);
+  if (reply !== null) return { kind: "reply", text: reply[1]! };
   return null;
 }

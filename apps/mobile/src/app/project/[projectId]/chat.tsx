@@ -519,9 +519,16 @@ function MessageBubble({ message }: { message: AgentUiMessageItem }) {
       </View>
     );
   }
-  /* A note the frontend sent its backend mid-call: machinery worth having
-   * on the record, not a message anybody typed — collapsed to one row. */
-  if (voice?.kind === "note") return <VoiceNoteRow id={message.id} text={voice.text} />;
+  /* Call machinery worth having on the record, not conversation: a note
+   * the frontend sent its backend, or the backend's tagged reply (whose
+   * words the caller already heard as the spoken turn beside it) —
+   * collapsed to one row each. */
+  if (voice?.kind === "note") {
+    return <VoiceNoteRow id={message.id} label="note to backend" text={voice.text} />;
+  }
+  if (voice?.kind === "reply") {
+    return <VoiceNoteRow id={message.id} label="backend replied" text={voice.text} />;
+  }
   const isUser = message.kind === "user";
   // A photo frame is exactly this wide, while a bubble would otherwise grow to
   // 85% of the screen — so a caption longer than the photo would stretch the
@@ -558,7 +565,7 @@ function MessageBubble({ message }: { message: AgentUiMessageItem }) {
 /** One tappable row for a frontend→backend voice note, collapsed by
  * default — the query cache holds the toggle (no useState, composer
  * precedent), keyed per item so each note expands alone. */
-function VoiceNoteRow({ id, text }: { id: string; text: string }) {
+function VoiceNoteRow({ id, label, text }: { id: string; label: string; text: string }) {
   const cache = useQueryClient();
   const { data: open } = useQuery<boolean>({
     queryKey: ["voice-note-open", id],
@@ -568,13 +575,14 @@ function VoiceNoteRow({ id, text }: { id: string; text: string }) {
   });
   return (
     <Pressable
-      accessibilityLabel={open ? "Collapse voice note" : "Expand voice note"}
+      accessibilityLabel={open ? `Collapse ${label}` : `Expand ${label}`}
       accessibilityRole="button"
       onPress={() => cache.setQueryData(["voice-note-open", id], !open)}
       style={styles.voiceNoteRow}
     >
       <Text numberOfLines={open ? undefined : 1} style={styles.voiceNoteText}>
-        🎙 note to backend{open ? `\n${text}` : ` · ${text}`}
+        🎙 {label}
+        {open ? `\n${text}` : ` · ${text}`}
       </Text>
     </Pressable>
   );

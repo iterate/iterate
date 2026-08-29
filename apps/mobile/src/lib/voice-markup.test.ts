@@ -33,6 +33,18 @@ test("a voice note parses through the platform's stamps around it", () => {
   });
 });
 
+test("a tagged backend reply parses; the voice's stripped copy beside it does not", () => {
+  expect(
+    parseVoiceMarkup("<voice-reply>\nBrooklands Museum is open 10 till 5.\n</voice-reply>"),
+  ).toEqual({
+    kind: "reply",
+    text: "Brooklands Museum is open 10 till 5.",
+  });
+  /* The transform strips the tags before the voice speaks, so the spoken
+   * transcript copy arrives tagless and renders as a normal turn. */
+  expect(parseVoiceMarkup("Brooklands Museum is open 10 till 5.")).toBeNull();
+});
+
 test("ordinary messages parse as nothing", () => {
   expect(parseVoiceMarkup("hello there")).toBeNull();
   expect(parseVoiceMarkup("")).toBeNull();

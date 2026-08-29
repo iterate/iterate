@@ -1670,6 +1670,52 @@ describe("tools on the birth certificate", () => {
   });
 
   /*
+   * ONE NOTE, HOWEVER MANY FORWARDERS. A stale duplicate subscription (the
+   * legacy shared name beside a per-line one) delivers the same reply as
+   * two different offsets, and the caller heard every answer twice
+   * (misha, on-device, 2026-08-29). Identical text inside the window is
+   * one note: injected once, spoken once.
+   */
+  it("a duplicated colleague note is injected and spoken once", async () => {
+    const h = makeHarness();
+    await h.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: {
+        providerBaseUrl: "https://fake.provider.test/v1/realtime",
+        provider: "grok",
+        clientTakesTurns: CLIENT_TAKES_TURNS,
+      },
+    });
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
+    await h.append(
+      {
+        type: "events.iterate.com/voice-agent/colleague-note",
+        payload: { text: "The answer is 42." },
+      },
+      {
+        type: "events.iterate.com/voice-agent/colleague-note",
+        payload: { text: "The answer is 42." },
+      },
+    );
+    await h.settle();
+    const notes = (
+      h.provider.sentOfType("conversation.item.create") as {
+        item: { content?: { text: string }[] };
+      }[]
+    ).filter((entry) => entry.item.content?.[0]?.text.startsWith("[note from"));
+    expect(notes).toHaveLength(1);
+    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
+    /* The pending drain must not resurrect the duplicate either. */
+    h.provider.responseCreated();
+    h.provider.answerComplete();
+    await h.settle();
+    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
+  });
+
+  /*
    * A BROKEN DESK IS NEWS, NOT SILENCE. The link and the note dispatch
    * used to swallow their failures whole; a caller then heard "it's
    * picking up the note" forever while four notes in a row went nowhere,

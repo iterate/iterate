@@ -505,12 +505,16 @@ const SPOKEN_STATUS_MIN_GAP_MS = 15_000;
  */
 /** Bump when the status subscription's filter or transform changes — see
  * the keyed append at the install site. */
-const COLLEAGUE_STATUS_SUBSCRIPTION_REV = 5;
+const COLLEAGUE_STATUS_SUBSCRIPTION_REV = 6;
 
+/* The <voice-reply> wrapper on the colleague's reply is for the CHAT UI
+ * (a tagged reply renders as a collapsed machinery row instead of a
+ * near-duplicate of the spoken turn beside it); the voice never says the
+ * tag, so the note branch strips it here. */
 const COLLEAGUE_STATUS_TRANSFORM = [
   'type = "events.iterate.com/agents/web-message-sent"',
   '? { "type": "events.iterate.com/voice-agent/colleague-note",',
-  '    "payload": { "text": payload.message } }',
+  '    "payload": { "text": $trim($replace($replace(payload.message, "<voice-reply>", ""), "</voice-reply>", "")) } }',
   ': { "type": "events.iterate.com/voice-agent/colleague-status", "payload":',
   '    type = "events.iterate.com/agent/summary-updated"',
   '      ? { "activity": payload.activity, "title": payload.title, "waitingFor": payload.waitingFor }',
@@ -767,7 +771,11 @@ const COLLEAGUE_BRIEF = [
   "that…'.",
   "",
   "HOW TO REPLY — this exact call, and nothing else:",
-  '  await itx.chat.sendMessage("…")',
+  '  await itx.chat.sendMessage("<voice-reply> your words </voice-reply>")',
+  "Wrap a reply to a <voice-note> in <voice-reply> tags exactly like that: the chat UI",
+  "renders tagged replies as collapsed call-machinery rows next to the spoken transcript",
+  "(untagged they show as a near-duplicate of what the voice said out loud). The voice",
+  "never speaks the tags. Replies to ordinary typed messages stay UNTAGGED.",
   "Notes arrive stamped with a routing line like 'To reply to /agents/voice/…: await",
   "itx.agents.get(…).message(text)'. That line is WRONG on this stream — the sender is",
   "the voice call's machinery, not an agent. Calling .message() on it fails; calling",
@@ -2559,6 +2567,18 @@ export class VoiceAgentProcessor extends StreamProcessor<
          * one high-water mark is the whole dedupe. */
         if (event.offset <= this.#lastInjectedNoteOffset) return;
         this.#lastInjectedNoteOffset = event.offset;
+        {
+          const nowMs = this.deps.nowAtFacetMs();
+          if (
+            event.payload.text === this.#lastInjectedNoteText &&
+            nowMs - this.#lastInjectedNoteAtMs < 20_000
+          ) {
+            return;
+          }
+          this.#lastInjectedNoteText =
+            typeof event.payload.text === "string" ? event.payload.text : null;
+          this.#lastInjectedNoteAtMs = nowMs;
+        }
         /*
          * THE REPLY EVENT. Every chat message the colleague sends arrives
          * here, durably — solicited or not — and is read into whichever
@@ -3858,6 +3878,14 @@ export class VoiceAgentProcessor extends StreamProcessor<
    * redelivery dedupe for the note whisper (see the colleague-note arm). */
   #lastInjectedNoteOffset = 0;
 
+  /** The last note's text and when it was injected — the belt behind the
+   * offset dedupe: a stale duplicate FORWARDER (the legacy shared-name
+   * subscription beside a per-line one) delivers the same words as two
+   * different offsets, and the caller hears the answer twice (misha,
+   * 2026-08-29). Identical text inside the window is one note. */
+  #lastInjectedNoteText: string | null = null;
+  #lastInjectedNoteAtMs = 0;
+
   /**
    * The chat recap fetched by THIS incarnation's most recent dial — read at
    * session.update ahead of the folded copy, because the fold's append may
@@ -4038,7 +4066,11 @@ export class VoiceAgentProcessor extends StreamProcessor<
             idempotencyKey: this.idempotencyKey(
               `colleague-status-subscription-legacy-removed:${colleaguePath}`,
             ),
-            payload: { name: "voice-colleague-status" },
+            /* `reason` is REQUIRED by the platform schema — its absence is
+             * exactly what this catch silently ate for a day, leaving the
+             * legacy subscription alive beside the per-line one and every
+             * reply spoken twice (misha, on-device, 2026-08-29). */
+            payload: { name: "voice-colleague-status", reason: "requested" },
           });
         } catch {
           /* An absent legacy name, or a platform that refuses the removal —
@@ -4054,7 +4086,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
          * old words forever. */
         await agent.append({
           type: "events.iterate.com/agents/context-added",
-          idempotencyKey: this.idempotencyKey("colleague-brief:v3"),
+          idempotencyKey: this.idempotencyKey("colleague-brief:v4"),
           payload: {
             content: COLLEAGUE_BRIEF,
             key: "voice-agent/colleague-brief",
