@@ -30,7 +30,10 @@ export function UpdateBanner() {
     staleTime: Infinity,
   });
 
-  if (state.update.kind !== "behind" || dismissed.data) return null;
+  // `watched` too, not just "behind": a manual check from Build info can
+  // land "behind" in the shared cache on an unwatched (main) phone, and the
+  // spec is that main phones stay quiet — the Build info row shows it there.
+  if (!state.watched || state.update.kind !== "behind" || dismissed.data) return null;
 
   return (
     <View style={[styles.wrap, { top: insets.top + spacing.sm }]}>

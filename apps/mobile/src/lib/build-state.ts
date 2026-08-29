@@ -18,6 +18,7 @@ import * as Application from "expo-application";
 import Constants from "expo-constants";
 import * as Updates from "expo-updates";
 import { Platform } from "react-native";
+import { queryClient } from "./query.ts";
 import {
   type BuildState,
   buildStamp,
@@ -88,6 +89,10 @@ async function setChannelOverride(channel: string | null) {
   } else {
     await AsyncStorage.removeItem(OVERRIDE_KEY);
   }
+  // Every write keeps the cached read honest — including the install guard's
+  // clear, which runs outside any mutation while the banner's read may
+  // already have landed with the old value.
+  void queryClient.invalidateQueries({ queryKey: overrideKey });
 }
 
 // One-shot marker: the user tapped "Switch to <channel>", which already says
@@ -206,9 +211,13 @@ export function useBuildState(): LiveBuildState {
       installedAt: installedAt.data?.toISOString() || null,
     });
 
-  // Two passes: `watched` is itself derived from the override, so the check
-  // can only be armed once that read has landed.
-  const armed = override.isSuccess && withoutCheck({ kind: "idle" }).watched;
+  // Two passes: `watched` is derived from the override AND the baked
+  // channel, so the check only arms once BOTH reads have landed. While the
+  // baked read is in flight a main phone would otherwise look non-main
+  // (null defaultChannel) for a moment and fire a check it should never run.
+  // A RESOLVED-null baked channel still counts as watched — that's the
+  // just-installed boot, where checking matters most.
+  const armed = override.isSuccess && baked.isSuccess && withoutCheck({ kind: "idle" }).watched;
   const check = useQuery({
     queryKey: checkKey,
     queryFn: checkForUpdate,
@@ -221,13 +230,18 @@ export function useBuildState(): LiveBuildState {
   // No `armed` guard here: an unwatched build's check data can still arrive
   // via checkNow's imperative fetch (the disabled observer stays subscribed
   // to the cache), and hiding it would make the manual button look dead.
+  // Data wins over "checking": the staleTime-0 refetch runs on every
+  // foreground, and mapping it to "checking" would unmount the banner each
+  // time the app opens — the previous verdict stands until replaced.
   return {
     ...withoutCheck(
-      check.isFetching
-        ? { kind: "checking" }
+      check.data
+        ? check.data
         : check.isError
           ? { kind: "error", message: String(check.error) }
-          : check.data || { kind: "idle" },
+          : check.isFetching
+            ? { kind: "checking" }
+            : { kind: "idle" },
     ),
     ready: override.isSuccess,
   };
@@ -289,7 +303,16 @@ export function useBuildActions(): BuildActions {
     mutationFn: async ({ channel, revertOnNoUpdate }: SwitchChannelInput) => {
       const previous = await getChannelOverride();
       await setChannelOverride(channel);
-      const result = await fetchLatestUpdateAndReload();
+      let result;
+      try {
+        result = await fetchLatestUpdateAndReload();
+      } catch (error) {
+        // A thrown check/fetch (offline, mid-flight conflict) must not leave
+        // the new override dangling — that half-switched state is exactly the
+        // stranded-on-restart trap, arrived at via the error path.
+        await setChannelOverride(previous);
+        throw error;
+      }
       if (result === "up-to-date" && revertOnNoUpdate) {
         await setChannelOverride(previous);
       }
