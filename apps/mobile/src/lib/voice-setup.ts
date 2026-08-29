@@ -81,10 +81,10 @@ export function voiceSetupConfig(colleaguePath: string | null): Record<string, u
 }
 
 /** Bump to force one re-setup on every device after changing the setup
- * semantics in a way the config hash alone would not capture. v6: the
- * colleague-casual instructions ride the certificate, so existing lines
- * need one re-assert. */
-const SETUP_MARKER_VERSION = 6;
+ * semantics in a way the config hash alone would not capture. v7: the
+ * transcript transform stamps `kind` on spoken turns — only a setup rerun
+ * replaces the installed subscription. */
+const SETUP_MARKER_VERSION = 7;
 
 /** FNV-1a over the exact payload we would send — pure, no crypto import, and
  * two devices/app-versions agree iff they would send identical setups. */

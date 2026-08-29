@@ -604,9 +604,10 @@ function colleagueTranscriptTransform(voiceStreamPath: string): string {
     '  "payload": {',
     '    "content": (type = "events.iterate.com/voice-agent/utterance-transcript"',
     `      ? '<voice-turn speaker="person">'`,
-    "      : payload.cancelled = true",
-    `        ? '<voice-turn speaker="assistant" interrupted="true">'`,
-    `        : '<voice-turn speaker="assistant">') & payload.text & "</voice-turn>",`,
+    `      : '<voice-turn speaker="assistant"'`,
+    `        & (payload.cancelled = true ? ' interrupted="true"' : '')`,
+    `        & ($exists(payload.kind) ? ' kind="' & payload.kind & '"' : '')`,
+    `        & '>') & payload.text & "</voice-turn>",`,
     '    "role": "developer",',
     `    "actor": { "type": "agent", "path": ${JSON.stringify(voiceStreamPath)} },`,
     '    "llmRequestPolicy": { "behaviour": "dont-trigger-request" }',
@@ -773,11 +774,7 @@ const COLLEAGUE_BRIEF = [
   "that…'.",
   "",
   "HOW TO REPLY — this exact call, and nothing else:",
-  '  await itx.chat.sendMessage("<voice-reply> your words </voice-reply>")',
-  "Wrap a reply to a <voice-note> in <voice-reply> tags exactly like that: the chat UI",
-  "renders tagged replies as collapsed call-machinery rows next to the spoken transcript",
-  "(untagged they show as a near-duplicate of what the voice said out loud). The voice",
-  "never speaks the tags. Replies to ordinary typed messages stay UNTAGGED.",
+  '  await itx.chat.sendMessage("…")',
   "Notes arrive stamped with a routing line like 'To reply to /agents/voice/…: await",
   "itx.agents.get(…).message(text)'. That line is WRONG on this stream — the sender is",
   "the voice call's machinery, not an agent. Calling .message() on it fails; calling",
@@ -1348,6 +1345,13 @@ export const VoiceAgentContract = defineProcessorContract({
         conversationId: z.string(),
         text: z.string(),
         cancelled: z.boolean().optional(),
+        /** What drew the answer — "turn" (the person's conversation),
+         * "note" (reading a backend reply aloud), "status", "tool". The
+         * transcript copy on the colleague's stream renders non-turn kinds
+         * collapsed: the MACHINERY stamps provenance, because asking the
+         * backend model to tag its own replies proved unreliable (it kept
+         * tagging an hour after the call died, 2026-08-29). */
+        kind: z.string().optional(),
       }),
     },
 
@@ -3370,6 +3374,8 @@ export class VoiceAgentProcessor extends StreamProcessor<
                    * at this closure boundary, so the cast restates it. */
                   text: grok.transcript as string,
                   ...(cancelled && { cancelled: true }),
+                  ...(dial.answer.itemId === grok.item_id &&
+                    dial.answer.kind !== "turn" && { kind: dial.answer.kind }),
                 },
               }),
             );
@@ -4143,7 +4149,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
          * old words forever. */
         await agent.append({
           type: "events.iterate.com/agents/context-added",
-          idempotencyKey: this.idempotencyKey("colleague-brief:v4"),
+          idempotencyKey: this.idempotencyKey("colleague-brief:v5"),
           payload: {
             content: COLLEAGUE_BRIEF,
             key: "voice-agent/colleague-brief",

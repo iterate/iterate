@@ -8,12 +8,21 @@
 // Pure string parsing; the reducer stays untouched — this is presentation.
 
 export type VoiceMarkup =
-  | { kind: "turn"; speaker: "person" | "assistant"; interrupted: boolean; text: string }
+  | {
+      kind: "turn";
+      speaker: "person" | "assistant";
+      interrupted: boolean;
+      /** What drew a spoken assistant turn, when the facet stamped it:
+       * "note" = reading the backend's reply aloud, "status" = progress
+       * aside, "tool" = tool follow-up. Absent = real conversation. */
+      spokenKind: string | null;
+      text: string;
+    }
   | { kind: "note"; text: string }
   | { kind: "reply"; text: string };
 
 const TURN_PATTERN =
-  /^<voice-turn speaker="(person|assistant)"( interrupted="true")?>([\s\S]*?)<\/voice-turn>\s*$/;
+  /^<voice-turn speaker="(person|assistant)"( interrupted="true")?(?: kind="([a-z]+)")?>([\s\S]*?)<\/voice-turn>\s*$/;
 const NOTE_PATTERN = /<voice-note>\n?([\s\S]*?)\n?<\/voice-note>/;
 /* Anchored: the backend wraps the WHOLE reply, and prose that merely
  * mentions the tag must not collapse. */
@@ -26,7 +35,8 @@ export function parseVoiceMarkup(text: string): VoiceMarkup | null {
       kind: "turn",
       speaker: turn[1] as "person" | "assistant",
       interrupted: turn[2] !== undefined,
-      text: turn[3]!.trim(),
+      spokenKind: turn[3] || null,
+      text: turn[4]!.trim(),
     };
   }
   /* Anywhere, not anchored: the platform stamps a routing label before the

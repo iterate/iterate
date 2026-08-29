@@ -520,6 +520,21 @@ function MessageBubble({ message }: { message: AgentUiMessageItem }) {
    * 2026-08-29). The reducer sees developer rows; the SIDE comes from the
    * tag's speaker, not the item kind. */
   if (voice?.kind === "turn") {
+    /* A spoken turn the facet stamped as machinery — reading the backend's
+     * reply aloud, a status aside — collapses: the substance is already in
+     * the thread as the backend's own message right beside it. The stamp
+     * comes from the FACET (it knows what drew each answer); the backend
+     * model tags nothing (asking it to proved unreliable — it kept tagging
+     * an hour after the call died, 2026-08-29). */
+    if (voice.speaker === "assistant" && voice.spokenKind !== null) {
+      return (
+        <VoiceNoteRow
+          id={message.id}
+          label={voice.spokenKind === "status" ? "status aside" : "said aloud"}
+          text={voice.text}
+        />
+      );
+    }
     const person = voice.speaker === "person";
     return (
       <View style={[styles.bubble, person ? styles.bubbleUser : styles.bubbleAssistant]}>

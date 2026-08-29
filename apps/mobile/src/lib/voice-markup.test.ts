@@ -6,6 +6,7 @@ test("spoken turns parse with their speaker, interruption marked", () => {
     kind: "turn",
     speaker: "person",
     interrupted: false,
+    spokenKind: null,
     text: "what's the total?",
   });
   expect(
@@ -16,6 +17,7 @@ test("spoken turns parse with their speaker, interruption marked", () => {
     kind: "turn",
     speaker: "assistant",
     interrupted: true,
+    spokenKind: null,
     text: "It comes to four thou",
   });
 });
@@ -30,6 +32,20 @@ test("a voice note parses through the platform's stamps around it", () => {
   expect(parseVoiceMarkup(stamped)).toEqual({
     kind: "note",
     text: "look up the March invoice",
+  });
+});
+
+test("facet-stamped spoken kinds parse; plain turns carry none", () => {
+  expect(
+    parseVoiceMarkup('<voice-turn speaker="assistant" kind="note">Sunny, 24 degrees.</voice-turn>'),
+  ).toMatchObject({ kind: "turn", speaker: "assistant", spokenKind: "note" });
+  expect(
+    parseVoiceMarkup(
+      '<voice-turn speaker="assistant" interrupted="true" kind="status">still going</voice-turn>',
+    ),
+  ).toMatchObject({ kind: "turn", interrupted: true, spokenKind: "status" });
+  expect(parseVoiceMarkup('<voice-turn speaker="person">hi</voice-turn>')).toMatchObject({
+    spokenKind: null,
   });
 });
 
