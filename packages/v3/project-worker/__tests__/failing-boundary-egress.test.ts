@@ -9,7 +9,7 @@
 //     a `capability-table/` idempotencyKey) was placed in the `stream` BUILT-IN's append wrapper,
 //     NOT in StreamDurableObject.append (the real commit door). The existing defect-34 lock
 //     (failing-appsos-mined.test.ts:90) only exercises the fenced `stream.append` door; this file
-//     proves the SAME ☠ authority loss is still reachable through `itx.contexts.get(path).append`
+//     proves the SAME ☠ authority loss is still reachable through `itx.cd(path).append`
 //     (own context AND siblings), which reach DO.append directly and bypass the fence.
 //   • THE ENVELOPE BOUNDARY IS A SINGLE RUNTIME GUARD — capnweb-validate was removed (2026-08-20),
 //     so the only append-input check is StreamDurableObject.append's typeless guard (non-string /

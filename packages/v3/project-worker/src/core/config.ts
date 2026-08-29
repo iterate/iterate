@@ -1,7 +1,7 @@
 // core/config.ts — the typed APP_CONFIG. Its heart is `configMounts`: mount rows
 // (capability path ⇒ target expression), written string-first ("most people would prefer the
 // string"). Config mounts sit at the BOTTOM of every shadow stack, with provenance `config` —
-// the ONLY provenance whose targets see the built-ins (kv, stream, contexts, connections, … —
+// the ONLY provenance whose targets see the built-ins (kv, stream, cd, connections, … —
 // built-ins.ts). Topology lives here as data:
 //
 //   iterate-hosted   { "pattern": "itx.os", "target": "bindings.get('FALLBACK')" }
@@ -58,11 +58,13 @@ export const DEFAULT_CONFIG_MOUNTS: { path: string; target: string }[] = [
   { path: "itx.secrets", target: "secrets" },
   /** MY stream (append/read — the commonest write is dotted-door spellable). */
   { path: "itx.stream", target: "stream" },
-  /** Sibling contexts, ROUTED — each is a whole context, not just a log. */
-  { path: "itx.contexts", target: "contexts" },
+  /** Navigate to a sibling context, ROUTED — each is a whole context, not just a log. */
+  { path: "itx.cd", target: "cd" },
   { path: "itx.connections", target: "connections" },
   { path: "itx.facets", target: "facets" },
   { path: "itx.workers", target: "workers" },
+  /** Run stateless code — sugar over `workers.get({type:'stateless',source}).run(…)`. */
+  { path: "itx.runScript", target: "runScript" },
   { path: "itx.os", target: "bindings.get('FALLBACK')" },
 ];
 

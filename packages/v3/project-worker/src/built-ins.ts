@@ -2,7 +2,7 @@
 // ONLY for config-provenance targets (the provenance gate is a scope-KEY-SET decision — config
 // mounts resolve against { ...builtIns, itx }, event mounts against { itx } alone; nothing is
 // policed, the keys are simply absent). Config-mount targets read `kv`, `stream`,
-// `contexts.get('/x')`, `bindings.get('FALLBACK')` — the vocabulary, unbundled.
+// `cd('/x')`, `bindings.get('FALLBACK')` — the vocabulary, unbundled.
 
 import {
   CODE_CAP_RUNNER,
@@ -41,14 +41,13 @@ type FacetsView = {
  *  `DynamicWorkerRef`. `get` takes a discriminated ref: `type:"stateless"` → a fresh confined
  *  isolate, a `{ run, fetch }` handle (no DO, no storage); `type:"stateful"` → the exported
  *  `className` hosted DURABLY as a facet of this stream (a deep dotted method proxy + `.fetch`).
- *  `run` is one-hop sugar for `get({ type:"stateless", source }).run(...)`. */
+ *  Scope-level `runScript(source, ...)` is one-hop sugar for `get({ type:"stateless", source }).run(...)`. */
 type WorkersView = {
   get(
     ref:
       | { type: "stateless"; source: unknown; props?: Record<string, unknown> }
       | { type: "stateful"; source: unknown; className: string },
   ): unknown;
-  run(source: unknown, ...args: unknown[]): Promise<unknown>;
 };
 import type { StreamDurableObject } from "./stream-durable-object.ts";
 
@@ -144,8 +143,6 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       }
       return statelessHandle(ref.source as WorkerSource, ref.props);
     },
-    run: (source: unknown, ...args: unknown[]) =>
-      statelessHandle(source as WorkerSource).run(...args),
   };
 
   const { itxKv, secretsKv } = { itxKv: env.ITX_KV, secretsKv: env.SECRETS_KV };
@@ -211,25 +208,26 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       append: (...e: StreamEventInput[]) => own().append(...e),
       read: (after?: number, limit?: number) => own().read(after, limit),
     },
-    /** Sibling contexts, ROUTED: `contexts.get('/x').anything(...)` resolves through the
+    /** Navigate to a SIBLING context, ROUTED: `cd('/x').anything(...)` resolves through the
      *  SIBLING's own table (its mounts answer, its default route falls through) — a named,
      *  shadowable whole-context capability. append/read skip the facet hop (the physical fast
      *  path — the log door needs no routing). Codec-named, so only THIS project is reachable. */
-    contexts: {
-      get: (siblingPath: string) =>
-        new InvokeHandle((segments, args) => {
-          const sibling = deps.context(siblingPath); // a Context — no cast (real-typed seam)
-          if (segments.length === 1 && (segments[0] === "append" || segments[0] === "read"))
-            return segments[0] === "append"
-              ? sibling.append(...(args as StreamEventInput[]))
-              : sibling.read(...(args as [number?, number?]));
-          const last = segments[segments.length - 1] as string;
-          return sibling.invoke(["itx", ...segments.slice(0, -1), [last, ...args]]);
-        }),
-    },
+    cd: (siblingPath: string) =>
+      new InvokeHandle((segments, args) => {
+        const sibling = deps.context(siblingPath); // a Context — no cast (real-typed seam)
+        if (segments.length === 1 && (segments[0] === "append" || segments[0] === "read"))
+          return segments[0] === "append"
+            ? sibling.append(...(args as StreamEventInput[]))
+            : sibling.read(...(args as [number?, number?]));
+        const last = segments[segments.length - 1] as string;
+        return sibling.invoke(["itx", ...segments.slice(0, -1), [last, ...args]]);
+      }),
     connections: deps.connections,
     facets: deps.facets,
     workers,
+    /** Run stateless code in this context — sugar for `workers.get({type:'stateless',source}).run(…)`. */
+    runScript: (source: unknown, ...args: unknown[]) =>
+      statelessHandle(source as WorkerSource).run(...args),
     /** The forker door: any wrangler service binding, referenced by name from a config seed. */
     bindings: {
       get: (name: string) => {

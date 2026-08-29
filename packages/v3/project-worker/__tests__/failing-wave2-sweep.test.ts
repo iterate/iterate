@@ -225,17 +225,17 @@ test("kv list returns EVERY key, not silently the first 1000", async () => {
 
 // ═══════════ 8. contexts view — path normalization pins ═══════════
 
-test("contexts.get('x') and contexts.get('/x') are the SAME sibling stream", async () => {
+test("cd('x') and cd('/x') are the SAME sibling stream", async () => {
   // Pins the one-DO-per-logical-context rule: the codec's normalizePath runs on every sibling
   // resolution, so the slash-less spelling cannot mint a shadow twin of the same context.
   const itx = await harness.itx("prj_w2ctx");
-  await itx.invoke("itx.contexts.get('x').append({type:'ping-x'})");
-  const page = await itx.invoke("itx.contexts.get('/x').read(0, 50)");
+  await itx.invoke("itx.cd('x').append({type:'ping-x'})");
+  const page = await itx.invoke("itx.cd('/x').read(0, 50)");
   expect(page.events.map((e: any) => e.type)).toContain("ping-x");
 });
 
-test("contexts.get('') resolves to THIS context (self) and answers rather than wedging", async () => {
-  // The root's own path is "/" but contexts.get('') normalizes to "/" AFTER the own-path
+test("cd('') resolves to THIS context (self) and answers rather than wedging", async () => {
+  // The root's own path is "/" but cd('') normalizes to "/" AFTER the own-path
   // fast-path check (built-ins deps.context: `p === path ? own : getByName(...)`), so the empty
   // spelling reaches SELF through a Workers-RPC self-stub instead of the in-process closure.
   // Pin: the self-call answers (workerd delivers self-RPC re-entrantly) and lands in the SAME
@@ -243,7 +243,7 @@ test("contexts.get('') resolves to THIS context (self) and answers rather than w
   // BEFORE comparing.
   const itx = await harness.itx("prj_w2self");
   const raced = await Promise.race([
-    itx.invoke("itx.contexts.get('').append({type:'self-ping'})"),
+    itx.invoke("itx.cd('').append({type:'self-ping'})"),
     new Promise((_, reject) =>
       setTimeout(
         () => reject(new Error("self-context call wedged >10s (self-RPC deadlock)")),

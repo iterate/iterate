@@ -73,7 +73,7 @@ export default async function run(itx) {
   return { ran: true };
 }`;
 await itx.invokeCapability({ path: ["kv", "put"], args: ["src/consumer.js", CONSUMER] });
-const ran = await itx.workers.run("itx.kv.get('src/consumer.js')");
+const ran = await itx.runScript("itx.kv.get('src/consumer.js')");
 check(
   ran?.ran === true,
   "dynamic worker cap ran to completion (its callback resolved it)",

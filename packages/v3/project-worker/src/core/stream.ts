@@ -31,7 +31,7 @@ export interface Stream {
 }
 
 /** A CONTEXT reachable over the wire: the stream surface above, plus `invoke` for capability
- *  dispatch. This is what `itx.contexts.get('/x')` routes through and what `deps.context(path)`
+ *  dispatch. This is what `itx.cd('/x')` routes through and what `deps.context(path)`
  *  returns. The StreamDurableObject is one; a sibling DO stub and the own-path adapter satisfy it. */
 export interface Context extends Stream {
   invoke(call: string | Expression): Promise<unknown>;

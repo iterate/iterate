@@ -1,5 +1,5 @@
 // core/invoke-handle.ts — a GENUINE, pipelinable RpcTarget for a MID-CHAIN capability handle
-// (`connections.get(key)`, `facets.get(slug)`, `contexts.get(path)`, `workers.get(ref)`).
+// (`connections.get(key)`, `facets.get(slug)`, `cd(path)`, `workers.get(ref)`).
 //
 // These used to return a bare `pathProxy` (dispatch.ts) — a Proxy-over-function. It folds dotted
 // members fine, but it is NOT a native RpcTarget, and a mid-chain call returns it ACROSS an RPC
