@@ -1,7 +1,7 @@
 // The app's one answer to "which build am I on, and is it current?" — pure
 // half. Every rule lives here (what channel am I really on, is this binary
 // worth watching for updates, what does an update check MEAN), so the node
-// vitest lane covers all of it without a device. The Expo bindings and the
+// vitest tests cover all of it without a device. The Expo bindings and the
 // react-query wrappers are the other half, src/lib/build-state.ts.
 //
 // Replaces the reading that used to be spread across build-info.ts,
@@ -223,6 +223,10 @@ export function updateHeadline(status: UpdateStatus): string {
  * trusted: the manifest is remote data.
  */
 export function stampFromManifest(manifest: unknown): Partial<BuildStamp> {
+  // Cast to any because this is remote data with no trustworthy static type:
+  // expo's Manifest union doesn't describe `extra.expoClient.extra`, and even
+  // if it did, the server could send anything. The cast only reaches into the
+  // object; every field is runtime-checked below before it's used.
   const extra = (manifest as any)?.extra?.expoClient?.extra?.buildInfo;
   if (!extra || typeof extra !== "object") return {};
   const strings = ["branch", "commit", "message"] as const;

@@ -5,7 +5,7 @@
 //
 // Absorbs the old build-info.ts, preview-channel.ts and native-install-guard.ts.
 // The rules live next door in build-state-core.ts, which is pure so the node
-// vitest lane covers them without a device.
+// vitest tests cover them without a device.
 //
 // Channel overrides use expo-updates' headers-only override, which is allowed
 // without `disableAntiBrickingMeasures` because the override keys must already
@@ -151,6 +151,10 @@ async function checkForUpdate(): Promise<UpdateCheck> {
   return {
     kind: "available",
     stamp: stampFromManifest(result.manifest),
+    // Cast because expo types the manifest as a union that includes the
+    // embedded-manifest shape, which has no createdAt — but an AVAILABLE
+    // check result always came from the update server, whose manifests carry
+    // it as an ISO string. Absence just reads as "unknown publish time".
     publishedAt: (result.manifest as { createdAt?: string }).createdAt || null,
   };
 }
