@@ -52,6 +52,7 @@ import {
   type ActivityApprovalContext,
 } from "../../../components/activity-card.tsx";
 import { Markdown } from "../../../components/markdown.tsx";
+import { useDebouncedLiveStatus } from "../../../lib/use-debounced-live-status.ts";
 import { base64ToUint8Array, pickImages, type PickedImage } from "../../../lib/attachments.ts";
 import { SignInRequiredError } from "../../../lib/auth.ts";
 import {
@@ -444,13 +445,16 @@ function FeedItem({
   liveStatus: ReturnType<typeof reduceFeed>["liveStatus"];
   threadEvents: StreamEvent[];
 }) {
+  // Displayed phase lags the derived one by a 250ms quiet window so
+  // sub-100ms journal ripples can't flash the glyph (see the hook).
+  const debouncedLiveStatus = useDebouncedLiveStatus(item.id, liveStatus);
   switch (item.kind) {
     case "activity":
       return (
         <ActivityCard
           activity={item}
           approvals={activityApprovals}
-          liveStatus={liveStatus}
+          liveStatus={debouncedLiveStatus}
           threadEvents={threadEvents}
         />
       );

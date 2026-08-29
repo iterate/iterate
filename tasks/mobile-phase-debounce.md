@@ -8,7 +8,8 @@ branch: mobile-phase-debounce
 
 ## Status summary
 
-Fleshed-out spec, implementation starting.
+Implemented and green: hook + chat.tsx wiring, spec passes with the
+debounce in place, lint/typecheck/knip clean. Awaiting review.
 
 ## What
 
@@ -38,13 +39,13 @@ A→B→A within the window shows A throughout.
 
 ## Checklist
 
-- [ ] `useDebouncedLiveStatus(activityId, liveStatus)` hook in
+- [x] `useDebouncedLiveStatus(activityId, liveStatus)` hook in
       `apps/mobile/src/lib/` (tanstack-query debounce as above).
-- [ ] chat.tsx: pass the debounced status to the live ActivityCard.
-- [ ] Existing `specs/mobile/live-status.spec.ts` still green (its phase
+- [x] chat.tsx: pass the debounced status to the live ActivityCard.
+- [x] Existing `specs/mobile/live-status.spec.ts` still green (its phase
       holds are all ≥4s, far above the debounce; the lag is absorbed by
       the waits).
-- [ ] Sanity-run against local dev.
+- [x] Sanity-run against local dev. _(spec 27.4s, all phases assert through the lag)_
 
 ## Assumptions made (Misha was around but this is small)
 
