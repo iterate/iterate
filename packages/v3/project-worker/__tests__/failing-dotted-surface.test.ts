@@ -264,24 +264,19 @@ test("slack-style deep SDK replay: itx.slack.chat.postMessage({...})", async () 
   expect(sdkCalls).toEqual([["chat.postMessage", { channel: "#dotted", text: "sugar" }]]);
 });
 
-// BUG: a wrong guess at a dotted surface (`itx.slack.api.postMessage` — the invented `.api.`
-//   namespace from slack-api.test.ts's own fixture) dies as a bare property miss that names
-//   only the FIRST bad segment, not the attempted path, in no recognizable grammar.
-// EXPECTED (apps/os/src/itx/path-proxy.ts:107-121 replayPathCall + isPathMissMessage;
-//   apps/os/src/domains/integrations/slack-api.test.ts:211-217 pins exactly this string): the
-//   rejection names the FULL attempted path in the miss grammar — "Capability path
-//   api.postMessage hit undefined." — so isPathMissMessage(msg) matches and an error
-//   normalizer can answer with the surface's calling convention.
-// ACTUAL (post-hop — a SEPARATE cluster from the surface): the dotted path now REACHES the
-//   capability table (the hop landed), so `itx.slack.api.postMessage(...)` dispatches
-//   invokeCapability({path:["slack","api","postMessage"]}) and rejects at the bridge — but the
-//   rejection is a raw replay error, not the isPathMissMessage grammar naming the full attempted
-//   path. This is capability-table-REPLAY vocabulary (apps/os/src/itx/path-proxy.ts replayPathCall
-//   + isPathMissMessage), independent of the client surface hop.
+// FIXED: a wrong guess at a dotted surface (`itx.slack.api.postMessage` — the invented `.api.`
+//   namespace from slack-api.test.ts's own fixture) now rejects in the platform's ONE miss grammar,
+//   naming the FULL attempted dotted path. The dotted path REACHES the capability table (the hop
+//   landed), dispatches invokeCapability({path:["slack","api","postMessage"]}), routes through the
+//   parked-connection relay, and the remote SlackReplayTarget's absent `.api` surfaces as a raw JS
+//   TypeError inside RetainedCallbackInvoker.invoke (core/itx-surface.ts). That catch now re-codes a
+//   provider-side path MISS (isProviderPathMiss: "… is not a function." / "Cannot read properties of
+//   undefined|null (reading …)") into "Capability path api.postMessage did not resolve to a function."
+//   (code NOT_A_METHOD), so isPathMissMessage(msg) matches. A genuine app error propagates untouched.
 // WHY IT MATTERS: the miss message is the surface's error-repair loop — apps/os's
 //   normalizeSlackError turns exactly this grammar into "here is the call grammar; use
 //   itx.integrations.list()"; without it a caller (human or agent) gets a raw error.
-test.fails("a dotted mid-path miss NAMES the full attempted path in the miss grammar", async () => {
+test("a dotted mid-path miss NAMES the full attempted path in the miss grammar", async () => {
   const { itx } = await slackRig(c("miss"));
   const err = await rejectionOf(
     itx.slack.api.postMessage({ channel: "#x", text: "y" }),
@@ -293,20 +288,19 @@ test.fails("a dotted mid-path miss NAMES the full attempted path in the miss gra
   expect(isPathMissMessage(msg)).toBe(true); // the recognizable miss grammar
 });
 
-// BUG: even through the WORKING explicit door, a leaf miss on a live bridge surfaces as
-//   capnweb's internal follow-path error, not the platform's miss grammar.
-// EXPECTED (apps/os/src/itx/path-proxy.ts:115-121 — "Capability path chat.nosuchMethod did not
-//   resolve to a function." (+ optional `(capability "slack") — describe() lists what
-//   exists.`); pinned by apps/os/src/domains/integrations/slack-api.test.ts:200-209): full
-//   attempted path AND isPathMissMessage-recognizable wording.
-// ACTUAL: TypeError: 'chat.nosuchMethod' is not a function. (own props { remote: true } only —
-//   no code, no capability context, no discovery pointer). The full-path half PASSES today —
-//   capnweb's ValueStubHook happens to join the path — but the grammar half fails, so no error
-//   normalizer can recognize the condition without message-sniffing capnweb internals.
+// FIXED: even through the WORKING explicit door, a leaf miss on a live bridge now speaks the
+//   platform's miss grammar — full attempted path AND isPathMissMessage-recognizable wording.
+//   invokeCapability({path:["slack","chat","nosuchMethod"]}) routes through the parked-connection
+//   relay; the remote SlackReplayTarget's `chat` exists but `.nosuchMethod` does not, so capnweb
+//   rejects with TypeError: 'chat.nosuchMethod' is not a function. inside RetainedCallbackInvoker.invoke
+//   (core/itx-surface.ts). That catch now re-codes the provider-side path MISS (isProviderPathMiss)
+//   into "Capability path chat.nosuchMethod did not resolve to a function." (code NOT_A_METHOD), so
+//   isPathMissMessage(msg) matches and the full dotted path is named — no message-sniffing of capnweb
+//   internals required. A genuine app error from a live provider method propagates untouched.
 // WHY IT MATTERS: our replay pipeline (capability-table walkSteps → RetainedCallbackInvoker →
-//   provider-side capnweb) has three different miss vocabularies depending on WHERE the walk
+//   provider-side capnweb) had three different miss vocabularies depending on WHERE the walk
 //   dies; apps/os proved one shared grammar (isPathMissMessage) is what makes misses repairable.
-test.fails("a leaf miss through the EXPLICIT door keeps the same miss grammar", async () => {
+test("a leaf miss through the EXPLICIT door keeps the same miss grammar", async () => {
   const { itx } = await slackRig(c("leaf"));
   const err = await rejectionOf(
     itx.invokeCapability({
