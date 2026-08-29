@@ -306,9 +306,13 @@ function PhaseGlyph({ phase }: { phase: AgentUiLiveStatus["phase"] | undefined }
   if (phase === "writing") icon = { name: "edit-2", label: "writing code" };
   else if (phase === "running") icon = { name: "play", label: "running code" };
   else if (phase === "processing") icon = { name: "rotate-cw", label: "processing result" };
+  // Ellipsis for all three nothing-concrete-yet phases: the loader icon read
+  // as a second spinner next to the real one (a circle of dashes IS a
+  // spinner glyph), and thinking/working/waiting are the same visual promise
+  // — something's underway, nothing to show yet.
   else if (phase === "thinking") icon = { name: "more-horizontal", label: "thinking" };
-  else if (phase === "working") icon = { name: "loader", label: "working" };
-  else icon = { name: "loader", label: "waiting for a response" };
+  else if (phase === "working") icon = { name: "more-horizontal", label: "working" };
+  else icon = { name: "more-horizontal", label: "waiting for a response" };
   return (
     <Feather
       accessibilityLabel={icon.label}
