@@ -84,6 +84,9 @@ export async function getChannelOverride(): Promise<string | null> {
 
 async function setChannelOverride(channel: string | null) {
   Updates.setUpdateRequestHeadersOverride(channel ? { "expo-channel-name": channel } : null);
+  // Any check already in flight is now asking about the previous channel —
+  // callers from here on must not join it (see sharedCheckForUpdateAsync).
+  channelGeneration++;
   if (channel) {
     await AsyncStorage.setItem(OVERRIDE_KEY, channel);
   } else {
@@ -164,15 +167,33 @@ const canOta = () => Updates.isEnabled && !__DEV__;
 // in-flight checkForUpdateAsync REJECTS — and two callers genuinely overlap
 // here: after a switch settles, the QR screen's freshness pull and the
 // watched-build check arm in the same render. Everyone shares one native
-// call instead.
-let checkInFlight: ReturnType<typeof Updates.checkForUpdateAsync> | null = null;
+// call instead — but only callers asking about the SAME channel: a check is
+// stamped with the channel generation it started under (setChannelOverride
+// bumps it), because a just-switched caller joining a pre-switch check would
+// treat another channel's verdict as its own — and for Switch-to-main that
+// verdict feeds the revert decision. A mismatched caller queues behind the
+// stale call instead of overlapping it, so the no-second-check rule holds.
+let channelGeneration = 0;
+let checkInFlight: {
+  gen: number;
+  promise: ReturnType<typeof Updates.checkForUpdateAsync>;
+} | null = null;
+let lastCheckSettled: Promise<unknown> = Promise.resolve();
 function sharedCheckForUpdateAsync() {
-  if (!checkInFlight) {
-    checkInFlight = Updates.checkForUpdateAsync().finally(() => {
-      checkInFlight = null;
-    });
+  if (checkInFlight && checkInFlight.gen === channelGeneration) {
+    return checkInFlight.promise;
   }
-  return checkInFlight;
+  const promise = lastCheckSettled.then(() => Updates.checkForUpdateAsync());
+  const entry = { gen: channelGeneration, promise };
+  lastCheckSettled = promise.then(
+    () => {},
+    () => {},
+  );
+  void promise.finally(() => {
+    if (checkInFlight === entry) checkInFlight = null;
+  });
+  checkInFlight = entry;
+  return promise;
 }
 
 async function checkForUpdate(): Promise<UpdateCheck> {
