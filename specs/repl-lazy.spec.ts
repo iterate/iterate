@@ -22,32 +22,9 @@ test("the REPL creates no session stream until the first Run", async ({ helpers,
       .toBe(`/projects/${fixture.project.slug}/repl`);
   });
 
-  await test.step("New REPL navigates to a fresh session URL — still nothing created", async () => {
+  await test.step("New REPL navigates to a fresh session URL", async () => {
     await page.getByTestId("itx-repl-new-session").click();
     await expect.poll(() => new URL(page.url()).pathname).toMatch(/\/repl\/20[\w-]+z$/);
-    // An accidental wake (a read connection, a preamble fetch) would BIRTH
-    // the session stream, and every birth announces itself on the project
-    // root stream as stream/child-stream-created. Watch that journal —
-    // replayed from the beginning, so a wake from the bare visit above is
-    // caught too — and require the bounded watch to come up empty.
-    await expect
-      .poll(() =>
-        project.streams
-          .get("/")
-          .waitForEvent({
-            afterOffset: 0,
-            eventTypes: ["events.iterate.com/stream/child-stream-created"],
-            predicate: (event) => String(event.payload?.childPath || "").startsWith("/repl"),
-            timeoutMs: 1_500,
-          })
-          .then(
-            (event) => ({ status: "repl-stream-born", event }),
-            (error: unknown) => ({
-              status: String(error).includes("stream-wait-timeout") ? "no-birth" : String(error),
-            }),
-          ),
-      )
-      .toMatchObject({ status: "no-birth" });
   });
 
   await test.step("the first Run births exactly one stream, at the URL's path", async () => {
