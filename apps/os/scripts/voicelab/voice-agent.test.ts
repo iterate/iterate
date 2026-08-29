@@ -1079,7 +1079,7 @@ describe("tools on the birth certificate", () => {
      * stamps a reply-routing label on the same message that points at a
      * path which is not an agent. */
     expect(messaged).toHaveLength(1);
-    expect(messaged[0]).toMatch(/^look up the March invoice\n/);
+    expect(messaged[0]).toMatch(/^<voice-note>\nlook up the March invoice\n<\/voice-note>\n/);
     expect(messaged[0]).toContain("itx.chat.sendMessage");
 
     /* The reply arrives as a durable colleague-note (the copy-to-stream
@@ -1148,7 +1148,7 @@ describe("tools on the birth certificate", () => {
     });
     await h.settle();
     expect(messaged).toHaveLength(1);
-    expect(messaged[0]).toMatch(/^factorize the first 23 digits of pi\n/);
+    expect(messaged[0]).toMatch(/^<voice-note>\nfactorize the first 23 digits of pi\n/);
     const firstSocket = h.provider;
 
     /* The person waits quietly for the answer, so the idle deadline kills
@@ -1212,7 +1212,7 @@ describe("tools on the birth certificate", () => {
     expect(new Set(gotten)).toEqual(new Set(["/agents/voice-notes/voice/test"]));
     expect(created).toEqual(["/agents/voice-notes/voice/test"]);
     expect(messaged).toHaveLength(2);
-    expect(messaged[1]).toMatch(/^now double-check it\n/);
+    expect(messaged[1]).toMatch(/^<voice-note>\nnow double-check it\n/);
   });
 
   /*
@@ -1543,6 +1543,23 @@ describe("tools on the birth certificate", () => {
             append: async (event: any) => {
               subscriptions.push({ path, ...event });
             },
+            /* The chat's history, for the recap fetch the dial runs. */
+            getEventPage: async () => ({ streamMaxOffset: 42 }),
+            getEvents: async () => [
+              {
+                type: "events.iterate.com/agents/context-added",
+                payload: { role: "user", content: "what's the March invoice total?" },
+              },
+              {
+                type: "events.iterate.com/agents/web-message-sent",
+                payload: { message: "£4,120 — want the breakdown?" },
+              },
+              /* The call's own residue must not recap itself. */
+              {
+                type: "events.iterate.com/agents/context-added",
+                payload: { role: "user", content: '<voice-turn speaker="person">hi</voice-turn>' },
+              },
+            ],
           };
         },
       },
@@ -1563,6 +1580,37 @@ describe("tools on the birth certificate", () => {
 
     /* Linked at CALL START — before any note exists. */
     expect(created).toEqual(["/agents/mobile/1234"]);
+
+    /* THE CHAT'S RECAP briefs the session: a call to an existing chat picks
+     * up the thread, never greets a stranger — and the fetch lands durably
+     * for the next incarnation's fold. */
+    const update = h.provider.sentOfType("session.update")[0] as {
+      session: { instructions?: string };
+    };
+    expect(update.session.instructions).toContain("continues an ongoing TEXT conversation");
+    expect(update.session.instructions).toContain("the person: what's the March invoice total?");
+    expect(update.session.instructions).toContain("you: £4,120 — want the breakdown?");
+    expect(update.session.instructions).not.toContain("<voice-turn");
+    const recaps = eventsOfType(h, "colleague-recap");
+    expect(recaps).toHaveLength(1);
+    expect(recaps[0]!.payload).toMatchObject({
+      text: "the person: what's the March invoice total?\nyou: £4,120 — want the breakdown?",
+    });
+
+    /* AND THE BRIEFING IS ON THE RECORD: one durable event says what this
+     * session was told and armed with — the stream shows how the frontend
+     * was initialized instead of that being invisible provider state. */
+    const configuredSessions = eventsOfType(h, "session-configured");
+    expect(configuredSessions).toHaveLength(1);
+    expect(configuredSessions[0]!.payload).toMatchObject({
+      provider: "grok",
+      greeting: false,
+      recapIncluded: true,
+      tools: ["note_to_self"],
+    });
+    expect((configuredSessions[0]!.payload as { instructions: string }).instructions).toContain(
+      "continues an ongoing TEXT conversation",
+    );
     /* Status lane: the chat's narration and replies flow HERE. (The
      * transcript lane the other way rides SETUP's batch, not the link.) */
     expect(subscriptions).toHaveLength(1);
@@ -1586,7 +1634,7 @@ describe("tools on the birth certificate", () => {
     });
     await h.settle();
     expect(messaged).toHaveLength(1);
-    expect(messaged[0]).toMatch(/^check the calendar\n/);
+    expect(messaged[0]).toMatch(/^<voice-note>\ncheck the calendar\n/);
   });
 
   it("greeting on the certificate makes the model speak first at pickup — unless the caller already did", async () => {

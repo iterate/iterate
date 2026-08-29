@@ -43,22 +43,18 @@ import {
   transcriptItems,
   TRANSCRIPT_EVENT_TYPES,
   type VoiceCallHandle,
-  type VoiceCallStatus,
 } from "../lib/voice-call.ts";
 import {
   chatVoiceStreamPath,
   ensureVoiceAgentSetup,
   mobileVoiceStreamPath,
 } from "../lib/voice-setup.ts";
+import { voiceCallStatusKey as statusKey, type VoiceUiStatus } from "../lib/voice-call-state.ts";
 
-const statusKey = ["voice-call", "status"];
 const sheetKey = ["voice-call", "sheet-open"];
 const outputKey = ["voice-call", "output"];
 const targetKey = ["voice-call", "target"];
 const SETUP_MARKER_STORAGE_PREFIX = "voice-setup-marker:";
-
-/** null = no call has ever run this app session. */
-type VoiceUiStatus = (VoiceCallStatus & { micDenied?: boolean }) | null;
 
 /** Which line the active (or last) call is on. The device's own line when
  * started from the floating button; a chat's line when started from a chat

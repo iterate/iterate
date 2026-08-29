@@ -114,17 +114,17 @@ test("calling a chat: speak, be answered, and the conversation lands on the chat
     });
     voiceLines = contextItems
       .map((event: any) => String(event.payload?.content ?? ""))
-      .filter((content: string) => content.startsWith("[voice call"));
+      .filter((content: string) => content.startsWith("<voice-turn"));
     if (
-      voiceLines.some((line) => line.includes("the person said")) &&
-      voiceLines.some((line) => line.includes("you said"))
+      voiceLines.some((line) => line.includes('speaker="person"')) &&
+      voiceLines.some((line) => line.includes('speaker="assistant"'))
     ) {
       break;
     }
     await new Promise((resolve) => setTimeout(resolve, 2_000));
   }
-  expect(voiceLines.some((line) => line.includes("the person said"))).toBe(true);
-  expect(voiceLines.some((line) => line.includes("you said"))).toBe(true);
+  expect(voiceLines.some((line) => line.includes('speaker="person"'))).toBe(true);
+  expect(voiceLines.some((line) => line.includes('speaker="assistant"'))).toBe(true);
 }, 210_000);
 
 /* ------------------------------------------------------------- fixtures --- */

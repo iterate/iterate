@@ -23,7 +23,7 @@
 // harmless no-op when reopening an already-created chat from the list.
 
 import { useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import {
@@ -78,6 +78,7 @@ import { InThreadApprovalCard } from "../../../components/in-thread-approval.tsx
 import { VoiceCallChatButton } from "../../../components/voice-call-button.tsx";
 import { useClaimReplyPresented } from "../../../lib/reply-presented.ts";
 import { useLiveEvents } from "../../../lib/use-live-events.ts";
+import { parseVoiceMarkup } from "../../../lib/voice-markup.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
 import { getServerBaseUrl } from "../../../lib/storage.ts";
 import { buildStreamViewerUrl } from "../../../lib/stream-url.ts";
@@ -491,8 +492,33 @@ function FeedItem({
 }
 
 function MessageBubble({ message }: { message: AgentUiMessageItem }) {
-  const isUser = message.kind === "user";
+  const voice = parseVoiceMarkup(message.text);
   const window = useWindowDimensions();
+  /* Spoken turns copied from a voice call: the person's side renders like
+   * their normal messages and the voice's side like the bot's — both in
+   * italics so a glance separates said from typed (on-device feedback,
+   * 2026-08-29). The reducer sees developer rows; the SIDE comes from the
+   * tag's speaker, not the item kind. */
+  if (voice?.kind === "turn") {
+    const person = voice.speaker === "person";
+    return (
+      <View style={[styles.bubble, person ? styles.bubbleUser : styles.bubbleAssistant]}>
+        <View style={styles.bubbleTextInset}>
+          <Text
+            style={[person ? styles.bubbleUserText : styles.voiceAssistantText, styles.voiceText]}
+            selectable
+          >
+            {voice.text}
+            {voice.interrupted ? " —" : ""}
+          </Text>
+        </View>
+      </View>
+    );
+  }
+  /* A note the frontend sent its backend mid-call: machinery worth having
+   * on the record, not a message anybody typed — collapsed to one row. */
+  if (voice?.kind === "note") return <VoiceNoteRow id={message.id} text={voice.text} />;
+  const isUser = message.kind === "user";
   // A photo frame is exactly this wide, while a bubble would otherwise grow to
   // 85% of the screen — so a caption longer than the photo would stretch the
   // bubble past it and reopen the gap at the photo's edge. Cap the caption at
@@ -522,6 +548,31 @@ function MessageBubble({ message }: { message: AgentUiMessageItem }) {
         </View>
       ) : null}
     </View>
+  );
+}
+
+/** One tappable row for a frontend→backend voice note, collapsed by
+ * default — the query cache holds the toggle (no useState, composer
+ * precedent), keyed per item so each note expands alone. */
+function VoiceNoteRow({ id, text }: { id: string; text: string }) {
+  const cache = useQueryClient();
+  const { data: open } = useQuery<boolean>({
+    queryKey: ["voice-note-open", id],
+    queryFn: () => false,
+    staleTime: Infinity,
+    initialData: false,
+  });
+  return (
+    <Pressable
+      accessibilityLabel={open ? "Collapse voice note" : "Expand voice note"}
+      accessibilityRole="button"
+      onPress={() => cache.setQueryData(["voice-note-open", id], !open)}
+      style={styles.voiceNoteRow}
+    >
+      <Text numberOfLines={open ? undefined : 1} style={styles.voiceNoteText}>
+        🎙 note to backend{open ? `\n${text}` : ` · ${text}`}
+      </Text>
+    </Pressable>
   );
 }
 
@@ -675,6 +726,19 @@ const styles = StyleSheet.create({
   },
   bubbleUserText: { color: colors.background, fontSize: 15, lineHeight: 21 },
   bubbleAssistantText: { color: colors.text, fontSize: 15, lineHeight: 21 },
+  voiceText: { fontStyle: "italic" },
+  voiceAssistantText: { color: colors.text, fontSize: 15, lineHeight: 21 },
+  voiceNoteRow: {
+    alignSelf: "flex-start",
+    maxWidth: "85%",
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderWidth: 1,
+  },
+  voiceNoteText: { color: colors.textMuted, fontSize: 12, fontStyle: "italic" },
   bottomStack: { gap: spacing.sm },
   eventRow: { gap: 4 },
   eventType: { color: colors.textFaint, fontSize: 11, fontFamily: "Menlo" },

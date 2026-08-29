@@ -63,6 +63,7 @@ import { queryClient } from "../lib/query.ts";
 import { DEFAULT_SERVER } from "../lib/servers.ts";
 import { getServerBaseUrl } from "../lib/storage.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
+import { useVoiceCallActive } from "../lib/voice-call-state.ts";
 import { RecentPhotosStrip } from "./recent-photos-strip.tsx";
 import { VoiceCallButton } from "./voice-call-button.tsx";
 
@@ -181,6 +182,7 @@ export function NoteCaptureOverlay() {
   const params = useGlobalSearchParams<{ projectId?: string; slug?: string }>();
   const insets = useSafeAreaInsets();
   const cache = useQueryClient();
+  const callActive = useVoiceCallActive();
   const projectId = typeof params.projectId === "string" ? params.projectId : "";
   // Widened: expo-router's typed segments omit the index route, but at
   // runtime the sign-in screen yields [].
@@ -348,7 +350,21 @@ export function NoteCaptureOverlay() {
     },
   });
 
-  if (onChatScreen) return null;
+  if (onChatScreen) {
+    /* Chat has its own composer — never stack two inputs. But a LIVE call's
+     * overlay (floating button + hold-to-talk sheet) must follow you here:
+     * a call started from a chat's own header was otherwise untalkable
+     * until you left the chat (Misha, on-device, 2026-08-29). Idle, the
+     * chat stays uncluttered — its header already has the phone button. */
+    return inProject && baseUrl && callActive ? (
+      <View
+        pointerEvents="box-none"
+        style={[styles.overlay, { paddingBottom: insets.bottom + spacing.md }]}
+      >
+        <VoiceCallButton baseUrl={baseUrl} projectId={projectId} />
+      </View>
+    ) : null;
+  }
 
   if (!expanded) {
     return (

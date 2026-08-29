@@ -85,9 +85,11 @@ export function voiceSetupConfig(colleaguePath: string | null): Record<string, u
 }
 
 /** Bump to force one re-setup on every device after changing the setup
- * semantics in a way the config hash alone would not capture (marker v4:
- * facet 18.0.0 — call-start colleague link + transcript lane). */
-const SETUP_MARKER_VERSION = 4;
+ * semantics in a way the config hash alone would not capture (marker v5:
+ * the transcript lane's transform grew <voice-turn> tags — setup's
+ * content-hash key changes, and only a re-run replaces the installed
+ * subscription). */
+const SETUP_MARKER_VERSION = 5;
 
 /** FNV-1a over the exact payload we would send — pure, no crypto import, and
  * two devices/app-versions agree iff they would send identical setups. */

@@ -399,6 +399,47 @@ const TRANSCRIPT_TURN_MAX_CHARS = 600;
 const COLLEAGUE_NOTES_MAX = 4;
 const COLLEAGUE_NOTE_MAX_CHARS = 600;
 
+/** Bounds for the chat recap a per-chat call is briefed with (the last few
+ * text messages either side sent), and the deadline the recap fetch races —
+ * a slow read costs the recap, never the call. */
+const CHAT_RECAP_MAX_TURNS = 12;
+const CHAT_RECAP_TURN_MAX_CHARS = 240;
+const CHAT_RECAP_DEADLINE_MS = 2_500;
+
+/**
+ * The colleague chat's recent text conversation, as briefing lines — pure,
+ * from the chat stream's own events. `web-message-sent` is the chat's every
+ * reply; user-role `context-added` is the person's side. The call's OWN
+ * residue is excluded (voice-turn copies, voice-note dispatches): a recap
+ * that quotes the current call back at itself is noise. Null when the chat
+ * has said nothing yet.
+ */
+export function chatRecapFromEvents(
+  events: { type: string; payload?: Record<string, unknown> }[],
+): string | null {
+  const clip = (text: string) =>
+    text.length > CHAT_RECAP_TURN_MAX_CHARS ? `${text.slice(0, CHAT_RECAP_TURN_MAX_CHARS)}…` : text;
+  const turns: string[] = [];
+  for (const event of events) {
+    const p = event.payload ?? {};
+    if (event.type === "events.iterate.com/agents/web-message-sent") {
+      if (typeof p.message === "string" && p.message !== "") turns.push(`you: ${clip(p.message)}`);
+    } else if (event.type === "events.iterate.com/agents/context-added") {
+      if (
+        p.role === "user" &&
+        typeof p.content === "string" &&
+        p.content !== "" &&
+        !p.content.startsWith("<voice-") &&
+        !p.content.includes("<voice-note>")
+      ) {
+        turns.push(`the person: ${clip(p.content)}`);
+      }
+    }
+  }
+  if (turns.length === 0) return null;
+  return turns.slice(-CHAT_RECAP_MAX_TURNS).join("\n");
+}
+
 /** One recap entry, as the fold keeps it. */
 interface TranscriptTurn {
   role: "listener" | "assistant";
@@ -541,15 +582,19 @@ export function colleaguePathForStream(streamPath: string, certificatePath: stri
   return `/agents/voice-notes/${suffix}`;
 }
 
+/* The content wears a light tag, not prose — `<voice-turn speaker="…">` —
+ * so the chat UI can render the two sides as italic person/assistant
+ * bubbles instead of identical developer rows (Misha's on-device feedback,
+ * 2026-08-29), while the model reads the same attributes as words. */
 function colleagueTranscriptTransform(voiceStreamPath: string): string {
   return [
     '{ "type": "events.iterate.com/agents/context-added",',
     '  "payload": {',
     '    "content": (type = "events.iterate.com/voice-agent/utterance-transcript"',
-    '      ? "[voice call — the person said] "',
+    `      ? '<voice-turn speaker="person">'`,
     "      : payload.cancelled = true",
-    '        ? "[voice call — you said, interrupted partway] "',
-    '        : "[voice call — you said] ") & payload.text,',
+    `        ? '<voice-turn speaker="assistant" interrupted="true">'`,
+    `        : '<voice-turn speaker="assistant">') & payload.text & "</voice-turn>",`,
     '    "role": "developer",',
     `    "actor": { "type": "agent", "path": ${JSON.stringify(voiceStreamPath)} },`,
     '    "llmRequestPolicy": { "behaviour": "dont-trigger-request" }',
@@ -726,10 +771,10 @@ const COLLEAGUE_BRIEF = [
   "chat message is heard; silent thoroughness is not. Send as many chat messages as you",
   "like: every one reaches the voice as its own note, whether or not anybody asked.",
   "",
-  "A transcript of the call lands here as it happens — bracketed '[voice call — …]'",
-  "context lines, both sides. Read it for what the person actually said and meant; do not",
-  "reply to transcript lines directly (the voice is already answering them), only to",
-  "notes.",
+  'A transcript of the call lands here as it happens — <voice-turn speaker="…"> context',
+  "lines, both sides. Read it for what the person actually said and meant; do not reply",
+  "to transcript lines directly (the voice is already answering them), only to",
+  "<voice-note> messages.",
   "",
   "Everything you send will be READ OUT LOUD, so write to be spoken: two or three",
   "sentences of plain language, no lists, no URLs, no code. Lead with the point. Work with",
@@ -1009,6 +1054,13 @@ const VoiceState = z.object({
    * actually said, and the briefing says so.
    */
   colleagueNotes: z.array(z.strictObject({ text: z.string() })).default([]),
+  /**
+   * The colleague chat's recent text messages, fetched at dial time (chat
+   * colleagues only) — what lets a call to an existing chat open with "hi
+   * again, about that invoice" instead of a stranger's hello, and lets a
+   * reconnect's briefing carry the same context. Replaced per dial.
+   */
+  colleagueRecap: z.string().nullable().default(null),
   call: z
     .object({
       conversationId: z.string(),
@@ -1135,7 +1187,11 @@ export const VoiceAgentContract = defineProcessorContract({
    * carry BOTH the lifecycle phase and the colleague's own words, and a
    * newsworthy status (its words changed, or a failure) draws one
    * response.create when the floor is free — the frontend may SAY a short
-   * status line instead of only knowing it. Clean break as ever. */
+   * status line instead of only knowing it. A per-chat dial also fetches
+   * the chat's recent messages (`colleague-recap`, folded) so the call
+   * greets with the thread in mind, and every provider session's whole
+   * briefing is recorded (`session-configured`) so the stream shows how
+   * the frontend was initialized. Clean break as ever. */
   version: "19.0.0",
   description: "Runs a voice call in the stream's own Durable Object, one flush watermark deep.",
   stateSchema: VoiceState,
@@ -1307,6 +1363,26 @@ export const VoiceAgentContract = defineProcessorContract({
         "message the colleague ever sends arrives here, solicited or not.",
       payloadSchema: z.looseObject({ text: z.string() }),
     },
+    "events.iterate.com/voice-agent/colleague-recap": {
+      description:
+        "The colleague chat's recent text messages, fetched at dial time and folded — a call " +
+        "to an existing chat greets with the thread in mind, and a reconnect keeps it.",
+      payloadSchema: z.looseObject({ text: z.string() }),
+    },
+    "events.iterate.com/voice-agent/session-configured": {
+      description:
+        "The whole briefing one provider session was configured with — instructions " +
+        "(bounded), tools, whether it was asked to greet — recorded so the stream shows how " +
+        "the frontend was initialized instead of that being invisible session state.",
+      payloadSchema: z.looseObject({
+        conversationId: z.string(),
+        provider: z.string(),
+        instructions: z.string(),
+        tools: z.array(z.string()),
+        greeting: z.boolean(),
+        recapIncluded: z.boolean(),
+      }),
+    },
 
     /*
      * THE SPEAKER LANE. Two events, and between them the device's entire buffer
@@ -1388,6 +1464,8 @@ export const VoiceAgentContract = defineProcessorContract({
      * for the fold and the quiet injection. */
     "events.iterate.com/voice-agent/colleague-status",
     "events.iterate.com/voice-agent/colleague-note",
+    /* Appended by the dial's own recap fetch; consumed for the fold only. */
+    "events.iterate.com/voice-agent/colleague-recap",
     /* The live half. Naming them is the whole opt-in — `"*"` never matches an
      * ephemeral event, so nobody gets this firehose by accident. */
     "events.iterate.com/voice-agent/ptt-start",
@@ -1403,6 +1481,8 @@ export const VoiceAgentContract = defineProcessorContract({
     "events.iterate.com/voice-agent/utterance-transcript",
     "events.iterate.com/voice-agent/answer-transcript",
     "events.iterate.com/voice-agent/colleague-status",
+    "events.iterate.com/voice-agent/colleague-recap",
+    "events.iterate.com/voice-agent/session-configured",
     "events.iterate.com/voice-agent/spk-frame",
     "events.iterate.com/voice-agent/grok-event",
   ],
@@ -2101,6 +2181,11 @@ export class VoiceAgentProcessor extends StreamProcessor<
         };
       }
 
+      case "events.iterate.com/voice-agent/colleague-recap":
+        /* Replaced wholesale: each dial fetches the chat afresh, and the
+         * newest fetch is the truth about "recent". */
+        return event.payload.text === "" ? state : { ...state, colleagueRecap: event.payload.text };
+
       case "events.iterate.com/voice-agent/colleague-note": {
         if (event.payload.text === "") return state;
         return {
@@ -2597,6 +2682,30 @@ export class VoiceAgentProcessor extends StreamProcessor<
      * not move on its own — reuses it. */
     const dialId = crypto.randomUUID();
     runInBackground(async () => {
+      /*
+       * THE CHAT'S OWN RECAP, fetched BEFORE the dial so the greeting can
+       * be "hi again — about that invoice" instead of a stranger's hello
+       * (measured on-device: calling an existing chat drew a blank,
+       * 2026-08-29). Fresh per dial — the chat moves between calls — and
+       * bounded by a race inside #fetchChatRecap: a slow read costs the
+       * recap, never the call; the ring covers a quick one. Chat
+       * colleagues only — the voice-notes desk has no text thread.
+       */
+      if (state.colleague && state.colleaguePath !== null) {
+        const recap = await this.#fetchChatRecap(state.colleaguePath);
+        if (recap !== null && this.#dial === dial) {
+          this.#chatRecap = recap;
+          /* Durable, so a reconnect briefed from the FOLD carries the same
+           * context an eviction would otherwise lose. */
+          runInBackground(() =>
+            append({
+              type: "events.iterate.com/voice-agent/colleague-recap",
+              idempotencyKey: this.idempotencyKey(`colleague-recap:${dialId}`),
+              payload: { text: recap },
+            }),
+          );
+        }
+      }
       /* A dial can REJECT (DNS, TLS), not just refuse — and an uncaught
        * throw here was measured as sixty seconds of dead air: the runner
        * logs it, nothing appends, nothing re-dials, and the user's whole
@@ -2696,68 +2805,100 @@ export class VoiceAgentProcessor extends StreamProcessor<
         this.#forwardProviderEvent(dial, grok, providerEventType, receivedAtFacetMs, append);
 
         switch (providerEventType) {
-          case "session.created":
+          case "session.created": {
             /* The one edge that makes us configure the session; miss it and
              * the handshake never completes and the call hangs, silently. */
+            /* The dial's own fetch wins over the fold (its append may still
+             * be in flight); the fold is the fresh incarnation's copy. */
+            const chatRecap =
+              state.colleaguePath === null ? null : (this.#chatRecap ?? state.colleagueRecap);
+            const declaredTools = [...state.tools, ...(state.colleague ? [NOTE_TO_SELF_TOOL] : [])];
+            const instructions = [
+              ...(state.instructions === "" ? [] : [state.instructions]),
+              ...(state.colleague ? [FAST_HALF_INSTRUCTIONS] : []),
+              /* The chat's own history, for a per-chat line: the person has
+               * been TEXTING this same assistant; the call picks the thread
+               * up instead of greeting a stranger. */
+              ...(chatRecap === null
+                ? []
+                : [
+                    "This call continues an ongoing TEXT conversation with the same person " +
+                      "on the same stream. Recent chat messages, oldest first:\n" +
+                      chatRecap +
+                      "\nGreet like a colleague picking up the phone mid-project — with the " +
+                      "thread in mind — never like a stranger meeting them for the first time.",
+                  ]),
+              /* The recap: a fresh provider session is a stranger,
+               * and the fold remembers so it does not have to be. */
+              ...(state.transcript.length > 0 ? [transcriptRecap(state.transcript)] : []),
+              /* A note still on the colleague's desk survives the
+               * reconnect too — saying so is what stops this session
+               * re-sending the same note (measured: a reconnected
+               * session re-asked and the duplicate answer was never
+               * even deliverable). */
+              ...(state.colleagueStatus !== null && state.colleagueStatus.waitingFor === null
+                ? [
+                    `Your backend is mid-task right now — its latest status: ` +
+                      `"${[state.colleagueStatus.phase, state.colleagueStatus.activity]
+                        .filter(Boolean)
+                        .join(" — ")}"` +
+                      (state.colleagueStatus.failure === null
+                        ? ""
+                        : ` (a script failed: ${state.colleagueStatus.failure})`) +
+                      `. Its reply will arrive as a bracketed note; do not send another ` +
+                      `note for the same request.`,
+                  ]
+                : []),
+              /* Notes that landed between calls were spoken to
+               * nobody; the reconnect inherits them. */
+              ...(state.colleagueNotes.length > 0
+                ? [
+                    [
+                      "Recent notes from your backend, oldest first (the conversation " +
+                        "record above shows which, if any, you already relayed):",
+                      ...state.colleagueNotes.map((note) => `- ${note.text}`),
+                    ].join("\n"),
+                  ]
+                : []),
+            ].join("\n\n");
+            /*
+             * THE BRIEFING IS ON THE RECORD. Everything below configures a
+             * provider session nobody can inspect later — "why did it say
+             * hi like a stranger?" had no answer in the stream (asked
+             * on-device, 2026-08-29). One durable event per dial says
+             * exactly what this session was told and armed with.
+             */
+            this.runInBackground(() =>
+              append({
+                type: "events.iterate.com/voice-agent/session-configured",
+                idempotencyKey: this.idempotencyKey(`session-configured:${dialId}`),
+                payload: {
+                  conversationId,
+                  provider: state.provider,
+                  instructions: instructions.slice(0, 8_000),
+                  tools: declaredTools.map((tool) => tool.name),
+                  greeting: state.greeting,
+                  recapIncluded: chatRecap !== null,
+                },
+              }),
+            );
             socket.send(
               JSON.stringify({
                 type: "session.update",
                 session: {
                   type: "realtime",
-                  ...((state.instructions !== "" ||
-                    state.colleague ||
-                    state.transcript.length > 0) && {
-                    instructions: [
-                      ...(state.instructions === "" ? [] : [state.instructions]),
-                      ...(state.colleague ? [FAST_HALF_INSTRUCTIONS] : []),
-                      /* The recap: a fresh provider session is a stranger,
-                       * and the fold remembers so it does not have to be. */
-                      ...(state.transcript.length > 0 ? [transcriptRecap(state.transcript)] : []),
-                      /* A note still on the colleague's desk survives the
-                       * reconnect too — saying so is what stops this session
-                       * re-sending the same note (measured: a reconnected
-                       * session re-asked and the duplicate answer was never
-                       * even deliverable). */
-                      ...(state.colleagueStatus !== null &&
-                      state.colleagueStatus.waitingFor === null
-                        ? [
-                            `Your backend is mid-task right now — its latest status: ` +
-                              `"${[state.colleagueStatus.phase, state.colleagueStatus.activity]
-                                .filter(Boolean)
-                                .join(" — ")}"` +
-                              (state.colleagueStatus.failure === null
-                                ? ""
-                                : ` (a script failed: ${state.colleagueStatus.failure})`) +
-                              `. Its reply will arrive as a bracketed note; do not send another ` +
-                              `note for the same request.`,
-                          ]
-                        : []),
-                      /* Notes that landed between calls were spoken to
-                       * nobody; the reconnect inherits them. */
-                      ...(state.colleagueNotes.length > 0
-                        ? [
-                            [
-                              "Recent notes from your backend, oldest first (the conversation " +
-                                "record above shows which, if any, you already relayed):",
-                              ...state.colleagueNotes.map((note) => `- ${note.text}`),
-                            ].join("\n"),
-                          ]
-                        : []),
-                    ].join("\n\n"),
-                  }),
+                  ...(instructions !== "" && { instructions }),
                   /* The certificate's tools, declared verbatim; the GA shape
                    * both providers speak. The expression never touches the
                    * wire — the provider knows names, we know what they do. */
-                  ...((state.tools.length > 0 || state.colleague) && {
+                  ...(declaredTools.length > 0 && {
                     tool_choice: "auto",
-                    tools: [...state.tools, ...(state.colleague ? [NOTE_TO_SELF_TOOL] : [])].map(
-                      ({ name, description, parameters }) => ({
-                        type: "function",
-                        name,
-                        description,
-                        parameters: parameters ?? { type: "object", properties: {} },
-                      }),
-                    ),
+                    tools: declaredTools.map(({ name, description, parameters }) => ({
+                      type: "function",
+                      name,
+                      description,
+                      parameters: parameters ?? { type: "object", properties: {} },
+                    })),
                   }),
                   audio: {
                     input: {
@@ -2816,6 +2957,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
               }),
             );
             return;
+          }
 
           case "session.updated": {
             /* Usable. Everything the handshake made us hold goes now. */
@@ -3681,6 +3823,73 @@ export class VoiceAgentProcessor extends StreamProcessor<
    * redelivery dedupe for the note whisper (see the colleague-note arm). */
   #lastInjectedNoteOffset = 0;
 
+  /**
+   * The chat recap fetched by THIS incarnation's most recent dial — read at
+   * session.update ahead of the folded copy, because the fold's append may
+   * still be in flight when the handshake completes. The fold is the
+   * durable fallback for a fresh incarnation.
+   */
+  #chatRecap: string | null = null;
+
+  /**
+   * The colleague chat's recent messages, read from its stream — a recent
+   * WINDOW walked back from the head, because getEvents pages from the
+   * front and an old chat's opening lines are not a recap. Raced against a
+   * short deadline; any failure is a missing recap, never a failed call.
+   */
+  async #fetchChatRecap(chatPath: string): Promise<string | null> {
+    try {
+      const timedOut = Symbol("recap deadline");
+      const work = this.deps.withProject(async (project) => {
+        /* Asserted, not typed: the generated client type lives in apps/os
+         * and a config-repo template cannot import it — a wrong assertion
+         * fails loudly at the RPC boundary. */
+        const stream = (
+          project as {
+            streams: {
+              get(path: string): {
+                getEventPage(input: {
+                  afterOffset: number;
+                  limit: number;
+                }): Promise<{ streamMaxOffset: number }>;
+                getEvents(input: {
+                  afterOffset: number;
+                  eventTypes: string[];
+                  limit: number;
+                }): Promise<{ type: string; payload?: Record<string, unknown> }[]>;
+              };
+            };
+          }
+        ).streams.get(chatPath);
+        const head = (await stream.getEventPage({ afterOffset: 0, limit: 1 })).streamMaxOffset;
+        const eventTypes = [
+          "events.iterate.com/agents/context-added",
+          "events.iterate.com/agents/web-message-sent",
+        ];
+        let events = await stream.getEvents({
+          afterOffset: Math.max(0, head - 2_000),
+          eventTypes,
+          limit: 400,
+        });
+        if (events.length === 0 && head > 2_000) {
+          events = await stream.getEvents({ afterOffset: 0, eventTypes, limit: 400 });
+        }
+        return chatRecapFromEvents(events);
+      });
+      const result = await Promise.race([
+        work,
+        this.deps.sleep(CHAT_RECAP_DEADLINE_MS).then(() => timedOut as unknown),
+      ]);
+      if (result === timedOut) {
+        void work.catch(() => {});
+        return null;
+      }
+      return result as string | null;
+    } catch {
+      return null;
+    }
+  }
+
   /** Where this stream's colleague lives — see colleaguePathForStream. */
   #colleaguePath(state: ProcessEventArgs<VoiceAgentContract>["state"]): string {
     return colleaguePathForStream(this.path, state.colleaguePath);
@@ -3788,7 +3997,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
          * old words forever. */
         await agent.append({
           type: "events.iterate.com/agents/context-added",
-          idempotencyKey: this.idempotencyKey("colleague-brief:v2"),
+          idempotencyKey: this.idempotencyKey("colleague-brief:v3"),
           payload: {
             content: COLLEAGUE_BRIEF,
             key: "voice-agent/colleague-brief",
@@ -3869,10 +4078,13 @@ export class VoiceAgentProcessor extends StreamProcessor<
            * and a rule three system items away loses to an instruction on
            * the line being read. See COLLEAGUE_BRIEF for the incident.
            */
+          /* The <voice-note> tag is for the chat UI (a note renders as a
+           * collapsed row, not one of the person's messages); the model
+           * reads it as the label it is. */
           await typedProject.agents
             .get(this.#colleaguePath(state))
             .message(
-              `${note}\n\n` +
+              `<voice-note>\n${note}\n</voice-note>\n\n` +
                 `(Reply with await itx.chat.sendMessage("…") on this stream — that is the ` +
                 `only channel the voice hears. The 'To reply to /agents/voice/…' routing ` +
                 `line above is wrong here: that path is not an agent; do not message it or ` +
