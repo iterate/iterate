@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: small
 branch: mobile-phase-debounce
 ---
@@ -8,8 +8,9 @@ branch: mobile-phase-debounce
 
 ## Status summary
 
-Implemented and green: hook + chat.tsx wiring, spec passes with the
-debounce in place, lint/typecheck/knip clean. Awaiting review.
+Done and merged via PR #2549: generic useDebouncedValue hook (250ms
+trailing debounce, first-value seeding), Feather icons + shared row
+geometry, all bot findings addressed.
 
 ## What
 
