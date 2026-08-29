@@ -12,7 +12,7 @@
 // key hits cache and switches back instantly — flap suppression falls out
 // of caching.
 
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 
 export function useDebouncedValue<T>(input: {
   /** Cache identity for this debounced stream (e.g. the feed item's id). */
@@ -24,10 +24,21 @@ export function useDebouncedValue<T>(input: {
   value: T;
   debounceMs: number;
 }): T {
+  const queryClient = useQueryClient();
+  const scopeKey = ["debounced-value", input.scope, input.debounceMs];
   const query = useQuery({
-    queryKey: ["debounced-value", input.scope, input.debounceMs, input.contentKey],
+    queryKey: [...scopeKey, input.contentKey],
     queryFn: async () => {
-      await new Promise((resolve) => setTimeout(resolve, input.debounceMs));
+      // The scope's FIRST value resolves instantly: nothing is displayed
+      // yet, so there's nothing to flash from — and resolving (rather than
+      // bypassing the cache) seeds keepPreviousData, so a change landing
+      // even within the first window already debounces against it.
+      const hasPrevious = queryClient
+        .getQueriesData({ queryKey: scopeKey })
+        .some(([, data]) => data !== undefined);
+      if (hasPrevious) {
+        await new Promise((resolve) => setTimeout(resolve, input.debounceMs));
+      }
       return { value: input.value };
     },
     enabled: input.contentKey !== null,
@@ -35,7 +46,7 @@ export function useDebouncedValue<T>(input: {
     placeholderData: keepPreviousData,
   });
   if (input.contentKey === null) return input.value;
-  // First value in this scope: nothing is displayed yet, so nothing can
-  // flash — show it immediately rather than holding back for the window.
+  // One frame at scope birth: the instant first resolution hasn't landed
+  // yet and there is no previous data — paint the value it will cache.
   return query.data === undefined ? input.value : query.data.value;
 }
