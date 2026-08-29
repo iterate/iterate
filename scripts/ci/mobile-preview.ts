@@ -58,7 +58,42 @@ export const easJson = (args: string[]) => {
   return JSON.parse(output.slice(start, end + 1));
 };
 
-const usableStatuses = ["NEW", "IN_QUEUE", "IN_PROGRESS", "FINISHED"];
+const inProgressStatuses = ["NEW", "IN_QUEUE", "IN_PROGRESS"];
+
+/**
+ * Bake a channel into the build profile before building.
+ *
+ * `eas build` has no `--channel` flag (eas-cli 21.0.1) and the channel must
+ * reach the binary — it ends up in Expo.plist — so CI writes the profile and
+ * lets eas-cli upload the working tree, exactly as it already does for
+ * src/build-info.json. Pure so the rewrite is testable without eas.
+ *
+ * This is only safe for the runtime version because
+ * apps/mobile/fingerprint.config.js ignores eas.json. Without that ignore the
+ * rewritten file would move the fingerprint and the resulting binary would
+ * refuse the very updates this PR publishes.
+ */
+export const easJsonWithChannel = (raw: string, profile: string, channel: string) => {
+  const parsed = JSON.parse(raw);
+  if (!parsed.build?.[profile]) {
+    throw new Error(`eas.json has no build profile "${profile}"`);
+  }
+  parsed.build[profile].channel = channel;
+  return `${JSON.stringify(parsed, null, 2)}\n`;
+};
+
+/** Run `fn` with the profile's channel rewritten, then put eas.json back —
+ * CI checkouts are ephemeral, but a restored tree keeps local runs honest. */
+const withProfileChannel = <T>(profile: string, channel: string, fn: () => T): T => {
+  const easJsonPath = path.join(mobileDir, "eas.json");
+  const original = readFileSync(easJsonPath, "utf8");
+  writeFileSync(easJsonPath, easJsonWithChannel(original, profile, channel));
+  try {
+    return fn();
+  } finally {
+    writeFileSync(easJsonPath, original);
+  }
+};
 
 /** Runtime of the newest finished preview build — what a phone can be running today. */
 export const latestInstalledRuntime = (): string | undefined => {
@@ -77,30 +112,68 @@ export const latestInstalledRuntime = (): string | undefined => {
   return builds[0]?.runtimeVersion;
 };
 
-/** A build that can run JS published for `runtime`: reuse any usable one,
- * else trigger a fresh build (--no-wait) and return it. */
-export const ensureBuildForRuntime = (runtime: string) => {
+export type InstallBuild = {
+  id: string;
+  gitCommitHash: string | undefined;
+  /** False while the build is still queued or compiling: its install page
+   * exists but has nothing to install yet, and the section says so rather
+   * than offering a link that dead-ends. */
+  finished: boolean;
+};
+
+/**
+ * A build that both runs JS published for `runtime` AND boots on `channel`.
+ *
+ * The channel half is the point: an install used to hand you a binary whose
+ * own channel was `preview` (main), so installing a PR's build ran main's JS
+ * until you went back and scanned the OTA link too. Matching on channel — and
+ * building one when nothing matches — makes the install QR mean what it says.
+ *
+ * One build per PR branch, not per push: later pushes find this build and
+ * ride OTA.
+ */
+export const ensureBuildForPr = (input: { channel: string; runtime: string }): InstallBuild => {
   const builds: any[] = easJson([
     "build:list",
     "--platform",
     "ios",
     "--build-profile",
-    "preview",
+    buildProfileForChannel(input.channel),
     "--runtime-version",
-    runtime,
+    input.runtime,
     "--limit",
     "30",
   ]);
-  let build = builds.find((b) => usableStatuses.includes(b.status));
-  if (!build) {
-    console.log(`no preview build for runtime ${runtime} — triggering one`);
-    const triggered = easJson(["build", "--platform", "ios", "--profile", "preview", "--no-wait"]);
-    build = Array.isArray(triggered) ? triggered[0] : triggered;
-  }
+  const onChannel = builds.filter((b) => b.channel === input.channel);
+  // Finished first: a queued build's install page has nothing to install.
+  const build =
+    onChannel.find((b) => b.status === "FINISHED") ||
+    onChannel.find((b) => inProgressStatuses.includes(b.status)) ||
+    triggerBuild(input);
   if (!build?.id) {
     throw new Error(`could not find or trigger an install build: ${JSON.stringify(build)}`);
   }
-  return build;
+  return {
+    id: build.id,
+    gitCommitHash: build.gitCommitHash,
+    finished: build.status === "FINISHED",
+  };
+};
+
+/** Main keeps its long-lived `preview` profile; PR channels go through
+ * `preview-pr`, whose channel this run rewrites. */
+const buildProfileForChannel = (channel: string) =>
+  channel === "preview" ? "preview" : "preview-pr";
+
+const triggerBuild = (input: { channel: string; runtime: string }) => {
+  const profile = buildProfileForChannel(input.channel);
+  console.log(
+    `no ${profile} build on channel ${input.channel} for runtime ${input.runtime} — triggering one`,
+  );
+  const triggered = withProfileChannel(profile, input.channel, () =>
+    easJson(["build", "--platform", "ios", "--profile", profile, "--no-wait"]),
+  );
+  return Array.isArray(triggered) ? triggered[0] : triggered;
 };
 
 export type PreviewPlan = {
@@ -114,6 +187,8 @@ export type PreviewPlan = {
    * directly, so QR codes encode this and skip the interstitial hop. */
   otaQrContent: string;
   installUrl: string;
+  /** The install build has finished and can actually be installed. */
+  installReady: boolean;
 };
 
 export const planPreview = (input: {
@@ -124,15 +199,17 @@ export const planPreview = (input: {
   publishedRuntime: string;
   /** Runtime of the newest FINISHED preview-profile build — what's installable today. */
   installedRuntime: string | undefined;
-  /** Install page of the build serving this update: the newest usable build
-   * whose runtime matches (may be freshly triggered). */
+  /** Install page of the build serving this update: one whose runtime AND
+   * channel match (may be freshly triggered, hence installReady). */
   installUrl: string;
+  installReady: boolean;
 }): PreviewPlan => ({
   runtimeMatchesInstalled: input.publishedRuntime === input.installedRuntime,
   channel: input.channel,
   deepLinkUrl: interstitialUrl(input.baseUrl, input.channel),
   otaQrContent: `${input.scheme}://preview-channel/${input.channel}`,
   installUrl: input.installUrl,
+  installReady: input.installReady,
 });
 
 const qrDetails = (opts: {
@@ -199,17 +276,19 @@ export const renderPreviewSection = (input: {
       }\`)`,
       qrImageUrl: input.installQrUrl,
       href: plan.installUrl,
-      caption: "Open the EAS build install page",
-      // A fresh install boots on the default channel (often running main's
-      // JS, not this PR's) — the OTA link is what points it here.
+      caption: plan.installReady
+        ? "Open the EAS build install page"
+        : "Build still running — the install page fills in when it finishes",
+      // The build is built FOR this channel, so installing it is being on
+      // this channel. No second scan, and no order to get wrong.
       note: forMain
         ? ""
-        : "Installing gets you a compatible binary on the default channel — then use the OTA link above to switch it to this PR's JS.",
+        : `This build boots on <code>${plan.channel}</code> — installing it is all you need.`,
     }),
     "",
     forMain
       ? `<sub>Posted by mobile-eas-update on merges touching apps/mobile.</sub>`
-      : `<sub>Back to main inside the app: Build info → Reset to default channel. Republishes on every push to this PR.</sub>`,
+      : `<sub>Back to main inside the app: Build info → Switch to main. Republishes on every push to this PR.</sub>`,
   ].join("\n");
 };
 

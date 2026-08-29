@@ -24,7 +24,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { router, Stack, useLocalSearchParams } from "expo-router";
+import { Stack, useLocalSearchParams } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import {
   ActionSheetIOS,
@@ -54,7 +54,6 @@ import {
 import { Markdown } from "../../../components/markdown.tsx";
 import { useDebouncedValue } from "../../../lib/use-debounced-value.ts";
 import { base64ToUint8Array, pickImages, type PickedImage } from "../../../lib/attachments.ts";
-import { SignInRequiredError } from "../../../lib/auth.ts";
 import {
   collapseConsecutiveStreamWakes,
   reduceFeed,
@@ -106,15 +105,10 @@ export default function ChatScreen() {
   const events = useLiveEvents({
     queryKey: ["thread-events", baseUrl || "", projectId, path],
     read: async () => {
-      try {
-        const project = await getProjectItx(baseUrl!, projectId);
-        return await project.streams.get(path).getEvents({});
-      } catch (error) {
-        // Redirect from the async failure, not render: render-time
-        // navigation re-fires on every re-render while the error persists.
-        if (error instanceof SignInRequiredError) router.replace("/");
-        throw error;
-      }
+      // A dead sign-in drops back to the sign-in screen from the query
+      // cache's error handler (lib/query.ts) — app-global, not per screen.
+      const project = await getProjectItx(baseUrl!, projectId);
+      return await project.streams.get(path).getEvents({});
     },
     enabled: baseUrl !== undefined,
     eventTypes: undefined,

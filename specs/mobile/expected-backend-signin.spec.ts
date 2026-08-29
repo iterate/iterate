@@ -10,7 +10,7 @@
 // The expectation is stamped into build-info.json at publish time
 // (apps/mobile/scripts/write-build-info.mjs); the web dev bundle here is
 // unstamped, so these specs seed the dev-only localStorage override
-// (apps/mobile/src/lib/build-info.ts) — same values, same code paths.
+// (apps/mobile/src/lib/build-state-core.ts) — same values, same code paths.
 //
 // The deployed-auth spec needs APP_CONFIG_BASE_URL pointing at a deployed
 // preview slot running this branch (CI's preview e2e lane always does;
