@@ -188,7 +188,7 @@ export class ProcessorFacet extends DurableObject<Env> {
       projectId: identity.projectId,
       identity,
       props: identity.props,
-      parent: () => parent(),
+      parent,
     });
     return this.#processor;
   }

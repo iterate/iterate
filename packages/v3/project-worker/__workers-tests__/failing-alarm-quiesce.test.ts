@@ -249,7 +249,20 @@ test("SCALE DROP + QUIESCE + EVICT + WAKE: a dropped connection stays dropped; t
   const evicted = await stateOf(ctx);
   expect(evicted.stubs).toBe(K - 1); // survivors' hibernatable sockets rode the eviction; k3 stayed gone
 
-  const answers = (await caller.invoke("itx.connections.each('echo', 'hi')")) as string[];
+  // fan-out = list() + map over get(key).echo (no built-in `each`); the caller owns the allSettled.
+  const keys = (
+    (await caller.invoke("itx.connections.list()")) as {
+      connectionKey?: string;
+      connectionId: string;
+    }[]
+  ).map((r) => r.connectionKey ?? r.connectionId);
+  const answers = (
+    await Promise.all(
+      keys.map((k) =>
+        caller.invoke(`itx.connections.get('${k}').echo('hi')`).catch(() => undefined),
+      ),
+    )
+  ).filter((v): v is string => v !== undefined);
   const got = new Set(answers);
   expect(answers.length).toBe(K - 1);
   for (let i = 0; i < K; i++)

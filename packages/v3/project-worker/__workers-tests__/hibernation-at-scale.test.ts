@@ -203,7 +203,20 @@ test("SCALE WAKE: after another eviction, a fan-out reaches ALL 200 clients", as
   expect(evicted.pagedIn).toBe(0);
 
   const t0 = Date.now();
-  const answers = (await callerItx.invoke("itx.connections.each('echo', 'hi')")) as string[];
+  // fan-out = list() + map over get(key).echo (no built-in `each`); the caller owns the allSettled.
+  const keys = (
+    (await callerItx.invoke("itx.connections.list()")) as {
+      connectionKey?: string;
+      connectionId: string;
+    }[]
+  ).map((r) => r.connectionKey ?? r.connectionId);
+  const answers = (
+    await Promise.all(
+      keys.map((k) =>
+        callerItx.invoke(`itx.connections.get('${k}').echo('hi')`).catch(() => undefined),
+      ),
+    )
+  ).filter((v): v is string => v !== undefined);
   const wallMs = Date.now() - t0;
   console.log(
     `SCALE WAKE: ${answers.length}/${CLIENTS} answers in ${wallMs}ms (cold fan-out: every answer paid page → stub → invoke)`,

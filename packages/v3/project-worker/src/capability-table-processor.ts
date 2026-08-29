@@ -314,7 +314,7 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
     return this.resolve(state, call, [request]);
   }
 
-  /** Pure routing (exposed for describe/debug): the winning mount or null. */
+  /** Pure routing: the winning mount for a call, or null. */
   route(
     state: State,
     call: Expression,

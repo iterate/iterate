@@ -79,9 +79,9 @@ export class ItxConnectionDirectory {
   }): Promise<{ connectionId: string; connectionKey?: string }> {
     let sessionStartedAtOffset: number | undefined;
     if (input.connectionKey) {
-      // Reconnect under the same key replaces the predecessor transport (same logical client).
-      for (const r of this.#stubs.all())
-        if (r.connectionKey === input.connectionKey) this.#stubs.drop(r.stubKey, "replaced");
+      // Same-key "newest transport wins" is enforced when the NEW pager reaches 101 (see #pageIn's
+      // drop loop) — not here, so a replacement whose relay dies before its pager opens never kills
+      // the incumbent.
       const sessionKey = `connection-session:${input.connectionKey}`;
       const open = this.#deps.kv.get(sessionKey) as ItxConnectionSessionRecord | undefined;
       if (open) {

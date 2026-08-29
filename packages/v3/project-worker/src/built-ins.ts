@@ -45,7 +45,7 @@ type FacetsView = {
 type WorkersView = {
   get(
     ref:
-      | { type: "stateless"; source: unknown; props?: Record<string, unknown> }
+      | { type: "stateless"; source: unknown }
       | { type: "stateful"; source: unknown; className: string },
   ): unknown;
 };
@@ -102,8 +102,8 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   /** PRIMITIVE — load a stateless, non-facet confined worker (kind "code"): its own isolate,
    *  no DO, no storage, `env.ITX` bound. Returns the `{ run, fetch }` handle. `source` is a
    *  producer (an itx-Expression, or `{ type:"inline", files }`), resolved by the one shared
-   *  `resolveSource` path. `props` (apps/os parity) seed the entrypoint's `ctx.props`. */
-  const statelessHandle = (source: WorkerSource, props?: Record<string, unknown>) => {
+   *  `resolveSource` path. */
+  const statelessHandle = (source: WorkerSource) => {
     const entrypoint = async () => {
       const modules = await resolveSource(deps.invoke, source, "workers.get");
       const worker = confinedWorker(
@@ -113,9 +113,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         { "run.js": CODE_CAP_RUNNER, "processor.js": PROCESSOR_SDK_MODULE, ...modules },
         itxEntrypointFor(deps.hostCtx, contextName),
       );
-      return (props !== undefined
-        ? worker.getEntrypoint(undefined, { props })
-        : worker.getEntrypoint()) as unknown as {
+      return worker.getEntrypoint() as unknown as {
         run(...a: unknown[]): Promise<unknown>;
         fetch(r: Request): Promise<Response>;
       };
@@ -141,7 +139,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           return deps.statefulWorkers.invoke({ source, className }, segments, args);
         });
       }
-      return statelessHandle(ref.source as WorkerSource, ref.props);
+      return statelessHandle(ref.source as WorkerSource);
     },
   };
 
