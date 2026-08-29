@@ -442,7 +442,13 @@ export class StreamDurableObject extends DurableObject<Env> {
    *  layer over the hibernatable RPC stubs (see itx-connection-directory.ts). */
   readonly #itxConnections = new ItxConnectionDirectory({
     hooks: {
-      acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
+      acceptWebSocket: (ws, tags) => {
+        this.ctx.acceptWebSocket(ws, tags);
+        // Auto-"pong" the edge relay's 30s keepalive "ping" at the RUNTIME level — the message
+        // never reaches a handler, so it keeps the pager socket warm (defeats the ~100s idle-close)
+        // WITHOUT waking the DO, leaving hibernation intact. Reconnect still backs a hard drop.
+        this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
+      },
       getWebSockets: (tag) => this.ctx.getWebSockets(tag),
     },
     kv: {

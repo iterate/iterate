@@ -278,6 +278,16 @@ export async function openStubPagerWebSocket(
   if (!response.webSocket)
     throw new Error(`stub pager upgrade returned ${response.status} without a WebSocket`);
   response.webSocket.accept();
+  // Keep this leg warm: a 30s "ping" the DO auto-"pong"s via setWebSocketAutoResponse WITHOUT
+  // waking it — defeats the ~100s idle-close and keeps the /api isolate warm. Dies with the isolate.
+  const keepalive = setInterval(() => {
+    try {
+      response.webSocket!.send("ping");
+    } catch {
+      clearInterval(keepalive);
+    }
+  }, 30_000);
+  response.webSocket.addEventListener("close", () => clearInterval(keepalive));
   response.webSocket.addEventListener("message", (event: MessageEvent) => {
     if (typeof event.data !== "string") return;
     try {
