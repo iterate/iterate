@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: large
 ---
 
@@ -7,7 +7,8 @@ size: large
 
 ## Status
 
-Both halves implemented on `mobile-build-state`
+Done, pending merge. Deferred bits are recorded below (app-config extra
+stamping; the on-hold merge-time QR swap). Implemented on `mobile-build-state`
 ([#2542](https://github.com/iterate/iterate/pull/2542)). Done: the module and
 its 11 unit tests, the app-global session, the rewritten Build info and QR
 screens, the update banner, per-PR builds with the channel baked in, and the
