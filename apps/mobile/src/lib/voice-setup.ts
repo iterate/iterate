@@ -49,7 +49,10 @@ export const voiceAgentEntrypointRef = {
  * 60s idle).
  */
 export const MOBILE_VOICE_SETUP = {
-  instructions: "You are Iterate, a voice assistant on a phone. Keep replies short and natural.",
+  instructions:
+    "You are Iterate, on a phone call with a colleague who knows you well. Casual, " +
+    "direct, brief — never customer-service polish. Greet in a couple of words ('hey', " +
+    "'hi again'), answer in plain short sentences, acknowledge in two or three words.",
   clientTakesTurns: true,
   colleague: true,
   /** The phone rings, so the other end picks up (facet 17.0.0): the model
@@ -78,11 +81,10 @@ export function voiceSetupConfig(colleaguePath: string | null): Record<string, u
 }
 
 /** Bump to force one re-setup on every device after changing the setup
- * semantics in a way the config hash alone would not capture (marker v5:
- * the transcript lane's transform grew <voice-turn> tags — setup's
- * content-hash key changes, and only a re-run replaces the installed
- * subscription). */
-const SETUP_MARKER_VERSION = 5;
+ * semantics in a way the config hash alone would not capture. v6: the
+ * colleague-casual instructions ride the certificate, so existing lines
+ * need one re-assert. */
+const SETUP_MARKER_VERSION = 6;
 
 /** FNV-1a over the exact payload we would send — pure, no crypto import, and
  * two devices/app-versions agree iff they would send identical setups. */

@@ -78,6 +78,8 @@ import { InThreadApprovalCard } from "../../../components/in-thread-approval.tsx
 import { VoiceCallChatButton } from "../../../components/voice-call-button.tsx";
 import { useClaimReplyPresented } from "../../../lib/reply-presented.ts";
 import { useLiveEvents } from "../../../lib/use-live-events.ts";
+import { getActiveCall } from "../../../lib/voice-call-session.ts";
+import { useVoiceCallActive, useVoiceCallTarget } from "../../../lib/voice-call-state.ts";
 import { parseVoiceMarkup } from "../../../lib/voice-markup.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
 import { getServerBaseUrl } from "../../../lib/storage.ts";
@@ -156,8 +158,18 @@ export default function ChatScreen() {
       setTimeout(() => copyStreamUrl.reset(), 1_800);
     },
   });
+  const callActive = useVoiceCallActive();
+  const callTarget = useVoiceCallTarget();
   const send = useMutation({
     mutationFn: async (input: { message: string; files: PickedImage[] }) => {
+      /* Typing to the chat you are CALLING is switching modalities: hang
+       * up first, or the still-live voice narrates every reply into your
+       * pocket and sprays spoken-turn copies through this thread
+       * (observed 2026-08-29 — the "hang up" had only minimised the
+       * sheet, and the call ran on until the idle reaper). */
+      if (callActive && callTarget?.colleaguePath === path) {
+        await getActiveCall()?.hangUp();
+      }
       const project = await getProjectItx(baseUrl!, projectId);
       const agent = project.agents.get(path) as RpcStub<Agent>;
       // create() is idempotent (its birth events carry deterministic

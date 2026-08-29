@@ -720,13 +720,15 @@ const FAST_HALF_INSTRUCTIONS = [
   "something failed or stalled, SAY SO — never invent an explanation for a delay or a",
   "result you have not seen.",
   "",
+  "TONE: you are talking with a colleague who knows you well — casual, direct, brief.",
+  "Never sound like customer service: no 'nice to hear your voice', no 'how can I assist',",
+  "no sign-off patter. Acknowledgements are two or three words ('sent it', 'on it').",
+  "",
   "Sometimes you get the floor right after a status arrives, with no question pending.",
-  "That is your chance to keep the person in the loop — use judgement. If the status is",
-  "news worth hearing ('running the code now', 'that script failed'), say it in ONE short",
-  "sentence, then stop. If it adds nothing the person would care about, a couple of words",
-  "or nothing at all is better than filler. Never pad, never speculate past the status,",
-  "and never let progress commentary delay a real answer: if the answer itself has",
-  "arrived, deliver that instead.",
+  "That is a progress ping, not a speech: a FEW WORDS — 'running the code', 'still going',",
+  "'a script failed'. Never pad ('if anything comes through, we'll hear it' is noise),",
+  "never re-say the previous status in new words, never speculate past what the status",
+  "says. And if the real answer has arrived, skip the commentary and say THAT.",
   "",
   "You can send follow-up notes at ANY time — to nudge, refine, add detail, or cancel.",
   "Nudge WITHOUT being asked: if the person is waiting and the statuses have gone quiet,",
@@ -1517,6 +1519,14 @@ export type VoiceAgentContract = typeof VoiceAgentContract;
  */
 interface Answer {
   /**
+   * What drew this response: a person's turn, or one of the facet's own
+   * follow-ups. "status" answers are progress commentary and OUTRANKED by
+   * the real thing — a colleague note arriving mid-status cancels them
+   * (measured 2026-08-29: two waffly status lines played out in full while
+   * the found answer waited behind them).
+   */
+  kind: "turn" | "status" | "note" | "tool";
+  /**
    * The provider's identity for the answer now playing, beside the two
    * clocks a truthful interruption needs (`receivedMs`, `sentMs`). On a
    * barge, `conversation.item.truncate` gets heard-ms (sent minus what the
@@ -1612,6 +1622,7 @@ interface Repair {
 
 /** The between-answers state: nothing playing, nothing owed. */
 const freshAnswer = (): Answer => ({
+  kind: "turn",
   itemId: null,
   contentIndex: 0,
   receivedMs: 0,
@@ -1843,6 +1854,14 @@ interface Dial {
    * the wipe stays for those.
    */
   followUpResponsePending: boolean;
+  /** Which lane asked for the pending follow-up — stamped onto the answer
+   * at response.created so the note-barge can tell commentary from
+   * conversation. */
+  followUpKind: "status" | "note" | "tool";
+  /** A colleague note cancelled a streaming STATUS answer; its
+   * response.done is the cue to create the note's response (creating
+   * before the provider settles the cancelled one is an error). */
+  statusAnswerCancelled: boolean;
   /**
    * The model decided the call is over; settle at the drain point, after the
    * goodbye PLAYS. v1's instant version was measured cutting "Goodbye!"
@@ -1903,6 +1922,8 @@ const freshDial = (
   pendingRepair: null,
   openToolCallIds: new Set(),
   followUpResponsePending: false,
+  followUpKind: "tool",
+  statusAnswerCancelled: false,
   hangUpAfterAnswerDrains: null,
   lastColleagueActivity: null,
   lastStatusSpokenAtMs: null,
@@ -2556,6 +2577,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
           /* The follow-up lane, not a barge: the previous answer's tail may
            * still be draining and must finish playing. */
           dial.followUpResponsePending = true;
+          dial.followUpKind = "status";
           this.#sendControl(dial, { type: "response.create" }, append);
         }
         return;
@@ -2619,7 +2641,22 @@ export class VoiceAgentProcessor extends StreamProcessor<
           !dial.followUpResponsePending
         ) {
           dial.followUpResponsePending = true;
+          dial.followUpKind = "note";
           this.#sendControl(dial, { type: "response.create" }, append);
+        } else if (dial.answer.phase === "streaming" && dial.answer.kind === "status") {
+          /* THE ANSWER OUTRANKS ITS OWN PROGRESS COMMENTARY: cut the
+           * status line mid-word (cancel + silence the device) and speak
+           * the note the moment the provider settles the cancelled
+           * response — creating before its response.done is a provider
+           * error, so the done arm below finishes the job. A PERSON's
+           * answer is never cut this way; only the facet's own commentary
+           * is interruptible (measured 2026-08-29: two full status lines
+           * played out while the found answer waited behind them). */
+          this.#dropAnswerInFlight(dial, this.deps.nowAtFacetMs(), append);
+          dial.answer.endsWhenQueueDrains = false;
+          this.#sendControl(dial, { type: "response.cancel" }, append);
+          dial.statusAnswerCancelled = true;
+          dial.pendingNoteResponse = true;
         } else {
           /* ALWAYS pend when we did not create. The note item goes out
            * AFTER any in-flight response.create, so it never rides that
@@ -3079,9 +3116,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
                       {
                         type: "input_text",
                         text:
-                          "[the call just connected — greet the person briefly, a few words. " +
-                          "If the conversation record above shows you have spoken before, greet " +
-                          "them like the returning caller they are.]",
+                          "[the call just connected — say hi in a FEW WORDS, like a colleague " +
+                          "picking up: 'hey', 'hi again'. No welcome speech, no 'nice to hear " +
+                          "your voice', no menu of offers. If the record above shows history, " +
+                          "one short beat of continuity is plenty.]",
                       },
                     ],
                   },
@@ -3252,6 +3290,9 @@ export class VoiceAgentProcessor extends StreamProcessor<
               this.#confirmTentativeOnset(dial, append);
             }
             dial.answer = freshAnswer();
+            dial.answer.kind = followUp ? dial.followUpKind : "turn";
+            /* A new answer supersedes any cancelled-status bookkeeping. */
+            dial.statusAnswerCancelled = false;
             dial.answer.phase = "streaming";
             dial.answer.startedAtFacetMs = receivedAtFacetMs;
             /* A new answer is a new signal; without this, the filter's
@@ -3453,12 +3494,15 @@ export class VoiceAgentProcessor extends StreamProcessor<
              * floor, and the note waits for their turn to finish. */
             if (
               dial.pendingNoteResponse &&
-              dial.answer.phase === "settled" &&
+              (dial.answer.phase === "settled" ||
+                (dial.answer.phase === "cancelled" && dial.statusAnswerCancelled)) &&
               dial.openToolCallIds.size === 0 &&
               dial.hangUpAfterAnswerDrains === null
             ) {
               dial.pendingNoteResponse = false;
+              dial.statusAnswerCancelled = false;
               dial.followUpResponsePending = true;
+              dial.followUpKind = "note";
               this.#sendControl(dial, { type: "response.create" }, append);
             }
             return;
@@ -3860,6 +3904,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
          * preamble is usually still sitting unplayed there. See
          * `followUpResponsePending`. */
         dial.followUpResponsePending = true;
+        dial.followUpKind = "tool";
         this.#sendControl(dial, { type: "response.create" }, append);
       }
     });

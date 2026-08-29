@@ -1716,6 +1716,69 @@ describe("tools on the birth certificate", () => {
   });
 
   /*
+   * THE ANSWER OUTRANKS THE COMMENTARY. A status line the facet drew is
+   * progress ping, not conversation — when the real note lands mid-status,
+   * the status is cancelled (device silenced) and the note speaks the
+   * moment the provider settles the cancelled response. A PERSON's answer
+   * is never cut this way.
+   */
+  it("a note barges the facet's own status line, never a real answer", async () => {
+    const h = makeHarness();
+    await h.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: {
+        providerBaseUrl: "https://fake.provider.test/v1/realtime",
+        provider: "grok",
+        clientTakesTurns: CLIENT_TAKES_TURNS,
+      },
+    });
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
+
+    /* A newsworthy status draws a spoken line; the provider starts it. */
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-status",
+      payload: { activity: "reading the ledger" },
+    });
+    await h.settle();
+    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
+    h.provider.responseCreated();
+    h.provider.answerAudio(200);
+    await h.settle();
+
+    /* Mid-status, the actual answer lands: the status is cancelled... */
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-note",
+      payload: { text: "The ledger totals £4,120." },
+    });
+    await h.settle();
+    expect(h.provider.sentOfType("response.cancel")).toHaveLength(1);
+    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
+    /* ...and the note speaks as soon as the cancelled response settles. */
+    h.provider.push({ type: "response.done" });
+    await h.settle();
+    expect(h.provider.sentOfType("response.create")).toHaveLength(2);
+
+    /* Only status commentary is interruptible: a second note arriving
+     * while the NOTE answer streams pends instead of cancelling. */
+    h.provider.responseCreated();
+    h.provider.answerAudio(200);
+    await h.settle();
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-note",
+      payload: { text: "One more thing — the March total was higher." },
+    });
+    await h.settle();
+    expect(h.provider.sentOfType("response.cancel")).toHaveLength(1);
+    h.provider.answerComplete();
+    await h.settle();
+    /* Spoken after the answer finishes, not through it. */
+    expect(h.provider.sentOfType("response.create")).toHaveLength(3);
+  });
+
+  /*
    * A BROKEN DESK IS NEWS, NOT SILENCE. The link and the note dispatch
    * used to swallow their failures whole; a caller then heard "it's
    * picking up the note" forever while four notes in a row went nowhere,
