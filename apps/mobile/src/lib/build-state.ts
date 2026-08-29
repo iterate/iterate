@@ -89,11 +89,16 @@ async function setChannelOverride(channel: string | null) {
   } else {
     await AsyncStorage.removeItem(OVERRIDE_KEY);
   }
-  // Every write keeps the cached read honest — including the install guard's
-  // clear, which runs outside any mutation while the banner's read may
-  // already have landed with the old value.
-  void queryClient.invalidateQueries({ queryKey: overrideKey });
 }
+
+// Deliberately NOT invalidated inside setChannelOverride: the switch
+// mutation writes the override and only THEN checks/fetches/reloads, and a
+// mid-flight cache refresh makes the QR screen treat the switch as already
+// done — arming its freshness pull as a concurrent second check whose throw
+// would revert a perfectly good switch through the error path. Instead the
+// two effectful boundaries invalidate when they settle: the switch mutation
+// (below) and the install guard's clear.
+const invalidateChannelOverride = () => queryClient.invalidateQueries({ queryKey: overrideKey });
 
 // One-shot marker: the user tapped "Switch to <channel>", which already says
 // "run this PR's JS against its backend as its identity" — the confirm screen
@@ -137,7 +142,12 @@ export async function resetChannelOverrideForNewInstall(): Promise<{
   await AsyncStorage.setItem(LAST_SEEN_INSTALL_KEY, id);
   if (seen === null) return nothing;
   const override = await getChannelOverride();
-  if (override) await setChannelOverride(null);
+  if (override) {
+    await setChannelOverride(null);
+    // The banner's read races this guard and may have landed with the old
+    // value; the guard has no mutation wrapper, so it refreshes here.
+    await invalidateChannelOverride();
+  }
   return { binaryChanged: true, clearedOverride: override };
 }
 
@@ -318,13 +328,16 @@ export function useBuildActions(): BuildActions {
       }
       return result === "up-to-date" ? ("no-update" as const) : result;
     },
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: overrideKey });
+    // Settled, not success: the error path REVERTED the override, and the
+    // cache must reflect that too.
+    onSettled: (_data, error) => {
+      void invalidateChannelOverride();
       // The cached check verdict described the OLD channel; drop it rather
       // than let Build info report the wrong channel's freshness. (Remove,
       // not invalidate: on an unwatched build nothing would refetch, and
-      // stale-but-displayed is exactly the bug.)
-      queryClient.removeQueries({ queryKey: checkKey });
+      // stale-but-displayed is exactly the bug.) Not on error — the override
+      // was restored, so the old verdict still describes the live channel.
+      if (!error) queryClient.removeQueries({ queryKey: checkKey });
     },
   });
   const updateNow = useMutation({
