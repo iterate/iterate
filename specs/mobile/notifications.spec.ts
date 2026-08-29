@@ -222,23 +222,7 @@ test("the approval push is suppressed in the watched thread and sent when you're
     // interrupted whoever was reading the thread.
     await page.goBack();
     await page.getByLabel("Open project menu").filter({ visible: true }).click();
-    // The drawer slides in over ~180ms and the press works mid-slide — but
-    // clicking then bakes a half-open drawer into the recording (video-mode
-    // freezes the click-moment screenshot under its synthetic pointer, which
-    // reads as a clipped drawer to a reviewer). The product is fine: given a
-    // beat, the panel settles at translateX(0) at this exact viewport. Wait
-    // for the item to stop moving before pressing.
-    const notificationsItem = page.getByRole("button", { name: "/notifications" });
-    await notificationsItem.waitFor();
-    await expect
-      .poll(async () => {
-        const before = (await notificationsItem.boundingBox())!.x;
-        await page.waitForTimeout(120);
-        const after = (await notificationsItem.boundingBox())!.x;
-        return after - before;
-      })
-      .toBe(0);
-    await notificationsItem.click();
+    await page.getByRole("button", { name: "/notifications" }).click();
     await page.getByText("Skipped — already on screen").waitFor();
     // The orphan batch is already here — nothing on this device's stream
     // mentions it, so its row is the synthetic one, riding in from the

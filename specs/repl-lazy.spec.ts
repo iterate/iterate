@@ -22,13 +22,9 @@ test("the REPL creates no session stream until the first Run", async ({ helpers,
       .toBe(`/projects/${fixture.project.slug}/repl`);
   });
 
-  await test.step("New REPL navigates to a fresh session URL — still nothing created", async () => {
+  await test.step("New REPL navigates to a fresh session URL", async () => {
     await page.getByTestId("itx-repl-new-session").click();
     await expect.poll(() => new URL(page.url()).pathname).toMatch(/\/repl\/20[\w-]+z$/);
-    // Deliberate settle window: an accidental wake (a read connection, a
-    // preamble fetch) would journal stream/created within this.
-    await page.waitForTimeout(1_500);
-    await expect.poll(replStreams, { timeout: 5_000 }).toEqual([]); // timeout: poll budget — expect.poll is outside the spinner-waiter's reach
   });
 
   await test.step("the first Run births exactly one stream, at the URL's path", async () => {

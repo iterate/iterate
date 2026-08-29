@@ -13,10 +13,10 @@ import { test } from "./test-support/test.ts";
 // the view's source, factory refresh on re-acquire, a dial deadline, and
 // resetTransport eviction for the half-open lane.
 //
-// Assertions ride window.__streamRuntimeDebug() (stream-browser-store.ts's
-// debug registry) — transport-level truth, immune to UI-layer noise.
+// Assertions are user-visible: a chat message appended server-side (the same
+// events.iterate.com/agents/web-message-sent that itx.chat.sendMessage
+// appends) must paint as a feed row.
 
-const MARKER_EVENT_TYPE = "events.iterate.test/spec/suspend-marker";
 const WEB_MESSAGE_SENT = "events.iterate.com/agents/web-message-sent";
 // This is the failure stimulus, not a recovery budget. The test arms an
 // in-page timer immediately before CDP suspends script execution and verifies
@@ -42,42 +42,23 @@ const RECOVERY_DELIVERY_MS = 90_000;
 
 test("control: appended event is delivered to a live stream feed", async ({ helpers, page }) => {
   await using fixture = await helpers.createFixture("suspend-control");
-  const consoleLines = captureStreamConsole(page);
-
   const agent = await fixture.createAgent();
 
   await page.goto(agent.webUrl);
-  const keys = runtimeDebugKeys(fixture.project.id, agent.path);
-  await waitForSubscribed(page, keys);
-
-  const [marker] = await agent.stream.append({
-    type: MARKER_EVENT_TYPE,
-    payload: { marker: "control" },
-  });
-  const { delivered, snapshot } = await pollDelivered(
-    page,
-    keys,
-    marker!.offset,
-    HEALTHY_DELIVERY_MS,
-  );
-  dumpEvidence("control", snapshot, consoleLines);
-  // oxlint-disable-next-line iterate/spec-restricted-syntax -- deliberate suspend-repro probe: pollDelivered() never throws so the evidence dump above always runs; the boolean verdict is asserted here with the diagnostic message.
-  expect(
-    delivered,
-    `marker at offset ${marker!.offset} should be delivered to a healthy subscription`,
-  ).toBe(true);
+  await agent.stream.append({ type: WEB_MESSAGE_SENT, payload: { message: "marker: control" } });
+  await page.getByText("marker: control").waitFor({ timeout: HEALTHY_DELIVERY_MS }); // timeout: fresh-stream first delivery can stall into the ~10s probe self-heal — no spinner in a push-only feed for the spinner-waiter to extend
 });
 
 test("feed resumes after the /api WebSocket dies (clean close)", async ({ helpers, page }) => {
   await using fixture = await helpers.createFixture("suspend-socket");
   await installSocketKillSwitch(page);
-  const consoleLines = captureStreamConsole(page);
-
   const agent = await fixture.createAgent();
 
   await page.goto(agent.webUrl);
-  const keys = runtimeDebugKeys(fixture.project.id, agent.path);
-  await waitForSubscribed(page, keys);
+  await test.step("prove the live feed delivers before the stimulus", async () => {
+    await agent.stream.append({ type: WEB_MESSAGE_SENT, payload: { message: "marker: baseline" } });
+    await page.getByText("marker: baseline").waitFor({ timeout: HEALTHY_DELIVERY_MS }); // timeout: same fresh-stream first-delivery window as the control test — push-only feed gap, no spinner for the spinner-waiter
+  });
 
   // Kill the itx transport from inside the page — the "close event delivered"
   // lane (mobile Safari suspend, proxy idle timeout, …). The itx socket map
@@ -88,26 +69,18 @@ test("feed resumes after the /api WebSocket dies (clean close)", async ({ helper
   console.log(`closed sockets: ${JSON.stringify(closed)}`);
   expect(closed.length, "expected at least one live /api WebSocket to close").toBeGreaterThan(0);
 
-  // Append immediately: delivery is the recovery invariant, so polling it
-  // covers however many liveness-probe intervals the runtime actually needs
-  // without paying a guessed probe delay before starting the real assertion.
-  const [marker] = await test.step("clean close: append recovery marker", () =>
-    agent.stream.append({
-      type: MARKER_EVENT_TYPE,
-      payload: { marker: "after-socket-death" },
-    }));
-  const { delivered, snapshot } =
-    await test.step("clean close: redial and deliver a new stream event", () =>
-      pollDelivered(page, keys, marker!.offset, RECOVERY_DELIVERY_MS));
-  dumpEvidence("after socket death", snapshot, consoleLines);
-  // The historical wedge: runtimes stuck in connectionStatus "reconnecting"
-  // with connectionError "connect failed: Peer closed WebSocket: 1005"
-  // forever, dialing through the dead mount-time capnweb session.
-  // oxlint-disable-next-line iterate/spec-restricted-syntax -- deliberate suspend-repro probe: pollDelivered() never throws so the evidence dump above always runs; the boolean verdict is asserted here with the diagnostic message.
-  expect(
-    delivered,
-    `marker at offset ${marker!.offset} should be delivered after the browser re-dials /api — see the __streamRuntimeDebug dump above for the reconnect wedge`,
-  ).toBe(true);
+  // Append immediately: painting the message is the recovery invariant, so
+  // waiting on it covers however many liveness-probe intervals the runtime
+  // actually needs without paying a guessed probe delay first. The historical
+  // wedge: runtimes stuck reconnecting through the dead mount-time capnweb
+  // session forever — the feed never showed another message until reload.
+  await test.step("clean close: redial and deliver a new stream event", async () => {
+    await agent.stream.append({
+      type: WEB_MESSAGE_SENT,
+      payload: { message: "marker: after-socket-death" },
+    });
+    await page.getByText("marker: after-socket-death").waitFor({ timeout: RECOVERY_DELIVERY_MS }); // timeout: bounded recovery window (probe strikes + eviction + fresh dial, see RECOVERY_DELIVERY_MS note) — push-only feed gap, no spinner for the spinner-waiter
+  });
 });
 
 test("feed resumes after page freeze + socket death (mobile suspend shape)", async ({
@@ -117,13 +90,13 @@ test("feed resumes after page freeze + socket death (mobile suspend shape)", asy
   await using fixture = await helpers.createFixture("suspend-freeze");
   await installSocketKillSwitch(page);
   await installSuspendTimerProbe(page);
-  const consoleLines = captureStreamConsole(page);
-
   const agent = await fixture.createAgent();
 
   await page.goto(agent.webUrl);
-  const keys = runtimeDebugKeys(fixture.project.id, agent.path);
-  await waitForSubscribed(page, keys);
+  await test.step("prove the live feed delivers before the stimulus", async () => {
+    await agent.stream.append({ type: WEB_MESSAGE_SENT, payload: { message: "marker: baseline" } });
+    await page.getByText("marker: baseline").waitFor({ timeout: HEALTHY_DELIVERY_MS }); // timeout: same fresh-stream first-delivery window as the control test — push-only feed gap, no spinner for the spinner-waiter
+  });
 
   // Mobile suspend ≈ suspended page script + the OS reaping the TCP
   // connection. This lane covers the close-event-delivered shape; the dedicated
@@ -146,6 +119,9 @@ test("feed resumes after page freeze + socket death (mobile suspend shape)", asy
       (window as unknown as { __armSuspendTimerProbe: () => void }).__armSuspendTimerProbe(),
     );
     await cdp.send("Emulation.setScriptExecutionDisabled", { value: true });
+    // This sleep IS the suspend stimulus: wall-clock passing while the page
+    // is frozen (scripts disabled), so there is no UI to wait on.
+    // timeout: the stimulus itself — nothing for the spinner-waiter here
     await page.waitForTimeout(SUSPEND_STIMULUS_MS);
     await page.context().setOffline(false);
     await cdp.send("Emulation.setScriptExecutionDisabled", { value: false });
@@ -171,26 +147,18 @@ test("feed resumes after page freeze + socket death (mobile suspend shape)", asy
   });
 
   // Going back online lets the runtime's resume check fire; its periodic probe
-  // remains the fallback.
-  // Append immediately and wait on durable delivery so
-  // a healthy runtime finishes when it heals, while the historical permanent
-  // wedge still consumes the full bounded recovery window and fails.
-  const [marker] = await test.step("thaw: append recovery marker", () =>
-    agent.stream.append({
-      type: MARKER_EVENT_TYPE,
-      payload: { marker: "after-freeze" },
-    }));
-  const { delivered, snapshot } =
-    await test.step("thaw: redial and deliver a new stream event", () =>
-      pollDelivered(page, keys, marker!.offset, RECOVERY_DELIVERY_MS));
-  dumpEvidence("after freeze", snapshot, consoleLines);
-  // Historically the same wedge as the clean-close test — the frozen window
-  // only delayed when the liveness probe noticed.
-  // oxlint-disable-next-line iterate/spec-restricted-syntax -- deliberate suspend-repro probe: pollDelivered() never throws so the evidence dump above always runs; the boolean verdict is asserted here with the diagnostic message.
-  expect(
-    delivered,
-    `marker at offset ${marker!.offset} should be delivered after the page thaws — see the __streamRuntimeDebug dump above for the reconnect wedge`,
-  ).toBe(true);
+  // remains the fallback. Append immediately and wait on the painted row so a
+  // healthy runtime finishes when it heals, while the historical permanent
+  // wedge (same as the clean-close test — the frozen window only delayed when
+  // the liveness probe noticed) still consumes the full bounded recovery
+  // window and fails.
+  await test.step("thaw: redial and deliver a new stream event", async () => {
+    await agent.stream.append({
+      type: WEB_MESSAGE_SENT,
+      payload: { message: "marker: after-freeze" },
+    });
+    await page.getByText("marker: after-freeze").waitFor({ timeout: RECOVERY_DELIVERY_MS }); // timeout: bounded recovery window (probe strikes + eviction + fresh dial, see RECOVERY_DELIVERY_MS note) — push-only feed gap, no spinner for the spinner-waiter
+  });
 });
 
 test("feed resumes after the /api WebSocket goes half-open (no close frame)", async ({
@@ -203,8 +171,6 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
   test.setTimeout(360_000);
   await using fixture = await helpers.createFixture("suspend-halfopen");
   await installSocketKillSwitch(page);
-  const consoleLines = captureStreamConsole(page);
-
   const agent = await fixture.createAgent();
   // A standing responder, not setOnce: this test drives TWO turns — the primer
   // below, and the mid-outage send further down that must eventually land.
@@ -214,8 +180,6 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
   await agent.message("Reply with exactly: ready");
 
   await page.goto(agent.webUrl);
-  const keys = runtimeDebugKeys(fixture.project.id, agent.path);
-  await waitForSubscribed(page, keys);
 
   // The composer initially renders a Send button before the initial reply's
   // activity reaches the browser. Waiting on that button alone can therefore
@@ -299,28 +263,16 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
       )
       .toBe(0);
   });
-  console.log("--- after half-open probe window ---");
-  console.log(JSON.stringify(await readDebugSnapshot(page), null, 2));
-
-  const [marker] = await agent.stream.append({
-    type: MARKER_EVENT_TYPE,
-    payload: { marker: "after-half-open" },
-  });
-  const { delivered, snapshot } = await pollDelivered(
-    page,
-    keys,
-    marker!.offset,
-    RECOVERY_DELIVERY_MS,
-  );
-  dumpEvidence("after half-open", snapshot, consoleLines);
   // Historically the WORST wedge: connect() had no dial deadline, so the
   // runtime parked forever awaiting a stub on the muted session — not even a
-  // reconnect timer armed.
-  // oxlint-disable-next-line iterate/spec-restricted-syntax -- deliberate suspend-repro probe: pollDelivered() never throws so the evidence dump above always runs; the boolean verdict is asserted here with the diagnostic message.
-  expect(
-    delivered,
-    `marker at offset ${marker!.offset} should be delivered after the transport is evicted and re-dialed — see the __streamRuntimeDebug dump above`,
-  ).toBe(true);
+  // reconnect timer armed. The feed never showed another message until reload.
+  await test.step("half-open: redial and deliver a new stream event", async () => {
+    await agent.stream.append({
+      type: WEB_MESSAGE_SENT,
+      payload: { message: "marker: after-half-open" },
+    });
+    await page.getByText("marker: after-half-open").waitFor({ timeout: RECOVERY_DELIVERY_MS }); // timeout: bounded recovery window (probe strikes + eviction + fresh dial, see RECOVERY_DELIVERY_MS note) — push-only feed gap, no spinner for the spinner-waiter
+  });
 
   // The user's half of the story: the stranded mid-outage send must SETTLE —
   // either it landed, or it rejected (composer re-enables, draft retained) and
@@ -381,57 +333,6 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
     )
     .toBeLessThanOrEqual(socketsBaseline);
 });
-
-// The stream view mounts ONE browser mirror runtime on the agent stream — it
-// downloads once and fans out to the canonical processors (raw events cache +
-// feed projector). Its debug-registry key is `${projectId} ${streamPath}
-// browser-stream-processors` (stream-browser-store.ts).
-function runtimeDebugKeys(projectId: string, agentPath: string) {
-  return [`${projectId} ${agentPath} browser-stream-processors`];
-}
-
-type RuntimeDebug = {
-  connectionStatus?: string;
-  connectionError?: string;
-  lastDeliveredOffset?: number;
-  [key: string]: unknown;
-};
-type DebugSnapshot = Record<string, RuntimeDebug>;
-
-function readDebugSnapshot(page: Page): Promise<DebugSnapshot> {
-  return page.evaluate(() => {
-    const read = (window as { __streamRuntimeDebug?: () => Record<string, unknown> })
-      .__streamRuntimeDebug;
-    return (typeof read === "function" ? read() : {}) as DebugSnapshot;
-  });
-}
-
-async function waitForSubscribed(page: Page, keys: string[], timeoutMs = 90_000) {
-  const deadline = Date.now() + timeoutMs;
-  let last: DebugSnapshot = {};
-  for (;;) {
-    last = await readDebugSnapshot(page);
-    if (keys.every((key) => last[key]?.connectionStatus === "receiving-events")) return last;
-    if (Date.now() > deadline) {
-      throw new Error(
-        `Timed out waiting for runtimes ${keys.join(", ")} to reach "receiving-events". Last __streamRuntimeDebug:\n${JSON.stringify(last, null, 2)}`,
-      );
-    }
-    await page.waitForTimeout(500);
-  }
-}
-
-/** Poll until every runtime's lastDeliveredOffset reaches `offset`. Never throws. */
-async function pollDelivered(page: Page, keys: string[], offset: number, timeoutMs: number) {
-  const deadline = Date.now() + timeoutMs;
-  let last: DebugSnapshot = {};
-  for (;;) {
-    last = await readDebugSnapshot(page);
-    const delivered = keys.every((key) => (last[key]?.lastDeliveredOffset ?? -1) >= offset);
-    if (delivered || Date.now() > deadline) return { delivered, snapshot: last };
-    await page.waitForTimeout(1_000);
-  }
-}
 
 function installSuspendTimerProbe(page: Page) {
   return page.addInitScript(() => {
@@ -598,23 +499,4 @@ function readSuspendTimerEvidence(page: Page) {
     if (!evidence) throw new Error("suspend timer evidence was not installed before navigation");
     return evidence;
   });
-}
-
-/** The store logs its reconnect decisions under "[stream …]"; keep them as evidence. */
-function captureStreamConsole(page: Page) {
-  const lines: string[] = [];
-  page.on("console", (message) => {
-    const text = message.text();
-    if (text.includes("[stream") || text.includes("[vite]")) {
-      lines.push(`${new Date().toISOString()} ${message.type()}: ${text}`);
-    }
-  });
-  return lines;
-}
-
-function dumpEvidence(label: string, snapshot: DebugSnapshot, consoleLines: string[]) {
-  console.log(`--- ${label}: __streamRuntimeDebug() ---`);
-  console.log(JSON.stringify(snapshot, null, 2));
-  console.log(`--- ${label}: [stream …] console lines ---`);
-  console.log(consoleLines.join("\n") || "(none)");
 }
