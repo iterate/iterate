@@ -207,7 +207,7 @@ const styles = StyleSheet.create({
   },
   newChatGrow: { flex: 1 },
   newCall: {
-    backgroundColor: "#1da851",
+    backgroundColor: colors.text,
     borderRadius: radius.md,
     alignItems: "center",
     justifyContent: "center",
