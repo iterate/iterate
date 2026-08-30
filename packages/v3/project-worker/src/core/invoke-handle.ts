@@ -1,5 +1,5 @@
 // core/invoke-handle.ts — a GENUINE, pipelinable RpcTarget for a MID-CHAIN capability handle
-// (`connections.get(key)`, `facets.get(slug)`, `cd(path)`, `workers.get(ref)`).
+// (`rpcStubs.get(key)`, `facets.get(ref)`, `cd(path)`, `workers.get(ref)`).
 //
 // These used to return a bare `pathProxy` (dispatch.ts) — a Proxy-over-function. It folds dotted
 // members fine, but it is NOT a native RpcTarget, and a mid-chain call returns it ACROSS an RPC
@@ -21,7 +21,7 @@ import { installPrototypeInvokeCapabilityFallback } from "./dotted-path-proxy.ts
 
 /** A branded, pipelinable handle whose unknown dotted members fold into ONE `dispatch(path, args)`.
  *  `dispatch` routes the folded path into the underlying object — a connection's retained callback
- *  (`#itxConnections.invoke`), a facet's method walk (`facetInvoke`), a sibling context, or a
+ *  (`RpcStubDirectory.invoke`), a facet's method walk (`facetInvoke`), a sibling context, or a
  *  stateful loaded class. Declared members (just `invokeCapability`) win over the fallback, so a
  *  capability cannot be named `invokeCapability` — the one reserved word this wrapper adds. */
 export class InvokeHandle extends RpcTarget {

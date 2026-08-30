@@ -7,7 +7,7 @@
 //   • TODAY it forwards every call to the owning Stream DO by name — a swappable
 //     implementation detail, not the stub's identity.
 //   • TOMORROW it is where DO-free capabilities get served WITHOUT waking the DO (the
-//     KV-cached-table future: bindings/kv/secrets/whoami answered right here; only genuinely
+//     KV-cached-table future: kv/whoami answered right here; only genuinely
 //     actor-shaped targets dial the stream).
 //   • It is Kenton-aligned persistence-ready: `ctx.exports`-minted stubs are exactly the kind
 //     the shipped persistent-stub machinery (`allow_irrevocable_stub_storage` + `[restore]`)

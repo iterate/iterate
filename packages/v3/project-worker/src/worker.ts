@@ -16,20 +16,18 @@ interface Env {
   CONTEXT: DurableObjectNamespace<StreamDurableObject>;
 }
 
-// The SOLO fallback (target-core §3.4): a whole control plane, trivially — platform-secret substitution (none in
-// solo) then terminal; `invokeCapability` is the capability fallthrough. Bound as FALLBACK only in solo config.
+// The SOLO fallback: the egress terminal, trivially — platform-secret substitution (none in solo)
+// then a bare fetch. Bound as FALLBACK only in solo config (the deployed config binds the real
+// control-plane shell instead). Capability-level control-plane egress (`itx.os`) was removed with
+// config; it returns as `itx.connectToCapnweb(url)` when a real control plane lands.
 export class DummyControlPlane extends WorkerEntrypoint {
   async fetch(request: Request): Promise<Response> {
     return fetch(request);
   }
-  async invokeCapability(callPath: string, _args?: unknown[]): Promise<unknown> {
-    if (callPath === "itx.auth.gate") return { ok: true };
-    throw new Error(`DummyControlPlane: no capability "${callPath}"`);
-  }
 }
 
 // Bumped every deploy so a smoke test can wait for THIS build to propagate (workers.dev lags ~1-2min/colo).
-const CODE_VERSION = "live-22";
+const CODE_VERSION = "live-23";
 
 /** The context host DO for a request's `?ctx=` (defaults to `prj_demo`). The DO does the real work. */
 function host(env: Env, url: URL) {
@@ -43,7 +41,7 @@ export default {
     if (url.pathname === "/version") return new Response(CODE_VERSION + "\n");
 
     // THE ONE capnweb ENTRYPOINT (the hard rule): capnweb terminates HERE, in the stateless worker; the DO is
-    // reached only over Workers RPC. A client dials `/api` and gets a `ProjectSession` (`get`/`connect` → itx).
+    // reached only over Workers RPC. A client dials `/api` and gets a `ProjectSession` (`get(context?)` → itx).
     if (url.pathname === "/api")
       // newWorkersRpcResponse serves BOTH a WebSocket upgrade AND a one-shot HTTP batch —
       // a CLI script or cron does one POST, no socket handshake. (Batch sessions cannot hold

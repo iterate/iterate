@@ -267,32 +267,32 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
     if (typeof expr[0] !== "string")
       throw new Error("cannot call the scope symbol itself — name a capability first");
     const itx = this.#itxAtDepth(depth + 1);
-    // BUILT-IN FIRST: `itx.<root>…` where `<root>` is a physical-layer built-in resolves DIRECTLY —
-    // as if by an implicit mount `itx.<root> ⇒ <root>` (`match` consumes the boundary/remainder the
-    // same way a config mount used to). The built-ins are the ONLY targets that see the physical
-    // scope; `itx` spreads LAST so no root shadows the resolver's recursion symbol.
-    const root = typeof expr[1] === "string" ? expr[1] : Array.isArray(expr[1]) ? expr[1][0] : null;
+    // Pick the scope + target + match, then ONE apply. BUILT-IN FIRST: `itx.<root>…` where `<root>`
+    // is a physical-layer built-in resolves DIRECTLY — as if by an implicit mount `itx.<root> ⇒
+    // <root>` (`match` consumes boundary/remainder the same way a userspace mount does), against
+    // `{ ...builtIns, itx }` (`itx` spreads LAST so no root shadows the recursion symbol). Otherwise
+    // the winning USERSPACE `provide` mount, against `{ itx }` alone (a bare root is unspellable).
+    const root = Array.isArray(expr[1]) ? expr[1][0] : expr[1];
+    let scope: Record<string, unknown>, target: Expression, m: Match;
     if (expr[0] === "itx" && typeof root === "string" && Object.hasOwn(this.#builtIns, root)) {
-      const m = match(["itx", root], expr)!;
-      return await apply(
-        { ...this.#builtIns, itx },
-        [root],
-        { boundaryArgs: m.boundaryArgs, remainder: m.remainder },
-        extraArgs,
-      );
+      scope = { ...this.#builtIns, itx };
+      target = [root];
+      m = match(["itx", root], expr)!;
+    } else {
+      const winner = this.#route(state, expr);
+      if (!winner)
+        throw codedError(
+          "NO_CAPABILITY_MATCH",
+          `no capability matches ${JSON.stringify(print(expr))} (default-deny; provide a capability first)`,
+        );
+      scope = { itx };
+      target = winner.row.target;
+      m = winner.m;
     }
-    // USERSPACE: a `provide` mount (event-sourced). Its target recurses through `itx` — which lands
-    // back here, on a built-in or another mount.
-    const winner = this.route(state, expr);
-    if (!winner)
-      throw codedError(
-        "NO_CAPABILITY_MATCH",
-        `no capability matches ${JSON.stringify(print(expr))} (default-deny; provide a capability first)`,
-      );
     return await apply(
-      { itx },
-      winner.row.target,
-      { boundaryArgs: winner.m.boundaryArgs, remainder: winner.m.remainder },
+      scope,
+      target,
+      { boundaryArgs: m.boundaryArgs, remainder: m.remainder },
       extraArgs,
     );
   }
@@ -320,13 +320,17 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
 
   /** Pure routing: the winning userspace `provide` mount for a call, or null (built-ins are
    *  resolved before this — see `resolve`). Longest matching path wins; ties → newest mount. */
-  route(
+  #route(
     state: State,
     call: Expression,
   ): { row: Pick<CapabilityMount, "path" | "target">; m: Match; providedAtOffset: number } | null {
     if (typeof call[0] !== "string")
       throw new Error("cannot call the scope symbol itself — name a capability first");
-    let best: ReturnType<CapabilityTableProcessor["route"]> = null;
+    let best: {
+      row: Pick<CapabilityMount, "path" | "target">;
+      m: Match;
+      providedAtOffset: number;
+    } | null = null;
     for (const mount of state.mounts) {
       const m = match(mount.path, call);
       if (!m) continue;

@@ -21,8 +21,8 @@
 // because the real capability lives inside a BROWSER's WebSocket session — only the edge worker
 // holding that socket can re-mint the stub, so restore MUST route through it.
 //
-// The manager is the partial-fetch helper the DO composes in (`#hibernatableRpcStubs.fetch(req)`
-// first, own doors after) — stub mechanics live here, domain meaning (ItxConnections, session
+// The manager is the partial-fetch helper the DO composes in (`#rpcStubs.fetch(req)`
+// first, own doors after) — stub mechanics live here, domain meaning (RpcStubDirectory, session
 // facts) stays in the DO. It is record-AGNOSTIC: callers stamp what they need and read it back.
 
 export const STUB_PAGER_WEBSOCKET_HEADER = "x-itx-stub-pager";

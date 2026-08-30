@@ -34,7 +34,7 @@ export default class CodeCap extends WorkerEntrypoint {
 // `DurableObject` class DIRECTLY and calls its methods — no `__HostedActor` fetch-tunnel wrapper.)
 
 /** Load a confined dynamic worker — THE one loader wiring (stateless code caps, userspace facet
- *  processors, the stateful runner all ride it). The confinement contract, stated once: the
+ *  processors, stateful facets all ride it). The confinement contract, stated once: the
  *  worker's WHOLE world — `env.ITX` (a service binding to the ItxEntrypoint; `.get()` yields the
  *  real itx scope) and every global fetch — is its owning context, so sibling calls and egress
  *  route through the host's dispatch with no second path. Callers version their `cacheKey`
@@ -96,7 +96,7 @@ export function confinedWorker(
 
 /** Materialize (or restart on a source change) a durable facet hosting a LOADED class, keeping
  *  its storage across restarts — the version-marker dance, stated once for both hosts (the
- *  stream's userspace processors and the stateful runner). The deploy id is already in the
+ *  stream's userspace processors and stateful facets). The deploy id is already in the
  *  loader cacheKey (confinedWorker); the marker catches CONTENT changes within a deploy. */
 /** A source expression may evaluate to a modules record ({ name: code }) or to ONE module
  *  string (plain kv — increment 57 killed the files root); normalize to the loader's shape.

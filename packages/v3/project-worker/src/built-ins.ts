@@ -57,8 +57,8 @@ export interface BuiltInsEnv {
   SECRETS_KV?: KVNamespace;
   /** Deploy identity — reduced into loader cacheKeys so a redeploy mints fresh isolates. */
   CF_VERSION_METADATA?: { id: string };
-  /** The shell this context's egress + `itx.os` bottom out at (a whole control plane). */
-  FALLBACK: Fetcher & { invokeCapability(callPath: string, args?: unknown[]): Promise<unknown> };
+  /** The egress terminal this context's `fetch` bottoms out at (secret-substituted, then sent). */
+  FALLBACK: Fetcher;
 }
 
 /** What the hosting side injects: identity, bindings, and the three host-specific seams. */
@@ -115,53 +115,56 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     };
   };
   const workers: WorkersView = {
-    get: (ref) => statelessHandle(ref.source as WorkerSource),
+    // A GENUINE RpcTarget (InvokeHandle), the exact mirror of facets.get — so
+    // `itx.workers.get({ source }).run(x)` pipelines the mid-chain call on every lane, and `.fetch`
+    // forwards to the loaded entrypoint's own fetch (workerd#6873; core/invoke-handle.ts).
+    get: (ref) => {
+      const handle = statelessHandle(ref.source as WorkerSource);
+      return new InvokeHandle((segments, args) => {
+        if (segments.length === 1 && segments[0] === "fetch")
+          return handle.fetch(args[0] as Request);
+        if (segments.length === 1 && segments[0] === "run") return handle.run(...args);
+        throw new Error(
+          `workers.get(...): no method ${JSON.stringify(segments.join("."))} (run|fetch)`,
+        );
+      });
+    },
   };
 
-  const itxKv = env.ITX_KV;
   const kvPrefix = `${projectId}:`;
   const own = () => deps.context(path);
-
-  /** One prefixed view over the shared namespace — the prefix IS the isolation. */
-  const prefixedKv = (prefix: string, what: string) => {
-    const kv = () => {
-      if (!itxKv) throw new Error(`${what}: no ITX_KV bound`);
-      return itxKv;
-    };
-    return {
-      get: (k: string) => kv().get(prefix + k),
-      put: async (k: string, v: string) => {
-        await kv().put(prefix + k, String(v));
-        return { ok: true };
-      },
-      delete: async (k: string) => {
-        await kv().delete(prefix + k);
-        return { ok: true };
-      },
-      keys: async (start = "") => {
-        // Paginate on the cursor: Cloudflare KV caps ONE list page at 1000 keys, so a single
-        // `list()` would silently present page 1 as the whole truth (sweep/GC over it would leave
-        // key 1001+ as permanent orphans). Drain every page.
-        const out: string[] = [];
-        for (let cursor: string | undefined; ; ) {
-          const page = await kv().list({ prefix: prefix + start, ...(cursor ? { cursor } : {}) });
-          for (const k of page.keys) out.push(k.name.slice(prefix.length));
-          if (page.list_complete) return out;
-          cursor = page.cursor;
-        }
-      },
-    };
+  const kvBinding = () => {
+    if (!env.ITX_KV) throw new Error("kv: no ITX_KV bound");
+    return env.ITX_KV;
   };
-  const projectKv = prefixedKv(kvPrefix, "kv");
 
   const scope: Record<string, unknown> = {
     whoami: () => ({ projectId, path }),
-    /** Project-prefixed KV. */
+    /** Project-prefixed KV — the `${projectId}:` prefix IS the isolation. */
     kv: {
-      get: projectKv.get,
-      put: projectKv.put,
-      delete: projectKv.delete,
-      list: async (start = "") => ({ keys: await projectKv.keys(start) }),
+      get: (k: string) => kvBinding().get(kvPrefix + k),
+      put: async (k: string, v: string) => {
+        await kvBinding().put(kvPrefix + k, String(v));
+        return { ok: true };
+      },
+      delete: async (k: string) => {
+        await kvBinding().delete(kvPrefix + k);
+        return { ok: true };
+      },
+      list: async (start = "") => {
+        // Paginate on the cursor: Cloudflare KV caps ONE list page at 1000 keys, so a single
+        // `list()` would present page 1 as the whole truth (sweep/GC would orphan key 1001+). Drain.
+        const out: string[] = [];
+        for (let cursor: string | undefined; ; ) {
+          const page = await kvBinding().list({
+            prefix: kvPrefix + start,
+            ...(cursor ? { cursor } : {}),
+          });
+          for (const k of page.keys) out.push(k.name.slice(kvPrefix.length));
+          if (page.list_complete) return { keys: out };
+          cursor = page.cursor;
+        }
+      },
     },
     /** MY OWN stream — a deliberate, chosen surface (append/read), never the raw DO stub. */
     stream: {

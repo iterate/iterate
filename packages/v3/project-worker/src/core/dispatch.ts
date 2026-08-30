@@ -100,7 +100,7 @@ async function walkSteps(
 /**
  * Dotted-path invocation over a LOCAL object graph — a facet stub, a hosted class, any dotted
  * view: walk the intermediates receiver-preservingly, apply the terminal. ONE walk for every "call
- * path X with args on this object" door (the parent's facetInvoke, the stateful runner); the
+ * path X with args on this object" door (the parent's facetInvoke, stateful facets); the
  * DataCloneError learning on `walkSteps` above is exactly why the hand-rolled copies it replaced
  * were the drift class.
  */

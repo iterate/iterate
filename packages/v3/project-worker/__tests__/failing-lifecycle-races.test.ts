@@ -272,7 +272,7 @@ test("disable mid-drive: appends survive, no ongoing error storm, re-enable rebu
 
   const state = await doState(ctx);
   expect(state.facetProcessors).not.toContain("tally");
-  await expect(itx.facetSnapshot("tally")).rejects.toThrow(/no facet "tally" enabled/);
+  await expect(itx.facetSnapshot("tally")).rejects.toThrow(/no facet.*"tally"/);
 
   // post-disable traffic must not keep erroring into the dead facet: in-flight chains may log
   // a bounded burst at the disable moment, but NOTHING new may appear afterwards

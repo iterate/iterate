@@ -853,10 +853,8 @@ export class StreamDurableObject extends DurableObject<Env> {
       };
       return invokePath(view, path, args, `inline "${slug}"`);
     }
-    if (!this.#facetEntries().some((e) => e.slug === slug))
-      throw codedError("NO_FACET", `no facet "${slug}" enabled`);
-    // invokePath = stepGet + Reflect.apply with the receiver carried (the DataCloneError
-    // learning lives on the helper — see core/expression.ts).
+    // invokePath = stepGet + Reflect.apply with the receiver carried (the DataCloneError learning
+    // lives on the helper — see core/expression.ts). #facet throws NO_FACET for an unknown slug.
     return invokePath(await this.#facet(slug), path, args, `facet "${slug}"`);
   }
 
