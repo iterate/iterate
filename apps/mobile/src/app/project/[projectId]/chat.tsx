@@ -23,7 +23,7 @@
 // harmless no-op when reopening an already-created chat from the list.
 
 import { useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery } from "@tanstack/react-query";
 import { Stack, useLocalSearchParams } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import {
@@ -53,7 +53,16 @@ import {
 } from "../../../components/activity-card.tsx";
 import { Markdown } from "../../../components/markdown.tsx";
 import { useDebouncedValue } from "../../../lib/use-debounced-value.ts";
-import { base64ToUint8Array, pickImages, type PickedImage } from "../../../lib/attachments.ts";
+import { AttachmentChips } from "../../../components/attachment-chips.tsx";
+import { AttachmentSheet } from "../../../components/attachment-sheet.tsx";
+import { RecordControls } from "../../../components/record-controls.tsx";
+import {
+  attachmentKey,
+  attachmentUploads,
+  messageWithXmlParts,
+  type ComposerAttachment,
+} from "../../../lib/composer-attachments.ts";
+import { readFileBase64, recordControlsAvailable } from "../../../lib/native-modules.ts";
 import {
   collapseConsecutiveStreamWakes,
   reduceFeed,
@@ -63,6 +72,7 @@ import {
 } from "../../../lib/feed.ts";
 import { awaitingAgentActivity, latestAgentTitle } from "../../../lib/chat.ts";
 import { photoFrame, photoFrameMaxWidth, PHOTO_MAX_HEIGHT } from "../../../lib/photo-layout.ts";
+import { mosaicLayout } from "../../../lib/mosaic-layout.ts";
 import { getProjectItx } from "../../../lib/itx.ts";
 // APPROVAL_STREAM_EVENT_TYPES is module-level (identity-stable) on purpose:
 // useLiveEvents folds eventTypes into its connection-hook deps, so an inline
@@ -146,8 +156,15 @@ export default function ChatScreen() {
   });
 
   const [draft, setDraft] = useState(seed || "");
-  const [attachments, setAttachments] = useState<PickedImage[]>([]);
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  const [sheetOpen, setSheetOpen] = useState(false);
   const [viewMode, setViewMode] = useState<"chat" | "events">("chat");
+  const appendAttachments = (added: ComposerAttachment[]) => {
+    setAttachments((prev) => {
+      const seen = new Set(prev.map(attachmentKey));
+      return [...prev, ...added.filter((attachment) => !seen.has(attachmentKey(attachment)))];
+    });
+  };
   const copyStreamUrl = useMutation({
     mutationFn: async (url: string) => Clipboard.setString(url),
     onSuccess: () => {
@@ -155,7 +172,12 @@ export default function ChatScreen() {
     },
   });
   const send = useMutation({
-    mutationFn: async (input: { message: string; files: PickedImage[] }) => {
+    mutationFn: async (input: { message: string; files: ComposerAttachment[] }) => {
+      // Byte-carrying attachments become addFiles payloads (bytes read
+      // lazily from their local uris here, at send time); location becomes
+      // an XML part appended to the text (lib/composer-attachments.ts).
+      const uploads = await attachmentUploads(input.files, readFileBase64);
+      const message = messageWithXmlParts(input.message, input.files);
       const project = await getProjectItx(baseUrl!, projectId);
       const agent = project.agents.get(path) as RpcStub<Agent>;
       // create() is idempotent (its birth events carry deterministic
@@ -163,19 +185,15 @@ export default function ChatScreen() {
       // chat or an already-created one opened from the list — the platform
       // requires an explicit create() before the first message either way.
       await agent.create();
-      if (input.files.length === 0) {
-        const event = await agent.message(input.message);
+      if (uploads.length === 0) {
+        const event = await agent.message(message);
         return event.offset;
       }
       // Same shape as the web composer: ONE addFiles call → one input event
       // carrying every attachment → one feed message + one agent turn.
       const added = await agent.addFiles({
-        files: input.files.map((file) => ({
-          contentType: file.contentType,
-          data: base64ToUint8Array(file.base64),
-          filename: file.filename,
-        })),
-        ...(input.message && { message: input.message }),
+        files: uploads,
+        ...(message && { message }),
       });
       return added.event.offset;
     },
@@ -297,30 +315,21 @@ export default function ChatScreen() {
         <EventList events={events.data || []} />
       )}
 
-      {attachments.length > 0 ? (
-        <View style={styles.attachmentStrip}>
-          {attachments.map((image) => (
-            <Pressable
-              key={image.previewUri}
-              onPress={() =>
-                setAttachments(attachments.filter((a) => a.previewUri !== image.previewUri))
-              }
-            >
-              <Image source={{ uri: image.previewUri }} style={styles.attachmentThumb} />
-              <Text style={styles.attachmentRemove}>✕</Text>
-            </Pressable>
-          ))}
-        </View>
-      ) : null}
+      <AttachmentChips
+        attachments={attachments}
+        onRemove={(key) =>
+          setAttachments((prev) => prev.filter((attachment) => attachmentKey(attachment) !== key))
+        }
+      />
       <View style={[styles.composer, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}>
         <Pressable
-          onPress={async () =>
-            setAttachments([...attachments, ...(await pickImages({ selectionLimit: 6 }))])
-          }
+          accessibilityLabel={sheetOpen ? "Close attachment options" : "Attach something"}
+          accessibilityRole="button"
+          onPress={() => setSheetOpen(!sheetOpen)}
           disabled={send.isPending}
           style={styles.attach}
         >
-          <Text style={styles.attachText}>+</Text>
+          <Text style={[styles.attachText, sheetOpen && styles.attachTextOpen]}>+</Text>
         </Pressable>
         <TextInput
           value={draft}
@@ -330,25 +339,38 @@ export default function ChatScreen() {
           placeholderTextColor={colors.textFaint}
           style={styles.input}
         />
-        <Pressable
-          accessibilityLabel="Send"
-          accessibilityRole="button"
-          onPress={() => {
-            const message = draft.trim();
-            const canSend = message !== "" || attachments.length > 0;
-            if (canSend && !send.isPending) send.mutate({ message, files: attachments });
-          }}
-          disabled={(draft.trim() === "" && attachments.length === 0) || send.isPending}
-          style={[
-            styles.send,
-            ((draft.trim() === "" && attachments.length === 0) || send.isPending) && {
-              opacity: 0.4,
-            },
-          ]}
-        >
-          <Text style={styles.sendText}>↑</Text>
-        </Pressable>
+        {draft.trim() !== "" || attachments.length > 0 || !recordControlsAvailable() ? (
+          <Pressable
+            accessibilityLabel="Send"
+            accessibilityRole="button"
+            onPress={() => {
+              const message = draft.trim();
+              const canSend = message !== "" || attachments.length > 0;
+              if (canSend && !send.isPending) send.mutate({ message, files: attachments });
+            }}
+            disabled={(draft.trim() === "" && attachments.length === 0) || send.isPending}
+            style={[
+              styles.send,
+              ((draft.trim() === "" && attachments.length === 0) || send.isPending) && {
+                opacity: 0.4,
+              },
+            ]}
+          >
+            <Text style={styles.sendText}>↑</Text>
+          </Pressable>
+        ) : (
+          // Empty composer on a capable build: the Telegram-style mic/video
+          // hold-to-record button takes the send slot.
+          <RecordControls onAttach={(attachment) => appendAttachments([attachment])} />
+        )}
       </View>
+      {sheetOpen ? (
+        <AttachmentSheet
+          attachedKeys={attachments.map(attachmentKey)}
+          onAttach={appendAttachments}
+          onClose={() => setSheetOpen(false)}
+        />
+      ) : null}
       {send.isError ? (
         <Text style={styles.sendError}>
           {send.error instanceof Error ? send.error.message : String(send.error)}
@@ -496,12 +518,21 @@ function MessageBubble({ message }: { message: AgentUiMessageItem }) {
   const photoWidth = message.files?.some((file) => file.contentType.startsWith("image/"))
     ? photoFrameMaxWidth(window.width)
     : null;
+  const images = (message.files || []).filter((file) => file.contentType.startsWith("image/"));
+  const otherFiles = (message.files || []).filter((file) => !file.contentType.startsWith("image/"));
   return (
     <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAssistant]}>
       {/* Photos above their caption, the way every chat app puts them — and
           the bubble carries no padding of its own, so a photo reaches its
-          edges instead of floating in a frame. Text brings its own inset. */}
-      {message.files?.map((file) => (
+          edges instead of floating in a frame. Text brings its own inset.
+          Two or more photos share a Telegram-style mosaic instead of
+          stacking full-width (lib/mosaic-layout.ts). */}
+      {images.length >= 2 ? (
+        <MessageMosaic files={images} />
+      ) : (
+        images.map((file) => <MessageAttachment key={file.path} file={file} />)
+      )}
+      {otherFiles.map((file) => (
         <MessageAttachment key={file.path} file={file} />
       ))}
       {message.text !== "" ? (
@@ -535,6 +566,52 @@ function MessageAttachment({ file }: { file: AgentUiFileAttachment }) {
   );
 }
 
+/** Two-or-more photos in one message: the justified-rows mosaic
+ * (lib/mosaic-layout.ts) — photos share rows at a common height, cropped to
+ * cover their tiles, instead of stacking full-width. Sizes come from the
+ * same per-URL cache MessagePhoto uses; until they load the layout runs on
+ * square guesses and reflows once. */
+function MessageMosaic({ files }: { files: AgentUiFileAttachment[] }) {
+  const window = useWindowDimensions();
+  const sizes = useQueries({
+    queries: files.map((file) => imageSizeQuery(file.url)),
+  });
+  const layout = mosaicLayout({
+    aspectRatios: sizes.map((size) =>
+      size.data === undefined ? 1 : size.data.width / size.data.height,
+    ),
+    maxWidth: photoFrameMaxWidth(window.width),
+  });
+  return (
+    <View style={{ height: layout.height, width: layout.width }}>
+      {files.map((file, index) => {
+        const rect = layout.rects[index]!;
+        return (
+          <Pressable
+            accessibilityLabel={file.filename}
+            key={file.path}
+            onPress={() => void WebBrowser.openBrowserAsync(file.url)}
+            style={{
+              position: "absolute",
+              left: rect.x,
+              top: rect.y,
+              width: rect.width,
+              height: rect.height,
+            }}
+          >
+            {sizes[index]?.data === undefined ? (
+              // Real loading UI, not a guess: the spec's spinner waiter holds
+              // on this instead of racing the reflow (MessagePhoto precedent).
+              <View accessibilityLabel="Loading" style={StyleSheet.absoluteFill} />
+            ) : null}
+            <Image resizeMode="cover" source={{ uri: file.url }} style={StyleSheet.absoluteFill} />
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
 /** Photo attachments, Telegram-style: flush to the bubble's edges at their own
  * aspect ratio, and — when a tall screenshot hits the height cap and no longer
  * fills the frame — sitting on a blurred copy of themselves rather than black
@@ -543,15 +620,7 @@ function MessagePhoto({ file, onPress }: { file: AgentUiFileAttachment; onPress:
   const window = useWindowDimensions();
   // Dimensions come from the loaded image, not the attachment record (which
   // carries none) — one lookup per URL, cached for the thread's lifetime.
-  const natural = useQuery({
-    queryKey: ["image-size", file.url],
-    queryFn: () =>
-      new Promise<{ height: number; width: number }>((resolve, reject) =>
-        Image.getSize(file.url, (width, height) => resolve({ height, width }), reject),
-      ),
-    staleTime: Infinity,
-    retry: false,
-  });
+  const natural = useQuery(imageSizeQuery(file.url));
   const frame = photoFrame({
     maxHeight: PHOTO_MAX_HEIGHT,
     maxWidth: photoFrameMaxWidth(window.width),
@@ -582,6 +651,20 @@ function MessagePhoto({ file, onPress }: { file: AgentUiFileAttachment; onPress:
       <Image source={{ uri: file.url }} style={StyleSheet.absoluteFill} resizeMode="contain" />
     </Pressable>
   );
+}
+
+/** One image-dimensions lookup per URL, cached for the thread's lifetime —
+ * shared by the single-photo frame and the mosaic. */
+function imageSizeQuery(url: string) {
+  return {
+    queryKey: ["image-size", url],
+    queryFn: () =>
+      new Promise<{ height: number; width: number }>((resolve, reject) =>
+        Image.getSize(url, (width, height) => resolve({ height, width }), reject),
+      ),
+    staleTime: Infinity,
+    retry: false,
+  };
 }
 
 function formatFileSize(bytes: number): string {
@@ -681,33 +764,6 @@ const styles = StyleSheet.create({
     alignSelf: "flex-start",
   },
   fileChipText: { color: colors.textMuted, fontSize: 12 },
-  attachmentStrip: {
-    flexDirection: "row",
-    gap: spacing.sm,
-    paddingHorizontal: spacing.md,
-    paddingTop: spacing.sm,
-  },
-  attachmentThumb: {
-    width: 52,
-    height: 52,
-    borderRadius: radius.sm,
-    borderColor: colors.border,
-    borderWidth: 1,
-  },
-  attachmentRemove: {
-    position: "absolute",
-    top: -6,
-    right: -6,
-    color: colors.text,
-    backgroundColor: colors.surfaceRaised,
-    borderRadius: radius.full,
-    width: 18,
-    height: 18,
-    textAlign: "center",
-    fontSize: 11,
-    lineHeight: 17,
-    overflow: "hidden",
-  },
   attach: {
     width: 38,
     height: 38,
@@ -718,6 +774,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   attachText: { color: colors.textMuted, fontSize: 20, lineHeight: 22 },
+  // The + leans into a ✕ while the sheet is open — same control closes it.
+  attachTextOpen: { color: colors.text, transform: [{ rotate: "45deg" }] },
   composer: {
     flexDirection: "row",
     alignItems: "flex-end",

@@ -42,10 +42,14 @@ and uploads lazily.
 1. **Scope: the chat composer** (`src/app/project/[projectId]/chat.tsx`). The
    note composer keeps its current strip/+ but shares the new lib code where
    free.
-2. **Telegram screenshots didn't reach me** — the message referenced them but
-   no images came through. Gesture + locked-mode UI mimicked from knowledge of
-   Telegram's composer (slide-to-cancel hint, red dot + timer, lock chevron,
-   locked mode with cancel / red stop).
+2. **Telegram screenshots arrived mid-flight** (a follow-up message). Details
+   to mimic: tooltip text "Hold to record video. Tap to switch to audio."
+   (mirrored for the other direction); while holding — red dot + timer +
+   "‹ Slide to cancel" bar, lock icon with chevron above the button; locked
+   mode — bar becomes red dot + timer + a Cancel text button, and the button
+   becomes send/stop. Video records into a circular viewport overlaid on the
+   screen with camera-flip + flash controls. Telegram's locked-mode *pause*
+   control is a follow-up, not v1.
 3. **Release-to-finish attaches, doesn't send.** Telegram sends on release;
    Misha's blanket rule here is "don't automatically send", so a finished
    recording becomes an attachment chip like everything else.
@@ -103,6 +107,12 @@ and uploads lazily.
       kind); video/file size guard
 - [ ] app.json: camera/mic/location/photo permission strings + plugins
 - [ ] Graceful degradation when native module missing (old dev client, web)
+- [ ] Masonry/mosaic layout for multi-photo MESSAGE BUBBLES (scope added
+      mid-flight): today multiple photos stack full-width on top of each
+      other; instead lay them out Telegram-style. Pure justified-rows
+      algorithm (flickr/justified-layout-inspired, attributed) in
+      `lib/mosaic-layout.ts` + unit tests; bubble component uses cached
+      image sizes and falls back to squares while they load
 - [ ] Unit tests: gesture machine, attachment model, location xml, size guard
 - [ ] typecheck + lint + knip + format + test green
 
