@@ -1,3 +1,9 @@
+> **⚠️ SUPERSEDED (2026-08-30).** The "maximum simple" refactor LANDED: built-ins now resolve
+> DIRECTLY (no config, no mounts, no provenance — `core/config.ts` deleted); `itx.connections`/`connect()`
+> → the `rpcStubs` kernel primitive; `workers.get({source})`/`facets.get(ref)` mirror; `runScript(lambda)`;
+> `itx.connectToCapnweb(url)` replaces `itx.os`. Read `src/built-ins.ts` + `capability-table-processor.ts`
+> for the real surface. The config-gated / exokernel-grant model described below was NOT built (deliberately).
+
 # The Iterate Context — a concrete design (v1, for annotation)
 
 > Requirements-first, like the consolidation doc. v1 folds in three research

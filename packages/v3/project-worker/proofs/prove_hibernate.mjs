@@ -115,7 +115,7 @@ check(
 );
 
 // (2) the facet fold survived reconstruction (rebuilt from the durable log).
-const snap = await itx.facetSnapshot("tally");
+const snap = await itx.invoke("itx.facets.get('tally').snapshot()");
 check(
   snap?.offset >= 1 && snap?.state?.counts,
   "facet snapshot still folds after reconstruction (rebuilt from durable identity)",

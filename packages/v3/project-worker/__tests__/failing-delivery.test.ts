@@ -320,7 +320,9 @@ test("FIXED (defect 12): unsubscribe during an in-flight delivery leaves no ghos
   // barrier: the forwarder's reduce has passed the revoke commit (its cursor moved beyond it)
   await until(
     "forwarder reduced the revoke",
-    async () => (await itx.facetSnapshot("subscription-forwarder")).offset > mark.offset,
+    async () =>
+      (await itx.invoke("itx.facets.get('subscription-forwarder').snapshot()")).offset >
+      mark.offset,
   );
   release();
   // correct behavior: the revoked row goes quiet — poll generously for the spurious audit fact

@@ -12,8 +12,10 @@ import {
 } from "./core/agent-runtime.ts";
 import { PROCESSOR_SDK_MODULE } from "./generated/processor-sdk.ts";
 import { itxEntrypointFor } from "./itx-entrypoint.ts";
+import { newHttpBatchRpcSession } from "capnweb";
 import { toExpression, type Expression } from "./core/expression.ts";
 import { InvokeHandle } from "./core/invoke-handle.ts";
+import { invokePath } from "./core/dispatch.ts";
 import type { Context } from "./core/stream.ts";
 import type { StreamEventInput } from "./core/events.ts";
 import { hashSource } from "./core/hash.ts";
@@ -47,6 +49,41 @@ type FacetsView = {
 type WorkersView = {
   get(ref: { source: unknown }): unknown;
 };
+
+/** THE built-in scope, as ONE interface — the physical-layer roots a context resolves `itx.<root>…`
+ *  against DIRECTLY (capability-table-processor.ts `resolve`, built-in first; no config, no mount).
+ *  This is the clean-room's whole kernel surface. It is a PLAIN OBJECT, not an RpcTarget class, on
+ *  purpose: the resolver spreads it (`{ ...builtIns, itx }`) and gates on `Object.hasOwn`, so a
+ *  prototype-method class would spread to `{}` and every root would go unreachable. */
+interface BuiltInScope {
+  /** Identify this context. */
+  whoami(): { projectId: string; path: string };
+  /** Project-prefixed durable key/value (the `${projectId}:` prefix IS the isolation). */
+  kv: {
+    get(key: string): Promise<string | null>;
+    put(key: string, value: string): Promise<{ ok: true }>;
+    delete(key: string): Promise<{ ok: true }>;
+    list(prefix?: string): Promise<{ keys: string[] }>;
+  };
+  /** This context's append-only event log, plus the facets that REDUCE it (`processors` = sugar). */
+  stream: {
+    append(...events: StreamEventInput[]): Promise<unknown>;
+    read(afterOffset?: number, limit?: number): Promise<unknown>;
+    processors: FacetsView;
+  };
+  /** Navigate to a SIBLING context, routed through its own table. */
+  cd(path: string): unknown;
+  /** The live rpc-stub registry (`get`/`list`/`close`; `provide` is relay-side — DON'T-PIN). */
+  rpcStubs: RpcStubsView;
+  /** Run a durable object as a facet — address by name, or materialize `{ source, className }`. */
+  facets: FacetsView;
+  /** Run STATELESS loaded code — `get({ source })` → a pipelinable `{ run, fetch }` entrypoint. */
+  workers: WorkersView;
+  /** Run a stateless lambda STRING (sugar over `workers.get({ source }).run(...)`). */
+  runScript(script: string, ...args: unknown[]): Promise<unknown>;
+  /** Dial a REMOTE capnweb API by URL (one HTTP batch — no persistent socket). */
+  connectToCapnweb(url: string): unknown;
+}
 import type { StreamDurableObject } from "./stream-durable-object.ts";
 
 /** The bindings roots-building needs — present in BOTH hosts (the worker env). */
@@ -138,7 +175,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     return env.ITX_KV;
   };
 
-  const scope: Record<string, unknown> = {
+  const scope = {
     whoami: () => ({ projectId, path }),
     /** Project-prefixed KV — the `${projectId}:` prefix IS the isolation. */
     kv: {
@@ -201,7 +238,16 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       statelessHandle({ type: "inline", files: { "cap.js": `export default ${script};` } }).run(
         ...args,
       ),
-  };
+    /** Dial a REMOTE capnweb API by URL and call it — `itx.connectToCapnweb('https://x/api').m(a)`
+     *  opens a one-shot HTTP-batch session to the remote root, pipelines the call, and returns its
+     *  result. HTTP batch (not a WebSocket) on purpose: no persistent socket, so it never pins this
+     *  DO (workerd#6087). This is the replacement for the removed `itx.os`/`bindings` control-plane
+     *  door — the outbound-capnweb primitive; a named `itx.os` becomes a mount over it. */
+    connectToCapnweb: (url: string) =>
+      new InvokeHandle((path, args) =>
+        invokePath(newHttpBatchRpcSession(url), path, args, `capnweb ${url}`),
+      ),
+  } satisfies BuiltInScope;
   if (Object.hasOwn(scope, "itx")) throw new Error("host scope must never register 'itx'");
   return scope;
 }

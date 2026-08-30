@@ -63,7 +63,7 @@ await itx.invoke(`itx.stream.append({ type: 'mark' })`); // a good one stuck beh
 const tallyAfterHalt = await until(
   "halt audit fact",
   async () => {
-    const t = await itx.facetSnapshot("tally");
+    const t = await itx.invoke("itx.facets.get('tally').snapshot()");
     return (t.state.counts["events.iterate.com/stream/subscription-delivery-halted"] ?? 0) >= 1
       ? t
       : undefined;

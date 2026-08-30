@@ -32,7 +32,7 @@ const read = (
       afterOffset === undefined ? [] : limit === undefined ? [afterOffset] : [afterOffset, limit],
   });
 
-const coreState = async (itx: any) => (await itx.facetSnapshot("core")).state;
+const coreState = async (itx: any) => (await itx.invoke("itx.facets.get('core').snapshot()")).state;
 
 const breakerConfigured = (capacity: number, refillPerSecond: number) => ({
   type: "events.iterate.com/stream/breaker-configured",

@@ -56,7 +56,7 @@ const until = async (label, fn, timeoutMs = 15000) => {
   }
 };
 const chunky = await until("chunky reduced the chunks", async () => {
-  const snap = await itx.facetSnapshot("chunky");
+  const snap = await itx.invoke("itx.facets.get('chunky').snapshot()");
   return snap.state.chunks === 3 && snap.state.marks === 2 ? snap : null;
 });
 check(
@@ -65,7 +65,7 @@ check(
   JSON.stringify(chunky),
 );
 const tally = await until("tally caught up to chunky", async () => {
-  const snap = await itx.facetSnapshot("tally");
+  const snap = await itx.invoke("itx.facets.get('tally').snapshot()");
   return snap.offset >= chunky.offset ? snap : null;
 });
 check(

@@ -405,15 +405,6 @@ export class Itx extends RpcTarget {
     return this.#host.disableProcessor(slug);
   }
 
-  /** A facet processor's reduce — sugar over the facet ADDRESS (`itx.facets.get(slug).snapshot()`
-   *  through the routing table; aliasable and shadowable like any other capability). */
-  facetSnapshot(slug: string): Promise<{ offset: number; state: unknown }> {
-    return this.#host.invoke(["itx", "facets", ["get", slug], ["snapshot"]]) as Promise<{
-      offset: number;
-      state: unknown;
-    }>;
-  }
-
   /** Subscribe — sugar for a subscription mount at `itx.subscribers.<name>`. How it is SERVED
    *  depends only on the target's shape (see DeliveryPolicy in core/events.ts):
    *    • a LIVE CALLBACK (any capnweb function/RpcTarget): parked as an rpc stub (itx.rpcStubs),

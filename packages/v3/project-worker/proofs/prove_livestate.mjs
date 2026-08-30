@@ -192,7 +192,7 @@ check(
 );
 
 // ── the loop guard: nothing consumed the change events ──
-const snap = await itx.facetSnapshot("chunky");
+const snap = await itx.invoke("itx.facets.get('chunky').snapshot()");
 check(
   !JSON.stringify(snap).includes("live-state"),
   "live-state change events are unconsumable (no loop)",

@@ -58,7 +58,7 @@ await itx.invoke(`itx.stream.append({ type: 'mark' })`);
 await itx.disableProcessor("tally");
 let denied = "";
 try {
-  await itx.facetSnapshot("tally");
+  await itx.invoke("itx.facets.get('tally').snapshot()");
 } catch (e) {
   denied = String(e);
 }

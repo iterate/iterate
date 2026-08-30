@@ -45,11 +45,11 @@ check(
 );
 await itx.revoke(prov);
 
-// 4. the facetSnapshot sugar (now routed through the address) still answers
-const sugar = await itx.facetSnapshot("tally");
+// 4. the facets.get(slug).snapshot() address still answers
+const sugar = await itx.invoke("itx.facets.get('tally').snapshot()");
 check(
   sugar?.state?.counts?.mark === 1,
-  "facetSnapshot sugar rides the address",
+  "facets.get(slug).snapshot() rides the address",
   JSON.stringify(sugar?.state),
 );
 

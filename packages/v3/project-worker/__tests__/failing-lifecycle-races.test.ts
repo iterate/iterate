@@ -145,7 +145,7 @@ test("enableProcessor('tally') from two sessions concurrently: one effective lin
   const snap = await until(
     "tally reduced the whole log exactly once",
     async () => {
-      const s: any = await itxA.facetSnapshot("tally");
+      const s: any = await itxA.invoke("itx.facets.get('tally').snapshot()");
       return s.offset >= head && s;
     },
     20_000,
@@ -182,7 +182,7 @@ test("FIXED (defect 29): every enableProcessor drives the enablement commit into
   const head = await readHead(itx);
   await until(
     "tally at head",
-    async () => ((await itx.facetSnapshot("tally")) as any).offset >= head,
+    async () => ((await itx.invoke("itx.facets.get('tally').snapshot()")) as any).offset >= head,
   );
   await settle(400);
   expect(countMatches(logsText(), /not configured/g) - before).toBe(0);
@@ -202,7 +202,7 @@ test("FIXED (defect 30): a processor mount through the ordinary provide door is 
   //   REJECT processor-path mounts loudly instead of half-accepting them.)
   // ACTUAL: /state facetProcessors lists the slug as if healthy while EVERY commit burns a
   //   facet materialization + a logged stream-do.facet-drive "ProcessorFacet: not configured"
-  //   and drops the batch; facetSnapshot throws the same. The storm runs until someone calls
+  //   and drops the batch; the facet's snapshot() throws the same. The storm runs until someone calls
   //   disableProcessor — or worse, enableProcessor(slug) "heals" it while leaving the
   //   half-mount shadowed underneath.
   // WHY IT MATTERS: the identity side-channel makes rebuild-from-log a lie — mounts replay,
@@ -215,7 +215,7 @@ test("FIXED (defect 30): a processor mount through the ordinary provide door is 
   const state = await doState(ctx);
   expect(state.facetProcessors).toContain("tally"); // listed as enabled (this passes — the lie)
   await append(itx, { type: "mark" });
-  const snap: any = await itx.facetSnapshot("tally"); // throws "not configured"
+  const snap: any = await itx.invoke("itx.facets.get('tally').snapshot()"); // throws "not configured"
   expect(snap.state.counts.mark).toBe(1);
 });
 
@@ -229,7 +229,7 @@ test("re-enable while WARM shadows without corrupting the reduce (no reset, no d
   await append(itx, { type: "mark" });
   const head1 = await readHead(itx);
   const s1: any = await until("tally at head", async () => {
-    const s: any = await itx.facetSnapshot("tally");
+    const s: any = await itx.invoke("itx.facets.get('tally').snapshot()");
     return s.offset >= head1 && s;
   });
   expect(s1.state.counts.mark).toBe(2);
@@ -239,7 +239,7 @@ test("re-enable while WARM shadows without corrupting the reduce (no reset, no d
   const head2 = await readHead(itx);
   const expected = durableCountsByType(await readAll(itx));
   const s2: any = await until("tally at head after re-enable", async () => {
-    const s: any = await itx.facetSnapshot("tally");
+    const s: any = await itx.invoke("itx.facets.get('tally').snapshot()");
     return s.offset >= head2 && s;
   });
   expect(s2.state.counts).toEqual(expected); // exact — the shadow neither reset nor doubled
@@ -260,7 +260,8 @@ test("disable mid-drive: appends survive, no ongoing error storm, re-enable rebu
   const headWarm = await readHead(itx);
   await until(
     "tally warm",
-    async () => ((await itx.facetSnapshot("tally")) as any).offset >= headWarm,
+    async () =>
+      ((await itx.invoke("itx.facets.get('tally').snapshot()")) as any).offset >= headWarm,
   );
 
   // the burst + the disable, racing (in-flight drive chains vs facet delete)
@@ -272,7 +273,9 @@ test("disable mid-drive: appends survive, no ongoing error storm, re-enable rebu
 
   const state = await doState(ctx);
   expect(state.facetProcessors).not.toContain("tally");
-  await expect(itx.facetSnapshot("tally")).rejects.toThrow(/no facet.*"tally"/);
+  await expect(itx.invoke("itx.facets.get('tally').snapshot()")).rejects.toThrow(
+    /no facet.*"tally"/,
+  );
 
   // post-disable traffic must not keep erroring into the dead facet: in-flight chains may log
   // a bounded burst at the disable moment, but NOTHING new may appear afterwards
@@ -295,7 +298,7 @@ test("disable mid-drive: appends survive, no ongoing error storm, re-enable rebu
   const head = await readHead(itx);
   const expected = durableCountsByType(await readAll(itx));
   const snap: any = await until("re-enabled tally reduced the whole log", async () => {
-    const s: any = await itx.facetSnapshot("tally");
+    const s: any = await itx.invoke("itx.facets.get('tally').snapshot()");
     return s.offset >= head && s;
   });
   expect(snap.state.counts).toEqual(expected);
@@ -358,7 +361,9 @@ test("reentrancy characterized: a forwarder delivery targeting itx.stream.append
   const headNow = await readHead(itx);
   await until(
     "forwarder cursor reaches head",
-    async () => ((await itx.facetSnapshot("subscription-forwarder")) as any).offset >= headNow,
+    async () =>
+      ((await itx.invoke("itx.facets.get('subscription-forwarder').snapshot()")) as any).offset >=
+      headNow,
   );
 });
 
@@ -413,7 +418,7 @@ test("waitUntilProcessed(future offset) times out with its documented error and 
   const head = await readHead(itx);
   await until(
     "tally at head",
-    async () => ((await itx.facetSnapshot("tally")) as any).offset >= head,
+    async () => ((await itx.invoke("itx.facets.get('tally').snapshot()")) as any).offset >= head,
   );
 
   const t0 = Date.now();
@@ -437,7 +442,7 @@ test("waitUntilProcessed(future offset) times out with its documented error and 
     ["get", "tally"],
     ["waitUntilProcessed", { offset: m.offset, timeoutMs: 5000 }],
   ]);
-  const snap: any = await itx.facetSnapshot("tally");
+  const snap: any = await itx.invoke("itx.facets.get('tally').snapshot()");
   expect(snap.offset).toBeGreaterThanOrEqual(m.offset);
   expect(snap.state.counts.mark).toBe(2);
 });

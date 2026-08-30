@@ -1,0 +1,7 @@
+{
+  "name": "dummy-capnweb",
+  "main": "worker.js",
+  "compatibility_date": "2026-07-01",
+  "account_id": "04b3b57291ef2626c6a8daa9d47065a7",
+  "workers_dev": true,
+}

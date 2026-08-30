@@ -146,7 +146,7 @@ test("enableProcessor rejects a slug the mount grammar re-segments (a dotted slu
   // EXPECTED: a slug that cannot round-trip as ONE path segment is rejected at the door (the
   //      space spelling already is — parseCapabilityPath throws on "itx.subscribers.a b" — the
   //      dot spelling silently re-segments instead: two spellings, two behaviors).
-  // ACTUAL: {ok: true}; facetSnapshot("a.b") then rejects NO_FACET; the processor never runs.
+  // ACTUAL: {ok: true}; itx.facets.get('a.b').snapshot() then rejects NO_FACET; the processor never runs.
   // WHY IT MATTERS (SHAPE S1, with an S5 seam — the slug is embedded in a parsed grammar in one
   //      door and compared as an opaque string in the others): an ok-receipt for a processor
   //      that never observes a single event is the silent version of the exact failure
@@ -193,7 +193,7 @@ test("a processor enabled by its MOUNT alone (the documented event-sourced door)
   //      the tally facet to run (the parent HAS the full identity: its own name, projectId, path,
   //      the mount's slug and props — it can configure on first materialization).
   // ACTUAL: provide succeeds, the drive errors are swallowed per commit (S2), and
-  //      facetSnapshot("tally") rejects "not configured (call configure() first)".
+  //      itx.facets.get('tally').snapshot() rejects "not configured (call configure() first)".
   // WHY IT MATTERS (SHAPE S5 — one rule, two implementations drifting; the same class as the
   //      wave-1 consumes-filter split): the log-replay story ("rebuild is cursor-driven",
   //      "re-enabling rebuilds from the log") quietly depends on the OTHER door having run once
@@ -201,7 +201,7 @@ test("a processor enabled by its MOUNT alone (the documented event-sourced door)
   const itx = await harness.itx("prj_w2mount");
   await itx.provide({ path: "itx.subscribers.tally", target: "itx.facets.get('tally')" });
   await append(itx, { type: "seed" });
-  const snap = await itx.facetSnapshot("tally"); // ← rejects: ProcessorFacet: not configured
+  const snap = await itx.invoke("itx.facets.get('tally').snapshot()"); // ← rejects: ProcessorFacet: not configured
   expect(snap.state).toHaveProperty("counts");
 });
 
