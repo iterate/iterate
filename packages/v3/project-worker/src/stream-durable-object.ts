@@ -903,60 +903,58 @@ export class StreamDurableObject extends DurableObject<Env> {
   ): Promise<unknown> {
     this.#noteActivity(); // (was in #facet — moved out so the resurrection pass stays idle-neutral)
     if (path.length === 0) throw new Error(`facet: name a method`);
-    // OBJECT ref = `itx.load(...)`: materialize a loaded class hosted as a facet, or address a
-    // running one by name. A method walks receiver-preservingly (invokePath); a top-level `.fetch`
-    // forwards to the facet's own fetch (a 101 flows DO→facet natively).
+    const facet = await this.#resolveFacet(ref);
+    // A top-level `.fetch` forwards to the facet's own fetch (a 101 flows DO→facet natively), never
+    // through invokePath's await-walk. A method walks receiver-preservingly (invokePath).
+    if (path.length === 1 && path[0] === "fetch")
+      return (facet as Fetcher).fetch(args[0] as Request);
+    const what =
+      typeof ref === "string"
+        ? `facet "${ref}"`
+        : ref.name
+          ? `named "${ref.name}"`
+          : `worker "${ref.className}"`;
+    return invokePath(facet, path, args, what);
+  }
+
+  /** THE one facet resolver: turn ANY ref into a live facet handle. A NAME (string) resolves an
+   *  inline core (always at head, a synthesized snapshot view), an enabled processor (its mount
+   *  names the source), or a named durable instance (its registration does). A LOAD SPEC
+   *  (`{ source, className, name? }` — `itx.load(...)`) materializes the class as a facet, first
+   *  registering a NAMED instance durably (parent kv) so a later `load({ name })` re-materializes it
+   *  after an eviction — its own DO storage having survived. Throws NO_FACET for an unknown name. */
+  async #resolveFacet(
+    ref: string | { source?: unknown; className?: string; name?: string },
+  ): Promise<unknown> {
     if (typeof ref !== "string") {
-      const facet = await this.#loadFacet(ref);
-      if (path.length === 1 && path[0] === "fetch")
-        return (facet as Fetcher).fetch(args[0] as Request);
-      return invokePath(
-        facet,
-        path,
-        args,
-        ref.name ? `named "${ref.name}"` : `worker "${ref.className}"`,
+      if (ref.source !== undefined && ref.className) {
+        const source = toExpression(ref.source as ItxExpression);
+        if (ref.name)
+          this.ctx.storage.kv.put(`named-facet:${ref.name}`, {
+            source: print(source),
+            className: ref.className,
+          });
+        return this.#statefulFacet({ source, className: ref.className }, ref.name);
+      }
+      if (ref.name) return this.#resolveFacet(ref.name); // { name } ⇒ address by name (below)
+      throw new Error(
+        `load: pass { source, className } to run a facet, or { name } to address one`,
       );
     }
-    return invokePath(await this.#addressNamed(ref), path, args, `facet "${ref}"`);
-  }
-
-  /** MATERIALIZE from `{ source, className, name? }`, or ADDRESS an existing one by `{ name }`. A
-   *  NAMED instance registers `name → { source, className }` durably (parent kv), so a later
-   *  `load({ name })` re-materializes it AFTER an eviction — its own DO storage having survived. */
-  async #loadFacet(ref: { source?: unknown; className?: string; name?: string }): Promise<unknown> {
-    if (ref.source !== undefined && ref.className) {
-      const source = toExpression(ref.source as string | Expression);
-      if (ref.name)
-        this.ctx.storage.kv.put(`named-facet:${ref.name}`, {
-          source: print(source),
-          className: ref.className,
-        });
-      return this.#statefulFacet({ source, className: ref.className }, ref.name);
-    }
-    if (ref.name) return this.#addressNamed(ref.name);
-    throw new Error(`load: pass { source, className } to run a facet, or { name } to address one`);
-  }
-
-  /** Address a facet by NAME — THE one by-name resolver: an INLINE core (always at head, a
-   *  synthesized snapshot view), an enabled processor (its mount names the source), or a named
-   *  durable instance (its registration does). Throws NO_FACET for an unknown name. */
-  async #addressNamed(name: string): Promise<unknown> {
-    // Inline processors answer at the same address — always at head, so the barrier verb is
-    // trivially satisfied and snapshot needs no catch-up.
-    if (isInlineSlug(name)) {
-      const entry = this.#inline(name);
+    if (isInlineSlug(ref)) {
+      const entry = this.#inline(ref);
       return {
         snapshot: () => ({ offset: entry.throughOffset, state: entry.state }),
         waitUntilProcessed: () => ({ ok: true }),
       };
     }
-    if (this.#facetEntries().some((e) => e.slug === name)) return this.#facet(name);
-    const reg = this.ctx.storage.kv.get(`named-facet:${name}`) as
+    if (this.#facetEntries().some((e) => e.slug === ref)) return this.#facet(ref);
+    const reg = this.ctx.storage.kv.get(`named-facet:${ref}`) as
       | { source: string; className: string }
       | undefined;
     if (reg)
-      return this.#statefulFacet({ source: parse(reg.source), className: reg.className }, name);
-    throw codedError("NO_FACET", `no facet "${name}" enabled or registered`);
+      return this.#statefulFacet({ source: parse(reg.source), className: reg.className }, ref);
+    throw codedError("NO_FACET", `no facet "${ref}" enabled or registered`);
   }
 
   // ── stateful loaded classes: FACETS of this stream (the dedicated runner DO died in 57) ──

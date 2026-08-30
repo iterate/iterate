@@ -1,8 +1,9 @@
 // core/dispatch.ts — match a capability call to a mount, then EXECUTE it against a LIVE object graph
 // (the codec that turns strings ⇄ these structures is ./expression.ts). One engine (`walkSteps`)
 // under three doors — `evaluate` (from a named scope root), `invokePath` (from a bare target),
-// `apply` (a matched mount). `pathProxy` is the programmatic write-half that builds expressions by
-// being called. `match` claims a call for a capability path (longest-prefix; the final segment may
+// `apply` (a matched mount). The dotted write-half (a scope symbol whose access folds into one
+// dispatch) is `InvokeHandle` (core/invoke-handle.ts) — the ONE such primitive, pipelinable over
+// Workers RPC. `match` claims a call for a capability path (longest-prefix; the final segment may
 // consume the call's args as boundary args; the unmatched tail is the remainder apply() replays).
 
 import { codedError } from "./errors.ts";
@@ -158,23 +159,4 @@ export async function apply(
   ({ value, receiver } = await walkSteps({ value, receiver }, m.remainder, "remainder"));
   if (extraArgs) value = await callOn(value, receiver, extraArgs);
   return await value;
-}
-
-/** The dotted surface as a runtime Proxy — the programmatic write-half of the codec: property gets
- *  accumulate path segments, calling hands `(segments, args)` to `call`. `then`/symbol probes return
- *  undefined so a proxy is never mistaken for a thenable mid-await. Calling the BARE root is a loud
- *  error (mirroring the parser). Mid-chain CAPABILITY handles that must survive an RPC boundary use
- *  `InvokeHandle` (a real RpcTarget) instead — a bare Proxy is NonPipelinable over Workers RPC. */
-export function pathProxy(call: (segments: string[], args: unknown[]) => unknown): unknown {
-  const build = (segments: string[]): unknown =>
-    new Proxy(function () {} as object, {
-      get: (_t, p) =>
-        p === "then" || typeof p === "symbol" ? undefined : build([...segments, p as string]),
-      apply: (_t, _this, args) => {
-        if (segments.length === 0)
-          throw new Error("cannot call the scope symbol itself — name a capability first");
-        return call(segments, args as unknown[]);
-      },
-    });
-  return build([]);
 }

@@ -38,7 +38,8 @@ import {
   type Expression,
   type ItxExpression,
 } from "./core/expression.ts";
-import { apply, match, pathProxy, type Match } from "./core/dispatch.ts";
+import { apply, match, type Match } from "./core/dispatch.ts";
+import { InvokeHandle } from "./core/invoke-handle.ts";
 import type { ProcessorStream, ReduceArgs, ReduceOnlyProcessor } from "./core/processor.ts";
 
 const tableLog = createLogger("capability-table");
@@ -366,9 +367,10 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
 
   /** The `itx` scope symbol at a given recursion depth: dotted/called access re-enters
    *  `resolve` with the CURRENT state, carrying the depth. This is what makes alias mounts
-   *  compose and default routes forward whole calls. */
+   *  compose and default routes forward whole calls. An `InvokeHandle` (the ONE dotted-fold
+   *  primitive) — the same fold a bare `pathProxy` did, now on a pipelinable brand. */
   #itxAtDepth(depth: number): unknown {
-    return pathProxy((segments, args) => {
+    return new InvokeHandle((segments, args) => {
       const last = segments[segments.length - 1] as string;
       return this.#resolveCurrent(["itx", ...segments.slice(0, -1), [last, ...args]], depth);
     });

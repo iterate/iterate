@@ -1,6 +1,6 @@
 // Executable spec for the capability-path matcher + the expression evaluator/dispatcher.
 import { describe, expect, test } from "vitest";
-import { apply, evaluate, match, pathProxy } from "./dispatch.ts";
+import { apply, evaluate, match } from "./dispatch.ts";
 import { parse, parseCapabilityPath } from "./expression.ts";
 
 // ───────────────────────────── capability-path matching ─────────────────────────────
@@ -158,8 +158,9 @@ describe("evaluate/apply", () => {
     });
   });
 
-  test("calling the bare scope symbol is a loud error", () => {
-    const itx = pathProxy(() => "unreachable") as (...args: unknown[]) => unknown;
-    expect(() => itx(1)).toThrow(/cannot call the scope symbol itself/);
+  test("calling the bare scope symbol is a loud error (the parser guards it)", () => {
+    // The dotted write-half is now `InvokeHandle`; the "can't call the scope root itself" guard
+    // lives in the codec parser (a bare `itx(...)` never becomes a legal expression).
+    expect(() => parse("itx(1)")).toThrow(/cannot call the scope symbol itself/);
   });
 });
