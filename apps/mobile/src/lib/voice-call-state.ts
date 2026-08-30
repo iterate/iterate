@@ -51,11 +51,13 @@ export function useVoiceCallActive(): boolean {
 }
 
 /** Whether the floating call controls should exist at all: a live call, or
- * an ended one whose caption still needs acting on (a failure to read, the
- * mic-denied tap-through to Settings). A plain "call ended" needs nothing. */
+ * an ended one whose caption still needs acting on — a failure, "no answer
+ * — try again", the mic-denied tap-through to Settings. Only a plain
+ * "call ended" (with its heard-tally suffix) needs nothing (Bugbot, PR
+ * #2548: the no-answer caption used to vanish with the overlay). */
 export function useVoiceCallOverlayVisible(): boolean {
   const status = useVoiceCallStatus();
   if (status === null) return false;
   if (status.phase !== "ended") return true;
-  return status.micDenied === true || status.caption.startsWith("call failed");
+  return status.micDenied === true || !status.caption.startsWith("call ended");
 }

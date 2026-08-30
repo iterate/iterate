@@ -57,6 +57,15 @@ export async function startChatCall(
     streamPath: chatVoiceStreamPath(chatPath),
     colleaguePath: chatPath,
   };
+  /* ONE CALL AT A TIME, enforced at the one entry point: dialing while a
+   * call is live hangs the old one up first (same doctrine as texting the
+   * chat you are calling) — without this, a second dial orphaned the first
+   * call's handles and left two live audio sessions (Bugbot, PR #2548). */
+  await activeCall?.hangUp();
+  /* The target is stored BEFORE the permission gate: a mic denial needs a
+   * home for its "tap to open Settings" caption, and the overlay mounts by
+   * target (Bugbot, PR #2548). */
+  queryClient.setQueryData<VoiceCallTarget>(targetKey, target);
   const audio = createNativeVoiceAudio();
   if ((await audio.requestPermission()) !== "granted") {
     const denied: VoiceUiStatus = {
@@ -71,7 +80,6 @@ export async function startChatCall(
   const { streamPath } = target;
   const session = audio.createSession();
   activeSession = session;
-  queryClient.setQueryData<VoiceCallTarget>(targetKey, target);
   queryClient.setQueryData(sheetKey, true);
   /* Every call starts on the loudspeaker — hold-to-talk means the phone is
    * in front of you, not on your ear. */
