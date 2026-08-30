@@ -85,7 +85,7 @@ const provB = await (async () => {
   const sess = itxB;
   return sess.provide({
     path: "itx.probe",
-    target: `itx.workers.get({ source: "itx.kv.get('src/probe.js')" })`,
+    target: `itx.load("itx.kv.get('src/probe.js')").getEntrypoint()`,
   });
 })();
 const rich = await attempt("rich args into the stateless run lane", () =>

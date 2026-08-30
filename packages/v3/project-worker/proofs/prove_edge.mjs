@@ -29,10 +29,16 @@ await itx.invokeCapability({
   path: ["kv", "put"],
   args: [
     "src/mine.js",
-    "export default async (itx) => `from-kv:${(await itx.whoami()).projectId}`;",
+    `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class Mine extends WorkerEntrypoint {
+  async run() {
+    const itx = await this.env.ITX.get();
+    return \`from-kv:\${(await itx.whoami()).projectId}\`;
+  }
+}`,
   ],
 });
-const out = await itx.invoke(`itx.workers.get({source:"itx.kv.get('src/mine.js')"}).run()`);
+const out = await itx.invoke(`itx.load("itx.kv.get('src/mine.js')").getEntrypoint().run()`);
 check(
   out === `from-kv:${CTX}`,
   "kv-stored source runs as a worker (itx round-trip inside)",
@@ -42,7 +48,7 @@ check(
 // 3. fetchCap: a fetch-shaped capability through the SESSION (no /cap door)
 await itx.provide({
   path: "itx.site",
-  target: `itx.workers.get({ source: "itx.kv.get('src/site.js')" })`,
+  target: `itx.load("itx.kv.get('src/site.js')").getEntrypoint()`,
 });
 const resp = await itx.fetchCap("itx.site", new Request(`https://${BASE}/`));
 const html = await resp.text();

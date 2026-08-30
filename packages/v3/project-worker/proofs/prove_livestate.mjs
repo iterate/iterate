@@ -98,7 +98,7 @@ await seedSources(itx, ["chatroom", "chunky"]);
 // ── mini-app flavor: the chatroom (SDK liveState helper) ──
 await itx.provide({
   path: "itx.chat",
-  target: `itx.facets.get({ source: "itx.kv.get('src/chatroom.js')", className: 'Chatroom' })`,
+  target: `itx.load("itx.kv.get('src/chatroom.js')").getDurableObjectClass('Chatroom').get()`,
 });
 
 const chat = liveClient(async () =>

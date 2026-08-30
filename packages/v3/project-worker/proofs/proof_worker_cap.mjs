@@ -1,5 +1,5 @@
 // proof_worker_cap.mjs — DYNAMIC WORKER CODE AS A CAPABILITY (owner's ask, 2026-08-19):
-// providing a capability that targets itx.facets.get({source,className}) — a stateful worker
+// providing a capability that targets itx.load(src).getDurableObjectClass(className).get() — a stateful worker
 // class — and calling RPC methods on it, INCLUDING pipelined deep dotted access where a method
 // or getter returns a NESTED RpcTarget (the sub-capability case), not just a plain object.
 import { newWebSocketRpcSession } from "capnweb";
@@ -34,7 +34,7 @@ await itx.invokeCapability({ path: ["kv", "put"], args: ["src/sheet.js", src] })
 // 1. PROVIDE a capability that targets dynamic worker code (stateful class)
 await itx.provide({
   path: "itx.sheet",
-  target: "itx.facets.get({ source: \"itx.kv.get('src/sheet.js')\", className: 'Sheet' })",
+  target: "itx.load(\"itx.kv.get('src/sheet.js')\").getDurableObjectClass('Sheet').get()",
 });
 const set = await itx.invokeCapability({ path: ["sheet", "set"], args: [21] });
 check(set === 21, "1. provide→stateful worker capability: set(21)", String(set));
@@ -72,11 +72,17 @@ await itx.invokeCapability({
   path: ["kv", "put"],
   args: [
     "src/greet.js",
-    "export default async (itx, who) => `hi ${who} from ${(await itx.whoami()).projectId}`;",
+    `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class Greet extends WorkerEntrypoint {
+  async run(who) {
+    const itx = await this.env.ITX.get();
+    return \`hi \${who} from \${(await itx.whoami()).projectId}\`;
+  }
+}`,
   ],
 });
 const greeting = await itx.invoke(
-  "itx.workers.get({source:\"itx.kv.get('src/greet.js')\"}).run('jonas')",
+  "itx.load(\"itx.kv.get('src/greet.js')\").getEntrypoint().run('jonas')",
 );
 check(
   greeting === `hi jonas from ${CTX}`,

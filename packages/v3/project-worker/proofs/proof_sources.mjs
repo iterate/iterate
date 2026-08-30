@@ -4,7 +4,10 @@
 //   await seedSources(itx, ["site", "counter"]);
 //   ...source: "itx.kv.get('src/site.js')"...
 export const SOURCES = {
-  "src/hello.js": `export default (itx, name) => "hello " + (name ?? "world");`,
+  "src/hello.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class Hello extends WorkerEntrypoint {
+  async run(name) { return "hello " + (name ?? "world"); }
+}`,
   "src/counter.js": `import { DurableObject } from "cloudflare:workers";
 export class Counter extends DurableObject {
   async increment(by) { const n = ((await this.ctx.storage.get("n")) ?? 0) + by; await this.ctx.storage.put("n", n); return n; }
@@ -25,10 +28,15 @@ export class Chatroom extends DurableObject {
   }
   state() { return this.#chat.snapshot(); }
 }`,
-  "src/probe.js": `export default async (itx, v, cb) => ({
-  ctor: v?.constructor?.name ?? typeof v,
-  cbResult: typeof cb === "function" ? await cb(7) : null,
-});`,
+  "src/probe.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class Probe extends WorkerEntrypoint {
+  async run(v, cb) {
+    return {
+      ctor: v?.constructor?.name ?? typeof v,
+      cbResult: typeof cb === "function" ? await cb(7) : null,
+    };
+  }
+}`,
   "src/keeper.js": `import { DurableObject } from "cloudflare:workers";
 export class Keeper extends DurableObject {
   async stash() {
@@ -89,7 +97,8 @@ export class UserTally extends StreamProcessor {
     return { counts: { ...state.counts, [event.type]: (state.counts[event.type] ?? 0) + 1 } };
   }
 }`,
-  "src/site.js": `export default {
+  "src/site.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class Site extends WorkerEntrypoint {
   async fetch(request) {
     if ((request.headers.get("Upgrade") || "").toLowerCase() === "websocket") {
       const pair = new WebSocketPair();
@@ -99,7 +108,7 @@ export class UserTally extends StreamProcessor {
     }
     return new Response("<!doctype html><title>dynamic site</title><h1>hello from a dynamic web capability</h1>", { headers: { "content-type": "text/html" } });
   }
-};`,
+}`,
 };
 
 /** Seed the named sources (short names: "site", "counter", …) into the project's kv. */

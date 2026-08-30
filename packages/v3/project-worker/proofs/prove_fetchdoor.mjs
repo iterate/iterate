@@ -15,13 +15,13 @@ function check(cond, label, detail = "") {
 
 // Mount the seeded /site.js on the fetch door: a mount whose target is a stateless dynamic worker
 // (its .fetch serves /cap). `type:'code'` provisioning was folded into the ONE provide door —
-// a capability is an itx EXPRESSION (workers.get), same as every other mount.
+// a capability is an itx EXPRESSION (load(src).getEntrypoint()), same as every other mount.
 const session = newWebSocketRpcSession(`wss://${BASE}/api?ctx=${CTX}`);
 const itx = await session.get();
 await seedSources(itx, ["site"]);
 await itx.provide({
   path: "itx.site",
-  target: "itx.workers.get({ source: \"itx.kv.get('src/site.js')\" })",
+  target: "itx.load(\"itx.kv.get('src/site.js')\").getEntrypoint()",
 });
 
 // ── 4a. GET through the one fetch door ──

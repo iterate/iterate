@@ -62,18 +62,22 @@ check(
 
 // ── lane 2: a DYNAMIC WORKER via env.ITX.get() — the callback appends to the stream (observable) ──
 const CONSUMER = `
-export default async function run(itx) {
-  // itx here is env.ITX.get() — the real scope. Plain dotted access; the callback runs back HERE.
-  await new Promise((resolve) =>
-    itx.demo.timer.callLater(250, async () => {
-      await itx.stream.append({ type: 'pinged-from-worker' }); // AWAIT so it lands before we return
-      resolve();
-    }),
-  );
-  return { ran: true };
+import { WorkerEntrypoint } from "cloudflare:workers";
+export default class Consumer extends WorkerEntrypoint {
+  async run() {
+    // env.ITX.get() is the real scope. Plain dotted access; the callback runs back HERE.
+    const itx = await this.env.ITX.get();
+    await new Promise((resolve) =>
+      itx.demo.timer.callLater(250, async () => {
+        await itx.stream.append({ type: 'pinged-from-worker' }); // AWAIT so it lands before we return
+        resolve();
+      }),
+    );
+    return { ran: true };
+  }
 }`;
 await itx.invokeCapability({ path: ["kv", "put"], args: ["src/consumer.js", CONSUMER] });
-const ran = await itx.workers.get({ source: "itx.kv.get('src/consumer.js')" }).run();
+const ran = await itx.load("itx.kv.get('src/consumer.js')").getEntrypoint().run();
 check(
   ran?.ran === true,
   "dynamic worker cap ran to completion (its callback resolved it)",
