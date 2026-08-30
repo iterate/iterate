@@ -56,6 +56,7 @@ import {
 import { Markdown } from "../../../components/markdown.tsx";
 import { useDebouncedValue } from "../../../lib/use-debounced-value.ts";
 import { AttachmentChips } from "../../../components/attachment-chips.tsx";
+import { CrashGuard } from "../../../components/crash-guard.tsx";
 import { AttachmentSheet } from "../../../components/attachment-sheet.tsx";
 import { RecordControls } from "../../../components/record-controls.tsx";
 import {
@@ -108,7 +109,15 @@ import { getServerBaseUrl } from "../../../lib/storage.ts";
 import { buildStreamViewerUrl } from "../../../lib/stream-url.ts";
 import { colors, radius, spacing } from "../../../lib/theme.ts";
 
-export default function ChatScreen() {
+export default function ChatScreenGuarded() {
+  return (
+    <CrashGuard label="chat">
+      <ChatScreen />
+    </CrashGuard>
+  );
+}
+
+function ChatScreen() {
   const { projectId, slug, path, seed } = useLocalSearchParams<{
     projectId: string;
     slug?: string;
