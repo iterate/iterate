@@ -454,6 +454,14 @@ export class StreamDurableObject extends DurableObject<Env> {
   // the flag with an eviction is exactly the point.
   #facetsResurrected = false;
 
+  /** EVERY facet name materialized this incarnation — processors (`proc:<slug>`) AND stateful
+   *  instances (`named:<name>` / `stateful:<class>:<hash>`), in ONE set. The quiesce alarm aborts
+   *  the whole set in one loop so no LIVE facet (of either kind) pins this actor awake. In memory
+   *  on purpose: facets die with the incarnation, and a fresh call re-materializes from durable
+   *  storage. (Only processors are also RESURRECTED — `#facetEntries`, the durable driven registry;
+   *  a stateful facet re-materializes on its next call, so it needs no catch-up pass.) */
+  readonly #liveFacets = new Set<string>();
+
   async alarm(): Promise<void> {
     this.#alarmArmer.markFired();
     // Facets have no alarms (workerd#6810) — the parent proxies. The subscription-forwarder's
@@ -494,21 +502,17 @@ export class StreamDurableObject extends DurableObject<Env> {
       // so nothing is lost (replies are output-gated; abort keeps storage; rebuild ~50-700ms).
       // Never while a drive/reduce is in flight: aborting mid-reduce is the stall the resurrection
       // pass exists to heal.
-      for (const { slug } of this.#facetEntries()) {
-        try {
-          this.ctx.facets.abort(`proc:${slug}`, "idle quiesce");
-        } catch {
-          /* facet not running — already quiesced */
-        }
-      }
-      for (const facetName of this.#statefulFacetNames) {
+      // ONE loop over every live facet — processors and stateful instances alike (they pin the
+      // actor the same way). Their cursors/state are durable in their OWN facet storage, so abort
+      // loses nothing; the next drive/call re-materializes.
+      for (const facetName of this.#liveFacets) {
         try {
           this.ctx.facets.abort(facetName, "idle quiesce");
         } catch {
           /* facet not running — already quiesced */
         }
       }
-      this.#statefulFacetNames.clear();
+      this.#liveFacets.clear();
       // Same doctrine for the paged-in RetainedCallbackInvoker stubs: retaining one pins this
       // actor awake, and a page always gets it back — dispose them with the idle facets.
       this.#rpcStubs.disposeRetainedStubs();
@@ -706,6 +710,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     // an unconfigured facet that storms every drive.
     const entry = this.#facetEntries().find((e) => e.slug === slug);
     if (!entry) throw codedError("NO_FACET", `no facet processor "${slug}" enabled`);
+    this.#liveFacets.add(`proc:${slug}`); // tracked for the one quiesce loop, beside stateful facets
     let handle: FacetProcessorHandle;
     if (!entry.ref) {
       const exports = (this.ctx as unknown as { exports: Record<string, unknown> }).exports;
@@ -831,6 +836,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       throw new Error(`"${slug}" is an inline core processor — it cannot be disabled`);
     this.#driveChains.delete(slug);
     this.#driveDeliveredThrough.delete(slug); // a re-enable must not inherit a scanned range it never saw
+    this.#liveFacets.delete(`proc:${slug}`);
     await this.revokeCapability({ path: `itx.subscribers.${slug}` });
     const facets = this.ctx.facets as unknown as { delete?: (name: string) => void };
     if (typeof facets.delete === "function") facets.delete(`proc:${slug}`);
@@ -907,12 +913,6 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   // ── stateful loaded classes: FACETS of this stream (the dedicated runner DO died in 57) ──
 
-  /** Names of stateful facets materialized THIS incarnation — the quiesce alarm aborts them
-   *  beside the idle processor facets (an IDLE stateful facet must never pin the stream; a
-   *  BUSY one does — the accepted trade of hosting them here). In memory on purpose: facets
-   *  die with the incarnation, and a fresh call re-materializes from durable facet storage. */
-  readonly #statefulFacetNames = new Set<string>();
-
   /** Materialize (or reuse) the facet hosting a loaded `className`. Same confinedWorker +
    *  versionedFacet as userspace processors. A NAMED instance (`itx.load({source, className, name})`)
    *  keys its DO storage on the NAME — two names are two independent states of the same class; an
@@ -926,7 +926,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     const facetName = name
       ? `named:${name}`
       : `stateful:${ref.className}:${hashSource(JSON.stringify(ref.source))}`;
-    this.#statefulFacetNames.add(facetName);
+    this.#liveFacets.add(facetName);
     return this.#durableFacet({
       source: ref.source,
       discriminator: ref.className,
