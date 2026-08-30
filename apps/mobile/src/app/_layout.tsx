@@ -7,6 +7,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { initialWindowMetrics, SafeAreaProvider } from "react-native-safe-area-context";
 import { NoteCaptureOverlay } from "../components/note-composer.tsx";
 import { UpdateBanner } from "../components/update-banner.tsx";
+import { VoiceCallBanner } from "../components/voice-call-banner.tsx";
 import { resetChannelOverrideForNewInstall } from "../lib/build-state.ts";
 import { queryClient } from "../lib/query.ts";
 import { routeInitialNotification } from "../lib/push-device.ts";
@@ -19,6 +20,9 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider initialMetrics={initialWindowMetrics}>
         <QueryClientProvider client={queryClient}>
+          {/* WhatsApp-style live-call strip: extends the top bar down and
+              pushes the app below it; tap returns to the call's chat. */}
+          <VoiceCallBanner />
           <RootStack />
           {/* Global capture composer — floats above every screen (chat
               excepted); see components/note-composer.tsx. */}

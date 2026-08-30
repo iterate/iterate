@@ -23,7 +23,7 @@
 // harmless no-op when reopening an already-created chat from the list.
 
 import { useState } from "react";
-import { useMutation, useQueries, useQuery } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Stack, useLocalSearchParams } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import {
@@ -97,8 +97,12 @@ import {
 } from "../../../lib/approvals.ts";
 import { approverKeyStatus } from "../../../lib/approver.ts";
 import { InThreadApprovalCard } from "../../../components/in-thread-approval.tsx";
+import { VoiceCallChatButton } from "../../../components/voice-call-button.tsx";
 import { useClaimReplyPresented } from "../../../lib/reply-presented.ts";
 import { useLiveEvents } from "../../../lib/use-live-events.ts";
+import { getActiveCall } from "../../../lib/voice-call-session.ts";
+import { useVoiceCallActive, useVoiceCallTarget } from "../../../lib/voice-call-state.ts";
+import { parseVoiceMarkup } from "../../../lib/voice-markup.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
 import { getServerBaseUrl } from "../../../lib/storage.ts";
 import { buildStreamViewerUrl } from "../../../lib/stream-url.ts";
@@ -194,12 +198,22 @@ export default function ChatScreen() {
   const visiblePending = pendingSends.filter(
     (pending) => pending.offset === undefined || !echoedOffsets.has(pending.offset),
   );
+  const callActive = useVoiceCallActive();
+  const callTarget = useVoiceCallTarget();
   const send = useMutation({
     mutationFn: async (input: {
       clientId: string;
       message: string;
       files: ComposerAttachment[];
     }) => {
+      /* Typing to the chat you are CALLING is switching modalities: hang
+       * up first, or the still-live voice narrates every reply into your
+       * pocket and sprays spoken-turn copies through this thread
+       * (observed 2026-08-29 — the "hang up" had only minimised the
+       * sheet, and the call ran on until the idle reaper). */
+      if (callActive && callTarget?.colleaguePath === path) {
+        await getActiveCall()?.hangUp();
+      }
       // Recorded clips pick up their on-device transcript (started at attach
       // time; wait briefly for a straggler) so it rides the <voice-note>
       // part the agent reads.
@@ -334,14 +348,25 @@ export default function ChatScreen() {
           // (still one tap away in the ••• menu) until then.
           title: latestAgentTitle(events.data || []) || path.replace(/^\/agents\//, ""),
           headerRight: () => (
-            <Pressable
-              accessibilityLabel="Stream actions"
-              accessibilityRole="button"
-              onPress={showStreamMenu}
-              style={styles.streamMenu}
-            >
-              <Text style={styles.modeToggle}>•••</Text>
-            </Pressable>
+            <View style={styles.headerActions}>
+              {/* Call this chat: its agent becomes the voice call's backend
+                  and the conversation lands right here in the thread. Voice
+                  machinery streams (lines, voice-notes desks) are not
+                  callable — calling a desk wires a voice line to another
+                  voice line's backend, a hall of mirrors that ate an
+                  afternoon (2026-08-29). */}
+              {baseUrl && !path.startsWith("/agents/voice") ? (
+                <VoiceCallChatButton baseUrl={baseUrl} path={path} projectId={projectId} />
+              ) : null}
+              <Pressable
+                accessibilityLabel="Stream actions"
+                accessibilityRole="button"
+                onPress={showStreamMenu}
+                style={styles.streamMenu}
+              >
+                <Text style={styles.modeToggle}>•••</Text>
+              </Pressable>
+            </View>
           ),
         }}
       />
@@ -708,8 +733,60 @@ function PendingSendBubble({
 }
 
 function MessageBubble({ message }: { message: AgentUiMessageItem }) {
-  const isUser = message.kind === "user";
+  const voice = parseVoiceMarkup(message.text);
   const window = useWindowDimensions();
+  // Hooks above the voice-turn early returns (rules of hooks): tapped photos
+  // open the in-app viewer (components/media-viewer.tsx) on the SAME uri the
+  // bubble already rendered — instant from the image cache, with pinch-zoom
+  // and swipe-down, instead of a browser page reloading it.
+  const [viewingImage, setViewingImage] = useState<AgentUiFileAttachment | null>(null);
+  /* Spoken turns copied from a voice call: the person's side renders like
+   * their normal messages and the voice's side like the bot's — both in
+   * italics so a glance separates said from typed (on-device feedback,
+   * 2026-08-29). The reducer sees developer rows; the SIDE comes from the
+   * tag's speaker, not the item kind. */
+  if (voice?.kind === "turn") {
+    /* A spoken turn the facet stamped as machinery — reading the backend's
+     * reply aloud, a status aside — collapses: the substance is already in
+     * the thread as the backend's own message right beside it. The stamp
+     * comes from the FACET (it knows what drew each answer); the backend
+     * model tags nothing (asking it to proved unreliable — it kept tagging
+     * an hour after the call died, 2026-08-29). */
+    if (voice.speaker === "assistant" && voice.spokenKind !== null) {
+      return (
+        <VoiceNoteRow
+          id={message.id}
+          label={voice.spokenKind === "status" ? "status aside" : "said aloud"}
+          text={voice.text}
+        />
+      );
+    }
+    const person = voice.speaker === "person";
+    return (
+      <View style={[styles.bubble, person ? styles.bubbleUser : styles.bubbleAssistant]}>
+        <View style={styles.bubbleTextInset}>
+          <Text
+            style={[person ? styles.bubbleUserText : styles.voiceAssistantText, styles.voiceText]}
+            selectable
+          >
+            {voice.text}
+            {voice.interrupted ? " —" : ""}
+          </Text>
+        </View>
+      </View>
+    );
+  }
+  /* Call machinery worth having on the record, not conversation: a note
+   * the frontend sent its backend, or the backend's tagged reply (whose
+   * words the caller already heard as the spoken turn beside it) —
+   * collapsed to one row each. */
+  if (voice?.kind === "note") {
+    return <VoiceNoteRow id={message.id} label="note to backend" text={voice.text} />;
+  }
+  if (voice?.kind === "reply") {
+    return <VoiceNoteRow id={message.id} label="backend replied" text={voice.text} />;
+  }
+  const isUser = message.kind === "user";
   // A photo frame is exactly this wide, while a bubble would otherwise grow to
   // 85% of the screen — so a caption longer than the photo would stretch the
   // bubble past it and reopen the gap at the photo's edge. Cap the caption at
@@ -725,10 +802,6 @@ function MessageBubble({ message }: { message: AgentUiMessageItem }) {
     media.length > 0 || audios.length > 0 || message.text.includes("<user-location ")
       ? photoFrameMaxWidth(window.width)
       : null;
-  // Tapped photos open the in-app viewer (components/media-viewer.tsx) on
-  // the SAME uri the bubble already rendered — instant from the image cache,
-  // with pinch-zoom and swipe-down, instead of a browser page reloading it.
-  const [viewingImage, setViewingImage] = useState<AgentUiFileAttachment | null>(null);
   // The composer sends each photo/video's pixel dimensions as an
   // <attachment .../> part in the text, so frames can be sized before the
   // media loads — no reflow. Shared locations arrive as <user-location .../>
@@ -820,6 +893,32 @@ function MessageBubble({ message }: { message: AgentUiMessageItem }) {
         ) : null}
       </Modal>
     </View>
+  );
+}
+
+/** One tappable row for a frontend→backend voice note, collapsed by
+ * default — the query cache holds the toggle (no useState, composer
+ * precedent), keyed per item so each note expands alone. */
+function VoiceNoteRow({ id, label, text }: { id: string; label: string; text: string }) {
+  const cache = useQueryClient();
+  const { data: open } = useQuery<boolean>({
+    queryKey: ["voice-note-open", id],
+    queryFn: () => false,
+    staleTime: Infinity,
+    initialData: false,
+  });
+  return (
+    <Pressable
+      accessibilityLabel={open ? `Collapse ${label}` : `Expand ${label}`}
+      accessibilityRole="button"
+      onPress={() => cache.setQueryData(["voice-note-open", id], !open)}
+      style={styles.voiceNoteRow}
+    >
+      <Text numberOfLines={open ? undefined : 1} style={styles.voiceNoteText}>
+        🎙 {label}
+        {open ? `\n${text}` : ` · ${text}`}
+      </Text>
+    </Pressable>
   );
 }
 
@@ -1065,6 +1164,11 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     padding: spacing.lg,
   },
+  headerActions: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.sm,
+  },
   streamMenu: {
     alignItems: "center",
     borderColor: colors.border,
@@ -1104,6 +1208,19 @@ const styles = StyleSheet.create({
   },
   bubbleUserText: { color: colors.background, fontSize: 15, lineHeight: 21 },
   bubbleAssistantText: { color: colors.text, fontSize: 15, lineHeight: 21 },
+  voiceText: { fontStyle: "italic" },
+  voiceAssistantText: { color: colors.text, fontSize: 15, lineHeight: 21 },
+  voiceNoteRow: {
+    alignSelf: "flex-start",
+    maxWidth: "85%",
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderWidth: 1,
+  },
+  voiceNoteText: { color: colors.textMuted, fontSize: 12, fontStyle: "italic" },
   bottomStack: { gap: spacing.sm },
   eventRow: { gap: 4 },
   eventType: { color: colors.textFaint, fontSize: 11, fontFamily: "Menlo" },

@@ -2,7 +2,12 @@
 // handle and the audio session (the same interfaces the phone, the Node e2e,
 // and a future library swap use; nothing here mocks internals).
 import { expect, test } from "vitest";
-import { captionForEvent, startVoiceCall, type VoiceCallStatus } from "./voice-call.ts";
+import {
+  captionForEvent,
+  startVoiceCall,
+  transcriptItems,
+  type VoiceCallStatus,
+} from "./voice-call.ts";
 
 const SPK = "events.iterate.com/voice-agent/spk-frame";
 const ENDED = "events.iterate.com/voice-agent/conversation-ended";
@@ -168,6 +173,27 @@ test("a microphone that will not start ends the call cleanly instead of leaving 
   /* Failed before any connection opened — nothing to close. */
 });
 
+test("the keepalive heartbeat runs for the call's life and dies with it", async () => {
+  const h = makeHarness();
+  const call = await startVoiceCall({ ...h.deps, keepaliveIntervalMs: 4 });
+  const beats = () => h.appends.filter((a) => a.type.endsWith("/keepalive"));
+  /* Poll-until with a watchdog, not a fixed sleep: a loaded CI runner can
+   * starve a 4ms interval past any fixed wait (measured: one beat in 20ms
+   * on Depot). Two beats prove periodicity. */
+  const deadline = Date.now() + 2_000;
+  while (beats().length < 2 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  expect(beats().length).toBeGreaterThanOrEqual(2);
+  expect(beats()[0]).toMatchObject({ ephemeral: true });
+  await call.hangUp();
+  /* A cleared interval cannot fire again, so a short fixed wait suffices
+   * to catch a timer that survived finish(). */
+  const after = beats().length;
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  expect(beats().length).toBe(after);
+});
+
 test("a stalled socket drops mic frames instead of queueing the past", async () => {
   const h = makeHarness({ stallAppends: true });
   const call = await startVoiceCall(h.deps);
@@ -223,6 +249,77 @@ test("captionForEvent stays quiet for events a glancing human does not need", ()
   expect(
     captionForEvent("events.iterate.com/voice-agent/colleague-note", { text: "y".repeat(200) }),
   ).toMatch(/…$/);
+});
+
+test("transcriptItems: both sides, notes, deduped statuses, empties skipped", () => {
+  const items = transcriptItems([
+    {
+      type: "events.iterate.com/voice-agent/utterance-transcript",
+      offset: 1,
+      payload: { text: "what's the weather?" },
+    },
+    {
+      type: "events.iterate.com/voice-agent/answer-transcript",
+      offset: 2,
+      payload: { text: "Let me check." },
+    },
+    /* The facet's quiet opening status, then the same folded line twice —
+     * one status row, not three. */
+    {
+      type: "events.iterate.com/voice-agent/colleague-status",
+      offset: 3,
+      payload: { activity: "checking the forecast" },
+    },
+    {
+      type: "events.iterate.com/voice-agent/colleague-status",
+      offset: 4,
+      payload: { activity: "checking the forecast" },
+    },
+    /* A waitingFor-only patch says nothing a glancing human needs. */
+    {
+      type: "events.iterate.com/voice-agent/colleague-status",
+      offset: 5,
+      payload: { waitingFor: null },
+    },
+    {
+      type: "events.iterate.com/voice-agent/colleague-note",
+      offset: 6,
+      payload: { text: "Sunny, 24 degrees." },
+    },
+    /* An interrupted answer keeps its words, marked. */
+    {
+      type: "events.iterate.com/voice-agent/answer-transcript",
+      offset: 7,
+      payload: { text: "It's sunny and", cancelled: true },
+    },
+    /* Silence heard as a turn is not a row. */
+    {
+      type: "events.iterate.com/voice-agent/utterance-transcript",
+      offset: 8,
+      payload: { text: "" },
+    },
+    /* Machinery events are not conversation. */
+    { type: "events.iterate.com/voice-agent/ptt-start", offset: 9, payload: {} },
+  ]);
+  expect(items).toEqual([
+    { key: "e1", kind: "you", text: "what's the weather?" },
+    { key: "e2", kind: "voice", text: "Let me check." },
+    { key: "e3", kind: "status", text: "checking the forecast" },
+    { key: "e6", kind: "backend", text: "Sunny, 24 degrees." },
+    { key: "e7", kind: "voice", text: "It's sunny and —" },
+  ]);
+});
+
+test("transcriptItems: a failed script's status carries its error", () => {
+  expect(
+    transcriptItems([
+      {
+        type: "events.iterate.com/voice-agent/colleague-status",
+        offset: 1,
+        payload: { phase: "a script failed", failure: "TypeError: no ledger" },
+      },
+    ]),
+  ).toEqual([{ key: "e1", kind: "status", text: "a script failed — TypeError: no ledger" }]);
 });
 
 /* ------------------------------------------------------------- harness --- */
