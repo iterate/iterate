@@ -170,7 +170,7 @@ const SITE_SOURCE = `export default {
 };`;
 
 // BUG: the loaded-worker lane is DEAD in the harness lane — every `itx.workers.get(...)`
-//   capability 500s at materialization. agent-runtime.ts#confinedWorker pins
+//   capability 500s at materialization. worker-loader.ts#confinedWorker pins
 //   compatibilityFlags: ["allow_irrevocable_stub_storage"] on every loader child, and the
 //   harness's local workerd rejects the DYNAMIC child spec with "The compatibility flag
 //   allow_irrevocable_stub_storage is experimental ... you must pass --experimental on the

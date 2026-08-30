@@ -30,7 +30,7 @@ import {
   loadConfinedWorker,
   versionedFacet,
   type WorkerSource,
-} from "./core/agent-runtime.ts";
+} from "./core/worker-loader.ts";
 import { createLogger } from "./core/logs.ts";
 import {
   breakerRemaining,

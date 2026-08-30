@@ -17,7 +17,7 @@
 // named instances) — address by name, no source. `itx.runScript(lambda)` is sugar for the one
 // bare-lambda case (wrap → `load(...).getEntrypoint().run`).
 
-import { loadConfinedWorker, type WorkerSource } from "./core/agent-runtime.ts";
+import { loadConfinedWorker, type WorkerSource } from "./core/worker-loader.ts";
 import { itxEntrypointFor } from "./itx-entrypoint.ts";
 import { newHttpBatchRpcSession } from "capnweb";
 import type { Expression } from "./core/expression.ts";

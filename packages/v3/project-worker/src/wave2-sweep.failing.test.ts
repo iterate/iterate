@@ -1,5 +1,5 @@
 // wave2-sweep.failing.test.ts — BUG-HUNT WAVE 2, unit lane: the wave-1 DEFECT SHAPES hunted in
-// the files wave 1 didn't reach (agent-runtime cacheKey composition, the capability table's
+// the files wave 1 didn't reach (worker-loader cacheKey composition, the capability table's
 // ARRAY-path door, ProcessorFacet identity durability, shared egress).
 //
 // Every test asserts CORRECT behavior. `test.fails(...)` marks a case VERIFIED failing by
@@ -28,7 +28,7 @@ vi.mock("cloudflare:workers", () => ({
 }));
 
 import { substituteHeaderSecrets } from "@v3/shared/egress";
-import { confinedWorker, facetLoaderOwner } from "./core/agent-runtime.ts";
+import { confinedWorker, facetLoaderOwner } from "./core/worker-loader.ts";
 import { DurableObjectNameCodec } from "./core/durable-object-names.ts";
 import { type Expression } from "./core/expression.ts";
 import {
@@ -287,7 +287,7 @@ test.todo(
 
 test.todo(
   "S1 — USERSPACE processor props-refresh end-to-end: versionedFacet keys restart on CONTENT " +
-    "hash only (agent-runtime.ts), so re-enabling a loader-hosted processor with new props " +
+    "hash only (worker-loader.ts), so re-enabling a loader-hosted processor with new props " +
     "restarts nothing and the runner's memoized instance keeps the old props (the built-in " +
     "twin is verified above). Needs the Worker Loader — DEFECTS.md defect 28.",
 );

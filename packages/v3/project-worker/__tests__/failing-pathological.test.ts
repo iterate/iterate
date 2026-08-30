@@ -367,7 +367,7 @@ export default class FanProbe extends StreamProcessor {
 `;
 
 test.fails("BUG: 50 userspace processors — the loader lane cannot materialize AT ALL under the local harness", async () => {
-  // BUG: confinedWorker (core/agent-runtime.ts) sets compatibilityFlags:
+  // BUG: confinedWorker (core/worker-loader.ts) sets compatibilityFlags:
   //      ["allow_irrevocable_stub_storage"] on every LOADER.get worker; local workerd (as
   //      booted by wrangler createTestHarness) refuses experimental flags without
   //      --experimental, so the very FIRST enableProcessor with a userspace ref rejects:

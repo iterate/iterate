@@ -1,4 +1,8 @@
-// agent-runtime.ts — code injected into every loaded agent's confined isolate.
+// worker-loader.ts — THE loader: wrap Cloudflare's `env.LOADER` (a `WorkerLoader`) into the two
+// hosts this system runs dynamic code under — a stateless WorkerEntrypoint isolate, or a durable
+// DurableObject facet. `confinedWorker` mints the confined isolate (the billed cacheKey lives here);
+// `loadConfinedWorker` is the one shared "load the code" step; `versionedFacet` hosts a loaded class
+// as a facet with a source-change restart marker; `resolveSource` normalizes a source to modules.
 //
 // A loaded worker's `env.ITX` is a Workers-RPC service binding to the `ItxEntrypoint`. It reaches
 // the genuine itx scope with `env.ITX.get()` — a real `Itx` RpcTarget — and then writes plain
@@ -138,7 +142,7 @@ function asModules(result: unknown, what: string): Record<string, string> {
  *  `type:"repo"` is deliberately NOT a third branch here — it is surface sugar that compiles to a
  *  producer expression, so there is ONE resolve path, not a per-variant fan-out. */
 export type WorkerSource = string | Expression | { type: "inline"; files: Record<string, string> };
-export async function resolveSource(
+async function resolveSource(
   invoke: (call: Expression) => Promise<unknown>,
   source: WorkerSource,
   what: string,
