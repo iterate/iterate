@@ -163,6 +163,10 @@ function parseStreamDurableObjectName(name: string | undefined) {
 
 /** The capability host's slug — hosted INLINE (see the inline-core section below). */
 const CAPABILITY_TABLE_SLUG = "capability-table";
+/** The two INLINE reduce-only processors: reduced at the commit point, never real facets — always
+ *  on, un-disableable, addressed by name like any facet. The one predicate for "is this slug an
+ *  inline core?" (was open-coded at four sites). */
+const isInlineSlug = (slug: string): boolean => slug === CAPABILITY_TABLE_SLUG || slug === "core";
 /** The core processor is stateless (pure reduce) — one module-level instance serves every DO. */
 const CORE_PROCESSOR = new CoreStreamProcessor();
 const streamLog = createLogger("stream-do");
@@ -711,9 +715,10 @@ export class StreamDurableObject extends DurableObject<Env> {
     } else {
       handle = (await this.#durableFacet({
         source: entry.ref.source,
-        role: "processor",
         discriminator: slug,
         loadedClassName: "ProcessorFacetRunner",
+        mainModule: "runner.js",
+        extraModules: { "runner.js": PROCESSOR_RUNNER_MODULE },
         facetName: `proc:${slug}`,
         markerKey: `procfacet:${slug}:version`,
         what: `processor "${slug}"`,
@@ -733,20 +738,22 @@ export class StreamDurableObject extends DurableObject<Env> {
     return handle;
   }
 
-  /** Load a class as a FACET of this stream — the ONE loader for both roles: a userspace
-   *  `StreamProcessor` (role "processor", behind the `runner.js` adapter + SDK, commit-driven) and
-   *  a raw stateful `DurableObject` class (role "stateful", loaded directly and called). Shared:
-   *  `resolveSource` → contentHash → `confinedWorker` (kind "facet") → `versionedFacet`; the SDK
-   *  (`processor.js`) rides BOTH roles (every userspace load may `import "./processor.js"`), so the
-   *  two roles differ ONLY in whether the `runner.js` adapter (and its mainModule) rides. The loader
-   *  `owner` is composed collision-free (`facetLoaderOwner`). */
+  /** Load a class as a FACET of this stream — the ONE loader for both a userspace `StreamProcessor`
+   *  (behind the `runner.js` adapter + SDK, commit-driven) and a raw stateful `DurableObject` class
+   *  (loaded directly and called). Shared: `loadConfinedWorker` (kind "facet") → `versionedFacet`;
+   *  the SDK (`processor.js`) rides every load. The caller passes the `mainModule`/`extraModules` it
+   *  wants (a processor its `runner.js` adapter; a raw class nothing) — no role re-branch here. The
+   *  loader `owner` is composed collision-free (`facetLoaderOwner`). */
   async #durableFacet(opts: {
     source: WorkerSource;
-    role: "processor" | "stateful";
     /** The owner's second half — a processor slug or a stateful className. */
     discriminator: string;
-    /** The class `confinedWorker`/`versionedFacet` instantiate (the runner for a processor). */
+    /** The class `versionedFacet` instantiates (the runner for a processor). */
     loadedClassName: string;
+    /** The loaded module that exports the class (`runner.js` for a processor, `cap.js` for a
+     *  raw stateful class), and any adapter modules to layer over the source + SDK. */
+    mainModule: string;
+    extraModules?: Record<string, string>;
     facetName: string;
     markerKey: string;
     what: string;
@@ -758,10 +765,8 @@ export class StreamDurableObject extends DurableObject<Env> {
       kind: "facet",
       owner: facetLoaderOwner(this.#address.name, opts.discriminator),
       source: opts.source,
-      // A processor rides the `runner.js` adapter (its mainModule); a raw stateful class is loaded
-      // as-is (mainModule "cap.js"). The SDK ("processor.js") is injected by loadConfinedWorker.
-      mainModule: opts.role === "processor" ? "runner.js" : "cap.js",
-      extraModules: opts.role === "processor" ? { "runner.js": PROCESSOR_RUNNER_MODULE } : {},
+      mainModule: opts.mainModule,
+      extraModules: opts.extraModules,
       what: opts.what,
     });
     return versionedFacet(this.ctx, {
@@ -791,7 +796,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     props?: Record<string, unknown>,
   ): Promise<{ ok: true }> {
     this.#eventLog.touch();
-    if (slug === CAPABILITY_TABLE_SLUG || slug === "core")
+    if (isInlineSlug(slug))
       throw new Error(`"${slug}" is an inline core processor — it is always on, never a facet`);
     if (!/^[A-Za-z0-9_-]+$/.test(slug))
       throw new Error(`invalid processor slug ${JSON.stringify(slug)}: one segment, [A-Za-z0-9_-]`);
@@ -822,7 +827,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    *  the hunt flagged: before this, a misbehaving userspace processor burned a loader
    *  materialization + error log on EVERY commit with no remedy but hand-editing kv). */
   async disableProcessor(slug: string): Promise<{ ok: true }> {
-    if (slug === CAPABILITY_TABLE_SLUG || slug === "core")
+    if (isInlineSlug(slug))
       throw new Error(`"${slug}" is an inline core processor — it cannot be disabled`);
     this.#driveChains.delete(slug);
     this.#driveDeliveredThrough.delete(slug); // a re-enable must not inherit a scanned range it never saw
@@ -858,18 +863,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         ref.name ? `named "${ref.name}"` : `worker "${ref.className}"`,
       );
     }
-    const slug = ref;
-    // INLINE processors answer at the same address — always at head, so the barrier verb is
-    // trivially satisfied and snapshot needs no catch-up.
-    if (slug === CAPABILITY_TABLE_SLUG || slug === "core") {
-      const entry = this.#inline(slug);
-      const view = {
-        snapshot: () => ({ offset: entry.throughOffset, state: entry.state }),
-        waitUntilProcessed: () => ({ ok: true }),
-      };
-      return invokePath(view, path, args, `inline "${slug}"`);
-    }
-    return invokePath(await this.#addressNamed(slug), path, args, `facet "${slug}"`);
+    return invokePath(await this.#addressNamed(ref), path, args, `facet "${ref}"`);
   }
 
   /** MATERIALIZE from `{ source, className, name? }`, or ADDRESS an existing one by `{ name }`. A
@@ -889,9 +883,19 @@ export class StreamDurableObject extends DurableObject<Env> {
     throw new Error(`load: pass { source, className } to run a facet, or { name } to address one`);
   }
 
-  /** Address a facet by NAME: an enabled processor (its mount names the source), or a named durable
-   *  instance (its registration does). `#facet`/here throw NO_FACET for an unknown name. */
+  /** Address a facet by NAME — THE one by-name resolver: an INLINE core (always at head, a
+   *  synthesized snapshot view), an enabled processor (its mount names the source), or a named
+   *  durable instance (its registration does). Throws NO_FACET for an unknown name. */
   async #addressNamed(name: string): Promise<unknown> {
+    // Inline processors answer at the same address — always at head, so the barrier verb is
+    // trivially satisfied and snapshot needs no catch-up.
+    if (isInlineSlug(name)) {
+      const entry = this.#inline(name);
+      return {
+        snapshot: () => ({ offset: entry.throughOffset, state: entry.state }),
+        waitUntilProcessed: () => ({ ok: true }),
+      };
+    }
     if (this.#facetEntries().some((e) => e.slug === name)) return this.#facet(name);
     const reg = this.ctx.storage.kv.get(`named-facet:${name}`) as
       | { source: string; className: string }
@@ -925,9 +929,9 @@ export class StreamDurableObject extends DurableObject<Env> {
     this.#statefulFacetNames.add(facetName);
     return this.#durableFacet({
       source: ref.source,
-      role: "stateful",
       discriminator: ref.className,
       loadedClassName: ref.className,
+      mainModule: "cap.js", // a raw stateful class is loaded as-is (no runner adapter)
       facetName,
       markerKey: `${facetName}:version`,
       what: name ? `named worker "${name}"` : `stateful worker "${ref.className}"`,
