@@ -712,12 +712,10 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     delete callerSource.script;
     if (context?.kind !== "script-execution") {
       if (event.source?.script === undefined) return event;
-      return {
-        ...event,
-        ...(Object.keys(callerSource).length === 0
-          ? { source: undefined }
-          : { source: callerSource }),
-      };
+      // Strip the forged slot; drop `source` entirely rather than carrying
+      // an explicit-undefined key through RPC serialization.
+      const { source: _discarded, ...rest } = event;
+      return Object.keys(callerSource).length === 0 ? rest : { ...rest, source: callerSource };
     }
     return {
       ...event,

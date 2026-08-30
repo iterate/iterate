@@ -78,7 +78,16 @@ Design notes + call graphs: explainers.ignoreme/source-script-provenance.html
   OPTIONAL streamContext (internal DO plumbing has no caller and omits it —
   the one place optionality earns its keep). ProjectRpcTarget's getters
   thread its own #streamContext, so scripts' `itx.streams`, `itx.agents`,
-  `itx.chat`, and dynamic capability appends all stamp.
+  and `itx.chat` appends all stamp. KNOWN LIMITATION: durable
+  itx-expression capabilities (a mounted alias like
+  `["streams", ["get", X], "append"]`) evaluate server-side against the
+  capability host facet's own scope-context itx
+  (processor-facet-durable-object.ts mints `kind: "scope"`), so appends made
+  THROUGH a dynamic capability are unstamped. The shipped consumer is
+  unaffected — AGENT_SUMMARY_INSTRUCTION statuses go through the direct
+  `itx.agent.append` door — but per-call context threading into expression
+  evaluation is the follow-up if dynamic-capability appends ever need
+  attribution.
 - `agent-ui-reducer` state gained `lastSettledActivity` (one slot,
   overwritten each settle) — correction applies only when it contains the
   stamped executionId, so old cards can never be rewritten.
