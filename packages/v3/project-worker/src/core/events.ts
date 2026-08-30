@@ -5,6 +5,10 @@
 
 import { z } from "zod";
 import type { EventDefinition, ProcessorContract } from "./processor.ts";
+// THE one deep-equal lives in patch.ts (the live-state diff needs it dependency-free); the
+// idempotency-body compare below is the same test, re-exported here for the SDK bundle.
+import { jsonEqual } from "./patch.ts";
+export { jsonEqual };
 
 /** THE delivery policy — one spelling for every host of it (the subscribe inputs, the provide
  *  payload). Rides the capability-provided event itself, so subscription config is
@@ -101,34 +105,6 @@ export function sameIdempotentEvent(
     jsonEqual(existing.payload, requested.payload) &&
     jsonEqual(existing.metadata, requested.metadata)
   );
-}
-
-/** Structural deep-equal over plain JSON values — the idempotency-body compare (order-
- *  insensitive, unbudgeted: apps/os jsonValuesEqual). Object key ORDER is insignificant. */
-export function jsonEqual(a: unknown, b: unknown): boolean {
-  // No depth budget (apps/os jsonValuesEqual): idempotency equality is decoupled from the
-  // PARSER's depth limit, so a legitimately-deep payload the commit path accepted never throws
-  // here. JSON values are acyclic, so unbounded recursion is safe.
-  if (Object.is(a, b)) return true;
-  if (Array.isArray(a) && Array.isArray(b))
-    return a.length === b.length && a.every((x, i) => jsonEqual(x, b[i]));
-  if (
-    typeof a === "object" &&
-    a !== null &&
-    !Array.isArray(a) &&
-    typeof b === "object" &&
-    b !== null &&
-    !Array.isArray(b)
-  ) {
-    const ka = Object.keys(a as object);
-    return (
-      ka.length === Object.keys(b as object).length &&
-      ka.every((k) =>
-        jsonEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]),
-      )
-    );
-  }
-  return false;
 }
 
 // ── the zod contract helper (the host-side way to author a ProcessorContract) ──

@@ -76,20 +76,21 @@ const setup = () => {
   const builtIns = fakeBuiltIns();
   // No config, no base mounts: whoami/kv/rpcStubs/openai are KEYS in fakeBuiltIns(), so
   // `itx.<root>…` resolves DIRECTLY against the physical scope (built-ins first, unshadowable).
-  const host = new CapabilityTableProcessor({
-    stream,
-    builtIns: builtIns as unknown as Record<string, unknown>,
-  });
   // INLINE HOSTING, exactly like the parent: reduce the durable log per call.
   const reduceAll = () =>
     events.reduce(
       (st, e) => host.reduce({ event: e, state: st }) ?? st,
       host.contract.initialState(),
     );
-  host.resolveCurrent = async (call: Expression, depth = 0) =>
+  const resolveNow = (call: Expression, depth = 0) =>
     host.resolve(reduceAll(), call, undefined, depth);
-  const invoke = (call: string) => host.resolveCurrent(parse(call));
-  return { stream, events, host, builtIns, invoke, reduceAll };
+  const host: CapabilityTableProcessor = new CapabilityTableProcessor({
+    stream,
+    builtIns: builtIns as unknown as Record<string, unknown>,
+    resolveCurrent: resolveNow,
+  });
+  const invoke = (call: string) => resolveNow(parse(call));
+  return { stream, events, host, builtIns, invoke, reduceAll, resolveNow };
 };
 
 describe("built-in resolution + default-deny", () => {
@@ -202,8 +203,8 @@ describe("event mounts + the shadow stack", () => {
   });
 
   test("bare CALL on the scope symbol is a loud error even as a hand-crafted Expression", async () => {
-    const { host } = setup();
-    await expect(host.resolveCurrent([["itx", 1]] as unknown as Expression)).rejects.toThrow(
+    const { resolveNow } = setup();
+    await expect(resolveNow([["itx", 1]] as unknown as Expression)).rejects.toThrow(
       /cannot call the scope symbol itself/,
     );
   });

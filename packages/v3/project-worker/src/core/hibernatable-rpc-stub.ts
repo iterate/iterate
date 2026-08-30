@@ -44,7 +44,7 @@ export type RetainedCallbackInvoker = {
  *  (absent on a socket that has been opened but not yet attached — `all()` filters those out). */
 export type HibernatableRpcStubRecord = { stubKey: string; connectionKey?: string };
 /** An ATTACHED record — `connectionKey` present. `all()` returns only these. */
-export type AttachedRpcStubRecord = HibernatableRpcStubRecord & { connectionKey: string };
+type AttachedRpcStubRecord = HibernatableRpcStubRecord & { connectionKey: string };
 
 // `Symbol.dispose` isn't in the current lib target; reference it defensively. THE one disposer
 // for any RPC-ish stub (Workers-RPC legs here, retained capnweb callbacks in itx-surface.ts).

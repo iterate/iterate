@@ -130,17 +130,17 @@ const setupTable = () => {
   const { stream, events } = memoryStream();
   // whoami is a KEY in builtIns → `itx.whoami` resolves DIRECTLY (built-ins first); no config.
   const builtIns = { whoami: () => ({ projectId: "prj_t", path: "/" }) };
-  const host = new CapabilityTableProcessor({
-    stream,
-    builtIns: builtIns as unknown as Record<string, unknown>,
-  });
   const reduceAll = () =>
     events.reduce(
       (st, e) => host.reduce({ event: e, state: st }) ?? st,
       host.contract.initialState(),
     );
-  host.resolveCurrent = async (call: Expression, depth = 0) =>
-    host.resolve(reduceAll(), call, undefined, depth);
+  const host: CapabilityTableProcessor = new CapabilityTableProcessor({
+    stream,
+    builtIns: builtIns as unknown as Record<string, unknown>,
+    resolveCurrent: (call: Expression, depth = 0) =>
+      host.resolve(reduceAll(), call, undefined, depth),
+  });
   return { host };
 };
 

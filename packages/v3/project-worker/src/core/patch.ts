@@ -15,19 +15,23 @@ const isRecord = (v: unknown): v is Record<string, unknown> =>
 const escape = (seg: string | number): string =>
   String(seg).replaceAll("~", "~0").replaceAll("/", "~1");
 
-const equal = (a: unknown, b: unknown): boolean => {
+/** Structural deep-equal over plain JSON values — order-insensitive, unbudgeted (JSON is acyclic).
+ *  THE one deep-equal: the live-state diff's "don't emit" test AND the idempotency-body compare
+ *  (re-exported through core/events.ts). The `Object.hasOwn(b, k)` guard is load-bearing — without
+ *  it, two objects with the same key COUNT but different key SETS compare equal. */
+export function jsonEqual(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;
   if (Array.isArray(a) && Array.isArray(b))
-    return a.length === b.length && a.every((v, i) => equal(v, b[i]));
+    return a.length === b.length && a.every((v, i) => jsonEqual(v, b[i]));
   if (isRecord(a) && isRecord(b)) {
     const ka = Object.keys(a);
     return (
       ka.length === Object.keys(b).length &&
-      ka.every((k) => Object.hasOwn(b, k) && equal(a[k], b[k]))
+      ka.every((k) => Object.hasOwn(b, k) && jsonEqual(a[k], b[k]))
     );
   }
   return false;
-};
+}
 
 /** Structural diff `a → b`, or undefined when deep-equal (the producer's "don't emit" signal).
  *  Objects recurse per key; arrays get the chat-log fast paths (pure append → `add …/-` ops,
@@ -47,11 +51,11 @@ export function diff(a: unknown, b: unknown): PatchOp[] | undefined {
 }
 
 function walk(a: unknown, b: unknown, path: string): PatchOp[] | undefined {
-  if (equal(a, b)) return undefined;
+  if (jsonEqual(a, b)) return undefined;
   if (Array.isArray(a) && Array.isArray(b)) {
     const shared = Math.min(a.length, b.length);
     let p = 0;
-    while (p < shared && equal(a[p], b[p])) p++;
+    while (p < shared && jsonEqual(a[p], b[p])) p++;
     if (p === a.length) return b.slice(p).map((value) => ({ op: "add", path: `${path}/-`, value }));
     if (p === b.length)
       return a

@@ -145,10 +145,19 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
    *  `resolve`. Userspace `provide` mounts (event-sourced) name NEW paths and their targets recurse
    *  through the `itx` symbol; they cannot spell a bare root, so the built-ins are unshadowable. */
   readonly #builtIns: Record<string, unknown>;
+  /** Resolve one call against the CURRENT reduced table — the host's own dispatch. The `itx`
+   *  recursion symbol re-enters through this, so alias mounts compose and default routes forward
+   *  whole calls. A constructor dependency (not a reassigned stub): there is no un-wired state. */
+  readonly #resolveCurrent: (call: Expression, depth?: number) => Promise<unknown>;
 
-  constructor(args: { stream: ProcessorStream; builtIns: Record<string, unknown> }) {
+  constructor(args: {
+    stream: ProcessorStream;
+    builtIns: Record<string, unknown>;
+    resolveCurrent: (call: Expression, depth?: number) => Promise<unknown>;
+  }) {
     this.stream = args.stream;
     this.#builtIns = args.builtIns;
+    this.#resolveCurrent = args.resolveCurrent;
   }
 
   // The capability table is pure reduce — no side effects (which is exactly what qualifies it
@@ -360,7 +369,7 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
   #itxAtDepth(depth: number): unknown {
     return pathProxy((segments, args) => {
       const last = segments[segments.length - 1] as string;
-      return this.resolveCurrent(["itx", ...segments.slice(0, -1), [last, ...args]], depth);
+      return this.#resolveCurrent(["itx", ...segments.slice(0, -1), [last, ...args]], depth);
     });
   }
 
@@ -372,10 +381,5 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
     const row = state.mounts.find((m) => m.providedAtOffset === providedAtOffset);
     if (!row) throw new Error(`no subscription mount at offset ${providedAtOffset}`);
     return apply({ itx: this.#itxAtDepth(1) }, row.target, { boundaryArgs: args, remainder: [] });
-  }
-
-  /** Overridden by the host to hand `resolve` the current reduced state. */
-  resolveCurrent(_call: Expression, _depth = 0): Promise<unknown> {
-    throw new Error("capability-table: resolveCurrent not wired (host must bind it to its reads)");
   }
 }

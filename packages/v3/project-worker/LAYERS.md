@@ -34,11 +34,11 @@ offset of its ephemeral connection-opened fact.
 `capability-table-processor.ts`, hosted INLINE at the commit point: capability-provided/-revoked
 events (string-at-rest expression halves) reduce into the mount stack. One dispatch path:
 parse → longest-path-prefix match (final segment may consume boundary args, ties → newest) →
-substitute → evaluate → replay the remainder. Config mounts see the built-ins
-(`built-ins.ts`); event mounts see only `itx` (the provenance gate is scope-key absence).
-EVERY attachment is a mount here: plain capabilities, subscriptions (delivery policy on the
-event), processors (processor policy: source/export/props), live-capability aliases
-(`path ⇒ itx.connections.get(id)`).
+substitute → evaluate → replay the remainder. A built-in root (`built-ins.ts`) resolves DIRECTLY
+(built-ins first); userspace mounts see only `itx` — a bare root is unspellable, so the built-ins
+are unshadowable. EVERY attachment is a mount here: plain capabilities, subscriptions (delivery
+policy + the stamped lane on the event), processors (processor policy: source/export/props),
+live-capability aliases (`path ⇒ itx.rpcStubs.get(key)`).
 
 ## Layer 4 — processors (cursor + two switches + declared dependencies)
 
@@ -51,21 +51,27 @@ injected SDK. Stateful loaded classes are facets here too (the dedicated runner 
 `subscription-forwarder-processor.ts` is the model citizen: contract, two switches, one
 `readonly #pump` dependency.
 
-## Layer 5 — connections and delivery (the edges of the system)
+## Layer 5 — rpc stubs and delivery (the edges of the system)
 
-`core/itx-surface.ts`: capnweb terminates at `/api`, never in a DO. `connect()` attaches an
-**ItxConnection** to a context (client-chosen connectionKey; the session rule files durable
-ItxConnectionSession facts; T = 15 min); the `connections` view addresses them
-(get/each/list/close). Delivery is TWO lanes, chosen by the mount target's shape alone:
+`core/itx-surface.ts`: capnweb terminates at `/api`, never in a DO. A client offers a live
+capability with `itx.rpcStubs.provide(stub, { key })` — the callback is retained relay-side and
+paged into the DO on demand (the poor-man's sturdy ref, `hibernatable-rpc-stub.ts`); `get`/`list`
+address the held stubs, and a mount can alias one (`path ⇒ itx.rpcStubs.get(key)`). The registry is
+LIVE-ONLY (presence via `list()`, no durable session history).
 
-- **Connected** (`itx.connections.get(…)`): fire-and-forget batches + the GLOBAL
+A subscriber mount's delivery LANE is a DECLARED fact — `laneOf` stamps it ONCE on the
+capability-provided event at the provide door (`SubscriptionLane`), never re-sniffed from the
+target's shape at delivery time. Three lanes:
+
+- **reduce** (`itx.facets.get('slug')`): a co-located facet the commit PUMP drives — a processor.
+- **connected** (`itx.rpcStubs.get('key')`): fire-and-forget batches + the GLOBAL
   ScannedOffsetRange over the paged-in stub, straight from the commit path — no acks, no server
-  cursor, no coalescing; the client holds its own offset and heals by pull. Live-state deltas
-  ride the same lane, revision-chained, door-healed. Measured: p50 35ms end-to-end, 20×
-  batching (prove_ephemeralflood).
-- **Absent** (any other expression): the subscription-forwarder facet holds a
-  SubscriptionDeliveryProgress cursor per mount and applies the ONE failure policy —
-  bounded retries → HALT + audit fact; recovery is a durable subscription-resumed event.
+  cursor, no coalescing; the client holds its own offset and heals by pull. Live-state deltas ride
+  the same lane, revision-chained, door-healed. Measured: p50 ~215ms end-to-end, ~50× batching
+  (prove_ephemeralflood).
+- **durable** (any other expression): the subscription-forwarder facet holds a
+  SubscriptionDeliveryProgress cursor per mount and applies the ONE failure policy — bounded
+  retries → HALT + audit fact; recovery is a durable subscription-resumed event.
 
-Mounts targeting a dead connection auto-revoke on close. Everything a client ever does —
-Slack-bridge RpcTargets included (prove_slack) — is these five layers composed.
+Mounts naming a dead stub auto-revoke on close. Everything a client ever does — Slack-bridge
+RpcTargets included (prove_slack) — is these five layers composed.

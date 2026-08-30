@@ -1,0 +1,7 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": ["src/sdk.ts", "src/runner-entry.ts", "proofs/*.mjs", "**/*.test.ts"],
+  "project": ["src/**/*.ts"],
+  "ignoreDependencies": ["cloudflare", "@v3/shared"],
+  "ignoreUnresolved": ["./cap.js"]
+}

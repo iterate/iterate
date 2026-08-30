@@ -80,19 +80,20 @@ const setup = () => {
   const builtIns = fakeBuiltIns();
   // whoami/kv/rpcStubs/openai are KEYS in fakeBuiltIns() → `itx.<root>…` resolves DIRECTLY
   // (built-ins first, unshadowable); no config, no base mounts.
-  const host = new CapabilityTableProcessor({
-    stream,
-    builtIns: builtIns as unknown as Record<string, unknown>,
-  });
   const reduceAll = () =>
     events.reduce(
       (st, e) => host.reduce({ event: e, state: st }) ?? st,
       host.contract.initialState(),
     );
-  host.resolveCurrent = async (call: Expression, depth = 0) =>
+  const resolveNow = (call: Expression, depth = 0) =>
     host.resolve(reduceAll(), call, undefined, depth);
-  const invoke = (call: string) => host.resolveCurrent(parse(call));
-  return { stream, events, host, builtIns, invoke, reduceAll };
+  const host: CapabilityTableProcessor = new CapabilityTableProcessor({
+    stream,
+    builtIns: builtIns as unknown as Record<string, unknown>,
+    resolveCurrent: resolveNow,
+  });
+  const invoke = (call: string) => resolveNow(parse(call));
+  return { stream, events, host, builtIns, invoke, reduceAll, resolveNow };
 };
 
 // ─────────────── the codec asymmetry surfaces as a SILENTLY DROPPED MOUNT ───────────────
