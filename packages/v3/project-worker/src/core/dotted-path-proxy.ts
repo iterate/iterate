@@ -75,10 +75,11 @@ function isReservedDynamicPathSegment(segment: string): boolean {
 export function createInvokeCapabilityPathProxy(
   invoker: InvokeCapabilityTarget,
   path: string[] = [],
-  isReserved = isReservedDynamicPathSegment,
 ): unknown {
-  const valueFor = (key: string) =>
-    createInvokeCapabilityPathProxy(invoker, [...path, key], isReserved);
+  const valueFor = (key: string) => createInvokeCapabilityPathProxy(invoker, [...path, key]);
+  // A key that must NOT conjure a path segment — a JS/wire reserved name or a protocol probe.
+  const reserved = (key: string) =>
+    isReservedDynamicPathSegment(key) || PROTOCOL_PROBE_KEYS.has(key);
 
   return new Proxy(function () {}, {
     apply(_target, _thisArg, args) {
@@ -86,28 +87,21 @@ export function createInvokeCapabilityPathProxy(
     },
     get(target, key, receiver) {
       if (typeof key === "symbol") return Reflect.get(target, key, receiver);
-      if (isReserved(key) || PROTOCOL_PROBE_KEYS.has(key)) return undefined;
+      if (reserved(key)) return undefined;
       return valueFor(key);
     },
     getOwnPropertyDescriptor(target, key) {
       const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
       if (descriptor) return descriptor;
-      if (typeof key === "symbol" || isReserved(key) || PROTOCOL_PROBE_KEYS.has(key)) {
-        return undefined;
-      }
+      if (typeof key === "symbol" || reserved(key)) return undefined;
       // Cap'n Web's server-side path traversal probes own descriptors before reading a segment.
       // Dynamic roots need to look discoverable here so calls like
       // itx.slack.chat.postMessage(...) reach the apply trap.
-      return {
-        configurable: true,
-        enumerable: true,
-        value: valueFor(key),
-        writable: false,
-      };
+      return { configurable: true, enumerable: true, value: valueFor(key), writable: false };
     },
     has(target, key) {
       if (typeof key === "symbol") return key in target;
-      return !isReserved(key) && !PROTOCOL_PROBE_KEYS.has(key);
+      return !reserved(key);
     },
   });
 }
@@ -140,7 +134,7 @@ const PROTOTYPE_FALLBACK_HOPS = new WeakSet<object>();
  *   it (SingleStub), so `x.get(p).method()` chains work in one expression.
  * - Declared members (own prototype methods/getters) resolve BEFORE the hop — built-ins win.
  * - Unknown string keys reach the hop's `get` trap and become dynamic capability path proxies,
- *   dispatched via `invokerFor(receiver)`.
+ *   dispatched via the receiver's own `invokeCapability`.
  * - Instances stay clean of own properties, so Workers RPC's instance-property protection needs
  *   no `getOwnPropertyDescriptor` help.
  *
@@ -155,23 +149,9 @@ const PROTOTYPE_FALLBACK_HOPS = new WeakSet<object>();
  */
 export function installPrototypeInvokeCapabilityFallback<
   T extends abstract new (...args: never[]) => object,
->(
-  cls: T,
-  options: {
-    isReserved?: (segment: string) => boolean;
-    /**
-     * Derive the invokeCapability dispatcher from the instance the lookup happened on. Defaults
-     * to the instance itself (which must then have `invokeCapability`); surfaces that dispatch
-     * through a separate host return it here.
-     */
-    invokerFor?: (instance: InstanceType<T>) => InvokeCapabilityTarget;
-  } = {},
-): void {
-  const isReserved = options.isReserved ?? isReservedDynamicPathSegment;
-  const invokerFor =
-    options.invokerFor ?? ((instance) => instance as unknown as InvokeCapabilityTarget);
-  // A second install is a programmer error: silently returning would discard the second caller's
-  // options with no trace, and stacking hops would double-dispatch. Module re-evaluation (test
+>(cls: T): void {
+  // A second install is a programmer error: silently returning would discard the second caller with
+  // no trace, and stacking hops would double-dispatch. Module re-evaluation (test
   // runners, HMR) redefines the class and gets a fresh prototype, so this only fires on a genuine
   // duplicate call.
   if (PROTOTYPE_FALLBACK_HOPS.has(cls.prototype as object)) {
@@ -190,24 +170,17 @@ export function installPrototypeInvokeCapabilityFallback<
       if (typeof key === "symbol" || key in hopTarget) {
         return Reflect.get(hopTarget, key, receiver);
       }
-      if (isReserved(key) || PROTOCOL_PROBE_KEYS.has(key)) return undefined;
+      if (isReservedDynamicPathSegment(key) || PROTOCOL_PROBE_KEYS.has(key)) return undefined;
       // The dynamic fallback exists for INSTANCES. A lookup whose receiver is not one — someone
       // probing `Class.prototype.foo` directly, a framework walking prototypes — must see plain
       // "undefined", not conjure a dispatcher over an uninitialized receiver.
       if (!(receiver instanceof (cls as unknown as abstract new (...args: never[]) => object))) {
         return undefined;
       }
-      // invokerFor resolves at CALL time, not trap time: the trap can fire mid-construction (a
-      // property miss on `this` inside a base-class constructor, before field initializers ran),
-      // and a dispatcher built over half-initialized state must not be baked into the path proxy.
-      return createInvokeCapabilityPathProxy(
-        {
-          invokeCapability: (call) =>
-            invokerFor(receiver as InstanceType<T>).invokeCapability(call),
-        },
-        [key],
-        isReserved,
-      );
+      // The receiver IS the invoker (it implements invokeCapability). Its method resolves at CALL
+      // time, so a trap firing mid-construction (a property miss on `this` before field initializers
+      // ran) can't bake a dispatcher over half-initialized state into the path proxy.
+      return createInvokeCapabilityPathProxy(receiver as unknown as InvokeCapabilityTarget, [key]);
     },
   });
   Object.setPrototypeOf(cls.prototype, hop);

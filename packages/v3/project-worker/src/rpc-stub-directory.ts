@@ -54,12 +54,9 @@ export class RpcStubDirectory {
 
   /** Reserve a transport for `key` (the relay calls this BEFORE opening the stub pager WebSocket).
    *  Mints a fresh transportId the pager carries; the key is the caller's addressing key. */
-  attach(input: { key: string; description?: string }): { transportId: string } {
+  attach(input: { key: string }): { transportId: string } {
     const transportId = crypto.randomUUID();
-    this.#pending.set(transportId, {
-      connectionKey: input.key,
-      ...(input.description ? { description: input.description } : {}),
-    });
+    this.#pending.set(transportId, { connectionKey: input.key });
     return { transportId };
   }
 
@@ -108,14 +105,12 @@ export class RpcStubDirectory {
     const record = this.#stubs.closed(ws);
     if (record)
       void this.#stubClosed(record, reason).catch((e) =>
-        reportIssue("rpc-stub.close", e, {
-          key: (record.connectionKey as string | undefined) ?? record.stubKey,
-        }),
+        reportIssue("rpc-stub.close", e, { key: record.connectionKey ?? record.stubKey }),
       );
   }
 
   async #stubClosed(record: HibernatableRpcStubRecord, reason: string): Promise<void> {
-    const key = (record.connectionKey as string | undefined) ?? record.stubKey;
+    const key = record.connectionKey ?? record.stubKey;
     // "replaced" is the SAME logical key changing transports — never a key-final close.
     const keyFinal =
       reason !== "replaced" &&
@@ -126,7 +121,7 @@ export class RpcStubDirectory {
   // ── the views + the delivery leg ──
 
   find(key: string): HibernatableRpcStubRecord | undefined {
-    return this.#stubs.all().find((r) => r.connectionKey === key || r.stubKey === key);
+    return this.#stubs.all().find((r) => r.connectionKey === key);
   }
 
   /** Invoke one stub's retained callback by key — the ONE door for both the consumer dotted path
@@ -140,10 +135,7 @@ export class RpcStubDirectory {
 
   /** The keys currently held by this context (presence). */
   list(): Record<string, unknown>[] {
-    return this.#stubs.all().map((r) => ({
-      key: r.connectionKey ?? r.stubKey,
-      ...(r.description !== undefined ? { description: r.description } : {}),
-    }));
+    return this.#stubs.all().map((r) => ({ key: r.connectionKey }));
   }
 
   /** Kick a stub by key (idempotent — unknown keys are a no-op). */

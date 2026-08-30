@@ -107,20 +107,17 @@ export class SubscriptionForwarderProcessor extends StreamProcessor<ForwarderSta
           delivery?: Partial<AbsentTargetSubscriptionMount> & { liveState?: unknown };
           lane?: string;
         };
-        const segments = path.split(".");
-        if (segments.length !== 3 || segments[0] !== "itx" || segments[1] !== "subscribers")
-          return undefined;
         // The forwarder owns exactly the DURABLE lane. The lane is stamped ONCE on the event by the
-        // parent's provide door (SubscriptionLane) — reduce (pump) and connected (live stub) are
-        // other lanes, and liveState is always connected. This reads that one field; it used to
-        // re-classify from the target string with regexes that had to track two nouns in another
-        // bundle — they drifted once and double-delivered every connected mount.
+        // parent's provide door (SubscriptionLane), and ONLY on `itx.subscribers.*` mounts — so a
+        // `durable` lane already implies a 3-segment subscribers path. This reads that one field; it
+        // used to re-classify from the target string with regexes that had to track two nouns in
+        // another bundle — they drifted once and double-delivered every connected mount.
         if (lane !== "durable") return undefined;
         return {
           subscriptionMounts: [
             ...state.subscriptionMounts,
             {
-              name: segments[2],
+              name: path.split(".")[2],
               providedAtOffset: event.offset,
               target,
               ...(delivery?.consumes ? { consumes: delivery.consumes } : {}),

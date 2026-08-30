@@ -48,25 +48,6 @@ function isLiveStub(target: unknown): boolean {
   return typeof target === "function" || (typeof target === "object" && !Array.isArray(target));
 }
 
-/** A raw provider-side path MISS, as the REMOTE capnweb stub spells it: the two native shapes a
- *  segment/terminal miss takes on any JS object — a non-callable terminal ("… is not a function.")
- *  or a read through an absent segment ("Cannot read properties of undefined|null (reading …)").
- *  Deliberately narrow: a genuine application error thrown by a real provider method has NEITHER
- *  shape, so re-grammaring on this predicate can never swallow an app failure — it only re-codes a
- *  WRONG GUESS at the capability surface into the platform's one miss grammar (core/itx path-proxy
- *  isPathMissMessage). Message-sniffing is safe HERE (not across a hop) because the raw capnweb
- *  reject is caught LOCALLY at the relay, before any error crosses Workers-RPC. */
-function isProviderPathMiss(e: unknown): boolean {
-  const message =
-    typeof e === "object" && e !== null && "message" in e
-      ? String((e as { message: unknown }).message)
-      : String(e);
-  return (
-    /is not a function/.test(message) ||
-    /Cannot read properties of (?:undefined|null) \(reading /.test(message)
-  );
-}
-
 /** The per-burst borrowed Workers-RPC leg: wraps the RETAINED CAPNWEB CALLBACK STUB and forwards
  *  `invoke(capPath, args)` onto it (a DIRECT dotted dispatch — never `.apply`), so a call from the
  *  stream reaches the client's actual function over the capnweb WebSocket. */
@@ -98,22 +79,10 @@ class RetainedCallbackInvoker extends WorkersRpcTarget {
       // classify by code across a hop). A genuine app error from a live client propagates untouched.
       if (this.#broken)
         throw codedError("CONNECTION_OFFLINE", "itx rpc stub provider went offline mid-invoke");
-      // A dotted-path MISS on a LIVE provider — a wrong guess at its capability surface (a segment
-      // resolved to undefined/null, or the terminal is not a function) — rides back from the REMOTE
-      // capnweb stub as a raw JS TypeError that names only the FIRST bad segment in no recognizable
-      // grammar ("'chat.nosuchMethod' is not a function.", "Cannot read properties of undefined
-      // (reading 'postMessage')"). Re-code it to the platform's ONE miss grammar (isPathMissMessage —
-      // apps/os/src/itx/path-proxy.ts), naming the FULL attempted dotted path, so an error normalizer
-      // (slack-api normalizeSlackError et al.) can answer with the surface's calling convention and
-      // the caller's next attempt is shaped right. NOT_A_METHOD rides beside the message for cross-hop
-      // classification (core/errors.ts). A GENUINE application error from a live provider method (any
-      // other shape) propagates UNTOUCHED — isProviderPathMiss claims only the two native property-miss
-      // shapes, never an app's own throw.
-      if (capPath.length > 0 && isProviderPathMiss(e))
-        throw codedError(
-          "NOT_A_METHOD",
-          `Capability path ${capPath.join(".")} did not resolve to a function.`,
-        );
+      // Any other throw — a genuine app error OR a wrong guess at a live provider's surface — rides
+      // back as its raw capnweb error. (We used to re-grammar path-misses into NOT_A_METHOD for an
+      // apps/os error-normalizer; the clean room has no such consumer, so message-sniffing bought
+      // nothing here.)
       throw e;
     }
   }
@@ -272,10 +241,7 @@ class RpcStubs extends RpcTarget {
    *  omitted). Re-providing the same key replaces the incumbent (reconnect). Returns a disposable
    *  handle — `revoke()`/`dispose` closes the transport, so the stub goes offline and any mount
    *  naming its key auto-revokes. */
-  async provide(
-    target: ProviderStub,
-    opts?: { key?: string; description?: string },
-  ): Promise<ProvidedStub> {
+  async provide(target: ProviderStub, opts?: { key?: string }): Promise<ProvidedStub> {
     const key = opts?.key ?? crypto.randomUUID();
     const relay = await startRpcStubRelay(
       this.#host,

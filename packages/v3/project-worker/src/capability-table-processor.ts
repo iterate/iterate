@@ -91,7 +91,6 @@ const CapabilityTableContract = defineProcessorContract({
         delivery: z
           .object({
             consumes: z.array(z.string()).optional(),
-            onFailingEvent: z.enum(["halt", "skip"]).optional(), // dies with the pump (increment 56)
             maxAttempts: z.number().int().positive().optional(),
             start: z.enum(["beginning", "now"]).optional(),
             /** LIVE STATE mode: the key's state change events are forwarded as they commit;
@@ -301,7 +300,7 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
           `no capability matches ${JSON.stringify(print(expr))} (default-deny; provide a capability first)`,
         );
       scope = { itx };
-      target = winner.row.target;
+      target = winner.target;
       m = winner.m;
     }
     return await apply(
@@ -335,17 +334,12 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
 
   /** Pure routing: the winning userspace `provide` mount for a call, or null (built-ins are
    *  resolved before this — see `resolve`). Longest matching path wins; ties → newest mount. */
-  #route(
-    state: State,
-    call: Expression,
-  ): { row: Pick<CapabilityMount, "path" | "target">; m: Match; providedAtOffset: number } | null {
+  #route(state: State, call: Expression): { target: Expression; m: Match } | null {
     if (typeof call[0] !== "string")
       throw new Error("cannot call the scope symbol itself — name a capability first");
-    let best: {
-      row: Pick<CapabilityMount, "path" | "target">;
-      m: Match;
-      providedAtOffset: number;
-    } | null = null;
+    // `providedAtOffset` is the tie-breaker (newest same-length mount wins) — needed WHILE ranking,
+    // not by the caller, so it stays local and the return is just the winner's target + match.
+    let best: { target: Expression; m: Match; providedAtOffset: number } | null = null;
     for (const mount of state.mounts) {
       const m = match(mount.path, call);
       if (!m) continue;
@@ -355,9 +349,9 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
         (m.matchedSegments === best.m.matchedSegments &&
           mount.providedAtOffset > best.providedAtOffset)
       )
-        best = { row: mount, m, providedAtOffset: mount.providedAtOffset };
+        best = { target: mount.target, m, providedAtOffset: mount.providedAtOffset };
     }
-    return best;
+    return best && { target: best.target, m: best.m };
   }
 
   /** The `itx` scope symbol at a given recursion depth: dotted/called access re-enters

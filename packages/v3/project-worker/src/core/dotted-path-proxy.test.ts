@@ -76,25 +76,6 @@ describe("prototype-chain dynamic fallback", () => {
     expect(b.calls).toEqual([{ args: [], path: ["toolB"] }]);
   });
 
-  it("supports a custom invokerFor (surfaces that dispatch through their capability host)", () => {
-    const recorded: DynamicCall[] = [];
-    class Handle extends RpcTarget {
-      get host() {
-        return {
-          invokeCapability(call: DynamicCall) {
-            recorded.push(call);
-            return `via-host:${call.path.join(".")}`;
-          },
-        };
-      }
-    }
-    installPrototypeInvokeCapabilityFallback(Handle, { invokerFor: (handle) => handle.host });
-
-    const result = (new Handle() as unknown as { someTool(n: number): unknown }).someTool(7);
-    expect(result).toBe("via-host:someTool");
-    expect(recorded).toEqual([{ args: [7], path: ["someTool"] }]);
-  });
-
   it("awaiting an instance must not treat it as a thenable", async () => {
     const target = new HostTarget();
     expect((target as unknown as { then: unknown }).then).toBeUndefined();
@@ -174,25 +155,22 @@ describe("prototype-chain dynamic fallback", () => {
   it("resolves the invoker at CALL time, not lookup time (mid-construction safety)", () => {
     const recorded: DynamicCall[] = [];
     class LateHost extends RpcTarget {
-      host: { invokeCapability(call: DynamicCall): unknown } | undefined;
+      ready = false;
       constructor() {
         super();
+        // Probe a dynamic member DURING construction (before `ready` is set): the trap must not
+        // bake a dispatcher over half-initialized state — the receiver's invokeCapability resolves
+        // only when the path proxy is CALLED, by which point construction has finished.
         void (this as unknown as { probedDuringConstruction: unknown }).probedDuringConstruction;
-        this.host = {
-          invokeCapability(call: DynamicCall) {
-            recorded.push(call);
-            return "late";
-          },
-        };
+        this.ready = true;
+      }
+      invokeCapability(call: DynamicCall) {
+        if (!this.ready) throw new Error("invoker resolved before construction finished");
+        recorded.push(call);
+        return "late";
       }
     }
-    installPrototypeInvokeCapabilityFallback(LateHost, {
-      invokerFor: (instance) => {
-        const host = (instance as LateHost).host;
-        if (host === undefined) throw new Error("invoker resolved before construction finished");
-        return host;
-      },
-    });
+    installPrototypeInvokeCapabilityFallback(LateHost);
 
     const instance = new LateHost();
     const early = (instance as unknown as { earlyTool(): unknown }).earlyTool;

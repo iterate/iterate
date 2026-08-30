@@ -1091,7 +1091,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   /** Reserve a transport for `key` — the relay calls this, then opens the pager carrying the
    *  returned transportId. */
-  rpcStubAttach(input: { key: string; description?: string }): { transportId: string } {
+  rpcStubAttach(input: { key: string }): { transportId: string } {
     return this.#rpcStubs.attach(input);
   }
 

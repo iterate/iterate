@@ -40,8 +40,11 @@ export type RetainedCallbackInvoker = {
 };
 
 /** One stub's durable record — the socket attachment (survives hibernation). `stubKey` is the
- *  manager's identity for it; every other field is the caller's own stamp. */
-export type HibernatableRpcStubRecord = { stubKey: string; [k: string]: unknown };
+ *  manager's identity for it; `connectionKey` is the caller's addressing key, stamped by `attach`
+ *  (absent on a socket that has been opened but not yet attached — `all()` filters those out). */
+export type HibernatableRpcStubRecord = { stubKey: string; connectionKey?: string };
+/** An ATTACHED record — `connectionKey` present. `all()` returns only these. */
+export type AttachedRpcStubRecord = HibernatableRpcStubRecord & { connectionKey: string };
 
 // `Symbol.dispose` isn't in the current lib target; reference it defensively. THE one disposer
 // for any RPC-ish stub (Workers-RPC legs here, retained capnweb callbacks in itx-surface.ts).
@@ -111,10 +114,10 @@ export class HibernatableRpcStubManager {
 
   /** Every attached stub — DERIVED from the surviving pager sockets, so a fresh DO incarnation
    *  reads them straight back with nothing to reconcile. */
-  all(): HibernatableRpcStubRecord[] {
+  all(): AttachedRpcStubRecord[] {
     return this.#sockets()
       .map((ws) => this.#attachment(ws))
-      .filter((r): r is HibernatableRpcStubRecord => r !== undefined && Object.keys(r).length > 1);
+      .filter((r): r is AttachedRpcStubRecord => r?.connectionKey !== undefined);
   }
 
   /** THE one call door: page the stub in if absent, then `invoke(path, args)` on it. The stub
