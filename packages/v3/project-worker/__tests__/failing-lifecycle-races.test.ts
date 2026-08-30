@@ -59,12 +59,11 @@ function collector() {
 }
 
 const append = (itx: any, ...events: unknown[]) =>
-  itx.invokeCapability({ path: ["stream", "append"], args: events });
+  itx.invokeCapability(["itx", "stream", ["append", ...events]]);
 const readAll = async (itx: any): Promise<any[]> =>
-  (await itx.invokeCapability({ path: ["stream", "read"], args: [0, 500] })).events;
+  (await itx.invokeCapability(["itx", "stream", ["read", 0, 500]])).events;
 const readHead = async (itx: any): Promise<number> =>
-  (await itx.invokeCapability({ path: ["stream", "read"], args: [0, 500] }))
-    .scannedThroughOffset as number;
+  (await itx.invokeCapability(["itx", "stream", ["read", 0, 500]])).scannedThroughOffset as number;
 const doState = async (ctx: string): Promise<any> =>
   (await fetch(new URL(`/state?ctx=${ctx}`, harness.url))).json();
 
@@ -94,7 +93,7 @@ test("shadow stack: 10 concurrent provides on ONE path end deterministic (newest
     keep.push(await itx.rpcStubs.provide(() => i, { key }));
     await itx.provide({ path: `itx.probe${i}`, target: `itx.rpcStubs.get('${key}')` });
   }
-  const race = () => itx.invokeCapability({ path: ["race"], args: [] });
+  const race = () => itx.invokeCapability(["itx", ["race"]]);
 
   // wave 1: five concurrent provides at itx.race
   const wave1: { providedAtOffset: number }[] = await Promise.all(
@@ -145,7 +144,7 @@ test("enableProcessor('tally') from two sessions concurrently: one effective lin
   const snap = await until(
     "tally reduced the whole log exactly once",
     async () => {
-      const s: any = await itxA.invoke("itx.facets.get('tally').snapshot()");
+      const s: any = await itxA.invokeCapability("itx.facets.get('tally').snapshot()");
       return s.offset >= head && s;
     },
     20_000,
@@ -182,7 +181,8 @@ test("FIXED (defect 29): every enableProcessor drives the enablement commit into
   const head = await readHead(itx);
   await until(
     "tally at head",
-    async () => ((await itx.invoke("itx.facets.get('tally').snapshot()")) as any).offset >= head,
+    async () =>
+      ((await itx.invokeCapability("itx.facets.get('tally').snapshot()")) as any).offset >= head,
   );
   await settle(400);
   expect(countMatches(logsText(), /not configured/g) - before).toBe(0);
@@ -215,7 +215,7 @@ test("FIXED (defect 30): a processor mount through the ordinary provide door is 
   const state = await doState(ctx);
   expect(state.facetProcessors).toContain("tally"); // listed as enabled (this passes — the lie)
   await append(itx, { type: "mark" });
-  const snap: any = await itx.invoke("itx.facets.get('tally').snapshot()"); // throws "not configured"
+  const snap: any = await itx.invokeCapability("itx.facets.get('tally').snapshot()"); // throws "not configured"
   expect(snap.state.counts.mark).toBe(1);
 });
 
@@ -229,7 +229,7 @@ test("re-enable while WARM shadows without corrupting the reduce (no reset, no d
   await append(itx, { type: "mark" });
   const head1 = await readHead(itx);
   const s1: any = await until("tally at head", async () => {
-    const s: any = await itx.invoke("itx.facets.get('tally').snapshot()");
+    const s: any = await itx.invokeCapability("itx.facets.get('tally').snapshot()");
     return s.offset >= head1 && s;
   });
   expect(s1.state.counts.mark).toBe(2);
@@ -239,7 +239,7 @@ test("re-enable while WARM shadows without corrupting the reduce (no reset, no d
   const head2 = await readHead(itx);
   const expected = durableCountsByType(await readAll(itx));
   const s2: any = await until("tally at head after re-enable", async () => {
-    const s: any = await itx.invoke("itx.facets.get('tally').snapshot()");
+    const s: any = await itx.invokeCapability("itx.facets.get('tally').snapshot()");
     return s.offset >= head2 && s;
   });
   expect(s2.state.counts).toEqual(expected); // exact — the shadow neither reset nor doubled
@@ -261,7 +261,8 @@ test("disable mid-drive: appends survive, no ongoing error storm, re-enable rebu
   await until(
     "tally warm",
     async () =>
-      ((await itx.invoke("itx.facets.get('tally').snapshot()")) as any).offset >= headWarm,
+      ((await itx.invokeCapability("itx.facets.get('tally').snapshot()")) as any).offset >=
+      headWarm,
   );
 
   // the burst + the disable, racing (in-flight drive chains vs facet delete)
@@ -273,7 +274,7 @@ test("disable mid-drive: appends survive, no ongoing error storm, re-enable rebu
 
   const state = await doState(ctx);
   expect(state.facetProcessors).not.toContain("tally");
-  await expect(itx.invoke("itx.facets.get('tally').snapshot()")).rejects.toThrow(
+  await expect(itx.invokeCapability("itx.facets.get('tally').snapshot()")).rejects.toThrow(
     /no facet.*"tally"/,
   );
 
@@ -298,7 +299,7 @@ test("disable mid-drive: appends survive, no ongoing error storm, re-enable rebu
   const head = await readHead(itx);
   const expected = durableCountsByType(await readAll(itx));
   const snap: any = await until("re-enabled tally reduced the whole log", async () => {
-    const s: any = await itx.invoke("itx.facets.get('tally').snapshot()");
+    const s: any = await itx.invokeCapability("itx.facets.get('tally').snapshot()");
     return s.offset >= head && s;
   });
   expect(snap.state.counts).toEqual(expected);
@@ -334,14 +335,15 @@ test("FIXED: double-enable then ONE disableProcessor disables it (clears the WHO
   const head = await readHead(itx);
   await until(
     "tally at head",
-    async () => ((await itx.invoke("itx.facets.get('tally').snapshot()")) as any).offset >= head,
+    async () =>
+      ((await itx.invokeCapability("itx.facets.get('tally').snapshot()")) as any).offset >= head,
   );
 
   await itx.disableProcessor("tally"); // ONE disable
 
   const state = await doState(ctx);
   expect(state.facetProcessors).not.toContain("tally"); // RED: still contains "tally"
-  await expect(itx.invoke("itx.facets.get('tally').snapshot()")).rejects.toThrow(
+  await expect(itx.invokeCapability("itx.facets.get('tally').snapshot()")).rejects.toThrow(
     /no facet.*"tally"/,
   );
 });
@@ -402,8 +404,8 @@ test("reentrancy characterized: a forwarder delivery targeting itx.stream.append
   await until(
     "forwarder cursor reaches head",
     async () =>
-      ((await itx.invoke("itx.facets.get('subscription-forwarder').snapshot()")) as any).offset >=
-      headNow,
+      ((await itx.invokeCapability("itx.facets.get('subscription-forwarder').snapshot()")) as any)
+        .offset >= headNow,
   );
 });
 
@@ -458,12 +460,13 @@ test("waitUntilProcessed(future offset) times out with its documented error and 
   const head = await readHead(itx);
   await until(
     "tally at head",
-    async () => ((await itx.invoke("itx.facets.get('tally').snapshot()")) as any).offset >= head,
+    async () =>
+      ((await itx.invokeCapability("itx.facets.get('tally').snapshot()")) as any).offset >= head,
   );
 
   const t0 = Date.now();
   await expect(
-    itx.invoke([
+    itx.invokeCapability([
       "itx",
       "facets",
       ["get", "tally"],
@@ -476,13 +479,13 @@ test("waitUntilProcessed(future offset) times out with its documented error and 
 
   // a LATER append releases nothing stale: the barrier still works exactly
   const [m] = await append(itx, { type: "mark" });
-  await itx.invoke([
+  await itx.invokeCapability([
     "itx",
     "facets",
     ["get", "tally"],
     ["waitUntilProcessed", { offset: m.offset, timeoutMs: 5000 }],
   ]);
-  const snap: any = await itx.invoke("itx.facets.get('tally').snapshot()");
+  const snap: any = await itx.invokeCapability("itx.facets.get('tally').snapshot()");
   expect(snap.offset).toBeGreaterThanOrEqual(m.offset);
   expect(snap.state.counts.mark).toBe(2);
 });

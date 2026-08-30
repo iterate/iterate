@@ -12,17 +12,18 @@ afterAll(async () => {
 
 test("boot + whoami round trip through the capability table", async () => {
   const itx = await harness.itx("prj_harness_smoke");
-  const who = await itx.invokeCapability({ path: ["whoami"], args: [] });
+  const who = await itx.invokeCapability(["itx", ["whoami"]]);
   expect(who).toMatchObject({ projectId: "prj_harness_smoke", path: "/" });
 });
 
 test("append + read through the real event log", async () => {
   const itx = await harness.itx("prj_harness_log");
-  const [committed] = await itx.invokeCapability({
-    path: ["stream", "append"],
-    args: [{ type: "mark", payload: { n: 1 } }],
-  });
+  const [committed] = await itx.invokeCapability([
+    "itx",
+    "stream",
+    ["append", { type: "mark", payload: { n: 1 } }],
+  ]);
   expect(committed.offset).toBeGreaterThanOrEqual(1);
-  const page = await itx.invokeCapability({ path: ["stream", "read"], args: [] });
+  const page = await itx.invokeCapability(["itx", "stream", ["read"]]);
   expect(page.events.some((e: any) => e.type === "mark")).toBe(true);
 });

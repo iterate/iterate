@@ -58,7 +58,9 @@ const itx = await consumer.get();
 let provider = newWebSocketRpcSession(API);
 await provider.get().rpcStubs.provide(new Tools("v1"), { key: "p" });
 await until("callable online", async () =>
-  (await itx.invoke("itx.rpcStubs.get('p').echo('a')")) === "echo-v1:a" ? true : undefined,
+  (await itx.invokeCapability("itx.rpcStubs.get('p').echo('a')")) === "echo-v1:a"
+    ? true
+    : undefined,
 );
 check(true, "1. provider online: itx.rpcStubs.get('p').echo() answers");
 
@@ -66,7 +68,7 @@ check(true, "1. provider online: itx.rpcStubs.get('p').echo() answers");
 provider[DISPOSE]?.();
 await until("provider offline", async () => {
   try {
-    await itx.invoke("itx.rpcStubs.get('p').echo('b')");
+    await itx.invokeCapability("itx.rpcStubs.get('p').echo('b')");
     return undefined; // still answering — keep polling
   } catch {
     return true; // CONNECTION_OFFLINE — the drop landed
@@ -81,7 +83,7 @@ await provider.get().rpcStubs.provide(new Tools("v2"), { key: "p" });
 // 4. THE CONTRACT: the capability is callable AGAIN through the same key — it resolves to the
 //    reconnected provider (v2), with no re-addressing by the caller.
 const after = await until("callable after reconnect", async () => {
-  const r = await itx.invoke("itx.rpcStubs.get('p').echo('c')");
+  const r = await itx.invokeCapability("itx.rpcStubs.get('p').echo('c')");
   return r === "echo-v2:c" ? r : undefined;
 });
 check(

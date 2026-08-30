@@ -58,9 +58,9 @@ function collector() {
 }
 
 const append = (itx: any, ...events: unknown[]) =>
-  itx.invokeCapability({ path: ["stream", "append"], args: events });
+  itx.invokeCapability(["itx", "stream", ["append", ...events]]);
 const readAll = async (itx: any): Promise<any[]> =>
-  (await itx.invokeCapability({ path: ["stream", "read"], args: [0, 500] })).events;
+  (await itx.invokeCapability(["itx", "stream", ["read", 0, 500]])).events;
 
 const HALTED = "events.iterate.com/stream/subscription-delivery-halted";
 
@@ -321,7 +321,7 @@ test("FIXED (defect 12): unsubscribe during an in-flight delivery leaves no ghos
   await until(
     "forwarder reduced the revoke",
     async () =>
-      (await itx.invoke("itx.facets.get('subscription-forwarder').snapshot()")).offset >
+      (await itx.invokeCapability("itx.facets.get('subscription-forwarder').snapshot()")).offset >
       mark.offset,
   );
   release();

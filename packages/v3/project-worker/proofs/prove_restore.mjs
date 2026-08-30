@@ -24,7 +24,7 @@ await itx.provide({
 });
 
 // 1. stash: storage.put(env.ITX) — throws unless the whole chain is restore-eligible
-const stashed = await itx.invokeCapability({ path: ["keeper", "stash"], args: [] });
+const stashed = await itx.invokeCapability(["itx", "keeper", ["stash"]]);
 check(
   stashed?.stashed === true,
   "storage.put accepted the live capability handle",
@@ -32,7 +32,7 @@ check(
 );
 
 // 2. use the RESTORED handle (storage.get replays the restore chain on use)
-const who = await itx.invokeCapability({ path: ["keeper", "useStashed"], args: [] });
+const who = await itx.invokeCapability(["itx", "keeper", ["useStashed"]]);
 check(
   who?.projectId === CTX,
   "restored handle answers whoami through the routed table",
@@ -40,7 +40,7 @@ check(
 );
 
 // 3. and again — replay is per-load, not a one-shot
-const who2 = await itx.invokeCapability({ path: ["keeper", "useStashed"], args: [] });
+const who2 = await itx.invokeCapability(["itx", "keeper", ["useStashed"]]);
 check(who2?.projectId === CTX, "second load replays again", JSON.stringify(who2));
 
 console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURES`);

@@ -54,7 +54,7 @@ for (let seq = 0; seq < TOTAL; seq += APPEND_BATCH) {
     ...(EPHEMERAL ? { ephemeral: true } : {}),
     payload: { seq: seq + i, sentAtMs: Date.now(), pad },
   }));
-  appendCalls.push(itx.invokeCapability({ path: ["stream", "append"], args: batch }));
+  appendCalls.push(itx.invokeCapability(["itx", "stream", ["append", ...batch]]));
 }
 await Promise.all(appendCalls);
 const appendsDoneAtMs = Date.now();

@@ -102,7 +102,7 @@ await itx.provide({
 });
 
 const chat = liveClient(async () =>
-  JSON.parse(JSON.stringify(await itx.invoke("itx.chat.state()"))),
+  JSON.parse(JSON.stringify(await itx.invokeCapability("itx.chat.state()"))),
 );
 await itx.subscribe({
   name: "chatwatch",
@@ -117,8 +117,8 @@ check(
   JSON.stringify({ rev: chatSeedRev, doc: chat.doc }),
 );
 
-await itx.invokeCapability({ path: ["chat", "post"], args: ["jonas", "hi"] });
-await itx.invokeCapability({ path: ["chat", "post"], args: ["jonas", "again"] });
+await itx.invokeCapability(["itx", "chat", ["post", "jonas", "hi"]]);
+await itx.invokeCapability(["itx", "chat", ["post", "jonas", "again"]]);
 await until("two messages", () => chat.doc?.messages?.length === 2);
 check(
   chat.applied === 2 && chat.reseeds === 0,
@@ -135,7 +135,7 @@ check(
   "applyPatch converged on the server value",
   JSON.stringify(chat.doc.messages),
 );
-const door = JSON.parse(JSON.stringify(await itx.invoke("itx.chat.state()")));
+const door = JSON.parse(JSON.stringify(await itx.invokeCapability("itx.chat.state()")));
 check(
   door.rev === chat.rev && JSON.stringify(door.state) === JSON.stringify(chat.doc),
   "door and patched client doc are byte-identical",
@@ -161,7 +161,7 @@ check(
 // ── processor flavor: chunky's fold, door = liveSnapshot() ──
 await itx.enableProcessor("chunky", { source: "itx.kv.get('src/chunky.js')", className: "Chunky" });
 const proc = liveClient(async () =>
-  JSON.parse(JSON.stringify(await itx.invoke("itx.facets.get('chunky').liveSnapshot()"))),
+  JSON.parse(JSON.stringify(await itx.invokeCapability("itx.facets.get('chunky').liveSnapshot()"))),
 );
 await itx.subscribe({
   name: "chunkywatch",
@@ -176,9 +176,9 @@ check(
   JSON.stringify({ rev: seedRev, doc: proc.doc }),
 );
 
-await itx.invoke(`itx.stream.append({ type: 'mark' })`);
+await itx.invokeCapability(`itx.stream.append({ type: 'mark' })`);
 await until("mark folded", () => proc.doc?.marks >= 1);
-await itx.invoke(`itx.stream.append({ type: 'mark' })`);
+await itx.invokeCapability(`itx.stream.append({ type: 'mark' })`);
 await until("second mark", () => proc.doc?.marks >= 2);
 check(
   proc.applied === 2 && proc.reseeds === 0,
@@ -192,7 +192,7 @@ check(
 );
 
 // ── the loop guard: nothing consumed the change events ──
-const snap = await itx.invoke("itx.facets.get('chunky').snapshot()");
+const snap = await itx.invokeCapability("itx.facets.get('chunky').snapshot()");
 check(
   !JSON.stringify(snap).includes("live-state"),
   "live-state change events are unconsumable (no loop)",

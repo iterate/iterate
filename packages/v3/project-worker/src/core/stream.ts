@@ -12,7 +12,7 @@
 // This replaces the old `deps.context` typed `{ append; read }` + a re-cast to add `invoke` with
 // `unknown` returns — the sync-own-vs-async-sibling mud that the loose type papered over.
 
-import type { Expression } from "./expression.ts";
+import type { Expression, ItxExpression } from "./expression.ts";
 import type { StreamEvent, StreamEventInput } from "./events.ts";
 
 /** One page of the log: the events after an offset, plus how far the scan reached (the range a
@@ -34,7 +34,7 @@ export interface Stream {
  *  dispatch. This is what `itx.cd('/x')` routes through and what `deps.context(path)`
  *  returns. The StreamDurableObject is one; a sibling DO stub and the own-path adapter satisfy it. */
 export interface Context extends Stream {
-  invoke(call: string | Expression): Promise<unknown>;
+  invoke(call: ItxExpression): Promise<unknown>;
 }
 
 /** The own StreamDurableObject (same isolate) as a uniform-async Context. The ONLY wrap is `read`
@@ -43,7 +43,7 @@ export interface Context extends Stream {
 export function localContext(self: {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   read(afterOffset?: number, limit?: number): StreamPage;
-  invoke(call: string | Expression): Promise<unknown>;
+  invoke(call: ItxExpression): Promise<unknown>;
 }): Context {
   return {
     append: (...events) => self.append(...events),

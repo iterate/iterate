@@ -69,9 +69,9 @@ const freshConsumer = () => newWebSocketRpcSession(API).get();
 let provider = await connectProvider();
 let itx = await freshConsumer();
 await itx.enableProcessor("tally"); // a built-in facet processor whose fold must survive reconstruction
-await itx.invokeCapability({ path: ["stream", "append"], args: [{ type: "mark", n: 0 }] });
+await itx.invokeCapability(["itx", "stream", ["append", { type: "mark", n: 0 }]]);
 await until("provider online before idle", async () =>
-  (await itx.invoke("itx.rpcStubs.get('p').echo('a')")) === "echo:a" ? true : undefined,
+  (await itx.invokeCapability("itx.rpcStubs.get('p').echo('a')")) === "echo:a" ? true : undefined,
 );
 const base = await stateOf();
 check(base.stubs >= 1, "before idle: provider pager parked", `stubs=${base.stubs}`);
@@ -85,13 +85,13 @@ await new Promise((r) => setTimeout(r, IDLE_MS));
 // A fresh consumer + a durable write: the write wakes the DO, and if it hibernated this is the first
 // write of a NEW incarnation, which bumps the durable incarnation counter.
 itx = await freshConsumer();
-await itx.invokeCapability({ path: ["stream", "append"], args: [{ type: "mark", n: 1 }] });
+await itx.invokeCapability(["itx", "stream", ["append", { type: "mark", n: 1 }]]);
 
 // The capability, reconnecting the provider under the SAME key if it dropped during the idle.
 let reconnected = false;
 const echoed = await until("capability callable after wake (reconnect if needed)", async () => {
   try {
-    const r = await itx.invoke("itx.rpcStubs.get('p').echo('c')");
+    const r = await itx.invokeCapability("itx.rpcStubs.get('p').echo('c')");
     return r === "echo:c" ? r : undefined;
   } catch {
     // provider socket dropped during the idle → reconnect under the same key and let the next poll retry
@@ -115,7 +115,7 @@ check(
 );
 
 // (2) the facet fold survived reconstruction (rebuilt from the durable log).
-const snap = await itx.invoke("itx.facets.get('tally').snapshot()");
+const snap = await itx.invokeCapability("itx.facets.get('tally').snapshot()");
 check(
   snap?.offset >= 1 && snap?.state?.counts,
   "facet snapshot still folds after reconstruction (rebuilt from durable identity)",

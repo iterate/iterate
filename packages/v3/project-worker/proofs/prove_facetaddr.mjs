@@ -13,10 +13,10 @@ const check = (cond, label, detail = "") => {
 const session = newWebSocketRpcSession(`wss://${BASE}/api?ctx=${CTX}`);
 const itx = await session.authenticate().get();
 await itx.enableProcessor("tally");
-await itx.invoke(`itx.stream.append({ type: 'mark' })`);
+await itx.invokeCapability(`itx.stream.append({ type: 'mark' })`);
 
 // 1. a facet method through the SEEDED address
-const snap = await itx.invoke(`itx.facets.get('tally').snapshot()`);
+const snap = await itx.invokeCapability(`itx.facets.get('tally').snapshot()`);
 check(
   snap?.state?.counts?.mark === 1,
   "itx.facets.get('tally').snapshot() through the table",
@@ -24,12 +24,14 @@ check(
 );
 
 // 2. the barrier verb through the same address
-await itx.invoke(`itx.facets.get('tally').waitUntilProcessed({ offset: 1, timeoutMs: 5000 })`);
+await itx.invokeCapability(
+  `itx.facets.get('tally').waitUntilProcessed({ offset: 1, timeoutMs: 5000 })`,
+);
 check(true, "waitUntilProcessed rides the facet address");
 
 // 3. userspace ALIAS + shadow-stack (the address is an ordinary capability)
 const prov = await itx.provide({ path: "itx.counts", target: "itx.facets.get('tally')" });
-const aliased = await itx.invokeCapability({ path: ["counts", "snapshot"], args: [] });
+const aliased = await itx.invokeCapability(["itx", "counts", ["snapshot"]]);
 check(
   aliased?.state?.counts?.mark === 1,
   "aliased facet address via the dotted door",
@@ -38,7 +40,7 @@ check(
 await itx.revoke(prov);
 
 // 4. the facets.get(slug).snapshot() address still answers
-const sugar = await itx.invoke("itx.facets.get('tally').snapshot()");
+const sugar = await itx.invokeCapability("itx.facets.get('tally').snapshot()");
 check(
   sugar?.state?.counts?.mark === 1,
   "facets.get(slug).snapshot() rides the address",
@@ -48,7 +50,7 @@ check(
 // 5. probe-resistance carries over: inherited built-ins unreachable on the facet
 let denied = "";
 try {
-  await itx.invoke(`itx.facets.get('tally').toString()`);
+  await itx.invokeCapability(`itx.facets.get('tally').toString()`);
 } catch (e) {
   denied = String(e);
 }

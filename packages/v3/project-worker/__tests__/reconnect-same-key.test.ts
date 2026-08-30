@@ -73,7 +73,9 @@ test("a provider goes OFFLINE and reconnects under the SAME key — its capabili
   let provider = harness.session(ctx);
   await provider.get().rpcStubs.provide(new Tools("v1"), { key: "p" });
   const before = await until("callable while online", async () =>
-    (await consumer.invoke("itx.rpcStubs.get('p').echo('a')")) === "echo-v1:a" ? "ok" : undefined,
+    (await consumer.invokeCapability("itx.rpcStubs.get('p').echo('a')")) === "echo-v1:a"
+      ? "ok"
+      : undefined,
   );
   expect(before).toBe("ok");
 
@@ -82,7 +84,7 @@ test("a provider goes OFFLINE and reconnects under the SAME key — its capabili
   (provider as Record<symbol, () => void>)[DISPOSE]?.();
   await until("provider is OFFLINE (the key stops answering)", async () => {
     try {
-      await consumer.invoke("itx.rpcStubs.get('p').echo('b')");
+      await consumer.invokeCapability("itx.rpcStubs.get('p').echo('b')");
       return undefined; // still answering — keep polling until it goes offline
     } catch {
       return true; // CONNECTION_OFFLINE — the drop landed
@@ -96,7 +98,7 @@ test("a provider goes OFFLINE and reconnects under the SAME key — its capabili
   // 4. THE CONTRACT: the capability is callable AGAIN through the same key — it now resolves to the
   //    reconnected provider (the v2 instance), no re-address needed by the caller.
   const after = await until("callable again after reconnect under the same key", async () => {
-    const r = await consumer.invoke("itx.rpcStubs.get('p').echo('c')");
+    const r = await consumer.invokeCapability("itx.rpcStubs.get('p').echo('c')");
     return r === "echo-v2:c" ? r : undefined;
   });
   expect(after).toBe("echo-v2:c");

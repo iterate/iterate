@@ -29,26 +29,26 @@ export class Sheet extends DurableObject {
   async row() { return new Row((await this.ctx.storage.get("n")) ?? 0); }
   get rows() { const self = this; return { at: async (k) => new Row(k) }; }
 }`;
-await itx.invokeCapability({ path: ["kv", "put"], args: ["src/sheet.js", src] });
+await itx.invokeCapability(["itx", "kv", ["put", "src/sheet.js", src]]);
 
 // 1. PROVIDE a capability that targets dynamic worker code (stateful class)
 await itx.provide({
   path: "itx.sheet",
   target: "itx.load(\"itx.kv.get('src/sheet.js')\").getDurableObjectClass('Sheet').get()",
 });
-const set = await itx.invokeCapability({ path: ["sheet", "set"], args: [21] });
+const set = await itx.invokeCapability(["itx", "sheet", ["set", 21]]);
 check(set === 21, "1. provide→stateful worker capability: set(21)", String(set));
-const val = await itx.invoke("itx.sheet.value()");
+const val = await itx.invokeCapability("itx.sheet.value()");
 check(val === 21, "2. value() via the expression door", String(val));
 
 // 3. getter returning an object of fns (already works — the baseline)
-const tripled = await itx.invoke("itx.sheet.rows.at(5).double()");
+const tripled = await itx.invokeCapability("itx.sheet.rows.at(5).double()");
 check(tripled === 10, "3. getter→object of fns, deep dotted, one shot", String(tripled));
 
 // 4. THE PIPELINING CASE: a method returns a NESTED RpcTarget; call a method ON that
 let nested = "";
 try {
-  const doubled = await itx.invoke("itx.sheet.row().double()");
+  const doubled = await itx.invokeCapability("itx.sheet.row().double()");
   check(
     doubled === 42,
     "4. method returns RpcTarget → .double() pipelined through the mount",
@@ -61,16 +61,18 @@ try {
 
 // 5. deeper: nested RpcTarget's own getter returning an object of fns
 try {
-  const t = await itx.invoke("itx.sheet.row().deep.triple()");
+  const t = await itx.invokeCapability("itx.sheet.row().deep.triple()");
   check(t === 63, "5. method→RpcTarget→getter→fn, all one shot", String(t));
 } catch (e) {
   check(false, "5. method→RpcTarget→getter→fn", String(e).slice(0, 140));
 }
 
 // 6. stateless run() as a capability (the itx.run thin-wrapper shape)
-await itx.invokeCapability({
-  path: ["kv", "put"],
-  args: [
+await itx.invokeCapability([
+  "itx",
+  "kv",
+  [
+    "put",
     "src/greet.js",
     `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Greet extends WorkerEntrypoint {
@@ -80,8 +82,8 @@ export default class Greet extends WorkerEntrypoint {
   }
 }`,
   ],
-});
-const greeting = await itx.invoke(
+]);
+const greeting = await itx.invokeCapability(
   "itx.load(\"itx.kv.get('src/greet.js')\").getEntrypoint().run('jonas')",
 );
 check(

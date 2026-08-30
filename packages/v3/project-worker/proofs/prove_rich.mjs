@@ -49,7 +49,7 @@ await itxA.provide({ path: "itx.tools", target: `itx.rpcStubs.get('${toolsKey}')
 
 // 1. a Date through the whole path
 const probed = await attempt("Date through invoke → live cap", () =>
-  itxB.invokeCapability({ path: ["tools", "probe"], args: [new Date("2026-08-18T12:00:00Z")] }),
+  itxB.invokeCapability(["itx", "tools", ["probe", new Date("2026-08-18T12:00:00Z")]]),
 );
 if (probed !== undefined)
   check(
@@ -60,14 +60,14 @@ if (probed !== undefined)
 
 // 2. bytes through the whole path
 const bytes = await attempt("Uint8Array through invoke → live cap", () =>
-  itxB.invokeCapability({ path: ["tools", "probe"], args: [new Uint8Array([1, 2, 3, 4])] }),
+  itxB.invokeCapability(["itx", "tools", ["probe", new Uint8Array([1, 2, 3, 4])]]),
 );
 if (bytes !== undefined)
   check(bytes?.byteLen === 4, "Uint8Array survives with its bytes", JSON.stringify(bytes));
 
 // 3. THE callback: B hands a function, A calls it back across every hop
 const cbResult = await attempt("callback function B→A→B", () =>
-  itxB.invokeCapability({ path: ["tools", "transform"], args: [21, async (n) => n + 1] }),
+  itxB.invokeCapability(["itx", "tools", ["transform", 21, async (n) => n + 1]]),
 );
 if (cbResult !== undefined)
   check(
@@ -78,7 +78,7 @@ if (cbResult !== undefined)
 
 // 4. the STATELESS RUN LANE (was the one JSON boundary — now a real RPC method): a Date and a
 //    client callback ride into a confined loaded isolate; note the ref needs NO `type`.
-await itxB.invoke(
+await itxB.invokeCapability(
   `itx.stream.append({ type: 'noop' })`, // ensure the stream exists
 );
 const provB = await (async () => {
@@ -89,10 +89,11 @@ const provB = await (async () => {
   });
 })();
 const rich = await attempt("rich args into the stateless run lane", () =>
-  itxB.invokeCapability({
-    path: ["probe", "run"],
-    args: [new Date("2026-01-01T00:00:00Z"), async (n) => n * 6],
-  }),
+  itxB.invokeCapability([
+    "itx",
+    "probe",
+    ["run", new Date("2026-01-01T00:00:00Z"), async (n) => n * 6],
+  ]),
 );
 if (rich !== undefined)
   check(
@@ -127,17 +128,18 @@ const richKey = crypto.randomUUID();
 await itxA.rpcStubs.provide(new ToolsRich(), { key: richKey });
 await itxA.provide({ path: "itx.rich", target: `itx.rpcStubs.get('${richKey}')` });
 const nbResult = await attempt("RpcTarget-with-methods as an arg", () =>
-  itxB.invokeCapability({ path: ["rich", "useNotebook"], args: [new Notebook()] }),
+  itxB.invokeCapability(["itx", "rich", ["useNotebook", new Notebook()]]),
 );
 if (nbResult !== undefined)
   check(nbResult === "one|two", "provider called TWO methods on B's RpcTarget", String(nbResult));
 
 // 6. HTTP Request as an arg, Response as the return — through a live capability
 const respBack = await attempt("Request arg / Response return via live cap", async () => {
-  const r = await itxB.invokeCapability({
-    path: ["rich", "handleRequest"],
-    args: [new Request("https://x.local/hello", { method: "POST", body: "ping" })],
-  });
+  const r = await itxB.invokeCapability([
+    "itx",
+    "rich",
+    ["handleRequest", new Request("https://x.local/hello", { method: "POST", body: "ping" })],
+  ]);
   return `${r.status}:${await r.text()}`;
 });
 if (respBack !== undefined)

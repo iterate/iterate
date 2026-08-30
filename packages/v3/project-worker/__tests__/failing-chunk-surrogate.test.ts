@@ -19,13 +19,13 @@ afterAll(async () => {
 });
 
 const append = (itx: any, ...events: unknown[]): Promise<any[]> =>
-  itx.invokeCapability({ path: ["stream", "append"], args: events });
+  itx.invokeCapability(["itx", "stream", ["append", ...events]]);
 const read = (
   itx: any,
   afterOffset?: number,
   limit?: number,
 ): Promise<{ events: any[]; scannedThroughOffset: number }> =>
-  itx.invokeCapability({ path: ["stream", "read"], args: [afterOffset ?? 0, limit ?? 500] });
+  itx.invokeCapability(["itx", "stream", ["read", afterOffset ?? 0, limit ?? 500]]);
 
 const EVENT_CHUNK_SIZE = 512 * 1024; // must match core/event-log.ts
 const EMOJI = String.fromCodePoint(0x1f600); // "grinning face" = high+low surrogate pair

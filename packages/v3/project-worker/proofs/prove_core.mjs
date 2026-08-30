@@ -16,7 +16,9 @@ const check = (cond, label, detail = "") => {
 const session = newWebSocketRpcSession(`wss://${BASE}/api?ctx=${CTX}`);
 const itx = await session.authenticate().get();
 const append = (type, payload) =>
-  itx.invoke(`itx.stream.append(${JSON.stringify({ type, ...(payload ? { payload } : {}) })})`);
+  itx.invokeCapability(
+    `itx.stream.append(${JSON.stringify({ type, ...(payload ? { payload } : {}) })})`,
+  );
 const rejects = async (fn, re) => {
   try {
     await fn();
@@ -86,10 +88,12 @@ check(
 
 // ephemeral events are never counted (they cost no storage)
 const eph = await rejects(() => append("chunk-ish"), /x/).catch(() => null); // placeholder no-op
-const ephOk = await itx.invoke(`itx.stream.append({ type: 'chunk', ephemeral: true })`).then(
-  () => true,
-  (e) => String(e).slice(0, 80),
-);
+const ephOk = await itx
+  .invokeCapability(`itx.stream.append({ type: 'chunk', ephemeral: true })`)
+  .then(
+    () => true,
+    (e) => String(e).slice(0, 80),
+  );
 check(
   ephOk === true,
   "ephemeral appends bypass the breaker (durable growth is what it meters)",

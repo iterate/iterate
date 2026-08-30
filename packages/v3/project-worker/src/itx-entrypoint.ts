@@ -16,13 +16,11 @@
 //     ROUTED door, keeping deletion-is-revocation for stored stubs.
 //
 // The surface is exactly what loaded code speaks: `get()` (hand back the real `Itx` scope — the
-// dotted door), the raw `invokeCapability`/`invoke` doors the scope forwards to, the SDK runner's
-// stream verbs (`append`/`read`), and `fetch` (globalOutbound egress → the DO's secret-
-// substituting terminal).
+// dotted door, which owns its own dispatch), the SDK runner's stream verbs (`append`/`read`), and
+// `fetch` (globalOutbound egress → the DO's secret-substituting terminal).
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { itxForHost } from "./core/itx-surface.ts";
-import type { Expression } from "./core/expression.ts";
 import type { StreamEvent, StreamEventInput } from "./core/events.ts";
 import type { StreamDurableObject } from "./stream-durable-object.ts";
 
@@ -45,14 +43,6 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env> {
    *  A service binding addresses THIS entrypoint class; `.get()` bridges it to the scope. */
   get(): unknown {
     return itxForHost(this.#host(), (p) => this.ctx.waitUntil(p));
-  }
-
-  invokeCapability(callPath: string, args: unknown[] = []): Promise<unknown> {
-    return this.#host().invokeCapability(callPath, args);
-  }
-
-  invoke(call: string | Expression, depth = 0): Promise<unknown> {
-    return this.#host().invoke(call, depth);
   }
 
   append(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {

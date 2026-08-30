@@ -52,7 +52,7 @@ async function until<T>(
 }
 
 /** Presence: the keys currently held by this context (`[{ key, description? }]`). */
-const listStubs = (itx: any): Promise<any[]> => itx.invoke("itx.rpcStubs.list()");
+const listStubs = (itx: any): Promise<any[]> => itx.invokeCapability("itx.rpcStubs.list()");
 
 /** The DO's read-only /state door (never mints storage): the rpc-stub registry's live counters
  *  ride at the top level — `stubs` (attached pager sockets), `pagedIn`, `dormant`. */
@@ -153,7 +153,7 @@ test("reconnect under the same key replaces ONLY that key and leaves a separate 
   });
 
   // Put the separate stub MID-INVOKE (a call that never returns) across the reconnect.
-  const hanging: Promise<unknown> = observer.invoke("itx.rpcStubs.get('slow').hang()");
+  const hanging: Promise<unknown> = observer.invokeCapability("itx.rpcStubs.get('slow').hang()");
   hanging.catch(() => undefined);
   await until("hang() reached the separate stub", () => hangTools.hangStarted);
 
@@ -162,7 +162,9 @@ test("reconnect under the same key replaces ONLY that key and leaves a separate 
   await sB.get().rpcStubs.provide(new Tools("rk2"), { key: "rk" });
   await until("the key 'rk' now resolves to the NEW transport", async () => {
     try {
-      return (await observer.invoke("itx.rpcStubs.get('rk').hello()")) === "hello-from-rk2";
+      return (
+        (await observer.invokeCapability("itx.rpcStubs.get('rk').hello()")) === "hello-from-rk2"
+      );
     } catch {
       return false;
     }
@@ -172,7 +174,7 @@ test("reconnect under the same key replaces ONLY that key and leaves a separate 
   // resolvable, and its in-flight call still pending (not collaterally severed).
   const keys = (await listStubs(observer)).map((r) => r.key);
   expect(keys.filter((k) => k === "slow").length).toBe(1);
-  expect(await observer.invoke("itx.rpcStubs.get('slow').hello()")).toBe("hang-tools");
+  expect(await observer.invokeCapability("itx.rpcStubs.get('slow').hello()")).toBe("hang-tools");
   const raced = await Promise.race([
     hanging.then(() => "settled").catch(() => "settled"),
     new Promise((r) => setTimeout(() => r("pending"), 1500)),

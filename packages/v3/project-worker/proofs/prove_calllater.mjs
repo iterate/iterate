@@ -76,7 +76,7 @@ export default class Consumer extends WorkerEntrypoint {
     return { ran: true };
   }
 }`;
-await itx.invokeCapability({ path: ["kv", "put"], args: ["src/consumer.js", CONSUMER] });
+await itx.invokeCapability(["itx", "kv", ["put", "src/consumer.js", CONSUMER]]);
 const ran = await itx.load("itx.kv.get('src/consumer.js')").getEntrypoint().run();
 check(
   ran?.ran === true,
@@ -84,7 +84,7 @@ check(
   JSON.stringify(ran),
 );
 const got = await until("worker callback appended to the stream", async () => {
-  const page = await itx.invokeCapability({ path: ["stream", "read"], args: [0, 500] });
+  const page = await itx.invokeCapability(["itx", "stream", ["read", 0, 500]]);
   return page.events.find((e) => e.type === "pinged-from-worker");
 });
 check(

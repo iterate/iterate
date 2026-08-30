@@ -33,7 +33,7 @@ afterAll(async () => {
 // ── tiny verbs over the real client surface (copied, per the hunt brief — not imported) ──
 
 const streamAppend = (itx: any, ...events: unknown[]): Promise<any[]> =>
-  itx.invokeCapability({ path: ["stream", "append"], args: events });
+  itx.invokeCapability(["itx", "stream", ["append", ...events]]);
 
 /** Await a promise that MUST reject; hand back the error for inspection. */
 async function rejection(p: Promise<unknown>): Promise<Error & { code?: string }> {

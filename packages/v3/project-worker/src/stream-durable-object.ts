@@ -18,10 +18,9 @@
 //     placeholder substitution → the FALLBACK terminal).
 //
 // PURE WORKERS-RPC: capnweb never terminates here (hard rule) — the stateless `/api` worker
-// relays. Dispatch is ONE path: parse → route the table → substitute → evaluate → replay — all
-// of it against the inline capability table; this class only delegates. The dotted
-// `invokeCapability(callPath, args)` door remains as the degenerate string half of the codec
-// (loaded workers + the stateful runner speak it).
+// relays. Dispatch is ONE door: `invoke(call)` — parse → route the table → substitute → evaluate
+// → replay, all against the inline capability table; this class only delegates. (`Itx` builds the
+// call Expression client-side; there is no separate dotted-string door on the DO.)
 
 import { DurableObject } from "cloudflare:workers";
 import { substituteHeaderSecrets } from "@v3/shared/egress";
@@ -45,7 +44,13 @@ import {
   type StreamEventInput,
   type SubscriptionLane,
 } from "./core/events.ts";
-import { parse, print, toExpression, type Expression } from "./core/expression.ts";
+import {
+  parse,
+  print,
+  toExpression,
+  type Expression,
+  type ItxExpression,
+} from "./core/expression.ts";
 import { readReduceCheckpoint, writeReduceCheckpoint } from "./core/reduce-checkpoint.ts";
 import { invokePath } from "./core/dispatch.ts";
 import { InvokeHandle } from "./core/invoke-handle.ts";
@@ -108,11 +113,11 @@ type SubscriptionMount = DeliveryPolicy & {
   providedAtOffset: number; // the row's identity
   target?: Expression;
   /** The delivery lane (see `SubscriptionLane`) — the ONE fact every fan-out reader switches on,
-   *  stamped at the provide door and projected here (with a `laneOf` fallback for any un-laned
-   *  legacy/raw mount). `reduce` = pump-driven facet, `connected` = live stub, `durable` = forwarder. */
+   *  stamped at the provide door and projected here verbatim. `facet` = pump-driven facet,
+   *  `connected` = live stub, `durable` = forwarder. */
   lane: SubscriptionLane;
-  /** Present iff the lane is `reduce` AND userspace code — the class that facet loads. A processor
-   *  is a `reduce`-lane subscriber; this is its code. */
+  /** Present iff the lane is `facet` AND userspace code — the class that facet loads. A processor
+   *  is a `facet`-lane subscriber; this is its code. */
   processor?: ProcessorPolicy;
 };
 
@@ -146,11 +151,11 @@ const facetTarget = (t?: Expression): { slug: string } | undefined => {
 };
 
 /** THE lane classifier, called once per mount at the provide door — `itx.facets.get('slug')` ⇒
- *  reduce (pump-driven facet), `itx.rpcStubs.get('key')` ⇒ connected (live stub), anything else ⇒
+ *  facet (pump-driven), `itx.rpcStubs.get('key')` ⇒ connected (live stub), anything else ⇒
  *  durable (the forwarder facet's cursored lane). The result is stored on the mount so no reader
  *  ever re-derives it. */
 const laneOf = (target: Expression): SubscriptionLane =>
-  facetTarget(target) ? "reduce" : rpcStubTarget(target) ? "connected" : "durable";
+  facetTarget(target) ? "facet" : rpcStubTarget(target) ? "connected" : "durable";
 
 /** The subscription-forwarder facet's slug (auto-enabled when an absent-target subscription
  *  mount first appears). */
@@ -559,8 +564,9 @@ export class StreamDurableObject extends DurableObject<Env> {
           providedAtOffset: m.providedAtOffset,
           ...((m.delivery ?? {}) as DeliveryPolicy),
           target: m.target,
-          // Read the stamped lane; derive once as a fallback for any un-laned raw/legacy mount.
-          lane: (m.lane as SubscriptionLane | undefined) ?? laneOf(m.target),
+          // Read the stamped lane verbatim — every `itx.subscribers.*` mount is laned at the provide
+          // door (provideCapability / enableProcessor), so there is nothing to re-derive.
+          lane: m.lane as SubscriptionLane,
           ...(m.processor ? { processor: m.processor as ProcessorPolicy } : {}),
         });
     }
@@ -601,7 +607,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           if (errorCode(err) !== "CONNECTION_OFFLINE") onDrop(err);
         });
     for (const row of this.#activeSubscriptionMounts()) {
-      if (row.lane !== "connected") continue; // reduce (pump) / durable (forwarder) — not this lane
+      if (row.lane !== "connected") continue; // facet (pump) / durable (forwarder) — not this lane
       if (row.liveState) {
         // State mode: forward each committed change payload for the watched key, raw (no
         // in-flight tracking, no latest-wins queue — the owner's no-coalescing decision; a
@@ -701,7 +707,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   #facetEntries(): FacetProcessorEntry[] {
     const entries: FacetProcessorEntry[] = [];
     for (const row of this.#activeSubscriptionMounts()) {
-      if (row.lane !== "reduce") continue; // connected/durable subscriber, not a facet reduce
+      if (row.lane !== "facet") continue; // connected/durable subscriber, not a pump-driven facet
       const policy = (row.processor ?? {}) as ProcessorPolicy;
       entries.push({
         slug: row.name,
@@ -832,7 +838,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     await this.#capabilityTableProcessor().provide({
       path: `itx.subscribers.${slug}`,
       target: `itx.facets.get('${slug}')`,
-      lane: "reduce", // a processor IS a reduce-lane subscriber — declared, not sniffed
+      lane: "facet", // a processor IS a facet-lane subscriber — declared, not sniffed
       processor: {
         ...(ref ? { source: print(toExpression(ref.source)), className: ref.className } : {}),
         ...(props ? { props } : {}),
@@ -957,19 +963,13 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   // ── dispatch (ONE path: the routing table — the INLINE core reduce, zero distance) ──
 
-  /** Resolve + run one call (either codec half) against the current table. */
-  async invoke(call: string | Expression, depth = 0): Promise<unknown> {
+  /** Resolve + run one call against the current table. The ONE dispatch door — `Itx` builds the
+   *  call Expression client-side and hands it here (a full expression can spell mid-path call args
+   *  a dotted string never could: `itx.streams.get('/').append({...})`). */
+  async invoke(call: ItxExpression, depth = 0): Promise<unknown> {
     this.#noteActivity();
     const state = this.#table();
     return this.#capabilityTableProcessor().resolve(state, toExpression(call), undefined, depth);
-  }
-
-  /** The dotted door — the degenerate string half. Loaded workers' `itx.js` + the runner speak
-   *  this (`itx.a.b(args)` ⇒ ["itx","a",["b",...args]]). */
-  invokeCapability(callPath: string, args: unknown[] = []): Promise<unknown> {
-    const segments = callPath.split(".");
-    const last = segments.at(-1)!;
-    return this.invoke([...segments.slice(0, -1), [last, ...args]] as Expression);
   }
 
   /** Mount a userspace capability (its target recurses through itx; built-ins resolve directly). A
@@ -979,7 +979,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    *  never be noticed — reject at the door, not at delivery time. */
   async provideCapability(input: {
     path: string | string[];
-    target: string | Expression;
+    target: ItxExpression;
     delivery?: DeliveryPolicy;
     processor?: ProcessorPolicy;
   }): Promise<{ providedAtOffset: number }> {

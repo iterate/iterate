@@ -189,7 +189,7 @@ const SITE_SOURCE = `export default {
 test.fails("baseline: /cap serves HTTP and a 101 WebSocket echo from a LOADED-WORKER capability", async () => {
   const ctx = c("baseline");
   const itx = await harness.itx(ctx);
-  await itx.invokeCapability({ path: ["kv", "put"], args: ["src/site.js", SITE_SOURCE] });
+  await itx.invokeCapability(["itx", "kv", ["put", "src/site.js", SITE_SOURCE]]);
   await itx.provide({
     path: "itx.site",
     target: "itx.workers.get({ source: \"itx.kv.get('src/site.js')\" })",

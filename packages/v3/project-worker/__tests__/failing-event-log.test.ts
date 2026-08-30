@@ -19,20 +19,28 @@ afterAll(async () => {
 // ── tiny verbs over the real client surface (no framework — the smoke test's voice) ──
 
 const append = (itx: any, ...events: unknown[]): Promise<any[]> =>
-  itx.invokeCapability({ path: ["stream", "append"], args: events });
+  itx.invokeCapability(["itx", "stream", ["append", ...events]]);
 
 const read = (
   itx: any,
   afterOffset?: number,
   limit?: number,
 ): Promise<{ events: any[]; scannedThroughOffset: number }> =>
-  itx.invokeCapability({
-    path: ["stream", "read"],
-    args:
-      afterOffset === undefined ? [] : limit === undefined ? [afterOffset] : [afterOffset, limit],
-  });
+  itx.invokeCapability([
+    "itx",
+    "stream",
+    [
+      "read",
+      ...(afterOffset === undefined
+        ? []
+        : limit === undefined
+          ? [afterOffset]
+          : [afterOffset, limit]),
+    ],
+  ]);
 
-const coreState = async (itx: any) => (await itx.invoke("itx.facets.get('core').snapshot()")).state;
+const coreState = async (itx: any) =>
+  (await itx.invokeCapability("itx.facets.get('core').snapshot()")).state;
 
 const breakerConfigured = (capacity: number, refillPerSecond: number) => ({
   type: "events.iterate.com/stream/breaker-configured",
@@ -366,10 +374,10 @@ test("bad mount events are skipped without wedging later provides", async () => 
   // the table still takes provides and resolves them — the checkpoint didn't wedge
   const { providedAtOffset } = await itx.provide({ path: "itx.hello", target: "itx.whoami" });
   expect(providedAtOffset).toBeGreaterThan(0);
-  const who = await itx.invokeCapability({ path: ["hello"], args: [] });
+  const who = await itx.invokeCapability(["itx", ["hello"]]);
   expect(who).toMatchObject({ projectId: "prj_table_badmount" });
   // and the malformed mount is dead weight, not a route (default-deny still answers there)
-  const missErr = await rejection(itx.invokeCapability({ path: ["broken"], args: [] }));
+  const missErr = await rejection(itx.invokeCapability(["itx", ["broken"]]));
   expect(missErr.message).toContain("no capability matches");
 });
 

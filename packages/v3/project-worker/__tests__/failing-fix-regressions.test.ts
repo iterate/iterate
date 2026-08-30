@@ -26,7 +26,7 @@ test("charset gate: a legitimate ctx (hyphen, underscore, uppercase, digits) is 
   const itx = await harness.itx("prj_FixReg-1_A");
   // A probe → whoami round-trip proves the ctx addressed the right project (and parsed cleanly).
   await itx.provide({ path: "itx.probe", target: "itx.whoami" });
-  const who = await itx.invokeCapability({ path: ["probe"], args: [] });
+  const who = await itx.invokeCapability(["itx", ["probe"]]);
   expect(who).toMatchObject({ projectId: "prj_FixReg-1_A" });
 });
 

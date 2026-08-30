@@ -32,15 +32,13 @@ const PROVIDED = "events.iterate.com/capability-table/capability-provided";
 test("a 64-deep nested-array payload (structured lane) appends and reads back byte-identically", async () => {
   const itx = await harness.itx("prj_path_depth");
   const payload = { d: nested(64) }; // the value-depth budget is 64 — this is AT the edge
-  const [committed] = await itx.invokeCapability({
-    path: ["stream", "append"],
-    args: [{ type: "deep", payload }],
-  });
+  const [committed] = await itx.invokeCapability([
+    "itx",
+    "stream",
+    ["append", { type: "deep", payload }],
+  ]);
   expect(committed.offset).toBeGreaterThanOrEqual(1);
-  const page = await itx.invokeCapability({
-    path: ["stream", "read"],
-    args: [committed.offset - 1, 1],
-  });
+  const page = await itx.invokeCapability(["itx", "stream", ["read", committed.offset - 1, 1]]);
   expect(page.events).toHaveLength(1);
   expect(JSON.stringify(page.events[0].payload)).toBe(JSON.stringify(payload));
 });
@@ -49,13 +47,10 @@ test("string-half expressions: deeply nested payloads parse and round-trip (JSON
   const itx = await harness.itx("prj_path_depthstr");
   // JSON5 is iterative — there is no artificial parse budget; a deep arg parses and round-trips.
   for (const depth of [58, 70]) {
-    const [committed] = await itx.invoke(
+    const [committed] = await itx.invokeCapability(
       `itx.stream.append({type:'deepstr',payload:{d:${nestedLiteral(depth)}}})`,
     );
-    const page = await itx.invokeCapability({
-      path: ["stream", "read"],
-      args: [committed.offset - 1, 1],
-    });
+    const page = await itx.invokeCapability(["itx", "stream", ["read", committed.offset - 1, 1]]);
     expect(JSON.stringify(page.events[0].payload)).toBe(JSON.stringify({ d: nested(depth) }));
   }
 });
@@ -80,8 +75,8 @@ test("FIXED (defect 22): idempotent RETRY of a 64-deep payload dedupes's depth e
     payload: { d: nested(64) },
     idempotencyKey: "deep-once",
   });
-  const [first] = await itx.invokeCapability({ path: ["stream", "append"], args: [build()] });
-  const [retry] = await itx.invokeCapability({ path: ["stream", "append"], args: [build()] });
+  const [first] = await itx.invokeCapability(["itx", "stream", ["append", build()]]);
+  const [retry] = await itx.invokeCapability(["itx", "stream", ["append", build()]]);
   expect(retry.offset).toBe(first.offset); // the idempotency contract: same key + same body = same event
 });
 
@@ -94,7 +89,7 @@ test("300 mounts: invoking the NEWEST mount and a base config mount both stay un
     type: PROVIDED,
     payload: { path: `itx.m${i}`, target: "itx.whoami" },
   }));
-  const committed = await itx.invokeCapability({ path: ["stream", "append"], args: mounts });
+  const committed = await itx.invokeCapability(["itx", "stream", ["append", ...mounts]]);
   expect(committed).toHaveLength(300);
 
   const time = async (fn: () => Promise<unknown>, iters = 12): Promise<number> => {
@@ -108,12 +103,12 @@ test("300 mounts: invoking the NEWEST mount and a base config mount both stay un
   };
 
   // Warm both lanes once (table rehydration / DO wake are not what we are measuring).
-  const viaNewest = await itx.invokeCapability({ path: ["m299"], args: [] });
+  const viaNewest = await itx.invokeCapability(["itx", ["m299"]]);
   expect(viaNewest).toMatchObject({ projectId: "prj_path_mounts", path: "/" }); // it really aliases whoami
-  await itx.invokeCapability({ path: ["whoami"], args: [] });
+  await itx.invokeCapability(["itx", ["whoami"]]);
 
-  const newestMs = await time(() => itx.invokeCapability({ path: ["m299"], args: [] }));
-  const configMs = await time(() => itx.invokeCapability({ path: ["whoami"], args: [] }));
+  const newestMs = await time(() => itx.invokeCapability(["itx", ["m299"]]));
+  const configMs = await time(() => itx.invokeCapability(["itx", ["whoami"]]));
   // eslint-disable-next-line no-console
   console.log(
     `[300 mounts] newest-mount median ${newestMs.toFixed(1)}ms, config-mount median ${configMs.toFixed(1)}ms`,
@@ -131,14 +126,14 @@ test("an alias chain 30 deep resolves under the depth-32 budget; 33 deep fails l
     type: PROVIDED,
     payload: { path: `itx.alias${i}`, target: i === 0 ? "itx.whoami" : `itx.alias${i - 1}` },
   }));
-  await itx.invokeCapability({ path: ["stream", "append"], args: aliases });
+  await itx.invokeCapability(["itx", "stream", ["append", ...aliases]]);
 
   // 30 hops (alias29 → … → alias0 → whoami) resolve within the budget…
-  const resolved = await itx.invokeCapability({ path: ["alias29"], args: [] });
+  const resolved = await itx.invokeCapability(["itx", ["alias29"]]);
   expect(resolved).toMatchObject({ projectId: "prj_path_alias", path: "/" });
 
   // …33 hops trip the guard LOUDLY (never a spin, never a stack overflow).
-  await expect(itx.invokeCapability({ path: ["alias32"], args: [] })).rejects.toThrow(/depth 32/);
+  await expect(itx.invokeCapability(["itx", ["alias32"]])).rejects.toThrow(/depth 32/);
 }, 60_000);
 
 // ══════════════════════════════ payload-size baseline control ══════════════════════════════
@@ -146,14 +141,12 @@ test("an alias chain 30 deep resolves under the depth-32 budget; 33 deep fails l
 test("a ~256KB payload round-trips byte-identically (the in-bounds control)", async () => {
   const itx = await harness.itx("prj_path_mid");
   const blob = "x".repeat(256 * 1024);
-  const [committed] = await itx.invokeCapability({
-    path: ["stream", "append"],
-    args: [{ type: "mid", payload: { blob } }],
-  });
-  const page = await itx.invokeCapability({
-    path: ["stream", "read"],
-    args: [committed.offset - 1, 1],
-  });
+  const [committed] = await itx.invokeCapability([
+    "itx",
+    "stream",
+    ["append", { type: "mid", payload: { blob } }],
+  ]);
+  const page = await itx.invokeCapability(["itx", "stream", ["read", committed.offset - 1, 1]]);
   expect(page.events[0].payload.blob === blob).toBe(true);
 });
 
@@ -185,9 +178,9 @@ test("a ~256KB payload round-trips byte-identically (the in-bounds control)", as
 
 describe("arbitrary-size payloads (row chunking — the apps/os contract)", () => {
   const append = async (itx: any, events: unknown[]) =>
-    itx.invokeCapability({ path: ["stream", "append"], args: events });
+    itx.invokeCapability(["itx", "stream", ["append", ...events]]);
   const readOne = async (itx: any, offset: number) => {
-    const page = await itx.invokeCapability({ path: ["stream", "read"], args: [offset - 1, 1] });
+    const page = await itx.invokeCapability(["itx", "stream", ["read", offset - 1, 1]]);
     return page.events[0];
   };
 
@@ -258,10 +251,7 @@ describe("arbitrary-size payloads (row chunking — the apps/os contract)", () =
     expect(committedBig[0].offset).toBe(before.offset + 1); // dense…
     expect(after.offset).toBe(committedBig[0].offset + 1); // …on both sides
     // The big offset alone carries the WHOLE body (chunk rows are invisible to reads):
-    const page = await itx.invokeCapability({
-      path: ["stream", "read"],
-      args: [before.offset, 500],
-    });
+    const page = await itx.invokeCapability(["itx", "stream", ["read", before.offset, 500]]);
     expect(page.events.map((e: { type: string }) => e.type)).toEqual(["big", "small-after"]);
     expect(page.events[0].payload.blob === blob).toBe(true);
   }, 60_000);
@@ -310,7 +300,7 @@ describe("arbitrary-size payloads (row chunking — the apps/os contract)", () =
       ]),
     ).rejects.toThrow(/idempotency key "pin" already names a different event/);
     // Nothing partial survived the rollback…
-    const page = await itx.invokeCapability({ path: ["stream", "read"], args: [0, 500] });
+    const page = await itx.invokeCapability(["itx", "stream", ["read", 0, 500]]);
     expect(page.events.map((e: { type: string }) => e.type)).toEqual(["pin"]);
     // …and the allocator did not burn offsets for the rolled-back batch: dense continuation.
     const [next] = await append(itx, [{ type: "after-rollback" }]);
@@ -333,15 +323,16 @@ describe("arbitrary-size payloads (row chunking — the apps/os contract)", () =
     const [big] = await append(itx, [{ type: "big", payload: { blob } }]); // offset 3
     await append(itx, [{ type: "e4" }, { type: "e5" }]);
     // Page 1: limit 3 lands exactly ON the chunked event.
-    const page1 = await itx.invokeCapability({ path: ["stream", "read"], args: [0, 3] });
+    const page1 = await itx.invokeCapability(["itx", "stream", ["read", 0, 3]]);
     expect(page1.events.map((e: { offset: number }) => e.offset)).toEqual([1, 2, 3]);
     expect(page1.scannedThroughOffset).toBe(big.offset); // the EVENT offset — never a chunk row's
     expect(page1.events[2].payload.blob === blob).toBe(true); // the body rode the page whole
     // Page 2 chains contiguously from the proof.
-    const page2 = await itx.invokeCapability({
-      path: ["stream", "read"],
-      args: [page1.scannedThroughOffset, 500],
-    });
+    const page2 = await itx.invokeCapability([
+      "itx",
+      "stream",
+      ["read", page1.scannedThroughOffset, 500],
+    ]);
     expect(page2.events.map((e: { offset: number }) => e.offset)).toEqual([4, 5]);
     expect(page2.scannedThroughOffset).toBe(5);
   }, 60_000);
@@ -385,7 +376,7 @@ test.fails("BUG: 50 userspace processors — the loader lane cannot materialize 
   //      bugs live. Until this gap closes, no CI lane can catch a fan-out regression.
   //      (The loader-free fan-out probe below covers the commit-path half in the meantime.)
   const itx = await harness.itx("prj_path_fanout");
-  await itx.invokeCapability({ path: ["kv", "put"], args: ["procsrc", FAN_PROCESSOR_SOURCE] });
+  await itx.invokeCapability(["itx", "kv", ["put", "procsrc", FAN_PROCESSOR_SOURCE]]);
 
   const enableT0 = performance.now();
   for (let i = 0; i < 50; i++) {
@@ -397,20 +388,21 @@ test.fails("BUG: 50 userspace processors — the loader lane cannot materialize 
 
   // ONE append → the pump drives all 50 facets.
   const t0 = performance.now();
-  const [marker] = await itx.invokeCapability({
-    path: ["stream", "append"],
-    args: [{ type: "fanout-marker" }],
-  });
+  const [marker] = await itx.invokeCapability([
+    "itx",
+    "stream",
+    ["append", { type: "fanout-marker" }],
+  ]);
 
   // Responsiveness DURING the fan-out: an unrelated call must not be head-of-line blocked.
   const whoT0 = performance.now();
-  await itx.invokeCapability({ path: ["whoami"], args: [] });
+  await itx.invokeCapability(["itx", ["whoami"]]);
   const whoMs = performance.now() - whoT0;
 
   // The barrier: every one of the 50 processors reaches the marker offset.
   await Promise.all(
     Array.from({ length: 50 }, (_, i) =>
-      itx.invoke(
+      itx.invokeCapability(
         `itx.facets.get('fan${i}').waitUntilProcessed({offset: ${marker.offset}, timeoutMs: 30000})`,
       ),
     ),
@@ -422,7 +414,7 @@ test.fails("BUG: 50 userspace processors — the loader lane cannot materialize 
   );
 
   // Sanity: a mid-pack processor really reduced the log (each enable event + the marker).
-  const snap = await itx.invoke(`itx.subscribers.fan7.snapshot()`);
+  const snap = await itx.invokeCapability(`itx.subscribers.fan7.snapshot()`);
   expect(snap.offset).toBeGreaterThanOrEqual(marker.offset);
   expect((snap.state as { n: number }).n).toBeGreaterThan(0);
 
@@ -461,11 +453,11 @@ test("50 CONNECTED live subscribers: one append fans out to all 50 in <5s and th
   const subscribeMs = performance.now() - subscribeT0;
 
   const t0 = performance.now();
-  await itx.invokeCapability({ path: ["stream", "append"], args: [{ type: "sub-fanout-marker" }] });
+  await itx.invokeCapability(["itx", "stream", ["append", { type: "sub-fanout-marker" }]]);
 
   // Responsiveness DURING the fan-out: an unrelated call must not be head-of-line blocked.
   const whoT0 = performance.now();
-  await itx.invokeCapability({ path: ["whoami"], args: [] });
+  await itx.invokeCapability(["itx", ["whoami"]]);
   const whoMs = performance.now() - whoT0;
 
   let lastArrival: number;

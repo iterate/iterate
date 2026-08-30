@@ -8,6 +8,11 @@ import JSON5 from "json5";
 type Step = string | [method: string, ...args: unknown[]];
 /** A call written as data: a scope-root name then get/call steps. */
 export type Expression = Step[];
+/** THE dispatch target, in EITHER codec half — a dotted string that starts with the scope root
+ *  (`"itx.streams.get('/logs')"`) OR the parsed structured form (`["itx","streams",["get","/logs"]]`).
+ *  Both carry call args (the string via `.method(args)`), and `toExpression` normalizes either to the
+ *  structured form — so either works wherever one works, at every door that dispatches. */
+export type ItxExpression = string | Expression;
 /** A capability path — a mount's left side: plain dotted segments, no calls, no args. */
 export type CapabilityPath = string[];
 const IDENT = /^[A-Za-z_$][A-Za-z0-9_$-]*/;
@@ -65,8 +70,8 @@ export function parse(source: string): Expression {
   return steps;
 }
 
-/** Accept either half; normalize to the structured form. */
-export function toExpression(input: string | Expression): Expression {
+/** Accept either half of an `ItxExpression`; normalize to the structured form. */
+export function toExpression(input: ItxExpression): Expression {
   return typeof input === "string" ? parse(input) : input;
 }
 

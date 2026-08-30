@@ -138,7 +138,7 @@ export async function evaluate(
  *  handle fronts. This is the one bridge between "callable capability" and "pipelinable RpcTarget". */
 async function callOn(value: unknown, receiver: unknown, args: unknown[]): Promise<unknown> {
   if (typeof value === "function") return Reflect.apply(value, receiver, args);
-  if (value instanceof InvokeHandle) return value.invokeCapability({ path: [], args });
+  if (value instanceof InvokeHandle) return value.applyRoot(args);
   throw new Error(`mount target is not callable but ${args.length} arg(s) were passed`);
 }
 

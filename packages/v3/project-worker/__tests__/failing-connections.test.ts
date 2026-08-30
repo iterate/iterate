@@ -93,7 +93,7 @@ const codeOf = (e: unknown): string | undefined =>
   typeof e === "object" && e !== null && "code" in e ? String((e as any).code) : undefined;
 
 /** Presence: the keys currently held by this context (`[{ key, description? }]`). */
-const listStubs = (itx: any): Promise<any[]> => itx.invoke("itx.rpcStubs.list()");
+const listStubs = (itx: any): Promise<any[]> => itx.invokeCapability("itx.rpcStubs.list()");
 
 class Tools extends RpcTarget {
   #tag: string;
@@ -125,7 +125,7 @@ class HangTools extends RpcTarget {
 test("calling a stub key that never existed rejects with code CONNECTION_OFFLINE", async () => {
   const itx = await harness.itx(c("offline"));
   const err = await rejectionOf(
-    itx.invoke("itx.rpcStubs.get('never-existed').hello()"),
+    itx.invokeCapability("itx.rpcStubs.get('never-existed').hello()"),
     10_000,
     "invoke on a never-provided key",
   );
@@ -154,9 +154,7 @@ test("same-key re-provide replaces the incumbent while online; a mount naming th
   );
   // A mount that names the KEY (not a transport) — it must survive a replace and keep resolving.
   await observer.provide({ path: "itx.dupTool", target: "itx.rpcStubs.get('dup')" });
-  expect(await observer.invokeCapability({ path: ["dupTool", "hello"], args: [] })).toBe(
-    "hello-from-one",
-  );
+  expect(await observer.invokeCapability(["itx", "dupTool", ["hello"]])).toBe("hello-from-one");
 
   // Second LIVE session, same key → the newest transport wins (the concurrent-replace path in
   // rpc-stub-directory.fetch drops the predecessor with reason "replaced", keyFinal=false, so no
@@ -169,8 +167,7 @@ test("same-key re-provide replaces the incumbent while online; a mount naming th
     const dups = (await listStubs(observer)).filter((r) => r.key === "dup");
     if (dups.length !== 1) return undefined;
     try {
-      return (await observer.invokeCapability({ path: ["dupTool", "hello"], args: [] })) ===
-        "hello-from-two"
+      return (await observer.invokeCapability(["itx", "dupTool", ["hello"]])) === "hello-from-two"
         ? "ok"
         : undefined;
     } catch {
@@ -178,9 +175,7 @@ test("same-key re-provide replaces the incumbent while online; a mount naming th
     }
   });
   // The key mount was never auto-revoked by the replace ("replaced" is never key-final).
-  expect(await observer.invokeCapability({ path: ["dupTool", "hello"], args: [] })).toBe(
-    "hello-from-two",
-  );
+  expect(await observer.invokeCapability(["itx", "dupTool", ["hello"]])).toBe("hello-from-two");
 });
 
 test("disposing a client session removes its stubs promptly and auto-revokes its live-cap mounts", async () => {
@@ -191,9 +186,7 @@ test("disposing a client session removes its stubs promptly and auto-revokes its
   // Provide a live capability under a key and name it at a path.
   await itxA.rpcStubs.provide(new Tools("ghost"), { key: "ghost" });
   await observer.provide({ path: "itx.ghosttool", target: "itx.rpcStubs.get('ghost')" });
-  expect(await observer.invokeCapability({ path: ["ghosttool", "hello"], args: [] })).toBe(
-    "hello-from-ghost",
-  );
+  expect(await observer.invokeCapability(["itx", "ghosttool", ["hello"]])).toBe("hello-from-ghost");
   await until("the provided stub listed", async () =>
     (await listStubs(observer)).some((r) => r.key === "ghost"),
   );
@@ -206,7 +199,7 @@ test("disposing a client session removes its stubs promptly and auto-revokes its
   );
   await until("live-cap mount auto-revoked (default-deny restored)", async () => {
     try {
-      await observer.invokeCapability({ path: ["ghosttool", "hello"], args: [] });
+      await observer.invokeCapability(["itx", "ghosttool", ["hello"]]);
       return undefined;
     } catch (e) {
       return codeOf(e) === "NO_CAPABILITY_MATCH";
@@ -214,7 +207,7 @@ test("disposing a client session removes its stubs promptly and auto-revokes its
   });
   // The stale key is now simply offline — coded, not a hang.
   const err = await rejectionOf(
-    observer.invoke("itx.rpcStubs.get('ghost').hello()"),
+    observer.invokeCapability("itx.rpcStubs.get('ghost').hello()"),
     10_000,
     "invoke on the disposed session's key",
   );
@@ -234,9 +227,9 @@ test("killing the provider session mid-invoke rejects the in-flight call promptl
   await until("'hanger' listed", async () =>
     (await listStubs(observer)).some((r) => r.key === "hanger"),
   );
-  expect(await observer.invoke("itx.rpcStubs.get('hanger').hello()")).toBe("hang-tools");
+  expect(await observer.invokeCapability("itx.rpcStubs.get('hanger').hello()")).toBe("hang-tools");
 
-  const inFlight: Promise<unknown> = observer.invoke("itx.rpcStubs.get('hanger').hang()");
+  const inFlight: Promise<unknown> = observer.invokeCapability("itx.rpcStubs.get('hanger').hang()");
   inFlight.catch(() => undefined); // settled later via rejectionOf — never an unhandled rejection
   await until("hang() reached the provider", () => hangTools.hangStarted);
 
@@ -263,7 +256,7 @@ test("fan-out via rpcStubs.list() + map drops dead members and the no-hello subs
   const fanOut = async (): Promise<unknown[]> => {
     const rows = await listStubs(observer);
     const settled = await Promise.allSettled(
-      rows.map((r) => observer.invoke(`itx.rpcStubs.get('${r.key}').hello()`)),
+      rows.map((r) => observer.invokeCapability(`itx.rpcStubs.get('${r.key}').hello()`)),
     );
     return settled
       .filter((s): s is PromiseFulfilledResult<unknown> => s.status === "fulfilled")

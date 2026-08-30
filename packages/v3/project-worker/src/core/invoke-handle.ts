@@ -19,21 +19,35 @@
 
 import { RpcTarget } from "capnweb";
 import { installPrototypeInvokeCapabilityFallback } from "./dotted-path-proxy.ts";
+import { toExpression, type ItxExpression } from "./expression.ts";
 
 /** A branded, pipelinable handle whose unknown dotted members fold into ONE `dispatch(path, args)`.
  *  `dispatch` routes the folded path into the underlying object — a connection's retained callback
  *  (`RpcStubDirectory.invoke`), a facet's method walk (`facetInvoke`), a sibling context, or a
- *  stateful loaded class. Declared members (just `invokeCapability`) win over the fallback, so a
- *  capability cannot be named `invokeCapability` — the one reserved word this wrapper adds. */
+ *  stateful loaded class. Declared members (`invokeCapability` / `applyRoot`) win over the fallback,
+ *  so a capability cannot be named either — the two reserved words this wrapper adds. */
 export class InvokeHandle extends RpcTarget {
   readonly #dispatch: (path: string[], args: unknown[]) => unknown;
   constructor(dispatch: (path: string[], args: unknown[]) => unknown) {
     super();
     this.#dispatch = dispatch;
   }
-  /** THE fold door the prototype hop dispatches onto (default `invokerFor` = the instance itself). */
-  invokeCapability(call: { path: string[]; args: unknown[] }): unknown {
-    return this.#dispatch(call.path, call.args);
+  /** THE fold door the prototype hop dispatches onto (default `invokerFor` = the instance itself).
+   *  The `ItxExpression` is RELATIVE to this handle (empty scope root — the hop is installed with
+   *  `[]`): property-read steps then a final call step, unpacked back into `(path, args)`. */
+  invokeCapability(call: ItxExpression): unknown {
+    const expr = toExpression(call);
+    const tail = expr.at(-1);
+    if (tail === undefined) return this.#dispatch([], []);
+    const [method, args] =
+      typeof tail === "string" ? [tail, [] as unknown[]] : [tail[0], tail.slice(1)];
+    return this.#dispatch([...(expr.slice(0, -1) as string[]), method], args);
+  }
+  /** Root-apply: call the bare capability this handle fronts (empty path). `callOn` (dispatch.ts)
+   *  uses this when a matched mount's target IS an InvokeHandle and args are applied at the mount —
+   *  `handle(events, range)` ⇒ the parked callback the handle delivers to. */
+  applyRoot(args: unknown[]): unknown {
+    return this.#dispatch([], args);
   }
 }
-installPrototypeInvokeCapabilityFallback(InvokeHandle);
+installPrototypeInvokeCapabilityFallback(InvokeHandle, []);

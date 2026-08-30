@@ -126,10 +126,12 @@ async function slackRig(ctx: string) {
   const itx = await harness.itx(ctx);
   // Sanity through the EXPLICIT door — the mount is live before any dotted attempt.
   await until("slack mount routable via the explicit door", async () => {
-    const posted: any = await itx.invokeCapability({
-      path: ["slack", "chat", "postMessage"],
-      args: [{ channel: "#sanity", text: "rig up" }],
-    });
+    const posted: any = await itx.invokeCapability([
+      "itx",
+      "slack",
+      "chat",
+      ["postMessage", { channel: "#sanity", text: "rig up" }],
+    ]);
     return posted?.ok === true;
   });
   sdkCalls.length = 0; // the sanity call is rig noise, not test data
@@ -143,7 +145,9 @@ async function connectedRig(ctx: string, key: string) {
   const s = harness.session(ctx);
   await s.get().rpcStubs.provide(new Tools(key), { key });
   await until(`rpc stub '${key}' answers via the string door`, async () => {
-    return (await itx.invoke(`itx.rpcStubs.get('${key}').hello()`)) === `hello-from-${key}`;
+    return (
+      (await itx.invokeCapability(`itx.rpcStubs.get('${key}').hello()`)) === `hello-from-${key}`
+    );
   });
   return itx;
 }
@@ -155,7 +159,7 @@ async function connectedRig(ctx: string, key: string) {
 // so every test.fails below is a missing-sugar bug, never a broken door.
 test("explicit door: invokeCapability(['whoami']) answers (the half the dotted surface sugars)", async () => {
   const itx = await harness.itx(c("door"));
-  const who = await itx.invokeCapability({ path: ["whoami"], args: [] });
+  const who = await itx.invokeCapability(["itx", ["whoami"]]);
   expect(who).toMatchObject({ projectId: c("door"), path: "/" });
 });
 
@@ -164,10 +168,12 @@ test("explicit door: invokeCapability(['whoami']) answers (the half the dotted s
 // works TODAY through the explicit door — the dotted spelling below is pure client sugar.
 test("explicit door: deep slack replay through a live bridge works today", async () => {
   const { itx, sdkCalls } = await slackRig(c("sdoor"));
-  const posted: any = await itx.invokeCapability({
-    path: ["slack", "chat", "postMessage"],
-    args: [{ channel: "#general", text: "hello from itx" }],
-  });
+  const posted: any = await itx.invokeCapability([
+    "itx",
+    "slack",
+    "chat",
+    ["postMessage", { channel: "#general", text: "hello from itx" }],
+  ]);
   expect(posted).toMatchObject({ ok: true, ts: "1755.000100", channel: "#general" });
   expect(sdkCalls).toEqual([["chat.postMessage", { channel: "#general", text: "hello from itx" }]]);
 });
@@ -178,7 +184,7 @@ test("explicit door: deep slack replay through a live bridge works today", async
 //   prototype-hop / path-proxy fallback, so an unknown dotted root never becomes an
 //   invokeCapability dispatch.
 // EXPECTED (apps/os/src/domains/itx/path-proxy.test.ts:50-61 "falls back only for unknown
-//   paths"): `itx.whoami()` = sugar for invokeCapability({ path: ["whoami"], args: [] }) →
+//   paths"): `itx.whoami()` = sugar for invokeCapability(["itx", ["whoami"]]) →
 //   { projectId, path: "/" }.
 // ACTUAL: rejects with capnweb's raw follow-path error — TypeError: 'whoami' is not a
 //   function. (own props: { remote: true }, no code) — nothing ever reaches the capability table.
@@ -195,7 +201,7 @@ test("root dotted call: await itx.whoami() falls back to the capability table", 
 //   RpcTarget and the follow-path walk explodes on the next segment.
 // EXPECTED (apps/os/src/domains/itx/path-proxy.test.ts:55-56 — stub.nested.math.add /
 //   stub.tools.greeter.sayHello accumulate path segments and dispatch once): itx.kv.put →
-//   invokeCapability({ path: ["kv","put"], args: ["k","v"] }) → { ok: true }; itx.kv.get → "v".
+//   invokeCapability(["itx", "kv", ["put", "k","v"]]) → { ok: true }; itx.kv.get → "v".
 //   The explicit door proves the capability itself works (DEFAULT_CONFIG_MOUNTS mounts itx.kv).
 // ACTUAL: rejects with TypeError: Cannot read properties of undefined (reading 'put') — a raw
 //   JS property miss on the server, uncoded ({ remote: true } only).
@@ -219,7 +225,7 @@ test("dotted write, explicit read: itx.stream.append lands in the ONE log", asyn
   const itx = await harness.itx(c("stream"));
   const [committed] = await itx.stream.append({ type: "mark", payload: { n: 1 } });
   expect(committed.offset).toBeGreaterThanOrEqual(1);
-  const page: any = await itx.invokeCapability({ path: ["stream", "read"], args: [] });
+  const page: any = await itx.invokeCapability(["itx", "stream", ["read"]]);
   expect(page.events.some((e: any) => e.type === "mark")).toBe(true);
 });
 
@@ -255,7 +261,7 @@ test("slack-style deep SDK replay: itx.slack.chat.postMessage({...})", async () 
 
 // A wrong guess at a dotted surface (`itx.slack.api.postMessage` — the invented `.api.` namespace
 //   from slack-api.test.ts's own fixture) REACHES the capability table (the hop landed), dispatches
-//   invokeCapability({path:["slack","api","postMessage"]}), routes through the parked-connection
+//   invokeCapability(["itx", "slack", "api", ["postMessage"]]), routes through the parked-connection
 //   relay, and the remote SlackReplayTarget's absent `.api` surfaces as a raw JS TypeError inside
 //   RetainedCallbackInvoker.invoke (core/itx-surface.ts). We propagate that reject as-is — the
 //   NOT_A_METHOD re-grammar (an apps/os error-normalizer nicety) has no clean-room consumer.
@@ -280,10 +286,7 @@ test("a dotted mid-path miss REJECTS (the invented namespace resolves to nothing
 test("a leaf miss through the EXPLICIT door also rejects", async () => {
   const { itx } = await slackRig(c("leaf"));
   const err = await rejectionOf(
-    itx.invokeCapability({
-      path: ["slack", "chat", "nosuchMethod"],
-      args: [{ channel: "#x", text: "y" }],
-    }),
+    itx.invokeCapability(["itx", "slack", "chat", ["nosuchMethod", { channel: "#x", text: "y" }]]),
     15_000,
     "explicit-door call on a method the bridge never had",
   );
@@ -320,7 +323,7 @@ test("an unawaited dotted chain is await-safe: awaiting mid-chain yields a live 
 test("awaiting the root itx stub again neither hangs nor dispatches (then-safety)", async () => {
   const itx = await harness.itx(c("then"));
   const again: any = await Promise.resolve(itx); // a settled stub must not look thenable
-  const who = await again.invokeCapability({ path: ["whoami"], args: [] });
+  const who = await again.invokeCapability(["itx", ["whoami"]]);
   expect(who).toMatchObject({ projectId: c("then") });
 });
 

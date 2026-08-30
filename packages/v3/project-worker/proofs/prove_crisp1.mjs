@@ -39,25 +39,25 @@ await itxB.rpcStubs.provide(new ToolsB(), { key: "b", description: "prover B" })
 await seedSources(itxA, ["site", "counter"]);
 
 // 1. whoami through the routing table (seed itx.whoami ⇒ roots.whoami) — via the ONE dispatch door
-const who = await itxA.invokeCapability({ path: ["whoami"], args: [] });
+const who = await itxA.invokeCapability(["itx", ["whoami"]]);
 // 1b. the authenticate() introduction door (a NO-OP today; the shape the real gate lands in)
 const whoAuth = await sessionA
   .authenticate({ token: "ignored-today" })
   .get()
-  .invokeCapability({ path: ["whoami"], args: [] });
+  .invokeCapability(["itx", ["whoami"]]);
 check(whoAuth?.projectId === CTX, "authenticate() introduction door", JSON.stringify(whoAuth));
 check(who?.projectId === CTX, "whoami via seed", JSON.stringify(who));
 
 // 2. kv through the seed (itx.kv ⇒ roots.kv, project-prefixed)
-await itxA.invokeCapability({ path: ["kv", "put"], args: ["greet", "hi-crisp"] });
-const got = await itxA.invokeCapability({ path: ["kv", "get"], args: ["greet"] });
+await itxA.invokeCapability(["itx", "kv", ["put", "greet", "hi-crisp"]]);
+const got = await itxA.invokeCapability(["itx", "kv", ["get", "greet"]]);
 check(got === "hi-crisp", "kv round-trip via seed", String(got));
 
 // 3. live capability: provide from A (park an rpc stub under a key + mount it), invoke from B
 const toolsKey = crypto.randomUUID();
 await itxA.rpcStubs.provide(new ToolsA(), { key: toolsKey });
 await itxA.provide({ path: "itx.tools", target: `itx.rpcStubs.get('${toolsKey}')` });
-const echoed = await itxB.invokeCapability({ path: ["tools", "echo"], args: ["hello"] });
+const echoed = await itxB.invokeCapability(["itx", "tools", ["echo", "hello"]]);
 check(echoed === "echo-A:hello", "live cap: B invokes A's provider", String(echoed));
 const s1 = await state();
 // The paged-in stub stays WARM after a call now (disposal is the 60s quiesce alarm —
@@ -75,15 +75,15 @@ await itxA.provide({ path: "itx.greeter", target: `itx.rpcStubs.get('${greeterKe
 const greeterKeyB = crypto.randomUUID();
 await itxB.rpcStubs.provide(new ToolsB(), { key: greeterKeyB });
 await itxB.provide({ path: "itx.greeter", target: `itx.rpcStubs.get('${greeterKeyB}')` });
-const winB = await itxA.invokeCapability({ path: ["greeter", "hello"], args: [] });
+const winB = await itxA.invokeCapability(["itx", "greeter", ["hello"]]);
 check(winB === "from B", "shadow stack: newest mount wins", String(winB));
 await itxB.revoke({ path: "itx.greeter" });
-const winA = await itxA.invokeCapability({ path: ["greeter", "hello"], args: [] });
+const winA = await itxA.invokeCapability(["itx", "greeter", ["hello"]]);
 check(winA === "from A", "shadow stack: revoke restores what was beneath", String(winA));
 await itxA.revoke({ path: "itx.greeter" });
 let denied = "";
 try {
-  await itxA.invokeCapability({ path: ["greeter", "hello"], args: [] });
+  await itxA.invokeCapability(["itx", "greeter", ["hello"]]);
 } catch (e) {
   denied = String(e);
 }
@@ -127,13 +127,13 @@ await itxA.provide({
   target:
     "itx.load(['itx', 'kv', ['get', 'src/counter.js']]).getDurableObjectClass('Counter').get()",
 });
-const inc = await itxA.invokeCapability({ path: ["counter", "increment"], args: [2] });
+const inc = await itxA.invokeCapability(["itx", "counter", ["increment", 2]]);
 check(inc === 2, "stateful worker: increment(2)", String(inc));
-const deep = await itxA.invokeCapability({ path: ["counter", "counters", "add"], args: [3] });
+const deep = await itxA.invokeCapability(["itx", "counter", "counters", ["add", 3]]);
 check(deep === 5, "stateful worker: DEEP dotted counters.add(3)", String(deep));
-const val = await itxA.invokeCapability({ path: ["counter", "value"], args: [] });
+const val = await itxA.invokeCapability(["itx", "counter", ["value"]]);
 check(val === 5, "stateful worker: value()", String(val));
-const whoDeep = await itxA.invokeCapability({ path: ["counter", "whoAmI"], args: [] });
+const whoDeep = await itxA.invokeCapability(["itx", "counter", ["whoAmI"]]);
 check(
   whoDeep?.projectId === CTX,
   "stateful worker calls BACK through env.ITX",
@@ -141,19 +141,21 @@ check(
 );
 
 // 7. the rpcStubs view: list (held stub keys), single-target get, fan-out via list() + map
-const heldStubs = await itxA.invoke("itx.rpcStubs.list()");
+const heldStubs = await itxA.invokeCapability("itx.rpcStubs.list()");
 check(
   Array.isArray(heldStubs) && ["a", "b"].every((k) => heldStubs.some((c) => c.key === k)),
   "rpcStubs.list shows both keyed stubs",
   JSON.stringify(heldStubs),
 );
-const single = await itxA.invoke("itx.rpcStubs.get('b').hello()");
+const single = await itxA.invokeCapability("itx.rpcStubs.get('b').hello()");
 check(single === "from B", "rpcStubs.get(key) reaches ONE stub", String(single));
 // fan-out is list() + map over get(key) — no built-in `each`; the caller owns the allSettled.
-const stubKeys = (await itxA.invoke("itx.rpcStubs.list()")).map((r) => r.key);
+const stubKeys = (await itxA.invokeCapability("itx.rpcStubs.list()")).map((r) => r.key);
 const fans = (
   await Promise.all(
-    stubKeys.map((k) => itxA.invoke(`itx.rpcStubs.get('${k}').hello()`).catch(() => undefined)),
+    stubKeys.map((k) =>
+      itxA.invokeCapability(`itx.rpcStubs.get('${k}').hello()`).catch(() => undefined),
+    ),
   )
 ).filter((v) => v !== undefined);
 check(

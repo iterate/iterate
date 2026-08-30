@@ -12,7 +12,7 @@ export default class Hello extends WorkerEntrypoint {
 export class Counter extends DurableObject {
   async increment(by) { const n = ((await this.ctx.storage.get("n")) ?? 0) + by; await this.ctx.storage.put("n", n); return n; }
   async value() { return (await this.ctx.storage.get("n")) ?? 0; }
-  async whoAmI() { return await this.env.ITX.invokeCapability("itx.whoami", []); }
+  async whoAmI() { return await (await this.env.ITX.get()).whoami(); }
   get counters() {
     const self = this;
     return { async add(by) { return self.increment(by); } };
@@ -46,7 +46,7 @@ export class Keeper extends DurableObject {
   async useStashed() {
     const cap = await this.ctx.storage.get("itx-cap");
     if (!cap) throw new Error("keeper: nothing stashed");
-    return await cap.invokeCapability("itx.whoami", []);
+    return await (await cap.get()).whoami();
   }
 }`,
   "src/digest.js": `import { WorkerEntrypoint } from "cloudflare:workers";
@@ -116,6 +116,6 @@ export async function seedSources(itx, names) {
   for (const n of names) {
     const key = `src/${n}.js`;
     if (!SOURCES[key]) throw new Error(`proof_sources: no source ${key}`);
-    await itx.invokeCapability({ path: ["kv", "put"], args: [key, SOURCES[key]] });
+    await itx.invokeCapability(["itx", "kv", ["put", key, SOURCES[key]]]);
   }
 }

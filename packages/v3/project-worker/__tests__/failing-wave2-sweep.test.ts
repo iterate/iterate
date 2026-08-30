@@ -39,10 +39,10 @@ async function until<T>(
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const append = (itx: any, ...events: unknown[]) =>
-  itx.invokeCapability({ path: ["stream", "append"], args: events });
+  itx.invokeCapability(["itx", "stream", ["append", ...events]]);
 const kvPut = (itx: any, k: string, v: string) =>
-  itx.invokeCapability({ path: ["kv", "put"], args: [k, v] });
-const kvGet = (itx: any, k: string) => itx.invokeCapability({ path: ["kv", "get"], args: [k] });
+  itx.invokeCapability(["itx", "kv", ["put", k, v]]);
+const kvGet = (itx: any, k: string) => itx.invokeCapability(["itx", "kv", ["get", k]]);
 
 const LIVE_STATE_CHANGED = "events.iterate.com/live-state/changed";
 
@@ -91,7 +91,7 @@ test("secrets.set rejects a name the egress substitution grammar cannot express"
   // proxy, whose pipelined children reject vacuously and fake a pass.)
   await expect(
     (async () => {
-      await itx.invokeCapability({ path: ["secrets", "set"], args: ["api:key", "v-unreachable"] });
+      await itx.invokeCapability(["itx", "secrets", ["set", "api:key", "v-unreachable"]]);
     })(),
   ).rejects.toThrow(); // ← resolves {ok: true} — the dead write is accepted
 });
@@ -201,7 +201,7 @@ test("a processor enabled by its MOUNT alone (the documented event-sourced door)
   const itx = await harness.itx("prj_w2mount");
   await itx.provide({ path: "itx.subscribers.tally", target: "itx.facets.get('tally')" });
   await append(itx, { type: "seed" });
-  const snap = await itx.invoke("itx.facets.get('tally').snapshot()"); // ← rejects: ProcessorFacet: not configured
+  const snap = await itx.invokeCapability("itx.facets.get('tally').snapshot()"); // ← rejects: ProcessorFacet: not configured
   expect(snap.state).toHaveProperty("counts");
 });
 
@@ -219,7 +219,7 @@ test("kv list returns EVERY key, not silently the first 1000", async () => {
   for (let i = 0; i < names.length; i += 100) {
     await Promise.all(names.slice(i, i + 100).map((n) => kvPut(itx, n, "1")));
   }
-  const listed = await itx.invokeCapability({ path: ["kv", "list"], args: [] });
+  const listed = await itx.invokeCapability(["itx", "kv", ["list"]]);
   expect(listed.keys).toHaveLength(total); // ← 1000
 }, 60_000);
 
@@ -229,8 +229,8 @@ test("cd('x') and cd('/x') are the SAME sibling stream", async () => {
   // Pins the one-DO-per-logical-context rule: the codec's normalizePath runs on every sibling
   // resolution, so the slash-less spelling cannot mint a shadow twin of the same context.
   const itx = await harness.itx("prj_w2ctx");
-  await itx.invoke("itx.cd('x').append({type:'ping-x'})");
-  const page = await itx.invoke("itx.cd('/x').read(0, 50)");
+  await itx.invokeCapability("itx.cd('x').append({type:'ping-x'})");
+  const page = await itx.invokeCapability("itx.cd('/x').read(0, 50)");
   expect(page.events.map((e: any) => e.type)).toContain("ping-x");
 });
 
@@ -243,7 +243,7 @@ test("cd('') resolves to THIS context (self) and answers rather than wedging", a
   // BEFORE comparing.
   const itx = await harness.itx("prj_w2self");
   const raced = await Promise.race([
-    itx.invoke("itx.cd('').append({type:'self-ping'})"),
+    itx.invokeCapability("itx.cd('').append({type:'self-ping'})"),
     new Promise((_, reject) =>
       setTimeout(
         () => reject(new Error("self-context call wedged >10s (self-RPC deadlock)")),
@@ -252,7 +252,7 @@ test("cd('') resolves to THIS context (self) and answers rather than wedging", a
     ),
   ]);
   expect((raced as any[])[0].type).toBe("self-ping");
-  const page = await itx.invokeCapability({ path: ["stream", "read"], args: [0, 50] });
+  const page = await itx.invokeCapability(["itx", "stream", ["read", 0, 50]]);
   expect(page.events.map((e: any) => e.type)).toContain("self-ping");
 });
 

@@ -24,7 +24,7 @@ keep.push(await itx.rpcStubs.provide(fn, { key }));
 await itx.provide({ path: "itx.ctlHook", target: `itx.rpcStubs.get('${key}')` });
 await itx.subscribe({ name: "ctl", target: "itx.ctlHook", consumes: ["mark"], start: "beginning" });
 
-await itx.invoke(`itx.stream.append({"type":"mark"})`);
+await itx.invokeCapability(`itx.stream.append({"type":"mark"})`);
 const t0 = Date.now();
 while (Date.now() - t0 < 15000 && invocations < 2) await sleep(200);
 const ms = Date.now() - t0;

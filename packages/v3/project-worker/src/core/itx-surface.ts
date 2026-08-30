@@ -23,7 +23,7 @@
 import { RpcTarget } from "capnweb";
 import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
 import type { DeliveryPolicy } from "./events.ts";
-import { print, type Expression } from "./expression.ts";
+import { print, type Expression, type ItxExpression } from "./expression.ts";
 import { disposeStub, openStubPagerWebSocket } from "./hibernatable-rpc-stub.ts";
 import { codedError } from "./errors.ts";
 import { InvokeHandle } from "./invoke-handle.ts";
@@ -316,7 +316,7 @@ class ProvidedStub extends RpcTarget {
 
 /** The iterate context (`itx`). Dotted capability calls + the built-in collections forward to the DO over
  *  Workers RPC. capnweb terminates upstream in `/api`, so a client stub `itx.a.b(x)` never touches the DO's
- *  transport — it lands here and becomes `DO.invokeCapability("itx.a.b", [x])`. */
+ *  transport — it lands here and becomes a `DO.invoke(["itx", "a", ["b", x]])` call Expression. */
 export class Itx extends RpcTarget {
   readonly #host: ItxHostStub;
   readonly #parking: Parking;
@@ -335,15 +335,12 @@ export class Itx extends RpcTarget {
     return new RpcStubs(this.#host, this.#parking, this.#waitUntil);
   }
 
-  /** The universal dispatch door (built-ins + provided capabilities). `itx.a.b(x)` is client-side sugar for
-   *  `invokeCapability({ path: ["a", "b"], args: [x] })`. */
-  invokeCapability(input: { path: string[]; args?: unknown[] }): Promise<unknown> {
-    return this.#host.invokeCapability(`itx.${input.path.join(".")}`, input.args ?? []);
-  }
-
-  /** The GENERIC dispatch door: a FULL expression, either codec half — mid-path call args and
-   *  all (`itx.streams.get('/').append({...})`), which the dotted sugar above cannot spell. */
-  invoke(call: string | Expression): Promise<unknown> {
+  /** THE dispatch door (built-ins + provided capabilities) — the ONE way to call the itx surface.
+   *  Takes an `ItxExpression`: a dotted string (`"itx.streams.get('/').append({...})"`) OR the parsed
+   *  array (`["itx","streams",["get","/"],["append",{...}]]`); both carry mid-path call args, and both
+   *  work here. The dotted sugar `itx.a.b(x)` folds into `["itx","a",["b",x]]` (see the prototype
+   *  fallback at the bottom of this file) and lands right here. */
+  invokeCapability(call: ItxExpression): Promise<unknown> {
     return this.#host.invoke(call);
   }
 
@@ -352,7 +349,7 @@ export class Itx extends RpcTarget {
    *  Returns the mount's identity for `revoke`. */
   provide(input: {
     path: string | string[];
-    target: string | Expression;
+    target: ItxExpression;
     delivery?: DeliveryPolicy;
   }): Promise<{ providedAtOffset: number }> {
     return this.#host.provideCapability(input);
@@ -361,7 +358,7 @@ export class Itx extends RpcTarget {
   /** Reach a FETCH-shaped capability through the session itself (the fork's
    *  Upgrade-Response-over-RPC carries the Response — including a 101 — back over capnweb, so
    *  capnweb clients need no separate /cap door). */
-  fetchCap(cap: string | Expression, request: Request): Promise<Response> {
+  fetchCap(cap: ItxExpression, request: Request): Promise<Response> {
     const headers = new Headers(request.headers);
     headers.set("x-itx-cap", typeof cap === "string" ? cap : JSON.stringify(cap));
     return this.#host.fetch(new Request(request, { headers }));
@@ -407,7 +404,7 @@ export class Itx extends RpcTarget {
   async subscribe(
     input: DeliveryPolicy & {
       name?: string;
-      target: string | Expression | ProviderStub;
+      target: ItxExpression | ProviderStub;
     },
   ): Promise<{ name: string; providedAtOffset: number }> {
     // SUBSCRIBING IS PROVIDING — pure edge sugar: a unique name (concurrent anonymous subscribes
@@ -415,7 +412,7 @@ export class Itx extends RpcTarget {
     // at itx.subscribers.<name> targeting it, with the delivery policy riding the event.
     const name = input.name ?? `sub-${crypto.randomUUID().slice(0, 8)}`;
     const { name: _n, target: rawTarget, ...delivery } = input;
-    let target: string | Expression;
+    let target: ItxExpression;
     if (isLiveStub(rawTarget)) {
       const key = `sub-${crypto.randomUUID()}`;
       const relay = await startRpcStubRelay(
@@ -427,7 +424,7 @@ export class Itx extends RpcTarget {
       this.#parking.addNamed(name, relay);
       target = print(["itx", "rpcStubs", ["get", key]]);
     } else {
-      target = rawTarget as string | Expression;
+      target = rawTarget as ItxExpression;
     }
     const { providedAtOffset } = await this.#host.provideCapability({
       path: `itx.subscribers.${name}`,
@@ -460,7 +457,7 @@ export class Itx extends RpcTarget {
 // the door the path proxy calls. Runs once at module load, after the class body. See
 // core/dotted-path-proxy.ts for the workerd brand-check reason this is a prototype hop and not a
 // Proxy AROUND the instance.
-installPrototypeInvokeCapabilityFallback(Itx);
+installPrototypeInvokeCapabilityFallback(Itx, ["itx"]);
 
 /** Build the itx scope for a context reached over Workers-RPC — the `ItxEntrypoint` / loaded-worker
  *  lane. It is the SAME genuine `Itx` RpcTarget the capnweb client gets from `session.get()`

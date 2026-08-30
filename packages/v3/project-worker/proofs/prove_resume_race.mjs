@@ -69,7 +69,7 @@ const sub = await itx.subscribe({
 });
 check(!!sub.name, "subscribed on the forwarder lane", JSON.stringify(sub));
 
-const append = (ev) => itx.invoke(`itx.stream.append(${JSON.stringify(ev)})`);
+const append = (ev) => itx.invokeCapability(`itx.stream.append(${JSON.stringify(ev)})`);
 
 // 1. m1 → the forwarder delivers [m1]; the callback holds it in flight.
 const [m1] = await append({ type: "mark", payload: { n: 1 } });

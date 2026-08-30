@@ -16,7 +16,7 @@ const batch = newHttpBatchRpcSession(`https://${BASE}/api?ctx=${CTX}`);
 const who = await batch
   .authenticate()
   .get()
-  .invokeCapability({ path: ["whoami"], args: [] });
+  .invokeCapability(["itx", ["whoami"]]);
 check(who?.projectId === CTX, "one-shot HTTP batch: whoami without a socket", JSON.stringify(who));
 
 // live session for the rest
@@ -25,9 +25,11 @@ const itx = await session.authenticate().get();
 await seedSources(itx, ["site"]);
 
 // 2. SOURCE IS PLAIN KV (the files/repo roots died in increment 57): put source, run it
-await itx.invokeCapability({
-  path: ["kv", "put"],
-  args: [
+await itx.invokeCapability([
+  "itx",
+  "kv",
+  [
+    "put",
     "src/mine.js",
     `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Mine extends WorkerEntrypoint {
@@ -37,8 +39,10 @@ export default class Mine extends WorkerEntrypoint {
   }
 }`,
   ],
-});
-const out = await itx.invoke(`itx.load("itx.kv.get('src/mine.js')").getEntrypoint().run()`);
+]);
+const out = await itx.invokeCapability(
+  `itx.load("itx.kv.get('src/mine.js')").getEntrypoint().run()`,
+);
 check(
   out === `from-kv:${CTX}`,
   "kv-stored source runs as a worker (itx round-trip inside)",
@@ -60,11 +64,11 @@ check(
 
 // 4. disableProcessor: enable, disable, snapshot now refuses
 await itx.enableProcessor("tally");
-await itx.invoke(`itx.stream.append({ type: 'mark' })`);
+await itx.invokeCapability(`itx.stream.append({ type: 'mark' })`);
 await itx.disableProcessor("tally");
 let denied = "";
 try {
-  await itx.invoke("itx.facets.get('tally').snapshot()");
+  await itx.invokeCapability("itx.facets.get('tally').snapshot()");
 } catch (e) {
   denied = String(e);
 }

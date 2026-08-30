@@ -21,7 +21,7 @@ const entrypoint = (body) =>
 const itx = await newWebSocketRpcSession(`wss://${BASE}/api?ctx=${CTX}`).authenticate().get();
 
 // 1. INLINE source: hand the code over literally — no kv.put, no producer to invoke.
-const inline = await itx.invoke([
+const inline = await itx.invokeCapability([
   "itx",
   ["load", { type: "inline", files: { "cap.js": entrypoint("async run(x) { return x * 2; }") } }],
   ["getEntrypoint"],
@@ -31,11 +31,12 @@ check(inline === 42, "inline source runs (files handed over literally)", String(
 
 // 2. PRODUCER-EXPRESSION source still works through the same resolveSource path: itx.kv.get is a
 //    callback that produces the code.
-await itx.invokeCapability({
-  path: ["kv", "put"],
-  args: ["src/triple.js", entrypoint("async run(x) { return x * 3; }")],
-});
-const viaExpr = await itx.invoke([
+await itx.invokeCapability([
+  "itx",
+  "kv",
+  ["put", "src/triple.js", entrypoint("async run(x) { return x * 3; }")],
+]);
+const viaExpr = await itx.invokeCapability([
   "itx",
   ["load", "itx.kv.get('src/triple.js')"],
   ["getEntrypoint"],
@@ -44,7 +45,7 @@ const viaExpr = await itx.invoke([
 check(viaExpr === 42, "producer-expression source runs (the itx.kv.get callback)", String(viaExpr));
 
 // 3. inline code can call back into itx (env.ITX is bound in the confined isolate).
-const withItx = await itx.invoke([
+const withItx = await itx.invokeCapability([
   "itx",
   [
     "load",

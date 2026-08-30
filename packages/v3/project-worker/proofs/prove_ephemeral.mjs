@@ -24,7 +24,7 @@ await itx.enableProcessor("chunky", { source: "itx.kv.get('src/chunky.js')", cla
 await itx.enableProcessor("tally");
 
 // 2. durable mark, three ephemeral chunks, another durable mark — all through the table
-const mark = await itx.invoke(`itx.stream.append({ type: 'mark' })`);
+const mark = await itx.invokeCapability(`itx.stream.append({ type: 'mark' })`);
 check(
   Array.isArray(mark) && mark[0]?.offset >= 1,
   "durable append via itx.invoke (full expression)",
@@ -34,7 +34,7 @@ check(
 //  sequence — assert the shared-sequence INVARIANT instead: strictly increasing offsets)
 let lastOffset = mark[0].offset;
 for (let i = 0; i < 3; i++) {
-  const c = await itx.invoke(`itx.stream.append({ type: 'chunk', ephemeral: true })`);
+  const c = await itx.invokeCapability(`itx.stream.append({ type: 'chunk', ephemeral: true })`);
   check(
     c?.[0]?.ephemeral === true && c?.[0]?.offset > lastOffset,
     `ephemeral append ${i + 1} (shared offset sequence, > ${lastOffset})`,
@@ -42,7 +42,7 @@ for (let i = 0; i < 3; i++) {
   );
   lastOffset = c[0].offset;
 }
-await itx.invoke(`itx.stream.append({ type: 'mark' })`);
+await itx.invokeCapability(`itx.stream.append({ type: 'mark' })`);
 
 // 3. the NAMED consumer folded the chunks; "*" saw none; both cursors cover the whole window
 // (drives are fire-and-forget — wait for the reduce to land rather than racing it)
@@ -56,7 +56,7 @@ const until = async (label, fn, timeoutMs = 15000) => {
   }
 };
 const chunky = await until("chunky reduced the chunks", async () => {
-  const snap = await itx.invoke("itx.facets.get('chunky').snapshot()");
+  const snap = await itx.invokeCapability("itx.facets.get('chunky').snapshot()");
   return snap.state.chunks === 3 && snap.state.marks === 2 ? snap : null;
 });
 check(
@@ -65,7 +65,7 @@ check(
   JSON.stringify(chunky),
 );
 const tally = await until("tally caught up to chunky", async () => {
-  const snap = await itx.invoke("itx.facets.get('tally').snapshot()");
+  const snap = await itx.invokeCapability("itx.facets.get('tally').snapshot()");
   return snap.offset >= chunky.offset ? snap : null;
 });
 check(
@@ -87,7 +87,9 @@ check(
 // 4. ephemeral misuse is a loud error
 let bad = "";
 try {
-  await itx.invoke(`itx.stream.append({ type: 'x', ephemeral: true, idempotencyKey: 'k' })`);
+  await itx.invokeCapability(
+    `itx.stream.append({ type: 'x', ephemeral: true, idempotencyKey: 'k' })`,
+  );
 } catch (e) {
   bad = String(e);
 }

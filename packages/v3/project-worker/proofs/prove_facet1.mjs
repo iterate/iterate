@@ -20,7 +20,7 @@ const itx = await session.get();
 await itx.provide({ path: "itx.before", target: "itx.kv" });
 
 await itx.enableProcessor("tally");
-const s1 = await itx.invoke("itx.facets.get('tally').snapshot()");
+const s1 = await itx.invokeCapability("itx.facets.get('tally').snapshot()");
 check(
   // TWO provided events by now: the itx.before mount AND tally's own enablement mount
   // (enablement is a mount since increment 55 — event-sourced like every attachment)
@@ -34,7 +34,7 @@ const p2 = await itx.provide({ path: "itx.a", target: "itx.kv" });
 await itx.provide({ path: "itx.b", target: "itx.kv" });
 await itx.revoke({ providedAtOffset: p2.providedAtOffset });
 
-const s2 = await itx.invoke("itx.facets.get('tally').snapshot()");
+const s2 = await itx.invokeCapability("itx.facets.get('tally').snapshot()");
 check(
   s2.state?.counts?.["events.iterate.com/capability-table/capability-provided"] === 4 &&
     s2.state?.counts?.["events.iterate.com/capability-table/capability-revoked"] === 1 &&

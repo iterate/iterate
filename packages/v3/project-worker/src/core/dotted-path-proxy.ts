@@ -4,18 +4,22 @@
 // of the server-side `Itx` RpcTarget. This module is what lets that proxy be spoken as deep
 // dotted property access — `itx.slack.chat.postMessage({...})`, `itx.kv.put('k','v')`,
 // `itx.rpcStubs.get('b').hello()` — even though `Itx` declares only fixed methods
-// (invokeCapability / invoke / provide / …). Every unknown segment accumulates into ONE
-// `invokeCapability({ path, args })` dispatch; declared methods always win.
+// (invokeCapability / provide / …). Every unknown segment accumulates into ONE `invokeCapability`
+// dispatch carrying an `ItxExpression`; declared methods always win.
 //
 // PORTED (not verbatim) from apps/os/src/domains/itx/utils.ts
 // (installPrototypeInvokeCapabilityFallback + createInvokeCapabilityPathProxy), proven by
-// apps/os/src/domains/itx/path-proxy.test.ts. The clean-room `Itx.invokeCapability({ path, args })`
-// door is the exact InvokeCapabilityTarget shape this expects, so the default invokerFor
-// (the instance itself) wires it with zero glue.
+// apps/os/src/domains/itx/path-proxy.test.ts. `Itx.invokeCapability(ItxExpression)` is the exact
+// InvokeCapabilityTarget shape this expects (installed with scope root `["itx"]`), so the default
+// invokerFor (the instance itself) wires it with zero glue.
 
-/** The dispatch door every dotted miss collapses onto. `Itx` implements it directly. */
+import type { Expression, ItxExpression } from "./expression.ts";
+
+/** The dispatch door every dotted miss collapses onto. `Itx` implements it directly (root `itx`); a
+ *  mid-chain `InvokeHandle` implements it relative to itself (empty root). The accumulated dotted
+ *  access folds into ONE `ItxExpression` — `[...root, ...prefix, [method, ...args]]`. */
 type InvokeCapabilityTarget = {
-  invokeCapability(call: { args: unknown[]; path: string[] }): unknown;
+  invokeCapability(call: ItxExpression): unknown;
 };
 
 /** Names that must NEVER become dynamic capability segments: JS/RPC protocol machinery a
@@ -74,16 +78,21 @@ function isReservedDynamicPathSegment(segment: string): boolean {
  */
 export function createInvokeCapabilityPathProxy(
   invoker: InvokeCapabilityTarget,
+  root: readonly string[],
   path: string[] = [],
 ): unknown {
-  const valueFor = (key: string) => createInvokeCapabilityPathProxy(invoker, [...path, key]);
+  const valueFor = (key: string) => createInvokeCapabilityPathProxy(invoker, root, [...path, key]);
   // A key that must NOT conjure a path segment — a JS/wire reserved name or a protocol probe.
   const reserved = (key: string) =>
     isReservedDynamicPathSegment(key) || PROTOCOL_PROBE_KEYS.has(key);
 
   return new Proxy(function () {}, {
     apply(_target, _thisArg, args) {
-      return invoker.invokeCapability({ args: [...args], path });
+      // Fold the accumulated dotted access into ONE ItxExpression (structured half): the scope root,
+      // the property-read prefix, then the final call step carrying the args.
+      const method = path[path.length - 1];
+      const expr: Expression = [...root, ...path.slice(0, -1), [method, ...(args as unknown[])]];
+      return invoker.invokeCapability(expr);
     },
     get(target, key, receiver) {
       if (typeof key === "symbol") return Reflect.get(target, key, receiver);
@@ -149,7 +158,7 @@ const PROTOTYPE_FALLBACK_HOPS = new WeakSet<object>();
  */
 export function installPrototypeInvokeCapabilityFallback<
   T extends abstract new (...args: never[]) => object,
->(cls: T): void {
+>(cls: T, root: readonly string[]): void {
   // A second install is a programmer error: silently returning would discard the second caller with
   // no trace, and stacking hops would double-dispatch. Module re-evaluation (test
   // runners, HMR) redefines the class and gets a fresh prototype, so this only fires on a genuine
@@ -180,7 +189,9 @@ export function installPrototypeInvokeCapabilityFallback<
       // The receiver IS the invoker (it implements invokeCapability). Its method resolves at CALL
       // time, so a trap firing mid-construction (a property miss on `this` before field initializers
       // ran) can't bake a dispatcher over half-initialized state into the path proxy.
-      return createInvokeCapabilityPathProxy(receiver as unknown as InvokeCapabilityTarget, [key]);
+      return createInvokeCapabilityPathProxy(receiver as unknown as InvokeCapabilityTarget, root, [
+        key,
+      ]);
     },
   });
   Object.setPrototypeOf(cls.prototype, hop);

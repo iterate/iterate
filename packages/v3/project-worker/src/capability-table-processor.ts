@@ -36,6 +36,7 @@ import {
   toExpression,
   type CapabilityPath,
   type Expression,
+  type ItxExpression,
 } from "./core/expression.ts";
 import { apply, match, pathProxy, type Match } from "./core/dispatch.ts";
 import type { ProcessorStream, ReduceArgs, ReduceOnlyProcessor } from "./core/processor.ts";
@@ -75,7 +76,7 @@ const CapabilityTableContract = defineProcessorContract({
           delivery: z.record(z.string(), z.unknown()).optional(),
           processor: z.record(z.string(), z.unknown()).optional(),
           /** SUBSCRIPTION mounts only — the declared delivery lane (see `SubscriptionLane`). */
-          lane: z.enum(["reduce", "connected", "durable"]).optional(),
+          lane: z.enum(["facet", "connected", "durable"]).optional(),
         }),
       )
       .default([]),
@@ -109,7 +110,7 @@ const CapabilityTableContract = defineProcessorContract({
           .optional(),
         /** The delivery lane, stamped ONCE here (see `SubscriptionLane`) — every reader reads it
          *  instead of re-inferring from the target's shape. Subscriber mounts only. */
-        lane: z.enum(["reduce", "connected", "durable"]).optional(),
+        lane: z.enum(["facet", "connected", "durable"]).optional(),
       }),
     },
     "events.iterate.com/capability-table/capability-revoked": {
@@ -173,7 +174,7 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
         target: string;
         delivery?: Record<string, unknown>;
         processor?: Record<string, unknown>;
-        lane?: "reduce" | "connected" | "durable";
+        lane?: "facet" | "connected" | "durable";
       };
       let parsed: { path: CapabilityPath; target: Expression };
       try {
@@ -210,7 +211,7 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
    *  through print). The offset that comes back IS the mount's identity. */
   async provide(input: {
     path: string | CapabilityPath;
-    target: string | Expression;
+    target: ItxExpression;
     delivery?: DeliveryPolicy;
     processor?: ProcessorPolicy;
     /** The delivery lane, stamped on the event (see `SubscriptionLane`). The host computes it once
@@ -278,7 +279,7 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
    */
   async resolve(
     state: State,
-    call: string | Expression,
+    call: ItxExpression,
     extraArgs?: unknown[],
     depth = 0,
   ): Promise<unknown> {

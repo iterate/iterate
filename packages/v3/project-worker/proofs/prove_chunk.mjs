@@ -9,9 +9,8 @@ const check = (cond, label, detail = "") => {
   console.log(`${cond ? "PASS" : "FAIL"}  ${label}${detail ? ` — ${detail}` : ""}`);
   if (!cond) failures++;
 };
-const append = (itx, events) => itx.invokeCapability({ path: ["stream", "append"], args: events });
-const read = (itx, after, limit) =>
-  itx.invokeCapability({ path: ["stream", "read"], args: [after, limit] });
+const append = (itx, events) => itx.invokeCapability(["itx", "stream", ["append", ...events]]);
+const read = (itx, after, limit) => itx.invokeCapability(["itx", "stream", ["read", after, limit]]);
 
 const itx = await newWebSocketRpcSession(`wss://${BASE}/api?ctx=${CTX}`).authenticate().get();
 

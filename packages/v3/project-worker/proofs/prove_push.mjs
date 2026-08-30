@@ -46,9 +46,9 @@ const sub = await itx.subscribe({
 check(sub.name === "digest", "subscribe returns the row name", JSON.stringify(sub));
 
 // 3. three good marks → the worker's own kv shows 3 (the awaited call IS the ack)
-for (let i = 0; i < 3; i++) await itx.invoke(`itx.stream.append({ type: 'mark' })`);
+for (let i = 0; i < 3; i++) await itx.invokeCapability(`itx.stream.append({ type: 'mark' })`);
 const digested3 = await until("digest=3", async () => {
-  const v = await itx.invokeCapability({ path: ["kv", "get"], args: ["digested"] });
+  const v = await itx.invokeCapability(["itx", "kv", ["get", "digested"]]);
   return v === "3" ? v : undefined;
 });
 check(digested3 === "3", "stateless worker digested 3 marks via the forwarder", digested3);
@@ -56,14 +56,14 @@ check(digested3 === "3", "stateless worker digested 3 marks via the forwarder", 
 // 4. a poison mark: digest stamps `retryable: false` on its error, so the forwarder HALTS
 // IMMEDIATELY with an audit fact — no ladder burned on an error that can never succeed
 // (the stamped-flag doctrine from core/errors.ts). No skip, no pinning: ONE policy.
-const [poisoned] = await itx.invoke(
+const [poisoned] = await itx.invokeCapability(
   `itx.stream.append({ type: 'mark', payload: { poison: true } })`,
 );
-await itx.invoke(`itx.stream.append({ type: 'mark' })`); // a good one stuck behind it
+await itx.invokeCapability(`itx.stream.append({ type: 'mark' })`); // a good one stuck behind it
 const tallyAfterHalt = await until(
   "halt audit fact",
   async () => {
-    const t = await itx.invoke("itx.facets.get('tally').snapshot()");
+    const t = await itx.invokeCapability("itx.facets.get('tally').snapshot()");
     return (t.state.counts["events.iterate.com/stream/subscription-delivery-halted"] ?? 0) >= 1
       ? t
       : undefined;
@@ -75,7 +75,7 @@ check(
   "retryable: false → immediate HALT left an audit fact on the stream",
   JSON.stringify(tallyAfterHalt.state.counts),
 );
-const digestedStill3 = await itx.invokeCapability({ path: ["kv", "get"], args: ["digested"] });
+const digestedStill3 = await itx.invokeCapability(["itx", "kv", ["get", "digested"]]);
 check(digestedStill3 === "3", "halted subscription delivered nothing more", String(digestedStill3));
 
 // 5. resumeSubscription past the poison — THE one recovery verb — and the stuck good mark lands
@@ -83,7 +83,7 @@ await itx.resumeSubscription({ name: "digest", afterOffset: poisoned.offset });
 const digested4 = await until(
   "digest=4 (past the poison)",
   async () => {
-    const v = await itx.invokeCapability({ path: ["kv", "get"], args: ["digested"] });
+    const v = await itx.invokeCapability(["itx", "kv", ["get", "digested"]]);
     return v === "4" ? v : undefined;
   },
   60000,

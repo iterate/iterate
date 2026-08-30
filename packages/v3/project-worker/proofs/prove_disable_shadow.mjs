@@ -27,8 +27,8 @@ const state = async (ctx) => (await fetch(`https://${BASE}/state?ctx=${ctx}`)).j
 async function run(ctx, enableTimes) {
   console.log(`\n──────── ctx=${ctx}  (enable ×${enableTimes}, then disable ×1) ────────`);
   const itx = await newWebSocketRpcSession(`wss://${BASE}/api?ctx=${ctx}`).get();
-  const append = (...events) => itx.invokeCapability({ path: ["stream", "append"], args: events });
-  const snap = () => itx.invoke("itx.facets.get('tally').snapshot()");
+  const append = (...events) => itx.invokeCapability(["itx", "stream", ["append", ...events]]);
+  const snap = () => itx.invokeCapability("itx.facets.get('tally').snapshot()");
 
   for (let i = 0; i < enableTimes; i++) await itx.enableProcessor("tally");
   await append({ type: "mark" });

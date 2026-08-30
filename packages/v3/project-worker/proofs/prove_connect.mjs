@@ -13,7 +13,7 @@ const check = (cond, label, detail = "") => {
 const itx = await newWebSocketRpcSession(`wss://${BASE}/api?ctx=${CTX}`).authenticate().get();
 
 // 1. dial the remote capnweb API and call a method (one HTTP batch, no persistent socket)
-const greeting = await itx.invoke(`itx.connectToCapnweb('${REMOTE}').hello('world')`);
+const greeting = await itx.invokeCapability(`itx.connectToCapnweb('${REMOTE}').hello('world')`);
 check(
   greeting === "hi world from dummy-capnweb",
   "connectToCapnweb(url).hello('world')",
@@ -21,12 +21,12 @@ check(
 );
 
 // 2. a second method with numeric args
-const sum = await itx.invoke(`itx.connectToCapnweb('${REMOTE}').add(2, 40)`);
+const sum = await itx.invokeCapability(`itx.connectToCapnweb('${REMOTE}').add(2, 40)`);
 check(sum === 42, "connectToCapnweb(url).add(2, 40)", String(sum));
 
 // 3. NAMED as a mount — this is exactly how `itx.os` becomes sugar over connectToCapnweb.
 await itx.provide({ path: "itx.remoteApi", target: `itx.connectToCapnweb('${REMOTE}')` });
-const viaMount = await itx.invoke("itx.remoteApi.hello('mounted')");
+const viaMount = await itx.invokeCapability("itx.remoteApi.hello('mounted')");
 check(
   viaMount === "hi mounted from dummy-capnweb",
   "mounted alias over connectToCapnweb",

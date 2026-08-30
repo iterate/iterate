@@ -69,8 +69,8 @@ export default class ConsumerB extends WorkerEntrypoint {
 const session = newWebSocketRpcSession(`wss://${BASE}/api?ctx=${CTX}`);
 const itx = await session.authenticate().get();
 
-await itx.invokeCapability({ path: ["kv", "put"], args: ["src/counterA.js", WORKER_A] });
-await itx.invokeCapability({ path: ["kv", "put"], args: ["src/consumerB.js", WORKER_B] });
+await itx.invokeCapability(["itx", "kv", ["put", "src/counterA.js", WORKER_A]]);
+await itx.invokeCapability(["itx", "kv", ["put", "src/consumerB.js", WORKER_B]]);
 
 // aRef names worker A's stateful class: a source EXPRESSION + the exported className. load(source)
 // .getDurableObjectClass(className).get() loads the class and materializes it as a facet.
@@ -99,7 +99,7 @@ check(
   JSON.stringify(ran),
 );
 const got = await until("worker B's callback appended to the stream", async () => {
-  const page = await itx.invokeCapability({ path: ["stream", "read"], args: [0, 500] });
+  const page = await itx.invokeCapability(["itx", "stream", ["read", 0, 500]]);
   return page.events.find((e) => e.type === "pinged-from-A-via-B");
 });
 check(

@@ -37,12 +37,12 @@ await itx.subscribe({
   consumes: ["ctl"],
   target: (events) => (ctrl += events.length),
 });
-await itx.invoke("itx.stream.append({ type: 'ctl', payload: { n: 1 } })");
+await itx.invokeCapability("itx.stream.append({ type: 'ctl', payload: { n: 1 } })");
 await sleep(2000);
 check(ctrl === 1, "control: single subscribe delivers", `ctrl=${ctrl}`);
 await itx.unsubscribe({ name: "control" });
 await sleep(800);
-await itx.invoke("itx.stream.append({ type: 'ctl', payload: { n: 2 } })");
+await itx.invokeCapability("itx.stream.append({ type: 'ctl', payload: { n: 2 } })");
 await sleep(2500);
 check(
   ctrl === 1,
@@ -65,7 +65,7 @@ await itx.subscribe({
   target: (events) => (cb2 += events.length),
 });
 
-await itx.invoke("itx.stream.append({ type: 'mark', payload: { n: 1 } })");
+await itx.invokeCapability("itx.stream.append({ type: 'mark', payload: { n: 1 } })");
 await sleep(2500);
 check(
   cb2 === 1 && cb1 === 0,
@@ -75,7 +75,7 @@ check(
 
 await itx.unsubscribe({ name: "s" }); // client expects: subscription 's' fully gone
 await sleep(1000);
-await itx.invoke("itx.stream.append({ type: 'mark', payload: { n: 2 } })");
+await itx.invokeCapability("itx.stream.append({ type: 'mark', payload: { n: 2 } })");
 await sleep(3000);
 
 const st = await (await fetch(`https://${BASE}/state?ctx=${CTX}`)).json();

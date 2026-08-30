@@ -228,7 +228,7 @@ test("pipelining: authenticate().get().invokeCapability(whoami) with zero awaits
   const who: any = await w.session
     .authenticate()
     .get()
-    .invokeCapability({ path: ["whoami"], args: [] });
+    .invokeCapability(["itx", ["whoami"]]);
   expect(who).toMatchObject({ projectId: ctx, path: "/" });
   const frames = w.frames.slice();
   expectOneRoundTrip(frames, "auth().get().invokeCapability()");
@@ -252,7 +252,7 @@ test("pipelining: invokes on the NOT-YET-RESOLVED itx from get() = ONE round tri
   const ctx = c("pipe2");
   const w = wireSession(ctx);
   const itxPromise = w.session.get("/pipelined"); // NOT awaited — pure addressing to a context
-  const who: any = await itxPromise.invokeCapability({ path: ["whoami"], args: [] });
+  const who: any = await itxPromise.invokeCapability(["itx", ["whoami"]]);
   expect(who).toMatchObject({ projectId: ctx, path: "/pipelined" });
   const frames = w.frames.slice();
   expectOneRoundTrip(frames, "get().invokeCapability()");
@@ -307,7 +307,7 @@ test("pipelining: rpcStubs.provide(...).revoke() on the UNRESOLVED handle = ONE 
   // Correctness under pipelining: the provide really registered the stub, the revoke really took it
   // offline, and the DO auto-revoked the mount that named its key (onFinalClose).
   const gone = await until("the mount naming the revoked stub auto-revoked", async () => {
-    const err = await errorOf(itx.invokeCapability({ path: ["piptool"], args: [1] }));
+    const err = await errorOf(itx.invokeCapability(["itx", ["piptool", 1]]));
     return codeOf(err) === "NO_CAPABILITY_MATCH";
   });
   expect(gone).toBe(true);
@@ -321,7 +321,7 @@ test("frames per call: ONE settled invokeCapability = exactly 2 outbound (push+p
   const itx = await w.session.authenticate().get(); // settle the stub first
   await settle(200);
   const mark = w.mark();
-  const who: any = await itx.invokeCapability({ path: ["whoami"], args: [] });
+  const who: any = await itx.invokeCapability(["itx", ["whoami"]]);
   expect(who.path).toBe("/");
   const callFrames = w.since(mark);
   const t = tally(callFrames);
@@ -355,10 +355,11 @@ test("one-directional delivery: 100 ephemeral chunks arrive as inbound frames; t
   const producer = await harness.itx(ctx); // a SECOND session appends
   const mark = w.mark();
   for (let i = 0; i < 100; i++)
-    await producer.invokeCapability({
-      path: ["stream", "append"],
-      args: [{ type: "chunk", ephemeral: true, payload: { n: i } }],
-    });
+    await producer.invokeCapability([
+      "itx",
+      "stream",
+      ["append", { type: "chunk", ephemeral: true, payload: { n: i } }],
+    ]);
   await until("all 100 chunks delivered", () => received.length >= 100, 30_000);
   await settle(500); // let the last acks flush into the census
   const frames = w.since(mark);
@@ -383,10 +384,11 @@ test("one-directional delivery: 100 ephemeral chunks arrive as inbound frames; t
   w.stallOutbound();
   const stallMark = w.mark();
   for (let i = 100; i < 120; i++)
-    await producer.invokeCapability({
-      path: ["stream", "append"],
-      args: [{ type: "chunk", ephemeral: true, payload: { n: i } }],
-    });
+    await producer.invokeCapability([
+      "itx",
+      "stream",
+      ["append", { type: "chunk", ephemeral: true, payload: { n: i } }],
+    ]);
   await until("20 more chunks delivered THROUGH the stall", () => received.length >= 120, 20_000);
   const stalledWindow = w.since(stallMark);
   expect(stalledWindow.every((f) => f.dir === "in")).toBe(true); // zero outbound frames flushed
@@ -405,12 +407,12 @@ test("deep chaining: 3+ segment dotted paths through a live provider (getter →
   const w = wireSession(ctx);
   const itx = await w.session.authenticate().get();
   await until("the slack bridge is attached", async () =>
-    ((await itx.invoke("itx.rpcStubs.list()")) as any[]).some((r) => r.key === "slack"),
+    ((await itx.invokeCapability("itx.rpcStubs.list()")) as any[]).some((r) => r.key === "slack"),
   );
 
   // String half: deep dots + a trailing call.
   const mark1 = w.mark();
-  const posted: any = await itx.invoke(
+  const posted: any = await itx.invokeCapability(
     "itx.rpcStubs.get('slack').chat.postMessage({ channel: '#wire', text: 'deep' })",
   );
   expect(posted).toMatchObject({ ok: true, ts: "1755.000100", channel: "#wire" });
@@ -421,7 +423,7 @@ test("deep chaining: 3+ segment dotted paths through a live provider (getter →
   expect(t1["in:resolve"]).toBe(1);
 
   // Array half: a mid-path call with structured args.
-  const listed: any = await itx.invoke([
+  const listed: any = await itx.invokeCapability([
     "itx",
     "rpcStubs",
     ["get", "slack"],
@@ -446,13 +448,17 @@ test("disposal: `using` on the /api session stub tears its rpc stubs down at sco
     using scoped = newWebSocketRpcSession(`ws://${harness.url.host}/api?ctx=${ctx}`) as any;
     await scoped.get().rpcStubs.provide(new Tools("scoped"), { key: "scoped" });
     await until("'scoped' listed while the scope lives", async () =>
-      ((await observer.invoke("itx.rpcStubs.list()")) as any[]).some((r) => r.key === "scoped"),
+      ((await observer.invokeCapability("itx.rpcStubs.list()")) as any[]).some(
+        (r) => r.key === "scoped",
+      ),
     );
   } // ← Symbol.dispose fires here: capnweb says goodbye, ProjectSession tears every relay down
   await until(
     "'scoped' left the presence list after scope exit",
     async () =>
-      !((await observer.invoke("itx.rpcStubs.list()")) as any[]).some((r) => r.key === "scoped"),
+      !((await observer.invokeCapability("itx.rpcStubs.list()")) as any[]).some(
+        (r) => r.key === "scoped",
+      ),
   );
 });
 
@@ -473,7 +479,7 @@ test("disposal: `using` on a ProvidedStub drops the stub AND auto-revokes its mo
   {
     using stub = await itx.rpcStubs.provide(new Tools("scopedtool"), { key: "scopedtool" });
     await itx.provide({ path: "itx.scopedtool", target: "itx.rpcStubs.get('scopedtool')" });
-    expect(await observer.invokeCapability({ path: ["scopedtool", "hello"], args: [] })).toBe(
+    expect(await observer.invokeCapability(["itx", "scopedtool", ["hello"]])).toBe(
       "hello-from-scopedtool",
     );
     void stub; // used via `using` only
@@ -481,9 +487,7 @@ test("disposal: `using` on a ProvidedStub drops the stub AND auto-revokes its mo
   const gone = await until(
     "the mount auto-revoked after the stub handle was disposed",
     async () => {
-      const err = await errorOf(
-        observer.invokeCapability({ path: ["scopedtool", "hello"], args: [] }),
-      );
+      const err = await errorOf(observer.invokeCapability(["itx", "scopedtool", ["hello"]]));
       return codeOf(err) === "NO_CAPABILITY_MATCH";
     },
     5_000,
@@ -498,12 +502,12 @@ test("disposal: dup() survives disposal of the original; the LAST dispose kills 
   const dup = itx.dup();
   itx[Symbol.dispose]();
   // The duplicate still works — refcounted, not killed by the sibling's disposal.
-  const who: any = await dup.invokeCapability({ path: ["whoami"], args: [] });
+  const who: any = await dup.invokeCapability(["itx", ["whoami"]]);
   expect(who.path).toBe("/");
   dup[Symbol.dispose]();
   // The LAST duplicate is gone — calls reject with the library's documented disposal error
   // (a prompt classifiable rejection, never a hang).
-  const err = await errorOf(dup.invokeCapability({ path: ["whoami"], args: [] }));
+  const err = await errorOf(dup.invokeCapability(["itx", ["whoami"]]));
   expect(String(err)).toContain("Attempted to use RPC stub after it has been disposed.");
 });
 

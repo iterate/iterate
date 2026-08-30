@@ -97,17 +97,19 @@ check(
   JSON.stringify(sdkCalls.at(-1)),
 );
 // 1b. the SAME call via the explicit door (the desugared form the dotted spelling compiles to)
-const postedExplicit = await itx.invokeCapability({
-  path: ["slack", "chat", "postMessage"],
-  args: [{ channel: "#general", text: "via explicit door" }],
-});
+const postedExplicit = await itx.invokeCapability([
+  "itx",
+  "slack",
+  "chat",
+  ["postMessage", { channel: "#general", text: "via explicit door" }],
+]);
 check(
   postedExplicit?.ok === true && postedExplicit?.channel === "#general",
-  "itx.invokeCapability({path,args}) — the explicit door — answers identically",
+  "itx.invokeCapability(Expression) — the structured half — answers identically",
   JSON.stringify(postedExplicit),
 );
 // 2. the same thing through the GENERIC expression door (the string half)
-const listed = await itx.invoke(`itx.slack.conversations.list({ limit: 10 })`);
+const listed = await itx.invokeCapability(`itx.slack.conversations.list({ limit: 10 })`);
 check(
   listed?.ok === true && listed?.channels?.length === 2 && listed.channels[0].name === "general",
   "itx.slack.conversations.list({limit}) via the expression door",
@@ -116,7 +118,7 @@ check(
 
 // 3. a mounted alias can shadow-route ONTO the live bridge like any capability
 await itx.provide({ path: "itx.notify", target: "itx.slack.chat.postMessage" });
-const aliased = await itx.invoke(`itx.notify({ channel: '#alerts', text: 'aliased!' })`);
+const aliased = await itx.invokeCapability(`itx.notify({ channel: '#alerts', text: 'aliased!' })`);
 check(
   aliased?.ok === true &&
     sdkCalls.some(([m, o]) => m === "chat.postMessage" && o.channel === "#alerts"),
@@ -131,10 +133,12 @@ const slack2Stub = await bridgeItx.rpcStubs.provide(replayOnto(slackSdk), {
   description: "slack sdk bridge, zero-declaration replay",
 });
 await bridgeItx.provide({ path: "itx.slack2", target: `itx.rpcStubs.get('${slack2Key}')` });
-const posted2 = await itx.invokeCapability({
-  path: ["slack2", "chat", "postMessage"],
-  args: [{ channel: "#zero", text: "no rpctarget declared" }],
-});
+const posted2 = await itx.invokeCapability([
+  "itx",
+  "slack2",
+  "chat",
+  ["postMessage", { channel: "#zero", text: "no rpctarget declared" }],
+]);
 check(
   posted2?.ok === true &&
     sdkCalls.some(([m, o]) => m === "chat.postMessage" && o.channel === "#zero"),
@@ -147,10 +151,12 @@ await slack2Stub.revoke();
 await slackStub.revoke();
 const denied = await until("revoke propagated", async () => {
   try {
-    await itx.invokeCapability({
-      path: ["slack", "chat", "postMessage"],
-      args: [{ channel: "#x", text: "y" }],
-    });
+    await itx.invokeCapability([
+      "itx",
+      "slack",
+      "chat",
+      ["postMessage", { channel: "#x", text: "y" }],
+    ]);
     return undefined; // still routed — keep waiting
   } catch (e) {
     return String(e);

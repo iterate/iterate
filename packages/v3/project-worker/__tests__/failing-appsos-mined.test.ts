@@ -20,10 +20,10 @@ afterAll(async () => {
 // ── tiny verbs over the real client surface (the smoke test's voice) ──
 
 const append = (itx: any, ...events: unknown[]): Promise<any[]> =>
-  itx.invokeCapability({ path: ["stream", "append"], args: events });
+  itx.invokeCapability(["itx", "stream", ["append", ...events]]);
 
 const readAll = async (itx: any): Promise<any[]> =>
-  (await itx.invokeCapability({ path: ["stream", "read"], args: [0, 500] })).events;
+  (await itx.invokeCapability(["itx", "stream", ["read", 0, 500]])).events;
 
 const settle = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -99,7 +99,7 @@ test("FIXED (defect 34/46 at the root): squatting capability-table/revoke: is ha
   //   worst failure a capability system can have.
   const itx = await harness.itx("prj_am_forge");
   const { providedAtOffset } = await itx.provide({ path: "itx.probe", target: "itx.whoami" });
-  expect(await itx.invokeCapability({ path: ["probe"], args: [] })).toMatchObject({
+  expect(await itx.invokeCapability(["itx", ["probe"]])).toMatchObject({
     projectId: "prj_am_forge",
   });
   // Forge the platform's revoke key with a benign public event.
@@ -113,7 +113,7 @@ test("FIXED (defect 34/46 at the root): squatting capability-table/revoke: is ha
   // authority loss itself, not the throw.
   await itx.revoke({ providedAtOffset }).catch(() => undefined);
   // EXPECTED: the capability is gone. ACTUAL: it still resolves — the mount can never be revoked.
-  const err = await rejection(itx.invokeCapability({ path: ["probe"], args: [] }));
+  const err = await rejection(itx.invokeCapability(["itx", ["probe"]]));
   expect(err.message).toMatch(/no capability matches/);
 });
 
@@ -131,7 +131,7 @@ test.skip("revoking the same mount twice is idempotent in the TABLE (two keyless
       e.payload?.providedAtOffset === providedAtOffset,
   );
   expect(revokes).toHaveLength(1);
-  const err = await rejection(itx.invokeCapability({ path: ["probe"], args: [] }));
+  const err = await rejection(itx.invokeCapability(["itx", ["probe"]]));
   expect(err.message).toMatch(/no capability matches/);
 });
 
@@ -177,7 +177,7 @@ test("a default-deny miss carries code NO_CAPABILITY_MATCH across the /api hop",
   //   `code`, never message/name/instanceof — own props survive DO→relay→client. apps/os shares
   //   the workshop plain-Error + `code` shape.
   const itx = await harness.itx("prj_am_code_miss");
-  const err = await rejection(itx.invokeCapability({ path: ["nope", "thing"], args: [] }));
+  const err = await rejection(itx.invokeCapability(["itx", "nope", ["thing"]]));
   expect(err.code).toBe("NO_CAPABILITY_MATCH");
   expect(err.message).toMatch(/no capability matches/);
 });

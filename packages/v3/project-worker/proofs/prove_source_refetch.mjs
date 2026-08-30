@@ -61,9 +61,8 @@ const SOURCE = `itx.runScript(${JSON.stringify(LAMBDA)})`;
 const session = newWebSocketRpcSession(`wss://${BASE}/api?ctx=${CTX}`);
 const itx = await session.get();
 
-const kvGetNum = async (k) =>
-  Number((await itx.invokeCapability({ path: ["kv", "get"], args: [k] })) ?? 0);
-const append = (events) => itx.invokeCapability({ path: ["stream", "append"], args: events });
+const kvGetNum = async (k) => Number((await itx.invokeCapability(["itx", "kv", ["get", k]])) ?? 0);
+const append = (events) => itx.invokeCapability(["itx", "stream", ["append", ...events]]);
 
 // Settle detector that NEVER touches the facet: poll the kv counter until it stops climbing.
 async function settledSrcEvals() {
@@ -83,7 +82,7 @@ async function settledSrcEvals() {
 }
 
 // 1) seed the module code into kv (the lambda reads it back on each evaluation)
-await itx.invokeCapability({ path: ["kv", "put"], args: ["src/mark-refetch.js", MARK_MODULE] });
+await itx.invokeCapability(["itx", "kv", ["put", "src/mark-refetch.js", MARK_MODULE]]);
 
 // 2) enable the USERSPACE processor (source = the counting expression)
 await itx.enableProcessor(SLUG, { source: SOURCE, className: "Mark" });

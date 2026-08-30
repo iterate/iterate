@@ -27,7 +27,7 @@ const itx = await newWebSocketRpcSession(`wss://${BASE}/api?ctx=${CTX}`).authent
 {
   let greeting;
   try {
-    greeting = await itx.invoke(`itx.connectToCapnweb('${REMOTE}').hello('world')`);
+    greeting = await itx.invokeCapability(`itx.connectToCapnweb('${REMOTE}').hello('world')`);
   } catch (e) {
     greeting = `THREW: ${e?.name}: ${e?.message}`;
   }
@@ -43,7 +43,7 @@ const itx = await newWebSocketRpcSession(`wss://${BASE}/api?ctx=${CTX}`).authent
 {
   let result, threw;
   try {
-    result = await itx.invoke(`itx.connectToCapnweb('${REMOTE}').math.add(2, 3)`);
+    result = await itx.invokeCapability(`itx.connectToCapnweb('${REMOTE}').math.add(2, 3)`);
   } catch (e) {
     threw = e;
   }
