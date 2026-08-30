@@ -186,6 +186,14 @@ and uploads lazily.
   attachments over 512KB now ride as chunked ReadableStreams (capnweb
   multiplexes them with flow control; web-streams-polyfill fills Hermes's
   gap).
+- Optimistic sends (feedback item a): tapping ↑ renders the predicted
+  bubble immediately from phone-local data — the SAME MessageBubble the echo
+  will render, fed local uris (previews, mosaic, players, location cards all
+  work locally) — dimmed with "sending…" while the upload runs, hidden when
+  its event offset echoes back over the live connection. Failures keep the
+  bubble with Retry / Edit instead of dumping the draft back. Sends can
+  queue (the button no longer locks while one is in flight). Eager upload
+  (item b) stays a follow-up: needs an addFiles-by-reference platform seam.
 - Gotcha found while running specs: wrapping `dev.ts` in an outer
   `doppler run` exports DOPPLER_PROJECT/DOPPLER_CONFIG, which the INNER
   `doppler run` (apps/os scope) honors over doppler.yaml — the dev server

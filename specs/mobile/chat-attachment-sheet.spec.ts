@@ -6,9 +6,12 @@
 //
 // A browser has no camera roll, so the carousel reads the same injected
 // library boundary the note composer's strip uses
-// (apps/mobile/src/lib/recent-photos.ts). Camera/mic/location surfaces are
-// native-module-gated and simply absent here — exactly the old-client
-// degradation the loaders guarantee (lib/native-modules.ts).
+// (apps/mobile/src/lib/recent-photos.ts); the camera tile and location row
+// are native-only surfaces (explicit Platform checks) and absent here.
+//
+// Sending is OPTIMISTIC: the moment ↑ is tapped the message renders as a
+// predicted bubble from phone-local data — no waiting for the upload or the
+// server echo.
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -65,6 +68,17 @@ test("+ opens the sheet; carousel attaches chips that need a confirm to remove",
   // label flips back to the attach affordance.
   await page.getByLabel("Close attachment options").click();
   await page.getByLabel("Attach something").waitFor();
+
+  // Optimistic send: attach a photo, type, tap ↑ — the bubble (text AND
+  // photo, rendered from local data) is visible immediately, while the
+  // upload and echo happen behind it.
+  await page.getByLabel("Attach something").click();
+  await page.getByLabel("Attach recent photo").first().click();
+  await page.getByLabel(/Attachment: ticket\.png/).waitFor();
+  await page.getByPlaceholder("Message").fill("here's my train ticket");
+  await page.getByLabel("Send", { exact: true }).click();
+  await page.getByText("here's my train ticket").waitFor();
+  await page.getByLabel("ticket.png", { exact: true }).waitFor();
 });
 
 /** Real PNGs as the browser's stand-in camera roll, newest first. */

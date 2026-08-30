@@ -181,8 +181,23 @@ export default function ChatScreen() {
       setTimeout(() => copyStreamUrl.reset(), 1_800);
     },
   });
+  // Optimistic sends: the moment you hit ↑ the message renders as a real
+  // bubble built from phone-local data (text, preview uris, dimensions) —
+  // the upload happens behind it. The entry carries the event offset once
+  // the platform accepts it, and hides as soon as that offset's echo arrives
+  // over the live connection; a failure keeps the bubble with Retry/Edit
+  // instead of dumping everything back into the composer.
+  const [pendingSends, setPendingSends] = useState<PendingSend[]>([]);
+  const echoedOffsets = new Set((events.data || []).map((event) => event.offset));
+  const visiblePending = pendingSends.filter(
+    (pending) => pending.offset === undefined || !echoedOffsets.has(pending.offset),
+  );
   const send = useMutation({
-    mutationFn: async (input: { message: string; files: ComposerAttachment[] }) => {
+    mutationFn: async (input: {
+      clientId: string;
+      message: string;
+      files: ComposerAttachment[];
+    }) => {
       // Byte-carrying attachments become addFiles payloads (bytes read
       // lazily from their local uris here, at send time); location becomes
       // an XML part appended to the text (lib/composer-attachments.ts).
@@ -207,19 +222,54 @@ export default function ChatScreen() {
       });
       return added.event.offset;
     },
-    onMutate: () => {
+    onMutate: (input) => {
       setDraft("");
       setAttachments([]);
+      setPendingSends((prev) => {
+        // Echoed entries have done their job; a retry reuses its clientId.
+        const kept = prev.filter(
+          (pending) =>
+            pending.clientId !== input.clientId &&
+            (pending.offset === undefined || !echoedOffsets.has(pending.offset)),
+        );
+        return [
+          ...kept,
+          {
+            clientId: input.clientId,
+            files: input.files,
+            message: input.message,
+            sentAtMs: Date.now(),
+            status: "sending",
+          },
+        ];
+      });
     },
-    onError: (_error, input) => {
-      setDraft(input.message);
-      setAttachments(input.files);
+    onSuccess: (offset, input) => {
+      setPendingSends((prev) =>
+        prev.map((pending) =>
+          pending.clientId === input.clientId ? { ...pending, offset } : pending,
+        ),
+      );
+    },
+    onError: (error, input) => {
+      setPendingSends((prev) =>
+        prev.map((pending) =>
+          pending.clientId === input.clientId
+            ? {
+                ...pending,
+                error: error instanceof Error ? error.message : String(error),
+                status: "failed" as const,
+              }
+            : pending,
+        ),
+      );
     },
   });
 
   const feed = reduceFeed(path, events.data || []);
-  const sendPending =
-    send.isPending || (send.data ? awaitingAgentActivity(events.data || [], send.data) : false);
+  // The pending bubble covers the upload window; the working card takes over
+  // once the platform has the message and the agent owes a turn.
+  const sendPending = send.data ? awaitingAgentActivity(events.data || [], send.data) : false;
   const insets = useSafeAreaInsets();
   const streamUrl =
     baseUrl && slug ? buildStreamViewerUrl({ baseUrl, projectSlug: slug, streamPath: path }) : null;
@@ -316,6 +366,26 @@ export default function ChatScreen() {
             projectId,
             projectSlug: slug || "",
           }}
+          pending={visiblePending.map((entry) => (
+            <PendingSendBubble
+              entry={entry}
+              key={entry.clientId}
+              onEdit={() => {
+                setPendingSends((prev) =>
+                  prev.filter((pending) => pending.clientId !== entry.clientId),
+                );
+                setDraft(entry.message);
+                setAttachments(entry.files);
+              }}
+              onRetry={() =>
+                send.mutate({
+                  clientId: entry.clientId,
+                  message: entry.message,
+                  files: entry.files,
+                })
+              }
+            />
+          ))}
           sendPending={sendPending}
           // The Meta tab replays each llm request's exact prompt from the
           // thread's own event window (same pure fold as the os trace panel).
@@ -353,7 +423,6 @@ export default function ChatScreen() {
           accessibilityLabel={sheetOpen ? "Close attachment options" : "Attach something"}
           accessibilityRole="button"
           onPress={() => setSheetOpen(!sheetOpen)}
-          disabled={send.isPending}
           style={styles.attach}
         >
           <Text style={[styles.attachText, sheetOpen && styles.attachTextOpen]}>+</Text>
@@ -372,15 +441,20 @@ export default function ChatScreen() {
             accessibilityRole="button"
             onPress={() => {
               const message = draft.trim();
-              const canSend = message !== "" || attachments.length > 0;
-              if (canSend && !send.isPending) send.mutate({ message, files: attachments });
+              if (message !== "" || attachments.length > 0) {
+                // Fire-and-render: the optimistic bubble appears immediately
+                // and further sends can queue behind it.
+                send.mutate({
+                  clientId: Math.random().toString(36).slice(2, 10),
+                  message,
+                  files: attachments,
+                });
+              }
             }}
-            disabled={(draft.trim() === "" && attachments.length === 0) || send.isPending}
+            disabled={draft.trim() === "" && attachments.length === 0}
             style={[
               styles.send,
-              ((draft.trim() === "" && attachments.length === 0) || send.isPending) && {
-                opacity: 0.4,
-              },
+              draft.trim() === "" && attachments.length === 0 && { opacity: 0.4 },
             ]}
           >
             <Text style={styles.sendText}>↑</Text>
@@ -391,11 +465,6 @@ export default function ChatScreen() {
           <RecordControls onAttach={(attachment) => appendAttachments([attachment])} />
         )}
       </View>
-      {send.isError ? (
-        <Text style={styles.sendError}>
-          {send.error instanceof Error ? send.error.message : String(send.error)}
-        </Text>
-      ) : null}
       {copyStreamUrl.isSuccess ? (
         <View
           accessibilityLiveRegion="polite"
@@ -414,12 +483,16 @@ function FeedList({
   activityApprovals,
   approvals,
   feed,
+  pending,
   sendPending,
   threadEvents,
 }: {
   activityApprovals: ActivityApprovalContext;
   approvals: React.ReactNode;
   feed: ReturnType<typeof reduceFeed>;
+  /** Optimistic just-sent bubbles, newest last — they sit directly under the
+   * real messages, above any approval dialogs. */
+  pending: React.ReactNode;
   sendPending: boolean;
   threadEvents: StreamEvent[];
 }) {
@@ -439,6 +512,7 @@ function FeedList({
         // (above the transient working row), right where the human is
         // already looking.
         <View style={styles.bottomStack}>
+          {pending}
           {approvals}
           {/* working with no live steps covers BOTH owed-turn gaps: a live
               activity with no steps yet, and the pending-turn debounce
@@ -526,6 +600,84 @@ function FeedItem({
     case "assistant":
       return <MessageBubble message={item} />;
   }
+}
+
+/** One optimistic send: everything needed to render the predicted bubble
+ * from phone-local data, plus enough to retry or re-edit a failure. */
+type PendingSend = {
+  clientId: string;
+  files: ComposerAttachment[];
+  message: string;
+  sentAtMs: number;
+  status: "sending" | "failed";
+  error?: string;
+  offset?: number;
+};
+
+/** The predicted bubble for a send in flight: the SAME MessageBubble the
+ * echo will render, fed local uris instead of signed urls (previews, players,
+ * mosaic and location cards all work on local files), slightly dimmed with a
+ * status line under it. Failure keeps the bubble and offers Retry / Edit —
+ * nothing gets dumped back into the composer. */
+function PendingSendBubble({
+  entry,
+  onEdit,
+  onRetry,
+}: {
+  entry: PendingSend;
+  onEdit: () => void;
+  onRetry: () => void;
+}) {
+  const message: AgentUiMessageItem = {
+    kind: "user",
+    id: `pending-${entry.clientId}`,
+    text: messageWithXmlParts(entry.message, entry.files),
+    timestampMs: entry.sentAtMs,
+    files: entry.files.flatMap((attachment): AgentUiFileAttachment[] => {
+      const key = attachmentKey(attachment);
+      if (attachment.kind === "location") return []; // rides in the text
+      if (attachment.kind === "photo") {
+        return [
+          {
+            contentType: attachment.image.contentType,
+            filename: attachment.image.filename,
+            path: key,
+            size: 0,
+            url: attachment.image.previewUri,
+          },
+        ];
+      }
+      return [
+        {
+          contentType: attachment.contentType,
+          filename: attachment.filename,
+          path: key,
+          size: attachment.kind === "audio" ? 0 : attachment.sizeBytes || 0,
+          url: attachment.uri,
+        },
+      ];
+    }),
+  };
+  return (
+    <View style={entry.status === "sending" ? styles.pendingSending : null}>
+      <MessageBubble message={message} />
+      {entry.status === "sending" ? (
+        <Text style={styles.pendingStatus}>sending…</Text>
+      ) : (
+        <View style={styles.pendingFailedRow}>
+          <Text numberOfLines={2} style={styles.pendingError}>
+            {entry.error || "Couldn't send"}
+          </Text>
+          <Pressable accessibilityRole="button" hitSlop={8} onPress={onRetry}>
+            <Text style={styles.pendingAction}>Retry</Text>
+          </Pressable>
+          <Pressable accessibilityRole="button" hitSlop={8} onPress={onEdit}>
+            <Text style={styles.pendingAction}>Edit</Text>
+          </Pressable>
+        </View>
+      )}
+    </View>
+  );
 }
 
 function MessageBubble({ message }: { message: AgentUiMessageItem }) {
@@ -944,12 +1096,23 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   sendText: { color: colors.background, fontSize: 18, fontWeight: "700" },
-  sendError: {
-    color: colors.danger,
-    fontSize: 12,
-    paddingHorizontal: spacing.md,
-    paddingBottom: spacing.sm,
+  pendingSending: { opacity: 0.75 },
+  pendingStatus: {
+    alignSelf: "flex-end",
+    color: colors.textFaint,
+    fontSize: 11,
+    marginTop: 2,
   },
+  pendingFailedRow: {
+    alignSelf: "flex-end",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    marginTop: 2,
+    maxWidth: "85%",
+  },
+  pendingError: { color: colors.danger, flexShrink: 1, fontSize: 11 },
+  pendingAction: { color: colors.text, fontSize: 12, fontWeight: "600" },
   toast: {
     position: "absolute",
     left: spacing.xl,
