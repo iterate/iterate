@@ -602,7 +602,16 @@ export const STREAM_DURABLE_OBJECT_STUB = Symbol("stream-durable-object-stub");
  * callers and processors still work with explicit events.
  */
 export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
-  readonly props: { auth: ItxAuth; projectId: string | null; path: string };
+  readonly props: {
+    auth: ItxAuth;
+    projectId: string | null;
+    path: string;
+    /** The ambient caller context, when the mint site has one (itx-scoped
+     * handles thread it; internal DO plumbing has no caller and omits it).
+     * Optional for that reason alone — when present and script-shaped, every
+     * append through this target is stamped with source.script. */
+    streamContext?: StreamContext;
+  };
 
   async __describe(): Promise<Description> {
     return describeNode({
@@ -684,9 +693,43 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   // so a read cannot inherit the surrounding wake connection's lifetime.
   /** Commit events; resolves with the same events carrying offsets and timestamps. */
   async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
-    return await this.#appendRetrying(events, () =>
-      Promise.resolve(this[STREAM_DURABLE_OBJECT_STUB].append(...events)),
+    const stamped = events.map((event) => this.#withScriptProvenance(event));
+    return await this.#appendRetrying(stamped, () =>
+      Promise.resolve(this[STREAM_DURABLE_OBJECT_STUB].append(...stamped)),
     );
+  }
+
+  /**
+   * source.script is HOST TRUTH: whatever the caller supplied is stripped,
+   * and the slot is filled only from the server-minted StreamContext of the
+   * itx handle doing the appending — so an event carrying it really was
+   * written by that script run. (The processor stamp stays a claim; this
+   * slot is the one consumers may rely on for exact attribution.)
+   */
+  #withScriptProvenance(event: StreamEventInput): StreamEventInput {
+    const context = this.props.streamContext;
+    const callerSource = { ...event.source };
+    delete callerSource.script;
+    if (context?.kind !== "script-execution") {
+      if (event.source?.script === undefined) return event;
+      return {
+        ...event,
+        ...(Object.keys(callerSource).length === 0
+          ? { source: undefined }
+          : { source: callerSource }),
+      };
+    }
+    return {
+      ...event,
+      source: {
+        ...callerSource,
+        script: {
+          executionId: context.executionId,
+          streamPath: context.streamPath,
+          scriptRunRequestedEventOffset: context.scriptRunRequestedEventOffset,
+        },
+      },
+    };
   }
 
   async #appendRetrying(
@@ -757,6 +800,9 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       auth: this.props.auth,
       projectId: this.props.projectId,
       path: resolveStreamPath(this.props.path, path),
+      ...(this.props.streamContext === undefined
+        ? {}
+        : { streamContext: this.props.streamContext }),
     });
   }
 
@@ -1422,7 +1468,9 @@ class StreamCollectionRpcTarget<
     });
   }
 
-  constructor(readonly props: { auth: ItxAuth; projectId: string | null }) {
+  constructor(
+    readonly props: { auth: ItxAuth; projectId: string | null; streamContext?: StreamContext },
+  ) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
   }
@@ -1433,13 +1481,18 @@ class StreamCollectionRpcTarget<
       auth: this.props.auth,
       projectId: this.props.projectId,
       path,
+      ...(this.props.streamContext === undefined
+        ? {}
+        : { streamContext: this.props.streamContext }),
     });
   }
 }
 
 /** Project-scoped stream catalog with reduced-state listing. */
 class ProjectStreamCollectionRpcTarget extends StreamCollectionRpcTarget<"ProjectStreamCollection"> {
-  constructor(readonly projectProps: { auth: ItxAuth; projectId: string }) {
+  constructor(
+    readonly projectProps: { auth: ItxAuth; projectId: string; streamContext?: StreamContext },
+  ) {
     super(projectProps);
   }
 
@@ -2041,9 +2094,12 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
        * "current actor". Relative `get()` paths resolve against it, and
        * `message()` on the returned agents stamps it as the sender when it
        * is an agent path. Captured at itx mint time (itxForScope), so it is
-       * a property of the tree, not of per-call auth.
+       * a property of the tree, not of per-call auth. `streamContext`
+       * likewise: the ambient caller context, threaded so agent stream
+       * appends carry source.script when the caller is a script.
        */
       sourceScopePath?: string;
+      streamContext?: StreamContext;
     },
   ) {
     super();
@@ -2075,6 +2131,9 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
       ...(this.props.sourceScopePath === undefined
         ? {}
         : { sourceScopePath: this.props.sourceScopePath }),
+      ...(this.props.streamContext === undefined
+        ? {}
+        : { streamContext: this.props.streamContext }),
     });
   }
 
@@ -4921,7 +4980,14 @@ class AgentChatRpcTarget extends IterateRpcTarget<"AgentChat"> {
     });
   }
 
-  constructor(readonly props: { auth: ItxAuth; path: string; projectId: string }) {
+  constructor(
+    readonly props: {
+      auth: ItxAuth;
+      path: string;
+      projectId: string;
+      streamContext?: StreamContext;
+    },
+  ) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
   }
@@ -4931,6 +4997,9 @@ class AgentChatRpcTarget extends IterateRpcTarget<"AgentChat"> {
     return new StreamRpcTarget({
       auth: this.props.auth,
       projectId: this.props.projectId,
+      ...(this.props.streamContext === undefined
+        ? {}
+        : { streamContext: this.props.streamContext }),
       path: this.props.path,
     });
   }
@@ -4982,6 +5051,9 @@ type AgentRpcTargetProps = {
   projectId: string;
   /** The calling scope's path ("current actor") — see AgentCollectionRpcTarget. */
   sourceScopePath?: string;
+  /** Ambient caller context — appends through this handle carry source.script
+   * when the caller is a script (see StreamRpcTarget). */
+  streamContext?: StreamContext;
 };
 
 /**
@@ -5071,6 +5143,9 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       auth: this.#props.auth,
       projectId: this.#props.projectId,
       path: this.#path,
+      ...(this.#props.streamContext === undefined
+        ? {}
+        : { streamContext: this.#props.streamContext }),
     });
   }
 
@@ -5096,6 +5171,9 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       auth: this.#props.auth,
       path: this.#path,
       projectId: this.#props.projectId,
+      ...(this.#props.streamContext === undefined
+        ? {}
+        : { streamContext: this.#props.streamContext }),
     });
   }
 
@@ -5944,6 +6022,9 @@ type CapabilityHostRpcTargetProps = {
   // project root, `/agents/bla` an agent scope. Normalized in the constructor.
   path: string;
   projectId: string;
+  /** Ambient caller context — the host's own stream appends carry
+   * source.script when the caller is a script (see StreamRpcTarget). */
+  streamContext?: StreamContext;
 };
 
 /**
@@ -5989,6 +6070,9 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
   get #stream(): StreamRpcTarget {
     return new StreamRpcTarget({
       auth: this.#props.auth,
+      ...(this.#props.streamContext === undefined
+        ? {}
+        : { streamContext: this.#props.streamContext }),
       path: this.#props.path,
       projectId: this.#props.projectId,
     });
@@ -7351,6 +7435,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return new ProjectStreamCollectionRpcTarget({
       auth: this.#props.auth,
       projectId: this.#projectId,
+      streamContext: this.#streamContext,
     });
   }
 
@@ -7360,6 +7445,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       auth: this.#props.auth,
       ctx: this.#props.ctx,
       projectId: this.#projectId,
+      streamContext: this.#streamContext,
       // The "current actor": this itx's own scope path. Relative agent paths
       // resolve against it, and message() stamps it as the sender when the
       // scope is an agent — how delegated reports know who they are from.

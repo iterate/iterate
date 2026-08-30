@@ -39,6 +39,23 @@ export const StreamEventInput = z
               .optional(),
           })
           .optional(),
+        // Stamped by the trusted append door (StreamRpcTarget) when — and only
+        // when — the appending itx handle belongs to a script execution
+        // (StreamContext kind "script-execution"). Unlike the processor
+        // stamp's claim semantics, this slot is HOST TRUTH: caller-supplied
+        // values are stripped at the door, so an event carrying it really
+        // was written by that script run. Consumers (e.g. the agent UI's
+        // status attribution) may rely on it for exact placement.
+        script: z
+          .strictObject({
+            executionId: z.string().trim().min(1),
+            /** The stream whose script run made this append — appends can
+             * land cross-stream, so the home stream is recorded absolutely. */
+            streamPath: z.string().trim().startsWith("/"),
+            /** Offset of script-run-requested on that home stream. */
+            scriptRunRequestedEventOffset: z.number().int().nonnegative(),
+          })
+          .optional(),
         copiedFrom: z
           .array(
             z.strictObject({

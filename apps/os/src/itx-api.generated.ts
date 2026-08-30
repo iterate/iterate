@@ -3066,6 +3066,9 @@ export type StreamEvent = {
               whileProcessing?: { offset: number; type: string } | undefined;
             }
           | undefined;
+        script?:
+          | { executionId: string; streamPath: string; scriptRunRequestedEventOffset: number }
+          | undefined;
         copiedFrom?:
           | {
               name: string;
@@ -3900,6 +3903,9 @@ export type StreamEventInput = {
               whileProcessing?: { offset: number; type: string } | undefined;
             }
           | undefined;
+        script?:
+          | { executionId: string; streamPath: string; scriptRunRequestedEventOffset: number }
+          | undefined;
         copiedFrom?:
           | {
               name: string;
@@ -4057,6 +4063,9 @@ export type CommittedSubscriptionConfiguredEvent = Omit<
                 whileProcessing?: { offset: number; type: string } | undefined;
               }
             | undefined;
+          script?:
+            | { executionId: string; streamPath: string; scriptRunRequestedEventOffset: number }
+            | undefined;
           copiedFrom?:
             | {
                 name: string;
@@ -4094,6 +4103,9 @@ export type CommittedSubscriptionConfiguredEvent = Omit<
                   stream: { path: string; projectId: string | null; streamId: string };
                   whileProcessing?: { offset: number; type: string } | undefined;
                 }
+              | undefined;
+            script?:
+              | { executionId: string; streamPath: string; scriptRunRequestedEventOffset: number }
               | undefined;
             copiedFrom?:
               | {
@@ -4461,6 +4473,9 @@ export type CommittedSubscriptionRemovedEvent = Omit<
                 whileProcessing?: { offset: number; type: string } | undefined;
               }
             | undefined;
+          script?:
+            | { executionId: string; streamPath: string; scriptRunRequestedEventOffset: number }
+            | undefined;
           copiedFrom?:
             | {
                 name: string;
@@ -4498,6 +4513,9 @@ export type CommittedSubscriptionRemovedEvent = Omit<
                   stream: { path: string; projectId: string | null; streamId: string };
                   whileProcessing?: { offset: number; type: string } | undefined;
                 }
+              | undefined;
+            script?:
+              | { executionId: string; streamPath: string; scriptRunRequestedEventOffset: number }
               | undefined;
             copiedFrom?:
               | {

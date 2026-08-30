@@ -10,6 +10,14 @@ export type StreamEventSource = {
     slug: string;
     version: string;
   };
+  /** Host-stamped script provenance: which script run wrote this event.
+   * Trusted (the append door strips caller-supplied values), so the agent-ui
+   * fold may attribute events to exact code steps by executionId. */
+  script?: {
+    executionId: string;
+    streamPath: string;
+    scriptRunRequestedEventOffset: number;
+  };
 };
 
 export type StreamEvent<Type extends string = string, Payload = unknown> = {

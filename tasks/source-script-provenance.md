@@ -8,9 +8,13 @@ branch: source-script-provenance
 
 ## Status summary
 
-Fleshed-out spec (design agreed with Misha via explainer); implementation
-starting. One PR: platform stamp + the first consumer (agent-ui fold
-attribution, fixing the stale-status-between-rounds bug) + tests.
+Done pending review. The stamp works end to end on the first e2e run: a
+script's appends journal source.script with the real executionId and home
+streamPath; forged stamps are stripped whether supplied from inside a
+script or from an external session. The agent-ui fold attributes
+summary-updated by executionId (live steps, and a retained-last-settle
+correction gated by executionId containment — no time window), with the
+legacy running-step behavior kept for unstamped events.
 
 ## Why
 
@@ -47,22 +51,37 @@ Design notes + call graphs: explainers.ignoreme/source-script-provenance.html
 
 ## Checklist
 
-- [ ] Schema: `source.script` in packages/iterate processors/schemas.ts
-- [ ] `StreamRpcTarget` carries `streamContext`; every mint site threads it
-- [ ] Append + keyed append strip caller `source.script`, stamp host truth
-- [ ] Regenerate itx-api generated files (codegen after format)
-- [ ] DECISIONS.md entry (apps/os/src/itx): source.script is stamped,
+- [x] Schema: `source.script` in packages/iterate processors/schemas.ts
+- [x] `StreamRpcTarget` carries `streamContext`; every mint site threads it
+- [x] Append + keyed append strip caller `source.script`, stamp host truth
+- [x] Regenerate itx-api generated files (codegen after format)
+- [x] DECISIONS.md entry (apps/os/src/itx): source.script is stamped,
       never accepted
-- [ ] Fold: attribution by executionId (live + retained-settled correction,
+- [x] Fold: attribution by executionId (live + retained-settled correction,
       foreign-stream handling, legacy fallback)
-- [ ] Host-level test: a script's append journals the stamp; a forged
+- [x] Host-level test: a script's append journals the stamp; a forged
       caller `source.script` is discarded
-- [ ] Reducer tests: port the three ordering tests from the parked
+- [x] Reducer tests: port the three ordering tests from the parked
       mobile-interwoven-status branch, now driven by the stamp
-- [ ] E2E: port specs/mobile/interwoven-status.spec.ts (verbatim weave)
-- [ ] Existing suites green (os components/projector, mobile feed,
+- [x] E2E: port specs/mobile/interwoven-status.spec.ts (verbatim weave)
+- [x] Existing suites green (os components/projector, mobile feed,
       live-status + approvals specs)
 
 ## Implementation log
 
 (append as you go)
+
+## Implementation notes
+
+- Threading is itx-tree-scoped: StreamRpcTarget/StreamCollection/
+  AgentCollection/AgentRpcTarget/AgentChat/CapabilityHost all take an
+  OPTIONAL streamContext (internal DO plumbing has no caller and omits it —
+  the one place optionality earns its keep). ProjectRpcTarget's getters
+  thread its own #streamContext, so scripts' `itx.streams`, `itx.agents`,
+  `itx.chat`, and dynamic capability appends all stamp.
+- `agent-ui-reducer` state gained `lastSettledActivity` (one slot,
+  overwritten each settle) — correction applies only when it contains the
+  stamped executionId, so old cards can never be rewritten.
+- e2e guard: apps/os/e2e/vitest/script-append-provenance.itx.e2e.test.ts
+  (17.9s against local dev). Weave spec ported from the parked branch,
+  passing (the interwoven card now wears each round's own status).
