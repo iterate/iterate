@@ -22,7 +22,6 @@ import { itxEntrypointFor } from "./itx-entrypoint.ts";
 import { newHttpBatchRpcSession } from "capnweb";
 import type { Expression } from "./core/expression.ts";
 import { InvokeHandle } from "./core/invoke-handle.ts";
-import { invokePath } from "./core/dispatch.ts";
 import type { Context } from "./core/stream.ts";
 import type { StreamEventInput } from "./core/events.ts";
 
@@ -300,9 +299,18 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
      *  DO (workerd#6087). This is the replacement for the removed `itx.os`/`bindings` control-plane
      *  door — the outbound-capnweb primitive; a named `itx.os` becomes a mount over it. */
     connectToCapnweb: (url: string) =>
-      new InvokeHandle((path, args) =>
-        invokePath(newHttpBatchRpcSession(url), path, args, `capnweb ${url}`),
-      ),
+      new InvokeHandle((path, args) => {
+        // Walk the remote stub via capnweb's NATIVE promise pipelining — NO intervening awaits, or
+        // the one-shot HTTP batch flushes early and every hop after the first dies with capnweb's
+        // "Batch RPC request ended" (build the whole chain with no awaits; workerd/capnweb#26 +
+        // prove_connect_multihop.mjs). Property access pipelines; the TERMINAL call sends the batch,
+        // and the caller awaits once on its result. (This is why we can't route through the generic
+        // `walkSteps`, which awaits every intermediate.)
+        const session = newHttpBatchRpcSession(url) as unknown as Record<string, unknown>;
+        let target = session;
+        for (const seg of path.slice(0, -1)) target = target[seg] as Record<string, unknown>;
+        return (target[path.at(-1)!] as (...a: unknown[]) => unknown)(...args);
+      }),
   } satisfies BuiltInScope;
   if (Object.hasOwn(scope, "itx")) throw new Error("host scope must never register 'itx'");
   return scope;

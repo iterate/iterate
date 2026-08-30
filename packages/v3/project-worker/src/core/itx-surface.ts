@@ -53,15 +53,16 @@ function isLiveStub(target: unknown): boolean {
  *  stream reaches the client's actual function over the capnweb WebSocket. */
 class RetainedCallbackInvoker extends WorkersRpcTarget {
   #provider: RetainedProviderStub;
-  /** Set the instant the provider's capnweb session breaks. capnweb fires onRpcBroken BEFORE it
-   *  rejects the in-flight import, so a call caught below sees this already true — no race. */
-  #broken = false;
-  constructor(provider: RetainedProviderStub) {
+  /** SHARED across every page of one relay (a `{ value }` holder), flipped by the ONE `onRpcBroken`
+   *  registration in `startRpcStubRelay`. capnweb has no `offRpcBroken`, so registering per paged-in
+   *  invoker would accumulate a listener per page for the session's life — the leak the failing test
+   *  pins. capnweb fires onRpcBroken BEFORE it rejects the in-flight import, so a call caught below
+   *  sees this already true — no race. */
+  #broken: { value: boolean };
+  constructor(provider: RetainedProviderStub, broken: { value: boolean }) {
     super();
     this.#provider = provider;
-    (provider as { onRpcBroken?: (cb: (e: unknown) => void) => void }).onRpcBroken?.(() => {
-      this.#broken = true;
-    });
+    this.#broken = broken;
   }
   async invoke(capPath: string[], args: unknown[]): Promise<unknown> {
     try {
@@ -77,7 +78,7 @@ class RetainedCallbackInvoker extends WorkersRpcTarget {
       // LOCALLY to CONNECTION_OFFLINE so the CODE (never a message) crosses the Workers-RPC hop
       // back to the caller — the same condition the offline pre-call paths throw (core/errors.ts:
       // classify by code across a hop). A genuine app error from a live client propagates untouched.
-      if (this.#broken)
+      if (this.#broken.value)
         throw codedError("CONNECTION_OFFLINE", "itx rpc stub provider went offline mid-invoke");
       // Any other throw — a genuine app error OR a wrong guess at a live provider's surface — rides
       // back as its raw capnweb error. (We used to re-grammar path-misses into NOT_A_METHOD for an
@@ -130,7 +131,7 @@ class Parking {
  *  provider stub, open the stub pager WebSocket, and answer every page with a fresh stub. The
  *  relay lives until disposed (explicitly, or at session end); its close makes the DO drop the stub
  *  (⇒ any mount naming the key auto-revokes). */
-async function startRpcStubRelay(
+export async function startRpcStubRelay(
   host: ItxHostStub,
   provider: RetainedProviderStub,
   key: string,
@@ -138,20 +139,26 @@ async function startRpcStubRelay(
 ): Promise<CapnwebCallbackRelay> {
   const { transportId } = await host.rpcStubAttach({ key });
   const retained = provider.dup();
+  // ONE shared broken flag for the whole relay — every paged-in invoker reads it; the single
+  // onRpcBroken registration below flips it. (Registering per page would leak a listener per page:
+  // capnweb has no offRpcBroken. See rpc-stub-broken-leak.failing.test.ts.)
+  const broken = { value: false };
   const pagerWebSocket = await openStubPagerWebSocket(host, transportId, () => {
     // The page answer: re-mint the Workers-RPC stub around the retained capnweb callback and
     // hand it to the DO, which keeps it warm until its idle quiesce.
     waitUntil(
       host
-        .rpcStubActivate({ transportId, invoker: new RetainedCallbackInvoker(retained) })
+        .rpcStubActivate({ transportId, invoker: new RetainedCallbackInvoker(retained, broken) })
         .catch(() => undefined), // a stale page (nobody waiting) returns undefined; offline throws — ignore
     );
   });
   const disposeRetained = () => disposeStub(retained);
-  // The library's own death signal: the client's capnweb session broke → the retained callback can
-  // never answer again. Close the pager WebSocket NOW so the DO drops the stub immediately —
+  // The library's own death signal, registered ONCE: the client's capnweb session broke → the
+  // retained callback can never answer again. Flip the shared flag (so in-flight invokes re-code to
+  // CONNECTION_OFFLINE) AND close the pager WebSocket NOW so the DO drops the stub immediately —
   // without this the presence list lies until a page times out (10s).
   (retained as { onRpcBroken?: (cb: () => void) => void }).onRpcBroken?.(() => {
+    broken.value = true;
     try {
       pagerWebSocket.close(1000, "provider session broke");
     } catch {
