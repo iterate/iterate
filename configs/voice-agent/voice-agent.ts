@@ -538,7 +538,7 @@ const COLLEAGUE_STATUS_TRANSFORM = [
  * Role `developer`, not `user`, deliberately: user-role items participate
  * in turn accounting (queued messages, the working row) and a transcript
  * is testimony, not a prompt. `dont-trigger-request` for the same reason —
- * the fast half owns the conversation; the note lane is what asks the
+ * the fast half owns the conversation; a note is what asks the
  * backend to act. The actor names this voice stream, which is also what
  * keeps developer-role precedence through the platform's trust demotion
  * (agent-authored developer items keep their role).
@@ -1199,7 +1199,7 @@ export const VoiceAgentContract = defineProcessorContract({
    * ways. `colleaguePath` on the certificate points the frontend/backend
    * split at an existing agent (a chat) instead of a minted
    * `/agents/voice-notes/...` desk; the link is established at call start,
-   * not first note, and setup installs a transcript lane — the call's
+   * not first note, and setup installs a transcript subscription — the call's
    * utterance/answer transcripts land on the colleague's stream as
    * developer context, so the backend reads the conversation. Whispers
    * carry BOTH the lifecycle phase and the colleague's own words, and a
@@ -1872,7 +1872,7 @@ interface Dial {
    * the wipe stays for those.
    */
   followUpResponsePending: boolean;
-  /** Which lane asked for the pending follow-up — stamped onto the answer
+  /** What asked for the pending follow-up — stamped onto the answer
    * at response.created so the note-barge can tell commentary from
    * conversation. */
   followUpKind: "status" | "note" | "tool";
@@ -2594,7 +2594,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
             this.deps.nowAtFacetMs() - dial.lastStatusSpokenAtMs >= SPOKEN_STATUS_MIN_GAP_MS)
         ) {
           dial.lastStatusSpokenAtMs = this.deps.nowAtFacetMs();
-          /* The follow-up lane, not a barge: the previous answer's tail may
+          /* A follow-up response.create, not a barge: the previous answer's tail may
            * still be draining and must finish playing. */
           dial.followUpResponsePending = true;
           dial.followUpKind = "status";
@@ -2764,7 +2764,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
     if (state.visemes) dial.face = createFace();
     this.#dial = dial;
     /* THE COLLEAGUE LINK STANDS FROM CALL START, not from the first note:
-     * the transcript lane it installs is how the backend hears the
+     * the transcript subscription it installs is how the backend hears the
      * conversation, and a call with no note still deserves a record on the
      * colleague's stream. Background and swallowed — the note path retries
      * it, and a call must not fail because the desk was unreachable. */
@@ -4013,12 +4013,16 @@ export class VoiceAgentProcessor extends StreamProcessor<
       });
       const result = await Promise.race([
         work,
+        /* The sentinel widens to unknown so the race's type admits both
+         * outcomes; the identity check below is the discriminator. */
         this.deps.sleep(CHAT_RECAP_DEADLINE_MS).then(() => timedOut as unknown),
       ]);
       if (result === timedOut) {
         void work.catch(() => {});
         return null;
       }
+      /* The sentinel was ruled out above; what remains is the fetch's own
+       * return type, which the race erased. */
       return result as string | null;
     } catch {
       return null;
@@ -4031,13 +4035,13 @@ export class VoiceAgentProcessor extends StreamProcessor<
   }
 
   /**
-   * Ensure the colleague exists, is briefed, and BOTH forwarding lanes are
+   * Ensure the colleague exists, is briefed, and BOTH forwarding subscriptions are
    * installed — status/replies coming here, the call's transcript going
    * there. Memoized per incarnation (reset on failure so the next call or
    * note retries); every append inside dedupes by idempotency key, so
    * re-running is a handful of no-op round trips.
    *
-   * CALLED AT CALL START, not only at the first note: the transcript lane
+   * CALLED AT CALL START, not only at the first note: the transcript subscription
    * is how the backend hears the conversation, and a call in which nobody
    * ever says `note_to_self` still deserves a record on the chat.
    */
@@ -4051,6 +4055,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
     const timedOut = Symbol("colleague link deadline");
     const work = this.deps
       .withProject(async (project) => {
+        /* Asserted, not typed: withProject hands over the project root
+         * untyped (the generated client type lives in apps/os and a
+         * config-repo template cannot import it); a wrong assertion fails
+         * loudly at the RPC boundary. */
         const typedProject = project as {
           agents: {
             get(path: string): {
@@ -4075,7 +4083,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
         const agent = typedProject.agents.get(colleaguePath);
         await agent.create({});
         /*
-         * THE STATUS LANE. The colleague already narrates itself —
+         * THE STATUS SUBSCRIPTION. The colleague already narrates itself —
          * `agent/summary-updated` is mandatory beside its work, and an
          * itx script can append its own — so forwarding that feed is
          * the whole feature: a copy-to-stream subscription on the
@@ -4113,7 +4121,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
                 "events.iterate.com/agent/llm-request-requested",
                 "events.iterate.com/capability-host/script-run-started",
                 "events.iterate.com/capability-host/script-run-settled",
-                /* The REPLY LANE rides this same subscription: without
+                /* REPLIES ride this same subscription: without
                  * this entry the transform's web-message-sent branch is
                  * dead code and every colleague reply silently never
                  * leaves its stream — measured, embarrassingly, for an
@@ -5152,7 +5160,7 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
         },
       };
       const subscriptionKeyPrefix = `voice-agent/subscription:${streamPath}`;
-      /* THE TRANSCRIPT LANE rides the setup batch: the facet cannot append
+      /* THE TRANSCRIPT SUBSCRIPTION rides the setup batch: the facet cannot append
        * a subscription to its own stream (the RPC re-enters its own Durable
        * Object), and setup already owns this stream's subscriptions. The
        * colleague path is a pure function of the certificate, so setup

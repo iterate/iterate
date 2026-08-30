@@ -1068,10 +1068,10 @@ describe("tools on the birth certificate", () => {
      * same desk for every conversation the stream ever holds. */
     expect(gotten[0]).toBe("/agents/voice-notes/voice/test");
     expect(created).toEqual(["/agents/voice-notes/voice/test"]);
-    /* And the link wires the status lane: the colleague's own narration is
+    /* And the link wires the status forwarding: the colleague's own narration is
      * forwarded to this stream as colleague-status events, under a name
      * OWNED BY THIS LINE (two lines sharing a desk must not fight over one
-     * name), with the legacy shared name removed. (The transcript lane
+     * name), with the legacy shared name removed. (The transcript subscription
      * rides SETUP's batch — the facet cannot append a subscription to its
      * own stream.) */
     expect(subscriptions).toHaveLength(2);
@@ -1639,8 +1639,8 @@ describe("tools on the birth certificate", () => {
     expect((configuredSessions[0]!.payload as { instructions: string }).instructions).toContain(
       "continues an ongoing TEXT conversation",
     );
-    /* Status lane: the chat's narration and replies flow HERE, under this
-     * line's own name. (The transcript lane the other way rides SETUP's
+    /* Status forwarding: the chat's narration and replies flow HERE, under this
+     * line's own name. (The transcript subscription the other way rides SETUP's
      * batch, not the link.) */
     expect(subscriptions.filter((s) => s.type.endsWith("subscription-configured"))).toHaveLength(1);
     expect(subscriptions[0]).toMatchObject({

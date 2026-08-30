@@ -1,5 +1,5 @@
 // The light markup voice calls leave on a chat's stream, parsed for
-// presentation. The facet's transcript lane copies each spoken turn as
+// presentation. The facet's transcript subscription copies each spoken turn as
 // `<voice-turn speaker="person|assistant" [interrupted="true"]>…</voice-turn>`
 // and the frontend's notes to the backend arrive wrapped in `<voice-note>` —
 // tags chosen so the MODEL reads them as the labels they are while the chat
@@ -33,6 +33,8 @@ export function parseVoiceMarkup(text: string): VoiceMarkup | null {
   if (turn !== null) {
     return {
       kind: "turn",
+      /* The pattern alternation only admits these two values; the cast
+       * restates what the regex guarantees. */
       speaker: turn[1] as "person" | "assistant",
       interrupted: turn[2] !== undefined,
       spokenKind: turn[3] || null,

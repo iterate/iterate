@@ -123,6 +123,8 @@ export function transcriptItems(
 ): VoiceTranscriptItem[] {
   const items: VoiceTranscriptItem[] = [];
   for (const event of events) {
+    /* Cast, not parse: unvalidated wire JSON, and every read below
+     * typeof-narrows its own field before trusting it. */
     const p = (event.payload ?? {}) as Record<string, unknown>;
     const text = typeof p.text === "string" ? p.text : "";
     switch (event.type) {

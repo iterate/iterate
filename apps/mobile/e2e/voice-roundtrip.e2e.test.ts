@@ -41,7 +41,7 @@ test("calling a chat: speak, be answered, and the conversation lands on the chat
 
   /* A fresh "chat" per run — the per-chat mode covers strictly more than
    * the device line did: the certificate's colleaguePath, the call-start
-   * colleague link, and the transcript lane onto the chat's stream. */
+   * colleague link, and the transcript subscription onto the chat's stream. */
   const chatPath = `/agents/mobile/e2e-${Date.now().toString(36)}`;
   const streamPath = chatVoiceStreamPath(chatPath);
   const markers = new Map<string, string>();
@@ -101,7 +101,7 @@ test("calling a chat: speak, be answered, and the conversation lands on the chat
   expect(answers.length).toBeGreaterThan(0);
   expect(String(answers[0].payload.text).length).toBeGreaterThan(0);
 
-  /* THE CONVERSATION ON THE CHAT'S STREAM: the transcript lane copies both
+  /* THE CONVERSATION ON THE CHAT'S STREAM: the transcript subscription copies both
    * sides onto the colleague (the chat) as developer context items. The
    * listener's transcription can lag the answer, so poll for both sides. */
   let voiceLines: string[] = [];
