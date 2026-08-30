@@ -65,11 +65,10 @@ interface BuiltInScope {
     delete(key: string): Promise<{ ok: true }>;
     list(prefix?: string): Promise<{ keys: string[] }>;
   };
-  /** This context's append-only event log, plus the facets that REDUCE it (`processors` = sugar). */
+  /** This context's append-only event log (the facets that REDUCE it are `itx.facets.get(ref)`). */
   stream: {
     append(...events: StreamEventInput[]): Promise<unknown>;
     read(afterOffset?: number, limit?: number): Promise<unknown>;
-    processors: FacetsView;
   };
   /** Navigate to a SIBLING context, routed through its own table. */
   cd(path: string): unknown;
@@ -203,16 +202,11 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         }
       },
     },
-    /** MY OWN stream — a deliberate, chosen surface (append/read), never the raw DO stub. */
+    /** MY OWN stream — a deliberate, chosen surface (append/read), never the raw DO stub. The
+     *  facets that reduce this stream are addressed via `itx.facets.get(ref)`. */
     stream: {
       append: (...e: StreamEventInput[]) => own().append(...e),
       read: (after?: number, limit?: number) => own().read(after, limit),
-      /** The facets that reduce THIS stream's log — THIN SUGAR over `itx.facets.get(ref)` (a
-       *  processor is a facet driven by the stream's commits). Address one by name to read its
-       *  reduce (`itx.stream.processors.get('tally').snapshot()`) or materialize a loaded class. */
-      processors: {
-        get: (ref: string | { source: unknown; className: string }) => deps.facets.get(ref),
-      },
     },
     /** Navigate to a SIBLING context, ROUTED: `cd('/x').anything(...)` resolves through the
      *  SIBLING's own table (its mounts answer, its default route falls through) — a named,
