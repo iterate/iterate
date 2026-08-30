@@ -42,7 +42,7 @@ check(
 // 3. fetchCap: a fetch-shaped capability through the SESSION (no /cap door)
 await itx.provide({
   path: "itx.site",
-  target: `itx.workers.get({ type: 'stateless', source: "itx.kv.get('src/site.js')" })`,
+  target: `itx.workers.get({ source: "itx.kv.get('src/site.js')" })`,
 });
 const resp = await itx.fetchCap("itx.site", new Request(`https://${BASE}/`));
 const html = await resp.text();

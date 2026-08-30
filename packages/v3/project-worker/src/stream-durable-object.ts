@@ -325,11 +325,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         close: (key) => this.#rpcStubs.close(key),
       },
       facets: {
-        get: (slug) => new InvokeHandle((path, args) => this.facetInvoke(slug, path, args)),
-      },
-      statefulWorkers: {
-        invoke: (ref, segments, args) => this.#statefulWorkerInvoke(ref, segments, args),
-        fetch: (ref, request) => this.#statefulWorkerFetch(ref, request),
+        get: (ref) => new InvokeHandle((path, args) => this.facetInvoke(ref, path, args)),
       },
       hostCtx: this.ctx,
     });
@@ -772,7 +768,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    *  modules, `className` the exported StreamProcessor subclass) PLUS one appended fact — a
    *  SUBSCRIPTION mount `itx.subscribers.<slug> → itx.facets.get('<slug>')`. A processor is just a
    *  subscription whose target is a co-located facet: the commit pump drives every facet-target
-   *  subscriber. The only difference from a stateful `workers.get({ source, className })`: a
+   *  subscriber. The only difference from a stateful `facets.get({ source, className })`: a
    *  processor's class extends `StreamProcessor` (loaded behind the `runner.js` adapter, so the
    *  author writes a reduce, never a DurableObject). So `enableProcessor` == subscribe a facet;
    *  there is no separate `itx.processors.*` namespace and no second "enablement" concept. */
@@ -827,9 +823,26 @@ export class StreamDurableObject extends DurableObject<Env> {
    *  walk happens where the stub lives), walk the dotted path with the exposure guard, apply
    *  the terminal. `roots.facets` (and via one seed, `itx.facets`) rides this to reach ANY
    *  method a facet's durable object exposes — a facet hosts an object; processor is a role. */
-  async facetInvoke(slug: string, path: string[], args: unknown[]): Promise<unknown> {
+  async facetInvoke(
+    ref: string | { source: unknown; className: string },
+    path: string[],
+    args: unknown[],
+  ): Promise<unknown> {
     this.#noteActivity(); // (was in #facet — moved out so the resurrection pass stays idle-neutral)
-    if (path.length === 0) throw new Error(`facet "${slug}": name a method`);
+    if (path.length === 0) throw new Error(`facet: name a method`);
+    // A loaded STATEFUL class hosted as a facet: materialize (or reuse) it, then call — a method
+    // walks receiver-preservingly (invokePath), a top-level `.fetch` forwards to the facet's own
+    // fetch (a 101 flows DO→facet natively). This is the mirror of a stateless workers.get(ref).
+    if (typeof ref !== "string") {
+      const facet = await this.#statefulFacet({
+        source: toExpression(ref.source as string | Expression),
+        className: ref.className,
+      });
+      if (path.length === 1 && path[0] === "fetch")
+        return (facet as Fetcher).fetch(args[0] as Request);
+      return invokePath(facet, path, args, `worker "${ref.className}"`);
+    }
+    const slug = ref;
     // INLINE processors answer at the same address — always at head, so the barrier verb is
     // trivially satisfied and snapshot needs no catch-up.
     if (slug === CAPABILITY_TABLE_SLUG || slug === "core") {
@@ -871,30 +884,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       markerKey: `${facetName}:version`,
       what: `stateful worker "${ref.className}"`,
     });
-  }
-
-  /** RPC lane: a DOTTED method walks receiver-preservingly, terminal Reflect.apply — the
-   *  DataCloneError learning lives on invokePath (never `stub[m].apply`). */
-  async #statefulWorkerInvoke(
-    ref: { source: Expression; className: string },
-    segments: string[],
-    args: unknown[],
-  ): Promise<unknown> {
-    return invokePath(
-      await this.#statefulFacet(ref),
-      segments,
-      args,
-      `stateful worker "${ref.className}"`,
-    );
-  }
-
-  /** WS/streaming lane: the facet's own fetch — a 101 flows DO→facet natively (the old
-   *  x-itx-source/x-itx-class header protocol died with the runner DO). */
-  async #statefulWorkerFetch(
-    ref: { source: Expression; className: string },
-    request: Request,
-  ): Promise<Response> {
-    return ((await this.#statefulFacet(ref)) as Fetcher).fetch(request);
   }
 
   // ── dispatch (ONE path: the routing table — the INLINE core reduce, zero distance) ──

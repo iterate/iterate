@@ -192,7 +192,7 @@ test.fails("baseline: /cap serves HTTP and a 101 WebSocket echo from a LOADED-WO
   await itx.invokeCapability({ path: ["kv", "put"], args: ["src/site.js", SITE_SOURCE] });
   await itx.provide({
     path: "itx.site",
-    target: "itx.workers.get({ type: 'stateless', source: \"itx.kv.get('src/site.js')\" })",
+    target: "itx.workers.get({ source: \"itx.kv.get('src/site.js')\" })",
   });
 
   // HTTP through the door

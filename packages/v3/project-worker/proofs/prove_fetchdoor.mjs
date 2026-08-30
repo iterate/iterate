@@ -21,7 +21,7 @@ const itx = await session.get();
 await seedSources(itx, ["site"]);
 await itx.provide({
   path: "itx.site",
-  target: "itx.workers.get({ type: 'stateless', source: \"itx.kv.get('src/site.js')\" })",
+  target: "itx.workers.get({ source: \"itx.kv.get('src/site.js')\" })",
 });
 
 // ── 4a. GET through the one fetch door ──

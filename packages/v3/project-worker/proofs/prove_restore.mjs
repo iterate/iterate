@@ -20,7 +20,7 @@ await seedSources(itx, ["keeper"]);
 
 await itx.provide({
   path: "itx.keeper",
-  target: `itx.workers.get({ type: 'stateful', source: "itx.kv.get('src/keeper.js')", className: 'Keeper' })`,
+  target: `itx.facets.get({ source: "itx.kv.get('src/keeper.js')", className: 'Keeper' })`,
 });
 
 // 1. stash: storage.put(env.ITX) — throws unless the whole chain is restore-eligible

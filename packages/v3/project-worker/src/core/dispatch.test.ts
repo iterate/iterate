@@ -82,7 +82,7 @@ const scope = () => {
         }),
       },
       // a stub-returning chain — pipelining through an async hop
-      workers: {
+      facets: {
         get: async (_ref: unknown) => ({ counters: { add: async (n: number) => 40 + n } }),
       },
       append: (e: unknown) => (log.push(`append ${JSON.stringify(e)}`), { offset: 1 }),
@@ -95,7 +95,7 @@ describe("evaluate/apply", () => {
     const s = scope();
     const { value } = await evaluate(
       s,
-      parse("itx.workers.get({ type: 'stateful' }).counters.add(2)"),
+      parse("itx.facets.get({ className: 'Counter' }).counters.add(2)"),
     );
     expect(value).toBe(42);
   });

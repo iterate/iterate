@@ -31,23 +31,21 @@ type RpcStubsView = {
   close(key: string): { ok: true } | Promise<{ ok: true }>;
 };
 
-/** `facets.get(slug)` → a dotted method proxy over ONE enabled facet — ANY method its durable
- *  object exposes (facet stubs are non-transferable, so the walk happens parent-side). */
+/** `facets.get(ref)` → a dotted method proxy over ONE facet (a durable object run as a facet of
+ *  this stream) — ANY method it exposes (facet stubs are non-transferable, so the walk happens
+ *  parent-side). `ref` is a STRING (address an already-running facet by name — processors, built-in
+ *  slugs) OR `{ source, className }` (materialize the loaded `className` durable object as a facet).
+ *  The mirror of `workers.get(ref)` (a stateless WorkerEntrypoint): entrypoint vs durable object. */
 type FacetsView = {
-  get(slug: string): unknown;
+  get(ref: string | { source: unknown; className: string }): unknown;
 };
 
-/** Run code in this context — THE fundamental context operation, mirroring apps/os
- *  `DynamicWorkerRef`. `get` takes a discriminated ref: `type:"stateless"` → a fresh confined
- *  isolate, a `{ run, fetch }` handle (no DO, no storage); `type:"stateful"` → the exported
- *  `className` hosted DURABLY as a facet of this stream (a deep dotted method proxy + `.fetch`).
- *  Scope-level `runScript(source, ...)` is one-hop sugar for `get({ type:"stateless", source }).run(...)`. */
+/** Run STATELESS code in this context — a fresh confined isolate, a `{ run, fetch }` handle (no DO,
+ *  no storage). `get({ source })` loads it; scope-level `runScript(source, ...)` is one-hop sugar
+ *  for `get({ source }).run(...)`. Durable classes hosted as facets are the mirror door,
+ *  `itx.facets.get({ source, className })`. */
 type WorkersView = {
-  get(
-    ref:
-      | { type: "stateless"; source: unknown }
-      | { type: "stateful"; source: unknown; className: string },
-  ): unknown;
+  get(ref: { source: unknown }): unknown;
 };
 import type { StreamDurableObject } from "./stream-durable-object.ts";
 
@@ -77,17 +75,10 @@ interface BuildBuiltInsDeps {
   context: (path: string) => Context;
   /** The rpcStubs view (parent-local closures over the HibernatableRpcStubManager). */
   rpcStubs: RpcStubsView;
+  /** `facets.get(ref)` — address a facet by name, OR materialize `{ source, className }` (a loaded
+   *  durable object hosted as a facet of this stream; the runner DO died in increment 57 — accepted
+   *  trade: a busy stateful facet pins its stream). */
   facets: FacetsView;
-  /** Host a stateful loaded class as a FACET of this stream (the dedicated runner DO died in
-   *  increment 57 — accepted trade: a busy stateful worker pins its stream). */
-  statefulWorkers: {
-    invoke(
-      ref: { source: Expression; className: string },
-      segments: string[],
-      args: unknown[],
-    ): Promise<unknown>;
-    fetch(ref: { source: Expression; className: string }, request: Request): Promise<Response>;
-  };
   /** The ctx whose `exports` mints the ItxEntrypoint loopback (the loaded-worker
    *  host — see iterate-context-entrypoint.ts for why it is never a raw getByName stub). */
   hostCtx: unknown;
@@ -124,23 +115,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     };
   };
   const workers: WorkersView = {
-    get: (ref) => {
-      if (ref.type === "stateful") {
-        // Durable class: a FACET of this stream — a method proxy that walks deep dots natively;
-        // a top-level `.fetch` forwards to the facet's own fetch (101s pass, no header protocol).
-        const source = toExpression(ref.source as string | Expression);
-        const className = ref.className;
-        // A GENUINE RpcTarget (not a bare pathProxy) so a mid-chain call on a stateful loaded
-        // class pipelines — `itx.workers.get(ref).demo.timer.callLater(cb)` from one dynamic
-        // worker to another rides one round trip (workerd#6873; see core/invoke-handle.ts).
-        return new InvokeHandle((segments, args) => {
-          if (segments.length === 1 && segments[0] === "fetch")
-            return deps.statefulWorkers.fetch({ source, className }, args[0] as Request);
-          return deps.statefulWorkers.invoke({ source, className }, segments, args);
-        });
-      }
-      return statelessHandle(ref.source as WorkerSource);
-    },
+    get: (ref) => statelessHandle(ref.source as WorkerSource),
   };
 
   const itxKv = env.ITX_KV;
@@ -210,7 +185,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     rpcStubs: deps.rpcStubs,
     facets: deps.facets,
     workers,
-    /** Run stateless code in this context — sugar for `workers.get({type:'stateless',source}).run(…)`. */
+    /** Run stateless code in this context — sugar for `workers.get({ source }).run(…)`. */
     runScript: (source: unknown, ...args: unknown[]) =>
       statelessHandle(source as WorkerSource).run(...args),
   };

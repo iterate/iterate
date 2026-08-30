@@ -11,10 +11,7 @@ const TABLE: [string, Expression][] = [
   ["itx.kv.put('k','v')", ["itx", "kv", ["put", "k", "v"]]], // multiple args
   ["itx.facets.get('tally').snapshot()", ["itx", "facets", ["get", "tally"], ["snapshot"]]], // chain
   ["itx.rpcStubs.get('robot-arm-1').ping()", ["itx", "rpcStubs", ["get", "robot-arm-1"], ["ping"]]],
-  [
-    "itx.workers.get({type:'stateful',className:'Counter'})",
-    ["itx", "workers", ["get", { type: "stateful", className: "Counter" }]],
-  ],
+  ["itx.facets.get({className:'Counter'})", ["itx", "facets", ["get", { className: "Counter" }]]],
   [
     "itx.stream.append({type:'evt',payload:{n:1,ok:true,tags:['a','b']}})",
     ["itx", "stream", ["append", { type: "evt", payload: { n: 1, ok: true, tags: ["a", "b"] } }]],

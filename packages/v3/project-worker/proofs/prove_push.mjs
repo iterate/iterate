@@ -30,7 +30,7 @@ await seedSources(itx, ["digest"]);
 await itx.enableProcessor("tally");
 await itx.provide({
   path: "itx.digest",
-  target: `itx.workers.get({ type: 'stateless', source: "itx.kv.get('src/digest.js')" })`,
+  target: `itx.workers.get({ source: "itx.kv.get('src/digest.js')" })`,
 });
 
 // 2. subscribe with an ABSENT target → the subscription-forwarder facet is auto-enabled and

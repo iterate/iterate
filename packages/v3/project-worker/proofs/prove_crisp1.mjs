@@ -92,7 +92,7 @@ check(/no capability matches/.test(denied), "default-deny after last revoke", de
 // 5. EXPRESSION MOUNT running a stateless dynamic worker (the fetch lane end-to-end)
 await itxA.provide({
   path: "itx.site",
-  target: "itx.workers.get({ type: 'stateless', source: ['itx', 'kv', ['get', 'src/site.js']] })",
+  target: "itx.workers.get({ source: ['itx', 'kv', ['get', 'src/site.js']] })",
 });
 const page = await fetch(`https://${BASE}/cap?ctx=${CTX}&cap=${encodeURIComponent("itx.site")}`);
 const html = await page.text();
@@ -125,7 +125,7 @@ check(
 await itxA.provide({
   path: "itx.counter",
   target:
-    "itx.workers.get({ type: 'stateful', source: ['itx', 'kv', ['get', 'src/counter.js']], className: 'Counter' })",
+    "itx.facets.get({ source: ['itx', 'kv', ['get', 'src/counter.js']], className: 'Counter' })",
 });
 const inc = await itxA.invokeCapability({ path: ["counter", "increment"], args: [2] });
 check(inc === 2, "stateful worker: increment(2)", String(inc));

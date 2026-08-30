@@ -44,7 +44,7 @@ export type ProcessorPolicy = {
    *  Absent = a built-in facet class named by the mount's slug. */
   source?: string;
   /** Which exported class of the userspace modules is the StreamProcessor subclass — the SAME
-   *  `className` a stateful `itx.workers.get({ source, className })` names, unified deliberately:
+   *  `className` a stateful `itx.facets.get({ source, className })` names, unified deliberately:
    *  enabling a processor is loading a class as a facet, plus driving it with this stream's
    *  commits. Defaults to the module's default export. */
   className?: string;

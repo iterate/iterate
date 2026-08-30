@@ -41,7 +41,7 @@ type Env = BuiltInsEnv;
 
 /** The identity a facet is configured with — plain data, durable in the facet's own kv.
  *  `className` names the userspace exported StreamProcessor subclass for loader-hosted
- *  processors (runner.js) — the same word `itx.workers.get({ source, className })` uses. */
+ *  processors (runner.js) — the same word `itx.facets.get({ source, className })` uses. */
 export type FacetIdentity = {
   parentName: string;
   projectId: string;

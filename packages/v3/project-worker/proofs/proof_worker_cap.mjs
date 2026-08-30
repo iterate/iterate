@@ -1,5 +1,5 @@
 // proof_worker_cap.mjs — DYNAMIC WORKER CODE AS A CAPABILITY (owner's ask, 2026-08-19):
-// providing a capability that targets itx.workers.get({source,...}) — stateless run + stateful
+// providing a capability that targets itx.facets.get({source,className}) — a stateful worker
 // class — and calling RPC methods on it, INCLUDING pipelined deep dotted access where a method
 // or getter returns a NESTED RpcTarget (the sub-capability case), not just a plain object.
 import { newWebSocketRpcSession } from "capnweb";
@@ -34,8 +34,7 @@ await itx.invokeCapability({ path: ["kv", "put"], args: ["src/sheet.js", src] })
 // 1. PROVIDE a capability that targets dynamic worker code (stateful class)
 await itx.provide({
   path: "itx.sheet",
-  target:
-    "itx.workers.get({ type: 'stateful', source: \"itx.kv.get('src/sheet.js')\", className: 'Sheet' })",
+  target: "itx.facets.get({ source: \"itx.kv.get('src/sheet.js')\", className: 'Sheet' })",
 });
 const set = await itx.invokeCapability({ path: ["sheet", "set"], args: [21] });
 check(set === 21, "1. provide→stateful worker capability: set(21)", String(set));
