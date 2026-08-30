@@ -44,6 +44,7 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
 import type { RpcStub } from "capnweb";
 import type { Agent, StreamEvent } from "iterate/sdk/itx/react";
 import {
@@ -344,69 +345,80 @@ export default function ChatScreen() {
           ),
         }}
       />
-      {events.isPending ? (
-        <View style={styles.center}>
-          <ActivityIndicator accessibilityLabel="Loading" color={colors.textMuted} />
-        </View>
-      ) : events.isError ? (
-        <View style={styles.center}>
-          <Text style={styles.error}>{String(events.error.message)}</Text>
-          <Pressable onPress={() => events.refetch()} style={styles.retry}>
-            <Text style={styles.retryText}>Retry</Text>
-          </Pressable>
-        </View>
-      ) : viewMode === "chat" ? (
-        <FeedList
-          approvals={
-            baseUrl === undefined
-              ? null
-              : threadBatches.map((batch) => (
-                  <InThreadApprovalCard
-                    baseUrl={baseUrl}
-                    batch={batch}
-                    canApprove={approverKey.data?.kind === "enrolled"}
-                    key={batch.offset}
-                    projectId={projectId}
-                  />
-                ))
-          }
-          feed={feed}
-          // The card's Approvals tab and status glyphs derive from the same
-          // live root-stream approval events the in-thread dialogs use.
-          activityApprovals={{
-            baseUrl: baseUrl!,
-            events: approvalEvents.data || [],
-            projectId,
-            projectSlug: slug || "",
-          }}
-          pending={visiblePending.map((entry) => (
-            <PendingSendBubble
-              entry={entry}
-              key={entry.clientId}
-              onEdit={() => {
-                setPendingSends((prev) =>
-                  prev.filter((pending) => pending.clientId !== entry.clientId),
-                );
-                setDraft(entry.message);
-                setAttachments(entry.files);
-              }}
-              onRetry={() =>
-                send.mutate({
-                  clientId: entry.clientId,
-                  message: entry.message,
-                  files: entry.files,
-                })
-              }
-            />
-          ))}
-          sendPending={sendPending}
-          // The Meta tab replays each llm request's exact prompt from the
-          // thread's own event window (same pure fold as the os trace panel).
-          threadEvents={events.data || []}
-        />
-      ) : (
-        <EventList events={events.data || []} />
-      )}
+      <View style={styles.feedArea}>
+        {events.isPending ? (
+          <View style={styles.center}>
+            <ActivityIndicator accessibilityLabel="Loading" color={colors.textMuted} />
+          </View>
+        ) : events.isError ? (
+          <View style={styles.center}>
+            <Text style={styles.error}>{String(events.error.message)}</Text>
+            <Pressable onPress={() => events.refetch()} style={styles.retry}>
+              <Text style={styles.retryText}>Retry</Text>
+            </Pressable>
+          </View>
+        ) : viewMode === "chat" ? (
+          <FeedList
+            approvals={
+              baseUrl === undefined
+                ? null
+                : threadBatches.map((batch) => (
+                    <InThreadApprovalCard
+                      baseUrl={baseUrl}
+                      batch={batch}
+                      canApprove={approverKey.data?.kind === "enrolled"}
+                      key={batch.offset}
+                      projectId={projectId}
+                    />
+                  ))
+            }
+            feed={feed}
+            // The card's Approvals tab and status glyphs derive from the same
+            // live root-stream approval events the in-thread dialogs use.
+            activityApprovals={{
+              baseUrl: baseUrl!,
+              events: approvalEvents.data || [],
+              projectId,
+              projectSlug: slug || "",
+            }}
+            pending={visiblePending.map((entry) => (
+              <PendingSendBubble
+                entry={entry}
+                key={entry.clientId}
+                onEdit={() => {
+                  setPendingSends((prev) =>
+                    prev.filter((pending) => pending.clientId !== entry.clientId),
+                  );
+                  setDraft(entry.message);
+                  setAttachments(entry.files);
+                }}
+                onRetry={() =>
+                  send.mutate({
+                    clientId: entry.clientId,
+                    message: entry.message,
+                    files: entry.files,
+                  })
+                }
+              />
+            ))}
+            sendPending={sendPending}
+            // The Meta tab replays each llm request's exact prompt from the
+            // thread's own event window (same pure fold as the os trace panel).
+            threadEvents={events.data || []}
+          />
+        ) : (
+          <EventList events={events.data || []} />
+        )}
+        {sheetOpen ? (
+          // Drawer semantics for the attachment sheet: any tap on the
+          // conversation above it dismisses, like tapping a sheet's backdrop.
+          <Pressable
+            accessibilityLabel="Dismiss attachment options"
+            onPress={() => setSheetOpen(false)}
+            style={StyleSheet.absoluteFill}
+          />
+        ) : null}
+      </View>
 
       {/* The sheet sits ABOVE the chips + input so opening it never moves
           the input row (it eats feed space instead). */}
@@ -760,7 +772,12 @@ function MessageBubble({ message }: { message: AgentUiMessageItem }) {
         />
       ))}
       {otherFiles.map((file) => (
-        <MessageAttachment file={file} key={file.path} />
+        <MessageAttachment
+          file={file}
+          key={file.path}
+          tone={isUser ? "onLight" : "onDark"}
+          width={photoFrameMaxWidth(window.width)}
+        />
       ))}
       {locations.map((location) => (
         <LocationCard
@@ -806,14 +823,46 @@ function MessageBubble({ message }: { message: AgentUiMessageItem }) {
   );
 }
 
-/** Non-media files: the tappable chip — opens the signed public URL minted
- * when the file was attached (same source the web's <img> and the LLM use). */
-function MessageAttachment({ file }: { file: AgentUiFileAttachment }) {
+/** Non-media files as a media-row sibling of the voice-note player: same
+ * height and width, file glyph where the play button is, filename where the
+ * waveform goes, size + type where the time goes. Tapping opens the signed
+ * public URL (same source the web's <img> and the LLM use). */
+function MessageAttachment({
+  file,
+  tone,
+  width,
+}: {
+  file: AgentUiFileAttachment;
+  tone: "onLight" | "onDark";
+  width: number;
+}) {
+  const palette =
+    tone === "onLight"
+      ? { circle: colors.background, glyph: colors.text, name: colors.background }
+      : { circle: colors.text, glyph: colors.background, name: colors.text };
+  const extension = file.filename.split(".").at(-1);
+  const meta = [
+    file.size > 0 ? formatFileSize(file.size) : null,
+    extension && extension !== file.filename ? extension.toUpperCase() : null,
+  ]
+    .filter((part) => part !== null)
+    .join(" · ");
   return (
-    <Pressable onPress={() => void WebBrowser.openBrowserAsync(file.url)} style={styles.fileChip}>
-      <Text style={styles.fileChipText} numberOfLines={1}>
-        📎 {file.filename} · {formatFileSize(file.size)}
-      </Text>
+    <Pressable
+      accessibilityLabel={`Open file ${file.filename}`}
+      accessibilityRole="button"
+      onPress={() => void WebBrowser.openBrowserAsync(file.url)}
+      style={[styles.fileRow, { width }]}
+    >
+      <View style={[styles.fileGlyph, { backgroundColor: palette.circle }]}>
+        <Ionicons name="document-outline" size={18} color={palette.glyph} />
+      </View>
+      <View style={styles.fileColumn}>
+        <Text numberOfLines={1} style={[styles.fileName, { color: palette.name }]}>
+          {file.filename}
+        </Text>
+        {meta !== "" ? <Text style={styles.fileMeta}>{meta}</Text> : null}
+      </View>
     </Pressable>
   );
 }
@@ -1008,6 +1057,7 @@ function previewPayload(payload: Record<string, unknown>): string {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
+  feedArea: { flex: 1 },
   center: {
     flex: 1,
     alignItems: "center",
@@ -1058,17 +1108,24 @@ const styles = StyleSheet.create({
   eventRow: { gap: 4 },
   eventType: { color: colors.textFaint, fontSize: 11, fontFamily: "Menlo" },
   wakeMarker: { color: colors.textFaint, fontSize: 11, textAlign: "center" },
-  fileChip: {
-    borderColor: colors.border,
-    borderWidth: 1,
-    borderRadius: radius.full,
+  fileRow: {
+    height: 56,
+    minWidth: 200,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
     paddingHorizontal: spacing.sm,
-    paddingVertical: 4,
-    marginHorizontal: spacing.md,
-    marginVertical: 4,
-    alignSelf: "flex-start",
   },
-  fileChipText: { color: colors.textMuted, fontSize: 12 },
+  fileGlyph: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.full,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  fileColumn: { flex: 1, gap: 3 },
+  fileName: { fontSize: 14, fontWeight: "600" },
+  fileMeta: { color: colors.textFaint, fontSize: 11 },
   attach: {
     width: 38,
     height: 38,

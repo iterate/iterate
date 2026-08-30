@@ -105,23 +105,18 @@ const styles = StyleSheet.create({
   strip: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: spacing.sm,
+    // Flush like the sheet's filmstrip: 1px of page background as divider.
+    gap: 1,
     paddingHorizontal: spacing.md,
     paddingTop: spacing.sm,
   },
   thumb: {
     width: 52,
     height: 52,
-    borderRadius: radius.sm,
-    borderColor: colors.border,
-    borderWidth: 1,
   },
   thumbBox: {
     width: 52,
     height: 52,
-    borderRadius: radius.sm,
-    borderColor: colors.border,
-    borderWidth: 1,
     backgroundColor: colors.surface,
     alignItems: "center",
     justifyContent: "center",

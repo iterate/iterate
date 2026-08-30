@@ -180,6 +180,14 @@ export function AttachmentSheet(props: {
                     </Text>
                   </View>
                 ) : null}
+                {item.isFavorite ? (
+                  <Ionicons
+                    color={colors.text}
+                    name="heart"
+                    size={12}
+                    style={styles.favoriteBadge}
+                  />
+                ) : null}
                 {attached ? (
                   <View style={styles.check}>
                     <Text style={styles.checkText}>✓</Text>
@@ -312,13 +320,14 @@ const styles = StyleSheet.create({
   },
   carousel: {
     flexDirection: "row",
-    gap: spacing.sm,
+    // Flush filmstrip: the 1px of sheet background between tiles IS the
+    // subtle divider line.
+    gap: 1,
     paddingHorizontal: spacing.md,
   },
   tile: {
     width: TILE,
     height: TILE,
-    borderRadius: radius.sm,
     overflow: "hidden",
   },
   plainTile: {
@@ -363,6 +372,13 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   checkText: { color: colors.background, fontSize: 13, fontWeight: "700" },
+  favoriteBadge: {
+    position: "absolute",
+    bottom: spacing.xs,
+    right: spacing.xs,
+    textShadowColor: "#0b0b0f",
+    textShadowRadius: 3,
+  },
   tileLoading: {
     ...StyleSheet.absoluteFillObject,
     alignItems: "center",
@@ -371,6 +387,8 @@ const styles = StyleSheet.create({
   },
   actionRow: {
     flexDirection: "row",
+    flexGrow: 1,
+    justifyContent: "center",
     gap: spacing.lg,
     paddingHorizontal: spacing.md,
     paddingBottom: spacing.xs,

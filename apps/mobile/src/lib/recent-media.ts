@@ -13,7 +13,7 @@ import type { ComposerAttachment } from "./composer-attachments.ts";
 import { oversizeReason } from "./composer-attachments.ts";
 import { readPhotoAsAttachment } from "./recent-photos.ts";
 
-export const CAROUSEL_LIMIT = 10;
+export const CAROUSEL_LIMIT = 50;
 
 export type RecentMediaItem = {
   assetId: string;
@@ -21,6 +21,8 @@ export type RecentMediaItem = {
   previewUri: string;
   mediaType: "photo" | "video";
   durationSeconds: number;
+  /** ❤️'d in the photo library — the carousel badges these. */
+  isFavorite: boolean;
 };
 
 export async function readRecentMedia(limit: number): Promise<RecentMediaItem[]> {
@@ -33,6 +35,7 @@ export async function readRecentMedia(limit: number): Promise<RecentMediaItem[]>
       previewUri: photo.dataUri,
       mediaType: "photo" as const,
       durationSeconds: 0,
+      isFavorite: false,
     }));
   }
   const page = await MediaLibrary.getAssetsAsync({
@@ -40,11 +43,22 @@ export async function readRecentMedia(limit: number): Promise<RecentMediaItem[]>
     sortBy: [["creationTime", false]],
     first: limit,
   });
-  return page.assets.map((asset) => ({
+  // isFavorite only rides the per-asset info lookup; metadata-only (no
+  // network) so fifty in parallel stay quick, and a straggler just loses
+  // its heart badge.
+  const infos = await Promise.all(
+    page.assets.map((asset) =>
+      MediaLibrary.getAssetInfoAsync(asset.id, { shouldDownloadFromNetwork: false }).catch(
+        () => null,
+      ),
+    ),
+  );
+  return page.assets.map((asset, index) => ({
     assetId: asset.id,
     previewUri: asset.uri,
     mediaType: asset.mediaType === "video" ? "video" : "photo",
     durationSeconds: asset.duration,
+    isFavorite: infos[index]?.isFavorite === true,
   }));
 }
 

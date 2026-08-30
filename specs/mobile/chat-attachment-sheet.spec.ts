@@ -69,6 +69,13 @@ test("+ opens the sheet; carousel attaches chips that need a confirm to remove",
   await page.getByLabel("Close attachment options").click();
   await page.getByLabel("Attach something").waitFor();
 
+  // Drawer semantics: tapping the conversation above the open sheet
+  // dismisses it too.
+  await page.getByLabel("Attach something").click();
+  await page.getByText("All photos").waitFor();
+  await page.getByLabel("Dismiss attachment options").click();
+  await page.getByLabel("Attach something").waitFor();
+
   // Optimistic send: attach a photo, type, tap ↑ — the bubble (text AND
   // photo, rendered from local data) is visible immediately, while the
   // upload and echo happen behind it.

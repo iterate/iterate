@@ -209,6 +209,15 @@ and uploads lazily.
   the result as `<voice-note transcript="…" />`. Best-effort: permission
   refused / no speech / slow → attribute simply absent, and the agent can
   still run a model transcription. New native module → another build.
+- Feedback round 6 (UI niggles): the + sheet dismisses on any tap outside
+  it (transparent backdrop over the conversation — drawer semantics);
+  carousel now 50 items with ❤️ badges (per-asset info lookups,
+  no-network); carousel tiles and pending-attachment thumbnails sit flush
+  with a 1px background line between them; file attachments render as a
+  media row matching the voice note's geometry (glyph / filename / size +
+  type; page count would need PDF parsing — skipped); the
+  All photos|Files|Audio|Location bar is centered. EAS plan upgraded, so
+  this push's workflow run should produce the transcription build.
 - Gotcha found while running specs: wrapping `dev.ts` in an outer
   `doppler run` exports DOPPLER_PROJECT/DOPPLER_CONFIG, which the INNER
   `doppler run` (apps/os scope) honors over doppler.yaml — the dev server
