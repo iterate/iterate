@@ -63,7 +63,7 @@ const snapCounter = (ctx: string, slug = "counter") =>
 
 async function enableCounter(ctx: string, slug = "counter"): Promise<void> {
   const s = stub(ctx);
-  await s.invokeCapability("itx.kv.put", ["procsrc", COUNTER_SRC]);
+  await s.invoke(["itx", "kv", ["put", "procsrc", COUNTER_SRC]]);
   await s.enableProcessor(slug, { source: "itx.kv.get('procsrc')", export: "default" });
 }
 
@@ -216,7 +216,7 @@ test("PAGE-IN RACES THE QUIESCE ALARM: a connection invoke fired concurrently wi
   try {
     vi.setSystemTime(Date.now() + 61_000);
     const alarmP = runDurableObjectAlarm(stub(ctx));
-    const invokeP = caller.invoke("itx.rpcStubs.get('p2').echo('race')");
+    const invokeP = caller.invokeCapability("itx.rpcStubs.get('p2').echo('race')");
     const [, inv] = await Promise.all([alarmP, invokeP]);
     raced = inv;
   } finally {
@@ -237,7 +237,7 @@ test("SCALE DROP + QUIESCE + EVICT + WAKE: a dropped connection stays dropped; t
   for (let i = 0; i < K; i++) await clientItx.rpcStubs.provide(new Echo(i), { key: `k${i}` });
   const caller = await (await openSession(ctx)).get();
 
-  await caller.invoke("itx.rpcStubs.close('k3')"); // drop one
+  await caller.invokeCapability("itx.rpcStubs.close('k3')"); // drop one
   const dropped = await stateOf(ctx);
   expect(dropped.stubs).toBe(K - 1);
 
@@ -248,12 +248,14 @@ test("SCALE DROP + QUIESCE + EVICT + WAKE: a dropped connection stays dropped; t
   expect(evicted.stubs).toBe(K - 1); // survivors' hibernatable sockets rode the eviction; k3 stayed gone
 
   // fan-out = list() + map over get(key).echo (no built-in `each`); the caller owns the allSettled.
-  const keys = ((await caller.invoke("itx.rpcStubs.list()")) as { key: string }[]).map(
+  const keys = ((await caller.invokeCapability("itx.rpcStubs.list()")) as { key: string }[]).map(
     (r) => r.key,
   );
   const answers = (
     await Promise.all(
-      keys.map((k) => caller.invoke(`itx.rpcStubs.get('${k}').echo('hi')`).catch(() => undefined)),
+      keys.map((k) =>
+        caller.invokeCapability(`itx.rpcStubs.get('${k}').echo('hi')`).catch(() => undefined),
+      ),
     )
   ).filter((v): v is string => v !== undefined);
   const got = new Set(answers);

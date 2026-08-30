@@ -154,7 +154,7 @@ test("SCALE ATTACH: 200 clients park 200 stubs, the DO stays dormant, spot invok
   const picks = new Set<number>();
   while (picks.size < 5) picks.add(Math.floor(Math.random() * CLIENTS));
   for (const i of picks) {
-    const out = await callerItx.invoke(`itx.rpcStubs.get('c${i}').echo('x${i}')`);
+    const out = await callerItx.invokeCapability(`itx.rpcStubs.get('c${i}').echo('x${i}')`);
     expect(out).toBe(`echo-${i}:x${i}`);
   }
 
@@ -182,7 +182,7 @@ test("EVICT THEN WAKE: eviction drops every in-memory stub; a call pages the rel
 
   // The wake path, several clients: page → fresh RetainedCallbackInvoker → invoke.
   for (const i of [3, 77, 141]) {
-    const out = await callerItx.invoke(`itx.rpcStubs.get('c${i}').echo('wake${i}')`);
+    const out = await callerItx.invokeCapability(`itx.rpcStubs.get('c${i}').echo('wake${i}')`);
     expect(out).toBe(`echo-${i}:wake${i}`);
   }
   const paged = await state();
@@ -203,13 +203,13 @@ test("SCALE WAKE: after another eviction, a fan-out reaches ALL 200 clients", as
 
   const t0 = Date.now();
   // fan-out = list() + map over get(key).echo (no built-in `each`); the caller owns the allSettled.
-  const keys = ((await callerItx.invoke("itx.rpcStubs.list()")) as { key: string }[]).map(
+  const keys = ((await callerItx.invokeCapability("itx.rpcStubs.list()")) as { key: string }[]).map(
     (r) => r.key,
   );
   const answers = (
     await Promise.all(
       keys.map((k) =>
-        callerItx.invoke(`itx.rpcStubs.get('${k}').echo('hi')`).catch(() => undefined),
+        callerItx.invokeCapability(`itx.rpcStubs.get('${k}').echo('hi')`).catch(() => undefined),
       ),
     )
   ).filter((v): v is string => v !== undefined);
