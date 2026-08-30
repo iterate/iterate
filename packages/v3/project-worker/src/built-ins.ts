@@ -167,6 +167,12 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     stream: {
       append: (...e: StreamEventInput[]) => own().append(...e),
       read: (after?: number, limit?: number) => own().read(after, limit),
+      /** The facets that reduce THIS stream's log — THIN SUGAR over `itx.facets.get(ref)` (a
+       *  processor is a facet driven by the stream's commits). Address one by name to read its
+       *  reduce (`itx.stream.processors.get('tally').snapshot()`) or materialize a loaded class. */
+      processors: {
+        get: (ref: string | { source: unknown; className: string }) => deps.facets.get(ref),
+      },
     },
     /** Navigate to a SIBLING context, ROUTED: `cd('/x').anything(...)` resolves through the
      *  SIBLING's own table (its mounts answer, its default route falls through) — a named,

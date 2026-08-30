@@ -23,6 +23,14 @@ check(
   JSON.stringify(snap),
 );
 
+// 1b. itx.stream.processors.get(...) is THIN SUGAR over itx.facets.get(...) — same reduce.
+const viaProcessors = await itx.invoke(`itx.stream.processors.get('tally').snapshot()`);
+check(
+  viaProcessors?.state?.counts?.mark === 1,
+  "itx.stream.processors.get('tally') is thin sugar over itx.facets.get",
+  JSON.stringify(viaProcessors),
+);
+
 // 2. the barrier verb through the same address
 await itx.invoke(`itx.facets.get('tally').waitUntilProcessed({ offset: 1, timeoutMs: 5000 })`);
 check(true, "waitUntilProcessed rides the facet address");
