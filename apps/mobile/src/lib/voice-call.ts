@@ -14,6 +14,8 @@
 import type { VoiceAudioSession } from "./voice-audio.ts";
 
 const EVENT = {
+  answerTranscript: "events.iterate.com/voice-agent/answer-transcript",
+  keepalive: "events.iterate.com/voice-agent/keepalive",
   callStarted: "events.iterate.com/voice-agent/call-started",
   colleagueNote: "events.iterate.com/voice-agent/colleague-note",
   colleagueStatus: "events.iterate.com/voice-agent/colleague-status",
@@ -23,6 +25,7 @@ const EVENT = {
   pttEnd: "events.iterate.com/voice-agent/ptt-end",
   pttStart: "events.iterate.com/voice-agent/ptt-start",
   spkFrame: "events.iterate.com/voice-agent/spk-frame",
+  utteranceTranscript: "events.iterate.com/voice-agent/utterance-transcript",
 };
 
 export type VoiceCallPhase = "connecting" | "live" | "ended";
@@ -102,6 +105,71 @@ export function captionForEvent(type: string, payload: unknown): string | null {
   }
 }
 
+/** One line of the call sheet's live transcript. */
+export interface VoiceTranscriptItem {
+  key: string;
+  kind: "you" | "voice" | "backend" | "status";
+  text: string;
+}
+
+/**
+ * The sheet's transcript, derived pure from the stream's durable events —
+ * the same events that brief reconnects and land on the colleague's stream,
+ * so what the sheet shows IS the record, not a parallel guess. Consecutive
+ * duplicate status lines collapse (phase churn re-whispers the same fold).
+ */
+export function transcriptItems(
+  events: { type: string; offset: number; payload?: unknown }[],
+): VoiceTranscriptItem[] {
+  const items: VoiceTranscriptItem[] = [];
+  for (const event of events) {
+    /* Cast, not parse: unvalidated wire JSON, and every read below
+     * typeof-narrows its own field before trusting it. */
+    const p = (event.payload ?? {}) as Record<string, unknown>;
+    const text = typeof p.text === "string" ? p.text : "";
+    switch (event.type) {
+      case EVENT.utteranceTranscript:
+        if (text !== "") items.push({ key: `e${event.offset}`, kind: "you", text });
+        break;
+      case EVENT.answerTranscript:
+        if (text !== "") {
+          items.push({
+            key: `e${event.offset}`,
+            kind: "voice",
+            text: p.cancelled === true ? `${text} —` : text,
+          });
+        }
+        break;
+      case EVENT.colleagueNote:
+        if (text !== "") items.push({ key: `e${event.offset}`, kind: "backend", text });
+        break;
+      case EVENT.colleagueStatus: {
+        const status =
+          (typeof p.activity === "string" && p.activity) ||
+          (typeof p.phase === "string" && p.phase);
+        if (status === false || status === "") break;
+        const line = `${status}${typeof p.failure === "string" && p.failure !== "" ? ` — ${p.failure}` : ""}`;
+        const last = items[items.length - 1];
+        if (last?.kind === "status" && last.text === line) break;
+        items.push({ key: `e${event.offset}`, kind: "status", text: line });
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  return items;
+}
+
+/** The durable event types the sheet transcript reads — module-level so a
+ * live-events hook can fold it into stable connection deps. */
+export const TRANSCRIPT_EVENT_TYPES = [
+  EVENT.utteranceTranscript,
+  EVENT.answerTranscript,
+  EVENT.colleagueNote,
+  EVENT.colleagueStatus,
+] as const;
+
 export async function startVoiceCall(deps: {
   stream: VoiceCallStream;
   audio: VoiceAudioSession;
@@ -118,6 +186,12 @@ export async function startVoiceCall(deps: {
    * facet — a recycled preview backend, an unprovisioned project — otherwise
    * rings forever at a press nobody consumes. */
   ringTimeoutMs?: number;
+  /** How often to tell the server this call UI is still alive (default
+   * 20s). The facet's 60s idle reaper counts DEVICE INPUT; without the
+   * heartbeat, waiting quietly for a slow answer — or stepping away from
+   * the app with the call up — ends the call under you (observed live,
+   * 2026-08-29 evening). Injectable so tests need not wait 20 seconds. */
+  keepaliveIntervalMs?: number;
   now(): number;
 }): Promise<VoiceCallHandle> {
   let ended = false;
@@ -130,6 +204,7 @@ export async function startVoiceCall(deps: {
   let spkMsHeard = 0;
   let ringTimer: ReturnType<typeof setInterval> | null = null;
   let noAnswerTimer: ReturnType<typeof setTimeout> | null = null;
+  let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
   const startedAtMs = deps.now();
 
   const stopRinging = () => {
@@ -143,6 +218,8 @@ export async function startVoiceCall(deps: {
     if (ended) return;
     ended = true;
     stopRinging();
+    if (keepaliveTimer !== null) clearInterval(keepaliveTimer);
+    keepaliveTimer = null;
     /* The heard tally rides the obituary caption ON PURPOSE (demo
      * diagnostics): round 2 on-device was "no response" with the server
      * provably answering — this line splits "frames never arrived" from
@@ -282,10 +359,26 @@ export async function startVoiceCall(deps: {
   /* A press nobody consumes must not ring forever: no pickup in time ends
    * the call with a caption a person can act on. Seen live when a preview
    * backend recycled under the app — fresh project, no facet, eternal
-   * ring. */
+   * ring. Setup now auto-installs a missing template (and a missing secret
+   * fails setup with its own message before the mint), so this caption no
+   * longer speculates about setup. */
   noAnswerTimer = setTimeout(() => {
-    finish("no answer — the project may need voice set up; try again");
+    finish("no answer — try again");
   }, deps.ringTimeoutMs ?? 25_000);
+  /* The heartbeat runs for the call's whole life — it dies with finish(),
+   * so a dead app re-arms the server's reaper. Ephemeral: losing one costs
+   * nothing (the next is 20s away), and history is not presence. */
+  keepaliveTimer = setInterval(() => {
+    deps.stream
+      .append({
+        type: EVENT.keepalive,
+        ephemeral: true,
+        payload: { t: deps.now() - startedAtMs },
+      })
+      .catch(() => {
+        /* The connection's own failure surfaces carry this. */
+      });
+  }, deps.keepaliveIntervalMs ?? 20_000);
 
   return {
     setTalking: (next: boolean) => {
