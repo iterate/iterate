@@ -1,14 +1,16 @@
-// prove_source_refetch.mjs — HOT-PATH INEFFICIENCY, live: a USERSPACE (ref-carrying) processor
-// re-EVALUATES its source expression on EVERY commit, even when the facet is already warm.
+// prove_source_refetch.mjs — HOT-PATH FIX, live: a USERSPACE (ref-carrying) processor resolves its
+// source expression exactly ONCE per materialization — NOT on every commit.
 //
-// WHY: the commit pump (stream-durable-object.ts `#driveFacets`) calls `this.#facet(slug)` per
-// commit → `#durableFacet` → worker-loader.ts `loadConfinedWorker` → `resolveSource(...)`, which
-// does `await invoke(toExpression(source))` — it EVALUATES the source expression (a code fetch)
-// to compute the contentHash BEFORE `ctx.facets.get` is consulted. So the loader-isolate cache
-// never gets a chance to short-circuit the source fetch: it is paid up front, every commit.
-// Built-in processors do NOT do this (they hand a CLASS straight into `ctx.facets.get(name, () =>
-// ({class}))`, whose callback runs only on (re)start), so a stream that commits M times
-// re-evaluates a userspace processor's source ~M times instead of once.
+// THE FIX (agent-C): the commit pump (stream-durable-object.ts `#driveFacets`) calls
+// `this.#facet(slug)` per commit → `#durableFacet` → worker-loader.ts `loadConfinedWorker`. That
+// used to `resolveSource(...)` (`await invoke(toExpression(source))` — a code fetch) + `hashSource`
+// on EVERY commit, to compute the contentHash. Now `#durableFacet` keeps a per-facet
+// `#resolvedFacetSource` memo keyed by the PRINTED source expression: on a warm facet it passes the
+// cached `{ modules, version }` straight through, skipping the fetch+hash. The memo is dropped on
+// disable and cleared at idle-quiesce, so a source EDIT is picked up at the next materialization
+// (never mid-incarnation per-commit — which the deploy-keyed loader was never meant to do).
+// Built-ins already had this shape (a CLASS handed to `ctx.facets.get(name, () => ({class}))`); this
+// brings userspace processors to parity: M commits add ZERO source re-evaluations.
 //
 // HOW WE COUNT: the processor's SOURCE is an itx-expression that, when evaluated, bumps a KV
 // counter `srcEvals` and returns the (kv-seeded) processor module code. A KV bump — NOT a stream
@@ -131,13 +133,10 @@ check(
 
 if (failures > 0) {
   console.log(
-    `\nBUG DEMONSTRATED: ${afterMarks} source evaluations for what should be 1 — ` +
-      `resolveSource() re-fetches/re-hashes the processor source inside #durableFacet on every ` +
-      `#facet(slug) call the commit pump makes (stream-durable-object.ts #driveFacets → #facet → ` +
-      `#durableFacet → worker-loader.ts loadConfinedWorker → resolveSource → invoke(toExpression(source))).`,
+    `\nREGRESSION: ${afterMarks} source evaluations for what should be 1 — the #resolvedFacetSource ` +
+      `memo in #durableFacet is meant to skip resolveSource()+hashSource on a warm facet (keyed by ` +
+      `the printed source expression, invalidated at disable/quiesce).`,
   );
 }
-console.log(
-  failures === 0 ? "\nALL PASS" : `\n${failures} FAILURES (expected — this proof is RED by design)`,
-);
+console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURES`);
 process.exit(failures === 0 ? 0 : 1);

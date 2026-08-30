@@ -284,6 +284,16 @@ export class StreamDurableObject extends DurableObject<Env> {
    *  batch still receives the skipped span inside its next range (a skip is an ephemeral hole to a
    *  reduce). One record per facet — merged from the two parallel maps this used to keep in sync. */
   readonly #facetDrives = new Map<string, { chain: Promise<unknown>; deliveredThrough: number }>();
+  /** Per-facet resolved-source memo (keyed by facetName): the printed source expression it was
+   *  resolved from, plus the fetched modules + their contentHash. The commit pump loads the same
+   *  facet on every commit — without this, `#durableFacet` re-fetched + re-hashed the userspace
+   *  source on EVERY commit (prove_source_refetch). Kept ONLY while the facet is live: dropped on
+   *  disable and cleared at idle-quiesce, so a source edit is picked up at the next materialization
+   *  (never mid-incarnation per-commit — which the deploy-keyed loader was never meant to do). */
+  readonly #resolvedFacetSource = new Map<
+    string,
+    { srcPrint: string; version: string; modules: Record<string, string> }
+  >();
   // The in-flight count the quiesce alarm respects (aborting a facet mid-REDUCE is exactly the
   // stall the resurrection pass exists to heal — never cause it).
   #facetWorkInFlight = 0;
@@ -534,6 +544,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         }
       }
       this.#liveFacets.clear();
+      this.#resolvedFacetSource.clear(); // aborted facets re-materialize; their next load re-fetches
       // Same doctrine for the paged-in RetainedCallbackInvoker stubs: retaining one pins this
       // actor awake, and a page always gets it back — dispose them with the idle facets.
       this.#rpcStubs.disposeRetainedStubs();
@@ -785,7 +796,18 @@ export class StreamDurableObject extends DurableObject<Env> {
     markerKey: string;
     what: string;
   }): Promise<unknown> {
-    const { worker, version } = await loadConfinedWorker({
+    // Resolve the source ONCE per materialization, not once per commit: a memo keyed by the printed
+    // source expression skips the fetch+hash on a warm facet (agent-C fix; prove_source_refetch).
+    const srcPrint =
+      typeof opts.source === "string"
+        ? opts.source
+        : Array.isArray(opts.source)
+          ? print(opts.source)
+          : JSON.stringify(opts.source);
+    const memo = this.#resolvedFacetSource.get(opts.facetName);
+    const resolved =
+      memo?.srcPrint === srcPrint ? { version: memo.version, modules: memo.modules } : undefined;
+    const { worker, version, modules } = await loadConfinedWorker({
       env: this.env,
       invoke: (e) => this.invoke(e),
       host: itxEntrypointFor(this.ctx, this.#address.name),
@@ -795,7 +817,9 @@ export class StreamDurableObject extends DurableObject<Env> {
       mainModule: opts.mainModule,
       extraModules: opts.extraModules,
       what: opts.what,
+      ...(resolved ? { resolved } : {}),
     });
+    if (!resolved) this.#resolvedFacetSource.set(opts.facetName, { srcPrint, version, modules });
     return versionedFacet(this.ctx, {
       worker,
       className: opts.loadedClassName,
@@ -858,6 +882,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       throw new Error(`"${slug}" is an inline core processor — it cannot be disabled`);
     this.#facetDrives.delete(slug); // a re-enable must not inherit a chain or a scanned range it never saw
     this.#liveFacets.delete(`proc:${slug}`);
+    this.#resolvedFacetSource.delete(`proc:${slug}`); // a re-enable re-fetches the (possibly new) source
     // Clear the WHOLE enablement stack (a double-enable leaves >1 mount) — else an older shadowed
     // mount is re-elected and the "disabled" processor keeps running with deleted storage.
     await this.revokeCapability({ path: `itx.subscribers.${slug}`, all: true });

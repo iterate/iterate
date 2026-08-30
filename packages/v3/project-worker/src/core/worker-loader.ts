@@ -103,9 +103,20 @@ export async function loadConfinedWorker(opts: {
    *  processor `runner.js` adapter). */
   extraModules?: Record<string, string>;
   what: string;
-}): Promise<{ worker: ReturnType<typeof confinedWorker>; version: string }> {
-  const userModules = await resolveSource(opts.invoke, opts.source, opts.what);
-  const version = hashSource(JSON.stringify(userModules));
+  /** PRE-RESOLVED `{ modules, version }` from a caller-owned memo — skips the source fetch + hash.
+   *  The commit pump loads the SAME facet on EVERY commit; a per-facet memo (keyed by the printed
+   *  source expression, invalidated at disable/quiesce) turns that into one fetch+hash per
+   *  materialization instead of one per commit. The loader `cacheKey` is unchanged either way (a warm
+   *  isolate returns cheaply), so this is pure work avoided, not a cardinality change. */
+  resolved?: { version: string; modules: Record<string, string> };
+}): Promise<{
+  worker: ReturnType<typeof confinedWorker>;
+  version: string;
+  modules: Record<string, string>;
+}> {
+  const userModules =
+    opts.resolved?.modules ?? (await resolveSource(opts.invoke, opts.source, opts.what));
+  const version = opts.resolved?.version ?? hashSource(JSON.stringify(userModules));
   const worker = confinedWorker(
     opts.env,
     { kind: opts.kind, owner: opts.owner, contentHash: version },
@@ -113,7 +124,7 @@ export async function loadConfinedWorker(opts: {
     { ...userModules, "processor.js": PROCESSOR_SDK_MODULE, ...opts.extraModules },
     opts.host,
   );
-  return { worker, version };
+  return { worker, version, modules: userModules };
 }
 
 /** A source expression may evaluate to a modules record ({ name: code }) or to ONE module
