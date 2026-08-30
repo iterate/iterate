@@ -2163,3 +2163,105 @@ describe("live status derivation", () => {
     expect(resumed.paused).toBe(false);
   });
 });
+
+describe("summary updates racing settlement", () => {
+  const request = (offset: number) => ({
+    type: "events.iterate.com/agent/llm-request-requested",
+    offset,
+    payload: {},
+  });
+  const requestSettled2 = (requestOffset: number) => ({
+    type: "events.iterate.com/agent/llm-request-settled",
+    payload: { requestOffset, result: { status: "succeeded", text: "await work()" } },
+  });
+  const scriptRequested2 = (executionId: string) => ({
+    type: "events.iterate.com/capability-host/script-run-requested",
+    payload: { executionId, code: "await work()", expiresAt: SCRIPT_EXPIRES_AT },
+  });
+
+  test("a status append that lands just after the deferred-flush settle still reaches the card", () => {
+    // The on-device weave: the script batches its status append with a
+    // sendMessage and a value-less return via Promise.all, so the
+    // summary-updated event can journal AFTER script-run-settled — which
+    // already settled the activity to flush the deferred reply. The late
+    // status must still land on the just-settled card (re-emitted as a
+    // same-id correction), not evaporate.
+    const state = reduceAll([
+      request(5),
+      requestSettled2(5),
+      scriptRequested2("x1"),
+      {
+        type: "events.iterate.com/agents/web-message-sent",
+        payload: { message: "All done." },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-run-settled",
+        payload: { executionId: "x1", settlement: { status: "succeeded" } },
+      },
+      {
+        type: "events.iterate.com/agent/summary-updated",
+        payload: { activity: "Extracting the voice brief" },
+      },
+    ]);
+    expect(state.live).toBeNull();
+    const activities = state.items.filter((item) => item.kind === "activity");
+    expect(activities.at(-1)).toMatchObject({
+      status: "done",
+      steps: [{ kind: "llm" }, { kind: "code", activitySummary: "Extracting the voice brief" }],
+    });
+  });
+
+  test("a status append during the processing gap reaches the settled step", () => {
+    // Between a value-returning script settling and the next request
+    // journaling, the activity is live but nothing runs — a status append
+    // here previously stamped nothing.
+    const state = reduceAll([
+      request(5),
+      requestSettled2(5),
+      scriptRequested2("x1"),
+      {
+        type: "events.iterate.com/capability-host/script-run-settled",
+        payload: { executionId: "x1", settlement: { status: "succeeded", result: 42 } },
+      },
+      {
+        type: "events.iterate.com/agent/summary-updated",
+        payload: { activity: "Extracting the voice brief" },
+      },
+    ]);
+    expect(state.live?.steps.at(-1)).toMatchObject({
+      kind: "code",
+      status: "done",
+      activitySummary: "Extracting the voice brief",
+    });
+  });
+
+  test("the correction window closes at the next turn: a later status leaves old cards alone", () => {
+    const state = reduceAll([
+      request(5),
+      requestSettled2(5),
+      scriptRequested2("x1"),
+      {
+        type: "events.iterate.com/agents/web-message-sent",
+        payload: { message: "All done." },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-run-settled",
+        payload: { executionId: "x1", settlement: { status: "succeeded" } },
+      },
+      // The next turn begins…
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: { role: "user", actor: { type: "user", origin: "web" }, content: "next" },
+      },
+      // …so this status belongs to the NEW turn, not the settled card.
+      {
+        type: "events.iterate.com/agent/summary-updated",
+        payload: { activity: "A totally different job" },
+      },
+    ]);
+    const activities = state.items.filter((item) => item.kind === "activity");
+    expect(activities.at(-1)!.steps.at(-1)).not.toMatchObject({
+      activitySummary: "A totally different job",
+    });
+  });
+});

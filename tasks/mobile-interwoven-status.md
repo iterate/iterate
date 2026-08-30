@@ -8,7 +8,22 @@ branch: mobile-interwoven-status
 
 ## Status summary
 
-Fleshed-out spec; repro first (worktreeify), then diagnose, then fix.
+Done pending review. Root cause found and fixed in the reducer; pinned by
+three unit tests (the e2e weave spec documents the surrounding behavior
+but cannot force the racing ordering — it passed even pre-fix).
+
+**Root cause**: scripts batch their `summary-updated` append with
+`sendMessage` and their return (Promise.all), so the status event can
+journal just AFTER the script settle — and the settle had already flushed
+and settled the card (deferred-reply path). The fold only stamped RUNNING
+code steps, so the late status landed on nothing and the card kept its
+birth-inherited previous-round text forever.
+
+**Fix (agent-ui-reducer)**: a summary-updated with nothing running stamps
+the LAST code step of the live activity (the processing gap); with no live
+activity it corrects the just-settled card — `settleLive` records a
+`correctableActivity`, the correction re-emits the same-id item, and the
+window closes when the next turn begins (new request/script/user message).
 
 ## What (observed, Misha's phone 2026-08-30)
 
@@ -60,12 +75,14 @@ live-status.spec.ts (`createMobileFixture` + `createAgentHelper` +
 
 ## Checklist
 
-- [ ] Failing-then-fixed spec `specs/mobile/interwoven-status.spec.ts`
-- [ ] Diagnose which fold/derivation serves the stale status
-- [ ] Fix (reducer/mobile-lib/presentation as the diagnosis dictates —
-      no new journal events)
-- [ ] Reducer/feed unit coverage for the weave ordering
-- [ ] Existing live-status + approvals specs stay green
+- [x] Repro: reducer unit tests pin the racing orderings (post-settle
+      append, processing-gap append, window-close); e2e weave spec added
+      as the user-visible guard _(it cannot force the race — passed pre-fix)_
+- [x] Diagnosed: late summary-updated vs settle ordering (see summary)
+- [x] Fix in agent-ui-reducer: last-done-step stamp + correctableActivity
+      window _(no new journal events; one client-fold state field)_
+- [x] Reducer/feed unit coverage for the weave ordering
+- [x] Existing live-status spec green alongside the new weave spec
 
 ## Assumptions (Misha on phone)
 

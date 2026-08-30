@@ -443,6 +443,11 @@ export type AgentUiState = {
    * to tell a this-turn status from stale previous-turn text (code steps
    * inherit `summaryActivity` at birth regardless of age). */
   summaryActivityUpdatedAtMs: number | null;
+  /** The most recently settled activity, correctable until the next turn
+   * begins: a status append can journal moments AFTER the script settle
+   * that flushed the turn (the script batches its append with sendMessage
+   * and its return), and it still describes the just-finished card. */
+  correctableActivity: AgentUiActivity | null;
   /** The stream/agent is paused (agent/paused or stream/paused, uncleared by
    * a resume). A paused loop owes no follow-up round, so the "processing"
    * inference must not claim one. */
@@ -572,6 +577,7 @@ export const AgentUiStateSchema = z
     provisionalActivities: z.record(z.string(), AgentUiActivitySchema),
     summaryActivity: z.string().nullable(),
     summaryActivityUpdatedAtMs: z.number().finite().nullable(),
+    correctableActivity: AgentUiActivitySchema.nullable(),
     paused: z.boolean(),
   })
   .superRefine((state, context) => {
@@ -613,6 +619,7 @@ export function initialAgentUiState(): AgentUiState {
     provisionalActivities: {},
     summaryActivity: null,
     summaryActivityUpdatedAtMs: null,
+    correctableActivity: null,
     paused: false,
   };
 }
@@ -859,7 +866,11 @@ function reduceAgentUiEvent(
         responseWindows: [],
         startedAtMs: timestampMs,
       };
-      return { ...ready, live: { ...live, steps: [...live.steps, step] } };
+      return {
+        ...ready,
+        correctableActivity: null,
+        live: { ...live, steps: [...live.steps, step] },
+      };
     }
 
     case AGENT_LLM_RESPONSE_CHUNKS: {
@@ -976,7 +987,11 @@ function reduceAgentUiEvent(
         // inferred (deadline/idle) closes carry it — not only durable settles.
         ...(state.summaryActivity == null ? {} : { activitySummary: state.summaryActivity }),
       };
-      return { ...interpretedState, live: { ...live, steps: [...live.steps, step] } };
+      return {
+        ...interpretedState,
+        correctableActivity: null,
+        live: { ...live, steps: [...live.steps, step] },
+      };
     }
 
     case SCRIPT_EXECUTION_COMPLETED: {
@@ -1030,10 +1045,19 @@ function reduceAgentUiEvent(
       if (activity == null || activity === "") return state;
       // Summaries are usually appended by the running script itself, so the
       // running code step picks the new text up immediately (live rounds show
-      // it before the settle stamp lands).
+      // it before the settle stamp lands). With nothing running (the
+      // processing gap between a value-returning settle and the next
+      // request), the append still belongs to the last step — scripts batch
+      // their status append with other calls, so it can journal just after
+      // the settle.
       if (state.live != null) {
-        const steps = state.live.steps.map((step) =>
-          step.kind === "code" && step.status === "running"
+        const running = state.live.steps.some(
+          (step) => step.kind === "code" && step.status === "running",
+        );
+        const lastCodeIndex = state.live.steps.findLastIndex((step) => step.kind === "code");
+        const steps = state.live.steps.map((step, index) =>
+          step.kind === "code" &&
+          (step.status === "running" || (!running && index === lastCodeIndex))
             ? { ...step, activitySummary: activity }
             : step,
         );
@@ -1043,6 +1067,31 @@ function reduceAgentUiEvent(
           summaryActivityUpdatedAtMs: timestampMs,
           live: { ...state.live, steps },
         };
+      }
+      // No live activity: if the previous turn JUST settled (window closes
+      // when the next turn starts), this append raced that settle — the
+      // script fired it alongside the sendMessage/return that flushed the
+      // card. Re-emit the settled activity with the stamp; same id, so
+      // consumers replace the item rather than duplicate it.
+      const correctable = state.correctableActivity;
+      if (correctable !== null && correctable.steps.some((step) => step.kind === "code")) {
+        const lastCodeIndex = correctable.steps.findLastIndex((step) => step.kind === "code");
+        const corrected: AgentUiActivity = {
+          ...correctable,
+          steps: correctable.steps.map((step, index) =>
+            index === lastCodeIndex ? { ...step, activitySummary: activity } : step,
+          ),
+        };
+        return emitItem(
+          {
+            ...state,
+            summaryActivity: activity,
+            summaryActivityUpdatedAtMs: timestampMs,
+            correctableActivity: corrected,
+          },
+          items,
+          corrected,
+        );
       }
       return { ...state, summaryActivity: activity, summaryActivityUpdatedAtMs: timestampMs };
     }
@@ -1260,6 +1309,9 @@ function reduceAgentUiEvent(
 function ensureLive(state: AgentUiState, offset: number, startedAtMs: number): AgentUiActivity {
   // Multiple simultaneous steps render as one live activity.
   if (state.live != null) return { ...state.live, status: "running" };
+  // A new activity is a new turn-half: late status appends now belong here,
+  // so the previous card's correction window is over. (Callers spread the
+  // returned activity into state; the flag is cleared at the same moment.)
   return {
     kind: "activity",
     id: `activity-${offset}`,
@@ -1369,7 +1421,11 @@ function settleLive(state: AgentUiState, endedAtMs: number, items: AgentUiItem[]
       delete provisionalActivities[oldestId];
     }
   }
-  return emitItem({ ...state, live: null, provisionalActivities }, items, settled);
+  return emitItem(
+    { ...state, live: null, provisionalActivities, correctableActivity: settled },
+    items,
+    settled,
+  );
 }
 
 function flushQueuedUserMessages(state: AgentUiState, items: AgentUiItem[]): AgentUiState {
@@ -1407,7 +1463,9 @@ function emitUserMessageItem(
     return { ...settled, queuedUserMessages: [...settled.queuedUserMessages, item] };
   }
   const flushed = settled.live === null ? flushDeferredMessages(settled, items) : settled;
-  return emitItem(flushed, items, item);
+  // An emitted user message is the NEXT turn's input: any later status
+  // append describes that turn, not the settled card — window over.
+  return emitItem({ ...flushed, correctableActivity: null }, items, item);
 }
 
 /**
