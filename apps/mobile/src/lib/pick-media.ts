@@ -73,7 +73,9 @@ export async function pickDocuments(kind: "any" | "audio"): Promise<ComposerAtta
       filename: asset.name,
       contentType: asset.mimeType || "application/octet-stream",
       uri: asset.uri,
-      ...(kind === "audio" ? { durationSeconds: null } : { sizeBytes: asset.size || null }),
+      ...(kind === "audio"
+        ? { durationSeconds: null, transcript: null }
+        : { sizeBytes: asset.size || null }),
     } as ComposerAttachment;
   });
 }

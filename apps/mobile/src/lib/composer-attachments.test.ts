@@ -35,6 +35,7 @@ const voiceClip: ComposerAttachment = {
   contentType: "audio/mp4",
   uri: "file:///tmp/voice-123.m4a",
   durationSeconds: 83,
+  transcript: null,
 };
 
 const location: ComposerAttachment = {
@@ -115,9 +116,13 @@ test("location and dimensions become self-describing xml parts appended to the t
     '<user-location latitude="51.5074" longitude="-0.1278" accuracy-meters="12" captured-at="2026-08-30T12:00:00.000Z" />',
   );
   // A recorded voice clip announces itself so the agent knows to transcribe
-  // — and so the bubble can render as just the player.
+  // — and so the bubble can render as just the player. With the on-device
+  // transcript hydrated, the agent may not need to transcribe at all.
   expect(messageWithXmlParts("", [voiceClip])).toBe(
     '<voice-note filename="voice-123.m4a" duration-seconds="83" />',
+  );
+  expect(messageWithXmlParts("", [{ ...voiceClip, transcript: 'I said "hi" & left' }])).toBe(
+    '<voice-note filename="voice-123.m4a" duration-seconds="83" transcript="I said &quot;hi&quot; &amp; left" />',
   );
   // Nothing part-worthy (a document-picked file) → text passes through.
   const pdf: ComposerAttachment = {

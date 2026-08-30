@@ -72,6 +72,7 @@ import { MediaViewer } from "../../../components/media-viewer.tsx";
 import { AudioMessagePlayer } from "../../../components/audio-player.tsx";
 import { VideoTile } from "../../../components/video-attachment.tsx";
 import { readFileBase64 } from "../../../lib/file-bytes.ts";
+import { transcriptFor } from "../../../lib/voice-transcription.ts";
 import { videoThumbnailQuery } from "../../../lib/video-thumbnails.ts";
 import {
   collapseConsecutiveStreamWakes,
@@ -198,11 +199,23 @@ export default function ChatScreen() {
       message: string;
       files: ComposerAttachment[];
     }) => {
+      // Recorded clips pick up their on-device transcript (started at attach
+      // time; wait briefly for a straggler) so it rides the <voice-note>
+      // part the agent reads.
+      const files = await Promise.all(
+        input.files.map(async (attachment) =>
+          attachment.kind === "audio" &&
+          attachment.durationSeconds !== null &&
+          attachment.transcript === null
+            ? { ...attachment, transcript: await transcriptFor(attachment.uri, 4_000) }
+            : attachment,
+        ),
+      );
       // Byte-carrying attachments become addFiles payloads (bytes read
       // lazily from their local uris here, at send time); location becomes
       // an XML part appended to the text (lib/composer-attachments.ts).
-      const uploads = await attachmentUploads(input.files, readFileBase64);
-      const message = messageWithXmlParts(input.message, input.files);
+      const uploads = await attachmentUploads(files, readFileBase64);
+      const message = messageWithXmlParts(input.message, files);
       const project = await getProjectItx(baseUrl!, projectId);
       const agent = project.agents.get(path) as RpcStub<Agent>;
       // create() is idempotent (its birth events carry deterministic

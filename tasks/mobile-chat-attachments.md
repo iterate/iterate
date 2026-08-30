@@ -203,6 +203,12 @@ and uploads lazily.
   with the server's default "[Files attached: …]" note, so a voice-only
   message renders as just the player. On-device transcription
   (expo-speech-recognition) noted as a possible follow-up.
+- Feedback round 5: ON-DEVICE TRANSCRIPTION. expo-speech-recognition
+  (SFSpeechRecognizer) transcribes a recorded clip starting the moment the
+  recording lands; the send path waits up to 4s for a straggler and stamps
+  the result as `<voice-note transcript="…" />`. Best-effort: permission
+  refused / no speech / slow → attribute simply absent, and the agent can
+  still run a model transcription. New native module → another build.
 - Gotcha found while running specs: wrapping `dev.ts` in an outer
   `doppler run` exports DOPPLER_PROJECT/DOPPLER_CONFIG, which the INNER
   `doppler run` (apps/os scope) honors over doppler.yaml — the dev server

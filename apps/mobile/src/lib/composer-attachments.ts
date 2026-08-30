@@ -49,6 +49,10 @@ export type ComposerAttachment =
       contentType: string;
       uri: string;
       durationSeconds: number | null;
+      /** On-device transcription of a recorded clip (lib/voice-transcription
+       * .ts), hydrated at send time; null while pending/unavailable and for
+       * picked audio files. Rides the <voice-note transcript /> attribute. */
+      transcript: string | null;
     }
   | {
       kind: "location";
@@ -222,7 +226,11 @@ export function dimensionsXmlPart(attachment: ComposerAttachment): string | null
  * files. */
 export function voiceNoteXmlPart(attachment: ComposerAttachment): string | null {
   if (attachment.kind !== "audio" || attachment.durationSeconds === null) return null;
-  return `<voice-note filename="${escapeXmlAttribute(attachment.filename)}" duration-seconds="${Math.round(attachment.durationSeconds)}" />`;
+  const transcript =
+    attachment.transcript === null || attachment.transcript === ""
+      ? ""
+      : ` transcript="${escapeXmlAttribute(attachment.transcript)}"`;
+  return `<voice-note filename="${escapeXmlAttribute(attachment.filename)}" duration-seconds="${Math.round(attachment.durationSeconds)}"${transcript} />`;
 }
 
 /** The message text that actually sends: the typed text, then each XML part

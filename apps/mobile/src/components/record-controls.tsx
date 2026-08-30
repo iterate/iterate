@@ -27,6 +27,7 @@ import {
 import { Camera, CameraView } from "expo-camera";
 import * as FileSystem from "expo-file-system/legacy";
 import { formatClipDuration, type ComposerAttachment } from "../lib/composer-attachments.ts";
+import { beginTranscription } from "../lib/voice-transcription.ts";
 import {
   cancelProgress,
   reduceRecordGesture,
@@ -157,12 +158,16 @@ export function RecordControls(props: { onAttach: (attachment: ComposerAttachmen
         stableUri = `${FileSystem.cacheDirectory}voice-${current.startedAt}.wav`;
         await FileSystem.copyAsync({ from: uri, to: stableUri });
       }
+      // Transcription starts NOW; the attach-to-send gap usually covers it,
+      // and the send path waits briefly for a straggler.
+      beginTranscription(stableUri);
       props.onAttach({
         kind: "audio",
         filename: `voice-${current.startedAt}.wav`,
         contentType: "audio/wav",
         uri: stableUri,
         durationSeconds: (Date.now() - current.startedAt) / 1000,
+        transcript: null,
       });
     } catch (thrown) {
       setError(thrown instanceof Error ? thrown.message : String(thrown));

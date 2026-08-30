@@ -70,7 +70,14 @@
           "locationWhenInUsePermission": "Iterate attaches your current location to a chat message only when you tap Location in the attachment sheet."
         }
       ],
-      "expo-video"
+      "expo-video",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Iterate uses the microphone to record voice clips you attach to chat messages.",
+          "speechRecognitionPermission": "Iterate transcribes your voice clips on this device so the agent can read what you said."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
