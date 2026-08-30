@@ -30,6 +30,11 @@ export type ComposerAttachment =
       previewUri: string | null;
       durationSeconds: number | null;
       sizeBytes: number | null;
+      /** Pixel dimensions when the source knows them (library assets do,
+       * fresh recordings don't) — sent as an <attachment .../> part so
+       * renderers can lay out before the media loads. */
+      width: number | null;
+      height: number | null;
     }
   | {
       kind: "file";
@@ -157,14 +162,84 @@ export function locationXmlPart(attachment: {
   return `<user-location ${attributes.join(" ")} />`;
 }
 
+/** A photo/video's pixel dimensions as a self-describing XML part, so a
+ * renderer can size its frame BEFORE the bytes load (the mosaic would
+ * otherwise draw square guesses and reflow when Image.getSize reports in).
+ * Null when the attachment's dimensions are unknown. */
+export function dimensionsXmlPart(attachment: ComposerAttachment): string | null {
+  const dimensions =
+    attachment.kind === "photo"
+      ? {
+          filename: attachment.image.filename,
+          width: attachment.image.width,
+          height: attachment.image.height,
+        }
+      : attachment.kind === "video" && attachment.width !== null && attachment.height !== null
+        ? { filename: attachment.filename, width: attachment.width, height: attachment.height }
+        : null;
+  if (dimensions === null || dimensions.width <= 0 || dimensions.height <= 0) return null;
+  return `<attachment filename="${escapeXmlAttribute(dimensions.filename)}" width="${Math.round(dimensions.width)}" height="${Math.round(dimensions.height)}" />`;
+}
+
 /** The message text that actually sends: the typed text, then each XML part
- * on its own line. */
+ * on its own line (location + attachment dimensions). */
 export function messageWithXmlParts(message: string, attachments: ComposerAttachment[]): string {
-  const parts = attachments.flatMap((attachment) =>
-    attachment.kind === "location" ? [locationXmlPart(attachment)] : [],
-  );
+  const parts = attachments.flatMap((attachment) => {
+    if (attachment.kind === "location") return [locationXmlPart(attachment)];
+    const dimensions = dimensionsXmlPart(attachment);
+    return dimensions === null ? [] : [dimensions];
+  });
   if (parts.length === 0) return message;
   return [message, ...parts].filter((line) => line !== "").join("\n");
+}
+
+const ATTACHMENT_PART_PATTERN = /<attachment filename="([^"]*)" width="(\d+)" height="(\d+)" \/>/g;
+
+/** filename → pixel dimensions, parsed back out of a received message's
+ * <attachment .../> parts. */
+export function parseAttachmentDimensions(
+  text: string,
+): Record<string, { width: number; height: number }> {
+  const dimensions: Record<string, { width: number; height: number }> = {};
+  for (const match of text.matchAll(ATTACHMENT_PART_PATTERN)) {
+    dimensions[unescapeXmlAttribute(match[1]!)] = {
+      width: Number(match[2]),
+      height: Number(match[3]),
+    };
+  }
+  return dimensions;
+}
+
+const LOCATION_PART_PATTERN =
+  /<user-location latitude="(-?[\d.]+)" longitude="(-?[\d.]+)"(?: accuracy-meters="(\d+)")? captured-at="([^"]*)" \/>/g;
+
+/** The shared locations in a received message's <user-location .../> parts —
+ * each one renders as a map card instead of raw XML. */
+export function parseUserLocations(
+  text: string,
+): { latitude: number; longitude: number; accuracyMeters: number | null; capturedAt: string }[] {
+  return [...text.matchAll(LOCATION_PART_PATTERN)].map((match) => ({
+    latitude: Number(match[1]),
+    longitude: Number(match[2]),
+    accuracyMeters: match[3] === undefined ? null : Number(match[3]),
+    capturedAt: match[4]!,
+  }));
+}
+
+/** The caption a human should see: <attachment .../> parts are layout
+ * metadata and <user-location .../> parts render as map cards — neither
+ * belongs in the visible text. */
+export function stripAttachmentXmlParts(text: string): string {
+  return text
+    .split("\n")
+    .filter((line) => {
+      const trimmed = line.trim();
+      return (
+        !/^<attachment filename=.* \/>$/.test(trimmed) && !/^<user-location .* \/>$/.test(trimmed)
+      );
+    })
+    .join("\n")
+    .trim();
 }
 
 function escapeXmlAttribute(value: string): string {
@@ -173,4 +248,12 @@ function escapeXmlAttribute(value: string): string {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
+}
+
+function unescapeXmlAttribute(value: string): string {
+  return value
+    .replaceAll("&quot;", '"')
+    .replaceAll("&gt;", ">")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&amp;", "&");
 }

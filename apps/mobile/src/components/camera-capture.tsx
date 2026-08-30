@@ -65,6 +65,8 @@ export function CameraCaptureModal(props: {
         previewUri: null,
         durationSeconds: null,
         sizeBytes: null,
+        width: null,
+        height: null,
       });
       props.onClose();
     },

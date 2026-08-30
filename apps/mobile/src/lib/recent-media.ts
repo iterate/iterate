@@ -74,6 +74,8 @@ export async function readMediaAsAttachment(item: RecentMediaItem): Promise<Comp
     previewUri: item.previewUri,
     durationSeconds: info.duration,
     sizeBytes: videoSizeBytes(info),
+    width: info.width || null,
+    height: info.height || null,
   };
 }
 

@@ -125,7 +125,8 @@ and uploads lazily.
 
 ## Follow-ups (explicitly out of scope)
 
-- Map renderer for received location parts (mobile + web)
+- Map renderer for received location parts on the WEB dashboard (mobile has
+  one now — feedback round 1)
 - Rendering audio/video attachments inline in the thread (playback UI) —
   today they open via the signed URL in the browser like other files
 - Note composer adopting the same sheet
@@ -151,6 +152,17 @@ and uploads lazily.
   specs `specs/mobile/chat-attachment-sheet.spec.ts` and the updated
   `specs/mobile/chat-photos.spec.ts` (mosaic assertions; solo-photo message
   keeps the blurred-backdrop coverage).
+- Feedback round 1 (Misha, in-chat): sheet moved ABOVE the input row so the
+  composer never shifts; action rows became a horizontal Telegram-style
+  icon bar; the "Camera is not ready" crash on mic→video switch fixed by
+  pre-warming an invisible CameraView the moment video mode is armed
+  (recordAsync only ever runs after onCameraReady); photo/video pixel
+  dimensions now ride the message as `<attachment filename w h />` XML parts
+  so mosaics lay out exactly right on first paint (parts are stripped from
+  the visible caption); `<user-location/>` renders as a real map card — OSM
+  raster tiles stitched by pure Web Mercator math (lib/location-map.ts, no
+  native module, no API key), pin overlay, tap → Apple Maps | Google Maps
+  chooser.
 - Gotcha found while running specs: wrapping `dev.ts` in an outer
   `doppler run` exports DOPPLER_PROJECT/DOPPLER_CONFIG, which the INNER
   `doppler run` (apps/os scope) honors over doppler.yaml — the dev server

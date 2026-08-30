@@ -61,8 +61,12 @@ import {
   attachmentKey,
   attachmentUploads,
   messageWithXmlParts,
+  parseAttachmentDimensions,
+  parseUserLocations,
+  stripAttachmentXmlParts,
   type ComposerAttachment,
 } from "../../../lib/composer-attachments.ts";
+import { LocationCard } from "../../../components/location-card.tsx";
 import { readFileBase64, recordControlsAvailable } from "../../../lib/native-modules.ts";
 import {
   collapseConsecutiveStreamWakes,
@@ -316,6 +320,23 @@ export default function ChatScreen() {
         <EventList events={events.data || []} />
       )}
 
+      {/* The sheet sits ABOVE the chips + input so opening it never moves
+          the input row (it eats feed space instead). */}
+      {sheetOpen ? (
+        <AttachmentSheet
+          attachedAssetIds={attachments.flatMap((attachment) => {
+            const assetId = attachmentAssetId(attachment);
+            return assetId === null ? [] : [assetId];
+          })}
+          onAttach={appendAttachments}
+          onDetachAsset={(assetId) =>
+            setAttachments((prev) =>
+              prev.filter((attachment) => attachmentAssetId(attachment) !== assetId),
+            )
+          }
+          onClose={() => setSheetOpen(false)}
+        />
+      ) : null}
       <AttachmentChips
         attachments={attachments}
         onRemove={(key) =>
@@ -365,21 +386,6 @@ export default function ChatScreen() {
           <RecordControls onAttach={(attachment) => appendAttachments([attachment])} />
         )}
       </View>
-      {sheetOpen ? (
-        <AttachmentSheet
-          attachedAssetIds={attachments.flatMap((attachment) => {
-            const assetId = attachmentAssetId(attachment);
-            return assetId === null ? [] : [assetId];
-          })}
-          onAttach={appendAttachments}
-          onDetachAsset={(assetId) =>
-            setAttachments((prev) =>
-              prev.filter((attachment) => attachmentAssetId(attachment) !== assetId),
-            )
-          }
-          onClose={() => setSheetOpen(false)}
-        />
-      ) : null}
       {send.isError ? (
         <Text style={styles.sendError}>
           {send.error instanceof Error ? send.error.message : String(send.error)}
@@ -524,11 +530,21 @@ function MessageBubble({ message }: { message: AgentUiMessageItem }) {
   // 85% of the screen — so a caption longer than the photo would stretch the
   // bubble past it and reopen the gap at the photo's edge. Cap the caption at
   // the frame's width and the bubble stays the photo's size.
-  const photoWidth = message.files?.some((file) => file.contentType.startsWith("image/"))
-    ? photoFrameMaxWidth(window.width)
-    : null;
+  const photoWidth =
+    message.files?.some((file) => file.contentType.startsWith("image/")) ||
+    message.text.includes("<user-location ")
+      ? photoFrameMaxWidth(window.width)
+      : null;
   const images = (message.files || []).filter((file) => file.contentType.startsWith("image/"));
   const otherFiles = (message.files || []).filter((file) => !file.contentType.startsWith("image/"));
+  // The composer sends each photo/video's pixel dimensions as an
+  // <attachment .../> part in the text, so frames can be sized before the
+  // media loads — no reflow. Shared locations arrive as <user-location .../>
+  // parts and render as map cards. Both are parsed here and hidden from the
+  // visible caption.
+  const knownDimensions = parseAttachmentDimensions(message.text);
+  const locations = parseUserLocations(message.text);
+  const caption = stripAttachmentXmlParts(message.text);
   return (
     <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAssistant]}>
       {/* Photos above their caption, the way every chat app puts them — and
@@ -537,23 +553,32 @@ function MessageBubble({ message }: { message: AgentUiMessageItem }) {
           Two or more photos share a Telegram-style mosaic instead of
           stacking full-width (lib/mosaic-layout.ts). */}
       {images.length >= 2 ? (
-        <MessageMosaic files={images} />
+        <MessageMosaic files={images} knownDimensions={knownDimensions} />
       ) : (
-        images.map((file) => <MessageAttachment key={file.path} file={file} />)
+        images.map((file) => (
+          <MessageAttachment file={file} key={file.path} knownDimensions={knownDimensions} />
+        ))
       )}
       {otherFiles.map((file) => (
-        <MessageAttachment key={file.path} file={file} />
+        <MessageAttachment file={file} key={file.path} knownDimensions={knownDimensions} />
       ))}
-      {message.text !== "" ? (
+      {locations.map((location) => (
+        <LocationCard
+          key={location.capturedAt}
+          location={location}
+          width={photoFrameMaxWidth(window.width)}
+        />
+      ))}
+      {caption !== "" ? (
         <View
           style={[styles.bubbleTextInset, photoWidth === null ? null : { maxWidth: photoWidth }]}
         >
           {isUser ? (
             <Text style={styles.bubbleUserText} selectable>
-              {message.text}
+              {caption}
             </Text>
           ) : (
-            <Markdown markdown={message.text} />
+            <Markdown markdown={caption} />
           )}
         </View>
       ) : null}
@@ -561,11 +586,19 @@ function MessageBubble({ message }: { message: AgentUiMessageItem }) {
   );
 }
 
-function MessageAttachment({ file }: { file: AgentUiFileAttachment }) {
+function MessageAttachment({
+  file,
+  knownDimensions,
+}: {
+  file: AgentUiFileAttachment;
+  knownDimensions: KnownDimensions;
+}) {
   // Signed public URL minted when the file was attached — same source the
   // web's <img> and the LLM use.
   const open = () => void WebBrowser.openBrowserAsync(file.url);
-  if (file.contentType.startsWith("image/")) return <MessagePhoto file={file} onPress={open} />;
+  if (file.contentType.startsWith("image/")) {
+    return <MessagePhoto file={file} knownDimensions={knownDimensions} onPress={open} />;
+  }
   return (
     <Pressable onPress={open} style={styles.fileChip}>
       <Text style={styles.fileChipText} numberOfLines={1}>
@@ -578,17 +611,27 @@ function MessageAttachment({ file }: { file: AgentUiFileAttachment }) {
 /** Two-or-more photos in one message: the justified-rows mosaic
  * (lib/mosaic-layout.ts) — photos share rows at a common height, cropped to
  * cover their tiles, instead of stacking full-width. Sizes come from the
- * same per-URL cache MessagePhoto uses; until they load the layout runs on
- * square guesses and reflows once. */
-function MessageMosaic({ files }: { files: AgentUiFileAttachment[] }) {
+ * same per-URL cache MessagePhoto uses — but a message whose composer sent
+ * <attachment .../> dimension parts lays out right the first time, no
+ * reflow; only dimensionless files fall back to measuring and one reflow. */
+function MessageMosaic({
+  files,
+  knownDimensions,
+}: {
+  files: AgentUiFileAttachment[];
+  knownDimensions: KnownDimensions;
+}) {
   const window = useWindowDimensions();
   const sizes = useQueries({
     queries: files.map((file) => imageSizeQuery(file.url)),
   });
+  const naturalOf = (file: AgentUiFileAttachment, index: number) =>
+    knownDimensions[file.filename] || sizes[index]?.data;
   const layout = mosaicLayout({
-    aspectRatios: sizes.map((size) =>
-      size.data === undefined ? 1 : size.data.width / size.data.height,
-    ),
+    aspectRatios: files.map((file, index) => {
+      const natural = naturalOf(file, index);
+      return natural === undefined ? 1 : natural.width / natural.height;
+    }),
     maxWidth: photoFrameMaxWidth(window.width),
   });
   return (
@@ -608,7 +651,7 @@ function MessageMosaic({ files }: { files: AgentUiFileAttachment[] }) {
               height: rect.height,
             }}
           >
-            {sizes[index]?.data === undefined ? (
+            {naturalOf(file, index) === undefined ? (
               // Real loading UI, not a guess: the spec's spinner waiter holds
               // on this instead of racing the reflow (MessagePhoto precedent).
               <View accessibilityLabel="Loading" style={StyleSheet.absoluteFill} />
@@ -625,15 +668,25 @@ function MessageMosaic({ files }: { files: AgentUiFileAttachment[] }) {
  * aspect ratio, and — when a tall screenshot hits the height cap and no longer
  * fills the frame — sitting on a blurred copy of themselves rather than black
  * bars. Frame maths and its reasoning: lib/photo-layout.ts. */
-function MessagePhoto({ file, onPress }: { file: AgentUiFileAttachment; onPress: () => void }) {
+function MessagePhoto({
+  file,
+  knownDimensions,
+  onPress,
+}: {
+  file: AgentUiFileAttachment;
+  knownDimensions: KnownDimensions;
+  onPress: () => void;
+}) {
   const window = useWindowDimensions();
-  // Dimensions come from the loaded image, not the attachment record (which
-  // carries none) — one lookup per URL, cached for the thread's lifetime.
-  const natural = useQuery(imageSizeQuery(file.url));
+  // Dimensions come from the message's own <attachment .../> part when the
+  // composer sent one; otherwise from the loaded image — one lookup per URL,
+  // cached for the thread's lifetime.
+  const sized = useQuery(imageSizeQuery(file.url));
+  const natural = knownDimensions[file.filename] || sized.data;
   const frame = photoFrame({
     maxHeight: PHOTO_MAX_HEIGHT,
     maxWidth: photoFrameMaxWidth(window.width),
-    natural: natural.data,
+    natural,
   });
   return (
     <Pressable
@@ -641,7 +694,7 @@ function MessagePhoto({ file, onPress }: { file: AgentUiFileAttachment; onPress:
       onPress={onPress}
       style={{ height: frame.height, width: frame.width }}
     >
-      {natural.data === undefined ? (
+      {natural === undefined ? (
         // Until the image reports its dimensions the frame is a plain box at a
         // guessed aspect ratio. Say so: it is a real loading state, a screen
         // reader should announce it, and it is what the spec's spinner waiter
@@ -661,6 +714,8 @@ function MessagePhoto({ file, onPress }: { file: AgentUiFileAttachment; onPress:
     </Pressable>
   );
 }
+
+type KnownDimensions = ReturnType<typeof parseAttachmentDimensions>;
 
 /** One image-dimensions lookup per URL, cached for the thread's lifetime —
  * shared by the single-photo frame and the mosaic. */

@@ -201,15 +201,22 @@ export function AttachmentSheet(props: {
           })}
         </ScrollView>
       ) : null}
-      <View style={styles.rows}>
-        <SheetRow
+      {/* One horizontal row of the other sendable things, Telegram's bottom
+          bar: icon in a circle, label underneath. */}
+      <ScrollView
+        contentContainerStyle={styles.actionRow}
+        horizontal
+        keyboardShouldPersistTaps="handled"
+        showsHorizontalScrollIndicator={false}
+      >
+        <SheetAction
           icon="images-outline"
           label="All photos"
           loading={pickAll.isPending}
           onPress={() => pickAll.mutate()}
         />
         {loadDocumentPicker() !== null ? (
-          <SheetRow
+          <SheetAction
             icon="document-outline"
             label="Files"
             loading={pickFiles.isPending}
@@ -217,22 +224,22 @@ export function AttachmentSheet(props: {
           />
         ) : null}
         {loadDocumentPicker() !== null && loadAudio() !== null ? (
-          <SheetRow
+          <SheetAction
             icon="musical-notes-outline"
-            label="Audio recordings"
+            label="Audio"
             loading={pickAudio.isPending}
             onPress={() => pickAudio.mutate()}
           />
         ) : null}
         {loadLocation() !== null && Platform.OS !== "web" ? (
-          <SheetRow
+          <SheetAction
             icon="location-outline"
             label="Location"
             loading={attachLocation.isPending}
             onPress={() => attachLocation.mutate()}
           />
         ) : null}
-      </View>
+      </ScrollView>
       {camera !== null && cameraOpen ? (
         <CameraCaptureModal
           onCapture={(attachment) => {
@@ -278,7 +285,7 @@ function CameraTile(props: { loading: boolean; onPress: () => void }) {
   );
 }
 
-function SheetRow(props: {
+function SheetAction(props: {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
   loading: boolean;
@@ -290,14 +297,16 @@ function SheetRow(props: {
       accessibilityRole="button"
       disabled={props.loading}
       onPress={props.onPress}
-      style={styles.row}
+      style={styles.action}
     >
-      {props.loading ? (
-        <ActivityIndicator accessibilityLabel="Loading" color={colors.textMuted} size="small" />
-      ) : (
-        <Ionicons name={props.icon} size={20} color={colors.textMuted} />
-      )}
-      <Text style={styles.rowLabel}>{props.label}</Text>
+      <View style={styles.actionCircle}>
+        {props.loading ? (
+          <ActivityIndicator accessibilityLabel="Loading" color={colors.textMuted} size="small" />
+        ) : (
+          <Ionicons name={props.icon} size={22} color={colors.text} />
+        )}
+      </View>
+      <Text style={styles.actionLabel}>{props.label}</Text>
     </Pressable>
   );
 }
@@ -368,15 +377,24 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "#0b0b0fcc",
   },
-  rows: { paddingHorizontal: spacing.sm },
-  row: {
+  actionRow: {
     flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.md,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 10,
+    gap: spacing.lg,
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.xs,
   },
-  rowLabel: { color: colors.text, fontSize: 15 },
+  action: { alignItems: "center", gap: 4, width: 64 },
+  actionCircle: {
+    width: 48,
+    height: 48,
+    borderRadius: radius.full,
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  actionLabel: { color: colors.textMuted, fontSize: 11 },
   error: {
     color: colors.danger,
     fontSize: 12,

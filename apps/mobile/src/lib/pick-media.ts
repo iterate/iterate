@@ -40,6 +40,8 @@ export async function pickLibraryMedia(options: {
         previewUri: null,
         durationSeconds: typeof asset.duration === "number" ? asset.duration / 1000 : null,
         sizeBytes: asset.fileSize || null,
+        width: asset.width || null,
+        height: asset.height || null,
       });
       continue;
     }

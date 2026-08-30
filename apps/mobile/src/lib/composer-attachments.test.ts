@@ -8,6 +8,9 @@ import {
   MAX_UPLOAD_BYTES,
   messageWithXmlParts,
   oversizeReason,
+  parseAttachmentDimensions,
+  parseUserLocations,
+  stripAttachmentXmlParts,
   type ComposerAttachment,
 } from "./composer-attachments.ts";
 
@@ -69,16 +72,59 @@ test("uploads: a file that reads back oversized refuses with the filename", asyn
   ).rejects.toThrow(/huge\.pdf.*too big/);
 });
 
-test("location becomes a self-describing xml part appended to the text", () => {
+test("location and dimensions become self-describing xml parts appended to the text", () => {
   expect(messageWithXmlParts("meet me here", [photo, location])).toBe(
-    'meet me here\n<user-location latitude="51.5074" longitude="-0.1278" accuracy-meters="12" captured-at="2026-08-30T12:00:00.000Z" />',
+    'meet me here\n<attachment filename="sunset.jpg" width="100" height="80" />\n<user-location latitude="51.5074" longitude="-0.1278" accuracy-meters="12" captured-at="2026-08-30T12:00:00.000Z" />',
   );
   // Location-only send: no leading newline.
   expect(messageWithXmlParts("", [location])).toBe(
     '<user-location latitude="51.5074" longitude="-0.1278" accuracy-meters="12" captured-at="2026-08-30T12:00:00.000Z" />',
   );
-  // No location → the text passes through untouched.
-  expect(messageWithXmlParts("hi", [photo])).toBe("hi");
+  // Nothing with a dimension or location → the text passes through untouched.
+  expect(messageWithXmlParts("hi", [voiceClip])).toBe("hi");
+});
+
+test("dimension parts round-trip: sent for sized media, parsed back, hidden from the caption", () => {
+  const video: ComposerAttachment = {
+    kind: "video",
+    assetId: null,
+    filename: 'clip "a&b".mov',
+    contentType: "video/quicktime",
+    uri: "file:///tmp/clip.mov",
+    previewUri: null,
+    durationSeconds: 3,
+    sizeBytes: null,
+    width: 1920,
+    height: 1080,
+  };
+  const sent = messageWithXmlParts("look at these", [photo, video, voiceClip]);
+  // The renderer gets exact dimensions before any bytes load — the whole
+  // point: the mosaic never reflows.
+  expect(parseAttachmentDimensions(sent)).toEqual({
+    "sunset.jpg": { width: 100, height: 80 },
+    'clip "a&b".mov': { width: 1920, height: 1080 },
+  });
+  // ...and the human never sees the metadata lines.
+  expect(stripAttachmentXmlParts(sent)).toBe("look at these");
+  // A message with no parts is untouched (multiline text survives).
+  expect(stripAttachmentXmlParts("line one\nline two")).toBe("line one\nline two");
+});
+
+test("location parts parse back into coordinates and hide from the caption", () => {
+  const sent = messageWithXmlParts("meet me here", [location]);
+  expect(parseUserLocations(sent)).toEqual([
+    {
+      latitude: 51.5074,
+      longitude: -0.1278,
+      accuracyMeters: 12,
+      capturedAt: "2026-08-30T12:00:00.000Z",
+    },
+  ]);
+  expect(stripAttachmentXmlParts(sent)).toBe("meet me here");
+  // No accuracy attribute → null, not NaN.
+  expect(
+    parseUserLocations('<user-location latitude="1.5" longitude="-2" captured-at="t" />'),
+  ).toEqual([{ latitude: 1.5, longitude: -2, accuracyMeters: null, capturedAt: "t" }]);
 });
 
 test("xml attributes escape reserved characters", () => {

@@ -74,6 +74,7 @@ export function RecordControls(props: { onAttach: (attachment: ComposerAttachmen
   const sessionRef = useRef<RecordSession | null>(null);
   const tooltipGeneration = useRef(0);
   const cameraRef = useRef<CameraViewType>(null);
+  const cameraReadyRef = useRef(false);
   const videoResultRef = useRef<Promise<{ uri: string } | undefined> | null>(null);
 
   const showTooltip = (text: string) => {
@@ -95,8 +96,12 @@ export function RecordControls(props: { onAttach: (attachment: ComposerAttachmen
     setSession(nextSession);
     setError(null);
     if (nextSession.mode === "mic") void runMicSession(nextSession);
-    // Video waits for the circular CameraView to mount + report ready
-    // (onCameraReady below) before recordAsync can start.
+    // Video: the circular CameraView is pre-warmed the moment the mode
+    // flips to video (mounted invisibly below), so it is usually ready
+    // before the hold starts; otherwise onCameraReady starts the recording
+    // when it arrives. Calling recordAsync before readiness is the
+    // "Camera is not ready. Wait for 'onCameraReady' callback" crash.
+    if (nextSession.mode === "video" && cameraReadyRef.current) startVideoRecording();
   };
 
   const runMicSession = async (current: RecordSession) => {
@@ -159,6 +164,7 @@ export function RecordControls(props: { onAttach: (attachment: ComposerAttachmen
   const startVideoRecording = () => {
     const current = sessionRef.current;
     if (current === null || current.outcome !== "recording" || cameraRef.current === null) return;
+    if (current.mode !== "video" || videoResultRef.current !== null) return;
     videoResultRef.current = cameraRef.current.recordAsync({ maxDuration: 60 });
     void videoResultRef.current
       .then(async (video) => {
@@ -173,6 +179,8 @@ export function RecordControls(props: { onAttach: (attachment: ComposerAttachmen
             previewUri: null,
             durationSeconds: (Date.now() - current.startedAt) / 1000,
             sizeBytes: null,
+            width: null,
+            height: null,
           });
         }
         endSession(current);
@@ -227,6 +235,7 @@ export function RecordControls(props: { onAttach: (attachment: ComposerAttachmen
       showTooltip("Video needs a newer app build");
       return;
     }
+    if (next === "mic") cameraReadyRef.current = false;
     setMode(next);
     showTooltip(
       next === "video"
@@ -296,17 +305,28 @@ export function RecordControls(props: { onAttach: (attachment: ComposerAttachmen
 
   return (
     <View collapsable={false} style={styles.slot}>
-      {recording && session.mode === "video" && camera !== null ? (
+      {mode === "video" && camera !== null ? (
+        // Mounted (and warming) from the moment video mode is armed, but only
+        // VISIBLE while a video session records — recordAsync must not run
+        // before onCameraReady, and warming during the tooltip beat is what
+        // makes hold-to-record start instantly.
         <View
+          pointerEvents="none"
           style={[
             styles.videoCircle,
             { width: circle, height: circle, borderRadius: circle / 2, left: circleLeft },
+            recording && session.mode === "video" ? null : styles.videoCircleWarming,
           ]}
         >
           <camera.CameraView
             facing="front"
             mode="video"
-            onCameraReady={startVideoRecording}
+            onCameraReady={() => {
+              cameraReadyRef.current = true;
+              // A hold that began before the camera finished warming is
+              // waiting on this.
+              startVideoRecording();
+            }}
             ref={cameraRef}
             style={StyleSheet.absoluteFill}
           />
@@ -461,4 +481,5 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     backgroundColor: colors.surface,
   },
+  videoCircleWarming: { opacity: 0 },
 });

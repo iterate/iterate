@@ -54,9 +54,15 @@ test("multiple photos share a mosaic row; a lone tall one sits on its blurred ba
     })),
     // Long enough to wrap: a caption must not be able to stretch the bubble
     // wider than its photo, which would put bubble fill along the photo's
-    // edge — the exact gap this layout exists to remove.
-    message:
+    // edge — the exact gap this layout exists to remove. The <attachment>
+    // parts are what the composer sends (lib/composer-attachments.ts
+    // dimensionsXmlPart): exact pixel dimensions so the mosaic lays out
+    // right the first time, and metadata the caption must hide.
+    message: [
       "Here are their instructions, and a caption long enough that it has to wrap onto several lines inside the bubble",
+      '<attachment filename="phone-screenshot.png" width="390" height="844" />',
+      '<attachment filename="swim-email.png" width="720" height="480" />',
+    ].join("\n"),
   });
 
   // A second message with the tall screenshot ALONE — the mosaic only kicks
@@ -90,9 +96,11 @@ test("multiple photos share a mosaic row; a lone tall one sits on its blurred ba
   expect(landscapeBox.x).toBeGreaterThan(screenshotBox.x + screenshotBox.width - 1);
   expect(Math.round(screenshotBox.width + landscapeBox.width)).toBeGreaterThanOrEqual(276);
 
-  // The caption sits under the mosaic, never wider than it.
+  // The caption sits under the mosaic, never wider than it — and the
+  // <attachment .../> metadata lines are stripped from what a human sees.
   const caption = page.getByText("Here are their instructions,");
   await caption.waitFor();
+  expect(await caption.textContent()).not.toContain("<attachment");
   const captionBox = (await caption.boundingBox())!;
   expect(captionBox.y).toBeGreaterThan(landscapeBox.y);
   expect(captionBox.width).toBeLessThanOrEqual(281);
@@ -103,6 +111,16 @@ test("multiple photos share a mosaic row; a lone tall one sits on its blurred ba
   const solo = page.getByLabel("phone-screenshot-solo.png");
   await solo.getByTestId("photo-backdrop").waitFor();
   expect(await solo.boundingBox()).toMatchObject({ height: 340, width: 280 });
+
+  // A shared location renders as a tappable map card (OSM tiles + pin), not
+  // raw XML — the <user-location .../> part disappears from the caption.
+  await agent.message(
+    'Meet here\n<user-location latitude="51.5074" longitude="-0.1278" accuracy-meters="15" captured-at="2026-08-30T16:05:04.166Z" />',
+  );
+  await page.getByLabel(/Open location 51\.50740, -0\.12780 in maps/).waitFor();
+  const locationCaption = page.getByText("Meet here");
+  await locationCaption.waitFor();
+  expect(await locationCaption.textContent()).not.toContain("<user-location");
 });
 
 async function signUpToProject(
