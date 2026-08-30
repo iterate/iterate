@@ -80,7 +80,7 @@ describe("head-clamp stale-push named-ephemeral drop", () => {
     stream.append({ type: "tick" }); // offset 1, durable
     await p.wake();
     // one commit: durable tick@2 + ephemeral chunk@3 → range (1,3]
-    const committed = stream.append({ type: "tick" }, { type: "chunk", ephemeral: true });
+    const committed = await stream.append({ type: "tick" }, { type: "chunk", ephemeral: true });
     // the commit's fire-and-forget push lands FIRST…
     await p.processEventBatch(committed, { scannedAfterOffset: 1, scannedThroughOffset: 3 });
     // …then a barrier wake (now a no-op — already at head)
@@ -95,7 +95,7 @@ describe("head-clamp stale-push named-ephemeral drop", () => {
     stream.append({ type: "tick" }); // offset 1, durable
     await p.wake();
     // identical commit: durable tick@2 + ephemeral chunk@3 → range (1,3]
-    const committed = stream.append({ type: "tick" }, { type: "chunk", ephemeral: true });
+    const committed = await stream.append({ type: "tick" }, { type: "chunk", ephemeral: true });
     // a read-your-writes barrier for offset 3 reaches the facet's serial chain FIRST: its wake
     // catches up the durable log and, via the head-clamped proof, advances the cursor to 3 —
     // OVER the ephemeral offset — while consuming only the durable tick@2.

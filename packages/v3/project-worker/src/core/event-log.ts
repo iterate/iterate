@@ -245,13 +245,23 @@ export class StreamEventLog {
       offset,
       idempotencyKey,
     );
-    for (let i = 0, idx = 0; i < serialized.length; i += EVENT_CHUNK_SIZE, idx++)
+    for (let start = 0, idx = 0; start < serialized.length; idx++) {
+      let end = Math.min(start + EVENT_CHUNK_SIZE, serialized.length);
+      // NEVER split a UTF-16 surrogate PAIR across two cells: a lone surrogate becomes U+FFFD on
+      // the SQLite TEXT bind, silently corrupting the body (byte-identity breaks). If the cut lands
+      // right after a high surrogate, keep it with its low half in the next cell.
+      if (end < serialized.length) {
+        const c = serialized.charCodeAt(end - 1);
+        if (c >= 0xd800 && c <= 0xdbff) end -= 1;
+      }
       this.#storage.sql.exec(
         "INSERT INTO event_chunks (offset, chunk_index, chunk) VALUES (?, ?, ?)",
         offset,
         idx,
-        serialized.slice(i, i + EVENT_CHUNK_SIZE),
+        serialized.slice(start, end),
       );
+      start = end;
+    }
   }
 
   /** The full body for an event row: the cell itself when single-cell, else its chunk rows joined

@@ -255,6 +255,15 @@ export class SubscriptionForwarderProcessor extends StreamProcessor<ForwarderSta
             rev: progress.rev,
           });
         } catch (error) {
+          // SAME CAS as the success path, FIRST: a subscription-resumed that landed while we were
+          // delivering supersedes this failure — re-pump from the reset cursor. The reset's own
+          // pump was blocked by the in-flight guard, so this loop is the ONLY thing that will
+          // restart it; without this `continue` the failure fell straight through to
+          // #onDeliveryFailure, whose rev-CAS returned silently and wedged the row until the idle
+          // alarm (prove_resume_race.mjs).
+          const fresh = this.#progress(row.providedAtOffset);
+          if (fresh === undefined) return; // revoked mid-delivery — abandon
+          if ((fresh.rev ?? 0) !== (progress.rev ?? 0)) continue;
           await this.#onDeliveryFailure(row, progress, error);
           return;
         } finally {

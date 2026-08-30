@@ -306,10 +306,11 @@ test("disable mid-drive: appends survive, no ongoing error storm, re-enable rebu
   expect(snap.state.counts.post).toBe(10);
 });
 
-test.fails("double-enable (shadow stack) then ONE disableProcessor leaves the older mount ACTIVE — the processor is NOT disabled", async () => {
-  // BUG: disableProcessor(slug) → revokeCapability({ path: `itx.subscribers.<slug>` }), which
-  //   revokes ONLY the newest mount at that path (revokeCapability sorts desc, takes [0], revokes
-  //   one providedAtOffset). But enableProcessor appends a FRESH capability-provided mount every
+test("FIXED: double-enable then ONE disableProcessor disables it (clears the WHOLE enablement stack)", async () => {
+  // WAS-BUG (fixed: disableProcessor now revokes ALL mounts at the path, `revokeCapability({path,
+  //   all:true})`): disableProcessor(slug) → revokeCapability({ path: `itx.subscribers.<slug>` }),
+  //   which revoked ONLY the newest mount at that path (sorts desc, takes [0], revokes one
+  //   providedAtOffset). But enableProcessor appends a FRESH capability-provided mount every
   //   call — the supported "re-enable while WARM shadows" case tested above — so enabling twice
   //   leaves TWO mounts at itx.subscribers.<slug>. One disable pops the newest; the OLDER survivor
   //   is re-elected by #activeSubscriptionMounts() (newest-of-survivors) → #facetEntries() still

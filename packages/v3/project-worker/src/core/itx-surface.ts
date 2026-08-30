@@ -101,21 +101,32 @@ interface CapnwebCallbackRelay {
  *  `named` additionally keys a relay by subscription name so `unsubscribe` can dispose exactly it. */
 class Parking {
   readonly #relays = new Set<CapnwebCallbackRelay>();
-  readonly #named = new Map<string, CapnwebCallbackRelay>();
+  /** name → ALL relays parked under it. Re-subscribing the SAME name SHADOWS (the old callback
+   *  stops receiving but its connection stays live — failing-delivery.test.ts:158), so the older
+   *  relay is KEPT here, not disposed. `unsubscribe` then disposes the WHOLE set — else a shadowed
+   *  relay lingers online and a restored shadowed mount resumes delivering to it (the zombie,
+   *  probe_resub_zombie.mjs). */
+  readonly #named = new Map<string, Set<CapnwebCallbackRelay>>();
   add(relay: CapnwebCallbackRelay): void {
     this.#relays.add(relay);
   }
   addNamed(name: string, relay: CapnwebCallbackRelay): void {
     this.#relays.add(relay);
-    this.#named.set(name, relay);
+    let set = this.#named.get(name);
+    if (!set) {
+      set = new Set();
+      this.#named.set(name, set);
+    }
+    set.add(relay);
   }
   remove(relay: CapnwebCallbackRelay): void {
     this.#relays.delete(relay);
   }
   disposeNamed(name: string): void {
-    const relay = this.#named.get(name);
-    if (relay) {
-      this.#named.delete(name);
+    const relays = this.#named.get(name);
+    if (!relays) return;
+    this.#named.delete(name);
+    for (const relay of relays) {
       this.#relays.delete(relay);
       relay.dispose();
     }
@@ -428,7 +439,10 @@ export class Itx extends RpcTarget {
 
   /** Revoke the subscription mount and dispose the parked stub (if it was a live callback). */
   async unsubscribe(input: { name: string }): Promise<void> {
-    await this.#host.revokeCapability({ path: `itx.subscribers.${input.name}` });
+    // Clear the WHOLE stack + dispose ALL relays for the name — a re-subscribe shadowed the older
+    // mount/relay (both still present), so a single-pop revoke would restore the shadowed mount and
+    // its still-live relay would resume delivering (probe_resub_zombie.mjs).
+    await this.#host.revokeCapability({ path: `itx.subscribers.${input.name}`, all: true });
     this.#parking.disposeNamed(input.name);
   }
 

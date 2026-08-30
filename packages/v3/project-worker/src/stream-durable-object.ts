@@ -846,7 +846,9 @@ export class StreamDurableObject extends DurableObject<Env> {
       throw new Error(`"${slug}" is an inline core processor — it cannot be disabled`);
     this.#facetDrives.delete(slug); // a re-enable must not inherit a chain or a scanned range it never saw
     this.#liveFacets.delete(`proc:${slug}`);
-    await this.revokeCapability({ path: `itx.subscribers.${slug}` });
+    // Clear the WHOLE enablement stack (a double-enable leaves >1 mount) — else an older shadowed
+    // mount is re-elected and the "disabled" processor keeps running with deleted storage.
+    await this.revokeCapability({ path: `itx.subscribers.${slug}`, all: true });
     const facets = this.ctx.facets as unknown as { delete?: (name: string) => void };
     if (typeof facets.delete === "function") facets.delete(`proc:${slug}`);
     else this.ctx.facets.abort(`proc:${slug}`, "disabled");
@@ -999,7 +1001,25 @@ export class StreamDurableObject extends DurableObject<Env> {
   async revokeCapability(input: {
     providedAtOffset?: number;
     path?: string | string[];
+    /** Clear EVERY mount at `path` — the subscription/processor OFF-SWITCH. The default (and
+     *  `itx.revoke({path})`) pops only the NEWEST winner and restores what it shadowed; an
+     *  off-switch must remove the whole enablement shadow stack, or an older shadowed mount is
+     *  re-elected and the "disabled" thing keeps running (prove_disable_shadow.mjs /
+     *  probe_resub_zombie.mjs). */
+    all?: boolean;
   }): Promise<void> {
+    if (input.all) {
+      if (!input.path) throw new Error("revokeCapability: `all` needs a path");
+      const pathString = typeof input.path === "string" ? input.path : input.path.join(".");
+      const offsets = this.#table()
+        .mounts.filter((m) => m.path.join(".") === pathString)
+        .map((m) => m.providedAtOffset);
+      for (const providedAtOffset of offsets) {
+        await this.#capabilityTableProcessor().revoke({ providedAtOffset });
+        this.#subscriptionDeliveredThrough.delete(providedAtOffset);
+      }
+      return;
+    }
     let providedAtOffset = input.providedAtOffset;
     if (providedAtOffset === undefined) {
       if (!input.path) throw new Error("revokeCapability: pass providedAtOffset or path");
