@@ -104,9 +104,30 @@ export function formatClipDuration(seconds: number): string {
   return `${minutes}:${String(whole % 60).padStart(2, "0")}`;
 }
 
-/** Anything bigger risks an unsendable websocket frame (photos never get
- * here — the picker recompresses them well under this). */
 export const MAX_UPLOAD_BYTES = 32 * 1024 * 1024;
+
+/** Payloads past this ride the wire as a chunked ReadableStream instead of
+ * one Uint8Array arg: capnweb multiplexes stream chunks into separate
+ * websocket frames with flow control, while a single big arg becomes one
+ * frame — and Cloudflare closes inbound websocket messages over ~1MiB (the
+ * "RPC session was shut down" a 10MB PDF used to die with). */
+export const STREAM_UPLOAD_THRESHOLD_BYTES = 512 * 1024;
+export const UPLOAD_CHUNK_BYTES = 256 * 1024;
+
+/** The bytes as a pull-based stream of frame-sized chunks. */
+export function chunkedUploadStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
+  let offset = 0;
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (offset >= bytes.byteLength) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(bytes.subarray(offset, offset + UPLOAD_CHUNK_BYTES));
+      offset += UPLOAD_CHUNK_BYTES;
+    },
+  });
+}
 
 /** Human-readable refusal, or null when the size is fine/unknown. Unknown
  * sizes pass — the read at send time is the backstop. */
@@ -122,14 +143,22 @@ export function oversizeReason(sizeBytes: number | null): string | null {
 export async function attachmentUploads(
   attachments: ComposerAttachment[],
   readBase64: (uri: string) => Promise<string>,
-): Promise<{ contentType: string; data: Uint8Array; filename: string }[]> {
-  const uploads: { contentType: string; data: Uint8Array; filename: string }[] = [];
+): Promise<
+  { contentType: string; data: Uint8Array | ReadableStream<Uint8Array>; filename: string }[]
+> {
+  const uploads: {
+    contentType: string;
+    data: Uint8Array | ReadableStream<Uint8Array>;
+    filename: string;
+  }[] = [];
+  const wireShape = (bytes: Uint8Array) =>
+    bytes.byteLength > STREAM_UPLOAD_THRESHOLD_BYTES ? chunkedUploadStream(bytes) : bytes;
   for (const attachment of attachments) {
     if (attachment.kind === "location") continue;
     if (attachment.kind === "photo") {
       uploads.push({
         contentType: attachment.image.contentType,
-        data: base64ToUint8Array(attachment.image.base64),
+        data: wireShape(base64ToUint8Array(attachment.image.base64)),
         filename: attachment.image.filename,
       });
       continue;
@@ -137,7 +166,11 @@ export async function attachmentUploads(
     const data = base64ToUint8Array(await readBase64(attachment.uri));
     const refusal = oversizeReason(data.byteLength);
     if (refusal !== null) throw new Error(`${attachment.filename}: ${refusal}`);
-    uploads.push({ contentType: attachment.contentType, data, filename: attachment.filename });
+    uploads.push({
+      contentType: attachment.contentType,
+      data: wireShape(data),
+      filename: attachment.filename,
+    });
   }
   return uploads;
 }

@@ -1,4 +1,5 @@
 import "react-native-url-polyfill/auto";
+import "../lib/streams-polyfill.ts";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { router, Stack, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";

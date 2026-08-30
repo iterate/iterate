@@ -1,17 +1,15 @@
 // Video attachments drawn like photos: a real thumbnail (first frame via
 // expo-video-thumbnails) with a play badge, in the mosaic or alone. Tapping
-// opens full-screen playback (expo-video + native controls). Both modules
-// come through the guarded loaders — a build without them falls back to a
-// dark tile and, for playback, the signed url in the browser.
+// opens full-screen playback (expo-video + native controls).
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import * as WebBrowser from "expo-web-browser";
+import { useVideoPlayer, VideoView } from "expo-video";
 import { Image, Modal, Pressable, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import type { AgentUiFileAttachment } from "../lib/feed.ts";
-import { loadVideo, videoThumbnailQuery } from "../lib/native-modules.ts";
+import { videoThumbnailQuery } from "../lib/video-thumbnails.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
 
 /** Fills whatever frame its parent gives it (a mosaic rect or a solo photo
@@ -22,19 +20,11 @@ export function VideoTile(props: {
 }) {
   const [playing, setPlaying] = useState(false);
   const thumbnail = useQuery(videoThumbnailQuery(props.file.url));
-  const open = () => {
-    if (loadVideo() === null) {
-      // No player in this build — the signed url still plays in the browser.
-      void WebBrowser.openBrowserAsync(props.file.url);
-      return;
-    }
-    setPlaying(true);
-  };
   return (
     <Pressable
       accessibilityLabel={`Play video ${props.file.filename}`}
       accessibilityRole="button"
-      onPress={open}
+      onPress={() => setPlaying(true)}
       style={props.style}
     >
       {thumbnail.data ? (
@@ -58,18 +48,15 @@ export function VideoTile(props: {
   );
 }
 
-/** Only mounted once a tap confirmed expo-video is loadable, so the hook can
- * come off the guarded module. */
 function FullscreenVideoModal(props: { onClose: () => void; url: string }) {
-  const video = loadVideo()!;
   const insets = useSafeAreaInsets();
-  const player = video.useVideoPlayer(props.url, (instance) => {
+  const player = useVideoPlayer(props.url, (instance) => {
     instance.play();
   });
   return (
     <Modal animationType="fade" onRequestClose={props.onClose} visible>
       <View style={styles.fullscreen}>
-        <video.VideoView
+        <VideoView
           allowsFullscreen
           contentFit="contain"
           nativeControls

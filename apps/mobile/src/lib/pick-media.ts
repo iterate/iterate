@@ -3,10 +3,11 @@
 // resolves to ComposerAttachment; everything but photos stays a local uri
 // until send time (lib/composer-attachments.ts explains the laziness).
 
+import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
+import * as Location from "expo-location";
 import { pickedImageFromAsset } from "./attachments.ts";
 import { oversizeReason, type ComposerAttachment } from "./composer-attachments.ts";
-import { loadDocumentPicker, loadLocation } from "./native-modules.ts";
 
 /** The full-screen library picker, photos AND videos. Resolves [] on cancel. */
 export async function pickLibraryMedia(options: {
@@ -54,11 +55,9 @@ export async function pickLibraryMedia(options: {
 
 /** The document picker — "any" for the Files row, "audio" for the Audio
  * recordings row (existing voice memos, exported recordings, music files).
- * Resolves [] on cancel; null module means this build can't (old client). */
-export async function pickDocuments(kind: "any" | "audio"): Promise<ComposerAttachment[] | null> {
-  const picker = loadDocumentPicker();
-  if (picker === null) return null;
-  const result = await picker.getDocumentAsync({
+ * Resolves [] on cancel. */
+export async function pickDocuments(kind: "any" | "audio"): Promise<ComposerAttachment[]> {
+  const result = await DocumentPicker.getDocumentAsync({
     multiple: true,
     // A picked iCloud/provider file may not be readable at send time; the
     // cache copy is ours until then.
@@ -80,18 +79,16 @@ export async function pickDocuments(kind: "any" | "audio"): Promise<ComposerAtta
 }
 
 /** One current-position read for the Location row. Throws human-readable on
- * refusal; null module means this build can't. */
-export async function captureCurrentLocation(): Promise<ComposerAttachment | null> {
-  const location = loadLocation();
-  if (location === null) return null;
-  const permission = await location.requestForegroundPermissionsAsync();
+ * refusal. */
+export async function captureCurrentLocation(): Promise<ComposerAttachment> {
+  const permission = await Location.requestForegroundPermissionsAsync();
   if (!permission.granted) {
     throw new Error(
       "Location permission was refused — allow it in Settings to attach where you are.",
     );
   }
-  const position = await location.getCurrentPositionAsync({
-    accuracy: location.Accuracy.Balanced,
+  const position = await Location.getCurrentPositionAsync({
+    accuracy: Location.Accuracy.Balanced,
   });
   return {
     kind: "location",

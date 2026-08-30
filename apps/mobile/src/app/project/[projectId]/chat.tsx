@@ -71,12 +71,8 @@ import { LocationCard } from "../../../components/location-card.tsx";
 import { MediaViewer } from "../../../components/media-viewer.tsx";
 import { AudioMessagePlayer } from "../../../components/audio-player.tsx";
 import { VideoTile } from "../../../components/video-attachment.tsx";
-import {
-  audioPlayerAvailable,
-  readFileBase64,
-  recordControlsAvailable,
-  videoThumbnailQuery,
-} from "../../../lib/native-modules.ts";
+import { readFileBase64 } from "../../../lib/file-bytes.ts";
+import { videoThumbnailQuery } from "../../../lib/video-thumbnails.ts";
 import {
   collapseConsecutiveStreamWakes,
   reduceFeed,
@@ -370,7 +366,7 @@ export default function ChatScreen() {
           placeholderTextColor={colors.textFaint}
           style={styles.input}
         />
-        {draft.trim() !== "" || attachments.length > 0 || !recordControlsAvailable() ? (
+        {draft.trim() !== "" || attachments.length > 0 || Platform.OS === "web" ? (
           <Pressable
             accessibilityLabel="Send"
             accessibilityRole="button"
@@ -588,17 +584,14 @@ function MessageBubble({ message }: { message: AgentUiMessageItem }) {
           />
         ))
       )}
-      {audios.map((file) =>
-        audioPlayerAvailable() ? (
-          <AudioMessagePlayer
-            file={file}
-            key={file.path}
-            width={photoFrameMaxWidth(window.width)}
-          />
-        ) : (
-          <MessageAttachment file={file} key={file.path} />
-        ),
-      )}
+      {audios.map((file) => (
+        <AudioMessagePlayer
+          file={file}
+          key={file.path}
+          tone={isUser ? "onLight" : "onDark"}
+          width={photoFrameMaxWidth(window.width)}
+        />
+      ))}
       {otherFiles.map((file) => (
         <MessageAttachment file={file} key={file.path} />
       ))}
@@ -622,8 +615,11 @@ function MessageBubble({ message }: { message: AgentUiMessageItem }) {
           )}
         </View>
       ) : null}
+      {/* animationType none: the fade used to show ~300ms of the viewer's
+          near-black backdrop before the (already cached) image painted —
+          instant open reads as the thumbnail expanding instead. */}
       <Modal
-        animationType="fade"
+        animationType="none"
         onRequestClose={() => setViewingImage(null)}
         statusBarTranslucent
         transparent

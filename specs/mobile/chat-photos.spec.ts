@@ -117,13 +117,27 @@ test("multiple photos share a mosaic row; a lone tall one sits on its blurred ba
   // placeholder face, since a browser build can't extract a thumbnail from
   // the deliberately-bogus bytes — and the audio draws the play/waveform
   // row. Real playback: the wav is genuine, so play flips to pause.
-  await agent.addFiles({
+  const wav = tinyWav();
+  const mediaMessage = await agent.addFiles({
     files: [
-      { contentType: "audio/wav", data: tinyWav(), filename: "voice-note.wav" },
+      { contentType: "audio/wav", data: wav, filename: "voice-note.wav" },
       { contentType: "video/mp4", data: new Uint8Array([0, 0, 0, 0]), filename: "clip.mp4" },
     ],
     message: '<attachment filename="clip.mp4" width="640" height="360" />',
   });
+
+  // The file plane honors byte ranges — without this, iOS AVPlayer (expo-audio
+  // playback, expo-video, thumbnail extraction) can't stream or even report a
+  // duration from these urls. Assert the real serving path, not the parser.
+  const audioUrl = mediaMessage.files.find((file) => file.filename === "voice-note.wav")!.url;
+  const ranged = await fetch(audioUrl, { headers: { range: "bytes=0-99" } });
+  expect(ranged).toMatchObject({ status: 206 });
+  expect(Object.fromEntries(ranged.headers)).toMatchObject({
+    "accept-ranges": "bytes",
+    "content-range": `bytes 0-99/${wav.byteLength}`,
+  });
+  expect(await ranged.arrayBuffer()).toMatchObject({ byteLength: 100 });
+
   await page.getByLabel("Play video clip.mp4").waitFor();
   await page.getByLabel("Seek audio").waitFor();
   await page.getByLabel("Play audio").click();

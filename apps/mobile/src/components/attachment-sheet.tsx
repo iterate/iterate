@@ -21,8 +21,8 @@ import {
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { Camera, CameraView } from "expo-camera";
 import { formatClipDuration, type ComposerAttachment } from "../lib/composer-attachments.ts";
-import { loadAudio, loadCamera, loadDocumentPicker, loadLocation } from "../lib/native-modules.ts";
 import { captureCurrentLocation, pickDocuments, pickLibraryMedia } from "../lib/pick-media.ts";
 import { CAROUSEL_LIMIT, readMediaAsAttachment, readRecentMedia } from "../lib/recent-media.ts";
 import { readPhotoLibraryAccess, requestPhotoLibraryAccess } from "../lib/recent-photos.ts";
@@ -41,7 +41,6 @@ export function AttachmentSheet(props: {
 }) {
   const cache = useQueryClient();
   const [cameraOpen, setCameraOpen] = useState(false);
-  const camera = loadCamera();
 
   const accessKey = ["photo-library-access"];
   const access = useQuery({
@@ -69,12 +68,12 @@ export function AttachmentSheet(props: {
 
   const openCamera = useMutation({
     mutationFn: async () => {
-      const cameraPermission = await camera!.Camera.requestCameraPermissionsAsync();
+      const cameraPermission = await Camera.requestCameraPermissionsAsync();
       if (!cameraPermission.granted) {
         throw new Error("Camera permission was refused — allow it in Settings.");
       }
       // Mic too, so video clips have sound; a refusal still allows photos.
-      await camera!.Camera.requestMicrophonePermissionsAsync().catch(() => {});
+      await Camera.requestMicrophonePermissionsAsync().catch(() => {});
       setCameraOpen(true);
     },
   });
@@ -91,7 +90,7 @@ export function AttachmentSheet(props: {
   const pickFiles = useMutation({
     mutationFn: () => pickDocuments("any"),
     onSuccess: (attachments) => {
-      if (attachments !== null && attachments.length > 0) {
+      if (attachments.length > 0) {
         props.onAttach(attachments);
         props.onClose();
       }
@@ -100,7 +99,7 @@ export function AttachmentSheet(props: {
   const pickAudio = useMutation({
     mutationFn: () => pickDocuments("audio"),
     onSuccess: (attachments) => {
-      if (attachments !== null && attachments.length > 0) {
+      if (attachments.length > 0) {
         props.onAttach(attachments);
         props.onClose();
       }
@@ -109,10 +108,8 @@ export function AttachmentSheet(props: {
   const attachLocation = useMutation({
     mutationFn: captureCurrentLocation,
     onSuccess: (attachment) => {
-      if (attachment !== null) {
-        props.onAttach([attachment]);
-        props.onClose();
-      }
+      props.onAttach([attachment]);
+      props.onClose();
     },
   });
 
@@ -121,7 +118,8 @@ export function AttachmentSheet(props: {
   )?.error;
 
   const roll = media.data || [];
-  const showCameraTile = camera !== null && Platform.OS !== "web";
+  // A browser has no camera or one-tap location; those stay native-only.
+  const showCameraTile = Platform.OS !== "web";
 
   return (
     <View style={styles.sheet}>
@@ -215,23 +213,19 @@ export function AttachmentSheet(props: {
           loading={pickAll.isPending}
           onPress={() => pickAll.mutate()}
         />
-        {loadDocumentPicker() !== null ? (
-          <SheetAction
-            icon="document-outline"
-            label="Files"
-            loading={pickFiles.isPending}
-            onPress={() => pickFiles.mutate()}
-          />
-        ) : null}
-        {loadDocumentPicker() !== null && loadAudio() !== null ? (
-          <SheetAction
-            icon="musical-notes-outline"
-            label="Audio"
-            loading={pickAudio.isPending}
-            onPress={() => pickAudio.mutate()}
-          />
-        ) : null}
-        {loadLocation() !== null && Platform.OS !== "web" ? (
+        <SheetAction
+          icon="document-outline"
+          label="Files"
+          loading={pickFiles.isPending}
+          onPress={() => pickFiles.mutate()}
+        />
+        <SheetAction
+          icon="musical-notes-outline"
+          label="Audio"
+          loading={pickAudio.isPending}
+          onPress={() => pickAudio.mutate()}
+        />
+        {Platform.OS !== "web" ? (
           <SheetAction
             icon="location-outline"
             label="Location"
@@ -240,7 +234,7 @@ export function AttachmentSheet(props: {
           />
         ) : null}
       </ScrollView>
-      {camera !== null && cameraOpen ? (
+      {cameraOpen ? (
         <CameraCaptureModal
           onCapture={(attachment) => {
             props.onAttach([attachment]);
@@ -256,11 +250,9 @@ export function AttachmentSheet(props: {
 
 /** The live viewfinder tile — the box-camera way into full-screen capture. */
 function CameraTile(props: { loading: boolean; onPress: () => void }) {
-  const camera = loadCamera()!;
-  const CameraView = camera.CameraView;
   const permission = useQuery({
     queryKey: ["camera-permission"],
-    queryFn: async () => (await camera.Camera.getCameraPermissionsAsync()).granted,
+    queryFn: async () => (await Camera.getCameraPermissionsAsync()).granted,
     staleTime: Infinity,
   });
   return (

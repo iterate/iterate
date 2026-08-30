@@ -146,3 +146,36 @@ function constantTimeEqual(a: string, b: string): boolean {
   }
   return mismatch === 0;
 }
+
+/**
+ * Parse a request's Range header against a known object size, RFC 9110
+ * single-range subset. AVPlayer (audio/video on iOS — expo-audio, expo-video,
+ * thumbnail extraction) refuses to stream or report durations from servers
+ * that ignore ranges, so the file plane must speak this.
+ *
+ * - null: no/unsupported range (multi-range, non-bytes) — serve 200 whole.
+ * - "unsatisfiable": a syntactically valid range outside the object — 416.
+ * - otherwise the R2-shaped { offset, length } slice for a 206.
+ */
+export function parseRangeHeader(
+  header: string | null,
+  size: number,
+): { offset: number; length: number } | "unsatisfiable" | null {
+  if (header === null) return null;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (match === null) return null;
+  const [, startText, endText] = match as unknown as [string, string, string];
+  if (startText === "" && endText === "") return null;
+  if (startText === "") {
+    // Suffix range: the last N bytes (AVPlayer probes tails for moov atoms).
+    const suffix = Number(endText);
+    if (suffix === 0) return "unsatisfiable";
+    const length = Math.min(suffix, size);
+    return { offset: size - length, length };
+  }
+  const start = Number(startText);
+  if (start >= size) return "unsatisfiable";
+  const end = endText === "" ? size - 1 : Math.min(Number(endText), size - 1);
+  if (end < start) return "unsatisfiable";
+  return { offset: start, length: end - start + 1 };
+}

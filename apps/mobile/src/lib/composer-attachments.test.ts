@@ -10,7 +10,9 @@ import {
   oversizeReason,
   parseAttachmentDimensions,
   parseUserLocations,
+  STREAM_UPLOAD_THRESHOLD_BYTES,
   stripAttachmentXmlParts,
+  UPLOAD_CHUNK_BYTES,
   type ComposerAttachment,
 } from "./composer-attachments.ts";
 
@@ -54,7 +56,39 @@ test("uploads: photos carry their own base64, everything else reads lazily", asy
     { filename: "sunset.jpg", contentType: "image/jpeg" },
     { filename: "voice-123.m4a", contentType: "audio/mp4" },
   ]);
-  expect(Buffer.from(uploads[1]!.data).toString()).toBe("audio bytes");
+  expect(Buffer.from(uploads[1]!.data as Uint8Array).toString()).toBe("audio bytes");
+});
+
+test("uploads: big payloads ride as chunked streams, small ones as plain bytes", async () => {
+  const big: ComposerAttachment = {
+    kind: "file",
+    filename: "slides.pdf",
+    contentType: "application/pdf",
+    uri: "file:///tmp/slides.pdf",
+    sizeBytes: null,
+  };
+  const bytes = Buffer.alloc(STREAM_UPLOAD_THRESHOLD_BYTES + 100_000);
+  for (let i = 0; i < bytes.length; i += 4096) bytes[i] = i % 251;
+  const uploads = await attachmentUploads([big, voiceClip], async (uri) =>
+    uri.endsWith("slides.pdf")
+      ? bytes.toString("base64")
+      : Buffer.from("small clip").toString("base64"),
+  );
+  // The PDF exceeds the threshold: a stream of frame-sized chunks (one giant
+  // websocket message would be killed by Cloudflare's ~1MiB cap).
+  expect(uploads[0]!.data).toBeInstanceOf(ReadableStream);
+  const chunks: Uint8Array[] = [];
+  const reader = (uploads[0]!.data as ReadableStream<Uint8Array>).getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+  for (const chunk of chunks) expect(chunk.byteLength).toBeLessThanOrEqual(UPLOAD_CHUNK_BYTES);
+  expect(Buffer.concat(chunks).equals(bytes)).toBe(true);
+  // The voice clip stays a plain byte array — no stream overhead for small
+  // payloads.
+  expect(uploads[1]!.data).toBeInstanceOf(Uint8Array);
 });
 
 test("uploads: a file that reads back oversized refuses with the filename", async () => {

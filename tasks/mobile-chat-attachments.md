@@ -170,6 +170,22 @@ and uploads lazily.
   (pinch/zoom/swipe-dismiss) on the cached uri — instant — instead of the
   slow in-app browser page. Two more native modules: expo-video,
   expo-video-thumbnails (same new-build boat).
+- Feedback round 3 (on-device testing): ripped out ALL old-client
+  degradation (guarded loaders, availability checks, fallback branches) —
+  the fingerprint runtime policy already keeps this JS off old binaries, and
+  every module ships a web implementation, so the guards protected nobody
+  but an outdated Metro dev client (crash-and-rebuild is the repo's
+  precedent). Waveform recolored to the neutral theme palette (tone-aware
+  per bubble). ROOT CAUSE of dead m4a playback / missing duration / broken
+  scrub / blank video thumbnails / black fullscreen video: the file-serving
+  plane ignored HTTP Range headers, which iOS AVPlayer requires — fixed
+  server-side (parseRangeHeader + 206/416 in serveProjectFileRequest, unit
+  tested + live 206 asserted in the chat-photos spec). Image viewer opens
+  with animationType none (no more black-fade flash). The 10MB-PDF
+  "RPC session was shut down" was Cloudflare's ~1MiB websocket message cap:
+  attachments over 512KB now ride as chunked ReadableStreams (capnweb
+  multiplexes them with flow control; web-streams-polyfill fills Hermes's
+  gap).
 - Gotcha found while running specs: wrapping `dev.ts` in an outer
   `doppler run` exports DOPPLER_PROJECT/DOPPLER_CONFIG, which the INNER
   `doppler run` (apps/os scope) honors over doppler.yaml — the dev server

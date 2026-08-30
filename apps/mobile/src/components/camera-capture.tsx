@@ -2,18 +2,13 @@
 // camera tile: snap a photo (shutter) or record a clip (red button toggles).
 // Produces a ComposerAttachment; nothing sends until the composer's ↑.
 //
-// Only mounted when expo-camera loaded (lib/native-modules.ts) — the sheet
-// hides the tile otherwise — so the hooks in here can use the module
-// directly.
-
 import { useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import type { CameraView as CameraViewType } from "expo-camera";
+import { CameraView } from "expo-camera";
 import { formatClipDuration, type ComposerAttachment } from "../lib/composer-attachments.ts";
-import { loadCamera } from "../lib/native-modules.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
 
 export function CameraCaptureModal(props: {
@@ -21,9 +16,7 @@ export function CameraCaptureModal(props: {
   onClose: () => void;
   onCapture: (attachment: ComposerAttachment) => void;
 }) {
-  const camera = loadCamera()!;
-  const CameraView = camera.CameraView;
-  const ref = useRef<CameraViewType>(null);
+  const ref = useRef<CameraView>(null);
   const [facing, setFacing] = useState<"back" | "front">("back");
   const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null);
   const insets = useSafeAreaInsets();

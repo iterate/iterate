@@ -4,25 +4,42 @@
 // and the clip length underneath. One fixed-height row at the bubble's full
 // media width.
 //
-// Playback is expo-audio through the guarded loader; chat only renders this
-// when audioPlayerAvailable() (old clients keep the plain file chip).
-
 import { useRef, useState } from "react";
+import { setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus } from "expo-audio";
 import { PanResponder, Pressable, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import type { AgentUiFileAttachment } from "../lib/feed.ts";
 import { formatClipDuration } from "../lib/composer-attachments.ts";
-import { loadAudio } from "../lib/native-modules.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
 import { WAVEFORM_BAR_COUNT, waveformBars } from "../lib/waveform.ts";
 
 const AUDIO_ROW_HEIGHT = 56;
 
-export function AudioMessagePlayer(props: { file: AgentUiFileAttachment; width: number }) {
-  const audio = loadAudio()!;
-  const player = audio.useAudioPlayer({ uri: props.file.url });
-  const status = audio.useAudioPlayerStatus(player);
+export function AudioMessagePlayer(props: {
+  file: AgentUiFileAttachment;
+  /** Which bubble it sits in: user bubbles are near-white, assistant bubbles
+   * near-black — the neutral palette flips accordingly (no accent green;
+   * the theme's calm-over-flashy rule). */
+  tone: "onLight" | "onDark";
+  width: number;
+}) {
+  const player = useAudioPlayer({ uri: props.file.url });
+  const status = useAudioPlayerStatus(player);
   const bars = waveformBars(props.file.filename, WAVEFORM_BAR_COUNT);
+  const palette =
+    props.tone === "onLight"
+      ? {
+          button: colors.background,
+          glyph: colors.text,
+          played: colors.background,
+          rest: colors.textMuted,
+        }
+      : {
+          button: colors.text,
+          glyph: colors.background,
+          played: colors.text,
+          rest: colors.textFaint,
+        };
 
   // While a finger is on the waveform, IT owns the shown position; the seek
   // lands on release.
@@ -80,7 +97,7 @@ export function AudioMessagePlayer(props: { file: AgentUiFileAttachment; width: 
       return;
     }
     // Voice notes play through the silent switch, like every messenger.
-    void audio.setAudioModeAsync({ playsInSilentMode: true }).catch(() => {});
+    void setAudioModeAsync({ playsInSilentMode: true }).catch(() => {});
     if (status.duration > 0 && status.currentTime >= status.duration - 0.05) {
       void player.seekTo(0);
     }
@@ -96,12 +113,12 @@ export function AudioMessagePlayer(props: { file: AgentUiFileAttachment; width: 
         accessibilityLabel={status.playing ? "Pause audio" : "Play audio"}
         accessibilityRole="button"
         onPress={togglePlay}
-        style={styles.playButton}
+        style={[styles.playButton, { backgroundColor: palette.button }]}
       >
         <Ionicons
           name={status.playing ? "pause" : "play"}
           size={18}
-          color={colors.background}
+          color={palette.glyph}
           style={status.playing ? null : styles.playGlyphNudge}
         />
       </Pressable>
@@ -120,8 +137,7 @@ export function AudioMessagePlayer(props: { file: AgentUiFileAttachment; width: 
                 styles.bar,
                 {
                   height: Math.max(3, bar * 26),
-                  backgroundColor:
-                    index / bars.length <= progress ? colors.accent : colors.textFaint,
+                  backgroundColor: index / bars.length <= progress ? palette.played : palette.rest,
                 },
               ]}
             />
@@ -150,7 +166,6 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: radius.full,
-    backgroundColor: colors.accent,
     alignItems: "center",
     justifyContent: "center",
   },

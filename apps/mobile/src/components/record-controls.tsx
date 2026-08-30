@@ -5,29 +5,26 @@
 // records the front camera into a circular viewport, like the screenshots.
 //
 // The gesture's branching is lib/record-gesture.ts (pure, unit-tested);
-// this file maps PanResponder events in and performs the effects. Recording
-// itself is expo-audio / expo-camera through the guarded loaders — chat only
-// renders this when recordControlsAvailable() (old clients keep the plain
-// dimmed send button).
+// this file maps PanResponder events in and performs the effects. Chat only
+// renders this on native (web keeps the plain dimmed send button).
 //
 // A finished clip ATTACHES (chips row) rather than sending — Telegram sends
 // on release, but nothing in this composer auto-sends by design.
 
 import { useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import {
-  PanResponder,
-  Platform,
-  Pressable,
-  StyleSheet,
-  Text,
-  useWindowDimensions,
-  View,
-} from "react-native";
+import { PanResponder, Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import type { CameraView as CameraViewType } from "expo-camera";
+import {
+  getRecordingPermissionsAsync,
+  RecordingPresets,
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+  useAudioRecorder,
+} from "expo-audio";
+import { Camera, CameraView } from "expo-camera";
+import * as FileSystem from "expo-file-system/legacy";
 import { formatClipDuration, type ComposerAttachment } from "../lib/composer-attachments.ts";
-import { loadAudio, loadCamera, loadFileSystem } from "../lib/native-modules.ts";
 import {
   cancelProgress,
   reduceRecordGesture,
@@ -56,9 +53,7 @@ function liveOutcome(session: RecordSession): RecordSession["outcome"] {
 }
 
 export function RecordControls(props: { onAttach: (attachment: ComposerAttachment) => void }) {
-  const audio = loadAudio()!;
-  const camera = loadCamera();
-  const recorder = audio.useAudioRecorder(audio.RecordingPresets.HIGH_QUALITY);
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const window = useWindowDimensions();
 
   const [mode, setMode] = useState<"mic" | "video">("mic");
@@ -73,7 +68,7 @@ export function RecordControls(props: { onAttach: (attachment: ComposerAttachmen
   modeRef.current = mode;
   const sessionRef = useRef<RecordSession | null>(null);
   const tooltipGeneration = useRef(0);
-  const cameraRef = useRef<CameraViewType>(null);
+  const cameraRef = useRef<CameraView>(null);
   const cameraReadyRef = useRef(false);
   const videoResultRef = useRef<Promise<{ uri: string } | undefined> | null>(null);
 
@@ -106,15 +101,13 @@ export function RecordControls(props: { onAttach: (attachment: ComposerAttachmen
 
   const runMicSession = async (current: RecordSession) => {
     try {
-      const existing = await audio.getRecordingPermissionsAsync();
-      const permission = existing.granted
-        ? existing
-        : await audio.requestRecordingPermissionsAsync();
+      const existing = await getRecordingPermissionsAsync();
+      const permission = existing.granted ? existing : await requestRecordingPermissionsAsync();
       if (!permission.granted) {
         throw new Error("Microphone permission was refused — allow it in Settings.");
       }
       if (current.outcome !== "recording") return;
-      await audio.setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
       await recorder.prepareToRecordAsync();
       if (current.outcome !== "recording") return;
       recorder.record();
@@ -136,11 +129,10 @@ export function RecordControls(props: { onAttach: (attachment: ComposerAttachmen
       if (uri === null) throw new Error("The recorder produced no file");
       // The recorder reuses its output path; copy the clip somewhere stable
       // so a second recording can't overwrite an attached-but-unsent one.
-      const fileSystem = loadFileSystem();
       let stableUri = uri;
-      if (fileSystem !== null && fileSystem.cacheDirectory !== null) {
-        stableUri = `${fileSystem.cacheDirectory}voice-${current.startedAt}.m4a`;
-        await fileSystem.copyAsync({ from: uri, to: stableUri });
+      if (FileSystem.cacheDirectory !== null) {
+        stableUri = `${FileSystem.cacheDirectory}voice-${current.startedAt}.m4a`;
+        await FileSystem.copyAsync({ from: uri, to: stableUri });
       }
       props.onAttach({
         kind: "audio",
@@ -196,7 +188,7 @@ export function RecordControls(props: { onAttach: (attachment: ComposerAttachmen
     sessionRef.current = null;
     setSession(null);
     videoResultRef.current = null;
-    void audio.setAudioModeAsync({ allowsRecording: false }).catch(() => {});
+    void setAudioModeAsync({ allowsRecording: false }).catch(() => {});
   };
 
   const resolveSession = (outcome: "finish" | "cancel") => {
@@ -231,10 +223,6 @@ export function RecordControls(props: { onAttach: (attachment: ComposerAttachmen
       else endSession(current);
     }
     const next = modeRef.current === "mic" ? "video" : "mic";
-    if (next === "video" && (camera === null || Platform.OS === "web")) {
-      showTooltip("Video needs a newer app build");
-      return;
-    }
     if (next === "mic") cameraReadyRef.current = false;
     setMode(next);
     showTooltip(
@@ -244,8 +232,8 @@ export function RecordControls(props: { onAttach: (attachment: ComposerAttachmen
     );
     if (next === "video") {
       // Ask up front so the first hold doesn't die on a permission dialog.
-      void camera!.Camera.requestCameraPermissionsAsync();
-      void camera!.Camera.requestMicrophonePermissionsAsync();
+      void Camera.requestCameraPermissionsAsync();
+      void Camera.requestMicrophonePermissionsAsync();
     }
   };
 
@@ -305,7 +293,7 @@ export function RecordControls(props: { onAttach: (attachment: ComposerAttachmen
 
   return (
     <View collapsable={false} style={styles.slot}>
-      {mode === "video" && camera !== null ? (
+      {mode === "video" ? (
         // Mounted (and warming) from the moment video mode is armed, but only
         // VISIBLE while a video session records — recordAsync must not run
         // before onCameraReady, and warming during the tooltip beat is what
@@ -318,7 +306,7 @@ export function RecordControls(props: { onAttach: (attachment: ComposerAttachmen
             recording && session.mode === "video" ? null : styles.videoCircleWarming,
           ]}
         >
-          <camera.CameraView
+          <CameraView
             facing="front"
             mode="video"
             onCameraReady={() => {
