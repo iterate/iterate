@@ -306,6 +306,45 @@ test("disable mid-drive: appends survive, no ongoing error storm, re-enable rebu
   expect(snap.state.counts.post).toBe(10);
 });
 
+test.fails("double-enable (shadow stack) then ONE disableProcessor leaves the older mount ACTIVE — the processor is NOT disabled", async () => {
+  // BUG: disableProcessor(slug) → revokeCapability({ path: `itx.subscribers.<slug>` }), which
+  //   revokes ONLY the newest mount at that path (revokeCapability sorts desc, takes [0], revokes
+  //   one providedAtOffset). But enableProcessor appends a FRESH capability-provided mount every
+  //   call — the supported "re-enable while WARM shadows" case tested above — so enabling twice
+  //   leaves TWO mounts at itx.subscribers.<slug>. One disable pops the newest; the OLDER survivor
+  //   is re-elected by #activeSubscriptionMounts() (newest-of-survivors) → #facetEntries() still
+  //   lists the slug. disableProcessor already ran facets.delete('proc:<slug>'), so the next commit
+  //   re-materializes the facet with FRESH storage and silently re-reduces the whole log from 0.
+  // EXPECTED: one disableProcessor turns the processor OFF no matter how many times it was enabled —
+  //   /state stops listing it and its facet address throws NO_FACET (the single-enable path does
+  //   exactly this — see the "disable mid-drive" test below).
+  // ACTUAL: /state STILL lists the slug; itx.facets.get(slug).snapshot() still ANSWERS; every future
+  //   commit re-drives it (an effectful processor re-runs its whole effect history from offset 0 —
+  //   double-fire). The only remedy is to call disableProcessor as many times as enableProcessor ran.
+  // WHY IT MATTERS: the off-switch disableProcessor was added to provide (a misbehaving processor's
+  //   only remedy) silently fails whenever the enablement was ever shadowed; the deleted-then-
+  //   resurrected facet re-drives the entire log (double effects) and keeps burning a materialization
+  //   per commit — the exact zombie the off-switch exists to kill.
+  const ctx = "prj_lr_disshadow";
+  const itx = await harness.itx(ctx);
+  await itx.enableProcessor("tally");
+  await itx.enableProcessor("tally"); // shadow the enablement mount (supported: "re-enable while WARM")
+  await append(itx, { type: "mark" });
+  const head = await readHead(itx);
+  await until(
+    "tally at head",
+    async () => ((await itx.invoke("itx.facets.get('tally').snapshot()")) as any).offset >= head,
+  );
+
+  await itx.disableProcessor("tally"); // ONE disable
+
+  const state = await doState(ctx);
+  expect(state.facetProcessors).not.toContain("tally"); // RED: still contains "tally"
+  await expect(itx.invoke("itx.facets.get('tally').snapshot()")).rejects.toThrow(
+    /no facet.*"tally"/,
+  );
+});
+
 // ─────────────────────────── 5. append-during-drive reentrancy ───────────────────────────
 
 test("reentrancy characterized: a forwarder delivery targeting itx.stream.append neither deadlocks nor runs away — the delivery call shape is refused and the row halts loudly", async () => {

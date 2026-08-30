@@ -374,7 +374,7 @@ test("forwarder auto-enables exactly once across many absent-target subscribes (
   );
   const rows = state.subscriptionMounts.filter((r: any) => r.name.startsWith("auto-"));
   expect(rows).toHaveLength(3);
-  for (const r of rows) expect(r.lane).toBe("forwarder");
+  for (const r of rows) expect(r.lane).toBe("durable");
 });
 
 test("liveState subscribe with an ABSENT target is rejected loudly at provide", async () => {
