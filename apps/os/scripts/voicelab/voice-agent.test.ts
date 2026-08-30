@@ -1745,7 +1745,7 @@ describe("tools on the birth certificate", () => {
    * moment the provider settles the cancelled response. A PERSON's answer
    * is never cut this way.
    */
-  it("a note barges the facet's own status line, never a real answer", async () => {
+  it("a note barges status lines AND turn answers (hold music); note answers stay whole", async () => {
     const h = makeHarness();
     await h.append({
       type: "events.iterate.com/voice-agent/configured",
@@ -1784,8 +1784,8 @@ describe("tools on the birth certificate", () => {
     await h.settle();
     expect(h.provider.sentOfType("response.create")).toHaveLength(2);
 
-    /* Only status commentary is interruptible: a second note arriving
-     * while the NOTE answer streams pends instead of cancelling. */
+    /* The NOTE answer now streaming is never cut by the next note — the
+     * previous answer's delivery stays whole; the newcomer pends. */
     h.provider.responseCreated();
     h.provider.answerAudio(200);
     await h.settle();
@@ -1799,6 +1799,28 @@ describe("tools on the birth certificate", () => {
     await h.settle();
     /* Spoken after the answer finishes, not through it. */
     expect(h.provider.sentOfType("response.create")).toHaveLength(3);
+
+    /* Consume the drained note answer whole, so the follow-up flag is
+     * spent and the NEXT response reads as the person's own turn. */
+    h.provider.responseCreated();
+    h.provider.answerComplete();
+    await h.settle();
+
+    /* HOLD MUSIC LOSES TO THE THING BEING WAITED FOR: a PERSON-drawn
+     * answer ("count to 100 while it works") is cut the moment the real
+     * answer lands, exactly like status commentary. */
+    h.provider.responseCreated();
+    h.provider.answerAudio(200);
+    await h.settle();
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-note",
+      payload: { text: "Done: the factors are 5, 1499 and two big primes." },
+    });
+    await h.settle();
+    expect(h.provider.sentOfType("response.cancel")).toHaveLength(2);
+    h.provider.push({ type: "response.done" });
+    await h.settle();
+    expect(h.provider.sentOfType("response.create")).toHaveLength(4);
   });
 
   /*

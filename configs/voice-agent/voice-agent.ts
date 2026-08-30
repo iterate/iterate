@@ -744,6 +744,9 @@ const FAST_HALF_INSTRUCTIONS = [
   "them faithfully — summarize when that serves the moment, and read one out in full,",
   "word for word, whenever the person wants the details or asks you to repeat something.",
   "If one contradicts something you already said, correct yourself plainly.",
+  "An arriving answer may CUT YOU OFF mid-sentence — that is the machinery working.",
+  "Deliver the answer first, stitched naturally ('—oh, it's in: …'); offer to pick up",
+  "what you were saying only if it actually mattered.",
 ].join("\n");
 
 /**
@@ -1873,10 +1876,11 @@ interface Dial {
    * at response.created so the note-barge can tell commentary from
    * conversation. */
   followUpKind: "status" | "note" | "tool";
-  /** A colleague note cancelled a streaming STATUS answer; its
-   * response.done is the cue to create the note's response (creating
-   * before the provider settles the cancelled one is an error). */
-  statusAnswerCancelled: boolean;
+  /** A colleague note cancelled the streaming answer (status commentary
+   * or the person's hold music); its response.done is the cue to create
+   * the note's response (creating before the provider settles the
+   * cancelled one is an error). */
+  answerCancelledForNote: boolean;
   /**
    * The model decided the call is over; settle at the drain point, after the
    * goodbye PLAYS. v1's instant version was measured cutting "Goodbye!"
@@ -1938,7 +1942,7 @@ const freshDial = (
   openToolCallIds: new Set(),
   followUpResponsePending: false,
   followUpKind: "tool",
-  statusAnswerCancelled: false,
+  answerCancelledForNote: false,
   hangUpAfterAnswerDrains: null,
   lastColleagueActivity: null,
   lastStatusSpokenAtMs: null,
@@ -2659,19 +2663,24 @@ export class VoiceAgentProcessor extends StreamProcessor<
           dial.followUpResponsePending = true;
           dial.followUpKind = "note";
           this.#sendControl(dial, { type: "response.create" }, append);
-        } else if (dial.answer.phase === "streaming" && dial.answer.kind === "status") {
-          /* THE ANSWER OUTRANKS ITS OWN PROGRESS COMMENTARY: cut the
-           * status line mid-word (cancel + silence the device) and speak
-           * the note the moment the provider settles the cancelled
-           * response — creating before its response.done is a provider
-           * error, so the done arm below finishes the job. A PERSON's
-           * answer is never cut this way; only the facet's own commentary
-           * is interruptible (measured 2026-08-29: two full status lines
-           * played out while the found answer waited behind them). */
+        } else if (
+          dial.answer.phase === "streaming" &&
+          (dial.answer.kind === "status" || dial.answer.kind === "turn")
+        ) {
+          /* THE AWAITED ANSWER OUTRANKS WHATEVER IS PLAYING — the facet's
+           * own status commentary, and the person's turn-answers too:
+           * anyone listening while a note is pending is waiting, and hold
+           * music ("count to 100 while it works") must lose to the thing
+           * being waited for. Only note/tool answers stay protected — the
+           * previous answer's delivery must not be cut by the next one.
+           * Cancel + silence the device; the note speaks the moment the
+           * provider settles the cancelled response (creating before its
+           * response.done is a provider error, so the done arm below
+           * finishes the job). */
           this.#dropAnswerInFlight(dial, this.deps.nowAtFacetMs(), append);
           dial.answer.endsWhenQueueDrains = false;
           this.#sendControl(dial, { type: "response.cancel" }, append);
-          dial.statusAnswerCancelled = true;
+          dial.answerCancelledForNote = true;
           dial.pendingNoteResponse = true;
         } else {
           /* ALWAYS pend when we did not create. The note item goes out
@@ -3308,7 +3317,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
             dial.answer = freshAnswer();
             dial.answer.kind = followUp ? dial.followUpKind : "turn";
             /* A new answer supersedes any cancelled-status bookkeeping. */
-            dial.statusAnswerCancelled = false;
+            dial.answerCancelledForNote = false;
             dial.answer.phase = "streaming";
             dial.answer.startedAtFacetMs = receivedAtFacetMs;
             /* A new answer is a new signal; without this, the filter's
@@ -3513,12 +3522,12 @@ export class VoiceAgentProcessor extends StreamProcessor<
             if (
               dial.pendingNoteResponse &&
               (dial.answer.phase === "settled" ||
-                (dial.answer.phase === "cancelled" && dial.statusAnswerCancelled)) &&
+                (dial.answer.phase === "cancelled" && dial.answerCancelledForNote)) &&
               dial.openToolCallIds.size === 0 &&
               dial.hangUpAfterAnswerDrains === null
             ) {
               dial.pendingNoteResponse = false;
-              dial.statusAnswerCancelled = false;
+              dial.answerCancelledForNote = false;
               dial.followUpResponsePending = true;
               dial.followUpKind = "note";
               this.#sendControl(dial, { type: "response.create" }, append);
