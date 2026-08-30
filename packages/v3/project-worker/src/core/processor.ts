@@ -231,28 +231,26 @@ export abstract class StreamProcessor<State> {
     );
     return this.#enqueue(async () => {
       await this.#rereduceIfVersionChanged();
-      const progress = this.#loadProgress();
-      if (scannedOffsetRange.scannedAfterOffset === progress.reducedThroughOffset) {
-        // atHead only if a LATER push hasn't already shown us a higher head (two enqueued
-        // back-to-back must not each fire caughtUp — only the one reaching the shown head).
-        const atHead = scannedOffsetRange.scannedThroughOffset >= (this.#pushedThroughOffset ?? 0);
-        await this.#processBatch(events, scannedOffsetRange, atHead);
-      } else if (scannedOffsetRange.scannedThroughOffset > progress.reducedThroughOffset) {
-        // Non-contiguous push: the cursor is behind this batch's start. Repair the durable gap from
-        // the cursor UP TO the push's scannedAfterOffset, then — if that closes the gap — process
-        // the PUSHED batch itself. Its fresh named ephemerals ride the push ONLY (reads are
-        // durable-only), so a blanket #catchUpBody repairs the durables but SILENTLY DROPS the
-        // deliverable ephemerals (defect 21). If the repair can't reach the push start (a durable
-        // row genuinely missing), fall back to the durable-only log repair.
+      const cursor = this.#loadProgress().reducedThroughOffset;
+      // DURABLE GAP REPAIR is the ONLY reason not to process the push immediately: a durable prefix
+      // the push assumes but we haven't folded must be healed from the log FIRST. The push carries
+      // fresh named ephemerals the log can't return (reads are durable-only), so a blanket catch-up
+      // would repair the durables but drop the ephemerals (defect 21) — hence repair up to the push
+      // start, then process the push itself.
+      if (scannedOffsetRange.scannedAfterOffset > cursor) {
         await this.#repairThrough(scannedOffsetRange.scannedAfterOffset);
-        if (this.#loadProgress().reducedThroughOffset === scannedOffsetRange.scannedAfterOffset) {
-          const atHead =
-            scannedOffsetRange.scannedThroughOffset >= (this.#pushedThroughOffset ?? 0);
-          await this.#processBatch(events, scannedOffsetRange, atHead);
-        } else {
+        // Log can't reach the push start (a durable row genuinely missing) → full durable catch-up,
+        // then STILL process the push below so its ephemerals aren't dropped (closes defect 21's
+        // residual hole; the durables will simply be filtered as already-folded).
+        if (this.#loadProgress().reducedThroughOffset !== scannedOffsetRange.scannedAfterOffset)
           await this.#catchUpBody();
-        }
-      } // else: a stale redelivery — the scannedOffsetRange is already behind us; nothing to do
+      }
+      // ALWAYS process the push — no push is ever discarded. Durables fold iff fresh (`offset >
+      // cursor`); ephemerals ALWAYS deliver (one push, unredeliverable); the cursor never regresses.
+      // A wholly-behind (stale) push folds nothing and just delivers its ephemerals — B's fix. This
+      // one path replaced the old contiguous / non-contiguous / stale-drop three-way branch.
+      const atHead = scannedOffsetRange.scannedThroughOffset >= (this.#pushedThroughOffset ?? 0);
+      await this.#processBatch(events, scannedOffsetRange, atHead);
     });
   }
 
@@ -431,141 +429,166 @@ export abstract class StreamProcessor<State> {
     }
   }
 
-  /** Rules 2–5 over one contiguous scannedOffsetRange. The caller established contiguity. */
+  /** Rules 2–5 over one scannedOffsetRange (the caller has healed any durable prefix gap first).
+   *  DURABLES fold at-most-once — `offset > cursor`. EPHEMERALS ALWAYS deliver — each rides exactly
+   *  one push and can never be a redelivery, so a durable-only wake that clamped the cursor PAST an
+   *  ephemeral offset must not suppress it. The cursor is a DURABLE-fold watermark and never
+   *  regresses. (This one method replaced the old contiguous / non-contiguous / stale-drop three-way
+   *  in `processEventBatch`; there is no separate ephemeral path.) */
   async #processBatch(
     events: StreamEventT[],
     scannedOffsetRange: ScannedOffsetRange,
     atHead: boolean,
   ): Promise<void> {
     const progress = this.#loadProgress();
-    let { state } = progress;
-    let caughtUpDelivered = false;
+    const prevState = progress.state;
+    let state = prevState;
 
-    const makeAppend =
-      (whileProcessing: StreamEventT | null) =>
-      async (...inputs: StreamEventInputT[]): Promise<StreamEventT[]> => {
-        for (const input of inputs) {
-          if (!this.contract.emits.includes(input.type))
-            throw new Error(
-              `processor "${this.contract.slug}" emits ${JSON.stringify(input.type)} without declaring it`,
-            );
-          input.source = {
-            processor: {
-              slug: this.contract.slug,
-              version: this.contract.version,
-              ...(whileProcessing
-                ? {
-                    whileProcessing: {
-                      offset: whileProcessing.offset,
-                      type: whileProcessing.type,
-                    },
-                  }
-                : {}),
-            },
-          };
-        }
-        return await this.stream.append(...inputs);
-      };
-
-    const runOne = async (event: StreamEventT | null, caughtUp: boolean) => {
-      const previousState = state;
-      if (event) {
-        let next: State | null | undefined;
-        try {
-          next = this.reduce({ event, state });
-        } catch (error) {
-          // A malformed/hostile event must not wedge the reduce forever: record the skip, move on.
-          reportIssue("processor.reduce", error, {
-            slug: this.contract.slug,
-            offset: event.offset,
-          });
-          next = undefined;
-        }
-        state = next ?? state;
-      }
-      // FIFO blocker chain for THIS event (rule 2); background work escapes it (rule 3).
-      let blockers: Promise<unknown> = Promise.resolve();
-      this.processEvent({
-        event,
-        state,
-        previousState,
-        append: makeAppend(event),
-        blockProcessorWhile: (work) => {
-          blockers = blockers.then(() => work());
-        },
-        runInBackground: (work) => {
-          void work().catch((error) =>
-            reportIssue("processor.background", error, { slug: this.contract.slug }),
-          );
-        },
-        delivery: { caughtUp },
-      });
-      // STRICT PER-EVENT ORDERING (rule 2): drain the blocker chain to a FIXED POINT. A
-      // blockProcessorWhile called from INSIDE a running blocker extends the chain (still THIS
-      // event's blocking work), so re-await until it stops growing — latching the pre-nesting
-      // snapshot would let the next event's processEvent (and the batch commit) overtake it.
-      for (let awaited: Promise<unknown> | undefined; awaited !== blockers; ) {
-        awaited = blockers;
-        await awaited;
-      }
-      if (caughtUp) caughtUpDelivered = true;
-    };
-
-    const sawDurable = events.some((e) => !e.ephemeral);
     const consumable = events.filter(
-      (e) => consumesEvent(this.contract.consumes, e) && e.offset > progress.reducedThroughOffset,
+      (e) =>
+        consumesEvent(this.contract.consumes, e) &&
+        (e.ephemeral || e.offset > progress.reducedThroughOffset),
     );
+    let caughtUpDelivered = false;
     for (let i = 0; i < consumable.length; i++) {
-      await runOne(consumable[i], atHead && i === consumable.length - 1);
+      const last = i === consumable.length - 1;
+      state = await this.#applyEvent(consumable[i], state, atHead && last);
+      if (atHead && last) caughtUpDelivered = true;
     }
-    // Rule 5: reached the head without a caught-up event → one eventless at-head pass.
-    if (atHead && !caughtUpDelivered) await runOne(null, true);
+    // Rule 5: reached the head with no caught-up event → one eventless at-head pass.
+    if (atHead && !caughtUpDelivered) state = await this.#applyEvent(null, state, true);
 
-    // Rule 4: ONE persist per scannedOffsetRange, before the cursor advances — but NEVER for an
-    // ephemeral-only scannedOffsetRange (a pure-ephemeral flood costs zero writes; after eviction the
-    // cursor regresses only over events nobody can redeliver anyway).
+    // Rule 4: ONE persist per scannedOffsetRange, iff a DURABLE actually ADVANCED the cursor. The
+    // cursor never REGRESSES (`max`), so a wholly-behind (stale) push leaves it put — and must NOT
+    // re-persist (a stale durable re-push already folded is a no-op write; a pure-ephemeral range
+    // writes zero — the flood stays free). `advanced` excludes the stale re-push; `sawDurable`
+    // excludes the ephemeral-only range. (This is why B's stale push delivers its ephemerals in
+    // memory yet persists nothing.)
+    const reducedThroughOffset = Math.max(
+      progress.reducedThroughOffset,
+      scannedOffsetRange.scannedThroughOffset,
+    );
+    const advanced = reducedThroughOffset > progress.reducedThroughOffset;
+    const sawDurable = events.some((e) => !e.ephemeral);
     const next: ReduceCheckpoint<State> = {
       reducerVersion: this.contract.version,
-      reducedThroughOffset: scannedOffsetRange.scannedThroughOffset,
+      reducedThroughOffset,
       state,
     };
-    if (sawDurable)
-      writeReduceCheckpoint(
-        this.#storage,
-        this.contract.slug,
-        next,
-        state,
-        state !== progress.state,
-      );
+    if (sawDurable && advanced)
+      writeReduceCheckpoint(this.#storage, this.contract.slug, next, state, state !== prevState);
     this.#progress = next;
+    this.#resolveWaiters(reducedThroughOffset);
+    // Persist FIRST, emit the live-state delta second (a crash between loses only a notification,
+    // healed by the chain gap; never state).
+    await this.#emitLiveStateIfChanged(
+      prevState,
+      state,
+      progress.reducedThroughOffset,
+      scannedOffsetRange.scannedThroughOffset,
+    );
+  }
+
+  /** THE per-event primitive (rules 2–3), shared by every path (batch, gap-repair, at-head pass):
+   *  a GUARDED reduce, then `processEvent` with a FIFO blocker chain drained to a FIXED POINT. Returns
+   *  the next state; owns NO cursor / persist / waiter — the caller does. Extracting it is why the
+   *  ephemeral fix is a one-clause filter change and not a duplicated batch body. */
+  async #applyEvent(event: StreamEventT | null, state: State, caughtUp: boolean): Promise<State> {
+    const previousState = state;
+    if (event) {
+      let next: State | null | undefined;
+      try {
+        next = this.reduce({ event, state });
+      } catch (error) {
+        // A malformed/hostile event must not wedge the reduce forever: record the skip, move on.
+        reportIssue("processor.reduce", error, { slug: this.contract.slug, offset: event.offset });
+        next = undefined;
+      }
+      state = next ?? state;
+    }
+    // FIFO blocker chain for THIS event (rule 2); background work escapes it (rule 3).
+    let blockers: Promise<unknown> = Promise.resolve();
+    this.processEvent({
+      event,
+      state,
+      previousState,
+      append: this.#makeAppend(event),
+      blockProcessorWhile: (work) => {
+        blockers = blockers.then(() => work());
+      },
+      runInBackground: (work) => {
+        void work().catch((error) =>
+          reportIssue("processor.background", error, { slug: this.contract.slug }),
+        );
+      },
+      delivery: { caughtUp },
+    });
+    // STRICT PER-EVENT ORDERING (rule 2): drain the blocker chain to a FIXED POINT. A
+    // blockProcessorWhile called from INSIDE a running blocker extends the chain (still THIS event's
+    // blocking work), so re-await until it stops growing — latching the pre-nesting snapshot would
+    // let the next event's processEvent (and the batch commit) overtake it.
+    for (let awaited: Promise<unknown> | undefined; awaited !== blockers; ) {
+      awaited = blockers;
+      await awaited;
+    }
+    return state;
+  }
+
+  /** Provenance stamper: every emit carries this processor's slug/version (+ what it was processing),
+   *  validated against the declared `emits`. */
+  #makeAppend(whileProcessing: StreamEventT | null) {
+    return async (...inputs: StreamEventInputT[]): Promise<StreamEventT[]> => {
+      for (const input of inputs) {
+        if (!this.contract.emits.includes(input.type))
+          throw new Error(
+            `processor "${this.contract.slug}" emits ${JSON.stringify(input.type)} without declaring it`,
+          );
+        input.source = {
+          processor: {
+            slug: this.contract.slug,
+            version: this.contract.version,
+            ...(whileProcessing
+              ? { whileProcessing: { offset: whileProcessing.offset, type: whileProcessing.type } }
+              : {}),
+          },
+        };
+      }
+      return await this.stream.append(...inputs);
+    };
+  }
+
+  /** Resolve the waiters a cursor advance satisfies (waitUntilProcessed); keep the rest. */
+  #resolveWaiters(reducedThroughOffset: number): void {
     for (const w of this.#waiters.splice(0)) {
-      if (next.reducedThroughOffset >= w.offset) w.resolve();
+      if (reducedThroughOffset >= w.offset) w.resolve();
       else this.#waiters.push(w);
     }
+  }
 
-    // LIVE STATE: if this scannedOffsetRange changed the PROJECTED shape, emit the delta — persist first,
-    // emit second, so a crash between the two loses only a notification (healed by the chain
-    // mismatch on the next change), never state. The revision advances even if the append
-    // fails, for the same reason: a hole in the chain is a re-seed, a lie in it is corruption.
-    // The WHOLE block is guarded — the reduce above already committed, so a projection/diff
-    // failure (an unserializable value in state, a throwing projection) must degrade to a lost
-    // notification, never to a rejected batch that snapshot()/waitUntilProcessed callers see.
-    if (typeof this.liveState === "function" && state !== progress.state) {
-      try {
-        const patch = diff(this.liveState(progress.state), this.liveState(state));
-        if (patch) {
-          const from = this.#liveStateRev ?? progress.reducedThroughOffset;
-          const to = scannedOffsetRange.scannedThroughOffset;
-          this.#liveStateRev = to;
-          await this.stream.append({
-            type: LIVE_STATE_CHANGED,
-            ephemeral: true,
-            payload: { key: this.contract.slug, from, to, patch },
-          });
-        }
-      } catch (error) {
-        reportIssue("processor.live-state-emit", error, { slug: this.contract.slug });
-      }
+  /** Emit ONE live-state delta iff the projection changed. `to` is clamped MONOTONIC (`max(from,…)`)
+   *  so a late (behind-cursor) ephemeral delivery can never mint a backwards revision. A
+   *  projection/diff/append failure degrades to a LOST notification (the client re-seeds on the chain
+   *  gap), never a thrown batch a snapshot/barrier caller would see. */
+  async #emitLiveStateIfChanged(
+    prev: State,
+    next: State,
+    fromCursor: number,
+    toOffset: number,
+  ): Promise<void> {
+    if (typeof this.liveState !== "function" || next === prev) return;
+    try {
+      const patch = diff(this.liveState(prev), this.liveState(next));
+      if (!patch) return;
+      const from = this.#liveStateRev ?? fromCursor;
+      const to = Math.max(from, toOffset);
+      this.#liveStateRev = to;
+      await this.stream.append({
+        type: LIVE_STATE_CHANGED,
+        ephemeral: true,
+        payload: { key: this.contract.slug, from, to, patch },
+      });
+    } catch (error) {
+      reportIssue("processor.live-state-emit", error, { slug: this.contract.slug });
     }
   }
 }

@@ -253,15 +253,21 @@ export class StreamDurableObject extends DurableObject<Env> {
       (justCommitted, after, next) => this.#reduceInlineAtCommit(justCommitted, after, next),
     );
     if (nextOffset > scannedAfterOffset) {
+      // A prior-batch idempotency dedupe echoes an ALREADY-DELIVERED below-range offset into
+      // `distinct` (see event-log). Drop it before the fan-out — the range is (scannedAfterOffset,
+      // nextOffset]; a durable at/below the floor was delivered on its own commit. Ephemerals are
+      // minted IN range (they can't carry an idempotency key), so this never drops one; it just makes
+      // the two fan-out sites match the inline reduce's guard.
+      const fresh = distinct.filter((e) => e.offset > scannedAfterOffset);
       // THE PUMP: drive every facet, then push the batch to connected subscribers. Live-state
       // changes never ride a drive — every reduce is unconsumable to them (the platform rule) — so
       // a live-state-only batch skips the drives and the next real range covers the skipped span.
-      const drivable = distinct.filter((e) => e.type !== "events.iterate.com/live-state/changed");
+      const drivable = fresh.filter((e) => e.type !== "events.iterate.com/live-state/changed");
       if (drivable.length > 0) this.#driveFacets(drivable, scannedAfterOffset, nextOffset);
       // CONNECTED subscription mounts get the batch pushed one-directionally, right now, from the
       // commit path — a synchronous fire-and-forget WebSocket send. (DURABLE targets ride the
       // subscription-forwarder facet, which is one of the drives above.)
-      this.#deliverToConnectedSubscriptions(distinct, scannedAfterOffset, nextOffset);
+      this.#deliverToConnectedSubscriptions(fresh, scannedAfterOffset, nextOffset);
     }
     this.#noteActivity();
     return committed;

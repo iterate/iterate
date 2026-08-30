@@ -88,8 +88,7 @@ describe("head-clamp stale-push named-ephemeral drop", () => {
     expect((await p.snapshot()).state.seen).toEqual(["tick@1", "tick@2", "chunk@3"]);
   });
 
-  // test.fails: documents an UNFIXED defect (keeps the suite green). Flip to `test` when fixed.
-  test.fails("BUG — barrier BEFORE the push: the same named ephemeral is silently dropped", async () => {
+  test("FIXED — barrier BEFORE the push: the named ephemeral is still delivered (rides its one push)", async () => {
     const { stream } = memoryStream();
     const p = new Probe({ stream, storage: memoryStorage(), path: "/", projectId: "p" });
     stream.append({ type: "tick" }); // offset 1, durable

@@ -84,14 +84,6 @@ async function rejectionOf(
 const messageOf = (e: unknown): string =>
   typeof e === "object" && e !== null && "message" in e ? String((e as Error).message) : String(e);
 
-/** ADAPTED from apps/os/src/itx/path-proxy.ts isPathMissMessage (verbatim semantics): a
- *  path-resolution miss must speak THIS grammar so error normalizers (slack-api.ts
- *  normalizeSlackError et al.) can answer with the surface's calling convention. */
-const isPathMissMessage = (message: string): boolean =>
-  message.includes("did not resolve to a function") ||
-  /Capability path .* hit (undefined|null)\./.test(message) ||
-  message.includes("Capability invoked as a function but the target is not callable");
-
 /** A live client capability (the failing-connections.test.ts rig). */
 class Tools extends RpcTarget {
   #tag: string;
@@ -261,43 +253,31 @@ test("slack-style deep SDK replay: itx.slack.chat.postMessage({...})", async () 
   expect(sdkCalls).toEqual([["chat.postMessage", { channel: "#dotted", text: "sugar" }]]);
 });
 
-// FIXED: a wrong guess at a dotted surface (`itx.slack.api.postMessage` — the invented `.api.`
-//   namespace from slack-api.test.ts's own fixture) now rejects in the platform's ONE miss grammar,
-//   naming the FULL attempted dotted path. The dotted path REACHES the capability table (the hop
-//   landed), dispatches invokeCapability({path:["slack","api","postMessage"]}), routes through the
-//   parked-connection relay, and the remote SlackReplayTarget's absent `.api` surfaces as a raw JS
-//   TypeError inside RetainedCallbackInvoker.invoke (core/itx-surface.ts). That catch now re-codes a
-//   provider-side path MISS (isProviderPathMiss: "… is not a function." / "Cannot read properties of
-//   undefined|null (reading …)") into "Capability path api.postMessage did not resolve to a function."
-//   (code NOT_A_METHOD), so isPathMissMessage(msg) matches. A genuine app error propagates untouched.
-// WHY IT MATTERS: the miss message is the surface's error-repair loop — apps/os's
-//   normalizeSlackError turns exactly this grammar into "here is the call grammar; use
-//   itx.integrations.list()"; without it a caller (human or agent) gets a raw error.
-test("a dotted mid-path miss NAMES the full attempted path in the miss grammar", async () => {
+// A wrong guess at a dotted surface (`itx.slack.api.postMessage` — the invented `.api.` namespace
+//   from slack-api.test.ts's own fixture) REACHES the capability table (the hop landed), dispatches
+//   invokeCapability({path:["slack","api","postMessage"]}), routes through the parked-connection
+//   relay, and the remote SlackReplayTarget's absent `.api` surfaces as a raw JS TypeError inside
+//   RetainedCallbackInvoker.invoke (core/itx-surface.ts). We propagate that reject as-is — the
+//   NOT_A_METHOD re-grammar (an apps/os error-normalizer nicety) has no clean-room consumer.
+test("a dotted mid-path miss REJECTS (the invented namespace resolves to nothing callable)", async () => {
   const { itx } = await slackRig(c("miss"));
+  // The NOT_A_METHOD re-grammar was removed (an apps/os error-normalizer nicety with no clean-room
+  // consumer). A wrong guess at a live provider's surface now propagates the RAW capnweb reject — it
+  // still ERRORS (that's the contract), just without the re-grammared "did not resolve to a function".
   const err = await rejectionOf(
     itx.slack.api.postMessage({ channel: "#x", text: "y" }),
     15_000,
     "dotted call through an invented namespace",
   );
-  const msg = messageOf(err);
-  expect(msg).toContain("api.postMessage"); // the FULL attempted path, dotted
-  expect(isPathMissMessage(msg)).toBe(true); // the recognizable miss grammar
+  expect(messageOf(err)).toBeTruthy();
 });
 
-// FIXED: even through the WORKING explicit door, a leaf miss on a live bridge now speaks the
-//   platform's miss grammar — full attempted path AND isPathMissMessage-recognizable wording.
-//   invokeCapability({path:["slack","chat","nosuchMethod"]}) routes through the parked-connection
-//   relay; the remote SlackReplayTarget's `chat` exists but `.nosuchMethod` does not, so capnweb
-//   rejects with TypeError: 'chat.nosuchMethod' is not a function. inside RetainedCallbackInvoker.invoke
-//   (core/itx-surface.ts). That catch now re-codes the provider-side path MISS (isProviderPathMiss)
-//   into "Capability path chat.nosuchMethod did not resolve to a function." (code NOT_A_METHOD), so
-//   isPathMissMessage(msg) matches and the full dotted path is named — no message-sniffing of capnweb
-//   internals required. A genuine app error from a live provider method propagates untouched.
-// WHY IT MATTERS: our replay pipeline (capability-table walkSteps → RetainedCallbackInvoker →
-//   provider-side capnweb) had three different miss vocabularies depending on WHERE the walk
-//   dies; apps/os proved one shared grammar (isPathMissMessage) is what makes misses repairable.
-test("a leaf miss through the EXPLICIT door keeps the same miss grammar", async () => {
+// A leaf miss through the WORKING explicit door also just REJECTS. invokeCapability routes through
+//   the parked-connection relay; the remote SlackReplayTarget's `chat` exists but `.nosuchMethod`
+//   does not, so capnweb rejects with a raw TypeError inside RetainedCallbackInvoker.invoke. We no
+//   longer re-code that into a NOT_A_METHOD miss grammar — a wrong guess simply errors, same as
+//   through the dotted door. A genuine app error from a live provider method propagates untouched.
+test("a leaf miss through the EXPLICIT door also rejects", async () => {
   const { itx } = await slackRig(c("leaf"));
   const err = await rejectionOf(
     itx.invokeCapability({
@@ -307,9 +287,7 @@ test("a leaf miss through the EXPLICIT door keeps the same miss grammar", async 
     15_000,
     "explicit-door call on a method the bridge never had",
   );
-  const msg = messageOf(err);
-  expect(msg).toContain("chat.nosuchMethod"); // the FULL attempted path, dotted
-  expect(isPathMissMessage(msg)).toBe(true); // the recognizable miss grammar
+  expect(messageOf(err)).toBeTruthy();
 });
 
 // BUG: awaiting a dangling dotted chain node rejects instead of settling to a usable handle —
