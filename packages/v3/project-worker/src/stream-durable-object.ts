@@ -39,7 +39,12 @@ import {
   type CoreState,
 } from "./core-processor.ts";
 import { codedError, errorCode, reportIssue } from "./core/errors.ts";
-import { type DeliveryPolicy, type StreamEvent, type StreamEventInput } from "./core/events.ts";
+import {
+  type DeliveryPolicy,
+  type StreamEvent,
+  type StreamEventInput,
+  type SubscriptionLane,
+} from "./core/events.ts";
 import { parse, print, toExpression, type Expression } from "./core/expression.ts";
 import { invokePath } from "./core/dispatch.ts";
 import { InvokeHandle } from "./core/invoke-handle.ts";
@@ -101,30 +106,36 @@ type SubscriptionMount = DeliveryPolicy & {
   name: string;
   providedAtOffset: number; // the row's identity
   target?: Expression;
-  /** Present iff the target is a co-located facet (`facetTarget`) AND userspace code — the class
-   *  that facet loads. A processor is a facet-target subscriber; this is its code. */
+  /** The delivery lane (see `SubscriptionLane`) — the ONE fact every fan-out reader switches on,
+   *  stamped at the provide door and projected here (with a `laneOf` fallback for any un-laned
+   *  legacy/raw mount). `reduce` = pump-driven facet, `connected` = live stub, `durable` = forwarder. */
+  lane: SubscriptionLane;
+  /** Present iff the lane is `reduce` AND userspace code — the class that facet loads. A processor
+   *  is a `reduce`-lane subscriber; this is its code. */
   processor?: ProcessorPolicy;
 };
 
+// ── deriving a subscriber's LANE from its target shape — done ONCE, at the provide door ──
+// These two matchers used to be consulted at ~7 read sites to re-classify a mount on every commit;
+// now `laneOf` calls them ONCE when a mount is born and STORES the result as `lane` on the event
+// (see `SubscriptionLane`). `rpcStubTarget` also survives as the auto-revoke KEY extractor
+// (identity, not classification — no drift hazard). Every reader reads `row.lane`.
+
 /** Match an RPC-STUB target: `itx.rpcStubs.get('<key>')`, optionally followed by a trailing dotted
- *  path (which callable on the retained callback receives the delivery — `apply()` walks the raw
- *  target expression for that). Only the `key` is needed here (routing + auto-revoke identity); a
- *  trailing CALL step means an ABSENT target — the forwarder's lane. */
+ *  path (the callable on the retained callback that receives the delivery — `apply()` walks the raw
+ *  target for that). Yields the `key` (lane derivation + auto-revoke identity); a trailing CALL step
+ *  means the stub is a method receiver, not a delivery callable → NOT a connected lane. */
 const rpcStubTarget = (t?: Expression): { key: string } | undefined => {
   if (!t || t.length < 3 || t[0] !== "itx" || t[1] !== "rpcStubs") return undefined;
   const call = t[2];
   if (!Array.isArray(call) || call.length !== 2 || call[0] !== "get" || typeof call[1] !== "string")
     return undefined;
-  // A trailing CALL step (non-string) names a method, not a delivery callable → an absent target.
   if (t.slice(3).some((step) => typeof step !== "string")) return undefined;
   return { key: call[1] };
 };
 
 /** Match a FACET target: `itx.facets.get('<slug>')` — a subscriber whose target is a co-located
- *  facet on THIS stream. These ARE the processors: the commit pump drives them (a reduce over the
- *  log). Because they are pump-driven, not delivered, BOTH the connected lane and the forwarder
- *  skip a facet-target mount. Target-shape dispatch, one namespace: a processor is just a
- *  subscription whose target is a facet. */
+ *  facet the commit pump drives (a processor). Used only by `laneOf`. */
 const facetTarget = (t?: Expression): { slug: string } | undefined => {
   if (!t || t.length !== 3 || t[0] !== "itx" || t[1] !== "facets") return undefined;
   const call = t[2];
@@ -132,6 +143,13 @@ const facetTarget = (t?: Expression): { slug: string } | undefined => {
     return undefined;
   return { slug: call[1] };
 };
+
+/** THE lane classifier, called once per mount at the provide door — `itx.facets.get('slug')` ⇒
+ *  reduce (pump-driven facet), `itx.rpcStubs.get('key')` ⇒ connected (live stub), anything else ⇒
+ *  durable (the forwarder facet's cursored lane). The result is stored on the mount so no reader
+ *  ever re-derives it. */
+const laneOf = (target: Expression): SubscriptionLane =>
+  facetTarget(target) ? "reduce" : rpcStubTarget(target) ? "connected" : "durable";
 
 /** The subscription-forwarder facet's slug (auto-enabled when an absent-target subscription
  *  mount first appears). */
@@ -517,6 +535,8 @@ export class StreamDurableObject extends DurableObject<Env> {
           providedAtOffset: m.providedAtOffset,
           ...((m.delivery ?? {}) as DeliveryPolicy),
           target: m.target,
+          // Read the stamped lane; derive once as a fallback for any un-laned raw/legacy mount.
+          lane: (m.lane as SubscriptionLane | undefined) ?? laneOf(m.target),
           ...(m.processor ? { processor: m.processor as ProcessorPolicy } : {}),
         });
     }
@@ -557,7 +577,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           if (errorCode(err) !== "CONNECTION_OFFLINE") onDrop(err);
         });
     for (const row of this.#activeSubscriptionMounts()) {
-      if (!rpcStubTarget(row.target)) continue; // absent target — the forwarder facet's lane
+      if (row.lane !== "connected") continue; // reduce (pump) / durable (forwarder) — not this lane
       if (row.liveState) {
         // State mode: forward each committed change payload for the watched key, raw (no
         // in-flight tracking, no latest-wins queue — the owner's no-coalescing decision; a
@@ -624,7 +644,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   async resumeSubscription(input: { name: string; afterOffset?: number }): Promise<{ ok: true }> {
     const row = this.#activeSubscriptionMounts().find((r) => r.name === input.name);
     if (!row) throw new Error(`no subscription "${input.name}"`);
-    if (rpcStubTarget(row.target))
+    if (row.lane === "connected")
       throw new Error(
         `"${input.name}" delivers one-directionally to a connected client — there is no server cursor; the client heals itself with read(afterOffset)`,
       );
@@ -657,7 +677,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   #facetEntries(): FacetProcessorEntry[] {
     const entries: FacetProcessorEntry[] = [];
     for (const row of this.#activeSubscriptionMounts()) {
-      if (!facetTarget(row.target)) continue; // a connected/absent subscriber, not a facet reduce
+      if (row.lane !== "reduce") continue; // connected/durable subscriber, not a facet reduce
       const policy = (row.processor ?? {}) as ProcessorPolicy;
       entries.push({
         slug: row.name,
@@ -786,6 +806,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     await this.#capabilityTableProcessor().provide({
       path: `itx.subscribers.${slug}`,
       target: `itx.facets.get('${slug}')`,
+      lane: "reduce", // a processor IS a reduce-lane subscriber — declared, not sniffed
       processor: {
         ...(ref ? { source: print(toExpression(ref.source)), className: ref.className } : {}),
         ...(props ? { props } : {}),
@@ -943,14 +964,13 @@ export class StreamDurableObject extends DurableObject<Env> {
   }): Promise<{ providedAtOffset: number }> {
     this.#eventLog.touch();
     const pathString = typeof input.path === "string" ? input.path : input.path.join(".");
-    // ABSENT = an itx.subscribers.* mount that is neither CONNECTED (client lane) nor a FACET
-    // (the pump's lane — a processor). Only an absent target needs the forwarder.
     const targetExpr = toExpression(input.target);
-    if (
-      pathString.startsWith("itx.subscribers.") &&
-      !rpcStubTarget(targetExpr) &&
-      !facetTarget(targetExpr)
-    ) {
+    // Classify the delivery lane ONCE, here at the provide door — it is stamped on the mount event
+    // and every commit-time reader reads it back (no per-commit target re-sniff). Non-subscriber
+    // mounts (plain aliases) carry no lane. `durable` is the absent target — the forwarder's lane.
+    const isSubscriber = pathString.startsWith("itx.subscribers.");
+    const lane = isSubscriber ? laneOf(targetExpr) : undefined;
+    if (lane === "durable") {
       if (input.delivery?.liveState)
         throw new Error(
           "a live-state subscription needs a live rpc-stub target (itx.rpcStubs.get(…)) — an absent target has no revision chain to keep",
@@ -958,7 +978,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       if (!this.#facetEntries().some((e) => e.slug === SUBSCRIPTION_FORWARDER_SLUG))
         await this.enableProcessor(SUBSCRIPTION_FORWARDER_SLUG);
     }
-    return this.#capabilityTableProcessor().provide(input);
+    return this.#capabilityTableProcessor().provide({ ...input, ...(lane ? { lane } : {}) });
   }
 
   /** Revoke by the mount's identity — or by its capability path (pops the newest winner at
@@ -1037,11 +1057,8 @@ export class StreamDurableObject extends DurableObject<Env> {
         subscriptionMounts: this.#activeSubscriptionMounts().map((r) => ({
           name: r.name,
           providedAtOffset: r.providedAtOffset,
-          lane: rpcStubTarget(r.target)
-            ? r.liveState
-              ? "connected-live-state"
-              : "connected"
-            : "forwarder",
+          // The stamped lane, verbatim (with the live-state refinement of the connected lane).
+          lane: r.lane === "connected" && r.liveState ? "connected-live-state" : r.lane,
         })),
         ...this.#rpcStubs.state(),
       });

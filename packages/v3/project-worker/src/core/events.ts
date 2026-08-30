@@ -28,6 +28,18 @@ export type DeliveryPolicy = {
   liveState?: { key: string };
 };
 
+/** THE DELIVERY LANE of a subscriber mount (`itx.subscribers.<name>`) — stamped ONCE on the
+ *  `capability-provided` event at provide time, then read verbatim wherever the lane matters. It is
+ *  a declared fact, NOT re-inferred from the target's shape at each read site (that scattered
+ *  target-sniff drifted once and double-delivered). Three genuinely-different behaviors:
+ *   • `reduce`    — a co-located facet the commit pump drives (a processor; its target is
+ *                   `itx.facets.get('<slug>')`).
+ *   • `connected` — a live rpc-stub, served fire-and-forget from the commit path (zero server
+ *                   state, so the DO still hibernates).
+ *   • `durable`   — an absent target (webhook, foreign worker) served by the subscription-forwarder
+ *                   facet, which owns the cursor + bounded-retry ladder. */
+export type SubscriptionLane = "reduce" | "connected" | "durable";
+
 /** What `append` accepts: the event body, before the stream assigns its committed identity. */
 const eventInputShape = z.strictObject({
   /** Convention: `events.iterate.com/<domain>/<fact>`. */

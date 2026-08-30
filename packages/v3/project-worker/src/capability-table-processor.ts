@@ -24,7 +24,11 @@
 import { z } from "zod";
 import { codedError } from "./core/errors.ts";
 import { createLogger } from "./core/logs.ts";
-import { defineProcessorContract, type DeliveryPolicy } from "./core/events.ts";
+import {
+  defineProcessorContract,
+  type DeliveryPolicy,
+  type SubscriptionLane,
+} from "./core/events.ts";
 import {
   parse,
   parseCapabilityPath,
@@ -70,6 +74,8 @@ const CapabilityTableContract = defineProcessorContract({
           providedAtOffset: z.number().int().positive(),
           delivery: z.record(z.string(), z.unknown()).optional(),
           processor: z.record(z.string(), z.unknown()).optional(),
+          /** SUBSCRIPTION mounts only — the declared delivery lane (see `SubscriptionLane`). */
+          lane: z.enum(["reduce", "connected", "durable"]).optional(),
         }),
       )
       .default([]),
@@ -102,6 +108,9 @@ const CapabilityTableContract = defineProcessorContract({
             props: z.record(z.string(), z.unknown()).optional(),
           })
           .optional(),
+        /** The delivery lane, stamped ONCE here (see `SubscriptionLane`) — every reader reads it
+         *  instead of re-inferring from the target's shape. Subscriber mounts only. */
+        lane: z.enum(["reduce", "connected", "durable"]).optional(),
       }),
     },
     "events.iterate.com/capability-table/capability-revoked": {
@@ -151,11 +160,12 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
   reduce({ event, state }: ReduceArgs<State>): State | undefined {
     if (event.ephemeral) return undefined;
     if (event.type === "events.iterate.com/capability-table/capability-provided") {
-      const { path, target, delivery, processor } = event.payload as {
+      const { path, target, delivery, processor, lane } = event.payload as {
         path: string;
         target: string;
         delivery?: Record<string, unknown>;
         processor?: Record<string, unknown>;
+        lane?: "reduce" | "connected" | "durable";
       };
       let parsed: { path: CapabilityPath; target: Expression };
       try {
@@ -176,6 +186,7 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
             providedAtOffset: event.offset,
             ...(delivery ? { delivery } : {}),
             ...(processor ? { processor } : {}),
+            ...(lane ? { lane } : {}),
           },
         ],
       };
@@ -194,6 +205,9 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
     target: string | Expression;
     delivery?: DeliveryPolicy;
     processor?: ProcessorPolicy;
+    /** The delivery lane, stamped on the event (see `SubscriptionLane`). The host computes it once
+     *  at the provide door; every reader reads it back rather than re-inferring from the target. */
+    lane?: SubscriptionLane;
   }): Promise<{ providedAtOffset: number }> {
     const path = typeof input.path === "string" ? parseCapabilityPath(input.path) : input.path;
     const target = toExpression(input.target);
@@ -228,6 +242,7 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
           target: print(target),
           ...(input.delivery ? { delivery: input.delivery } : {}),
           ...(input.processor ? { processor: input.processor } : {}),
+          ...(input.lane ? { lane: input.lane } : {}),
         },
       }),
     );

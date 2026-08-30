@@ -101,23 +101,21 @@ export class SubscriptionForwarderProcessor extends StreamProcessor<ForwarderSta
   protected override reduce({ event, state }: ReduceArgs<ForwarderState>) {
     switch (event.type) {
       case "events.iterate.com/capability-table/capability-provided": {
-        const { path, target, delivery } = event.payload as {
+        const { path, target, delivery, lane } = event.payload as {
           path: string;
           target: string;
           delivery?: Partial<AbsentTargetSubscriptionMount> & { liveState?: unknown };
+          lane?: string;
         };
         const segments = path.split(".");
         if (segments.length !== 3 || segments[0] !== "itx" || segments[1] !== "subscribers")
           return undefined;
-        // Connected (rpc-stub) targets are the parent's lane; FACET targets are the pump's lane (a
-        // processor is a facet-target subscriber — including this forwarder itself); liveState never
-        // reaches an absent target (rejected at provide — this guard is the reduce's belt for raw
-        // appends). THESE TWO NOUNS MUST TRACK rpcStubTarget/facetTarget in stream-durable-object.ts
-        // (this is a separate string-side copy across the facet-bundle boundary — a rename of either
-        // noun there MUST be mirrored here, or the two lanes disagree and double-deliver).
-        const t = target.trim();
-        if (/^itx\.rpcStubs\.get\(/.test(t) || /^itx\.facets\.get\(/.test(t) || delivery?.liveState)
-          return undefined;
+        // The forwarder owns exactly the DURABLE lane. The lane is stamped ONCE on the event by the
+        // parent's provide door (SubscriptionLane) — reduce (pump) and connected (live stub) are
+        // other lanes, and liveState is always connected. This reads that one field; it used to
+        // re-classify from the target string with regexes that had to track two nouns in another
+        // bundle — they drifted once and double-delivered every connected mount.
+        if (lane !== "durable") return undefined;
         return {
           subscriptionMounts: [
             ...state.subscriptionMounts,

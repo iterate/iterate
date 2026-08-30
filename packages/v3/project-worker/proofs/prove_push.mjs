@@ -30,7 +30,7 @@ await seedSources(itx, ["digest"]);
 await itx.enableProcessor("tally");
 await itx.provide({
   path: "itx.digest",
-  target: `itx.workers.get({ source: "itx.kv.get('src/digest.js')" })`,
+  target: `itx.load("itx.kv.get('src/digest.js')").getEntrypoint()`,
 });
 
 // 2. subscribe with an ABSENT target → the subscription-forwarder facet is auto-enabled and
@@ -98,8 +98,8 @@ check(
 const state = await (await fetch(`https://${BASE}/state?ctx=${CTX}`)).json();
 const row = state.subscriptionMounts?.find((r) => r.name === "digest");
 check(
-  row?.lane === "forwarder" && state.facetProcessors?.includes("subscription-forwarder"),
-  "/state: absent-target row on the forwarder lane, forwarder facet auto-enabled",
+  row?.lane === "durable" && state.facetProcessors?.includes("subscription-forwarder"),
+  "/state: absent-target row on the durable lane, forwarder facet auto-enabled",
   JSON.stringify({ row, facetProcessors: state.facetProcessors }),
 );
 
