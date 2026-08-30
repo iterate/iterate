@@ -2,7 +2,7 @@
 // facet (`ctx.facets.get`) on the Stream DO, with its OWN isolated SQLite-backed storage and
 // independent abort/restart. A facet hosts a DURABLE OBJECT; *stream processor* is the role its
 // object plays. This is the DISTANCE lane — for built-in processors with effects (processEvent,
-// retries, isolation needs); the ITERATE CONTEXT and the CORE processor are reduce-only and run
+// retries, isolation needs); the CAPABILITY TABLE and the CORE processor are reduce-only and run
 // INLINE at the parent's commit point instead (zero distance needs zero runner — see
 // core/processor.ts ReduceOnlyProcessor and the core-processor jam doc).
 //

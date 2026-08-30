@@ -390,10 +390,11 @@ export class Itx extends RpcTarget {
   }
 
   /** Enable a facet-hosted processor on this context's stream. Sugar for "load a class as a
-   *  facet + subscribe it": `ref` is the SAME `{ source, className }` shape `itx.workers.get`
-   *  takes (userspace code through the Worker Loader), and enabling appends a SUBSCRIPTION mount
-   *  `itx.subscribers.<slug> → itx.facets.get('<slug>')` that the commit pump drives. A processor
-   *  is just a subscription to a facet. Ref-less enables a built-in processor by slug. */
+   *  facet + subscribe it": `ref` is the same `source` + `className` that
+   *  `itx.load(src).getDurableObjectClass(className)` takes (userspace code through the Worker
+   *  Loader), and enabling appends a SUBSCRIPTION mount `itx.subscribers.<slug> →
+   *  itx.facets.get('<slug>')` that the commit pump drives. A processor is just a subscription to a
+   *  facet. Ref-less enables a built-in processor by slug. */
   enableProcessor(
     slug: string,
     ref?: { source: string | Expression; className: string },

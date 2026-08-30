@@ -20,7 +20,7 @@
   // survives redeploys — so a facet built from an isolate minted by a PRIOR deployment can't be
   // called from the new parent ("Durable Object Facet stubs cannot be transferred between Workers").
   // apps/os folds workerVersion(env)=CF_VERSION_METADATA.id into its loader cacheKey to prevent
-  // exactly this; the clean room does the same (see confinedWorker in core/agent-runtime.ts).
+  // exactly this; the clean room does the same (see confinedWorker in core/worker-loader.ts).
   "version_metadata": { "binding": "CF_VERSION_METADATA" },
 
   // THE context DO: one per {projectId, path}, codec-named — the stream, the routing table, and

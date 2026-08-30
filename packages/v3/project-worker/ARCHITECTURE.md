@@ -465,7 +465,7 @@ type AppConfig = { fallback: FallbackRef }
 parseAppConfig(raw): AppConfig     // default: solo → the worker's own DummyControlPlane
 ```
 
-### `agent-runtime.ts` — code injected into loaded dynamic workers
+### `worker-loader.ts` — the confined-worker loader
 
 - `ITX_SURFACE_MODULE` — injected as `itx.js`: `itxFromStub(stub)` wraps the raw `env.ITX` host stub in the
   dotted `itx.a.b(args)` Proxy (each call → `stub.invokeCapability("itx.a.b", [args])`).

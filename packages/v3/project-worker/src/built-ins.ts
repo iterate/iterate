@@ -120,7 +120,7 @@ interface BuildBuiltInsDeps {
    *  trade: a busy stateful facet pins its stream). */
   facets: FacetsView;
   /** The ctx whose `exports` mints the ItxEntrypoint loopback (the loaded-worker
-   *  host — see iterate-context-entrypoint.ts for why it is never a raw getByName stub). */
+   *  host — see itx-entrypoint.ts for why it is never a raw getByName stub). */
   hostCtx: unknown;
 }
 

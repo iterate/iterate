@@ -14,7 +14,7 @@ back later.
 | -------------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
 | Durable Object by name     | its codec name (`prj_x.iterate/path`) | Cloudflare (`getByName`)                                                                 | `core/durable-object-names.ts` (`DurableObjectNameCodec`)                 |
 | Worker entrypoint by props | the props object                      | Cloudflare (`ctx.exports`, persistent stubs)                                             | `itx-entrypoint.ts`                                                       |
-| Loaded isolate / facet     | cacheKey + source modules             | Cloudflare (Worker Loader, `ctx.facets`)                                                 | `core/agent-runtime.ts` (`confinedWorker`, `versionedFacet`, `asModules`) |
+| Loaded isolate / facet     | cacheKey + source modules             | Cloudflare (Worker Loader, `ctx.facets`)                                                 | `core/worker-loader.ts` (`confinedWorker`, `versionedFacet`, `asModules`) |
 | **Hibernatable RPC stub**  | a stub pager WebSocket attachment     | **us** — `{type:"page"}` pages the edge worker, which re-mints the stub over Workers RPC | `core/hibernatable-rpc-stub.ts` (`HibernatableRpcStubManager`)            |
 
 The first three are Cloudflare features. The fourth is ours — a poor-man's sturdy ref whose

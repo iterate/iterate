@@ -755,15 +755,16 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   /** Enable a facet-hosted processor on this stream (idempotent; identity configured durably).
    *
-   *  SUGAR, deliberately: enabling a processor is just LOADING A CLASS AS A FACET (the exact
-   *  `{ source, className }` ref `itx.workers.get` takes — `source` an expression resolved to
-   *  modules, `className` the exported StreamProcessor subclass) PLUS one appended fact — a
-   *  SUBSCRIPTION mount `itx.subscribers.<slug> → itx.facets.get('<slug>')`. A processor is just a
-   *  subscription whose target is a co-located facet: the commit pump drives every facet-target
-   *  subscriber. The only difference from a stateful `facets.get({ source, className })`: a
-   *  processor's class extends `StreamProcessor` (loaded behind the `runner.js` adapter, so the
-   *  author writes a reduce, never a DurableObject). So `enableProcessor` == subscribe a facet;
-   *  there is no separate `itx.processors.*` namespace and no second "enablement" concept. */
+   *  SUGAR, deliberately: enabling a processor is just LOADING A CLASS AS A FACET (the same
+   *  `source` + `className` that `itx.load(src).getDurableObjectClass(className)` takes — `source`
+   *  an expression resolved to modules, `className` the exported StreamProcessor subclass) PLUS one
+   *  appended fact — a SUBSCRIPTION mount `itx.subscribers.<slug> → itx.facets.get('<slug>')`. A
+   *  processor is just a subscription whose target is a co-located facet: the commit pump drives
+   *  every facet-target subscriber. The only difference from a stateful
+   *  `itx.load(src).getDurableObjectClass(className).get()`: a processor's class extends
+   *  `StreamProcessor` (loaded behind the `runner.js` adapter, so the author writes a reduce, never
+   *  a DurableObject). So `enableProcessor` == subscribe a facet; there is no separate
+   *  `itx.processors.*` namespace and no second "enablement" concept. */
   async enableProcessor(
     slug: string,
     ref?: { source: string | Expression; className: string },

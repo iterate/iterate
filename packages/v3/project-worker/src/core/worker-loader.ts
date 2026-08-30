@@ -70,7 +70,7 @@ export function confinedWorker(
     compatibilityDate: "2026-07-01",
     // Chain-enable Kenton's persistent-stub machinery: a loaded worker may STORE its env.ITX
     // (a ctx.exports-minted entrypoint stub) in its own durable storage and get a replay-on-use
-    // handle back — every chain member needs the flag (see iterate-context-entrypoint.ts).
+    // handle back — every chain member needs the flag (see itx-entrypoint.ts).
     compatibilityFlags: ["allow_irrevocable_stub_storage"],
     mainModule,
     // The processor SDK ("processor.js", ~330KB) is injected by `loadConfinedWorker` (THE one
@@ -116,10 +116,6 @@ export async function loadConfinedWorker(opts: {
   return { worker, version };
 }
 
-/** Materialize (or restart on a source change) a durable facet hosting a LOADED class, keeping
- *  its storage across restarts — the version-marker dance, stated once for both hosts (the
- *  stream's userspace processors and stateful facets). The deploy id is already in the
- *  loader cacheKey (confinedWorker); the marker catches CONTENT changes within a deploy. */
 /** A source expression may evaluate to a modules record ({ name: code }) or to ONE module
  *  string (plain kv — increment 57 killed the files root); normalize to the loader's shape.
  *  Anything else is a loud error, not an empty worker. */
@@ -156,6 +152,10 @@ async function resolveSource(
   return asModules(await invoke(toExpression(source as string | Expression)), what);
 }
 
+/** Materialize (or restart on a source change) a durable facet hosting a LOADED class, keeping
+ *  its storage across restarts — the version-marker dance, stated once for both hosts (the
+ *  stream's userspace processors and stateful facets). The deploy id is already in the
+ *  loader cacheKey (confinedWorker); the marker catches CONTENT changes within a deploy. */
 export function versionedFacet(
   ctx: {
     storage: { kv: { get(k: string): unknown; put(k: string, v: unknown): void } };
