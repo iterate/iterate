@@ -300,7 +300,7 @@ describe("the concurrency contract", () => {
     mem.procs.push(flaky);
     mem.stream.append({ type: "e" }) as StreamEvent[]; // the auto-push fails (attempt 1)
     await settle();
-    expect(storage.get("processor:flaky:progress")).toBeUndefined(); // nothing persisted
+    expect(storage.get("reduce:flaky:progress")).toBeUndefined(); // nothing persisted
     await flaky.wake(); // retried whole
     expect(attempts).toBe(2);
     const snap = await flaky.snapshot();

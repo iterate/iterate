@@ -226,7 +226,7 @@ describe("version-bump refold (Phase C)", () => {
     const mem = memoryStream();
     const { storage } = memoryStorage();
     // Persist a v1 cursor at offset 0 with a state (as if nothing was ever consumed).
-    storage.put("processor:count:progress", { reducerVersion: "1.0.0", reducedThroughOffset: 0 });
+    storage.put("reduce:count:progress", { reducerVersion: "1.0.0", reducedThroughOffset: 0 });
     const p2 = new CountProcessor(
       { stream: mem.stream, storage, path: "/", projectId: "prj_t" },
       "2.0.0",
@@ -296,7 +296,7 @@ describe("effect-only processor eviction (untouched-state loadProgress fallback)
     await p1.wake();
     expect(p1.effects).toEqual([1, 2, 3, 4]);
     // The cursor IS persisted (rule 4), even though state never changed.
-    expect(storage.get("processor:eff:progress")).toMatchObject({ reducedThroughOffset: 4 });
+    expect(storage.get("reduce:eff:progress")).toMatchObject({ reducedThroughOffset: 4 });
 
     // Eviction: fresh instance, SAME storage + log, SAME version.
     const p2 = new EffectOnlyProcessor({

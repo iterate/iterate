@@ -46,6 +46,7 @@ import {
   type SubscriptionLane,
 } from "./core/events.ts";
 import { parse, print, toExpression, type Expression } from "./core/expression.ts";
+import { readReduceCheckpoint, writeReduceCheckpoint } from "./core/reduce-checkpoint.ts";
 import { invokePath } from "./core/dispatch.ts";
 import { InvokeHandle } from "./core/invoke-handle.ts";
 import { StreamAlarmArmer, StreamEventLog } from "./core/event-log.ts";
@@ -387,13 +388,12 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (!entry) {
       const def = this.#inlineDefs().find((d) => d.slug === slug);
       if (!def) throw new Error(`no inline processor "${slug}"`);
-      const cp = this.ctx.storage.kv.get(`inline:${slug}`) as
-        | { reducerVersion: string; reducedThroughOffset: number; state: unknown }
-        | undefined;
-      entry =
-        cp && cp.reducerVersion === def.proc.contract.version
-          ? { proc: def.proc, state: cp.state, throughOffset: cp.reducedThroughOffset }
-          : { proc: def.proc, state: def.proc.contract.initialState(), throughOffset: 0 };
+      const cp = readReduceCheckpoint(this.ctx.storage.kv, slug, def.proc.contract.version, () =>
+        def.proc.contract.initialState(),
+      );
+      entry = cp
+        ? { proc: def.proc, state: cp.state, throughOffset: cp.reducedThroughOffset }
+        : { proc: def.proc, state: def.proc.contract.initialState(), throughOffset: 0 };
       this.#inlineCache.set(slug, entry);
     }
     const head = this.#eventLog.highestAssignedOffset();
@@ -436,12 +436,16 @@ export class StreamDurableObject extends DurableObject<Env> {
         this.#reduceInline(entry, e);
       }
       entry.throughOffset = nextOffset;
+      // Inline writes ONLY on change (it re-catches-up cheaply from the log on rebuild, so an
+      // unadvanced cursor is harmless) — unlike the facet, which advances the cursor every batch.
       if (entry.state !== before)
-        this.ctx.storage.kv.put(`inline:${def.slug}`, {
-          reducerVersion: def.proc.contract.version,
-          reducedThroughOffset: nextOffset,
-          state: entry.state,
-        });
+        writeReduceCheckpoint(
+          this.ctx.storage.kv,
+          def.slug,
+          { reducerVersion: def.proc.contract.version, reducedThroughOffset: nextOffset },
+          entry.state,
+          true,
+        );
     }
   }
 

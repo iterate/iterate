@@ -41,6 +41,12 @@
 import type { z } from "zod";
 import { diff } from "./patch.ts";
 import { reportIssue } from "./errors.ts";
+import {
+  type ReduceCheckpoint,
+  readReduceCheckpoint,
+  reduceCursorKey,
+  writeReduceCheckpoint,
+} from "./reduce-checkpoint.ts";
 import type {
   StreamEvent as StreamEventT,
   StreamEventInput as StreamEventInputT,
@@ -142,12 +148,6 @@ export function consumesEvent(
   return consumes === undefined || consumes.includes("*") || consumes.includes(event.type);
 }
 
-type ReduceProgress<State> = {
-  reducerVersion: string;
-  reducedThroughOffset: number;
-  state: State;
-};
-
 export abstract class StreamProcessor<State> {
   abstract readonly contract: ProcessorContract<State>;
   protected readonly stream: ProcessorStream;
@@ -158,7 +158,7 @@ export abstract class StreamProcessor<State> {
 
   // Rule 1: the serial chain.
   #chain: Promise<void> = Promise.resolve();
-  #progress: ReduceProgress<State> | null = null; // in-memory cache of the persisted reduce progress
+  #progress: ReduceCheckpoint<State> | null = null; // in-memory cache of the persisted reduce progress
   #pushedThroughOffset?: number; // highest scannedThroughOffset ever SHOWN to us (see processEventBatch)
   #waiters: { offset: number; resolve: () => void }[] = [];
 
@@ -333,38 +333,16 @@ export abstract class StreamProcessor<State> {
     return run;
   }
 
-  #progressKey(): string {
-    return `processor:${this.contract.slug}:progress`;
-  }
-  #stateKey(): string {
-    return `processor:${this.contract.slug}:state`;
-  }
-
-  /** The persisted reduce is TWO keys: the tiny cursor record (written per durable scannedOffsetRange) and
-   *  the state blob (written only when the reduce actually changed it) — otherwise every enabled
-   *  facet rewrote its ENTIRE state for every durable batch, consumed or not. Both writes land
-   *  in one event-loop turn, so the storage write coalescer commits them together. */
-  #loadProgress(): ReduceProgress<State> {
+  /** The persisted reduce checkpoint (see reduce-checkpoint.ts) — cached per incarnation. A
+   *  version MATCH is cached; a MISMATCH (or no cursor) returns the fresh fallback WITHOUT caching
+   *  it, because `#rereduceIfVersionChanged` bails when `#progress` is already set — caching here
+   *  would skip the refold and replay the whole log WITH side effects (defect 17). */
+  #loadProgress(): ReduceCheckpoint<State> {
     if (this.#progress) return this.#progress;
-    const cursor = this.#storage.get<{ reducerVersion: string; reducedThroughOffset: number }>(
-      this.#progressKey(),
+    const cp = readReduceCheckpoint(this.#storage, this.contract.slug, this.contract.version, () =>
+      this.contract.initialState(),
     );
-    const state = this.#storage.get<State>(this.#stateKey());
-    if (cursor && cursor.reducerVersion === this.contract.version) {
-      // Accept the persisted cursor whenever the version matches — an ABSENT state key means the
-      // reduce never changed state (a pure side-effect processor), which legitimately EQUALS
-      // initialState(); reusing the cursor stops it from re-firing its whole effect history on
-      // every eviction/quiesce (defect 50, the missing-state twin of defect 17).
-      this.#progress = {
-        reducerVersion: cursor.reducerVersion,
-        reducedThroughOffset: cursor.reducedThroughOffset,
-        state: state !== undefined ? state : this.contract.initialState(),
-      };
-      return this.#progress;
-    }
-    // A VERSION MISMATCH (or missing state) returns the fresh fallback WITHOUT caching it: the
-    // refold in #rereduceIfVersionChanged bails if #progress is already set, so caching here
-    // would skip the refold and replay the whole log WITH side effects (defect 17).
+    if (cp) return (this.#progress = cp);
     return {
       reducerVersion: this.contract.version,
       reducedThroughOffset: 0,
@@ -377,7 +355,7 @@ export abstract class StreamProcessor<State> {
   async #rereduceIfVersionChanged(): Promise<void> {
     if (this.#progress) return; // version can't change within an incarnation — probe storage once
     const stored = this.#storage.get<{ reducerVersion: string; reducedThroughOffset: number }>(
-      this.#progressKey(),
+      reduceCursorKey(this.contract.slug),
     );
     if (!stored || stored.reducerVersion === this.contract.version) return;
     // Rebuild ONLY through the offset the OLD cursor covered (reduce-only, no effects). Events
@@ -399,11 +377,7 @@ export abstract class StreamProcessor<State> {
       if (page.events.length < 500) break;
     }
     this.#progress = { reducerVersion: this.contract.version, reducedThroughOffset: target, state };
-    this.#storage.put(this.#progressKey(), {
-      reducerVersion: this.contract.version,
-      reducedThroughOffset: target,
-    });
-    this.#storage.put(this.#stateKey(), state);
+    writeReduceCheckpoint(this.#storage, this.contract.slug, this.#progress, state, true);
   }
 
   /** CURSOR-DRIVEN gap repair: read contiguously from the persisted cursor out of the log —
@@ -550,18 +524,19 @@ export abstract class StreamProcessor<State> {
     // Rule 4: ONE persist per scannedOffsetRange, before the cursor advances — but NEVER for an
     // ephemeral-only scannedOffsetRange (a pure-ephemeral flood costs zero writes; after eviction the
     // cursor regresses only over events nobody can redeliver anyway).
-    const next: ReduceProgress<State> = {
+    const next: ReduceCheckpoint<State> = {
       reducerVersion: this.contract.version,
       reducedThroughOffset: scannedOffsetRange.scannedThroughOffset,
       state,
     };
-    if (sawDurable) {
-      this.#storage.put(this.#progressKey(), {
-        reducerVersion: next.reducerVersion,
-        reducedThroughOffset: next.reducedThroughOffset,
-      });
-      if (state !== progress.state) this.#storage.put(this.#stateKey(), state);
-    }
+    if (sawDurable)
+      writeReduceCheckpoint(
+        this.#storage,
+        this.contract.slug,
+        next,
+        state,
+        state !== progress.state,
+      );
     this.#progress = next;
     for (const w of this.#waiters.splice(0)) {
       if (next.reducedThroughOffset >= w.offset) w.resolve();

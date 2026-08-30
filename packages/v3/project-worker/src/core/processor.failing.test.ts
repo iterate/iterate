@@ -188,7 +188,7 @@ describe("rule 3 — runInBackground never blocks the batch commit", () => {
     await p.processEventBatch(committed, { scannedAfterOffset: 0, scannedThroughOffset: 1 });
     // The batch is durably committed BEFORE the background work lands (overtaking allowed):
     expect(bgDone).toBe(false);
-    expect(storage.get<{ reducedThroughOffset: number }>("processor:bg:progress")).toMatchObject({
+    expect(storage.get<{ reducedThroughOffset: number }>("reduce:bg:progress")).toMatchObject({
       reducedThroughOffset: 1,
     });
     await sleep(120);
