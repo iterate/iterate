@@ -824,23 +824,25 @@ export class StreamDurableObject extends DurableObject<Env> {
    *  the terminal. `roots.facets` (and via one seed, `itx.facets`) rides this to reach ANY
    *  method a facet's durable object exposes — a facet hosts an object; processor is a role. */
   async facetInvoke(
-    ref: string | { source: unknown; className: string },
+    ref: string | { source?: unknown; className?: string; name?: string },
     path: string[],
     args: unknown[],
   ): Promise<unknown> {
     this.#noteActivity(); // (was in #facet — moved out so the resurrection pass stays idle-neutral)
     if (path.length === 0) throw new Error(`facet: name a method`);
-    // A loaded STATEFUL class hosted as a facet: materialize (or reuse) it, then call — a method
-    // walks receiver-preservingly (invokePath), a top-level `.fetch` forwards to the facet's own
-    // fetch (a 101 flows DO→facet natively). This is the mirror of a stateless workers.get(ref).
+    // OBJECT ref = `itx.load(...)`: materialize a loaded class hosted as a facet, or address a
+    // running one by name. A method walks receiver-preservingly (invokePath); a top-level `.fetch`
+    // forwards to the facet's own fetch (a 101 flows DO→facet natively).
     if (typeof ref !== "string") {
-      const facet = await this.#statefulFacet({
-        source: toExpression(ref.source as string | Expression),
-        className: ref.className,
-      });
+      const facet = await this.#loadFacet(ref);
       if (path.length === 1 && path[0] === "fetch")
         return (facet as Fetcher).fetch(args[0] as Request);
-      return invokePath(facet, path, args, `worker "${ref.className}"`);
+      return invokePath(
+        facet,
+        path,
+        args,
+        ref.name ? `named "${ref.name}"` : `worker "${ref.className}"`,
+      );
     }
     const slug = ref;
     // INLINE processors answer at the same address — always at head, so the barrier verb is
@@ -853,9 +855,36 @@ export class StreamDurableObject extends DurableObject<Env> {
       };
       return invokePath(view, path, args, `inline "${slug}"`);
     }
-    // invokePath = stepGet + Reflect.apply with the receiver carried (the DataCloneError learning
-    // lives on the helper — see core/expression.ts). #facet throws NO_FACET for an unknown slug.
-    return invokePath(await this.#facet(slug), path, args, `facet "${slug}"`);
+    return invokePath(await this.#addressNamed(slug), path, args, `facet "${slug}"`);
+  }
+
+  /** MATERIALIZE from `{ source, className, name? }`, or ADDRESS an existing one by `{ name }`. A
+   *  NAMED instance registers `name → { source, className }` durably (parent kv), so a later
+   *  `load({ name })` re-materializes it AFTER an eviction — its own DO storage having survived. */
+  async #loadFacet(ref: { source?: unknown; className?: string; name?: string }): Promise<unknown> {
+    if (ref.source !== undefined && ref.className) {
+      const source = toExpression(ref.source as string | Expression);
+      if (ref.name)
+        this.ctx.storage.kv.put(`named-facet:${ref.name}`, {
+          source: print(source),
+          className: ref.className,
+        });
+      return this.#statefulFacet({ source, className: ref.className }, ref.name);
+    }
+    if (ref.name) return this.#addressNamed(ref.name);
+    throw new Error(`load: pass { source, className } to run a facet, or { name } to address one`);
+  }
+
+  /** Address a facet by NAME: an enabled processor (its mount names the source), or a named durable
+   *  instance (its registration does). `#facet`/here throw NO_FACET for an unknown name. */
+  async #addressNamed(name: string): Promise<unknown> {
+    if (this.#facetEntries().some((e) => e.slug === name)) return this.#facet(name);
+    const reg = this.ctx.storage.kv.get(`named-facet:${name}`) as
+      | { source: string; className: string }
+      | undefined;
+    if (reg)
+      return this.#statefulFacet({ source: parse(reg.source), className: reg.className }, name);
+    throw codedError("NO_FACET", `no facet "${name}" enabled or registered`);
   }
 
   // ── stateful loaded classes: FACETS of this stream (the dedicated runner DO died in 57) ──
@@ -867,11 +896,18 @@ export class StreamDurableObject extends DurableObject<Env> {
   readonly #statefulFacetNames = new Set<string>();
 
   /** Materialize (or reuse) the facet hosting a loaded `className`. Same confinedWorker +
-   *  versionedFacet as userspace processors; facet identity keys on the SOURCE EXPRESSION
-   *  (stable name), while versionedFacet restarts it when the resolved CONTENT changes. */
-  async #statefulFacet(ref: { source: Expression; className: string }): Promise<unknown> {
+   *  versionedFacet as userspace processors. A NAMED instance (`itx.load({source, className, name})`)
+   *  keys its DO storage on the NAME — two names are two independent states of the same class; an
+   *  unnamed one is CONTENT-keyed (`stateful:<class>:<hash>`), the anonymous run-a-class case. The
+   *  loader isolate is keyed by className either way (same code, one isolate; distinct DO storage). */
+  async #statefulFacet(
+    ref: { source: Expression; className: string },
+    name?: string,
+  ): Promise<unknown> {
     this.#noteActivity();
-    const facetName = `stateful:${ref.className}:${hashSource(JSON.stringify(ref.source))}`;
+    const facetName = name
+      ? `named:${name}`
+      : `stateful:${ref.className}:${hashSource(JSON.stringify(ref.source))}`;
     this.#statefulFacetNames.add(facetName);
     return this.#durableFacet({
       source: ref.source,
@@ -880,7 +916,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       loadedClassName: ref.className,
       facetName,
       markerKey: `${facetName}:version`,
-      what: `stateful worker "${ref.className}"`,
+      what: name ? `named worker "${name}"` : `stateful worker "${ref.className}"`,
     });
   }
 

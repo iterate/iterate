@@ -1,5 +1,5 @@
 // built-ins.ts — THE BUILT-INS: a plain record whose KEYS are the physical-layer roots (`whoami`,
-// `kv`, `stream`, `cd`, `rpcStubs`, `facets`, `workers`, `runScript`). A call `itx.<root>…`
+// `kv`, `stream`, `cd`, `rpcStubs`, `facets`, `workers`, `load`, `runScript`, `connectToCapnweb`). A call `itx.<root>…`
 // resolves DIRECTLY against these (capability-table-processor.ts `resolve`, built-in first) — no
 // config, no mount. Userspace `provide` mounts resolve against `{ itx }` alone and recurse through
 // the `itx` symbol to reach a root; a bare root is unspellable, so the built-ins are unshadowable.
@@ -39,8 +39,14 @@ type RpcStubsView = {
  *  slugs) OR `{ source, className }` (materialize the loaded `className` durable object as a facet).
  *  The mirror of `workers.get(ref)` (a stateless WorkerEntrypoint): entrypoint vs durable object. */
 type FacetsView = {
-  get(ref: string | { source: unknown; className: string }): unknown;
+  get(ref: string | { source?: unknown; className?: string; name?: string }): unknown;
 };
+
+/** A ref to loadable code (`itx.load`): a WorkerEntrypoint OR a DurableObject, discriminated by
+ *  what the source exports. `{ source }` (no className) → a STATELESS isolate; `{ source, className,
+ *  name? }` → a DURABLE object hosted as a facet (named instances have independent state); `{ name }`
+ *  / a bare string → ADDRESS an already-running facet (or enabled processor) by name. */
+type LoadRef = string | { source?: unknown; className?: string; name?: string };
 
 /** Run STATELESS code in this context — a fresh confined isolate, a `{ run, fetch }` handle (no DO,
  *  no storage). `get({ source })` loads code from a source; scope-level `runScript(script)` is sugar
@@ -78,6 +84,9 @@ interface BuiltInScope {
   facets: FacetsView;
   /** Run STATELESS loaded code — `get({ source })` → a pipelinable `{ run, fetch }` entrypoint. */
   workers: WorkersView;
+  /** THE loaded-code door over workers+facets — `{ source }` stateless, `{ source, className, name? }`
+   *  durable facet, `{ name }`/string address a running one. See `LoadRef`. */
+  load(ref: LoadRef): unknown;
   /** Run a stateless lambda STRING (sugar over `workers.get({ source }).run(...)`). */
   runScript(script: string, ...args: unknown[]): Promise<unknown>;
   /** Dial a REMOTE capnweb API by URL (one HTTP batch — no persistent socket). */
@@ -225,6 +234,24 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     rpcStubs: deps.rpcStubs,
     facets: deps.facets,
     workers,
+    /** THE loaded-code door — one door over `workers`+`facets`, discriminated by what the source
+     *  exports. `{ source }` (no className) → a STATELESS WorkerEntrypoint isolate (`.run`/`.fetch`);
+     *  `{ source, className, name? }` → a DURABLE object hosted as a facet (a `name` gives a
+     *  persistent, independently-stated instance); `{ name }` / a bare string → ADDRESS a running
+     *  facet by name. The returned handle pipelines any method the loaded class exposes. */
+    load: (ref: LoadRef) => {
+      const r = typeof ref === "string" ? { name: ref } : ref;
+      if (r.source !== undefined && r.className === undefined && r.name === undefined) {
+        const handle = statelessHandle(r.source as WorkerSource);
+        return new InvokeHandle((segments, args) => {
+          if (segments.length === 1 && segments[0] === "fetch")
+            return handle.fetch(args[0] as Request);
+          if (segments.length === 1 && segments[0] === "run") return handle.run(...args);
+          throw new Error(`load(...).${segments.join(".")}: a stateless worker exposes run|fetch`);
+        });
+      }
+      return deps.facets.get(r); // durable facet: materialize {source,className,name?} or address {name}
+    },
     /** Run a STATELESS lambda — a string like `"async (itx, ...args) => …"` (same as apps/os). It
      *  is wrapped in a WorkerEntrypoint whose `run()` injects `itx`, then run with `...args`. To run
      *  code loaded from a source (kv, a repo, inline files), use `workers.get({ source }).run(...)`. */
