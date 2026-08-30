@@ -36,24 +36,21 @@ import {
 } from "../lib/record-gesture.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
 
-/** Voice notes record as 16kHz mono LPCM WAV — the transcription models'
- * native diet. The default AAC m4a came back "no recognizable speech" from
- * the platform's transcriber; wav is bigger (~32KB/s, fine for clips — the
- * chunked-stream upload lane carries it) but decodes everywhere. Android
- * keeps AAC (MediaRecorder can't write wav; this app ships iOS-first). */
+/** Voice notes record as 16kHz mono AAC — the voice-optimized profile the
+ * transcribers (on-device SFSpeechRecognizer and server models) handle well.
+ * NOT LPCM/WAV: expo-audio passes bitRate to AVAudioRecorder unconditionally
+ * (AudioUtils.createRecordingOptions), and AVFoundation raises an
+ * uncatchable NSInvalidArgumentException when a bit rate accompanies Linear
+ * PCM — and useAudioRecorder constructs the recorder on every chat-screen
+ * mount, so the LPCM options crashed the app on opening ANY chat
+ * (on-device, 2026-08-31). */
 const VOICE_RECORDING_OPTIONS: RecordingOptions = {
-  extension: ".wav",
+  extension: ".m4a",
   sampleRate: 16000,
   numberOfChannels: 1,
-  bitRate: 256000,
+  bitRate: 64000,
   android: { outputFormat: "mpeg4", audioEncoder: "aac" },
-  ios: {
-    outputFormat: IOSOutputFormat.LINEARPCM,
-    audioQuality: AudioQuality.MAX,
-    linearPCMBitDepth: 16,
-    linearPCMIsBigEndian: false,
-    linearPCMIsFloat: false,
-  },
+  ios: { outputFormat: IOSOutputFormat.MPEG4AAC, audioQuality: AudioQuality.MAX },
   web: { mimeType: "audio/webm", bitsPerSecond: 128000 },
 };
 
@@ -155,7 +152,7 @@ export function RecordControls(props: { onAttach: (attachment: ComposerAttachmen
       // so a second recording can't overwrite an attached-but-unsent one.
       let stableUri = uri;
       if (FileSystem.cacheDirectory !== null) {
-        stableUri = `${FileSystem.cacheDirectory}voice-${current.startedAt}.wav`;
+        stableUri = `${FileSystem.cacheDirectory}voice-${current.startedAt}.m4a`;
         await FileSystem.copyAsync({ from: uri, to: stableUri });
       }
       // Transcription starts NOW; the attach-to-send gap usually covers it,
@@ -163,8 +160,8 @@ export function RecordControls(props: { onAttach: (attachment: ComposerAttachmen
       beginTranscription(stableUri);
       props.onAttach({
         kind: "audio",
-        filename: `voice-${current.startedAt}.wav`,
-        contentType: "audio/wav",
+        filename: `voice-${current.startedAt}.m4a`,
+        contentType: "audio/mp4",
         uri: stableUri,
         durationSeconds: (Date.now() - current.startedAt) / 1000,
         transcript: null,
