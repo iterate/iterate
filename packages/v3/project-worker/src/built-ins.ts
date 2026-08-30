@@ -41,9 +41,9 @@ type FacetsView = {
 };
 
 /** Run STATELESS code in this context — a fresh confined isolate, a `{ run, fetch }` handle (no DO,
- *  no storage). `get({ source })` loads it; scope-level `runScript(source, ...)` is one-hop sugar
- *  for `get({ source }).run(...)`. Durable classes hosted as facets are the mirror door,
- *  `itx.facets.get({ source, className })`. */
+ *  no storage). `get({ source })` loads code from a source; scope-level `runScript(script)` is sugar
+ *  for wrapping a lambda STRING and `get({ source }).run(...)`. Durable classes hosted as facets are
+ *  the mirror door, `itx.facets.get({ source, className })`. */
 type WorkersView = {
   get(ref: { source: unknown }): unknown;
 };
@@ -185,9 +185,13 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     rpcStubs: deps.rpcStubs,
     facets: deps.facets,
     workers,
-    /** Run stateless code in this context — sugar for `workers.get({ source }).run(…)`. */
-    runScript: (source: unknown, ...args: unknown[]) =>
-      statelessHandle(source as WorkerSource).run(...args),
+    /** Run a STATELESS lambda — a string like `"async (itx, ...args) => …"` (same as apps/os). It
+     *  is wrapped in a WorkerEntrypoint whose `run()` injects `itx`, then run with `...args`. To run
+     *  code loaded from a source (kv, a repo, inline files), use `workers.get({ source }).run(...)`. */
+    runScript: (script: string, ...args: unknown[]) =>
+      statelessHandle({ type: "inline", files: { "cap.js": `export default ${script};` } }).run(
+        ...args,
+      ),
   };
   if (Object.hasOwn(scope, "itx")) throw new Error("host scope must never register 'itx'");
   return scope;

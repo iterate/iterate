@@ -32,7 +32,7 @@ await itx.invokeCapability({
     "export default async (itx) => `from-kv:${(await itx.whoami()).projectId}`;",
   ],
 });
-const out = await itx.invoke(`itx.runScript("itx.kv.get('src/mine.js')")`);
+const out = await itx.invoke(`itx.workers.get({source:"itx.kv.get('src/mine.js')"}).run()`);
 check(
   out === `from-kv:${CTX}`,
   "kv-stored source runs as a worker (itx round-trip inside)",

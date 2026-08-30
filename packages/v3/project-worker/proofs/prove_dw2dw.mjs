@@ -82,7 +82,7 @@ check(
 );
 
 // ── lane 2: worker B reaches worker A via env.ITX.get() — the dynamic-worker → dynamic-worker case ──
-const ran = await itx.runScript("itx.kv.get('src/consumerB.js')", aRef);
+const ran = await itx.workers.get({ source: "itx.kv.get('src/consumerB.js')" }).run(aRef);
 check(
   ran?.ran === true && ran?.pinged === true,
   "dynamic worker B: env.ITX.get().facets.get(aRef).demo.timer.callLater(cb) ran and the callback fired inside B",
