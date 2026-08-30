@@ -114,8 +114,26 @@ test("location and dimensions become self-describing xml parts appended to the t
   expect(messageWithXmlParts("", [location])).toBe(
     '<user-location latitude="51.5074" longitude="-0.1278" accuracy-meters="12" captured-at="2026-08-30T12:00:00.000Z" />',
   );
-  // Nothing with a dimension or location → the text passes through untouched.
-  expect(messageWithXmlParts("hi", [voiceClip])).toBe("hi");
+  // A recorded voice clip announces itself so the agent knows to transcribe
+  // — and so the bubble can render as just the player.
+  expect(messageWithXmlParts("", [voiceClip])).toBe(
+    '<voice-note filename="voice-123.m4a" duration-seconds="83" />',
+  );
+  // Nothing part-worthy (a document-picked file) → text passes through.
+  const pdf: ComposerAttachment = {
+    kind: "file",
+    filename: "doc.pdf",
+    contentType: "application/pdf",
+    uri: "file:///tmp/doc.pdf",
+    sizeBytes: 10,
+  };
+  expect(messageWithXmlParts("hi", [pdf])).toBe("hi");
+});
+
+test("captions hide metadata parts and the server's default attachment note", () => {
+  expect(stripAttachmentXmlParts('<voice-note filename="v.wav" duration-seconds="3" />')).toBe("");
+  expect(stripAttachmentXmlParts("[Files attached: voice-1788126369274.m4a]")).toBe("");
+  expect(stripAttachmentXmlParts("real words\n[Files attached: a.pdf, b.png]")).toBe("real words");
 });
 
 test("dimension parts round-trip: sent for sized media, parsed back, hidden from the caption", () => {

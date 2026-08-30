@@ -214,13 +214,24 @@ export function dimensionsXmlPart(attachment: ComposerAttachment): string | null
   return `<attachment filename="${escapeXmlAttribute(dimensions.filename)}" width="${Math.round(dimensions.width)}" height="${Math.round(dimensions.height)}" />`;
 }
 
+/** A recorded voice clip announces itself: the part is both the agent's cue
+ * to transcribe (clearer than the server's default "[Files attached: …]"
+ * note) and what lets a voice-only bubble render as JUST the player —
+ * renderers strip it from the caption. Recorded clips are the ones carrying
+ * a duration; document-picked audio files (durationSeconds null) are just
+ * files. */
+export function voiceNoteXmlPart(attachment: ComposerAttachment): string | null {
+  if (attachment.kind !== "audio" || attachment.durationSeconds === null) return null;
+  return `<voice-note filename="${escapeXmlAttribute(attachment.filename)}" duration-seconds="${Math.round(attachment.durationSeconds)}" />`;
+}
+
 /** The message text that actually sends: the typed text, then each XML part
- * on its own line (location + attachment dimensions). */
+ * on its own line (location + attachment dimensions + voice notes). */
 export function messageWithXmlParts(message: string, attachments: ComposerAttachment[]): string {
   const parts = attachments.flatMap((attachment) => {
     if (attachment.kind === "location") return [locationXmlPart(attachment)];
-    const dimensions = dimensionsXmlPart(attachment);
-    return dimensions === null ? [] : [dimensions];
+    const part = dimensionsXmlPart(attachment) || voiceNoteXmlPart(attachment);
+    return part === null ? [] : [part];
   });
   if (parts.length === 0) return message;
   return [message, ...parts].filter((line) => line !== "").join("\n");
@@ -260,15 +271,20 @@ export function parseUserLocations(
 }
 
 /** The caption a human should see: <attachment .../> parts are layout
- * metadata and <user-location .../> parts render as map cards — neither
- * belongs in the visible text. */
+ * metadata, <user-location .../> parts render as map cards,
+ * <voice-note .../> parts render as players, and the server's default
+ * "[Files attached: …]" note is redundant next to rich attachment renders —
+ * none of them belong in the visible text. */
 export function stripAttachmentXmlParts(text: string): string {
   return text
     .split("\n")
     .filter((line) => {
       const trimmed = line.trim();
       return (
-        !/^<attachment filename=.* \/>$/.test(trimmed) && !/^<user-location .* \/>$/.test(trimmed)
+        !/^<attachment filename=.* \/>$/.test(trimmed) &&
+        !/^<user-location .* \/>$/.test(trimmed) &&
+        !/^<voice-note .* \/>$/.test(trimmed) &&
+        !/^\[Files attached: .*\]$/.test(trimmed)
       );
     })
     .join("\n")

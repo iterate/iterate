@@ -194,6 +194,15 @@ and uploads lazily.
   bubble with Retry / Edit instead of dumping the draft back. Sends can
   queue (the button no longer locks while one is in flight). Eager upload
   (item b) stays a follow-up: needs an addFiles-by-reference platform seam.
+- Feedback round 4: "sending…" under a pending bubble now renders in the
+  SAME WorkingCard box that replaces it — no layout jump. Voice notes record
+  as 16kHz mono LPCM WAV (transcription models' native diet; the AAC m4a
+  came back "no recognizable speech" from the platform transcriber) and
+  announce themselves with a `<voice-note filename duration-seconds />` part
+  — the agent's cue to transcribe, stripped from the visible caption along
+  with the server's default "[Files attached: …]" note, so a voice-only
+  message renders as just the player. On-device transcription
+  (expo-speech-recognition) noted as a possible follow-up.
 - Gotcha found while running specs: wrapping `dev.ts` in an outer
   `doppler run` exports DOPPLER_PROJECT/DOPPLER_CONFIG, which the INNER
   `doppler run` (apps/os scope) honors over doppler.yaml — the dev server

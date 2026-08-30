@@ -16,11 +16,13 @@ import { useQuery } from "@tanstack/react-query";
 import { PanResponder, Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import {
+  AudioQuality,
   getRecordingPermissionsAsync,
-  RecordingPresets,
+  IOSOutputFormat,
   requestRecordingPermissionsAsync,
   setAudioModeAsync,
   useAudioRecorder,
+  type RecordingOptions,
 } from "expo-audio";
 import { Camera, CameraView } from "expo-camera";
 import * as FileSystem from "expo-file-system/legacy";
@@ -32,6 +34,27 @@ import {
   type RecordGestureState,
 } from "../lib/record-gesture.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
+
+/** Voice notes record as 16kHz mono LPCM WAV — the transcription models'
+ * native diet. The default AAC m4a came back "no recognizable speech" from
+ * the platform's transcriber; wav is bigger (~32KB/s, fine for clips — the
+ * chunked-stream upload lane carries it) but decodes everywhere. Android
+ * keeps AAC (MediaRecorder can't write wav; this app ships iOS-first). */
+const VOICE_RECORDING_OPTIONS: RecordingOptions = {
+  extension: ".wav",
+  sampleRate: 16000,
+  numberOfChannels: 1,
+  bitRate: 256000,
+  android: { outputFormat: "mpeg4", audioEncoder: "aac" },
+  ios: {
+    outputFormat: IOSOutputFormat.LINEARPCM,
+    audioQuality: AudioQuality.MAX,
+    linearPCMBitDepth: 16,
+    linearPCMIsBigEndian: false,
+    linearPCMIsFloat: false,
+  },
+  web: { mimeType: "audio/webm", bitsPerSecond: 128000 },
+};
 
 const BUTTON = 38;
 const TOOLTIP_MS = 1600;
@@ -53,7 +76,7 @@ function liveOutcome(session: RecordSession): RecordSession["outcome"] {
 }
 
 export function RecordControls(props: { onAttach: (attachment: ComposerAttachment) => void }) {
-  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorder = useAudioRecorder(VOICE_RECORDING_OPTIONS);
   const window = useWindowDimensions();
 
   const [mode, setMode] = useState<"mic" | "video">("mic");
@@ -131,13 +154,13 @@ export function RecordControls(props: { onAttach: (attachment: ComposerAttachmen
       // so a second recording can't overwrite an attached-but-unsent one.
       let stableUri = uri;
       if (FileSystem.cacheDirectory !== null) {
-        stableUri = `${FileSystem.cacheDirectory}voice-${current.startedAt}.m4a`;
+        stableUri = `${FileSystem.cacheDirectory}voice-${current.startedAt}.wav`;
         await FileSystem.copyAsync({ from: uri, to: stableUri });
       }
       props.onAttach({
         kind: "audio",
-        filename: `voice-${current.startedAt}.m4a`,
-        contentType: "audio/mp4",
+        filename: `voice-${current.startedAt}.wav`,
+        contentType: "audio/wav",
         uri: stableUri,
         durationSeconds: (Date.now() - current.startedAt) / 1000,
       });

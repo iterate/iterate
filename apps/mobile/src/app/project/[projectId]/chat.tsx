@@ -520,7 +520,7 @@ function FeedList({
               turnPending). Rendered as the SAME card the live activity uses,
               so the box doesn't jump when the real card takes over. */}
           {sendPending || (feed.working && (feed.live === null || feed.live.steps.length === 0)) ? (
-            <WorkingCard />
+            <WorkingCard label="working…" />
           ) : null}
         </View>
       }
@@ -659,10 +659,12 @@ function PendingSendBubble({
     }),
   };
   return (
-    <View style={entry.status === "sending" ? styles.pendingSending : null}>
+    <View style={[styles.pendingWrap, entry.status === "sending" ? styles.pendingSending : null]}>
       <MessageBubble message={message} />
       {entry.status === "sending" ? (
-        <Text style={styles.pendingStatus}>sending…</Text>
+        // The SAME card working… renders in — identical box, so nothing
+        // jumps when the echo lands and the working card takes this spot.
+        <WorkingCard label="sending…" />
       ) : (
         <View style={styles.pendingFailedRow}>
           <Text numberOfLines={2} style={styles.pendingError}>
@@ -1096,13 +1098,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   sendText: { color: colors.background, fontSize: 18, fontWeight: "700" },
+  pendingWrap: { gap: spacing.sm },
   pendingSending: { opacity: 0.75 },
-  pendingStatus: {
-    alignSelf: "flex-end",
-    color: colors.textFaint,
-    fontSize: 11,
-    marginTop: 2,
-  },
   pendingFailedRow: {
     alignSelf: "flex-end",
     flexDirection: "row",

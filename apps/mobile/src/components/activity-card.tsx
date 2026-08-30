@@ -289,7 +289,7 @@ function roundHeaderMeta(round: { llm: AgentUiLlmStep | null; code: AgentUiCodeS
  * loading affordance never changes box, border, or text position when the
  * real card takes over — it just starts filling in.
  */
-export function WorkingCard() {
+export function WorkingCard({ label }: { label: string }) {
   return (
     <View style={[styles.card, styles.cardLive]}>
       <View style={styles.summaryRow}>
@@ -301,7 +301,7 @@ export function WorkingCard() {
         />
         <PhaseGlyph phase="working" />
         <Text style={styles.summary} numberOfLines={1}>
-          working…
+          {label}
         </Text>
       </View>
     </View>
