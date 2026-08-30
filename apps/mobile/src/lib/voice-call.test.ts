@@ -176,13 +176,21 @@ test("a microphone that will not start ends the call cleanly instead of leaving 
 test("the keepalive heartbeat runs for the call's life and dies with it", async () => {
   const h = makeHarness();
   const call = await startVoiceCall({ ...h.deps, keepaliveIntervalMs: 4 });
-  await new Promise((resolve) => setTimeout(resolve, 20));
   const beats = () => h.appends.filter((a) => a.type.endsWith("/keepalive"));
-  expect(beats().length).toBeGreaterThan(1);
+  /* Poll-until with a watchdog, not a fixed sleep: a loaded CI runner can
+   * starve a 4ms interval past any fixed wait (measured: one beat in 20ms
+   * on Depot). Two beats prove periodicity. */
+  const deadline = Date.now() + 2_000;
+  while (beats().length < 2 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  expect(beats().length).toBeGreaterThanOrEqual(2);
   expect(beats()[0]).toMatchObject({ ephemeral: true });
   await call.hangUp();
+  /* A cleared interval cannot fire again, so a short fixed wait suffices
+   * to catch a timer that survived finish(). */
   const after = beats().length;
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await new Promise((resolve) => setTimeout(resolve, 25));
   expect(beats().length).toBe(after);
 });
 

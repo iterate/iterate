@@ -4156,8 +4156,9 @@ export class VoiceAgentProcessor extends StreamProcessor<
           /* An absent legacy name, or a platform that refuses the removal —
            * either way the per-line subscription above already stands. */
         }
-        /* (The transcript lane — the other direction — is installed by
-         * SETUP, whose batch surfaces a refused append as a failed setup;
+        /* (The transcript subscription — copying the call's spoken turns
+         * TO the colleague — is installed by SETUP, whose batch surfaces
+         * a refused append as a failed setup;
          * see colleagueTranscriptSubscription for the silent-evening
          * incident that moved it there.) */
         /* Keyed context item — re-adding the key IS the update — but the
