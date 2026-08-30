@@ -166,6 +166,7 @@ export function RecordControls(props: { onAttach: (attachment: ComposerAttachmen
         if (outcome === "finish" && video) {
           props.onAttach({
             kind: "video",
+            assetId: null,
             filename: `video-${current.startedAt}.mov`,
             contentType: "video/quicktime",
             uri: video.uri,

@@ -3,7 +3,7 @@
 // "Remove attachment?" OK|Cancel (deliberate friction — the old tap-removes-
 // instantly behavior ate photos people meant to preview).
 
-import { Alert, Image, Pressable, StyleSheet, Text, View } from "react-native";
+import { Alert, Image, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import {
   attachmentKey,
@@ -27,12 +27,9 @@ export function AttachmentChips(props: {
             accessibilityLabel={`Attachment: ${attachmentLabel(attachment)}. Tap to remove.`}
             accessibilityRole="button"
             key={key}
-            onPress={() =>
-              Alert.alert("Remove attachment?", attachmentLabel(attachment), [
-                { text: "Cancel", style: "cancel" },
-                { text: "OK", onPress: () => props.onRemove(key) },
-              ])
-            }
+            onPress={async () => {
+              if (await confirmRemoval(attachmentLabel(attachment))) props.onRemove(key);
+            }}
           >
             <Chip attachment={attachment} />
           </Pressable>
@@ -40,6 +37,20 @@ export function AttachmentChips(props: {
       })}
     </View>
   );
+}
+
+/** Native gets the OK|Cancel alert; web gets window.confirm — the same
+ * dialog a playwright spec answers (lib/reject-reason.ts precedent). */
+function confirmRemoval(label: string): Promise<boolean> {
+  if (Platform.OS === "web") {
+    return Promise.resolve(window.confirm(`Remove attachment?\n${label}`));
+  }
+  return new Promise((resolve) => {
+    Alert.alert("Remove attachment?", label, [
+      { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+      { text: "OK", onPress: () => resolve(true) },
+    ]);
+  });
 }
 
 function Chip({ attachment }: { attachment: ComposerAttachment }) {

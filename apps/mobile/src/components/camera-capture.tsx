@@ -58,6 +58,7 @@ export function CameraCaptureModal(props: {
       const now = Date.now();
       props.onCapture({
         kind: "video",
+        assetId: null,
         filename: `camera-${now}.mov`,
         contentType: "video/quicktime",
         uri: video.uri,

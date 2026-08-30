@@ -67,6 +67,7 @@ export async function readMediaAsAttachment(item: RecentMediaItem): Promise<Comp
   if (refusal !== null) throw new Error(refusal);
   return {
     kind: "video",
+    assetId: item.assetId,
     filename: info.filename || `video-${item.assetId}.${extension}`,
     contentType: extension === "mp4" ? "video/mp4" : "video/quicktime",
     uri: info.localUri,

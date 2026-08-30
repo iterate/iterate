@@ -32,9 +32,11 @@ import { CameraCaptureModal } from "./camera-capture.tsx";
 const TILE = 100;
 
 export function AttachmentSheet(props: {
-  /** Keys of what's already attached — carousel tiles show a check. */
-  attachedKeys: string[];
+  /** Library asset ids already attached — their tiles show a check, and
+   * tapping one again detaches it (the note strip's toggle semantics). */
+  attachedAssetIds: string[];
   onAttach: (attachments: ComposerAttachment[]) => void;
+  onDetachAsset: (assetId: string) => void;
   onClose: () => void;
 }) {
   const cache = useQueryClient();
@@ -155,15 +157,20 @@ export function AttachmentSheet(props: {
           ) : null}
           {roll.map((item) => {
             const loading = attachTile.isPending && attachTile.variables?.assetId === item.assetId;
+            const attached = props.attachedAssetIds.includes(item.assetId);
             return (
               <Pressable
                 accessibilityLabel={
-                  item.mediaType === "video" ? "Attach recent video" : "Attach recent photo"
+                  (attached ? "Detach recent " : "Attach recent ") +
+                  (item.mediaType === "video" ? "video" : "photo")
                 }
                 accessibilityRole="button"
+                accessibilityState={{ selected: attached }}
                 disabled={loading}
                 key={item.assetId}
-                onPress={() => attachTile.mutate(item)}
+                onPress={() =>
+                  attached ? props.onDetachAsset(item.assetId) : attachTile.mutate(item)
+                }
                 style={styles.tile}
               >
                 <Image source={{ uri: item.previewUri }} style={styles.thumb} />
@@ -175,7 +182,7 @@ export function AttachmentSheet(props: {
                     </Text>
                   </View>
                 ) : null}
-                {props.attachedKeys.some((key) => key.includes(item.assetId)) ? (
+                {attached ? (
                   <View style={styles.check}>
                     <Text style={styles.checkText}>✓</Text>
                   </View>

@@ -8,10 +8,17 @@ branch: mobile-chat-attachments
 
 ## Status summary
 
-Fleshed-out spec, implementation starting. Nothing merged yet.
+Implementation largely complete; verified on the web build via browser specs.
+Native (camera/mic/location) paths compile and degrade gracefully but need a
+new dev-client build + a phone to try for real.
 
-- Done: spec below (assumptions delineated), worktree + PR open
-- Missing: everything else
+- Done: attachment model + chips + remove dialog, + sheet (carousel, camera
+  tile, All photos/Files/Audio/Location rows), hold-to-record gesture machine
+  + record button (mic + circular video), mosaic bubbles, unit tests, two
+  browser specs (mosaic, sheet)
+- Missing: on-phone verification of camera/audio/location (needs new EAS dev
+  client), audio *recorder* UI in the sheet (row currently picks audio files;
+  the mic button records), locked-mode pause, map rendering for locations
 
 ## Ask (verbatim gist)
 
@@ -80,41 +87,41 @@ and uploads lazily.
 
 ## Checklist
 
-- [ ] `ComposerAttachment` union (photo | video | file | audio | location) in
+- [x] `ComposerAttachment` union (photo | video | file | audio | location) in
       a new `lib/composer-attachments.ts`, replacing `PickedImage[]` state in
       chat; bytes read lazily at send
-- [ ] Attachment chips above input: thumbnail per kind (image preview, video
+- [x] Attachment chips above input: thumbnail per kind (image preview, video
       preview + ▶, 📎 name, 🎤 duration, 📍); tap → "Remove attachment?"
       OK|Cancel
-- [ ] "+" opens attachment sheet (not the picker directly)
-- [ ] Sheet carousel: last ~10 camera-roll photos+videos, horizontal; extends
+- [x] "+" opens attachment sheet (not the picker directly)
+- [x] Sheet carousel: last ~10 camera-roll photos+videos, horizontal; extends
       `recent-photos` lib to videos
-- [ ] Carousel tile 1: live `expo-camera` preview with box-camera icon → tap
+- [x] Carousel tile 1: live `expo-camera` preview with box-camera icon → tap
       opens full-screen capture (photo snap + video record)
-- [ ] Sheet rows: All photos (picker with videos enabled), Files
+- [x] Sheet rows: All photos (picker with videos enabled), Files
       (document picker), Audio (recorder modal), Location (one-tap attach)
-- [ ] Mic button replaces dimmed ↑ when composer is empty; tap toggles
+- [x] Mic button replaces dimmed ↑ when composer is empty; tap toggles
       mic ↔ box-camera with transient tooltip
-- [ ] Hold-to-record gesture: pure state machine in
+- [x] Hold-to-record gesture: pure state machine in
       `lib/record-gesture.ts` (+ unit tests) — hold records, release
       finishes→attach, slide left cancels, slide up locks
-- [ ] Recording UI: red dot + elapsed timer + "slide to cancel"; locked mode
+- [x] Recording UI: red dot + elapsed timer + "slide to cancel"; locked mode
       with Cancel / stop button
-- [ ] Video record mode: front camera, Telegram-style circular viewport
+- [x] Video record mode: front camera, Telegram-style circular viewport
       while recording
-- [ ] Location XML part composing + send-path merge into message text
-- [ ] `addFiles` send path handles the new kinds (contentType/filename per
+- [x] Location XML part composing + send-path merge into message text
+- [x] `addFiles` send path handles the new kinds (contentType/filename per
       kind); video/file size guard
-- [ ] app.json: camera/mic/location/photo permission strings + plugins
-- [ ] Graceful degradation when native module missing (old dev client, web)
-- [ ] Masonry/mosaic layout for multi-photo MESSAGE BUBBLES (scope added
+- [x] app.json: camera/mic/location/photo permission strings + plugins
+- [x] Graceful degradation when native module missing (old dev client, web)
+- [x] Masonry/mosaic layout for multi-photo MESSAGE BUBBLES (scope added
       mid-flight): today multiple photos stack full-width on top of each
       other; instead lay them out Telegram-style. Pure justified-rows
       algorithm (flickr/justified-layout-inspired, attributed) in
       `lib/mosaic-layout.ts` + unit tests; bubble component uses cached
       image sizes and falls back to squares while they load
-- [ ] Unit tests: gesture machine, attachment model, location xml, size guard
-- [ ] typecheck + lint + knip + format + test green
+- [x] Unit tests: gesture machine, attachment model, location xml, size guard
+- [x] typecheck + lint + knip + format + test green
 
 ## Follow-ups (explicitly out of scope)
 
@@ -126,4 +133,26 @@ and uploads lazily.
 
 ## Implementation log
 
-(appended as work happens)
+- Pure cores first, all unit-tested: `lib/composer-attachments.ts` (model,
+  lazy uploads, location XML), `lib/record-gesture.ts` (hold/slide/lock
+  machine), `lib/mosaic-layout.ts` (justified rows,
+  flickr/justified-layout-inspired).
+- `lib/native-modules.ts` guards requires of expo-camera/audio/location/
+  document-picker/file-system so old dev clients hide features instead of
+  crashing (native-markdown precedent).
+- Components: `attachment-chips.tsx` (remove dialog; window.confirm on web),
+  `attachment-sheet.tsx` (carousel + rows), `camera-capture.tsx` (full-screen
+  photo/video), `record-controls.tsx` (mic/video hold-to-record; expo-audio
+  hook used via a component only mounted when the module loads).
+- Audio row = document picker filtered to audio/* (recording lives on the mic
+  button); revisit if a dedicated recorder modal is wanted there.
+- Timer displays use refetchInterval queries, not effect hooks.
+- The chips flow + carousel toggle + mosaic verified end-to-end by browser
+  specs `specs/mobile/chat-attachment-sheet.spec.ts` and the updated
+  `specs/mobile/chat-photos.spec.ts` (mosaic assertions; solo-photo message
+  keeps the blurred-backdrop coverage).
+- Gotcha found while running specs: wrapping `dev.ts` in an outer
+  `doppler run` exports DOPPLER_PROJECT/DOPPLER_CONFIG, which the INNER
+  `doppler run` (apps/os scope) honors over doppler.yaml — the dev server
+  then reads the wrong project's secrets and /api/health 500s. Run
+  `node ./apps/os/scripts/dev.ts restart --detach` bare.

@@ -33,6 +33,7 @@ export async function pickLibraryMedia(options: {
       const extension = asset.uri.split(".").at(-1)?.toLowerCase() || "mp4";
       attachments.push({
         kind: "video",
+        assetId: asset.assetId || null,
         filename: asset.fileName || `video-${Date.now()}-${index}.${extension}`,
         contentType: asset.mimeType || (extension === "mov" ? "video/quicktime" : "video/mp4"),
         uri: asset.uri,

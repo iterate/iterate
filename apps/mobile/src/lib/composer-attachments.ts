@@ -17,6 +17,10 @@ export type ComposerAttachment =
   | { kind: "photo"; image: PickedImage }
   | {
       kind: "video";
+      /** The photo library's own id, when the video came from it — the
+       * attachment sheet's carousel uses it for its checkmarks and
+       * tap-again-to-detach (null for fresh recordings). */
+      assetId: string | null;
       filename: string;
       contentType: string;
       /** Local file uri; bytes are read from it at send time. */
@@ -48,6 +52,14 @@ export type ComposerAttachment =
       accuracyMeters: number | null;
       capturedAt: string;
     };
+
+/** The library asset id behind an attachment, when there is one — how the
+ * attachment sheet's carousel knows a tile is already attached. */
+export function attachmentAssetId(attachment: ComposerAttachment): string | null {
+  if (attachment.kind === "photo") return attachment.image.assetId;
+  if (attachment.kind === "video") return attachment.assetId;
+  return null;
+}
 
 /** Stable identity for list keys and the remove dialog. */
 export function attachmentKey(attachment: ComposerAttachment): string {

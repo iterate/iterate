@@ -57,6 +57,7 @@ import { AttachmentChips } from "../../../components/attachment-chips.tsx";
 import { AttachmentSheet } from "../../../components/attachment-sheet.tsx";
 import { RecordControls } from "../../../components/record-controls.tsx";
 import {
+  attachmentAssetId,
   attachmentKey,
   attachmentUploads,
   messageWithXmlParts,
@@ -366,8 +367,16 @@ export default function ChatScreen() {
       </View>
       {sheetOpen ? (
         <AttachmentSheet
-          attachedKeys={attachments.map(attachmentKey)}
+          attachedAssetIds={attachments.flatMap((attachment) => {
+            const assetId = attachmentAssetId(attachment);
+            return assetId === null ? [] : [assetId];
+          })}
           onAttach={appendAttachments}
+          onDetachAsset={(assetId) =>
+            setAttachments((prev) =>
+              prev.filter((attachment) => attachmentAssetId(attachment) !== assetId),
+            )
+          }
           onClose={() => setSheetOpen(false)}
         />
       ) : null}
