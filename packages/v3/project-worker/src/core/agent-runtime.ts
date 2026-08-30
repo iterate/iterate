@@ -6,28 +6,12 @@
 // `session.get()`. There is no client-side wrapper: the scope IS a real RpcTarget, so mid-chain
 // handles and callbacks pipeline natively over both lanes (no accumulating Proxy, no fold shim).
 
-// Wraps a repo file so the host can run it confined as a STATELESS dynamic worker. ONE wrapper,
-// ONE isolate, ONE billed loader identity for both lanes: `run(...args)` is a real RPC method
-// (rich values — callbacks, Dates, bytes, stubs — ride Workers RPC natively; the old JSON fetch
-// tunnel silently mangled them, the owner's hard NO), and `fetch` forwards to the source's own
-// fetch when it has one. `cap.js` is the repo file; the itx scope arrives via `env.ITX.get()`.
-export const CODE_CAP_RUNNER = /* js */ `
-import { WorkerEntrypoint } from "cloudflare:workers";
-import cap from "./cap.js";
-export default class CodeCap extends WorkerEntrypoint {
-  async run(...args) {
-    if (typeof cap !== "function") throw new Error("this source has no callable default export");
-    // env.ITX is a service binding to the ItxEntrypoint; .get() hands back the genuine itx scope
-    // (an RpcTarget) so the cap writes plain dotted access — itx.demo.timer.callLater(cb) — and
-    // mid-chain handles pipeline natively, exactly like a capnweb client after session.get().
-    return await cap(await this.env.ITX.get(), ...args);
-  }
-  fetch(request) {
-    if (typeof cap?.fetch === "function") return cap.fetch(request, this.env, this.ctx);
-    return new Response("this source serves no fetch\\n", { status: 405 });
-  }
-}
-`;
+// A loaded SOURCE now EXPORTS its own host object — a `WorkerEntrypoint` (reached with
+// `itx.load(src).getEntrypoint(name?)`) or a `DurableObject` class (`…getDurableObjectClass(name)`),
+// mirroring Cloudflare's own `worker.getEntrypoint()` / `worker.getDurableObjectClass()`. There is
+// NO host-injected wrapper: the code the author wrote IS what runs. The one bare-lambda ergonomic —
+// `itx.runScript("async (itx, x) => …")` — wraps its string into a WorkerEntrypoint at the call
+// site (built-ins.ts `RUN_SCRIPT_ENTRYPOINT`), so even that bottoms out at an EXPORTED entrypoint.
 
 // (The STATEFUL dynamic-worker wrapper `statefulDoRunner` was removed: with native facet RPC
 // (Reflect.apply via invokePath), the stream DO loads the user's
@@ -57,6 +41,8 @@ export default class CodeCap extends WorkerEntrypoint {
  *  deliberate type change; `owner` is composed collision-free by `facetLoaderOwner`;
  *  `contentHash` versions the source. */
 import { toExpression, type Expression } from "./expression.ts";
+import { hashSource } from "./hash.ts";
+import { PROCESSOR_SDK_MODULE } from "../generated/processor-sdk.ts";
 
 /** Compose the loader cacheKey `owner` (context + a discriminator: a processor slug or a stateful
  *  className) COLLISION-FREE. The naive `${context}:${discriminator}` aliased across a different
@@ -83,15 +69,47 @@ export function confinedWorker(
     // handle back — every chain member needs the flag (see iterate-context-entrypoint.ts).
     compatibilityFlags: ["allow_irrevocable_stub_storage"],
     mainModule,
-    // The processor SDK ("processor.js", ~330KB) is NOT injected here — the CALLER includes it on
-    // every userspace load (stateless code cap, raw stateful DO, AND processor facet) so any loaded
-    // user code may `import "./processor.js"` uniformly; only the "runner.js" adapter stays
-    // processor-role-only (#durableFacet). The itx scope is reached via `env.ITX.get()`, not an
-    // injected module.
+    // The processor SDK ("processor.js", ~330KB) is injected by `loadConfinedWorker` (THE one
+    // caller), not here, so `confinedWorker` stays a pure loader-primitive: every load gets
+    // "processor.js" (any user code may `import "./processor.js"` uniformly), and only the
+    // "runner.js" adapter stays processor-role-only. The itx scope is reached via `env.ITX.get()`,
+    // not an injected module.
     modules,
     env: { ITX: host },
     globalOutbound: host,
   }));
+}
+
+/** THE one loading step, shared by BOTH hosts: resolve the source → contentHash → mint the confined
+ *  worker (SDK injected). It stops at the loaded `worker` handle — the CALLER then chooses the host,
+ *  exactly like Cloudflare's own two-step: `worker.getEntrypoint(name?)` for a stateless
+ *  `WorkerEntrypoint` (built-ins.ts `statelessHandle`), or `worker.getDurableObjectClass(name)` fed
+ *  to `versionedFacet` for a durable `DurableObject` facet (stream-durable-object.ts `#durableFacet`).
+ *  The two used to inline this block each; unifying it is why "load the code" and "choose the host"
+ *  are now visibly separate. `version` (the contentHash) rides back for the facet marker dance. */
+export async function loadConfinedWorker(opts: {
+  env: { LOADER: WorkerLoader; CF_VERSION_METADATA?: { id: string } };
+  invoke: (call: Expression) => Promise<unknown>;
+  host: Fetcher;
+  kind: "code" | "facet";
+  owner: string;
+  source: WorkerSource;
+  mainModule: string;
+  /** Role-specific modules layered over the user's source + the always-present SDK (e.g. the
+   *  processor `runner.js` adapter). */
+  extraModules?: Record<string, string>;
+  what: string;
+}): Promise<{ worker: ReturnType<typeof confinedWorker>; version: string }> {
+  const userModules = await resolveSource(opts.invoke, opts.source, opts.what);
+  const version = hashSource(JSON.stringify(userModules));
+  const worker = confinedWorker(
+    opts.env,
+    { kind: opts.kind, owner: opts.owner, contentHash: version },
+    opts.mainModule,
+    { ...userModules, "processor.js": PROCESSOR_SDK_MODULE, ...opts.extraModules },
+    opts.host,
+  );
+  return { worker, version };
 }
 
 /** Materialize (or restart on a source change) a durable facet hosting a LOADED class, keeping

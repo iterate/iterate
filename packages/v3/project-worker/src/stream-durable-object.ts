@@ -26,9 +26,8 @@
 import { DurableObject } from "cloudflare:workers";
 import { substituteHeaderSecrets } from "@v3/shared/egress";
 import {
-  confinedWorker,
   facetLoaderOwner,
-  resolveSource,
+  loadConfinedWorker,
   versionedFacet,
   type WorkerSource,
 } from "./core/agent-runtime.ts";
@@ -64,7 +63,6 @@ import {
 } from "./core/processor.ts";
 import type { BuiltInsEnv } from "./built-ins.ts";
 import { PROCESSOR_RUNNER_MODULE } from "./generated/processor-runner.ts";
-import { PROCESSOR_SDK_MODULE } from "./generated/processor-sdk.ts";
 import { buildBuiltIns } from "./built-ins.ts";
 import { BUILT_IN_PROCESSOR_SLUGS, type FacetIdentity } from "./processor-facet.ts";
 
@@ -733,25 +731,19 @@ export class StreamDurableObject extends DurableObject<Env> {
     markerKey: string;
     what: string;
   }): Promise<unknown> {
-    const userModules = await resolveSource((e) => this.invoke(e), opts.source, opts.what);
-    const version = hashSource(JSON.stringify(userModules));
-    const worker = confinedWorker(
-      this.env,
-      {
-        kind: "facet",
-        owner: facetLoaderOwner(this.#address.name, opts.discriminator),
-        contentHash: version,
-      },
-      opts.role === "processor" ? "runner.js" : "cap.js",
-      opts.role === "processor"
-        ? {
-            ...userModules,
-            "processor.js": PROCESSOR_SDK_MODULE,
-            "runner.js": PROCESSOR_RUNNER_MODULE,
-          }
-        : { ...userModules, "processor.js": PROCESSOR_SDK_MODULE },
-      itxEntrypointFor(this.ctx, this.#address.name),
-    );
+    const { worker, version } = await loadConfinedWorker({
+      env: this.env,
+      invoke: (e) => this.invoke(e),
+      host: itxEntrypointFor(this.ctx, this.#address.name),
+      kind: "facet",
+      owner: facetLoaderOwner(this.#address.name, opts.discriminator),
+      source: opts.source,
+      // A processor rides the `runner.js` adapter (its mainModule); a raw stateful class is loaded
+      // as-is (mainModule "cap.js"). The SDK ("processor.js") is injected by loadConfinedWorker.
+      mainModule: opts.role === "processor" ? "runner.js" : "cap.js",
+      extraModules: opts.role === "processor" ? { "runner.js": PROCESSOR_RUNNER_MODULE } : {},
+      what: opts.what,
+    });
     return versionedFacet(this.ctx, {
       worker,
       className: opts.loadedClassName,

@@ -1,24 +1,30 @@
 // built-ins.ts — THE BUILT-INS: a plain record whose KEYS are the physical-layer roots (`whoami`,
-// `kv`, `stream`, `cd`, `rpcStubs`, `facets`, `workers`, `load`, `runScript`, `connectToCapnweb`). A call `itx.<root>…`
-// resolves DIRECTLY against these (capability-table-processor.ts `resolve`, built-in first) — no
-// config, no mount. Userspace `provide` mounts resolve against `{ itx }` alone and recurse through
-// the `itx` symbol to reach a root; a bare root is unspellable, so the built-ins are unshadowable.
+// `kv`, `stream`, `cd`, `rpcStubs`, `facets`, `load`, `runScript`, `connectToCapnweb`). A call
+// `itx.<root>…` resolves DIRECTLY against these (capability-table-processor.ts `resolve`, built-in
+// first) — no config, no mount. Userspace `provide` mounts resolve against `{ itx }` alone and
+// recurse through the `itx` symbol to reach a root; a bare root is unspellable, so the built-ins
+// are unshadowable.
+//
+// LOADING DYNAMIC CODE — `itx.load(source)` mirrors Cloudflare's Worker Loader: it loads the code
+// and hands back a WORKER, then you pick the host EXPLICITLY, the same two accessors Cloudflare
+// exposes:
+//   • `itx.load(src).getEntrypoint(name?).run(...)` — a STATELESS `WorkerEntrypoint` (its own
+//     isolate, no storage) — the mirror of `worker.getEntrypoint()`.
+//   • `itx.load(src).getDurableObjectClass('C').get(name?).method(...)` — a `DurableObject` class
+//     hosted as a durable FACET of this stream (own storage; a `name` is an independent instance)
+//     — the mirror of `worker.getDurableObjectClass()` + `ctx.facets.get(name, { class })`.
+// `itx.facets.get(name)` is the SEPARATE door for a facet that is ALREADY RUNNING (processors,
+// named instances) — address by name, no source. `itx.runScript(lambda)` is sugar for the one
+// bare-lambda case (wrap → `load(...).getEntrypoint().run`).
 
-import {
-  CODE_CAP_RUNNER,
-  confinedWorker,
-  resolveSource,
-  type WorkerSource,
-} from "./core/agent-runtime.ts";
-import { PROCESSOR_SDK_MODULE } from "./generated/processor-sdk.ts";
+import { loadConfinedWorker, type WorkerSource } from "./core/agent-runtime.ts";
 import { itxEntrypointFor } from "./itx-entrypoint.ts";
 import { newHttpBatchRpcSession } from "capnweb";
-import { toExpression, type Expression } from "./core/expression.ts";
+import type { Expression } from "./core/expression.ts";
 import { InvokeHandle } from "./core/invoke-handle.ts";
 import { invokePath } from "./core/dispatch.ts";
 import type { Context } from "./core/stream.ts";
 import type { StreamEventInput } from "./core/events.ts";
-import { hashSource } from "./core/hash.ts";
 
 /** The `rpcStubs` view every context has: the live-stub registry, surfaced. One entry per held
  *  live capnweb stub (client callbacks and parked subscribers — one registry). */
@@ -33,27 +39,14 @@ type RpcStubsView = {
   close(key: string): { ok: true } | Promise<{ ok: true }>;
 };
 
-/** `facets.get(ref)` → a dotted method proxy over ONE facet (a durable object run as a facet of
- *  this stream) — ANY method it exposes (facet stubs are non-transferable, so the walk happens
- *  parent-side). `ref` is a STRING (address an already-running facet by name — processors, built-in
- *  slugs) OR `{ source, className }` (materialize the loaded `className` durable object as a facet).
- *  The mirror of `workers.get(ref)` (a stateless WorkerEntrypoint): entrypoint vs durable object. */
+/** The DEP shape (host-injected): the facet door reaches ANY method a facet's durable object
+ *  exposes (facet stubs are non-transferable, so the walk happens parent-side). `ref` is a STRING
+ *  (address an already-running facet by name — processors, named instances) OR `{ source, className,
+ *  name? }` (materialize the loaded `className` durable object as a facet — the form `itx.load(...)
+ *  .getDurableObjectClass(...).get(...)` routes here internally). The PUBLIC `itx.facets` root is
+ *  string-only; the object form is spelled through `itx.load`. */
 type FacetsView = {
   get(ref: string | { source?: unknown; className?: string; name?: string }): unknown;
-};
-
-/** A ref to loadable code (`itx.load`): a WorkerEntrypoint OR a DurableObject, discriminated by
- *  what the source exports. `{ source }` (no className) → a STATELESS isolate; `{ source, className,
- *  name? }` → a DURABLE object hosted as a facet (named instances have independent state); `{ name }`
- *  / a bare string → ADDRESS an already-running facet (or enabled processor) by name. */
-type LoadRef = string | { source?: unknown; className?: string; name?: string };
-
-/** Run STATELESS code in this context — a fresh confined isolate, a `{ run, fetch }` handle (no DO,
- *  no storage). `get({ source })` loads code from a source; scope-level `runScript(script)` is sugar
- *  for wrapping a lambda STRING and `get({ source }).run(...)`. Durable classes hosted as facets are
- *  the mirror door, `itx.facets.get({ source, className })`. */
-type WorkersView = {
-  get(ref: { source: unknown }): unknown;
 };
 
 /** THE built-in scope, as ONE interface — the physical-layer roots a context resolves `itx.<root>…`
@@ -71,7 +64,7 @@ interface BuiltInScope {
     delete(key: string): Promise<{ ok: true }>;
     list(prefix?: string): Promise<{ keys: string[] }>;
   };
-  /** This context's append-only event log (the facets that REDUCE it are `itx.facets.get(ref)`). */
+  /** This context's append-only event log (the facets that REDUCE it are `itx.facets.get(name)`). */
   stream: {
     append(...events: StreamEventInput[]): Promise<unknown>;
     read(afterOffset?: number, limit?: number): Promise<unknown>;
@@ -80,14 +73,16 @@ interface BuiltInScope {
   cd(path: string): unknown;
   /** The live rpc-stub registry (`get`/`list`/`close`; `provide` is relay-side — DON'T-PIN). */
   rpcStubs: RpcStubsView;
-  /** Run a durable object as a facet — address by name, or materialize `{ source, className }`. */
-  facets: FacetsView;
-  /** Run STATELESS loaded code — `get({ source })` → a pipelinable `{ run, fetch }` entrypoint. */
-  workers: WorkersView;
-  /** THE loaded-code door over workers+facets — `{ source }` stateless, `{ source, className, name? }`
-   *  durable facet, `{ name }`/string address a running one. See `LoadRef`. */
-  load(ref: LoadRef): unknown;
-  /** Run a stateless lambda STRING (sugar over `workers.get({ source }).run(...)`). */
+  /** Address a facet that is ALREADY RUNNING by name (an enabled processor, a named instance). No
+   *  source — to LOAD and host a class, use `itx.load(src).getDurableObjectClass(name).get(name?)`. */
+  facets: { get(name: string): unknown };
+  /** Load dynamic code → a WORKER, then pick the host (mirror of Cloudflare's Worker Loader):
+   *  `.getEntrypoint(name?)` → a stateless `WorkerEntrypoint` (`.run`/`.fetch`);
+   *  `.getDurableObjectClass(name)` → a `DurableObject` class whose `.get(instance?)` is a durable
+   *  facet of this stream. `source` is a producer expression, a bare string, or `{ type:"inline" }`. */
+  load(source: WorkerSource): unknown;
+  /** Run a stateless lambda STRING — sugar: wrap into a `WorkerEntrypoint`, then
+   *  `load(...).getEntrypoint().run(...)`. The one bare-lambda ergonomic (same as apps/os). */
   runScript(script: string, ...args: unknown[]): Promise<unknown>;
   /** Dial a REMOTE capnweb API by URL (one HTTP batch — no persistent socket). */
   connectToCapnweb(url: string): unknown;
@@ -132,24 +127,48 @@ interface BuildBuiltInsDeps {
 /** Assemble the host scope for one context. Every entry closes over the context's identity —
  *  PRE-SCOPED, not policed: cross-project access is unspellable by construction. The builder
  *  must never register `itx` (asserted below — the resolver's recursion symbol always wins). */
+/** The one bare-lambda wrapper — `itx.runScript("async (itx, x) => …")`. The lambda STRING becomes
+ *  a `WorkerEntrypoint`'s default export, so `runScript` bottoms out at the SAME `load(...)
+ *  .getEntrypoint()` path as any exported entrypoint (no separate loader branch). `run()` injects
+ *  the itx scope via `env.ITX.get()` — mid-chain handles/callbacks pipeline natively, exactly like a
+ *  capnweb client after `session.get()`. This used to be a host-injected wrapper on EVERY stateless
+ *  load (`CODE_CAP_RUNNER`); it now rides only this one bare-lambda door. */
+const RUN_SCRIPT_ENTRYPOINT = (script: string) => /* js */ `
+import { WorkerEntrypoint } from "cloudflare:workers";
+const cap = ${script};
+export default class RunScript extends WorkerEntrypoint {
+  async run(...args) {
+    if (typeof cap !== "function") throw new Error("runScript: expected a function");
+    return await cap(await this.env.ITX.get(), ...args);
+  }
+  fetch(request) {
+    if (typeof cap?.fetch === "function") return cap.fetch(request, this.env, this.ctx);
+    return new Response("this script serves no fetch\\n", { status: 405 });
+  }
+}
+`;
+
 export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> {
   const { projectId, path, contextName, env } = deps;
 
-  /** PRIMITIVE — load a stateless, non-facet confined worker (kind "code"): its own isolate,
-   *  no DO, no storage, `env.ITX` bound. Returns the `{ run, fetch }` handle. `source` is a
-   *  producer (an itx-Expression, or `{ type:"inline", files }`), resolved by the one shared
-   *  `resolveSource` path. */
-  const statelessHandle = (source: WorkerSource) => {
+  /** THE stateless host — `worker.getEntrypoint(className?)`: a fresh confined isolate (no DO, no
+   *  storage, `env.ITX` bound), a `{ run, fetch }` handle over the loaded WorkerEntrypoint. Loading
+   *  is the shared `loadConfinedWorker` (kind "code"); the source EXPORTS the entrypoint (no
+   *  host-injected wrapper — the mirror of Cloudflare's `worker.getEntrypoint()`). Re-resolves per
+   *  call, but the loader caches by contentHash so a warm isolate is reused. */
+  const statelessHandle = (source: WorkerSource, className?: string) => {
     const entrypoint = async () => {
-      const modules = await resolveSource(deps.invoke, source, "workers.get");
-      const worker = confinedWorker(
+      const { worker } = await loadConfinedWorker({
         env,
-        { kind: "code", owner: contextName, contentHash: hashSource(JSON.stringify(modules)) },
-        "run.js",
-        { "run.js": CODE_CAP_RUNNER, "processor.js": PROCESSOR_SDK_MODULE, ...modules },
-        itxEntrypointFor(deps.hostCtx, contextName),
-      );
-      return worker.getEntrypoint() as unknown as {
+        invoke: deps.invoke,
+        host: itxEntrypointFor(deps.hostCtx, contextName),
+        kind: "code",
+        owner: contextName,
+        source,
+        mainModule: "cap.js",
+        what: "load.getEntrypoint",
+      });
+      return worker.getEntrypoint(className) as unknown as {
         run(...a: unknown[]): Promise<unknown>;
         fetch(r: Request): Promise<Response>;
       };
@@ -158,22 +177,6 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       run: async (...args: unknown[]) => (await entrypoint()).run(...args),
       fetch: async (request: Request) => (await entrypoint()).fetch(request),
     };
-  };
-  const workers: WorkersView = {
-    // A GENUINE RpcTarget (InvokeHandle), the exact mirror of facets.get — so
-    // `itx.workers.get({ source }).run(x)` pipelines the mid-chain call on every lane, and `.fetch`
-    // forwards to the loaded entrypoint's own fetch (workerd#6873; core/invoke-handle.ts).
-    get: (ref) => {
-      const handle = statelessHandle(ref.source as WorkerSource);
-      return new InvokeHandle((segments, args) => {
-        if (segments.length === 1 && segments[0] === "fetch")
-          return handle.fetch(args[0] as Request);
-        if (segments.length === 1 && segments[0] === "run") return handle.run(...args);
-        throw new Error(
-          `workers.get(...): no method ${JSON.stringify(segments.join("."))} (run|fetch)`,
-        );
-      });
-    },
   };
 
   const kvPrefix = `${projectId}:`;
@@ -232,33 +235,65 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         return sibling.invoke(["itx", ...segments.slice(0, -1), [last, ...args]]);
       }),
     rpcStubs: deps.rpcStubs,
-    facets: deps.facets,
-    workers,
-    /** THE loaded-code door — one door over `workers`+`facets`, discriminated by what the source
-     *  exports. `{ source }` (no className) → a STATELESS WorkerEntrypoint isolate (`.run`/`.fetch`);
-     *  `{ source, className, name? }` → a DURABLE object hosted as a facet (a `name` gives a
-     *  persistent, independently-stated instance); `{ name }` / a bare string → ADDRESS a running
-     *  facet by name. The returned handle pipelines any method the loaded class exposes. */
-    load: (ref: LoadRef) => {
-      const r = typeof ref === "string" ? { name: ref } : ref;
-      if (r.source !== undefined && r.className === undefined && r.name === undefined) {
-        const handle = statelessHandle(r.source as WorkerSource);
-        return new InvokeHandle((segments, args) => {
-          if (segments.length === 1 && segments[0] === "fetch")
-            return handle.fetch(args[0] as Request);
-          if (segments.length === 1 && segments[0] === "run") return handle.run(...args);
-          throw new Error(`load(...).${segments.join(".")}: a stateless worker exposes run|fetch`);
-        });
-      }
-      return deps.facets.get(r); // durable facet: materialize {source,className,name?} or address {name}
+    /** Address a facet ALREADY RUNNING by name (processors, named instances) — string only. The
+     *  object/materialize form is spelled through `itx.load(...)` so the two doors don't overlap. */
+    facets: {
+      get: (name: string) => {
+        if (typeof name !== "string")
+          throw new Error(
+            "itx.facets.get(name): address a RUNNING facet by name. To load & host a class use itx.load(src).getDurableObjectClass('Class').get(name?)",
+          );
+        return deps.facets.get(name);
+      },
     },
-    /** Run a STATELESS lambda — a string like `"async (itx, ...args) => …"` (same as apps/os). It
-     *  is wrapped in a WorkerEntrypoint whose `run()` injects `itx`, then run with `...args`. To run
-     *  code loaded from a source (kv, a repo, inline files), use `workers.get({ source }).run(...)`. */
+    /** THE loaded-code door — mirror of Cloudflare's Worker Loader: `load(source)` loads the code
+     *  and returns a WORKER; you then pick the host EXPLICITLY. `.getEntrypoint(name?)` → a stateless
+     *  `WorkerEntrypoint` (`.run`/`.fetch`, its own isolate). `.getDurableObjectClass('C')` → a
+     *  `DurableObject` class whose `.get(instance?)` is a durable FACET of this stream (`.get('x')`
+     *  is an independently-stated named instance; `.get()` is content-keyed/anonymous). Each hop is
+     *  an `InvokeHandle`, so the whole chain pipelines on every lane (workerd#6873). */
+    load: (source: WorkerSource) => {
+      const entrypointHandle = (className?: string) =>
+        new InvokeHandle((seg, args) => {
+          if (seg.length === 1 && seg[0] === "run")
+            return statelessHandle(source, className).run(...args);
+          if (seg.length === 1 && seg[0] === "fetch")
+            return statelessHandle(source, className).fetch(args[0] as Request);
+          throw new Error(
+            `load(src).getEntrypoint().${seg.join(".")}: a WorkerEntrypoint exposes run|fetch`,
+          );
+        });
+      const classHandle = (className: string) =>
+        new InvokeHandle((seg, args) => {
+          if (seg.length === 1 && seg[0] === "get")
+            // .get(instance?) → the durable facet; deps.facets.get folds the rest into facetInvoke.
+            return deps.facets.get({ source, className, name: args[0] as string | undefined });
+          throw new Error(
+            `load(src).getDurableObjectClass('${className}').${seg.join(".")}: call .get(name?)`,
+          );
+        });
+      return new InvokeHandle((seg, args) => {
+        if (seg.length === 1 && seg[0] === "getEntrypoint")
+          return entrypointHandle(args[0] as string | undefined);
+        if (seg.length === 1 && seg[0] === "getDurableObjectClass") {
+          if (typeof args[0] !== "string")
+            throw new Error("load(src).getDurableObjectClass(name): name the exported class");
+          return classHandle(args[0]);
+        }
+        throw new Error(
+          `load(src).${seg.join(".")}: call .getEntrypoint(name?) or .getDurableObjectClass(name)`,
+        );
+      });
+    },
+    /** Run a STATELESS lambda — a string like `"async (itx, ...args) => …"` (same as apps/os). It is
+     *  wrapped into a `WorkerEntrypoint` (`RUN_SCRIPT_ENTRYPOINT`) whose `run()` injects `itx`, then
+     *  loaded and run — so even this bare-lambda door bottoms out at an EXPORTED entrypoint. To run
+     *  code from a source, use `itx.load(src).getEntrypoint().run(...)`. */
     runScript: (script: string, ...args: unknown[]) =>
-      statelessHandle({ type: "inline", files: { "cap.js": `export default ${script};` } }).run(
-        ...args,
-      ),
+      statelessHandle({
+        type: "inline",
+        files: { "cap.js": RUN_SCRIPT_ENTRYPOINT(script) },
+      }).run(...args),
     /** Dial a REMOTE capnweb API by URL and call it — `itx.connectToCapnweb('https://x/api').m(a)`
      *  opens a one-shot HTTP-batch session to the remote root, pipelines the call, and returns its
      *  result. HTTP batch (not a WebSocket) on purpose: no persistent socket, so it never pins this
