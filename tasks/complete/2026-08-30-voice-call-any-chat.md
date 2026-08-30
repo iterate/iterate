@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: large
 base: mobile-voice-client
 ---
@@ -119,8 +119,10 @@ on-device box below (pure-JS app change, OTA-able).
       green top banner while a call is live anywhere but its chat (tap to
       jump back); hold-to-talk floats only over the call's own chat
       _voice-call-session.ts + voice-call-banner.tsx; mobileVoiceStreamPath deleted; desk (/agents/voice-notes) is now legacy for boards/CLI only_
-- [ ] Morning: on-device — call a chat from its header, watch the chat
-      thread fill with the call, hear a status line mid-task
+- [x] On-device — call a chat from its header, watch the chat thread fill,
+      hear status lines mid-task _superseded by five live feedback rounds on
+      Misha's phone through 2026-08-29/30, each driving fixes recorded above;
+      the eval-shaped hold-music barge (4d2df7ae6) closed the loop_
 
 ## Out of scope
 
