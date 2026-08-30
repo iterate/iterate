@@ -125,10 +125,8 @@ and uploads lazily.
 
 ## Follow-ups (explicitly out of scope)
 
-- Map renderer for received location parts on the WEB dashboard (mobile has
-  one now — feedback round 1)
-- Rendering audio/video attachments inline in the thread (playback UI) —
-  today they open via the signed URL in the browser like other files
+- Map renderer for location parts + audio/video players on the WEB dashboard
+  (mobile has them now)
 - Note composer adopting the same sheet
 - True background/lazy upload with retry (upload-at-send is v1)
 
@@ -163,6 +161,15 @@ and uploads lazily.
   raster tiles stitched by pure Web Mercator math (lib/location-map.ts, no
   native module, no API key), pin overlay, tap → Apple Maps | Google Maps
   chooser.
+- Feedback round 2: inline PLAYERS. Audio attachments (m4a/mp3/wav) render a
+  play/pause + scrubbable waveform row (deterministic bars —
+  lib/waveform.ts; expo-audio playback; fixed height, full media width) with
+  the length underneath. Videos join the photo mosaic as first-frame
+  thumbnails (expo-video-thumbnails) with a play badge → full-screen
+  expo-video player. Tapping photos now opens the existing MediaViewer
+  (pinch/zoom/swipe-dismiss) on the cached uri — instant — instead of the
+  slow in-app browser page. Two more native modules: expo-video,
+  expo-video-thumbnails (same new-build boat).
 - Gotcha found while running specs: wrapping `dev.ts` in an outer
   `doppler run` exports DOPPLER_PROJECT/DOPPLER_CONFIG, which the INNER
   `doppler run` (apps/os scope) honors over doppler.yaml — the dev server

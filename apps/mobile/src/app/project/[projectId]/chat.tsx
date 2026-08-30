@@ -34,6 +34,7 @@ import {
   FlatList,
   Image,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   StyleSheet,
@@ -67,7 +68,15 @@ import {
   type ComposerAttachment,
 } from "../../../lib/composer-attachments.ts";
 import { LocationCard } from "../../../components/location-card.tsx";
-import { readFileBase64, recordControlsAvailable } from "../../../lib/native-modules.ts";
+import { MediaViewer } from "../../../components/media-viewer.tsx";
+import { AudioMessagePlayer } from "../../../components/audio-player.tsx";
+import { VideoTile } from "../../../components/video-attachment.tsx";
+import {
+  audioPlayerAvailable,
+  readFileBase64,
+  recordControlsAvailable,
+  videoThumbnailQuery,
+} from "../../../lib/native-modules.ts";
 import {
   collapseConsecutiveStreamWakes,
   reduceFeed,
@@ -530,13 +539,21 @@ function MessageBubble({ message }: { message: AgentUiMessageItem }) {
   // 85% of the screen — so a caption longer than the photo would stretch the
   // bubble past it and reopen the gap at the photo's edge. Cap the caption at
   // the frame's width and the bubble stays the photo's size.
+  const isMedia = (file: AgentUiFileAttachment) =>
+    file.contentType.startsWith("image/") || file.contentType.startsWith("video/");
+  const media = (message.files || []).filter(isMedia);
+  const audios = (message.files || []).filter((file) => file.contentType.startsWith("audio/"));
+  const otherFiles = (message.files || []).filter(
+    (file) => !isMedia(file) && !file.contentType.startsWith("audio/"),
+  );
   const photoWidth =
-    message.files?.some((file) => file.contentType.startsWith("image/")) ||
-    message.text.includes("<user-location ")
+    media.length > 0 || audios.length > 0 || message.text.includes("<user-location ")
       ? photoFrameMaxWidth(window.width)
       : null;
-  const images = (message.files || []).filter((file) => file.contentType.startsWith("image/"));
-  const otherFiles = (message.files || []).filter((file) => !file.contentType.startsWith("image/"));
+  // Tapped photos open the in-app viewer (components/media-viewer.tsx) on
+  // the SAME uri the bubble already rendered — instant from the image cache,
+  // with pinch-zoom and swipe-down, instead of a browser page reloading it.
+  const [viewingImage, setViewingImage] = useState<AgentUiFileAttachment | null>(null);
   // The composer sends each photo/video's pixel dimensions as an
   // <attachment .../> part in the text, so frames can be sized before the
   // media loads — no reflow. Shared locations arrive as <user-location .../>
@@ -547,20 +564,43 @@ function MessageBubble({ message }: { message: AgentUiMessageItem }) {
   const caption = stripAttachmentXmlParts(message.text);
   return (
     <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAssistant]}>
-      {/* Photos above their caption, the way every chat app puts them — and
-          the bubble carries no padding of its own, so a photo reaches its
-          edges instead of floating in a frame. Text brings its own inset.
-          Two or more photos share a Telegram-style mosaic instead of
-          stacking full-width (lib/mosaic-layout.ts). */}
-      {images.length >= 2 ? (
-        <MessageMosaic files={images} knownDimensions={knownDimensions} />
+      {/* Media above the caption, the way every chat app puts it — and the
+          bubble carries no padding of its own, so a photo reaches its edges
+          instead of floating in a frame. Text brings its own inset. Two or
+          more photos/videos share a Telegram-style mosaic instead of
+          stacking full-width (lib/mosaic-layout.ts); videos wear a play
+          badge and open full screen. */}
+      {media.length >= 2 ? (
+        <MessageMosaic
+          files={media}
+          knownDimensions={knownDimensions}
+          onViewImage={setViewingImage}
+        />
+      ) : media.length === 1 && media[0]!.contentType.startsWith("video/") ? (
+        <SingleVideoFrame file={media[0]!} knownDimensions={knownDimensions} />
       ) : (
-        images.map((file) => (
-          <MessageAttachment file={file} key={file.path} knownDimensions={knownDimensions} />
+        media.map((file) => (
+          <MessagePhoto
+            file={file}
+            key={file.path}
+            knownDimensions={knownDimensions}
+            onPress={() => setViewingImage(file)}
+          />
         ))
       )}
+      {audios.map((file) =>
+        audioPlayerAvailable() ? (
+          <AudioMessagePlayer
+            file={file}
+            key={file.path}
+            width={photoFrameMaxWidth(window.width)}
+          />
+        ) : (
+          <MessageAttachment file={file} key={file.path} />
+        ),
+      )}
       {otherFiles.map((file) => (
-        <MessageAttachment file={file} key={file.path} knownDimensions={knownDimensions} />
+        <MessageAttachment file={file} key={file.path} />
       ))}
       {locations.map((location) => (
         <LocationCard
@@ -582,25 +622,32 @@ function MessageBubble({ message }: { message: AgentUiMessageItem }) {
           )}
         </View>
       ) : null}
+      <Modal
+        animationType="fade"
+        onRequestClose={() => setViewingImage(null)}
+        statusBarTranslucent
+        transparent
+        visible={viewingImage !== null}
+      >
+        {viewingImage ? (
+          <MediaViewer
+            markdown=""
+            onClose={() => setViewingImage(null)}
+            tags={[]}
+            title={viewingImage.filename}
+            uri={viewingImage.url}
+          />
+        ) : null}
+      </Modal>
     </View>
   );
 }
 
-function MessageAttachment({
-  file,
-  knownDimensions,
-}: {
-  file: AgentUiFileAttachment;
-  knownDimensions: KnownDimensions;
-}) {
-  // Signed public URL minted when the file was attached — same source the
-  // web's <img> and the LLM use.
-  const open = () => void WebBrowser.openBrowserAsync(file.url);
-  if (file.contentType.startsWith("image/")) {
-    return <MessagePhoto file={file} knownDimensions={knownDimensions} onPress={open} />;
-  }
+/** Non-media files: the tappable chip — opens the signed public URL minted
+ * when the file was attached (same source the web's <img> and the LLM use). */
+function MessageAttachment({ file }: { file: AgentUiFileAttachment }) {
   return (
-    <Pressable onPress={open} style={styles.fileChip}>
+    <Pressable onPress={() => void WebBrowser.openBrowserAsync(file.url)} style={styles.fileChip}>
       <Text style={styles.fileChipText} numberOfLines={1}>
         📎 {file.filename} · {formatFileSize(file.size)}
       </Text>
@@ -617,16 +664,24 @@ function MessageAttachment({
 function MessageMosaic({
   files,
   knownDimensions,
+  onViewImage,
 }: {
   files: AgentUiFileAttachment[];
   knownDimensions: KnownDimensions;
+  onViewImage: (file: AgentUiFileAttachment) => void;
 }) {
   const window = useWindowDimensions();
   const sizes = useQueries({
-    queries: files.map((file) => imageSizeQuery(file.url)),
+    // Photos measure via Image.getSize; videos via their extracted
+    // first-frame thumbnail. Either way the composer's dimension part wins.
+    queries: files.map((file) =>
+      file.contentType.startsWith("video/")
+        ? videoThumbnailQuery(file.url)
+        : imageSizeQuery(file.url),
+    ),
   });
   const naturalOf = (file: AgentUiFileAttachment, index: number) =>
-    knownDimensions[file.filename] || sizes[index]?.data;
+    knownDimensions[file.filename] || sizes[index]?.data || undefined;
   const layout = mosaicLayout({
     aspectRatios: files.map((file, index) => {
       const natural = naturalOf(file, index);
@@ -638,18 +693,22 @@ function MessageMosaic({
     <View style={{ height: layout.height, width: layout.width }}>
       {files.map((file, index) => {
         const rect = layout.rects[index]!;
+        const rectStyle = {
+          position: "absolute" as const,
+          left: rect.x,
+          top: rect.y,
+          width: rect.width,
+          height: rect.height,
+        };
+        if (file.contentType.startsWith("video/")) {
+          return <VideoTile file={file} key={file.path} style={rectStyle} />;
+        }
         return (
           <Pressable
             accessibilityLabel={file.filename}
             key={file.path}
-            onPress={() => void WebBrowser.openBrowserAsync(file.url)}
-            style={{
-              position: "absolute",
-              left: rect.x,
-              top: rect.y,
-              width: rect.width,
-              height: rect.height,
-            }}
+            onPress={() => onViewImage(file)}
+            style={rectStyle}
           >
             {naturalOf(file, index) === undefined ? (
               // Real loading UI, not a guess: the spec's spinner waiter holds
@@ -662,6 +721,25 @@ function MessageMosaic({
       })}
     </View>
   );
+}
+
+/** A lone video message: the photo frame's sizing rules (dimension part or
+ * extracted thumbnail for the aspect ratio) around a VideoTile. */
+function SingleVideoFrame({
+  file,
+  knownDimensions,
+}: {
+  file: AgentUiFileAttachment;
+  knownDimensions: KnownDimensions;
+}) {
+  const window = useWindowDimensions();
+  const thumbnail = useQuery(videoThumbnailQuery(file.url));
+  const frame = photoFrame({
+    maxHeight: PHOTO_MAX_HEIGHT,
+    maxWidth: photoFrameMaxWidth(window.width),
+    natural: knownDimensions[file.filename] || thumbnail.data || undefined,
+  });
+  return <VideoTile file={file} style={{ height: frame.height, width: frame.width }} />;
 }
 
 /** Photo attachments, Telegram-style: flush to the bubble's edges at their own

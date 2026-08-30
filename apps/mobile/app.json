@@ -69,7 +69,8 @@
         {
           "locationWhenInUsePermission": "Iterate attaches your current location to a chat message only when you tap Location in the attachment sheet."
         }
-      ]
+      ],
+      "expo-video"
     ],
     "experiments": {
       "typedRoutes": true

@@ -37,6 +37,12 @@ export const loadDocumentPicker = memoize(
   () => require("expo-document-picker") as typeof import("expo-document-picker"),
 );
 
+export const loadVideo = memoize(() => require("expo-video") as typeof import("expo-video"));
+
+export const loadVideoThumbnails = memoize(
+  () => require("expo-video-thumbnails") as typeof import("expo-video-thumbnails"),
+);
+
 export const loadFileSystem = memoize(
   // The legacy entry point: the SDK 54 File API is fine too, but
   // readAsStringAsync is all we need and its shape is long-stable.
@@ -47,6 +53,28 @@ export const loadFileSystem = memoize(
  * the plain dimmed send button otherwise). */
 export function recordControlsAvailable(): boolean {
   return Platform.OS !== "web" && loadAudio() !== null;
+}
+
+/** Whether inline audio playback is available in this build. */
+export function audioPlayerAvailable(): boolean {
+  return loadAudio() !== null;
+}
+
+/** First-frame thumbnail (uri + pixel dimensions) for a remote video, cached
+ * per url; data null when this build can't extract one. Both the video tile
+ * and the mosaic layout read it. */
+export function videoThumbnailQuery(url: string) {
+  return {
+    queryKey: ["video-thumbnail", url],
+    queryFn: async (): Promise<{ height: number; uri: string; width: number } | null> => {
+      const thumbnails = loadVideoThumbnails();
+      if (thumbnails === null) return null;
+      const thumb = await thumbnails.getThumbnailAsync(url, { time: 0 });
+      return { height: thumb.height, uri: thumb.uri, width: thumb.width };
+    },
+    staleTime: Infinity,
+    retry: false,
+  };
 }
 
 /** Read a local file's bytes as base64 — the send-time boundary

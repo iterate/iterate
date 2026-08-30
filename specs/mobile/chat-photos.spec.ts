@@ -112,6 +112,31 @@ test("multiple photos share a mosaic row; a lone tall one sits on its blurred ba
   await solo.getByTestId("photo-backdrop").waitFor();
   expect(await solo.boundingBox()).toMatchObject({ height: 340, width: 280 });
 
+  // Audio + video attachments in one message: the video (dimensions known
+  // from its <attachment> part) draws as a playable tile — here with the
+  // placeholder face, since a browser build can't extract a thumbnail from
+  // the deliberately-bogus bytes — and the audio draws the play/waveform
+  // row. Real playback: the wav is genuine, so play flips to pause.
+  await agent.addFiles({
+    files: [
+      { contentType: "audio/wav", data: tinyWav(), filename: "voice-note.wav" },
+      { contentType: "video/mp4", data: new Uint8Array([0, 0, 0, 0]), filename: "clip.mp4" },
+    ],
+    message: '<attachment filename="clip.mp4" width="640" height="360" />',
+  });
+  await page.getByLabel("Play video clip.mp4").waitFor();
+  await page.getByLabel("Seek audio").waitFor();
+  await page.getByLabel("Play audio").click();
+  await page.getByLabel("Pause audio").waitFor();
+
+  // Tapping a photo opens the in-app viewer instantly on the cached image —
+  // not a browser page re-downloading it.
+  await landscape.click();
+  const fullScreen = page.getByLabel("Full screen media");
+  await fullScreen.waitFor();
+  await fullScreen.click();
+  await page.getByLabel("Close image").click();
+
   // A shared location renders as a tappable map card (OSM tiles + pin), not
   // raw XML — the <user-location .../> part disappears from the caption.
   await agent.message(
@@ -122,6 +147,34 @@ test("multiple photos share a mosaic row; a lone tall one sits on its blurred ba
   await locationCaption.waitFor();
   expect(await locationCaption.textContent()).not.toContain("<user-location");
 });
+
+/** A real WAV: 8kHz mono 16-bit, 3s of a 440Hz tone — long enough that the
+ * player is still visibly PLAYING when the spec looks for the pause state
+ * (a 0.2s clip finished before the assertion could see it). */
+function tinyWav(): Uint8Array {
+  const sampleRate = 8000;
+  const sampleCount = Math.floor(sampleRate * 3);
+  const buffer = Buffer.alloc(44 + sampleCount * 2);
+  buffer.write("RIFF", 0);
+  buffer.writeUInt32LE(36 + sampleCount * 2, 4);
+  buffer.write("WAVEfmt ", 8);
+  buffer.writeUInt32LE(16, 16); // fmt chunk size
+  buffer.writeUInt16LE(1, 20); // PCM
+  buffer.writeUInt16LE(1, 22); // mono
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(sampleRate * 2, 28); // byte rate
+  buffer.writeUInt16LE(2, 32); // block align
+  buffer.writeUInt16LE(16, 34); // bits per sample
+  buffer.write("data", 36);
+  buffer.writeUInt32LE(sampleCount * 2, 40);
+  for (let i = 0; i < sampleCount; i++) {
+    buffer.writeInt16LE(
+      Math.round(Math.sin((i / sampleRate) * 440 * 2 * Math.PI) * 8000),
+      44 + i * 2,
+    );
+  }
+  return new Uint8Array(buffer);
+}
 
 async function signUpToProject(
   page: test.Page,
