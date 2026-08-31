@@ -6,19 +6,17 @@
 // Produces a ComposerAttachment; nothing sends until the composer's ↑.
 //
 import { useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { CameraView } from "expo-camera";
 import * as FileSystem from "expo-file-system/legacy";
+import { useCameraFacing } from "../lib/camera-facing.ts";
 import { formatClipDuration, type ComposerAttachment } from "../lib/composer-attachments.ts";
 import { FILTER_PICKER, FILTERED_CLIP_MAX_SECONDS } from "../lib/filters/picker.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
 import FilterCamera, { type FilterCameraCommand } from "./filter-camera.tsx";
-
-const CAMERA_FACING_KEY = "iterate.cameraFacing.v1";
 
 export function CameraCaptureModal(props: {
   visible: boolean;
@@ -30,21 +28,7 @@ export function CameraCaptureModal(props: {
   // resolves recordAsync with the partial video, so without this flag the
   // aborted recording would ride into the composer (review-caught).
   const closeCancelledRecording = useRef(false);
-  const queryClient = useQueryClient();
-  // Which camera you last used survives app restarts (a flip writes through
-  // to AsyncStorage; the query seeds from it).
-  const storedFacing = useQuery({
-    queryKey: ["camera-facing"],
-    queryFn: async () =>
-      ((await AsyncStorage.getItem(CAMERA_FACING_KEY)) === "front" ? "front" : "back") as
-        | "back"
-        | "front",
-  });
-  const facing = storedFacing.data || "back";
-  const setFacing = (next: "back" | "front") => {
-    queryClient.setQueryData(["camera-facing"], next);
-    void AsyncStorage.setItem(CAMERA_FACING_KEY, next);
-  };
+  const { facing, setFacing } = useCameraFacing();
   const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null);
   const [filterId, setFilterId] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);

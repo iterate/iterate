@@ -58,6 +58,9 @@ type State = {
   message: string | null;
   /** Transient readout while the user drags a feature's mask looseness. */
   adjustLabel: string | null;
+  /** Mirrors #recorder so render() can hide chrome (the mode button) that
+   * should not appear in recorded clips' UI. */
+  recording: boolean;
 };
 
 const MASK_STRETCH_KEY = "iterate.filterMaskStretch.v1";
@@ -74,7 +77,7 @@ function loadMaskStretch(): MaskStretch {
 }
 
 export default class FilterCamera extends Component<Props, State> {
-  state: State = { status: "starting", message: null, adjustLabel: null };
+  state: State = { status: "starting", message: null, adjustLabel: null, recording: false };
 
   #canvas: HTMLCanvasElement | null = null;
   #frameCanvas = document.createElement("canvas");
@@ -86,6 +89,9 @@ export default class FilterCamera extends Component<Props, State> {
   #disposed = false;
   #backgroundIndex = 0;
   #modeIndex = 0;
+  // First tracked face after the filter starts: the reference the potato's
+  // full head-tracking moves relative to.
+  #faceBaseline: { cx: number; cy: number; width: number } | null = null;
   #maskStretch = loadMaskStretch();
   #featureHits: FeatureHit[] = [];
   // One in-flight touch: where it started, which feature (if any) it grabbed
@@ -113,6 +119,7 @@ export default class FilterCamera extends Component<Props, State> {
 
   componentDidUpdate(previous: Props) {
     if (previous.facing !== this.props.facing) void this.#start();
+    if (previous.filterId !== this.props.filterId) this.#faceBaseline = null;
     const command = this.props.command;
     if (command && command.seq !== this.#handledCommandSeq) {
       this.#handledCommandSeq = command.seq;
@@ -250,6 +257,18 @@ export default class FilterCamera extends Component<Props, State> {
       if (landmarks) face = faceGeometryFromLandmarks(landmarks, t);
     }
     face = face || fallbackFaceGeometry(width, height);
+    if (face.tracked && this.#faceBaseline === null) {
+      this.#faceBaseline = { cx: face.box.cx, cy: face.box.cy, width: face.box.width };
+    }
+    const baseline = this.#faceBaseline;
+    const facePose =
+      face.tracked && baseline
+        ? {
+            dx: face.box.cx - baseline.cx,
+            dy: face.box.cy - baseline.cy,
+            scale: face.box.width / baseline.width,
+          }
+        : { dx: 0, dy: 0, scale: 1 };
 
     const draw = filterDrawerById(this.props.filterId);
     const ctx = canvas.getContext("2d")!;
@@ -262,6 +281,7 @@ export default class FilterCamera extends Component<Props, State> {
       face,
       backgroundIndex: this.#backgroundIndex,
       modeIndex: this.#modeIndex,
+      facePose,
       maskStretch: this.#maskStretch,
       featureHits,
       timeMs: performance.now(),
@@ -375,6 +395,7 @@ export default class FilterCamera extends Component<Props, State> {
     if (!mimeType) throw new Error("MediaRecorder supports no usable format here");
     const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 2_500_000 });
     this.#recorder = recorder;
+    this.setState({ recording: true });
     this.#recorderChunks = [];
     this.#recordingStartedAt = Date.now();
     recorder.ondataavailable = (event) => {
@@ -387,6 +408,7 @@ export default class FilterCamera extends Component<Props, State> {
       this.#recorderChunks = [];
       if (this.#recordingMaxTimer) clearTimeout(this.#recordingMaxTimer);
       if (this.#disposed) return;
+      this.setState({ recording: false });
       void blobToBase64(blob)
         .then((base64) => this.props.onVideo({ base64, mimeType, durationSeconds }))
         .catch((error) => this.props.onCaptureError(String((error as Error).message || error)));
@@ -416,7 +438,7 @@ export default class FilterCamera extends Component<Props, State> {
           onPointerUp={this.#onPointerUp}
           onPointerCancel={this.#onPointerUp}
         />
-        {(FILTER_MODES[this.props.filterId] || []).length > 1 ? (
+        {(FILTER_MODES[this.props.filterId] || []).length > 1 && !this.state.recording ? (
           <button
             className="mode"
             onClick={() => {

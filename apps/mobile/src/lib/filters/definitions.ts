@@ -43,6 +43,10 @@ export type FilterFrameArgs = {
   /** Cycled by the pipeline's mode button for filters that declare
    * FILTER_MODES (the flashcards' picture style). */
   modeIndex: number;
+  /** Head movement relative to the baseline captured when the filter
+   * started: canvas-pixel offsets and a z-ish scale (face width ratio, >1 =
+   * closer). {0,0,1} while untracked. */
+  facePose: { dx: number; dy: number; scale: number };
   maskStretch: MaskStretch;
   /** Filled DURING draw by the cutout helper: where each feature landed on
    * screen this frame — the pipeline hit-tests swipes against it. */
@@ -54,12 +58,15 @@ export const FILTER_DRAWERS: Record<string, (args: FilterFrameArgs) => void> = {
   potato: (args) => {
     const backdrops = ["potato-dirt", "potato-farm", "potato-rain"];
     drawBackdrop(args, backdrops[args.backgroundIndex % backdrops.length]);
-    // The potato is buried: fixed in the dirt at a fixed size, but it rolls
-    // with your head, and your eyes and lips sit at fixed positions WITHIN
-    // the potato (face-masking anchored to the dirt instead of your face).
-    const size = Math.min(args.width * 0.62, args.height * 0.42);
-    const cx = args.width / 2;
-    const cy = args.height * 0.56;
+    // The potato starts buried mid-dirt and then FOLLOWS your head: move
+    // up/down/left/right and it moves, come closer and it grows, roll and
+    // it rolls — all relative to where your face was when the filter
+    // started. Your eyes and lips sit at fixed positions WITHIN the potato.
+    const pose = args.facePose;
+    const zoom = Math.min(2.2, Math.max(0.45, pose.scale));
+    const size = Math.min(args.width * 0.62, args.height * 0.42) * zoom;
+    const cx = args.width / 2 + pose.dx;
+    const cy = args.height * 0.56 + pose.dy;
     const tilt = args.face.box.angle;
     drawEmoji(args.ctx, "🥔", cx, cy, size * 1.3, tilt);
     const at = (dx: number, dy: number) => ({
@@ -143,26 +150,27 @@ export const FILTER_DRAWERS: Record<string, (args: FilterFrameArgs) => void> = {
       }
     }
     // The grown-up stays pinned in the top half: eyes and lips remapped to
-    // fixed spots up there (patches keep the head's roll, positions don't
-    // wander over the card).
+    // fixed spots up there (patches keep the head's roll and grow as you
+    // lean in, but positions don't wander over the card).
     const eyeY = height * 0.15;
     const angle = face.box.angle;
+    const zoom = Math.min(1.8, Math.max(0.6, args.facePose.scale));
     drawFeatureCutout(args, "eyes", face.leftEye, {
       cx: width / 2 - width * 0.11,
       cy: eyeY,
-      width: width * 0.16,
+      width: width * 0.16 * zoom,
       angle,
     });
     drawFeatureCutout(args, "eyes", face.rightEye, {
       cx: width / 2 + width * 0.11,
       cy: eyeY,
-      width: width * 0.16,
+      width: width * 0.16 * zoom,
       angle,
     });
     drawFeatureCutout(args, "lips", face.lips, {
       cx: width / 2,
       cy: height * 0.25,
-      width: width * 0.22,
+      width: width * 0.22 * zoom,
       angle,
     });
   },
@@ -186,56 +194,130 @@ for (const filter of FILTER_PICKER) {
   if (!FILTER_DRAWERS[filter.id]) throw new Error(`Picker filter has no drawer: ${filter.id}`);
 }
 
-// Pictures an 18-month-old might know the word for. Tap anywhere to advance.
-// Words must exist in the generated image sets (scripts/generate-flashcard-
-// images.mjs); color cards draw a swatch instead.
-const FLASHCARDS: { word: string; background: string; swatch?: string }[] = [
-  { word: "dog", background: "#2874a6" },
-  { word: "cat", background: "#af601a" },
-  { word: "ball", background: "#239b56" },
-  { word: "banana", background: "#6c3483" },
-  { word: "apple", background: "#1e8449" },
-  { word: "water", background: "#154360" },
-  { word: "milk", background: "#7d6608" },
-  { word: "baby", background: "#884ea0" },
-  { word: "tomato", background: "#1a5276" },
-  { word: "cucumber", background: "#943126" },
-  { word: "door", background: "#21618c" },
-  { word: "chair", background: "#117864" },
-  { word: "bed", background: "#6e2c00" },
-  { word: "cow", background: "#5b2c6f" },
-  { word: "pig", background: "#1d8348" },
-  { word: "horse", background: "#1f618d" },
-  { word: "sheep", background: "#7b241c" },
-  { word: "duck", background: "#9a7d0a" },
-  { word: "chicken", background: "#633974" },
-  { word: "carrot", background: "#0e6251" },
-  { word: "pasta", background: "#78281f" },
-  { word: "bread", background: "#4a235a" },
-  { word: "cheese", background: "#1b4f72" },
-  { word: "egg", background: "#186a3b" },
-  { word: "strawberry", background: "#145a32" },
-  { word: "grapes", background: "#7e5109" },
-  { word: "orange", background: "#283747" },
-  { word: "car", background: "#148f77" },
-  { word: "bus", background: "#512e5f" },
-  { word: "train", background: "#a04000" },
-  { word: "book", background: "#0b5345" },
-  { word: "star", background: "#1c2833" },
-  { word: "moon", background: "#212f3d" },
-  { word: "sun", background: "#2471a3" },
-  { word: "tree", background: "#6e2c00" },
-  { word: "flower", background: "#186a3b" },
-  { word: "fish", background: "#7b241c" },
-  { word: "bird", background: "#1a5276" },
-  { word: "shoe", background: "#117a65" },
-  { word: "hat", background: "#b03a2e" },
-  { word: "spoon", background: "#2e4053" },
+// Pictures an 18-month-old might know the word for. Tap anywhere to
+// advance. Words must exist in the generated image sets (keep in sync with
+// scripts/generate-flashcard-images.mjs); color cards draw a swatch. The
+// deck shuffles once per camera session (module load) so the order varies.
+const PICTURE_WORDS = [
+  "dog",
+  "cat",
+  "ball",
+  "banana",
+  "apple",
+  "water",
+  "milk",
+  "baby",
+  "tomato",
+  "cucumber",
+  "door",
+  "chair",
+  "bed",
+  "cow",
+  "pig",
+  "horse",
+  "sheep",
+  "duck",
+  "chicken",
+  "carrot",
+  "pasta",
+  "bread",
+  "cheese",
+  "egg",
+  "strawberry",
+  "grapes",
+  "orange",
+  "car",
+  "bus",
+  "train",
+  "book",
+  "star",
+  "moon",
+  "sun",
+  "tree",
+  "flower",
+  "fish",
+  "bird",
+  "shoe",
+  "hat",
+  "spoon",
+  "nose",
+  "ear",
+  "hand",
+  "foot",
+  "sock",
+  "cup",
+  "bowl",
+  "plate",
+  "bottle",
+  "phone",
+  "keys",
+  "bath",
+  "brush",
+  "cookie",
+  "cake",
+  "juice",
+  "corn",
+  "peas",
+  "bear",
+  "lion",
+  "elephant",
+  "monkey",
+  "rabbit",
+  "frog",
+  "bee",
+  "mouse",
+  "butterfly",
+  "snail",
+  "worm",
+  "bike",
+  "boat",
+  "plane",
+  "truck",
+  "tractor",
+  "balloon",
+  "teddy bear",
+  "doll",
+  "blocks",
+  "cloud",
+  "snow",
+];
+
+const CARD_COLORS = [
+  "#2874a6",
+  "#af601a",
+  "#239b56",
+  "#6c3483",
+  "#1e8449",
+  "#154360",
+  "#7d6608",
+  "#884ea0",
+  "#943126",
+  "#21618c",
+  "#117864",
+  "#6e2c00",
+  "#5b2c6f",
+  "#1f618d",
+  "#9a7d0a",
+  "#0e6251",
+  "#78281f",
+  "#4a235a",
+];
+
+const FLASHCARDS: { word: string; background: string; swatch?: string }[] = shuffle([
+  ...PICTURE_WORDS.map((word, i) => ({ word, background: CARD_COLORS[i % CARD_COLORS.length] })),
   { word: "red", background: "#34495e", swatch: "#e74c3c" },
   { word: "blue", background: "#34495e", swatch: "#3498db" },
   { word: "green", background: "#34495e", swatch: "#2ecc71" },
   { word: "yellow", background: "#34495e", swatch: "#f1c40f" },
-];
+]);
+
+function shuffle<T>(items: T[]): T[] {
+  for (let i = items.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [items[i], items[j]] = [items[j], items[i]];
+  }
+  return items;
+}
 
 // Data-URI images decode lazily; cached across frames. Returns null for the
 // first frame or two while the image decodes (callers draw without it).
@@ -400,8 +482,12 @@ function drawFeatureCutout(
     });
     return;
   }
-  // Uniform scale: the patch keeps YOUR feature's aspect ratio.
-  const scale = dest.width / sw;
+  // Uniform scale anchored to the UNSTRETCHED feature size: the patch keeps
+  // YOUR feature's aspect ratio, and adjusting the mask looseness only
+  // reshapes the hole — dividing by the stretched patch size instead would
+  // zoom the imagery as the mask grows (on-device-caught).
+  const nominalWidth = 2 * feature.rx * BASE_EXPAND[kind] * 1.3;
+  const scale = dest.width / Math.max(nominalWidth, 1);
   ctx.save();
   ctx.translate(dest.cx, dest.cy);
   // The sampled patch is already in canvas orientation (it carries the

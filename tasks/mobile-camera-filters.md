@@ -178,3 +178,20 @@ loading from failed.
 - The generic mode/mask machinery (FILTER_MODES, featureHits hit-testing,
   maskStretch) is part of the vibe-code filter interface, not
   flashcards-specific.
+
+## Feedback round 5 (tracking + polish)
+
+- The attachment sheet's live camera tile now respects the persisted
+  front/back choice (shared `useCameraFacing()` in `lib/camera-facing.ts`).
+- Mask swipes now reshape ONLY the hole: remapped cutouts scale from the
+  unstretched feature size, so growing the mask no longer zooms the imagery
+  underneath.
+- The mode (card-style) button hides while recording.
+- Potato fully tracks the head: position, roll, and z-depth (face-width
+  ratio) relative to a baseline captured on the first tracked frame after
+  the filter starts; flashcard features scale with lean-in while staying
+  pinned top-half.
+- Deck grown to 81 picture words + 4 colors (body parts, animals, vehicles,
+  foods, toys — 1.5yo vocabulary guesses) for both styles; generation
+  script is merge-mode (keeps approved art, generates only missing words);
+  order shuffles each camera session. Unsplash dropped per Misha.
