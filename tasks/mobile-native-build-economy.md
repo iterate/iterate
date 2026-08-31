@@ -9,11 +9,11 @@ base: mobile-merged-qr (#2550)
 
 ## Status summary
 
-Spec committed first; implementation not started yet. Main pieces planned:
-stop building a native binary per PR, key builds on the runtime fingerprint
-instead, make install links live-resolving interstitials, and teach the app
-to say "this channel's JS needs a different native build" with a Download
-button.
+Implemented; verifying. All unit lanes green (scripts 291, os 9 new,
+mobile 204 incl. new incompatible-state cases); typecheck/lint/knip/format
+clean; mobile web specs being re-run (first batch had fresh-worktree dev
+server OOM noise — specs pass individually). Remaining: PR body risk map +
+interstitial screenshot.
 
 ## The ask (Misha, verbatim-ish)
 
@@ -151,22 +151,50 @@ that can't run never gets to report anything.)
 
 ## Checklist
 
-- [ ] `mobile-preview.ts`: `ensureBuildForRuntime` (drop channel matching,
+- [x] `mobile-preview.ts`: `ensureBuildForRuntime` (drop channel matching,
       always `preview` profile), delete the eas.json rewrite machinery,
-      delete `preview-pr` from eas.json
-- [ ] `mobile-preview.ts`: install links/QRs → `/m/install/<channel>`;
-      sha-independent asset names; section copy updated (install no longer
-      lands you on the PR channel by itself — the interstitial sequences it)
-- [ ] OS: status store (admin-auth write endpoint + storage) with tests
-- [ ] OS: `/m/install/$channel` interstitial + `/m/channel-status/$channel`
-      JSON (CORS), fallback rendering when status is missing
-- [ ] CI writers: publish-pr / publish-main / refresh / cleanup push status
-- [ ] `write-build-info.mjs` + publishers: stamp `runtimeFingerprint`,
-      assert it matches the published runtime
-- [ ] App: `build-state-core` `"incompatible"` status + tests;
+      delete `preview-pr` from eas.json _(easJsonWithChannel /
+      withProfileChannel / buildProfileForChannel gone)_
+- [x] `mobile-preview.ts`: install links/QRs → `/m/install/<channel>`;
+      sha-independent asset names; section copy updated _(one OTA + one
+      install PNG per PR, two stable ones for main; note says "After
+      installing, tap Open in app…")_
+- [x] OS: status store (admin-auth write endpoint + storage) with tests
+      _(apps/os/src/domains/mobile/channel-status.ts + .test.ts; FILES_BUCKET
+      `platform/mobile-channel-status/<channel>.json`)_
+- [x] OS: `/m/install/$channel` interstitial + `/m/channel-status/$channel`
+      JSON (CORS), fallback rendering when status is missing _(thin routes;
+      HTML orders install before Open-in-app; PUT tolerates route-absent 404
+      during the bootstrap window, loudly)_
+- [x] CI writers: publish-pr / publish-main / refresh / cleanup push status
+      _(refresh guards on buildId so a newer merge's snapshot is never
+      regressed; cleanup deletes the channel's snapshot)_
+- [x] `write-build-info.mjs` + publishers: stamp `runtimeFingerprint`,
+      assert it matches the published runtime _(computeRuntimeFingerprint via
+      expo-updates fingerprint:generate; verified stamping build-info.json
+      does NOT move the fingerprint)_
+- [x] App: `build-state-core` `"incompatible"` status + tests;
       channel-status query; Download button on the banner/Build info and the
-      QR confirm screen's no-update path
-- [ ] README (apps/mobile): per-PR channels section rewritten for the new
+      QR confirm screen's no-update path _(Download opens the interstitial,
+      not the raw build page — the new-install guard clears overrides, so the
+      channel hop must come after the install)_
+- [x] README (apps/mobile): per-PR channels section rewritten for the new
       build economics; note the status store
-- [ ] Tests: scripts planners, OS routes, mobile core; specs where the web
-      lane can exercise them
+- [x] Tests: scripts planners, OS routes, mobile core _(no new web spec: the
+      incompatible path needs native OTA facts the expo-web dev bundle can't
+      have — canOta() is false there, so the status query never arms; core
+      logic is node-tested instead)_
+
+## Implementation log
+
+- Storage decision: FILES_BUCKET `platform/` prefix over a new KV namespace —
+  R2 is read-after-write consistent (scan the QR the moment CI publishes) and
+  needs no per-env id in envs.ts.
+- No EXPO_TOKEN in the worker (per the documented decision in the README):
+  the store is CI-pushed. Known staleness: a PR build finishing after publish
+  stays `buildFinished: false` until the next push; the interstitial links
+  the concrete build page, which is live truth.
+- Transition note: until this merges and prd deploys, PR publishes log
+  "channel-status endpoint not deployed yet — snapshot skipped" and QR
+  sections still render; interstitial URLs 404 until then (this PR's own
+  preview section will demonstrate the fallback once prd has the routes).

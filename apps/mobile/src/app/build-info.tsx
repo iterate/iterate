@@ -7,9 +7,10 @@
 // A dumb view: every fact and every action comes from lib/build-state.ts.
 
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import {
   buildStamp,
+  installPageUrl,
   isOverridden,
   MAIN_CHANNEL,
   updateHeadline,
@@ -26,6 +27,8 @@ export default function BuildInfoScreen() {
   const state = useBuildState();
   const actions = useBuildActions();
   const overridden = isOverridden(state);
+  // Captured as a const so the closure below keeps the narrowing.
+  const incompatibleChannel = state.update.kind === "incompatible" ? state.channel : null;
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
@@ -70,6 +73,10 @@ export default function BuildInfoScreen() {
             bundles) — the first thing to check when a preview looks wrong. */}
         <Row label="Expected backend" value={buildStamp.expectedBackendEnv} />
         <Row label="Test login" value={buildStamp.testLoginEmail} />
+        {/* The runtime fingerprint the publisher computed for this bundle —
+            its own record of which native build it expects (matches the
+            binary's runtime whenever this bundle is actually running). */}
+        <Row label="Expected runtime" value={buildStamp.runtimeFingerprint.slice(0, 9)} />
       </Section>
       <Section title="Update">
         <Row label="Status" value={updateHeadline(state.update)} />
@@ -78,9 +85,24 @@ export default function BuildInfoScreen() {
             <Row label="Latest commit" value={state.update.commit.slice(0, 7)} />
             <Row label="Published" value={formatTime(state.update.publishedAt)} />
           </>
+        ) : state.update.kind === "incompatible" ? (
+          <>
+            <Row label="Latest commit" value={state.update.commit.slice(0, 7)} />
+            <Row label="Message" value={state.update.message} />
+          </>
         ) : null}
       </Section>
-      {state.update.kind === "unsupported" ? null : (
+      {incompatibleChannel !== null ? (
+        // OTA can't cross a runtime change — the fix is a download. The
+        // interstitial (not the raw build page) so the post-install
+        // "Open in app" tap lands back on this channel.
+        <Button
+          label="Download the native build"
+          pending={false}
+          pendingLabel=""
+          onPress={() => void Linking.openURL(installPageUrl(incompatibleChannel))}
+        />
+      ) : state.update.kind === "unsupported" ? null : (
         <Button
           label={state.update.kind === "behind" ? "Update now" : "Check for update"}
           pending={actions.updateNowPending || state.update.kind === "checking"}

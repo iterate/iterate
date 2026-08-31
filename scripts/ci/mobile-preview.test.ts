@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annotator.ts";
 import {
   channelForBranch,
-  easJsonWithChannel,
+  installInterstitialUrl,
   planPreview,
   renderPreviewSection,
 } from "./mobile-preview.ts";
@@ -177,14 +177,14 @@ test("bundleStampForPr stamps nothing without a leased preview slot", () => {
   });
 });
 
-test("a PR's install QR promises the PR's channel, not just a compatible binary", () => {
+test("a PR's install QR goes to the channel-stable interstitial and explains the channel hop", () => {
   const plan = planPreview({
     baseUrl: "https://os.iterate.com",
     scheme: "iterate",
     channel: "add-native-module",
     publishedRuntime: "aaaa000000000000000000000000000000000000",
     installedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
-    installUrl: "https://expo.dev/accounts/o/projects/p/builds/build-2",
+    installUrl: installInterstitialUrl("https://os.iterate.com", "add-native-module"),
     installReady: true,
   });
   const section = renderPreviewSection({
@@ -196,12 +196,14 @@ test("a PR's install QR promises the PR's channel, not just a compatible binary"
     installBuildSha: "abcdef1234567890",
     publishedRuntime: "aaaa000000000000000000000000000000000000",
   });
-  // The old copy sent you back to the OTA QR after installing, because the
-  // binary booted on main. Builds are made for their channel now.
+  // Builds are shared across channels (one per runtime fingerprint); the
+  // install link resolves the right build at scan time, and the page's
+  // "Open in app" tap does the channel hop after the install.
+  expect(section).toContain("https://os.iterate.com/m/install/add-native-module");
   expect(section).toContain(
-    "This build boots on <code>add-native-module</code> — installing it is all you need.",
+    "After installing, tap <b>Open in app</b> on that page to land on <code>add-native-module</code>.",
   );
-  expect(section).not.toContain("then use the OTA link above");
+  expect(section).not.toContain("expo.dev");
 });
 
 test("a build that hasn't finished says so instead of offering a dead install link", () => {
@@ -224,22 +226,6 @@ test("a build that hasn't finished says so instead of offering a dead install li
     publishedRuntime: "aaaa000000000000000000000000000000000000",
   });
   expect(section).toContain("Build still running — the install page fills in when it finishes");
-});
-
-test("the PR channel is written into its own build profile, leaving the rest alone", () => {
-  const raw = JSON.stringify(
-    { build: { preview: { channel: "preview" }, "preview-pr": { channel: "preview" } } },
-    null,
-    2,
-  );
-  const written = JSON.parse(easJsonWithChannel(raw, "preview-pr", "my-branch"));
-  expect(written.build).toEqual({
-    preview: { channel: "preview" },
-    "preview-pr": { channel: "my-branch" },
-  });
-  // A profile that doesn't exist is a CI bug, not something to paper over —
-  // silently adding one would produce a build on a channel nobody serves.
-  expect(() => easJsonWithChannel(raw, "nope", "my-branch")).toThrow(/no build profile "nope"/);
 });
 
 test("the PR footer routes back to main via the explicit switch, not reset-to-default", () => {

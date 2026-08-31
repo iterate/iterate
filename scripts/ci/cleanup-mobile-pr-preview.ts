@@ -13,6 +13,7 @@ import { getOctokit, getRepo, readEventPayload } from "./github.ts";
 import {
   bodySectionLabel,
   channelForBranch,
+  deleteChannelStatus,
   easJson,
   isMainFlavoredSection,
 } from "./mobile-preview.ts";
@@ -67,6 +68,9 @@ async function cleanupMobilePrPreview() {
         console.log(`skipping ${args[0]}: ${String(error).split("\n")[0]}`);
       }
     }
+    // The install interstitial for a deleted channel must fall back to its
+    // honest "no publish snapshot" page rather than offer a stale build.
+    await deleteChannelStatus(plan.channel);
   }
 
   const github = getOctokit();
