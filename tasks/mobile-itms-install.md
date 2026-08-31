@@ -9,9 +9,10 @@ base: mobile-native-build-economy (#2555)
 
 ## Status summary
 
-Spec committed first; implementation follows in this branch. One coherent
-change: the install page installs the app in place instead of bouncing
-through expo.dev.
+Implemented and green (typecheck/lint/knip/format, scripts 291, os 13 incl.
+6 new manifest/interstitial tests). Remaining: reapply onto main once #2555
+merges; a phone-scan sanity check of the itms dialog is the only thing CI
+can't prove.
 
 ## The problem
 
@@ -66,13 +67,13 @@ happens ON our page, with "Open in app" sitting right below it.
 
 ## Checklist
 
-- [ ] Schema: optional `ipaUrl`/`appVersion`/`bundleId` + comment on why
+- [x] Schema: optional `ipaUrl`/`appVersion`/`bundleId` + comment on why
       optional
-- [ ] `mobile-preview.ts`: `InstallBuild.ipaUrl`; writers pass
+- [x] `mobile-preview.ts`: `InstallBuild.ipaUrl`; writers pass
       ipaUrl/appVersion/bundleId; refresher upgrades ipaUrl when the build
       finishes
-- [ ] OS: `handleInstallManifestRequest` + thin route, plist rendering,
+- [x] OS: `handleInstallManifestRequest` + thin route, plist rendering,
       404s, tests (incl. XML escaping)
-- [ ] OS: interstitial itms CTA variant + demoted build-details link, tests
-- [ ] Explainer + README copy
-- [ ] Gauntlet: typecheck, lint, knip, format, scripts + os tests
+- [x] OS: interstitial itms CTA variant + demoted build-details link, tests
+- [x] Explainer + README copy
+- [x] Gauntlet: typecheck, lint, knip, format, scripts + os tests
