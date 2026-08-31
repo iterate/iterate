@@ -16,6 +16,7 @@ import { deployedPreviewEnvs } from "../../envs.ts";
 import { leasedPreviewSlotFromBody } from "../preview/preview.ts";
 import { getOctokit, getRepo, readEventPayload } from "./github.ts";
 import {
+  bodySectionLabel,
   channelForBranch,
   easJson,
   ensureBuildForPr,
@@ -27,9 +28,6 @@ import {
   run,
   uploadQrAsset,
 } from "./mobile-preview.ts";
-
-/** markdownAnnotator label for the managed PR-body section. */
-export const bodySectionLabel = "mobile-pr-preview";
 
 /**
  * The expected-backend + test-sign-in stamp for a PR's bundle
