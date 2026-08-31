@@ -55,7 +55,13 @@ async function refreshMobileMainQr() {
 
   // Flip the channel snapshot to installable — unless a newer merge already
   // superseded this build's snapshot, which must not be regressed.
-  const status = await fetchChannelStatus("preview");
+  // Unreachable-or-erroring store reads as "no snapshot": the buildId guard
+  // below then skips the flip, which is the safe answer during the cutover
+  // window (mobile.iterate.com not serving yet).
+  const status = await fetchChannelStatus("preview").catch((error) => {
+    console.warn(`reading main's channel status failed (${error}) — leaving the snapshot alone`);
+    return null;
+  });
   if (status !== null && status.buildId === build.id) {
     await pushChannelStatus({
       ...status,

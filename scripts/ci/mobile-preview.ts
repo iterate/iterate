@@ -66,18 +66,28 @@ export const mobileWebsiteBaseUrl = mobileWebsiteEnvs.prd.baseUrl;
  * store exists to kill.
  */
 export async function pushChannelStatus(status: MobileChannelStatus) {
-  const response = await fetch(`${mobileWebsiteBaseUrl}/channel-status/${status.channel}`, {
-    method: "PUT",
-    headers: { ...adminAuthHeader(), "content-type": "application/json" },
-    body: JSON.stringify(status),
-  });
-  // 404 = the route isn't deployed yet (prd deploys on merge; PR publishes
-  // can race the first deploy carrying it). The handler itself never 404s a
-  // PUT for a channelForBranch-shaped name, so this is purely transitional —
-  // warn loudly and let the publish proceed; any other failure is fatal.
-  if (response.status === 404) {
+  // Until deploy-mobile-website has run on main, mobile.iterate.com is in
+  // various stages of not-existing: no DNS (fetch THROWS), DNS but no worker
+  // route (Cloudflare error status), or worker without the handler (404).
+  // All three are the same transitional condition — warn loudly, skip, let
+  // the publish proceed. Once the site serves, a PUT for a
+  // channelForBranch-shaped name never 404s, so real handler failures (400,
+  // 401) stay fatal: a publish whose snapshot silently didn't land would
+  // leave install QRs resolving to the previous build.
+  let response: Response;
+  try {
+    response = await fetch(`${mobileWebsiteBaseUrl}/channel-status/${status.channel}`, {
+      method: "PUT",
+      headers: { ...adminAuthHeader(), "content-type": "application/json" },
+      body: JSON.stringify(status),
+    });
+  } catch (error) {
+    console.warn(`${mobileWebsiteBaseUrl} unreachable (${error}) — snapshot skipped`);
+    return;
+  }
+  if (response.status === 404 || response.status >= 520) {
     console.warn(
-      `channel-status endpoint not deployed on ${mobileWebsiteBaseUrl} yet — snapshot skipped`,
+      `channel-status endpoint not serving on ${mobileWebsiteBaseUrl} yet (${response.status}) — snapshot skipped`,
     );
     return;
   }
@@ -98,13 +108,21 @@ export async function fetchChannelStatus(channel: string): Promise<MobileChannel
 }
 
 /** Remove a closed PR's snapshot so its install interstitial falls back to
- * the honest "no publish snapshot" page. Tolerates absence. */
+ * the honest "no publish snapshot" page. Tolerates absence — and, like the
+ * push, tolerates the site not serving yet (a PR closed during the cutover
+ * window has no snapshot there to delete anyway). */
 export async function deleteChannelStatus(channel: string) {
-  const response = await fetch(`${mobileWebsiteBaseUrl}/channel-status/${channel}`, {
-    method: "DELETE",
-    headers: adminAuthHeader(),
-  });
-  if (!response.ok && response.status !== 404) {
+  let response: Response;
+  try {
+    response = await fetch(`${mobileWebsiteBaseUrl}/channel-status/${channel}`, {
+      method: "DELETE",
+      headers: adminAuthHeader(),
+    });
+  } catch (error) {
+    console.warn(`${mobileWebsiteBaseUrl} unreachable (${error}) — nothing to delete there yet`);
+    return;
+  }
+  if (!response.ok && response.status !== 404 && response.status < 520) {
     throw new Error(`deleting channel status failed: ${response.status} ${await response.text()}`);
   }
   console.log(`deleted channel status for ${channel}`);
