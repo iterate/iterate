@@ -1,0 +1,36 @@
+// HAND-WRITTEN (no generator: mobile-website deploys to prd only, like
+// tunnels) — keep in sync with the root envs.ts `mobileWebsiteEnvs`.
+// Top level is local dev (`pnpm dev`); miniflare fakes the R2 bucket.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mobile-website-dev",
+  "main": "./src/worker.ts",
+  "compatibility_date": "2026-06-17",
+  "r2_buckets": [{ "binding": "STATE_BUCKET", "bucket_name": "mobile-website-dev-state" }],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": { "enabled": true, "head_sampling_rate": 1, "persist": true, "invocation_logs": true },
+    "traces": { "enabled": true, "persist": true, "head_sampling_rate": 1 },
+  },
+  "env": {
+    "prd": {
+      "name": "mobile-website-prd",
+      // envs.ts PRD_ACCOUNT_ID
+      "account_id": "04b3b57291ef2626c6a8daa9d47065a7",
+      "routes": [{ "pattern": "mobile.iterate.com/*", "zone_name": "iterate.com" }],
+      "r2_buckets": [{ "binding": "STATE_BUCKET", "bucket_name": "mobile-website-prd-state" }],
+      "observability": {
+        "enabled": true,
+        "head_sampling_rate": 1,
+        "logs": {
+          "enabled": true,
+          "head_sampling_rate": 1,
+          "persist": true,
+          "invocation_logs": true,
+        },
+        "traces": { "enabled": true, "persist": true, "head_sampling_rate": 1 },
+      },
+    },
+  },
+}

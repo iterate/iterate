@@ -446,6 +446,35 @@ export const tunnelsEnvs = {
 } satisfies Record<string, TunnelsEnv>;
 
 /**
+ * apps/mobile/website — the mobile app's own web surface (preview-channel
+ * and install interstitials, the itms manifest, the channel-status store).
+ * Deliberately OUT of apps/os: kernel vs userland, and these phone-scan
+ * pages want a worker measured in KB, not os's 21MB bundle. prd-only like
+ * tunnels — QR codes and the app's status fetches only ever point at prd.
+ * Secrets come from doppler project `os` (the CI snapshot writers already
+ * authenticate with os's admin bearer; one secret, one rotation).
+ */
+export interface MobileWebsiteEnv {
+  cloudflareAccountId: string;
+  /** Doppler config (project `os`) supplying this env's secrets. */
+  dopplerConfig: string;
+  workerName: string;
+  /** The env's public origin — what QR codes and the app's fetches use. */
+  baseUrl: string;
+  hostname: string;
+}
+
+export const mobileWebsiteEnvs = {
+  prd: {
+    cloudflareAccountId: PRD_ACCOUNT_ID,
+    dopplerConfig: "prd",
+    workerName: "mobile-website-prd",
+    baseUrl: "https://mobile.iterate.com",
+    hostname: "mobile.iterate.com",
+  },
+} satisfies Record<string, MobileWebsiteEnv>;
+
+/**
  * apps/streams-example-app — the streams browser UI. Served on a custom
  * domain (`streams.<env zone>`) like every other app, not workers.dev:
  * workers.dev routes on this account have a documented drift class (routes

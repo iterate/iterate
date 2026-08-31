@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import QRCode from "qrcode";
 import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annotator.ts";
 import { MobileChannelStatus } from "../../packages/shared/src/mobile-channel-status.ts";
-import { envs } from "../../envs.ts";
+import { mobileWebsiteEnvs } from "../../envs.ts";
 import { getOctokit, getRepo } from "./github.ts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -36,20 +36,24 @@ export const channelForBranch = (branch: string) =>
  * published bundle itself (apps/mobile/scripts/write-build-info.mjs), not
  * the link. */
 export const interstitialUrl = (baseUrl: string, channel: string) =>
-  `${baseUrl}/m/preview-channel/${channel}`;
+  // Bare path, not /m/: this is the universal-link prefix — a phone whose
+  // binary carries the applinks entitlement opens the app DIRECTLY from
+  // this href; everyone else gets the web interstitial bounce.
+  `${baseUrl}/preview-channel/${channel}`;
 
 /** The channel-stable install page (apps/os/src/routes/m.install.$channel.ts):
  * resolves the channel's expected native build at scan time from the status
  * snapshot below, so an install QR printed three pushes ago still works. */
 export const installInterstitialUrl = (baseUrl: string, channel: string) =>
-  `${baseUrl}/m/install/${channel}`;
+  `${baseUrl}/install/${channel}`;
 
 /** The build's expo.dev page — the actual installer the interstitial links. */
 export const expoBuildUrl = (input: { owner: string; slug: string; buildId: string }) =>
   `https://expo.dev/accounts/${input.owner}/projects/${input.slug}/builds/${input.buildId}`;
 
-/** Production OS — the phone's app talks to prd, so QR links do too. */
-export const prdBaseUrl = envs.prd.baseUrl;
+/** The mobile app's own web surface — every /m/* link and the snapshot
+ * store live here, not on the os kernel (apps/mobile/website). */
+export const mobileWebsiteBaseUrl = mobileWebsiteEnvs.prd.baseUrl;
 
 /**
  * Push a channel's "expected native build" snapshot to prd OS, where the
@@ -62,7 +66,7 @@ export const prdBaseUrl = envs.prd.baseUrl;
  * store exists to kill.
  */
 export async function pushChannelStatus(status: MobileChannelStatus) {
-  const response = await fetch(`${prdBaseUrl}/m/channel-status/${status.channel}`, {
+  const response = await fetch(`${mobileWebsiteBaseUrl}/m/channel-status/${status.channel}`, {
     method: "PUT",
     headers: { ...adminAuthHeader(), "content-type": "application/json" },
     body: JSON.stringify(status),
@@ -72,7 +76,9 @@ export async function pushChannelStatus(status: MobileChannelStatus) {
   // PUT for a channelForBranch-shaped name, so this is purely transitional —
   // warn loudly and let the publish proceed; any other failure is fatal.
   if (response.status === 404) {
-    console.warn(`channel-status endpoint not deployed on ${prdBaseUrl} yet — snapshot skipped`);
+    console.warn(
+      `channel-status endpoint not deployed on ${mobileWebsiteBaseUrl} yet — snapshot skipped`,
+    );
     return;
   }
   if (!response.ok) {
@@ -83,7 +89,7 @@ export async function pushChannelStatus(status: MobileChannelStatus) {
 
 /** Read a channel's snapshot back (public endpoint); null when absent. */
 export async function fetchChannelStatus(channel: string): Promise<MobileChannelStatus | null> {
-  const response = await fetch(`${prdBaseUrl}/m/channel-status/${channel}`);
+  const response = await fetch(`${mobileWebsiteBaseUrl}/m/channel-status/${channel}`);
   if (response.status === 404) return null;
   if (!response.ok) {
     throw new Error(`fetching channel status failed: ${response.status} ${await response.text()}`);
@@ -94,7 +100,7 @@ export async function fetchChannelStatus(channel: string): Promise<MobileChannel
 /** Remove a closed PR's snapshot so its install interstitial falls back to
  * the honest "no publish snapshot" page. Tolerates absence. */
 export async function deleteChannelStatus(channel: string) {
-  const response = await fetch(`${prdBaseUrl}/m/channel-status/${channel}`, {
+  const response = await fetch(`${mobileWebsiteBaseUrl}/m/channel-status/${channel}`, {
     method: "DELETE",
     headers: adminAuthHeader(),
   });

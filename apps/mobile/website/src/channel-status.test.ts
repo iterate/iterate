@@ -1,13 +1,12 @@
 import { expect, test } from "vitest";
-import { parseAppConfigFromEnv } from "@iterate-com/shared/config";
 import {
   channelStatusKey,
   handleChannelStatusRequest,
   handleInstallManifestRequest,
   handleInstallPageRequest,
+  handlePreviewChannelRequest,
   type StatusBucket,
 } from "./channel-status.ts";
-import { AppConfig } from "~/config.ts";
 
 const ADMIN_SECRET = "channel-status-test-admin-secret";
 const ORIGIN = "https://os.example.test";
@@ -28,7 +27,7 @@ test("PUT then GET round-trips a snapshot; GET is public with CORS", async () =>
   const put = await handleChannelStatusRequest({
     bucket,
     channel: "my-feature",
-    config: config(),
+    adminSecret: ADMIN_SECRET,
     request: request("PUT", "my-feature", { body: status, admin: true }),
   });
   expect(put.status).toBe(200);
@@ -37,7 +36,7 @@ test("PUT then GET round-trips a snapshot; GET is public with CORS", async () =>
   const get = await handleChannelStatusRequest({
     bucket,
     channel: "my-feature",
-    config: config(),
+    adminSecret: ADMIN_SECRET,
     request: request("GET", "my-feature", {}),
   });
   expect(get.status).toBe(200);
@@ -52,14 +51,14 @@ test("writes require the admin bearer; reads do not", async () => {
     const put = await handleChannelStatusRequest({
       bucket,
       channel: "my-feature",
-      config: config(),
+      adminSecret: ADMIN_SECRET,
       request: request("PUT", "my-feature", { body: status, authorization: auth }),
     });
     expect(put.status).toBe(401);
     const del = await handleChannelStatusRequest({
       bucket,
       channel: "my-feature",
-      config: config(),
+      adminSecret: ADMIN_SECRET,
       request: request("DELETE", "my-feature", { authorization: auth }),
     });
     expect(del.status).toBe(401);
@@ -72,7 +71,7 @@ test("PUT rejects malformed bodies and channel mismatches", async () => {
   const badShape = await handleChannelStatusRequest({
     bucket,
     channel: "my-feature",
-    config: config(),
+    adminSecret: ADMIN_SECRET,
     request: request("PUT", "my-feature", { body: { channel: "my-feature" }, admin: true }),
   });
   expect(badShape.status).toBe(400);
@@ -80,7 +79,7 @@ test("PUT rejects malformed bodies and channel mismatches", async () => {
   const mismatch = await handleChannelStatusRequest({
     bucket,
     channel: "other-channel",
-    config: config(),
+    adminSecret: ADMIN_SECRET,
     request: request("PUT", "other-channel", { body: status, admin: true }),
   });
   expect(mismatch.status).toBe(400);
@@ -94,14 +93,14 @@ test("DELETE removes the snapshot and GET 404s afterwards", async () => {
   const del = await handleChannelStatusRequest({
     bucket,
     channel: "my-feature",
-    config: config(),
+    adminSecret: ADMIN_SECRET,
     request: request("DELETE", "my-feature", { admin: true }),
   });
   expect(del.status).toBe(200);
   const get = await handleChannelStatusRequest({
     bucket,
     channel: "my-feature",
-    config: config(),
+    adminSecret: ADMIN_SECRET,
     request: request("GET", "my-feature", {}),
   });
   expect(get.status).toBe(404);
@@ -112,7 +111,7 @@ test("an invalid channel name 404s before touching storage", async () => {
   const response = await handleChannelStatusRequest({
     bucket,
     channel: "Bad Channel!",
-    config: config(),
+    adminSecret: ADMIN_SECRET,
     request: request("GET", "bad", {}),
   });
   expect(response.status).toBe(404);
@@ -264,7 +263,7 @@ test("a null ipaUrl is rejected — writers must normalize EAS's null to an abse
   const response = await handleChannelStatusRequest({
     bucket,
     channel: "my-feature",
-    config: config(),
+    adminSecret: ADMIN_SECRET,
     request: request("PUT", "my-feature", { body: { ...status, ipaUrl: null }, admin: true }),
   });
   expect(response.status).toBe(400);
@@ -280,20 +279,21 @@ test("the manifest 404s without the itms fields or without a snapshot", async ()
   expect(missing.status).toBe(404);
 });
 
+test("the preview-channel interstitial bounces to the deep link and offers install", () => {
+  const response = handlePreviewChannelRequest({ channel: "my-feature" });
+  expect(response.status).toBe(200);
+});
+
+test("the preview-channel interstitial content survives a smoke read", async () => {
+  const html = await handlePreviewChannelRequest({ channel: "my-feature" }).text();
+  expect(html).toContain("iterate://preview-channel/my-feature");
+  expect(html).toContain("/install/my-feature");
+  expect(handlePreviewChannelRequest({ channel: "Bad Channel!" }).status).toBe(404);
+});
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
-
-function config(secret = ADMIN_SECRET) {
-  return parseAppConfigFromEnv({
-    configSchema: AppConfig,
-    env: {
-      APP_CONFIG: JSON.stringify({ openAiApiKey: "test-openai-key" }),
-      APP_CONFIG_ADMIN_API_SECRET: secret,
-    },
-    prefix: "APP_CONFIG_",
-  });
-}
 
 function request(
   method: string,

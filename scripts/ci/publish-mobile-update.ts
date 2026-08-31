@@ -26,7 +26,7 @@ import {
   mainInstalledRuntime,
   mobileDir,
   planPreview,
-  prdBaseUrl,
+  mobileWebsiteBaseUrl,
   pushChannelStatus,
   renderPreviewSection,
   run,
@@ -101,12 +101,12 @@ async function publishMobileUpdate() {
   });
 
   const plan = planPreview({
-    baseUrl: prdBaseUrl,
+    baseUrl: mobileWebsiteBaseUrl,
     scheme,
     channel: "preview",
     publishedRuntime: runtimeVersion,
     installedRuntime,
-    installUrl: installInterstitialUrl(prdBaseUrl, "preview"),
+    installUrl: installInterstitialUrl(mobileWebsiteBaseUrl, "preview"),
     installReady: installBuild.finished,
     // Main's bundle stamps no expected backend (write-build-info.mjs ran
     // without the MOBILE_* env vars above): phones default to prd, and never
@@ -117,7 +117,7 @@ async function publishMobileUpdate() {
   // these names must change too — uploads are skip-if-exists.
   const [deepLinkQrUrl, installQrUrl] = await Promise.all([
     uploadQrAsset(`mobile-main-ota-scheme.png`, plan.otaQrContent),
-    uploadQrAsset(`mobile-main-install-page.png`, plan.installUrl),
+    uploadQrAsset(`mobile-main-install-site.png`, plan.installUrl),
   ]);
   const section = renderPreviewSection({
     variant: "main",

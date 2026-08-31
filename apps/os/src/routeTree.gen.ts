@@ -18,6 +18,7 @@ import { Route as DocsIndexRouteImport } from './routes/docs.index'
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
 import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
+import { Route as MSplatRouteImport } from './routes/m.$'
 import { Route as ESplatRouteImport } from './routes/e.$'
 import { Route as CollectSecretProjectSlugRouteImport } from './routes/collect-secret.$projectSlug'
 import { Route as ApiMcpRouteImport } from './routes/api.mcp'
@@ -30,10 +31,6 @@ import { Route as AdminStreamsRouteRouteImport } from './routes/admin/streams/ro
 import { Route as AppProjectsRouteRouteImport } from './routes/_app/projects/route'
 import { Route as AdminStreamsIndexRouteImport } from './routes/admin/streams/index'
 import { Route as AppProjectsIndexRouteImport } from './routes/_app/projects/index'
-import { Route as MPreviewChannelChannelRouteImport } from './routes/m.preview-channel.$channel'
-import { Route as MInstallChannelRouteImport } from './routes/m.install.$channel'
-import { Route as MInstallManifestChannelRouteImport } from './routes/m.install-manifest.$channel'
-import { Route as MChannelStatusChannelRouteImport } from './routes/m.channel-status.$channel'
 import { Route as AdminStreamsProjectIdRouteRouteImport } from './routes/admin/streams/$projectId/route'
 import { Route as AppProjectsProjectSlugRouteRouteImport } from './routes/_app/projects/$projectSlug/route'
 import { Route as DocsStreamsProcessorsIndexRouteImport } from './routes/docs.streams.processors.index'
@@ -105,6 +102,11 @@ const SignInSplatRoute = SignInSplatRouteImport.update({
   path: '/sign-in/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const MSplatRoute = MSplatRouteImport.update({
+  id: '/m/$',
+  path: '/m/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ESplatRoute = ESplatRouteImport.update({
   id: '/e/$',
   path: '/e/$',
@@ -166,26 +168,6 @@ const AppProjectsIndexRoute = AppProjectsIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => AppProjectsRouteRoute,
-} as any)
-const MPreviewChannelChannelRoute = MPreviewChannelChannelRouteImport.update({
-  id: '/m/preview-channel/$channel',
-  path: '/m/preview-channel/$channel',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const MInstallChannelRoute = MInstallChannelRouteImport.update({
-  id: '/m/install/$channel',
-  path: '/m/install/$channel',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const MInstallManifestChannelRoute = MInstallManifestChannelRouteImport.update({
-  id: '/m/install-manifest/$channel',
-  path: '/m/install-manifest/$channel',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const MChannelStatusChannelRoute = MChannelStatusChannelRouteImport.update({
-  id: '/m/channel-status/$channel',
-  path: '/m/channel-status/$channel',
-  getParentRoute: () => rootRouteImport,
 } as any)
 const AdminStreamsProjectIdRouteRoute =
   AdminStreamsProjectIdRouteRouteImport.update({
@@ -359,16 +341,13 @@ export interface FileRoutesByFullPath {
   '/api/mcp': typeof ApiMcpRoute
   '/collect-secret/$projectSlug': typeof CollectSecretProjectSlugRoute
   '/e/$': typeof ESplatRoute
+  '/m/$': typeof MSplatRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/admin/': typeof AdminIndexRoute
   '/docs/': typeof DocsIndexRoute
   '/projects/$projectSlug': typeof AppProjectsProjectSlugRouteRouteWithChildren
   '/admin/streams/$projectId': typeof AdminStreamsProjectIdRouteRouteWithChildren
-  '/m/channel-status/$channel': typeof MChannelStatusChannelRoute
-  '/m/install-manifest/$channel': typeof MInstallManifestChannelRoute
-  '/m/install/$channel': typeof MInstallChannelRoute
-  '/m/preview-channel/$channel': typeof MPreviewChannelChannelRoute
   '/projects/': typeof AppProjectsIndexRoute
   '/admin/streams/': typeof AdminStreamsIndexRoute
   '/projects/$projectSlug/integrations': typeof AppProjectsProjectSlugIntegrationsRoute
@@ -407,14 +386,11 @@ export interface FileRoutesByTo {
   '/api/mcp': typeof ApiMcpRoute
   '/collect-secret/$projectSlug': typeof CollectSecretProjectSlugRoute
   '/e/$': typeof ESplatRoute
+  '/m/$': typeof MSplatRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/admin': typeof AdminIndexRoute
   '/docs': typeof DocsIndexRoute
-  '/m/channel-status/$channel': typeof MChannelStatusChannelRoute
-  '/m/install-manifest/$channel': typeof MInstallManifestChannelRoute
-  '/m/install/$channel': typeof MInstallChannelRoute
-  '/m/preview-channel/$channel': typeof MPreviewChannelChannelRoute
   '/projects': typeof AppProjectsIndexRoute
   '/admin/streams': typeof AdminStreamsIndexRoute
   '/projects/$projectSlug/integrations': typeof AppProjectsProjectSlugIntegrationsRoute
@@ -458,16 +434,13 @@ export interface FileRoutesById {
   '/api/mcp': typeof ApiMcpRoute
   '/collect-secret/$projectSlug': typeof CollectSecretProjectSlugRoute
   '/e/$': typeof ESplatRoute
+  '/m/$': typeof MSplatRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/admin/': typeof AdminIndexRoute
   '/docs/': typeof DocsIndexRoute
   '/_app/projects/$projectSlug': typeof AppProjectsProjectSlugRouteRouteWithChildren
   '/admin/streams/$projectId': typeof AdminStreamsProjectIdRouteRouteWithChildren
-  '/m/channel-status/$channel': typeof MChannelStatusChannelRoute
-  '/m/install-manifest/$channel': typeof MInstallManifestChannelRoute
-  '/m/install/$channel': typeof MInstallChannelRoute
-  '/m/preview-channel/$channel': typeof MPreviewChannelChannelRoute
   '/_app/projects/': typeof AppProjectsIndexRoute
   '/admin/streams/': typeof AdminStreamsIndexRoute
   '/_app/projects/$projectSlug/integrations': typeof AppProjectsProjectSlugIntegrationsRoute
@@ -512,16 +485,13 @@ export interface FileRouteTypes {
     | '/api/mcp'
     | '/collect-secret/$projectSlug'
     | '/e/$'
+    | '/m/$'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/admin/'
     | '/docs/'
     | '/projects/$projectSlug'
     | '/admin/streams/$projectId'
-    | '/m/channel-status/$channel'
-    | '/m/install-manifest/$channel'
-    | '/m/install/$channel'
-    | '/m/preview-channel/$channel'
     | '/projects/'
     | '/admin/streams/'
     | '/projects/$projectSlug/integrations'
@@ -560,14 +530,11 @@ export interface FileRouteTypes {
     | '/api/mcp'
     | '/collect-secret/$projectSlug'
     | '/e/$'
+    | '/m/$'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/admin'
     | '/docs'
-    | '/m/channel-status/$channel'
-    | '/m/install-manifest/$channel'
-    | '/m/install/$channel'
-    | '/m/preview-channel/$channel'
     | '/projects'
     | '/admin/streams'
     | '/projects/$projectSlug/integrations'
@@ -610,16 +577,13 @@ export interface FileRouteTypes {
     | '/api/mcp'
     | '/collect-secret/$projectSlug'
     | '/e/$'
+    | '/m/$'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/admin/'
     | '/docs/'
     | '/_app/projects/$projectSlug'
     | '/admin/streams/$projectId'
-    | '/m/channel-status/$channel'
-    | '/m/install-manifest/$channel'
-    | '/m/install/$channel'
-    | '/m/preview-channel/$channel'
     | '/_app/projects/'
     | '/admin/streams/'
     | '/_app/projects/$projectSlug/integrations'
@@ -659,12 +623,9 @@ export interface RootRouteChildren {
   ApiMcpRoute: typeof ApiMcpRoute
   CollectSecretProjectSlugRoute: typeof CollectSecretProjectSlugRoute
   ESplatRoute: typeof ESplatRoute
+  MSplatRoute: typeof MSplatRoute
   SignInSplatRoute: typeof SignInSplatRoute
   SignUpSplatRoute: typeof SignUpSplatRoute
-  MChannelStatusChannelRoute: typeof MChannelStatusChannelRoute
-  MInstallManifestChannelRoute: typeof MInstallManifestChannelRoute
-  MInstallChannelRoute: typeof MInstallChannelRoute
-  MPreviewChannelChannelRoute: typeof MPreviewChannelChannelRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -730,6 +691,13 @@ declare module '@tanstack/react-router' {
       path: '/sign-in/$'
       fullPath: '/sign-in/$'
       preLoaderRoute: typeof SignInSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/m/$': {
+      id: '/m/$'
+      path: '/m/$'
+      fullPath: '/m/$'
+      preLoaderRoute: typeof MSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/e/$': {
@@ -815,34 +783,6 @@ declare module '@tanstack/react-router' {
       fullPath: '/projects/'
       preLoaderRoute: typeof AppProjectsIndexRouteImport
       parentRoute: typeof AppProjectsRouteRoute
-    }
-    '/m/preview-channel/$channel': {
-      id: '/m/preview-channel/$channel'
-      path: '/m/preview-channel/$channel'
-      fullPath: '/m/preview-channel/$channel'
-      preLoaderRoute: typeof MPreviewChannelChannelRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/m/install/$channel': {
-      id: '/m/install/$channel'
-      path: '/m/install/$channel'
-      fullPath: '/m/install/$channel'
-      preLoaderRoute: typeof MInstallChannelRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/m/install-manifest/$channel': {
-      id: '/m/install-manifest/$channel'
-      path: '/m/install-manifest/$channel'
-      fullPath: '/m/install-manifest/$channel'
-      preLoaderRoute: typeof MInstallManifestChannelRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/m/channel-status/$channel': {
-      id: '/m/channel-status/$channel'
-      path: '/m/channel-status/$channel'
-      fullPath: '/m/channel-status/$channel'
-      preLoaderRoute: typeof MChannelStatusChannelRouteImport
-      parentRoute: typeof rootRouteImport
     }
     '/admin/streams/$projectId': {
       id: '/admin/streams/$projectId'
@@ -1216,12 +1156,9 @@ const rootRouteChildren: RootRouteChildren = {
   ApiMcpRoute: ApiMcpRoute,
   CollectSecretProjectSlugRoute: CollectSecretProjectSlugRoute,
   ESplatRoute: ESplatRoute,
+  MSplatRoute: MSplatRoute,
   SignInSplatRoute: SignInSplatRoute,
   SignUpSplatRoute: SignUpSplatRoute,
-  MChannelStatusChannelRoute: MChannelStatusChannelRoute,
-  MInstallManifestChannelRoute: MInstallManifestChannelRoute,
-  MInstallChannelRoute: MInstallChannelRoute,
-  MPreviewChannelChannelRoute: MPreviewChannelChannelRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

@@ -19,6 +19,7 @@ import Constants from "expo-constants";
 import * as Updates from "expo-updates";
 import { Platform } from "react-native";
 import { MobileChannelStatus } from "@iterate-com/shared/mobile-channel-status";
+import { mobileWebsiteEnvs } from "../../../../envs.ts";
 import { queryClient } from "./query.ts";
 import {
   type BuildState,
@@ -28,7 +29,6 @@ import {
   type UpdateCheck,
   stampFromManifest,
 } from "./build-state-core.ts";
-import { PRODUCTION_PRESET } from "./servers.ts";
 
 export {
   type BuildState,
@@ -203,22 +203,23 @@ function sharedCheckForUpdateAsync() {
  * The CI-pushed "expected native build" snapshot for a channel — the one
  * question checkForUpdateAsync can't answer (the update server filters by
  * runtime, so "no update" and "newer JS you can't run" look identical).
- * Always read from prd: CI writes there and the snapshot is platform
- * metadata, same as the QR links themselves.
+ * Always read from mobile.iterate.com (the app's own web surface,
+ * apps/mobile/website): CI writes there regardless of which backend the
+ * phone points at.
  */
 /**
  * Where every in-app "Download" button goes: the channel-stable install
- * interstitial on prd OS, NOT the raw expo.dev build page. Installing a new
+ * interstitial on mobile.iterate.com, NOT the raw expo.dev build page. Installing a new
  * binary clears any channel override on first boot (the new-install guard),
  * so a direct install would drop the phone back on main — the interstitial's
  * "Open in app" tap after the install re-points it, in the right order.
  */
 export const installPageUrl = (channel: string) =>
-  `${PRODUCTION_PRESET.baseUrl}/m/install/${channel}`;
+  `${mobileWebsiteEnvs.prd.baseUrl}/install/${channel}`;
 
 async function fetchChannelStatus(channel: string): Promise<ChannelStatusCheck> {
   try {
-    const response = await fetch(`${PRODUCTION_PRESET.baseUrl}/m/channel-status/${channel}`);
+    const response = await fetch(`${mobileWebsiteEnvs.prd.baseUrl}/channel-status/${channel}`);
     if (!response.ok) return { kind: "unavailable" };
     const status = MobileChannelStatus.parse(await response.json());
     return {

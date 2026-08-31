@@ -108,7 +108,7 @@ on the PR — pick by what your phone already has:
   Needs a binary whose runtime already matches. The QR encodes the raw scheme
   URL so the camera opens the app directly, no browser hop.
 - **Full install** — the channel-stable interstitial
-  `os.iterate.com/m/install/<channel>`, which resolves the channel's expected
+  `mobile.iterate.com/install/<channel>`, which resolves the channel's expected
   native build _at scan time_ from the CI-pushed snapshot (so a QR printed
   three pushes ago still lands on the right build), installs it in place via
   an OS-served itms-services manifest (the EAS build page stays linked for
@@ -144,12 +144,21 @@ PR is the on-ramp back onto main; no hunting commit comments.
 
 Channel discovery is the PR bodies' QR sections — deliberately no in-app
 channel list, because listing channels needs the EAS API and we don't ship
-`EXPO_TOKEN` to the deployment. What the deployment DOES know is the
+`EXPO_TOKEN` to the deployment. What the platform DOES know is the
 CI-pushed per-channel snapshot (`packages/shared/src/mobile-channel-status.ts`
-→ prd R2 via `PUT /m/channel-status/<channel>`, admin bearer): each publish
-records the channel's runtime and expected native build, the install
-interstitial (`/m/install/<channel>`) and the app's staleness banner read it
+→ `PUT mobile.iterate.com/channel-status/<channel>`, admin bearer): each
+publish records the channel's runtime and expected native build; the install
+interstitial (`/install/<channel>`) and the app's staleness banner read it
 back tokenlessly.
+
+The web surface is the app's own worker — `apps/mobile/website/`,
+mobile.iterate.com, zero-framework, prd-only (kernel vs userland: none of it
+lives in apps/os, which keeps 301s for `/m/*` QRs already printed). The
+domain also carries the `apple-app-site-association`, so
+`https://mobile.iterate.com/preview-channel/<channel>` is a **universal
+link**: binaries carrying the `applinks:mobile.iterate.com` entitlement
+(app.json `ios.associatedDomains`) open the app directly from the PR body's
+tap link; older binaries fall back to the web interstitial bounce.
 
 ## Run and test it in a browser
 

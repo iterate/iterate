@@ -15,7 +15,7 @@ import {
   installInterstitialUrl,
   mobileDir,
   planPreview,
-  prdBaseUrl,
+  mobileWebsiteBaseUrl,
   pushChannelStatus,
   renderPreviewSection,
   syncMainPreviewSection,
@@ -72,7 +72,7 @@ async function refreshMobileMainQr() {
   const appConfig = JSON.parse(readFileSync(path.join(mobileDir, "app.json"), "utf8"));
   const { scheme } = appConfig.expo;
   const plan = planPreview({
-    baseUrl: prdBaseUrl,
+    baseUrl: mobileWebsiteBaseUrl,
     scheme,
     channel: "preview",
     publishedRuntime: build.runtimeVersion,
@@ -81,14 +81,14 @@ async function refreshMobileMainQr() {
     // section must keep saying "native changes — needs a fresh install" with
     // the install QR expanded, now that its link is actually installable.
     installedRuntime: undefined,
-    installUrl: installInterstitialUrl(prdBaseUrl, "preview"),
+    installUrl: installInterstitialUrl(mobileWebsiteBaseUrl, "preview"),
     installReady: true,
   });
   // Same channel-stable asset names the publisher used — uploads are
   // skip-if-exists and the contents are identical.
   const [deepLinkQrUrl, installQrUrl] = await Promise.all([
     uploadQrAsset(`mobile-main-ota-scheme.png`, plan.otaQrContent),
-    uploadQrAsset(`mobile-main-install-page.png`, plan.installUrl),
+    uploadQrAsset(`mobile-main-install-site.png`, plan.installUrl),
   ]);
   const section = renderPreviewSection({
     variant: "main",

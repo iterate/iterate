@@ -1,29 +1,22 @@
-// The mobile "expected native build" store and its two public faces:
+// The mobile "expected native build" store and its public faces (moved here
+// from apps/os — kernel vs userland: this is the app's own web surface):
 //
 //   PUT/DELETE /m/channel-status/<channel>  — CI writers (admin bearer)
 //   GET        /m/channel-status/<channel>  — the app's staleness check (JSON)
 //   GET        /m/install/<channel>         — the human install interstitial
+//   GET        /m/install-manifest/<channel> — the itms-services plist
 //
 // CI pushes a snapshot on every mobile publish (scripts/ci/mobile-preview.ts)
 // and deletes it when a PR closes; this worker never talks to the EAS API
-// (deliberately no EXPO_TOKEN in the deployment — apps/mobile/README.md).
-// Snapshots live in FILES_BUCKET under the reserved `platform/` prefix
-// (project file keys start with a project id, so no collision), which is
-// read-after-write consistent — a phone can scan the QR the moment CI logs
-// the publish.
-//
-// Route files stay thin (apps/os/vitest.config.ts excludes src/routes tests):
-// the logic lives here and channel-status.test.ts drives these functions with
-// real Requests and a fake bucket.
+// (deliberately no EXPO_TOKEN in any deployment — apps/mobile/README.md).
+// Snapshots live in this worker's own R2 bucket, which is read-after-write
+// consistent — a phone can scan the QR the moment CI logs the publish.
 import { MobileChannelStatus } from "@iterate-com/shared/mobile-channel-status";
-import type { AppConfig } from "~/config.ts";
-import { authenticateAdminApiSecret } from "~/auth/admin.ts";
 
 /** Same alphabet CI's channelForBranch produces; anything else 404s. */
 const CHANNEL_RE = /^[a-z0-9._-]{1,100}$/;
 
-export const channelStatusKey = (channel: string) =>
-  `platform/mobile-channel-status/${channel}.json`;
+export const channelStatusKey = (channel: string) => `channel-status/${channel}.json`;
 
 /** The slice of R2Bucket this store uses — injectable in tests. */
 export type StatusBucket = {
@@ -53,18 +46,29 @@ async function readChannelStatus(
   if (object === null) return null;
   const parsed = MobileChannelStatus.safeParse(JSON.parse(await object.text()));
   // A stored snapshot that no longer parses (schema moved) reads as absent —
-  // both faces have an honest missing-status rendering, and the next publish
+  // every face has an honest missing-status rendering, and the next publish
   // rewrites it.
   return parsed.success ? parsed.data : null;
 }
 
+/** Constant-ish compare is not needed here (the secret is long and random,
+ * and callers are CI); a plain equality against the deployed secret matches
+ * what apps/os's authenticateAdminBearer does. */
+const isAdmin = (request: Request, adminSecret: string) => {
+  const match = /^bearer\s+(.+)$/i.exec(request.headers.get("authorization") || "");
+  const token = match?.[1]?.trim() || "";
+  return token.length > 0 && adminSecret.length > 0 && token === adminSecret;
+};
+
 export async function handleChannelStatusRequest(input: {
   bucket: StatusBucket;
   channel: string;
-  config: Pick<AppConfig, "adminApiSecret">;
+  /** The same APP_CONFIG_ADMIN_API_SECRET the CI writers hold (doppler
+   * os/prd) — one secret, one rotation. */
+  adminSecret: string;
   request: Request;
 }): Promise<Response> {
-  const { bucket, channel, config, request } = input;
+  const { bucket, channel, adminSecret, request } = input;
   if (!CHANNEL_RE.test(channel)) return new Response("not found", { status: 404 });
 
   if (request.method === "GET") {
@@ -78,9 +82,7 @@ export async function handleChannelStatusRequest(input: {
     return Response.json(status, { headers: jsonHeaders });
   }
 
-  // Writes are CI-only: the same APP_CONFIG_ADMIN_API_SECRET bearer token
-  // that authenticates admin itx connections (assertAdminSecret in auth.ts).
-  if (!authenticateAdminApiSecret({ config }, request)) {
+  if (!isAdmin(request, adminSecret)) {
     return Response.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -131,6 +133,51 @@ const escapeHtml = (value: string) =>
 /** Every build CI triggers lives in this EAS project; the fallback when we
  * have no snapshot is its builds list. */
 const EAS_BUILDS_LIST_URL = "https://expo.dev/accounts/mishanustom/projects/iterate/builds";
+
+const PAGE_STYLE = `
+  body { font-family: -apple-system, system-ui, sans-serif; background: #0b0b0f; color: #e7e7ea; display: grid; place-items: center; min-height: 100dvh; margin: 0; text-align: center; }
+  main { display: grid; gap: 16px; padding: 24px; max-width: 28rem; }
+  a { color: #7dd3a8; font-weight: 600; }
+  a.cta { border: 1px solid #2a2a33; border-radius: 10px; display: block; font-size: 18px; padding: 14px 18px; }
+  p { color: #9b9ba3; font-size: 14px; margin: 0; }
+  code { color: #e7e7ea; }
+  h1 { font-size: 18px; margin: 0; }`;
+
+const htmlResponse = (html: string) =>
+  new Response(html, {
+    headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
+  });
+
+/**
+ * Https interstitial for preview-channel deep links. GitHub strips
+ * custom-scheme hrefs (`iterate://…`) from rendered markdown, so PR/commit
+ * OTA links point here; this page immediately bounces to the app. Public:
+ * it leaks nothing beyond a channel name, and the app itself still shows a
+ * confirm screen before switching.
+ */
+export function handlePreviewChannelRequest(input: { channel: string }): Response {
+  const { channel } = input;
+  if (!CHANNEL_RE.test(channel)) return new Response("not found", { status: 404 });
+  const deepLink = `iterate://preview-channel/${channel}`;
+  return htmlResponse(`<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta http-equiv="refresh" content="0;url=${deepLink}" />
+<title>Open Iterate — ${escapeHtml(channel)}</title>
+<style>${PAGE_STYLE}</style>
+</head>
+<body>
+<main>
+  <p>Opening the Iterate app on channel <code>${escapeHtml(channel)}</code>…</p>
+  <p><a href="${deepLink}">Tap here if nothing happens</a></p>
+  <p>App not installed? <a href="/install/${escapeHtml(channel)}">Install it first</a>.</p>
+</main>
+<script>location.href = ${JSON.stringify(deepLink)};</script>
+</body>
+</html>`);
+}
 
 /**
  * The install interstitial: the "native build installer that always works".
@@ -191,21 +238,13 @@ export async function handleInstallPageRequest(input: {
         `<a class="cta" href="${EAS_BUILDS_LIST_URL}">Browse EAS builds</a>`,
       ].join("\n");
 
-  const html = `<!doctype html>
+  return htmlResponse(`<!doctype html>
 <html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Install Iterate — ${escapeHtml(channel)}</title>
-<style>
-  body { font-family: -apple-system, system-ui, sans-serif; background: #0b0b0f; color: #e7e7ea; display: grid; place-items: center; min-height: 100dvh; margin: 0; text-align: center; }
-  main { display: grid; gap: 16px; padding: 24px; max-width: 28rem; }
-  a { color: #7dd3a8; font-weight: 600; }
-  a.cta { border: 1px solid #2a2a33; border-radius: 10px; display: block; font-size: 18px; padding: 14px 18px; }
-  p { color: #9b9ba3; font-size: 14px; margin: 0; }
-  code { color: #e7e7ea; }
-  h1 { font-size: 18px; margin: 0; }
-</style>
+<style>${PAGE_STYLE}</style>
 </head>
 <body>
 <main>
@@ -216,10 +255,7 @@ export async function handleInstallPageRequest(input: {
   <p>Already have a compatible build installed? Just tap Open in app.</p>
 </main>
 </body>
-</html>`;
-  return new Response(html, {
-    headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
-  });
+</html>`);
 }
 
 /**
