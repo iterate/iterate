@@ -12,9 +12,9 @@
 // runtime change sync through ONE projection and ONE revision chain, as ephemeral deltas.
 
 import { afterAll, beforeAll, expect, test } from "vitest";
-import { startProjectHarness, type ProjectHarness } from "./harness.ts";
+import { seedSources } from "../e2e/support/sources.ts";
 import { connectLiveState } from "../src/client/live-state-client.ts";
-import { seedSources } from "../proofs/proof_sources.mjs";
+import { startProjectHarness, type ProjectHarness } from "./harness.ts";
 
 let harness: ProjectHarness;
 beforeAll(async () => {
@@ -49,7 +49,11 @@ test("a dynamic-worker processor's live state combines reduced (ticks) + runtime
       JSON.stringify(await itx.invokeCapability("itx.facets.get('presence').liveSnapshot()")),
     );
 
-  const store = await connectLiveState<PresenceLive>(itx, { key: "presence", name: "watch", door });
+  const { store } = await connectLiveState<PresenceLive>(itx, {
+    key: "presence",
+    name: "watch",
+    door,
+  });
 
   // Seed: reduced 0 ticks, runtime lastPokeMs 0 — the whole projection, read atomically through the door.
   expect(store.get()).toEqual({ ticks: 0, lastPokeMs: 0 });

@@ -39,18 +39,16 @@ async function until<T>(
 const settle = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 type Range = { after: number; through: number };
-type Invocation = { events: any[]; range: Range };
 
 /** A subscriber callback that records every invocation (deep-cloned — capnweb payloads must not
  *  be read after the callback's turn). Works verbatim on BOTH lanes: connected targets get it
  *  directly, absent targets reach it through a parked live-capability alias (mountHook). */
 function collector() {
-  const invocations: Invocation[] = [];
-  const fn = (events: any[], range: Range) => {
-    invocations.push(JSON.parse(JSON.stringify({ events, range })));
-  };
+  const invocations: { events: any[]; range: Range }[] = [];
   return {
-    fn,
+    fn: (events: any[], range: Range) => {
+      invocations.push(JSON.parse(JSON.stringify({ events, range })));
+    },
     invocations,
     offsets: () => invocations.flatMap((i) => i.events.map((e) => e.offset as number)),
     types: () => invocations.flatMap((i) => i.events.map((e) => e.type as string)),
@@ -61,8 +59,6 @@ const append = (itx: any, ...events: unknown[]) =>
   itx.invokeCapability(["itx", "stream", ["append", ...events]]);
 const readAll = async (itx: any): Promise<any[]> =>
   (await itx.invokeCapability(["itx", "stream", ["read", 0, 500]])).events;
-
-const HALTED = "events.iterate.com/stream/subscription-delivery-halted";
 
 // Provisions/handles retained for the whole file so nothing client-side disposes a parked
 // callback while a test still needs it.
@@ -225,7 +221,11 @@ test("forwarder: maxAttempts 1 halts after exactly ONE attempt, leaves the audit
   await itx.subscribe({ name: "halty", target: hook, consumes: ["mark"], maxAttempts: 1 });
   await append(itx, { type: "mark" });
   const halt = await until("halt audit fact on the stream", async () =>
-    (await readAll(itx)).find((e) => e.type === HALTED && e.payload?.name === "halty"),
+    (await readAll(itx)).find(
+      (e) =>
+        e.type === "events.iterate.com/stream/subscription-delivery-halted" &&
+        e.payload?.name === "halty",
+    ),
   );
   expect(halt.payload.reason).toMatch(/1 delivery attempts failed/);
   expect(attempts).toBe(1); // the ladder burned exactly one attempt before halting
@@ -329,7 +329,11 @@ test("FIXED (defect 12): unsubscribe during an in-flight delivery leaves no ghos
   let haltEvent: any;
   const t0 = Date.now();
   while (Date.now() - t0 < 5_000 && !haltEvent) {
-    haltEvent = (await readAll(itx)).find((e) => e.type === HALTED && e.payload?.name === "ghost");
+    haltEvent = (await readAll(itx)).find(
+      (e) =>
+        e.type === "events.iterate.com/stream/subscription-delivery-halted" &&
+        e.payload?.name === "ghost",
+    );
     if (!haltEvent) await settle(150);
   }
   expect(invocations).toBe(1); // the callback itself was never re-offered (sanity)
@@ -349,7 +353,11 @@ test("forwarder: row isolation — one halted row never blocks its neighbor", as
   await itx.subscribe({ name: "good", target: goodHook, consumes: ["mark"] });
   const [m1] = await append(itx, { type: "mark", payload: { n: 1 } });
   await until("bad halted", async () =>
-    (await readAll(itx)).some((e) => e.type === HALTED && e.payload?.name === "bad"),
+    (await readAll(itx)).some(
+      (e) =>
+        e.type === "events.iterate.com/stream/subscription-delivery-halted" &&
+        e.payload?.name === "bad",
+    ),
   );
   await until("good got m1", () => good.offsets().includes(m1.offset));
   const [m2] = await append(itx, { type: "mark", payload: { n: 2 } });
@@ -441,7 +449,6 @@ test("PATHOLOGICAL: 200 connected subscription mounts — one append fans out to
   await append(itx, { type: "ping", payload: { round: 2 } });
   await until("all 200 received round 2", () => received >= 400, 10_000, 10);
   const wallMs = Date.now() - t0;
-  // eslint-disable-next-line no-console
   console.log(`fan-out: cold(first-page) ${coldWallMs}ms, warm ${wallMs}ms for 200 mounts`);
   expect(wallMs).toBeLessThan(2_000);
   await settle(300);

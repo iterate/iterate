@@ -43,15 +43,13 @@ async function until<T>(
 const settle = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 type Range = { scannedAfterOffset: number; scannedThroughOffset: number };
-type Invocation = { events: any[]; range: Range };
 
 function collector() {
-  const invocations: Invocation[] = [];
-  const fn = (events: any[], range: Range) => {
-    invocations.push(JSON.parse(JSON.stringify({ events, range })));
-  };
+  const invocations: { events: any[]; range: Range }[] = [];
   return {
-    fn,
+    fn: (events: any[], range: Range) => {
+      invocations.push(JSON.parse(JSON.stringify({ events, range })));
+    },
     invocations,
     offsets: () => invocations.flatMap((i) => i.events.map((e) => e.offset as number)),
     types: () => invocations.flatMap((i) => i.events.map((e) => e.type as string)),
@@ -84,8 +82,6 @@ const durableCountsByType = (events: any[]): Record<string, number> => {
 
 const logsText = () => JSON.stringify(harness.logs());
 const countMatches = (text: string, re: RegExp) => (text.match(re) ?? []).length;
-
-const HALTED = "events.iterate.com/stream/subscription-delivery-halted";
 
 // Provisions/handles retained for the whole file so nothing client-side disposes a parked
 // callback while a test still needs it.
@@ -397,7 +393,11 @@ test("reentrancy characterized: a forwarder delivery targeting itx.stream.append
 
   const events = await readAll(itx);
   expect(events.filter((e) => typeof e.type !== "string")).toHaveLength(0); // no junk committed
-  const halts = events.filter((e) => e.type === HALTED && e.payload?.name === "reenter");
+  const halts = events.filter(
+    (e) =>
+      e.type === "events.iterate.com/stream/subscription-delivery-halted" &&
+      e.payload?.name === "reenter",
+  );
   expect(halts).toHaveLength(1); // exactly one loud audit fact
   expect(halts[0].payload.reason).toMatch(/2 delivery attempts failed/);
   expect(halts[0].payload.reason).toMatch(/non-empty type/); // the honest root cause (typeless guard)

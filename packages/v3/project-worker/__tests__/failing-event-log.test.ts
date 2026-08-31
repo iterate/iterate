@@ -47,8 +47,6 @@ const breakerConfigured = (capacity: number, refillPerSecond: number) => ({
   payload: { capacity, refillPerSecond },
 });
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
 /** Await a promise that MUST reject; hand back the error for inspection. */
 async function rejection(p: Promise<unknown>): Promise<Error & { code?: string }> {
   try {
@@ -313,7 +311,7 @@ test("breaker refills across a paused period and clamps at capacity", async () =
   expect(err.message).toContain("circuit breaker open");
   // pause does not freeze the bucket: refill rides elapsed time, not append traffic
   await append(itx, { type: "events.iterate.com/stream/paused", payload: { reason: "soak" } });
-  await sleep(2100);
+  await new Promise((r) => setTimeout(r, 2100));
   await append(itx, { type: "events.iterate.com/stream/resumed", payload: {} });
   const [after] = await append(itx, { type: "spend", payload: { n: 3 } });
   expect(after.offset).toBeGreaterThan(0);

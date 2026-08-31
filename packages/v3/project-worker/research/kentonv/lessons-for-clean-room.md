@@ -19,7 +19,7 @@ not credit. Archive citations name the file, the entry heading, and the original
 not — RPC must never expose them, and reserved-name filtering must happen server-side, at the
 dispatch point, not in the client — a-rpc-stubs-lifecycle.md, entry "Which methods are exposed
 over RPC: the whole `constructor` / Object-prototype doctrine" (workerd PR #1028,
-discussion_r1409945331; also "Reserved names filtered server-side, not client-side", PR #1311)
+discussion*r1409945331; also "Reserved names filtered server-side, not client-side", PR #1311)
 **Us:** Only the string-half parser blacklists three names (`__proto__`/`constructor`/`prototype`)
 — `src/core/expression.ts:242`; the structured half (`invoke(["itx","kv",["constructor"]])`) and
 the dotted door (`invokeCapability("itx.kv.toString")`, `src/stream-durable-object.ts:268-272`)
@@ -29,7 +29,7 @@ skip that check entirely, and `walkSteps` resolves steps with a bare `Reflect.ge
 `__defineGetter__`, etc.
 **Verdict:** APPLY
 The parser check is client-side filtering in Kenton's exact sense: two of the three doors bypass
-it. The fix is one guard at the shared chokepoint — in `walkSteps`, treat a step as _missing_
+it. The fix is one guard at the shared chokepoint — in `walkSteps`, treat a step as \_missing*
 (same error as an unknown method, per his "identical errors so clients can't probe" rule from the
 same review) whenever the resolved property is inherited from `Object.prototype` and not
 overridden. The stateful runner's private segment walk

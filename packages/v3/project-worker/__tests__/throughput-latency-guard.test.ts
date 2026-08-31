@@ -85,7 +85,6 @@ test("throughput+latency guard: 1000 ephemeral chunks flood through one-directio
     (TOTAL / Math.max(1, appendsDoneAtMs - floodStartedAtMs)) * 1000,
   );
   const batchingFactor = (TOTAL / Math.max(1, callbackInvocations)).toFixed(1);
-  // eslint-disable-next-line no-console
   console.log(
     `[perf-guard] ${received.length}/${TOTAL} | append ${appendEventsPerSecond} ev/s | ` +
       `end-to-end ${endToEndEventsPerSecond} ev/s | latency p50 ${pct(50)}ms p95 ${pct(95)}ms ` +

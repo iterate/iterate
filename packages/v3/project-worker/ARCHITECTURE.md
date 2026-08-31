@@ -190,16 +190,13 @@ capnweb provider still can't take a raw 101 (needs a frame bridge — deferred).
 
 ### 4.1 `project-worker` edge — `default.fetch(request, env, ctx)` (`src/worker.ts`)
 
-| Route                  | Method   | Behaviour                                                                                                                                    |
-| ---------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/version`             | GET      | the `CODE_VERSION` marker (smoke tests wait for it)                                                                                          |
-| `/api?ctx=<projectId>` | WS       | **the one capnweb entrypoint** → `newWorkersWebSocketRpcResponse(request, new ProjectSession(...))`                                          |
-| `/cap?ctx=&cap=<expr>` | any/WS   | the fetch lane → sets `x-itx-cap`, forwards to the host DO (carries WS)                                                                      |
-| `/demo`                | GET      | the hosted live-state demo page (self-contained React + capnweb, served from the worker)                                                     |
-| `itx.hostState()`      | capnweb  | observability over the ONE door → `{ incarnation, facetProcessors, core, subscriptionMounts, …stubs }` (the old `/state` HTTP door, retired) |
-| `/facet?ctx=&path=`    | any/WS   | stateful-worker fetch lane → forwards to the DO                                                                                              |
-| `/call?ctx=`           | POST/GET | `invokeCapability(path, args)` — `{path,args}` body or `?path=&args=` (agents/harnesses)                                                     |
-| bare WS upgrade        | WS       | ingress → the DO                                                                                                                             |
+| Route                  | Method     | Behaviour                                                                                                                                    |
+| ---------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/version`             | GET        | the `CODE_VERSION` marker (smoke tests wait for it)                                                                                          |
+| `/api?ctx=<projectId>` | WS / batch | **the one capnweb entrypoint** → `newWorkersRpcResponse(request, new ProjectSession(...))` — WebSocket upgrade OR one-shot HTTP batch        |
+| `/cap?ctx=&cap=<expr>` | any/WS     | the fetch lane → sets `x-itx-cap`, forwards to the host DO (carries WS)                                                                      |
+| `/demo`                | GET        | the hosted live-state demo page (self-contained React + capnweb, served from the worker)                                                     |
+| `itx.hostState()`      | capnweb    | observability over the ONE door → `{ incarnation, facetProcessors, core, subscriptionMounts, …stubs }` (the old `/state` HTTP door, retired) |
 
 ### 4.2 `ProjectSession` — the capnweb main (`src/core/itx-surface.ts`)
 

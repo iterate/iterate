@@ -1,18 +1,19 @@
-// THE vitest config. Three PROJECTS (vitest's own word), one command (`pnpm test`). Each is a
-// genuinely different execution context:
+// THE vitest config for `pnpm test`. Three PROJECTS (vitest's own word), each a genuinely
+// different execution context:
 //   • unit    — in-process node, the fast lane (src/**/*.test.ts)
-//   • harness — a real worker booted locally via wrangler createTestHarness, driven over capnweb
-//               EXACTLY like production (__tests__/**). This is the interface-level E2E lane: no
-//               workerd-internal hooks, so the same tests would hold against a live/self-hosted
-//               deployment. Most integration coverage lives here.
+//   • harness — a real worker booted PER FILE via wrangler createTestHarness, driven over capnweb
+//               (__tests__/**). Deep multi-step integration scenarios that want their own worker.
 //   • workers — tests run INSIDE workerd next to the worker, reaching cloudflare:test controls
 //               (evictDurableObject / runDurableObjectAlarm). Deliberately narrowed to the
 //               HIBERNATION cases that genuinely need those controls (__workers-tests__/**).
 //
-// Browser E2E is Playwright, not vitest (see playwright.config.ts + e2e/**) — a real browser drives
-// the hosted /demo page against a real worker.
+// Two sibling lanes live in their own configs:
+//   • `pnpm e2e`  — the vitest E2E lane (e2e/vitest.config.ts): ONE shared worker booted once by
+//                   globalSetup, files in parallel — the ported live-board proofs live there.
+//   • `pnpm spec` — Playwright (playwright.config.ts + specs/**): a real browser drives the hosted
+//                   /demo page against a real worker.
 
-import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
+import { cloudflareTest } from "@cloudflare/vitest-plugin";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({

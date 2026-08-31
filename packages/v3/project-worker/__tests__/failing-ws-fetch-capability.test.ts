@@ -34,30 +34,6 @@ afterAll(async () => {
   await harness?.stop();
 });
 
-const settle = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-async function until<T>(
-  label: string,
-  fn: () => Promise<T | undefined | false> | T | undefined | false,
-  timeoutMs = 15_000,
-  pollMs = 50,
-): Promise<T> {
-  const deadline = Date.now() + timeoutMs;
-  let last: unknown;
-  for (;;) {
-    try {
-      const v = await fn();
-      if (v) return v as T;
-      last = `falsy: ${JSON.stringify(v)}`;
-    } catch (e) {
-      last = e;
-    }
-    if (Date.now() > deadline)
-      throw new Error(`until(${label}): deadline after ${timeoutMs}ms — last: ${String(last)}`);
-    await new Promise((r) => setTimeout(r, pollMs));
-  }
-}
-
 const capUrl = (ctx: string, cap: string, scheme: "http" | "ws") =>
   `${scheme}://${harness.url.host}/cap?ctx=${ctx}&cap=${encodeURIComponent(cap)}`;
 
@@ -308,7 +284,7 @@ test("upgrade REQUEST forwarding: the eyeball's ws upgrade reaches the Node prov
   // The raw HTTP/1.1 upgrade dial (node:http — undici fetch strips the forbidden
   // Connection/Upgrade headers, so this is the only Node way to read the non-101 answer).
   const probe = await rawUpgradeProbe(`/cap?ctx=${ctx}&cap=${encodeURIComponent("itx.ws-device")}`);
-  await settle(300);
+  await new Promise((r) => setTimeout(r, 300));
   console.log("[wsfetch] raw upgrade probe:", JSON.stringify(probe).slice(0, 400));
   console.log("[wsfetch] provider observations:", JSON.stringify(device.observations));
 

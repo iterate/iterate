@@ -40,9 +40,10 @@ import { afterAll, expect, test, vi } from "vitest";
 import { canonicalName } from "../src/core/durable-object-names.ts";
 import type { StreamDurableObject } from "../src/stream-durable-object.ts";
 
-const ns = () =>
-  (env as unknown as { CONTEXT: DurableObjectNamespace<StreamDurableObject> }).CONTEXT;
-const stub = (ctx: string) => ns().getByName(canonicalName(ctx));
+const stub = (ctx: string) =>
+  (env as unknown as { CONTEXT: DurableObjectNamespace<StreamDurableObject> }).CONTEXT.getByName(
+    canonicalName(ctx),
+  );
 
 /** A tiny userspace processor: counts every durable event. Loaded through the Worker Loader
  *  (the only facet kind the pool lane can materialize — see the header). */
@@ -71,7 +72,7 @@ const durableCount = async (ctx: string): Promise<number> =>
 async function enableCounter(ctx: string, slug = "counter"): Promise<void> {
   const s = stub(ctx);
   await s.invoke(["itx", "kv", ["put", "procsrc", COUNTER_SRC]]);
-  await s.enableProcessor(slug, { source: "itx.kv.get('procsrc')", export: "default" });
+  await s.enableProcessor(slug, { source: "itx.kv.get('procsrc')", className: "default" });
 }
 
 const stateOf = (ctx: string): Promise<Record<string, any>> =>

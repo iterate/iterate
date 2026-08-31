@@ -12,7 +12,7 @@ const PORT = Number(process.env.DEMO_PORT ?? 8788);
 const baseURL = process.env.DEMO_BASE_URL ?? `http://127.0.0.1:${PORT}`;
 
 export default defineConfig({
-  testDir: "e2e",
+  testDir: "specs",
   testMatch: "**/*.spec.ts",
   timeout: 90_000,
   expect: { timeout: 30_000 },

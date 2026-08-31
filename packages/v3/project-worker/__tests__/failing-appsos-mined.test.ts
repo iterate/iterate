@@ -22,11 +22,6 @@ afterAll(async () => {
 const append = (itx: any, ...events: unknown[]): Promise<any[]> =>
   itx.invokeCapability(["itx", "stream", ["append", ...events]]);
 
-const readAll = async (itx: any): Promise<any[]> =>
-  (await itx.invokeCapability(["itx", "stream", ["read", 0, 500]])).events;
-
-const settle = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
 async function until<T>(
   label: string,
   fn: () => T | undefined | false | Promise<T | undefined | false>,
@@ -39,7 +34,7 @@ async function until<T>(
     if (v) return v;
     if (Date.now() - t0 > timeoutMs)
       throw new Error(`until(${label}): timed out after ${timeoutMs}ms`);
-    await settle(pollMs);
+    await new Promise((r) => setTimeout(r, pollMs));
   }
 }
 
@@ -57,11 +52,10 @@ async function rejection(p: Promise<unknown>): Promise<Error & { code?: string }
  *  read after the callback's turn). */
 function collector() {
   const invocations: { events: any[] }[] = [];
-  const fn = (events: any[]) => {
-    invocations.push(JSON.parse(JSON.stringify({ events })));
-  };
   return {
-    fn,
+    fn: (events: any[]) => {
+      invocations.push(JSON.parse(JSON.stringify({ events })));
+    },
     offsets: () => invocations.flatMap((i) => i.events.map((e) => e.offset as number)),
   };
 }
@@ -125,8 +119,8 @@ test.skip("revoking the same mount twice is idempotent in the TABLE (two keyless
   const { providedAtOffset } = await itx.provide({ path: "itx.probe", target: "itx.whoami" });
   await itx.revoke({ providedAtOffset });
   await itx.revoke({ providedAtOffset }); // idempotent — same key, same body
-  const revokes = (await readAll(itx)).filter(
-    (e) =>
+  const revokes = (await itx.invokeCapability(["itx", "stream", ["read", 0, 500]])).events.filter(
+    (e: { type: string; payload?: { providedAtOffset?: number } }) =>
       e.type === "events.iterate.com/capability-table/capability-revoked" &&
       e.payload?.providedAtOffset === providedAtOffset,
   );

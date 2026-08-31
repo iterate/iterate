@@ -221,7 +221,7 @@ Context: The compat flag guarding persistent stubs / stored bindings.
 ### Persistent stubs: only ctx.exports / ctx.restore() loopbacks can be persistent, and why
 
 Source: workerd@d9094ff3e805875a145e76aae8ecd9049fa3475c (commit message, 2026-06-21)
-Context: "Require allow_irrevocable_stub_storage on persistent stub _target_."
+Context: "Require allow*irrevocable_stub_storage on persistent stub \_target*."
 
 > Until now, storing stubs to DO storage was allowed as long as the storer had `allow_irrevocable_stub_storage` enabled. This is not safe enough to make generally available. This commit makes it so that the _target_ of the stub must _also_ have the flag, both at the time that the stub is minted and at the time that it is used. As long as both caller and callee are opting into the kinda-insecure behavior, there's no reason we can't make this available to everyone.
 >

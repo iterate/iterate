@@ -23,10 +23,6 @@ const nested = (n: number): unknown => {
 /** The same shape in the STRING half of the codec. */
 const nestedLiteral = (n: number): string => "[".repeat(n) + "0" + "]".repeat(n);
 
-const median = (xs: number[]): number => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
-
-const PROVIDED = "events.iterate.com/capability-table/capability-provided";
-
 // ═══════════════════════ expression/value depth near the parse budget ═══════════════════════
 
 test("a 64-deep nested-array payload (structured lane) appends and reads back byte-identically", async () => {
@@ -86,7 +82,7 @@ test("300 mounts: invoking the NEWEST mount and a base config mount both stay un
   const itx = await harness.itx("prj_path_mounts");
   // Mounts are event-sourced — append all 300 capability-provided events in ONE commit.
   const mounts = Array.from({ length: 300 }, (_, i) => ({
-    type: PROVIDED,
+    type: "events.iterate.com/capability-table/capability-provided",
     payload: { path: `itx.m${i}`, target: "itx.whoami" },
   }));
   const committed = await itx.invokeCapability(["itx", "stream", ["append", ...mounts]]);
@@ -99,7 +95,7 @@ test("300 mounts: invoking the NEWEST mount and a base config mount both stay un
       await fn();
       samples.push(performance.now() - t0);
     }
-    return median(samples);
+    return [...samples].sort((a, b) => a - b)[Math.floor(samples.length / 2)]; // median
   };
 
   // Warm both lanes once (table rehydration / DO wake are not what we are measuring).
@@ -109,7 +105,6 @@ test("300 mounts: invoking the NEWEST mount and a base config mount both stay un
 
   const newestMs = await time(() => itx.invokeCapability(["itx", ["m299"]]));
   const configMs = await time(() => itx.invokeCapability(["itx", ["whoami"]]));
-  // eslint-disable-next-line no-console
   console.log(
     `[300 mounts] newest-mount median ${newestMs.toFixed(1)}ms, config-mount median ${configMs.toFixed(1)}ms`,
   );
@@ -123,7 +118,7 @@ test("an alias chain 30 deep resolves under the depth-32 budget; 33 deep fails l
   const itx = await harness.itx("prj_path_alias");
   // alias0 → itx.whoami; aliasK → itx.alias(K-1). One commit mounts all 33 rows.
   const aliases = Array.from({ length: 33 }, (_, i) => ({
-    type: PROVIDED,
+    type: "events.iterate.com/capability-table/capability-provided",
     payload: { path: `itx.alias${i}`, target: i === 0 ? "itx.whoami" : `itx.alias${i - 1}` },
   }));
   await itx.invokeCapability(["itx", "stream", ["append", ...aliases]]);
@@ -374,7 +369,6 @@ test("50 userspace processors materialize in the harness; one append fans out to
     await itx.enableProcessor(`fan${i}`, { source: "itx.kv.get('procsrc')", className: "default" });
   }
   const enableMs = performance.now() - enableT0;
-  // eslint-disable-next-line no-console
   console.log(`[fan-out] enabled 50 userspace processors in ${enableMs.toFixed(0)}ms`);
 
   // ONE append → the pump drives all 50 facets.
@@ -399,7 +393,6 @@ test("50 userspace processors materialize in the harness; one append fans out to
     ),
   );
   const fanoutMs = performance.now() - t0;
-  // eslint-disable-next-line no-console
   console.log(
     `[fan-out] all 50 processors reached offset ${marker.offset} in ${fanoutMs.toFixed(0)}ms; whoami during fan-out ${whoMs.toFixed(1)}ms`,
   );
@@ -458,7 +451,6 @@ test("50 CONNECTED live subscribers: one append fans out to all 50 in <5s and th
     for (const t of timers) clearTimeout(t);
   }
   const fanoutMs = lastArrival - t0;
-  // eslint-disable-next-line no-console
   console.log(
     `[sub fan-out] 50 subscribes in ${subscribeMs.toFixed(0)}ms; marker reached all 50 in ${fanoutMs.toFixed(0)}ms; whoami during fan-out ${whoMs.toFixed(1)}ms`,
   );

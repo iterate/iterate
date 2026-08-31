@@ -6,21 +6,9 @@
 // DummyControlPlane entrypoint (the SOLO topology from wrangler.jsonc's own comment), so the
 // harness needs no external control-plane worker.
 
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { createTestHarness, type TestHarness } from "wrangler";
 import { newWebSocketRpcSession } from "capnweb";
-
-const PACKAGE_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
-
-/** jsonc → object without a parser dependency: strip comments + trailing commas (our config
- *  keeps strings comment-free, so the naive strip is safe HERE — not a general jsonc parser). */
-function readWranglerConfig(): Record<string, unknown> {
-  const raw = readFileSync(join(PACKAGE_DIR, "wrangler.jsonc"), "utf8");
-  const stripped = raw.replace(/^\s*\/\/.*$/gm, "").replace(/,(\s*[}\]])/g, "$1");
-  return JSON.parse(stripped) as Record<string, unknown>;
-}
+import { createTestHarness, type TestHarness } from "wrangler";
+import { PACKAGE_DIR, soloWorkerConfig } from "../e2e/support/solo-config.ts";
 
 export type ProjectHarness = {
   server: TestHarness;
@@ -38,15 +26,7 @@ export type ProjectHarness = {
 };
 
 export async function startProjectHarness(): Promise<ProjectHarness> {
-  const config = readWranglerConfig();
-  config.main = join(PACKAGE_DIR, String(config.main));
-  config.build = { ...(config.build as object), cwd: PACKAGE_DIR };
-  // Fresh local storage can't replay prod's rename-chain history — only the LIVE class matters.
-  config.migrations = [{ tag: "local", new_sqlite_classes: ["StreamDurableObject"] }];
-  // SOLO topology: egress + itx.os bottom out at this worker's own dummy control plane.
-  config.services = [
-    { binding: "FALLBACK", service: String(config.name), entrypoint: "DummyControlPlane" },
-  ];
+  const config = soloWorkerConfig();
   const server = createTestHarness({ root: PACKAGE_DIR, workers: [{ config: config as never }] });
   const { url } = await server.listen();
   const wsBase = `ws://${url.host}`;

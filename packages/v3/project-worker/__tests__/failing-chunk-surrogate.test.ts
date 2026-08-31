@@ -18,15 +18,6 @@ afterAll(async () => {
   await harness?.stop();
 });
 
-const append = (itx: any, ...events: unknown[]): Promise<any[]> =>
-  itx.invokeCapability(["itx", "stream", ["append", ...events]]);
-const read = (
-  itx: any,
-  afterOffset?: number,
-  limit?: number,
-): Promise<{ events: any[]; scannedThroughOffset: number }> =>
-  itx.invokeCapability(["itx", "stream", ["read", afterOffset ?? 0, limit ?? 500]]);
-
 const EVENT_CHUNK_SIZE = 512 * 1024; // must match core/event-log.ts
 const EMOJI = String.fromCodePoint(0x1f600); // "grinning face" = high+low surrogate pair
 
@@ -53,13 +44,17 @@ test("a surrogate pair straddling a chunk boundary round-trips byte-identically"
   expect(hi).toBeGreaterThanOrEqual(0xd800);
   expect(hi).toBeLessThanOrEqual(0xdbff);
 
-  const [committed] = await append(itx, { type: "big", payload: { blob } });
+  const [committed] = await itx.invokeCapability([
+    "itx",
+    "stream",
+    ["append", { type: "big", payload: { blob } }],
+  ]);
   // The append echo is the in-memory object — always intact; the real test is storage read-back.
   expect(committed.payload.blob).toBe(blob);
 
   // Read back through a FRESH session -> forces a real reassembly from event_chunks, not an echo.
   const itx2 = await harness.itx("prj_chunk_surrogate");
-  const page = await read(itx2, committed.offset - 1, 10);
+  const page = await itx2.invokeCapability(["itx", "stream", ["read", committed.offset - 1, 10]]);
   const back = page.events.find((e: any) => e.offset === committed.offset);
   expect(back).toBeTruthy();
 

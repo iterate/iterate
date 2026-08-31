@@ -37,14 +37,10 @@ async function until<T>(
   }
 }
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
 const append = (itx: any, ...events: unknown[]) =>
   itx.invokeCapability(["itx", "stream", ["append", ...events]]);
 const kvPut = (itx: any, k: string, v: string) =>
   itx.invokeCapability(["itx", "kv", ["put", k, v]]);
-const kvGet = (itx: any, k: string) => itx.invokeCapability(["itx", "kv", ["get", k]]);
-
-const LIVE_STATE_CHANGED = "events.iterate.com/live-state/changed";
 
 // ═══════════ 1. prefixed-kv isolation — the ":"-joined key composition (S3) ═══════════
 
@@ -65,7 +61,7 @@ test("a projectId containing ':' is REJECTED (the kv/secret isolation wall holds
   await expect(
     (async () => {
       const b = await harness.itx("prj_w2kv:x");
-      await kvGet(b, "leak"); // never reached
+      await b.invokeCapability(["itx", "kv", ["get", "leak"]]); // never reached
     })(),
   ).rejects.toThrow();
 });
@@ -125,13 +121,16 @@ test("a payload-less live-state/changed event never rejects an append that alrea
   });
   // The lane itself works: a WELL-FORMED change payload for the watched key is delivered.
   await append(itx, {
-    type: LIVE_STATE_CHANGED,
+    type: "events.iterate.com/live-state/changed",
     ephemeral: true,
     payload: { key: "avatar", from: 0, to: 1, patch: {} },
   });
   await until("well-formed change delivered", () => seen.length >= 1);
   // The bug: a BARE change event (no payload) must still commit-and-resolve.
-  const [bare] = await append(itx, { type: LIVE_STATE_CHANGED, ephemeral: true });
+  const [bare] = await append(itx, {
+    type: "events.iterate.com/live-state/changed",
+    ephemeral: true,
+  });
   expect(bare.offset).toBeGreaterThan(0); // ← the await above rejects: TypeError on undefined payload
 });
 

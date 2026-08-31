@@ -1630,3 +1630,29 @@ before changes. Fixed test.fails flipped to plain regression tests.
   (now the sole input check); coarse TS-type policing (ephemeral:false loud-error, forged `source`,
   excess keys) lapses. Restoring any of it = a runtime `StreamEventInput.parse()` at the append door.
 - Lanes green: unit exit 0; full run 278 passed / 37 xfail / 2 skip / 31 todo; typecheck clean.
+
+## 2026-08-31 — the .mjs live board becomes the vitest E2E lane; full-package audit
+
+- The proofs/_.mjs board is RETIRED (deleted, git history keeps it): all 27 portable proofs now run
+  as `pnpm e2e` (e2e/\*\*/_.e2e.test.ts) — apps/os shape: ONE shared worker booted once by
+  e2e/support/global-setup.ts (createTestHarness + the SOLO FALLBACK rebind, shared with
+  **tests**/harness.ts via e2e/support/solo-config.ts), files in parallel, fresh ctx per test,
+  13s for the whole board (vs minutes of sequential .mjs runs against a deploy). Lanes now:
+  `pnpm test` (unit/harness/workers) · `pnpm e2e` (vitest E2E) · `pnpm spec` (Playwright, specs/\*\*).
+- Proof deltas while porting: exact-offset pins loosened (live-state default-on shares the offset
+  space); the three fixed lifecycle bugs (resume-race, disable-shadow, resub-zombie) flipped from
+  RED to green regression pins; prove_connect/multihop re-pointed at a Node-hosted dummy capnweb
+  API inside globalSetup — the property-hop pipelining is GREEN, and a NEW test.fails pins the
+  still-broken call-then-call chain (`.svc('x').add(…)` — the advertised `itx.os.projects.get(id).…`
+  shape dies with "Batch RPC request ended").
+- Full-model audit of the recent work (13 adversarial reviewers) found and FIXED: LiveState.set's
+  diff-failure branch adopted the base without bumping rev (silent client corruption; now bumps +
+  root-replace fallback so a poisoned base can't wedge the chain — live-state.test.ts pins it);
+  version refolds now publish one heal delta (clients re-seed instead of staying silently stale);
+  useLiveState never unsubscribed (leaked a durable mount per unmount — connectLiveState now
+  returns {store, dispose}); client store got seed monotonicity + single-flight gap heals with
+  surfaced errors; four leftover ALL_CAPS event-type constants inlined.
+- Package held to the repo gates for the first time: oxlint --deny-warnings 0/0 (was 97 errors
+  pre-session), typecheck now covers e2e/specs/**tests**/**workers-tests** (tsconfig.tests.json).
+- `@cloudflare/vitest-pool-workers` → `@cloudflare/vitest-plugin@^1.0.0` (the 2026-08-19 rename;
+  same API), workers-types bumped to its peer floor.
