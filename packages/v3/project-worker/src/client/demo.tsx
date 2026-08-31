@@ -1,4 +1,4 @@
-// client/demo.tsx — THE HOSTED DEMO. build-demo.mjs bundles this (React + react-dom + the capnweb
+// client/demo.tsx — THE HOSTED DEMO. build-sdk.mjs bundles this (React + react-dom + the capnweb
 // fork + the useLiveState hook, all inlined — no CDN) into one self-contained HTML string the worker
 // serves at `/demo` (worker.ts). Open it against any deployment: it dials `/api` over capnweb exactly
 // like production, loads the Presence processor into a dynamic worker, subscribes to its live state,

@@ -3,7 +3,8 @@
 // a seed `{rev, state}` through the door, and `{key, from, to, patch}` deltas (RFC-6902 via
 // core/patch.ts) through the subscription target — so this proves the client half (the hook, the
 // store, applyPatch) reassembles reduced ⊕ runtime live state and re-renders, in a browser, without a
-// worker in the loop. The end-to-end against a live worker is the hosted demo page (client/demo.html).
+// worker in the loop. The end-to-end against a live worker is the hosted /demo page (src/client/demo.tsx),
+// driven by e2e/live-state-demo.spec.ts (Playwright).
 
 import { expect, test } from "vitest";
 import { diff, type PatchOp } from "../src/core/patch.ts";
