@@ -6,17 +6,35 @@
 // resolve null and the note sends without a transcript (the agent can still
 // run a model transcription on request).
 
-import { ExpoSpeechRecognitionModule } from "expo-speech-recognition";
 import { Platform } from "react-native";
+
+/** Resolved lazily ON PURPOSE — this is incident scar tissue, not old-client
+ * tolerance: expo-speech-recognition@56.x (an Expo SDK 56 build, picked by a
+ * version-map-less `expo install` on SDK 54) registered no native module,
+ * and its module-scope requireNativeModule throw was a fatal JS error during
+ * route evaluation — every chat open crashed the app, past any error
+ * boundary (crash log 2026-08-31, expo.controller.errorRecoveryQueue).
+ * Transcription is an optional enhancement: resolving the module lazily
+ * turns any such skew into "no transcript" instead of a dead chat screen. */
+function speechModule() {
+  try {
+    return (require("expo-speech-recognition") as typeof import("expo-speech-recognition"))
+      .ExpoSpeechRecognitionModule;
+  } catch {
+    return null;
+  }
+}
 
 const transcriptions = new Map<string, Promise<string | null>>();
 
 /** Start transcribing the clip at `uri` in the background. */
 export function beginTranscription(uri: string): void {
   if (Platform.OS === "web") return;
+  const recognition = speechModule();
+  if (recognition === null) return;
   transcriptions.set(
     uri,
-    transcribeFile(uri).catch(() => null),
+    transcribeFile(recognition, uri).catch(() => null),
   );
 }
 
@@ -31,10 +49,13 @@ export function transcriptFor(uri: string, timeoutMs: number): Promise<string | 
   ]);
 }
 
-async function transcribeFile(uri: string): Promise<string | null> {
+async function transcribeFile(
+  recognition: NonNullable<ReturnType<typeof speechModule>>,
+  uri: string,
+): Promise<string | null> {
   // First transcription triggers the OS speech-recognition dialog (on top of
   // the mic permission the recording already asked for).
-  const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+  const permission = await recognition.requestPermissionsAsync();
   if (!permission.granted) return null;
   return await new Promise<string | null>((resolve) => {
     let transcript: string | null = null;
@@ -44,13 +65,13 @@ async function transcribeFile(uri: string): Promise<string | null> {
       resolve(value);
     };
     subscriptions.push(
-      ExpoSpeechRecognitionModule.addListener("result", (event) => {
+      recognition.addListener("result", (event) => {
         if (event.isFinal && event.results[0]) transcript = event.results[0].transcript;
       }),
-      ExpoSpeechRecognitionModule.addListener("end", () => finish(transcript)),
-      ExpoSpeechRecognitionModule.addListener("error", () => finish(transcript)),
+      recognition.addListener("end", () => finish(transcript)),
+      recognition.addListener("error", () => finish(transcript)),
     );
-    ExpoSpeechRecognitionModule.start({
+    recognition.start({
       // The OS service (on-device on modern iPhones; iOS picks). English
       // covers the house; a wrong-language clip just resolves null-ish and
       // the model transcription path remains.
