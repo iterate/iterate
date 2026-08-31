@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import {
   coverTransform,
+  FACE_LANDMARK_RINGS,
   faceGeometryFromLandmarks,
   fallbackFaceGeometry,
 } from "./face-geometry.ts";
@@ -42,5 +43,19 @@ test("fallback face is a centered untracked oval with parts inside the box", () 
   for (const part of [face.leftEye, face.rightEye, face.lips]) {
     expect(Math.abs(part.cx - face.box.cx)).toBeLessThan(face.box.width / 2);
     expect(Math.abs(part.cy - face.box.cy)).toBeLessThan(face.box.height / 2);
+  }
+});
+
+test("head roll survives the front-camera mirror", () => {
+  // A level face: left-eye ring on the image left, right-eye ring on the
+  // image right, same height. The mirror swaps the rings' sides; the roll
+  // must stay ~0, not flip to ~180° (the upside-down-potato bug).
+  const landmarks = Array.from({ length: 478 }, () => ({ x: 0.5, y: 0.6 }));
+  for (const i of FACE_LANDMARK_RINGS.leftEye()) landmarks[i] = { x: 0.3, y: 0.4 };
+  for (const i of FACE_LANDMARK_RINGS.rightEye()) landmarks[i] = { x: 0.7, y: 0.4 };
+  const square = { videoWidth: 100, videoHeight: 100, canvasWidth: 100, canvasHeight: 100 };
+  for (const mirrored of [false, true]) {
+    const face = faceGeometryFromLandmarks(landmarks, coverTransform({ ...square, mirrored }));
+    expect(Math.abs(face.box.angle)).toBeLessThan(0.01);
   }
 });

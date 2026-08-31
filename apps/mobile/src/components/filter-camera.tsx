@@ -12,6 +12,13 @@
 // JS — the point of the exercise (see tasks/mobile-camera-filters.md).
 
 import { Component } from "react";
+import { FaceLandmarker } from "@mediapipe/tasks-vision";
+import { base64ToUint8Array } from "../lib/encoding.ts";
+import {
+  FACE_LANDMARKER_MODEL_GZ,
+  MEDIAPIPE_WASM_GZ,
+  MEDIAPIPE_WASM_LOADER_JS_GZ,
+} from "../lib/filters/mediapipe-assets.generated.ts";
 import {
   CAMERA_FILTERS,
   FILTERED_CLIP_MAX_SECONDS,
@@ -22,7 +29,6 @@ import {
   faceGeometryFromLandmarks,
   fallbackFaceGeometry,
   type FaceGeometry,
-  type NormalizedLandmark,
 } from "../lib/filters/face-geometry.ts";
 
 // NOTE: "use dom" modules only support a single default export — runtime
@@ -33,10 +39,6 @@ export type FilterCameraCommand = {
   seq: number;
   type: "snap" | "start-recording" | "stop-recording";
 };
-
-const MEDIAPIPE_CDN = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22";
-const FACE_MODEL_URL =
-  "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
 
 type Props = {
   dom?: import("expo/dom").DOMProps;
@@ -50,16 +52,6 @@ type Props = {
 
 type State = { status: "starting" | "live" | "error"; message: string | null };
 
-// Minimal surface of @mediapipe/tasks-vision we touch (the real types live
-// in the CDN bundle, which Metro never sees).
-type FaceLandmarkerLike = {
-  detectForVideo: (
-    video: HTMLVideoElement,
-    timestampMs: number,
-  ) => { faceLandmarks: NormalizedLandmark[][] };
-  close: () => void;
-};
-
 export default class FilterCamera extends Component<Props, State> {
   state: State = { status: "starting", message: null };
 
@@ -67,7 +59,8 @@ export default class FilterCamera extends Component<Props, State> {
   #frameCanvas = document.createElement("canvas");
   #video = document.createElement("video");
   #stream: MediaStream | null = null;
-  #landmarker: FaceLandmarkerLike | null = null;
+  #landmarker: FaceLandmarker | null = null;
+  #trackerError: string | null = null;
   #raf = 0;
   #disposed = false;
   #backgroundIndex = 0;
@@ -135,27 +128,44 @@ export default class FilterCamera extends Component<Props, State> {
     }
   }
 
+  // The whole tracking runtime ships in the app (wasm + model, gzipped in
+  // mediapipe-assets.generated.ts) and is handed to MediaPipe as blob URLs /
+  // bytes: release builds host DOM components on file:// pages, where
+  // cross-origin module imports and fetches are unreliable — an earlier
+  // CDN-loading version of this hung forever on-device.
   async #loadFaceTracker() {
     try {
-      const vision = await importFromCdn(`${MEDIAPIPE_CDN}/vision_bundle.mjs`);
-      const fileset = await vision.FilesetResolver.forVisionTasks(`${MEDIAPIPE_CDN}/wasm`);
-      const landmarker: FaceLandmarkerLike = await vision.FaceLandmarker.createFromOptions(
-        fileset,
-        {
-          baseOptions: { modelAssetPath: FACE_MODEL_URL, delegate: "GPU" },
+      if (typeof DecompressionStream === "undefined") {
+        throw new Error("DecompressionStream unavailable (needs iOS 16.4+)");
+      }
+      const [loaderJs, wasmBinary, model] = await Promise.all([
+        gunzip(MEDIAPIPE_WASM_LOADER_JS_GZ),
+        gunzip(MEDIAPIPE_WASM_GZ),
+        gunzip(FACE_LANDMARKER_MODEL_GZ),
+      ]);
+      const fileset = {
+        wasmLoaderPath: URL.createObjectURL(new Blob([loaderJs], { type: "text/javascript" })),
+        wasmBinaryPath: URL.createObjectURL(new Blob([wasmBinary], { type: "application/wasm" })),
+      };
+      const create = (delegate: "GPU" | "CPU") =>
+        FaceLandmarker.createFromOptions(fileset, {
+          baseOptions: { modelAssetBuffer: model, delegate },
           runningMode: "VIDEO",
           numFaces: 1,
-        },
-      );
+        });
+      // WKWebView WebGL2 support varies by OS version; CPU inference is fine
+      // for one face.
+      const landmarker = await create("GPU").catch(() => create("CPU"));
       if (this.#disposed) {
         landmarker.close();
         return;
       }
       this.#landmarker = landmarker;
       this.forceUpdate();
-    } catch {
+    } catch (error) {
       // Filters keep running on the fallback face oval; the pill in render()
-      // tells the user tracking is off.
+      // says exactly what broke.
+      this.#trackerError = String((error as Error).message || error);
       this.forceUpdate();
     }
   }
@@ -302,8 +312,13 @@ export default class FilterCamera extends Component<Props, State> {
         {this.state.status === "starting" ? (
           <div className="pill">Warming up the camera…</div>
         ) : null}
-        {this.state.status === "live" && !trackerLive ? (
-          <div className="pill">Face tracking loading — filters use a guessed face for now</div>
+        {this.state.status === "live" && !trackerLive && this.#trackerError === null ? (
+          <div className="pill">Loading face tracking…</div>
+        ) : null}
+        {this.state.status === "live" && this.#trackerError !== null ? (
+          <div className="pill error">
+            Face tracking failed — using a guessed face. {this.#trackerError}
+          </div>
         ) : null}
         {this.state.status === "error" ? (
           <div className="pill error">{this.state.message}</div>
@@ -319,28 +334,11 @@ function filterById(id: string): FilterDefinition {
   return filter;
 }
 
-/** Import an ES module from a URL at runtime. Metro must not see the URL as
- * an import (it would try to bundle it), so this goes through an injected
- * <script type="module"> that hands the namespace back on window. Inline
- * module import failures surface as unhandled rejections, not script onerror
- * — hence the timeout as the failure path. */
-function importFromCdn(url: string): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const key = `__cdnModule_${Math.random().toString(36).slice(2)}`;
-    const timer = setTimeout(() => {
-      delete (window as any)[key];
-      reject(new Error(`Timed out importing ${url}`));
-    }, 20_000);
-    (window as any)[key] = (moduleNamespace: any) => {
-      clearTimeout(timer);
-      delete (window as any)[key];
-      resolve(moduleNamespace);
-    };
-    const script = document.createElement("script");
-    script.type = "module";
-    script.textContent = `import * as m from ${JSON.stringify(url)}; window[${JSON.stringify(key)}](m);`;
-    document.head.appendChild(script);
-  });
+async function gunzip(base64: string): Promise<Uint8Array<ArrayBuffer>> {
+  const stream = new Blob([base64ToUint8Array(base64)])
+    .stream()
+    .pipeThrough(new DecompressionStream("gzip"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
 function blobToBase64(blob: Blob): Promise<string> {

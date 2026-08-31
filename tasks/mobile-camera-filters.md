@@ -111,3 +111,27 @@ the thing to verify first).
 - The desktop "filter harness" screenshotted in the PR is a throwaway test
   rig in the session scratchpad (bundles the real filter modules against a
   synthetic camera); it is not part of the app.
+
+## Feedback round 2 (on-device: tracker never loaded)
+
+Root causes found (no device needed): the CDN pin `@0.10.22` doesn't exist
+(404), remote ESM imports are unreliable from the `file://` pages release
+builds host DOM components on, and the "loading" pill never distinguished
+loading from failed.
+
+- Face tracking now ships **fully bundled, zero network**:
+  `@mediapipe/tasks-vision` (0.10.35, exact) bundles through Metro (with a
+  pnpm patch neutralizing a non-literal dynamic `import()` Metro can't
+  parse); wasm + face_landmarker model ride as gzipped base64 in
+  `mediapipe-assets.generated.ts` (~6.5MB, regenerate with
+  `scripts/generate-mediapipe-assets.mjs`), decompressed at runtime via
+  `DecompressionStream` (iOS 16.4+) into blob URLs / model bytes.
+- The pill now reports the actual tracker error on failure.
+- Verified end-to-end in the harness: tracker goes live offline and detects
+  even the synthetic cartoon face — which exposed and fixed a real bug: the
+  front-camera mirror swaps the eye rings, flipping the roll ~180°
+  (upside-down potato); roll now wraps into ±90°, with a regression test.
+- Flip-camera choice persists across restarts (AsyncStorage-backed query,
+  `iterate.cameraFacing.v1`) — and replaced a `useState` in the process.
+- Follow-up: the filter DOM bundle is now ~10MB; if that hurts open time,
+  move the model/wasm to native assets or lazy-load per filter.

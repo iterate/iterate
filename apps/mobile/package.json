@@ -30,6 +30,7 @@
     "@expo/vector-icons": "^15.1.1",
     "@fsegurai/codemirror-theme-vscode-dark": "6.2.4",
     "@iterate-com/ui": "workspace:*",
+    "@mediapipe/tasks-vision": "0.10.35",
     "@noble/curves": "^2.2.0",
     "@noble/hashes": "^2.2.0",
     "@react-native-async-storage/async-storage": "2.2.0",

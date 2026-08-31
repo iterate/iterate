@@ -73,10 +73,15 @@ export function faceGeometryFromLandmarks(
 
   const oval = ring(FACE_OVAL);
   const box = boundingBox(oval);
-  // Roll from the line between the eye centers.
+  // Roll from the line between the eye centers. Under the front-camera
+  // mirror the eye rings swap sides and this vector points backwards (~180°
+  // off — harness-caught: upside-down potato); roll is an undirected axis,
+  // so wrap it into ±90°.
   const left = ringCenter(ring(LEFT_EYE));
   const right = ringCenter(ring(RIGHT_EYE));
-  const angle = Math.atan2(right.y - left.y, right.x - left.x);
+  let angle = Math.atan2(right.y - left.y, right.x - left.x);
+  if (angle > Math.PI / 2) angle -= Math.PI;
+  else if (angle < -Math.PI / 2) angle += Math.PI;
 
   return {
     box: { ...box, angle },
@@ -161,6 +166,14 @@ function ellipseAround(
 }
 
 // MediaPipe Face Mesh canonical index rings (see attribution at top).
+// Exported for tests, which build synthetic landmark arrays around them.
+export const FACE_LANDMARK_RINGS = {
+  faceOval: () => FACE_OVAL,
+  leftEye: () => LEFT_EYE,
+  rightEye: () => RIGHT_EYE,
+  lipsOuter: () => LIPS_OUTER,
+};
+
 const FACE_OVAL = [
   10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148,
   176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109,

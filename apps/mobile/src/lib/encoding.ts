@@ -3,7 +3,10 @@
  * capnweb sends to `agent.addFiles`. Kept separate from attachments.ts so the
  * pure part is importable under Node (vitest / the live e2e).
  */
-export function base64ToUint8Array(base64: string): Uint8Array {
+// The narrow Uint8Array<ArrayBuffer> return matters: `new Uint8Array(n)` is
+// always ArrayBuffer-backed, and consumers hand these bytes to APIs typed
+// against ArrayBuffer views (Blob parts in the filter pipeline).
+export function base64ToUint8Array(base64: string): Uint8Array<ArrayBuffer> {
   const binary = atob(base64.replace(/\s+/g, ""));
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
