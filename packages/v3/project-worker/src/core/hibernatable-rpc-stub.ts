@@ -34,28 +34,28 @@ const STUB_PAGER_WEBSOCKET_TAG = "itx-stub-pager-websocket";
 
 /** THE ONE message the stub pager WebSocket ever carries (DO → edge): "I ought to have your
  *  RPC stub but I don't — send it." Everything else rides Workers RPC on the paged-in stub — the
- *  pager is a PAGER, minimal by decree. (WS-fetch bridge traffic rides its own DEDICATED socket:
- *  see openWsBridge on RetainedCallbackInvoker and WS_BRIDGE_SOCKET_HEADER below.) */
+ *  pager is a PAGER, minimal by decree. (Fetch-upgrade traffic rides its own DEDICATED socket:
+ *  see openFetchUpgrade on RetainedCallbackInvoker and FETCH_UPGRADE_SOCKET_HEADER below.) */
 type StubPageMessage = { type: "page" };
 
-// ── THE WEBSOCKET BRIDGE (fetch-shaped rides fetch; the pager stays minimal) ──
+// ── FETCH UPGRADES on live capabilities (fetch-shaped rides fetch; the pager stays minimal) ──
 // A live capability's WS upgrade cannot return its 101 over Workers RPC (workerd's RPC serializer
 // has no WebSocket support — DataCloneError), a loopback entrypoint cannot touch the relay's
 // capnweb session (I/O pins to its creating request context), and proxying the socket as RPC
 // streams pins the DO non-hibernatable for the socket's lifetime (measured: evictDurableObject
 // times out on "active references"). So: the DO asks the paged-in invoker to dial
-// (openWsBridge — an RPC call that EXECUTES in the session's context; its return is the honest
-// ack), the relay opens ONE dedicated WebSocket back into this DO per bridge, and the DO mints
+// (openFetchUpgrade — an RPC call that EXECUTES in the session's context; its return is the honest
+// ack), the relay opens ONE dedicated upgrade leg back into this DO per upgrade, and the DO mints
 // the eyeball's WebSocketPair natively. Frames forward RAW (native text/binary — no codec)
-// between the two DO-side sockets by bridgeId tag; both are hibernatable, so the bridge SURVIVES
+// between the two DO-side sockets by upgradeId tag; both are hibernatable, so the upgrade SURVIVES
 // eviction (routing state lives in tags + attachments) and idle costs nothing.
-export const WS_BRIDGE_SOCKET_HEADER = "x-itx-ws-bridge";
-const WS_BRIDGE_EYEBALL_TAG = "itx-ws-bridge-eyeball";
-const WS_BRIDGE_TRANSPORT_TAG = "itx-ws-bridge-transport";
+export const FETCH_UPGRADE_SOCKET_HEADER = "x-itx-fetch-upgrade";
+const FETCH_UPGRADE_EYEBALL_TAG = "itx-fetch-upgrade-eyeball";
+const FETCH_UPGRADE_LEG_TAG = "itx-fetch-upgrade-leg";
 /** Eyeball-side attachment. */
-type WsBridgeEyeball = { wsBridgeEyeball: { bridgeId: string } };
+type FetchUpgradeEyeball = { fetchUpgradeEyeball: { upgradeId: string } };
 /** Relay-side (transport) attachment. */
-type WsBridgeTransport = { wsBridgeTransport: { bridgeId: string } };
+type FetchUpgradeLeg = { fetchUpgradeLeg: { upgradeId: string } };
 
 /** Close codes a handler may pass to close(): 1000 or app codes; everything reserved/invalid
  *  (1004-1006, 1015, out-of-range — e.g. an abnormal-closure 1006 being FORWARDED) clamps to 1000. */
@@ -158,8 +158,8 @@ export class HibernatableRpcStubManager {
    *  callers just don't await (a failed delivery is the client's heal-by-pull). */
   async invoke(stubKey: string, path: string[], args: unknown[]): Promise<unknown> {
     // THE FETCH-SHAPED RULE: a WebSocket upgrade on a live capability never rides the RPC leg
-    // (its 101 Response cannot serialize) — it opens the DEDICATED websocket bridge instead (see
-    // WS_BRIDGE_SOCKET_HEADER above). Plain (non-upgrade) fetches keep riding invoke() — a
+    // (its 101 Response cannot serialize) — it rides the DEDICATED upgrade leg instead (see
+    // FETCH_UPGRADE_SOCKET_HEADER above). Plain (non-upgrade) fetches keep riding invoke() — a
     // socketless Response serializes fine over Workers RPC.
     if (
       path.length === 1 &&
@@ -167,7 +167,7 @@ export class HibernatableRpcStubManager {
       args[0] instanceof Request &&
       (args[0].headers.get("Upgrade") ?? "").toLowerCase() === "websocket"
     )
-      return this.#openWsBridge(stubKey, args[0]);
+      return this.#openFetchUpgrade(stubKey, args[0]);
     const retained = await this.#pageIn(stubKey);
     retained.inFlight += 1;
     try {
@@ -226,74 +226,76 @@ export class HibernatableRpcStubManager {
 
   /** A pager WebSocket closed — the stub is gone with it. Hands back the record so the caller
    *  can run its own lifecycle (ephemeral facts, auto-revoke, session settlement). */
-  /** Bridge upgrades this DO is expecting (bridgeId → asked-at ms): minted by #openWsBridge just
-   *  before the invoker dial, consumed by bridgeFetch when the relay's dedicated socket arrives.
+  /** Fetch upgrades this DO is expecting (upgradeId → asked-at ms): minted by #openFetchUpgrade
+   *  just before the invoker dial, consumed by acceptFetchUpgradeLeg when the leg arrives.
    *  In-memory + lazily swept, mirroring the attach-reservation pattern — a crashed relay's RPC
    *  rejection cleans up in the finally; the sweep is belt-and-braces for orphans. */
-  #pendingBridges = new Map<string, number>();
-  #sweepPendingBridges(): void {
+  #pendingFetchUpgrades = new Map<string, number>();
+  #sweepPendingFetchUpgrades(): void {
     const cutoff = Date.now() - PAGE_TIMEOUT_MS;
-    for (const [bridgeId, atMs] of this.#pendingBridges)
-      if (atMs < cutoff) this.#pendingBridges.delete(bridgeId);
+    for (const [upgradeId, atMs] of this.#pendingFetchUpgrades)
+      if (atMs < cutoff) this.#pendingFetchUpgrades.delete(upgradeId);
   }
 
-  /** Open one eyeball⇄provider WebSocket bridge: page in the invoker, ask it to dial
-   *  (openWsBridge — runs in the relay's session context; the await IS the ack, and the relay
-   *  opens the dedicated bridge socket into this DO before returning), then mint the eyeball's
+  /** Serve one WebSocket upgrade on a live capability: page in the invoker, ask it to dial
+   *  (openFetchUpgrade — runs in the relay's session context; the await IS the ack, and the relay
+   *  opens the dedicated upgrade leg into this DO before returning), then mint the eyeball's
    *  pair natively and hand back a real 101. A failed dial throws — the fetch lane answers
    *  non-101 with the provider's words. */
-  async #openWsBridge(stubKey: string, request: Request): Promise<Response> {
+  async #openFetchUpgrade(stubKey: string, request: Request): Promise<Response> {
     const retained = await this.#pageIn(stubKey);
-    const bridgeId = crypto.randomUUID();
+    const upgradeId = crypto.randomUUID();
     // Hop-by-hop / handshake headers stay behind — the relay re-issues the Upgrade to the provider.
     const headers: Record<string, string> = {};
     for (const [name, value] of request.headers)
       if (!/^(connection|upgrade|keep-alive|sec-websocket-.*)$/i.test(name)) headers[name] = value;
-    this.#sweepPendingBridges();
-    this.#pendingBridges.set(bridgeId, Date.now());
+    this.#sweepPendingFetchUpgrades();
+    this.#pendingFetchUpgrades.set(upgradeId, Date.now());
     try {
       await (
         retained.invoker as unknown as {
-          openWsBridge(id: string, url: string, h: Record<string, string>): Promise<unknown>;
+          openFetchUpgrade(id: string, url: string, h: Record<string, string>): Promise<unknown>;
         }
-      ).openWsBridge(bridgeId, request.url, headers);
+      ).openFetchUpgrade(upgradeId, request.url, headers);
     } finally {
-      this.#pendingBridges.delete(bridgeId);
+      this.#pendingFetchUpgrades.delete(upgradeId);
     }
-    const transport = this.#hooks.getWebSockets(`${WS_BRIDGE_TRANSPORT_TAG}:${bridgeId}`)[0];
+    const transport = this.#hooks.getWebSockets(`${FETCH_UPGRADE_LEG_TAG}:${upgradeId}`)[0];
     if (transport === undefined)
-      throw new Error(`ws bridge ${bridgeId}: dial acked but no bridge socket arrived`);
+      throw new Error(`fetch upgrade ${upgradeId}: dial acked but no upgrade leg arrived`);
     const pair = new WebSocketPair();
     this.#hooks.acceptWebSocket(pair[1], [
-      WS_BRIDGE_EYEBALL_TAG,
-      `${WS_BRIDGE_EYEBALL_TAG}:${bridgeId}`,
+      FETCH_UPGRADE_EYEBALL_TAG,
+      `${FETCH_UPGRADE_EYEBALL_TAG}:${upgradeId}`,
     ]);
-    pair[1].serializeAttachment({ wsBridgeEyeball: { bridgeId } } satisfies WsBridgeEyeball);
+    pair[1].serializeAttachment({
+      fetchUpgradeEyeball: { upgradeId },
+    } satisfies FetchUpgradeEyeball);
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
-  /** PARTIAL FETCH: accept the relay's dedicated bridge socket (see WS_BRIDGE_SOCKET_HEADER),
-   *  gated on a pending dial — an unknown bridgeId 409s. */
-  bridgeFetch(request: Request): Response | undefined {
-    const bridgeId = request.headers.get(WS_BRIDGE_SOCKET_HEADER);
-    if (bridgeId === null) return undefined;
-    this.#sweepPendingBridges();
-    if (!this.#pendingBridges.has(bridgeId))
-      return new Response(`unknown ws bridge ${bridgeId} (dial first)\n`, { status: 409 });
+  /** PARTIAL FETCH: accept the relay's dedicated upgrade leg (see FETCH_UPGRADE_SOCKET_HEADER),
+   *  gated on a pending dial — an unknown upgradeId 409s. */
+  acceptFetchUpgradeLeg(request: Request): Response | undefined {
+    const upgradeId = request.headers.get(FETCH_UPGRADE_SOCKET_HEADER);
+    if (upgradeId === null) return undefined;
+    this.#sweepPendingFetchUpgrades();
+    if (!this.#pendingFetchUpgrades.has(upgradeId))
+      return new Response(`unknown fetch upgrade ${upgradeId} (dial first)\n`, { status: 409 });
     const pair = new WebSocketPair();
     this.#hooks.acceptWebSocket(pair[1], [
-      WS_BRIDGE_TRANSPORT_TAG,
-      `${WS_BRIDGE_TRANSPORT_TAG}:${bridgeId}`,
+      FETCH_UPGRADE_LEG_TAG,
+      `${FETCH_UPGRADE_LEG_TAG}:${upgradeId}`,
     ]);
-    pair[1].serializeAttachment({ wsBridgeTransport: { bridgeId } } satisfies WsBridgeTransport);
+    pair[1].serializeAttachment({ fetchUpgradeLeg: { upgradeId } } satisfies FetchUpgradeLeg);
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
   /** Route one incoming WebSocket message (wire this to webSocketMessage). TRUE = handled: a
-   *  bridge frame forwarded RAW to its peer socket (eyeball ⇄ transport by bridgeId tag). FALSE =
+   *  fetch-upgrade frame forwarded RAW to its peer socket (eyeball ⇄ leg, by upgradeId tag). FALSE =
    *  not this subsystem's socket. The pager itself carries no routable inbound payloads. */
   message(ws: WebSocket, data: string | ArrayBuffer): boolean {
-    const peer = this.#bridgePeer(ws);
+    const peer = this.#fetchUpgradePeer(ws);
     if (peer === undefined) return false;
     if (peer === null) return true; // peer already gone — drop the frame; close handles teardown
     try {
@@ -304,31 +306,31 @@ export class HibernatableRpcStubManager {
     return true;
   }
 
-  /** The OTHER side of a bridge socket, or undefined (not a bridge socket) / null (peer gone). */
-  #bridgePeer(ws: WebSocket): WebSocket | null | undefined {
+  /** The OTHER side of a fetch-upgrade socket, or undefined (not one) / null (peer gone). */
+  #fetchUpgradePeer(ws: WebSocket): WebSocket | null | undefined {
     const att = this.#rawAttachment(ws) as
-      | (Partial<WsBridgeEyeball> & Partial<WsBridgeTransport>)
+      | (Partial<FetchUpgradeEyeball> & Partial<FetchUpgradeLeg>)
       | undefined;
-    if (att?.wsBridgeEyeball)
+    if (att?.fetchUpgradeEyeball)
       return (
         this.#hooks.getWebSockets(
-          `${WS_BRIDGE_TRANSPORT_TAG}:${att.wsBridgeEyeball.bridgeId}`,
+          `${FETCH_UPGRADE_LEG_TAG}:${att.fetchUpgradeEyeball.upgradeId}`,
         )[0] ?? null
       );
-    if (att?.wsBridgeTransport)
+    if (att?.fetchUpgradeLeg)
       return (
         this.#hooks.getWebSockets(
-          `${WS_BRIDGE_EYEBALL_TAG}:${att.wsBridgeTransport.bridgeId}`,
+          `${FETCH_UPGRADE_EYEBALL_TAG}:${att.fetchUpgradeLeg.upgradeId}`,
         )[0] ?? null
       );
     return undefined;
   }
 
   closed(ws: WebSocket, code = 1000, reason = ""): HibernatableRpcStubRecord | undefined {
-    // A bridge socket closed (either side) → close its peer with the clamped code; each bridge
-    // dies with its own socket pair, no sweeps needed (the relay dying closes its transports,
+    // A fetch-upgrade socket closed (either side) → close its peer with the clamped code; each
+    // upgrade dies with its own socket pair, no sweeps needed (the relay dying closes its legs,
     // which closes the eyeballs here — automatically, per socket).
-    const peer = this.#bridgePeer(ws);
+    const peer = this.#fetchUpgradePeer(ws);
     if (peer !== undefined) {
       try {
         peer?.close(clampCloseCode(code), reason.slice(0, 123));
@@ -441,7 +443,7 @@ export type ProviderSocket = {
 
 /** Edge side: open the stub pager WebSocket to a stream DO (via its stub's `fetch`), answering
  *  every `{type: "page"}` by re-minting the Workers-RPC stub through `onPage`. Nothing else rides
- *  it — the pager is a pager (WS-bridge traffic has its own socket: openWsBridgeSocket). */
+ *  it — the pager is a pager (fetch-upgrade traffic has its own socket: openFetchUpgradeLeg). */
 export async function openStubPagerWebSocket(
   host: { fetch(url: string, init?: RequestInit): Promise<Response> },
   stubKey: string,
@@ -474,18 +476,18 @@ export async function openStubPagerWebSocket(
   return response.webSocket;
 }
 
-/** Edge side: open ONE dedicated ws-bridge socket into the DO for `bridgeId` (called from
- *  RetainedCallbackInvoker.openWsBridge, mid-dial — the DO is awaiting that RPC and serves this
+/** Edge side: open ONE dedicated fetch-upgrade leg into the DO for `upgradeId` (called from
+ *  RetainedCallbackInvoker.openFetchUpgrade, mid-dial — the DO is awaiting that RPC and serves this
  *  upgrade concurrently). Frames ride it RAW; its close closes the peer eyeball socket. */
-export async function openWsBridgeSocket(
+export async function openFetchUpgradeLeg(
   host: { fetch(url: string, init?: RequestInit): Promise<Response> },
-  bridgeId: string,
+  upgradeId: string,
 ): Promise<WebSocket> {
-  const response = await host.fetch("https://ws-bridge.internal/", {
-    headers: { Upgrade: "websocket", [WS_BRIDGE_SOCKET_HEADER]: bridgeId },
+  const response = await host.fetch("https://fetch-upgrade.internal/", {
+    headers: { Upgrade: "websocket", [FETCH_UPGRADE_SOCKET_HEADER]: upgradeId },
   });
   if (!response.webSocket)
-    throw new Error(`ws bridge upgrade returned ${response.status} without a WebSocket`);
+    throw new Error(`fetch-upgrade leg returned ${response.status} without a WebSocket`);
   response.webSocket.accept();
   return response.webSocket;
 }

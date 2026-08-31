@@ -305,8 +305,8 @@ test("upgrade REQUEST forwarding: the eyeball's ws upgrade reaches the Node prov
 // ACTUAL: the fetch lane answers 500 (the provider's throw), so the eyeball's WebSocket never
 //   opens — undici reports "Received network error or non-101 status code.", close code 1002.
 //   Whether OUR lane would forward a GENUINE 101 (capnweb serializing a webSocket-bearing
-//   Response, relay → Workers RPC → DO → eyeball) is PROVEN GREEN in workerd — the pager
-//   WebSocket bridge (ws-fetch-live-101.test.ts); only Node-side FABRICATION remains impossible.
+//   Response, relay → Workers RPC → DO → eyeball) is PROVEN GREEN in workerd — the fetch-upgrade
+//   lane (ws-fetch-live-101.test.ts); only Node-side FABRICATION remains impossible.
 // WHY IT MATTERS: "clients are always connected" bridges are Node processes; a device that
 //   wants to OFFER a WebSocket endpoint (itx.ws-device) as a live capability simply cannot,
 //   today — every WS-fetch capability must be workerd-side loaded code, which the harness lane
@@ -331,7 +331,7 @@ test.fails("live capability WebSocket fetch: a plain eyeball WebSocket opens (10
 // ─────────────────────── 4. what WOULD make the platform half provable ───────────────────────
 
 // The platform question proper — does OUR lane forward a GENUINE 101 from a LIVE capability — is
-// ANSWERED GREEN in __workers-tests__/ws-fetch-live-101.test.ts: the pager WebSocket bridge (the DO
+// ANSWERED GREEN in __workers-tests__/ws-fetch-live-101.test.ts: the dedicated fetch-upgrade leg (the DO
 // mints the eyeball pair natively, frames tunnel over the stub pager) carries a workerd provider's
 // genuine 101 + echo + close through every hop. Only provider-side fabrication in NODE stays
 // impossible (the test.fails above).

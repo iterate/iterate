@@ -81,8 +81,8 @@ export class RpcStubDirectory {
    *  attach record. `undefined` = not this door's request. */
   fetch(request: Request): Response | undefined {
     const transportId = request.headers.get(STUB_PAGER_WEBSOCKET_HEADER);
-    // Not a pager upgrade → maybe the relay's dedicated ws-bridge socket (gated on a pending dial).
-    if (transportId === null) return this.#stubs.bridgeFetch(request);
+    // Not a pager upgrade → maybe the relay's dedicated fetch-upgrade leg (gated on a pending dial).
+    if (transportId === null) return this.#stubs.acceptFetchUpgradeLeg(request);
     this.#sweepPending();
     const connectionKey = this.#pending.get(transportId)?.key;
     if (connectionKey === undefined)
@@ -115,14 +115,15 @@ export class RpcStubDirectory {
     if (record) this.#stubs.drop(record.stubKey, reason);
   }
 
-  /** A pager WebSocket closed (wire this to webSocketClose/webSocketError): for a key whose LAST
-   *  transport just went, the DO's onFinalClose (auto-revoke the mounts naming it). Fire-and-forget
-   *  safe. */
-  /** Inbound WebSocket message routing (wire this to webSocketMessage) — the pager bridge. */
+  /** Inbound WebSocket message routing (wire this to webSocketMessage) — fetch-upgrade frames
+   *  forwarded between their two DO-side sockets. */
   message(ws: WebSocket, data: string | ArrayBuffer): void {
     this.#stubs.message(ws, data);
   }
 
+  /** A WebSocket closed (wire this to webSocketClose/webSocketError). A pager: for a key whose
+   *  LAST transport just went, the DO's onFinalClose (auto-revoke the mounts naming it) — fire and
+   *  forget safe. A fetch-upgrade socket: its peer closes with it. */
   closed(ws: WebSocket, code: number, reason: string): void {
     const record = this.#stubs.closed(ws, code, reason);
     if (record)

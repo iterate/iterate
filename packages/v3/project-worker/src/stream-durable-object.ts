@@ -177,7 +177,7 @@ export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
         // reaches a handler, so it keeps the pager socket warm (defeats the ~100s idle-close)
         // WITHOUT waking the DO, leaving hibernation intact. Reconnect still backs a hard drop.
         // The literal is DELIBERATELY distinctive: setWebSocketAutoResponse is DO-WIDE (it also
-        // covers bridged EYEBALL sockets), so a plain "ping" would silently hijack any client
+        // covers fetch-upgrade EYEBALL sockets), so a plain "ping" would silently hijack any client
         // frame that happens to equal it — the ws-fetch-live-101 test caught exactly that.
         this.ctx.setWebSocketAutoResponse(
           new WebSocketRequestResponsePair("itx-pager-keepalive", "itx-pager-keepalive-ack"),
@@ -1067,8 +1067,8 @@ export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
-    // Bridged eyeball frames (→ the pager) and pager bridge replies (→ the eyeball socket); a
-    // plain pager socket's other inbound payloads carry nothing we act on.
+    // Fetch-upgrade frames forwarded between their two DO-side sockets (eyeball ⇄ upgrade leg);
+    // a plain pager socket's inbound payloads carry nothing we act on.
     this.#rpcStubs.message(ws, message);
   }
   webSocketClose(ws: WebSocket, code: number, reason: string): void {

@@ -1,5 +1,5 @@
 // __workers-tests__/ws-fetch-live-101.test.ts — THE PLATFORM QUESTION, answered by running: does
-// OUR lane forward a GENUINE 101 from a LIVE capability? YES — via the pager WebSocket bridge.
+// OUR lane forward a GENUINE 101 from a LIVE capability? YES — via the dedicated fetch-upgrade leg.
 //
 // The harness twin (__tests__/failing-ws-fetch-capability.test.ts) pinned that Node providers die
 // at FABRICATION (no WebSocketPair; undici rejects status 101) — so the platform half needed a
@@ -7,20 +7,20 @@
 // real capnweb session; a real eyeball dials the /cap fetch door. Every hop is production-shaped:
 //
 //   eyeball SELF.fetch /cap → worker sets x-itx-cap → DO #fetchCapLane → capability table →
-//   `itx.rpcStubs.get('<key>')` alias → the WS BRIDGE: the DO asks the paged-in invoker to dial
-//   (openWsBridge — an RPC call that EXECUTES in the relay's session context; its return is the
+//   `itx.rpcStubs.get('<key>')` alias → FETCH UPGRADES: the DO asks the paged-in invoker to dial
+//   (openFetchUpgrade — an RPC call that EXECUTES in the relay's session context; its return is the
 //   honest ack), the relay dials the provider's fetch() over capnweb and opens ONE dedicated
-//   bridge WebSocket back into the DO, the DO mints the eyeball's WebSocketPair natively, and
+//   fetch-upgrade leg back into the DO, the DO mints the eyeball's WebSocketPair natively, and
 //   frames forward RAW between the two DO-side sockets. The stub pager stays a PAGER.
 //
-// WHY a bridge and not a passthrough (all dead ends measured 2026-08-31): workerd's JS RPC cannot
+// WHY forwarded frames and not a passthrough (all dead ends measured 2026-08-31): workerd's JS RPC cannot
 // serialize a webSocket-bearing Response (DataCloneError at the relay→DO return — same verdict
 // when the capnweb stub itself is LOANED to the DO and dotted-called), a loopback ctx.exports
 // entrypoint cannot touch the relay's capnweb session ("Cannot perform I/O on behalf of a
 // different request" — I/O pins to its creating context), and proxying the socket as RPC streams
 // pins the DO non-hibernatable for the socket's lifetime (evictDurableObject times out on "active
 // references"). capnweb 0.12.0 carries the provider's 101 to the relay (socket-as-streams); the
-// dedicated bridge socket carries its frames the rest of the way, hibernatably.
+// dedicated upgrade leg carries its frames the rest of the way, hibernatably.
 // Run:
 //   pnpm exec vitest run --project workers __workers-tests__/ws-fetch-live-101.test.ts
 
@@ -101,11 +101,11 @@ test("plain fetch through a LIVE capability: the eyeball's GET reaches the worke
   expect(site.observations).toContain('fetch invoked: GET upgrade=""');
 });
 
-// ─────────────────── the platform question proper — GREEN via the pager bridge ───────────────────
+// ─────────────────── the platform question proper — GREEN via the fetch-upgrade lane ───────────────────
 
-// Was VERIFIED BROKEN (the DataCloneError above, pinned here as a test.fails) until the bridge
+// Was VERIFIED BROKEN (a DataCloneError on the RPC return leg) until the fetch-upgrade lane
 // landed; now the regression pin for the whole path: genuine 101, frames BOTH ways through every
-// hop (eyeball ⇄ DO pair ⇄ pager ⇄ relay ⇄ capnweb ⇄ provider pair), clean close. Also caught on
+// hop (eyeball ⇄ DO pair ⇄ upgrade leg ⇄ relay ⇄ capnweb ⇄ provider pair), clean close. Also caught on
 // the way: the pager keepalive literal must be DISTINCTIVE — setWebSocketAutoResponse is DO-wide,
 // so a plain "ping"/"pong" pair hijacked any eyeball frame equal to "ping".
 test("live capability WebSocket fetch: the eyeball's upgrade gets the provider's GENUINE 101, echoes, and closes cleanly", async () => {

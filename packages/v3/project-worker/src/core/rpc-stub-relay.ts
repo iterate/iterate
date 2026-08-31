@@ -17,7 +17,7 @@ import {
   clampCloseCode,
   disposeStub,
   openStubPagerWebSocket,
-  openWsBridgeSocket,
+  openFetchUpgradeLeg,
   type ProviderSocket,
 } from "./hibernatable-rpc-stub.ts";
 
@@ -55,17 +55,17 @@ class RetainedCallbackInvoker extends WorkersRpcTarget {
     this.#host = host;
   }
 
-  /** THE WEBSOCKET BRIDGE DIAL (fetch-shaped rides fetch; the pager stays MINIMAL): a live
+  /** THE FETCH-UPGRADE DIAL (fetch-shaped rides fetch; the pager stays MINIMAL): a live
    *  capability's WS upgrade cannot return its 101 over Workers RPC (no WebSocket serialization)
    *  and no other channel reaches the capnweb session's request context — but THIS method runs in
    *  it (RPC calls execute where their target was minted). So the DO calls here; we dial the
    *  provider's fetch over capnweb (the fork carries its genuine 101 back as a tunneled socket),
-   *  open one DEDICATED bridge WebSocket into the DO, and wire the two — frames ride NATIVE
+   *  open one DEDICATED upgrade leg into the DO, and wire the two — frames ride NATIVE
    *  text/binary WebSocket messages, no codec. Returning IS the ack: the DO mints the eyeball's
    *  pair only after this resolves, so its 101 is honest, and a provider failure throws back with
    *  the provider's own words (a non-101 at the fetch lane). */
-  async openWsBridge(
-    bridgeId: string,
+  async openFetchUpgrade(
+    upgradeId: string,
     url: string,
     headers: Record<string, string>,
   ): Promise<{ ok: true }> {
@@ -79,29 +79,29 @@ class RetainedCallbackInvoker extends WorkersRpcTarget {
     if (!provider)
       throw new Error(`provider answered ${response?.status ?? "?"} without a webSocket`);
     provider.accept?.();
-    const bridge = await openWsBridgeSocket(this.#host, bridgeId);
+    const leg = await openFetchUpgradeLeg(this.#host, upgradeId);
     provider.addEventListener("message", (ev) => {
       try {
-        bridge.send(ev.data as string | ArrayBuffer);
+        leg.send(ev.data as string | ArrayBuffer);
       } catch {
-        /* bridge closing — its close handler tears the provider side down */
+        /* leg closing — its close handler tears the provider side down */
       }
     });
     provider.addEventListener("close", (ev) => {
       try {
-        bridge.close(clampCloseCode(ev.code), (ev.reason ?? "").slice(0, 123));
+        leg.close(clampCloseCode(ev.code), (ev.reason ?? "").slice(0, 123));
       } catch {
         /* already closing */
       }
     });
-    bridge.addEventListener("message", (ev) => {
+    leg.addEventListener("message", (ev) => {
       try {
         provider.send((ev as MessageEvent).data as string | ArrayBuffer);
       } catch {
         /* provider closing */
       }
     });
-    bridge.addEventListener("close", (ev) => {
+    leg.addEventListener("close", (ev) => {
       try {
         provider.close(
           clampCloseCode((ev as CloseEvent).code),
