@@ -708,15 +708,32 @@ export async function prepareAgentLlmMessages(
     messages.map(async (message) => {
       const files = message.files ?? [];
       if (files.length === 0) return { role: message.role, content: message.content };
-      const resolvedFiles =
+      // A file can outlive its bytes: preview environments reap R2 objects
+      // 3h after write (docs/preview-resource-gc.md), and prod files can be
+      // deleted. One gone attachment must not fail this — and thereby every
+      // future — turn of the conversation: drop it from the prompt and tell
+      // the model, which can relay that to the human.
+      const resolutions =
         resolveModelFileUrl === undefined
           ? files
           : await Promise.all(
-              files.map(async (file) => ({ ...file, url: await resolveModelFileUrl(file) })),
+              files.map(async (file) => {
+                try {
+                  return { ...file, url: await resolveModelFileUrl(file) };
+                } catch {
+                  return null;
+                }
+              }),
             );
+      const resolvedFiles = resolutions.flatMap((file) => (file === null ? [] : [file]));
+      const gone = files.filter((_, index) => resolutions[index] === null);
+      const goneNote =
+        gone.length === 0
+          ? ""
+          : `\n[Attachments no longer available (expired or deleted): ${gone.map((file) => file.filename).join(", ")}]`;
       return {
         role: message.role,
-        content: flattenMessageToText({ ...message, files: resolvedFiles }),
+        content: flattenMessageToText({ ...message, files: resolvedFiles }) + goneNote,
         containsFiles: true,
       };
     }),

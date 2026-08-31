@@ -30,7 +30,7 @@ test("captures a note from the global composer and manages it on /notes", async 
   await page.getByLabel("Save note").click();
 
   // ✕ collapses to the floating pill; the pill brings it back.
-  await page.getByLabel("Close note composer").click();
+  await page.getByLabel("Collapse note composer").click();
   await page.getByPlaceholder("Capture a note").waitFor({ state: "hidden" });
   await page.getByLabel("Capture a note").click();
   await page.getByPlaceholder("Capture a note").waitFor();

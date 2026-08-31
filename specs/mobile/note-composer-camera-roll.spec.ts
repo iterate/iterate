@@ -1,11 +1,13 @@
-// The note composer's camera-roll strip: the photo you just took is one tap
-// away, above the text field, without opening the full-screen picker.
+// The note composer's attachment surface: the SAME AttachmentSheet the chat
+// composer uses (carousel of recent media, All photos / Files / Audio /
+// Location) — only the destination differs: saving goes to /notes.
 //
 // A browser has no camera roll, so the web build reads its library from the
 // boundary apps/mobile/src/lib/recent-photos.ts documents — filled here with
 // real PNG fixtures before the app boots. Everything downstream of it is
-// the shipping code path: the same strip component, the same tap-to-attach
-// mutation, the same note write, and the same attachment rendered on /notes.
+// the shipping code path: the shared sheet component, the same
+// tap-to-attach mutation, the same note write, and the same attachment
+// rendered on /notes.
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -13,7 +15,7 @@ import { localOsDevServer } from "../../apps/os/scripts/dev.ts";
 import { signUpWithEmailOtp, uniqueSignupEmail } from "../test-support/email-otp-signup.ts";
 import { test } from "../test-support/test.ts";
 
-test("attaches a recent photo to a note straight from the composer strip", async ({
+test("attaches a recent photo to a note through the shared attachment sheet", async ({
   page,
 }, testInfo) => {
   const osBaseUrl = await resolveOsBaseUrl();
@@ -23,24 +25,21 @@ test("attaches a recent photo to a note straight from the composer strip", async
   await signUpToProject(page, testInfo, osBaseUrl, projectSlug);
   page.videoMode?.setStartTime();
 
-  // The strip is already sitting above the text field on the project screen —
-  // no navigation, no picker modal between opening the app and attaching the
-  // photo you just took.
+  // The + on the note composer opens the same attachment sheet chat has.
   await page.getByText(`→ /notes in ${projectSlug}`).waitFor();
-  await page.getByLabel("Attach recent photo 1").click();
+  await page.getByLabel("Attach something").click();
+  await page.getByText("All photos").waitFor();
+  await page.getByLabel("Attach recent photo").first().click();
 
-  // The tile flips to its attached state (and to the control that takes it
-  // back off), and the photo joins the composer's attachment row.
-  await page.getByLabel("Remove recent photo 1").waitFor();
+  // The tile flips to its attached state, and the photo joins the chips row.
+  await page.getByLabel(/Attachment: ticket\.png/).waitFor();
+  await page.getByLabel("Detach recent photo").waitFor();
 
-  // Second thoughts on a second photo: attach, then tap the same tile again.
-  await page.getByLabel("Attach recent photo 2").click();
-  await page.getByLabel("Remove recent photo 2").click();
-  await page.getByLabel("Attach recent photo 2").waitFor();
-
-  // Past the last recent photo sits the way out to everything older — the
-  // same full-screen picker the + button opens.
-  await page.getByLabel("Choose from all photos").waitFor();
+  // Second thoughts on a second photo: attach, then tap the same tile again
+  // — both tiles end back in their attach state.
+  await page.getByLabel("Attach recent photo").first().click();
+  await page.getByLabel("Detach recent photo").nth(1).click();
+  await page.getByLabel("Detach recent photo").waitFor();
 
   await page.getByPlaceholder("Capture a note").fill("Ticket for the Florence train");
   await page.getByLabel("Save note").click();
