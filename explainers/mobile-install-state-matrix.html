@@ -233,7 +233,8 @@
       <b>Takeaway:</b> the worst any cell gets is <i>Download → Install → Open in app → Switch</i>,
       and the app tells you when you're in that cell. Native builds happen only when native code
       actually changed — one build per fingerprint, shared by the PR, its siblings, and main after
-      merge. Nothing is silently stale anymore.
+      merge. Only two facts about your phone matter — the binary's fingerprint and the channel it
+      points at; where any of it came from never does. Nothing is silently stale anymore.
     </div>
 
     <details class="gloss">
@@ -305,6 +306,45 @@
           >When your channel's latest JS needs a different fingerprint than your binary, the app
           (via the snapshot) shows a banner + <b>Download</b> button. Download opens the install
           page, which orders the steps: Install, then Open in app.</span
+        >
+      </div>
+    </div>
+
+    <h2>Distinctions that sound meaningful but aren't</h2>
+    <p class="sub" style="margin-bottom: 8px">
+      The phone's entire behavior-relevant state is <b>two facts</b>: its binary's fingerprint and
+      the channel it points at. Everything else about where things came from is provenance the
+      system neither stores nor consults — it only affects what Build info displays and which
+      backend the bundle recommends. So several states you can describe don't exist as far as the
+      machinery cares:
+    </p>
+    <div class="rules">
+      <div class="rule">
+        <b>"Whose build is my binary?"</b>
+        <span
+          >Not a thing. "pr-1234's binary" means "a binary with pr-1234's fingerprint" — when
+          fingerprints match, the PR, its siblings and main share <i>one literal build</i>. The rows
+          below are named by provenance only as a courtesy.</span
+        >
+      </div>
+      <div class="rule">
+        <b>Intra-PR pushes (old JS + old native of the same PR)</b>
+        <span
+          >Not a new column — re-read the matrix with "what the PR changes" measured against
+          <i>what you hold</i>. Staying on the channel: a follow-up push that keeps the fingerprint
+          is the ALREADY-THERE cell (banner / rescan pulls it); one that moves the fingerprint is
+          the DOWNLOAD cell — your binary just became "old main" relative to its own PR. A push
+          changing native <i>and</i> JS is still one fingerprint move: install once, the JS comes
+          with it.</span
+        >
+      </div>
+      <div class="rule">
+        <b>JS from old PR A on a binary from old PR B</b>
+        <span
+          >Legal, and unremarkable: scanning any QR compares <i>B's fingerprint</i> (the binary's)
+          to the target channel's latest — match → one scan, mismatch → Download. Which PR the
+          running JS came from never enters; it only contributes its stamped backend recommendation.
+          There is no "wrong pairing" state the phone can be trapped in.</span
         >
       </div>
     </div>
@@ -421,7 +461,9 @@
           </tr>
           <tr>
             <th>
-              pr-1234 binary · pr-1234 JS<span class="st">you installed this PR's build</span>
+              pr-1234 binary · pr-1234 JS<span class="st"
+                >you installed this PR's build — from any push; age never matters</span
+              >
             </th>
             <td class="na">
               <span class="chip c-na">N/A</span>
@@ -473,7 +515,10 @@
           </tr>
           <tr>
             <th>
-              pr-1234 binary · pr-5678 JS<span class="st">PR build, someone else's channel</span>
+              pr-1234 binary · pr-5678 JS<span class="st"
+                >one PR's build, another's channel — stands in for every cross-PR mixture; only the
+                fingerprints matter</span
+              >
             </th>
             <td class="na">
               <span class="chip c-na">N/A</span>
@@ -487,7 +532,8 @@
               <p>
                 Running pr-5678's JS on this binary means the two PRs share a fingerprint (rule 1) —
                 sibling PRs sharing one build is by design. So pr-1234's OTA QR is one scan: Switch
-                → instant.
+                → instant. (A binary whose fingerprint <i>doesn't</i> match this PR's latest is just
+                the DOWNLOAD cell above, whoever built it.)
               </p>
               <details>
                 <summary>if 5678 later diverges</summary>
