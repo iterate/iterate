@@ -13,8 +13,10 @@ Picking a filter swaps the plain `expo-camera` preview for a live filtered
 pipeline. Photos and clips captured while a filter is active come back as
 normal composer attachments, filter baked in.
 
-High-level status: spec committed first for review; implementation follows
-in subsequent commits on this branch.
+High-level status: implemented and pushed — picker, pipeline, all four
+filters, both capture paths; typecheck/lint/knip/tests green. Remaining:
+Misha tries it on a real phone (the getUserMedia-in-DOM-component claim is
+the thing to verify first).
 
 ## Why this shape (assumptions made while AFK)
 
@@ -45,26 +47,26 @@ in subsequent commits on this branch.
 
 ## Checklist
 
-- [ ] ✨ button in the camera top bar; horizontal filter picker (None + 4
+- [x] ✨ button in the camera top bar; horizontal filter picker (None + 4
       filters) _in `camera-capture.tsx`_
-- [ ] WebView filter pipeline DOM component _`filter-camera.tsx`, driven by a
+- [x] WebView filter pipeline DOM component _`filter-camera.tsx`, driven by a
       marshaled `command` prop (snap / start / stop), results come back as
       base64 via async props_
-- [ ] Face geometry from MediaPipe FaceLandmarker, with a no-face/no-CDN
+- [x] Face geometry from MediaPipe FaceLandmarker, with a no-face/no-CDN
       fallback oval _`src/lib/filters/face-geometry.ts`_
-- [ ] Filter: **potato-in-the-dirt** — giant 🥔 over the face, your real
+- [x] Filter: **potato-in-the-dirt** — giant 🥔 over the face, your real
       eyes + lips composited on top, dirt/field scene behind
-- [ ] Filter: **just-eyes-and-lips** — only your eyes and lips float over
+- [x] Filter: **just-eyes-and-lips** — only your eyes and lips float over
       the scene
-- [ ] Filter: **cat** — full 🐱 face ("I'm not a cat"), real eyes + lips
+- [x] Filter: **cat** — full 🐱 face ("I'm not a cat"), real eyes + lips
       showing through
-- [ ] Filter: **toddler flashcards** — eyes-and-lips over a giant flashcard
+- [x] Filter: **toddler flashcards** — eyes-and-lips over a giant flashcard
       (dog, ball, banana, cow, colors, ~40 words an 18-month-old might
       know); tapping advances the card
-- [ ] Every filter: tap the background mid-stream to cycle it (flashcards:
+- [x] Every filter: tap the background mid-stream to cycle it (flashcards:
       tap = next card) — proof the pipeline is interactive
-- [ ] Photo capture with filter baked in → `ComposerAttachment` (photo)
-- [ ] Video capture with filter baked in (incl. mic audio) →
+- [x] Photo capture with filter baked in → `ComposerAttachment` (photo)
+- [x] Video capture with filter baked in (incl. mic audio) →
       `ComposerAttachment` (video, mp4)
 - [ ] Human test on a real phone (Misha)
 
@@ -83,3 +85,15 @@ in subsequent commits on this branch.
 - Worktree created off `mobile-chat-attachments` (d58fec3f3). Watching PR
   #2554; when it merges, update this branch from main (merge, or cherry-pick
   reapply if the squash makes the merge ugly).
+- Implementation: `src/lib/filters/face-geometry.ts` (landmarks → face box +
+  eye/lip ellipses, unit-tested), `src/lib/filters/definitions.ts` (the four
+  filters; scenes are gradient sky + hill + emoji props, faces are giant
+  emoji + feathered video cutouts), `src/components/filter-camera.tsx` (the
+  `"use dom"` pipeline: getUserMedia, rAF draw loop, MediaPipe via injected
+  <script type="module"> because Metro must not see the CDN import,
+  MediaRecorder for filtered clips), `camera-capture.tsx` (✨ + picker +
+  command/promise bridge).
+- Filtered-clip flow: native mutation parks a promise, sends `{seq, type}`
+  command prop; DOM records canvas.captureStream + mic, base64 → onVideo →
+  file written via expo-file-system/legacy → video attachment. 30s hard cap
+  both sides.
