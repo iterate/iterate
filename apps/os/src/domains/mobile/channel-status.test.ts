@@ -3,12 +3,14 @@ import { parseAppConfigFromEnv } from "@iterate-com/shared/config";
 import {
   channelStatusKey,
   handleChannelStatusRequest,
+  handleInstallManifestRequest,
   handleInstallPageRequest,
   type StatusBucket,
 } from "./channel-status.ts";
 import { AppConfig } from "~/config.ts";
 
 const ADMIN_SECRET = "channel-status-test-admin-secret";
+const ORIGIN = "https://os.example.test";
 
 const status = {
   channel: "my-feature",
@@ -119,7 +121,11 @@ test("an invalid channel name 404s before touching storage", async () => {
 test("the install page offers the snapshot's build and the open-in-app link, install first", async () => {
   const bucket = fakeBucket();
   bucket.objects.set(channelStatusKey("my-feature"), JSON.stringify(status));
-  const response = await handleInstallPageRequest({ bucket, channel: "my-feature" });
+  const response = await handleInstallPageRequest({
+    bucket,
+    origin: ORIGIN,
+    channel: "my-feature",
+  });
   const html = await response.text();
   expect(response.status).toBe(200);
   expect(html).toContain(status.installUrl);
@@ -136,14 +142,22 @@ test("the install page for a still-compiling build says so instead of promising 
     channelStatusKey("my-feature"),
     JSON.stringify({ ...status, buildFinished: false }),
   );
-  const response = await handleInstallPageRequest({ bucket, channel: "my-feature" });
+  const response = await handleInstallPageRequest({
+    bucket,
+    origin: ORIGIN,
+    channel: "my-feature",
+  });
   const html = await response.text();
   expect(html).toContain("still compiling");
   expect(html).not.toContain("Install this build");
 });
 
 test("the install page without a snapshot falls back to the EAS builds list", async () => {
-  const response = await handleInstallPageRequest({ bucket: fakeBucket(), channel: "mystery" });
+  const response = await handleInstallPageRequest({
+    bucket: fakeBucket(),
+    origin: ORIGIN,
+    channel: "mystery",
+  });
   const html = await response.text();
   expect(response.status).toBe(200);
   expect(html).toContain("https://expo.dev/accounts/mishanustom/projects/iterate/builds");
@@ -156,10 +170,99 @@ test("snapshot text is HTML-escaped on the install page", async () => {
     channelStatusKey("my-feature"),
     JSON.stringify({ ...status, message: `<script>alert("x")</script>` }),
   );
-  const response = await handleInstallPageRequest({ bucket, channel: "my-feature" });
+  const response = await handleInstallPageRequest({
+    bucket,
+    origin: ORIGIN,
+    channel: "my-feature",
+  });
   const html = await response.text();
   expect(html).not.toContain("<script>alert");
   expect(html).toContain("&lt;script&gt;");
+});
+
+test("a fully-stocked snapshot makes the install page install in place (itms-services)", async () => {
+  const bucket = fakeBucket();
+  bucket.objects.set(
+    channelStatusKey("my-feature"),
+    JSON.stringify({
+      ...status,
+      ipaUrl: "https://expo.dev/artifacts/eas/abc.ipa",
+      appVersion: "0.1.0",
+      bundleId: "com.iterate.mobile",
+    }),
+  );
+  const response = await handleInstallPageRequest({
+    bucket,
+    origin: ORIGIN,
+    channel: "my-feature",
+  });
+  const html = await response.text();
+  expect(html).toContain(
+    `itms-services://?action=download-manifest&amp;url=${encodeURIComponent(
+      `${ORIGIN}/m/install-manifest/my-feature`,
+    )}`,
+  );
+  // The expo.dev build page demotes to a details link, but stays reachable.
+  expect(html).toContain("Build details");
+  expect(html).toContain(status.installUrl);
+});
+
+test("an itms-less snapshot (pre-field, or build unfinished) keeps the build-page CTA", async () => {
+  const bucket = fakeBucket();
+  bucket.objects.set(channelStatusKey("my-feature"), JSON.stringify(status));
+  const withoutFields = await handleInstallPageRequest({
+    bucket,
+    origin: ORIGIN,
+    channel: "my-feature",
+  });
+  expect(await withoutFields.text()).not.toContain("itms-services");
+
+  bucket.objects.set(
+    channelStatusKey("my-feature"),
+    JSON.stringify({
+      ...status,
+      buildFinished: false,
+      ipaUrl: "https://expo.dev/artifacts/eas/abc.ipa",
+      appVersion: "0.1.0",
+      bundleId: "com.iterate.mobile",
+    }),
+  );
+  const unfinished = await handleInstallPageRequest({
+    bucket,
+    origin: ORIGIN,
+    channel: "my-feature",
+  });
+  expect(await unfinished.text()).not.toContain("itms-services");
+});
+
+test("the manifest plist names the app and its ipa, XML-escaped", async () => {
+  const bucket = fakeBucket();
+  bucket.objects.set(
+    channelStatusKey("my-feature"),
+    JSON.stringify({
+      ...status,
+      ipaUrl: "https://expo.dev/artifacts/eas/abc.ipa?a=1&b=2",
+      appVersion: "0.1.0",
+      bundleId: "com.iterate.mobile",
+    }),
+  );
+  const response = await handleInstallManifestRequest({ bucket, channel: "my-feature" });
+  const xml = await response.text();
+  expect(response.status).toBe(200);
+  expect(response.headers.get("content-type")).toContain("application/xml");
+  expect(xml).toContain("<string>https://expo.dev/artifacts/eas/abc.ipa?a=1&amp;b=2</string>");
+  expect(xml).toContain("<string>com.iterate.mobile</string>");
+  expect(xml).toContain("<string>0.1.0</string>");
+  expect(xml).toContain("<string>software-package</string>");
+});
+
+test("the manifest 404s without the itms fields or without a snapshot", async () => {
+  const bucket = fakeBucket();
+  bucket.objects.set(channelStatusKey("my-feature"), JSON.stringify(status));
+  const preItms = await handleInstallManifestRequest({ bucket, channel: "my-feature" });
+  expect(preItms.status).toBe(404);
+  const missing = await handleInstallManifestRequest({ bucket: fakeBucket(), channel: "ghost" });
+  expect(missing.status).toBe(404);
 });
 
 // ---------------------------------------------------------------------------

@@ -144,19 +144,44 @@ const EAS_BUILDS_LIST_URL = "https://expo.dev/accounts/mishanustom/projects/iter
 export async function handleInstallPageRequest(input: {
   bucket: StatusBucket;
   channel: string;
+  /** The deployment's own origin (from the request URL) — the itms manifest
+   * URL must point back at the same host that served this page. */
+  origin: string;
 }): Promise<Response> {
-  const { bucket, channel } = input;
+  const { bucket, channel, origin } = input;
   if (!CHANNEL_RE.test(channel)) return new Response("not found", { status: 404 });
   const status = await readChannelStatus(bucket, channel);
   const deepLink = `iterate://preview-channel/${channel}`;
+  // Install in place when the snapshot carries everything the manifest
+  // needs: iOS fetches /m/install-manifest/<channel> over https and installs
+  // to the home screen without ever leaving this page. Otherwise (build
+  // still compiling, or a pre-itms snapshot) the expo.dev build page — whose
+  // own Install tap is the same itms mechanism, minus the staying-here part
+  // — remains the way in.
+  const installable =
+    status !== null &&
+    status.buildFinished &&
+    status.ipaUrl &&
+    status.bundleId &&
+    status.appVersion;
+  const itmsHref = `itms-services://?action=download-manifest&amp;url=${encodeURIComponent(
+    `${origin}/m/install-manifest/${channel}`,
+  )}`;
 
   const buildBlock = status
     ? [
-        `<a class="cta" href="${escapeHtml(status.installUrl)}">${
-          status.buildFinished
-            ? "Install this build"
-            : "Open the build page (still compiling when last published — Install appears there when it finishes)"
-        }</a>`,
+        installable
+          ? `<a class="cta" href="${itmsHref}">Install this build</a>`
+          : `<a class="cta" href="${escapeHtml(status.installUrl)}">${
+              status.buildFinished
+                ? "Install this build"
+                : "Open the build page (still compiling when last published — Install appears there when it finishes)"
+            }</a>`,
+        ...(installable
+          ? [
+              `<p>Installs in place — watch your home screen. <a href="${escapeHtml(status.installUrl)}">Build details</a>.</p>`,
+            ]
+          : []),
         `<p>Runtime <code>${escapeHtml(status.runtimeVersion.slice(0, 9))}</code> · <code>${escapeHtml(
           status.commit.slice(0, 7),
         )}</code> ${escapeHtml(status.message)}</p>`,
@@ -194,5 +219,62 @@ export async function handleInstallPageRequest(input: {
 </html>`;
   return new Response(html, {
     headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
+  });
+}
+
+/**
+ * The itms-services manifest iOS fetches when the install page's button is
+ * tapped: a plist naming the app (bundle id + version) and where its .ipa
+ * lives (the stable expo.dev artifact URL from the snapshot). Must be https
+ * with an XML content type or iOS refuses ("cannot connect to <host>").
+ * 404 when the snapshot is missing or predates the itms fields — the page
+ * only renders the itms button when they're all present, so a 404 here
+ * means a snapshot changed between page load and tap.
+ */
+export async function handleInstallManifestRequest(input: {
+  bucket: StatusBucket;
+  channel: string;
+}): Promise<Response> {
+  const { bucket, channel } = input;
+  if (!CHANNEL_RE.test(channel)) return new Response("not found", { status: 404 });
+  const status = await readChannelStatus(bucket, channel);
+  if (status === null || !status.ipaUrl || !status.bundleId || !status.appVersion) {
+    return new Response("no installable manifest for this channel", { status: 404 });
+  }
+  // escapeHtml doubles as an XML escaper (&, <, >, ").
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>items</key>
+  <array>
+    <dict>
+      <key>assets</key>
+      <array>
+        <dict>
+          <key>kind</key>
+          <string>software-package</string>
+          <key>url</key>
+          <string>${escapeHtml(status.ipaUrl)}</string>
+        </dict>
+      </array>
+      <key>metadata</key>
+      <dict>
+        <key>bundle-identifier</key>
+        <string>${escapeHtml(status.bundleId)}</string>
+        <key>bundle-version</key>
+        <string>${escapeHtml(status.appVersion)}</string>
+        <key>kind</key>
+        <string>software</string>
+        <key>title</key>
+        <string>Iterate</string>
+      </dict>
+    </dict>
+  </array>
+</dict>
+</plist>
+`;
+  return new Response(xml, {
+    headers: { "content-type": "application/xml; charset=utf-8", "cache-control": "no-store" },
   });
 }

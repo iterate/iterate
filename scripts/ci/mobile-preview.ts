@@ -199,6 +199,9 @@ export type InstallBuild = {
    * exists but has nothing to install yet, and the section says so rather
    * than offering a link that dead-ends. */
   finished: boolean;
+  /** The .ipa artifact URL (stable, unsigned) — undefined until the build
+   * finishes; the install page falls back to the build-page link without it. */
+  ipaUrl: string | undefined;
 };
 
 /**
@@ -237,6 +240,7 @@ export const ensureBuildForRuntime = (input: { runtime: string }): InstallBuild 
     id: build.id,
     gitCommitHash: build.gitCommitHash,
     finished: build.status === "FINISHED",
+    ipaUrl: build.artifacts?.applicationArchiveUrl,
   };
 };
 
