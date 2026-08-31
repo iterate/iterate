@@ -62,15 +62,18 @@ function collector() {
 
 // ─────────────────────────────── EVENT INPUT ENVELOPE ───────────────────────────────
 
-// WAS a PARITY LOCK (apps/os pins `ephemeral: z.literal(true)` — "`ephemeral: false` is a loud
-// input error, not a silent synonym for omitting the flag"). The clean room enforced it ONLY via
-// capnweb-validate's TS-type boundary, which was removed 2026-08-20. Nothing on the append path now
-// rejects the boolean `false` — it commits as a plain durable event. Restoring the guarantee is a
-// runtime StreamEventInput.parse() at the append door (the same one guard that would also reject an
-// empty type and strip a forged source — see failing-boundary-egress.test.ts).
-test.todo(
-  "ephemeral: false should be a LOUD input error — needs a runtime envelope parse now that capnweb-validate is removed",
-);
+// PARITY LOCK, restored (apps/os pins `ephemeral: z.literal(true)` — "`ephemeral: false` is a loud
+// input error, not a silent synonym for omitting the flag"). Enforcement lived only in
+// capnweb-validate's TS-type boundary until that was removed 2026-08-20; the append door's runtime
+// guard now rejects any non-`true` ephemeral itself.
+test("ephemeral: false is a LOUD input error at the append door, and commits nothing", async () => {
+  const itx = await harness.itx("prj_am_ephfalse");
+  const err = await rejection(append(itx, { type: "sneaky", ephemeral: false as unknown as true }));
+  expect(err.message).toMatch(/ephemeral must be literal true or absent/);
+  // nothing committed — the log has no durable "sneaky" row
+  const page = await itx.invokeCapability(["itx", "stream", ["read", 0, 50]]);
+  expect(page.events.map((e: { type: string }) => e.type)).not.toContain("sneaky");
+});
 
 // ─────────────────────────── PLATFORM-AUTHORED IDEMPOTENCY KEYS ───────────────────────────
 

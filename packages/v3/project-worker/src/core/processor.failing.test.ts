@@ -665,11 +665,3 @@ describe("ephemeral windows and repair", () => {
     expect((await p.snapshot()).state.n).toBe(3);
   });
 });
-
-// Speculative (not verified against a concrete contract clause — parked, not asserted):
-test.todo(
-  "a processEvent that MUTATES `state` in place poisons previousState and the liveState diff baseline — is containment specified?",
-);
-test.todo(
-  "10k waiters against a never-arriving offset: the waiter list is swept per batch — O(waiters) per commit; is there a bound?",
-);

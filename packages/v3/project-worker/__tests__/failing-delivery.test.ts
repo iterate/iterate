@@ -211,6 +211,28 @@ test("FIXED (defect 11): consumes ['*'] delivers every durable event on the forw
   expect(star.offsets()).toContain(note.offset);
 });
 
+test("forwarder lane: ephemeral events NEVER deliver to absent targets, even when consumes names the type", async () => {
+  // CONTRACT PIN (decided — document, don't reject): the forwarder pump reads DURABLE rows only,
+  // so an absent-target subscription never sees an ephemeral instance of a type its consumes
+  // names — while a durable instance of the SAME type delivers normally. Subscribe cannot warn
+  // at mount time: ephemerality is per-EVENT, not per-type, so consumes:["blip"] is a perfectly
+  // valid spelling that simply filters whatever durable "blip"s exist. (Contrast the connected
+  // lane above, where naming the type is exactly how a subscriber opts IN to ephemerals.)
+  const itx = await harness.itx("prj_fd_eph_fwd");
+  const c = collector();
+  const hook = await mountHook(itx, "ephFwdHook", c.fn);
+  await itx.subscribe({ name: "eph-fwd", consumes: ["blip"], target: hook });
+  const [eph] = await append(itx, { type: "blip", ephemeral: true, payload: { kind: "eph" } });
+  await settle(800); // bounded negative wait — the pump gets ample time to (not) deliver
+  expect(c.invocations).toEqual([]);
+  const [durable] = await append(itx, { type: "blip", payload: { kind: "durable" } });
+  // the durable delivery is also the barrier: the pump has now confirmed PAST the ephemeral
+  await until("the durable blip delivers", () => c.offsets().includes(durable.offset));
+  await settle(300);
+  expect(c.offsets()).toEqual([durable.offset]); // exactly the durable instance, nothing else
+  expect(c.offsets()).not.toContain(eph.offset);
+});
+
 test("forwarder: maxAttempts 1 halts after exactly ONE attempt, leaves the audit fact, and stays halted", async () => {
   const itx = await harness.itx("prj_fd_halt1");
   let attempts = 0;
@@ -470,12 +492,6 @@ test("an append of 900 events in one batch arrives as ONE callback invocation (b
 
 // ─────────────────────────────── speculative (not yet run to ground) ───────────────────────────────
 
-test.todo(
-  "forwarder reset CAS: a resume landing DURING an in-flight delivery must win (redelivery from the reset cursor, in-flight success write discarded) — needs a holdable target plus a timed resume",
-);
-test.todo(
-  "absent-target subscriptions never see ephemeral events even when consumes names the type (the pump reads durable rows only) — decide whether subscribe should reject that spelling loudly instead of silently never delivering",
-);
 test.todo(
   "connected subscriber whose socket buffer overflows mid-flood: overflow must close the socket and auto-revoke must reap the mount (needs a flood bigger than the local socket buffer)",
 );

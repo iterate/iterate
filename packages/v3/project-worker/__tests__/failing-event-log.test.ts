@@ -397,14 +397,36 @@ test("ephemeral + idempotencyKey is refused loudly and atomically mid-batch", as
   expect(probe.offset).toBe(seed.offset + 1);
 });
 
-// ── speculative / unverifiable here ──
-
-test.todo(
-  "breaker overdraft: a batch admitted before its own breaker-configured event (enforcement reads pre-batch state) can drive tokens NEGATIVE — clamp-at-zero vs carry-the-debt is an undecided contract",
-);
-test.todo(
-  "the in-batch dedupe double-reduce also skews the checkpoint away from a log replay — observable only across an eviction/rebuild, which this harness cannot force",
-);
-test.todo(
-  "a facet drive redelivers a dedupe-hit event with an offset below the batch's claimed scannedAfterOffset — whether facet cursors tolerate the out-of-range member needs a facet-processor fixture",
-);
+test("breaker overdraft: an admitted batch drives tokens NEGATIVE, and the debt is CARRIED, not clamped", async () => {
+  // DECIDED CONTRACT — carry the debt. Admission reads PRE-batch state, so a batch that carries
+  // its own breaker-configured event is admitted while the breaker is still off; the reduce then
+  // debits every durable event unconditionally (capacity 2, then d1..d4 → tokens -2). Clamping at
+  // zero would forgive the overdraft the moment it happened; carrying it means refill must climb
+  // THROUGH the debt before the stream takes durable writes again — overshoot on the way in is
+  // paid back, second for second, on the way out.
+  const itx = await harness.itx("prj_core_overdraft");
+  const batch = await append(
+    itx,
+    breakerConfigured(2, 1), // 1 token/second — recovery below rides wall time
+    { type: "d", payload: { n: 1 } },
+    { type: "d", payload: { n: 2 } },
+    { type: "d", payload: { n: 3 } },
+    { type: "d", payload: { n: 4 } },
+  );
+  expect(batch).toHaveLength(5); // the whole batch passed the (pre-batch, breaker-off) gate
+  const committedAtMs = Date.now(); // the debt clock starts at the batch's event times
+  expect((await coreState(itx)).breaker.tokens).toBeCloseTo(-2, 1); // the overdraft, on the record
+  // the very next durable append trips…
+  const err = await rejection(append(itx, { type: "d", payload: { n: 5 } }));
+  expect(err.message).toContain("circuit breaker open");
+  // …and STAYS tripped past a full refill period: a clamp-at-zero bucket would hold ~1.2 tokens
+  // by now; a bucket at -2 has only climbed to ~-0.8. (Refusals commit nothing — no state moves.)
+  await new Promise((r) => setTimeout(r, 1200));
+  const still = await rejection(append(itx, { type: "d", payload: { n: 6 } }));
+  expect(still.message).toContain("circuit breaker open");
+  // once wall time covers the debt PLUS one token (3s at 1/s; sleep the remainder with margin),
+  // the stream takes durable writes again.
+  await new Promise((r) => setTimeout(r, Math.max(0, committedAtMs + 3500 - Date.now())));
+  const [freed] = await append(itx, { type: "d", payload: { n: 7 } });
+  expect(freed.offset).toBeGreaterThan(0);
+});

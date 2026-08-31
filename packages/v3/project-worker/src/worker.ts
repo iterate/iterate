@@ -13,11 +13,13 @@ import { DEMO_PAGE_HTML } from "./generated/demo-page.ts";
 
 // Native workerd RPC promises pipeline exactly like capnweb ones — thread them unawaited through
 // the step walk too (dispatch.ts can't import cloudflare:workers itself: the unit lane runs it in
-// Node). Registered once at module load, before any request can dispatch. The cast bridges a
-// workers-types gap: the runtime exports RpcPromise (verified by probe) but the .d.ts doesn't yet.
-registerPipelinedRpcBrand(
-  (cloudflareWorkers as unknown as { RpcPromise: abstract new () => unknown }).RpcPromise,
-);
+// Node). A call step yields an RpcPromise; a PROPERTY step on one yields an RpcProperty — both
+// pipeline, so both register. Done once at module load, before any request can dispatch. The cast
+// bridges a workers-types gap: the runtime exports both (verified by probe) but the .d.ts doesn't.
+const { RpcPromise: NativeRpcPromise, RpcProperty: NativeRpcProperty } =
+  cloudflareWorkers as unknown as Record<"RpcPromise" | "RpcProperty", abstract new () => unknown>;
+registerPipelinedRpcBrand(NativeRpcPromise);
+registerPipelinedRpcBrand(NativeRpcProperty);
 
 export { StreamDurableObject };
 export { ProcessorFacet } from "./processor-facet.ts";

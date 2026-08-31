@@ -72,8 +72,6 @@ import { BUILT_IN_PROCESSOR_SLUGS, type FacetIdentity } from "./processor-facet.
 type FacetProcessorEntry = {
   slug: string;
   ref?: { source: Expression; className: string };
-  /** Per-instance configuration from the enablement mount, handed to the constructor. */
-  props?: Record<string, unknown>;
 };
 
 /** The duck-typed contract BOTH facet kinds satisfy (the built-in ProcessorFacet and the
@@ -205,12 +203,19 @@ export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
    *  every enabled facet processor is PUSHED the batch with its scanned-offset-range proof. */
   async append(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
     // THE commit door every path funnels through (public stream/contexts/env.ITX + internal):
-    // an event must carry a non-blank type. This runtime guard is now the SOLE enforcement (no
-    // capnweb-validate boundary) — it covers both the missing/non-string case and the contract's
-    // trim().min(1), so a "" or "   " type is rejected loudly instead of committing typeless.
-    for (const input of inputs)
+    // an event must carry a non-blank type, and `ephemeral` is literal `true` or ABSENT — a
+    // boolean `false` is a LOUD input error, never a silent synonym for durable (the apps/os
+    // contract core/events.ts declares; every consumer tests truthiness, so an unpoliced `false`
+    // would silently commit durable). This runtime guard is the SOLE enforcement (no
+    // capnweb-validate boundary).
+    for (const input of inputs) {
       if (typeof input.type !== "string" || input.type.trim() === "")
         throw new Error("append: every event needs a non-empty type");
+      if ("ephemeral" in input && input.ephemeral !== undefined && input.ephemeral !== true)
+        throw new Error(
+          `append: ephemeral must be literal true or absent — got ${JSON.stringify(input.ephemeral)} on "${input.type}"`,
+        );
+    }
     // THE CORE PROCESSOR SPEAKS FIRST (the apps/os shape): it reads its own reduced state and
     // refuses a paused/tripped append. All pause/breaker reasoning lives in core-processor.ts.
     admit(this.#coreState(), inputs, Date.now(), (k) => this.#eventLog.hasIdempotencyKey(k));
@@ -384,8 +389,14 @@ export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
     this.#alarmArmer.markFired();
     // Facets have no alarms (workerd#6810) — the parent proxies. The subscription-forwarder's
     // due retries pump here; it re-arms itself through armSubscriptionRetry when work remains.
+    // AWAITED, deliberately, so the pump completes BEFORE the quiesce check below: (a) the abort
+    // can never land mid-pump (aborting mid-delivery is the stall the resurrection pass exists to
+    // heal, and an aborted pump never re-arms), and (b) a pump that finds only FUTURE retries
+    // re-arms the alarm for the earliest one — that re-arm must land before quiesce hibernates
+    // this actor, or the retry is lost until the next append. (No deadlock: append never awaits
+    // its facet drives, so a delivery that appends its own halt event returns promptly.)
     if (this.#facetEntries().some((e) => e.slug === SUBSCRIPTION_FORWARDER_SLUG))
-      void this.#facet(SUBSCRIPTION_FORWARDER_SLUG)
+      await this.#facet(SUBSCRIPTION_FORWARDER_SLUG)
         .then((f) =>
           (
             f as unknown as { pumpSubscriptionDeliveries(): Promise<unknown> }
@@ -610,7 +621,6 @@ export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
         ...(policy.source && {
           ref: { source: parse(policy.source), className: policy.className ?? "default" },
         }),
-        ...(policy.props && { props: policy.props }),
       });
     }
     return entries;
@@ -656,7 +666,6 @@ export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
       path: this.#address.path,
       slug,
       ...(entry.ref?.className && { className: entry.ref.className }),
-      ...(entry.props && { props: entry.props }),
     });
     return handle;
   }
@@ -729,7 +738,6 @@ export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
   async enableProcessor(
     slug: string,
     ref?: { source: string | Expression; className: string },
-    props?: Record<string, unknown>,
   ): Promise<{ ok: true }> {
     this.#eventLog.touch();
     if (isInlineSlug(slug))
@@ -750,7 +758,6 @@ export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
       lane: "facet", // a processor IS a facet-lane subscriber — declared, not sniffed
       processor: {
         ...(ref && { source: print(toExpression(ref.source)), className: ref.className }),
-        ...(props && { props }),
       },
     });
     await this.#facet(slug); // not for correctness (the mount's own drive configures) — makes an
@@ -771,9 +778,11 @@ export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
     // Clear the WHOLE enablement stack (a double-enable leaves >1 mount) — else an older shadowed
     // mount is re-elected and the "disabled" processor keeps running with deleted storage.
     await this.revokeCapability({ path: `itx.subscribers.${slug}`, all: true });
-    const facets = this.ctx.facets as unknown as { delete?: (name: string) => void };
-    if (typeof facets.delete === "function") facets.delete(`proc:${slug}`);
-    else this.ctx.facets.abort(`proc:${slug}`, "disabled");
+    // DELETE, storage included — a disable→re-enable is a clean rebuild, never a resume from
+    // orphaned cursor/state. (facets.delete exists unconditionally on every runtime we run —
+    // production workerd, wrangler-local, and the vitest-plugin pool lane; the abort() fallback
+    // that kept storage was dead code and is gone.)
+    this.ctx.facets.delete(`proc:${slug}`);
     return { ok: true };
   }
 
@@ -788,18 +797,26 @@ export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
   ): Promise<unknown> {
     this.#noteActivity(); // (was in #facet — moved out so the resurrection pass stays idle-neutral)
     if (path.length === 0) throw new Error(`facet: name a method`);
-    const facet = await this.#resolveFacet(ref);
-    // A top-level `.fetch` forwards to the facet's own fetch (a 101 flows DO→facet natively), never
-    // through invokePath's await-walk. A method walks receiver-preservingly (invokePath).
-    if (path.length === 1 && path[0] === "fetch")
-      return (facet as Fetcher).fetch(args[0] as Request);
-    const what =
-      typeof ref === "string"
-        ? `facet "${ref}"`
-        : ref.name
-          ? `named "${ref.name}"`
-          : `worker "${ref.className}"`;
-    return invokePath(facet, path, args, what);
+    // Counted like a drive: a CONCURRENT alarm's quiesce must never abort the facet mid-call
+    // (#noteActivity above only guards the first 60s; a long invoke outlives it).
+    this.#facetWorkInFlight++;
+    try {
+      const facet = await this.#resolveFacet(ref);
+      // A top-level `.fetch` forwards to the facet's own fetch (a 101 flows DO→facet natively),
+      // never through invokePath's await-walk. A method walks receiver-preservingly (invokePath).
+      if (path.length === 1 && path[0] === "fetch")
+        return await (facet as Fetcher).fetch(args[0] as Request);
+      const what =
+        typeof ref === "string"
+          ? `facet "${ref}"`
+          : ref.name
+            ? `named "${ref.name}"`
+            : `worker "${ref.className}"`;
+      return await invokePath(facet, path, args, what);
+    } finally {
+      this.#facetWorkInFlight--;
+      this.#noteActivity(); // a finished invoke earns a fresh quiet period (mirrors #driveFacets)
+    }
   }
 
   /** THE one facet resolver: turn ANY ref into a live facet handle. A NAME (string) resolves an
@@ -1015,13 +1032,32 @@ export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
     };
   }
 
-  /** EGRESS: substitute `{{secret:NAME}}` placeholders, then the FALLBACK terminal. */
+  /** EGRESS: substitute `{{secret:project:NAME}}` placeholders, then the FALLBACK terminal. A
+   *  PROJECT-scope placeholder that survives substitution means no such secret is stored — and this
+   *  is the LAST door that owns the project scope, so it must FAIL here, loudly: forwarding would
+   *  leak the secret's NAME to the external destination and send a garbage credential in its place.
+   *  (`platform`-scope tokens pass through untouched — the next door down owns those.) */
   async #egress(request: Request): Promise<Response> {
     const sub = await substituteHeaderSecrets(request, "project", (name) =>
       this.env.SECRETS_KV
         ? this.env.SECRETS_KV.get(`secret:${this.#address.projectId}:${name}`)
         : null,
     );
+    const unresolvedProjectToken = (value: string) =>
+      /\{\{secret:project:[a-zA-Z0-9._-]+\}\}/.exec(value)?.[0];
+    const inUrl = unresolvedProjectToken(sub.url);
+    if (inUrl)
+      return new Response(`egress: no stored project secret for ${inUrl} in the request URL\n`, {
+        status: 502,
+      });
+    for (const [header, value] of sub.headers) {
+      const token = unresolvedProjectToken(value);
+      if (token)
+        return new Response(
+          `egress: no stored project secret for ${token} in header "${header}"\n`,
+          { status: 502 },
+        );
+    }
     return this.env.FALLBACK.fetch(sub);
   }
 

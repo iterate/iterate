@@ -14,6 +14,10 @@
 // A gated callback (parked as an ABSENT target → the forwarder lane) lets us hold delivery #1 in
 // flight, land the resume, then reject delivery #1. Then we measure the stall.
 // (was proofs/prove_resume_race.mjs)
+//
+// The SECOND test is the other half of the same rev-CAS: the in-flight delivery SUCCEEDS after the
+// reset lands. The success write must LOSE (never advance the cursor past the reset) and the batch
+// redelivers from the reset cursor.
 
 import { expect, test } from "vitest";
 import { freshCtx, openItx, sleep, until } from "./support/client.ts";
@@ -99,6 +103,79 @@ test("resume racing an in-flight forwarder delivery that then fails must re-deli
   // host-state sanity: the row is on the durable lane and the forwarder facet is enabled.
   const state = await itx.hostState();
   const row = state.subscriptionMounts?.find((r: { name: string }) => r.name === "race");
+  expect(row?.lane).toBe("durable");
+  expect(state.facetProcessors).toContain("subscription-forwarder");
+});
+
+// The SUCCESS variant of the reset CAS (was __tests__/failing-delivery.test.ts's "forwarder reset
+// CAS" todo): same rig, but delivery #1 returns ok AFTER the resume landed. #pumpRow's success path
+// re-reads progress and compares `rev` before writing — the reset bumped it, so the in-flight
+// success write is DISCARDED (`continue`), and the loop re-pumps from the reset cursor.
+test("resume racing an in-flight forwarder delivery that then SUCCEEDS: the reset wins — the success write must not advance the cursor, m1 redelivers", async () => {
+  const itx = openItx(freshCtx("racewin"));
+  const keep: unknown[] = [];
+
+  // ── the gated forwarder target: delivery #1 is held then returns OK; every delivery records ──
+  let invocations = 0;
+  const seen: { inv: number; offs: number[] }[] = []; // { inv, offs } per callback invocation
+  let releaseGate!: () => void; // resolves the held first delivery
+  const gate = new Promise<void>((r) => (releaseGate = r));
+  const fn = async (events: { offset: number }[]) => {
+    invocations++;
+    const inv = invocations;
+    const offs = (events ?? []).map((e) => e.offset);
+    seen.push({ inv, offs });
+    if (inv === 1) await gate; // hold delivery #1 in flight so the resume can race it
+    return { ok: true }; // SUCCESS — the write that must lose the CAS to the reset
+  };
+
+  // mountHook: park the live callback, alias it at itx.raceHook — an ABSENT target from the
+  // subscription lane's view, so the subscription rides the subscription-forwarder facet.
+  const key = crypto.randomUUID();
+  keep.push(await itx.rpcStubs.provide(fn, { key }));
+  await itx.provide({ path: "itx.raceHook", target: `itx.rpcStubs.get('${key}')` });
+
+  // subscribe (durable/forwarder lane). start:beginning so the reset target (offset 0) is meaningful.
+  const sub = await itx.subscribe({
+    name: "racewin",
+    target: "itx.raceHook",
+    consumes: ["mark"],
+    start: "beginning",
+  });
+  expect(sub.name).toBeTruthy(); // subscribed on the forwarder lane
+
+  const append = (ev: unknown) => itx.invokeCapability(`itx.stream.append(${JSON.stringify(ev)})`);
+
+  // 1. m1 → the forwarder delivers [m1]; the callback holds it in flight.
+  const [m1] = await append({ type: "mark", payload: { n: 1 } });
+  await until("delivery #1 in flight", () => invocations >= 1);
+  expect(invocations).toBe(1); // delivery #1 is held in flight
+  expect(seen[0].offs).toEqual([m1.offset]); // and it carried exactly [m1]
+
+  // 2. the operator resumes DURING the in-flight delivery — reset to before m1 (bumps rev, parks
+  //    the cursor at 0; the reset's own pump bails on the in-flight guard).
+  await itx.resumeSubscription({ name: "racewin", afterOffset: 0 });
+  // Let the subscription-resumed fact drive through to the forwarder's #reset before releasing.
+  // (Best-effort ordering only — if the release ever wins this race the reset lands after the
+  // success write and STILL redelivers m1, so the contract below holds either way.)
+  await sleep(600);
+
+  // 3. release delivery #1 → it returns ok → the success write hits the rev CAS and must LOSE.
+  releaseGate();
+
+  // THE CONTRACT: the reset wins. The in-flight success must not advance the cursor past the
+  // reset, so m1 REDELIVERS from the reset cursor — its offset shows up in a LATER invocation.
+  await until("m1 redelivered after the reset", () =>
+    seen.slice(1).some((s) => s.offs.includes(m1.offset)),
+  );
+
+  // liveness after the race: the row keeps delivering — the discarded write didn't wedge the cursor.
+  const [m2] = await append({ type: "mark", payload: { n: 2 } });
+  await until("m2 delivered after recovery", () => seen.flatMap((s) => s.offs).includes(m2.offset));
+
+  // host-state sanity: the row is on the durable lane and the forwarder facet is enabled.
+  const state = await itx.hostState();
+  const row = state.subscriptionMounts?.find((r: { name: string }) => r.name === "racewin");
   expect(row?.lane).toBe("durable");
   expect(state.facetProcessors).toContain("subscription-forwarder");
 });

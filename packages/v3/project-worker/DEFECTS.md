@@ -180,9 +180,10 @@ Tests: \_\_tests\_\_/failing-ws-fetch-capability.test.ts (2 pass / 2 fails / 1 t
 32. ⚠ Warm facet keeps STALE props: configure() writes new identity kv but never drops the
     memoized #processor — new props take effect only after a quiesce abort. FIX: configure()
     invalidates #processor on identity change (~2 lines; 30(a) covers materialization time).
-33. ◇ Client Itx.enableProcessor cannot spell props (DO verb takes them; the client door
-    doesn't) — per-instance configuration unspellable except via broken door 30. FIX: add +
-    plumb the parameter (~2 lines).
+33. ✓ RESOLVED BY DELETION (2026-08-31): props were half-dead surface — no typed client
+    spelling, nothing first-party ever read this.props. The whole plumb (DO param → policy →
+    identity → constructor member) is deleted; per-instance configuration returns as a real
+    feature when a consumer exists.
     Also pinned passing: 10-way provide/revoke races, double-enable lineage, disable-mid-drive,
     append-during-delivery reentrancy (bounded + loud), waiter hygiene. Infra note: the validated
     relay does NOT strip undeclared fields — a deliberate strict-vs-passthrough decision is owed.
@@ -236,11 +237,13 @@ Tests: \_\_tests\_\_/failing-ws-fetch-capability.test.ts (2 pass / 2 fails / 1 t
 45. ⚠ warm ProcessorFacet ignores re-configure (duplicate of 32, independently confirmed +
     the userspace runner shares the memo). FIX: configure() invalidates #processor.
     Also: H6 mount-only enablement = defect 30 confirmed from another angle (fix: configure at
-    materialization). Deferred TODOs (need defect-28 loader lane or 60s alarm cycles): egress
-    terminal leaks an unresolved {{secret}} name downstream (S4); quiesce resurrection clobbers
-    #lastActivityMs after its await; #facetWorkInFlight ignores forwarder pumps (quiesce can abort
-    mid-pump); disableProcessor abort()-fallback keeps storage. Passing pins: cold facet picks
-    newest identity, egress substitution arithmetic, contexts path normalization + self-RPC.
+    materialization). The formerly-deferred TODOs are CLOSED (2026-08-31): egress now 502s an
+    unresolved {{secret:project:…}} instead of forwarding it (S4); the #lastActivityMs clobber
+    was already gone (capture-restore removed); alarm() now AWAITS the forwarder pump before the
+    quiesce check (no mid-pump abort, and the pump's future-retry re-arm survives hibernation);
+    disableProcessor calls ctx.facets.delete unconditionally (the storage-keeping fallback was
+    dead code). Passing pins: cold facet picks newest identity, egress substitution arithmetic,
+    contexts path normalization + self-RPC.
 
 ## Family L — bug-hunt sprawl round 2 (2026-08-19, against the fixed code)
 

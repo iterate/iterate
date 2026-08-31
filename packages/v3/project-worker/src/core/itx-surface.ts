@@ -250,7 +250,9 @@ export class Itx extends RpcTarget {
    *    • an ABSENT target (an itx expression — a webhook, a stateless worker): the
    *      subscription-forwarder facet holds a cursor per target, calls the target's terminal
    *      path with `(events, range)` per batch (the awaited call IS the ack), and
-   *      applies the one bounded-retry-then-halt policy.
+   *      applies the one bounded-retry-then-halt policy. DURABLE ROWS ONLY: the forwarder's
+   *      cursor reads the log, so an EPHEMERAL event never reaches an absent target even when
+   *      `consumes` names its type — ephemerals ride only the connected lane.
    *  Add `liveState: {key}` for state mode: the target receives each of the key's change
    *  payloads `{key, from, to, patch}` as it commits; the CLIENT chains revisions (seed through
    *  the producer's door, re-read it on any gap). Live callbacks only — an absent target has no

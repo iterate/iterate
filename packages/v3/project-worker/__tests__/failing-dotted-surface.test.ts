@@ -353,14 +353,70 @@ test("JSON.stringify of a dangling chain node must not dispatch, and the node st
   expect(await node.hello()).toBe("hello-from-rec"); // still a live handle afterwards
 });
 
-// ── unadaptable here (named apps/os sources) ──
+// SUPERSEDED (pipelining todo): the e2e connect call-then-call rides a ONE-SHOT batch that cannot survive an extra round trip, and dispatch.test.ts's 'pipelined RPC promise threading' pins the walk contract.
 
-test.todo(
-  "pipelining: one round trip for a whole dotted chain (apps/os e2e/vitest/agent-handle-pipelining.itx.e2e.test.ts) — frame-level pinning belongs to the sibling wire agent",
-);
-test.todo(
-  "reserved segments are hidden at EVERY depth (proxy.then / proxy.alpha.then / dup / onRpcBroken yield undefined, never path segments) — apps/os/src/domains/itx/path-proxy.test.ts:267-279 + apps/os/src/itx/path-proxy.ts:39-63 — unspellable until any dotted surface exists to hide them from",
-);
-test.todo(
-  "instance fields never become dynamic paths (stub.ownField() rejects with /instance property/) — apps/os/src/domains/itx/path-proxy.test.ts:116-120 — our Itx keeps all state in #private fields, so there is no field to probe until a dotted fallback exists",
-);
+// PINS core/dotted-path-proxy.ts's reserved-word promise AGAINST THE LIVE SURFACE (unit half:
+// core/dotted-path-proxy.test.ts "hides reserved path segments from function-backed path
+// proxies"). RESERVED_DYNAMIC_PATH_SEGMENTS hides JS/transport machinery ('then', 'dup',
+// 'onRpcBroken', …) at the prototype hop AND inside every path proxy it hands out, so a
+// protocol probe can never conjure a dispatcher. Observable stakes on the live itx: a probe
+// that DID dispatch would commit through the capability table (an event, a tally tick) or
+// resolve as a mount — so the pin is behavioral: probe everywhere, then prove the log and the
+// tally never moved and every handle stayed live.
+test("reserved segments are hidden at EVERY depth: transport words never dispatch as capability paths", async () => {
+  const ctx = c("resv");
+  const itx = await harness.itx(ctx);
+  await itx.enableProcessor("tally");
+  await itx.stream.append({ type: "resv-mark", payload: {} }); // dotted write — one durable row
+  // Baseline: the durable head and tally's reduce of it (enable commits a mount event too).
+  const readHead = async (): Promise<number> => {
+    const { events } = (await itx.invokeCapability(["itx", "stream", ["read", 0, 500]])) as {
+      events: { offset: number }[];
+    };
+    return events.length ? events[events.length - 1].offset : 0;
+  };
+  const head = await readHead();
+  const baseline: any = await until("tally reduced the baseline log", async () => {
+    const s: any = await itx.invokeCapability("itx.facets.get('tally').snapshot()");
+    return s.offset >= head && s;
+  });
+
+  // (a) A dotted chain is AWAITABLE: `then` on the chain is capnweb's thenable hook, never a
+  // path segment — were it a segment, the await would dispatch ['itx','whoami','then',…] and
+  // reject at the table instead of settling with the real answer.
+  const chain = itx.whoami(); // unawaited dotted call — an RpcPromise
+  expect(typeof (chain as any).then).toBe("function"); // the hook, served by the promise itself
+  expect(await chain).toMatchObject({ projectId: ctx, path: "/" });
+
+  // (b) capnweb transport words at the ROOT resolve to TRANSPORT machinery: `dup()` hands back
+  // a duplicate stub that still answers the real surface (a fallen-through probe would instead
+  // dispatch ['itx',['dup']] and reject 'no capability matches'), and `onRpcBroken` registers a
+  // callback without ever touching the wire as a path.
+  expect(typeof (itx as any).dup).toBe("function");
+  expect(typeof (itx as any).onRpcBroken).toBe("function");
+  const dupped: any = (itx as any).dup();
+  expect(await dupped.invokeCapability(["itx", ["whoami"]])).toMatchObject({ projectId: ctx });
+  (itx as any).onRpcBroken(() => {}); // registers locally; must not travel as a path
+
+  // (c) The SAME at depth 2, on an InvokeHandle: on the UNAWAITED chain node all three words are
+  // the promise's own transport surface (functions, served locally — observed, not path
+  // segments); on the SETTLED handle the hop's `then`-hiding makes the stub a NON-thenable
+  // (`then` is undefined — a second await would settle, never dispatch) while dup/onRpcBroken
+  // stay transport; and the handle stays live through every probe.
+  const node = itx.facets.get("tally"); // unawaited dotted chain — no call yet
+  expect(typeof (node as any).then).toBe("function");
+  expect(typeof (node as any).dup).toBe("function");
+  expect(typeof (node as any).onRpcBroken).toBe("function");
+  const handle: any = await node; // settles (then-safety) — a stub of the InvokeHandle
+  expect(handle.then).toBeUndefined(); // the hop hides `then`: settled stubs are not thenables
+  expect(typeof handle.dup).toBe("function");
+  expect(typeof handle.onRpcBroken).toBe("function");
+  const snap: any = await handle.snapshot(); // the chain stays callable after every probe
+
+  // NOTHING dispatched: no probe committed an event (head unmoved) and tally never ticked.
+  expect(await readHead()).toBe(head);
+  expect(snap.state.counts).toEqual(baseline.state.counts);
+  expect(snap.state.counts["resv-mark"]).toBe(1);
+});
+
+// UNSPELLABLE (instance-fields todo): Itx keeps ALL state in #private fields by design — there is no own property for a dotted probe to shadow, so apps/os's /instance property/ guard has nothing to guard here.

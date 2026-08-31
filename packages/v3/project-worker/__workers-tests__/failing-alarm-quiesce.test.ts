@@ -272,78 +272,8 @@ test("SCALE DROP + QUIESCE + EVICT + WAKE: a dropped connection stays dropped; t
     i === 3 ? expect(got.has("echo-3:hi")).toBe(false) : expect(got.has(`echo-${i}:hi`)).toBe(true);
 });
 
-// ─────────────── UNFORCEABLE HERE (test.todo) — the deferred DEFECTS.md quiesce items ───────────────
-
-// Item (1a). CODE-VERIFIED DEFECT, unforceable in this lane.
-//   BUG: alarm()'s resurrection pass captures `idleSince = #lastActivityMs` before its
-//        `await Promise.allSettled(... facet.snapshot() ...)` and then unconditionally restores
-//        `#lastActivityMs = idleSince` AFTER the await (stream-durable-object.ts ~L630-638). Since
-//        #facet() no longer notes activity, the ONLY thing that can move #lastActivityMs during
-//        that await is GENUINE concurrent live traffic (append/invoke → #noteActivity). The blanket
-//        restore ERASES that fresh timestamp.
-//   EXPECTED: live traffic arriving during the resurrection keeps the DO warm — the quiesce is
-//        skipped (or at least the re-arm reflects the fresh activity).
-//   ACTUAL (by inspection): the clobber makes the quiesce check read the stale idleSince →
-//        wrongful facet abort; and if the fresh append's drive is still in flight (facetWorkInFlight
-//        > 0) the else-branch arms `armNoLaterThan(idleSince + 60_000)`, a time in the PAST on a
-//        fresh incarnation (idleSince≈0) → an immediate-fire alarm loop.
-//   BLOCKER: forcing it needs a WIDE resurrection await overlapping a concurrent append. The window
-//        is only wide when a facet is far BEHIND on a fresh incarnation — reachable solely by
-//        evicting mid-drive, which the workerd#6800 facet pin prevents (evictDurableObject times out
-//        after 30s, MEASURED). With the window collapsed (a fresh-incarnation facet catches up in one
-//        read), an injected append lands AFTER the await (MEASURED: +0ms, never inside it), so the
-//        interleave can't be made reliable for test.fails semantics.
-//   FIX: don't blanket-restore. Snapshot #lastActivityMs into a local, and after the await set
-//        `#lastActivityMs = Math.max(localBefore, #lastActivityMs)` (keep any fresher value), or
-//        gate the restore on "no #noteActivity happened since idleSince".
-test.todo(
-  "resurrection pass clobbers #lastActivityMs after its await (wrongful quiesce / past-armed alarm on concurrent traffic) — needs a wide resurrection window that only an evict-mid-drive gives, blocked by the #6800 facet pin",
-);
-
-// Item (1b). CODE-VERIFIED DEFECT, unforceable in this lane.
-//   BUG: the quiesce gate is `... && this.#facetWorkInFlight === 0`, but #facetWorkInFlight is
-//        incremented/decremented ONLY around append-driven processEventBatch calls (append's drive
-//        loop). The alarm's OWN fire-and-forget forwarder pump — `void
-//        #facet(SUBSCRIPTION_FORWARDER_SLUG).then(f => f.pumpSubscriptionDeliveries())` at
-//        stream-durable-object.ts ~L611 — is NOT counted. So the same alarm can, a few lines later,
-//        abort `proc:subscription-forwarder` while that pump is mid-delivery (a 20s watchdog'd call,
-//        or a retry-arming leg, in flight).
-//   EXPECTED: the quiesce never aborts a facet the same alarm just handed work to.
-//   ACTUAL (by inspection): a pump aborted before it reaches armRetry/onDeliveryFailure loses that
-//        leg; combined with (3) the pending retry is dropped.
-//   BLOCKER: the subscription-forwarder is a BUILT-IN facet; ctx.exports.ProcessorFacet is rejected
-//        as a DurableObjectClass under vitest-pool-workers (TypeError "Incorrect type for the
-//        'class' field on 'StartupOptions'", VERIFIED). It cannot materialize here; the harness lane
-//        runs it but cannot force the 60s alarm.
-//   FIX: count the alarm's forwarder pump in an in-flight guard (or await it before the quiesce
-//        gate), so the quiesce respects it like an append drive.
-test.todo(
-  "#facetWorkInFlight ignores the alarm's own forwarder pump → quiesce can abort the subscription-forwarder mid-pump — blocked: built-in ProcessorFacet won't materialize in vitest-pool-workers (ctx.exports rejected)",
-);
-
-// Item (3). CODE-VERIFIED DEFECT, unforceable in this lane (same forwarder blocker as 1b).
-//   BUG: the quiesce branch of alarm() does NOT re-arm the durable alarm. A forwarder retry armed
-//        for +30min is invisible while a nearer +60s quiesce alarm owns the single durable slot
-//        (StreamAlarmArmer.armNoLaterThan only ever moves EARLIER). The design's stated safety net
-//        ("every alarm() pass re-derives its obligations and re-arms" — the alarm-armer comment) is
-//        the forwarder pump at L611 re-deriving nextAttemptAtMs — the very pump (1b) lets the same
-//        quiesce abort. If the abort wins the race, nothing re-arms the +30min retry: the delivery
-//        stalls until an unrelated append happens to arm an alarm.
-//   EXPECTED: a delivery scheduled for +30min still fires after an intervening quiesce.
-//   ACTUAL (by inspection): retry lost when the quiesce aborts the re-deriving pump.
-//   BLOCKER: same as 1b — the forwarder cannot materialize in the pool lane.
-//   FIX: after quiescing, re-arm the earliest still-pending facet obligation (or have the quiesce
-//        branch call armNoLaterThan for any known retry), so re-derivation does not depend on a
-//        pump the same alarm may have aborted.
-test.todo(
-  "subscription-forwarder retry armed for +30min is lost across a quiesce (quiesce branch never re-arms; re-derivation rides the abortable pump) — blocked: forwarder won't materialize in vitest-pool-workers",
-);
-
-// Companion: the disableProcessor abort()-fallback-keeps-storage branch (DEFECTS.md deferred TODO).
-//   In this lane ctx.facets.delete EXISTS (VERIFIED), so disableProcessor never takes the
-//   `abort(...)` fallback that would orphan the facet's storage. Forcing the leak needs a workerd
-//   build/binding where ctx.facets exposes abort but NOT delete — not reachable under
-//   vitest-pool-workers. (The delete-path correctness is pinned by the DISABLE regression above.)
-test.todo(
-  "disableProcessor abort()-fallback keeps facet storage (orphaned cursor/state) — unforceable: ctx.facets.delete IS available in vitest-pool-workers, so the fallback branch is dead here",
-);
+// The former UNFORCEABLE-HERE test.todo block is gone — its items were either stale (the
+// #lastActivityMs capture-restore was already removed) or FIXED at the root (alarm() now AWAITS the
+// forwarder pump before the quiesce check, which also preserves the pump's future-retry re-arm
+// across hibernation; disableProcessor calls ctx.facets.delete unconditionally — the storage-keeping
+// abort() fallback was dead code on every runtime).

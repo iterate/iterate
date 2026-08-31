@@ -270,28 +270,3 @@ test("egress: substitution never rescans substituted VALUES (no token injection 
 });
 
 // ═══════════════ 5. suspected, not verifiable in this lane ═══════════════
-
-test.todo(
-  "S4 — egress terminal conflates 'not my scope' with 'missing secret': a {{secret:project:X}} " +
-    "with NO stored X is left intact by design (@v3/shared/egress) and the DO's egress terminal " +
-    "(stream-durable-object.ts fetch) forwards the literal placeholder to the external " +
-    "destination — leaking the secret's name and sending a garbage credential instead of failing " +
-    "loudly (no project-scope door exists below this one). Unverifiable here: the only harness " +
-    "route into the egress terminal is /cap WITHOUT ?cap, which self-loops the worker via " +
-    "DummyControlPlane's global fetch; the loaded-worker globalOutbound route is dead under " +
-    "createTestHarness (DEFECTS.md defect 28).",
-);
-
-test.todo(
-  "S3/S1 — the stateful cacheKey collision END-TO-END (context '/x:y' + class Door vs context " +
-    "'/x' + class 'y:Door' sharing one isolate and therefore ONE env.ITX): needs the Worker " +
-    "Loader, dead under createTestHarness (DEFECTS.md defect 28). The composition half is " +
-    "verified pure-functionally above.",
-);
-
-test.todo(
-  "S1 — USERSPACE processor props-refresh end-to-end: versionedFacet keys restart on CONTENT " +
-    "hash only (worker-loader.ts), so re-enabling a loader-hosted processor with new props " +
-    "restarts nothing and the runner's memoized instance keeps the old props (the built-in " +
-    "twin is verified above). Needs the Worker Loader — DEFECTS.md defect 28.",
-);

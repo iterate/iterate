@@ -54,9 +54,6 @@ export type ProcessorPolicy = {
    *  enabling a processor is loading a class as a facet, plus driving it with this stream's
    *  commits. Defaults to the module's default export. */
   className?: string;
-  /** Per-instance configuration, handed to the processor's constructor. Event-sourced:
-   *  re-enabling with different props SHADOWS the old configuration. */
-  props?: Record<string, unknown>;
 };
 
 const CapabilityTableContract = defineProcessorContract({
@@ -106,7 +103,6 @@ const CapabilityTableContract = defineProcessorContract({
           .object({
             source: z.string().optional(),
             className: z.string().optional(),
-            props: z.record(z.string(), z.unknown()).optional(),
           })
           .optional(),
         /** The delivery lane, stamped ONCE here (see `SubscriptionLane`) — every reader reads it

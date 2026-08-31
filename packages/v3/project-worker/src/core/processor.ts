@@ -150,7 +150,6 @@ export abstract class StreamProcessor<State> {
   protected readonly stream: ProcessorStream;
   protected readonly path: string;
   protected readonly projectId: string;
-  protected readonly props: Record<string, unknown>;
   readonly #storage: ProcessorStorage;
 
   // Rule 1: the serial chain.
@@ -164,15 +163,11 @@ export abstract class StreamProcessor<State> {
     storage: ProcessorStorage;
     path: string;
     projectId: string;
-    /** Per-instance configuration from the enablement mount (event-sourced; re-enabling with
-     *  different props shadows the old configuration). */
-    props?: Record<string, unknown>;
   }) {
     this.stream = args.stream;
     this.#storage = args.storage;
     this.path = args.path;
     this.projectId = args.projectId;
-    this.props = args.props ?? {};
   }
 
   /** Pure reduce. Return the NEXT state (a new object) — or null/undefined to keep the current. */

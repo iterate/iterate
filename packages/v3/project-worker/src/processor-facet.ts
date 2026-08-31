@@ -47,7 +47,6 @@ export type FacetIdentity = {
   slug: string;
   className?: string;
   /** Per-instance configuration from the enablement mount, handed to the constructor. */
-  props?: Record<string, unknown>;
 };
 
 // ── the demo built-in facet processor: tally events by type ──
@@ -77,7 +76,6 @@ export type FacetProcessorArgs = {
   storage: ProcessorStorage;
   path: string;
   projectId: string;
-  props?: Record<string, unknown>;
   parent: () => {
     /** Deliver a batch to a subscription mount BY ROW IDENTITY (never by name through the
      *  table) — the subscription-forwarder's delivery leg. */
@@ -111,12 +109,12 @@ export class ProcessorFacet extends DurableObject<BuiltInsEnv> {
 
   /** The parent hands the facet its identity at EVERY materialization (see #facet in the DO):
    *  idempotent — a write + memo-drop ONLY when the identity actually changed, so re-enabling
-   *  with new props takes effect on the warm instance while steady drives cost one kv read. */
+   *  takes effect on the warm instance while steady drives cost one kv read. */
   configure(identity: FacetIdentity): { ok: true } {
     const stored = this.ctx.storage.kv.get("identity");
     if (JSON.stringify(stored) === JSON.stringify(identity)) return { ok: true };
     this.ctx.storage.kv.put("identity", identity);
-    this.#processor = undefined; // identity/props changed → rebuild
+    this.#processor = undefined; // identity changed → rebuild
     return { ok: true };
   }
 
@@ -175,7 +173,6 @@ export class ProcessorFacet extends DurableObject<BuiltInsEnv> {
       storage,
       path: identity.path,
       projectId: identity.projectId,
-      props: identity.props,
       parent,
     });
     return this.#processor;

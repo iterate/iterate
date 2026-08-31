@@ -255,32 +255,7 @@ test("cd('') resolves to THIS context (self) and answers rather than wedging", a
   expect(page.events.map((e: any) => e.type)).toContain("self-ping");
 });
 
-// ═══════════ 9. suspected, unverifiable at harness speed (the 60s alarm cadence) ═══════════
-
-test.todo(
-  "S3 — quiesce vs live traffic: alarm()'s resurrection pass restores #lastActivityMs to its " +
-    "pre-await value AFTER awaiting every facet snapshot (stream-durable-object.ts alarm), " +
-    "erasing any #noteActivity that landed DURING the await — the very next check then either " +
-    "aborts every facet despite fresh traffic or re-arms the alarm at a target already in the " +
-    "past (armNoLaterThan(lastActivity+60s) with a stale lastActivity → an immediate-fire alarm " +
-    "loop). Unverifiable here: needs two real 60s alarm cycles with traffic injected inside the " +
-    "resurrection await window.",
-);
-
-test.todo(
-  "S5 — #facetWorkInFlight counts ONLY append-path drives: the alarm's own forwarder pump " +
-    "(void #facet(...).pumpSubscriptionDeliveries()) and every facetInvoke call run OUTSIDE the " +
-    "counter, so the quiesce branch can abort `proc:subscription-forwarder` MID-PUMP — exactly " +
-    "the 'aborting mid-reduce is the stall' the same function's comment forbids causing. " +
-    "Unverifiable here: requires landing the quiesce check inside a pump's delivery window, " +
-    "60s+ per attempt and timing-dependent.",
-);
-
-test.todo(
-  "S1 — disableProcessor's 'DELETE its facet — storage included' depends on ctx.facets.delete " +
-    "existing (it falls back to abort(), which KEEPS storage); on runtimes without facets.delete " +
-    "a disable→re-enable resumes from the old facet storage instead of a clean rebuild. " +
-    "Unverifiable observationally: tally's reduce is deterministic from the log, so stale " +
-    "storage and a clean rebuild produce identical snapshots — needs a processor with " +
-    "effect-side storage, i.e. a userspace ref, and the loader is dead here (DEFECTS.md 28).",
-);
+// The former section-9 test.todo block (quiesce/alarm suspicions) is gone: its items were stale
+// (the #lastActivityMs capture-restore was already removed) or fixed at the root (alarm() awaits
+// the forwarder pump before the quiesce check; disableProcessor calls ctx.facets.delete
+// unconditionally — the storage-keeping fallback was dead code on every runtime).

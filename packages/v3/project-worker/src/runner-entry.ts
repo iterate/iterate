@@ -33,7 +33,7 @@ export class ProcessorFacetRunner extends DurableObject<RunnerEnv> {
     const stored = this.ctx.storage.kv.get("identity");
     if (JSON.stringify(stored) === JSON.stringify(identity)) return { ok: true };
     this.ctx.storage.kv.put("identity", identity);
-    this.#p = undefined; // identity/props changed → rebuild
+    this.#p = undefined; // identity changed → rebuild
     return { ok: true };
   }
 
@@ -56,7 +56,6 @@ export class ProcessorFacetRunner extends DurableObject<RunnerEnv> {
       },
       path: identity.path,
       projectId: identity.projectId,
-      props: identity.props,
     });
     return this.#p;
   }

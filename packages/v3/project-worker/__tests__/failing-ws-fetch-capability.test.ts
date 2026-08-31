@@ -329,6 +329,4 @@ test.fails("live capability WebSocket fetch: a plain eyeball WebSocket opens (10
 
 // ─────────────────────── 4. what WOULD make the platform half provable ───────────────────────
 
-test.todo(
-  "the platform question proper — does OUR lane forward a GENUINE 101 from a LIVE capability — needs a provider that can fabricate one: (a) a workerd-side capnweb provider (a loaded worker that dials /api back over capnweb and provides {fetch} — blocked TODAY by the baseline bug: the harness's workerd rejects the loader child's experimental allow_irrevocable_stub_storage flag, so first the harness must start workerd with --experimental or the flag must become environment-conditional), or (b) capnweb growing WebSocket-in-Response serialization so a Node provider could answer at all. In Node the provider is dead before the platform is even asked (WebSocketPair undefined; undici rejects status 101 and drops the webSocket init).",
-);
+// The platform question proper — does OUR lane forward a GENUINE 101 from a LIVE capability — is ANSWERED by running in __workers-tests__/ws-fetch-live-101.test.ts (workers lane: a workerd-side provider CAN fabricate the 101 and capnweb 0.12.0 carries it; the blocker is the relay→DO Workers RPC leg — DataCloneError on WebSocket).

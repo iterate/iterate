@@ -27,6 +27,11 @@ import {
 } from "./core/hibernatable-rpc-stub.ts";
 import { codedError, reportIssue } from "./core/errors.ts";
 
+/** How long an attach reservation may sit without its pager arriving before the lazy sweep drops
+ *  it — matches the page-timeout scale (the relay opens the pager immediately after attach; 10s is
+ *  a dead relay, not a slow one). */
+const ATTACH_PENDING_TTL_MS = 10_000;
+
 /** Everything the directory needs from its DO, injected — no hidden reach. */
 type RpcStubDirectoryDeps = {
   hooks: {
@@ -43,10 +48,18 @@ export class RpcStubDirectory {
   /** The transport mechanics. VOCABULARY across the two layers: the manager's `stubKey` IS our
    *  `transportId`, and its `connectionKey` IS our `key` (the caller's addressing key). */
   readonly #stubs: HibernatableRpcStubManager;
-  /** transportId → connectionKey, for transports that have been reserved but whose stub pager
-   *  WebSocket hasn't arrived yet. In memory on purpose: if the DO dies in between, the upgrade
-   *  409s and the relay re-attaches. */
-  readonly #pending = new Map<string, string>();
+  /** transportId → the reservation, for transports whose stub pager WebSocket hasn't arrived yet.
+   *  In memory on purpose: if the DO dies in between, the upgrade 409s and the relay re-attaches.
+   *  Lazily SWEPT (never a timer — a pending timer would pin the DO out of hibernation): the relay
+   *  opens the pager immediately after attach, so a record still pending after ATTACH_PENDING_TTL_MS
+   *  is an abandoned reservation (the relay died mid-handshake) and is dropped on the next
+   *  attach/fetch — a swept-then-arriving upgrade hits the 409 door and the relay re-attaches. */
+  readonly #pending = new Map<string, { key: string; atMs: number }>();
+  #sweepPending(): void {
+    const cutoff = Date.now() - ATTACH_PENDING_TTL_MS;
+    for (const [transportId, entry] of this.#pending)
+      if (entry.atMs < cutoff) this.#pending.delete(transportId);
+  }
 
   constructor(deps: RpcStubDirectoryDeps) {
     this.#deps = deps;
@@ -58,8 +71,9 @@ export class RpcStubDirectory {
   /** Reserve a transport for `key` (the relay calls this BEFORE opening the stub pager WebSocket).
    *  Mints a fresh transportId the pager carries; the key is the caller's addressing key. */
   attach(input: { key: string }): { transportId: string } {
+    this.#sweepPending();
     const transportId = crypto.randomUUID();
-    this.#pending.set(transportId, input.key);
+    this.#pending.set(transportId, { key: input.key, atMs: Date.now() });
     return { transportId };
   }
 
@@ -68,7 +82,8 @@ export class RpcStubDirectory {
   fetch(request: Request): Response | undefined {
     const transportId = request.headers.get(STUB_PAGER_WEBSOCKET_HEADER);
     if (transportId === null) return undefined;
-    const connectionKey = this.#pending.get(transportId);
+    this.#sweepPending();
+    const connectionKey = this.#pending.get(transportId)?.key;
     if (connectionKey === undefined)
       return new Response(`unknown rpc stub transport ${transportId} (attach first)\n`, {
         status: 409,

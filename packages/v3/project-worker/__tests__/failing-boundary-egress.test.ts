@@ -11,11 +11,11 @@
 //     (failing-appsos-mined.test.ts:90) only exercises the fenced `stream.append` door; this file
 //     proves the SAME ☠ authority loss is still reachable through `itx.cd(path).append`
 //     (own context AND siblings), which reach DO.append directly and bypass the fence.
-//   • THE ENVELOPE BOUNDARY IS A SINGLE RUNTIME GUARD — capnweb-validate was removed (2026-08-20),
-//     so the only append-input check is StreamDurableObject.append's typeless guard (non-string /
-//     blank `type` → loud reject). None of the zod refinements the schema promises (`type`
-//     min-length/trim beyond blank, `ephemeral` literal true, `strictObject` excess-key rejection,
-//     runner-only `source`) are enforced at the door — a runtime StreamEventInput.parse() would.
+//   • THE ENVELOPE BOUNDARY IS A SMALL SET OF RUNTIME GUARDS — capnweb-validate was removed
+//     (2026-08-20), so the append-input checks are StreamDurableObject.append's own: the typeless
+//     guard (non-string / blank `type` → loud reject) and the `ephemeral` literal-true guard.
+//     The remaining zod refinements the schema promises (`strictObject` excess-key rejection,
+//     runner-only `source`) are NOT enforced at the door — a runtime StreamEventInput.parse() would.
 //
 // Run: pnpm exec vitest run --project harness __tests__/failing-boundary-egress.test.ts
 
@@ -52,19 +52,19 @@ async function rejection(p: Promise<unknown>): Promise<Error & { code?: string }
 
 // ═══════════════════ THE ENVELOPE BOUNDARY — runtime guard only (validate removed) ═══════════════════
 
-test("boundary: the runtime typeless guard still rejects a non-string type; ephemeral:false now commits (no TS-type boundary)", async () => {
+test("boundary: the runtime guards reject a non-string type AND a non-literal-true ephemeral", async () => {
   // capnweb-validate was removed (2026-08-20): there is no TS-type allow-list on the RPC boundary
-  // anymore. What remains is the ONE explicit runtime guard in StreamDurableObject.append — a
-  // non-string / blank `type` is rejected loudly. Everything the TS type used to police coarsely
-  // (ephemeral: literal `true`, etc.) is no longer checked here — a deliberate, accepted looseness
-  // (we trust clients; an envelope refinement would be a runtime StreamEventInput.parse() at the door).
+  // anymore. What remains are the explicit runtime guards in StreamDurableObject.append — a
+  // non-string / blank `type` is rejected loudly, and (since the append-door tightening) so is an
+  // `ephemeral` that is present but not literal `true` (the schema's `z.literal(true)` contract,
+  // now actually enforced at the commit door instead of silently committing a durable event).
   const itx = await harness.itx("prj_be_typed");
   // a numeric type is still refused — the typeless guard checks typeof, not just emptiness.
   expect((await rejection(streamAppend(itx, { type: 12345 }))).message).toMatch(/non-empty type/i);
-  // ephemeral: false is NO LONGER a loud error — with no boundary type-check it commits as a
-  // plain (non-ephemeral) durable event. Accepted coarse-grained loss of removing validate.
-  const [committed] = await streamAppend(itx, { type: "eph-false", ephemeral: false });
-  expect(committed.type).toBe("eph-false");
+  // ephemeral: false is a loud input error again — the door enforces literal true or absent.
+  expect(
+    (await rejection(streamAppend(itx, { type: "eph-false", ephemeral: false }))).message,
+  ).toMatch(/ephemeral must be literal true or absent/i);
 });
 
 test("stream.append rejects an empty or whitespace-only event type", async () => {
@@ -81,18 +81,67 @@ test("stream.append rejects an empty or whitespace-only event type", async () =>
 // is not a concern under the trusted-client model — we do not police intra-project forgery. See
 // feedback_trusted_clients_radical_simplicity.)
 
-// ═══════════════════ EGRESS / SECRETS — unverifiable in this lane (documented) ═══════════════════
+// ═══════════════════ EGRESS / SECRETS — the terminal now FAILS LOUD (S4 fixed) ═══════════════════
+//
+// FIXED (☠ S4, terminal leak): the DO's egress terminal (#egress in stream-durable-object.ts) is
+// the LAST door that owns the project scope — a `{{secret:project:NAME}}` token that survives
+// substitution means no such secret is stored, and forwarding it would leak the secret's NAME to
+// the external destination and send a garbage credential in its place. The door now scans the
+// substituted request (URL first, then every header) and answers 502 BEFORE the FALLBACK terminal.
+// `platform`-scope tokens are not this door's business — the next door down owns those.
+//
+// Driving it (this file had no egress driver before): the only route into the terminal is /cap
+// WITHOUT ?cap (no `x-itx-cap` header is set, no stub-pager header) — the DO's fetch falls through
+// to #egress. In solo, FALLBACK=DummyControlPlane does a bare `fetch(request)` on the same /cap
+// URL — the defect-28 self-loop — so a request that PASSES the door is unbounded and unobservable.
+// The 502 cases below never reach FALLBACK, which is exactly what makes them observable: the
+// prompt, name-bearing 502 IS the proof the request never left (the FALLBACK terminal is the sole
+// exit, and had the door forwarded, the response would come back only after the loop churned).
 
-test.todo(
-  "S4-EGRESS TERMINAL LEAK (missing project secret) + URL/BODY GAP: the DO's egress terminal " +
-    "(stream-durable-object.ts fetch) substitutes ONLY headers (substituteHeaderSecrets) and, for " +
-    "a project token with no stored value, forwards the LITERAL {{secret:project:NAME}} downstream " +
-    "(leaks the name + sends a garbage credential; no project-scope door exists below this one). A " +
-    "token in the URL or body is NEVER substituted at all. Unverifiable in the harness: the only " +
-    "route into the egress terminal is /cap WITHOUT ?cap, whose FALLBACK=DummyControlPlane does " +
-    "`fetch(request)` on the same /cap URL — an unobservable self-loop (DEFECTS.md defect 28). The " +
-    "present-secret-in-URL half is pinned purely in src/boundary-egress.failing.test.ts.",
-);
+/** Hit the DO's egress terminal: /cap with a unique ctx, NO ?cap, plus test query/headers.
+ *  (WHATWG URL serialization keeps `{{`/`}}` literal in the query — verified — so a URL token
+ *  arrives at the door byte-identical.) */
+const egress = (ctx: string, query: string, headers?: Record<string, string>) =>
+  fetch(new URL(`/cap?ctx=${ctx}${query}`, harness.url), { headers });
+
+test("egress: a missing project secret in a HEADER is a loud 502 naming the header and the token", async () => {
+  const res = await egress("prj_eg_header", "", {
+    "x-hunt-auth": "Bearer {{secret:project:GHOST}}",
+  });
+  expect(res.status).toBe(502);
+  const body = await res.text();
+  expect(body).toMatch(/no stored project secret/);
+  expect(body).toContain("{{secret:project:GHOST}}"); // the token is named to US, not the destination
+  expect(body).toContain('header "x-hunt-auth"'); // …and WHERE it sat, so the caller can fix it
+});
+
+test("egress: a missing project secret in the URL query is a loud 502 naming the URL", async () => {
+  // The pre-fix gap: substituteHeaderSecrets rebuilds ONLY headers, so a URL token was never even
+  // scanned (pinned at unit level in src/boundary-egress.failing.test.ts). The door now sweeps the
+  // substituted request's URL too — checked FIRST, before the header sweep.
+  const res = await egress("prj_eg_url", "&access_token={{secret:project:GHOST}}");
+  expect(res.status).toBe(502);
+  const body = await res.text();
+  expect(body).toMatch(/no stored project secret/);
+  expect(body).toContain("{{secret:project:GHOST}}");
+  expect(body).toContain("in the request URL");
+});
+
+test("egress: a platform-scope token does NOT trip our door (the next door owns platform scope)", async () => {
+  // A platform-only request would pass the door into the solo self-loop (unbounded — defect 28),
+  // so "forwarded untouched" is not observable here. What IS observable: the door checks the URL
+  // BEFORE the headers, so a platform token in the URL alongside an unresolved project token in a
+  // header is a discriminator — if the door wrongly matched platform scope, the 502 would name the
+  // URL token; instead it names the header's project token, proving the platform token sailed past.
+  const res = await egress("prj_eg_platform", "&pass={{secret:platform:X}}", {
+    "x-hunt-auth": "{{secret:project:GHOST}}",
+  });
+  expect(res.status).toBe(502);
+  const body = await res.text();
+  expect(body).toContain('header "x-hunt-auth"'); // the PROJECT token, in the header, tripped it
+  expect(body).not.toContain("in the request URL"); // the URL's platform token did NOT
+  expect(body).not.toContain("platform"); // and the platform token is nowhere in the refusal
+});
 
 // (Deleted with the rpcStubs migration: the "connectionKey / connectionId shared lookup namespace"
 // todo described an attack on the removed connection directory — connect({connectionKey}), the

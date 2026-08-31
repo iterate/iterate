@@ -300,11 +300,7 @@ test("concurrent provides under one key collapse to ONE live transport", async (
   );
 });
 
-// ── speculative (not runnable from outside the DO, or wall-clock infeasible) ──
-
-test.todo(
-  "attach without ever opening the pager leaks the pending record forever — rpcStubAttach is only reachable over Workers RPC, so the client-side rig cannot spell it; needs a DO-level harness",
-);
-test.todo(
-  "a client key that equals another stub's transportId UUID makes find() ambiguous (connectionKey === key || stubKey === key scans in all() order) — needs a deterministic transportId rig to force the collision",
-);
+// The attach-without-pager leak is FIXED (lazy 10s sweep) and pinned DO-level, where rpcStubAttach
+// is reachable: __workers-tests__/rpc-stub-sweep.test.ts.
+// The transportId-collision shape (a client key equal to another stub's UUID) is pathological —
+// the trusted-client doctrine does not defend against it; dropped, not deferred.

@@ -250,10 +250,6 @@ test("re-enable while WARM shadows without corrupting the reduce (no reset, no d
   expect(s2.state.counts.mark).toBe(3);
 });
 
-test.todo(
-  "re-enable with DIFFERENT props while the facet is WARM: the newest mount's props must win for subsequent behavior — UNTESTABLE in this lane: (a) the client surface drops props entirely (Itx.enableProcessor(slug, ref) has no props parameter — src/core/itx-surface.ts — while StreamDurableObject.enableProcessor takes them; the only client spelling that carries props is the half-enabled provide door above), (b) no built-in processor's behavior or any facet door reads props back (tally and subscription-forwarder ignore them; ProcessorFacet exposes no identity read), and (c) a props-echoing USERSPACE processor needs the Worker Loader, dead in this harness (DEFECTS.md defect 28) — the pool lane is the home. CODE-VERIFIED for the ledger meanwhile: ProcessorFacet.configure() puts the new identity to kv but never invalidates the memoized #processor (src/processor-facet.ts #p()), so a WARM facet keeps reducing with the OLD props until the quiesce alarm aborts it — the newest mount's props win only after a restart nobody schedules",
-);
-
 // ─────────────────────────── 4. disableProcessor MID-DRIVE ───────────────────────────
 
 test("disable mid-drive: appends survive, no ongoing error storm, re-enable rebuilds an exact reduce", async () => {
@@ -497,9 +493,3 @@ test("waitUntilProcessed(future offset) times out with its documented error and 
   expect(snap.offset).toBeGreaterThanOrEqual(m.offset);
   expect(snap.state.counts.mark).toBe(2);
 });
-
-// ─────────────────────────── 8. the resurrection pass racing live traffic ───────────────────────────
-
-test.todo(
-  "resurrection pass racing live traffic: the first alarm of an incarnation snapshot-catches-up every facet while appends land — unforceable here (the alarm arms lastActivity+60s of REAL time and every append re-arms it; the harness has no fake clock and no alarm-force door), and a 61s wall-clock wait per race attempt cannot pin the interleaving. Home: the workers pool lane (vitest-pool-workers runDurableObjectAlarm / fake timers)",
-);
