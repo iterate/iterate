@@ -7,9 +7,14 @@
 // half-typed note to save them one tap is a bad trade. The check itself runs
 // on mount and on every foreground (lib/build-state.ts).
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Linking, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { updateHeadline, useBuildActions, useBuildState } from "../lib/build-state.ts";
+import {
+  installPageUrl,
+  updateHeadline,
+  useBuildActions,
+  useBuildState,
+} from "../lib/build-state.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
 
 export function UpdateBanner() {
@@ -21,7 +26,11 @@ export function UpdateBanner() {
   // not silence the next push. Cache-held rather than useState so it survives
   // the banner unmounting between screens.
   const announcing =
-    state.update.kind === "behind" ? state.update.publishedAt || state.update.commit : null;
+    state.update.kind === "behind"
+      ? state.update.publishedAt || state.update.commit
+      : state.update.kind === "incompatible"
+        ? state.update.installUrl
+        : null;
   const dismissKey = ["update-banner-dismissed", announcing];
   const dismissed = useQuery({
     queryKey: dismissKey,
@@ -33,8 +42,21 @@ export function UpdateBanner() {
   // `watched` too, not just "behind": a manual check from Build info can
   // land "behind" in the shared cache on an unwatched (main) phone, and the
   // spec is that main phones stay quiet — the Build info row shows it there.
-  if (!state.watched || state.update.kind !== "behind" || dismissed.data) return null;
+  // "Incompatible" breaks that silence deliberately, main phones included: a
+  // native-change merge strands the binary on stale JS FOREVER with no other
+  // signal (the update server filters by runtime, so checks keep saying
+  // "current"), and the fix is a download, not patience.
+  const behind = state.watched && state.update.kind === "behind";
+  // Channel-guarded so the Download button below always has a target (the
+  // status query only arms with a known channel, so this is belt-and-braces).
+  const incompatible = state.update.kind === "incompatible" && state.channel !== null;
+  if ((!behind && !incompatible) || dismissed.data) return null;
 
+  // The interstitial, not the raw build page: a direct install clears any
+  // channel override on first boot, and the interstitial's "Open in app"
+  // tap re-points the fresh binary in the right order.
+  const download =
+    state.update.kind === "incompatible" && state.channel ? installPageUrl(state.channel) : null;
   return (
     <View style={[styles.wrap, { top: insets.top + spacing.sm }]}>
       <View style={styles.banner}>
@@ -49,11 +71,11 @@ export function UpdateBanner() {
         <Pressable
           accessibilityRole="button"
           disabled={actions.updateNowPending}
-          onPress={() => void actions.updateNow()}
+          onPress={() => (download ? void Linking.openURL(download) : void actions.updateNow())}
           style={[styles.action, actions.updateNowPending && styles.actionDisabled]}
         >
           <Text style={styles.actionLabel}>
-            {actions.updateNowPending ? "Updating…" : "Update now"}
+            {download ? "Download" : actions.updateNowPending ? "Updating…" : "Update now"}
           </Text>
         </Pressable>
         <Pressable

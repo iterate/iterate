@@ -123,6 +123,104 @@ test("a failed check is surfaced, not swallowed", () => {
   expect(updateHeadline(state.update)).toBe("Couldn't check for updates: offline");
 });
 
+test("a channel whose latest runtime differs reads as incompatible, even when the check says current", () => {
+  // The update server filters by runtime, so checkForUpdateAsync answers
+  // "current" to a phone the channel has actually left behind — only the
+  // CI-pushed snapshot can tell the difference.
+  const state = describeBuildState(
+    facts({
+      check: { kind: "current" },
+      channelStatus: {
+        kind: "loaded",
+        runtimeVersion: "fingerprint-NEW",
+        installUrl: "https://expo.dev/accounts/o/projects/p/builds/build-7",
+        buildFinished: true,
+        commit: "abc1234",
+        message: "add a native module",
+      },
+    }),
+  );
+  expect(state.update).toMatchObject({
+    kind: "incompatible",
+    installUrl: "https://expo.dev/accounts/o/projects/p/builds/build-7",
+    commit: "abc1234",
+  });
+  expect(updateHeadline(state.update)).toBe(
+    "This channel's latest JS expects a different native build.",
+  );
+});
+
+test("incompatible with a still-compiling build says so", () => {
+  const state = describeBuildState(
+    facts({
+      channelStatus: {
+        kind: "loaded",
+        runtimeVersion: "fingerprint-NEW",
+        installUrl: "https://expo.dev/accounts/o/projects/p/builds/build-8",
+        buildFinished: false,
+        commit: "abc1234",
+        message: "",
+      },
+    }),
+  );
+  expect(updateHeadline(state.update)).toBe(
+    "This channel's latest JS expects a different native build (still compiling).",
+  );
+});
+
+test("incompatible outranks behind — a runnable straggler is not the channel's latest", () => {
+  const state = describeBuildState(
+    facts({
+      check: { kind: "available", stamp: { message: "old runtime straggler" }, publishedAt: null },
+      channelStatus: {
+        kind: "loaded",
+        runtimeVersion: "fingerprint-NEW",
+        installUrl: "https://expo.dev/accounts/o/projects/p/builds/build-9",
+        buildFinished: true,
+        commit: "abc1234",
+        message: "",
+      },
+    }),
+  );
+  expect(state.update).toMatchObject({ kind: "incompatible" });
+});
+
+test("a matching or missing snapshot changes nothing", () => {
+  const matching = describeBuildState(
+    facts({
+      check: { kind: "current" },
+      channelStatus: {
+        kind: "loaded",
+        runtimeVersion: "fingerprint-abc",
+        installUrl: "https://expo.dev/accounts/o/projects/p/builds/build-1",
+        buildFinished: true,
+        commit: "abc1234",
+        message: "",
+      },
+    }),
+  );
+  expect(matching.update).toEqual({ kind: "current" });
+  const unavailable = describeBuildState(
+    facts({ check: { kind: "current" }, channelStatus: { kind: "unavailable" } }),
+  );
+  expect(unavailable.update).toEqual({ kind: "current" });
+  // No binary runtime (web) — nothing to compare, never a claim.
+  const web = describeBuildState(
+    facts({
+      runtimeVersion: null,
+      channelStatus: {
+        kind: "loaded",
+        runtimeVersion: "fingerprint-NEW",
+        installUrl: "https://expo.dev/accounts/o/projects/p/builds/build-1",
+        buildFinished: true,
+        commit: "abc1234",
+        message: "",
+      },
+    }),
+  );
+  expect(web.update).not.toMatchObject({ kind: "incompatible" });
+});
+
 test("the running bundle reads as embedded until an update replaces it", () => {
   expect(describeBuildState(facts({ isEmbeddedLaunch: true })).running.source).toBe("embedded");
 });
@@ -158,6 +256,7 @@ function facts(overrides: Partial<BuildFacts> = {}): BuildFacts {
       builtAt: "2026-08-28T12:00:00.000Z",
       expectedBackendEnv: "",
       testLoginEmail: "",
+      runtimeFingerprint: "",
     },
     updatesEnabled: true,
     isDevBundle: false,
@@ -168,6 +267,7 @@ function facts(overrides: Partial<BuildFacts> = {}): BuildFacts {
     updateId: "11111111-1111-1111-1111-111111111111",
     publishedAt: "2026-08-28T12:05:00.000Z",
     check: { kind: "idle" },
+    channelStatus: { kind: "idle" },
     appVersion: "0.1.0",
     nativeBuildVersion: "12",
     installedAt: "2026-08-27T09:00:00.000Z",

@@ -24,11 +24,12 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Linking, Pressable, StyleSheet, Text, View } from "react-native";
 import {
   clearAutoContinueChannel,
   fetchLatestUpdateAndReload,
   getAutoContinueChannel,
+  installPageUrl,
   setAutoContinueChannel,
   useBuildActions,
   useBuildState,
@@ -251,11 +252,31 @@ export default function PreviewChannelScreen() {
         </>
       )}
       {switchChannel.data === "no-update" ? (
-        <Text style={styles.note}>
-          Switched, but the channel has nothing this binary can run — either nothing is published
-          yet, or the PR has native changes (install its build instead). The override sticks; the
-          app will pick updates up once compatible ones are published.
-        </Text>
+        state.update.kind === "incompatible" ? (
+          <>
+            {/* The channel-status snapshot turned the guess into a verdict:
+                the channel's latest JS runs on a different native build. */}
+            <Text style={styles.note}>
+              Switched, but this channel's latest JS
+              {state.update.message ? ` ("${state.update.message}")` : ""} expects a different
+              native build{state.update.buildFinished ? "" : " (still compiling)"}. The override
+              sticks — install the build and its page's Open in app tap brings you back here.
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => void Linking.openURL(installPageUrl(channel))}
+              style={styles.button}
+            >
+              <Text style={styles.buttonLabel}>Download the native build</Text>
+            </Pressable>
+          </>
+        ) : (
+          <Text style={styles.note}>
+            Switched, but the channel has nothing this binary can run — either nothing is published
+            yet, or the PR has native changes (install its build instead). The override sticks; the
+            app will pick updates up once compatible ones are published.
+          </Text>
+        )
       ) : null}
       {switchChannel.error ? (
         <Text style={styles.errorNote}>{String(switchChannel.error)}</Text>

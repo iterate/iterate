@@ -18,12 +18,16 @@ import { fileURLToPath } from "node:url";
 import { appendFileSync } from "node:fs";
 import { isMainModule } from "../../packages/shared/src/dev/is-main-module.ts";
 import {
+  computeRuntimeFingerprint,
   easJson,
-  ensureBuildForPr,
-  latestInstalledRuntime,
+  ensureBuildForRuntime,
+  expoBuildUrl,
+  installInterstitialUrl,
+  mainInstalledRuntime,
   mobileDir,
   planPreview,
   prdBaseUrl,
+  pushChannelStatus,
   renderPreviewSection,
   run,
   syncMainPreviewSection,
@@ -37,6 +41,9 @@ async function publishMobileUpdate() {
     throw new Error("EXPO_TOKEN is not set — eas-cli cannot authenticate");
   }
 
+  const runtimeFingerprint = computeRuntimeFingerprint();
+  // Child processes inherit process.env; write-build-info.mjs reads it.
+  Object.assign(process.env, { MOBILE_RUNTIME_FINGERPRINT: runtimeFingerprint });
   run("node", ["scripts/write-build-info.mjs"], mobileDir);
 
   const message = run("git", ["log", "-1", "--format=%s"], repoRoot).trim().slice(0, 1024);
@@ -55,34 +62,57 @@ async function publishMobileUpdate() {
     throw new Error(`unexpected eas update output: ${JSON.stringify(published)}`);
   }
   console.log(`published update ${updates[0].id} (runtime ${runtimeVersion}): ${message}`);
+  if (runtimeVersion !== runtimeFingerprint) {
+    // The bundle now carries a lie about which native build it expects —
+    // stop before any QR/section is rendered from it.
+    throw new Error(
+      `published runtime ${runtimeVersion} != precomputed fingerprint ${runtimeFingerprint}`,
+    );
+  }
 
-  // Was a phone able to run main's JS *before* this publish? Compares against
-  // the newest finished build like the PR flow, so a fingerprint-changing
-  // merge renders as "native changes" until its fresh build finishes.
-  const installedRuntime = latestInstalledRuntime();
-  const installBuild = ensureBuildForPr({ channel: "preview", runtime: runtimeVersion });
+  // Was a phone able to run main's JS *before* this publish? Reads the
+  // PREVIOUS main snapshot, so this must stay ahead of the pushChannelStatus
+  // below that overwrites it — a fingerprint-changing merge then renders as
+  // "native changes" for this publish.
+  const installedRuntime = await mainInstalledRuntime();
+  // A native-change PR already built for this runtime (builds are keyed on
+  // the fingerprint, all `preview` profile), so the merge usually finds it
+  // FINISHED — the refresh job only has work when nothing pre-built it.
+  const installBuild = ensureBuildForRuntime({ runtime: runtimeVersion });
 
   const sha = process.env.GITHUB_SHA || run("git", ["rev-parse", "HEAD"], repoRoot).trim();
   const appConfig = JSON.parse(readFileSync(path.join(mobileDir, "app.json"), "utf8"));
   const { owner, slug, scheme } = appConfig.expo;
+
+  await pushChannelStatus({
+    channel: "preview",
+    runtimeVersion,
+    buildId: installBuild.id,
+    installUrl: expoBuildUrl({ owner, slug, buildId: installBuild.id }),
+    buildFinished: installBuild.finished,
+    commit: sha,
+    message,
+    publishedAt: new Date().toISOString(),
+  });
+
   const plan = planPreview({
     baseUrl: prdBaseUrl,
     scheme,
     channel: "preview",
     publishedRuntime: runtimeVersion,
     installedRuntime,
-    installUrl: `https://expo.dev/accounts/${owner}/projects/${slug}/builds/${installBuild.id}`,
+    installUrl: installInterstitialUrl(prdBaseUrl, "preview"),
     installReady: installBuild.finished,
     // Main's bundle stamps no expected backend (write-build-info.mjs ran
     // without the MOBILE_* env vars above): phones default to prd, and never
     // get a test sign-in offer (prd has no test OTP).
   });
+  // Channel-derived QR contents — two stable assets for main, ever, instead
+  // of two new ones per merge. If either QR's content semantics change,
+  // these names must change too — uploads are skip-if-exists.
   const [deepLinkQrUrl, installQrUrl] = await Promise.all([
-    uploadQrAsset(`mobile-main-${sha.slice(0, 9)}-ota-scheme.png`, plan.otaQrContent),
-    uploadQrAsset(
-      `mobile-main-${sha.slice(0, 9)}-install-${installBuild.id.slice(0, 8)}.png`,
-      plan.installUrl,
-    ),
+    uploadQrAsset(`mobile-main-ota-scheme.png`, plan.otaQrContent),
+    uploadQrAsset(`mobile-main-install-page.png`, plan.installUrl),
   ]);
   const section = renderPreviewSection({
     variant: "main",

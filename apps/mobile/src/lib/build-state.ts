@@ -18,14 +18,17 @@ import * as Application from "expo-application";
 import Constants from "expo-constants";
 import * as Updates from "expo-updates";
 import { Platform } from "react-native";
+import { MobileChannelStatus } from "@iterate-com/shared/mobile-channel-status";
 import { queryClient } from "./query.ts";
 import {
   type BuildState,
   buildStamp,
+  type ChannelStatusCheck,
   describeBuildState,
   type UpdateCheck,
   stampFromManifest,
 } from "./build-state-core.ts";
+import { PRODUCTION_PRESET } from "./servers.ts";
 
 export {
   type BuildState,
@@ -196,6 +199,42 @@ function sharedCheckForUpdateAsync() {
   return promise;
 }
 
+/**
+ * The CI-pushed "expected native build" snapshot for a channel — the one
+ * question checkForUpdateAsync can't answer (the update server filters by
+ * runtime, so "no update" and "newer JS you can't run" look identical).
+ * Always read from prd: CI writes there and the snapshot is platform
+ * metadata, same as the QR links themselves.
+ */
+/**
+ * Where every in-app "Download" button goes: the channel-stable install
+ * interstitial on prd OS, NOT the raw expo.dev build page. Installing a new
+ * binary clears any channel override on first boot (the new-install guard),
+ * so a direct install would drop the phone back on main — the interstitial's
+ * "Open in app" tap after the install re-points it, in the right order.
+ */
+export const installPageUrl = (channel: string) =>
+  `${PRODUCTION_PRESET.baseUrl}/m/install/${channel}`;
+
+async function fetchChannelStatus(channel: string): Promise<ChannelStatusCheck> {
+  try {
+    const response = await fetch(`${PRODUCTION_PRESET.baseUrl}/m/channel-status/${channel}`);
+    if (!response.ok) return { kind: "unavailable" };
+    const status = MobileChannelStatus.parse(await response.json());
+    return {
+      kind: "loaded",
+      runtimeVersion: status.runtimeVersion,
+      installUrl: status.installUrl,
+      buildFinished: status.buildFinished,
+      commit: status.commit,
+      message: status.message,
+    };
+  } catch {
+    // Offline, DNS, bad payload: say nothing rather than something wrong.
+    return { kind: "unavailable" };
+  }
+}
+
 async function checkForUpdate(): Promise<UpdateCheck> {
   const result = await sharedCheckForUpdateAsync();
   if (!result.isAvailable) return { kind: "current" };
@@ -240,6 +279,25 @@ export function useBuildState(): LiveBuildState {
     staleTime: Infinity,
   });
 
+  // The CI snapshot for the channel the app is pointed at. Deliberately NOT
+  // gated on `watched`: a main phone stranded on an old runtime after a
+  // native-change merge is exactly who needs to hear "you need a different
+  // native build" — checkForUpdateAsync will keep telling it "current"
+  // forever. Refetches on foreground like the check (staleTime 0 + focus).
+  const channel = override.data || baked.data || null;
+  const channelStatus = useQuery({
+    queryKey: ["build-state", "channel-status", channel],
+    queryFn: () => fetchChannelStatus(channel!),
+    enabled:
+      override.isSuccess &&
+      baked.isSuccess &&
+      channel !== null &&
+      canOta() &&
+      Updates.runtimeVersion !== null,
+    staleTime: 0,
+    retry: false,
+  });
+
   const withoutCheck = (check: UpdateCheck) =>
     describeBuildState({
       stamp: buildStamp,
@@ -252,6 +310,7 @@ export function useBuildState(): LiveBuildState {
       updateId: Updates.updateId,
       publishedAt: Updates.createdAt?.toISOString() || null,
       check,
+      channelStatus: channelStatus.data || { kind: "idle" },
       appVersion: Constants.expoConfig?.version || null,
       nativeBuildVersion: Application.nativeBuildVersion,
       installedAt: installedAt.data?.toISOString() || null,
