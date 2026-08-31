@@ -283,6 +283,11 @@ const deliveryRecorder = (slug: string, consumes: readonly string[]) => {
     protected override processEvent(args: ProcessEventArgs<{ n: number }>): undefined {
       deliveries.push({ offset: args.event?.offset ?? null, caughtUp: args.delivery.caughtUp });
     }
+    // Opt out of the default live-state emit — these suites assert exact offsets, and a constant
+    // projection never diffs (so no ephemeral delta consumes an offset under test).
+    protected override liveState() {
+      return null;
+    }
   }
   return { Rec, deliveries };
 };
@@ -351,6 +356,9 @@ describe("waitUntilProcessed", () => {
       protected override processEvent(args: ProcessEventArgs<{ n: number }>): undefined {
         if (args.event?.offset === 1) args.blockProcessorWhile(() => sleep(60));
       }
+      protected override liveState() {
+        return null; // exact-offset suite: opt out of the default live-state emit
+      }
     }
     const p = new Slow({ stream: mem.stream, storage: memoryStorage(), path: "/", projectId: "p" });
     mem.procs.push(p);
@@ -389,6 +397,9 @@ const makeVersioned = (
     }
     protected override processEvent(args: ProcessEventArgs<{ n: number }>): undefined {
       if (args.event) effects.push(`effect ${args.event.offset}`);
+    }
+    protected override liveState() {
+      return null; // exact-offset suite: opt out of the default live-state emit
     }
   })({ stream: mem.stream, storage, path: "/", projectId: "p" });
 };
@@ -513,6 +524,9 @@ describe("ephemeral windows and repair", () => {
     protected override reduce({ event, state }: ReduceArgs<{ n: number }>) {
       this.seen.push(`${event.type}@${event.offset}`);
       return { n: state.n + 1 };
+    }
+    protected override liveState() {
+      return null; // exact-offset suite: opt out of the default live-state emit
     }
   }
 

@@ -187,20 +187,15 @@ export abstract class StreamProcessor<State> {
   protected processEvent(_args: ProcessEventArgs<State>): undefined {}
 
   /** The live-state PROJECTION — the shape clients see and the shape the diffs are computed over.
-   *  DEFAULT: the reduced state verbatim, so reduced state is live out of the box. Override to
-   *  redact/trim, or to FOLD IN RUNTIME FIELDS the reduce doesn't own
+   *  DEFAULT: the reduced state verbatim, so EVERY processor's reduced state is live out of the box —
+   *  a delta emits on every change whether or not anyone is watching. That is deliberate: the delta
+   *  is an EPHEMERAL, unconsumable event (memory-only, no storage write, dropped at delivery if no
+   *  subscriber names its key), so "always live" costs an offset and a cheap diff, nothing durable.
+   *  Override to redact/trim, or to FOLD IN RUNTIME FIELDS the reduce doesn't own
    *  (`return { ...state, lastSeenMs: this.#lastSeenMs }`); after a runtime field changes out of
    *  band, call `publishLiveState()` to emit its delta. */
   protected liveState(state: State): unknown {
     return state;
-  }
-
-  /** Does this processor PUSH live-state deltas? A processor OPTS IN by overriding `liveState`
-   *  (even trivially, to add runtime fields) — otherwise its reduced state stays PULL-only through
-   *  `liveSnapshot`, and its reductions never inject deltas into the stream (no offset consumed for
-   *  a projection nobody subscribed to). The seed door works for every processor either way. */
-  #emitsLiveState(): boolean {
-    return this.liveState !== StreamProcessor.prototype.liveState;
   }
 
   // One LiveState holder per processor (core/live-state.ts) — it owns the revision chain and the
@@ -240,14 +235,10 @@ export abstract class StreamProcessor<State> {
   }
 
   /** Emit a delta for the CURRENT projection (reduced + any runtime fields) if it changed. The base
-   *  calls this after every batch; call it yourself after mutating a runtime field out of band. A
-   *  pull-only processor (didn't override `liveState`) just keeps the holder current for the seed
-   *  door — it `adopt`s the value, appending nothing. */
+   *  calls this after every batch; call it yourself after mutating a runtime field out of band. */
   protected publishLiveState(): void {
     const projection = this.#liveStateOf(this.#loadProgress().state);
-    if (projection === PROJECTION_FAILED) return;
-    if (this.#emitsLiveState()) this.#liveHolder().set(projection);
-    else this.#liveHolder().adopt(projection);
+    if (projection !== PROJECTION_FAILED) this.#liveHolder().set(projection);
   }
 
   /** Stable idempotency key namespaced by slug; add `whileProcessing` for per-event keys. */

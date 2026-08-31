@@ -54,14 +54,6 @@ export class LiveState<S> {
     return this.#state;
   }
 
-  /** Adopt a new value WITHOUT notifying — the pull-only path. A holder nobody subscribes to still
-   *  keeps its `snapshot()` current for the seed door, but appends no delta (and so consumes no
-   *  offset). Only safe when nothing is chaining off this holder's revisions — a live subscriber's
-   *  base would silently diverge (see core/processor.ts, where only non-emitting processors use it). */
-  adopt(next: S): void {
-    this.#state = next;
-  }
-
   /** THE seed door: `{rev, state}` read together (single-threaded ⇒ atomically), which is what lets
    *  a client chain patches exactly instead of guessing which changes its snapshot already contains. */
   snapshot(): { rev: number; state: S } {

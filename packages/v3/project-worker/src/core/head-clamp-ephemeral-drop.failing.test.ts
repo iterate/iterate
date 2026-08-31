@@ -71,6 +71,10 @@ class Probe extends StreamProcessor<{ seen: string[] }> {
   protected override reduce({ event, state }: ReduceArgs<{ seen: string[] }>) {
     return { seen: [...state.seen, `${event.type}@${event.offset}`] };
   }
+  // exact-offset suite: opt out of the default live-state emit (a constant projection never diffs)
+  protected override liveState() {
+    return null;
+  }
 }
 
 describe("head-clamp stale-push named-ephemeral drop", () => {

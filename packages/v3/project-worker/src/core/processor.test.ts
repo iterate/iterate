@@ -353,6 +353,11 @@ describe("ephemeral events", () => {
     protected override reduce({ event, state }: ReduceArgs<{ seen: string[] }>) {
       return { seen: [...state.seen, `${event.type}@${event.offset}`] };
     }
+    // This suite asserts exact offsets; opt out of the default live-state emit (a constant projection
+    // never diffs) so its ephemeral deltas don't consume offsets under test.
+    protected override liveState() {
+      return null;
+    }
   }
   const StarContract = defineProcessorContract({
     slug: "star",
@@ -367,6 +372,9 @@ describe("ephemeral events", () => {
     readonly contract = StarContract;
     protected override reduce({ event, state }: ReduceArgs<{ seen: string[] }>) {
       return { seen: [...state.seen, `${event.type}@${event.offset}`] };
+    }
+    protected override liveState() {
+      return null;
     }
   }
 
@@ -663,6 +671,11 @@ describe("live state (the delta patches on the wire)", () => {
       contract = contract3;
       reduce({ state }: ReduceArgs<z.infer<typeof contract3.stateSchema>>) {
         return { seen: state.seen + 1 };
+      }
+      // Opt out of its OWN live-state emit so the assertion counts only tally's change event — the
+      // point here is that Sneaky never CONSUMES a change event (the loop guard), not what it emits.
+      protected override liveState() {
+        return null;
       }
     }
     const mem = memoryStream();

@@ -60,6 +60,13 @@ export default class Counter extends StreamProcessor {
 type FacetSnap = { offset: number; state: { n: number } };
 const snapCounter = (ctx: string, slug = "counter") =>
   stub(ctx).invoke(["itx", "facets", ["get", slug], ["snapshot"]]) as Promise<FacetSnap>;
+// The number of DURABLE events (read is durable-only). Counter consumes "*", so its `n` equals this.
+// (We no longer assert `n === offset`: under default-on live state, Counter emits a live-state
+// ephemeral per event, and those consume offsets — so a durable event's offset now exceeds the count
+// of durable events before it. The exact-once invariant is `n === durable-event-count`.)
+const durableCount = async (ctx: string): Promise<number> =>
+  ((await stub(ctx).invoke(["itx", "stream", ["read", 0, 500]])) as { events: unknown[] }).events
+    .length;
 
 async function enableCounter(ctx: string, slug = "counter"): Promise<void> {
   const s = stub(ctx);
@@ -136,16 +143,20 @@ test("QUIESCE PRESERVES CURSOR+STATE: abort an idle facet, re-materialize, snaps
   await s.append({ type: "a/1" }, { type: "a/2" }, { type: "a/3" });
   await new Promise((r) => setTimeout(r, 150));
   const before = await snapCounter(ctx);
-  expect(before.state.n).toBe(before.offset); // every durable event counted, no double/no loss
+  expect(before.state.n).toBe(await durableCount(ctx)); // every durable event counted, no double/no loss
 
   // Idle 61s → the quiesce aborts the facet (its cursor is durable in its OWN storage).
   await quiesce(ctx);
 
   // The next snapshot re-materializes the facet: it must reconfigure and resume its cursor.
   const after = await snapCounter(ctx);
-  expect(after.offset).toBe(before.offset); // cursor preserved across the abort
+  // Cursor NOT reset/regressed across the abort. It may ADVANCE past `before.offset`: the cold
+  // re-catch-up reads to scannedThroughOffset (the raw head), which grew as Counter's own trailing
+  // live-state ephemerals landed after the last push — a head-tracking advance, not a replay. The
+  // exact-once invariant is the reduced STATE (below), not the offset number.
+  expect(after.offset).toBeGreaterThanOrEqual(before.offset);
   expect(after.state.n).toBe(before.state.n); // reduced state preserved
-  expect(after.state.n).toBe(after.offset); // still exact (idempotent re-drive, no replay effects)
+  expect(after.state.n).toBe(await durableCount(ctx)); // still exact (idempotent re-drive, no replay effects)
 });
 
 test("QUIESCE THEN EVICT THEN WAKE: the facet re-drives from its durable cursor exactly once (no double, no loss)", async () => {
@@ -170,8 +181,8 @@ test("QUIESCE THEN EVICT THEN WAKE: the facet re-drives from its durable cursor 
   await evictDurableObject(s);
 
   const after = await snapCounter(ctx); // wakes a fresh incarnation → catch-up from the durable cursor
-  expect(after.offset).toBeGreaterThanOrEqual(5); // enable-provide (1) + b/1..b/4 (2..5)
-  expect(after.state.n).toBe(after.offset); // EXACTLY one reduce per durable event across the eviction
+  expect(after.state.n).toBeGreaterThanOrEqual(5); // enable-provide (1) + b/1..b/4 (4) durable events
+  expect(after.state.n).toBe(await durableCount(ctx)); // EXACTLY one reduce per durable event across the eviction
 });
 
 test("DISABLE deletes the facet's storage; RE-ENABLE rebuilds from the log (no stale cursor, no skipped events)", async () => {
@@ -194,7 +205,7 @@ test("DISABLE deletes the facet's storage; RE-ENABLE rebuilds from the log (no s
   await enableCounter(ctx); // re-enable the same slug
   await new Promise((r) => setTimeout(r, 150));
   const after = await snapCounter(ctx);
-  expect(after.state.n).toBe(after.offset); // rebuilt from the whole log — no stale-cursor skip
+  expect(after.state.n).toBe(await durableCount(ctx)); // rebuilt from the whole log — no stale-cursor skip
 });
 
 test("PAGE-IN RACES THE QUIESCE ALARM: a connection invoke fired concurrently with the alarm still answers", async () => {

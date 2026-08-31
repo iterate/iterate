@@ -62,8 +62,17 @@ const append = (itx: any, ...events: unknown[]) =>
   itx.invokeCapability(["itx", "stream", ["append", ...events]]);
 const readAll = async (itx: any): Promise<any[]> =>
   (await itx.invokeCapability(["itx", "stream", ["read", 0, 500]])).events;
-const readHead = async (itx: any): Promise<number> =>
-  (await itx.invokeCapability(["itx", "stream", ["read", 0, 500]])).scannedThroughOffset as number;
+// The DURABLE head — the last durable row's offset, NOT scannedThroughOffset. Under default-on
+// live state, a "*" processor (tally) emits a live-state ephemeral per event; those inflate
+// scannedThroughOffset, but the pump deliberately skips driving facets for live-state-only commits
+// (stream-durable-object.ts) so a facet's offset trails the raw head by its own trailing emit. A
+// facet only ever catches up to the DURABLE head, which is what "has it reduced the log" means.
+const readHead = async (itx: any): Promise<number> => {
+  const { events } = (await itx.invokeCapability(["itx", "stream", ["read", 0, 500]])) as {
+    events: { offset: number }[];
+  };
+  return events.length ? events[events.length - 1].offset : 0;
+};
 const doState = async (ctx: string): Promise<any> => (await harness.itx(ctx)).hostState();
 
 /** Expected tally counts = groupBy(type) over the DURABLE log (tally consumes "*", durable only). */

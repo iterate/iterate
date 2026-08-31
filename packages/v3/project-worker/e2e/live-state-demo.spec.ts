@@ -19,13 +19,14 @@ test("the worker serves a self-contained /demo page that mounts and dials /api",
   await expect(page.getByRole("button", { name: /^poke/i })).toBeVisible();
 });
 
-// KNOWN GAP (capnweb, browser): the full reduced ⊕ runtime delta-PUSH into the browser is blocked
-// upstream. When the server invokes the client's BARE subscription callback (an empty path), the
-// capnweb fork's browser `evaluate` throws `'' is not a function.` — it resolves the empty path as
-// `stub[""]` instead of calling the stub. NODE tolerates the same delivery, so the feature is proven
-// end to end by the harness E2E (__tests__/live-state-runtime.test.ts). Un-`fixme` this once the
-// capnweb fork delivers bare callbacks to a browser client.
-test.fixme("the /demo renders reduced ⊕ runtime live state and updates on button clicks", async ({
+// The full reduced ⊕ runtime delta-PUSH into a real browser. (Was previously `fixme`d, blamed on a
+// capnweb browser bug: a `'' is not a function.` error. The real cause was in `demo.tsx`, not
+// capnweb: `setItx(scope)` stored a capnweb stub — a callable Proxy, `typeof === "function"` — in
+// React state, so React invoked it as a state-updater `scope(prev)`, i.e. an empty-path call on the
+// non-callable `Itx` capability, which throws `'' is not a function` server-side. Storing it with a
+// functional update — `setItx(() => scope)` — fixed it. Bare-callback delivery to a browser client
+// works in capnweb 0.12.0.)
+test("the /demo renders reduced ⊕ runtime live state and updates on button clicks", async ({
   page,
 }) => {
   await page.goto("/demo");

@@ -52,7 +52,10 @@ function Demo() {
   useEffect(() => {
     let disposed = false;
     connectAndEnable().then(
-      (scope) => !disposed && setItx(scope),
+      // A capnweb stub is a callable Proxy (`typeof === "function"`), so `setItx(scope)` would make
+      // React treat it as a state-updater and call `scope(prev)` — an empty-path call on the
+      // non-callable `Itx`, which throws `'' is not a function`. Store it via a functional update.
+      (scope) => !disposed && setItx(() => scope),
       (e: unknown) => !disposed && setConnectError(e instanceof Error ? e.message : String(e)),
     );
     return () => void (disposed = true);

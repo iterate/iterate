@@ -169,6 +169,10 @@ class CountProcessor extends StreamProcessor<{ ticks: number }> {
   protected override processEvent(args: ProcessEventArgs<{ ticks: number }>): undefined {
     if (args.event) this.effects.push(args.event.offset);
   }
+  // exact-offset suite: opt out of the default live-state emit (a constant projection never diffs)
+  protected override liveState() {
+    return null;
+  }
 }
 
 describe("version-bump refold (Phase C)", () => {
