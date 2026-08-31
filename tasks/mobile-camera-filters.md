@@ -38,8 +38,10 @@ the thing to verify first).
   backend anyway, so runtime network is acceptable for a POC; if the CDN is
   unreachable the filters fall back to a fixed centered face oval rather
   than dying. Follow-up: vendor/bundle the wasm + model as app assets.
-- **Filter art = emoji + canvas vector drawing.** iOS emoji render large and
-  beautifully; no image assets to license or bundle.
+- **Backdrops = AI-generated images** (gpt-image-1, via the Doppler OpenAI
+  key), generated once by `apps/mobile/scripts/generate-filter-backdrops.mjs`
+  and committed as data URIs in `backdrops.generated.ts` (~300KB for 9).
+  Face art stays emoji.
 - **Captured clips are re-encoded in the WebView** via
   `canvas.captureStream()` + `MediaRecorder` (mp4 on iOS WebKit), then
   base64 across the bridge and written to a cache file. Filtered recordings
@@ -97,3 +99,15 @@ the thing to verify first).
   command prop; DOM records canvas.captureStream + mic, base64 → onVideo →
   file written via expo-file-system/legacy → video attachment. 30s hard cap
   both sides.
+
+## Feedback round 1 (Misha, mid-flight)
+
+- Potato redone as **buried in the dirt** (reference image): the backdrop is
+  an underground soil cross-section, the potato sits fixed in it, and your
+  tracked eyes + lips are **remapped onto the potato** (cutouts gained a
+  source→dest mapping; cat/eyes-lips remain in-place masks).
+- Emoji-art scenes replaced with AI-generated backdrops (see above).
+- Flashcards no longer print the word — picture only; the grown-up says it.
+- The desktop "filter harness" screenshotted in the PR is a throwaway test
+  rig in the session scratchpad (bundles the real filter modules against a
+  synthetic camera); it is not part of the app.
