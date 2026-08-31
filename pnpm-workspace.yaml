@@ -88,6 +88,10 @@ overrides:
   axios: 1.13.6
   baseline-browser-mapping: ^2.9.14
   capnweb: npm:@iterate-com/capnweb@0.10.0
+  # project-worker (a standalone wrangler-deployed worker — no shared RpcTarget identity with the
+  # rest of the graph) runs ahead on 0.12.0: arg-disposal-on-broken, exact binary serialization,
+  # the batch-latency fix. The monorepo-wide pin above stays 0.10.0 until each consumer is verified.
+  'project-worker>capnweb': npm:@iterate-com/capnweb@0.12.0
   quicktype-core>readable-stream: npm:vite-compatible-readable-stream@3.6.1
   srvx: 0.11.12
   wrangler: 4.107.0

@@ -39,6 +39,7 @@ overrides:
   axios: 1.13.6
   baseline-browser-mapping: ^2.9.14
   capnweb: npm:@iterate-com/capnweb@0.10.0
+  project-worker>capnweb: npm:@iterate-com/capnweb@0.12.0
   quicktype-core>readable-stream: npm:vite-compatible-readable-stream@3.6.1
   srvx: 0.11.12
   wrangler: 4.107.0
@@ -1741,8 +1742,8 @@ importers:
         specifier: workspace:*
         version: link:../shared
       capnweb:
-        specifier: npm:@iterate-com/capnweb@0.10.0
-        version: '@iterate-com/capnweb@0.10.0'
+        specifier: npm:@iterate-com/capnweb@0.12.0
+        version: '@iterate-com/capnweb@0.12.0'
       json5:
         specifier: ^2.2.3
         version: 2.2.3
@@ -4268,6 +4269,9 @@ packages:
 
   '@iterate-com/capnweb@0.10.0':
     resolution: {integrity: sha512-XDDLrdlrMBkBgRGo0QQQpgfpTK3e+1O9/bsFJhD6wNSkSOR/2ErlbeDlURQstcc8PT0TckIphhDoGuEGo0T8gg==}
+
+  '@iterate-com/capnweb@0.12.0':
+    resolution: {integrity: sha512-LpERcUgmCoqkrFmxR/PXupV7+hX27uN+zzw2cfZg0Ty1Q/ob+BmGngBGlO6a6dNmI7wIzR51uYKuW2MQh23Ibg==}
 
   '@jest/create-cache-key-function@29.7.0':
     resolution: {integrity: sha512-4QqS3LY5PBmTRHj9sAg1HLoPzqAI0uOX6wI/TRqHIcOxlFidy6YEmCQJk6FSZjNLGCeubDMfmkWL+qaLKhSGQA==}
@@ -17055,6 +17059,8 @@ snapshots:
   '@istanbuljs/schema@0.1.6': {}
 
   '@iterate-com/capnweb@0.10.0': {}
+
+  '@iterate-com/capnweb@0.12.0': {}
 
   '@jest/create-cache-key-function@29.7.0':
     dependencies:
