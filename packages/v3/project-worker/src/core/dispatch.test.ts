@@ -1,6 +1,6 @@
 // Executable spec for the capability-path matcher + the expression evaluator/dispatcher.
 import { describe, expect, test } from "vitest";
-import { apply, evaluate, match } from "./dispatch.ts";
+import { apply, evaluate, match, registerPipelinedRpcBrand } from "./dispatch.ts";
 import { parse, parseCapabilityPath } from "./expression.ts";
 
 // ───────────────────────────── capability-path matching ─────────────────────────────
@@ -174,5 +174,61 @@ describe("evaluate/apply", () => {
     // The dotted write-half is now `InvokeHandle`; the "can't call the scope root itself" guard
     // lives in the codec parser (a bare `itx(...)` never becomes a legal expression).
     expect(() => parse("itx(1)")).toThrow(/cannot call the scope symbol itself/);
+  });
+});
+
+// ───────────────────────────── pipelined RPC promise threading ─────────────────────────────
+// THE CONTRACT (walkSteps): a value carrying a registered pipelinable-promise brand is NEVER
+// awaited mid-chain — property access and calls build on it directly, and only the caller's
+// terminal await settles the chain. Everything else (plain thenables included) keeps the
+// await-every-step behavior. For capnweb's one-shot HTTP batch this is CORRECTNESS (a mid-chain
+// await flushes the batch — the LIVE pin is e2e/connect.e2e.test.ts's call-then-call test, which
+// structurally CANNOT pass if any step awaits); for native workerd RPC (worker.ts registers the
+// cloudflare:workers RpcPromise at boot) it collapses a chain into one pipelined round trip.
+
+describe("pipelined RPC promise threading", () => {
+  /** A thenable that records every await and chains svc/add like a remote API — the test brand. */
+  class FakeRpcPromise {
+    static awaited: string[] = [];
+    constructor(readonly chain: string) {}
+    then(resolve: (v: unknown) => void): void {
+      FakeRpcPromise.awaited.push(this.chain);
+      resolve({ settled: this.chain });
+    }
+    svc(name: string): FakeRpcPromise {
+      return new FakeRpcPromise(`${this.chain}.svc(${name})`);
+    }
+    add(a: number, b: number): FakeRpcPromise {
+      return new FakeRpcPromise(`${this.chain}.add(${a},${b})`);
+    }
+  }
+  registerPipelinedRpcBrand(FakeRpcPromise);
+
+  test("a registered brand threads UNAWAITED through call-then-call — the terminal settles once", async () => {
+    FakeRpcPromise.awaited = [];
+    const scope = { itx: { dial: () => new FakeRpcPromise("dial") } };
+    const { value } = await evaluate(scope, parse("itx.dial().svc('x').add(2, 3)"));
+    // no step awaited any intermediate — the chain BUILT on the promises
+    expect(FakeRpcPromise.awaited).toEqual([]);
+    expect(value).toBeInstanceOf(FakeRpcPromise);
+    expect((value as FakeRpcPromise).chain).toBe("dial.svc(x).add(2,3)");
+    // the caller's terminal await is the single settle (what apply() does at its end)
+    expect(await value).toEqual({ settled: "dial.svc(x).add(2,3)" });
+    expect(FakeRpcPromise.awaited).toEqual(["dial.svc(x).add(2,3)"]);
+  });
+
+  test("an UNREGISTERED thenable keeps the default: awaited at every step", async () => {
+    const awaited: string[] = [];
+    const plain = (chain: string) => ({
+      then(resolve: (v: unknown) => void) {
+        awaited.push(chain);
+        resolve({ svc: (name: string) => plain(`${chain}.svc(${name})`) });
+      },
+    });
+    const scope = { itx: { dial: () => plain("dial") } };
+    const { value } = await evaluate(scope, parse("itx.dial().svc('x')"));
+    // the walk awaited the intermediate before stepping into it, and settled the tail too
+    expect(awaited).toEqual(["dial", "dial.svc(x)"]);
+    expect(value).toEqual({ svc: expect.any(Function) });
   });
 });

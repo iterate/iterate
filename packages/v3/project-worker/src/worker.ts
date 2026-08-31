@@ -2,12 +2,22 @@
 // StreamDurableObject over Workers RPC (the DO does the real work and stays hibernatable). `DummyControlPlane` is
 // the solo-mode fallback entrypoint (the deployed config binds FALLBACK to the real control-plane shell instead).
 
+import * as cloudflareWorkers from "cloudflare:workers";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { newWorkersRpcResponse } from "capnweb";
 import { StreamDurableObject } from "./stream-durable-object.ts";
+import { registerPipelinedRpcBrand } from "./core/dispatch.ts";
 import { canonicalName } from "./core/durable-object-names.ts";
 import { ProjectSession } from "./core/itx-surface.ts";
 import { DEMO_PAGE_HTML } from "./generated/demo-page.ts";
+
+// Native workerd RPC promises pipeline exactly like capnweb ones — thread them unawaited through
+// the step walk too (dispatch.ts can't import cloudflare:workers itself: the unit lane runs it in
+// Node). Registered once at module load, before any request can dispatch. The cast bridges a
+// workers-types gap: the runtime exports RpcPromise (verified by probe) but the .d.ts doesn't yet.
+registerPipelinedRpcBrand(
+  (cloudflareWorkers as unknown as { RpcPromise: abstract new () => unknown }).RpcPromise,
+);
 
 export { StreamDurableObject };
 export { ProcessorFacet } from "./processor-facet.ts";

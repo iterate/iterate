@@ -111,24 +111,6 @@ test("FIXED (defect 34/46 at the root): squatting capability-table/revoke: is ha
   expect(err.message).toMatch(/no capability matches/);
 });
 
-test.skip("revoking the same mount twice is idempotent in the TABLE (two keyless events now land; superseded)", async () => {
-  // PARITY LOCK (the mechanism the forge test above abuses, working as intended): the fixed
-  //   revoke idempotency key collapses a duplicate revoke. apps/os: idempotency keys dedupe a
-  //   same-body retry (core-processor.test.ts idempotency families).
-  const itx = await harness.itx("prj_am_revidem");
-  const { providedAtOffset } = await itx.provide({ path: "itx.probe", target: "itx.whoami" });
-  await itx.revoke({ providedAtOffset });
-  await itx.revoke({ providedAtOffset }); // idempotent — same key, same body
-  const revokes = (await itx.invokeCapability(["itx", "stream", ["read", 0, 500]])).events.filter(
-    (e: { type: string; payload?: { providedAtOffset?: number } }) =>
-      e.type === "events.iterate.com/capability-table/capability-revoked" &&
-      e.payload?.providedAtOffset === providedAtOffset,
-  );
-  expect(revokes).toHaveLength(1);
-  const err = await rejection(itx.invokeCapability(["itx", ["probe"]]));
-  expect(err.message).toMatch(/no capability matches/);
-});
-
 // ─────────────────────────────── IDEMPOTENCY EQUALITY AT THE COMMIT POINT ───────────────────────────────
 
 test("an idempotent retry with reordered payload keys dedupes to the same offset", async () => {

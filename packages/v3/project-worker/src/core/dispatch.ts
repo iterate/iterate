@@ -11,6 +11,18 @@ import { codedError } from "./errors.ts";
 import type { Expression } from "./expression.ts";
 import { InvokeHandle } from "./invoke-handle.ts";
 
+// Promise brands the step walk threads UNAWAITED (see walkSteps): property access and calls
+// pipeline on them natively, so the whole chain folds into one round trip and the caller's terminal
+// await is the single flush. capnweb's RpcPromise is here unconditionally (one-shot batch sessions
+// DIE on a mid-chain await); worker.ts registers the native cloudflare:workers RpcPromise at boot —
+// that import can't live here because the unit lane runs this module in Node.
+const PIPELINED_RPC_BRANDS: (abstract new (...args: never[]) => unknown)[] = [RpcPromise];
+/** Register an additional pipelinable promise brand (the workerd entrypoint's one call). */
+export function registerPipelinedRpcBrand(brand: abstract new (...args: never[]) => unknown): void {
+  PIPELINED_RPC_BRANDS.push(brand);
+}
+const pipelined = (v: unknown): boolean => PIPELINED_RPC_BRANDS.some((b) => v instanceof b);
+
 /** A successful claim of a call by a capability path — the two things `apply` needs. (Ranking uses
  *  the mount's own `path.length`, held by the caller; `match` is all-or-nothing, so a "how many
  *  segments matched" count could only ever equal that length.) */
@@ -82,13 +94,14 @@ async function walkSteps(
 ): Promise<{ value: unknown; receiver: unknown }> {
   let { value, receiver } = start;
   for (const step of steps) {
-    // A capnweb RpcPromise must NEVER be awaited mid-chain: property access and calls pipeline on
-    // it natively, and on a ONE-SHOT HTTP batch session (connectToCapnweb) the first await FLUSHES
-    // the batch — every step after it died with "Batch RPC request ended" (the call-then-call
+    // A pipelinable RPC promise (capnweb or native workerd — PIPELINED_RPC_BRANDS) must NOT be
+    // awaited mid-chain: property access and calls pipeline on it natively, so the whole chain
+    // folds into one round trip and the caller's terminal await settles it. For capnweb's ONE-SHOT
+    // HTTP batch (connectToCapnweb) this is CORRECTNESS, not just latency: the first await FLUSHES
+    // the batch, and every step after it died with "Batch RPC request ended" (the call-then-call
     // chain `.svc('x').add(…)`, i.e. the advertised `itx.os.projects.get(id).rename(…)` shape).
-    // Build the whole chain unawaited; the caller's terminal await is the one flush. Native
-    // workerd RPC promises don't carry the capnweb brand and keep the await-every-step behavior.
-    if (!(value instanceof RpcPromise)) value = await value;
+    // Everything else (plain promises, thenables) keeps the await-every-step behavior.
+    if (!pipelined(value)) value = await value;
     if (value == null) throw new Error(`${where} hit ${String(value)} at ${JSON.stringify(step)}`);
     if (typeof step === "string") {
       receiver = value;
@@ -100,10 +113,10 @@ async function walkSteps(
         throw codedError("NOT_A_METHOD", `${where}: ${JSON.stringify(method)} is not a method`);
       receiver = undefined;
       value = Reflect.apply(fn, value, args);
-      if (!(value instanceof RpcPromise)) value = await value;
+      if (!pipelined(value)) value = await value;
     }
   }
-  return { value: value instanceof RpcPromise ? value : await value, receiver };
+  return { value: pipelined(value) ? value : await value, receiver };
 }
 
 /**
