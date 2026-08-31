@@ -62,7 +62,11 @@ export default {
         url.pathname,
       );
     if (match) {
-      const [, page, channel] = match as unknown as [string, string, string];
+      const page = match[1];
+      const channel = match[2];
+      // The regex guarantees both captures; TS can't see that, so validate
+      // instead of casting.
+      if (!page || !channel) return new Response("not found", { status: 404 });
       const decoded = decodeURIComponent(channel);
       switch (page) {
         case "preview-channel":

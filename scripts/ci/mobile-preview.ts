@@ -41,9 +41,9 @@ export const interstitialUrl = (baseUrl: string, channel: string) =>
   // this href; everyone else gets the web interstitial bounce.
   `${baseUrl}/preview-channel/${channel}`;
 
-/** The channel-stable install page (apps/os/src/routes/m.install.$channel.ts):
- * resolves the channel's expected native build at scan time from the status
- * snapshot below, so an install QR printed three pushes ago still works. */
+/** The channel-stable install page (apps/mobile/website): resolves the
+ * channel's expected native build at scan time from the status snapshot
+ * below, so an install QR printed three pushes ago still works. */
 export const installInterstitialUrl = (baseUrl: string, channel: string) =>
   `${baseUrl}/install/${channel}`;
 
@@ -74,11 +74,14 @@ export async function pushChannelStatus(status: MobileChannelStatus) {
   // channelForBranch-shaped name never 404s, so real handler failures (400,
   // 401) stay fatal: a publish whose snapshot silently didn't land would
   // leave install QRs resolving to the previous build.
+  // Outside the try: a MISSING secret is a CI misconfiguration and must
+  // fail the publish — only network-level unreachability is transitional.
+  const headers = { ...adminAuthHeader(), "content-type": "application/json" };
   let response: Response;
   try {
     response = await fetch(`${mobileWebsiteBaseUrl}/channel-status/${status.channel}`, {
       method: "PUT",
-      headers: { ...adminAuthHeader(), "content-type": "application/json" },
+      headers,
       body: JSON.stringify(status),
     });
   } catch (error) {
@@ -112,11 +115,13 @@ export async function fetchChannelStatus(channel: string): Promise<MobileChannel
  * push, tolerates the site not serving yet (a PR closed during the cutover
  * window has no snapshot there to delete anyway). */
 export async function deleteChannelStatus(channel: string) {
+  // Outside the try, same as the push: a missing secret must fail loudly.
+  const headers = adminAuthHeader();
   let response: Response;
   try {
     response = await fetch(`${mobileWebsiteBaseUrl}/channel-status/${channel}`, {
       method: "DELETE",
-      headers: adminAuthHeader(),
+      headers,
     });
   } catch (error) {
     console.warn(`${mobileWebsiteBaseUrl} unreachable (${error}) — nothing to delete there yet`);
