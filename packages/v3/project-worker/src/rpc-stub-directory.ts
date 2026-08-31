@@ -81,7 +81,8 @@ export class RpcStubDirectory {
    *  attach record. `undefined` = not this door's request. */
   fetch(request: Request): Response | undefined {
     const transportId = request.headers.get(STUB_PAGER_WEBSOCKET_HEADER);
-    if (transportId === null) return undefined;
+    // Not a pager upgrade → maybe the relay's dedicated ws-bridge socket (gated on a pending dial).
+    if (transportId === null) return this.#stubs.bridgeFetch(request);
     this.#sweepPending();
     const connectionKey = this.#pending.get(transportId)?.key;
     if (connectionKey === undefined)

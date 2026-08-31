@@ -14,8 +14,10 @@ import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
 import type { StreamDurableObject } from "../stream-durable-object.ts";
 import { codedError } from "./errors.ts";
 import {
+  clampCloseCode,
   disposeStub,
   openStubPagerWebSocket,
+  openWsBridgeSocket,
   type ProviderSocket,
 } from "./hibernatable-rpc-stub.ts";
 
@@ -45,10 +47,71 @@ class RetainedCallbackInvoker extends WorkersRpcTarget {
    *  pins. capnweb fires onRpcBroken BEFORE it rejects the in-flight import, so a call caught below
    *  sees this already true — no race. */
   #broken: { value: boolean };
-  constructor(provider: RetainedProviderStub, broken: { value: boolean }) {
+  #host: ItxHostStub;
+  constructor(provider: RetainedProviderStub, broken: { value: boolean }, host: ItxHostStub) {
     super();
     this.#provider = provider;
     this.#broken = broken;
+    this.#host = host;
+  }
+
+  /** THE WEBSOCKET BRIDGE DIAL (fetch-shaped rides fetch; the pager stays MINIMAL): a live
+   *  capability's WS upgrade cannot return its 101 over Workers RPC (no WebSocket serialization)
+   *  and no other channel reaches the capnweb session's request context — but THIS method runs in
+   *  it (RPC calls execute where their target was minted). So the DO calls here; we dial the
+   *  provider's fetch over capnweb (the fork carries its genuine 101 back as a tunneled socket),
+   *  open one DEDICATED bridge WebSocket into the DO, and wire the two — frames ride NATIVE
+   *  text/binary WebSocket messages, no codec. Returning IS the ack: the DO mints the eyeball's
+   *  pair only after this resolves, so its 101 is honest, and a provider failure throws back with
+   *  the provider's own words (a non-101 at the fetch lane). */
+  async openWsBridge(
+    bridgeId: string,
+    url: string,
+    headers: Record<string, string>,
+  ): Promise<{ ok: true }> {
+    const response = (await (
+      this.#provider as unknown as { fetch(r: Request): Promise<unknown> }
+    ).fetch(new Request(url, { headers: { ...headers, Upgrade: "websocket" } }))) as {
+      status?: number;
+      webSocket?: ProviderSocket | null;
+    };
+    const provider = response?.webSocket;
+    if (!provider)
+      throw new Error(`provider answered ${response?.status ?? "?"} without a webSocket`);
+    provider.accept?.();
+    const bridge = await openWsBridgeSocket(this.#host, bridgeId);
+    provider.addEventListener("message", (ev) => {
+      try {
+        bridge.send(ev.data as string | ArrayBuffer);
+      } catch {
+        /* bridge closing — its close handler tears the provider side down */
+      }
+    });
+    provider.addEventListener("close", (ev) => {
+      try {
+        bridge.close(clampCloseCode(ev.code), (ev.reason ?? "").slice(0, 123));
+      } catch {
+        /* already closing */
+      }
+    });
+    bridge.addEventListener("message", (ev) => {
+      try {
+        provider.send((ev as MessageEvent).data as string | ArrayBuffer);
+      } catch {
+        /* provider closing */
+      }
+    });
+    bridge.addEventListener("close", (ev) => {
+      try {
+        provider.close(
+          clampCloseCode((ev as CloseEvent).code),
+          ((ev as CloseEvent).reason ?? "").slice(0, 123),
+        );
+      } catch {
+        /* already closing */
+      }
+    });
+    return { ok: true };
   }
   async invoke(capPath: string[], args: unknown[]): Promise<unknown> {
     try {
@@ -136,40 +199,18 @@ export async function startRpcStubRelay(
   // onRpcBroken registration below flips it. (Registering per page would leak a listener per page:
   // capnweb has no offRpcBroken. See rpc-stub-broken-leak.failing.test.ts.)
   const broken = { value: false };
-  // The bridge's provider dial (ws-open): forward the upgrade to the provider's fetch OVER THE
-  // CAPNWEB SESSION — this closure runs in the session's own request context, the one place its
-  // socket is legally touchable (workerd pins I/O to the creating context). The fork carries the
-  // provider's webSocket-bearing 101 back as a tunneled socket.
-  const openProviderSocket = async (
-    url: string,
-    headers: Record<string, string>,
-  ): Promise<ProviderSocket> => {
-    const response = (await (retained as unknown as { fetch(r: Request): Promise<unknown> }).fetch(
-      new Request(url, { headers: { ...headers, Upgrade: "websocket" } }),
-    )) as {
-      status?: number;
-      webSocket?: ProviderSocket | null;
-    };
-    const socket = response?.webSocket;
-    if (!socket)
-      throw new Error(`provider answered ${response?.status ?? "?"} without a webSocket`);
-    socket.accept?.();
-    return socket;
-  };
-  const pagerWebSocket = await openStubPagerWebSocket(
-    host,
-    transportId,
-    () => {
-      // The page answer: re-mint the Workers-RPC stub around the retained capnweb callback and
-      // hand it to the DO, which keeps it warm until its idle quiesce.
-      waitUntil(
-        host
-          .rpcStubActivate({ transportId, invoker: new RetainedCallbackInvoker(retained, broken) })
-          .catch(() => undefined), // a stale page (nobody waiting) returns undefined; offline throws — ignore
-      );
-    },
-    openProviderSocket,
-  );
+  const pagerWebSocket = await openStubPagerWebSocket(host, transportId, () => {
+    // The page answer: re-mint the Workers-RPC stub around the retained capnweb callback and
+    // hand it to the DO, which keeps it warm until its idle quiesce.
+    waitUntil(
+      host
+        .rpcStubActivate({
+          transportId,
+          invoker: new RetainedCallbackInvoker(retained, broken, host),
+        })
+        .catch(() => undefined), // a stale page (nobody waiting) returns undefined; offline throws — ignore
+    );
+  });
   const disposeRetained = () => disposeStub(retained);
   // The library's own death signal, registered ONCE: the client's capnweb session broke → the
   // retained callback can never answer again. Flip the shared flag (so in-flight invokes re-code to
