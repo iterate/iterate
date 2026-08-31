@@ -9,9 +9,6 @@ export const FILTER_PICKER = [
   { id: "eyes-lips", label: "Eyes & lips", emoji: "👄" },
   { id: "cat", label: "Cat", emoji: "🐱" },
   { id: "flashcards", label: "Flashcards", emoji: "🍎" },
+  { id: "sing", label: "Sing", emoji: "🎤" },
+  { id: "face-drop", label: "Face drop", emoji: "🫥" },
 ];
-
-/** Filtered recordings are re-encoded on-canvas and cross the WebView bridge
- * as one base64 message, so they stay shorter than plain camera clips. Both
- * sides of the bridge read this. */
-export const FILTERED_CLIP_MAX_SECONDS = 30;

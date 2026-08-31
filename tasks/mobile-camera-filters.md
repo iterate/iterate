@@ -195,3 +195,31 @@ loading from failed.
   foods, toys — 1.5yo vocabulary guesses) for both styles; generation
   script is merge-mode (keeps approved art, generates only missing words);
   order shuffles each camera session. Unsplash dropped per Misha.
+
+## Feedback round 6 (two game filters + vibe-coded filters for real)
+
+- 🎤 **Sing** filter: autocorrelation pitch detection on the live mic
+  (WebAudio AnalyserNode → `lib/filters/pitch.ts`, unit-tested), solfège
+  ladder do→do′, a wall slides in with its hole at the target note's
+  height, and the ball (your actual mouth, cutout-sampled) rides your sung
+  pitch folded to any octave — ±a quarter tone counts; miss and the wall
+  resets. `args.pitchHz` is now part of the filter surface.
+- 🫥 **Face drop**: your eyes and lips are skinned over (patches sampled
+  from cheek/chin), then fall one at a time down the screen; blinking
+  (eye-ring openness with hysteresis) locks each wherever it is, stuck to
+  your face box — misplace them for Mr. Potato Head. Tap resets.
+- **Dynamic (vibe-coded) filters**: any repo file `filters/<name>.filter.js`
+  in the project shows up in the ✨ picker. The file is ONE object
+  expression `({ label, emoji, modes?, draw(args) })`, evaluated in the
+  WebView, drawing with `args.helpers` (featureCutout / ellipseFeature /
+  emoji / cachedImage / imageCover / naturalWidth — the same primitives the
+  built-ins use, shaped by the two game filters above). Native side fetches
+  sources via `project.repos` (session already there), regex-sniffs
+  label/emoji for the picker chips, and a throwing filter shows an error
+  pill over the plain camera instead of killing the pipeline. Contract
+  spec'd by `dynamic-filter.test.ts`, which runs an agent-shaped filter
+  headlessly.
+- Removed the 30s filtered-clip cap (bridge payload is unbounded now — on
+  Misha's call).
+- Media viewer gained a ⬇ save-to-camera-roll button (remote/data uris go
+  through a cache file; expo-media-library was already in the build).

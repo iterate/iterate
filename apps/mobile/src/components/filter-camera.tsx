@@ -20,13 +20,16 @@ import {
   MEDIAPIPE_WASM_LOADER_JS_GZ,
 } from "../lib/filters/mediapipe-assets.generated.ts";
 import {
+  buildFrameArgs,
+  evaluateDynamicFilter,
   FILTER_DRAWERS,
   FILTER_MODES,
+  type DynamicFilterDefinition,
   type FeatureHit,
   type FilterFrameArgs,
   type MaskStretch,
 } from "../lib/filters/definitions.ts";
-import { FILTERED_CLIP_MAX_SECONDS } from "../lib/filters/picker.ts";
+import { autoCorrelatePitchHz } from "../lib/filters/pitch.ts";
 import {
   coverTransform,
   faceGeometryFromLandmarks,
@@ -46,6 +49,9 @@ export type FilterCameraCommand = {
 type Props = {
   dom?: import("expo/dom").DOMProps;
   filterId: string;
+  /** Project-authored filters (filters/<name>.filter.js repo files), fetched
+   * by the native side and evaluated here — see evaluateDynamicFilter. */
+  dynamicFilters: { id: string; source: string }[];
   facing: "front" | "back";
   command: FilterCameraCommand | null;
   onPhoto: (photo: { base64: string; width: number; height: number }) => Promise<void>;
@@ -58,6 +64,8 @@ type State = {
   message: string | null;
   /** Transient readout while the user drags a feature's mask looseness. */
   adjustLabel: string | null;
+  /** The active filter threw while drawing (project filters especially). */
+  filterError: string | null;
   /** Mirrors #recorder so render() can hide chrome (the mode button) that
    * should not appear in recorded clips' UI. */
   recording: boolean;
@@ -77,7 +85,13 @@ function loadMaskStretch(): MaskStretch {
 }
 
 export default class FilterCamera extends Component<Props, State> {
-  state: State = { status: "starting", message: null, adjustLabel: null, recording: false };
+  state: State = {
+    status: "starting",
+    message: null,
+    adjustLabel: null,
+    filterError: null,
+    recording: false,
+  };
 
   #canvas: HTMLCanvasElement | null = null;
   #frameCanvas = document.createElement("canvas");
@@ -94,6 +108,11 @@ export default class FilterCamera extends Component<Props, State> {
   #faceBaseline: { cx: number; cy: number; width: number } | null = null;
   #maskStretch = loadMaskStretch();
   #featureHits: FeatureHit[] = [];
+  // Live mic analysis for pitch-driven filters. The context can start
+  // suspended under autoplay rules; #onPointerDown re-resumes it.
+  #audioContext: AudioContext | null = null;
+  #audioAnalyser: AnalyserNode | null = null;
+  #audioSamples: Float32Array<ArrayBuffer> | null = null;
   // One in-flight touch: where it started, which feature (if any) it grabbed
   // and that feature's stretch at grab time, and whether it became a drag.
   #pointer: {
@@ -104,11 +123,13 @@ export default class FilterCamera extends Component<Props, State> {
     dragging: boolean;
   } | null = null;
   #adjustLabelTimer: ReturnType<typeof setTimeout> | null = null;
+  // Evaluated project filters, keyed by id; an Error marks a bad source so
+  // it is reported once instead of re-thrown every frame.
+  #dynamicCache = new Map<string, DynamicFilterDefinition | Error>();
   #handledCommandSeq = 0;
   #recorder: MediaRecorder | null = null;
   #recorderChunks: Blob[] = [];
   #recordingStartedAt = 0;
-  #recordingMaxTimer: ReturnType<typeof setTimeout> | null = null;
 
   componentDidMount() {
     this.#video.playsInline = true;
@@ -120,6 +141,7 @@ export default class FilterCamera extends Component<Props, State> {
   componentDidUpdate(previous: Props) {
     if (previous.facing !== this.props.facing) void this.#start();
     if (previous.filterId !== this.props.filterId) this.#faceBaseline = null;
+    if (previous.dynamicFilters !== this.props.dynamicFilters) this.#dynamicCache.clear();
     const command = this.props.command;
     if (command && command.seq !== this.#handledCommandSeq) {
       this.#handledCommandSeq = command.seq;
@@ -130,7 +152,7 @@ export default class FilterCamera extends Component<Props, State> {
   componentWillUnmount() {
     this.#disposed = true;
     cancelAnimationFrame(this.#raf);
-    if (this.#recordingMaxTimer) clearTimeout(this.#recordingMaxTimer);
+    void this.#audioContext?.close();
     this.#recorder?.stop();
     this.#stream?.getTracks().forEach((track) => track.stop());
     this.#landmarker?.close();
@@ -154,6 +176,7 @@ export default class FilterCamera extends Component<Props, State> {
         return;
       }
       this.#stream = stream;
+      this.#setupPitchAnalysis(stream);
       this.#video.srcObject = stream;
       await this.#video.play();
       this.setState({ status: "live", message: null });
@@ -174,6 +197,23 @@ export default class FilterCamera extends Component<Props, State> {
   // bytes: release builds host DOM components on file:// pages, where
   // cross-origin module imports and fetches are unreliable — an earlier
   // CDN-loading version of this hung forever on-device.
+  #setupPitchAnalysis(stream: MediaStream) {
+    try {
+      if (stream.getAudioTracks().length === 0) return;
+      void this.#audioContext?.close();
+      const context = new AudioContext();
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 2048;
+      context.createMediaStreamSource(stream).connect(analyser);
+      this.#audioContext = context;
+      this.#audioAnalyser = analyser;
+      this.#audioSamples = new Float32Array(analyser.fftSize);
+      void context.resume();
+    } catch {
+      // Pitch-driven filters just see null and say "make some noise".
+    }
+  }
+
   async #loadFaceTracker() {
     try {
       if (typeof DecompressionStream === "undefined") {
@@ -270,10 +310,15 @@ export default class FilterCamera extends Component<Props, State> {
           }
         : { dx: 0, dy: 0, scale: 1 };
 
-    const draw = filterDrawerById(this.props.filterId);
+    let pitchHz: number | null = null;
+    if (this.#audioContext && this.#audioAnalyser && this.#audioSamples) {
+      this.#audioAnalyser.getFloatTimeDomainData(this.#audioSamples);
+      pitchHz = autoCorrelatePitchHz(this.#audioSamples, this.#audioContext.sampleRate);
+    }
+
     const ctx = canvas.getContext("2d")!;
     const featureHits: FeatureHit[] = [];
-    draw({
+    const args = buildFrameArgs({
       ctx,
       frame: this.#frameCanvas,
       width,
@@ -284,10 +329,53 @@ export default class FilterCamera extends Component<Props, State> {
       facePose,
       maskStretch: this.#maskStretch,
       featureHits,
+      pitchHz,
       timeMs: performance.now(),
     });
+    try {
+      this.#resolveDrawer()(args);
+      if (this.state.filterError !== null) this.setState({ filterError: null });
+    } catch (error) {
+      // A broken (likely project-authored) filter must not kill the camera:
+      // show the plain frame plus the error.
+      ctx.drawImage(this.#frameCanvas, 0, 0);
+      const message = String((error as Error).message || error);
+      if (this.state.filterError !== message) this.setState({ filterError: message });
+    }
     this.#featureHits = featureHits;
   };
+
+  /** The active filter's draw function — built-in, or an evaluated project
+   * filter (cached; a bad source throws its evaluation error). */
+  #resolveDrawer(): (args: FilterFrameArgs) => void {
+    const id = this.props.filterId;
+    if (FILTER_DRAWERS[id]) return FILTER_DRAWERS[id];
+    const dynamic = this.#dynamicDefinition(id);
+    if (dynamic instanceof Error) throw dynamic;
+    if (dynamic) return dynamic.draw;
+    throw new Error(`Unknown filter: ${id}`);
+  }
+
+  #dynamicDefinition(id: string): DynamicFilterDefinition | Error | null {
+    const entry = this.props.dynamicFilters.find((filter) => filter.id === id);
+    if (!entry) return null;
+    let cached = this.#dynamicCache.get(id);
+    if (!cached) {
+      try {
+        cached = evaluateDynamicFilter(entry.source);
+      } catch (error) {
+        cached = error as Error;
+      }
+      this.#dynamicCache.set(id, cached);
+    }
+    return cached;
+  }
+
+  #modesForActiveFilter(): string[] {
+    const dynamic = this.#dynamicDefinition(this.props.filterId);
+    if (dynamic && !(dynamic instanceof Error)) return dynamic.modes || [];
+    return FILTER_MODES[this.props.filterId] || [];
+  }
 
   /** Pointer position in canvas device pixels (hits are recorded there). */
   #canvasPoint(event: { clientX: number; clientY: number }) {
@@ -297,6 +385,7 @@ export default class FilterCamera extends Component<Props, State> {
   }
 
   #onPointerDown = (event: React.PointerEvent) => {
+    void this.#audioContext?.resume();
     const point = this.#canvasPoint(event);
     let hit: FeatureHit | null = null;
     for (const candidate of this.#featureHits) {
@@ -406,7 +495,6 @@ export default class FilterCamera extends Component<Props, State> {
       const blob = new Blob(this.#recorderChunks, { type: mimeType });
       this.#recorder = null;
       this.#recorderChunks = [];
-      if (this.#recordingMaxTimer) clearTimeout(this.#recordingMaxTimer);
       if (this.#disposed) return;
       this.setState({ recording: false });
       void blobToBase64(blob)
@@ -414,12 +502,6 @@ export default class FilterCamera extends Component<Props, State> {
         .catch((error) => this.props.onCaptureError(String((error as Error).message || error)));
     };
     recorder.start();
-    // Hard cap so the base64 bridge payload stays bounded; the native side
-    // shows the same cap in its timer.
-    this.#recordingMaxTimer = setTimeout(
-      () => this.#recorder?.stop(),
-      FILTERED_CLIP_MAX_SECONDS * 1000,
-    );
   }
 
   render() {
@@ -438,7 +520,7 @@ export default class FilterCamera extends Component<Props, State> {
           onPointerUp={this.#onPointerUp}
           onPointerCancel={this.#onPointerUp}
         />
-        {(FILTER_MODES[this.props.filterId] || []).length > 1 && !this.state.recording ? (
+        {this.#modesForActiveFilter().length > 1 && !this.state.recording ? (
           <button
             className="mode"
             onClick={() => {
@@ -447,12 +529,11 @@ export default class FilterCamera extends Component<Props, State> {
             }}
             type="button"
           >
-            {
-              FILTER_MODES[this.props.filterId]![
-                this.#modeIndex % FILTER_MODES[this.props.filterId]!.length
-              ]
-            }
+            {this.#modesForActiveFilter()[this.#modeIndex % this.#modesForActiveFilter().length]}
           </button>
+        ) : null}
+        {this.state.filterError !== null ? (
+          <div className="pill error">Filter error: {this.state.filterError}</div>
         ) : null}
         {this.state.adjustLabel !== null ? (
           <div className="pill">{this.state.adjustLabel}</div>
@@ -474,12 +555,6 @@ export default class FilterCamera extends Component<Props, State> {
       </main>
     );
   }
-}
-
-function filterDrawerById(id: string): (args: FilterFrameArgs) => void {
-  const draw = FILTER_DRAWERS[id];
-  if (!draw) throw new Error(`Unknown filter: ${id}`);
-  return draw;
 }
 
 async function gunzip(base64: string): Promise<Uint8Array<ArrayBuffer>> {

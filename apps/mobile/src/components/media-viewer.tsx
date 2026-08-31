@@ -7,8 +7,11 @@
 // Animated values.
 
 import { useRef, useState } from "react";
+import { useMutation } from "@tanstack/react-query";
 import { Animated, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import * as FileSystem from "expo-file-system/legacy";
+import * as MediaLibrary from "expo-media-library";
 import { colors, radius, spacing } from "../lib/theme.ts";
 import { Markdown } from "./markdown.tsx";
 
@@ -30,6 +33,29 @@ export function MediaViewer({
 }) {
   const [chromeVisible, setChromeVisible] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  // Save the viewed media to the camera roll. Remote/data uris become a
+  // local cache file first — saveToLibraryAsync only takes local files.
+  const download = useMutation({
+    mutationFn: async () => {
+      let localUri = uri;
+      if (/^https?:/.test(uri)) {
+        const extension = /\.(jpe?g|png|gif|webp|heic|mp4|mov|webm)(\?|$)/i.exec(uri)?.[1] || "jpg";
+        const result = await FileSystem.downloadAsync(
+          uri,
+          `${FileSystem.cacheDirectory}download-${Date.now()}.${extension}`,
+        );
+        localUri = result.uri;
+      } else if (uri.startsWith("data:")) {
+        const match = /^data:image\/(\w+);base64,(.+)$/.exec(uri);
+        if (!match) throw new Error("Unrecognized data uri");
+        localUri = `${FileSystem.cacheDirectory}download-${Date.now()}.${match[1] === "jpeg" ? "jpg" : match[1]}`;
+        await FileSystem.writeAsStringAsync(localUri, match[2], {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+      }
+      await MediaLibrary.saveToLibraryAsync(localUri);
+    },
+  });
   const scale = useRef(new Animated.Value(1)).current;
   const translate = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
   // Committed gesture state between gestures (Animated.Value holds the live one).
@@ -96,6 +122,19 @@ export function MediaViewer({
           <Pressable accessibilityLabel="Close image" onPress={onClose} style={styles.close}>
             <Text style={styles.closeText}>✕</Text>
           </Pressable>
+          <Pressable
+            accessibilityLabel="Save to camera roll"
+            disabled={download.isPending || download.isSuccess}
+            onPress={() => download.mutate()}
+            style={styles.download}
+          >
+            <Text style={styles.closeText}>
+              {download.isPending ? "…" : download.isSuccess ? "✓" : "⬇"}
+            </Text>
+          </Pressable>
+          {download.isError ? (
+            <Text style={styles.downloadError}>{String((download.error as Error).message)}</Text>
+          ) : null}
           <View style={styles.panel}>
             {title ? <Text style={styles.panelTitle}>{title}</Text> : null}
             {tags.length > 0 ? (
@@ -146,6 +185,25 @@ const styles = StyleSheet.create({
     width: 36,
   },
   closeText: { color: colors.text, fontSize: 16 },
+  download: {
+    alignItems: "center",
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    borderRadius: radius.full,
+    height: 36,
+    justifyContent: "center",
+    position: "absolute",
+    right: spacing.md + 36 + spacing.sm,
+    top: spacing.xl + spacing.lg,
+    width: 36,
+  },
+  downloadError: {
+    color: colors.danger,
+    fontSize: 12,
+    position: "absolute",
+    right: spacing.md,
+    textAlign: "right",
+    top: spacing.xl + spacing.lg + 42,
+  },
   panel: {
     backgroundColor: "rgba(10, 10, 10, 0.88)",
     borderTopLeftRadius: radius.md,

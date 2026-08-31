@@ -7,14 +7,18 @@
 //
 import { useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { useGlobalSearchParams } from "expo-router";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { CameraView } from "expo-camera";
 import * as FileSystem from "expo-file-system/legacy";
 import { useCameraFacing } from "../lib/camera-facing.ts";
+import { getProjectItx } from "../lib/itx.ts";
+import { DEFAULT_SERVER } from "../lib/servers.ts";
+import { getServerBaseUrl } from "../lib/storage.ts";
 import { formatClipDuration, type ComposerAttachment } from "../lib/composer-attachments.ts";
-import { FILTER_PICKER, FILTERED_CLIP_MAX_SECONDS } from "../lib/filters/picker.ts";
+import { FILTER_PICKER } from "../lib/filters/picker.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
 import FilterCamera, { type FilterCameraCommand } from "./filter-camera.tsx";
 
@@ -29,6 +33,44 @@ export function CameraCaptureModal(props: {
   // aborted recording would ride into the composer (review-caught).
   const closeCancelledRecording = useRef(false);
   const { facing, setFacing } = useCameraFacing();
+  // Project-authored filters: filters/<name>.filter.js files in any of the
+  // project's repos, fetched here (native side holds the session) and
+  // evaluated inside the filter pipeline's WebView. Ask iterate to write
+  // one and it shows up in the ✨ picker.
+  const { projectId } = useGlobalSearchParams<{ projectId?: string }>();
+  const dynamicFilters = useQuery({
+    queryKey: ["camera-dynamic-filters", projectId],
+    enabled: props.visible && typeof projectId === "string",
+    staleTime: 60_000,
+    queryFn: async () => {
+      const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
+      const project = await getProjectItx(baseUrl, projectId!);
+      const repos: { path: string }[] = await project.repos.list();
+      const found: { id: string; label: string; emoji: string; source: string }[] = [];
+      for (const { path: repoPath } of repos) {
+        const repo = project.repos.get(repoPath);
+        const { paths } = await repo.listFiles();
+        for (const path of paths as string[]) {
+          if (!/(^|\/)filters\/[^/]+\.filter\.js$/.test(path)) continue;
+          const file = await repo.readFile({ path });
+          if (!file?.content) continue;
+          // Metadata is regex-sniffed natively (the picker needs chips
+          // before any WebView exists); the WebView does the real eval.
+          const slug = path
+            .split("/")
+            .pop()!
+            .replace(/\.filter\.js$/, "");
+          found.push({
+            id: `project:${repoPath}:${slug}`,
+            label: /label:\s*"([^"]+)"/.exec(file.content)?.[1] || slug,
+            emoji: /emoji:\s*"([^"]+)"/.exec(file.content)?.[1] || "🧪",
+            source: file.content,
+          });
+        }
+      }
+      return found;
+    },
+  });
   const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null);
   const [filterId, setFilterId] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -205,6 +247,7 @@ export function CameraCaptureModal(props: {
           <View style={StyleSheet.absoluteFill}>
             <FilterCamera
               command={filterCommand}
+              dynamicFilters={(dynamicFilters.data || []).map(({ id, source }) => ({ id, source }))}
               dom={{
                 style: { flex: 1 },
                 scrollEnabled: false,
@@ -245,10 +288,7 @@ export function CameraCaptureModal(props: {
           {recordingStartedAt !== null ? (
             <View style={styles.recordingPill}>
               <View style={styles.redDot} />
-              <Text style={styles.timerText}>
-                {formatClipDuration(elapsedSeconds)}
-                {filterId !== null ? ` / ${formatClipDuration(FILTERED_CLIP_MAX_SECONDS)}` : ""}
-              </Text>
+              <Text style={styles.timerText}>{formatClipDuration(elapsedSeconds)}</Text>
             </View>
           ) : null}
           <Pressable
@@ -273,7 +313,7 @@ export function CameraCaptureModal(props: {
             showsHorizontalScrollIndicator={false}
             style={[styles.picker, { bottom: insets.bottom + 120 }]}
           >
-            {[null, ...FILTER_PICKER].map((filter) => {
+            {[null, ...FILTER_PICKER, ...(dynamicFilters.data || [])].map((filter) => {
               const id = filter === null ? null : filter.id;
               const selected = filterId === id;
               return (

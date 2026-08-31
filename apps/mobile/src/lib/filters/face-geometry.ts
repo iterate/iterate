@@ -118,12 +118,12 @@ export function fallbackFaceGeometry(canvasWidth: number, canvasHeight: number):
   const height = width * 1.35;
   const eyeY = cy - height * 0.08;
   const eyeDx = width * 0.21;
-  const eye = (centerX: number) => syntheticFeature(centerX, eyeY, width * 0.13, width * 0.08);
+  const eye = (centerX: number) => ellipseFeature(centerX, eyeY, width * 0.13, width * 0.08);
   return {
     box: { cx, cy, width, height, angle: 0 },
     leftEye: eye(cx - eyeDx),
     rightEye: eye(cx + eyeDx),
-    lips: syntheticFeature(cx, cy + height * 0.26, width * 0.17, width * 0.09),
+    lips: ellipseFeature(cx, cy + height * 0.26, width * 0.17, width * 0.09),
     tracked: false,
   };
 }
@@ -170,8 +170,10 @@ function featureFrom(points: { x: number; y: number }[], angle: number): FaceFea
   return { ring: points, center, angle, rx, ry };
 }
 
-/** An elliptical stand-in ring for the fallback (untracked) face. */
-function syntheticFeature(cx: number, cy: number, rx: number, ry: number): FaceFeature {
+/** An elliptical stand-in FaceFeature — the fallback (untracked) face is
+ * built from these, and filters use them to sample arbitrary skin patches
+ * or invent features at chosen spots. */
+export function ellipseFeature(cx: number, cy: number, rx: number, ry: number): FaceFeature {
   const ring = Array.from({ length: 16 }, (_, i) => {
     const t = (i / 16) * Math.PI * 2;
     return { x: cx + Math.cos(t) * rx, y: cy + Math.sin(t) * ry };

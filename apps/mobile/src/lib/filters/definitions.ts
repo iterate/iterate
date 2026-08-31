@@ -20,13 +20,37 @@ import { FLASHCARD_IMAGES_CARTOON } from "./flashcards-cartoon.generated.ts";
 import { FLASHCARD_IMAGES_ENCYCLOPAEDIA } from "./flashcards-encyclopaedia.generated.ts";
 import { FLASHCARD_IMAGES_PHOTO } from "./flashcards-photo.generated.ts";
 import { FILTER_PICKER } from "./picker.ts";
-import type { FaceFeature, FaceGeometry } from "./face-geometry.ts";
+import { foldedSemitoneOffset, SOLFEGE } from "./pitch.ts";
+import { ellipseFeature, type FaceFeature, type FaceGeometry } from "./face-geometry.ts";
 
 /** How loose the cutout masks are around the tracked features, per feature
  * kind — 1 is the default; the pipeline lets the user drag these. */
 export type MaskStretch = { eyes: { x: number; y: number }; lips: { x: number; y: number } };
 
 export type FeatureHit = { kind: keyof MaskStretch; cx: number; cy: number; radius: number };
+
+/** The toolkit handed to every filter through args.helpers — the whole
+ * surface a dynamically-loaded (agent-written) filter can rely on, already
+ * bound to the current frame. Built-in filters use the same primitives via
+ * module functions; this is their stable, importless form. */
+export type FilterHelpers = {
+  /** Sample the live video under a tracked feature and paint it — in place
+   * (no dest) or remapped to dest (uniform scale, so nothing squashes). */
+  featureCutout: (
+    kind: keyof MaskStretch,
+    feature: FaceFeature,
+    dest?: { cx: number; cy: number; width: number; angle: number } | null,
+  ) => void;
+  /** The dest.width that renders a feature at natural 1:1 size. */
+  naturalWidth: (kind: keyof MaskStretch, feature: FaceFeature) => number;
+  /** An elliptical stand-in feature — sample skin patches, invent features. */
+  ellipseFeature: typeof ellipseFeature;
+  emoji: (glyph: string, cx: number, cy: number, sizePx: number, angle: number) => void;
+  /** Decode-once image cache for data URIs (null while decoding). */
+  cachedImage: (key: string, dataUri: string | undefined) => HTMLImageElement | null;
+  /** Cover-fit an image over the whole canvas. */
+  imageCover: (image: HTMLImageElement) => void;
+};
 
 export type FilterFrameArgs = {
   ctx: CanvasRenderingContext2D;
@@ -51,8 +75,69 @@ export type FilterFrameArgs = {
   /** Filled DURING draw by the cutout helper: where each feature landed on
    * screen this frame — the pipeline hit-tests swipes against it. */
   featureHits: FeatureHit[];
+  /** Fundamental of whatever the mic hears right now (autocorrelation over
+   * the live audio track), or null in silence — the sing filter's input. */
+  pitchHz: number | null;
+  helpers: FilterHelpers;
   timeMs: number;
 };
+
+/** Assemble frame args with the helpers kit bound to them (the pipeline
+ * calls this once per frame). */
+export function buildFrameArgs(base: Omit<FilterFrameArgs, "helpers">): FilterFrameArgs {
+  // The cast exists only because helpers closes over the finished args
+  // object; it is assigned on the next statement.
+  const args = base as FilterFrameArgs;
+  args.helpers = {
+    featureCutout: (kind, feature, dest = null) => drawFeatureCutout(args, kind, feature, dest),
+    naturalWidth: naturalCutoutWidth,
+    ellipseFeature,
+    emoji: (glyph, cx, cy, sizePx, angle) => drawEmoji(args.ctx, glyph, cx, cy, sizePx, angle),
+    cachedImage,
+    imageCover: (image) => drawImageCover(args.ctx, image, args.width, args.height),
+  };
+  return args;
+}
+
+/** A project-authored filter: the `filters/<name>.filter.js` repo file must
+ * be a single JS object expression of this shape. See evaluateDynamicFilter. */
+export type DynamicFilterDefinition = {
+  label: string;
+  emoji: string;
+  /** Optional mode labels — the pipeline shows its cycle button for them. */
+  modes?: string[];
+  draw: (args: FilterFrameArgs) => void;
+};
+
+/** Evaluate a project filter's source. The contract keeps vibe-coding easy:
+ * the file is one object expression, e.g.
+ *
+ *   ({
+ *     label: "Carrot",
+ *     emoji: "🥕",
+ *     draw(args) {
+ *       args.ctx.fillStyle = "#7cb342";
+ *       args.ctx.fillRect(0, 0, args.width, args.height);
+ *       args.helpers.emoji("🥕", args.face.box.cx, args.face.box.cy,
+ *         args.face.box.width * 2, args.face.box.angle);
+ *       args.helpers.featureCutout("eyes", args.face.leftEye);
+ *       args.helpers.featureCutout("eyes", args.face.rightEye);
+ *       args.helpers.featureCutout("lips", args.face.lips);
+ *     },
+ *   })
+ *
+ * Runs in the WebView with the same trust as the rest of the project's
+ * userland code. Throws (with a useful message) on a malformed file. */
+export function evaluateDynamicFilter(source: string): DynamicFilterDefinition {
+  // eslint-disable-next-line no-new-func -- evaluating project-authored filter code is the feature
+  const definition = new Function(`"use strict"; return (
+${source}
+);`)() as DynamicFilterDefinition | undefined;
+  if (!definition || typeof definition.draw !== "function") {
+    throw new Error("A filter file must be one object expression with a draw(args) function");
+  }
+  return definition;
+}
 
 export const FILTER_DRAWERS: Record<string, (args: FilterFrameArgs) => void> = {
   potato: (args) => {
@@ -174,6 +259,213 @@ export const FILTER_DRAWERS: Record<string, (args: FilterFrameArgs) => void> = {
       angle,
     });
   },
+  sing: (args) => {
+    const { ctx, width, height, face, timeMs } = args;
+    const game = singState;
+    if (game.lastTap !== args.backgroundIndex) {
+      game.lastTap = args.backgroundIndex;
+      game.note = 0;
+      game.wallStartMs = timeMs;
+      game.ballPos = -2;
+      game.winUntil = 0;
+      game.flashUntil = 0;
+    }
+    ctx.drawImage(args.frame, 0, 0);
+    ctx.fillStyle = "rgba(10, 10, 25, 0.45)";
+    ctx.fillRect(0, 0, width, height);
+
+    // Vertical scale: do at the bottom, high do at the top.
+    const yFor = (semitone: number) => height * 0.82 - (semitone / 12) * (height * 0.6);
+    const target = SOLFEGE[game.note];
+    const targetY = yFor(target.semitone);
+    // ±half a semitone (a quarter tone each way) counts as on-pitch.
+    const toleranceSemitones = 0.5;
+    const gapHalf = (toleranceSemitones / 12) * height * 0.6 + height * 0.012;
+
+    // The ball rides your sung pitch, octave-folded around the TARGET note
+    // — sing in whichever octave you like.
+    const hz = args.pitchHz;
+    const goalPos =
+      hz === null
+        ? -2
+        : target.semitone + foldedSemitoneOffset(hz, DO_HZ * 2 ** (target.semitone / 12));
+    game.ballPos += (goalPos - game.ballPos) * 0.25;
+    const ballX = width * 0.3;
+    const ballY = yFor(game.ballPos);
+
+    // Ladder of note names with the current target highlighted.
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    for (const [index, note] of SOLFEGE.entries()) {
+      const active = index === game.note;
+      ctx.font = `${active ? 700 : 400} ${Math.round(height * (active ? 0.032 : 0.022))}px -apple-system, sans-serif`;
+      ctx.fillStyle = active ? "#ffe066" : "rgba(255,255,255,0.55)";
+      ctx.fillText(note.name, width * 0.04, yFor(note.semitone));
+    }
+
+    // The wall slides in from the right; its hole sits at the target pitch.
+    const WALL_MS = 5000;
+    const wallWidth = width * 0.06;
+    const progress = Math.min(1, (timeMs - game.wallStartMs) / WALL_MS);
+    const wallX = width + wallWidth - progress * (width + wallWidth - ballX);
+    if (game.winUntil > timeMs) {
+      drawEmoji(ctx, "🎉", width / 2, height * 0.4, width * 0.5, 0);
+    } else {
+      ctx.fillStyle = game.flashUntil > timeMs ? "#e74c3caa" : "#58d68daa";
+      ctx.fillRect(wallX, 0, wallWidth, targetY - gapHalf);
+      ctx.fillRect(wallX, targetY + gapHalf, wallWidth, height - targetY - gapHalf);
+      if (progress >= 1) {
+        if (Math.abs(ballY - targetY) <= gapHalf) {
+          game.note += 1;
+          if (game.note >= SOLFEGE.length) {
+            game.note = 0;
+            game.winUntil = timeMs + 2500;
+          }
+        } else {
+          game.flashUntil = timeMs + 350;
+        }
+        game.wallStartMs = timeMs;
+      }
+    }
+
+    // The ball is your actual mouth.
+    ctx.beginPath();
+    ctx.arc(ballX, ballY, width * 0.085, 0, Math.PI * 2);
+    ctx.fillStyle = hz === null ? "rgba(255,255,255,0.25)" : "rgba(255,224,102,0.35)";
+    ctx.fill();
+    drawFeatureCutout(args, "lips", face.lips, {
+      cx: ballX,
+      cy: ballY,
+      width: width * 0.14,
+      angle: 0,
+    });
+
+    ctx.textAlign = "center";
+    ctx.font = `700 ${Math.round(height * 0.035)}px -apple-system, sans-serif`;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(`sing ${target.name}`, width / 2, height * 0.06);
+    ctx.font = `400 ${Math.round(height * 0.018)}px -apple-system, sans-serif`;
+    ctx.fillStyle = "rgba(255,255,255,0.7)";
+    ctx.fillText(
+      hz === null ? "any octave works — make some noise" : `${Math.round(hz)}Hz`,
+      width / 2,
+      height * 0.09,
+    );
+  },
+  "face-drop": (args) => {
+    const { ctx, width, height, face, timeMs } = args;
+    const game = faceDropState;
+    if (game.lastTap !== args.backgroundIndex) {
+      game.lastTap = args.backgroundIndex;
+      game.stage = 0;
+      game.locked = [];
+      game.cycleStartMs = timeMs;
+      game.eyesClosed = false;
+    }
+    ctx.drawImage(args.frame, 0, 0);
+
+    const box = face.box;
+    const features: { kind: keyof MaskStretch; feature: FaceFeature }[] = [
+      { kind: "eyes", feature: face.leftEye },
+      { kind: "eyes", feature: face.rightEye },
+      { kind: "lips", feature: face.lips },
+    ];
+
+    // Blank the face: cover every feature's home spot with nearby skin
+    // (cheek below the eyes, beside the mouth for the lips).
+    for (const { kind, feature } of features) {
+      const skin =
+        kind === "eyes"
+          ? ellipseFeature(
+              feature.center.x,
+              feature.center.y + box.height * 0.17,
+              feature.rx,
+              feature.ry,
+            )
+          : ellipseFeature(
+              feature.center.x - box.width * 0.3,
+              feature.center.y - box.height * 0.03,
+              feature.rx,
+              feature.ry,
+            );
+      drawFeatureCutout(args, kind, skin, {
+        cx: feature.center.x,
+        cy: feature.center.y,
+        width: naturalCutoutWidth(kind, feature) * 1.35,
+        angle: feature.angle,
+      });
+    }
+
+    // Locked features stick to your face at wherever you blinked them in —
+    // box-relative, so they ride along as you move (Mr. Potato Head mode).
+    for (const [index, lock] of game.locked.entries()) {
+      const { kind, feature } = features[index];
+      drawFeatureCutout(args, kind, feature, {
+        cx: box.cx + lock.dx * box.width,
+        cy: box.cy + lock.dy * box.width,
+        width: naturalCutoutWidth(kind, feature),
+        angle: box.angle,
+      });
+    }
+
+    if (game.stage < features.length) {
+      // The current feature falls down the screen on a loop; blink to lock
+      // it wherever it is right now.
+      const FALL_MS = 2600;
+      const { kind, feature } = features[game.stage];
+      const fallY = (((timeMs - game.cycleStartMs) % FALL_MS) / FALL_MS) * height;
+      const fallX = feature.center.x;
+      drawFeatureCutout(args, kind, feature, {
+        cx: fallX,
+        cy: fallY,
+        width: naturalCutoutWidth(kind, feature),
+        angle: box.angle,
+      });
+
+      const openness =
+        (face.leftEye.ry / Math.max(face.leftEye.rx, 1) +
+          face.rightEye.ry / Math.max(face.rightEye.rx, 1)) /
+        2;
+      if (face.tracked && game.eyesClosed && openness > 0.22) game.eyesClosed = false;
+      if (face.tracked && !game.eyesClosed && openness < 0.16) {
+        game.eyesClosed = true;
+        game.locked.push({ dx: (fallX - box.cx) / box.width, dy: (fallY - box.cy) / box.width });
+        game.stage += 1;
+        game.cycleStartMs = timeMs;
+      }
+
+      ctx.textAlign = "center";
+      ctx.font = `700 ${Math.round(height * 0.028)}px -apple-system, sans-serif`;
+      ctx.fillStyle = "#ffffff";
+      const names = ["left eye", "right eye", "lips"];
+      ctx.fillText(`blink to place your ${names[game.stage]}`, width / 2, height * 0.06);
+    } else {
+      drawEmoji(ctx, "🎉", width / 2, height * 0.12, width * 0.2, 0);
+      ctx.textAlign = "center";
+      ctx.font = `400 ${Math.round(height * 0.02)}px -apple-system, sans-serif`;
+      ctx.fillStyle = "rgba(255,255,255,0.85)";
+      ctx.fillText("a masterpiece — tap to try again", width / 2, height * 0.2);
+    }
+  },
+};
+
+const DO_HZ = 261.63;
+
+const singState = {
+  lastTap: -1,
+  note: 0,
+  wallStartMs: 0,
+  ballPos: -2,
+  winUntil: 0,
+  flashUntil: 0,
+};
+
+const faceDropState = {
+  lastTap: -1,
+  stage: 0,
+  locked: [] as { dx: number; dy: number }[],
+  cycleStartMs: 0,
+  eyesClosed: false,
 };
 
 // Flashcard picture styles the mode button cycles through. Styles with no
@@ -343,6 +635,15 @@ function drawBackdrop(args: FilterFrameArgs, id: string) {
     ctx.fillRect(0, 0, width, height);
     return;
   }
+  drawImageCover(ctx, image, width, height);
+}
+
+function drawImageCover(
+  ctx: CanvasRenderingContext2D,
+  image: HTMLImageElement,
+  width: number,
+  height: number,
+) {
   const scale = Math.max(width / image.naturalWidth, height / image.naturalHeight);
   ctx.drawImage(
     image,
@@ -381,6 +682,11 @@ function drawFaceCutoutsInPlace(args: FilterFrameArgs) {
 // Baseline mask looseness before the user's adjustable stretch: enough to
 // include lashes and the lip line, no more.
 const BASE_EXPAND: Record<keyof MaskStretch, number> = { eyes: 1.45, lips: 1.25 };
+
+/** The dest.width that renders a feature's cutout at natural 1:1 size. */
+function naturalCutoutWidth(kind: keyof MaskStretch, feature: FaceFeature): number {
+  return 2 * feature.rx * BASE_EXPAND[kind] * 1.3;
+}
 
 // Scratch canvases reused across frames: the sampled patch and its
 // polygon mask (drawn small, upscaled with smoothing = cheap feather).
