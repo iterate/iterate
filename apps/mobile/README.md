@@ -123,8 +123,14 @@ the first boot of a new binary force-clears any pre-existing channel override
 made per PR that guard is now purely protective — clearing the override lands
 you on the channel you installed for.
 
-Lifecycle: closing a PR deletes its channel, update branch, and QR assets
-(`.depot/workflows/mobile-pr-preview-cleanup.yml`). Channel discovery is the
+Lifecycle: closing a PR deletes its channel, update branch, and QR assets,
+and swaps the PR body's QR section for an honest placeholder
+(`.depot/workflows/mobile-pr-preview-cleanup.yml`). On a MERGE, the main
+publish then writes main's QR section into that same body — and when the
+merge changed the fingerprint, a follow-up job waits out the fresh main
+build and upgrades the install link once it's installable
+(`scripts/ci/refresh-mobile-main-qr.ts`). The merged PR is the on-ramp back
+onto main; no hunting commit comments. Channel discovery is the
 PR bodies' QR sections — deliberately no in-app channel list, because listing
 channels needs the EAS API and we don't ship `EXPO_TOKEN` to the deployment
 (a CI-pushed snapshot could enable it tokenlessly later).

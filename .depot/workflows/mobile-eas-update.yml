@@ -1,11 +1,7 @@
 name: Mobile EAS Update
 permissions:
   contents: write # commit comments + QR PNGs on the gh-attach-assets release
-concurrency:
-  # Updates must publish in commit order so the preview channel's latest
-  # update is always the latest main. Serialize, never cancel.
-  group: mobile-eas-update
-  cancel-in-progress: false
+  pull-requests: write # merged PRs get main's QR section written into their body
 on:
   push:
     branches:
@@ -23,10 +19,20 @@ on:
   workflow_dispatch: {}
 jobs:
   publish:
+    # Job-level (not workflow-level) so the refresh job below — which can sit
+    # polling a ~20-minute native build — never queues later merges' publishes.
+    # Updates must publish in commit order so the preview channel's latest
+    # update is always the latest main. Serialize, never cancel.
+    concurrency:
+      group: mobile-eas-update
+      cancel-in-progress: false
     runs-on:
       size: 2x8
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     timeout-minutes: 30
+    outputs:
+      install_ready: ${{ steps.publish.outputs.install_ready }}
+      build_id: ${{ steps.publish.outputs.build_id }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -37,7 +43,32 @@ jobs:
       # EXPO_TOKEN lives in the Doppler _shared project and is inherited by
       # os/prd; eas-cli picks it up from the environment.
       - name: Publish update (and native build on fingerprint change)
+        id: publish
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
         run: doppler run --project os --config prd -- pnpm tsx scripts/ci/publish-mobile-update.ts
+  # A fingerprint-changing merge triggers main's build --no-wait, so the
+  # section above links a "build still running" page. This job waits the
+  # build out and swaps in the installable link — commit comment and merged
+  # PR bodies alike (scripts/ci/refresh-mobile-main-qr.ts).
+  refresh-install-qr:
+    needs: publish
+    if: needs.publish.outputs.install_ready == 'false'
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 50
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Wait for the build, then upgrade the install link
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          BUILD_ID: ${{ needs.publish.outputs.build_id }}
+        run: doppler run --project os --config prd -- pnpm tsx scripts/ci/refresh-mobile-main-qr.ts

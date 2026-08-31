@@ -4,16 +4,19 @@
 // changes when native modules/config change, and old binaries silently
 // ignore incompatible updates, so on mismatch this kicks off a fresh EAS
 // build (--no-wait) whose install link supersedes the stale one. Finally
-// posts a commit comment with the same two-QR preview section PRs get —
-// an OTA switch-back link and the install build.
+// writes the two-QR main section into the commit comment AND into the body
+// of each merged PR this push belongs to — the merged PR is the natural
+// on-ramp back onto main, not a commit comment nobody hunts down. A freshly
+// triggered build renders "still running"; the refresh job
+// (refresh-mobile-main-qr.ts) upgrades it when the build finishes.
 // Runs on merge to main (.depot/workflows/mobile-eas-update.yml) with
 // EXPO_TOKEN supplied by Doppler (`_shared`, inherited into os/prd).
 // Section rendering/QR/eas plumbing: scripts/ci/mobile-preview.ts.
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { appendFileSync } from "node:fs";
 import { isMainModule } from "../../packages/shared/src/dev/is-main-module.ts";
-import { getOctokit, getRepo } from "./github.ts";
 import {
   easJson,
   ensureBuildForPr,
@@ -23,13 +26,11 @@ import {
   prdBaseUrl,
   renderPreviewSection,
   run,
+  syncMainPreviewSection,
   uploadQrAsset,
 } from "./mobile-preview.ts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-
-/** Marker making commit-comment updates idempotent across re-runs. */
-export const commitCommentMarker = "<!-- mobile-preview -->";
 
 async function publishMobileUpdate() {
   if (!process.env.EXPO_TOKEN) {
@@ -92,21 +93,20 @@ async function publishMobileUpdate() {
     installBuildSha: installBuild.gitCommitHash,
     publishedRuntime: runtimeVersion,
   });
-  const body = `${commitCommentMarker}\n${section}`;
+  // syncMainPreviewSection writes the commit comment AND the merged PR
+  // bodies' sections — getting onto latest main should never mean hunting
+  // commit comments.
+  await syncMainPreviewSection({ sha, section });
 
-  const github = getOctokit();
-  const repo = getRepo();
-  const { data: existing } = await github.rest.repos.listCommentsForCommit({
-    ...repo,
-    commit_sha: sha,
-  });
-  const mine = existing.find((c) => c.body?.includes(commitCommentMarker));
-  if (mine) {
-    await github.rest.repos.updateCommitComment({ ...repo, comment_id: mine.id, body });
-    console.log(`updated commit comment on ${sha.slice(0, 9)}`);
-  } else {
-    await github.rest.repos.createCommitComment({ ...repo, commit_sha: sha, body });
-    console.log(`posted commit comment on ${sha.slice(0, 9)}`);
+  // Hand the build-completion refresher what it needs: when the install
+  // build was freshly triggered (--no-wait), the section above links a
+  // "build still running" page, and the refresh job upgrades it once the
+  // build finishes.
+  if (process.env.GITHUB_OUTPUT) {
+    appendFileSync(
+      process.env.GITHUB_OUTPUT,
+      `install_ready=${installBuild.finished}\nbuild_id=${installBuild.id}\n`,
+    );
   }
 }
 
