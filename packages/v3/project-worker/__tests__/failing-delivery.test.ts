@@ -6,8 +6,11 @@
 //
 // Every test asserts CORRECT behavior. `test.fails` marks behavior VERIFIED BROKEN by running
 // against the real worker (wrangler createTestHarness) — each carries BUG/EXPECTED/ACTUAL/WHY.
-// Run: pnpm exec vitest run --config vitest.harness.config.ts __tests__/failing-delivery.test.ts
+// Run: pnpm exec vitest run --project harness failing-delivery
 
+import { createRequire } from "node:module";
+import { dirname } from "node:path";
+import { newWebSocketRpcSession } from "capnweb";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { startProjectHarness, type ProjectHarness } from "./harness.ts";
 
@@ -490,8 +493,123 @@ test("an append of 900 events in one batch arrives as ONE callback invocation (b
   expect(c.invocations[0].range.through).toBe(committed[899].offset);
 });
 
-// ─────────────────────────────── speculative (not yet run to ground) ───────────────────────────────
+// ─────────────────────────────── SOCKET-BUFFER OVERFLOW ───────────────────────────────
 
-test.todo(
-  "connected subscriber whose socket buffer overflows mid-flood: overflow must close the socket and auto-revoke must reap the mount (needs a flood bigger than the local socket buffer)",
-);
+/** A WebSocket client whose raw TCP socket we can STOP READING (the browser/undici WebSocket hides
+ *  it): the `ws` package, resolved through wrangler's dependency tree because this package keeps no
+ *  direct dep on it. Pausing `_socket` closes the TCP window, so every server→client send buffers
+ *  inside workerd — the client-controllable choke point of the delivery transport. capnweb interops
+ *  with a `ws` WebSocket directly (its transport needs only binaryType/readyState/
+ *  addEventListener/send, and `ws` speaks all four). */
+type StallableWebSocket = {
+  _socket: { pause(): void; resume(): void };
+  readyState: number;
+  send(data: string): void;
+  close(): void;
+  /** Hard TCP destroy — no close handshake (which a paused peer could never read anyway). */
+  terminate(): void;
+  addEventListener(type: string, fn: (ev: unknown) => void): void;
+};
+function stallableWebSocket(url: string): StallableWebSocket {
+  const req = createRequire(import.meta.url);
+  const wranglerDir = dirname(req.resolve("wrangler/package.json"));
+  const { WebSocket: WsWebSocket } = req(req.resolve("ws", { paths: [wranglerDir] }));
+  return new WsWebSocket(url) as StallableWebSocket;
+}
+
+test("MEASURED FINDING: a connected subscriber that stops reading mid-flood is NOT closed by local workerd (≥60MiB buffers silently) — but a real socket close reaps the mount instantly", async () => {
+  // The lane's design comment (stream-durable-object.ts, connected lane): "the socket buffer is
+  // the only queue; overflow closes the socket and the close IS the heal signal". This test ran
+  // that claim to ground against local workerd. It is NOT a test.fails: the buffering policy is
+  // workerd's, not this codebase's — what IS ours (close → onRpcBroken → pager close →
+  // onFinalClose → auto-revoke) is proven live below.
+  // EXPECTED (design): a client that stops reading its /api socket eventually overflows the
+  //   server's send buffer; workerd closes the socket; the relay's onRpcBroken closes the stub
+  //   pager; the DO auto-revokes the mount (hostState().subscriptionMounts drops it).
+  // ACTUAL (measured, local workerd via wrangler createTestHarness): 60.0MiB of payload flooded
+  //   into a TCP-paused subscriber produced NO close, NO delivery.event-batch.dropped warn, NO
+  //   CONNECTION_OFFLINE — the mount stayed listed and the stub stayed attached (stubs=1).
+  //   workerd buffers the outgoing WebSocket without any local limit we could reach. The chain
+  //   itself is sound: hard-killing the stalled socket reaped the mount in 10–30ms (stubs=0).
+  // RESIDUAL: live Cloudflare is NOT proven either way here — real edge sockets have real buffer
+  //   limits, so the overflow-close half may well hold in production; this pin documents LOCAL
+  //   workerd only. If the still-mounted assertion below ever fails, workerd grew a send-buffer
+  //   limit — upgrade this pin to assert the overflow-close instead.
+  const ctx = "prj_fd_overflow";
+  const itx = await harness.itx(ctx); // connection A: setup, the flood, and observation
+  // Connection B — THE VICTIM: its own client socket, because the retained callback stub lives in
+  // that socket's relay session; the socket's death must become the stub's death.
+  const wsB = stallableWebSocket(`ws://${harness.url.host}/api?ctx=${ctx}`);
+  const sessionB: any = newWebSocketRpcSession(wsB as any);
+  keep.push(sessionB);
+  const victim = sessionB.authenticate().get();
+  const c = collector();
+  await victim.subscribe({ name: "victim", consumes: ["flood"], target: c.fn });
+  // one probe proves the lane end-to-end BEFORE the stall
+  await append(itx, { type: "flood", ephemeral: true, payload: { probe: true } });
+  await until("probe delivered over the victim socket", () => c.invocations.length >= 1);
+  const before: any = await itx.hostState();
+  expect(before.subscriptionMounts).toContainEqual(
+    expect.objectContaining({ name: "victim", lane: "connected" }),
+  );
+  expect(before.stubs).toBe(1);
+  const droppedWarns = () =>
+    (JSON.stringify(harness.logs()).match(/delivery\.event-batch\.dropped/g) ?? []).length;
+  const droppedBefore = droppedWarns(); // logs are harness-global — assert the DELTA, not zero
+
+  // THE STALL: stop reading the victim's TCP socket. The kernel recv buffer fills, the TCP window
+  // closes, and workerd's sends for this socket can only buffer.
+  wsB._socket.pause();
+
+  // THE FLOOD: ephemeral events (memory-only server-side) with chunky payloads, ~0.5MiB per append
+  // (two 256KiB events — each hop's message stays under production's 1MiB WebSocket-message cap).
+  // Bounded at 60MiB; bail the moment the mount is reaped (it never was — see ACTUAL).
+  const chunk = "x".repeat(256 * 1024);
+  const victimReaped = async () => {
+    const s: any = await itx.hostState();
+    return !s.subscriptionMounts.some((m: any) => m.name === "victim");
+  };
+  let floodedBytes = 0;
+  let reaped = false;
+  for (let i = 0; i < 120 && !reaped; i++) {
+    await append(
+      itx,
+      { type: "flood", ephemeral: true, payload: { i, chunk } },
+      { type: "flood", ephemeral: true, payload: { i: i + 0.5, chunk } },
+    );
+    floodedBytes += 2 * chunk.length;
+    reaped = await victimReaped();
+  }
+  // bounded negative wait: when a close DOES propagate, the reap lands in tens of ms (measured
+  // below via the kill) — 1.5s is ample for an overflow-close triggered by the flood to surface.
+  if (!reaped) {
+    const tGrace = Date.now();
+    while (Date.now() - tGrace < 1_500 && !reaped) {
+      reaped = await victimReaped();
+      if (!reaped) await settle(150);
+    }
+  }
+  const after: any = await itx.hostState();
+  console.log(
+    `overflow: flooded ${(floodedBytes / 1024 / 1024).toFixed(1)}MiB into a paused socket; ` +
+      `reaped=${reaped}; stubs=${after.stubs}; dropped-warn delta=${droppedWarns() - droppedBefore}`,
+  );
+  // THE FINDING, pinned: the full 60MiB went in and NOTHING happened — no close, no reap, no
+  // dropped-delivery warn. workerd absorbed it all in memory.
+  expect(floodedBytes).toBe(120 * 2 * 256 * 1024);
+  expect(reaped).toBe(false);
+  expect(after.subscriptionMounts).toContainEqual(expect.objectContaining({ name: "victim" }));
+  expect(after.stubs).toBe(1);
+  expect(droppedWarns() - droppedBefore).toBe(0);
+
+  // THE CHAIN IS SOUND: hard-kill the stalled socket (RST — no close handshake a paused reader
+  // could never read) and the reap fires end-to-end: relay onRpcBroken → pager close → DO
+  // onFinalClose → auto-revoke. Measured 10–30ms; the until bound is generous, not a latency pin.
+  const tKill = Date.now();
+  wsB.terminate();
+  await until("mount reaped after the socket died", victimReaped, 15_000);
+  const final: any = await itx.hostState();
+  expect(final.subscriptionMounts).toEqual([]); // the victim was this ctx's only mount
+  expect(final.stubs).toBe(0);
+  console.log(`socket kill → mount reaped in ${Date.now() - tKill}ms`);
+}, 55_000);
