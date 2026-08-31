@@ -6,8 +6,9 @@
 // path, keeping ZERO per-row state.
 //
 // THE PROCESSOR IDIOM, deliberately: a contract, TWO SWITCHES (reduce = which subscription
-// mounts exist; processEvent = what to do about it), and ONE declared dependency — the
-// SubscriptionDeliveryPump below, which owns all delivery mechanics. Everything the processor
+// mounts exist; processEvent = what to do about it), and ONE non-event entry — pumpSubscriptionDeliveries(),
+// which the parent's alarm calls (facets have no alarms, workerd#6810). Every delivery mechanic
+// lives on THIS class; there is no injected pump. Everything the processor
 // does rides the log: mounts arrive as capability-provided/-revoked facts, operator recovery
 // arrives as a subscription-resumed fact (appended by the parent's resumeSubscription verb),
 // halts leave a subscription-delivery-halted audit fact. The ONE entry that can never be an
@@ -88,7 +89,6 @@ export class SubscriptionForwarderProcessor extends StreamProcessor<ForwarderSta
     this.#storage = args.storage;
   }
 
-  // ── the per-mount delivery cursor + failure ladder record (facet storage, keyed by offset) ──
   #progress(off: number): SubscriptionDeliveryProgress | undefined {
     return this.#storage.get(`subscription-delivery-progress:${off}`) as
       | SubscriptionDeliveryProgress

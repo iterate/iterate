@@ -27,11 +27,15 @@ export class DummyControlPlane extends WorkerEntrypoint {
 }
 
 // Bumped every deploy so a smoke test can wait for THIS build to propagate (workers.dev lags ~1-2min/colo).
-const CODE_VERSION = "live-38";
+const CODE_VERSION = "live-39";
 
-/** The context host DO for a request's `?ctx=` (defaults to `prj_demo`). The DO does the real work. */
+/** The `?ctx=` slug when a request names none. */
+const DEFAULT_CTX = "prj_demo";
+const ctxSlug = (url: URL) => url.searchParams.get("ctx") ?? DEFAULT_CTX;
+
+/** The context host DO for a request's `?ctx=`. The DO does the real work. */
 function host(env: Env, url: URL) {
-  return env.CONTEXT.getByName(canonicalName(url.searchParams.get("ctx") ?? "prj_demo"));
+  return env.CONTEXT.getByName(canonicalName(ctxSlug(url)));
 }
 
 export default {
@@ -47,10 +51,7 @@ export default {
       // a CLI script or cron does one POST, no socket handshake. (Batch sessions cannot hold
       // live capabilities: rpcStubs.provide needs the relay to outlive the response —
       // the relay's park call simply fails there, which is the honest error.)
-      return newWorkersRpcResponse(
-        request,
-        new ProjectSession(env.CONTEXT, url.searchParams.get("ctx") ?? "prj_demo", ctx),
-      );
+      return newWorkersRpcResponse(request, new ProjectSession(env.CONTEXT, ctxSlug(url), ctx));
 
     // THE FETCH LANE — the ONE fetch door: reach a fetch-shaped capability (WS upgrades and all) by a
     // serialized ItxExpression in `?cap=`. Set `x-itx-cap` and forward to the context host.

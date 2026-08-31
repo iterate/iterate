@@ -87,7 +87,8 @@ export type ProcessorStream = {
 export type ProcessorStorage = {
   get<T>(key: string): T | undefined;
   put(key: string, value: unknown): void;
-  /** Optional (older hosts may lack it): GC a key outright. */
+  /** Optional: GC a key outright. The userspace runner's storage adapter omits it; the built-in
+   *  facet host wires it (only the forwarder processor needs it). */
   delete?(key: string): void;
 };
 

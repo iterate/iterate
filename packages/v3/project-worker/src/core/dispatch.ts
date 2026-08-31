@@ -1,7 +1,7 @@
 // core/dispatch.ts — match a capability call to a mount, then EXECUTE it against a LIVE object graph
 // (the codec that turns strings ⇄ these structures is ./expression.ts). One engine (`walkSteps`)
-// under three doors — `evaluate` (from a named scope root), `invokePath` (from a bare target),
-// `apply` (a matched mount). The dotted write-half (a scope symbol whose access folds into one
+// under two doors — `invokePath` (from a bare target) and `apply` (a matched mount); `evaluate` is
+// apply's own scope-rooted walk (not a separate caller). The dotted write-half (a scope symbol whose access folds into one
 // dispatch) is `InvokeHandle` (core/invoke-handle.ts) — the ONE such primitive, pipelinable over
 // Workers RPC. `match` claims a call for a capability path (longest-prefix; the final segment may
 // consume the call's args as boundary args; the unmatched tail is the remainder apply() replays).
@@ -10,10 +10,10 @@ import { codedError } from "./errors.ts";
 import type { Expression } from "./expression.ts";
 import { InvokeHandle } from "./invoke-handle.ts";
 
-/** A successful claim of a call by a capability path. */
+/** A successful claim of a call by a capability path — the two things `apply` needs. (Ranking uses
+ *  the mount's own `path.length`, held by the caller; `match` is all-or-nothing, so a "how many
+ *  segments matched" count could only ever equal that length.) */
 export type Match = {
-  /** THE RANKING RULE: the longest matching path wins; ties go to the newest mount. */
-  matchedSegments: number;
   /** The call's args at the boundary, when the FINAL path segment matched a call step (`itx.grok`
    *  vs `itx.grok({...})`) — applied to the evaluated target. */
   boundaryArgs?: unknown[];
@@ -36,7 +36,7 @@ export function match(path: readonly string[], call: Expression): Match | null {
       return null; // call consume: final only
     else boundaryArgs = c.slice(1);
   }
-  return { matchedSegments: path.length, boundaryArgs, remainder: call.slice(path.length) };
+  return { boundaryArgs, remainder: call.slice(path.length) };
 }
 
 // RPC-EXPOSURE DOCTRINE (Kenton, workerd #1028), enforced at THE dispatch point: what an object

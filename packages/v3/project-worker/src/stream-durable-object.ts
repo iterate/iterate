@@ -166,10 +166,12 @@ function parseStreamDurableObjectName(name: string | undefined) {
 
 /** The capability host's slug — hosted INLINE (see the inline-core section below). */
 const CAPABILITY_TABLE_SLUG = "capability-table";
+const CORE_SLUG = "core";
 /** The two INLINE reduce-only processors: reduced at the commit point, never real facets — always
  *  on, un-disableable, addressed by name like any facet. The one predicate for "is this slug an
  *  inline core?" (was open-coded at four sites). */
-const isInlineSlug = (slug: string): boolean => slug === CAPABILITY_TABLE_SLUG || slug === "core";
+const isInlineSlug = (slug: string): boolean =>
+  slug === CAPABILITY_TABLE_SLUG || slug === CORE_SLUG;
 /** The core processor is stateless (pure reduce) — one module-level instance serves every DO. */
 const CORE_PROCESSOR = new CoreStreamProcessor();
 const streamLog = createLogger("stream-do");
@@ -335,7 +337,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     return this.#inline(CAPABILITY_TABLE_SLUG).state as CapabilityTable;
   }
   #coreState(): CoreState {
-    return this.#inline("core").state as CoreState;
+    return this.#inline(CORE_SLUG).state as CoreState;
   }
 
   /** THE capability host, parent-constructed: same class, same contract, zero distance. */
@@ -383,7 +385,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   #inlineDefs(): { slug: string; proc: ReduceOnlyProcessor<unknown> }[] {
     return [
-      { slug: "core", proc: CORE_PROCESSOR as ReduceOnlyProcessor<unknown> },
+      { slug: CORE_SLUG, proc: CORE_PROCESSOR as ReduceOnlyProcessor<unknown> },
       {
         slug: CAPABILITY_TABLE_SLUG,
         proc: this.#capabilityTableProcessor() as ReduceOnlyProcessor<unknown>,
@@ -524,10 +526,8 @@ export class StreamDurableObject extends DurableObject<Env> {
       // quiet — their cursors are durable in their OWN storage and delivery is cursor-driven,
       // so nothing is lost (replies are output-gated; abort keeps storage; rebuild ~50-700ms).
       // Never while a drive/reduce is in flight: aborting mid-reduce is the stall the resurrection
-      // pass exists to heal.
-      // ONE loop over every live facet — processors and stateful instances alike (they pin the
-      // actor the same way). Their cursors/state are durable in their OWN facet storage, so abort
-      // loses nothing; the next drive/call re-materializes.
+      // pass exists to heal. ONE loop over every live facet — processors and stateful instances
+      // alike, since they pin the actor the same way.
       for (const facetName of this.#liveFacets) {
         try {
           this.ctx.facets.abort(facetName, "idle quiesce");

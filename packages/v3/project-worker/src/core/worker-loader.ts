@@ -21,29 +21,6 @@
 // (Reflect.apply via invokePath), the stream DO loads the user's
 // `DurableObject` class DIRECTLY and calls its methods — no `__HostedActor` fetch-tunnel wrapper.)
 
-/** Load a confined dynamic worker — THE one loader wiring (stateless code caps, userspace facet
- *  processors, stateful facets all ride it). The confinement contract, stated once: the
- *  worker's WHOLE world — `env.ITX` (a service binding to the ItxEntrypoint; `.get()` yields the
- *  real itx scope) and every global fetch — is its owning context, so sibling calls and egress
- *  route through the host's dispatch with no second path. Callers version their `cacheKey`
- *  themselves (content hash + deploy id — see the stale-isolate learning on versionedFacet below).
- *
- *  ═══════════════════════════════════════════════════════════════════════════════════════════
- *  ⚠️  THE cacheKey IS A DOLLAR AMOUNT — one of the most cost-sensitive levers in the system.
- *  Cloudflare bills EVERY DISTINCT value ever passed to `LOADER.get` as a Dynamic Worker at
- *  $0.002/worker/day. apps/os PR #2504: a per-request random nonce in the key produced ~3.9M
- *  identities ≈ $7.8k in ~3 weeks, plus a cold isolate build on every dispatch (~5MB, 1-2s).
- *  Key components must be LOW-CARDINALITY and each one priced: deploy version × owning context
- *  × content hash — NEVER a random nonce, timestamp, request id, or offset. (The tension the
- *  nonce papered over is real — a loaded isolate captures the minting host's `env.ITX`/
- *  `globalOutbound`, which can die with the host's incarnation; we accept the rare
- *  re-dial failure and re-key on DEPLOY, not per use.)
- *  ═══════════════════════════════════════════════════════════════════════════════════════════ */
-/** The cacheKey is MINTED HERE — the one audit point for the dollar lever. `kind` is a CLOSED
- *  union (`code` = a stateless isolate; `facet` = a durable class hosted as a facet — the merge
- *  of the old `procfacet`/`stateful`, which differed only in module set) so a new key family is a
- *  deliberate type change; `owner` is composed collision-free by `facetLoaderOwner`;
- *  `contentHash` versions the source. */
 import { toExpression, type Expression } from "./expression.ts";
 import { hashSource } from "./hash.ts";
 import { PROCESSOR_SDK_MODULE } from "../generated/processor-sdk.ts";
@@ -58,6 +35,21 @@ export function facetLoaderOwner(contextName: string, discriminator: string): st
   return `${contextName.length}#${contextName}#${discriminator}`;
 }
 
+/** MINTS the loader cacheKey — the one audit point for the system's most cost-sensitive lever. The
+ *  confinement contract, stated once: a loaded worker's WHOLE world — `env.ITX` (a service binding to
+ *  the ItxEntrypoint; `.get()` yields the real itx scope) and every global fetch — is its owning
+ *  context, so sibling calls and egress route through the host's dispatch with no second path.
+ *
+ *  ⚠️  THE cacheKey IS A DOLLAR AMOUNT. Cloudflare bills EVERY DISTINCT value ever passed to
+ *  `LOADER.get` as a Dynamic Worker at $0.002/worker/day. apps/os PR #2504: a per-request random
+ *  nonce in the key produced ~3.9M identities ≈ $7.8k in ~3 weeks, plus a cold isolate build on
+ *  every dispatch (~5MB, 1-2s). Key components must be LOW-CARDINALITY: deploy version × owning
+ *  context × content hash — NEVER a nonce, timestamp, request id, or offset. (The tension the nonce
+ *  papered over is real — a loaded isolate captures the minting host's `env.ITX`/`globalOutbound`,
+ *  which can die with the host's incarnation; we accept the rare re-dial failure and re-key on
+ *  DEPLOY, not per use.) `kind` is a CLOSED union (`code` = stateless isolate; `facet` = durable
+ *  class hosted as a facet) so a new key family is a deliberate type change; `owner` is composed
+ *  collision-free by `facetLoaderOwner`; `contentHash` versions the source. */
 export function confinedWorker(
   env: { LOADER: WorkerLoader; CF_VERSION_METADATA?: { id: string } },
   key: { kind: "code" | "facet"; owner: string; contentHash: string },

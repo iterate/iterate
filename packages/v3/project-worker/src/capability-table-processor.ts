@@ -334,13 +334,11 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
       throw new Error(
         `fetch takes no expression args — the live Request rides in as the runtime arg (got ${JSON.stringify(last.slice(1))})`,
       );
-    const call: Expression =
-      last === "fetch"
-        ? expr
-        : Array.isArray(last) && last[0] === "fetch"
-          ? [...expr.slice(0, -1), "fetch"]
-          : [...expr, "fetch"];
-    return this.resolve(state, call, [request]);
+    // Strip any trailing `fetch` step (property OR call), then append the `fetch` PROPERTY step —
+    // the three old branches were all this one operation.
+    const endsInFetch = last === "fetch" || (Array.isArray(last) && last[0] === "fetch");
+    const base = endsInFetch ? expr.slice(0, -1) : expr;
+    return this.resolve(state, [...base, "fetch"], [request]);
   }
 
   /** Pure routing: the winning userspace `provide` mount for a call, or null (built-ins are
@@ -350,17 +348,18 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
       throw new Error("cannot call the scope symbol itself — name a capability first");
     // `providedAtOffset` is the tie-breaker (newest same-length mount wins) — needed WHILE ranking,
     // not by the caller, so it stays local and the return is just the winner's target + match.
-    let best: { target: Expression; m: Match; providedAtOffset: number } | null = null;
+    let best: { target: Expression; m: Match; length: number; providedAtOffset: number } | null =
+      null;
     for (const mount of state.mounts) {
       const m = match(mount.path, call);
       if (!m) continue;
+      const length = mount.path.length; // match is all-or-nothing, so this IS "how much matched"
       if (
         best === null ||
-        m.matchedSegments > best.m.matchedSegments ||
-        (m.matchedSegments === best.m.matchedSegments &&
-          mount.providedAtOffset > best.providedAtOffset)
+        length > best.length ||
+        (length === best.length && mount.providedAtOffset > best.providedAtOffset)
       )
-        best = { target: mount.target, m, providedAtOffset: mount.providedAtOffset };
+        best = { target: mount.target, m, length, providedAtOffset: mount.providedAtOffset };
     }
     return best && { target: best.target, m: best.m };
   }

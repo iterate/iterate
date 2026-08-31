@@ -37,7 +37,6 @@ describe("match", () => {
     const m = match(parseCapabilityPath(path as string), parse(call as string))!;
     expect(m).not.toBeNull();
     const e = expected as { segments: number; boundaryArgs?: unknown[]; remainder: unknown[] };
-    expect(m.matchedSegments).toBe(e.segments);
     if (e.boundaryArgs) expect(m.boundaryArgs).toEqual(e.boundaryArgs);
     expect(m.remainder).toEqual(e.remainder);
   });
@@ -50,11 +49,13 @@ describe("match", () => {
     expect(match(parseCapabilityPath(path as string), parse(call as string))).toBeNull();
   });
 
-  test("ranking: the longer path wins", () => {
+  test("ranking basis: the longer path consumes more of the call (less remainder to replay)", () => {
+    // #route ranks by the winning mount's own `path.length`; a longer matching path claims more
+    // segments, so it leaves a SHORTER remainder — the observable proof that it matched more.
     const call = parse("itx.rpcStubs.abc.ping()");
     const long = match(parseCapabilityPath("itx.rpcStubs.abc"), call)!;
     const short = match(parseCapabilityPath("itx.rpcStubs"), call)!;
-    expect(long.matchedSegments).toBeGreaterThan(short.matchedSegments);
+    expect(long.remainder.length).toBeLessThan(short.remainder.length);
   });
 });
 

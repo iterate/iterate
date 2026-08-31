@@ -23,7 +23,8 @@
 //
 // The manager is the partial-fetch helper the DO composes in (`#rpcStubs.fetch(req)`
 // first, own doors after) — stub mechanics live here, domain meaning (RpcStubDirectory, session
-// facts) stays in the DO. It is record-AGNOSTIC: callers stamp what they need and read it back.
+// facts) stays in the DO. Its one addressing fact is the directory's `connectionKey`, stamped by
+// `attach` and carried through hibernation on the pager socket.
 
 export const STUB_PAGER_WEBSOCKET_HEADER = "x-itx-stub-pager";
 const STUB_PAGER_WEBSOCKET_TAG = "itx-stub-pager-websocket";
@@ -104,12 +105,13 @@ export class HibernatableRpcStubManager {
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
-  /** Stamp a stub's record onto its (already-open) pager socket — carried through hibernation. */
-  attach(stubKey: string, record: Record<string, unknown>): void {
+  /** Stamp a stub's `connectionKey` onto its (already-open) pager socket — carried through
+   *  hibernation, and what `all()` filters on. */
+  attach(stubKey: string, connectionKey: string): void {
     const ws = this.#socketFor(stubKey);
     if (ws === undefined)
       throw new Error(`hibernatable rpc stub ${stubKey} has no pager websocket`);
-    ws.serializeAttachment({ stubKey, ...record });
+    ws.serializeAttachment({ stubKey, connectionKey } satisfies AttachedRpcStubRecord);
   }
 
   /** Every attached stub — DERIVED from the surviving pager sockets, so a fresh DO incarnation

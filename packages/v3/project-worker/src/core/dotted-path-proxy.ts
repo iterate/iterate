@@ -66,8 +66,10 @@ const RESERVED_DYNAMIC_PATH_SEGMENTS: ReadonlySet<string> = new Set([
  */
 const PROTOCOL_PROBE_KEYS: ReadonlySet<string> = new Set(["toJSON", "asymmetricMatch"]);
 
-function isReservedDynamicPathSegment(segment: string): boolean {
-  return RESERVED_DYNAMIC_PATH_SEGMENTS.has(segment);
+/** A key that must NOT conjure a dynamic capability segment — a JS/wire reserved name or a protocol
+ *  probe. The ONE predicate for both the prototype hop and every path-proxy trap. */
+function isReserved(key: string): boolean {
+  return RESERVED_DYNAMIC_PATH_SEGMENTS.has(key) || PROTOCOL_PROBE_KEYS.has(key);
 }
 
 /**
@@ -82,10 +84,6 @@ export function createInvokeCapabilityPathProxy(
   path: string[] = [],
 ): unknown {
   const valueFor = (key: string) => createInvokeCapabilityPathProxy(invoker, root, [...path, key]);
-  // A key that must NOT conjure a path segment — a JS/wire reserved name or a protocol probe.
-  const reserved = (key: string) =>
-    isReservedDynamicPathSegment(key) || PROTOCOL_PROBE_KEYS.has(key);
-
   return new Proxy(function () {}, {
     apply(_target, _thisArg, args) {
       // Fold the accumulated dotted access into ONE ItxExpression (structured half): the scope root,
@@ -96,13 +94,13 @@ export function createInvokeCapabilityPathProxy(
     },
     get(target, key, receiver) {
       if (typeof key === "symbol") return Reflect.get(target, key, receiver);
-      if (reserved(key)) return undefined;
+      if (isReserved(key)) return undefined;
       return valueFor(key);
     },
     getOwnPropertyDescriptor(target, key) {
       const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
       if (descriptor) return descriptor;
-      if (typeof key === "symbol" || reserved(key)) return undefined;
+      if (typeof key === "symbol" || isReserved(key)) return undefined;
       // Cap'n Web's server-side path traversal probes own descriptors before reading a segment.
       // Dynamic roots need to look discoverable here so calls like
       // itx.slack.chat.postMessage(...) reach the apply trap.
@@ -110,7 +108,7 @@ export function createInvokeCapabilityPathProxy(
     },
     has(target, key) {
       if (typeof key === "symbol") return key in target;
-      return !reserved(key);
+      return !isReserved(key);
     },
   });
 }
@@ -179,7 +177,7 @@ export function installPrototypeInvokeCapabilityFallback<
       if (typeof key === "symbol" || key in hopTarget) {
         return Reflect.get(hopTarget, key, receiver);
       }
-      if (isReservedDynamicPathSegment(key) || PROTOCOL_PROBE_KEYS.has(key)) return undefined;
+      if (isReserved(key)) return undefined;
       // The dynamic fallback exists for INSTANCES. A lookup whose receiver is not one — someone
       // probing `Class.prototype.foo` directly, a framework walking prototypes — must see plain
       // "undefined", not conjure a dispatcher over an uninitialized receiver.

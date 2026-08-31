@@ -41,9 +41,10 @@ type RpcStubDirectoryDeps = {
 export class RpcStubDirectory {
   readonly #deps: RpcStubDirectoryDeps;
   readonly #stubs: HibernatableRpcStubManager;
-  /** Records handed to `attach`, waiting for their stub pager WebSocket to arrive. In memory on
-   *  purpose: if the DO dies in between, the upgrade 409s and the relay re-attaches. */
-  readonly #pending = new Map<string, Record<string, unknown>>();
+  /** transportId → connectionKey, for transports that have been reserved but whose stub pager
+   *  WebSocket hasn't arrived yet. In memory on purpose: if the DO dies in between, the upgrade
+   *  409s and the relay re-attaches. */
+  readonly #pending = new Map<string, string>();
 
   constructor(deps: RpcStubDirectoryDeps) {
     this.#deps = deps;
@@ -56,7 +57,7 @@ export class RpcStubDirectory {
    *  Mints a fresh transportId the pager carries; the key is the caller's addressing key. */
   attach(input: { key: string }): { transportId: string } {
     const transportId = crypto.randomUUID();
-    this.#pending.set(transportId, { connectionKey: input.key });
+    this.#pending.set(transportId, input.key);
     return { transportId };
   }
 
@@ -65,25 +66,23 @@ export class RpcStubDirectory {
   fetch(request: Request): Response | undefined {
     const transportId = request.headers.get(STUB_PAGER_WEBSOCKET_HEADER);
     if (transportId === null) return undefined;
-    const record = this.#pending.get(transportId);
-    if (!record)
+    const connectionKey = this.#pending.get(transportId);
+    if (connectionKey === undefined)
       return new Response(`unknown rpc stub transport ${transportId} (attach first)\n`, {
         status: 409,
       });
     const response = this.#stubs.fetch(request)!;
     if (response.status === 101) {
       this.#pending.delete(transportId);
-      this.#stubs.attach(transportId, record);
+      this.#stubs.attach(transportId, connectionKey);
       // ONE transport per key, enforced when a transport becomes VISIBLE. attach() (before the
       // pager opens) can only drop predecessors already in #stubs.all(); a CONCURRENT provide under
       // the same key is still opening its own pager then, invisible to that scan — so N concurrent
       // provides would all linger. When THIS pager opens, drop every OTHER same-key transport now
       // (the newest transport wins). "replaced" ⇒ a transport swap, not a real close.
-      const key = record.connectionKey as string | undefined;
-      if (typeof key === "string")
-        for (const r of this.#stubs.all())
-          if (r.connectionKey === key && r.stubKey !== transportId)
-            this.#stubs.drop(r.stubKey, "replaced");
+      for (const r of this.#stubs.all())
+        if (r.connectionKey === connectionKey && r.stubKey !== transportId)
+          this.#stubs.drop(r.stubKey, "replaced");
     }
     return response;
   }

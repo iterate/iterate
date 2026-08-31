@@ -185,9 +185,10 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     return env.ITX_KV;
   };
 
+  // Each root implements one member of the BuiltInScope interface above (the canonical doc of the
+  // kernel surface); the comments here add only what the interface can't say — the WHY of a code branch.
   const scope = {
     whoami: () => ({ projectId, path }),
-    /** Project-prefixed KV — the `${projectId}:` prefix IS the isolation. */
     kv: {
       get: (k: string) => kvBinding().get(kvPrefix + k),
       put: async (k: string, v: string) => {
@@ -213,16 +214,12 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         }
       },
     },
-    /** MY OWN stream — a deliberate, chosen surface (append/read), never the raw DO stub. The
-     *  facets that reduce this stream are addressed via `itx.facets.get(ref)`. */
     stream: {
       append: (...e: StreamEventInput[]) => own().append(...e),
       read: (after?: number, limit?: number) => own().read(after, limit),
     },
-    /** Navigate to a SIBLING context, ROUTED: `cd('/x').anything(...)` resolves through the
-     *  SIBLING's own table (its mounts answer, its default route falls through) — a named,
-     *  shadowable whole-context capability. append/read skip the facet hop (the physical fast
-     *  path — the log door needs no routing). Codec-named, so only THIS project is reachable. */
+    // `cd` routes through the SIBLING's own table, EXCEPT append/read, which skip the facet hop
+    // straight to the log door (the physical fast path). Codec-named, so only THIS project is reachable.
     cd: (siblingPath: string) =>
       new InvokeHandle((segments, args) => {
         const sibling = deps.context(siblingPath); // a Context — no cast (real-typed seam)
@@ -234,8 +231,6 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         return sibling.invoke(["itx", ...segments.slice(0, -1), [last, ...args]]);
       }),
     rpcStubs: deps.rpcStubs,
-    /** Address a facet ALREADY RUNNING by name (processors, named instances) — string only. The
-     *  object/materialize form is spelled through `itx.load(...)` so the two doors don't overlap. */
     facets: {
       get: (name: string) => {
         if (typeof name !== "string")
@@ -245,23 +240,19 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         return deps.facets.get(name);
       },
     },
-    /** THE loaded-code door — mirror of Cloudflare's Worker Loader: `load(source)` loads the code
-     *  and returns a WORKER; you then pick the host EXPLICITLY. `.getEntrypoint(name?)` → a stateless
-     *  `WorkerEntrypoint` (`.run`/`.fetch`, its own isolate). `.getDurableObjectClass('C')` → a
-     *  `DurableObject` class whose `.get(instance?)` is a durable FACET of this stream (`.get('x')`
-     *  is an independently-stated named instance; `.get()` is content-keyed/anonymous). Each hop is
-     *  an `InvokeHandle`, so the whole chain pipelines on every lane (workerd#6873). */
+    // Each hop is its own InvokeHandle, so the whole `load(src).getEntrypoint().run()` /
+    // `.getDurableObjectClass('C').get(name?)` chain pipelines on every lane (workerd#6873).
     load: (source: WorkerSource) => {
-      const entrypointHandle = (className?: string) =>
-        new InvokeHandle((seg, args) => {
-          if (seg.length === 1 && seg[0] === "run")
-            return statelessHandle(source, className).run(...args);
-          if (seg.length === 1 && seg[0] === "fetch")
-            return statelessHandle(source, className).fetch(args[0] as Request);
+      const entrypointHandle = (className?: string) => {
+        const h = statelessHandle(source, className);
+        return new InvokeHandle((seg, args) => {
+          if (seg.length === 1 && seg[0] === "run") return h.run(...args);
+          if (seg.length === 1 && seg[0] === "fetch") return h.fetch(args[0] as Request);
           throw new Error(
             `load(src).getEntrypoint().${seg.join(".")}: a WorkerEntrypoint exposes run|fetch`,
           );
         });
+      };
       const classHandle = (className: string) =>
         new InvokeHandle((seg, args) => {
           if (seg.length === 1 && seg[0] === "get")
@@ -284,20 +275,15 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         );
       });
     },
-    /** Run a STATELESS lambda — a string like `"async (itx, ...args) => …"` (same as apps/os). It is
-     *  wrapped into a `WorkerEntrypoint` (`RUN_SCRIPT_ENTRYPOINT`) whose `run()` injects `itx`, then
-     *  loaded and run — so even this bare-lambda door bottoms out at an EXPORTED entrypoint. To run
-     *  code from a source, use `itx.load(src).getEntrypoint().run(...)`. */
+    // `RUN_SCRIPT_ENTRYPOINT` wraps the lambda string into a WorkerEntrypoint default export, so even
+    // this bare-lambda door bottoms out at `load(...).getEntrypoint().run(...)`.
     runScript: (script: string, ...args: unknown[]) =>
       statelessHandle({
         type: "inline",
         files: { "cap.js": RUN_SCRIPT_ENTRYPOINT(script) },
       }).run(...args),
-    /** Dial a REMOTE capnweb API by URL and call it — `itx.connectToCapnweb('https://x/api').m(a)`
-     *  opens a one-shot HTTP-batch session to the remote root, pipelines the call, and returns its
-     *  result. HTTP batch (not a WebSocket) on purpose: no persistent socket, so it never pins this
-     *  DO (workerd#6087). This is the replacement for the removed `itx.os`/`bindings` control-plane
-     *  door — the outbound-capnweb primitive; a named `itx.os` becomes a mount over it. */
+    // HTTP batch (not a WebSocket) on purpose: no persistent socket, so it never pins this DO
+    // (workerd#6087). The outbound-capnweb primitive — a named `itx.os` becomes a mount over it.
     connectToCapnweb: (url: string) =>
       new InvokeHandle((path, args) => {
         // Walk the remote stub via capnweb's NATIVE promise pipelining — NO intervening awaits, or
