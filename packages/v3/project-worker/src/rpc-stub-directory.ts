@@ -19,13 +19,14 @@
 // dead stub leaves behind (auto-revoking its mounts) is the composing DO's business — injected as
 // `onFinalClose`.
 
+import { codedError, reportIssue } from "./core/errors.ts";
+import type { LiveCapabilityFetchServer, WebSocketHooks } from "./core/fetch-capabilities.ts";
 import {
   HibernatableRpcStubManager,
   STUB_PAGER_WEBSOCKET_HEADER,
   type HibernatableRpcStubRecord,
   type RetainedCallbackInvoker,
 } from "./core/hibernatable-rpc-stub.ts";
-import { codedError, reportIssue } from "./core/errors.ts";
 
 /** How long an attach reservation may sit without its pager arriving before the lazy sweep drops
  *  it — matches the page-timeout scale (the relay opens the pager immediately after attach; 10s is
@@ -34,10 +35,10 @@ const ATTACH_PENDING_TTL_MS = 10_000;
 
 /** Everything the directory needs from its DO, injected — no hidden reach. */
 type RpcStubDirectoryDeps = {
-  hooks: {
-    acceptWebSocket(ws: WebSocket, tags: string[]): void;
-    getWebSockets(tag: string): WebSocket[];
-  };
+  hooks: WebSocketHooks;
+  /** The DO's live-capability fetch subsystem (core/fetch-capabilities.ts) — the manager routes
+   *  terminal-fetch invokes into its serve(). */
+  liveCapabilityFetch: LiveCapabilityFetchServer;
   /** A stub died for good — the DO auto-revokes every mount targeting its key. `keyFinal` ⇒ no
    *  replacement transport carries the key either. */
   onFinalClose(input: { key: string; keyFinal: boolean }): Promise<void>;
@@ -63,7 +64,7 @@ export class RpcStubDirectory {
 
   constructor(deps: RpcStubDirectoryDeps) {
     this.#deps = deps;
-    this.#stubs = new HibernatableRpcStubManager(deps.hooks);
+    this.#stubs = new HibernatableRpcStubManager(deps.hooks, deps.liveCapabilityFetch);
   }
 
   // ── the lifecycle ──
@@ -82,15 +83,14 @@ export class RpcStubDirectory {
    *  core/fetch-capabilities.ts). */
   fetch(request: Request): Response | null {
     const transportId = request.headers.get(STUB_PAGER_WEBSOCKET_HEADER);
-    // Not a pager upgrade → maybe the relay's dedicated fetch-upgrade leg (gated on a pending dial).
-    if (transportId === null) return this.#stubs.acceptFetchUpgradeLeg(request);
+    if (transportId === null) return null;
     this.#sweepPending();
     const connectionKey = this.#pending.get(transportId)?.key;
     if (connectionKey === undefined)
       return new Response(`unknown rpc stub transport ${transportId} (attach first)\n`, {
         status: 409,
       });
-    const response = this.#stubs.fetch(request)!;
+    const response = this.#stubs.acceptStubPagerSocket(transportId, request);
     if (response.status === 101) {
       this.#pending.delete(transportId);
       this.#stubs.attach(transportId, connectionKey);
@@ -116,17 +116,11 @@ export class RpcStubDirectory {
     if (record) this.#stubs.drop(record.stubKey, reason);
   }
 
-  /** Inbound WebSocket message routing (wire this to webSocketMessage) — fetch-upgrade frames
-   *  forwarded between their two DO-side sockets. */
-  message(ws: WebSocket, data: string | ArrayBuffer): void {
-    this.#stubs.message(ws, data);
-  }
-
-  /** A WebSocket closed (wire this to webSocketClose/webSocketError). A pager: for a key whose
-   *  LAST transport just went, the DO's onFinalClose (auto-revoke the mounts naming it) — fire and
-   *  forget safe. A fetch-upgrade socket: its peer closes with it. */
-  closed(ws: WebSocket, code: number, reason: string): void {
-    const record = this.#stubs.closed(ws, code, reason);
+  /** A pager WebSocket closed (wire this to webSocketClose/webSocketError, AFTER the DO's own
+   *  live-capability close routing): for a key whose LAST transport just went, the DO's
+   *  onFinalClose (auto-revoke the mounts naming it) — fire-and-forget safe. */
+  closed(ws: WebSocket, reason: string): void {
+    const record = this.#stubs.closed(ws);
     if (record)
       void this.#stubClosed(record, reason).catch((e) =>
         reportIssue("rpc-stub.close", e, { key: record.connectionKey ?? record.stubKey }),

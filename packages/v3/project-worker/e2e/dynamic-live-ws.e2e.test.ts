@@ -110,9 +110,9 @@ test("within the provider's invocation: a dyn-provided live capability serves PL
 // a webSocket-bearing Response. For a CAPNWEB provider (browser/Node/workerd client over /api)
 // that hop tunnels sockets (the fork's socket-as-streams) — ws-fetch-live-101 is green. For a
 // NATIVE provider (a dynamic worker providing over env.ITX.get(), where the retained stub is a
-// plain jsrpc stub), openFetchUpgrade's `provider.fetch(upgrade)` return leg IS Workers RPC — and the
+// plain jsrpc stub), the dial's `provider.fetch(upgrade)` return leg IS Workers RPC — and the
 // provider's genuine 101 dies there:
-//   500 "DataCloneError: Could not serialize object of type WebSocket" (at #openFetchUpgrade's dial)
+//   500 "DataCloneError: Could not serialize object of type WebSocket" (at dialLiveCapabilityFetch)
 // EXPECTED: parity with capnweb providers — 101 + echo. Fix directions in the session notes: the
 // symmetric dial-back (the provider opens its OWN upgrade leg via its env.ITX Fetcher — it HAS
 // one) or an SDK-side provider shim; the plain-fetch half (test above) already works everywhere.

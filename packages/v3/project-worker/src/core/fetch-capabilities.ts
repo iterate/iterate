@@ -11,7 +11,12 @@
 //      `webSocket`). Whether a given fetch upgrades is the PROVIDER'S decision, expressed in its
 //      answer — nothing here ever inspects the request to guess.
 //
-//   3. Two platform facts force everything unusual in this file, and BOTH are workarounds we
+//   3. Fetch-shaped calls enter through TWO doors, both landing here: over HTTP via the
+//      capability fetch lane (`x-itx-cap`, below), and over the dotted door — any terminal
+//      `.fetch(request)` on a LIVE capability (`itx.rpcStubs.get(k).fetch(...)`) is recognized by
+//      `isFetchShapedCall` and routed into `LiveCapabilityFetchServer.serve`.
+//
+//   4. Two platform facts force everything unusual in this file, and BOTH are workarounds we
 //      expect to delete one day:
 //        • workerd's Workers RPC cannot serialize a webSocket-bearing Response (DataCloneError) —
 //          only the FETCH CHANNEL (WorkerEntrypoint.fetch / DurableObject.fetch / service-binding
@@ -19,10 +24,10 @@
 //          `.fetch()` hop, end to end.
 //        • capnweb likewise could not carry sockets across a session, so we FORKED it
 //          (@iterate-com/capnweb: webSocket-in-Response rides the session as a stream pair).
-//      THE DAY workerd + capnweb serialize WebSockets over plain RPC methods, the section fenced
-//      "WORKAROUND" below is deleted whole: providers' socket-bearing Responses will simply flow
-//      back over the RPC legs, `LiveCapabilityFetchServer.serve` collapses to one invoker call,
-//      and nothing outside this file changes.
+//      THE DAY workerd + capnweb serialize WebSockets over plain RPC methods, everything fenced
+//      "WORKAROUND" below is DELETED — plus its (pure-deletion) call sites, enumerated at the
+//      fence — and a live capability's terminal fetch simply rides the plain invoke() walk like
+//      every other call, its Response flowing back over the RPC legs.
 //
 // THE COMPOSITION PATTERN — the "partial fetch": `(request) => Response | null`, where null means
 // "not my door, try the next one". The stream DO's fetch is an ordered walk over partial fetches
@@ -32,11 +37,15 @@
 import { errorCode } from "./errors.ts";
 import { parse, type Expression } from "./expression.ts";
 
-/** The shape of a fetch-shaped capability — what doctrine point 1 is about. */
-export type FetchShapedCapability = { fetch(request: Request): Promise<Response> };
-
 /** A composable door: answer the request, or `null` for "not mine — try the next door". */
 export type PartialFetch = (request: Request) => Response | null | Promise<Response | null>;
+
+/** The two hibernation-API hooks the DO-side machinery needs (`ctx.acceptWebSocket` /
+ *  `ctx.getWebSockets`). Timeless — the stub pager uses it too. */
+export type WebSocketHooks = {
+  acceptWebSocket(ws: WebSocket, tags: string[]): void;
+  getWebSockets(tag: string): WebSocket[];
+};
 
 // ── THE CAPABILITY FETCH LANE (the `x-itx-cap` door) ──
 // A fetch-shaped capability is reached over HTTP by naming an itx expression in this header (the
@@ -71,7 +80,7 @@ export async function serveCapabilityFetchLane(
   try {
     const expr = capHeader.trimStart().startsWith("[")
       ? (JSON.parse(capHeader) as Expression)
-      : parse(capHeader.startsWith("itx") ? capHeader : `itx.${capHeader}`);
+      : parse(capHeader === "itx" || capHeader.startsWith("itx.") ? capHeader : `itx.${capHeader}`);
     const result = await resolveFetch(expr, request);
     return result instanceof Response
       ? result
@@ -103,8 +112,11 @@ export async function serveCapabilityFetchLane(
 //   hop is a real fetch — socket-legal) and forward frames eyeball⇄leg by tag. Both DO-side
 //   sockets are hibernatable, so an open upgrade survives eviction and costs nothing idle.
 //
-// Delete-day checklist: remove this whole section; make the transport's dial return the
-// provider's Response unconditionally; `serve` returns the invoker's answer as-is. Done.
+// DELETE-DAY CHECKLIST (all deletions, nothing rewritten): remove this whole fenced section,
+// then delete its call sites — the isFetchShapedCall branch in HibernatableRpcStubManager.invoke,
+// RetainedCallbackInvoker.fetch (rpc-stub-relay.ts), and the acceptFetchUpgradeLeg door +
+// handleWebSocketMessage/Close wiring in the stream DO. Terminal-fetch calls then ride the plain
+// invoke() walk like any other call, their Responses — sockets included — crossing the RPC legs.
 // ═════════════════════════════════════════════════════════════════════════════════════
 
 const FETCH_UPGRADE_SOCKET_HEADER = "x-itx-fetch-upgrade";
@@ -120,7 +132,7 @@ type FetchUpgradeLegAttachment = { fetchUpgradeLeg: { upgradeId: string } };
 
 /** The transport's answer when the provider upgraded: the socket already rides the dedicated
  *  leg, so only this marker crosses the RPC hop. */
-export type FetchUpgradeMarker = { webSocketUpgrade: true };
+type FetchUpgradeMarker = { webSocketUpgrade: true };
 
 /** What `serve` needs from the paged-in transport stub: the live-capability fetch dial. */
 export type LiveCapabilityFetchTransport = {
@@ -129,7 +141,7 @@ export type LiveCapabilityFetchTransport = {
 
 /** Close codes a handler may pass to close(): 1000 or app codes; everything reserved/invalid
  *  (1004-1006, 1015, out-of-range — e.g. an abnormal-closure 1006 being FORWARDED) clamps to 1000. */
-export function clampCloseCode(code: number | undefined): number {
+function clampCloseCode(code: number | undefined): number {
   if (code === undefined) return 1000;
   if (code === 1000 || (code >= 3000 && code <= 4999)) return code;
   if (code >= 1001 && code <= 1003) return code;
@@ -138,7 +150,7 @@ export function clampCloseCode(code: number | undefined): number {
 }
 
 /** The provider-side socket a dial may receive — capnweb's TunneledWebSocket satisfies it. */
-export type ProviderSocket = {
+type ProviderSocket = {
   accept?(): void;
   send(data: string | ArrayBuffer): void;
   close(code?: number, reason?: string): void;
@@ -149,8 +161,11 @@ export type ProviderSocket = {
 };
 
 /** TRANSPORT SIDE of a live-capability fetch (runs where the provider is legally touchable —
- *  the capnweb session's request context, or the ItxEntrypoint context for a native provider).
- *  Dials the provider's real fetch and branches ONLY on the answer:
+ *  today that is the capnweb session's request context; a NATIVE provider's socket answer still
+ *  dies on its own RPC leg, pinned in dynamic-live-ws.e2e.test.ts). Dials the provider's real
+ *  fetch — with the upgradeId stamped as the x-itx-fetch-upgrade request header, so a provider
+ *  that cannot answer with a socket can one day dial its OWN leg instead — and branches ONLY on
+ *  the answer:
  *    • socketless Response → returned as-is (crosses the RPC leg fine);
  *    • socket-bearing Response → accept the socket HERE, open the dedicated upgrade leg into the
  *      DO, wire the frames, and return the marker instead. */
@@ -160,13 +175,16 @@ export async function dialLiveCapabilityFetch(
   upgradeId: string,
   host: { fetch(url: string, init?: RequestInit): Promise<Response> },
 ): Promise<Response | FetchUpgradeMarker> {
-  const response = (await providerFetch(request)) as {
+  const headers = new Headers(request.headers);
+  headers.set(FETCH_UPGRADE_SOCKET_HEADER, upgradeId);
+  const response = (await providerFetch(new Request(request, { headers }))) as {
     status?: number;
     webSocket?: ProviderSocket | null;
   };
   const providerSocket = response?.webSocket;
   if (!providerSocket) return response as unknown as Response;
-  providerSocket.accept?.();
+  // Leg first, listeners second, accept LAST — accepting before the awaited leg round-trip would
+  // drop any frame the provider sends immediately after upgrading (a server hello).
   const leg = await openFetchUpgradeLeg(host, upgradeId);
   providerSocket.addEventListener("message", (ev) => {
     try {
@@ -199,6 +217,7 @@ export async function dialLiveCapabilityFetch(
       /* already closing */
     }
   });
+  providerSocket.accept?.();
   return { webSocketUpgrade: true };
 }
 
@@ -216,12 +235,6 @@ async function openFetchUpgradeLeg(
   response.webSocket.accept();
   return response.webSocket;
 }
-
-/** The two hibernation-API hooks the DO side needs (`ctx.acceptWebSocket` / `ctx.getWebSockets`). */
-export type WebSocketHooks = {
-  acceptWebSocket(ws: WebSocket, tags: string[]): void;
-  getWebSockets(tag: string): WebSocket[];
-};
 
 /** DO SIDE of live-capability fetch: the pending-dial gate, the leg door, the eyeball pair, and
  *  the frame/close forwarding between them. One instance per DO, wired into its fetch /
@@ -274,6 +287,8 @@ export class LiveCapabilityFetchServer {
   acceptFetchUpgradeLeg(request: Request): Response | null {
     const upgradeId = request.headers.get(FETCH_UPGRADE_SOCKET_HEADER);
     if (upgradeId === null) return null;
+    if ((request.headers.get("Upgrade") ?? "").toLowerCase() !== "websocket")
+      return new Response(`fetch-upgrade leg: expected a websocket upgrade\n`, { status: 400 });
     this.#sweepPendingDials();
     if (!this.#pendingDials.has(upgradeId))
       return new Response(`unknown fetch upgrade ${upgradeId} (dial first)\n`, { status: 409 });
@@ -350,7 +365,10 @@ export class LiveCapabilityFetchServer {
 }
 
 /** Is this call a fetch-shaped capability call (doctrine point 1: a terminal `fetch` carrying the
- *  one live Request)? The routing predicate the RPC-stub door uses to send it down `serve`. */
+ *  one live Request)? The routing predicate the RPC-stub door uses to send it down `serve`. Dies
+ *  with the fence: post-delete-day, terminal fetch rides the plain invoke() walk unrecognized. */
 export function isFetchShapedCall(path: string[], args: unknown[]): boolean {
   return path.at(-1) === "fetch" && args.length === 1 && args[0] instanceof Request;
 }
+
+// ════════════════════════════════ END WORKAROUND ═════════════════════════════════════

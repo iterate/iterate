@@ -46,7 +46,11 @@ import {
   type Expression,
   type ItxExpression,
 } from "./core/expression.ts";
-import { serveCapabilityFetchLane, type PartialFetch } from "./core/fetch-capabilities.ts";
+import {
+  LiveCapabilityFetchServer,
+  serveCapabilityFetchLane,
+  type PartialFetch,
+} from "./core/fetch-capabilities.ts";
 import { InlineCore } from "./core/inline-core.ts";
 import { invokePath } from "./core/dispatch.ts";
 import { InvokeHandle } from "./core/invoke-handle.ts";
@@ -54,6 +58,10 @@ import { StreamAlarmArmer, StreamEventLog } from "./core/event-log.ts";
 import { hashSource } from "./core/hash.ts";
 import { localContext } from "./core/stream.ts";
 import { RpcStubDirectory } from "./rpc-stub-directory.ts";
+import {
+  STUB_PAGER_KEEPALIVE_REQUEST,
+  STUB_PAGER_KEEPALIVE_RESPONSE,
+} from "./core/hibernatable-rpc-stub.ts";
 import type { RetainedCallbackInvoker } from "./core/hibernatable-rpc-stub.ts";
 import { DurableObjectNameCodec } from "./core/durable-object-names.ts";
 import { itxEntrypointFor } from "./itx-entrypoint.ts";
@@ -170,7 +178,15 @@ export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
   readonly #address = parseStreamDurableObjectName(this.ctx.id.name);
   /** The live rpc-stub registry — the domain layer over the hibernatable RPC stubs (see
    *  rpc-stub-directory.ts). Live-only: presence via list(), no durable session history. */
+  /** The live-capability fetch subsystem (core/fetch-capabilities.ts) — the DO wires its three
+   *  halves directly: the upgrade-leg door (fetch), frame forwarding (webSocketMessage), and
+   *  peer close (webSocketClose); the rpc-stub directory borrows it for serve(). */
+  readonly #liveCapabilityFetch = new LiveCapabilityFetchServer({
+    acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
+    getWebSockets: (tag) => this.ctx.getWebSockets(tag),
+  });
   readonly #rpcStubs = new RpcStubDirectory({
+    liveCapabilityFetch: this.#liveCapabilityFetch,
     hooks: {
       acceptWebSocket: (ws, tags) => {
         this.ctx.acceptWebSocket(ws, tags);
@@ -181,7 +197,10 @@ export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
         // covers fetch-upgrade EYEBALL sockets), so a plain "ping" would silently hijack any client
         // frame that happens to equal it — the ws-fetch-live-101 test caught exactly that.
         this.ctx.setWebSocketAutoResponse(
-          new WebSocketRequestResponsePair("itx-pager-keepalive", "itx-pager-keepalive-ack"),
+          new WebSocketRequestResponsePair(
+            STUB_PAGER_KEEPALIVE_REQUEST,
+            STUB_PAGER_KEEPALIVE_RESPONSE,
+          ),
         );
       },
       getWebSockets: (tag) => this.ctx.getWebSockets(tag),
@@ -987,6 +1006,7 @@ export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
     //   3. everything else is EGRESS (secret substitution → the FALLBACK terminal).
     const doors: PartialFetch[] = [
       (r) => this.#rpcStubs.fetch(r),
+      (r) => this.#liveCapabilityFetch.acceptFetchUpgradeLeg(r),
       (r) =>
         serveCapabilityFetchLane(r, (expr, req) =>
           this.#capabilityTableProcessor().resolveFetch(this.#table(), expr, req),
@@ -1058,13 +1078,15 @@ export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
     // Fetch-upgrade frames forwarded between their two DO-side sockets (eyeball ⇄ upgrade leg);
     // a plain pager socket's inbound payloads carry nothing we act on.
-    this.#rpcStubs.message(ws, message);
+    this.#liveCapabilityFetch.handleWebSocketMessage(ws, message);
   }
   webSocketClose(ws: WebSocket, code: number, reason: string): void {
-    this.#rpcStubs.closed(ws, code, reason);
+    if (this.#liveCapabilityFetch.handleWebSocketClose(ws, code, reason)) return;
+    this.#rpcStubs.closed(ws, reason);
   }
   webSocketError(ws: WebSocket): void {
-    this.#rpcStubs.closed(ws, 1006, "transport error");
+    if (this.#liveCapabilityFetch.handleWebSocketClose(ws, 1006, "transport error")) return;
+    this.#rpcStubs.closed(ws, "transport error");
   }
 
   // ── the rpc-stub RPC verbs (the directory owns the lifecycle — see rpc-stub-directory.ts;

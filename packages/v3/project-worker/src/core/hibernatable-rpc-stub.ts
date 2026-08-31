@@ -37,6 +37,12 @@ import { createLogger } from "./logs.ts";
 
 export const STUB_PAGER_WEBSOCKET_HEADER = "x-itx-stub-pager";
 const STUB_PAGER_WEBSOCKET_TAG = "itx-stub-pager-websocket";
+/** The pager keepalive pair — one shared definition for the edge sender and the DO's
+ *  setWebSocketAutoResponse. DELIBERATELY distinctive literals: the auto-response is DO-WIDE
+ *  (it also covers fetch-upgrade eyeball sockets), so a plain "ping" would silently hijack any
+ *  client frame equal to it. */
+export const STUB_PAGER_KEEPALIVE_REQUEST = "itx-pager-keepalive";
+export const STUB_PAGER_KEEPALIVE_RESPONSE = "itx-pager-keepalive-ack";
 
 /** THE ONE message the stub pager WebSocket ever carries (DO → edge): "I ought to have your
  *  RPC stub but I don't — send it." Everything else rides Workers RPC on the paged-in stub — the
@@ -44,9 +50,11 @@ const STUB_PAGER_WEBSOCKET_TAG = "itx-stub-pager-websocket";
  *  separate subsystem: core/fetch-capabilities.ts.) */
 type StubPageMessage = { type: "page" };
 
-/** The Workers-RPC stub the paged edge worker hands back: it forwards `invoke(path, args)`
- *  onto the retained capnweb callback (a DIRECT dotted dispatch — never `.apply`). */
-export type RetainedCallbackInvoker = {
+/** The Workers-RPC stub the paged edge worker hands back — TWO doors: `invoke(path, args)`
+ *  forwards onto the retained capnweb callback (a DIRECT dotted dispatch — never `.apply`), and
+ *  `fetch(upgradeId, capPath, request)` is the live-capability fetch dial
+ *  (core/fetch-capabilities.ts — dies with that module's WORKAROUND fence). */
+export type RetainedCallbackInvoker = LiveCapabilityFetchTransport & {
   invoke(path: string[], args: unknown[]): Promise<unknown>;
   dup?(): RetainedCallbackInvoker;
 };
@@ -71,7 +79,8 @@ const PAGE_TIMEOUT_MS = 10_000; // a paged edge worker has this long to hand bac
 
 export class HibernatableRpcStubManager {
   readonly #hooks: WebSocketHooks;
-  /** The live-capability fetch subsystem (core/fetch-capabilities.ts), wired to the same DO. */
+  /** The DO's live-capability fetch subsystem (core/fetch-capabilities.ts) — borrowed for
+   *  serve(); the DO itself wires the subsystem's door and socket handlers. */
   readonly #liveFetch: LiveCapabilityFetchServer;
   // The PAGED-IN stubs, in memory ONLY and kept WARM: steady traffic pays ONE page, then every
   // delivery is a plain RPC call. Disposal is the caller's idle quiesce
@@ -90,16 +99,14 @@ export class HibernatableRpcStubManager {
     }
   >();
 
-  constructor(hooks: WebSocketHooks) {
+  constructor(hooks: WebSocketHooks, liveCapabilityFetch: LiveCapabilityFetchServer) {
     this.#hooks = hooks;
-    this.#liveFetch = new LiveCapabilityFetchServer(hooks);
+    this.#liveFetch = liveCapabilityFetch;
   }
 
-  /** PARTIAL FETCH: accept a stub pager WebSocket upgrade, or `null` when the request isn't one
-   *  (the composing DO then runs its next door). */
-  fetch(request: Request): Response | null {
-    const stubKey = request.headers.get(STUB_PAGER_WEBSOCKET_HEADER);
-    if (stubKey === null) return null;
+  /** Accept a stub pager WebSocket upgrade for an attach-gated transport (the directory read the
+   *  header and checked the reservation — the stubKey arrives decided, parsed once). */
+  acceptStubPagerSocket(stubKey: string, request: Request): Response {
     if ((request.headers.get("Upgrade") ?? "").toLowerCase() !== "websocket")
       return new Response(
         `stub pager: expected a websocket upgrade with ${STUB_PAGER_WEBSOCKET_HEADER}\n`,
@@ -132,23 +139,16 @@ export class HibernatableRpcStubManager {
    *  stays warm afterwards — steady traffic is pure RPC, no socket round-trips. Fire-and-forget
    *  callers just don't await (a failed delivery is the client's heal-by-pull). */
   async invoke(stubKey: string, path: string[], args: unknown[]): Promise<unknown> {
-    // THE FETCH-SHAPED RULE (owner-decreed): EVERY fetch-shaped call on a live capability rides
-    // the one live-capability fetch path — core/fetch-capabilities.ts owns it whole. The paged-in
-    // invoker is the transport; everything else about upgrades lives over there.
-    if (isFetchShapedCall(path, args)) {
-      const retained = await this.#pageIn(stubKey);
-      return this.#liveFetch.serve(
-        retained.invoker as unknown as LiveCapabilityFetchTransport,
-        path.slice(0, -1),
-        args[0] as Request,
-      );
-    }
     const retained = await this.#pageIn(stubKey);
     retained.inFlight += 1;
     try {
-      // A provider that dies mid-call is re-coded to CONNECTION_OFFLINE at the RELAY
-      // (RetainedCallbackInvoker.invoke), where the break is LOCAL — so the CODE, never a message,
-      // crosses this hop (core/errors.ts).
+      // THE FETCH-SHAPED RULE (owner-decreed): EVERY fetch-shaped call on a live capability rides
+      // the one live-capability fetch path — core/fetch-capabilities.ts owns it whole; the
+      // paged-in invoker is the transport. Everything else is a plain dotted dispatch. Either
+      // way, a provider that dies mid-call is re-coded to CONNECTION_OFFLINE at the relay, where
+      // the break is LOCAL — the CODE, never a message, crosses this hop (core/errors.ts).
+      if (isFetchShapedCall(path, args))
+        return await this.#liveFetch.serve(retained.invoker, path.slice(0, -1), args[0] as Request);
       return await retained.invoker.invoke(path, args);
     } finally {
       retained.inFlight -= 1;
@@ -201,22 +201,10 @@ export class HibernatableRpcStubManager {
 
   /** A pager WebSocket closed — the stub is gone with it. Hands back the record so the caller
    *  can run its own lifecycle (ephemeral facts, auto-revoke, session settlement). */
-  closed(ws: WebSocket, code = 1000, reason = ""): HibernatableRpcStubRecord | undefined {
-    if (this.#liveFetch.handleWebSocketClose(ws, code, reason)) return undefined;
+  closed(ws: WebSocket): HibernatableRpcStubRecord | undefined {
     const record = this.#attachment(ws);
     if (record) this.#forget(record.stubKey);
     return record;
-  }
-
-  /** PARTIAL FETCH: the live-capability upgrade-leg door (core/fetch-capabilities.ts). */
-  acceptFetchUpgradeLeg(request: Request): Response | null {
-    return this.#liveFetch.acceptFetchUpgradeLeg(request);
-  }
-
-  /** Route one incoming WebSocket message. TRUE = a live-capability upgrade frame (forwarded by
-   *  the subsystem); FALSE = not ours (the pager carries no routable inbound payloads). */
-  message(ws: WebSocket, data: string | ArrayBuffer): boolean {
-    return this.#liveFetch.handleWebSocketMessage(ws, data);
   }
 
   /** Observability: `dormant` ⇒ nothing paged in (the DO can hibernate; stubs stay attached). */
@@ -323,7 +311,7 @@ export async function openStubPagerWebSocket(
   // waking it — defeats the ~100s idle-close and keeps the /api isolate warm. Dies with the isolate.
   const keepalive = setInterval(() => {
     try {
-      response.webSocket!.send("itx-pager-keepalive");
+      response.webSocket!.send(STUB_PAGER_KEEPALIVE_REQUEST);
     } catch {
       clearInterval(keepalive);
     }

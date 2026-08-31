@@ -6,9 +6,9 @@
 // workerd-side provider, and THIS lane runs inside workerd. The provider lives here, parked over a
 // real capnweb session; a real eyeball dials the /cap fetch door. Every hop is production-shaped:
 //
-//   eyeball SELF.fetch /cap → worker sets x-itx-cap → DO #fetchCapLane → capability table →
-//   `itx.rpcStubs.get('<key>')` alias → FETCH UPGRADES: the DO asks the paged-in invoker to dial
-//   (openFetchUpgrade — an RPC call that EXECUTES in the relay's session context; its return is the
+//   eyeball SELF.fetch /cap → worker sets x-itx-cap → the DO's capability fetch lane →
+//   `itx.rpcStubs.get('<key>')` alias → core/fetch-capabilities.ts: the DO asks the paged-in
+//   invoker to dial (an RPC call that EXECUTES in the relay's session context; its return is the
 //   honest ack), the relay dials the provider's fetch() over capnweb and opens ONE dedicated
 //   fetch-upgrade leg back into the DO, the DO mints the eyeball's WebSocketPair natively, and
 //   frames forward RAW between the two DO-side sockets. The stub pager stays a PAGER.

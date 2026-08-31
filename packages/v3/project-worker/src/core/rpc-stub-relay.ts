@@ -50,23 +50,31 @@ class RetainedCallbackInvoker extends WorkersRpcTarget {
     this.#host = host;
   }
 
+  /** Walk dotted segments off the retained capnweb stub (property access pipelines through it). */
+  #receiver(capPath: string[]): Record<string, unknown> {
+    let recv = this.#provider as unknown as Record<string, unknown>;
+    for (const seg of capPath) recv = recv[seg] as Record<string, unknown>;
+    return recv;
+  }
+
+  /** The provider died mid-call: capnweb throws its raw, UNCODED close error. Re-code LOCALLY to
+   *  CONNECTION_OFFLINE so the CODE (never a message) crosses the Workers-RPC hop back to the
+   *  caller (core/errors.ts: classify by code across a hop). A genuine app error from a live
+   *  client propagates untouched. */
+  #recodeIfBroken(e: unknown, what: string): never {
+    if (this.#broken.value)
+      throw codedError("CONNECTION_OFFLINE", `itx rpc stub provider went offline ${what}`);
+    throw e;
+  }
+
   /** The live-capability fetch dial, TRANSPORT side — the whole mechanism (why it exists, the
-   *  upgrade leg, the marker) lives in core/fetch-capabilities.ts; this method only walks the
-   *  dotted receiver and re-codes a mid-dial session break, exactly like invoke() below. */
+   *  upgrade leg, the marker) lives in core/fetch-capabilities.ts. */
   async fetch(upgradeId: string, capPath: string[], request: Request): Promise<unknown> {
     try {
-      let recv = this.#provider as unknown as Record<string, unknown>;
-      for (const seg of capPath) recv = recv[seg] as Record<string, unknown>;
-      return await dialLiveCapabilityFetch(
-        (r) => (recv as { fetch(req: Request): Promise<unknown> }).fetch(r),
-        request,
-        upgradeId,
-        this.#host,
-      );
+      const recv = this.#receiver(capPath) as { fetch(req: Request): Promise<unknown> };
+      return await dialLiveCapabilityFetch((r) => recv.fetch(r), request, upgradeId, this.#host);
     } catch (e) {
-      if (this.#broken.value)
-        throw codedError("CONNECTION_OFFLINE", "itx rpc stub provider went offline mid-fetch");
-      throw e;
+      this.#recodeIfBroken(e, "mid-fetch");
     }
   }
 
@@ -75,18 +83,10 @@ class RetainedCallbackInvoker extends WorkersRpcTarget {
       // Empty path = the provider IS the callable (a bare callback parked as a capability).
       if (capPath.length === 0)
         return await (this.#provider as unknown as (...a: unknown[]) => unknown)(...args);
-      let recv = this.#provider as unknown as Record<string, unknown>;
-      for (let i = 0; i < capPath.length - 1; i++)
-        recv = recv[capPath[i]] as Record<string, unknown>;
+      const recv = this.#receiver(capPath.slice(0, -1));
       return await (recv[capPath[capPath.length - 1]] as (...a: unknown[]) => unknown)(...args);
     } catch (e) {
-      // The provider died mid-call: capnweb throws its raw, UNCODED close error here. Re-code
-      // LOCALLY to CONNECTION_OFFLINE so the CODE (never a message) crosses the Workers-RPC hop
-      // back to the caller — the same condition the offline pre-call paths throw (core/errors.ts:
-      // classify by code across a hop). A genuine app error from a live client propagates untouched.
-      if (this.#broken.value)
-        throw codedError("CONNECTION_OFFLINE", "itx rpc stub provider went offline mid-invoke");
-      throw e;
+      this.#recodeIfBroken(e, "mid-invoke");
     }
   }
 }
