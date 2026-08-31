@@ -1,48 +1,27 @@
-// live-state-runtime.test.ts — REDUCED ⊕ RUNTIME live state, end to end, inside workerd (the
-// pool-workers lane, which — unlike the createTestHarness lane — runs with the Worker Loader's
-// experimental flag, so a userspace processor FACET actually materializes here).
+// live-state-runtime.test.ts — REDUCED ⊕ RUNTIME live state, end to end over the EXTERNAL interface.
 //
-// The Presence processor (proof_sources.mjs, loaded into a DYNAMIC WORKER) exposes live state that
-// COMBINES:
+// This is an interface-level E2E (the apps/os shape): a real worker booted locally by the harness,
+// reached ONLY over capnweb at /api — no workerd-internal test hooks — so the same test would pass
+// against a live Cloudflare deployment or a self-hosted runtime. A userspace processor (Presence,
+// loaded into a DYNAMIC WORKER via the Worker Loader) exposes live state combining:
 //   • reduced state  — `ticks`, folded from durable 'tick' events (survives eviction, replayable), and
 //   • runtime state  — `lastPokeMs`, a plain field the reduce never touches (reset on eviction),
-//     bumped when a 'poke' EPHEMERAL event reaches processEvent.
-//
-// A real capnweb client (dialing `/api` over a WebSocket on SELF, exactly like production) subscribes
-// to the processor's live state, seeds through its `liveSnapshot()` door, and folds the deltas with
-// the SHIPPABLE client store (src/client). Both a reduced change and a runtime change sync through
-// ONE projection and ONE revision chain, as ephemeral LIVE_STATE_CHANGED deltas.
+//     bumped when a 'poke' EPHEMERAL event reaches its processEvent.
+// A capnweb client subscribes, seeds through `liveSnapshot()`, and folds the deltas with the SHIPPABLE
+// client store (src/client — the same store the browser hook uses). Both a reduced change and a
+// runtime change sync through ONE projection and ONE revision chain, as ephemeral deltas.
 
-import { SELF } from "cloudflare:test";
-import { newWebSocketRpcSession } from "capnweb";
-import { afterAll, expect, test } from "vitest";
+import { afterAll, beforeAll, expect, test } from "vitest";
+import { startProjectHarness, type ProjectHarness } from "./harness.ts";
 import { connectLiveState } from "../src/client/live-state-client.ts";
 import { seedSources } from "../proofs/proof_sources.mjs";
 
-const CTX = "prj_ls_runtime";
-const DISPOSE: symbol | undefined = (Symbol as { dispose?: symbol }).dispose;
-const sessions: unknown[] = [];
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function openItx(): Promise<any> {
-  const res = await SELF.fetch(`https://test.local/api?ctx=${CTX}`, {
-    headers: { Upgrade: "websocket" },
-  });
-  if (!res.webSocket) throw new Error(`expected a 101 with a WebSocket, got ${res.status}`);
-  res.webSocket.accept();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const session = newWebSocketRpcSession(res.webSocket as unknown as WebSocket) as any;
-  sessions.push(session);
-  return session.authenticate().get();
-}
-
-afterAll(() => {
-  for (const s of sessions)
-    try {
-      if (DISPOSE) (s as Record<symbol, () => void>)[DISPOSE]?.();
-    } catch {
-      /* already broken */
-    }
+let harness: ProjectHarness;
+beforeAll(async () => {
+  harness = await startProjectHarness();
+});
+afterAll(async () => {
+  await harness?.stop();
 });
 
 const until = async <T>(label: string, fn: () => T | undefined | false, timeoutMs = 20_000) => {
@@ -58,7 +37,7 @@ const until = async <T>(label: string, fn: () => T | undefined | false, timeoutM
 type PresenceLive = { ticks: number; lastPokeMs: number };
 
 test("a dynamic-worker processor's live state combines reduced (ticks) + runtime (lastPokeMs); a client syncs both via ephemeral deltas", async () => {
-  const itx = await openItx();
+  const itx = await harness.itx("prj_ls_runtime");
   await seedSources(itx, ["presence"]);
   await itx.enableProcessor("presence", {
     source: "itx.kv.get('src/presence.js')",

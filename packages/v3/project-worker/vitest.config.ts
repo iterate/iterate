@@ -8,6 +8,7 @@
 //               controls (evictDurableObject) — the hibernation lane (__workers-tests__/**)
 
 import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
+import { playwright } from "@vitest/browser-playwright";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
@@ -52,6 +53,21 @@ export default defineConfig({
           onUnhandledError(error) {
             if (/RPC session|WebSocket|CONNECTION_OFFLINE|disposed/i.test(error.message ?? ""))
               return false;
+          },
+        },
+      },
+      {
+        // browser — the React useLiveState hook rendered in a REAL browser (Chromium via Playwright),
+        // fed the same door + deltas the server sends, proving the client reassembles live state in
+        // the browser. Run alone with `pnpm test:browser` (or `vitest run --project browser`).
+        test: {
+          name: "browser",
+          include: ["__browser-tests__/**/*.test.tsx"],
+          browser: {
+            enabled: true,
+            provider: playwright(),
+            headless: true,
+            instances: [{ browser: "chromium" }],
           },
         },
       },

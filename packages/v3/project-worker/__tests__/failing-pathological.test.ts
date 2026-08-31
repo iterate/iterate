@@ -357,24 +357,15 @@ export default class FanProbe extends StreamProcessor {
 }
 `;
 
-test.fails("BUG: 50 userspace processors — the loader lane cannot materialize AT ALL under the local harness", async () => {
-  // BUG: confinedWorker (core/worker-loader.ts) sets compatibilityFlags:
-  //      ["allow_irrevocable_stub_storage"] on every LOADER.get worker; local workerd (as
-  //      booted by wrangler createTestHarness) refuses experimental flags without
-  //      --experimental, so the very FIRST enableProcessor with a userspace ref rejects:
-  //      "The compatibility flag allow_irrevocable_stub_storage is experimental … you must
-  //      pass --experimental". TestHarnessOptions exposes no knob for it ({root, workers}
-  //      only — checked wrangler 4.107.0), so the whole userspace-processor lane is
-  //      untestable in the one lane that boots the real worker.
-  // EXPECTED: 50 userspace processors enable, one append fans out to all 50 in <5s, and the
-  //      stream stays responsive while it happens (the assertions below — they become live
-  //      the moment the harness can boot workerd with --experimental or the flag goes stable).
-  // ACTUAL: enableProcessor("fan0", …) throws at facet materialization; zero of the 50 enable.
-  // WHY IT MATTERS: the harness exists so "tests speak to it exactly like production
-  //      clients" — but the loader path (userspace processors, code caps, stateful workers)
-  //      is invisible to it, which is exactly where pathological fan-out and isolate-cost
-  //      bugs live. Until this gap closes, no CI lane can catch a fan-out regression.
-  //      (The loader-free fan-out probe below covers the commit-path half in the meantime.)
+test("50 userspace processors materialize in the harness; one append fans out to all 50 in <5s while the stream stays responsive", async () => {
+  // Was a documented gap: confinedWorker (core/worker-loader.ts) sets
+  // compatibilityFlags:["allow_irrevocable_stub_storage"] on every LOADER.get worker, and the
+  // OLD local workerd (wrangler 4.107.0 → workerd 1.20260701) refused experimental flags without
+  // --experimental, so the loader lane was untestable in the harness. RESOLVED by bumping wrangler
+  // to a workerd where the flag is accepted (4.127.1) — the same runtime the vitest workers lane
+  // already used. The harness now boots the real worker AND loads userspace facets, so this fan-out
+  // runs for real: 50 userspace processors enable, one append fans out to all 50 in <5s, and an
+  // unrelated call is never head-of-line blocked while it happens.
   const itx = await harness.itx("prj_path_fanout");
   await itx.invokeCapability(["itx", "kv", ["put", "procsrc", FAN_PROCESSOR_SOURCE]]);
 
@@ -423,8 +414,8 @@ test.fails("BUG: 50 userspace processors — the loader lane cannot materialize 
 }, 240_000);
 
 test("50 CONNECTED live subscribers: one append fans out to all 50 in <5s and the stream stays responsive (the loader-free fan-out lane)", async () => {
-  // The commit-path half of the fan-out story (the loader half is blocked — see the BUG test
-  // above): 50 live capnweb callbacks parked as ItxConnections, delivered fire-and-forget
+  // The commit-path half of the fan-out story (the loader half now runs too — see the fan-out
+  // test above): 50 live capnweb callbacks parked as ItxConnections, delivered fire-and-forget
   // from the commit path. Wall time = append → the LAST subscriber sees the marker.
   const itx = await harness.itx("prj_path_subfan");
   const timers: ReturnType<typeof setTimeout>[] = [];

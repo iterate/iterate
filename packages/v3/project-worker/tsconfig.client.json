@@ -1,0 +1,14 @@
+{
+  // The BROWSER client (src/client/*.tsx) — React + DOM, NOT the worker runtime. Kept out of the
+  // main tsconfig (which is workerd-typed, no DOM/JSX on purpose) and checked here instead. The
+  // framework-free client halves (live-state-store.ts, live-state-client.ts) stay in the main
+  // tsconfig — they use no DOM and belong to the worker's type world.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["react", "react-dom"]
+  },
+  "include": ["src/client/react.tsx", "src/client/demo.tsx"],
+  "exclude": []
+}
