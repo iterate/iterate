@@ -12,7 +12,11 @@
 // JS — the point of the exercise (see tasks/mobile-camera-filters.md).
 
 import { Component } from "react";
-import { CAMERA_FILTERS, type FilterDefinition } from "../lib/filters/definitions.ts";
+import {
+  CAMERA_FILTERS,
+  FILTERED_CLIP_MAX_SECONDS,
+  type FilterDefinition,
+} from "../lib/filters/definitions.ts";
 import {
   coverTransform,
   faceGeometryFromLandmarks,
@@ -21,15 +25,14 @@ import {
   type NormalizedLandmark,
 } from "../lib/filters/face-geometry.ts";
 
+// NOTE: "use dom" modules only support a single default export — runtime
+// named exports break the Metro bundle (CI-caught). Shared values live in
+// ../lib/filters/definitions.ts; type-only exports are erased and fine.
 export type FilterCameraCommand = {
   /** Monotonic; a new seq triggers the action exactly once. */
   seq: number;
   type: "snap" | "start-recording" | "stop-recording";
 };
-
-/** Filtered recordings are re-encoded on-canvas and cross the WebView bridge
- * as one base64 message, so they stay shorter than plain camera clips. */
-export const FILTERED_CLIP_MAX_SECONDS = 30;
 
 const MEDIAPIPE_CDN = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22";
 const FACE_MODEL_URL =

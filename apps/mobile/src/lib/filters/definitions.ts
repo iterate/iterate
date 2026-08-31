@@ -28,6 +28,12 @@ export type FilterFrameArgs = {
   timeMs: number;
 };
 
+/** Filtered recordings are re-encoded on-canvas and cross the WebView bridge
+ * as one base64 message, so they stay shorter than plain camera clips.
+ * Lives here (not filter-camera.tsx) because "use dom" modules only allow a
+ * single default export at runtime. */
+export const FILTERED_CLIP_MAX_SECONDS = 30;
+
 export type FilterDefinition = {
   id: string;
   label: string;
@@ -44,13 +50,14 @@ export const CAMERA_FILTERS: FilterDefinition[] = [
     draw: (args) => {
       const backdrops = ["potato-dirt", "potato-farm", "potato-rain"];
       drawBackdrop(args, backdrops[args.backgroundIndex % backdrops.length]);
-      // The potato is buried: fixed in the dirt, not tracking your head.
-      // Your eyes and lips are sampled from wherever your face actually is
-      // and remapped onto the potato.
+      // The potato is buried: fixed in the dirt at a fixed size, but it
+      // rolls with your head, and your eyes and lips sit at fixed positions
+      // WITHIN the potato (standard face-masking, just anchored to the dirt
+      // instead of your face).
       const size = Math.min(args.width * 0.62, args.height * 0.42);
       const cx = args.width / 2;
       const cy = args.height * 0.56;
-      const tilt = -0.14;
+      const tilt = -0.14 + args.face.box.angle;
       drawEmoji(args.ctx, "🥔", cx, cy, size * 1.3, tilt);
       const at = (dx: number, dy: number) => ({
         x: cx + (dx * Math.cos(tilt) - dy * Math.sin(tilt)) * size,
