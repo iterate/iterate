@@ -236,6 +236,13 @@ function ChatScreen() {
             : attachment,
         ),
       );
+      // The optimistic bubble gets the hydrated transcripts too — the words
+      // appear under the waveform while the upload is still running.
+      setPendingSends((prev) =>
+        prev.map((pending) =>
+          pending.clientId === input.clientId ? { ...pending, files } : pending,
+        ),
+      );
       // Byte-carrying attachments become addFiles payloads (bytes read
       // lazily from their local uris here, at send time); location becomes
       // an XML part appended to the text (lib/composer-attachments.ts).
@@ -690,10 +697,23 @@ function PendingSendBubble({
   onEdit: () => void;
   onRetry: () => void;
 }) {
+  // While the send is in flight, a recorded clip whose transcription hasn't
+  // landed yet shows "Transcribing…" in the transcript slot — the mutation
+  // swaps in the real words as soon as hydration resolves.
+  const displayFiles =
+    entry.status === "sending"
+      ? entry.files.map((attachment) =>
+          attachment.kind === "audio" &&
+          attachment.durationSeconds !== null &&
+          attachment.transcript === null
+            ? { ...attachment, transcript: "Transcribing…" }
+            : attachment,
+        )
+      : entry.files;
   const message: AgentUiMessageItem = {
     kind: "user",
     id: `pending-${entry.clientId}`,
-    text: messageWithXmlParts(entry.message, entry.files),
+    text: messageWithXmlParts(entry.message, displayFiles),
     timestampMs: entry.sentAtMs,
     files: entry.files.flatMap((attachment): AgentUiFileAttachment[] => {
       const key = attachmentKey(attachment);

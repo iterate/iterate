@@ -629,7 +629,9 @@ const styles = StyleSheet.create({
   },
   target: { color: colors.textFaint, flex: 1, fontSize: 11 },
   collapseTab: {
-    alignSelf: "center",
+    // Right-hand side, about half the tab's own width off the screen edge.
+    alignSelf: "flex-end",
+    marginRight: spacing.xl,
     backgroundColor: colors.surfaceRaised,
     borderColor: colors.border,
     borderWidth: 1,
