@@ -136,7 +136,9 @@ test("calling a stub key that never existed rejects with code CONNECTION_OFFLINE
 test("stub pager upgrade with an unknown transportId is refused with 409 (attach first)", async () => {
   // Two-phase attach: the pager door must 409 an id it never minted, so a relay that outlived
   // a DO restart re-attaches instead of silently pairing a socket to nothing.
-  const res = await fetch(`http://${harness.url.host}/state?ctx=${c("pager409")}`, {
+  // Any worker route that forwards to the DO's fetch reaches the pager door, which is checked first;
+  // /cap forwards, and the pager header short-circuits before the cap/egress lanes.
+  const res = await fetch(`http://${harness.url.host}/cap?ctx=${c("pager409")}`, {
     headers: { "x-itx-stub-pager": "424242" },
   });
   expect(res.status).toBe(409);

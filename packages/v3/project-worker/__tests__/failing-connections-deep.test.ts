@@ -54,11 +54,11 @@ async function until<T>(
 /** Presence: the keys currently held by this context (`[{ key, description? }]`). */
 const listStubs = (itx: any): Promise<any[]> => itx.invokeCapability("itx.rpcStubs.list()");
 
-/** The DO's read-only /state door (never mints storage): the rpc-stub registry's live counters
- *  ride at the top level — `stubs` (attached pager sockets), `pagedIn`, `dormant`. */
+/** The DO's read-only observability (never mints storage), over the one door as `itx.hostState()`:
+ *  the rpc-stub registry's live counters ride at the top level — `stubs` (attached pager sockets),
+ *  `pagedIn`, `dormant`. */
 async function streamState(ctx: string): Promise<any> {
-  const res = await fetch(`http://${harness.url.host}/state?ctx=${ctx}`);
-  return await res.json();
+  return (await harness.itx(ctx)).hostState();
 }
 const stubCount = async (ctx: string): Promise<number> => (await streamState(ctx)).stubs;
 

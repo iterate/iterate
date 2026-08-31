@@ -484,24 +484,22 @@ describe("live state with a projection that throws only sometimes", () => {
     expect((await p.snapshot()).state.n).toBe(1); // the batch committed anyway
     expect(changes()).toHaveLength(0); // only the notification was lost
 
-    mem.stream.append({ type: "tick" }) as StreamEvent[]; // n: 1→2 — projecting the OLD state throws
+    mem.stream.append({ type: "tick" }) as StreamEvent[]; // n: 1→2 — projects again; the holder HEALS
     await settle();
     expect((await p.snapshot()).state.n).toBe(2);
-    expect(changes()).toHaveLength(0);
-
-    mem.stream.append({ type: "tick" }) as StreamEvent[]; // n: 2→3 — both sides project: HEALS
-    await settle();
-    expect((await p.snapshot()).state.n).toBe(3);
+    // The holder diffs the LAST GOOD projection it stored ({n:0}) against the new one ({n:2}),
+    // COALESCING the lost n=1 window into one delta — it heals the moment it can project again,
+    // not only once both sides of a step project.
     expect(changes()).toHaveLength(1);
     const healed = changes()[0].payload as { from: number; to: number; patch: unknown };
-    expect(healed.to).toBe(3); // the healed emission is anchored at the commit cursor
-    // (its `from` skips the lost window — a chain hole, which is the client's re-seed signal)
+    expect(healed.patch).toEqual([{ op: "replace", path: "/n", value: 2 }]);
 
-    mem.stream.append({ type: "tick" }) as StreamEvent[]; // n: 3→4 — the chain continues
+    mem.stream.append({ type: "tick" }) as StreamEvent[]; // n: 2→3 — the chain continues, linked
     await settle();
+    expect((await p.snapshot()).state.n).toBe(3);
     expect(changes()).toHaveLength(2);
     const next = changes()[1].payload as { from: number; to: number };
-    expect(next.from).toBe(healed.to); // linked exactly — no permanent chain damage
+    expect(next.from).toBe(healed.to); // linked exactly — from === the previous emission's to
   });
 });
 

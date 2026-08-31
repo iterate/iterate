@@ -69,11 +69,7 @@ async function enableCounter(ctx: string, slug = "counter"): Promise<void> {
 
 const stateOf = (ctx: string): Promise<Record<string, any>> =>
   runInDurableObject(stub(ctx), async (inst) =>
-    (
-      await (inst as unknown as { fetch(r: Request): Promise<Response> }).fetch(
-        new Request(`https://x/state?ctx=${ctx}`),
-      )
-    ).json(),
+    (inst as unknown as { hostState(): Record<string, any> }).hostState(),
   );
 
 /** Reproduce the production 60s idle quiesce ON DEMAND: fake Date only (+61s — sockets, the alarm

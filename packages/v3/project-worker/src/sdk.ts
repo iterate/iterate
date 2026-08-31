@@ -6,10 +6,7 @@
 // One contract shape, one base class, schemas everywhere (owner's call: isolates absolutely
 // get zod and full contract schemas as part of the SDK).
 
-import { applyPatch, diff, type PatchOp } from "./core/patch.ts";
-
 export {
-  LIVE_STATE_CHANGED,
   StreamProcessor,
   type ProcessorContract,
   type ProcessorSnapshot,
@@ -25,44 +22,10 @@ export {
   jsonEqual,
 } from "./core/events.ts";
 export { z } from "zod";
-export { applyPatch, diff, type PatchOp };
+export { applyPatch, diff, type PatchOp } from "./core/patch.ts";
 
-/** LIVE STATE for a mini-app that is NOT a stream processor (a chatroom DO, a game lobby):
- *  a tiny holder where MUTATION AND NOTIFICATION CANNOT BE SEPARATED — set() diffs old → new
- *  (as JSON: state must be a JSON value) and appends the (unconsumable, ephemeral) change
- *  event carrying the patch on the holder's own revision counter. `snapshot()` is the seed
- *  door — expose it as a method for clients to read {rev, state} through. A reborn holder
- *  restarts at rev 0 with `initial`: any client holding a later rev sees the chain break on
- *  the next set and re-reads the door — the state loss becomes visible, not papered over. */
-export function liveState<S>(
-  itx: { append(...e: unknown[]): unknown },
-  key: string,
-  initial: S,
-): { get(): S; set(next: S): S; snapshot(): { rev: number; state: S } } {
-  let state = initial;
-  // The revision chain is seeded from a per-incarnation EPOCH, not 0: a reborn holder's chain
-  // must never re-use an old chain's numbers, or a client that missed the first post-rebirth
-  // payloads would find `from` matching its held rev and apply a patch onto a diverged base —
-  // silently, forever. With a fresh epoch every stale rev mismatches and re-reads the door.
-  let rev = Date.now() * 4096 + Math.floor(Math.random() * 4096);
-  return {
-    get: () => state,
-    snapshot: () => ({ rev, state }),
-    set(next: S) {
-      const patch = diff(state, next);
-      state = next;
-      if (!patch) return state;
-      rev += 1;
-      void Promise.resolve(
-        itx.append({
-          type: "events.iterate.com/live-state/changed",
-          ephemeral: true,
-          payload: { key, from: rev - 1, to: rev, patch },
-        }),
-      ).catch(() => {
-        /* lossy by contract — a dropped change payload is a revision-chain gap the client heals */
-      });
-      return state;
-    },
-  };
-}
+// LIVE STATE — the one holder used two ways: a processor's base owns one internally (reduced state
+// is live by default, override `projectLiveState` to fold in runtime fields), and a mini-app DO that
+// is NOT a processor (a chatroom, a lobby) owns one directly: `new LiveState(env.ITX, "chat", {…})`,
+// mutate with `set`, expose `snapshot()` as the client seed door. See core/live-state.ts.
+export { LiveState, LIVE_STATE_CHANGED, type LiveStateSink } from "./core/live-state.ts";

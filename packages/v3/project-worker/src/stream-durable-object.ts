@@ -970,7 +970,6 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (pager) return pager;
     const capHeader = request.headers.get("x-itx-cap");
     if (capHeader) return this.#fetchCapLane(request, capHeader);
-    if (new URL(request.url).pathname === "/state") return this.#stateResponse();
     return this.#egress(request);
   }
 
@@ -996,11 +995,13 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
   }
 
-  /** Observability: incarnation (the hibernation tell) + the mount/stub registries. Read-only on
-   *  purpose — probing /state must never be the write that mints storage. */
-  #stateResponse(): Response {
+  /** OBSERVABILITY, over the one door: incarnation (the hibernation tell) + the core fold + the
+   *  mount/stub registries, reached as `itx.hostState()` over capnweb (there is no second HTTP
+   *  transport). Read-only on purpose — reading it must never be the write that mints storage
+   *  (a probe of a never-touched context stays a 404-less no-op; workerd auto-deletes empty DOs). */
+  hostState(): Record<string, unknown> {
     const cs = this.#coreState();
-    return Response.json({
+    return {
       incarnation: this.#eventLog.currentIncarnation(),
       facetProcessors: this.#facetEntries().map((e) => e.slug),
       core: {
@@ -1018,7 +1019,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         lane: r.lane === "connected" && r.liveState ? "connected-live-state" : r.lane,
       })),
       ...this.#rpcStubs.state(),
-    });
+    };
   }
 
   /** EGRESS: substitute `{{secret:NAME}}` placeholders, then the FALLBACK terminal. */

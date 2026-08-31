@@ -38,7 +38,7 @@
 // never be derived from an ephemeral event.
 
 import type { z } from "zod";
-import { diff } from "./patch.ts";
+import { LiveState, LIVE_STATE_CHANGED } from "./live-state.ts";
 import { reportIssue } from "./errors.ts";
 import {
   type ReduceCheckpoint,
@@ -126,14 +126,13 @@ export type ReduceOnlyProcessor<State> = {
   reduce(args: ReduceArgs<State>): State | null | undefined;
 };
 
-/** THE one live-state change type — ephemeral, payload `{key, from, to, patch}`: the delta
- *  patch itself rides the event (LiveView-style), chained by producer-owned revisions (`from` =
- *  the previous emission's `to`). HARD RULE: no processor can ever consume it (#consumes
- *  refuses it before contracts are even consulted), so state-change notifications can never
- *  feed a reduce — the feedback-loop class is unspellable, not merely discouraged. The CLIENT
- *  owns the chain: seed through the producer's door ({rev, state}), apply a payload whose
- *  `from` matches the held rev, re-read the door on any mismatch — never replay these events. */
-export const LIVE_STATE_CHANGED = "events.iterate.com/live-state/changed";
+// LIVE_STATE_CHANGED (and the LiveState holder that emits it) live in core/live-state.ts; re-export
+// so the SDK surface (src/sdk.ts) and its consumers reach it through the processor barrel unchanged.
+export { LIVE_STATE_CHANGED };
+
+/** Returned by #liveStateOf when `liveState(state)` threw — distinct from a legitimate `undefined`
+ *  projection, so a throw skips the emit while `undefined` is a real (patchable) value. */
+const PROJECTION_FAILED = Symbol("live-state-projection-failed");
 
 /** THE ONE consumes rule — the reduce, both delivery lanes (connected + forwarder), and the
  *  inline core all call this; there is no second copy to drift. `consumes` undefined = every
@@ -187,27 +186,68 @@ export abstract class StreamProcessor<State> {
   /** Side-effect hook. Synchronous by design: register async work via the two helpers. */
   protected processEvent(_args: ProcessEventArgs<State>): undefined {}
 
-  /** OPTIONAL live-state projection: define it and every batch whose reduce CHANGED the projected
-   *  shape emits ONE change event carrying the delta patch (key = the contract slug). Redact/
-   *  trim here — this is the shape clients see, and the shape the diffs are computed over. */
-  liveState?(state: State): unknown;
+  /** The live-state PROJECTION — the shape clients see and the shape the diffs are computed over.
+   *  DEFAULT: the reduced state verbatim, so reduced state is live out of the box. Override to
+   *  redact/trim, or to FOLD IN RUNTIME FIELDS the reduce doesn't own
+   *  (`return { ...state, lastSeenMs: this.#lastSeenMs }`); after a runtime field changes out of
+   *  band, call `publishLiveState()` to emit its delta. */
+  protected liveState(state: State): unknown {
+    return state;
+  }
 
-  // The live-state revision chain, in-memory ON PURPOSE: minted at the first liveSnapshot of an
-  // incarnation (from the reduce cursor — monotonic across incarnations), advanced to `to` on
-  // every emission. Losing it with an eviction just breaks the chain, and a broken chain is the
-  // subscriber-side signal to re-seed — never a correctness hazard.
-  #liveStateRev?: number;
+  /** Does this processor PUSH live-state deltas? A processor OPTS IN by overriding `liveState`
+   *  (even trivially, to add runtime fields) — otherwise its reduced state stays PULL-only through
+   *  `liveSnapshot`, and its reductions never inject deltas into the stream (no offset consumed for
+   *  a projection nobody subscribed to). The seed door works for every processor either way. */
+  #emitsLiveState(): boolean {
+    return this.liveState !== StreamProcessor.prototype.liveState;
+  }
 
-  /** THE SEED DOOR for live-state clients: `{rev, state}` — the revision and the projection
-   *  read together (single-threaded, so atomically), which is what lets a client chain patches
-   *  exactly instead of guessing which changes its snapshot already contains. */
+  // One LiveState holder per processor (core/live-state.ts) — it owns the revision chain and the
+  // diff→emit dance. Lazily materialized so its epoch is minted once per incarnation; seeded with
+  // the PREVIOUS projection at the top of each batch (so the first change after (re)materialization
+  // still diffs from the right base). A version refold clears it (#rereduceIfVersionChanged), so a
+  // reborn chain mints a fresh epoch and clients re-seed — which a refold wants.
+  #live?: LiveState<unknown>;
+  #liveHolder(seedState?: State): LiveState<unknown> {
+    if (this.#live) return this.#live;
+    const seed = this.#liveStateOf(seedState ?? this.#loadProgress().state);
+    return (this.#live = new LiveState(
+      this.stream,
+      this.contract.slug,
+      seed === PROJECTION_FAILED ? undefined : seed,
+    ));
+  }
+
+  /** `this.liveState(state)`, CONTAINED: a throwing/unserializable projection loses only its
+   *  notification (the client re-seeds on the chain gap), never a batch or the holder. The sentinel
+   *  distinguishes "threw" (skip the emit) from a legitimate `undefined` projection. */
+  #liveStateOf(state: State): unknown {
+    try {
+      return this.liveState(state);
+    } catch (error) {
+      reportIssue("processor.live-state", error, { slug: this.contract.slug });
+      return PROJECTION_FAILED;
+    }
+  }
+
+  /** THE SEED DOOR for live-state clients: `{rev, state}` read together (single-threaded ⇒
+   *  atomically), which is what lets a client chain patches exactly instead of guessing which
+   *  changes its snapshot already contains. */
   async liveSnapshot(): Promise<{ rev: number; state: unknown }> {
-    if (typeof this.liveState !== "function")
-      throw new Error(`processor "${this.contract.slug}" defines no liveState projection`);
     if (!this.#caughtUp()) await this.wake();
-    const progress = this.#loadProgress();
-    this.#liveStateRev ??= progress.reducedThroughOffset;
-    return { rev: this.#liveStateRev, state: this.liveState(progress.state) };
+    return this.#liveHolder().snapshot();
+  }
+
+  /** Emit a delta for the CURRENT projection (reduced + any runtime fields) if it changed. The base
+   *  calls this after every batch; call it yourself after mutating a runtime field out of band. A
+   *  pull-only processor (didn't override `liveState`) just keeps the holder current for the seed
+   *  door — it `adopt`s the value, appending nothing. */
+  protected publishLiveState(): void {
+    const projection = this.#liveStateOf(this.#loadProgress().state);
+    if (projection === PROJECTION_FAILED) return;
+    if (this.#emitsLiveState()) this.#liveHolder().set(projection);
+    else this.#liveHolder().adopt(projection);
   }
 
   /** Stable idempotency key namespaced by slug; add `whileProcessing` for per-event keys. */
@@ -373,6 +413,9 @@ export abstract class StreamProcessor<State> {
     }
     this.#progress = { reducerVersion: this.contract.version, reducedThroughOffset: target, state };
     writeReduceCheckpoint(this.#storage, this.contract.slug, this.#progress, state, true);
+    // A refold jumped the state under the holder; drop it so the next batch re-seeds a fresh chain
+    // (new epoch ⇒ clients re-read the door — a version bump wants exactly that).
+    this.#live = undefined;
   }
 
   /** CURSOR-DRIVEN gap repair: read contiguously from the persisted cursor out of the log —
@@ -427,6 +470,9 @@ export abstract class StreamProcessor<State> {
     const progress = this.#loadProgress();
     const prevState = progress.state;
     let state = prevState;
+    // Seed the holder at the PREVIOUS projection BEFORE #progress advances — so the delta emitted at
+    // the end diffs prev→next, not next→next (the first-change-lost trap if the holder is born after).
+    this.#liveHolder(prevState);
 
     const consumable = events.filter(
       (e) =>
@@ -461,13 +507,10 @@ export abstract class StreamProcessor<State> {
     this.#progress = next;
     this.#resolveWaiters(reducedThroughOffset);
     // Persist FIRST, emit the live-state delta second (a crash between loses only a notification,
-    // healed by the chain gap; never state).
-    await this.#emitLiveStateIfChanged(
-      prevState,
-      state,
-      progress.reducedThroughOffset,
-      range.through,
-    );
+    // healed by the chain gap; never state). #progress is already `next`, so publishLiveState reads
+    // the just-committed state; the holder diffs against the previous projection and no-ops if
+    // unchanged. Runtime-only fields ride a separate publishLiveState() call from out of band.
+    if (state !== prevState) this.publishLiveState();
   }
 
   /** THE per-event primitive (rules 2–3), shared by every path (batch, gap-repair, at-head pass):
@@ -543,33 +586,6 @@ export abstract class StreamProcessor<State> {
     for (const w of this.#waiters.splice(0)) {
       if (reducedThroughOffset >= w.offset) w.resolve();
       else this.#waiters.push(w);
-    }
-  }
-
-  /** Emit ONE live-state delta iff the projection changed. `to` is clamped MONOTONIC (`max(from,…)`)
-   *  so a late (behind-cursor) ephemeral delivery can never mint a backwards revision. A
-   *  projection/diff/append failure degrades to a LOST notification (the client re-seeds on the chain
-   *  gap), never a thrown batch a snapshot/barrier caller would see. */
-  async #emitLiveStateIfChanged(
-    prev: State,
-    next: State,
-    fromCursor: number,
-    toOffset: number,
-  ): Promise<void> {
-    if (typeof this.liveState !== "function" || next === prev) return;
-    try {
-      const patch = diff(this.liveState(prev), this.liveState(next));
-      if (!patch) return;
-      const from = this.#liveStateRev ?? fromCursor;
-      const to = Math.max(from, toOffset);
-      this.#liveStateRev = to;
-      await this.stream.append({
-        type: LIVE_STATE_CHANGED,
-        ephemeral: true,
-        payload: { key: this.contract.slug, from, to, patch },
-      });
-    } catch (error) {
-      reportIssue("processor.live-state-emit", error, { slug: this.contract.slug });
     }
   }
 }

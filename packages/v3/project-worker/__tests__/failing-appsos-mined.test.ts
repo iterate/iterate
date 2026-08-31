@@ -199,11 +199,12 @@ test("probing /state mints no storage — a virgin ctx reports incarnation 0, fi
   //   StreamEventLog). If the probe minted storage, the incarnation would already be bumped and
   //   the first append would land on incarnation 2.
   const ctx = "prj_am_lazy";
-  const first: any = await (await fetch(new URL(`/state?ctx=${ctx}`, harness.url))).json();
-  expect(first.incarnation).toBe(0);
   const itx = await harness.itx(ctx);
+  // Connecting + probing is pure read: no append yet, so no storage minted, incarnation still 0.
+  const first: any = await itx.hostState();
+  expect(first.incarnation).toBe(0);
   await append(itx, { type: "mark", payload: { n: 1 } });
-  const second: any = await (await fetch(new URL(`/state?ctx=${ctx}`, harness.url))).json();
+  const second: any = await itx.hostState();
   expect(second.incarnation).toBe(1);
 });
 

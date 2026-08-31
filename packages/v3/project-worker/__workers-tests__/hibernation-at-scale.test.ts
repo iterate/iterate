@@ -65,9 +65,8 @@ type StreamState = {
   dormant: boolean;
 };
 async function state(): Promise<StreamState> {
-  const res = await SELF.fetch(`https://test.local/state?ctx=${CTX}`);
-  expect(res.status).toBe(200);
-  return (await res.json()) as StreamState;
+  // Observability over the one door: the DO's hostState() method (the /state HTTP route is gone).
+  return (await contextStub().hostState()) as unknown as StreamState;
 }
 
 const contextStub = () =>

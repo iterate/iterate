@@ -191,6 +191,13 @@ export class Itx extends RpcTarget {
     return this.#host.invoke(call);
   }
 
+  /** OBSERVABILITY (read-only): the context host's incarnation, core fold (paused/breaker), active
+   *  subscription mounts, and live rpc-stub registry — one JSON snapshot. Replaces the old `/state`
+   *  HTTP door; there is no second transport, just this method over capnweb. */
+  hostState(): Promise<Record<string, unknown>> {
+    return this.#host.hostState();
+  }
+
   /** Mount a capability: bind a capability path to a target expression (string half preferred —
    *  it is what the event stores). Name a live stub by targeting `"itx.rpcStubs.get('<key>')"`.
    *  Returns the mount's identity for `revoke`. */

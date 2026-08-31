@@ -62,10 +62,7 @@ export default {
       return host(env, url).fetch(new Request(request, { headers }));
     }
 
-    // Observability forwards straight to the DO.
-    if (url.pathname === "/state") return host(env, url).fetch(request);
-
-    return new Response("project-worker — /api (capnweb), /cap, /state, /version\n", {
+    return new Response("project-worker — /api (capnweb), /cap, /version\n", {
       headers: { "content-type": "text/plain" },
     });
   },

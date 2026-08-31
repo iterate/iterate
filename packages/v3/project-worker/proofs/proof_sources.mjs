@@ -19,9 +19,9 @@ export class Counter extends DurableObject {
   }
 }`,
   "src/chatroom.js": `import { DurableObject } from "cloudflare:workers";
-import { liveState } from "./processor.js";
+import { LiveState } from "./processor.js";
 export class Chatroom extends DurableObject {
-  #chat = liveState(this.env.ITX, "chat", { messages: [] });
+  #chat = new LiveState(this.env.ITX, "chat", { messages: [] });
   post(from, text) {
     this.#chat.set({ messages: [...this.#chat.get().messages, { from, text }] });
     return { ok: true };
@@ -80,6 +80,28 @@ export class Chunky extends StreamProcessor {
     if (event.type === "mark") return { ...state, marks: state.marks + 1 };
   }
   liveState(state) { return { chunks: state.chunks, marks: state.marks }; }
+}`,
+  // A processor whose live state COMBINES reduced state (ticks, folded from durable 'tick' events)
+  // with RUNTIME state (lastPokeMs, set out of band by an RPC poke — no event, gone on eviction).
+  // Proves reduced ⊕ runtime through one projection + one revision chain (live-state-runtime.test.ts).
+  "src/presence.js": `import { StreamProcessor, defineProcessorContract, z } from "./processor.js";
+const contract = defineProcessorContract({
+  slug: "presence",
+  version: "1.0.0",
+  description: "Reduced tick count beside a runtime lastPokeMs the reduce never sees.",
+  stateSchema: z.object({ ticks: z.number().default(0) }),
+  events: {},
+  consumes: ["tick"],
+  emits: [],
+});
+export class Presence extends StreamProcessor {
+  contract = contract;
+  #lastPokeMs = 0;
+  reduce({ event, state }) {
+    if (event.type === "tick") return { ...state, ticks: state.ticks + 1 };
+  }
+  liveState(state) { return { ticks: state.ticks, lastPokeMs: this.#lastPokeMs }; }
+  poke() { this.#lastPokeMs = Date.now(); this.publishLiveState(); return { lastPokeMs: this.#lastPokeMs }; }
 }`,
   "src/user-tally.js": `import { StreamProcessor, defineProcessorContract, z } from "./processor.js";
 const contract = defineProcessorContract({

@@ -64,8 +64,7 @@ const readAll = async (itx: any): Promise<any[]> =>
   (await itx.invokeCapability(["itx", "stream", ["read", 0, 500]])).events;
 const readHead = async (itx: any): Promise<number> =>
   (await itx.invokeCapability(["itx", "stream", ["read", 0, 500]])).scannedThroughOffset as number;
-const doState = async (ctx: string): Promise<any> =>
-  (await fetch(new URL(`/state?ctx=${ctx}`, harness.url))).json();
+const doState = async (ctx: string): Promise<any> => (await harness.itx(ctx)).hostState();
 
 /** Expected tally counts = groupBy(type) over the DURABLE log (tally consumes "*", durable only). */
 const durableCountsByType = (events: any[]): Record<string, number> => {

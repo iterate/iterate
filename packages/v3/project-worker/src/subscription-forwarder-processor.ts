@@ -77,6 +77,8 @@ const activeMounts = (state: ForwarderState): AbsentTargetSubscriptionMount[] =>
 
 export class SubscriptionForwarderProcessor extends StreamProcessor<ForwarderState> {
   readonly contract = SubscriptionForwarderContract;
+  // (No liveState override: an internal cursor-keeper nobody watches doesn't opt into push — its
+  // reduced state stays pull-only, so its forwards never inject live-state deltas into the stream.)
   // Every delivery mechanic — cursor read-loop, watchdog, backoff ladder, halt — lives on THIS
   // class (no injected pump: the collaborators are the ones the processor already holds).
   readonly #parent: FacetProcessorArgs["parent"];

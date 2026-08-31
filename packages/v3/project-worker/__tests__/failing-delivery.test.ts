@@ -368,7 +368,7 @@ test("forwarder auto-enables exactly once across many absent-target subscribes (
       itx.subscribe({ name: `auto-${i}`, target: `itx.sink${i}`, consumes: ["never"] }),
     ),
   );
-  const state: any = await (await fetch(new URL(`/state?ctx=${ctx}`, harness.url))).json();
+  const state: any = await itx.hostState();
   expect(state.facetProcessors.filter((s: string) => s === "subscription-forwarder")).toHaveLength(
     1,
   );
@@ -383,7 +383,7 @@ test("liveState subscribe with an ABSENT target is rejected loudly at provide", 
     itx.subscribe({ name: "lsbad", liveState: { key: "chat" }, target: "itx.wherever" }),
   ).rejects.toThrow(/needs a live rpc-stub target/);
   // and the rejected mount left nothing behind
-  const state: any = await (await fetch(new URL(`/state?ctx=prj_fd_lsbad`, harness.url))).json();
+  const state: any = await itx.hostState();
   expect(state.subscriptionMounts).toEqual([]);
 });
 
