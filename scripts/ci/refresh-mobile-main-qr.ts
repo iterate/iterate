@@ -57,7 +57,12 @@ async function refreshMobileMainQr() {
   // superseded this build's snapshot, which must not be regressed.
   const status = await fetchChannelStatus("preview");
   if (status !== null && status.buildId === build.id) {
-    await pushChannelStatus({ ...status, buildFinished: true });
+    await pushChannelStatus({
+      ...status,
+      buildFinished: true,
+      // The publish wrote no ipaUrl (the build hadn't finished); it has one now.
+      ipaUrl: build.artifacts?.applicationArchiveUrl || status.ipaUrl,
+    });
   } else {
     console.log(
       `snapshot now points at ${status?.buildId || "nothing"} (not ${build.id}) — leaving it`,

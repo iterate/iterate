@@ -11,8 +11,12 @@ import { itxEnv } from "../env.ts";
 export const Route = createFileRoute("/m/install/$channel")({
   server: {
     handlers: {
-      GET: ({ params }) =>
-        handleInstallPageRequest({ bucket: itxEnv.FILES_BUCKET, channel: params.channel }),
+      GET: ({ params, request }) =>
+        handleInstallPageRequest({
+          bucket: itxEnv.FILES_BUCKET,
+          channel: params.channel,
+          origin: new URL(request.url).origin,
+        }),
     },
   },
 });

@@ -110,8 +110,10 @@ on the PR — pick by what your phone already has:
 - **Full install** — the channel-stable interstitial
   `os.iterate.com/m/install/<channel>`, which resolves the channel's expected
   native build _at scan time_ from the CI-pushed snapshot (so a QR printed
-  three pushes ago still lands on the right build), links its EAS install
-  page, and keeps an **Open in app** tap for the post-install channel switch.
+  three pushes ago still lands on the right build), installs it in place via
+  an OS-served itms-services manifest (the EAS build page stays linked for
+  details, and as the fallback while a build compiles), and keeps an
+  **Open in app** tap for the post-install channel switch.
 
 Builds are shared across channels — one per runtime fingerprint, all plain
 `preview` profile. A JS-only PR triggers **no build** (its install QR

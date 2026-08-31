@@ -138,6 +138,11 @@ async function publishMobilePrPreview() {
     commit: headSha,
     message,
     publishedAt: new Date().toISOString(),
+    // Powers the in-place itms-services install; absent until the build
+    // finishes (the next push then carries it).
+    ipaUrl: installBuild.ipaUrl,
+    appVersion: appConfig.expo.version,
+    bundleId: appConfig.expo.ios.bundleIdentifier,
   });
 
   const plan = planPreview({

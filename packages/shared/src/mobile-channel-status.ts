@@ -29,6 +29,20 @@ export const MobileChannelStatus = z.object({
   message: z.string(),
   /** ISO timestamp of the publish that wrote this snapshot. */
   publishedAt: z.string(),
+  // The three fields below power the in-place itms-services install on the
+  // /m/install page. Optional — a deliberate exception to the
+  // no-optional-properties preference, because absence is a real state with
+  // one meaning ("fall back to linking the build page"): snapshots written
+  // before these fields existed, a freshly triggered build with no artifact
+  // yet, and PUTs through an older deployed worker whose zod strips unknown
+  // keys all land there.
+  /** The build's .ipa artifact (artifacts.applicationArchiveUrl) — a stable
+   * unsigned expo.dev URL, valid until the build's ~90-day expiry. */
+  ipaUrl: z.url().optional(),
+  /** app.json expo.version — the manifest's bundle-version. */
+  appVersion: z.string().optional(),
+  /** app.json expo.ios.bundleIdentifier — the manifest's bundle-identifier. */
+  bundleId: z.string().optional(),
 });
 
 export type MobileChannelStatus = z.infer<typeof MobileChannelStatus>;

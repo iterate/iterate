@@ -93,6 +93,11 @@ async function publishMobileUpdate() {
     commit: sha,
     message,
     publishedAt: new Date().toISOString(),
+    // Powers the in-place itms-services install; absent until the build
+    // finishes (the refresher fills it in then).
+    ipaUrl: installBuild.ipaUrl,
+    appVersion: appConfig.expo.version,
+    bundleId: appConfig.expo.ios.bundleIdentifier,
   });
 
   const plan = planPreview({

@@ -277,7 +277,9 @@
           <dt>install page</dt>
           <dd>
             <code>os.iterate.com/m/install/&lt;channel&gt;</code> — what install QRs encode.
-            Resolves the channel's expected build <i>at scan time</i> (never stale), and keeps an
+            Resolves the channel's expected build <i>at scan time</i> (never stale), installs it in
+            place (an OS-served itms-services manifest — no expo.dev hop; the build page stays
+            linked for details, and as the fallback while a build compiles), and keeps an
             <b>Open in app</b> link for the post-install switch.
           </dd>
         </dl>
@@ -379,10 +381,10 @@
               <details>
                 <summary>steps</summary>
                 <div>
-                  Install (the expo.dev tap fires a native install dialog — the app lands on the
-                  home screen in the background, Safari stays put; no callback, our page is one Back
-                  away) → <b>Open in app</b> → Switch to <code>pr-1234</code>. The confirm screen
-                  also offers the PR's preview backend + test sign-in (stamped into the bundle).
+                  Install (the tap fires the native install dialog right on our page — the app lands
+                  on your home screen while the page stays open) → <b>Open in app</b> → Switch to
+                  <code>pr-1234</code>. The confirm screen also offers the PR's preview backend +
+                  test sign-in (stamped into the bundle).
                 </div>
               </details>
             </td>
