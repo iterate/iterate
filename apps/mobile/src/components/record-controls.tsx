@@ -19,6 +19,7 @@ import {
   AudioQuality,
   getRecordingPermissionsAsync,
   IOSOutputFormat,
+  RecordingPresets,
   requestRecordingPermissionsAsync,
   setAudioModeAsync,
   useAudioRecorder,
@@ -36,17 +37,17 @@ import {
 } from "../lib/record-gesture.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
 
-/** Voice notes record as 16kHz mono AAC — the voice-optimized profile the
- * transcribers (on-device SFSpeechRecognizer and server models) handle well.
- * NOT LPCM/WAV: expo-audio passes bitRate to AVAudioRecorder unconditionally
- * (AudioUtils.createRecordingOptions), and AVFoundation raises an
- * uncatchable NSInvalidArgumentException when a bit rate accompanies Linear
- * PCM — and useAudioRecorder constructs the recorder on every chat-screen
- * mount, so the LPCM options crashed the app on opening ANY chat
- * (on-device, 2026-08-31). */
+/** Voice notes record as 44.1kHz MONO AAC at 64kbps — the stock
+ * HIGH_QUALITY preset minus a channel and half the bitrate. Twice burned on
+ * cleverer profiles: LPCM+bitRate raises an uncatchable NSException, and
+ * 16kHz AAC at 64kbps exceeds the encoder's valid bitrate range for that
+ * sample rate — AVAudioRecorder init throws, expo-audio's constructor
+ * swallows it into a bare recorder, and the first hold dies with
+ * "Failed to prepare recorder" (on-device, 2026-08-31). Transcribers
+ * resample to 16k themselves; the source rate buys nothing. */
 const VOICE_RECORDING_OPTIONS: RecordingOptions = {
   extension: ".m4a",
-  sampleRate: 16000,
+  sampleRate: 44100,
   numberOfChannels: 1,
   bitRate: 64000,
   android: { outputFormat: "mpeg4", audioEncoder: "aac" },
@@ -129,7 +130,15 @@ export function RecordControls(props: { onAttach: (attachment: ComposerAttachmen
       }
       if (current.outcome !== "recording") return;
       await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
-      await recorder.prepareToRecordAsync();
+      try {
+        await recorder.prepareToRecordAsync();
+      } catch {
+        // prepareToRecordAsync(options) REBUILDS the native recorder — the
+        // recovery path when the mount-time construction failed silently
+        // (see VOICE_RECORDING_OPTIONS). The stock preset always works;
+        // worse compression beats a dead mic button.
+        await recorder.prepareToRecordAsync(RecordingPresets.HIGH_QUALITY);
+      }
       if (current.outcome !== "recording") return;
       recorder.record();
       // The finger may have resolved the gesture while prepare ran. The
