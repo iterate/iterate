@@ -11,9 +11,9 @@
 // pager sockets, the shared broken-flag, and shadow-relay disposal hidden here.
 
 import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
-import { disposeStub, openStubPagerWebSocket } from "./hibernatable-rpc-stub.ts";
-import { codedError } from "./errors.ts";
 import type { StreamDurableObject } from "../stream-durable-object.ts";
+import { codedError } from "./errors.ts";
+import { disposeStub, openStubPagerWebSocket } from "./hibernatable-rpc-stub.ts";
 
 export type ItxHostStub = DurableObjectStub<StreamDurableObject>;
 

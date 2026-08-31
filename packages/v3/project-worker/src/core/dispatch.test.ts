@@ -69,7 +69,10 @@ const scope = () => {
     builtins: {
       kv: {
         get: (k: string) => kvStore.get(k),
-        put: (k: string, v: string) => (kvStore.set(k, v), { ok: true }),
+        put: (k: string, v: string) => {
+          kvStore.set(k, v);
+          return { ok: true };
+        },
       },
     },
     itx: {
@@ -79,14 +82,22 @@ const scope = () => {
       rpcStubs: {
         get: (key: string) => ({
           ping: () => `pong:${key}`,
-          arm: { move: (n: number) => (log.push(`move ${n} @${key}`), "moved") },
+          arm: {
+            move: (n: number) => {
+              log.push(`move ${n} @${key}`);
+              return "moved";
+            },
+          },
         }),
       },
       // a stub-returning chain — pipelining through an async hop
       facets: {
         get: async (_ref: unknown) => ({ counters: { add: async (n: number) => 40 + n } }),
       },
-      append: (e: unknown) => (log.push(`append ${JSON.stringify(e)}`), { offset: 1 }),
+      append: (e: unknown) => {
+        log.push(`append ${JSON.stringify(e)}`);
+        return { offset: 1 };
+      },
     },
   };
 };

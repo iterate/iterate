@@ -21,6 +21,7 @@
 // quiesce (a page gets it back). So the DO holds no stub while idle and hibernates with any number of clients.
 
 import { RpcTarget } from "capnweb";
+import type { StreamDurableObject } from "../stream-durable-object.ts";
 import type { DeliveryPolicy } from "./events.ts";
 import { print, type Expression, type ItxExpression } from "./expression.ts";
 import { InvokeHandle } from "./invoke-handle.ts";
@@ -35,7 +36,6 @@ import {
   type ProviderStub,
   type RetainedProviderStub,
 } from "./rpc-stub-relay.ts";
-import type { StreamDurableObject } from "../stream-durable-object.ts";
 
 /** `session` at `/api` (bound to one projectId). `get(context?)` yields an `Itx`. */
 export class ProjectSession extends RpcTarget {

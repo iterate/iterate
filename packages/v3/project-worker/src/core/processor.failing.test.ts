@@ -19,7 +19,6 @@ import {
 function memoryStream(path = "/") {
   const events: StreamEvent[] = [];
   const pushed: StreamEvent[] = []; // every committed event, ephemerals included (the pump's view)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const procs: StreamProcessor<any>[] = [];
   let maxAssigned = 0;
   let reads = 0;
@@ -72,7 +71,10 @@ const memoryStorage = () => {
   let writes = 0;
   return {
     get: <T>(k: string) => map.get(k) as T | undefined,
-    put: (k: string, v: unknown) => (writes++, void map.set(k, structuredClone(v))),
+    put: (k: string, v: unknown) => {
+      writes++;
+      map.set(k, structuredClone(v));
+    },
     get writes() {
       return writes;
     },
@@ -270,9 +272,8 @@ describe("rule 4 — one durable commit per batch, all-or-nothing", () => {
 
 // ═══════════════════════════════ rule 5 — exactly one caughtUp ═══════════════════════════════
 
-type Delivery = { offset: number | null; caughtUp: boolean };
 const deliveryRecorder = (slug: string, consumes: readonly string[]) => {
-  const deliveries: Delivery[] = [];
+  const deliveries: { offset: number | null; caughtUp: boolean }[] = [];
   const Contract = contractOf(slug, "1", consumes);
   class Rec extends StreamProcessor<{ n: number }> {
     readonly contract = Contract;

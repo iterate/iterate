@@ -23,7 +23,6 @@ import {
 function memoryStream(path = "/") {
   const durable: StreamEvent[] = [];
   const byKey = new Map<string, StreamEvent>();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const procs: StreamProcessor<any>[] = [];
   let maxAssigned = 0;
   const stream: ProcessorStream = {
@@ -82,8 +81,6 @@ function memoryStorage() {
     } satisfies ProcessorStorage,
   };
 }
-
-const settle = () => new Promise((r) => setTimeout(r, 30));
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // Charset gate at DurableObjectNameCodec.parse (Phase 0 / defect 38, U1). Idea (1): does it
@@ -218,7 +215,7 @@ describe("version-bump refold (Phase C)", () => {
     mem.procs.length = 0;
     mem.procs.push(p2);
     mem.stream.append({ type: "tick" }); // offset 4, fire-and-forget push
-    await settle();
+    await new Promise((r) => setTimeout(r, 30));
     const snap = await p2.snapshot();
     expect(snap.state).toEqual({ ticks: 4 });
     expect(p2.effects).toEqual([4]); // ONLY the new event replayed effects, not 1..3

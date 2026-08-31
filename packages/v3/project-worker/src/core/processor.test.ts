@@ -24,7 +24,6 @@ function memoryStream(path = "/") {
   const events: StreamEvent[] = [];
   const pushed: StreamEvent[] = []; // every committed event, ephemerals included (the pump's view)
   const byKey = new Map<string, StreamEvent>();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const procs: StreamProcessor<any>[] = [];
   let maxAssigned = 0;
   let reads = 0;
@@ -88,7 +87,10 @@ const memoryStorage = () => {
   let writes = 0;
   return {
     get: <T>(k: string) => map.get(k) as T | undefined,
-    put: (k: string, v: unknown) => (writes++, void map.set(k, structuredClone(v))),
+    put: (k: string, v: unknown) => {
+      writes++;
+      map.set(k, structuredClone(v));
+    },
     get writes() {
       return writes;
     },
@@ -156,9 +158,13 @@ const setup = () => {
     projectId: "prj_t",
   });
   mem.procs.push(processor);
-  const tick = () =>
-    (mem.stream.append({ type: "events.iterate.com/counter/ticked" }) as StreamEvent[])[0];
-  return { ...mem, storage, processor, tick };
+  return {
+    ...mem,
+    storage,
+    processor,
+    tick: () =>
+      (mem.stream.append({ type: "events.iterate.com/counter/ticked" }) as StreamEvent[])[0],
+  };
 };
 
 describe("contract", () => {

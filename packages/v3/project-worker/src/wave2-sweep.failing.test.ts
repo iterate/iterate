@@ -57,7 +57,12 @@ test("two DIFFERENT facet identities never share one Worker Loader cacheKey (fac
   // unambiguous regardless of ":" in either half. The two identities below now mint DISTINCT keys.
   const keys: string[] = [];
   const env = {
-    LOADER: { get: (key: string) => (keys.push(key), {}) },
+    LOADER: {
+      get: (key: string) => {
+        keys.push(key);
+        return {};
+      },
+    },
     CF_VERSION_METADATA: { id: "deploy-1" },
   } as unknown as Parameters<typeof confinedWorker>[0];
   const host = {} as Parameters<typeof confinedWorker>[4];
@@ -183,7 +188,6 @@ const makeFacetHarness = () => {
   };
   const env = { CONTEXT: { getByName: () => parent } };
   // The mocked DurableObject base stashes (ctx, env) exactly like the real one.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return { facet: new (ProcessorFacet as any)(ctx, env), kv };
 };
 

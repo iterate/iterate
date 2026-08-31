@@ -20,9 +20,9 @@
 // A stateful dynamic worker is the user's `DurableObject` class loaded DIRECTLY as a facet; the
 // stream DO calls its methods via native facet RPC (Reflect.apply through invokePath) — no wrapper.
 
+import { PROCESSOR_SDK_MODULE } from "../generated/processor-sdk.ts";
 import { toExpression, type Expression } from "./expression.ts";
 import { hashSource } from "./hash.ts";
-import { PROCESSOR_SDK_MODULE } from "../generated/processor-sdk.ts";
 
 /** Compose the loader cacheKey `owner` (context + a discriminator: a processor slug or a stateful
  *  className) COLLISION-FREE. The naive `${context}:${discriminator}` aliased across a different

@@ -52,7 +52,7 @@ function serializeCaught(caught: unknown): { type: string; message?: string; sta
       return {
         type: (caught.name || "Error").slice(0, MAX.string),
         message: caught.message.slice(0, MAX.message),
-        ...(caught.stack ? { stack: caught.stack.slice(0, MAX.stack) } : {}),
+        ...(caught.stack && { stack: caught.stack.slice(0, MAX.stack) }),
       };
     }
     if (typeof caught === "object" && caught !== null) return { type: "ObjectThrown" };

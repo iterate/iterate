@@ -12,7 +12,7 @@
 // This replaces the old `deps.context` typed `{ append; read }` + a re-cast to add `invoke` with
 // `unknown` returns — the sync-own-vs-async-sibling mud that the loose type papered over.
 
-import type { Expression, ItxExpression } from "./expression.ts";
+import type { ItxExpression } from "./expression.ts";
 import type { StreamEvent, StreamEventInput } from "./events.ts";
 
 /** One page of the log: the events after an offset, plus how far the scan reached (the range a

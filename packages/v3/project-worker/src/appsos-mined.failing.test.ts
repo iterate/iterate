@@ -10,12 +10,7 @@
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import { defineProcessorContract, sameIdempotentEvent, type StreamEvent } from "./core/events.ts";
-import {
-  StreamProcessor,
-  type ProcessEventArgs,
-  type ProcessorStream,
-  type ReduceArgs,
-} from "./core/processor.ts";
+import { StreamProcessor, type ProcessEventArgs, type ReduceArgs } from "./core/processor.ts";
 
 // ── shared fakes (the capability-table-processor.test.ts / core/processor.test.ts pattern) ──
 

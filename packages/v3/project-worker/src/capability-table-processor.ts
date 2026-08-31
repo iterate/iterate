@@ -132,7 +132,6 @@ const CapabilityTableContract = defineProcessorContract({
 
 export type CapabilityTable = z.infer<typeof CapabilityTableContract.stateSchema>;
 type State = CapabilityTable;
-type CapabilityMount = State["mounts"][number];
 
 /** The capability table as a REDUCE-ONLY processor: pure reduce (the table) + the resolver
  *  methods the parent calls against that reduced state. Hosted INLINE at the parent's commit
@@ -194,9 +193,9 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
           {
             ...parsed,
             providedAtOffset: event.offset,
-            ...(delivery ? { delivery } : {}),
-            ...(processor ? { processor } : {}),
-            ...(lane ? { lane } : {}),
+            ...(delivery && { delivery }),
+            ...(processor && { processor }),
+            ...(lane && { lane }),
           },
         ],
       };
@@ -250,9 +249,9 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
         payload: {
           path: path.join("."),
           target: print(target),
-          ...(input.delivery ? { delivery: input.delivery } : {}),
-          ...(input.processor ? { processor: input.processor } : {}),
-          ...(input.lane ? { lane: input.lane } : {}),
+          ...(input.delivery && { delivery: input.delivery }),
+          ...(input.processor && { processor: input.processor }),
+          ...(input.lane && { lane: input.lane }),
         },
       }),
     );

@@ -51,10 +51,6 @@ function memoryStream(path = "/") {
   return { stream, events };
 }
 
-const throwOffline = (key: string): never => {
-  throw new Error(`client "${key}" is offline`);
-};
-
 /** A tiny fake built-ins record — enough physical layer to route into. */
 const fakeBuiltIns = () => {
   const kv = new Map<string, string>();
@@ -63,11 +59,25 @@ const fakeBuiltIns = () => {
   return {
     kv: {
       get: (k: unknown) => kv.get(String(k)) ?? null,
-      put: (k: string, v: string) => (kv.set(k, v), { ok: true }),
+      put: (k: string, v: string) => {
+        kv.set(k, v);
+        return { ok: true };
+      },
     },
-    rpcStubs: { get: (key: string) => connections.get(key) ?? throwOffline(key) },
+    rpcStubs: {
+      get: (key: string) => {
+        const cap = connections.get(key);
+        if (cap === undefined) throw new Error(`client "${key}" is offline`);
+        return cap;
+      },
+    },
     whoami: () => ({ projectId: "prj_t", path: "/" }),
-    openai: { chat: (o: { model: string }) => (openaiCalls.push(o), `chat:${o.model}`) },
+    openai: {
+      chat: (o: { model: string }) => {
+        openaiCalls.push(o);
+        return `chat:${o.model}`;
+      },
+    },
     openaiCalls,
     _connect: (key: string, cap: Record<string, (...a: unknown[]) => unknown>) =>
       connections.set(key, cap),
@@ -92,8 +102,15 @@ const setup = () => {
     builtIns: builtIns as unknown as Record<string, unknown>,
     resolveCurrent: resolveNow,
   });
-  const invoke = (call: string) => resolveNow(parse(call));
-  return { stream, events, host, builtIns, invoke, reduceAll, resolveNow };
+  return {
+    stream,
+    events,
+    host,
+    builtIns,
+    invoke: (call: string) => resolveNow(parse(call)),
+    reduceAll,
+    resolveNow,
+  };
 };
 
 // ─────────────── the codec asymmetry surfaces as a SILENTLY DROPPED MOUNT ───────────────

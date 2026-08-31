@@ -27,7 +27,6 @@ interface RunnerEnv {
 }
 
 export class ProcessorFacetRunner extends DurableObject<RunnerEnv> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   #p?: StreamProcessor<any>;
 
   configure(identity: FacetIdentity): { ok: true } {
@@ -38,7 +37,6 @@ export class ProcessorFacetRunner extends DurableObject<RunnerEnv> {
     return { ok: true };
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   #processor(): StreamProcessor<any> {
     if (this.#p) return this.#p;
     const identity = this.ctx.storage.kv.get("identity") as FacetIdentity | undefined;

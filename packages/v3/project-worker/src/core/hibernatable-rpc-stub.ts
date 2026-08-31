@@ -26,6 +26,9 @@
 // facts) stays in the DO. Its one addressing fact is the directory's `connectionKey`, stamped by
 // `attach` and carried through hibernation on the pager socket.
 
+import { codedError } from "./errors.ts";
+import { createLogger } from "./logs.ts";
+
 export const STUB_PAGER_WEBSOCKET_HEADER = "x-itx-stub-pager";
 const STUB_PAGER_WEBSOCKET_TAG = "itx-stub-pager-websocket";
 
@@ -54,9 +57,6 @@ export function disposeStub(x: unknown): void {
   const f = DISPOSE ? (x as Record<symbol, unknown>)[DISPOSE] : undefined;
   if (typeof f === "function") (f as () => void).call(x);
 }
-
-import { codedError } from "./errors.ts";
-import { createLogger } from "./logs.ts";
 
 const stubLog = createLogger("hibernatable-rpc-stub");
 const PAGE_TIMEOUT_MS = 10_000; // a paged edge worker has this long to hand back its stub
@@ -232,7 +232,10 @@ export class HibernatableRpcStubManager {
       if (pending === undefined) {
         let resolve!: () => void;
         let reject!: (e: Error) => void;
-        const arrived = new Promise<void>((res, rej) => ((resolve = res), (reject = rej)));
+        const arrived = new Promise<void>((res, rej) => {
+          resolve = res;
+          reject = rej;
+        });
         const timer = setTimeout(() => {
           if (this.#pagesPending.delete(stubKey))
             reject(new Error(`hibernatable rpc stub ${stubKey}: page timed out`));

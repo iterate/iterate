@@ -17,13 +17,15 @@
 // named instances) — address by name, no source. `itx.runScript(lambda)` is sugar for the one
 // bare-lambda case (wrap → `load(...).getEntrypoint().run`).
 
+// eslint-disable-next-line iterate/no-capnweb-http-batch -- one-shot batch on purpose: a socket would pin this DO (workerd#6087)
+import { newHttpBatchRpcSession } from "capnweb";
 import { loadConfinedWorker, type WorkerSource } from "./core/worker-loader.ts";
 import { itxEntrypointFor } from "./itx-entrypoint.ts";
-import { newHttpBatchRpcSession } from "capnweb";
 import type { Expression } from "./core/expression.ts";
 import { InvokeHandle } from "./core/invoke-handle.ts";
 import type { Context } from "./core/stream.ts";
 import type { StreamEventInput } from "./core/events.ts";
+import type { StreamDurableObject } from "./stream-durable-object.ts";
 
 /** The `rpcStubs` view every context has: the live-stub registry, surfaced. One entry per held
  *  live capnweb stub (client callbacks and parked subscribers — one registry). */
@@ -47,6 +49,39 @@ type RpcStubsView = {
 type FacetsView = {
   get(ref: string | { source?: unknown; className?: string; name?: string }): unknown;
 };
+
+/** The bindings roots-building needs — present in BOTH hosts (the worker env). */
+export interface BuiltInsEnv {
+  CONTEXT: DurableObjectNamespace<StreamDurableObject>;
+  LOADER: WorkerLoader;
+  ITX_KV?: KVNamespace;
+  SECRETS_KV?: KVNamespace;
+  /** Deploy identity — reduced into loader cacheKeys so a redeploy mints fresh isolates. */
+  CF_VERSION_METADATA?: { id: string };
+  /** The egress terminal this context's `fetch` bottoms out at (secret-substituted, then sent). */
+  FALLBACK: Fetcher;
+}
+
+/** The one bare-lambda wrapper — `itx.runScript("async (itx, x) => …")`. The lambda STRING becomes
+ *  a `WorkerEntrypoint`'s default export, so `runScript` bottoms out at the SAME `load(...)
+ *  .getEntrypoint()` path as any exported entrypoint (no separate loader branch). `run()` injects
+ *  the itx scope via `env.ITX.get()` — mid-chain handles/callbacks pipeline natively, exactly like a
+ *  capnweb client after `session.get()`. This used to be a host-injected wrapper on EVERY stateless
+ *  load (`CODE_CAP_RUNNER`); it now rides only this one bare-lambda door. */
+const RUN_SCRIPT_ENTRYPOINT = (script: string) => /* js */ `
+import { WorkerEntrypoint } from "cloudflare:workers";
+const cap = ${script};
+export default class RunScript extends WorkerEntrypoint {
+  async run(...args) {
+    if (typeof cap !== "function") throw new Error("runScript: expected a function");
+    return await cap(await this.env.ITX.get(), ...args);
+  }
+  fetch(request) {
+    if (typeof cap?.fetch === "function") return cap.fetch(request, this.env, this.ctx);
+    return new Response("this script serves no fetch\\n", { status: 405 });
+  }
+}
+`;
 
 /** THE built-in scope, as ONE interface — the physical-layer roots a context resolves `itx.<root>…`
  *  against DIRECTLY (capability-table-processor.ts `resolve`, built-in first; no config, no mount).
@@ -86,19 +121,6 @@ interface BuiltInScope {
   /** Dial a REMOTE capnweb API by URL (one HTTP batch — no persistent socket). */
   connectToCapnweb(url: string): unknown;
 }
-import type { StreamDurableObject } from "./stream-durable-object.ts";
-
-/** The bindings roots-building needs — present in BOTH hosts (the worker env). */
-export interface BuiltInsEnv {
-  CONTEXT: DurableObjectNamespace<StreamDurableObject>;
-  LOADER: WorkerLoader;
-  ITX_KV?: KVNamespace;
-  SECRETS_KV?: KVNamespace;
-  /** Deploy identity — reduced into loader cacheKeys so a redeploy mints fresh isolates. */
-  CF_VERSION_METADATA?: { id: string };
-  /** The egress terminal this context's `fetch` bottoms out at (secret-substituted, then sent). */
-  FALLBACK: Fetcher;
-}
 
 /** What the hosting side injects: identity, bindings, and the three host-specific seams. */
 interface BuildBuiltInsDeps {
@@ -126,27 +148,6 @@ interface BuildBuiltInsDeps {
 /** Assemble the host scope for one context. Every entry closes over the context's identity —
  *  PRE-SCOPED, not policed: cross-project access is unspellable by construction. The builder
  *  must never register `itx` (asserted below — the resolver's recursion symbol always wins). */
-/** The one bare-lambda wrapper — `itx.runScript("async (itx, x) => …")`. The lambda STRING becomes
- *  a `WorkerEntrypoint`'s default export, so `runScript` bottoms out at the SAME `load(...)
- *  .getEntrypoint()` path as any exported entrypoint (no separate loader branch). `run()` injects
- *  the itx scope via `env.ITX.get()` — mid-chain handles/callbacks pipeline natively, exactly like a
- *  capnweb client after `session.get()`. This used to be a host-injected wrapper on EVERY stateless
- *  load (`CODE_CAP_RUNNER`); it now rides only this one bare-lambda door. */
-const RUN_SCRIPT_ENTRYPOINT = (script: string) => /* js */ `
-import { WorkerEntrypoint } from "cloudflare:workers";
-const cap = ${script};
-export default class RunScript extends WorkerEntrypoint {
-  async run(...args) {
-    if (typeof cap !== "function") throw new Error("runScript: expected a function");
-    return await cap(await this.env.ITX.get(), ...args);
-  }
-  fetch(request) {
-    if (typeof cap?.fetch === "function") return cap.fetch(request, this.env, this.ctx);
-    return new Response("this script serves no fetch\\n", { status: 405 });
-  }
-}
-`;
-
 export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> {
   const { projectId, path, contextName, env } = deps;
 
@@ -206,7 +207,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         for (let cursor: string | undefined; ; ) {
           const page = await kvBinding().list({
             prefix: kvPrefix + start,
-            ...(cursor ? { cursor } : {}),
+            ...(cursor && { cursor }),
           });
           for (const k of page.keys) out.push(k.name.slice(kvPrefix.length));
           if (page.list_complete) return { keys: out };
@@ -292,6 +293,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         // prove_connect_multihop.mjs). Property access pipelines; the TERMINAL call sends the batch,
         // and the caller awaits once on its result. (This is why we can't route through the generic
         // `walkSteps`, which awaits every intermediate.)
+        // eslint-disable-next-line iterate/no-capnweb-http-batch -- one-shot batch on purpose: a socket would pin this DO (workerd#6087)
         const session = newHttpBatchRpcSession(url) as unknown as Record<string, unknown>;
         let target = session;
         for (const seg of path.slice(0, -1)) target = target[seg] as Record<string, unknown>;

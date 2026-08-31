@@ -45,7 +45,7 @@ export type DeliveryPolicy = {
 export type SubscriptionLane = "facet" | "connected" | "durable";
 
 /** What `append` accepts: the event body, before the stream assigns its committed identity. */
-const eventInputShape = z.strictObject({
+const EventInputShape = z.strictObject({
   /** Convention: `events.iterate.com/<domain>/<fact>`. */
   type: z.string().trim().min(1),
   payload: z.record(z.string(), z.unknown()).optional(),
@@ -75,14 +75,14 @@ const eventInputShape = z.strictObject({
    *  is a loud input error, not a synonym for durable. */
   ephemeral: z.literal(true).optional(),
 });
-export const StreamEventInput = eventInputShape.refine(
+export const StreamEventInput = EventInputShape.refine(
   (e) => !(e.ephemeral && e.idempotencyKey),
   "ephemeral events cannot carry an idempotencyKey — nothing idempotent about the unreplayable",
 );
 export type StreamEventInput = z.infer<typeof StreamEventInput>;
 
 /** A committed event: the input plus the identity the stream assigned at its commit point. */
-export const StreamEvent = eventInputShape.safeExtend({
+export const StreamEvent = EventInputShape.safeExtend({
   offset: z.number().int().positive(),
   createdAt: z.string(),
   path: z.string().trim().min(1),
@@ -149,7 +149,7 @@ export function defineProcessorContract<StateSchema extends z.ZodType>(contract:
     buildEvent: (event) => ({
       type: event.type,
       payload: payloadOf(event.type, event.payload, "buildEvent") as Record<string, unknown>,
-      ...(event.idempotencyKey ? { idempotencyKey: event.idempotencyKey } : {}),
+      ...(event.idempotencyKey && { idempotencyKey: event.idempotencyKey }),
     }),
   };
 }

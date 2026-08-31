@@ -37,8 +37,6 @@ import {
 import type { BuiltInsEnv } from "./built-ins.ts";
 import { SubscriptionForwarderProcessor } from "./subscription-forwarder-processor.ts";
 
-type Env = BuiltInsEnv;
-
 /** The identity a facet is configured with — plain data, durable in the facet's own kv.
  *  `className` names the userspace exported StreamProcessor subclass for loader-hosted
  *  processors (runner.js) — the same word `itx.facets.get({ source, className })` uses. */
@@ -98,7 +96,6 @@ export type FacetProcessorArgs = {
 const FACET_PROCESSORS: Record<
   string,
   // `any` because StreamProcessor is invariant in State — every concrete subclass must fit.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (args: FacetProcessorArgs) => StreamProcessor<any>
 > = {
   tally: (args) => new TallyProcessor(args),
@@ -109,8 +106,7 @@ const FACET_PROCESSORS: Record<
  *  this so an unknown slug fails loud at the door instead of storming every drive. */
 export const BUILT_IN_PROCESSOR_SLUGS = new Set(Object.keys(FACET_PROCESSORS));
 
-export class ProcessorFacet extends DurableObject<Env> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+export class ProcessorFacet extends DurableObject<BuiltInsEnv> {
   #processor?: StreamProcessor<any>;
 
   /** The parent hands the facet its identity at EVERY materialization (see #facet in the DO):
@@ -157,7 +153,6 @@ export class ProcessorFacet extends DurableObject<Env> {
 
   /** Rehydrate from the durable identity (every incarnation — facets restart independently,
    *  and the parent's quiesce alarm aborts idle facets on purpose). */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   #p(): StreamProcessor<any> {
     if (this.#processor) return this.#processor;
     const identity = this.ctx.storage.kv.get("identity") as FacetIdentity | undefined;

@@ -67,10 +67,6 @@ import { PROCESSOR_RUNNER_MODULE } from "./generated/processor-runner.ts";
 import { buildBuiltIns } from "./built-ins.ts";
 import { BUILT_IN_PROCESSOR_SLUGS, type FacetIdentity } from "./processor-facet.ts";
 
-// The parent hosts the INLINE CORE (host scope + routing table + core reduce), so it needs the
-// full roots env the facet used to inherit.
-type Env = BuiltInsEnv;
-
 /** One enabled facet-hosted processor: a built-in slug, or — with `ref` — USERSPACE code (a
  *  source expression resolved to modules + which export is the StreamProcessor subclass). */
 type FacetProcessorEntry = {
@@ -166,7 +162,9 @@ const isInlineSlug = (slug: string): boolean =>
 const CORE_PROCESSOR = new CoreStreamProcessor();
 const streamLog = createLogger("stream-do");
 
-export class StreamDurableObject extends DurableObject<Env> {
+// The parent hosts the INLINE CORE (host scope + routing table + core reduce), so it needs the
+// full roots env the facet used to inherit.
+export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
   /** WHO THIS DO IS — parsed ONCE from the unforgeable codec name; carries projectId, path
    *  AND its canonical string form (`.name`). A stream is only ever reached `getByName`; an
    *  id-addressed instance fails right here in the constructor, before it can touch anything. */
@@ -465,7 +463,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           // Read the stamped lane verbatim — every `itx.subscribers.*` mount is laned at the provide
           // door (provideCapability / enableProcessor), so there is nothing to re-derive.
           lane: m.lane as SubscriptionLane,
-          ...(m.processor ? { processor: m.processor as ProcessorPolicy } : {}),
+          ...(m.processor && { processor: m.processor as ProcessorPolicy }),
         });
     }
     return rows;
@@ -587,9 +585,9 @@ export class StreamDurableObject extends DurableObject<Env> {
       type: "events.iterate.com/stream/subscription-resumed",
       payload: {
         name: input.name,
-        ...(input.afterOffset !== undefined
-          ? { afterOffset: Math.min(input.afterOffset, head) }
-          : {}),
+        ...(input.afterOffset !== undefined && {
+          afterOffset: Math.min(input.afterOffset, head),
+        }),
       },
     });
     return { ok: true };
@@ -609,10 +607,10 @@ export class StreamDurableObject extends DurableObject<Env> {
       const policy = (row.processor ?? {}) as ProcessorPolicy;
       entries.push({
         slug: row.name,
-        ...(policy.source
-          ? { ref: { source: parse(policy.source), className: policy.className ?? "default" } }
-          : {}),
-        ...(policy.props ? { props: policy.props } : {}),
+        ...(policy.source && {
+          ref: { source: parse(policy.source), className: policy.className ?? "default" },
+        }),
+        ...(policy.props && { props: policy.props }),
       });
     }
     return entries;
@@ -657,8 +655,8 @@ export class StreamDurableObject extends DurableObject<Env> {
       projectId: this.#address.projectId,
       path: this.#address.path,
       slug,
-      ...(entry.ref?.className ? { className: entry.ref.className } : {}),
-      ...(entry.props ? { props: entry.props } : {}),
+      ...(entry.ref?.className && { className: entry.ref.className }),
+      ...(entry.props && { props: entry.props }),
     });
     return handle;
   }
@@ -704,7 +702,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       mainModule: opts.mainModule,
       extraModules: opts.extraModules,
       what: opts.what,
-      ...(resolved ? { resolved } : {}),
+      ...(resolved && { resolved }),
     });
     if (!resolved) this.#resolvedFacetSource.set(opts.facetName, { srcPrint, version, modules });
     return versionedFacet(this.ctx, {
@@ -751,8 +749,8 @@ export class StreamDurableObject extends DurableObject<Env> {
       target: `itx.facets.get('${slug}')`,
       lane: "facet", // a processor IS a facet-lane subscriber — declared, not sniffed
       processor: {
-        ...(ref ? { source: print(toExpression(ref.source)), className: ref.className } : {}),
-        ...(props ? { props } : {}),
+        ...(ref && { source: print(toExpression(ref.source)), className: ref.className }),
+        ...(props && { props }),
       },
     });
     await this.#facet(slug); // not for correctness (the mount's own drive configures) — makes an
@@ -909,7 +907,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       if (!this.#facetEntries().some((e) => e.slug === SUBSCRIPTION_FORWARDER_SLUG))
         await this.enableProcessor(SUBSCRIPTION_FORWARDER_SLUG);
     }
-    return this.#capabilityTableProcessor().provide({ ...input, ...(lane ? { lane } : {}) });
+    return this.#capabilityTableProcessor().provide({ ...input, ...(lane && { lane }) });
   }
 
   /** Revoke by the mount's identity — or by its capability path (pops the newest winner at
