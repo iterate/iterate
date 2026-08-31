@@ -117,8 +117,13 @@ export class RpcStubDirectory {
   /** A pager WebSocket closed (wire this to webSocketClose/webSocketError): for a key whose LAST
    *  transport just went, the DO's onFinalClose (auto-revoke the mounts naming it). Fire-and-forget
    *  safe. */
-  closed(ws: WebSocket, _code: number, reason: string): void {
-    const record = this.#stubs.closed(ws);
+  /** Inbound WebSocket message routing (wire this to webSocketMessage) — the pager bridge. */
+  message(ws: WebSocket, data: string | ArrayBuffer): void {
+    this.#stubs.message(ws, data);
+  }
+
+  closed(ws: WebSocket, code: number, reason: string): void {
+    const record = this.#stubs.closed(ws, code, reason);
     if (record)
       void this.#stubClosed(record, reason).catch((e) =>
         reportIssue("rpc-stub.close", e, { key: record.connectionKey ?? record.stubKey }),

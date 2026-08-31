@@ -13,7 +13,11 @@
 import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
 import type { StreamDurableObject } from "../stream-durable-object.ts";
 import { codedError } from "./errors.ts";
-import { disposeStub, openStubPagerWebSocket } from "./hibernatable-rpc-stub.ts";
+import {
+  disposeStub,
+  openStubPagerWebSocket,
+  type ProviderSocket,
+} from "./hibernatable-rpc-stub.ts";
 
 export type ItxHostStub = DurableObjectStub<StreamDurableObject>;
 
@@ -132,15 +136,40 @@ export async function startRpcStubRelay(
   // onRpcBroken registration below flips it. (Registering per page would leak a listener per page:
   // capnweb has no offRpcBroken. See rpc-stub-broken-leak.failing.test.ts.)
   const broken = { value: false };
-  const pagerWebSocket = await openStubPagerWebSocket(host, transportId, () => {
-    // The page answer: re-mint the Workers-RPC stub around the retained capnweb callback and
-    // hand it to the DO, which keeps it warm until its idle quiesce.
-    waitUntil(
-      host
-        .rpcStubActivate({ transportId, invoker: new RetainedCallbackInvoker(retained, broken) })
-        .catch(() => undefined), // a stale page (nobody waiting) returns undefined; offline throws — ignore
-    );
-  });
+  // The bridge's provider dial (ws-open): forward the upgrade to the provider's fetch OVER THE
+  // CAPNWEB SESSION — this closure runs in the session's own request context, the one place its
+  // socket is legally touchable (workerd pins I/O to the creating context). The fork carries the
+  // provider's webSocket-bearing 101 back as a tunneled socket.
+  const openProviderSocket = async (
+    url: string,
+    headers: Record<string, string>,
+  ): Promise<ProviderSocket> => {
+    const response = (await (retained as unknown as { fetch(r: Request): Promise<unknown> }).fetch(
+      new Request(url, { headers: { ...headers, Upgrade: "websocket" } }),
+    )) as {
+      status?: number;
+      webSocket?: ProviderSocket | null;
+    };
+    const socket = response?.webSocket;
+    if (!socket)
+      throw new Error(`provider answered ${response?.status ?? "?"} without a webSocket`);
+    socket.accept?.();
+    return socket;
+  };
+  const pagerWebSocket = await openStubPagerWebSocket(
+    host,
+    transportId,
+    () => {
+      // The page answer: re-mint the Workers-RPC stub around the retained capnweb callback and
+      // hand it to the DO, which keeps it warm until its idle quiesce.
+      waitUntil(
+        host
+          .rpcStubActivate({ transportId, invoker: new RetainedCallbackInvoker(retained, broken) })
+          .catch(() => undefined), // a stale page (nobody waiting) returns undefined; offline throws — ignore
+      );
+    },
+    openProviderSocket,
+  );
   const disposeRetained = () => disposeStub(retained);
   // The library's own death signal, registered ONCE: the client's capnweb session broke → the
   // retained callback can never answer again. Flip the shared flag (so in-flight invokes re-code to

@@ -173,10 +173,15 @@ export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
     hooks: {
       acceptWebSocket: (ws, tags) => {
         this.ctx.acceptWebSocket(ws, tags);
-        // Auto-"pong" the edge relay's 30s keepalive "ping" at the RUNTIME level — the message
-        // never reaches a handler, so it keeps the pager socket warm (defeats the ~100s idle-close)
+        // Auto-answer the edge relay's 30s keepalive at the RUNTIME level — the message never
+        // reaches a handler, so it keeps the pager socket warm (defeats the ~100s idle-close)
         // WITHOUT waking the DO, leaving hibernation intact. Reconnect still backs a hard drop.
-        this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
+        // The literal is DELIBERATELY distinctive: setWebSocketAutoResponse is DO-WIDE (it also
+        // covers bridged EYEBALL sockets), so a plain "ping" would silently hijack any client
+        // frame that happens to equal it — the ws-fetch-live-101 test caught exactly that.
+        this.ctx.setWebSocketAutoResponse(
+          new WebSocketRequestResponsePair("itx-pager-keepalive", "itx-pager-keepalive-ack"),
+        );
       },
       getWebSockets: (tag) => this.ctx.getWebSockets(tag),
     },
@@ -1061,8 +1066,10 @@ export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
     return this.env.FALLBACK.fetch(sub);
   }
 
-  webSocketMessage(): void {
-    // A stub pager WebSocket is DO→relay only — inbound payloads carry nothing we act on.
+  webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
+    // Bridged eyeball frames (→ the pager) and pager bridge replies (→ the eyeball socket); a
+    // plain pager socket's other inbound payloads carry nothing we act on.
+    this.#rpcStubs.message(ws, message);
   }
   webSocketClose(ws: WebSocket, code: number, reason: string): void {
     this.#rpcStubs.closed(ws, code, reason);

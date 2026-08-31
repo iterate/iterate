@@ -32,9 +32,52 @@ import { createLogger } from "./logs.ts";
 export const STUB_PAGER_WEBSOCKET_HEADER = "x-itx-stub-pager";
 const STUB_PAGER_WEBSOCKET_TAG = "itx-stub-pager-websocket";
 
-/** The ONE message the stub pager WebSocket ever carries (DO → edge): "I ought to have your
- *  RPC stub but I don't — send it." Everything else rides Workers RPC on the paged-in stub. */
-type StubPageMessage = { type: "page" };
+/** DO → edge over the stub pager WebSocket. `page` = "I ought to have your RPC stub but I
+ *  don't — send it" (everything call-shaped rides Workers RPC on the paged-in stub). The ws-*
+ *  messages are THE WEBSOCKET BRIDGE: a fetch-shaped upgrade on a live capability cannot return
+ *  its 101 Response over Workers RPC (workerd's RPC serializer has no WebSocket support —
+ *  DataCloneError), and a loopback entrypoint cannot touch the relay's capnweb session either
+ *  (workerd pins I/O objects to their creating request context). The pager socket is the ONE
+ *  channel that already connects the DO to the relay's session context — so the DO terminates
+ *  the eyeball's socket itself (a native 101 on the fetch channel) and FRAMES bridge over the
+ *  pager: `ws-open` dials the provider, `ws-send` carries eyeball→provider frames, `ws-close`
+ *  tears down. Binary frames ride base64 (`b64: true`). */
+type StubPageMessage =
+  | { type: "page" }
+  | { type: "ws-open"; bridgeId: string; url: string; headers: Record<string, string> }
+  | { type: "ws-send"; bridgeId: string; data: string; b64?: true }
+  | { type: "ws-close"; bridgeId: string; code: number; reason: string };
+
+/** Edge → DO over the same pager socket (besides the "itx-pager-keepalive" text). The dial ACK
+ *  (`ws-open-ok`/`ws-open-fail`) is what lets the DO answer the eyeball HONESTLY: no 101 until the
+ *  provider actually upgraded; a provider failure rides back as a non-101 carrying its words. */
+type StubPagerReply =
+  | { type: "ws-open-ok"; bridgeId: string }
+  | { type: "ws-open-fail"; bridgeId: string; reason: string }
+  | { type: "ws-frame"; bridgeId: string; data: string; b64?: true }
+  | { type: "ws-close"; bridgeId: string; code: number; reason: string };
+
+const WS_BRIDGE_TAG = "itx-ws-bridge";
+/** A bridged eyeball socket's attachment (survives hibernation — the bridge does too). */
+type WsBridgeAttachment = { wsBridge: { bridgeId: string; stubKey: string } };
+
+/** Frame codec for the pager bridge: strings ride verbatim, binary rides base64 (chunked — a
+ *  spread over a large frame would blow the stack). */
+export function encodeWsFrame(data: string | ArrayBuffer): { data: string; b64?: true } {
+  if (typeof data === "string") return { data };
+  const bytes = new Uint8Array(data);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000)
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return { data: btoa(binary), b64: true };
+}
+export function decodeWsFrame(frame: { data: string; b64?: true }): string | ArrayBuffer {
+  if (!frame.b64) return frame.data;
+  const binary = atob(frame.data);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
 
 /** The Workers-RPC stub the paged edge worker hands back: it forwards `invoke(path, args)`
  *  onto the retained capnweb callback (a DIRECT dotted dispatch — never `.apply`). */
@@ -126,6 +169,18 @@ export class HibernatableRpcStubManager {
    *  stays warm afterwards — steady traffic is pure RPC, no socket round-trips. Fire-and-forget
    *  callers just don't await (a failed delivery is the client's heal-by-pull). */
   async invoke(stubKey: string, path: string[], args: unknown[]): Promise<unknown> {
+    // THE FETCH-SHAPED RULE: a WebSocket upgrade on a live capability never rides the RPC leg
+    // (its 101 Response cannot serialize) — it opens the pager WebSocket bridge instead. The DO
+    // mints the eyeball's WebSocketPair natively; frames tunnel over the pager (see
+    // StubPageMessage). Plain (non-upgrade) fetches keep riding invoke() — a socketless Response
+    // serializes fine over Workers RPC.
+    if (
+      path.length === 1 &&
+      path[0] === "fetch" &&
+      args[0] instanceof Request &&
+      (args[0].headers.get("Upgrade") ?? "").toLowerCase() === "websocket"
+    )
+      return this.openWsBridge(stubKey, args[0]);
     const retained = await this.#pageIn(stubKey);
     retained.inFlight += 1;
     try {
@@ -184,9 +239,151 @@ export class HibernatableRpcStubManager {
 
   /** A pager WebSocket closed — the stub is gone with it. Hands back the record so the caller
    *  can run its own lifecycle (ephemeral facts, auto-revoke, session settlement). */
-  closed(ws: WebSocket): HibernatableRpcStubRecord | undefined {
+  /** Dials awaiting their ws-open ack, so the eyeball's 101 is HONEST (see StubPagerReply). */
+  #bridgeDials = new Map<
+    string,
+    {
+      stubKey: string;
+      resolve(): void;
+      reject(e: Error): void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
+
+  /** Open one eyeball⇄provider WebSocket bridge (see StubPageMessage): ask the relay to dial the
+   *  provider, AWAIT the ack (a failed dial throws — the fetch lane answers non-101 with the
+   *  provider's words), then accept the eyeball's server end HIBERNATABLY (the bridge survives
+   *  eviction — routing state lives in tags + attachments) and hand back a native 101. */
+  async openWsBridge(stubKey: string, request: Request): Promise<Response> {
+    const pager = this.#socketFor(stubKey);
+    if (pager === undefined)
+      throw codedError("CONNECTION_OFFLINE", `rpc stub ${stubKey} offline (no pager websocket)`);
+    const bridgeId = crypto.randomUUID();
+    // Hop-by-hop / handshake headers stay behind — the relay re-issues the Upgrade to the provider.
+    const headers: Record<string, string> = {};
+    for (const [name, value] of request.headers)
+      if (!/^(connection|upgrade|keep-alive|sec-websocket-.*)$/i.test(name)) headers[name] = value;
+    const acked = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (this.#bridgeDials.delete(bridgeId))
+          reject(new Error(`ws bridge ${bridgeId}: provider dial timed out`));
+      }, PAGE_TIMEOUT_MS);
+      this.#bridgeDials.set(bridgeId, { stubKey, resolve, reject, timer });
+    });
+    pager.send(
+      JSON.stringify({
+        type: "ws-open",
+        bridgeId,
+        url: request.url,
+        headers,
+      } satisfies StubPageMessage),
+    );
+    await acked;
+    const pair = new WebSocketPair();
+    this.#hooks.acceptWebSocket(pair[1], [WS_BRIDGE_TAG, `${WS_BRIDGE_TAG}:${bridgeId}`]);
+    pair[1].serializeAttachment({ wsBridge: { bridgeId, stubKey } } satisfies WsBridgeAttachment);
+    return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+
+  #settleDial(bridgeId: string, error?: Error): void {
+    const dial = this.#bridgeDials.get(bridgeId);
+    if (dial === undefined) return;
+    this.#bridgeDials.delete(bridgeId);
+    clearTimeout(dial.timer);
+    if (error) dial.reject(error);
+    else dial.resolve();
+  }
+
+  /** Route one incoming WebSocket message (wire this to webSocketMessage). TRUE = handled here:
+   *  a bridged eyeball frame (→ the pager, as ws-send) or a pager bridge reply (ws-frame/ws-close
+   *  → the eyeball socket). FALSE = not this subsystem's socket. */
+  message(ws: WebSocket, data: string | ArrayBuffer): boolean {
+    const bridge = (this.#rawAttachment(ws) as Partial<WsBridgeAttachment> | undefined)?.wsBridge;
+    if (bridge) {
+      const pager = this.#socketFor(bridge.stubKey);
+      if (pager === undefined) {
+        try {
+          ws.close(1001, "provider relay gone");
+        } catch {
+          /* already closing */
+        }
+        return true;
+      }
+      pager.send(
+        JSON.stringify({
+          type: "ws-send",
+          bridgeId: bridge.bridgeId,
+          ...encodeWsFrame(data),
+        } satisfies StubPageMessage),
+      );
+      return true;
+    }
     const record = this.#attachment(ws);
-    if (record) this.#forget(record.stubKey);
+    if (record === undefined || typeof data !== "string") return false;
+    let reply: StubPagerReply;
+    try {
+      reply = JSON.parse(data) as StubPagerReply;
+    } catch {
+      return false; // the keepalive is auto-answered runtime-side; unparseable text is noise
+    }
+    if (reply.type === "ws-open-ok") {
+      this.#settleDial(reply.bridgeId);
+      return true;
+    }
+    if (reply.type === "ws-open-fail") {
+      this.#settleDial(reply.bridgeId, new Error(reply.reason));
+      return true;
+    }
+    if (reply.type !== "ws-frame" && reply.type !== "ws-close") return false;
+    const eyeball = this.#hooks.getWebSockets(`${WS_BRIDGE_TAG}:${reply.bridgeId}`)[0];
+    if (eyeball === undefined) return true; // bridge already gone — drop
+    try {
+      if (reply.type === "ws-frame") eyeball.send(decodeWsFrame(reply));
+      else eyeball.close(reply.code, reply.reason.slice(0, 123));
+    } catch {
+      /* eyeball already closing */
+    }
+    return true;
+  }
+
+  closed(ws: WebSocket, code = 1000, reason = ""): HibernatableRpcStubRecord | undefined {
+    // A bridged eyeball socket closed → tell the relay to close the provider side.
+    const bridge = (this.#rawAttachment(ws) as Partial<WsBridgeAttachment> | undefined)?.wsBridge;
+    if (bridge) {
+      try {
+        this.#socketFor(bridge.stubKey)?.send(
+          JSON.stringify({
+            type: "ws-close",
+            bridgeId: bridge.bridgeId,
+            code,
+            reason,
+          } satisfies StubPageMessage),
+        );
+      } catch {
+        /* pager gone — nothing to tell */
+      }
+      return undefined;
+    }
+    const record = this.#attachment(ws);
+    if (record) {
+      this.#forget(record.stubKey);
+      // The pager died → fail its in-flight dials and close every bridged eyeball socket so
+      // clients learn NOW instead of at their next send.
+      for (const [bridgeId, dial] of this.#bridgeDials)
+        if (dial.stubKey === record.stubKey)
+          this.#settleDial(bridgeId, new Error("provider relay gone"));
+      for (const eyeball of this.#hooks.getWebSockets(WS_BRIDGE_TAG)) {
+        const att = (this.#rawAttachment(eyeball) as Partial<WsBridgeAttachment> | undefined)
+          ?.wsBridge;
+        if (att?.stubKey === record.stubKey) {
+          try {
+            eyeball.close(1001, "provider relay gone");
+          } catch {
+            /* already closing */
+          }
+        }
+      }
+    }
     return record;
   }
 
@@ -209,9 +406,12 @@ export class HibernatableRpcStubManager {
     return this.#sockets().find((ws) => this.#attachment(ws)?.stubKey === stubKey);
   }
   #attachment(ws: WebSocket): HibernatableRpcStubRecord | undefined {
+    const a = this.#rawAttachment(ws) as HibernatableRpcStubRecord | null;
+    return a && typeof a.stubKey === "string" ? a : undefined;
+  }
+  #rawAttachment(ws: WebSocket): unknown {
     try {
-      const a = ws.deserializeAttachment() as HibernatableRpcStubRecord | null;
-      return a && typeof a.stubKey === "string" ? a : undefined;
+      return ws.deserializeAttachment() as unknown;
     } catch {
       // A malformed attachment reads as "no attachment" — the socket is then invisible to the
       // registry and dies at its next close; better than wedging every enumeration.
@@ -273,12 +473,27 @@ export class HibernatableRpcStubManager {
   }
 }
 
+/** The provider-side socket a ws-open dials — capnweb's TunneledWebSocket satisfies it. */
+export type ProviderSocket = {
+  accept?(): void;
+  send(data: string | ArrayBuffer): void;
+  close(code?: number, reason?: string): void;
+  addEventListener(
+    type: string,
+    cb: (ev: { data?: unknown; code?: number; reason?: string }) => void,
+  ): void;
+};
+
 /** Edge side: open the stub pager WebSocket to a stream DO (via its stub's `fetch`), answering
- *  every `{type: "page"}` by re-minting the Workers-RPC stub through `onPage`. */
+ *  every `{type: "page"}` by re-minting the Workers-RPC stub through `onPage`, and serving the
+ *  WEBSOCKET BRIDGE messages (see StubPageMessage) by dialing the provider through
+ *  `openProviderSocket` — this runs in the SAME request context as the capnweb session, the one
+ *  place the provider's socket is legally touchable. */
 export async function openStubPagerWebSocket(
   host: { fetch(url: string, init?: RequestInit): Promise<Response> },
   stubKey: string,
   onPage: () => void,
+  openProviderSocket?: (url: string, headers: Record<string, string>) => Promise<ProviderSocket>,
 ): Promise<WebSocket> {
   const response = await host.fetch("https://stub-pager.internal/", {
     headers: { Upgrade: "websocket", [STUB_PAGER_WEBSOCKET_HEADER]: stubKey },
@@ -286,23 +501,87 @@ export async function openStubPagerWebSocket(
   if (!response.webSocket)
     throw new Error(`stub pager upgrade returned ${response.status} without a WebSocket`);
   response.webSocket.accept();
-  // Keep this leg warm: a 30s "ping" the DO auto-"pong"s via setWebSocketAutoResponse WITHOUT
+  // Keep this leg warm: a 30s keepalive the DO auto-answers via setWebSocketAutoResponse WITHOUT
   // waking it — defeats the ~100s idle-close and keeps the /api isolate warm. Dies with the isolate.
   const keepalive = setInterval(() => {
     try {
-      response.webSocket!.send("ping");
+      response.webSocket!.send("itx-pager-keepalive");
     } catch {
       clearInterval(keepalive);
     }
   }, 30_000);
   response.webSocket.addEventListener("close", () => clearInterval(keepalive));
+  // The live provider sockets this pager's bridges have dialed, by bridgeId. In-memory with the
+  // isolate on purpose: if this side dies, the pager closes and the DO closes every eyeball socket.
+  const bridges = new Map<string, ProviderSocket>();
+  const pagerSend = (reply: Record<string, unknown>) => {
+    try {
+      response.webSocket!.send(JSON.stringify(reply));
+    } catch {
+      /* pager closing — the DO-side close handler owns cleanup */
+    }
+  };
   response.webSocket.addEventListener("message", (event: MessageEvent) => {
     if (typeof event.data !== "string") return;
+    let msg: StubPageMessage;
     try {
-      if ((JSON.parse(event.data) as StubPageMessage)?.type === "page") onPage();
+      msg = JSON.parse(event.data) as StubPageMessage;
     } catch {
-      /* not a page — ignore */
+      return; /* not ours */
     }
+    if (msg.type === "page") return onPage();
+    if (openProviderSocket === undefined) return;
+    if (msg.type === "ws-open") {
+      const { bridgeId } = msg;
+      void openProviderSocket(msg.url, msg.headers).then(
+        (provider) => {
+          bridges.set(bridgeId, provider);
+          provider.addEventListener("message", (ev) =>
+            pagerSend({
+              type: "ws-frame",
+              bridgeId,
+              ...encodeWsFrame(ev.data as string | ArrayBuffer),
+            }),
+          );
+          provider.addEventListener("close", (ev) => {
+            bridges.delete(bridgeId);
+            pagerSend({
+              type: "ws-close",
+              bridgeId,
+              code: ev.code ?? 1000,
+              reason: ev.reason ?? "",
+            });
+          });
+          pagerSend({ type: "ws-open-ok", bridgeId });
+        },
+        (e: unknown) =>
+          pagerSend({
+            type: "ws-open-fail",
+            bridgeId,
+            reason: (e instanceof Error ? e.message : String(e)).slice(0, 300),
+          }),
+      );
+    } else if (msg.type === "ws-send") {
+      bridges.get(msg.bridgeId)?.send(decodeWsFrame(msg));
+    } else if (msg.type === "ws-close") {
+      const provider = bridges.get(msg.bridgeId);
+      bridges.delete(msg.bridgeId);
+      try {
+        provider?.close(msg.code, msg.reason.slice(0, 123));
+      } catch {
+        /* already closing */
+      }
+    }
+  });
+  response.webSocket.addEventListener("close", () => {
+    for (const provider of bridges.values()) {
+      try {
+        provider.close(1001, "pager closed");
+      } catch {
+        /* already closing */
+      }
+    }
+    bridges.clear();
   });
   return response.webSocket;
 }

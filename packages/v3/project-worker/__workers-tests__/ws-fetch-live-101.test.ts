@@ -1,30 +1,24 @@
 // __workers-tests__/ws-fetch-live-101.test.ts — THE PLATFORM QUESTION, answered by running: does
-// OUR lane forward a GENUINE 101 from a LIVE capability?
+// OUR lane forward a GENUINE 101 from a LIVE capability? YES — via the pager WebSocket bridge.
 //
-// The harness twin (__tests__/failing-ws-fetch-capability.test.ts) pinned that the upgrade
-// Request reaches a live provider through every hop and that PROVIDER-SIDE FABRICATION is where
-// Node dies (no WebSocketPair; undici rejects status 101) — so the platform half stayed UNPROVEN
-// there. A provider that CAN mint a webSocket-bearing Response needs workerd — and THIS lane runs
-// inside workerd: the test-runner isolate has WebSocketPair and the 101 Response natively. So the
-// provider lives HERE, parked over a real capnweb session (the failing-alarm-quiesce openSession
-// pattern), and a real eyeball dials the /cap fetch door. Every hop is production-shaped:
+// The harness twin (__tests__/failing-ws-fetch-capability.test.ts) pinned that Node providers die
+// at FABRICATION (no WebSocketPair; undici rejects status 101) — so the platform half needed a
+// workerd-side provider, and THIS lane runs inside workerd. The provider lives here, parked over a
+// real capnweb session; a real eyeball dials the /cap fetch door. Every hop is production-shaped:
 //
 //   eyeball SELF.fetch /cap → worker sets x-itx-cap → DO #fetchCapLane → capability table →
-//   `itx.rpcStubs.get('<key>')` alias → retained-stub invoker (Workers RPC, DO ↔ relay) →
-//   capnweb (the /api WebSocket) → THIS isolate's provider.fetch() — and the provider's answer
-//   rides every hop back out to the eyeball.
+//   `itx.rpcStubs.get('<key>')` alias → the WS BRIDGE (hibernatable-rpc-stub.ts): the DO mints
+//   the eyeball's WebSocketPair NATIVELY (a 101 on the fetch channel), sends ws-open down the
+//   stub pager WebSocket, and the relay — in the capnweb session's own request context — dials
+//   the provider's fetch(); frames then tunnel over the pager both ways.
 //
-// THE ANSWER (measured 2026-08-31, wrangler-pinned workerd + capnweb 0.12.0): NO — but the
-// blocker MOVED. capnweb 0.12.0 grew webSocket-in-Response serialization (the socket crosses as
-// a pair of streams; the receiving side re-mints a WebSocketPair), so the SUSPECTED blocker —
-// capnweb — is NOT the failing hop: the provider is invoked with the Upgrade header intact and
-// fabricates its 101 (both pinned below). The death is the NATIVE Workers RPC leg — the relay
-// returning the webSocket-bearing Response to the DO over RetainedCallbackInvoker.invoke():
-//   DataCloneError: Could not serialize object of type "WebSocket". This type does not support
-//   serialization.   (at HibernatableRpcStubManager.invoke)
-// workerd's JS RPC has no WebSocket serialization, and unlike a fetch chain there is no native
-// 101 passthrough on a plain RPC method return. Fixing it means teaching the relay↔DO leg the
-// same streams trick capnweb uses (or routing the fetch lane's live-stub hop over a real fetch).
+// WHY a bridge and not a passthrough (both dead ends measured 2026-08-31): workerd's JS RPC
+// cannot serialize a webSocket-bearing Response (DataCloneError at the relay→DO invoke() return),
+// and a loopback ctx.exports entrypoint cannot touch the relay's capnweb session either ("Cannot
+// perform I/O on behalf of a different request" — I/O objects pin to their creating context). The
+// pager socket is the ONE channel already connecting the DO to the session's context. capnweb
+// 0.12.0 carries the provider's webSocket-bearing Response to the relay (socket-as-streams);
+// the bridge carries its frames the rest of the way.
 // Run:
 //   pnpm exec vitest run --project workers __workers-tests__/ws-fetch-live-101.test.ts
 
@@ -105,53 +99,21 @@ test("plain fetch through a LIVE capability: the eyeball's GET reaches the worke
   expect(site.observations).toContain('fetch invoked: GET upgrade=""');
 });
 
-test("upgrade probe: the provider IS reached and fabricates a GENUINE 101 — the answer dies on the Workers RPC leg (DataCloneError), NOT in capnweb", async () => {
-  // The POSITIVE pin of the platform answer. Everything up to and INCLUDING provider-side
-  // fabrication works — so the harness twin's Node blocker is gone in workerd, and capnweb
-  // 0.12.0's webSocket-in-Response serialization is not what fails. What the eyeball gets is
-  // the fetch lane's 500 quoting workerd's own native-RPC refusal, stack-anchored at the
-  // retained-stub invoker await — the relay→DO Workers RPC return leg.
-  const ctx = "prj_ws101_probe";
-  const site = await mountLiveSite(ctx);
-  const res = await SELF.fetch(capUrl(ctx), { headers: { Upgrade: "websocket" } });
-  const body = await res.text();
-  console.log("[ws101] upgrade probe:", res.status, JSON.stringify(body).slice(0, 600));
-  console.log("[ws101] provider observations:", JSON.stringify(site.observations));
+// ─────────────────── the platform question proper — GREEN via the pager bridge ───────────────────
 
-  // The upgrade Request crossed every hop INTO the provider, Upgrade header intact…
-  expect(site.observations).toContain('fetch invoked: GET upgrade="websocket"');
-  // …and the provider minted a conforming answer (the thing Node could never do).
-  expect(site.observations).toContain("fabricated a genuine 101 with a webSocket");
-  // The failing hop, named by the runtime itself: workerd JS RPC cannot serialize a WebSocket.
-  expect(res.status).toBe(500);
-  expect(body).toContain('DataCloneError: Could not serialize object of type "WebSocket"');
-  expect(body).toContain("HibernatableRpcStubManager.invoke"); // the relay→DO Workers RPC leg
-});
-
-// ─────────────────────── the platform question proper — VERIFIED BROKEN ───────────────────────
-
-// BUG: a fetch-shaped LIVE capability cannot answer a WebSocket upgrade even when its provider
-//   CAN fabricate a genuine 101 (a workerd-side capnweb client). The failing hop is the NATIVE
-//   Workers RPC leg of the live-stub lane — the relay handing the webSocket-bearing Response
-//   back to the DO over RetainedCallbackInvoker.invoke():
-//     DataCloneError: Could not serialize object of type "WebSocket". This type does not
-//     support serialization.   (thrown awaiting retained.invoker.invoke, hibernatable-rpc-stub.ts)
-//   capnweb 0.12.0 DID carry the 101 across the session (webSocket-as-streams — the probe above
-//   pins provider-side success), so of the lane's two serializing hops only the workerd-native
-//   one remains broken.
-// EXPECTED: parity with the loaded-worker baseline (harness twin, prove_crisp1): 101, echo,
-//   clean close — a live device could OFFER a WebSocket endpoint as a capability.
-// ACTUAL: the fetch lane answers 500 carrying the DataCloneError above; the eyeball never gets
-//   a webSocket.
-// WHY IT MATTERS: WS-fetch capabilities remain loaded-worker-only. A fix must teach the
-//   relay↔DO leg what capnweb 0.12.0 taught the session (socket-as-streams), or route the
-//   live-stub fetch hop over a real fetch() so workerd's native 101 passthrough applies.
-test.fails("live capability WebSocket fetch: the eyeball's upgrade gets the provider's GENUINE 101, echoes, and closes cleanly", async () => {
+// Was VERIFIED BROKEN (the DataCloneError above, pinned here as a test.fails) until the bridge
+// landed; now the regression pin for the whole path: genuine 101, frames BOTH ways through every
+// hop (eyeball ⇄ DO pair ⇄ pager ⇄ relay ⇄ capnweb ⇄ provider pair), clean close. Also caught on
+// the way: the pager keepalive literal must be DISTINCTIVE — setWebSocketAutoResponse is DO-wide,
+// so a plain "ping"/"pong" pair hijacked any eyeball frame equal to "ping".
+test("live capability WebSocket fetch: the eyeball's upgrade gets the provider's GENUINE 101, echoes, and closes cleanly", async () => {
   const ctx = "prj_ws101_correct";
-  await mountLiveSite(ctx);
+  const site = await mountLiveSite(ctx);
   // THE CORRECT BEHAVIOR: a genuine 101 bearing a usable WebSocket…
   const res = await SELF.fetch(capUrl(ctx), { headers: { Upgrade: "websocket" } });
   expect(res.status).toBe(101);
+  expect(site.observations).toContain('fetch invoked: GET upgrade="websocket"');
+  expect(site.observations).toContain("fabricated a genuine 101 with a webSocket");
   const eyeball = res.webSocket;
   if (!eyeball) throw new Error("101 without a webSocket");
   // …frames flowing BOTH ways through every hop…
