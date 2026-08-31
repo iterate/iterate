@@ -59,3 +59,14 @@ test("head roll survives the front-camera mirror", () => {
     expect(Math.abs(face.box.angle)).toBeLessThan(0.01);
   }
 });
+
+test("leftEye is the canvas-left eye even under the mirror", () => {
+  const landmarks = Array.from({ length: 478 }, () => ({ x: 0.5, y: 0.6 }));
+  for (const i of FACE_LANDMARK_RINGS.leftEye()) landmarks[i] = { x: 0.3, y: 0.4 };
+  for (const i of FACE_LANDMARK_RINGS.rightEye()) landmarks[i] = { x: 0.7, y: 0.4 };
+  const square = { videoWidth: 100, videoHeight: 100, canvasWidth: 100, canvasHeight: 100 };
+  for (const mirrored of [false, true]) {
+    const face = faceGeometryFromLandmarks(landmarks, coverTransform({ ...square, mirrored }));
+    expect(face.leftEye.cx).toBeLessThan(face.rightEye.cx);
+  }
+});

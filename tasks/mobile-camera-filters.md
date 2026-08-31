@@ -135,3 +135,25 @@ loading from failed.
   `iterate.cameraFacing.v1`) — and replaced a `useState` in the process.
 - Follow-up: the filter DOM bundle is now ~10MB; if that hurts open time,
   move the model/wasm to native assets or lazy-load per filter.
+
+## Feedback round 3 (on-device: filters work; polish)
+
+- Potato eyes were swapped: the front-camera mirror puts the anatomical
+  left-eye ring on the canvas right, so `FaceGeometry.leftEye/rightEye` now
+  always mean canvas-left/right (regression-tested). Potato's fixed base
+  tilt removed — it aligns to your head roll only.
+- Flashcards: your face stays pinned in the top half (eyes/lips remapped to
+  fixed spots, patches still roll with your head); the card shows an
+  AI-generated cartoon picture (gpt-image-1,
+  `scripts/generate-flashcard-images.mjs` → `flashcards.generated.ts`)
+  instead of an emoji; color cards keep drawn swatches.
+- All cutouts tightened (eye expansion 2.4/3.2 → 1.8/2.4, lips 1.35/1.7 →
+  1.15/1.5).
+- Module split: `picker.ts` (ids/labels/emoji + clip cap — what the native
+  ✨ picker imports) vs `definitions.ts` (draw functions + generated image
+  data, DOM-bundle only). This also stops the backdrops riding into the
+  native Hermes bundle.
+- Unrelated CI red on the Cloudflare preview lane:
+  `userspace-facet-source-version.e2e.test.ts` is a `failing()`-pinned bug
+  test whose bug didn't reproduce that run — not caused by this branch; the
+  next push re-runs it.

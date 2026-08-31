@@ -3,14 +3,21 @@
 // index) — deliberately data-shaped so a later PR can load agent-written
 // filters from userland streams through this same interface.
 //
-// Backdrops are AI-generated images (scripts/generate-filter-backdrops.mjs,
-// committed as data URIs in backdrops.generated.ts); face art is emoji. The
-// "real eyes and lips" effect samples the live video through feathered
-// elliptical cutouts at the tracked landmark positions — either drawn in
-// place (a mask following your face) or remapped onto a drawn character
-// (your face on the buried potato).
+// ONLY import this module from the filter-camera DOM component (and its
+// test harness): the generated image imports below are megabytes that must
+// not ride into the native Hermes bundle. The native picker reads picker.ts.
+//
+// Backdrops and flashcard pictures are AI-generated images (the
+// scripts/generate-*.mjs scripts, committed as data URIs); face art is
+// emoji. The "real eyes and lips" effect samples the live video through
+// feathered elliptical cutouts at the tracked landmark positions — drawn in
+// place (a mask following your face), or remapped onto a character (the
+// buried potato), or pinned to a screen region (the flashcards keep your
+// face in the top half).
 
 import { FILTER_BACKDROPS } from "./backdrops.generated.ts";
+import { FLASHCARD_IMAGES } from "./flashcards.generated.ts";
+import { FILTER_PICKER } from "./picker.ts";
 import type { Ellipse, FaceGeometry } from "./face-geometry.ts";
 
 export type FilterFrameArgs = {
@@ -28,187 +35,200 @@ export type FilterFrameArgs = {
   timeMs: number;
 };
 
-/** Filtered recordings are re-encoded on-canvas and cross the WebView bridge
- * as one base64 message, so they stay shorter than plain camera clips.
- * Lives here (not filter-camera.tsx) because "use dom" modules only allow a
- * single default export at runtime. */
-export const FILTERED_CLIP_MAX_SECONDS = 30;
-
-export type FilterDefinition = {
-  id: string;
-  label: string;
-  /** Shown on the picker chip. */
-  emoji: string;
-  draw: (args: FilterFrameArgs) => void;
+export const FILTER_DRAWERS: Record<string, (args: FilterFrameArgs) => void> = {
+  potato: (args) => {
+    const backdrops = ["potato-dirt", "potato-farm", "potato-rain"];
+    drawBackdrop(args, backdrops[args.backgroundIndex % backdrops.length]);
+    // The potato is buried: fixed in the dirt at a fixed size, but it rolls
+    // with your head, and your eyes and lips sit at fixed positions WITHIN
+    // the potato (face-masking anchored to the dirt instead of your face).
+    const size = Math.min(args.width * 0.62, args.height * 0.42);
+    const cx = args.width / 2;
+    const cy = args.height * 0.56;
+    const tilt = args.face.box.angle;
+    drawEmoji(args.ctx, "🥔", cx, cy, size * 1.3, tilt);
+    const at = (dx: number, dy: number) => ({
+      x: cx + (dx * Math.cos(tilt) - dy * Math.sin(tilt)) * size,
+      y: cy + (dx * Math.sin(tilt) + dy * Math.cos(tilt)) * size,
+    });
+    const leftEye = at(-0.16, -0.14);
+    const rightEye = at(0.16, -0.14);
+    const lips = at(0, 0.14);
+    // face.leftEye is the canvas-left eye (geometry normalizes the mirror
+    // swap), so your left-on-screen eye lands on the potato's left.
+    drawFeatheredCutout(args, args.face.leftEye, {
+      cx: leftEye.x,
+      cy: leftEye.y,
+      rx: size * 0.12,
+      ry: size * 0.08,
+      angle: tilt,
+    });
+    drawFeatheredCutout(args, args.face.rightEye, {
+      cx: rightEye.x,
+      cy: rightEye.y,
+      rx: size * 0.12,
+      ry: size * 0.08,
+      angle: tilt,
+    });
+    drawFeatheredCutout(args, args.face.lips, {
+      cx: lips.x,
+      cy: lips.y,
+      rx: size * 0.17,
+      ry: size * 0.1,
+      angle: tilt,
+    });
+  },
+  "eyes-lips": (args) => {
+    const backdrops = ["eyes-lips-beach", "eyes-lips-space", "eyes-lips-sunset"];
+    drawBackdrop(args, backdrops[args.backgroundIndex % backdrops.length]);
+    drawFaceCutoutsInPlace(args);
+  },
+  cat: (args) => {
+    const backdrops = ["cat-study", "cat-garden", "cat-livingroom"];
+    drawBackdrop(args, backdrops[args.backgroundIndex % backdrops.length]);
+    // Unlike the potato, the cat is a mask: it follows your face.
+    const { box } = args.face;
+    drawEmoji(
+      args.ctx,
+      "🐱",
+      box.cx,
+      box.cy,
+      Math.max(box.width, box.height * 0.8) * 2.4,
+      box.angle,
+    );
+    drawFaceCutoutsInPlace(args);
+  },
+  flashcards: (args) => {
+    const card = FLASHCARDS[args.backgroundIndex % FLASHCARDS.length];
+    const { ctx, width, height, face } = args;
+    ctx.fillStyle = card.background;
+    ctx.fillRect(0, 0, width, height);
+    // The picture of the thing — no word on the card; the grown-up says it.
+    if (card.swatch) {
+      ctx.fillStyle = card.swatch;
+      ctx.beginPath();
+      ctx.arc(width / 2, height * 0.62, width * 0.3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.lineWidth = width * 0.015;
+      ctx.strokeStyle = "#ffffff";
+      ctx.stroke();
+    } else {
+      const image = cachedImage(`flashcard-${card.word}`, FLASHCARD_IMAGES[card.word]);
+      if (image) {
+        const cardSize = Math.min(width * 0.72, height * 0.52);
+        const x = (width - cardSize) / 2;
+        const y = height * 0.63 - cardSize / 2;
+        ctx.save();
+        ctx.beginPath();
+        ctx.roundRect(x, y, cardSize, cardSize, cardSize * 0.08);
+        ctx.clip();
+        ctx.drawImage(image, x, y, cardSize, cardSize);
+        ctx.restore();
+      }
+    }
+    // The grown-up stays pinned in the top half: eyes and lips remapped to a
+    // fixed spot up there (patches keep the head's roll — dest.angle follows
+    // it — but the positions don't wander over the card).
+    const eyeY = height * 0.15;
+    const angle = face.box.angle;
+    drawFeatheredCutout(args, face.leftEye, {
+      cx: width / 2 - width * 0.11,
+      cy: eyeY,
+      rx: width * 0.08,
+      ry: width * 0.055,
+      angle,
+    });
+    drawFeatheredCutout(args, face.rightEye, {
+      cx: width / 2 + width * 0.11,
+      cy: eyeY,
+      rx: width * 0.08,
+      ry: width * 0.055,
+      angle,
+    });
+    drawFeatheredCutout(args, face.lips, {
+      cx: width / 2,
+      cy: height * 0.25,
+      rx: width * 0.11,
+      ry: width * 0.065,
+      angle,
+    });
+  },
 };
 
-export const CAMERA_FILTERS: FilterDefinition[] = [
-  {
-    id: "potato",
-    label: "Potato",
-    emoji: "🥔",
-    draw: (args) => {
-      const backdrops = ["potato-dirt", "potato-farm", "potato-rain"];
-      drawBackdrop(args, backdrops[args.backgroundIndex % backdrops.length]);
-      // The potato is buried: fixed in the dirt at a fixed size, but it
-      // rolls with your head, and your eyes and lips sit at fixed positions
-      // WITHIN the potato (standard face-masking, just anchored to the dirt
-      // instead of your face).
-      const size = Math.min(args.width * 0.62, args.height * 0.42);
-      const cx = args.width / 2;
-      const cy = args.height * 0.56;
-      const tilt = -0.14 + args.face.box.angle;
-      drawEmoji(args.ctx, "🥔", cx, cy, size * 1.3, tilt);
-      const at = (dx: number, dy: number) => ({
-        x: cx + (dx * Math.cos(tilt) - dy * Math.sin(tilt)) * size,
-        y: cy + (dx * Math.sin(tilt) + dy * Math.cos(tilt)) * size,
-      });
-      const leftEye = at(-0.16, -0.14);
-      const rightEye = at(0.16, -0.14);
-      const lips = at(0, 0.14);
-      drawFeatheredCutout(args, args.face.leftEye, {
-        cx: leftEye.x,
-        cy: leftEye.y,
-        rx: size * 0.14,
-        ry: size * 0.1,
-        angle: tilt,
-      });
-      drawFeatheredCutout(args, args.face.rightEye, {
-        cx: rightEye.x,
-        cy: rightEye.y,
-        rx: size * 0.14,
-        ry: size * 0.1,
-        angle: tilt,
-      });
-      drawFeatheredCutout(args, args.face.lips, {
-        cx: lips.x,
-        cy: lips.y,
-        rx: size * 0.19,
-        ry: size * 0.12,
-        angle: tilt,
-      });
-    },
-  },
-  {
-    id: "eyes-lips",
-    label: "Eyes & lips",
-    emoji: "👄",
-    draw: (args) => {
-      const backdrops = ["eyes-lips-beach", "eyes-lips-space", "eyes-lips-sunset"];
-      drawBackdrop(args, backdrops[args.backgroundIndex % backdrops.length]);
-      drawFaceCutoutsInPlace(args);
-    },
-  },
-  {
-    id: "cat",
-    label: "Cat",
-    emoji: "🐱",
-    draw: (args) => {
-      const backdrops = ["cat-study", "cat-garden", "cat-livingroom"];
-      drawBackdrop(args, backdrops[args.backgroundIndex % backdrops.length]);
-      // Unlike the potato, the cat is a mask: it follows your face.
-      const { box } = args.face;
-      drawEmoji(
-        args.ctx,
-        "🐱",
-        box.cx,
-        box.cy,
-        Math.max(box.width, box.height * 0.8) * 2.4,
-        box.angle,
-      );
-      drawFaceCutoutsInPlace(args);
-    },
-  },
-  {
-    id: "flashcards",
-    label: "Flashcards",
-    emoji: "🍎",
-    draw: (args) => {
-      const card = FLASHCARDS[args.backgroundIndex % FLASHCARDS.length];
-      const { ctx, width, height } = args;
-      ctx.fillStyle = card.background;
-      ctx.fillRect(0, 0, width, height);
-      // No word on the card — the grown-up says it; the card just shows the
-      // picture of the thing.
-      if (card.swatch) {
-        ctx.fillStyle = card.swatch;
-        ctx.beginPath();
-        ctx.arc(width / 2, height * 0.62, width * 0.3, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.lineWidth = width * 0.015;
-        ctx.strokeStyle = "#ffffff";
-        ctx.stroke();
-      } else {
-        drawEmoji(args.ctx, card.emoji!, width / 2, height * 0.62, width * 0.62, 0);
-      }
-      // The grown-up floats above the card, eyes and lips only, out of the
-      // way so the card stays the star.
-      drawFaceCutoutsInPlace(args);
-    },
-  },
-];
+for (const filter of FILTER_PICKER) {
+  if (!FILTER_DRAWERS[filter.id]) throw new Error(`Picker filter has no drawer: ${filter.id}`);
+}
 
 // Pictures an 18-month-old might know the word for. Tap anywhere to advance.
-const FLASHCARDS: { emoji?: string; background: string; swatch?: string }[] = [
-  { emoji: "🐶", background: "#2874a6" },
-  { emoji: "🐱", background: "#af601a" },
-  { emoji: "⚽", background: "#239b56" },
-  { emoji: "🍌", background: "#6c3483" },
-  { emoji: "🍎", background: "#1e8449" },
-  { emoji: "💧", background: "#154360" },
-  { emoji: "🥛", background: "#7d6608" },
-  { emoji: "👶", background: "#884ea0" },
-  { emoji: "🍅", background: "#1a5276" },
-  { emoji: "🥒", background: "#943126" },
-  { emoji: "🚪", background: "#21618c" },
-  { emoji: "🪑", background: "#117864" },
-  { emoji: "🛏️", background: "#6e2c00" },
-  { emoji: "🐮", background: "#5b2c6f" },
-  { emoji: "🐷", background: "#1d8348" },
-  { emoji: "🐴", background: "#1f618d" },
-  { emoji: "🐑", background: "#7b241c" },
-  { emoji: "🦆", background: "#9a7d0a" },
-  { emoji: "🐔", background: "#633974" },
-  { emoji: "🥕", background: "#0e6251" },
-  { emoji: "🍝", background: "#78281f" },
-  { emoji: "🍞", background: "#4a235a" },
-  { emoji: "🧀", background: "#1b4f72" },
-  { emoji: "🥚", background: "#186a3b" },
-  { emoji: "🍓", background: "#145a32" },
-  { emoji: "🍇", background: "#7e5109" },
-  { emoji: "🍊", background: "#283747" },
-  { emoji: "🚗", background: "#148f77" },
-  { emoji: "🚌", background: "#512e5f" },
-  { emoji: "🚂", background: "#a04000" },
-  { emoji: "📖", background: "#0b5345" },
-  { emoji: "⭐", background: "#1c2833" },
-  { emoji: "🌙", background: "#212f3d" },
-  { emoji: "☀️", background: "#2471a3" },
-  { emoji: "🌳", background: "#6e2c00" },
-  { emoji: "🌸", background: "#186a3b" },
-  { emoji: "🐟", background: "#7b241c" },
-  { emoji: "🐦", background: "#1a5276" },
-  { emoji: "👟", background: "#117a65" },
-  { emoji: "🎩", background: "#b03a2e" },
-  { emoji: "🥄", background: "#2e4053" },
-  { background: "#34495e", swatch: "#e74c3c" },
-  { background: "#34495e", swatch: "#3498db" },
-  { background: "#34495e", swatch: "#2ecc71" },
-  { background: "#34495e", swatch: "#f1c40f" },
+// Words must exist in FLASHCARD_IMAGES (scripts/generate-flashcard-images
+// .mjs); color cards draw a swatch instead.
+const FLASHCARDS: { word: string; background: string; swatch?: string }[] = [
+  { word: "dog", background: "#2874a6" },
+  { word: "cat", background: "#af601a" },
+  { word: "ball", background: "#239b56" },
+  { word: "banana", background: "#6c3483" },
+  { word: "apple", background: "#1e8449" },
+  { word: "water", background: "#154360" },
+  { word: "milk", background: "#7d6608" },
+  { word: "baby", background: "#884ea0" },
+  { word: "tomato", background: "#1a5276" },
+  { word: "cucumber", background: "#943126" },
+  { word: "door", background: "#21618c" },
+  { word: "chair", background: "#117864" },
+  { word: "bed", background: "#6e2c00" },
+  { word: "cow", background: "#5b2c6f" },
+  { word: "pig", background: "#1d8348" },
+  { word: "horse", background: "#1f618d" },
+  { word: "sheep", background: "#7b241c" },
+  { word: "duck", background: "#9a7d0a" },
+  { word: "chicken", background: "#633974" },
+  { word: "carrot", background: "#0e6251" },
+  { word: "pasta", background: "#78281f" },
+  { word: "bread", background: "#4a235a" },
+  { word: "cheese", background: "#1b4f72" },
+  { word: "egg", background: "#186a3b" },
+  { word: "strawberry", background: "#145a32" },
+  { word: "grapes", background: "#7e5109" },
+  { word: "orange", background: "#283747" },
+  { word: "car", background: "#148f77" },
+  { word: "bus", background: "#512e5f" },
+  { word: "train", background: "#a04000" },
+  { word: "book", background: "#0b5345" },
+  { word: "star", background: "#1c2833" },
+  { word: "moon", background: "#212f3d" },
+  { word: "sun", background: "#2471a3" },
+  { word: "tree", background: "#6e2c00" },
+  { word: "flower", background: "#186a3b" },
+  { word: "fish", background: "#7b241c" },
+  { word: "bird", background: "#1a5276" },
+  { word: "shoe", background: "#117a65" },
+  { word: "hat", background: "#b03a2e" },
+  { word: "spoon", background: "#2e4053" },
+  { word: "red", background: "#34495e", swatch: "#e74c3c" },
+  { word: "blue", background: "#34495e", swatch: "#3498db" },
+  { word: "green", background: "#34495e", swatch: "#2ecc71" },
+  { word: "yellow", background: "#34495e", swatch: "#f1c40f" },
 ];
 
-// Backdrop images decode lazily from their data URIs; cached across frames.
-const backdropCache = new Map<string, HTMLImageElement>();
+// Data-URI images decode lazily; cached across frames. Returns null for the
+// first frame or two while the image decodes (callers draw without it).
+const imageCache = new Map<string, HTMLImageElement>();
+
+function cachedImage(key: string, dataUri: string | undefined): HTMLImageElement | null {
+  if (!dataUri) return null;
+  let image = imageCache.get(key);
+  if (!image) {
+    image = new Image();
+    image.src = dataUri;
+    imageCache.set(key, image);
+  }
+  return image.complete && image.naturalWidth ? image : null;
+}
 
 function drawBackdrop(args: FilterFrameArgs, id: string) {
   const { ctx, width, height } = args;
-  let image = backdropCache.get(id);
+  const image = cachedImage(`backdrop-${id}`, FILTER_BACKDROPS[id]);
   if (!image) {
-    image = new Image();
-    image.src = FILTER_BACKDROPS[id];
-    backdropCache.set(id, image);
-  }
-  if (!image.complete || !image.naturalWidth) {
     // One-frame (or failed-decode) fallback so the scene is never blank.
     ctx.fillStyle = "#5d4a36";
     ctx.fillRect(0, 0, width, height);

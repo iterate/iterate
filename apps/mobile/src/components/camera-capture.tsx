@@ -14,7 +14,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { CameraView } from "expo-camera";
 import * as FileSystem from "expo-file-system/legacy";
 import { formatClipDuration, type ComposerAttachment } from "../lib/composer-attachments.ts";
-import { CAMERA_FILTERS, FILTERED_CLIP_MAX_SECONDS } from "../lib/filters/definitions.ts";
+import { FILTER_PICKER, FILTERED_CLIP_MAX_SECONDS } from "../lib/filters/picker.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
 import FilterCamera, { type FilterCameraCommand } from "./filter-camera.tsx";
 
@@ -289,7 +289,7 @@ export function CameraCaptureModal(props: {
             showsHorizontalScrollIndicator={false}
             style={[styles.picker, { bottom: insets.bottom + 120 }]}
           >
-            {[null, ...CAMERA_FILTERS].map((filter) => {
+            {[null, ...FILTER_PICKER].map((filter) => {
               const id = filter === null ? null : filter.id;
               const selected = filterId === id;
               return (

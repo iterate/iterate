@@ -16,6 +16,9 @@ export type Ellipse = { cx: number; cy: number; rx: number; ry: number; angle: n
 export type FaceGeometry = {
   /** Face-oval bounding box center/size, with roll angle in radians. */
   box: { cx: number; cy: number; width: number; height: number; angle: number };
+  /** Always the eye that appears on the canvas LEFT — the front-camera
+   * mirror swaps the anatomical rings, so filters that remap features onto
+   * a character (eyes on the potato) must not trust anatomical naming. */
   leftEye: Ellipse;
   rightEye: Ellipse;
   lips: Ellipse;
@@ -83,13 +86,16 @@ export function faceGeometryFromLandmarks(
   if (angle > Math.PI / 2) angle -= Math.PI;
   else if (angle < -Math.PI / 2) angle += Math.PI;
 
+  // Expansion factors: the eye rings hug the eyelids; the cutouts include
+  // lashes and a little skin, but stay tight around the feature.
+  const eyeA = ellipseAround(ring(LEFT_EYE), angle, 1.8, 2.4);
+  const eyeB = ellipseAround(ring(RIGHT_EYE), angle, 1.8, 2.4);
+  const [leftEye, rightEye] = eyeA.cx <= eyeB.cx ? [eyeA, eyeB] : [eyeB, eyeA];
   return {
     box: { ...box, angle },
-    // Expansion factors: the eye rings hug the eyelids; the drawn cutouts
-    // should include lashes and a hint of brow/cheek to read as "real eyes".
-    leftEye: ellipseAround(ring(LEFT_EYE), angle, 2.4, 3.2),
-    rightEye: ellipseAround(ring(RIGHT_EYE), angle, 2.4, 3.2),
-    lips: ellipseAround(ring(LIPS_OUTER), angle, 1.35, 1.7),
+    leftEye,
+    rightEye,
+    lips: ellipseAround(ring(LIPS_OUTER), angle, 1.15, 1.5),
     tracked: true,
   };
 }

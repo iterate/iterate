@@ -19,11 +19,8 @@ import {
   MEDIAPIPE_WASM_GZ,
   MEDIAPIPE_WASM_LOADER_JS_GZ,
 } from "../lib/filters/mediapipe-assets.generated.ts";
-import {
-  CAMERA_FILTERS,
-  FILTERED_CLIP_MAX_SECONDS,
-  type FilterDefinition,
-} from "../lib/filters/definitions.ts";
+import { FILTER_DRAWERS, type FilterFrameArgs } from "../lib/filters/definitions.ts";
+import { FILTERED_CLIP_MAX_SECONDS } from "../lib/filters/picker.ts";
 import {
   coverTransform,
   faceGeometryFromLandmarks,
@@ -217,9 +214,9 @@ export default class FilterCamera extends Component<Props, State> {
     }
     face = face || fallbackFaceGeometry(width, height);
 
-    const filter = filterById(this.props.filterId);
+    const draw = filterDrawerById(this.props.filterId);
     const ctx = canvas.getContext("2d")!;
-    filter.draw({
+    draw({
       ctx,
       frame: this.#frameCanvas,
       width,
@@ -328,10 +325,10 @@ export default class FilterCamera extends Component<Props, State> {
   }
 }
 
-function filterById(id: string): FilterDefinition {
-  const filter = CAMERA_FILTERS.find((candidate) => candidate.id === id);
-  if (!filter) throw new Error(`Unknown filter: ${id}`);
-  return filter;
+function filterDrawerById(id: string): (args: FilterFrameArgs) => void {
+  const draw = FILTER_DRAWERS[id];
+  if (!draw) throw new Error(`Unknown filter: ${id}`);
+  return draw;
 }
 
 async function gunzip(base64: string): Promise<Uint8Array<ArrayBuffer>> {
