@@ -157,17 +157,12 @@ export class HibernatableRpcStubManager {
    *  stays warm afterwards — steady traffic is pure RPC, no socket round-trips. Fire-and-forget
    *  callers just don't await (a failed delivery is the client's heal-by-pull). */
   async invoke(stubKey: string, path: string[], args: unknown[]): Promise<unknown> {
-    // THE FETCH-SHAPED RULE: a WebSocket upgrade on a live capability never rides the RPC leg
-    // (its 101 Response cannot serialize) — it rides the DEDICATED upgrade leg instead (see
-    // FETCH_UPGRADE_SOCKET_HEADER above). Plain (non-upgrade) fetches keep riding invoke() — a
-    // socketless Response serializes fine over Workers RPC.
-    if (
-      path.length === 1 &&
-      path[0] === "fetch" &&
-      args[0] instanceof Request &&
-      (args[0].headers.get("Upgrade") ?? "").toLowerCase() === "websocket"
-    )
-      return this.#openFetchUpgrade(stubKey, args[0]);
+    // THE FETCH-SHAPED RULE (owner-decreed): EVERY fetch-shaped call on a live capability rides
+    // the one live-fetch path — not just upgrades, so any of them CAN upgrade. No request
+    // inspection here; the only branch lives on the provider's ANSWER (socket or not), inside
+    // the invoker's fetch (rpc-stub-relay.ts).
+    if (path.at(-1) === "fetch" && args.length === 1 && args[0] instanceof Request)
+      return this.#fetch(stubKey, path.slice(0, -1), args[0]);
     const retained = await this.#pageIn(stubKey);
     retained.inFlight += 1;
     try {
@@ -237,31 +232,30 @@ export class HibernatableRpcStubManager {
       if (atMs < cutoff) this.#pendingFetchUpgrades.delete(upgradeId);
   }
 
-  /** Serve one WebSocket upgrade on a live capability: page in the invoker, ask it to dial
-   *  (openFetchUpgrade — runs in the relay's session context; the await IS the ack, and the relay
-   *  opens the dedicated upgrade leg into this DO before returning), then mint the eyeball's
-   *  pair natively and hand back a real 101. A failed dial throws — the fetch lane answers
-   *  non-101 with the provider's words. */
-  async #openFetchUpgrade(stubKey: string, request: Request): Promise<Response> {
+  /** THE live-capability fetch, DO side: page in the invoker and hand the call to its fetch
+   *  (which runs in the relay's session context — see rpc-stub-relay.ts). A plain Response comes
+   *  back over the RPC leg as-is. An upgrade comes back as a marker — the relay has already
+   *  opened the dedicated upgrade leg into this DO — and we mint the eyeball's pair natively,
+   *  returning a real 101 only after the provider actually upgraded. A provider failure throws
+   *  through with its own words (the fetch lane answers non-101). */
+  async #fetch(stubKey: string, capPath: string[], request: Request): Promise<unknown> {
     const retained = await this.#pageIn(stubKey);
     const upgradeId = crypto.randomUUID();
-    // Hop-by-hop / handshake headers stay behind — the relay re-issues the Upgrade to the provider.
-    const headers: Record<string, string> = {};
-    for (const [name, value] of request.headers)
-      if (!/^(connection|upgrade|keep-alive|sec-websocket-.*)$/i.test(name)) headers[name] = value;
     this.#sweepPendingFetchUpgrades();
     this.#pendingFetchUpgrades.set(upgradeId, Date.now());
+    let result: unknown;
     try {
-      await (
+      result = await (
         retained.invoker as unknown as {
-          openFetchUpgrade(id: string, url: string, h: Record<string, string>): Promise<unknown>;
+          fetch(id: string, p: string[], r: Request): Promise<unknown>;
         }
-      ).openFetchUpgrade(upgradeId, request.url, headers);
+      ).fetch(upgradeId, capPath, request);
     } finally {
       this.#pendingFetchUpgrades.delete(upgradeId);
     }
-    const transport = this.#hooks.getWebSockets(`${FETCH_UPGRADE_LEG_TAG}:${upgradeId}`)[0];
-    if (transport === undefined)
+    if ((result as { webSocketUpgrade?: true } | null)?.webSocketUpgrade !== true) return result;
+    const leg = this.#hooks.getWebSockets(`${FETCH_UPGRADE_LEG_TAG}:${upgradeId}`)[0];
+    if (leg === undefined)
       throw new Error(`fetch upgrade ${upgradeId}: dial acked but no upgrade leg arrived`);
     const pair = new WebSocketPair();
     this.#hooks.acceptWebSocket(pair[1], [

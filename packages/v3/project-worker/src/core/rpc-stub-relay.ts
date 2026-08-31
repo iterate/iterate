@@ -55,64 +55,73 @@ class RetainedCallbackInvoker extends WorkersRpcTarget {
     this.#host = host;
   }
 
-  /** THE FETCH-UPGRADE DIAL (fetch-shaped rides fetch; the pager stays MINIMAL): a live
-   *  capability's WS upgrade cannot return its 101 over Workers RPC (no WebSocket serialization)
-   *  and no other channel reaches the capnweb session's request context — but THIS method runs in
-   *  it (RPC calls execute where their target was minted). So the DO calls here; we dial the
-   *  provider's fetch over capnweb (the fork carries its genuine 101 back as a tunneled socket),
-   *  open one DEDICATED upgrade leg into the DO, and wire the two — frames ride NATIVE
-   *  text/binary WebSocket messages, no codec. Returning IS the ack: the DO mints the eyeball's
-   *  pair only after this resolves, so its 101 is honest, and a provider failure throws back with
-   *  the provider's own words (a non-101 at the fetch lane). */
-  async openFetchUpgrade(
+  /** THE LIVE-CAPABILITY FETCH PATH (fetch-shaped rides fetch — ALL of it, not just upgrades):
+   *  every top-level `.fetch(request)` on a live capability lands here, in the capnweb session's
+   *  own request context (RPC calls execute where their target was minted — the one place the
+   *  provider's answer is legally touchable). We dial the provider's fetch; then the ONLY branch
+   *  this subsystem has, at the one seam the platform forces:
+   *    • a socketless Response returns over the Workers-RPC leg directly (it serializes fine);
+   *    • a webSocket-bearing Response cannot cross that leg (DataCloneError) — so we accept the
+   *      provider's socket HERE, open one DEDICATED upgrade leg into the DO, wire the two (frames
+   *      ride native text/binary), and return a marker; the DO mints the eyeball's pair natively.
+   *  Branching on the ANSWER, never the request — no Upgrade-header sniffing anywhere. The await
+   *  is the ack either way: a provider failure throws its own words back (a non-101 at the fetch
+   *  lane), and the DO returns a 101 only after the upgrade actually happened. */
+  async fetch(
     upgradeId: string,
-    url: string,
-    headers: Record<string, string>,
-  ): Promise<{ ok: true }> {
-    const response = (await (
-      this.#provider as unknown as { fetch(r: Request): Promise<unknown> }
-    ).fetch(new Request(url, { headers: { ...headers, Upgrade: "websocket" } }))) as {
-      status?: number;
-      webSocket?: ProviderSocket | null;
-    };
-    const provider = response?.webSocket;
-    if (!provider)
-      throw new Error(`provider answered ${response?.status ?? "?"} without a webSocket`);
-    provider.accept?.();
-    const leg = await openFetchUpgradeLeg(this.#host, upgradeId);
-    provider.addEventListener("message", (ev) => {
-      try {
-        leg.send(ev.data as string | ArrayBuffer);
-      } catch {
-        /* leg closing — its close handler tears the provider side down */
-      }
-    });
-    provider.addEventListener("close", (ev) => {
-      try {
-        leg.close(clampCloseCode(ev.code), (ev.reason ?? "").slice(0, 123));
-      } catch {
-        /* already closing */
-      }
-    });
-    leg.addEventListener("message", (ev) => {
-      try {
-        provider.send((ev as MessageEvent).data as string | ArrayBuffer);
-      } catch {
-        /* provider closing */
-      }
-    });
-    leg.addEventListener("close", (ev) => {
-      try {
-        provider.close(
-          clampCloseCode((ev as CloseEvent).code),
-          ((ev as CloseEvent).reason ?? "").slice(0, 123),
-        );
-      } catch {
-        /* already closing */
-      }
-    });
-    return { ok: true };
+    capPath: string[],
+    request: Request,
+  ): Promise<Response | { webSocketUpgrade: true }> {
+    try {
+      let recv = this.#provider as unknown as Record<string, unknown>;
+      for (const seg of capPath) recv = recv[seg] as Record<string, unknown>;
+      const response = (await (recv as { fetch(r: Request): Promise<unknown> }).fetch(request)) as {
+        status?: number;
+        webSocket?: ProviderSocket | null;
+      };
+      const provider = response?.webSocket;
+      if (!provider) return response as unknown as Response;
+      provider.accept?.();
+      const leg = await openFetchUpgradeLeg(this.#host, upgradeId);
+      provider.addEventListener("message", (ev) => {
+        try {
+          leg.send(ev.data as string | ArrayBuffer);
+        } catch {
+          /* leg closing — its close handler tears the provider side down */
+        }
+      });
+      provider.addEventListener("close", (ev) => {
+        try {
+          leg.close(clampCloseCode(ev.code), (ev.reason ?? "").slice(0, 123));
+        } catch {
+          /* already closing */
+        }
+      });
+      leg.addEventListener("message", (ev) => {
+        try {
+          provider.send((ev as MessageEvent).data as string | ArrayBuffer);
+        } catch {
+          /* provider closing */
+        }
+      });
+      leg.addEventListener("close", (ev) => {
+        try {
+          provider.close(
+            clampCloseCode((ev as CloseEvent).code),
+            ((ev as CloseEvent).reason ?? "").slice(0, 123),
+          );
+        } catch {
+          /* already closing */
+        }
+      });
+      return { webSocketUpgrade: true };
+    } catch (e) {
+      if (this.#broken.value)
+        throw codedError("CONNECTION_OFFLINE", "itx rpc stub provider went offline mid-fetch");
+      throw e;
+    }
   }
+
   async invoke(capPath: string[], args: unknown[]): Promise<unknown> {
     try {
       // Empty path = the provider IS the callable (a bare callback parked as a capability).
