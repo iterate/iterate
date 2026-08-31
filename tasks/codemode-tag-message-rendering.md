@@ -5,6 +5,9 @@ size: medium
 
 # Render codemode-tag agent messages properly (mobile + web)
 
+(Also bundles: move message attachment parts to an HTML vocabulary — see
+the last section. Same parsing seam, decide together.)
+
 ## Context
 
 An experiment on preview-14 switched an agent to a new response format:
@@ -137,3 +140,49 @@ What went RIGHT, for balance: `<voice-note transcript>` user messages
 (offsets 129/168/201) were understood perfectly — the agent acted on
 transcripts ("add one more seven") without any transcription turn — and
 the multi-step search→generate→send TTS chain worked once returns flowed.
+
+## Bundled: message parts as (nearly) valid HTML
+
+Decision sketch from discussion (2026-08-31). Principle, as Misha put it:
+"you could dump this html in a normal webpage and it would render sanely."
+Agreed direction, with one amendment (below).
+
+Replace the invented part vocabulary with real HTML elements — the invented
+one already converged on HTML by accident (`<attachment width height>` is
+`<img width height>`, whose whole ancient purpose is layout reservation
+before bytes arrive, i.e. our no-reflow mosaic fix):
+
+| Kind       | Element                                            | Metadata home                                  |
+| ---------- | -------------------------------------------------- | ---------------------------------------------- |
+| Voice note | `<audio>`                                          | `data-duration`, `data-transcript`             |
+| Image      | `<img>`                                            | `width`/`height` (native), `alt` for filename  |
+| Video      | `<video>`                                          | `width`/`height`, `poster` (the thumbnail!), `data-duration` |
+| File       | `<a type="application/pdf" data-size>name.pdf</a>` | anchor text = filename; `type` is real         |
+| Location   | `<a href="geo:51.5,-0.13" data-accuracy-m="15">`   | `geo:` is a real URI scheme — a plain page gets a clickable maps link |
+
+LLMs parse this vocabulary natively, and markdown legally embeds inline
+HTML, so it composes with the codemode-tag format.
+
+**The amendment — src hydrates at the edge, not in storage.** Attachment
+URLs are signed and expiring (7d public, 15min model-facing, re-minted per
+use — deliberately). Baking a signed URL into durable message text rots in
+a week; a permanent public URL abandons the security model; and `files[]`
+on the event is already the durable reference (HTML-with-src would be a
+second copy of truth that drifts). So stored text uses the real elements
+but references by `data-path`/filename with NO src; anything that wants an
+actually-dumpable webpage (export, share, email) runs one transform that
+mints fresh signed urls into `src` at that moment. The principle in
+practice: "one trivial transform away from a sane webpage."
+
+Other notes:
+- **Sanitization**: the web dashboard must never innerHTML message text —
+  user-typed `<img onerror=…>` lives in the same field. Renderers
+  allowlist-parse the tiny vocabulary either way; the win is semantics +
+  portability, not a free renderer.
+- **Same seam as codemode-tag**: whoever owns parsing `<codemode>` out of
+  assistant text should own parsing `<audio>`/`<img>`/`<a>` parts — once,
+  shared by web + mobile. Do not build two parsers.
+- **Migration**: mobile's composing/parsing is centralized in
+  apps/mobile/src/lib/composer-attachments.ts — swap vocabulary there, have
+  renderers accept both old (`<attachment>`, `<voice-note>`,
+  `<user-location>`) and new during transition; old messages age out.
