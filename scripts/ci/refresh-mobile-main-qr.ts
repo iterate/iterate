@@ -2,7 +2,8 @@
 // writes when a fingerprint-changing merge triggers a fresh main build
 // (--no-wait): polls that build to completion, then re-renders the main
 // preview section — commit comment and merged PR bodies alike, via the same
-// syncMainPreviewSection door — with the now-installable link. Runs as the
+// syncMainPreviewSection call the publisher used — with the now-installable
+// link. Runs as the
 // non-serialized second job of .depot/workflows/mobile-eas-update.yml, so a
 // twenty-minute build never queues later merge publishes.
 import { readFileSync } from "node:fs";
@@ -56,8 +57,11 @@ async function refreshMobileMainQr() {
     scheme,
     channel: "preview",
     publishedRuntime: build.runtimeVersion,
-    // The build we just watched finish IS the installable one.
-    installedRuntime: build.runtimeVersion,
+    // Deliberately NOT build.runtimeVersion: this job only runs because the
+    // merge changed the runtime, so phones are still on the old binary — the
+    // section must keep saying "native changes — needs a fresh install" with
+    // the install QR expanded, now that its link is actually installable.
+    installedRuntime: undefined,
     installUrl: `https://expo.dev/accounts/${owner}/projects/${slug}/builds/${build.id}`,
     installReady: true,
   });

@@ -299,8 +299,8 @@ export const renderPreviewSection = (input: {
 export const bodySectionLabel = "mobile-pr-preview";
 
 /** Marker making main-section commit-comment updates idempotent across
- * re-runs. Lives here so the merge-push publisher and the build-completion
- * refresher write through one door. */
+ * re-runs. Lives here because the merge-push publisher and the build-completion
+ * refresher both write the comment via syncMainPreviewSection below. */
 export const commitCommentMarker = "<!-- mobile-preview -->";
 
 /** True when a PR-body section already carries the main variant — the guard

@@ -93,8 +93,9 @@ async function publishMobileUpdate() {
     installBuildSha: installBuild.gitCommitHash,
     publishedRuntime: runtimeVersion,
   });
-  // One door for the commit comment AND the merged PR bodies' sections —
-  // getting onto latest main should never mean hunting commit comments.
+  // syncMainPreviewSection writes the commit comment AND the merged PR
+  // bodies' sections — getting onto latest main should never mean hunting
+  // commit comments.
   await syncMainPreviewSection({ sha, section });
 
   // Hand the build-completion refresher what it needs: when the install
