@@ -226,6 +226,8 @@ const config: KnipConfig = {
   // unrelated apps with heavyweight config loading.
   ignoreWorkspaces: [
     "apps/*",
+    // Nested under apps/mobile (itself ignored); "apps/*" doesn't reach it.
+    "apps/mobile/website",
     "!apps/os",
     "!apps/semaphore",
     "!apps/streams-example-app",

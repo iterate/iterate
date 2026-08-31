@@ -27,7 +27,7 @@ import {
   mainInstalledRuntime,
   mobileDir,
   planPreview,
-  prdBaseUrl,
+  mobileWebsiteBaseUrl,
   pushChannelStatus,
   renderPreviewSection,
   run,
@@ -146,12 +146,12 @@ async function publishMobilePrPreview() {
   });
 
   const plan = planPreview({
-    baseUrl: prdBaseUrl,
+    baseUrl: mobileWebsiteBaseUrl,
     scheme,
     channel,
     publishedRuntime,
     installedRuntime,
-    installUrl: installInterstitialUrl(prdBaseUrl, channel),
+    installUrl: installInterstitialUrl(mobileWebsiteBaseUrl, channel),
     installReady: installBuild.finished,
   });
 
@@ -160,7 +160,7 @@ async function publishMobilePrPreview() {
   // ever change, these names must change too — uploads are skip-if-exists.
   const [deepLinkQrUrl, installQrUrl] = await Promise.all([
     uploadQrAsset(`mobile-pr-${pullRequest.number}-ota-scheme.png`, plan.otaQrContent),
-    uploadQrAsset(`mobile-pr-${pullRequest.number}-install-page.png`, plan.installUrl),
+    uploadQrAsset(`mobile-pr-${pullRequest.number}-install-site.png`, plan.installUrl),
   ]);
 
   const section = renderPreviewSection({

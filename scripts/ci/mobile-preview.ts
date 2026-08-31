@@ -5,7 +5,7 @@
 // two-QR markdown section.
 //
 // Links deliberately go through the OS https interstitial
-// (`/m/preview-channel/<channel>`, apps/os/src/routes/m.preview-channel.$channel.ts)
+// (`/preview-channel/<channel>` on mobile.iterate.com — apps/mobile/website)
 // rather than `iterate://` directly: GitHub strips custom-scheme hrefs at
 // render time, so raw deep links were scannable but never tappable.
 import { execFileSync } from "node:child_process";
@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import QRCode from "qrcode";
 import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annotator.ts";
 import { MobileChannelStatus } from "../../packages/shared/src/mobile-channel-status.ts";
-import { envs } from "../../envs.ts";
+import { mobileWebsiteEnvs } from "../../envs.ts";
 import { getOctokit, getRepo } from "./github.ts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -36,24 +36,28 @@ export const channelForBranch = (branch: string) =>
  * published bundle itself (apps/mobile/scripts/write-build-info.mjs), not
  * the link. */
 export const interstitialUrl = (baseUrl: string, channel: string) =>
-  `${baseUrl}/m/preview-channel/${channel}`;
+  // Bare path, not /m/: this is the universal-link prefix — a phone whose
+  // binary carries the applinks entitlement opens the app DIRECTLY from
+  // this href; everyone else gets the web interstitial bounce.
+  `${baseUrl}/preview-channel/${channel}`;
 
-/** The channel-stable install page (apps/os/src/routes/m.install.$channel.ts):
- * resolves the channel's expected native build at scan time from the status
- * snapshot below, so an install QR printed three pushes ago still works. */
+/** The channel-stable install page (apps/mobile/website): resolves the
+ * channel's expected native build at scan time from the status snapshot
+ * below, so an install QR printed three pushes ago still works. */
 export const installInterstitialUrl = (baseUrl: string, channel: string) =>
-  `${baseUrl}/m/install/${channel}`;
+  `${baseUrl}/install/${channel}`;
 
 /** The build's expo.dev page — the actual installer the interstitial links. */
 export const expoBuildUrl = (input: { owner: string; slug: string; buildId: string }) =>
   `https://expo.dev/accounts/${input.owner}/projects/${input.slug}/builds/${input.buildId}`;
 
-/** Production OS — the phone's app talks to prd, so QR links do too. */
-export const prdBaseUrl = envs.prd.baseUrl;
+/** The mobile app's own web surface — every /m/* link and the snapshot
+ * store live here, not on the os kernel (apps/mobile/website). */
+export const mobileWebsiteBaseUrl = mobileWebsiteEnvs.prd.baseUrl;
 
 /**
  * Push a channel's "expected native build" snapshot to prd OS, where the
- * /m/install interstitial and the app's staleness check read it (the worker
+ * /install interstitial and the app's staleness check read it (the worker
  * deliberately has no EXPO_TOKEN, so CI is its only source of EAS state).
  * Admin bearer: every mobile CI job already runs under
  * `doppler --project os --config prd`, which carries the secret. Failures
@@ -62,17 +66,32 @@ export const prdBaseUrl = envs.prd.baseUrl;
  * store exists to kill.
  */
 export async function pushChannelStatus(status: MobileChannelStatus) {
-  const response = await fetch(`${prdBaseUrl}/m/channel-status/${status.channel}`, {
-    method: "PUT",
-    headers: { ...adminAuthHeader(), "content-type": "application/json" },
-    body: JSON.stringify(status),
-  });
-  // 404 = the route isn't deployed yet (prd deploys on merge; PR publishes
-  // can race the first deploy carrying it). The handler itself never 404s a
-  // PUT for a channelForBranch-shaped name, so this is purely transitional —
-  // warn loudly and let the publish proceed; any other failure is fatal.
-  if (response.status === 404) {
-    console.warn(`channel-status endpoint not deployed on ${prdBaseUrl} yet — snapshot skipped`);
+  // Until deploy-mobile-website has run on main, mobile.iterate.com is in
+  // various stages of not-existing: no DNS (fetch THROWS), DNS but no worker
+  // route (Cloudflare error status), or worker without the handler (404).
+  // All three are the same transitional condition — warn loudly, skip, let
+  // the publish proceed. Once the site serves, a PUT for a
+  // channelForBranch-shaped name never 404s, so real handler failures (400,
+  // 401) stay fatal: a publish whose snapshot silently didn't land would
+  // leave install QRs resolving to the previous build.
+  // Outside the try: a MISSING secret is a CI misconfiguration and must
+  // fail the publish — only network-level unreachability is transitional.
+  const headers = { ...adminAuthHeader(), "content-type": "application/json" };
+  let response: Response;
+  try {
+    response = await fetch(`${mobileWebsiteBaseUrl}/channel-status/${status.channel}`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify(status),
+    });
+  } catch (error) {
+    console.warn(`${mobileWebsiteBaseUrl} unreachable (${error}) — snapshot skipped`);
+    return;
+  }
+  if (response.status === 404 || response.status >= 520) {
+    console.warn(
+      `channel-status endpoint not serving on ${mobileWebsiteBaseUrl} yet (${response.status}) — snapshot skipped`,
+    );
     return;
   }
   if (!response.ok) {
@@ -83,7 +102,7 @@ export async function pushChannelStatus(status: MobileChannelStatus) {
 
 /** Read a channel's snapshot back (public endpoint); null when absent. */
 export async function fetchChannelStatus(channel: string): Promise<MobileChannelStatus | null> {
-  const response = await fetch(`${prdBaseUrl}/m/channel-status/${channel}`);
+  const response = await fetch(`${mobileWebsiteBaseUrl}/channel-status/${channel}`);
   if (response.status === 404) return null;
   if (!response.ok) {
     throw new Error(`fetching channel status failed: ${response.status} ${await response.text()}`);
@@ -92,13 +111,23 @@ export async function fetchChannelStatus(channel: string): Promise<MobileChannel
 }
 
 /** Remove a closed PR's snapshot so its install interstitial falls back to
- * the honest "no publish snapshot" page. Tolerates absence. */
+ * the honest "no publish snapshot" page. Tolerates absence — and, like the
+ * push, tolerates the site not serving yet (a PR closed during the cutover
+ * window has no snapshot there to delete anyway). */
 export async function deleteChannelStatus(channel: string) {
-  const response = await fetch(`${prdBaseUrl}/m/channel-status/${channel}`, {
-    method: "DELETE",
-    headers: adminAuthHeader(),
-  });
-  if (!response.ok && response.status !== 404) {
+  // Outside the try, same as the push: a missing secret must fail loudly.
+  const headers = adminAuthHeader();
+  let response: Response;
+  try {
+    response = await fetch(`${mobileWebsiteBaseUrl}/channel-status/${channel}`, {
+      method: "DELETE",
+      headers,
+    });
+  } catch (error) {
+    console.warn(`${mobileWebsiteBaseUrl} unreachable (${error}) — nothing to delete there yet`);
+    return;
+  }
+  if (!response.ok && response.status !== 404 && response.status < 520) {
     throw new Error(`deleting channel status failed: ${response.status} ${await response.text()}`);
   }
   console.log(`deleted channel status for ${channel}`);
@@ -211,7 +240,7 @@ export type InstallBuild = {
  * per PR channel so installing one landed you on the PR's JS in a single
  * step (#2542) — a ~20-minute paid EAS build per PR, almost always for zero
  * native changes. Now every build is the plain `preview` profile and the
- * channel hop after an install is one tap on the /m/install interstitial's
+ * channel hop after an install is one tap on the /install interstitial's
  * "Open in app" link. JS-only PRs (runtime matches an existing build)
  * trigger nothing; a native-change PR triggers the one build main will
  * reuse after merge.
@@ -276,7 +305,7 @@ export const planPreview = (input: {
   publishedRuntime: string;
   /** Runtime of the newest FINISHED preview-profile build — what's installable today. */
   installedRuntime: string | undefined;
-  /** The channel-stable /m/install/<channel> interstitial — it resolves the
+  /** The channel-stable /install/<channel> interstitial — it resolves the
    * channel's expected build (possibly freshly triggered, hence
    * installReady) at scan time. */
   installUrl: string;
