@@ -82,8 +82,10 @@ export class Chunky extends StreamProcessor {
   liveState(state) { return { chunks: state.chunks, marks: state.marks }; }
 }`,
   // A processor whose live state COMBINES reduced state (ticks, folded from durable 'tick' events)
-  // with RUNTIME state (lastPokeMs, set out of band by an RPC poke — no event, gone on eviction).
-  // Proves reduced ⊕ runtime through one projection + one revision chain (live-state-runtime.test.ts).
+  // with RUNTIME state (lastPokeMs — a plain field, NOT the reduce checkpoint, gone on eviction). A
+  // 'poke' ephemeral event bumps the runtime field in processEvent and publishes its delta out of
+  // band (the reduce never touches it). Proves reduced ⊕ runtime through ONE projection + ONE
+  // revision chain (live-state-runtime.test.ts).
   "src/presence.js": `import { StreamProcessor, defineProcessorContract, z } from "./processor.js";
 const contract = defineProcessorContract({
   slug: "presence",
@@ -91,17 +93,23 @@ const contract = defineProcessorContract({
   description: "Reduced tick count beside a runtime lastPokeMs the reduce never sees.",
   stateSchema: z.object({ ticks: z.number().default(0) }),
   events: {},
-  consumes: ["tick"],
+  consumes: ["tick", "poke"],
   emits: [],
 });
 export class Presence extends StreamProcessor {
   contract = contract;
-  #lastPokeMs = 0;
+  #lastPokeMs = 0; // RUNTIME: a field, not reduced state — reset to 0 on eviction, never refolded
   reduce({ event, state }) {
     if (event.type === "tick") return { ...state, ticks: state.ticks + 1 };
+    // 'poke' is deliberately NOT folded — it drives a runtime field, not durable truth
+  }
+  processEvent({ event }) {
+    if (event && event.type === "poke") {
+      this.#lastPokeMs = Date.now();
+      this.publishLiveState(); // out-of-band runtime delta: no reduce changed, we emit ourselves
+    }
   }
   liveState(state) { return { ticks: state.ticks, lastPokeMs: this.#lastPokeMs }; }
-  poke() { this.#lastPokeMs = Date.now(); this.publishLiveState(); return { lastPokeMs: this.#lastPokeMs }; }
 }`,
   "src/user-tally.js": `import { StreamProcessor, defineProcessorContract, z } from "./processor.js";
 const contract = defineProcessorContract({

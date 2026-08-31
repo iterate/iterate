@@ -1,0 +1,66 @@
+// client/live-state-store.ts — THE CLIENT HALF of live state, for browsers and node test clients.
+// Adapted from apps/os's `createLiveStateStore` (packages/iterate/src/sdk/capnweb/live-state), kept
+// deliberately tiny, and pointed at the CLEAN-ROOM wire instead of apps/os's in-band snapshot:
+//
+//   • SEED through the producer's door — `{rev, state}` read via an RPC method (a processor's
+//     `liveSnapshot()`, a mini-app's `state()`). apps/os folds the first snapshot in-band on the
+//     subscription; here the stream is a pure forwarder, so the seed is a separate read.
+//   • APPLY each `{key, from, to, patch}` delta the subscription delivers: a patch lands only when
+//     its `from` matches the held rev; a mismatch means a missed delta (or a reborn producer's fresh
+//     epoch) — resync by re-reading the door, exactly like apps/os's revision-gap resync.
+//
+// The patch format is core/patch.ts (an RFC-6902 subset), so this store shares ONE applyPatch with
+// the producer — no second diff implementation. No capnweb import: a caller wires the transport and
+// hands deltas in, so the same store backs a node test client and the React hook (client/react.tsx).
+
+import { applyPatch, type PatchOp } from "../core/patch.ts";
+
+/** One live-state delta off the wire — the payload of an `events.iterate.com/live-state/changed`
+ *  ephemeral event, delivered raw to the subscriber. */
+export type LiveStateDelta = { key: string; from: number; to: number; patch: PatchOp[] };
+
+/** What the producer's seed door returns: the current revision paired with the current value. */
+export type LiveStateSeed<S> = { rev: number; state: S };
+
+export type LiveStateStore<S> = {
+  /** The current value, or undefined until the first seed lands. */
+  get(): S | undefined;
+  /** The held revision, or null before the first seed. */
+  rev(): number | null;
+  /** Subscribe to changes (for React's useSyncExternalStore, or a test's await-loop). */
+  subscribe(listener: () => void): () => void;
+  /** Seed (or re-seed) from the door — the first paint, and the heal after a gap. */
+  seed(seed: LiveStateSeed<S>): void;
+  /** Fold one delta in; on a revision gap call `resync` and hold the value until a fresh seed. */
+  apply(delta: LiveStateDelta, resync: () => void): void;
+};
+
+export function createLiveStateStore<S>(): LiveStateStore<S> {
+  let held: { rev: number; state: S | undefined } = { rev: -1, state: undefined };
+  const listeners = new Set<() => void>();
+  const notify = () => listeners.forEach((l) => l());
+  return {
+    get: () => held.state,
+    rev: () => (held.rev === -1 ? null : held.rev),
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => void listeners.delete(listener);
+    },
+    seed: (seed) => {
+      held = { rev: seed.rev, state: seed.state };
+      notify();
+    },
+    apply: (delta, resync) => {
+      // A delta at-or-behind the held rev is a duplicate/out-of-order frame — drop it silently.
+      if (delta.to <= held.rev) return;
+      // A gap (its `from` is not the held rev) means a missed delta or a reborn epoch — re-read the
+      // door instead of applying onto a diverged base.
+      if (delta.from !== held.rev) {
+        resync();
+        return;
+      }
+      held = { rev: delta.to, state: applyPatch(held.state as S, delta.patch) };
+      notify();
+    },
+  };
+}
