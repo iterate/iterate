@@ -6,5 +6,6 @@
   "machine": "",
   "builtAt": "",
   "expectedBackendEnv": "",
-  "testLoginEmail": ""
+  "testLoginEmail": "",
+  "runtimeFingerprint": ""
 }

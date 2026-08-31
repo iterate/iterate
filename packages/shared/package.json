@@ -6,6 +6,7 @@
   "exports": {
     "./agent-events": "./src/agent-events.ts",
     "./config": "./src/config.ts",
+    "./mobile-channel-status": "./src/mobile-channel-status.ts",
     "./dev/is-main-module": "./src/dev/is-main-module.ts",
     "./evlog": "./src/evlog/with-evlog.ts",
     "./evlog/types": "./src/evlog/types.ts",

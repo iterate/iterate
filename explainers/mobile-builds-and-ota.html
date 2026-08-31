@@ -275,6 +275,14 @@
   </head>
   <body>
     <header>
+      <p style="border: 1px solid #b45309; border-radius: 8px; padding: 8px 12px; font-size: 13px">
+        <b>Partly superseded (PR #2555):</b> builds are no longer baked per PR channel — one build
+        per runtime fingerprint, shared with main; install QRs go through a live
+        <code>/m/install/&lt;channel&gt;</code> page; the app announces runtime mismatches with a
+        Download button. The channel/override/expo mechanics below still hold; the per-PR-build
+        scenario is pre-#2555 history. For "what happens in every phone × PR combination", see the
+        <a href="./mobile-install-state-matrix">install-state matrix</a>.
+      </p>
       <h1>Mobile builds &amp; OTA — how the phone decides what to run</h1>
       <p>
         Click any event to see the state of the whole system (phone + update server) right after it,

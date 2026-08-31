@@ -1,0 +1,56 @@
+name: Deploy Mobile Website
+permissions:
+  contents: read
+  deployments: write
+concurrency:
+  # Every ref deploys to the same production Worker. Never interrupt a
+  # credentialed deployment midway through its rollout.
+  group: deploy-mobile-website-production
+  cancel-in-progress: false
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .depot/workflows/deploy-mobile-website.yml
+      - apps/mobile/website/**
+      - packages/shared/src/mobile-channel-status.ts
+      - envs.ts
+      - scripts/lib/**
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to deploy. Leave empty for the current branch or commit.
+        required: false
+        type: string
+        default: ""
+jobs:
+  deploy:
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ inputs.ref || github.sha }}
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
+      # Doppler project `os`: the worker's only secret is the same admin
+      # bearer the CI snapshot writers use — one secret, one rotation.
+      - name: Setup Doppler (baked CLI)
+        run: doppler setup --config prd --project os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Ensure resources (DNS + R2, create-only)
+        working-directory: apps/mobile/website
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run -- pnpm run-script ensure-resources
+      - name: Deploy apps/mobile/website
+        working-directory: apps/mobile/website
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run -- pnpm run-script deploy

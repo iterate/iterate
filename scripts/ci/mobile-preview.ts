@@ -5,7 +5,7 @@
 // two-QR markdown section.
 //
 // Links deliberately go through the OS https interstitial
-// (`/m/preview-channel/<channel>`, apps/os/src/routes/m.preview-channel.$channel.ts)
+// (`/preview-channel/<channel>` on mobile.iterate.com — apps/mobile/website)
 // rather than `iterate://` directly: GitHub strips custom-scheme hrefs at
 // render time, so raw deep links were scannable but never tappable.
 import { execFileSync } from "node:child_process";
@@ -15,7 +15,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import QRCode from "qrcode";
 import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annotator.ts";
-import { envs } from "../../envs.ts";
+import { MobileChannelStatus } from "../../packages/shared/src/mobile-channel-status.ts";
+import { mobileWebsiteEnvs } from "../../envs.ts";
 import { getOctokit, getRepo } from "./github.ts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -35,10 +36,110 @@ export const channelForBranch = (branch: string) =>
  * published bundle itself (apps/mobile/scripts/write-build-info.mjs), not
  * the link. */
 export const interstitialUrl = (baseUrl: string, channel: string) =>
-  `${baseUrl}/m/preview-channel/${channel}`;
+  // Bare path, not /m/: this is the universal-link prefix — a phone whose
+  // binary carries the applinks entitlement opens the app DIRECTLY from
+  // this href; everyone else gets the web interstitial bounce.
+  `${baseUrl}/preview-channel/${channel}`;
 
-/** Production OS — the phone's app talks to prd, so QR links do too. */
-export const prdBaseUrl = envs.prd.baseUrl;
+/** The channel-stable install page (apps/mobile/website): resolves the
+ * channel's expected native build at scan time from the status snapshot
+ * below, so an install QR printed three pushes ago still works. */
+export const installInterstitialUrl = (baseUrl: string, channel: string) =>
+  `${baseUrl}/install/${channel}`;
+
+/** The build's expo.dev page — the actual installer the interstitial links. */
+export const expoBuildUrl = (input: { owner: string; slug: string; buildId: string }) =>
+  `https://expo.dev/accounts/${input.owner}/projects/${input.slug}/builds/${input.buildId}`;
+
+/** The mobile app's own web surface — every /m/* link and the snapshot
+ * store live here, not on the os kernel (apps/mobile/website). */
+export const mobileWebsiteBaseUrl = mobileWebsiteEnvs.prd.baseUrl;
+
+/**
+ * Push a channel's "expected native build" snapshot to prd OS, where the
+ * /install interstitial and the app's staleness check read it (the worker
+ * deliberately has no EXPO_TOKEN, so CI is its only source of EAS state).
+ * Admin bearer: every mobile CI job already runs under
+ * `doppler --project os --config prd`, which carries the secret. Failures
+ * throw — a publish whose snapshot didn't land would leave install QRs
+ * resolving to the previous build, which is exactly the silent drift this
+ * store exists to kill.
+ */
+export async function pushChannelStatus(status: MobileChannelStatus) {
+  // Until deploy-mobile-website has run on main, mobile.iterate.com is in
+  // various stages of not-existing: no DNS (fetch THROWS), DNS but no worker
+  // route (Cloudflare error status), or worker without the handler (404).
+  // All three are the same transitional condition — warn loudly, skip, let
+  // the publish proceed. Once the site serves, a PUT for a
+  // channelForBranch-shaped name never 404s, so real handler failures (400,
+  // 401) stay fatal: a publish whose snapshot silently didn't land would
+  // leave install QRs resolving to the previous build.
+  // Outside the try: a MISSING secret is a CI misconfiguration and must
+  // fail the publish — only network-level unreachability is transitional.
+  const headers = { ...adminAuthHeader(), "content-type": "application/json" };
+  let response: Response;
+  try {
+    response = await fetch(`${mobileWebsiteBaseUrl}/channel-status/${status.channel}`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify(status),
+    });
+  } catch (error) {
+    console.warn(`${mobileWebsiteBaseUrl} unreachable (${error}) — snapshot skipped`);
+    return;
+  }
+  if (response.status === 404 || response.status >= 520) {
+    console.warn(
+      `channel-status endpoint not serving on ${mobileWebsiteBaseUrl} yet (${response.status}) — snapshot skipped`,
+    );
+    return;
+  }
+  if (!response.ok) {
+    throw new Error(`pushing channel status failed: ${response.status} ${await response.text()}`);
+  }
+  console.log(`pushed channel status for ${status.channel} (build ${status.buildId})`);
+}
+
+/** Read a channel's snapshot back (public endpoint); null when absent. */
+export async function fetchChannelStatus(channel: string): Promise<MobileChannelStatus | null> {
+  const response = await fetch(`${mobileWebsiteBaseUrl}/channel-status/${channel}`);
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    throw new Error(`fetching channel status failed: ${response.status} ${await response.text()}`);
+  }
+  return MobileChannelStatus.parse(await response.json());
+}
+
+/** Remove a closed PR's snapshot so its install interstitial falls back to
+ * the honest "no publish snapshot" page. Tolerates absence — and, like the
+ * push, tolerates the site not serving yet (a PR closed during the cutover
+ * window has no snapshot there to delete anyway). */
+export async function deleteChannelStatus(channel: string) {
+  // Outside the try, same as the push: a missing secret must fail loudly.
+  const headers = adminAuthHeader();
+  let response: Response;
+  try {
+    response = await fetch(`${mobileWebsiteBaseUrl}/channel-status/${channel}`, {
+      method: "DELETE",
+      headers,
+    });
+  } catch (error) {
+    console.warn(`${mobileWebsiteBaseUrl} unreachable (${error}) — nothing to delete there yet`);
+    return;
+  }
+  if (!response.ok && response.status !== 404 && response.status < 520) {
+    throw new Error(`deleting channel status failed: ${response.status} ${await response.text()}`);
+  }
+  console.log(`deleted channel status for ${channel}`);
+}
+
+const adminAuthHeader = () => {
+  const secret = process.env.APP_CONFIG_ADMIN_API_SECRET;
+  if (!secret) {
+    throw new Error("APP_CONFIG_ADMIN_API_SECRET is not set — run under doppler os/prd");
+  }
+  return { authorization: `Bearer ${secret}` };
+};
 
 export const run = (command: string, args: string[], cwd: string) =>
   execFileSync(command, args, { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
@@ -62,42 +163,49 @@ export const easJson = (args: string[]) => {
 const inProgressStatuses = ["NEW", "IN_QUEUE", "IN_PROGRESS"];
 
 /**
- * Bake a channel into the build profile before building.
- *
- * `eas build` has no `--channel` flag (eas-cli 21.0.1) and the channel must
- * reach the binary — it ends up in Expo.plist — so CI writes the profile and
- * lets eas-cli upload the working tree, exactly as it already does for
- * src/build-info.json. Pure so the rewrite is testable without eas.
- *
- * This is only safe for the runtime version because
- * apps/mobile/fingerprint.config.js ignores eas.json. Without that ignore the
- * rewritten file would move the fingerprint and the resulting binary would
- * refuse the very updates this PR publishes.
+ * The runtime fingerprint `eas update` will compute for the working tree —
+ * computed BEFORE stamping so write-build-info.mjs can bake it into the
+ * bundle. Publishers assert the published runtime agreed, so a silent
+ * divergence between this and eas-cli's own computation can't ship.
  */
-export const easJsonWithChannel = (raw: string, profile: string, channel: string) => {
-  const parsed = JSON.parse(raw);
-  if (!parsed.build?.[profile]) {
-    throw new Error(`eas.json has no build profile "${profile}"`);
+export const computeRuntimeFingerprint = (): string => {
+  // pnpm exec, not node_modules/.bin directly: the .bin entry is a shell
+  // wrapper (running it under `node` is a syntax error on CI).
+  const output = run(
+    "pnpm",
+    ["exec", "expo-updates", "fingerprint:generate", "--platform", "ios"],
+    mobileDir,
+  );
+  // Same defensive JSON slicing as easJson — tool wrappers occasionally
+  // prefix noise.
+  const start = output.indexOf("{");
+  const end = output.lastIndexOf("}");
+  if (start === -1 || end < start) {
+    throw new Error(`no JSON found in fingerprint output:\n${output.slice(0, 500)}`);
   }
-  parsed.build[profile].channel = channel;
-  return `${JSON.stringify(parsed, null, 2)}\n`;
+  const hash = JSON.parse(output.slice(start, end + 1)).hash;
+  if (typeof hash !== "string" || !hash) {
+    throw new Error(`fingerprint:generate returned no hash: ${output.slice(0, 500)}`);
+  }
+  return hash;
 };
 
-/** Run `fn` with the profile's channel rewritten, then put eas.json back —
- * CI checkouts are ephemeral, but a restored tree keeps local runs honest. */
-const withProfileChannel = <T>(profile: string, channel: string, fn: () => T): T => {
-  const easJsonPath = path.join(mobileDir, "eas.json");
-  const original = readFileSync(easJsonPath, "utf8");
-  writeFileSync(easJsonPath, easJsonWithChannel(original, profile, channel));
-  try {
-    return fn();
-  } finally {
-    writeFileSync(easJsonPath, original);
-  }
-};
-
-/** Runtime of the newest finished preview build — what a phone can be running today. */
-export const latestInstalledRuntime = (): string | undefined => {
+/**
+ * The runtime a main-tracking phone is on — the baseline for the section's
+ * "JS-only vs native changes" framing. Main's channel snapshot is the
+ * authority: every build now shares the `preview` profile, so the raw
+ * build list can't tell "a native-change PR's build just finished" from
+ * "main moved runtimes", and using it flipped the heuristic for every
+ * publish after any PR build landed. Falls back to the newest finished
+ * build only while the snapshot doesn't exist yet (pre-store bootstrap),
+ * where PR-build pollution is a bounded, self-healing inaccuracy.
+ */
+export const mainInstalledRuntime = async (): Promise<string | undefined> => {
+  const status = await fetchChannelStatus("preview").catch((error) => {
+    console.warn(`reading main's channel status failed (${error}) — falling back to build list`);
+    return null;
+  });
+  if (status) return status.runtimeVersion;
   const builds: any[] = easJson([
     "build:list",
     "--platform",
@@ -120,36 +228,39 @@ export type InstallBuild = {
    * exists but has nothing to install yet, and the section says so rather
    * than offering a link that dead-ends. */
   finished: boolean;
+  /** The .ipa artifact URL (stable, unsigned) — undefined until the build
+   * finishes; the install page falls back to the build-page link without it. */
+  ipaUrl: string | undefined;
 };
 
 /**
- * A build that both runs JS published for `runtime` AND boots on `channel`.
+ * A native build that can run JS published for `runtime` — ANY channel.
  *
- * The channel half is the point: an install used to hand you a binary whose
- * own channel was `preview` (main), so installing a PR's build ran main's JS
- * until you went back and scanned the OTA link too. Matching on channel — and
- * building one when nothing matches — makes the install QR mean what it says.
- *
- * One build per PR branch, not per push: later pushes find this build and
- * ride OTA.
+ * One build per unique runtime fingerprint, ever. Builds used to be baked
+ * per PR channel so installing one landed you on the PR's JS in a single
+ * step (#2542) — a ~20-minute paid EAS build per PR, almost always for zero
+ * native changes. Now every build is the plain `preview` profile and the
+ * channel hop after an install is one tap on the /install interstitial's
+ * "Open in app" link. JS-only PRs (runtime matches an existing build)
+ * trigger nothing; a native-change PR triggers the one build main will
+ * reuse after merge.
  */
-export const ensureBuildForPr = (input: { channel: string; runtime: string }): InstallBuild => {
+export const ensureBuildForRuntime = (input: { runtime: string }): InstallBuild => {
   const builds: any[] = easJson([
     "build:list",
     "--platform",
     "ios",
     "--build-profile",
-    buildProfileForChannel(input.channel),
+    "preview",
     "--runtime-version",
     input.runtime,
     "--limit",
     "30",
   ]);
-  const onChannel = builds.filter((b) => b.channel === input.channel);
   // Finished first: a queued build's install page has nothing to install.
   const build =
-    onChannel.find((b) => b.status === "FINISHED") ||
-    onChannel.find((b) => inProgressStatuses.includes(b.status)) ||
+    builds.find((b) => b.status === "FINISHED") ||
+    builds.find((b) => inProgressStatuses.includes(b.status)) ||
     triggerBuild(input);
   if (!build?.id) {
     throw new Error(`could not find or trigger an install build: ${JSON.stringify(build)}`);
@@ -158,22 +269,16 @@ export const ensureBuildForPr = (input: { channel: string; runtime: string }): I
     id: build.id,
     gitCommitHash: build.gitCommitHash,
     finished: build.status === "FINISHED",
+    // || undefined: EAS reports null (not absent) on in-progress builds, and
+    // the snapshot schema rejects null — undefined serializes to an absent
+    // key, which means "fall back to the build page".
+    ipaUrl: build.artifacts?.applicationArchiveUrl || undefined,
   };
 };
 
-/** Main keeps its long-lived `preview` profile; PR channels go through
- * `preview-pr`, whose channel this run rewrites. */
-const buildProfileForChannel = (channel: string) =>
-  channel === "preview" ? "preview" : "preview-pr";
-
-const triggerBuild = (input: { channel: string; runtime: string }) => {
-  const profile = buildProfileForChannel(input.channel);
-  console.log(
-    `no ${profile} build on channel ${input.channel} for runtime ${input.runtime} — triggering one`,
-  );
-  const triggered = withProfileChannel(profile, input.channel, () =>
-    easJson(["build", "--platform", "ios", "--profile", profile, "--no-wait"]),
-  );
+const triggerBuild = (input: { runtime: string }) => {
+  console.log(`no preview build for runtime ${input.runtime} — triggering one`);
+  const triggered = easJson(["build", "--platform", "ios", "--profile", "preview", "--no-wait"]);
   return Array.isArray(triggered) ? triggered[0] : triggered;
 };
 
@@ -200,8 +305,9 @@ export const planPreview = (input: {
   publishedRuntime: string;
   /** Runtime of the newest FINISHED preview-profile build — what's installable today. */
   installedRuntime: string | undefined;
-  /** Install page of the build serving this update: one whose runtime AND
-   * channel match (may be freshly triggered, hence installReady). */
+  /** The channel-stable /install/<channel> interstitial — it resolves the
+   * channel's expected build (possibly freshly triggered, hence
+   * installReady) at scan time. */
   installUrl: string;
   installReady: boolean;
 }): PreviewPlan => ({
@@ -278,13 +384,14 @@ export const renderPreviewSection = (input: {
       qrImageUrl: input.installQrUrl,
       href: plan.installUrl,
       caption: plan.installReady
-        ? "Open the EAS build install page"
+        ? "Open the install page"
         : "Build still running — the install page fills in when it finishes",
-      // The build is built FOR this channel, so installing it is being on
-      // this channel. No second scan, and no order to get wrong.
+      // Builds are shared across channels (one per runtime fingerprint), so
+      // the install page sequences the channel hop: install, then its
+      // "Open in app" tap lands you on this channel.
       note: forMain
         ? ""
-        : `This build boots on <code>${plan.channel}</code> — installing it is all you need.`,
+        : `After installing, tap <b>Open in app</b> on that page to land on <code>${plan.channel}</code>.`,
     }),
     "",
     forMain

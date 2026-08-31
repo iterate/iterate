@@ -11,6 +11,7 @@
     "ios": {
       "bundleIdentifier": "com.iterate.mobile",
       "supportsTablet": false,
+      "associatedDomains": ["applinks:mobile.iterate.com"],
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }

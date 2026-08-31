@@ -63,7 +63,37 @@ export type UpdateStatus =
   | { kind: "current" }
   /** The channel has JS this binary can run and isn't running. */
   | { kind: "behind"; branch: string; commit: string; message: string; publishedAt: string | null }
+  /** The channel's latest JS expects a DIFFERENT native build — invisible to
+   * checkForUpdateAsync (the update server filters by runtime), detected via
+   * the CI-pushed channel snapshot. installUrl is the expected build's
+   * expo.dev page — the Download button. */
+  | {
+      kind: "incompatible";
+      installUrl: string;
+      buildFinished: boolean;
+      commit: string;
+      message: string;
+    }
   | { kind: "error"; message: string };
+
+/**
+ * The CI-pushed "expected native build" snapshot for the channel the app is
+ * pointed at (prd /m/channel-status/<channel> — see
+ * packages/shared/src/mobile-channel-status.ts). "unavailable" covers fetch
+ * failures, 404s (channel predates the store, or its PR closed) and the
+ * query simply not having run — all render as silence, never as a claim.
+ */
+export type ChannelStatusCheck =
+  | { kind: "idle" }
+  | { kind: "unavailable" }
+  | {
+      kind: "loaded";
+      runtimeVersion: string;
+      installUrl: string;
+      buildFinished: boolean;
+      commit: string;
+      message: string;
+    };
 
 /** Plain facts in, whole view model out. Gathered by build-state.ts. */
 export type BuildFacts = {
@@ -82,6 +112,7 @@ export type BuildFacts = {
   /** Updates.createdAt for the running update. */
   publishedAt: string | null;
   check: UpdateCheck;
+  channelStatus: ChannelStatusCheck;
   appVersion: string | null;
   nativeBuildVersion: string | null;
   installedAt: string | null;
@@ -171,6 +202,24 @@ export function describeBuildState(facts: BuildFacts): BuildState {
 function describeUpdate(facts: BuildFacts): UpdateStatus {
   if (!facts.updatesEnabled) return { kind: "unsupported", why: "metro" };
   if (facts.isDevBundle) return { kind: "unsupported", why: "dev" };
+  // The channel moved to a different runtime: the phone can't see that via
+  // checkForUpdateAsync (the server filters by runtime before answering), so
+  // the CI snapshot is the authority — and it wins over "behind", because a
+  // still-runnable straggler update is not the channel's latest, and the
+  // whole point of being on a channel is running its latest.
+  if (
+    facts.channelStatus.kind === "loaded" &&
+    facts.runtimeVersion !== null &&
+    facts.channelStatus.runtimeVersion !== facts.runtimeVersion
+  ) {
+    return {
+      kind: "incompatible",
+      installUrl: facts.channelStatus.installUrl,
+      buildFinished: facts.channelStatus.buildFinished,
+      commit: facts.channelStatus.commit,
+      message: facts.channelStatus.message,
+    };
+  }
   switch (facts.check.kind) {
     case "idle":
       return { kind: "unknown" };
@@ -201,6 +250,10 @@ export function updateHeadline(status: UpdateStatus): string {
       return status.message
         ? `New update on this channel: "${status.message}"`
         : "A newer update is available on this channel";
+    case "incompatible":
+      return status.buildFinished
+        ? "This channel's latest JS expects a different native build."
+        : "This channel's latest JS expects a different native build (still compiling).";
     case "checking":
       return "Checking for a newer update…";
     case "error":

@@ -774,6 +774,31 @@ importers:
         specifier: ^4.1.7
         version: 4.1.8(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(@vitest/browser-playwright@4.1.8)(jsdom@27.4.0(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@26.1.1)(typescript@5.9.3))(vite@8.0.16(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.9.0))
 
+  apps/mobile/website:
+    dependencies:
+      '@iterate-com/shared':
+        specifier: workspace:*
+        version: link:../../../packages/shared
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: catalog:cloudflare
+        version: 4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2)
+      trpc-cli:
+        specifier: 0.15.1
+        version: 0.15.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.4.3)
+      tsx:
+        specifier: ^4.20.6
+        version: 4.21.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.8
+        version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(jsdom@27.4.0(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@26.1.1)(typescript@5.9.3))(vite@8.0.16(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.9.0))
+      wrangler:
+        specifier: 4.107.0
+        version: 4.107.0(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))
+
   apps/os:
     dependencies:
       '@cloudflare/containers':

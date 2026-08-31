@@ -11,9 +11,12 @@ import path from "node:path";
 import { isMainModule } from "../../packages/shared/src/dev/is-main-module.ts";
 import {
   easJson,
+  fetchChannelStatus,
+  installInterstitialUrl,
   mobileDir,
   planPreview,
-  prdBaseUrl,
+  mobileWebsiteBaseUrl,
+  pushChannelStatus,
   renderPreviewSection,
   syncMainPreviewSection,
   uploadQrAsset,
@@ -50,10 +53,32 @@ async function refreshMobileMainQr() {
     await new Promise((resolve) => setTimeout(resolve, POLL_SECONDS * 1000));
   }
 
+  // Flip the channel snapshot to installable — unless a newer merge already
+  // superseded this build's snapshot, which must not be regressed.
+  // Unreachable-or-erroring store reads as "no snapshot": the buildId guard
+  // below then skips the flip, which is the safe answer during the cutover
+  // window (mobile.iterate.com not serving yet).
+  const status = await fetchChannelStatus("preview").catch((error) => {
+    console.warn(`reading main's channel status failed (${error}) — leaving the snapshot alone`);
+    return null;
+  });
+  if (status !== null && status.buildId === build.id) {
+    await pushChannelStatus({
+      ...status,
+      buildFinished: true,
+      // The publish wrote no ipaUrl (the build hadn't finished); it has one now.
+      ipaUrl: build.artifacts?.applicationArchiveUrl || status.ipaUrl,
+    });
+  } else {
+    console.log(
+      `snapshot now points at ${status?.buildId || "nothing"} (not ${build.id}) — leaving it`,
+    );
+  }
+
   const appConfig = JSON.parse(readFileSync(path.join(mobileDir, "app.json"), "utf8"));
-  const { owner, slug, scheme } = appConfig.expo;
+  const { scheme } = appConfig.expo;
   const plan = planPreview({
-    baseUrl: prdBaseUrl,
+    baseUrl: mobileWebsiteBaseUrl,
     scheme,
     channel: "preview",
     publishedRuntime: build.runtimeVersion,
@@ -62,16 +87,14 @@ async function refreshMobileMainQr() {
     // section must keep saying "native changes — needs a fresh install" with
     // the install QR expanded, now that its link is actually installable.
     installedRuntime: undefined,
-    installUrl: `https://expo.dev/accounts/${owner}/projects/${slug}/builds/${build.id}`,
+    installUrl: installInterstitialUrl(mobileWebsiteBaseUrl, "preview"),
     installReady: true,
   });
-  // Same sha-derived asset names the publisher used — uploads are idempotent.
+  // Same channel-stable asset names the publisher used — uploads are
+  // skip-if-exists and the contents are identical.
   const [deepLinkQrUrl, installQrUrl] = await Promise.all([
-    uploadQrAsset(`mobile-main-${sha.slice(0, 9)}-ota-scheme.png`, plan.otaQrContent),
-    uploadQrAsset(
-      `mobile-main-${sha.slice(0, 9)}-install-${build.id.slice(0, 8)}.png`,
-      plan.installUrl,
-    ),
+    uploadQrAsset(`mobile-main-ota-scheme.png`, plan.otaQrContent),
+    uploadQrAsset(`mobile-main-install-site.png`, plan.installUrl),
   ]);
   const section = renderPreviewSection({
     variant: "main",

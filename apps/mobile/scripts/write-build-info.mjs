@@ -57,6 +57,11 @@ const info = {
   builtAt: new Date().toISOString(),
   expectedBackendEnv: env.MOBILE_EXPECTED_BACKEND_ENV || "",
   testLoginEmail: env.MOBILE_TEST_LOGIN_EMAIL || "",
+  // The runtime fingerprint the publisher computed for this working tree —
+  // the bundle's own record of which native build it expects. CI supplies it
+  // (scripts/ci/mobile-preview.ts computeRuntimeFingerprint) and asserts the
+  // published runtime agreed; local/EAS stamps "" (unknown).
+  runtimeFingerprint: env.MOBILE_RUNTIME_FINGERPRINT || "",
 };
 
 writeFileSync(out, `${JSON.stringify(info, null, 2)}\n`);
