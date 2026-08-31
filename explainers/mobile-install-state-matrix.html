@@ -1,0 +1,572 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mobile install-state matrix — what happens when you point your phone at a PR</title>
+    <style>
+      :root {
+        --fg: #1a1a1a;
+        --muted: #666;
+        --line: #e5e5e5;
+        --bg: #fff;
+        --card: #fafafa;
+        --accent: #b45309;
+        --ok: #15803d;
+        --okbg: #f0fdf4;
+        --ota: #1d4ed8;
+        --otabg: #eff6ff;
+        --dl: #b45309;
+        --dlbg: #fffbeb;
+        --na: #6b7280;
+        --nabg: #f3f4f6;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #e5e5e5;
+          --muted: #999;
+          --line: #333;
+          --bg: #111;
+          --card: #191919;
+          --accent: #fbbf24;
+          --ok: #4ade80;
+          --okbg: #10231a;
+          --ota: #7fb4d8;
+          --otabg: #12202e;
+          --dl: #fbbf24;
+          --dlbg: #2a2210;
+          --na: #9ca3af;
+          --nabg: #1f2126;
+        }
+      }
+      body {
+        margin: 0 auto;
+        max-width: 1280px;
+        padding: 32px 20px 80px;
+        font:
+          15px/1.55 -apple-system,
+          system-ui,
+          sans-serif;
+        color: var(--fg);
+        background: var(--bg);
+      }
+      h1 {
+        font-size: 24px;
+        margin: 0 0 4px;
+      }
+      h2 {
+        font-size: 17px;
+        margin: 36px 0 8px;
+      }
+      .sub {
+        color: var(--muted);
+        margin: 0 0 20px;
+      }
+      .takeaway {
+        border: 1px solid var(--line);
+        border-left: 4px solid var(--accent);
+        background: var(--card);
+        border-radius: 8px;
+        padding: 12px 16px;
+        margin: 20px 0;
+      }
+      details {
+        margin: 10px 0;
+      }
+      summary {
+        cursor: pointer;
+        font-weight: 600;
+      }
+      details.gloss > div {
+        padding: 8px 0 0 16px;
+      }
+      dt {
+        font-weight: 600;
+        margin-top: 10px;
+      }
+      dd {
+        margin: 2px 0 0 0;
+        color: var(--muted);
+      }
+      code {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 0 4px;
+        font-size: 13px;
+      }
+      .rules {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 10px;
+        margin: 14px 0 24px;
+      }
+      .rule {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--card);
+        padding: 10px 14px;
+      }
+      .rule b {
+        display: block;
+        margin-bottom: 2px;
+      }
+      .rule span {
+        color: var(--muted);
+        font-size: 13.5px;
+      }
+      .tablewrap {
+        overflow-x: auto;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        min-width: 1050px;
+      }
+      th,
+      td {
+        border: 1px solid var(--line);
+        padding: 10px 12px;
+        vertical-align: top;
+        text-align: left;
+      }
+      thead th {
+        background: var(--card);
+        font-size: 13.5px;
+        position: sticky;
+        top: 0;
+      }
+      tbody th {
+        background: var(--card);
+        font-weight: 600;
+        font-size: 13.5px;
+        min-width: 170px;
+        max-width: 200px;
+        position: sticky;
+        left: 0;
+      }
+      tbody th .st {
+        display: block;
+        font-weight: 400;
+        color: var(--muted);
+        font-size: 12.5px;
+        margin-top: 2px;
+      }
+      td {
+        font-size: 13.5px;
+      }
+      .chip {
+        display: inline-block;
+        font-size: 11.5px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        border-radius: 999px;
+        padding: 1px 9px;
+        margin-bottom: 6px;
+        white-space: nowrap;
+      }
+      .c-ok {
+        color: var(--ok);
+        background: var(--okbg);
+      }
+      .c-ota {
+        color: var(--ota);
+        background: var(--otabg);
+      }
+      .c-dl {
+        color: var(--dl);
+        background: var(--dlbg);
+      }
+      .c-na {
+        color: var(--na);
+        background: var(--nabg);
+      }
+      td.na {
+        color: var(--muted);
+        background: var(--nabg);
+      }
+      td p {
+        margin: 0 0 6px;
+      }
+      td details {
+        margin: 6px 0 0;
+      }
+      td summary {
+        font-weight: 500;
+        font-size: 12.5px;
+        color: var(--muted);
+      }
+      td details div {
+        padding-top: 6px;
+        color: var(--muted);
+        font-size: 12.5px;
+      }
+      .mergestrip {
+        margin-top: 24px;
+      }
+      .mergestrip td {
+        font-size: 13.5px;
+      }
+      footer {
+        margin-top: 40px;
+        color: var(--muted);
+        font-size: 12.5px;
+        border-top: 1px solid var(--line);
+        padding-top: 12px;
+      }
+      a {
+        color: var(--accent);
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Mobile install-state matrix</h1>
+    <p class="sub">
+      What happens when your phone meets a mobile PR — for every combination of what's on the phone
+      and what the PR changes. Find your row (phone), find the PR's column, read the cell. "pr-1234"
+      is the PR whose QR codes you're looking at; "pr-5678" is any other PR.
+    </p>
+
+    <div class="takeaway">
+      <b>Takeaway:</b> the worst any cell gets is <i>Download → Install → Open in app → Switch</i>,
+      and the app tells you when you're in that cell. Native builds happen only when native code
+      actually changed — one build per fingerprint, shared by the PR, its siblings, and main after
+      merge. Nothing is silently stale anymore.
+    </div>
+
+    <details class="gloss">
+      <summary>Glossary — the six words the table uses</summary>
+      <div>
+        <dl>
+          <dt>binary (native build)</dt>
+          <dd>
+            The installed app itself, compiled by EAS. Carries a <b>runtime fingerprint</b> — a hash
+            of everything native (dependencies, config, native modules). "main binary" and "pr-1234
+            binary" mean binaries with main's / the PR's fingerprint.
+          </dd>
+          <dt>JS bundle / OTA update</dt>
+          <dd>
+            The JavaScript, published separately on every push. A binary only ever runs bundles
+            published with <b>its exact fingerprint</b> — anything else is invisible to it (the
+            update server filters before answering).
+          </dd>
+          <dt>channel</dt>
+          <dd>
+            Which stream of JS the binary pulls from. Every CI binary is built pointing at
+            <code>preview</code> (= main). Each mobile PR publishes to its own channel (<code
+              >pr-1234</code
+            >
+            ≈ its branch name).
+          </dd>
+          <dt>override / Switch</dt>
+          <dd>
+            Scanning a PR's OTA QR opens a confirm screen; <b>Switch</b> points the binary at that
+            channel. The first boot of any <i>newly installed</i> binary clears the override — which
+            is why installs come <i>before</i> channel switches, never after.
+          </dd>
+          <dt>snapshot</dt>
+          <dd>
+            On every publish, CI records each channel's latest runtime + expected build on prd
+            (<code>/m/channel-status/&lt;channel&gt;</code>). It's how the app can say "this
+            channel's latest JS expects a different native build" — the one thing the update check
+            can't see.
+          </dd>
+          <dt>install page</dt>
+          <dd>
+            <code>os.iterate.com/m/install/&lt;channel&gt;</code> — what install QRs encode.
+            Resolves the channel's expected build <i>at scan time</i> (never stale), and keeps an
+            <b>Open in app</b> link for the post-install switch.
+          </dd>
+        </dl>
+      </div>
+    </details>
+
+    <h2>The three rules that generate every cell</h2>
+    <div class="rules">
+      <div class="rule">
+        <b>1 · The runtime gate</b>
+        <span
+          >A binary runs only JS published with its exact fingerprint. Mismatched JS isn't
+          "rejected" — it's invisible.</span
+        >
+      </div>
+      <div class="rule">
+        <b>2 · One build per fingerprint</b>
+        <span
+          >A JS-only PR has no binary of its own — "its" binary is main's. A native-change PR gets
+          the one build its fingerprint will ever need; main reuses it after merge.</span
+        >
+      </div>
+      <div class="rule">
+        <b>3 · Mismatches announce themselves</b>
+        <span
+          >When your channel's latest JS needs a different fingerprint than your binary, the app
+          (via the snapshot) shows a banner + <b>Download</b> button. Download opens the install
+          page, which orders the steps: Install, then Open in app.</span
+        >
+      </div>
+    </div>
+
+    <h2>The matrix</h2>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Your phone ↓ · the PR →</th>
+            <th>No app changes</th>
+            <th>
+              JS-only changes<br /><span style="font-weight: 400">(fingerprint = main's)</span>
+            </th>
+            <th>
+              Native-only changes<br /><span style="font-weight: 400">(fingerprint moved)</span>
+            </th>
+            <th>Native + JS changes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th>Nothing installed</th>
+            <td class="na" rowspan="6">
+              <span class="chip c-na">NO-OP</span>
+              <p>
+                The PR gets no mobile preview section at all — the workflow only runs when
+                <code>apps/mobile/**</code> or the publish scripts change. Nothing published,
+                nothing built, nothing to scan. Your phone never hears about it, before or after
+                merge.
+              </p>
+            </td>
+            <td>
+              <span class="chip c-dl">INSTALL</span>
+              <p>
+                Scan the <b>install QR</b>. The page serves the shared main-runtime binary — no
+                build is triggered for this PR.
+              </p>
+              <details>
+                <summary>steps</summary>
+                <div>
+                  Install → back to the page → <b>Open in app</b> → Switch to <code>pr-1234</code>.
+                  The confirm screen also offers the PR's preview backend + test sign-in (stamped
+                  into the bundle).
+                </div>
+              </details>
+            </td>
+            <td>
+              <span class="chip c-dl">INSTALL</span>
+              <p>
+                Same flow, but the build is this PR's own. On the first native push the page says
+                "still compiling" for ~15–20 min; after that, Install is immediate.
+              </p>
+              <details>
+                <summary>steps</summary>
+                <div>
+                  Install → Open in app → Switch. This is the only build this fingerprint will ever
+                  get — sibling PRs and post-merge main reuse it.
+                </div>
+              </details>
+            </td>
+            <td>
+              <span class="chip c-dl">INSTALL</span>
+              <p>
+                As native-only. You'll also see the PR's JS changes once you land, and later JS-only
+                pushes ride OTA on the same binary.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <th>main binary · main JS<span class="st">the normal phone</span></th>
+            <td>
+              <span class="chip c-ota">ONE SCAN</span>
+              <p>
+                Scan the <b>OTA QR</b> (it's the expanded one) → Switch → fetch + reload. On the
+                PR's JS in seconds. Zero builds involved.
+              </p>
+            </td>
+            <td>
+              <span class="chip c-dl">DOWNLOAD</span>
+              <p>
+                Your binary can't run this JS, and the section knows: the <b>install QR</b> is the
+                expanded one. Scanning the OTA QR anyway is safe — the confirm screen answers "this
+                channel's latest JS expects a different native build" with a Download button to the
+                same install page.
+              </p>
+              <details>
+                <summary>steps</summary>
+                <div>Install the PR's build → Open in app → Switch → PR JS.</div>
+              </details>
+            </td>
+            <td>
+              <span class="chip c-dl">DOWNLOAD</span>
+              <p>As native-only.</p>
+            </td>
+          </tr>
+          <tr>
+            <th>main binary · pr-1234 JS<span class="st">you switched to this PR earlier</span></th>
+            <td>
+              <span class="chip c-ok">ALREADY THERE</span>
+              <p>
+                New pushes reach you: the banner says <i>"New update on this channel"</i> → Update
+                now. Or rescan the OTA QR — a scan means "give me the latest", so it pulls and
+                reloads by itself.
+              </p>
+            </td>
+            <td>
+              <span class="chip c-dl">DOWNLOAD</span>
+              <p>
+                The push moved the runtime out from under you. Your phone can't even <i>see</i> the
+                new bundle — but the snapshot check raises the banner:
+                <i>"this channel's latest JS expects a different native build"</i> + Download.
+              </p>
+              <details>
+                <summary>why this cell matters</summary>
+                <div>
+                  Before #2555 this state was silent: the update check said "current" forever and
+                  you'd review stale JS without knowing. This is the cell the Download banner was
+                  built for.
+                </div>
+              </details>
+            </td>
+            <td>
+              <span class="chip c-dl">DOWNLOAD</span>
+              <p>As native-only — and the JS you're currently holding is visibly old, too.</p>
+            </td>
+          </tr>
+          <tr>
+            <th>
+              pr-1234 binary · pr-1234 JS<span class="st">you installed this PR's build</span>
+            </th>
+            <td class="na">
+              <span class="chip c-na">N/A</span>
+              <p>
+                Can't exist: a JS-only PR has no binary of its own (rule 2) — you're really in a
+                "main binary" row above.
+              </p>
+              <details>
+                <summary>the leftover-binary case</summary>
+                <div>
+                  If the PR <i>used</i> to change native code and reverted it, your orphaned binary
+                  now mismatches the channel's latest — the banner offers Download for the
+                  main-runtime build.
+                </div>
+              </details>
+            </td>
+            <td>
+              <span class="chip c-ok">ALREADY THERE</span>
+              <p>
+                JS pushes on this fingerprint ride OTA: banner → Update now, or rescan the OTA QR.
+                If the PR moves the fingerprint <i>again</i>, you're back one row up: Download
+                banner, fresh build.
+              </p>
+            </td>
+            <td>
+              <span class="chip c-ok">ALREADY THERE</span>
+              <p>As native-only. Between native pushes, every JS push keeps flowing OTA.</p>
+            </td>
+          </tr>
+          <tr>
+            <th>
+              pr-1234 binary · main JS<span class="st">kept the PR build, went back to main</span>
+            </th>
+            <td class="na">
+              <span class="chip c-na">N/A</span>
+              <p>Same collapse as above — no distinct pr-1234 binary exists for a JS-only PR.</p>
+            </td>
+            <td>
+              <span class="chip c-ota">ONE SCAN</span>
+              <p>
+                Your binary IS this PR's runtime, so its OTA QR works instantly: Switch → PR JS.
+              </p>
+              <details>
+                <summary>how you got here, honestly</summary>
+                <div>
+                  Pre-merge, main has no JS your binary can run — "Switch to main" refuses to strand
+                  you (it reverts on no-update), so this state mostly means the binary's embedded
+                  JS. Post-merge, main publishes your runtime and this phone simply <i>becomes</i> a
+                  main phone — that's the payoff of main reusing the PR's build.
+                </div>
+              </details>
+            </td>
+            <td>
+              <span class="chip c-ota">ONE SCAN</span>
+              <p>As native-only.</p>
+            </td>
+          </tr>
+          <tr>
+            <th>
+              pr-1234 binary · pr-5678 JS<span class="st">PR build, someone else's channel</span>
+            </th>
+            <td class="na">
+              <span class="chip c-na">N/A</span>
+              <p>
+                Same collapse — and if your binary genuinely isn't main-runtime, any scan of this
+                JS-only PR ends at the Download banner for the main-runtime build.
+              </p>
+            </td>
+            <td>
+              <span class="chip c-ota">ONE SCAN</span>
+              <p>
+                Running pr-5678's JS on this binary means the two PRs share a fingerprint (rule 1) —
+                sibling PRs sharing one build is by design. So pr-1234's OTA QR is one scan: Switch
+                → instant.
+              </p>
+              <details>
+                <summary>if 5678 later diverges</summary>
+                <div>
+                  If pr-5678 moves its fingerprint past your binary, its channel goes quiet for you
+                  and the Download banner fires for <i>its</i> expected build — each channel's
+                  snapshot speaks for itself.
+                </div>
+              </details>
+            </td>
+            <td>
+              <span class="chip c-ota">ONE SCAN</span>
+              <p>As native-only.</p>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2 class="mergestrip">…and when the PR merges</h2>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>No app changes</th>
+            <th>JS-only changes</th>
+            <th>Native-only changes</th>
+            <th>Native + JS changes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="na">Nothing mobile happens.</td>
+            <td>
+              Main's publish OTAs every main phone on next launch. The merged PR's channel, snapshot
+              and QR assets are deleted, and the PR body's section is swapped for
+              <b>main's</b> QRs — the merged PR is the on-ramp back onto main.
+            </td>
+            <td colspan="2">
+              Same swap — and main <b>reuses the PR's already-finished build</b> (same fingerprint),
+              so the merged body's install link is usually live immediately instead of waiting out a
+              fresh ~20-minute build. Phones on old binaries see the Download banner until they
+              install.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <footer>
+      Sources: <code>scripts/ci/publish-mobile-pr-preview.ts</code>,
+      <code>scripts/ci/mobile-preview.ts</code>,
+      <code>apps/os/src/domains/mobile/channel-status.ts</code>,
+      <code>apps/mobile/src/lib/build-state-core.ts</code>. Introduced by PR #2555
+      (fingerprint-keyed builds), building on #2542 (build-state module) and #2550 (merged-PR main
+      QRs). The companion deep-dive on channels/overrides/expo mechanics:
+      <a href="./mobile-builds-and-ota">Mobile builds &amp; OTA</a> — note its per-PR-channel-baked
+      build scenario describes the pre-#2555 world.
+    </footer>
+  </body>
+</html>
