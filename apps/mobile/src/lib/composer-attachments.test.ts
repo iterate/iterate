@@ -10,6 +10,7 @@ import {
   oversizeReason,
   parseAttachmentDimensions,
   parseUserLocations,
+  parseVoiceNoteTranscripts,
   pendingNoteAttachments,
   STREAM_UPLOAD_THRESHOLD_BYTES,
   stripAttachmentXmlParts,
@@ -122,9 +123,17 @@ test("location and dimensions become self-describing xml parts appended to the t
   expect(messageWithXmlParts("", [voiceClip])).toBe(
     '<voice-note filename="voice-123.m4a" duration-seconds="83" />',
   );
-  expect(messageWithXmlParts("", [{ ...voiceClip, transcript: 'I said "hi" & left' }])).toBe(
+  const withTranscript = messageWithXmlParts("", [
+    { ...voiceClip, transcript: 'I said "hi" & left' },
+  ]);
+  expect(withTranscript).toBe(
     '<voice-note filename="voice-123.m4a" duration-seconds="83" transcript="I said &quot;hi&quot; &amp; left" />',
   );
+  // ...and the player reads it back for the under-waveform display.
+  expect(parseVoiceNoteTranscripts(withTranscript)).toEqual({
+    "voice-123.m4a": 'I said "hi" & left',
+  });
+  expect(parseVoiceNoteTranscripts(messageWithXmlParts("", [voiceClip]))).toEqual({});
   // Nothing part-worthy (a document-picked file) → text passes through.
   const pdf: ComposerAttachment = {
     kind: "file",

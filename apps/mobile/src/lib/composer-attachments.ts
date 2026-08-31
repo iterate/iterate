@@ -307,6 +307,21 @@ export function parseAttachmentDimensions(
   return dimensions;
 }
 
+const VOICE_NOTE_PART_PATTERN =
+  /<voice-note filename="([^"]*)" duration-seconds="\d+"(?: transcript="([^"]*)")? \/>/g;
+
+/** filename → on-device transcript, parsed back out of a received message's
+ * <voice-note .../> parts — the audio player shows it under the waveform. */
+export function parseVoiceNoteTranscripts(text: string): Record<string, string> {
+  const transcripts: Record<string, string> = {};
+  for (const match of text.matchAll(VOICE_NOTE_PART_PATTERN)) {
+    if (match[2] !== undefined && match[2] !== "") {
+      transcripts[unescapeXmlAttribute(match[1]!)] = unescapeXmlAttribute(match[2]);
+    }
+  }
+  return transcripts;
+}
+
 const LOCATION_PART_PATTERN =
   /<user-location latitude="(-?[\d.]+)" longitude="(-?[\d.]+)"(?: accuracy-meters="(\d+)")? captured-at="([^"]*)" \/>/g;
 

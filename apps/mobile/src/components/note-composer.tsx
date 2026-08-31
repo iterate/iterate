@@ -35,6 +35,7 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import Feather from "@expo/vector-icons/Feather";
 import { base64ToUint8Array } from "../lib/attachments.ts";
 import {
   attachmentAssetId,
@@ -441,6 +442,18 @@ export function NoteCaptureOverlay() {
       pointerEvents="box-none"
       style={styles.overlay}
     >
+      {/* The collapse control perches ABOVE the sheet as a drawer-style tab
+          of double chevrons — an ✕ here clashed with the attachment chips'
+          remove badges. */}
+      <Pressable
+        accessibilityLabel="Collapse note composer"
+        accessibilityRole="button"
+        hitSlop={8}
+        onPress={() => cache.setQueryData(composerOpenKey, "closed")}
+        style={styles.collapseTab}
+      >
+        <Feather color={colors.textMuted} name="chevrons-down" size={18} />
+      </Pressable>
       <View
         style={[
           styles.sheet,
@@ -461,14 +474,6 @@ export function NoteCaptureOverlay() {
               ? `→ /notes in ${params.slug || projectId}`
               : `→ saved on this phone until you open a project${pendingCount > 0 ? ` (${pendingCount} pending)` : ""}`}
           </Text>
-          <Pressable
-            accessibilityLabel="Close note composer"
-            accessibilityRole="button"
-            hitSlop={10}
-            onPress={() => cache.setQueryData(composerOpenKey, "closed")}
-          >
-            <Text style={styles.close}>✕</Text>
-          </Pressable>
         </View>
         {sheetOpen ? (
           // The chat composer's attachment surface, verbatim — carousel with
@@ -623,7 +628,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   target: { color: colors.textFaint, flex: 1, fontSize: 11 },
-  close: { color: colors.textMuted, fontSize: 16, fontWeight: "600" },
+  collapseTab: {
+    alignSelf: "center",
+    backgroundColor: colors.surfaceRaised,
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderBottomWidth: 0,
+    borderTopLeftRadius: radius.md,
+    borderTopRightRadius: radius.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: 3,
+    // Sits on the sheet's top border, reading as one piece with it.
+    marginBottom: -1,
+  },
   composerRow: {
     flexDirection: "row",
     alignItems: "flex-end",

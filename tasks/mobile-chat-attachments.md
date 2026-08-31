@@ -236,6 +236,11 @@ and uploads lazily.
   now shows the hold-to-record mic/video button (was a dimmed ↑), and a
   spoken note's on-device transcript rides into the note text as a
   <voice-note transcript /> line — for a note, the words are the point.
+- Feedback round 9: the note composer's ✕ (clashing with the chips' remove
+  badges) became a drawer-style double-chevron tab perched above the sheet;
+  successful on-device transcripts now render in italics under the audio
+  player's waveform — collapsed to two lines, tap to expand/collapse
+  (parseVoiceNoteTranscripts reads them back out of the message part).
 - Gotcha found while running specs: wrapping `dev.ts` in an outer
   `doppler run` exports DOPPLER_PROJECT/DOPPLER_CONFIG, which the INNER
   `doppler run` (apps/os scope) honors over doppler.yaml — the dev server

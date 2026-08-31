@@ -66,6 +66,7 @@ import {
   messageWithXmlParts,
   parseAttachmentDimensions,
   parseUserLocations,
+  parseVoiceNoteTranscripts,
   stripAttachmentXmlParts,
   type ComposerAttachment,
 } from "../../../lib/composer-attachments.ts";
@@ -820,6 +821,7 @@ function MessageBubble({ message }: { message: AgentUiMessageItem }) {
   // visible caption.
   const knownDimensions = parseAttachmentDimensions(message.text);
   const locations = parseUserLocations(message.text);
+  const transcripts = parseVoiceNoteTranscripts(message.text);
   const caption = stripAttachmentXmlParts(message.text);
   return (
     <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAssistant]}>
@@ -852,6 +854,7 @@ function MessageBubble({ message }: { message: AgentUiMessageItem }) {
           file={file}
           key={file.path}
           tone={isUser ? "onLight" : "onDark"}
+          transcript={transcripts[file.filename] || null}
           width={photoFrameMaxWidth(window.width)}
         />
       ))}

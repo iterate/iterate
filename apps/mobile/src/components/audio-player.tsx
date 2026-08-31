@@ -21,6 +21,10 @@ export function AudioMessagePlayer(props: {
    * near-black — the neutral palette flips accordingly (no accent green;
    * the theme's calm-over-flashy rule). */
   tone: "onLight" | "onDark";
+  /** On-device transcript from the message's <voice-note transcript .../>
+   * part; shown in italics under the waveform, collapsed to two lines with
+   * tap-to-expand. */
+  transcript: string | null;
   width: number;
 }) {
   const player = useAudioPlayer({ uri: props.file.url });
@@ -41,6 +45,7 @@ export function AudioMessagePlayer(props: {
           rest: colors.textFaint,
         };
 
+  const [transcriptExpanded, setTranscriptExpanded] = useState(false);
   // While a finger is on the waveform, IT owns the shown position; the seek
   // lands on release.
   const [scrub, setScrub] = useState<number | null>(null);
@@ -108,59 +113,87 @@ export function AudioMessagePlayer(props: {
     scrub !== null ? scrub : status.duration > 0 ? status.currentTime / status.duration : 0;
 
   return (
-    <View style={[styles.row, { width: props.width }]}>
-      <Pressable
-        accessibilityLabel={status.playing ? "Pause audio" : "Play audio"}
-        accessibilityRole="button"
-        onPress={togglePlay}
-        style={[styles.playButton, { backgroundColor: palette.button }]}
-      >
-        <Ionicons
-          name={status.playing ? "pause" : "play"}
-          size={18}
-          color={palette.glyph}
-          style={status.playing ? null : styles.playGlyphNudge}
-        />
-      </Pressable>
-      <View style={styles.waveColumn}>
-        <View
-          {...pan.panHandlers}
-          accessibilityLabel="Seek audio"
-          collapsable={false}
-          ref={waveRef}
-          style={styles.wave}
+    <View style={[styles.container, { width: props.width }]}>
+      <View style={styles.row}>
+        <Pressable
+          accessibilityLabel={status.playing ? "Pause audio" : "Play audio"}
+          accessibilityRole="button"
+          onPress={togglePlay}
+          style={[styles.playButton, { backgroundColor: palette.button }]}
         >
-          {bars.map((bar, index) => (
-            <View
-              key={index}
-              style={[
-                styles.bar,
-                {
-                  height: Math.max(3, bar * 26),
-                  backgroundColor: index / bars.length <= progress ? palette.played : palette.rest,
-                },
-              ]}
-            />
-          ))}
+          <Ionicons
+            name={status.playing ? "pause" : "play"}
+            size={18}
+            color={palette.glyph}
+            style={status.playing ? null : styles.playGlyphNudge}
+          />
+        </Pressable>
+        <View style={styles.waveColumn}>
+          <View
+            {...pan.panHandlers}
+            accessibilityLabel="Seek audio"
+            collapsable={false}
+            ref={waveRef}
+            style={styles.wave}
+          >
+            {bars.map((bar, index) => (
+              <View
+                key={index}
+                style={[
+                  styles.bar,
+                  {
+                    height: Math.max(3, bar * 26),
+                    backgroundColor:
+                      index / bars.length <= progress ? palette.played : palette.rest,
+                  },
+                ]}
+              />
+            ))}
+          </View>
+          <Text style={styles.time}>
+            {status.duration > 0
+              ? `${formatClipDuration(scrub !== null ? scrub * status.duration : status.currentTime)} / ${formatClipDuration(status.duration)}`
+              : "–:––"}
+          </Text>
         </View>
-        <Text style={styles.time}>
-          {status.duration > 0
-            ? `${formatClipDuration(scrub !== null ? scrub * status.duration : status.currentTime)} / ${formatClipDuration(status.duration)}`
-            : "–:––"}
-        </Text>
       </View>
+      {props.transcript !== null && props.transcript !== "" ? (
+        <Pressable
+          accessibilityLabel={transcriptExpanded ? "Collapse transcript" : "Expand transcript"}
+          accessibilityRole="button"
+          onPress={() => setTranscriptExpanded(!transcriptExpanded)}
+        >
+          <Text
+            numberOfLines={transcriptExpanded ? undefined : 2}
+            selectable={transcriptExpanded}
+            style={[
+              styles.transcript,
+              { color: props.tone === "onLight" ? colors.textFaint : colors.textMuted },
+            ]}
+          >
+            {props.transcript}
+          </Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  container: { minWidth: 200, paddingBottom: 2 },
   row: {
     height: AUDIO_ROW_HEIGHT,
-    minWidth: 200,
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
     paddingHorizontal: spacing.sm,
+  },
+  transcript: {
+    fontSize: 12,
+    fontStyle: "italic",
+    lineHeight: 16,
+    paddingHorizontal: spacing.sm,
+    paddingBottom: 6,
   },
   playButton: {
     width: 36,
