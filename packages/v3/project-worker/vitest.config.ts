@@ -1,14 +1,18 @@
-// THE ONE test config. Three PROJECTS (vitest's own word), one command (`pnpm test`) — the
-// cook-down of what used to be three configs + three scripts. Each project is a genuinely
-// different execution context, not a taste split:
+// THE vitest config. Three PROJECTS (vitest's own word), one command (`pnpm test`). Each is a
+// genuinely different execution context:
 //   • unit    — in-process node, the fast lane (src/**/*.test.ts)
-//   • harness — real worker booted locally via wrangler createTestHarness, driven over capnweb
-//               exactly like production (__tests__/**/*.test.ts)
-//   • workers — tests run INSIDE workerd next to the worker, reaching cloudflare:test DO
-//               controls (evictDurableObject) — the hibernation lane (__workers-tests__/**)
+//   • harness — a real worker booted locally via wrangler createTestHarness, driven over capnweb
+//               EXACTLY like production (__tests__/**). This is the interface-level E2E lane: no
+//               workerd-internal hooks, so the same tests would hold against a live/self-hosted
+//               deployment. Most integration coverage lives here.
+//   • workers — tests run INSIDE workerd next to the worker, reaching cloudflare:test controls
+//               (evictDurableObject / runDurableObjectAlarm). Deliberately narrowed to the
+//               HIBERNATION cases that genuinely need those controls (__workers-tests__/**).
+//
+// Browser E2E is Playwright, not vitest (see playwright.config.ts + e2e/**) — a real browser drives
+// the hosted /demo page against a real worker.
 
 import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
-import { playwright } from "@vitest/browser-playwright";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
@@ -53,21 +57,6 @@ export default defineConfig({
           onUnhandledError(error) {
             if (/RPC session|WebSocket|CONNECTION_OFFLINE|disposed/i.test(error.message ?? ""))
               return false;
-          },
-        },
-      },
-      {
-        // browser — the React useLiveState hook rendered in a REAL browser (Chromium via Playwright),
-        // fed the same door + deltas the server sends, proving the client reassembles live state in
-        // the browser. Run alone with `pnpm test:browser` (or `vitest run --project browser`).
-        test: {
-          name: "browser",
-          include: ["__browser-tests__/**/*.test.tsx"],
-          browser: {
-            enabled: true,
-            provider: playwright(),
-            headless: true,
-            instances: [{ browser: "chromium" }],
           },
         },
       },

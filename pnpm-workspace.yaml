@@ -95,6 +95,12 @@ overrides:
   quicktype-core>readable-stream: npm:vite-compatible-readable-stream@3.6.1
   srvx: 0.11.12
   wrangler: 4.107.0
+  # project-worker runs ahead on wrangler 4.127.1 (a newer bundled workerd, 1.20260815+): its
+  # createTestHarness + `wrangler dev` then accept the allow_irrevocable_stub_storage flag, so the
+  # harness/E2E lane can load userspace facets locally (the flag is stable in that workerd; the older
+  # 4.107.0 workerd still gates it behind --experimental). Scoped like the capnweb bump above — the
+  # monorepo-wide pin stays 4.107.0 until each consumer is verified.
+  'project-worker>wrangler': 4.127.1
   ws: 8.19.0
 
 packageExtensions:
