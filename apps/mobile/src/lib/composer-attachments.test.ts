@@ -10,6 +10,7 @@ import {
   oversizeReason,
   parseAttachmentDimensions,
   parseUserLocations,
+  pendingNoteAttachments,
   STREAM_UPLOAD_THRESHOLD_BYTES,
   stripAttachmentXmlParts,
   UPLOAD_CHUNK_BYTES,
@@ -165,6 +166,24 @@ test("dimension parts round-trip: sent for sized media, parsed back, hidden from
   expect(stripAttachmentXmlParts(sent)).toBe("look at these");
   // A message with no parts is untouched (multiline text survives).
   expect(stripAttachmentXmlParts("line one\nline two")).toBe("line one\nline two");
+});
+
+test("note attachments: bytes inline (pending notes must survive offline), locations skipped", async () => {
+  const pdf: ComposerAttachment = {
+    kind: "file",
+    filename: "doc.pdf",
+    contentType: "application/pdf",
+    uri: "file:///tmp/doc.pdf",
+    sizeBytes: 10,
+  };
+  const converted = await pendingNoteAttachments([photo, pdf, location], async () =>
+    Buffer.from("pdf bytes").toString("base64"),
+  );
+  expect(converted).toMatchObject([
+    { filename: "sunset.jpg", contentType: "image/jpeg", width: 100, height: 80 },
+    { filename: "doc.pdf", contentType: "application/pdf", width: 0, height: 0 },
+  ]);
+  expect(Buffer.from(converted[1]!.base64, "base64").toString()).toBe("pdf bytes");
 });
 
 test("location parts parse back into coordinates and hide from the caption", () => {

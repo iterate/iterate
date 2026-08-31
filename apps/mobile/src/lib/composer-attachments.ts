@@ -179,6 +179,51 @@ export async function attachmentUploads(
   return uploads;
 }
 
+/** The note composer's wire shape: every byte-carrying attachment as an
+ * inline base64 blob, matching lib/pending-notes.ts PendingNoteAttachment —
+ * capture must never lose data (a pending note has to survive offline in
+ * AsyncStorage, local file uris don't), so bytes are read eagerly here.
+ * Locations carry no bytes; fold them into the note text with
+ * locationXmlPart instead. */
+export async function pendingNoteAttachments(
+  attachments: ComposerAttachment[],
+  readBase64: (uri: string) => Promise<string>,
+): Promise<
+  { filename: string; contentType: string; base64: string; width: number; height: number }[]
+> {
+  const out: {
+    filename: string;
+    contentType: string;
+    base64: string;
+    width: number;
+    height: number;
+  }[] = [];
+  for (const attachment of attachments) {
+    if (attachment.kind === "location") continue;
+    if (attachment.kind === "photo") {
+      out.push({
+        filename: attachment.image.filename,
+        contentType: attachment.image.contentType,
+        base64: attachment.image.base64,
+        width: attachment.image.width,
+        height: attachment.image.height,
+      });
+      continue;
+    }
+    const base64 = await readBase64(attachment.uri);
+    const refusal = oversizeReason(Math.floor(base64.length * 0.75));
+    if (refusal !== null) throw new Error(`${attachment.filename}: ${refusal}`);
+    out.push({
+      filename: attachment.filename,
+      contentType: attachment.contentType,
+      base64,
+      width: attachment.kind === "video" ? attachment.width || 0 : 0,
+      height: attachment.kind === "video" ? attachment.height || 0 : 0,
+    });
+  }
+  return out;
+}
+
 /** Location goes into the message text itself as a self-describing XML part
  * — it has no bytes to upload, and any reader (agent, web, human) can parse
  * coordinates out of attributes. */

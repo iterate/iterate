@@ -45,24 +45,6 @@ export async function requestPhotoLibraryAccess(): Promise<PhotoLibraryAccess> {
   return photoLibraryAccessFrom(await MediaLibrary.requestPermissionsAsync());
 }
 
-export async function readRecentPhotos(limit: number): Promise<RecentPhoto[]> {
-  const library = webPhotoLibrary();
-  if (library !== null) {
-    return library.slice(0, limit).map((photo) => ({
-      assetId: photo.assetId,
-      previewUri: photo.dataUri,
-    }));
-  }
-  // Everything, not just screenshots: the screenshots-only walk belongs to
-  // the sync engine (lib/media-sync.ts), whose job is different.
-  const page = await MediaLibrary.getAssetsAsync({
-    mediaType: "photo",
-    sortBy: [["creationTime", false]],
-    first: limit,
-  });
-  return page.assets.map((asset) => ({ assetId: asset.id, previewUri: asset.uri }));
-}
-
 /** Read the tapped asset as an attachment. Throws with something a human can
  * act on — the composer surfaces it inline rather than dropping the tap. */
 export async function readPhotoAsAttachment(photo: RecentPhoto): Promise<PickedImage> {

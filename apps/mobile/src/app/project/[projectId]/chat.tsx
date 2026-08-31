@@ -454,8 +454,16 @@ function ChatScreen() {
         ) : null}
       </View>
 
-      {/* The sheet sits ABOVE the chips + input so opening it never moves
-          the input row (it eats feed space instead). */}
+      {/* Chips ABOVE the sheet, sheet ABOVE the input: attaching from the
+          open sheet grows the chips row upward into feed space, so neither
+          the sheet nor the input row ever shifts mid-interaction. (The
+          chips drop down when the sheet closes — fine.) */}
+      <AttachmentChips
+        attachments={attachments}
+        onRemove={(key) =>
+          setAttachments((prev) => prev.filter((attachment) => attachmentKey(attachment) !== key))
+        }
+      />
       {sheetOpen ? (
         <AttachmentSheet
           attachedAssetIds={attachments.flatMap((attachment) => {
@@ -471,12 +479,6 @@ function ChatScreen() {
           onClose={() => setSheetOpen(false)}
         />
       ) : null}
-      <AttachmentChips
-        attachments={attachments}
-        onRemove={(key) =>
-          setAttachments((prev) => prev.filter((attachment) => attachmentKey(attachment) !== key))
-        }
-      />
       <View style={[styles.composer, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}>
         <Pressable
           accessibilityLabel={sheetOpen ? "Close attachment options" : "Attach something"}

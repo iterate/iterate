@@ -218,6 +218,16 @@ and uploads lazily.
   type; page count would need PDF parsing — skipped); the
   All photos|Files|Audio|Location bar is centered. EAS plan upgraded, so
   this push's workflow run should produce the transcription build.
+- Feedback round 7: chips render ABOVE the attachment sheet (chat and note
+  composer), so attaching never shifts the sheet or input. The ambient note
+  composer now uses the SAME AttachmentSheet + AttachmentChips as chat —
+  full surface (camera tile, 50-item carousel, files, audio, location),
+  destination /notes; locations fold into the note text as xml lines,
+  byte attachments convert to inline base64 (pendingNoteAttachments) so the
+  offline pending-note store keeps its never-lose-data guarantee with an
+  UNCHANGED schema; the /media analysis double-append is now images-only.
+  recent-photos-strip.tsx deleted (readRecentPhotos/RECENT_PHOTOS_LIMIT
+  pruned with it); its spec now drives the shared sheet.
 - Gotcha found while running specs: wrapping `dev.ts` in an outer
   `doppler run` exports DOPPLER_PROJECT/DOPPLER_CONFIG, which the INNER
   `doppler run` (apps/os scope) honors over doppler.yaml — the dev server
