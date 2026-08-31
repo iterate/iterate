@@ -164,7 +164,10 @@ export function parseRangeHeader(
   if (header === null) return null;
   const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
   if (match === null) return null;
-  const [, startText, endText] = match as unknown as [string, string, string];
+  // Both groups always participate in a successful match (\d* matches
+  // empty); the fallbacks only satisfy indexed-access typing.
+  const startText = match[1] || "";
+  const endText = match[2] || "";
   if (startText === "" && endText === "") return null;
   if (startText === "") {
     // Suffix range: the last N bytes (AVPlayer probes tails for moov atoms).

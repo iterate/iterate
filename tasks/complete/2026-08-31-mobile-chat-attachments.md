@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: large
 branch: mobile-chat-attachments
 ---
@@ -8,9 +8,10 @@ branch: mobile-chat-attachments
 
 ## Status summary
 
-Implementation largely complete; verified on the web build via browser specs.
-Native (camera/mic/location) paths compile and degrade gracefully but need a
-new dev-client build + a phone to try for real.
+Done: shipped through nine on-device feedback rounds, review bots handled,
+ready to merge (PR #2554). Follow-ups live in their own task files
+(codemode-tag-message-rendering; addFiles-by-reference eager upload was
+discussed in-PR).
 
 - Done: attachment model + chips + remove dialog, + sheet (carousel, camera
   tile, All photos/Files/Audio/Location rows), hold-to-record gesture machine

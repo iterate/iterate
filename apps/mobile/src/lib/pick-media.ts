@@ -1,5 +1,5 @@
-// The attachment sheet's system-picker lanes: the full photo library (now
-// with videos), documents, and a one-shot current-location read. Everything
+// The attachment sheet's system pickers: the full photo library (now with
+// videos), documents, and a one-shot current-location read. Everything
 // resolves to ComposerAttachment; everything but photos stays a local uri
 // until send time (lib/composer-attachments.ts explains the laziness).
 
@@ -65,18 +65,19 @@ export async function pickDocuments(kind: "any" | "audio"): Promise<ComposerAtta
     type: kind === "audio" ? "audio/*" : "*/*",
   });
   if (result.canceled) return [];
-  return result.assets.map((asset) => {
+  return result.assets.map((asset): ComposerAttachment => {
     const refusal = oversizeReason(asset.size === undefined ? null : asset.size);
     if (refusal !== null) throw new Error(`${asset.name}: ${refusal}`);
-    return {
-      kind: kind === "audio" ? "audio" : "file",
+    const common = {
       filename: asset.name,
       contentType: asset.mimeType || "application/octet-stream",
       uri: asset.uri,
-      ...(kind === "audio"
-        ? { durationSeconds: null, transcript: null }
-        : { sizeBytes: asset.size || null }),
-    } as ComposerAttachment;
+    };
+    // Duration/transcript are unknowable for a picked file — the recorder
+    // fills them for its own clips.
+    return kind === "audio"
+      ? { kind: "audio", ...common, durationSeconds: null, transcript: null }
+      : { kind: "file", ...common, sizeBytes: asset.size || null };
   });
 }
 

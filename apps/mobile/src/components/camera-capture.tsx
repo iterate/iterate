@@ -17,6 +17,10 @@ export function CameraCaptureModal(props: {
   onCapture: (attachment: ComposerAttachment) => void;
 }) {
   const ref = useRef<CameraView>(null);
+  // Closing mid-recording must NOT attach the clip: unmounting the camera
+  // resolves recordAsync with the partial video, so without this flag the
+  // aborted recording would ride into the composer (review-caught).
+  const closeCancelledRecording = useRef(false);
   const [facing, setFacing] = useState<"back" | "front">("back");
   const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null);
   const insets = useSafeAreaInsets();
@@ -44,9 +48,11 @@ export function CameraCaptureModal(props: {
 
   const record = useMutation({
     mutationFn: async () => {
+      closeCancelledRecording.current = false;
       setRecordingStartedAt(Date.now());
       // Resolves when stopRecording() is called (or maxDuration hits).
       const video = await ref.current!.recordAsync({ maxDuration: 60 });
+      if (closeCancelledRecording.current) return;
       if (!video) throw new Error("The camera returned no recording");
       const now = Date.now();
       props.onCapture({
@@ -94,7 +100,13 @@ export function CameraCaptureModal(props: {
             accessibilityLabel="Close camera"
             accessibilityRole="button"
             hitSlop={12}
-            onPress={props.onClose}
+            onPress={() => {
+              if (record.isPending) {
+                closeCancelledRecording.current = true;
+                ref.current?.stopRecording();
+              }
+              props.onClose();
+            }}
             style={styles.roundControl}
           >
             <Ionicons name="close" size={22} color={colors.text} />

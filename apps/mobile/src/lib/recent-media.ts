@@ -95,7 +95,9 @@ export async function readMediaAsAttachment(item: RecentMediaItem): Promise<Comp
 
 function videoSizeBytes(info: MediaLibrary.AssetInfo): number | null {
   // MediaLibrary's iOS payload doesn't type a size field; fileSize rides on
-  // the raw object when the platform provides one.
+  // the raw object when the platform provides one. The `any` hop is safe
+  // because the typeof check below is the only consumer — anything but a
+  // number becomes null.
   const size = (info as any).fileSize;
   return typeof size === "number" ? size : null;
 }

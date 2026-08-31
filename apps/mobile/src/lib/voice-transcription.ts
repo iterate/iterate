@@ -18,6 +18,8 @@ import { Platform } from "react-native";
  * turns any such skew into "no transcript" instead of a dead chat screen. */
 function speechModule() {
   try {
+    // The assertion only names the package's own published types — require
+    // instead of import is purely for the lazy try/catch, not a shape change.
     return (require("expo-speech-recognition") as typeof import("expo-speech-recognition"))
       .ExpoSpeechRecognitionModule;
   } catch {

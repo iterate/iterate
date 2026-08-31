@@ -89,3 +89,51 @@ expects and renders as activity/code.
 - [ ] Note: the format itself is project-configurable (worker.ts parses the
       tags per-project) — whatever the renderer does must degrade sanely
       for projects still on the old bare-script format.
+
+## Session capture #2 — prompting failures (thread 2026-08-31t07-41-39-965z)
+
+Mostly UNRELATED to rendering: these are prompt-shaping gaps in the
+codemode-tag format itself, captured verbatim before preview-14 tears the
+thread down. Conversation: prime-factorise 484828, then voice-note
+follow-ups ("put two sevens at the end", "add one more seven", "send me a
+voice note back").
+
+1. **Head-math with broken LaTeX, twice wrong** (offset 46): the model
+   answered arithmetic from its head with mangled LaTeX (`\(484828 = 2^2
+   \times 121207\)`, a `\boxed{}` with a literal `?` in it) and wrong
+   factors — then produced a DIFFERENT wrong answer (2²×7×17×1019) before
+   code revealed the truth (2²×61×1987). Prompt gaps: (a) arithmetic should
+   reach for a codemode tag immediately; (b) chat renders markdown, not
+   LaTeX — the format prompt never says so.
+
+2. **Intent-prose silently ends the turn** (offset 206): user asked for a
+   voice note back; the model replied "I can do that—I'll create a short
+   audio reply." with NO tag — which, per the format, ENDS the turn. Nothing
+   happened until the user prodded ("Well?"). The format's "prose alone ends
+   your turn" rule needs a guard: never announce an action without the tag
+   that performs it.
+
+3. **Missing return stalls the loop** (offset 237): `await Promise.all([…,
+   itx.docs.search(…)]).then(([, results]) => results)` as a bare
+   expression — no `return`, so no result came back and the agent sat
+   there. The user had to teach it (offset 250: "lol you need to return a
+   value from these scripts in order to continue working!"). It then
+   verbalised the lesson (offset 259) and fixed it (280). The prompt says
+   returns drive the loop, but the failure mode (bare expression looks like
+   a return) needs an explicit example.
+
+4. **State carried by copy-paste, not return** (offset 327): to attach the
+   generated audio it pasted a ~500-char presigned URL literal into the
+   next script instead of returning/threading it — works, but exactly what
+   "carry state by returning it" was meant to prevent; fragile if the URL
+   had quoting-hostile characters.
+
+5. **Empty assistant message** (offset 341): the turn after the
+   sendMessage receipt appended an assistant context item with content ""
+   — renderers should tolerate/skip empty messages, and the format should
+   probably not emit them.
+
+What went RIGHT, for balance: `<voice-note transcript>` user messages
+(offsets 129/168/201) were understood perfectly — the agent acted on
+transcripts ("add one more seven") without any transcription turn — and
+the multi-step search→generate→send TTS chain worked once returns flowed.
