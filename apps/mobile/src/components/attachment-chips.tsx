@@ -1,9 +1,13 @@
-// The pending-attachment row above the chat composer's text field: one
-// thumbnail per attachment, nothing auto-sends. Tapping a chip asks
-// "Remove attachment?" OK|Cancel (deliberate friction — the old tap-removes-
-// instantly behavior ate photos people meant to preview).
+// The pending-attachment row above the composer's text field: one thumbnail
+// per attachment, flush like the sheet's filmstrip, nothing auto-sends.
+// The ✕ in each tile's corner removes it (behind the Remove attachment?
+// confirmation); tapping the tile itself previews it full screen — the SAME
+// MediaViewer already-sent photos open in (pinch/zoom, swipe down to
+// dismiss) and the same fullscreen player videos use. One day markup
+// (drawing on the preview, messenger-style) can hang off that viewer.
 
-import { Alert, Image, Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { useState } from "react";
+import { Alert, Image, Modal, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import {
   attachmentKey,
@@ -12,29 +16,69 @@ import {
   type ComposerAttachment,
 } from "../lib/composer-attachments.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
+import { MediaViewer } from "./media-viewer.tsx";
+import { FullscreenVideoModal } from "./video-attachment.tsx";
+
+const TILE = 84;
 
 export function AttachmentChips(props: {
   attachments: ComposerAttachment[];
   onRemove: (key: string) => void;
 }) {
+  const [preview, setPreview] = useState<ComposerAttachment | null>(null);
   if (props.attachments.length === 0) return null;
   return (
     <View style={styles.strip}>
       {props.attachments.map((attachment) => {
         const key = attachmentKey(attachment);
+        const label = attachmentLabel(attachment);
+        const previewable = attachment.kind === "photo" || attachment.kind === "video";
         return (
-          <Pressable
-            accessibilityLabel={`Attachment: ${attachmentLabel(attachment)}. Tap to remove.`}
-            accessibilityRole="button"
-            key={key}
-            onPress={async () => {
-              if (await confirmRemoval(attachmentLabel(attachment))) props.onRemove(key);
-            }}
-          >
-            <Chip attachment={attachment} />
-          </Pressable>
+          <View key={key} style={styles.tile}>
+            <Pressable
+              accessibilityLabel={`Attachment: ${label}`}
+              accessibilityRole={previewable ? "button" : "none"}
+              onPress={previewable ? () => setPreview(attachment) : undefined}
+              style={styles.tileBody}
+            >
+              <Chip attachment={attachment} />
+            </Pressable>
+            <Pressable
+              accessibilityLabel={`Remove ${label}`}
+              accessibilityRole="button"
+              hitSlop={8}
+              onPress={async () => {
+                if (await confirmRemoval(label)) props.onRemove(key);
+              }}
+              style={styles.removeBadge}
+            >
+              <Ionicons name="close" size={13} color={colors.text} />
+            </Pressable>
+          </View>
         );
       })}
+      {/* Full-screen preview of a not-yet-sent attachment, from local bytes —
+          instant, and identical to how the sent version will look. */}
+      <Modal
+        animationType="none"
+        onRequestClose={() => setPreview(null)}
+        statusBarTranslucent
+        transparent
+        visible={preview?.kind === "photo"}
+      >
+        {preview?.kind === "photo" ? (
+          <MediaViewer
+            markdown=""
+            onClose={() => setPreview(null)}
+            tags={[]}
+            title={preview.image.filename}
+            uri={preview.image.previewUri}
+          />
+        ) : null}
+      </Modal>
+      {preview?.kind === "video" ? (
+        <FullscreenVideoModal onClose={() => setPreview(null)} url={preview.uri} />
+      ) : null}
     </View>
   );
 }
@@ -74,7 +118,7 @@ function Chip({ attachment }: { attachment: ComposerAttachment }) {
     case "audio":
       return (
         <View style={styles.thumbBox}>
-          <Ionicons name="mic" size={20} color={colors.textMuted} />
+          <Ionicons name="mic" size={26} color={colors.textMuted} />
           {attachment.durationSeconds !== null ? (
             <Text style={styles.glyphCaption}>
               {formatClipDuration(attachment.durationSeconds)}
@@ -85,8 +129,8 @@ function Chip({ attachment }: { attachment: ComposerAttachment }) {
     case "file":
       return (
         <View style={styles.thumbBox}>
-          <Ionicons name="document-outline" size={20} color={colors.textMuted} />
-          <Text numberOfLines={1} style={styles.glyphCaption}>
+          <Ionicons name="document-outline" size={26} color={colors.textMuted} />
+          <Text numberOfLines={2} style={styles.glyphCaption}>
             {attachment.filename}
           </Text>
         </View>
@@ -94,7 +138,7 @@ function Chip({ attachment }: { attachment: ComposerAttachment }) {
     case "location":
       return (
         <View style={styles.thumbBox}>
-          <Ionicons name="location" size={20} color={colors.accent} />
+          <Ionicons name="location" size={26} color={colors.accent} />
           <Text style={styles.glyphCaption}>here</Text>
         </View>
       );
@@ -110,18 +154,34 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingTop: spacing.sm,
   },
+  tile: {
+    width: TILE,
+    height: TILE,
+  },
+  tileBody: { width: TILE, height: TILE, overflow: "hidden" },
   thumb: {
-    width: 52,
-    height: 52,
+    width: TILE,
+    height: TILE,
   },
   thumbBox: {
-    width: 52,
-    height: 52,
+    width: TILE,
+    height: TILE,
     backgroundColor: colors.surface,
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
-    gap: 2,
+    gap: 3,
+  },
+  removeBadge: {
+    position: "absolute",
+    top: 3,
+    right: 3,
+    width: 22,
+    height: 22,
+    borderRadius: radius.full,
+    backgroundColor: "#0b0b0fcc",
+    alignItems: "center",
+    justifyContent: "center",
   },
   mediaBadge: {
     position: "absolute",
@@ -138,8 +198,8 @@ const styles = StyleSheet.create({
   badgeText: { color: colors.text, fontSize: 9 },
   glyphCaption: {
     color: colors.textFaint,
-    fontSize: 8,
-    maxWidth: 48,
+    fontSize: 9,
+    maxWidth: TILE - 8,
     textAlign: "center",
   },
 });

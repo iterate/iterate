@@ -41,9 +41,11 @@ import {
   attachmentKey,
   locationXmlPart,
   pendingNoteAttachments,
+  voiceNoteXmlPart,
   type ComposerAttachment,
 } from "../lib/composer-attachments.ts";
 import { readFileBase64 } from "../lib/file-bytes.ts";
+import { transcriptFor } from "../lib/voice-transcription.ts";
 import { getProjectItx } from "../lib/itx.ts";
 import {
   buildUploadedEvent,
@@ -73,6 +75,7 @@ import { colors, radius, spacing } from "../lib/theme.ts";
 import { useVoiceCallOverlayVisible, useVoiceCallTarget } from "../lib/voice-call-state.ts";
 import { AttachmentChips } from "./attachment-chips.tsx";
 import { AttachmentSheet } from "./attachment-sheet.tsx";
+import { RecordControls } from "./record-controls.tsx";
 import { VoiceCallButton } from "./voice-call-button.tsx";
 
 /** How far the sheet's background hangs below its content — enough to sit
@@ -258,20 +261,34 @@ export function NoteCaptureOverlay() {
       text: string;
       files: ComposerAttachment[];
     }): Promise<"sent" | "pending" | "saved-locally"> => {
-      // Locations carry no bytes: they ride the note text as xml lines (the
-      // chat composer's convention). Everything else becomes inline base64 —
-      // a pending note must survive offline in AsyncStorage, so bytes are
-      // read eagerly (capture never loses data, D5).
-      const locationLines = input.files.flatMap((attachment) =>
-        attachment.kind === "location" ? [locationXmlPart(attachment)] : [],
+      // Recorded clips pick up their on-device transcript first (started at
+      // attach time; brief wait for a straggler) — for a note, the words ARE
+      // the point.
+      const files = await Promise.all(
+        input.files.map(async (attachment) =>
+          attachment.kind === "audio" &&
+          attachment.durationSeconds !== null &&
+          attachment.transcript === null
+            ? { ...attachment, transcript: await transcriptFor(attachment.uri, 4_000) }
+            : attachment,
+        ),
       );
+      // Locations and voice-note transcripts ride the note text as xml lines
+      // (the chat composer's convention). Everything else becomes inline
+      // base64 — a pending note must survive offline in AsyncStorage, so
+      // bytes are read eagerly (capture never loses data, D5).
+      const locationLines = files.flatMap((attachment) => {
+        if (attachment.kind === "location") return [locationXmlPart(attachment)];
+        const voiceNote = voiceNoteXmlPart(attachment);
+        return voiceNote === null ? [] : [voiceNote];
+      });
       const note: PendingNote = {
         // Pure entropy: the file path (capturedOnDeviceAt stamp + this)
         // is the note's identity now.
         noteKey: Math.random().toString(36).slice(2, 8),
         text: [input.text, ...locationLines].filter((line) => line !== "").join("\n"),
         capturedOnDeviceAt: new Date().toISOString(),
-        attachments: await pendingNoteAttachments(input.files, readFileBase64),
+        attachments: await pendingNoteAttachments(files, readFileBase64),
       };
       if (!inProject || baseUrl === undefined) {
         await addPendingNote(AsyncStorage, note);
@@ -489,29 +506,36 @@ export function NoteCaptureOverlay() {
             placeholderTextColor={colors.textFaint}
             style={styles.input}
           />
-          <Pressable
-            accessibilityLabel="Save note"
-            accessibilityRole="button"
-            disabled={!canSend || capture.isPending}
-            onPress={() => {
-              if (canSend && !capture.isPending) {
-                capture.mutate({ text: draft.trim(), files: attachments });
-              }
-            }}
-            style={[styles.send, (!canSend || capture.isPending) && { opacity: 0.4 }]}
-          >
-            {capture.isPending ? (
-              // The first capture provisions the notes repo + workspace and
-              // can take seconds — show it working, don't look dead.
-              <ActivityIndicator
-                accessibilityLabel="Loading"
-                color={colors.background}
-                size="small"
-              />
-            ) : (
-              <Text style={styles.sendText}>↑</Text>
-            )}
-          </Pressable>
+          {canSend || capture.isPending || Platform.OS === "web" ? (
+            <Pressable
+              accessibilityLabel="Save note"
+              accessibilityRole="button"
+              disabled={!canSend || capture.isPending}
+              onPress={() => {
+                if (canSend && !capture.isPending) {
+                  capture.mutate({ text: draft.trim(), files: attachments });
+                }
+              }}
+              style={[styles.send, (!canSend || capture.isPending) && { opacity: 0.4 }]}
+            >
+              {capture.isPending ? (
+                // The first capture provisions the notes repo + workspace and
+                // can take seconds — show it working, don't look dead.
+                <ActivityIndicator
+                  accessibilityLabel="Loading"
+                  color={colors.background}
+                  size="small"
+                />
+              ) : (
+                <Text style={styles.sendText}>↑</Text>
+              )}
+            </Pressable>
+          ) : (
+            // Empty composer on native: the same hold-to-record mic/video
+            // button chat has — a spoken note attaches like any clip (and
+            // its on-device transcript rides into the note text).
+            <RecordControls onAttach={(attachment) => appendAttachments([attachment])} />
+          )}
         </View>
         {capture.data === "sent" ? (
           // The confirmation doubles as the shortcut to what you just made.

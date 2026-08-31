@@ -228,6 +228,14 @@ and uploads lazily.
   UNCHANGED schema; the /media analysis double-append is now images-only.
   recent-photos-strip.tsx deleted (readRecentPhotos/RECENT_PHOTOS_LIMIT
   pruned with it); its spec now drives the shared sheet.
+- Feedback round 8: chips grew to 84px flush tiles with a corner ✕
+  (removal, still behind the confirm dialog) — tapping the tile previews it
+  full screen via the SAME MediaViewer sent photos use (pinch/zoom,
+  swipe-down dismiss; markup tools can hang off it one day); videos preview
+  in the shared fullscreen player. The note composer's empty-state send slot
+  now shows the hold-to-record mic/video button (was a dimmed ↑), and a
+  spoken note's on-device transcript rides into the note text as a
+  <voice-note transcript /> line — for a note, the words are the point.
 - Gotcha found while running specs: wrapping `dev.ts` in an outer
   `doppler run` exports DOPPLER_PROJECT/DOPPLER_CONFIG, which the INNER
   `doppler run` (apps/os scope) honors over doppler.yaml — the dev server

@@ -48,7 +48,9 @@ export function VideoTile(props: {
   );
 }
 
-function FullscreenVideoModal(props: { onClose: () => void; url: string }) {
+/** Also the composer chips' video preview — any playable uri works, local
+ * files included. */
+export function FullscreenVideoModal(props: { onClose: () => void; url: string }) {
   const insets = useSafeAreaInsets();
   const player = useVideoPlayer(props.url, (instance) => {
     instance.play();

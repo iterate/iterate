@@ -5,9 +5,12 @@
 // before anything comes off.
 //
 // A browser has no camera roll, so the carousel reads the same injected
-// library boundary the note composer's strip uses
+// library boundary the note composer uses
 // (apps/mobile/src/lib/recent-photos.ts); the camera tile and location row
 // are native-only surfaces (explicit Platform checks) and absent here.
+//
+// Chips: the corner ✕ removes (behind the confirm dialog); tapping the tile
+// itself opens the SAME full-screen viewer sent photos use.
 //
 // Sending is OPTIMISTIC: the moment ↑ is tapped the message renders as a
 // predicted bubble from phone-local data — no waiting for the upload or the
@@ -50,18 +53,29 @@ test("+ opens the sheet; carousel attaches chips that need a confirm to remove",
   await page.getByLabel("Detach recent photo").click();
   await page.getByLabel("Attach recent photo").nth(1).waitFor();
 
-  // Re-attach, then remove through the chip: the confirm dialog gates it.
+  // Re-attach. Tapping the chip ITSELF previews it full screen — the same
+  // MediaViewer sent photos open in — and swiping down (here: the close
+  // control) returns to the composer with the chip intact.
   await page.getByLabel("Attach recent photo").first().click();
   const chip = page.getByLabel(/Attachment: ticket\.png/);
   await chip.waitFor();
-  // First tap: dismiss the dialog — the chip must survive.
-  page.once("dialog", (dialog) => void dialog.dismiss());
   await chip.click();
+  const fullScreen = page.getByLabel("Full screen media");
+  await fullScreen.waitFor();
+  await fullScreen.click();
+  await page.getByLabel("Close image").click();
   await chip.waitFor();
-  // Second tap: accept — now it goes, and the carousel tile flips back to
-  // its attach state (the positive signal that the attachment came off).
+
+  // Removal lives on the corner ✕, behind the confirm dialog. First tap:
+  // dismiss — the chip must survive.
+  const removeBadge = page.getByLabel(/Remove ticket\.png/);
+  page.once("dialog", (dialog) => void dialog.dismiss());
+  await removeBadge.click();
+  await chip.waitFor();
+  // Accept — now it goes, and the carousel tile flips back to its attach
+  // state (the positive signal that the attachment came off).
   page.once("dialog", (dialog) => void dialog.accept());
-  await chip.click();
+  await removeBadge.click();
   await page.getByLabel("Attach recent photo").nth(1).waitFor();
 
   // Closing the sheet is the same + (now leaning as a ✕) — closed, its
