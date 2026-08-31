@@ -140,12 +140,21 @@ const inProgressStatuses = ["NEW", "IN_QUEUE", "IN_PROGRESS"];
  * divergence between this and eas-cli's own computation can't ship.
  */
 export const computeRuntimeFingerprint = (): string => {
+  // pnpm exec, not node_modules/.bin directly: the .bin entry is a shell
+  // wrapper (running it under `node` is a syntax error on CI).
   const output = run(
-    "node",
-    ["node_modules/.bin/expo-updates", "fingerprint:generate", "--platform", "ios"],
+    "pnpm",
+    ["exec", "expo-updates", "fingerprint:generate", "--platform", "ios"],
     mobileDir,
   );
-  const hash = JSON.parse(output).hash;
+  // Same defensive JSON slicing as easJson — tool wrappers occasionally
+  // prefix noise.
+  const start = output.indexOf("{");
+  const end = output.lastIndexOf("}");
+  if (start === -1 || end < start) {
+    throw new Error(`no JSON found in fingerprint output:\n${output.slice(0, 500)}`);
+  }
+  const hash = JSON.parse(output.slice(start, end + 1)).hash;
   if (typeof hash !== "string" || !hash) {
     throw new Error(`fingerprint:generate returned no hash: ${output.slice(0, 500)}`);
   }
