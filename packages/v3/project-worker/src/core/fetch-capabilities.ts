@@ -326,6 +326,14 @@ export class LiveCapabilityFetchServer {
     } catch {
       /* already closing */
     }
+    // Also complete the handshake on the socket that closed: workerd's hibernatable API does NOT
+    // auto-echo a peer-initiated close, so without this the initiator (an eyeball, or the relay's
+    // leg) never sees its own close confirmed and hangs until its timeout.
+    try {
+      ws.close(clampCloseCode(code), truncateCloseReason(reason));
+    } catch {
+      /* already closing */
+    }
     return true;
   }
 

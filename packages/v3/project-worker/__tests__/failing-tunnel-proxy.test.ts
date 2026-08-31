@@ -303,20 +303,21 @@ test("WS tunnel probe: the upgrade reaches the CLI, the CLI opens the localhost 
   expect(probe.body).toContain("tunnel provider cannot fabricate the 101 answer in Node");
 });
 
-// BUG: `iterate tunnel bla 3000` cannot tunnel WebSockets — same blocker as
-//   failing-ws-fetch-capability.test.ts, in the product shape that makes it bite: the CLI holds
-//   BOTH working halves (the platform delivers the upgrade Request to it; Node's WS client
-//   reaches localhost) and no spelling exists to stitch them, because a non-workerd capnweb
-//   provider cannot FABRICATE a webSocket-bearing 101 Response (no WebSocketPair; undici rejects
-//   status 101 and drops a `webSocket` init property).
-// EXPECTED: parity with a workerd provider (ws-fetch-live-101.test.ts proves the platform lane
-//   carries a genuine live-capability 101 end to end): the eyeball's WebSocket opens through
-//   itx.bla, frames echo off the LOCALHOST server, clean close.
-// ACTUAL: the fetch lane answers 500 (the provider's throw); the eyeball WS never opens.
-// THE FIX IS FORK-SIDE, not platform-side: a capnweb-client primitive to answer a fetch with an
-//   upgrade — a virtual socket pair whose frames tunnel over the session exactly like workerd
-//   sockets already do (socket-as-streams). It would flip this AND the ESP32/device scenario
-//   (failing-ws-fetch-capability.test.ts) green together.
+// BUG (NARROWED by measurement, 2026-08-31): `iterate tunnel bla 3000` cannot tunnel WebSockets
+//   with any BLESSED spelling — the provider above attempts the workerd one
+//   (`new Response(null,{status:101,webSocket})`) and Node refuses it (no WebSocketPair; undici
+//   rejects status 101 and drops a `webSocket` init property).
+// MEASURED: the gap is API BLESSING, not capability. The fork's serializer reads `webSocket` as
+//   a plain Response property and never serializes status for upgrades, so the fork's own
+//   test-only spelling — `Object.defineProperty(new Response(null), "webSocket", { value:
+//   localSocket })` with the undici client socket attached — ran this exact scenario GREEN end
+//   to end on published 0.12.0 (101 + `local-echo:` + clean close 1000; the clean close also
+//   needed the DO's close-echo fix in fetch-capabilities.handleWebSocketClose).
+// EXPECTED: parity with a workerd provider via a blessed one-call answer.
+// THE FIX IS A TINY FORK EXPORT, specced in docs/capnweb-upgrade-answer.md: bless the spelling
+//   as `upgradeWebSocketResponse(socket, init?)` (+ a pure-JS WebSocketPair shim for
+//   endpoint-style providers, which also flips failing-ws-fetch-capability.test.ts). This test
+//   flips green by swapping the upgrade branch above to that one call.
 test.fails("WS tunnel: an eyeball WebSocket on itx.bla opens (101), echoes off the LOCALHOST server, and closes clean", async () => {
   const ctx = c("ws");
   await provideTunnel(ctx);
