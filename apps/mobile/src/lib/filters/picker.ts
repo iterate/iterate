@@ -11,4 +11,5 @@ export const FILTER_PICKER = [
   { id: "flashcards", label: "Flashcards", emoji: "🍎" },
   { id: "sing", label: "Sing", emoji: "🎤" },
   { id: "face-drop", label: "Face drop", emoji: "🫥" },
+  { id: "paper-toss", label: "Paper toss", emoji: "🗑️" },
 ];

@@ -30,7 +30,18 @@ export function autoCorrelatePitchHz(samples: Float32Array, sampleRate: number):
   for (let i = 0; i < size; i++) zeroLag += samples[i] * samples[i];
   // Voiced sound correlates strongly at its period; noise doesn't.
   if (bestCorrelation / zeroLag < 0.5) return null;
-  return sampleRate / bestLag;
+  // Parabolic interpolation around the best lag for sub-sample precision —
+  // integer lags alone are ~a third of a semitone coarse at singing pitch.
+  const at = (lag: number) => {
+    let correlation = 0;
+    for (let i = 0; i < size - lag; i++) correlation += samples[i] * samples[i + lag];
+    return correlation;
+  };
+  const previous = at(bestLag - 1);
+  const next = at(bestLag + 1);
+  const denominator = previous - 2 * bestCorrelation + next;
+  const offset = denominator === 0 ? 0 : (0.5 * (previous - next)) / denominator;
+  return sampleRate / (bestLag + Math.max(-0.5, Math.min(0.5, offset)));
 }
 
 /** The major scale as semitone offsets from do. */

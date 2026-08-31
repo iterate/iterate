@@ -74,14 +74,21 @@ type State = {
 const MASK_STRETCH_KEY = "iterate.filterMaskStretch.v1";
 
 function loadMaskStretch(): MaskStretch {
+  const defaults: MaskStretch = {
+    eyes: { x: 1, y: 1 },
+    nose: { x: 1, y: 1 },
+    lips: { x: 1, y: 1 },
+  };
   // localStorage can be unavailable/empty on file:// pages — defaults win.
+  // Merge over defaults so values saved before a feature kind existed
+  // (nose) still load.
   try {
     const raw = localStorage.getItem(MASK_STRETCH_KEY);
-    if (raw) return JSON.parse(raw) as MaskStretch;
+    if (raw) return { ...defaults, ...(JSON.parse(raw) as Partial<MaskStretch>) };
   } catch {
     // fall through to defaults
   }
-  return { eyes: { x: 1, y: 1 }, lips: { x: 1, y: 1 } };
+  return defaults;
 }
 
 export default class FilterCamera extends Component<Props, State> {
@@ -108,6 +115,7 @@ export default class FilterCamera extends Component<Props, State> {
   #faceBaseline: { cx: number; cy: number; width: number } | null = null;
   #maskStretch = loadMaskStretch();
   #featureHits: FeatureHit[] = [];
+  #lastTap: { x: number; y: number; seq: number } | null = null;
   // Live mic analysis for pitch-driven filters. The context can start
   // suspended under autoplay rules; #onPointerDown re-resumes it.
   #audioContext: AudioContext | null = null;
@@ -330,6 +338,7 @@ export default class FilterCamera extends Component<Props, State> {
       maskStretch: this.#maskStretch,
       featureHits,
       pitchHz,
+      tap: this.#lastTap,
       timeMs: performance.now(),
     });
     try {
@@ -430,8 +439,13 @@ export default class FilterCamera extends Component<Props, State> {
     this.#pointer = null;
     if (!pointer) return;
     if (!pointer.dragging) {
-      // A plain tap: the filters' interactivity — next background/card.
+      // A plain tap: the filters' interactivity — next background/card, and
+      // the position for filters that react to where you tapped.
       this.#backgroundIndex += 1;
+      this.#lastTap = {
+        ...this.#canvasPoint({ clientX: pointer.startX, clientY: pointer.startY }),
+        seq: (this.#lastTap?.seq || 0) + 1,
+      };
       return;
     }
     if (pointer.hit) {

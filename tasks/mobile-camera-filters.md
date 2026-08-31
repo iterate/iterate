@@ -223,3 +223,29 @@ loading from failed.
   Misha's call).
 - Media viewer gained a ⬇ save-to-camera-roll button (remote/data uris go
   through a cache file; expo-media-library was already in the build).
+
+## Feedback round 7 (nose, skin, 3D sing, paper toss, agent docs)
+
+- Face drop: nose added (built from bridge/subnasale/alae landmarks as an
+  ellipse feature — the mesh has no canonical nose ring); skin fill now
+  layers two soft samples from either side of each feature (softness 2.2,
+  alpha-blended) so stubble/shading blend instead of one stamped patch.
+- Sing: pitch stabilised (parabolic interpolation in the autocorrelator +
+  a 700ms median window; passing requires holding the note ~500ms);
+  redrawn as a 3/4-perspective road — the wall slides in from the vanishing
+  point with a yellow-outlined hole at the target note's height, the ball
+  can't go below the road (do = rolling on the ground, silence = resting
+  hop). Solfège column stays left; tapping a note name PLAYS it, cycling
+  low→mid→high→off octaves (`helpers.playTone`, WebAudio).
+- 🗑️ Paper toss: open your mouth to throw — wider = further; random bin
+  distance/position + wind per attempt; score HUD; tap resets. Written
+  strictly against the args/helpers surface as the reference project
+  filter.
+- Filter surface grew: `args.tap {x,y,seq}` (positional taps),
+  `args.face.nose`, `helpers.playTone`, cutout `softness`/`alpha`;
+  mask-swipe tuning covers the nose (stored stretch merges over defaults).
+- **Agent context**: `apps/mobile/docs/project-filters.md` is the full
+  standalone contract (args, helpers, patterns, thresholds for
+  blink/mouth-open) written to be copied into a project repo as
+  `filters/README.md` — that's the missing piece for "add a paper toss
+  game" prompts to work; without it the project agent has nothing to go on.

@@ -32,6 +32,7 @@ export type FaceGeometry = {
    * a character (eyes on the potato) must not trust anatomical naming. */
   leftEye: FaceFeature;
   rightEye: FaceFeature;
+  nose: FaceFeature;
   lips: FaceFeature;
   /** False when this is the no-tracker/no-face fallback placement. */
   tracked: boolean;
@@ -83,7 +84,8 @@ export function faceGeometryFromLandmarks(
   landmarks: NormalizedLandmark[],
   t: FrameTransform,
 ): FaceGeometry {
-  const ring = (indices: number[]) => indices.map((i) => landmarkToCanvas(landmarks[i], t));
+  const point = (i: number) => landmarkToCanvas(landmarks[i], t);
+  const ring = (indices: number[]) => indices.map(point);
 
   const oval = ring(FACE_OVAL);
   const box = boundingBox(oval);
@@ -100,10 +102,25 @@ export function faceGeometryFromLandmarks(
   const eyeA = featureFrom(ring(LEFT_EYE), angle);
   const eyeB = featureFrom(ring(RIGHT_EYE), angle);
   const [leftEye, rightEye] = eyeA.center.x <= eyeB.center.x ? [eyeA, eyeB] : [eyeB, eyeA];
+  // The nose as an ellipse from a handful of well-known landmarks (bridge 6,
+  // subnasale 2, alae 98/327) rather than a raw ring — the mesh has no
+  // canonical nose outline loop.
+  const bridge = point(6);
+  const under = point(2);
+  const alaA = point(98);
+  const alaB = point(327);
+  const nose = ellipseFeature(
+    (bridge.x + under.x) / 2,
+    (bridge.y + under.y) / 2,
+    (Math.hypot(alaA.x - alaB.x, alaA.y - alaB.y) / 2) * 1.35,
+    (Math.hypot(bridge.x - under.x, bridge.y - under.y) / 2) * 0.85,
+    angle,
+  );
   return {
     box: { ...box, angle },
     leftEye,
     rightEye,
+    nose,
     lips: featureFrom(ring(LIPS_OUTER), angle),
     tracked: true,
   };
@@ -123,6 +140,7 @@ export function fallbackFaceGeometry(canvasWidth: number, canvasHeight: number):
     box: { cx, cy, width, height, angle: 0 },
     leftEye: eye(cx - eyeDx),
     rightEye: eye(cx + eyeDx),
+    nose: ellipseFeature(cx, cy + height * 0.08, width * 0.11, width * 0.13),
     lips: ellipseFeature(cx, cy + height * 0.26, width * 0.17, width * 0.09),
     tracked: false,
   };
@@ -173,12 +191,22 @@ function featureFrom(points: { x: number; y: number }[], angle: number): FaceFea
 /** An elliptical stand-in FaceFeature — the fallback (untracked) face is
  * built from these, and filters use them to sample arbitrary skin patches
  * or invent features at chosen spots. */
-export function ellipseFeature(cx: number, cy: number, rx: number, ry: number): FaceFeature {
+export function ellipseFeature(
+  cx: number,
+  cy: number,
+  rx: number,
+  ry: number,
+  angle = 0,
+): FaceFeature {
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
   const ring = Array.from({ length: 16 }, (_, i) => {
     const t = (i / 16) * Math.PI * 2;
-    return { x: cx + Math.cos(t) * rx, y: cy + Math.sin(t) * ry };
+    const localX = Math.cos(t) * rx;
+    const localY = Math.sin(t) * ry;
+    return { x: cx + localX * cos - localY * sin, y: cy + localX * sin + localY * cos };
   });
-  return { ring, center: { x: cx, y: cy }, angle: 0, rx, ry };
+  return { ring, center: { x: cx, y: cy }, angle, rx, ry };
 }
 
 // MediaPipe Face Mesh canonical index rings (see attribution at top).

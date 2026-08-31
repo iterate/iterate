@@ -40,14 +40,20 @@ test("a project filter file evaluates and draws through the helpers kit", () => 
     backgroundIndex: 0,
     modeIndex: 1,
     facePose: { dx: 0, dy: 0, scale: 1 },
-    maskStretch: { eyes: { x: 1, y: 1 }, lips: { x: 1, y: 1 } },
+    maskStretch: { eyes: { x: 1, y: 1 }, nose: { x: 1, y: 1 }, lips: { x: 1, y: 1 } },
     featureHits: [],
     pitchHz: null,
+    tap: null,
     timeMs: 0,
   });
   definition.draw(args);
   expect(recorded).toContain("fillRect");
   expect(recorded).toContain("fillText");
+});
+
+test("a formatter-added trailing semicolon does not break evaluation", () => {
+  const definition = evaluateDynamicFilter(`({ label: "X", emoji: "🧪", draw() {} });\n`);
+  expect(definition.label).toBe("X");
 });
 
 test("a malformed filter file throws a useful error instead of half-working", () => {
