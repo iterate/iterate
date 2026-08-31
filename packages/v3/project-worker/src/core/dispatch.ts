@@ -6,6 +6,7 @@
 // Workers RPC. `match` claims a call for a capability path (longest-prefix; the final segment may
 // consume the call's args as boundary args; the unmatched tail is the remainder apply() replays).
 
+import { RpcPromise } from "capnweb";
 import { codedError } from "./errors.ts";
 import type { Expression } from "./expression.ts";
 import { InvokeHandle } from "./invoke-handle.ts";
@@ -81,7 +82,13 @@ async function walkSteps(
 ): Promise<{ value: unknown; receiver: unknown }> {
   let { value, receiver } = start;
   for (const step of steps) {
-    value = await value;
+    // A capnweb RpcPromise must NEVER be awaited mid-chain: property access and calls pipeline on
+    // it natively, and on a ONE-SHOT HTTP batch session (connectToCapnweb) the first await FLUSHES
+    // the batch — every step after it died with "Batch RPC request ended" (the call-then-call
+    // chain `.svc('x').add(…)`, i.e. the advertised `itx.os.projects.get(id).rename(…)` shape).
+    // Build the whole chain unawaited; the caller's terminal await is the one flush. Native
+    // workerd RPC promises don't carry the capnweb brand and keep the await-every-step behavior.
+    if (!(value instanceof RpcPromise)) value = await value;
     if (value == null) throw new Error(`${where} hit ${String(value)} at ${JSON.stringify(step)}`);
     if (typeof step === "string") {
       receiver = value;
@@ -92,10 +99,11 @@ async function walkSteps(
       if (typeof fn !== "function")
         throw codedError("NOT_A_METHOD", `${where}: ${JSON.stringify(method)} is not a method`);
       receiver = undefined;
-      value = await Reflect.apply(fn, value, args);
+      value = Reflect.apply(fn, value, args);
+      if (!(value instanceof RpcPromise)) value = await value;
     }
   }
-  return { value: await value, receiver };
+  return { value: value instanceof RpcPromise ? value : await value, receiver };
 }
 
 /**

@@ -37,12 +37,12 @@ test("MULTI-hop connectToCapnweb(url).math.add(2,3) pipelines into one batch", a
   expect(await itx.invokeCapability(`itx.connectToCapnweb('${remote()}').math.add(2, 3)`)).toBe(5);
 });
 
-// STILL-RED pin: a capability returned from a CALL, then called — `.svc('math').add(2,3)` — is the
-// exact `itx.os.projects.get(id).rename(…)` shape the built-in's header advertises, and it still
-// dies with "Batch RPC request ended": the expression dispatcher awaits between the two CALLS, and
-// on a one-shot batch that await flushes the batch before the second call (verified 2026-08-31 —
-// the property-hop fix above does not cover call-then-call).
-test.fails("call-then-call chain .svc('math').add(2,3) through the one-shot batch", async () => {
+// The once-RED call-then-call shape, now the regression pin: a capability returned from a CALL,
+// then called — `.svc('math').add(2,3)`, the exact `itx.os.projects.get(id).rename(…)` shape the
+// built-in's header advertises. walkSteps used to await between the two CALLS, and on a one-shot
+// batch that await flushed the batch before the second call ("Batch RPC request ended"); the walk
+// now threads a capnweb RpcPromise through unawaited, so the whole chain pipelines into one flush.
+test("call-then-call chain .svc('math').add(2,3) through the one-shot batch", async () => {
   const itx = bareItx(freshCtx("conncc"));
   expect(await itx.invokeCapability(`itx.connectToCapnweb('${remote()}').svc('x').add(2, 3)`)).toBe(
     5,

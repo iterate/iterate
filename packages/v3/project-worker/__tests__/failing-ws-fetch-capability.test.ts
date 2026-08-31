@@ -133,7 +133,8 @@ function rawUpgradeProbe(
 // Loader), where WebSocketPair + 101 Responses are native. If THIS fails, the door is broken
 // and the live-capability verdicts below say nothing.
 
-const SITE_SOURCE = `export default {
+const SITE_SOURCE = `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class Site extends WorkerEntrypoint {
   async fetch(request) {
     if ((request.headers.get("Upgrade") || "").toLowerCase() === "websocket") {
       const pair = new WebSocketPair();
@@ -143,32 +144,21 @@ const SITE_SOURCE = `export default {
     }
     return new Response("baseline site", { headers: { "content-type": "text/plain" } });
   }
-};`;
+}`;
 
-// BUG: the loaded-worker lane is DEAD in the harness lane — every `itx.workers.get(...)`
-//   capability 500s at materialization. worker-loader.ts#confinedWorker pins
-//   compatibilityFlags: ["allow_irrevocable_stub_storage"] on every loader child, and the
-//   harness's local workerd rejects the DYNAMIC child spec with "The compatibility flag
-//   allow_irrevocable_stub_storage is experimental ... you must pass --experimental on the
-//   command line" — while accepting the SAME flag on the parent's own wrangler.jsonc at boot,
-//   and wrangler's createTestHarness exposes no workerd-flag passthrough (TestHarnessOptions is
-//   {root, workers} only).
-// EXPECTED: exactly what prove_crisp1 proves against production — /cap serves the mounted
-//   worker's HTML AND upgrades to a 101 WebSocket that echoes.
-// ACTUAL: 500 "fetch lane error: Error: The compatibility flag allow_irrevocable_stub_storage
-//   is experimental and may break or be removed in a future version of workerd. To use this
-//   flag, you must pass --experimental on the command line." for BOTH the HTTP and the WS dial.
-// WHY IT MATTERS: the ONLY local full-stack lane cannot exercise dynamic workers at all — every
-//   harness bug hunt that needs a loaded worker (including the workerd-side WS provider this
-//   file's todo wants) is blocked until the harness can start workerd with --experimental or
-//   the child flag becomes environment-conditional.
-test.fails("baseline: /cap serves HTTP and a 101 WebSocket echo from a LOADED-WORKER capability", async () => {
+// WAS a test.fails: the loaded-worker lane was dead locally — workerd rejected the loader child's
+// allow_irrevocable_stub_storage flag without --experimental, and wrangler exposed no passthrough.
+// The wrangler 4.127 bump (workerd 1.20260815 accepts the flag) fixed it, and the surface it
+// called (`itx.workers.get({source})`) has since been replaced by the Worker-Loader mirror
+// (`itx.load(src).getEntrypoint()`). Now the GREEN baseline the live-capability verdicts below
+// lean on — the same flow fetchdoor.e2e.test.ts pins in the e2e lane.
+test("baseline: /cap serves HTTP and a 101 WebSocket echo from a LOADED-WORKER capability", async () => {
   const ctx = c("baseline");
   const itx = await harness.itx(ctx);
   await itx.invokeCapability(["itx", "kv", ["put", "src/site.js", SITE_SOURCE]]);
   await itx.provide({
     path: "itx.site",
-    target: "itx.workers.get({ source: \"itx.kv.get('src/site.js')\" })",
+    target: "itx.load(\"itx.kv.get('src/site.js')\").getEntrypoint()",
   });
 
   // HTTP through the door
