@@ -31,20 +31,21 @@ const p1 = await itx.provide({ path: "itx.a", target: "itx.kv" });
 await itx.provide({ path: "itx.b", target: "itx.kv" });
 await itx.revoke({ providedAtOffset: p1.providedAtOffset });
 
-const PROVIDED = "events.iterate.com/capability-table/capability-provided";
-const REVOKED = "events.iterate.com/capability-table/capability-revoked";
-
 const su = await itx.invokeCapability("itx.facets.get('user-tally').snapshot()");
 check(
   // 4 provided: the two enablement mounts (user-tally, tally) + the two test mounts
-  su.state?.counts?.[PROVIDED] === 4 && su.state?.counts?.[REVOKED] === 1 && su.offset === 5,
+  su.state?.counts?.["events.iterate.com/capability-table/capability-provided"] === 4 &&
+    su.state?.counts?.["events.iterate.com/capability-table/capability-revoked"] === 1 &&
+    su.offset === 5,
   "USERSPACE facet folds (4 provided incl. enablements + 1 revoked @ own cursor 5)",
   JSON.stringify(su),
 );
 
 const sb = await itx.invokeCapability("itx.facets.get('tally').snapshot()");
 check(
-  sb.state?.counts?.[PROVIDED] === 4 && sb.state?.counts?.[REVOKED] === 1 && sb.offset === 5,
+  sb.state?.counts?.["events.iterate.com/capability-table/capability-provided"] === 4 &&
+    sb.state?.counts?.["events.iterate.com/capability-table/capability-revoked"] === 1 &&
+    sb.offset === 5,
   "BUILT-IN tally still works side-by-side (same reduce @ offset 5)",
   JSON.stringify(sb),
 );

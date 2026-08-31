@@ -38,7 +38,7 @@
 // never be derived from an ephemeral event.
 
 import type { z } from "zod";
-import { LiveState, LIVE_STATE_CHANGED } from "./live-state.ts";
+import { LiveState } from "./live-state.ts";
 import { reportIssue } from "./errors.ts";
 import {
   type ReduceCheckpoint,
@@ -126,10 +126,6 @@ export type ReduceOnlyProcessor<State> = {
   reduce(args: ReduceArgs<State>): State | null | undefined;
 };
 
-// LIVE_STATE_CHANGED (and the LiveState holder that emits it) live in core/live-state.ts; re-export
-// so the SDK surface (src/sdk.ts) and its consumers reach it through the processor barrel unchanged.
-export { LIVE_STATE_CHANGED };
-
 /** Returned by #liveStateOf when `liveState(state)` threw — distinct from a legitimate `undefined`
  *  projection, so a throw skips the emit while `undefined` is a real (patchable) value. */
 const PROJECTION_FAILED = Symbol("live-state-projection-failed");
@@ -137,13 +133,13 @@ const PROJECTION_FAILED = Symbol("live-state-projection-failed");
 /** THE ONE consumes rule — the reduce, both delivery lanes (connected + forwarder), and the
  *  inline core all call this; there is no second copy to drift. `consumes` undefined = every
  *  durable event (a subscriber's default). "*" = every durable event. A NAMED type opts that
- *  type in, INCLUDING ephemerals ("*" NEVER sweeps ephemerals). LIVE_STATE_CHANGED is never
- *  consumable (the loop guard). */
+ *  type in, INCLUDING ephemerals ("*" NEVER sweeps ephemerals). The live-state/changed type is
+ *  never consumable (the loop guard). */
 export function consumesEvent(
   consumes: readonly string[] | undefined,
   event: { type: string; ephemeral?: boolean },
 ): boolean {
-  if (event.type === LIVE_STATE_CHANGED) return false;
+  if (event.type === "events.iterate.com/live-state/changed") return false;
   if (event.ephemeral) return consumes?.includes(event.type) ?? false;
   return consumes === undefined || consumes.includes("*") || consumes.includes(event.type);
 }

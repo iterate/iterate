@@ -22,10 +22,11 @@ import { defineProcessorContract, type StreamEvent, type StreamEventInput } from
 import type { ReduceArgs, ReduceOnlyProcessor } from "./core/processor.ts";
 import { codedError } from "./core/errors.ts";
 
-export const STREAM_PAUSED = "events.iterate.com/stream/paused";
-export const STREAM_RESUMED = "events.iterate.com/stream/resumed";
-export const BREAKER_CONFIGURED = "events.iterate.com/stream/breaker-configured";
-const CONTROL_TYPES = new Set([STREAM_PAUSED, STREAM_RESUMED, BREAKER_CONFIGURED]);
+const CONTROL_TYPES = new Set([
+  "events.iterate.com/stream/paused",
+  "events.iterate.com/stream/resumed",
+  "events.iterate.com/stream/breaker-configured",
+]);
 
 const CoreContract = defineProcessorContract({
   slug: "core",
@@ -45,12 +46,12 @@ const CoreContract = defineProcessorContract({
       .default(null),
   }),
   events: {
-    [STREAM_PAUSED]: {
+    "events.iterate.com/stream/paused": {
       description: "Refuse every non-control append until resumed.",
       payloadSchema: z.object({ reason: z.string().default("paused") }),
     },
-    [STREAM_RESUMED]: { payloadSchema: z.object({}) },
-    [BREAKER_CONFIGURED]: {
+    "events.iterate.com/stream/resumed": { payloadSchema: z.object({}) },
+    "events.iterate.com/stream/breaker-configured": {
       description: "Meter durable appends with a token bucket; an empty payload turns it off.",
       payloadSchema: z.object({
         capacity: z.number().positive().optional(),
@@ -68,12 +69,12 @@ export class CoreStreamProcessor implements ReduceOnlyProcessor<CoreState> {
   readonly contract = CoreContract;
 
   reduce({ event, state }: ReduceArgs<CoreState>): CoreState | undefined {
-    if (event.type === STREAM_PAUSED) {
+    if (event.type === "events.iterate.com/stream/paused") {
       const { reason } = (event.payload ?? {}) as { reason?: string };
       return { ...state, paused: { reason: reason ?? "paused" } };
     }
-    if (event.type === STREAM_RESUMED) return { ...state, paused: null };
-    if (event.type === BREAKER_CONFIGURED) {
+    if (event.type === "events.iterate.com/stream/resumed") return { ...state, paused: null };
+    if (event.type === "events.iterate.com/stream/breaker-configured") {
       const { capacity, refillPerSecond } = (event.payload ?? {}) as {
         capacity?: number;
         refillPerSecond?: number;

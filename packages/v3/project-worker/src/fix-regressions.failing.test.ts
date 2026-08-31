@@ -11,7 +11,6 @@ import { canonicalName, DurableObjectNameCodec } from "./core/durable-object-nam
 import { defineProcessorContract, type StreamEvent, type StreamEventInput } from "./core/events.ts";
 import {
   consumesEvent,
-  LIVE_STATE_CHANGED,
   StreamProcessor,
   type ProcessEventArgs,
   type ProcessorStorage,
@@ -131,12 +130,11 @@ describe("consumesEvent unified rule (Phase B / defects 10+11)", () => {
     expect(consumesEvent(["a"], { type: "a" })).toBe(true);
     expect(consumesEvent(["a"], { type: "b" })).toBe(false);
   });
-  test("LIVE_STATE_CHANGED is never consumable, even when explicitly named or under *", () => {
-    expect(consumesEvent(undefined, { type: LIVE_STATE_CHANGED, ephemeral: true })).toBe(false);
-    expect(consumesEvent(["*"], { type: LIVE_STATE_CHANGED, ephemeral: true })).toBe(false);
-    expect(consumesEvent([LIVE_STATE_CHANGED], { type: LIVE_STATE_CHANGED, ephemeral: true })).toBe(
-      false,
-    );
+  test("the live-state/changed type is never consumable, even when explicitly named or under *", () => {
+    const t = "events.iterate.com/live-state/changed";
+    expect(consumesEvent(undefined, { type: t, ephemeral: true })).toBe(false);
+    expect(consumesEvent(["*"], { type: t, ephemeral: true })).toBe(false);
+    expect(consumesEvent([t], { type: t, ephemeral: true })).toBe(false);
   });
 });
 

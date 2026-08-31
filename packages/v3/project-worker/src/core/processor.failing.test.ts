@@ -8,7 +8,6 @@ import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import { defineProcessorContract, type StreamEvent, type StreamEventInput } from "./events.ts";
 import {
-  LIVE_STATE_CHANGED,
   StreamProcessor,
   type ProcessEventArgs,
   type ProcessorStream,
@@ -488,7 +487,8 @@ describe("live state with a projection that throws only sometimes", () => {
       projectId: "p",
     });
     mem.procs.push(p);
-    const changes = () => mem.pushed.filter((e) => e.type === LIVE_STATE_CHANGED);
+    const changes = () =>
+      mem.pushed.filter((e) => e.type === "events.iterate.com/live-state/changed");
 
     mem.stream.append({ type: "tick" }) as StreamEvent[]; // n: 0→1 — projecting NEW state throws
     await settle();
@@ -640,7 +640,7 @@ describe("ephemeral windows and repair", () => {
         return { n: state.n + 1 };
       }
       liveState(state: { n: number }): unknown {
-        return { n: state.n }; // emits LIVE_STATE_CHANGED — which even "*"+named must never consume
+        return { n: state.n }; // emits live-state/changed — which even "*"+named must never consume
       }
     }
     const p = new StarPlus({
@@ -657,7 +657,7 @@ describe("ephemeral windows and repair", () => {
     mem.stream.append({ type: "tock" }) as StreamEvent[]; // durable → swept
     await settle();
     const liveStateOffsets = mem.pushed
-      .filter((e) => e.type === LIVE_STATE_CHANGED)
+      .filter((e) => e.type === "events.iterate.com/live-state/changed")
       .map((e) => `${e.type}@${e.offset}`);
     expect(liveStateOffsets.length).toBeGreaterThan(0); // the projection did emit…
     expect(p.seen).toEqual(["tick@1", "chunk@3", "tock@5"]); // …and nothing consumed it or the noise

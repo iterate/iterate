@@ -9,7 +9,7 @@
 //     out of band (publishLiveState) when one changes.
 //
 // MUTATION AND NOTIFICATION ARE INSEPARABLE: `set(next)` diffs the held value → next; on a real
-// change it bumps the revision and appends the (ephemeral, unconsumable) LIVE_STATE_CHANGED delta
+// change it bumps the revision and appends the (ephemeral, unconsumable) live-state/changed delta
 // carrying `{key, from, to, patch}` onto the stream. `snapshot()` is the SEED DOOR clients read
 // `{rev, state}` through. The stream is a pure forwarder — no per-subscriber server state — and the
 // CLIENT owns its chain: seed through the door, apply a payload whose `from` matches its held rev,
@@ -22,12 +22,11 @@
 
 import { diff } from "./patch.ts";
 
-/** THE one live-state change type — ephemeral, payload `{key, from, to, patch}`: the delta patch
- *  rides the event (LiveView-style), chained by producer-owned revisions (`from` = the previous
- *  emission's `to`). HARD RULE: no processor can ever consume it (consumesEvent refuses it before
- *  contracts are consulted), so state-change notifications can never feed a reduce — the
- *  feedback-loop class is unspellable, not merely discouraged. */
-export const LIVE_STATE_CHANGED = "events.iterate.com/live-state/changed";
+// THE one live-state change type is the literal "events.iterate.com/live-state/changed" — ephemeral,
+// payload `{key, from, to, patch}`: the delta patch rides the event (LiveView-style), chained by
+// producer-owned revisions (`from` = the previous emission's `to`). HARD RULE: no processor can ever
+// consume it (consumesEvent refuses it before contracts are consulted), so state-change
+// notifications can never feed a reduce — the feedback-loop class is unspellable, not discouraged.
 
 /** The only thing a LiveState needs from its host: somewhere to append the delta. Both a
  *  `ProcessorStream` (`this.stream`) and the itx scope (`env.ITX`) satisfy it — the shape is the
@@ -81,7 +80,7 @@ export class LiveState<S> {
     this.#rev = from + 1;
     void Promise.resolve(
       this.#sink.append({
-        type: LIVE_STATE_CHANGED,
+        type: "events.iterate.com/live-state/changed",
         ephemeral: true,
         payload: { key: this.#key, from, to: this.#rev, patch },
       }),

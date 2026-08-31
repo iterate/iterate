@@ -3,12 +3,9 @@
 // and control events are exempt so a tripped stream can always accept its own resume.
 import { describe, expect, test } from "vitest";
 import {
-  BREAKER_CONFIGURED,
   breakerRemaining,
   CoreStreamProcessor,
   isCoreControl,
-  STREAM_PAUSED,
-  STREAM_RESUMED,
   type CoreState,
 } from "./core-processor.ts";
 import type { StreamEvent } from "./core/events.ts";
@@ -21,14 +18,16 @@ const reduceAll = (events: StreamEvent[], initial = proc.contract.initialState()
 
 describe("the core reduce", () => {
   test("pause is a latch: paused → resumed round-trips; reason carried", () => {
-    const paused = reduceAll([at(1, STREAM_PAUSED, { reason: "maintenance" })]);
+    const paused = reduceAll([
+      at(1, "events.iterate.com/stream/paused", { reason: "maintenance" }),
+    ]);
     expect(paused.paused).toEqual({ reason: "maintenance" });
-    expect(reduceAll([at(2, STREAM_RESUMED)], paused).paused).toBeNull();
+    expect(reduceAll([at(2, "events.iterate.com/stream/resumed")], paused).paused).toBeNull();
   });
 
   test("the breaker spends one token per counted event and refills from EVENT time", () => {
     const s0 = reduceAll([
-      at(0, BREAKER_CONFIGURED, { capacity: 2, refillPerSecond: 1 }),
+      at(0, "events.iterate.com/stream/breaker-configured", { capacity: 2, refillPerSecond: 1 }),
       at(1, "work"), // 2 → 1
       at(2, "work"), // 1 → 0
     ]);
@@ -41,30 +40,38 @@ describe("the core reduce", () => {
   });
 
   test("an empty configure turns the breaker OFF; enforcement then reads Infinity", () => {
-    const on = reduceAll([at(0, BREAKER_CONFIGURED, { capacity: 5, refillPerSecond: 1 })]);
-    const off = reduceAll([at(1, BREAKER_CONFIGURED, {})], on);
+    const on = reduceAll([
+      at(0, "events.iterate.com/stream/breaker-configured", { capacity: 5, refillPerSecond: 1 }),
+    ]);
+    const off = reduceAll([at(1, "events.iterate.com/stream/breaker-configured", {})], on);
     expect(off.breaker).toBeNull();
     expect(breakerRemaining(off, 999)).toBe(Infinity);
   });
 
   test("control events never spend a token (a tripped stream accepts its own resume)", () => {
     const s = reduceAll([
-      at(0, BREAKER_CONFIGURED, { capacity: 1, refillPerSecond: 0.001 }),
-      at(1, STREAM_PAUSED, { reason: "x" }),
-      at(2, STREAM_RESUMED),
+      at(0, "events.iterate.com/stream/breaker-configured", {
+        capacity: 1,
+        refillPerSecond: 0.001,
+      }),
+      at(1, "events.iterate.com/stream/paused", { reason: "x" }),
+      at(2, "events.iterate.com/stream/resumed"),
     ]);
     expect(s.breaker?.tokens).toBe(1); // untouched
-    expect(isCoreControl(STREAM_PAUSED) && isCoreControl(STREAM_RESUMED)).toBe(true);
+    expect(
+      isCoreControl("events.iterate.com/stream/paused") &&
+        isCoreControl("events.iterate.com/stream/resumed"),
+    ).toBe(true);
     expect(isCoreControl("work")).toBe(false);
   });
 
   test("the reduce rebuilds bit-identically from the log (pure — no wall clock anywhere)", () => {
     const log = [
-      at(0, BREAKER_CONFIGURED, { capacity: 3, refillPerSecond: 2 }),
+      at(0, "events.iterate.com/stream/breaker-configured", { capacity: 3, refillPerSecond: 2 }),
       at(100, "a"),
       at(1100, "b"),
-      at(1200, STREAM_PAUSED, { reason: "r" }),
-      at(5000, STREAM_RESUMED),
+      at(1200, "events.iterate.com/stream/paused", { reason: "r" }),
+      at(5000, "events.iterate.com/stream/resumed"),
       at(9000, "c"),
     ];
     expect(reduceAll(log)).toEqual(reduceAll(log));

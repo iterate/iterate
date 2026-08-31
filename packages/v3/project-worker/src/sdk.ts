@@ -28,4 +28,4 @@ export { applyPatch, diff, type PatchOp } from "./core/patch.ts";
 // is live by default, override `projectLiveState` to fold in runtime fields), and a mini-app DO that
 // is NOT a processor (a chatroom, a lobby) owns one directly: `new LiveState(env.ITX, "chat", {…})`,
 // mutate with `set`, expose `snapshot()` as the client seed door. See core/live-state.ts.
-export { LiveState, LIVE_STATE_CHANGED, type LiveStateSink } from "./core/live-state.ts";
+export { LiveState, type LiveStateSink } from "./core/live-state.ts";

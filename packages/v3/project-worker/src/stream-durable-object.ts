@@ -61,12 +61,7 @@ import {
   type CapabilityTable,
   type ProcessorPolicy,
 } from "./capability-table-processor.ts";
-import {
-  consumesEvent,
-  LIVE_STATE_CHANGED,
-  type ReduceOnlyProcessor,
-  type ScannedRange,
-} from "./core/processor.ts";
+import { consumesEvent, type ReduceOnlyProcessor, type ScannedRange } from "./core/processor.ts";
 import type { BuiltInsEnv } from "./built-ins.ts";
 import { PROCESSOR_RUNNER_MODULE } from "./generated/processor-runner.ts";
 import { buildBuiltIns } from "./built-ins.ts";
@@ -516,7 +511,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         // in-flight tracking, no latest-wins queue — the owner's no-coalescing decision; a
         // dropped or reordered payload is a revision-chain mismatch the client door-heals).
         for (const e of committed) {
-          if (e.type !== LIVE_STATE_CHANGED) continue;
+          if (e.type !== "events.iterate.com/live-state/changed") continue;
           if ((e.payload as { key?: string } | undefined)?.key !== row.liveState.key) continue;
           fire(row, [e.payload], (err) =>
             console.error(`live-state "${row.name}" delivery failed (client re-seeds on gap)`, err),
@@ -526,7 +521,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
       // Event mode: the consumes filter, applied statelessly outbound. Default = every durable
       // event; naming types opts into ephemerals too (the processor consumes rule, mirrored).
-      // LIVE_STATE_CHANGED never rides the event lane (the platform rule).
+      // The live-state/changed type never rides the event lane (the platform rule).
       const events = committed.filter((e) => consumesEvent(row.consumes, e));
       if (events.length === 0) continue; // the skipped span rides the next delivered range
       const deliveredAfter =
