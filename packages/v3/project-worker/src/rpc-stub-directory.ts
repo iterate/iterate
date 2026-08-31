@@ -40,6 +40,8 @@ type RpcStubDirectoryDeps = {
 
 export class RpcStubDirectory {
   readonly #deps: RpcStubDirectoryDeps;
+  /** The transport mechanics. VOCABULARY across the two layers: the manager's `stubKey` IS our
+   *  `transportId`, and its `connectionKey` IS our `key` (the caller's addressing key). */
   readonly #stubs: HibernatableRpcStubManager;
   /** transportId → connectionKey, for transports that have been reserved but whose stub pager
    *  WebSocket hasn't arrived yet. In memory on purpose: if the DO dies in between, the upgrade

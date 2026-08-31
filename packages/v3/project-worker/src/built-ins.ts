@@ -115,8 +115,8 @@ interface BuildBuiltInsDeps {
   /** The rpcStubs view (parent-local closures over the HibernatableRpcStubManager). */
   rpcStubs: RpcStubsView;
   /** `facets.get(ref)` — address a facet by name, OR materialize `{ source, className }` (a loaded
-   *  durable object hosted as a facet of this stream; the runner DO died in increment 57 — accepted
-   *  trade: a busy stateful facet pins its stream). */
+   *  durable object hosted as a facet of this stream; accepted trade: a busy stateful facet pins
+   *  its stream). */
   facets: FacetsView;
   /** The ctx whose `exports` mints the ItxEntrypoint loopback (the loaded-worker
    *  host — see itx-entrypoint.ts for why it is never a raw getByName stub). */

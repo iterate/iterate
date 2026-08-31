@@ -17,9 +17,8 @@
 // `itx.runScript("async (itx, x) => …")` — wraps its string into a WorkerEntrypoint at the call
 // site (built-ins.ts `RUN_SCRIPT_ENTRYPOINT`), so even that bottoms out at an EXPORTED entrypoint.
 
-// (The STATEFUL dynamic-worker wrapper `statefulDoRunner` was removed: with native facet RPC
-// (Reflect.apply via invokePath), the stream DO loads the user's
-// `DurableObject` class DIRECTLY and calls its methods — no `__HostedActor` fetch-tunnel wrapper.)
+// A stateful dynamic worker is the user's `DurableObject` class loaded DIRECTLY as a facet; the
+// stream DO calls its methods via native facet RPC (Reflect.apply through invokePath) — no wrapper.
 
 import { toExpression, type Expression } from "./expression.ts";
 import { hashSource } from "./hash.ts";
@@ -81,8 +80,7 @@ export function confinedWorker(
  *  exactly like Cloudflare's own two-step: `worker.getEntrypoint(name?)` for a stateless
  *  `WorkerEntrypoint` (built-ins.ts `statelessHandle`), or `worker.getDurableObjectClass(name)` fed
  *  to `versionedFacet` for a durable `DurableObject` facet (stream-durable-object.ts `#durableFacet`).
- *  The two used to inline this block each; unifying it is why "load the code" and "choose the host"
- *  are now visibly separate. `version` (the contentHash) rides back for the facet marker dance. */
+ * "load the code" and "choose the host" are visibly separate. `version` (the contentHash) rides back for the facet marker dance. */
 export async function loadConfinedWorker(opts: {
   env: { LOADER: WorkerLoader; CF_VERSION_METADATA?: { id: string } };
   invoke: (call: Expression) => Promise<unknown>;
@@ -120,7 +118,7 @@ export async function loadConfinedWorker(opts: {
 }
 
 /** A source expression may evaluate to a modules record ({ name: code }) or to ONE module
- *  string (plain kv — increment 57 killed the files root); normalize to the loader's shape.
+ *  string (plain kv); normalize to the loader's shape.
  *  Anything else is a loud error, not an empty worker. */
 function asModules(result: unknown, what: string): Record<string, string> {
   if (typeof result === "string") return { "cap.js": result };
@@ -130,8 +128,7 @@ function asModules(result: unknown, what: string): Record<string, string> {
 }
 
 /** A worker/facet SOURCE is a PRODUCER of module code, resolved the SAME way at every load site
- *  (stateless workers, stateful facets, processor facets — the three callers that used to inline
- *  `asModules(await invoke(source))` each). Two shapes, both bottoming out here:
+ *  (stateless workers, stateful facets, processor facets). Two shapes, both bottoming out here:
  *   • an itx-Expression producer — the norm. `itx.kv.get('src/x.js')` IS a callback that fetches
  *     the code; a repo fetch is just `itx.repo.get(...)`; a provided capnweb/Workers-RPC callback
  *     is any expression that invokes it. Re-derivable across incarnations — the durable form,

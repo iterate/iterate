@@ -25,7 +25,7 @@ import { afterEach, expect, test, vi } from "vitest";
 // under test) runs unmodified.
 vi.mock("cloudflare:workers", () => ({ RpcTarget: class {} }));
 
-import { startRpcStubRelay } from "./itx-surface.ts";
+import { startRpcStubRelay } from "./rpc-stub-relay.ts";
 
 const DISPOSE = (Symbol as { dispose?: symbol }).dispose ?? Symbol.for("dispose");
 
