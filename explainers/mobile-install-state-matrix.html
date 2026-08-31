@@ -315,28 +315,21 @@
         <thead>
           <tr>
             <th>Your phone ↓ · the PR →</th>
-            <th>No app changes</th>
             <th>
               JS-only changes<br /><span style="font-weight: 400">(fingerprint = main's)</span>
             </th>
             <th>
-              Native-only changes<br /><span style="font-weight: 400">(fingerprint moved)</span>
+              Native changes, with or without JS<br /><span style="font-weight: 400"
+                >(fingerprint moved — every push ships the whole bundle either way, so "native-only"
+                and "native + JS" behave identically)</span
+              >
             </th>
-            <th>Native + JS changes</th>
+            <th>No app changes</th>
           </tr>
         </thead>
         <tbody>
           <tr>
             <th>Nothing installed</th>
-            <td class="na" rowspan="6">
-              <span class="chip c-na">NO-OP</span>
-              <p>
-                The PR gets no mobile preview section at all — the workflow only runs when
-                <code>apps/mobile/**</code> or the publish scripts change. Nothing published,
-                nothing built, nothing to scan. Your phone never hears about it, before or after
-                merge.
-              </p>
-            </td>
             <td>
               <span class="chip c-dl">INSTALL</span>
               <p>
@@ -366,11 +359,13 @@
                 </div>
               </details>
             </td>
-            <td>
-              <span class="chip c-dl">INSTALL</span>
+            <td class="na" rowspan="6">
+              <span class="chip c-na">NO-OP</span>
               <p>
-                As native-only. You'll also see the PR's JS changes once you land, and later JS-only
-                pushes ride OTA on the same binary.
+                (Here for completeness.) The PR gets no mobile preview section at all — the workflow
+                only runs when <code>apps/mobile/**</code> or the publish scripts change. Nothing
+                published, nothing built, nothing to scan. Your phone never hears about it, before
+                or after merge.
               </p>
             </td>
           </tr>
@@ -395,10 +390,6 @@
                 <summary>steps</summary>
                 <div>Install the PR's build → Open in app → Switch → PR JS.</div>
               </details>
-            </td>
-            <td>
-              <span class="chip c-dl">DOWNLOAD</span>
-              <p>As native-only.</p>
             </td>
           </tr>
           <tr>
@@ -426,10 +417,6 @@
                   built for.
                 </div>
               </details>
-            </td>
-            <td>
-              <span class="chip c-dl">DOWNLOAD</span>
-              <p>As native-only — and the JS you're currently holding is visibly old, too.</p>
             </td>
           </tr>
           <tr>
@@ -459,10 +446,6 @@
                 banner, fresh build.
               </p>
             </td>
-            <td>
-              <span class="chip c-ok">ALREADY THERE</span>
-              <p>As native-only. Between native pushes, every JS push keeps flowing OTA.</p>
-            </td>
           </tr>
           <tr>
             <th>
@@ -486,10 +469,6 @@
                   main phone — that's the payoff of main reusing the PR's build.
                 </div>
               </details>
-            </td>
-            <td>
-              <span class="chip c-ota">ONE SCAN</span>
-              <p>As native-only.</p>
             </td>
           </tr>
           <tr>
@@ -519,10 +498,6 @@
                 </div>
               </details>
             </td>
-            <td>
-              <span class="chip c-ota">ONE SCAN</span>
-              <p>As native-only.</p>
-            </td>
           </tr>
         </tbody>
       </table>
@@ -533,26 +508,25 @@
       <table>
         <thead>
           <tr>
-            <th>No app changes</th>
             <th>JS-only changes</th>
-            <th>Native-only changes</th>
-            <th>Native + JS changes</th>
+            <th>Native changes</th>
+            <th>No app changes</th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <td class="na">Nothing mobile happens.</td>
             <td>
               Main's publish OTAs every main phone on next launch. The merged PR's channel, snapshot
               and QR assets are deleted, and the PR body's section is swapped for
               <b>main's</b> QRs — the merged PR is the on-ramp back onto main.
             </td>
-            <td colspan="2">
+            <td>
               Same swap — and main <b>reuses the PR's already-finished build</b> (same fingerprint),
               so the merged body's install link is usually live immediately instead of waiting out a
               fresh ~20-minute build. Phones on old binaries see the Download banner until they
               install.
             </td>
+            <td class="na">Nothing mobile happens.</td>
           </tr>
         </tbody>
       </table>
