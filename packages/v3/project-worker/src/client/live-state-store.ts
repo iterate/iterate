@@ -47,11 +47,19 @@ export function createLiveStateStore<S>(): LiveStateStore<S> {
       return () => void listeners.delete(listener);
     },
     seed: (seed) => {
+      // MONOTONIC: a late-resolving OLDER door read must never move the store backwards past state
+      // deltas have already advanced (a delta-triggered resync can race the initial seed). Revisions
+      // are time-seeded epochs plus increments, so "newer" is numeric.
+      if (held.rev !== -1 && seed.rev < held.rev) return;
       held = { rev: seed.rev, state: seed.state };
       notify();
     },
     apply: (delta, resync) => {
       // A delta at-or-behind the held rev is a duplicate/out-of-order frame — drop it silently.
+      // (Epochs are minted from the clock, so a reborn producer's fresh chain sits numerically above
+      // every rev an old chain handed out; a frame wholly behind us is genuinely old. The one
+      // exception is a clock that regressed across a producer rebirth — accepted: the next applied
+      // or gapped frame resyncs through the door anyway.)
       if (delta.to <= held.rev) return;
       // A gap (its `from` is not the held rev) means a missed delta or a reborn epoch — re-read the
       // door instead of applying onto a diverged base.

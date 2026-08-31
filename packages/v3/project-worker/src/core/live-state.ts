@@ -66,26 +66,41 @@ export class LiveState<S> {
   set(next: S): void {
     // The value is adopted whatever happens; only the NOTIFICATION is best-effort. A projection the
     // wire can't carry (a BigInt, a cycle) throws in `diff` — contain it here so a batch/set caller
-    // never sees it; the client re-seeds on the resulting chain gap.
+    // never sees it. Two containment rules keep the chain healable:
+    //   • If the PAIR won't diff but `next` itself rides the wire, emit a ROOT REPLACE instead —
+    //     otherwise a poisoned base wedges emission forever (every later diff against it throws).
+    //   • If even `next` won't serialize, adopt it and STILL advance the rev: the base moved without
+    //     an emit, and bumping is what mints the chain gap that forces a stale client's re-seed.
+    //     (Without the bump, a later emit's `from` matches the client's held rev and it applies a
+    //     patch computed against a base it never received: silent corruption, no heal signal.)
     let patch;
     try {
       patch = diff(this.#state, next);
     } catch {
-      this.#state = next;
-      return;
+      try {
+        patch = [{ op: "replace" as const, path: "", value: JSON.parse(JSON.stringify(next)) }];
+      } catch {
+        this.#state = next;
+        this.#rev += 1;
+        return;
+      }
     }
     this.#state = next;
     if (!patch) return;
     const from = this.#rev;
     this.#rev = from + 1;
-    void Promise.resolve(
-      this.#sink.append({
-        type: "events.iterate.com/live-state/changed",
-        ephemeral: true,
-        payload: { key: this.#key, from, to: this.#rev, patch },
-      }),
-    ).catch(() => {
-      /* lossy by contract — a dropped change payload is a revision-chain gap the client heals */
-    });
+    // Both a sync throw and a rejection land in the same lossy contract: a dropped change payload
+    // is a revision-chain gap the client heals (the rev already advanced above).
+    try {
+      void Promise.resolve(
+        this.#sink.append({
+          type: "events.iterate.com/live-state/changed",
+          ephemeral: true,
+          payload: { key: this.#key, from, to: this.#rev, patch },
+        }),
+      ).catch(() => {});
+    } catch {
+      /* same gap */
+    }
   }
 }

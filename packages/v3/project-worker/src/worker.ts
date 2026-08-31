@@ -71,7 +71,7 @@ export default {
       return host(env, url).fetch(new Request(request, { headers }));
     }
 
-    return new Response("project-worker — /api (capnweb), /cap, /version\n", {
+    return new Response("project-worker — /api (capnweb), /cap, /demo, /version\n", {
       headers: { "content-type": "text/plain" },
     });
   },

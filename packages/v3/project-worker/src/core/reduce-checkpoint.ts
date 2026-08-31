@@ -31,7 +31,7 @@ type CheckpointStore = {
 
 /** The cursor key — read directly by the facet's version-refold probe. */
 export const reduceCursorKey = (slug: string): string => `reduce:${slug}:progress`;
-const reduceStateKey = (slug: string): string => `reduce:${slug}:state`;
+export const reduceStateKey = (slug: string): string => `reduce:${slug}:state`;
 
 /** Read the persisted checkpoint for `slug`, or `undefined` when there is no cursor OR the stored
  *  cursor's version doesn't match — the caller then rebuilds from offset 0 (a version refold / cold

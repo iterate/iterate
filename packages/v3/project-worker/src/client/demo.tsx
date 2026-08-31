@@ -11,7 +11,6 @@ import { newWebSocketRpcSession } from "capnweb";
 import { useLiveState } from "./react.tsx";
 
 const CTX = "prj_demo_livestate";
-type PresenceLive = { ticks: number; lastPokeMs: number };
 
 // The demo processor, inline (a self-contained page needs no repo files): reduced `ticks` folded
 // from durable 'tick' events, runtime `lastPokeMs` bumped by a 'poke' ephemeral in processEvent.
@@ -30,12 +29,10 @@ export class Presence extends StreamProcessor {
   liveState(state) { return { ticks: state.ticks, lastPokeMs: this.#lastPokeMs }; }
 }`;
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function connectAndEnable(): Promise<any> {
   const url = new URL("/api", location.href);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.searchParams.set("ctx", CTX);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const itx = await (newWebSocketRpcSession(url.toString()) as any).authenticate().get();
   await itx.invokeCapability(["itx", "kv", ["put", "src/presence.js", PRESENCE_SRC]]);
   await itx.enableProcessor("presence", {
@@ -45,8 +42,8 @@ async function connectAndEnable(): Promise<any> {
   return itx;
 }
 
+// oxlint-disable-next-line react/only-export-components -- entry-point bundle: Demo is rendered below, never imported, so fast refresh doesn't apply
 function Demo() {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [itx, setItx] = useState<any>();
   const [connectError, setConnectError] = useState<string>();
   useEffect(() => {
@@ -61,13 +58,17 @@ function Demo() {
     return () => void (disposed = true);
   }, []);
 
-  const { value, rev, status, error } = useLiveState<PresenceLive>(itx, {
+  const { value, rev, status, error } = useLiveState<{ ticks: number; lastPokeMs: number }>(itx, {
     key: "presence",
     door: () => itx.invokeCapability("itx.facets.get('presence').liveSnapshot()"),
   });
 
+  // A failed append (a dropped socket, a paused stream) must surface on the page, not vanish as an
+  // unhandled rejection while the status still says "live".
   const append = (event: Record<string, unknown>) =>
-    void itx?.invokeCapability(["itx", "stream", ["append", event]]);
+    void itx?.invokeCapability(["itx", "stream", ["append", event]]).catch((e: unknown) => {
+      setConnectError(`append failed: ${e instanceof Error ? e.message : String(e)}`);
+    });
 
   return (
     <main

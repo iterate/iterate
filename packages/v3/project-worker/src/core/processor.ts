@@ -44,6 +44,7 @@ import {
   type ReduceCheckpoint,
   readReduceCheckpoint,
   reduceCursorKey,
+  reduceStateKey,
   writeReduceCheckpoint,
 } from "./reduce-checkpoint.ts";
 import type {
@@ -380,6 +381,9 @@ export abstract class StreamProcessor<State> {
       reduceCursorKey(this.contract.slug),
     );
     if (!stored || stored.reducerVersion === this.contract.version) return;
+    // The OLD-version state blob, read before the refold overwrites it — the diff base for the one
+    // heal delta emitted below.
+    const oldState = this.#storage.get<State>(reduceStateKey(this.contract.slug));
     // Rebuild ONLY through the offset the OLD cursor covered (reduce-only, no effects). Events
     // past it are the job of the normal flow that follows — refolding to the live head instead
     // would judge an already-queued in-flight push stale and swallow its effects.
@@ -400,9 +404,17 @@ export abstract class StreamProcessor<State> {
     }
     this.#progress = { reducerVersion: this.contract.version, reducedThroughOffset: target, state };
     writeReduceCheckpoint(this.#storage, this.contract.slug, this.#progress, state, true);
-    // A refold jumped the state under the holder; drop it so the next batch re-seeds a fresh chain
-    // (new epoch ⇒ clients re-read the door — a version bump wants exactly that).
+    // A refold jumped the state under the holder. Rebirth the chain NOW on a fresh epoch seeded at
+    // the OLD-version projection, and publish the refolded one through it: clients synced to the old
+    // chain get one delta whose `from` can't match any rev they hold → they re-seed — even when this
+    // refold is the last state change for a long while. (Dropping the holder alone left them
+    // silently stale until an unrelated later change happened to emit.) An unchanged projection
+    // emits nothing — there is nothing to heal. If the old state blob is absent (state never left
+    // initial under the old version), the fresh holder seeds at the refolded projection and the
+    // publish no-ops — same quiet outcome as before.
     this.#live = undefined;
+    if (oldState !== undefined) this.#liveHolder(oldState);
+    this.publishLiveState();
   }
 
   /** CURSOR-DRIVEN gap repair: read contiguously from the persisted cursor out of the log —
@@ -558,9 +570,9 @@ export abstract class StreamProcessor<State> {
           processor: {
             slug: this.contract.slug,
             version: this.contract.version,
-            ...(whileProcessing
-              ? { whileProcessing: { offset: whileProcessing.offset, type: whileProcessing.type } }
-              : {}),
+            ...(whileProcessing && {
+              whileProcessing: { offset: whileProcessing.offset, type: whileProcessing.type },
+            }),
           },
         };
       }

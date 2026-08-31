@@ -28,7 +28,6 @@ import {
   type ReduceArgs,
   type ScannedRange,
 } from "./core/processor.ts";
-import type { StreamEvent } from "./core/events.ts";
 import { consumesEvent } from "./core/processor.ts";
 import type { FacetProcessorArgs } from "./processor-facet.ts";
 import { reportIssue } from "./core/errors.ts";
@@ -77,8 +76,9 @@ const activeMounts = (state: ForwarderState): AbsentTargetSubscriptionMount[] =>
 
 export class SubscriptionForwarderProcessor extends StreamProcessor<ForwarderState> {
   readonly contract = SubscriptionForwarderContract;
-  // (No liveState override: an internal cursor-keeper nobody watches doesn't opt into push — its
-  // reduced state stays pull-only, so its forwards never inject live-state deltas into the stream.)
+  // (No liveState override: like every processor it gets the default-on projection, so its cursor
+  // rows emit live-state deltas as deliveries progress — free observability; a delta is an
+  // unconsumable ephemeral, so its own emissions can never feed its reduce.)
   // Every delivery mechanic — cursor read-loop, watchdog, backoff ladder, halt — lives on THIS
   // class (no injected pump: the collaborators are the ones the processor already holds).
   readonly #parent: FacetProcessorArgs["parent"];
@@ -122,9 +122,9 @@ export class SubscriptionForwarderProcessor extends StreamProcessor<ForwarderSta
               name: path.split(".")[2],
               providedAtOffset: event.offset,
               target,
-              ...(delivery?.consumes ? { consumes: delivery.consumes } : {}),
-              ...(delivery?.maxAttempts !== undefined ? { maxAttempts: delivery.maxAttempts } : {}),
-              ...(delivery?.start ? { start: delivery.start } : {}),
+              ...(delivery?.consumes && { consumes: delivery.consumes }),
+              ...(delivery?.maxAttempts !== undefined && { maxAttempts: delivery.maxAttempts }),
+              ...(delivery?.start && { start: delivery.start }),
             },
           ],
         };

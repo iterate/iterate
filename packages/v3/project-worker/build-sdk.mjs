@@ -2,8 +2,9 @@
 // module the host injects as `processor.js` into userspace processor isolates. Single source of
 // truth: the SAME core/processor.ts the host runs is what userspace extends. Run by the test
 // and deploy scripts; the generated file is committed so typecheck works without a build.
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { build } from "esbuild";
-import { readFileSync, writeFileSync } from "node:fs";
 
 // Write ONLY when the content actually changed — otherwise `wrangler dev`'s watcher sees the custom
 // build rewrite src/generated/* and restarts the build, forever (the generated files are inside the
@@ -12,10 +13,13 @@ function writeIfChanged(path, next) {
   let prev;
   try {
     prev = readFileSync(path, "utf8");
-  } catch {
-    /* new file */
+  } catch (e) {
+    if (e?.code !== "ENOENT") throw e; // only "new file" is expected — surface EACCES/EISDIR/etc
   }
-  if (prev !== next) writeFileSync(path, next);
+  if (prev !== next) {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, next);
+  }
 }
 
 const sdk = await build({
