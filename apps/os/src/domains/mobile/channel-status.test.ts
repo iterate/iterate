@@ -256,6 +256,21 @@ test("the manifest plist names the app and its ipa, XML-escaped", async () => {
   expect(xml).toContain("<string>software-package</string>");
 });
 
+test("a null ipaUrl is rejected — writers must normalize EAS's null to an absent key", async () => {
+  // EAS reports applicationArchiveUrl: null (not absent) on in-progress
+  // builds; scripts/ci/mobile-preview.ts converts it to undefined so the key
+  // never reaches the wire. This pins the contract from the store's side.
+  const bucket = fakeBucket();
+  const response = await handleChannelStatusRequest({
+    bucket,
+    channel: "my-feature",
+    config: config(),
+    request: request("PUT", "my-feature", { body: { ...status, ipaUrl: null }, admin: true }),
+  });
+  expect(response.status).toBe(400);
+  expect(bucket.objects.size).toBe(0);
+});
+
 test("the manifest 404s without the itms fields or without a snapshot", async () => {
   const bucket = fakeBucket();
   bucket.objects.set(channelStatusKey("my-feature"), JSON.stringify(status));
