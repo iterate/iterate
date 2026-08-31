@@ -13,13 +13,8 @@
 import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
 import type { StreamDurableObject } from "../stream-durable-object.ts";
 import { codedError } from "./errors.ts";
-import {
-  clampCloseCode,
-  disposeStub,
-  openStubPagerWebSocket,
-  openFetchUpgradeLeg,
-  type ProviderSocket,
-} from "./hibernatable-rpc-stub.ts";
+import { dialLiveCapabilityFetch } from "./fetch-capabilities.ts";
+import { disposeStub, openStubPagerWebSocket } from "./hibernatable-rpc-stub.ts";
 
 export type ItxHostStub = DurableObjectStub<StreamDurableObject>;
 
@@ -55,66 +50,19 @@ class RetainedCallbackInvoker extends WorkersRpcTarget {
     this.#host = host;
   }
 
-  /** THE LIVE-CAPABILITY FETCH PATH (fetch-shaped rides fetch — ALL of it, not just upgrades):
-   *  every top-level `.fetch(request)` on a live capability lands here, in the capnweb session's
-   *  own request context (RPC calls execute where their target was minted — the one place the
-   *  provider's answer is legally touchable). We dial the provider's fetch; then the ONLY branch
-   *  this subsystem has, at the one seam the platform forces:
-   *    • a socketless Response returns over the Workers-RPC leg directly (it serializes fine);
-   *    • a webSocket-bearing Response cannot cross that leg (DataCloneError) — so we accept the
-   *      provider's socket HERE, open one DEDICATED upgrade leg into the DO, wire the two (frames
-   *      ride native text/binary), and return a marker; the DO mints the eyeball's pair natively.
-   *  Branching on the ANSWER, never the request — no Upgrade-header sniffing anywhere. The await
-   *  is the ack either way: a provider failure throws its own words back (a non-101 at the fetch
-   *  lane), and the DO returns a 101 only after the upgrade actually happened. */
-  async fetch(
-    upgradeId: string,
-    capPath: string[],
-    request: Request,
-  ): Promise<Response | { webSocketUpgrade: true }> {
+  /** The live-capability fetch dial, TRANSPORT side — the whole mechanism (why it exists, the
+   *  upgrade leg, the marker) lives in core/fetch-capabilities.ts; this method only walks the
+   *  dotted receiver and re-codes a mid-dial session break, exactly like invoke() below. */
+  async fetch(upgradeId: string, capPath: string[], request: Request): Promise<unknown> {
     try {
       let recv = this.#provider as unknown as Record<string, unknown>;
       for (const seg of capPath) recv = recv[seg] as Record<string, unknown>;
-      const response = (await (recv as { fetch(r: Request): Promise<unknown> }).fetch(request)) as {
-        status?: number;
-        webSocket?: ProviderSocket | null;
-      };
-      const provider = response?.webSocket;
-      if (!provider) return response as unknown as Response;
-      provider.accept?.();
-      const leg = await openFetchUpgradeLeg(this.#host, upgradeId);
-      provider.addEventListener("message", (ev) => {
-        try {
-          leg.send(ev.data as string | ArrayBuffer);
-        } catch {
-          /* leg closing — its close handler tears the provider side down */
-        }
-      });
-      provider.addEventListener("close", (ev) => {
-        try {
-          leg.close(clampCloseCode(ev.code), (ev.reason ?? "").slice(0, 123));
-        } catch {
-          /* already closing */
-        }
-      });
-      leg.addEventListener("message", (ev) => {
-        try {
-          provider.send((ev as MessageEvent).data as string | ArrayBuffer);
-        } catch {
-          /* provider closing */
-        }
-      });
-      leg.addEventListener("close", (ev) => {
-        try {
-          provider.close(
-            clampCloseCode((ev as CloseEvent).code),
-            ((ev as CloseEvent).reason ?? "").slice(0, 123),
-          );
-        } catch {
-          /* already closing */
-        }
-      });
-      return { webSocketUpgrade: true };
+      return await dialLiveCapabilityFetch(
+        (r) => (recv as { fetch(req: Request): Promise<unknown> }).fetch(r),
+        request,
+        upgradeId,
+        this.#host,
+      );
     } catch (e) {
       if (this.#broken.value)
         throw codedError("CONNECTION_OFFLINE", "itx rpc stub provider went offline mid-fetch");

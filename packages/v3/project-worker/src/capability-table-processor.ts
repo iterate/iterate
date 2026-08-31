@@ -23,6 +23,7 @@
 
 import { z } from "zod";
 import { codedError } from "./core/errors.ts";
+import { expressionEndingInFetch } from "./core/fetch-capabilities.ts";
 import { createLogger } from "./core/logs.ts";
 import {
   defineProcessorContract,
@@ -321,19 +322,9 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
    *  arg (a Request is not expression data). Everything stays in-isolate or on native stub
    *  hops, so a 101 flows back out untouched. */
   resolveFetch(state: State, expr: Expression, request: Request): Promise<unknown> {
-    const last = expr.at(-1);
-    // Normalize the terminal to a PROPERTY step `fetch` — a call-step's JSON args could never
-    // carry the live Request; it always rides in as the runtime arg. A fetch CALL that carries
-    // expression args is a LOUD error: the author meant something the lane cannot do.
-    if (Array.isArray(last) && last[0] === "fetch" && last.length > 1)
-      throw new Error(
-        `fetch takes no expression args — the live Request rides in as the runtime arg (got ${JSON.stringify(last.slice(1))})`,
-      );
-    // Strip any trailing `fetch` step (property OR call), then append the `fetch` PROPERTY step —
-    // the three old branches were all this one operation.
-    const endsInFetch = last === "fetch" || (Array.isArray(last) && last[0] === "fetch");
-    const base = endsInFetch ? expr.slice(0, -1) : expr;
-    return this.resolve(state, [...base, "fetch"], [request]);
+    // Doctrine point 1 (core/fetch-capabilities.ts): fetch-shaped capabilities are always called
+    // via the terminal `fetch`, with the live Request as the one runtime arg.
+    return this.resolve(state, expressionEndingInFetch(expr), [request]);
   }
 
   /** Pure routing: the winning userspace `provide` mount for a call, or null (built-ins are

@@ -46,6 +46,7 @@ import {
   type Expression,
   type ItxExpression,
 } from "./core/expression.ts";
+import { serveCapabilityFetchLane, type PartialFetch } from "./core/fetch-capabilities.ts";
 import { InlineCore } from "./core/inline-core.ts";
 import { invokePath } from "./core/dispatch.ts";
 import { InvokeHandle } from "./core/invoke-handle.ts";
@@ -979,35 +980,23 @@ export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
   // ── native fetch: the stub pager door, the fetch lane, observability, egress ──
 
   async fetch(request: Request): Promise<Response> {
-    // A relay opens a stub pager WebSocket (partial fetch — the directory owns the attach gate;
-    // undefined means "not this door's request").
-    const pager = this.#rpcStubs.fetch(request);
-    if (pager) return pager;
-    const capHeader = request.headers.get("x-itx-cap");
-    if (capHeader) return this.#fetchCapLane(request, capHeader);
-    return this.#egress(request);
-  }
-
-  /** THE FETCH LANE: `x-itx-cap` resolves against the inline reduce right here — a 101 flows back
-   *  out natively (no facet tunnel). Classification by CODE, never message text (survives every hop). */
-  async #fetchCapLane(request: Request, capHeader: string): Promise<Response> {
-    try {
-      const expr = capHeader.trimStart().startsWith("[")
-        ? (JSON.parse(capHeader) as Expression)
-        : parse(capHeader.startsWith("itx") ? capHeader : `itx.${capHeader}`);
-      const result = await this.#capabilityTableProcessor().resolveFetch(
-        this.#table(),
-        expr,
-        request,
-      );
-      return result instanceof Response
-        ? result
-        : new Response(`fetch lane: ${JSON.stringify(result)}\n`);
-    } catch (error) {
-      const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
-      const status = errorCode(error) === "NO_CAPABILITY_MATCH" ? 404 : 500;
-      return new Response(`fetch lane error: ${message}\n`, { status });
+    // AN ORDERED WALK OVER PARTIAL FETCHES (the core/fetch-capabilities.ts convention: each door
+    // answers or returns null — middleware without a framework), ending in the egress terminal:
+    //   1. the stub pager + live-capability upgrade-leg doors (rpc-stub machinery);
+    //   2. the capability fetch lane (`x-itx-cap` — a fetch-shaped capability, 101s included);
+    //   3. everything else is EGRESS (secret substitution → the FALLBACK terminal).
+    const doors: PartialFetch[] = [
+      (r) => this.#rpcStubs.fetch(r),
+      (r) =>
+        serveCapabilityFetchLane(r, (expr, req) =>
+          this.#capabilityTableProcessor().resolveFetch(this.#table(), expr, req),
+        ),
+    ];
+    for (const door of doors) {
+      const response = await door(request);
+      if (response) return response;
     }
+    return this.#egress(request);
   }
 
   /** OBSERVABILITY, over the one door: incarnation (the hibernation tell) + the core fold + the

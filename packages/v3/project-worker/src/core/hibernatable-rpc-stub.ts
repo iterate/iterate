@@ -27,6 +27,12 @@
 // `attach` and carried through hibernation on the pager socket.
 
 import { codedError } from "./errors.ts";
+import {
+  isFetchShapedCall,
+  LiveCapabilityFetchServer,
+  type LiveCapabilityFetchTransport,
+  type WebSocketHooks,
+} from "./fetch-capabilities.ts";
 import { createLogger } from "./logs.ts";
 
 export const STUB_PAGER_WEBSOCKET_HEADER = "x-itx-stub-pager";
@@ -34,38 +40,9 @@ const STUB_PAGER_WEBSOCKET_TAG = "itx-stub-pager-websocket";
 
 /** THE ONE message the stub pager WebSocket ever carries (DO → edge): "I ought to have your
  *  RPC stub but I don't — send it." Everything else rides Workers RPC on the paged-in stub — the
- *  pager is a PAGER, minimal by decree. (Fetch-upgrade traffic rides its own DEDICATED socket:
- *  see openFetchUpgrade on RetainedCallbackInvoker and FETCH_UPGRADE_SOCKET_HEADER below.) */
+ *  pager is a PAGER, minimal by decree. (Live-capability FETCH — upgrades included — is a whole
+ *  separate subsystem: core/fetch-capabilities.ts.) */
 type StubPageMessage = { type: "page" };
-
-// ── FETCH UPGRADES on live capabilities (fetch-shaped rides fetch; the pager stays minimal) ──
-// A live capability's WS upgrade cannot return its 101 over Workers RPC (workerd's RPC serializer
-// has no WebSocket support — DataCloneError), a loopback entrypoint cannot touch the relay's
-// capnweb session (I/O pins to its creating request context), and proxying the socket as RPC
-// streams pins the DO non-hibernatable for the socket's lifetime (measured: evictDurableObject
-// times out on "active references"). So: the DO asks the paged-in invoker to dial
-// (openFetchUpgrade — an RPC call that EXECUTES in the session's context; its return is the honest
-// ack), the relay opens ONE dedicated upgrade leg back into this DO per upgrade, and the DO mints
-// the eyeball's WebSocketPair natively. Frames forward RAW (native text/binary — no codec)
-// between the two DO-side sockets by upgradeId tag; both are hibernatable, so the upgrade SURVIVES
-// eviction (routing state lives in tags + attachments) and idle costs nothing.
-export const FETCH_UPGRADE_SOCKET_HEADER = "x-itx-fetch-upgrade";
-const FETCH_UPGRADE_EYEBALL_TAG = "itx-fetch-upgrade-eyeball";
-const FETCH_UPGRADE_LEG_TAG = "itx-fetch-upgrade-leg";
-/** Eyeball-side attachment. */
-type FetchUpgradeEyeball = { fetchUpgradeEyeball: { upgradeId: string } };
-/** Relay-side (transport) attachment. */
-type FetchUpgradeLeg = { fetchUpgradeLeg: { upgradeId: string } };
-
-/** Close codes a handler may pass to close(): 1000 or app codes; everything reserved/invalid
- *  (1004-1006, 1015, out-of-range — e.g. an abnormal-closure 1006 being FORWARDED) clamps to 1000. */
-export function clampCloseCode(code: number | undefined): number {
-  if (code === undefined) return 1000;
-  if (code === 1000 || (code >= 3000 && code <= 4999)) return code;
-  if (code >= 1001 && code <= 1003) return code;
-  if (code >= 1007 && code <= 1014) return code;
-  return 1000;
-}
 
 /** The Workers-RPC stub the paged edge worker hands back: it forwards `invoke(path, args)`
  *  onto the retained capnweb callback (a DIRECT dotted dispatch — never `.apply`). */
@@ -92,13 +69,10 @@ export function disposeStub(x: unknown): void {
 const stubLog = createLogger("hibernatable-rpc-stub");
 const PAGE_TIMEOUT_MS = 10_000; // a paged edge worker has this long to hand back its stub
 
-type Hooks = {
-  acceptWebSocket(ws: WebSocket, tags: string[]): void;
-  getWebSockets(tag: string): WebSocket[];
-};
-
 export class HibernatableRpcStubManager {
-  readonly #hooks: Hooks;
+  readonly #hooks: WebSocketHooks;
+  /** The live-capability fetch subsystem (core/fetch-capabilities.ts), wired to the same DO. */
+  readonly #liveFetch: LiveCapabilityFetchServer;
   // The PAGED-IN stubs, in memory ONLY and kept WARM: steady traffic pays ONE page, then every
   // delivery is a plain RPC call. Disposal is the caller's idle quiesce
   // (disposeRetainedStubs()) — never per-call, never a timer (a pending timer would itself pin
@@ -116,15 +90,16 @@ export class HibernatableRpcStubManager {
     }
   >();
 
-  constructor(hooks: Hooks) {
+  constructor(hooks: WebSocketHooks) {
     this.#hooks = hooks;
+    this.#liveFetch = new LiveCapabilityFetchServer(hooks);
   }
 
-  /** PARTIAL FETCH: accept a stub pager WebSocket upgrade, or `undefined` when the request
-   *  isn't one (the composing DO then runs its own doors). */
-  fetch(request: Request): Response | undefined {
+  /** PARTIAL FETCH: accept a stub pager WebSocket upgrade, or `null` when the request isn't one
+   *  (the composing DO then runs its next door). */
+  fetch(request: Request): Response | null {
     const stubKey = request.headers.get(STUB_PAGER_WEBSOCKET_HEADER);
-    if (stubKey === null) return undefined;
+    if (stubKey === null) return null;
     if ((request.headers.get("Upgrade") ?? "").toLowerCase() !== "websocket")
       return new Response(
         `stub pager: expected a websocket upgrade with ${STUB_PAGER_WEBSOCKET_HEADER}\n`,
@@ -158,11 +133,16 @@ export class HibernatableRpcStubManager {
    *  callers just don't await (a failed delivery is the client's heal-by-pull). */
   async invoke(stubKey: string, path: string[], args: unknown[]): Promise<unknown> {
     // THE FETCH-SHAPED RULE (owner-decreed): EVERY fetch-shaped call on a live capability rides
-    // the one live-fetch path — not just upgrades, so any of them CAN upgrade. No request
-    // inspection here; the only branch lives on the provider's ANSWER (socket or not), inside
-    // the invoker's fetch (rpc-stub-relay.ts).
-    if (path.at(-1) === "fetch" && args.length === 1 && args[0] instanceof Request)
-      return this.#fetch(stubKey, path.slice(0, -1), args[0]);
+    // the one live-capability fetch path — core/fetch-capabilities.ts owns it whole. The paged-in
+    // invoker is the transport; everything else about upgrades lives over there.
+    if (isFetchShapedCall(path, args)) {
+      const retained = await this.#pageIn(stubKey);
+      return this.#liveFetch.serve(
+        retained.invoker as unknown as LiveCapabilityFetchTransport,
+        path.slice(0, -1),
+        args[0] as Request,
+      );
+    }
     const retained = await this.#pageIn(stubKey);
     retained.inFlight += 1;
     try {
@@ -221,121 +201,22 @@ export class HibernatableRpcStubManager {
 
   /** A pager WebSocket closed — the stub is gone with it. Hands back the record so the caller
    *  can run its own lifecycle (ephemeral facts, auto-revoke, session settlement). */
-  /** Fetch upgrades this DO is expecting (upgradeId → asked-at ms): minted by #openFetchUpgrade
-   *  just before the invoker dial, consumed by acceptFetchUpgradeLeg when the leg arrives.
-   *  In-memory + lazily swept, mirroring the attach-reservation pattern — a crashed relay's RPC
-   *  rejection cleans up in the finally; the sweep is belt-and-braces for orphans. */
-  #pendingFetchUpgrades = new Map<string, number>();
-  #sweepPendingFetchUpgrades(): void {
-    const cutoff = Date.now() - PAGE_TIMEOUT_MS;
-    for (const [upgradeId, atMs] of this.#pendingFetchUpgrades)
-      if (atMs < cutoff) this.#pendingFetchUpgrades.delete(upgradeId);
-  }
-
-  /** THE live-capability fetch, DO side: page in the invoker and hand the call to its fetch
-   *  (which runs in the relay's session context — see rpc-stub-relay.ts). A plain Response comes
-   *  back over the RPC leg as-is. An upgrade comes back as a marker — the relay has already
-   *  opened the dedicated upgrade leg into this DO — and we mint the eyeball's pair natively,
-   *  returning a real 101 only after the provider actually upgraded. A provider failure throws
-   *  through with its own words (the fetch lane answers non-101). */
-  async #fetch(stubKey: string, capPath: string[], request: Request): Promise<unknown> {
-    const retained = await this.#pageIn(stubKey);
-    const upgradeId = crypto.randomUUID();
-    this.#sweepPendingFetchUpgrades();
-    this.#pendingFetchUpgrades.set(upgradeId, Date.now());
-    let result: unknown;
-    try {
-      result = await (
-        retained.invoker as unknown as {
-          fetch(id: string, p: string[], r: Request): Promise<unknown>;
-        }
-      ).fetch(upgradeId, capPath, request);
-    } finally {
-      this.#pendingFetchUpgrades.delete(upgradeId);
-    }
-    if ((result as { webSocketUpgrade?: true } | null)?.webSocketUpgrade !== true) return result;
-    const leg = this.#hooks.getWebSockets(`${FETCH_UPGRADE_LEG_TAG}:${upgradeId}`)[0];
-    if (leg === undefined)
-      throw new Error(`fetch upgrade ${upgradeId}: dial acked but no upgrade leg arrived`);
-    const pair = new WebSocketPair();
-    this.#hooks.acceptWebSocket(pair[1], [
-      FETCH_UPGRADE_EYEBALL_TAG,
-      `${FETCH_UPGRADE_EYEBALL_TAG}:${upgradeId}`,
-    ]);
-    pair[1].serializeAttachment({
-      fetchUpgradeEyeball: { upgradeId },
-    } satisfies FetchUpgradeEyeball);
-    return new Response(null, { status: 101, webSocket: pair[0] });
-  }
-
-  /** PARTIAL FETCH: accept the relay's dedicated upgrade leg (see FETCH_UPGRADE_SOCKET_HEADER),
-   *  gated on a pending dial — an unknown upgradeId 409s. */
-  acceptFetchUpgradeLeg(request: Request): Response | undefined {
-    const upgradeId = request.headers.get(FETCH_UPGRADE_SOCKET_HEADER);
-    if (upgradeId === null) return undefined;
-    this.#sweepPendingFetchUpgrades();
-    if (!this.#pendingFetchUpgrades.has(upgradeId))
-      return new Response(`unknown fetch upgrade ${upgradeId} (dial first)\n`, { status: 409 });
-    const pair = new WebSocketPair();
-    this.#hooks.acceptWebSocket(pair[1], [
-      FETCH_UPGRADE_LEG_TAG,
-      `${FETCH_UPGRADE_LEG_TAG}:${upgradeId}`,
-    ]);
-    pair[1].serializeAttachment({ fetchUpgradeLeg: { upgradeId } } satisfies FetchUpgradeLeg);
-    return new Response(null, { status: 101, webSocket: pair[0] });
-  }
-
-  /** Route one incoming WebSocket message (wire this to webSocketMessage). TRUE = handled: a
-   *  fetch-upgrade frame forwarded RAW to its peer socket (eyeball ⇄ leg, by upgradeId tag). FALSE =
-   *  not this subsystem's socket. The pager itself carries no routable inbound payloads. */
-  message(ws: WebSocket, data: string | ArrayBuffer): boolean {
-    const peer = this.#fetchUpgradePeer(ws);
-    if (peer === undefined) return false;
-    if (peer === null) return true; // peer already gone — drop the frame; close handles teardown
-    try {
-      peer.send(data);
-    } catch {
-      /* peer closing — its close event tears the pair down */
-    }
-    return true;
-  }
-
-  /** The OTHER side of a fetch-upgrade socket, or undefined (not one) / null (peer gone). */
-  #fetchUpgradePeer(ws: WebSocket): WebSocket | null | undefined {
-    const att = this.#rawAttachment(ws) as
-      | (Partial<FetchUpgradeEyeball> & Partial<FetchUpgradeLeg>)
-      | undefined;
-    if (att?.fetchUpgradeEyeball)
-      return (
-        this.#hooks.getWebSockets(
-          `${FETCH_UPGRADE_LEG_TAG}:${att.fetchUpgradeEyeball.upgradeId}`,
-        )[0] ?? null
-      );
-    if (att?.fetchUpgradeLeg)
-      return (
-        this.#hooks.getWebSockets(
-          `${FETCH_UPGRADE_EYEBALL_TAG}:${att.fetchUpgradeLeg.upgradeId}`,
-        )[0] ?? null
-      );
-    return undefined;
-  }
-
   closed(ws: WebSocket, code = 1000, reason = ""): HibernatableRpcStubRecord | undefined {
-    // A fetch-upgrade socket closed (either side) → close its peer with the clamped code; each
-    // upgrade dies with its own socket pair, no sweeps needed (the relay dying closes its legs,
-    // which closes the eyeballs here — automatically, per socket).
-    const peer = this.#fetchUpgradePeer(ws);
-    if (peer !== undefined) {
-      try {
-        peer?.close(clampCloseCode(code), reason.slice(0, 123));
-      } catch {
-        /* already closing */
-      }
-      return undefined;
-    }
+    if (this.#liveFetch.handleWebSocketClose(ws, code, reason)) return undefined;
     const record = this.#attachment(ws);
     if (record) this.#forget(record.stubKey);
     return record;
+  }
+
+  /** PARTIAL FETCH: the live-capability upgrade-leg door (core/fetch-capabilities.ts). */
+  acceptFetchUpgradeLeg(request: Request): Response | null {
+    return this.#liveFetch.acceptFetchUpgradeLeg(request);
+  }
+
+  /** Route one incoming WebSocket message. TRUE = a live-capability upgrade frame (forwarded by
+   *  the subsystem); FALSE = not ours (the pager carries no routable inbound payloads). */
+  message(ws: WebSocket, data: string | ArrayBuffer): boolean {
+    return this.#liveFetch.handleWebSocketMessage(ws, data);
   }
 
   /** Observability: `dormant` ⇒ nothing paged in (the DO can hibernate; stubs stay attached). */
@@ -424,17 +305,6 @@ export class HibernatableRpcStubManager {
   }
 }
 
-/** The provider-side socket a ws-open dials — capnweb's TunneledWebSocket satisfies it. */
-export type ProviderSocket = {
-  accept?(): void;
-  send(data: string | ArrayBuffer): void;
-  close(code?: number, reason?: string): void;
-  addEventListener(
-    type: string,
-    cb: (ev: { data?: unknown; code?: number; reason?: string }) => void,
-  ): void;
-};
-
 /** Edge side: open the stub pager WebSocket to a stream DO (via its stub's `fetch`), answering
  *  every `{type: "page"}` by re-minting the Workers-RPC stub through `onPage`. Nothing else rides
  *  it — the pager is a pager (fetch-upgrade traffic has its own socket: openFetchUpgradeLeg). */
@@ -467,21 +337,5 @@ export async function openStubPagerWebSocket(
       /* not a page — ignore */
     }
   });
-  return response.webSocket;
-}
-
-/** Edge side: open ONE dedicated fetch-upgrade leg into the DO for `upgradeId` (called from
- *  RetainedCallbackInvoker.openFetchUpgrade, mid-dial — the DO is awaiting that RPC and serves this
- *  upgrade concurrently). Frames ride it RAW; its close closes the peer eyeball socket. */
-export async function openFetchUpgradeLeg(
-  host: { fetch(url: string, init?: RequestInit): Promise<Response> },
-  upgradeId: string,
-): Promise<WebSocket> {
-  const response = await host.fetch("https://fetch-upgrade.internal/", {
-    headers: { Upgrade: "websocket", [FETCH_UPGRADE_SOCKET_HEADER]: upgradeId },
-  });
-  if (!response.webSocket)
-    throw new Error(`fetch-upgrade leg returned ${response.status} without a WebSocket`);
-  response.webSocket.accept();
   return response.webSocket;
 }

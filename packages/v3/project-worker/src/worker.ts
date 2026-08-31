@@ -7,6 +7,7 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { newWorkersRpcResponse } from "capnweb";
 import { StreamDurableObject } from "./stream-durable-object.ts";
 import { registerPipelinedRpcBrand } from "./core/dispatch.ts";
+import { CAPABILITY_FETCH_HEADER } from "./core/fetch-capabilities.ts";
 import { canonicalName } from "./core/durable-object-names.ts";
 import { ProjectSession } from "./core/itx-surface.ts";
 import { DEMO_PAGE_HTML } from "./generated/demo-page.ts";
@@ -79,7 +80,7 @@ export default {
     if (url.pathname === "/cap") {
       const headers = new Headers(request.headers);
       const cap = url.searchParams.get("cap");
-      if (cap) headers.set("x-itx-cap", cap);
+      if (cap) headers.set(CAPABILITY_FETCH_HEADER, cap);
       return host(env, url).fetch(new Request(request, { headers }));
     }
 

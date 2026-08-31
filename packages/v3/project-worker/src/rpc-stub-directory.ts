@@ -78,8 +78,9 @@ export class RpcStubDirectory {
   }
 
   /** PARTIAL FETCH (compose first in the DO's fetch): the stub pager upgrade, gated on a pending
-   *  attach record. `undefined` = not this door's request. */
-  fetch(request: Request): Response | undefined {
+   *  attach record. `null` = not this door's request (the partial-fetch convention —
+   *  core/fetch-capabilities.ts). */
+  fetch(request: Request): Response | null {
     const transportId = request.headers.get(STUB_PAGER_WEBSOCKET_HEADER);
     // Not a pager upgrade → maybe the relay's dedicated fetch-upgrade leg (gated on a pending dial).
     if (transportId === null) return this.#stubs.acceptFetchUpgradeLeg(request);
