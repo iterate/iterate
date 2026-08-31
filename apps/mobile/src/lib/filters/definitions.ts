@@ -7,18 +7,26 @@
 // test harness): the generated image imports below are megabytes that must
 // not ride into the native Hermes bundle. The native picker reads picker.ts.
 //
-// Backdrops and flashcard pictures are AI-generated images (the
+// Backdrops and flashcard pictures are AI-generated or stock images (the
 // scripts/generate-*.mjs scripts, committed as data URIs); face art is
 // emoji. The "real eyes and lips" effect samples the live video through
-// feathered elliptical cutouts at the tracked landmark positions — drawn in
-// place (a mask following your face), or remapped onto a character (the
-// buried potato), or pinned to a screen region (the flashcards keep your
-// face in the top half).
+// cutouts whose shape IS your tracked feature's landmark ring (feathered,
+// user-adjustable looseness) — drawn in place (a mask following your face),
+// remapped onto a character (the buried potato), or pinned to a screen
+// region (the flashcards keep your face in the top half).
 
 import { FILTER_BACKDROPS } from "./backdrops.generated.ts";
-import { FLASHCARD_IMAGES } from "./flashcards.generated.ts";
+import { FLASHCARD_IMAGES_CARTOON } from "./flashcards-cartoon.generated.ts";
+import { FLASHCARD_IMAGES_ENCYCLOPAEDIA } from "./flashcards-encyclopaedia.generated.ts";
+import { FLASHCARD_IMAGES_PHOTO } from "./flashcards-photo.generated.ts";
 import { FILTER_PICKER } from "./picker.ts";
-import type { Ellipse, FaceGeometry } from "./face-geometry.ts";
+import type { FaceFeature, FaceGeometry } from "./face-geometry.ts";
+
+/** How loose the cutout masks are around the tracked features, per feature
+ * kind — 1 is the default; the pipeline lets the user drag these. */
+export type MaskStretch = { eyes: { x: number; y: number }; lips: { x: number; y: number } };
+
+export type FeatureHit = { kind: keyof MaskStretch; cx: number; cy: number; radius: number };
 
 export type FilterFrameArgs = {
   ctx: CanvasRenderingContext2D;
@@ -32,6 +40,13 @@ export type FilterFrameArgs = {
   /** Incremented every background tap; filters use it modulo their backdrop
    * count (the flashcards filter uses it as the card index). */
   backgroundIndex: number;
+  /** Cycled by the pipeline's mode button for filters that declare
+   * FILTER_MODES (the flashcards' picture style). */
+  modeIndex: number;
+  maskStretch: MaskStretch;
+  /** Filled DURING draw by the cutout helper: where each feature landed on
+   * screen this frame — the pipeline hit-tests swipes against it. */
+  featureHits: FeatureHit[];
   timeMs: number;
 };
 
@@ -56,25 +71,22 @@ export const FILTER_DRAWERS: Record<string, (args: FilterFrameArgs) => void> = {
     const lips = at(0, 0.14);
     // face.leftEye is the canvas-left eye (geometry normalizes the mirror
     // swap), so your left-on-screen eye lands on the potato's left.
-    drawFeatheredCutout(args, args.face.leftEye, {
+    drawFeatureCutout(args, "eyes", args.face.leftEye, {
       cx: leftEye.x,
       cy: leftEye.y,
-      rx: size * 0.12,
-      ry: size * 0.08,
+      width: size * 0.28,
       angle: tilt,
     });
-    drawFeatheredCutout(args, args.face.rightEye, {
+    drawFeatureCutout(args, "eyes", args.face.rightEye, {
       cx: rightEye.x,
       cy: rightEye.y,
-      rx: size * 0.12,
-      ry: size * 0.08,
+      width: size * 0.28,
       angle: tilt,
     });
-    drawFeatheredCutout(args, args.face.lips, {
+    drawFeatureCutout(args, "lips", args.face.lips, {
       cx: lips.x,
       cy: lips.y,
-      rx: size * 0.17,
-      ry: size * 0.1,
+      width: size * 0.38,
       angle: tilt,
     });
   },
@@ -100,6 +112,7 @@ export const FILTER_DRAWERS: Record<string, (args: FilterFrameArgs) => void> = {
   },
   flashcards: (args) => {
     const card = FLASHCARDS[args.backgroundIndex % FLASHCARDS.length];
+    const style = FLASHCARD_STYLES[args.modeIndex % FLASHCARD_STYLES.length];
     const { ctx, width, height, face } = args;
     ctx.fillStyle = card.background;
     ctx.fillRect(0, 0, width, height);
@@ -113,7 +126,10 @@ export const FILTER_DRAWERS: Record<string, (args: FilterFrameArgs) => void> = {
       ctx.strokeStyle = "#ffffff";
       ctx.stroke();
     } else {
-      const image = cachedImage(`flashcard-${card.word}`, FLASHCARD_IMAGES[card.word]);
+      const image = cachedImage(
+        `flashcard-${style.id}-${card.word}`,
+        style.images[card.word] || FLASHCARD_IMAGES_CARTOON[card.word],
+      );
       if (image) {
         const cardSize = Math.min(width * 0.72, height * 0.52);
         const x = (width - cardSize) / 2;
@@ -126,33 +142,44 @@ export const FILTER_DRAWERS: Record<string, (args: FilterFrameArgs) => void> = {
         ctx.restore();
       }
     }
-    // The grown-up stays pinned in the top half: eyes and lips remapped to a
-    // fixed spot up there (patches keep the head's roll — dest.angle follows
-    // it — but the positions don't wander over the card).
+    // The grown-up stays pinned in the top half: eyes and lips remapped to
+    // fixed spots up there (patches keep the head's roll, positions don't
+    // wander over the card).
     const eyeY = height * 0.15;
     const angle = face.box.angle;
-    drawFeatheredCutout(args, face.leftEye, {
+    drawFeatureCutout(args, "eyes", face.leftEye, {
       cx: width / 2 - width * 0.11,
       cy: eyeY,
-      rx: width * 0.08,
-      ry: width * 0.055,
+      width: width * 0.16,
       angle,
     });
-    drawFeatheredCutout(args, face.rightEye, {
+    drawFeatureCutout(args, "eyes", face.rightEye, {
       cx: width / 2 + width * 0.11,
       cy: eyeY,
-      rx: width * 0.08,
-      ry: width * 0.055,
+      width: width * 0.16,
       angle,
     });
-    drawFeatheredCutout(args, face.lips, {
+    drawFeatureCutout(args, "lips", face.lips, {
       cx: width / 2,
       cy: height * 0.25,
-      rx: width * 0.11,
-      ry: width * 0.065,
+      width: width * 0.22,
       angle,
     });
   },
+};
+
+// Flashcard picture styles the mode button cycles through. Styles with no
+// images yet (photo, until an Unsplash key exists) stay hidden.
+const FLASHCARD_STYLES = [
+  { id: "cartoon", label: "🖍️ Cartoon", images: FLASHCARD_IMAGES_CARTOON },
+  { id: "encyclopaedia", label: "📷 Encyclopaedia", images: FLASHCARD_IMAGES_ENCYCLOPAEDIA },
+  { id: "photo", label: "🌍 Real photos", images: FLASHCARD_IMAGES_PHOTO },
+].filter((style) => Object.keys(style.images).length > 0);
+
+/** Mode labels per filter id; the pipeline shows a cycle button when a
+ * filter has more than one. */
+export const FILTER_MODES: Record<string, string[]> = {
+  flashcards: FLASHCARD_STYLES.map((style) => style.label),
 };
 
 for (const filter of FILTER_PICKER) {
@@ -160,8 +187,8 @@ for (const filter of FILTER_PICKER) {
 }
 
 // Pictures an 18-month-old might know the word for. Tap anywhere to advance.
-// Words must exist in FLASHCARD_IMAGES (scripts/generate-flashcard-images
-// .mjs); color cards draw a swatch instead.
+// Words must exist in the generated image sets (scripts/generate-flashcard-
+// images.mjs); color cards draw a swatch instead.
 const FLASHCARDS: { word: string; background: string; swatch?: string }[] = [
   { word: "dog", background: "#2874a6" },
   { word: "cat", background: "#af601a" },
@@ -264,53 +291,138 @@ function drawEmoji(
 
 /** The mask arrangement: your eyes and lips drawn exactly where they are. */
 function drawFaceCutoutsInPlace(args: FilterFrameArgs) {
-  drawFeatheredCutout(args, args.face.leftEye, args.face.leftEye);
-  drawFeatheredCutout(args, args.face.rightEye, args.face.rightEye);
-  drawFeatheredCutout(args, args.face.lips, args.face.lips);
+  drawFeatureCutout(args, "eyes", args.face.leftEye, null);
+  drawFeatureCutout(args, "eyes", args.face.rightEye, null);
+  drawFeatureCutout(args, "lips", args.face.lips, null);
 }
 
-// Scratch canvas reused across frames for the feathered cutouts.
-let scratch: HTMLCanvasElement | null = null;
+// Baseline mask looseness before the user's adjustable stretch: enough to
+// include lashes and the lip line, no more.
+const BASE_EXPAND: Record<keyof MaskStretch, number> = { eyes: 1.45, lips: 1.25 };
 
-/** Sample the live video under `source` (a tracked feature), feather its
- * edge, and paint it into `dest` — same place for masks, somewhere else
- * entirely for character remapping (eyes on a potato). */
-function drawFeatheredCutout(args: FilterFrameArgs, source: Ellipse, dest: Ellipse) {
+// Scratch canvases reused across frames: the sampled patch and its
+// polygon mask (drawn small, upscaled with smoothing = cheap feather).
+let scratch: HTMLCanvasElement | null = null;
+let maskScratch: HTMLCanvasElement | null = null;
+
+/** Sample the live video under a tracked feature — the mask's shape is the
+ * feature's own landmark ring, inflated by the per-kind base looseness and
+ * the user's adjustable stretch — and paint it in place (`dest: null`) or
+ * remapped (uniformly scaled to `dest.width`, so nothing squashes) onto a
+ * character or screen region. Records where it landed in args.featureHits
+ * so the pipeline can hit-test the user's mask-adjust swipes. */
+function drawFeatureCutout(
+  args: FilterFrameArgs,
+  kind: keyof MaskStretch,
+  feature: FaceFeature,
+  dest: { cx: number; cy: number; width: number; angle: number } | null,
+) {
   const { ctx, frame } = args;
-  const pad = 1.25;
-  const sw = Math.ceil(source.rx * 2 * pad);
-  const sh = Math.ceil(source.ry * 2 * pad);
-  if (sw <= 0 || sh <= 0) return;
+  const stretch = args.maskStretch[kind];
+  const expandX = BASE_EXPAND[kind] * stretch.x;
+  const expandY = BASE_EXPAND[kind] * stretch.y;
+
+  // Inflate the ring around its centroid in face-local (roll-aligned) axes.
+  const cos = Math.cos(feature.angle);
+  const sin = Math.sin(feature.angle);
+  const polygon = feature.ring.map((p) => {
+    const dx = p.x - feature.center.x;
+    const dy = p.y - feature.center.y;
+    const localX = (dx * cos + dy * sin) * expandX;
+    const localY = (-dx * sin + dy * cos) * expandY;
+    return {
+      x: feature.center.x + localX * cos - localY * sin,
+      y: feature.center.y + localX * sin + localY * cos,
+    };
+  });
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const p of polygon) {
+    minX = Math.min(minX, p.x);
+    minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x);
+    maxY = Math.max(maxY, p.y);
+  }
+  // Margin so the feather has room to fade inside the sampled patch.
+  const margin = Math.max(6, (maxX - minX) * 0.15);
+  const sx = Math.floor(minX - margin);
+  const sy = Math.floor(minY - margin);
+  const sw = Math.ceil(maxX - minX + margin * 2);
+  const sh = Math.ceil(maxY - minY + margin * 2);
+  if (sw <= 0 || sh <= 0 || !Number.isFinite(sw + sh)) return;
+
   scratch = scratch || document.createElement("canvas");
   if (scratch.width < sw) scratch.width = sw;
   if (scratch.height < sh) scratch.height = sh;
   const sctx = scratch.getContext("2d")!;
   sctx.save();
   sctx.clearRect(0, 0, sw, sh);
-  // Pull the (already canvas-mapped) frame region under the source ellipse.
-  // The ellipse may be rotated; sampling the axis-aligned bounding region
-  // keeps this cheap and the feather hides the difference.
-  sctx.drawImage(frame, source.cx - sw / 2, source.cy - sh / 2, sw, sh, 0, 0, sw, sh);
-  // Feather: keep pixels inside an elliptical radial falloff, erase the
-  // rest. destination-in zeroes everything the mask fill leaves unpainted.
+  sctx.drawImage(frame, sx, sy, sw, sh, 0, 0, sw, sh);
+
+  // Feathered mask: fill the polygon into a small canvas, then upscale it
+  // with smoothing — the interpolation is the feather (no ctx.filter, which
+  // older WKWebViews lack).
+  const maskScale = 6;
+  const mw = Math.max(2, Math.round(sw / maskScale));
+  const mh = Math.max(2, Math.round(sh / maskScale));
+  maskScratch = maskScratch || document.createElement("canvas");
+  if (maskScratch.width < mw) maskScratch.width = mw;
+  if (maskScratch.height < mh) maskScratch.height = mh;
+  const mctx = maskScratch.getContext("2d")!;
+  // Clear the WHOLE reused canvas: upscaling samples bilinearly at the
+  // region's edges, and stale fill just outside the region bleeds in as a
+  // faint rectangle around the cutout (harness-caught).
+  mctx.clearRect(0, 0, maskScratch.width, maskScratch.height);
+  mctx.beginPath();
+  polygon.forEach((p, i) => {
+    const x = ((p.x - sx) / sw) * mw;
+    const y = ((p.y - sy) / sh) * mh;
+    if (i === 0) mctx.moveTo(x, y);
+    else mctx.lineTo(x, y);
+  });
+  mctx.closePath();
+  mctx.fillStyle = "#000";
+  mctx.fill();
   sctx.globalCompositeOperation = "destination-in";
-  sctx.translate(sw / 2, sh / 2);
-  sctx.scale(sw / 2, sh / 2);
-  const mask = sctx.createRadialGradient(0, 0, 0, 0, 0, 1);
-  mask.addColorStop(0, "rgba(0,0,0,1)");
-  mask.addColorStop(0.72, "rgba(0,0,0,1)");
-  mask.addColorStop(1, "rgba(0,0,0,0)");
-  sctx.fillStyle = mask;
-  sctx.fillRect(-1, -1, 2, 2);
+  sctx.imageSmoothingEnabled = true;
+  sctx.drawImage(maskScratch, 0, 0, mw, mh, 0, 0, sw, sh);
   sctx.restore();
-  const dw = dest.rx * 2 * pad;
-  const dh = dest.ry * 2 * pad;
+
+  if (dest === null) {
+    ctx.drawImage(scratch, 0, 0, sw, sh, sx, sy, sw, sh);
+    args.featureHits.push({
+      kind,
+      cx: sx + sw / 2,
+      cy: sy + sh / 2,
+      radius: Math.max(sw, sh) / 2,
+    });
+    return;
+  }
+  // Uniform scale: the patch keeps YOUR feature's aspect ratio.
+  const scale = dest.width / sw;
   ctx.save();
   ctx.translate(dest.cx, dest.cy);
   // The sampled patch is already in canvas orientation (it carries the
-  // face's roll), so only the source→dest orientation difference is applied
-  // — zero for in-place masks.
-  ctx.rotate(dest.angle - source.angle);
-  ctx.drawImage(scratch, 0, 0, sw, sh, -dw / 2, -dh / 2, dw, dh);
+  // face's roll), so only the source→dest orientation difference applies.
+  ctx.rotate(dest.angle - feature.angle);
+  ctx.drawImage(
+    scratch,
+    0,
+    0,
+    sw,
+    sh,
+    (-sw * scale) / 2,
+    (-sh * scale) / 2,
+    sw * scale,
+    sh * scale,
+  );
   ctx.restore();
+  args.featureHits.push({
+    kind,
+    cx: dest.cx,
+    cy: dest.cy,
+    radius: (Math.max(sw, sh) * scale) / 2,
+  });
 }

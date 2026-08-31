@@ -11,7 +11,18 @@
 
 export type NormalizedLandmark = { x: number; y: number };
 
-export type Ellipse = { cx: number; cy: number; rx: number; ry: number; angle: number };
+/** One face feature (an eye, the lips) as the tight polygon of its landmark
+ * ring in canvas pixels — cutout masks take their shape from this, so they
+ * follow YOUR features instead of a canned ellipse. */
+export type FaceFeature = {
+  ring: { x: number; y: number }[];
+  center: { x: number; y: number };
+  /** Face roll angle in radians (shared by all features). */
+  angle: number;
+  /** Tight half-extents of the ring along/across the roll axis. */
+  rx: number;
+  ry: number;
+};
 
 export type FaceGeometry = {
   /** Face-oval bounding box center/size, with roll angle in radians. */
@@ -19,9 +30,9 @@ export type FaceGeometry = {
   /** Always the eye that appears on the canvas LEFT — the front-camera
    * mirror swaps the anatomical rings, so filters that remap features onto
    * a character (eyes on the potato) must not trust anatomical naming. */
-  leftEye: Ellipse;
-  rightEye: Ellipse;
-  lips: Ellipse;
+  leftEye: FaceFeature;
+  rightEye: FaceFeature;
+  lips: FaceFeature;
   /** False when this is the no-tracker/no-face fallback placement. */
   tracked: boolean;
 };
@@ -86,16 +97,14 @@ export function faceGeometryFromLandmarks(
   if (angle > Math.PI / 2) angle -= Math.PI;
   else if (angle < -Math.PI / 2) angle += Math.PI;
 
-  // Expansion factors: the eye rings hug the eyelids; the cutouts include
-  // lashes and a little skin, but stay tight around the feature.
-  const eyeA = ellipseAround(ring(LEFT_EYE), angle, 1.8, 2.4);
-  const eyeB = ellipseAround(ring(RIGHT_EYE), angle, 1.8, 2.4);
-  const [leftEye, rightEye] = eyeA.cx <= eyeB.cx ? [eyeA, eyeB] : [eyeB, eyeA];
+  const eyeA = featureFrom(ring(LEFT_EYE), angle);
+  const eyeB = featureFrom(ring(RIGHT_EYE), angle);
+  const [leftEye, rightEye] = eyeA.center.x <= eyeB.center.x ? [eyeA, eyeB] : [eyeB, eyeA];
   return {
     box: { ...box, angle },
     leftEye,
     rightEye,
-    lips: ellipseAround(ring(LIPS_OUTER), angle, 1.15, 1.5),
+    lips: featureFrom(ring(LIPS_OUTER), angle),
     tracked: true,
   };
 }
@@ -109,18 +118,12 @@ export function fallbackFaceGeometry(canvasWidth: number, canvasHeight: number):
   const height = width * 1.35;
   const eyeY = cy - height * 0.08;
   const eyeDx = width * 0.21;
-  const eye = (centerX: number): Ellipse => ({
-    cx: centerX,
-    cy: eyeY,
-    rx: width * 0.16,
-    ry: width * 0.1,
-    angle: 0,
-  });
+  const eye = (centerX: number) => syntheticFeature(centerX, eyeY, width * 0.13, width * 0.08);
   return {
     box: { cx, cy, width, height, angle: 0 },
     leftEye: eye(cx - eyeDx),
     rightEye: eye(cx + eyeDx),
-    lips: { cx, cy: cy + height * 0.26, rx: width * 0.2, ry: width * 0.11, angle: 0 },
+    lips: syntheticFeature(cx, cy + height * 0.26, width * 0.17, width * 0.09),
     tracked: false,
   };
 }
@@ -149,14 +152,10 @@ function ringCenter(points: { x: number; y: number }[]) {
   return { x: sum.x / points.length, y: sum.y / points.length };
 }
 
-/** Ellipse over a landmark ring, measured along/across the face's roll axis
- * and inflated so the cutout comfortably contains the feature. */
-function ellipseAround(
-  points: { x: number; y: number }[],
-  angle: number,
-  expandX: number,
-  expandY: number,
-): Ellipse {
+/** A feature from its landmark ring: centroid + tight extents measured
+ * along/across the face's roll axis. No inflation here — mask looseness is
+ * a drawing-time concern (definitions.ts), adjustable by the user. */
+function featureFrom(points: { x: number; y: number }[], angle: number): FaceFeature {
   const center = ringCenter(points);
   const cos = Math.cos(-angle);
   const sin = Math.sin(-angle);
@@ -168,7 +167,16 @@ function ellipseAround(
     rx = Math.max(rx, Math.abs(dx * cos - dy * sin));
     ry = Math.max(ry, Math.abs(dx * sin + dy * cos));
   }
-  return { cx: center.x, cy: center.y, rx: rx * expandX, ry: ry * expandY, angle };
+  return { ring: points, center, angle, rx, ry };
+}
+
+/** An elliptical stand-in ring for the fallback (untracked) face. */
+function syntheticFeature(cx: number, cy: number, rx: number, ry: number): FaceFeature {
+  const ring = Array.from({ length: 16 }, (_, i) => {
+    const t = (i / 16) * Math.PI * 2;
+    return { x: cx + Math.cos(t) * rx, y: cy + Math.sin(t) * ry };
+  });
+  return { ring, center: { x: cx, y: cy }, angle: 0, rx, ry };
 }
 
 // MediaPipe Face Mesh canonical index rings (see attribution at top).

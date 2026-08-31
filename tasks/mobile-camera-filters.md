@@ -157,3 +157,24 @@ loading from failed.
   `userspace-facet-source-version.e2e.test.ts` is a `failing()`-pinned bug
   test whose bug didn't reproduce that run — not caused by this branch; the
   next push re-runs it.
+
+## Feedback round 4 (styles + dynamic masks)
+
+- Flashcard picture **styles**, cycled by a new mode button (bottom-left of
+  the filter view): 🖍️ Cartoon and 📷 Encyclopaedia (photo-real gpt-image-1,
+  quality medium, `generate-flashcard-images.mjs encyclopaedia`, ~1.3MB).
+  🌍 Real photos (Unsplash) is wired but hidden: `flashcards-photo
+  .generated.ts` is empty until `UNSPLASH_ACCESS_KEY` exists in Doppler —
+  add a free demo key from unsplash.com/developers and run
+  `generate-flashcard-images.mjs photo`.
+- Cutout masks are now **your feature's landmark-ring polygon** (feathered
+  by drawing the polygon small and upscaling — no ctx.filter), and remapped
+  patches scale **uniformly**, so eyes keep their real aspect instead of
+  squashing into canned ellipses.
+- **Swipe on a feature to tune its mask**: drag starting on an eye or the
+  lips — right/left widens/narrows, up/down heightens/flattens (eyes adjust
+  together; lips separate). A pill shows the multipliers; values persist in
+  the WebView's localStorage. Plain taps still cycle background/card.
+- The generic mode/mask machinery (FILTER_MODES, featureHits hit-testing,
+  maskStretch) is part of the vibe-code filter interface, not
+  flashcards-specific.

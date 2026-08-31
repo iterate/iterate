@@ -41,8 +41,8 @@ test("fallback face is a centered untracked oval with parts inside the box", () 
   const face = fallbackFaceGeometry(1000, 2000);
   expect(face).toMatchObject({ tracked: false, box: { cx: 500 } });
   for (const part of [face.leftEye, face.rightEye, face.lips]) {
-    expect(Math.abs(part.cx - face.box.cx)).toBeLessThan(face.box.width / 2);
-    expect(Math.abs(part.cy - face.box.cy)).toBeLessThan(face.box.height / 2);
+    expect(Math.abs(part.center.x - face.box.cx)).toBeLessThan(face.box.width / 2);
+    expect(Math.abs(part.center.y - face.box.cy)).toBeLessThan(face.box.height / 2);
   }
 });
 
@@ -67,6 +67,6 @@ test("leftEye is the canvas-left eye even under the mirror", () => {
   const square = { videoWidth: 100, videoHeight: 100, canvasWidth: 100, canvasHeight: 100 };
   for (const mirrored of [false, true]) {
     const face = faceGeometryFromLandmarks(landmarks, coverTransform({ ...square, mirrored }));
-    expect(face.leftEye.cx).toBeLessThan(face.rightEye.cx);
+    expect(face.leftEye.center.x).toBeLessThan(face.rightEye.center.x);
   }
 });

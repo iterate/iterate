@@ -19,7 +19,13 @@ import {
   MEDIAPIPE_WASM_GZ,
   MEDIAPIPE_WASM_LOADER_JS_GZ,
 } from "../lib/filters/mediapipe-assets.generated.ts";
-import { FILTER_DRAWERS, type FilterFrameArgs } from "../lib/filters/definitions.ts";
+import {
+  FILTER_DRAWERS,
+  FILTER_MODES,
+  type FeatureHit,
+  type FilterFrameArgs,
+  type MaskStretch,
+} from "../lib/filters/definitions.ts";
 import { FILTERED_CLIP_MAX_SECONDS } from "../lib/filters/picker.ts";
 import {
   coverTransform,
@@ -47,10 +53,28 @@ type Props = {
   onCaptureError: (message: string) => Promise<void>;
 };
 
-type State = { status: "starting" | "live" | "error"; message: string | null };
+type State = {
+  status: "starting" | "live" | "error";
+  message: string | null;
+  /** Transient readout while the user drags a feature's mask looseness. */
+  adjustLabel: string | null;
+};
+
+const MASK_STRETCH_KEY = "iterate.filterMaskStretch.v1";
+
+function loadMaskStretch(): MaskStretch {
+  // localStorage can be unavailable/empty on file:// pages — defaults win.
+  try {
+    const raw = localStorage.getItem(MASK_STRETCH_KEY);
+    if (raw) return JSON.parse(raw) as MaskStretch;
+  } catch {
+    // fall through to defaults
+  }
+  return { eyes: { x: 1, y: 1 }, lips: { x: 1, y: 1 } };
+}
 
 export default class FilterCamera extends Component<Props, State> {
-  state: State = { status: "starting", message: null };
+  state: State = { status: "starting", message: null, adjustLabel: null };
 
   #canvas: HTMLCanvasElement | null = null;
   #frameCanvas = document.createElement("canvas");
@@ -61,6 +85,19 @@ export default class FilterCamera extends Component<Props, State> {
   #raf = 0;
   #disposed = false;
   #backgroundIndex = 0;
+  #modeIndex = 0;
+  #maskStretch = loadMaskStretch();
+  #featureHits: FeatureHit[] = [];
+  // One in-flight touch: where it started, which feature (if any) it grabbed
+  // and that feature's stretch at grab time, and whether it became a drag.
+  #pointer: {
+    startX: number;
+    startY: number;
+    hit: FeatureHit | null;
+    startStretch: { x: number; y: number };
+    dragging: boolean;
+  } | null = null;
+  #adjustLabelTimer: ReturnType<typeof setTimeout> | null = null;
   #handledCommandSeq = 0;
   #recorder: MediaRecorder | null = null;
   #recorderChunks: Blob[] = [];
@@ -216,6 +253,7 @@ export default class FilterCamera extends Component<Props, State> {
 
     const draw = filterDrawerById(this.props.filterId);
     const ctx = canvas.getContext("2d")!;
+    const featureHits: FeatureHit[] = [];
     draw({
       ctx,
       frame: this.#frameCanvas,
@@ -223,8 +261,79 @@ export default class FilterCamera extends Component<Props, State> {
       height,
       face,
       backgroundIndex: this.#backgroundIndex,
+      modeIndex: this.#modeIndex,
+      maskStretch: this.#maskStretch,
+      featureHits,
       timeMs: performance.now(),
     });
+    this.#featureHits = featureHits;
+  };
+
+  /** Pointer position in canvas device pixels (hits are recorded there). */
+  #canvasPoint(event: { clientX: number; clientY: number }) {
+    const canvas = this.#canvas!;
+    const scale = canvas.width / (canvas.clientWidth || 1);
+    return { x: event.clientX * scale, y: event.clientY * scale };
+  }
+
+  #onPointerDown = (event: React.PointerEvent) => {
+    const point = this.#canvasPoint(event);
+    let hit: FeatureHit | null = null;
+    for (const candidate of this.#featureHits) {
+      const distance = Math.hypot(candidate.cx - point.x, candidate.cy - point.y);
+      if (distance <= candidate.radius * 1.8) {
+        if (!hit || distance < Math.hypot(hit.cx - point.x, hit.cy - point.y)) hit = candidate;
+      }
+    }
+    this.#pointer = {
+      startX: event.clientX,
+      startY: event.clientY,
+      hit,
+      startStretch: hit ? { ...this.#maskStretch[hit.kind] } : { x: 1, y: 1 },
+      dragging: false,
+    };
+  };
+
+  #onPointerMove = (event: React.PointerEvent) => {
+    const pointer = this.#pointer;
+    if (!pointer) return;
+    const dx = event.clientX - pointer.startX;
+    const dy = event.clientY - pointer.startY;
+    if (!pointer.dragging && Math.hypot(dx, dy) < 12) return;
+    pointer.dragging = true;
+    if (!pointer.hit) return;
+    // Right/left widens/narrows the mask; up/down heightens/flattens it.
+    // This reshapes the CUTOUT around your feature — it never rescales the
+    // sampled image.
+    const clamp = (value: number) => Math.min(3, Math.max(0.35, value));
+    const stretch = {
+      x: clamp(pointer.startStretch.x * (1 + dx / 240)),
+      y: clamp(pointer.startStretch.y * (1 - dy / 240)),
+    };
+    this.#maskStretch = { ...this.#maskStretch, [pointer.hit.kind]: stretch };
+    this.setState({
+      adjustLabel: `${pointer.hit.kind} mask ${stretch.x.toFixed(2)}× wide / ${stretch.y.toFixed(2)}× tall`,
+    });
+  };
+
+  #onPointerUp = () => {
+    const pointer = this.#pointer;
+    this.#pointer = null;
+    if (!pointer) return;
+    if (!pointer.dragging) {
+      // A plain tap: the filters' interactivity — next background/card.
+      this.#backgroundIndex += 1;
+      return;
+    }
+    if (pointer.hit) {
+      try {
+        localStorage.setItem(MASK_STRETCH_KEY, JSON.stringify(this.#maskStretch));
+      } catch {
+        // per-session adjustment still applies
+      }
+      if (this.#adjustLabelTimer) clearTimeout(this.#adjustLabelTimer);
+      this.#adjustLabelTimer = setTimeout(() => this.setState({ adjustLabel: null }), 900);
+    }
   };
 
   async #run(command: FilterCameraCommand) {
@@ -300,12 +409,32 @@ export default class FilterCamera extends Component<Props, State> {
           ref={(canvas) => {
             this.#canvas = canvas;
           }}
-          // Tapping the scene is the filters' interactivity: cycles the
-          // background (advances the card, for flashcards).
-          onClick={() => {
-            this.#backgroundIndex += 1;
-          }}
+          // Tap = next background/card; drag starting on an eye/lip cutout
+          // = adjust that mask's looseness (see #onPointerMove).
+          onPointerDown={this.#onPointerDown}
+          onPointerMove={this.#onPointerMove}
+          onPointerUp={this.#onPointerUp}
+          onPointerCancel={this.#onPointerUp}
         />
+        {(FILTER_MODES[this.props.filterId] || []).length > 1 ? (
+          <button
+            className="mode"
+            onClick={() => {
+              this.#modeIndex += 1;
+              this.forceUpdate();
+            }}
+            type="button"
+          >
+            {
+              FILTER_MODES[this.props.filterId]![
+                this.#modeIndex % FILTER_MODES[this.props.filterId]!.length
+              ]
+            }
+          </button>
+        ) : null}
+        {this.state.adjustLabel !== null ? (
+          <div className="pill">{this.state.adjustLabel}</div>
+        ) : null}
         {this.state.status === "starting" ? (
           <div className="pill">Warming up the camera…</div>
         ) : null}
@@ -368,4 +497,15 @@ const styles = `
     text-align: center;
   }
   .pill.error { background: rgba(180, 30, 30, 0.85); }
+  .mode {
+    position: fixed;
+    left: 12px;
+    bottom: calc(190px + env(safe-area-inset-bottom));
+    background: rgba(11, 11, 15, 0.7);
+    color: #fff;
+    font: 13px -apple-system, sans-serif;
+    padding: 8px 14px;
+    border: none;
+    border-radius: 999px;
+  }
 `;
