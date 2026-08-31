@@ -5,7 +5,7 @@
 // two-QR markdown section.
 //
 // Links deliberately go through the OS https interstitial
-// (`/m/preview-channel/<channel>`, apps/os/src/routes/m.preview-channel.$channel.ts)
+// (`/preview-channel/<channel>` on mobile.iterate.com — apps/mobile/website)
 // rather than `iterate://` directly: GitHub strips custom-scheme hrefs at
 // render time, so raw deep links were scannable but never tappable.
 import { execFileSync } from "node:child_process";
@@ -57,7 +57,7 @@ export const mobileWebsiteBaseUrl = mobileWebsiteEnvs.prd.baseUrl;
 
 /**
  * Push a channel's "expected native build" snapshot to prd OS, where the
- * /m/install interstitial and the app's staleness check read it (the worker
+ * /install interstitial and the app's staleness check read it (the worker
  * deliberately has no EXPO_TOKEN, so CI is its only source of EAS state).
  * Admin bearer: every mobile CI job already runs under
  * `doppler --project os --config prd`, which carries the secret. Failures
@@ -66,7 +66,7 @@ export const mobileWebsiteBaseUrl = mobileWebsiteEnvs.prd.baseUrl;
  * store exists to kill.
  */
 export async function pushChannelStatus(status: MobileChannelStatus) {
-  const response = await fetch(`${mobileWebsiteBaseUrl}/m/channel-status/${status.channel}`, {
+  const response = await fetch(`${mobileWebsiteBaseUrl}/channel-status/${status.channel}`, {
     method: "PUT",
     headers: { ...adminAuthHeader(), "content-type": "application/json" },
     body: JSON.stringify(status),
@@ -89,7 +89,7 @@ export async function pushChannelStatus(status: MobileChannelStatus) {
 
 /** Read a channel's snapshot back (public endpoint); null when absent. */
 export async function fetchChannelStatus(channel: string): Promise<MobileChannelStatus | null> {
-  const response = await fetch(`${mobileWebsiteBaseUrl}/m/channel-status/${channel}`);
+  const response = await fetch(`${mobileWebsiteBaseUrl}/channel-status/${channel}`);
   if (response.status === 404) return null;
   if (!response.ok) {
     throw new Error(`fetching channel status failed: ${response.status} ${await response.text()}`);
@@ -100,7 +100,7 @@ export async function fetchChannelStatus(channel: string): Promise<MobileChannel
 /** Remove a closed PR's snapshot so its install interstitial falls back to
  * the honest "no publish snapshot" page. Tolerates absence. */
 export async function deleteChannelStatus(channel: string) {
-  const response = await fetch(`${mobileWebsiteBaseUrl}/m/channel-status/${channel}`, {
+  const response = await fetch(`${mobileWebsiteBaseUrl}/channel-status/${channel}`, {
     method: "DELETE",
     headers: adminAuthHeader(),
   });
@@ -217,7 +217,7 @@ export type InstallBuild = {
  * per PR channel so installing one landed you on the PR's JS in a single
  * step (#2542) — a ~20-minute paid EAS build per PR, almost always for zero
  * native changes. Now every build is the plain `preview` profile and the
- * channel hop after an install is one tap on the /m/install interstitial's
+ * channel hop after an install is one tap on the /install interstitial's
  * "Open in app" link. JS-only PRs (runtime matches an existing build)
  * trigger nothing; a native-change PR triggers the one build main will
  * reuse after merge.
@@ -282,7 +282,7 @@ export const planPreview = (input: {
   publishedRuntime: string;
   /** Runtime of the newest FINISHED preview-profile build — what's installable today. */
   installedRuntime: string | undefined;
-  /** The channel-stable /m/install/<channel> interstitial — it resolves the
+  /** The channel-stable /install/<channel> interstitial — it resolves the
    * channel's expected build (possibly freshly triggered, hence
    * installReady) at scan time. */
   installUrl: string;

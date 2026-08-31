@@ -8,10 +8,14 @@ branch: mobile-website
 
 ## Status summary
 
-Spec committed first; implementation follows on this branch. Move the four
-`/m/*` routes + channel-status store out of apps/os into a tiny
-zero-framework worker at `apps/mobile/website/`, served at
-mobile.iterate.com, with os keeping 301s for already-printed QRs.
+Implemented and green (typecheck/lint/knip/format; website 19 tests,
+scripts 291, os 3052, mobile 245). Scope grew mid-flight at Misha's ask:
+mobile.iterate.com is also a **universal-link prefix** now — the worker
+serves apple-app-site-association (team 5N6A5Q26NT, dug out of the build's
+embedded.mobileprovision) for `/preview-channel/*`, bare paths are
+canonical, and app.json gains the applinks entitlement (fingerprint moves →
+this PR triggers the one build carrying it). Remaining: merge → first
+deploy → cutover runbook below → phone-verify the universal link.
 
 ## Why (Misha, condensed)
 
@@ -67,22 +71,47 @@ README/explainer copy.
 
 ## Checklist
 
-- [ ] envs.ts: `mobileWebsiteEnvs` (prd: worker `mobile-website-prd`,
+- [x] envs.ts: `mobileWebsiteEnvs` (prd: worker `mobile-website-prd`,
       hostname `mobile.iterate.com`, dopplerProject os)
-- [ ] `apps/mobile/website/`: package.json, tsconfig, wrangler.jsonc
+- [x] `apps/mobile/website/`: package.json, tsconfig, wrangler.jsonc
       (route + R2 binding + required secret), worker.ts (router),
       channel-status.ts (moved, bucket/secret injected), tests (moved +
       admin-auth against the plain secret), vitest config
-- [ ] scripts: deploy.ts + ensure-resources.ts (DNS record + R2 bucket,
+- [x] scripts: deploy.ts + ensure-resources.ts (DNS record + R2 bucket,
       create-only) via shared deployApp/resolveEnvContext
-- [ ] `.depot/workflows/deploy-mobile-website.yml` (deploy-tunnels
+- [x] `.depot/workflows/deploy-mobile-website.yml` (deploy-tunnels
       template, doppler os/prd)
-- [ ] os: delete the four routes + domains/mobile; add `/m/*` 301 catchall;
+- [x] os: delete the four routes + domains/mobile; add `/m/*` 301 catchall;
       remove EXPO-era comments pointing at os hosts
-- [ ] CI scripts + mobile app point at mobile.iterate.com
-- [ ] pnpm-workspace entry, knip.ts workspace entry, test.yml
+- [x] CI scripts + mobile app point at mobile.iterate.com
+- [x] pnpm-workspace entry, knip.ts workspace entry, test.yml
       TEST_TELEMETRY_EXPECTED_WORKSPACES gains @iterate-com/mobile-website
-- [ ] Docs: apps/mobile README, explainer footer/glossary hosts,
+- [x] Docs: apps/mobile README, explainer footer/glossary hosts,
       docs/architecture.md mention if it lists workers
-- [ ] Cutover runbook in PR body: deploy → ensure-resources → backfill PUT
+- [x] Cutover runbook in PR body: deploy → ensure-resources → backfill PUT
       → verify /m/install/preview on the new host → confirm os 301s
+
+## Universal links (added mid-flight)
+
+- AASA covers ONLY `/preview-channel/*` — install/manifest pages must stay
+  web pages (opening the old app would hide the Install button).
+- PR-body tap links now use the bare universal-link path; the scan-path QR
+  keeps the raw `iterate://` scheme (offline, instant, works on
+  pre-entitlement binaries). One-QR consolidation is possible later once
+  entitlement builds are the norm.
+- Verify on device post-merge: install the new build, tap a PR body's OTA
+  link → the app should open directly (no Safari hop).
+
+## Cutover runbook (after merge)
+
+1. deploy-mobile-website workflow runs on the merge (ensure-resources
+   creates DNS + bucket, deploy + smoke).
+2. Backfill the `preview` snapshot: one authenticated PUT to
+   mobile.iterate.com/channel-status/preview (same op CI does per publish);
+   the merge's own mobile publish may do it first if it runs after DNS is
+   live.
+3. Verify: GET mobile.iterate.com/install/preview shows "Install this
+   build"; os.iterate.com/m/install/preview 301s there.
+4. Delete the orphaned os FILES_BUCKET key
+   `platform/mobile-channel-status/preview.json` (one-off; nothing reads it
+   anymore).
