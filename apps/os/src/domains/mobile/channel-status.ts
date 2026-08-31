@@ -38,9 +38,9 @@ export type StatusBucket = {
 
 const jsonHeaders = {
   "content-type": "application/json; charset=utf-8",
-  // The app reads this cross-origin in the expo-web dev/spec lane; native
-  // fetches don't care. Public data (channel names + build ids), no
-  // credentials involved.
+  // The app fetches this cross-origin when it runs as an expo web dev
+  // bundle (playwright specs, local web dev); native fetches have no CORS.
+  // Public data (channel names + build ids), no credentials involved.
   "access-control-allow-origin": "*",
   "cache-control": "no-store",
 };
@@ -78,7 +78,8 @@ export async function handleChannelStatusRequest(input: {
     return Response.json(status, { headers: jsonHeaders });
   }
 
-  // Writes are CI-only: same admin bearer the itx admin lane uses.
+  // Writes are CI-only: the same APP_CONFIG_ADMIN_API_SECRET bearer token
+  // that authenticates admin itx connections (assertAdminSecret in auth.ts).
   if (!authenticateAdminApiSecret({ config }, request)) {
     return Response.json({ error: "unauthorized" }, { status: 401 });
   }

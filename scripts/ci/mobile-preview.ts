@@ -161,8 +161,22 @@ export const computeRuntimeFingerprint = (): string => {
   return hash;
 };
 
-/** Runtime of the newest finished preview build — what a phone can be running today. */
-export const latestInstalledRuntime = (): string | undefined => {
+/**
+ * The runtime a main-tracking phone is on — the baseline for the section's
+ * "JS-only vs native changes" framing. Main's channel snapshot is the
+ * authority: every build now shares the `preview` profile, so the raw
+ * build list can't tell "a native-change PR's build just finished" from
+ * "main moved runtimes", and using it flipped the heuristic for every
+ * publish after any PR build landed. Falls back to the newest finished
+ * build only while the snapshot doesn't exist yet (pre-store bootstrap),
+ * where PR-build pollution is a bounded, self-healing inaccuracy.
+ */
+export const mainInstalledRuntime = async (): Promise<string | undefined> => {
+  const status = await fetchChannelStatus("preview").catch((error) => {
+    console.warn(`reading main's channel status failed (${error}) — falling back to build list`);
+    return null;
+  });
+  if (status) return status.runtimeVersion;
   const builds: any[] = easJson([
     "build:list",
     "--platform",

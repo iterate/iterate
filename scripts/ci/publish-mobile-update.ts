@@ -23,7 +23,7 @@ import {
   ensureBuildForRuntime,
   expoBuildUrl,
   installInterstitialUrl,
-  latestInstalledRuntime,
+  mainInstalledRuntime,
   mobileDir,
   planPreview,
   prdBaseUrl,
@@ -70,10 +70,11 @@ async function publishMobileUpdate() {
     );
   }
 
-  // Was a phone able to run main's JS *before* this publish? Compares against
-  // the newest finished build like the PR flow, so a fingerprint-changing
-  // merge renders as "native changes" until its fresh build finishes.
-  const installedRuntime = latestInstalledRuntime();
+  // Was a phone able to run main's JS *before* this publish? Reads the
+  // PREVIOUS main snapshot, so this must stay ahead of the pushChannelStatus
+  // below that overwrites it — a fingerprint-changing merge then renders as
+  // "native changes" for this publish.
+  const installedRuntime = await mainInstalledRuntime();
   // A native-change PR already built for this runtime (builds are keyed on
   // the fingerprint, all `preview` profile), so the merge usually finds it
   // FINISHED — the refresh job only has work when nothing pre-built it.

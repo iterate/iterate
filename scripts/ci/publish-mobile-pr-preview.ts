@@ -24,7 +24,7 @@ import {
   ensureBuildForRuntime,
   expoBuildUrl,
   installInterstitialUrl,
-  latestInstalledRuntime,
+  mainInstalledRuntime,
   mobileDir,
   planPreview,
   prdBaseUrl,
@@ -120,7 +120,7 @@ async function publishMobilePrPreview() {
     );
   }
 
-  const installedRuntime = latestInstalledRuntime();
+  const installedRuntime = await mainInstalledRuntime();
   // Any build with a matching runtime — a JS-only PR reuses main's and
   // triggers nothing. The channel hop after an install is the interstitial's
   // "Open in app" tap.
