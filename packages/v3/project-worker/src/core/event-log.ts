@@ -48,8 +48,8 @@ const EVENT_CHUNK_SIZE = 512 * 1024;
  *  to the events table, so a chunked event is still ONE row at ONE offset (dense allocation, honest
  *  read paging); reads and idempotency-dedupe reassemble it, and the one transactionSync rolls back
  *  every chunk row with its event row on any mid-batch throw. Deliberately storage-lazy: a log that
- *  never writes must never mint backing storage (workerd auto-deletes empty objects; a probed /state
- *  or typo'd ctx must leave nothing behind — the Kenton PR #6101 doctrine). */
+ *  never writes must never mint backing storage (workerd auto-deletes empty objects; a probed
+ *  `itx.hostState()` or typo'd ctx must leave nothing behind — the Kenton PR #6101 doctrine). */
 export class StreamEventLog {
   readonly #storage: DurableObjectStorage;
   readonly #path: string;
@@ -94,7 +94,7 @@ export class StreamEventLog {
     this.#storageReady = true;
   }
 
-  /** Read-only (never the write that mints storage — /state probes ride this). */
+  /** Read-only (never the write that mints storage — `itx.hostState()` probes ride this). */
   currentIncarnation(): number {
     return this.#storageReady
       ? this.#incarnation

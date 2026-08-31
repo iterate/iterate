@@ -33,7 +33,7 @@ flowchart LR
   end
 
   subgraph pw["project-worker (Cloudflare Worker)"]
-    edge["fetch handler<br/>/api /call /cap /facet /state"]
+    edge["fetch handler<br/>/api /cap /version /demo"]
     relay["ProjectSession + relay<br/>(capnweb terminates HERE)"]
     subgraph dos["Durable Objects (pure Workers RPC)"]
       itx["ItxDurableObject<br/>(capability host,<br/>one per {projectId,path})"]
@@ -142,7 +142,7 @@ sequenceDiagram
   Note over DO: dormant:true again
 ```
 
-**Proven at scale:** 1000 clients connected → `/state = {stubs:1000, active:0, dormant:true}`; held 3 min idle;
+**Proven at scale:** 1000 clients connected → `itx.hostState() = {stubs:1000, active:0, dormant:true}`; held 3 min idle;
 `incarnation` climbed (the DO truly hibernated and was reconstructed ~4× while holding all 1000); calling two
 named clients woke only those two. Leases survive because they live in the socket attachment (§5).
 
@@ -190,15 +190,16 @@ capnweb provider still can't take a raw 101 (needs a frame bridge — deferred).
 
 ### 4.1 `project-worker` edge — `default.fetch(request, env, ctx)` (`src/worker.ts`)
 
-| Route                  | Method   | Behaviour                                                                                           |
-| ---------------------- | -------- | --------------------------------------------------------------------------------------------------- |
-| `/version`             | GET      | the `CODE_VERSION` marker (smoke tests wait for it)                                                 |
-| `/api?ctx=<projectId>` | WS       | **the one capnweb entrypoint** → `newWorkersWebSocketRpcResponse(request, new ProjectSession(...))` |
-| `/cap?ctx=&cap=<expr>` | any/WS   | the fetch lane → sets `x-itx-cap`, forwards to the host DO (carries WS)                             |
-| `/state?ctx=`          | GET      | forwards to the DO → `{ incarnation, stubs, active, pending, dormant }`                             |
-| `/facet?ctx=&path=`    | any/WS   | stateful-worker fetch lane → forwards to the DO                                                     |
-| `/call?ctx=`           | POST/GET | `invokeCapability(path, args)` — `{path,args}` body or `?path=&args=` (agents/harnesses)            |
-| bare WS upgrade        | WS       | ingress → the DO                                                                                    |
+| Route                  | Method   | Behaviour                                                                                                                                    |
+| ---------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/version`             | GET      | the `CODE_VERSION` marker (smoke tests wait for it)                                                                                          |
+| `/api?ctx=<projectId>` | WS       | **the one capnweb entrypoint** → `newWorkersWebSocketRpcResponse(request, new ProjectSession(...))`                                          |
+| `/cap?ctx=&cap=<expr>` | any/WS   | the fetch lane → sets `x-itx-cap`, forwards to the host DO (carries WS)                                                                      |
+| `/demo`                | GET      | the hosted live-state demo page (self-contained React + capnweb, served from the worker)                                                     |
+| `itx.hostState()`      | capnweb  | observability over the ONE door → `{ incarnation, facetProcessors, core, subscriptionMounts, …stubs }` (the old `/state` HTTP door, retired) |
+| `/facet?ctx=&path=`    | any/WS   | stateful-worker fetch lane → forwards to the DO                                                                                              |
+| `/call?ctx=`           | POST/GET | `invokeCapability(path, args)` — `{path,args}` body or `?path=&args=` (agents/harnesses)                                                     |
+| bare WS upgrade        | WS       | ingress → the DO                                                                                                                             |
 
 ### 4.2 `ProjectSession` — the capnweb main (`src/core/itx-surface.ts`)
 
