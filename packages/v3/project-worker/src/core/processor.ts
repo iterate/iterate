@@ -23,11 +23,10 @@
 //      carries `delivery.caughtUp: true`; a batch that reaches the head without one gets a single
 //      extra `processEvent({ event: null, delivery: { caughtUp: true } })` call.
 //
-// DELIVERY IS PUSH-FIRST with a SCANNED-OFFSET-RANGE PROOF. The stream pushes
-// `processEventBatch(events, scannedOffsetRange)` after every commit — the proof of the
-// contiguous range scanned (`scannedAfterOffset` exclusive → `scannedThroughOffset` inclusive), so ephemeral
-// holes, consumes-filters, and reboot gaps are all the same non-event — the cursor advances on
-// the RANGE, never by counting events. A non-contiguous push triggers GAP REPAIR: read durable
+// DELIVERY IS PUSH-FIRST with a SCANNED-RANGE PROOF. The stream pushes
+// `processEventBatch(events, range)` after every commit — the proof of the contiguous range scanned
+// (`after` exclusive → `through` inclusive), so ephemeral holes, consumes-filters, and reboot gaps
+// are all the same non-event — the cursor advances on the RANGE, never by counting events. A non-contiguous push triggers GAP REPAIR: read durable
 // rows from the own cursor until the head. Ephemeral events ride pushes ONLY (reads are
 // durable-only; an ephemeral missed while a facet rebuilds is gone by design — nothing can
 // redeliver it) and NEVER trigger a progress persist: an ephemeral-only range advances the
@@ -92,8 +91,9 @@ export type ProcessorStorage = {
   delete?(key: string): void;
 };
 
-/** The contiguity proof a delivery carries: (scannedAfterOffset, scannedThroughOffset]. */
-export type ScannedOffsetRange = { scannedAfterOffset: number; scannedThroughOffset: number };
+/** The contiguity proof a delivery carries: the half-open offset window `(after, through]`. A chain
+ *  of these (each `after` === the previous `through`) is how a subscriber proves it missed nothing. */
+export type ScannedRange = { after: number; through: number };
 
 export type ReduceArgs<State> = { event: StreamEventT; state: State };
 
@@ -219,38 +219,34 @@ export abstract class StreamProcessor<State> {
   // ── the drive doors ──
 
   /** THE push door: the stream (or hosting facet) hands the just-committed batch with its
-   *  scannedOffsetRange. Contiguous → reduce it directly (the fast path — no read); anything else → gap
+   *  range. Contiguous → reduce it directly (the fast path — no read); anything else → gap
    *  repair from the own cursor. Fire-and-forget safe: enqueues on the serial chain. */
-  processEventBatch(events: StreamEventT[], scannedOffsetRange: ScannedOffsetRange): Promise<void> {
+  processEventBatch(events: StreamEventT[], range: ScannedRange): Promise<void> {
     // Recorded SYNCHRONOUSLY: the head this processor has been SHOWN. Read verbs skip their
     // wake when the reduce has provably reached it — the fast path that deletes one parent read
     // RPC from every capability dispatch (and every level of alias nesting) once caught up.
-    this.#pushedThroughOffset = Math.max(
-      this.#pushedThroughOffset ?? 0,
-      scannedOffsetRange.scannedThroughOffset,
-    );
+    this.#pushedThroughOffset = Math.max(this.#pushedThroughOffset ?? 0, range.through);
     return this.#enqueue(async () => {
       await this.#rereduceIfVersionChanged();
       const cursor = this.#loadProgress().reducedThroughOffset;
       // DURABLE GAP REPAIR is the ONLY reason not to process the push immediately: a durable prefix
       // the push assumes but we haven't folded must be healed from the log FIRST. The push carries
       // fresh named ephemerals the log can't return (reads are durable-only), so a blanket catch-up
-      // would repair the durables but drop the ephemerals (defect 21) — hence repair up to the push
+      // would repair the durables but drop the ephemerals — hence repair up to the push
       // start, then process the push itself.
-      if (scannedOffsetRange.scannedAfterOffset > cursor) {
-        await this.#repairThrough(scannedOffsetRange.scannedAfterOffset);
+      if (range.after > cursor) {
+        await this.#repairThrough(range.after);
         // Log can't reach the push start (a durable row genuinely missing) → full durable catch-up,
-        // then STILL process the push below so its ephemerals aren't dropped (closes defect 21's
-        // residual hole; the durables will simply be filtered as already-folded).
-        if (this.#loadProgress().reducedThroughOffset !== scannedOffsetRange.scannedAfterOffset)
-          await this.#catchUpBody();
+        // then STILL process the push below so its ephemerals aren't dropped (the durables are
+        // simply filtered as already-folded).
+        if (this.#loadProgress().reducedThroughOffset !== range.after) await this.#catchUpBody();
       }
       // ALWAYS process the push — no push is ever discarded. Durables fold iff fresh (`offset >
       // cursor`); ephemerals ALWAYS deliver (one push, unredeliverable); the cursor never regresses.
-      // A wholly-behind (stale) push folds nothing and just delivers its ephemerals — B's fix. This
+      // A wholly-behind (stale) push folds nothing and just delivers its ephemerals. This
       // one path replaced the old contiguous / non-contiguous / stale-drop three-way branch.
-      const atHead = scannedOffsetRange.scannedThroughOffset >= (this.#pushedThroughOffset ?? 0);
-      await this.#processBatch(events, scannedOffsetRange, atHead);
+      const atHead = range.through >= (this.#pushedThroughOffset ?? 0);
+      await this.#processBatch(events, range, atHead);
     });
   }
 
@@ -334,7 +330,7 @@ export abstract class StreamProcessor<State> {
   /** The persisted reduce checkpoint (see reduce-checkpoint.ts) — cached per incarnation. A
    *  version MATCH is cached; a MISMATCH (or no cursor) returns the fresh fallback WITHOUT caching
    *  it, because `#rereduceIfVersionChanged` bails when `#progress` is already set — caching here
-   *  would skip the refold and replay the whole log WITH side effects (defect 17). */
+   *  would skip the refold and replay the whole log WITH side effects. */
   #loadProgress(): ReduceCheckpoint<State> {
     if (this.#progress) return this.#progress;
     const cp = readReduceCheckpoint(this.#storage, this.contract.slug, this.contract.version, () =>
@@ -358,7 +354,7 @@ export abstract class StreamProcessor<State> {
     if (!stored || stored.reducerVersion === this.contract.version) return;
     // Rebuild ONLY through the offset the OLD cursor covered (reduce-only, no effects). Events
     // past it are the job of the normal flow that follows — refolding to the live head instead
-    // would judge an already-queued in-flight push stale and swallow its effects (defect 18).
+    // would judge an already-queued in-flight push stale and swallow its effects.
     const target = stored.reducedThroughOffset;
     let state = this.contract.initialState();
     let after = 0;
@@ -390,20 +386,11 @@ export abstract class StreamProcessor<State> {
         // No new contiguous events beyond the cursor → we are AT HEAD. An EXACT full page (500)
         // was judged not-at-head and never got rule 5's caught-up pass; a log whose length is an
         // exact page multiple must still learn it is caught up — deliver the eventless at-head pass.
-        if (sawFullPage)
-          await this.#processBatch(
-            [],
-            { scannedAfterOffset: after, scannedThroughOffset: after },
-            true,
-          );
+        if (sawFullPage) await this.#processBatch([], { after, through: after }, true);
         return;
       }
       const atHead = page.events.length < 500;
-      await this.#processBatch(
-        page.events,
-        { scannedAfterOffset: after, scannedThroughOffset: page.scannedThroughOffset },
-        atHead,
-      );
+      await this.#processBatch(page.events, { after, through: page.scannedThroughOffset }, atHead);
       if (atHead) return;
       sawFullPage = true;
     }
@@ -422,24 +409,20 @@ export abstract class StreamProcessor<State> {
       const through = Math.min(page.scannedThroughOffset, target);
       await this.#processBatch(
         page.events.filter((e) => e.offset <= target),
-        { scannedAfterOffset: after, scannedThroughOffset: through },
+        { after, through },
         false,
       );
       if (through >= target) return;
     }
   }
 
-  /** Rules 2–5 over one scannedOffsetRange (the caller has healed any durable prefix gap first).
+  /** Rules 2–5 over one range (the caller has healed any durable prefix gap first).
    *  DURABLES fold at-most-once — `offset > cursor`. EPHEMERALS ALWAYS deliver — each rides exactly
    *  one push and can never be a redelivery, so a durable-only wake that clamped the cursor PAST an
    *  ephemeral offset must not suppress it. The cursor is a DURABLE-fold watermark and never
    *  regresses. (This one method replaced the old contiguous / non-contiguous / stale-drop three-way
    *  in `processEventBatch`; there is no separate ephemeral path.) */
-  async #processBatch(
-    events: StreamEventT[],
-    scannedOffsetRange: ScannedOffsetRange,
-    atHead: boolean,
-  ): Promise<void> {
+  async #processBatch(events: StreamEventT[], range: ScannedRange, atHead: boolean): Promise<void> {
     const progress = this.#loadProgress();
     const prevState = progress.state;
     let state = prevState;
@@ -458,16 +441,13 @@ export abstract class StreamProcessor<State> {
     // Rule 5: reached the head with no caught-up event → one eventless at-head pass.
     if (atHead && !caughtUpDelivered) state = await this.#applyEvent(null, state, true);
 
-    // Rule 4: ONE persist per scannedOffsetRange, iff a DURABLE actually ADVANCED the cursor. The
+    // Rule 4: ONE persist per range, iff a DURABLE actually ADVANCED the cursor. The
     // cursor never REGRESSES (`max`), so a wholly-behind (stale) push leaves it put — and must NOT
     // re-persist (a stale durable re-push already folded is a no-op write; a pure-ephemeral range
     // writes zero — the flood stays free). `advanced` excludes the stale re-push; `sawDurable`
     // excludes the ephemeral-only range. (This is why B's stale push delivers its ephemerals in
     // memory yet persists nothing.)
-    const reducedThroughOffset = Math.max(
-      progress.reducedThroughOffset,
-      scannedOffsetRange.scannedThroughOffset,
-    );
+    const reducedThroughOffset = Math.max(progress.reducedThroughOffset, range.through);
     const advanced = reducedThroughOffset > progress.reducedThroughOffset;
     const sawDurable = events.some((e) => !e.ephemeral);
     const next: ReduceCheckpoint<State> = {
@@ -485,7 +465,7 @@ export abstract class StreamProcessor<State> {
       prevState,
       state,
       progress.reducedThroughOffset,
-      scannedOffsetRange.scannedThroughOffset,
+      range.through,
     );
   }
 

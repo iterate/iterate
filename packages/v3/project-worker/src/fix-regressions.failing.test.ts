@@ -49,7 +49,7 @@ function memoryStream(path = "/") {
         return event;
       });
       if (maxAssigned > scannedAfterOffset) {
-        const range = { scannedAfterOffset, scannedThroughOffset: maxAssigned };
+        const range = { after: scannedAfterOffset, through: maxAssigned };
         for (const p of procs) void p.processEventBatch(committed, range).catch(() => {});
       }
       return committed;

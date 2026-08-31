@@ -70,7 +70,7 @@ import {
   consumesEvent,
   LIVE_STATE_CHANGED,
   type ReduceOnlyProcessor,
-  type ScannedOffsetRange,
+  type ScannedRange,
 } from "./core/processor.ts";
 import type { BuiltInsEnv } from "./built-ins.ts";
 import { PROCESSOR_RUNNER_MODULE } from "./generated/processor-runner.ts";
@@ -94,10 +94,7 @@ type FacetProcessorEntry = {
  *  SDK-injected runner.js): identity in, pushed windows in, reduce + barrier out. */
 type FacetProcessorHandle = {
   configure(identity: FacetIdentity): Promise<unknown> | unknown;
-  processEventBatch(
-    events: StreamEvent[],
-    scannedOffsetRange: ScannedOffsetRange,
-  ): Promise<unknown> | unknown;
+  processEventBatch(events: StreamEvent[], range: ScannedRange): Promise<unknown> | unknown;
   snapshot(): Promise<{ offset: number; state: unknown }>;
   waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<unknown>;
 };
@@ -259,7 +256,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     );
     if (nextOffset > scannedAfterOffset) {
       // A prior-batch idempotency dedupe echoes an ALREADY-DELIVERED below-range offset into
-      // `distinct` (see event-log). Drop it before the fan-out — the range is (scannedAfterOffset,
+      // `distinct` (see event-log). Drop it before the fan-out — the range is (after,
       // nextOffset]; a durable at/below the floor was delivered on its own commit. Ephemerals are
       // minted IN range (they can't carry an idempotency key), so this never drops one; it just makes
       // the two fan-out sites match the inline reduce's guard.
@@ -309,12 +306,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       const after = prev?.deliveredThrough ?? scannedAfterOffset;
       const chain = (prev?.chain ?? Promise.resolve())
         .then(() => this.#facet(slug))
-        .then((f) =>
-          f.processEventBatch(drivable, {
-            scannedAfterOffset: after,
-            scannedThroughOffset: nextOffset,
-          }),
-        )
+        .then((f) => f.processEventBatch(drivable, { after, through: nextOffset }))
         .catch((e) => reportIssue("stream-do.facet-drive", e, { slug }))
         .finally(() => {
           this.#facetWorkInFlight--;
@@ -556,10 +548,10 @@ export class StreamDurableObject extends DurableObject<Env> {
   // ── SUBSCRIPTION DELIVERY, connected lane: one-directional, from the commit path ──
   // A CONNECTED subscription mount (target itx.rpcStubs.get(…)) is served by raw
   // fire-and-forget invokes on the connection's paged-in stub: the filtered batch plus the
-  // GLOBAL ScannedOffsetRange. No acks, no server cursor, no retry ladder, no watchdogs, no
+  // GLOBAL ScannedRange. No acks, no server cursor, no retry ladder, no watchdogs, no
   // outbound coalescing (owner decision — the socket buffer is the only queue; overflow closes
   // the socket and the close IS the heal signal). The CLIENT owns its offset: delivered ranges
-  // chain (each scannedAfterOffset === the last scannedThroughOffset), so a gap is one
+  // chain (each `after` === the last `through`), so a gap is one
   // comparison and heals with read(afterOffset). ABSENT targets are the subscription-forwarder
   // facet's lane (cursor + the one bounded-retry-then-halt policy) — see
   // subscription-forwarder-processor.ts.
@@ -594,7 +586,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /** Per-row deliveredThroughOffset, IN MEMORY only: lets a row whose consumes filter skipped
-   *  whole batches receive the skipped span inside its next delivered ScannedOffsetRange (so the
+   *  whole batches receive the skipped span inside its next delivered ScannedRange (so the
    *  client's contiguity check holds without empty-batch sends). Losing it (eviction) just makes
    *  one delivered range start late — the client sees a gap once and pulls once. */
   readonly #subscriptionDeliveredThrough = new Map<number, number>();
@@ -645,9 +637,9 @@ export class StreamDurableObject extends DurableObject<Env> {
         [
           events,
           {
-            scannedAfterOffset: Math.min(deliveredAfter, scannedAfterOffset),
-            scannedThroughOffset: nextOffset,
-          } satisfies ScannedOffsetRange,
+            after: Math.min(deliveredAfter, scannedAfterOffset),
+            through: nextOffset,
+          } satisfies ScannedRange,
         ],
         // Survivable by design — the client sees the range gap and heals by pull.
         (err) =>

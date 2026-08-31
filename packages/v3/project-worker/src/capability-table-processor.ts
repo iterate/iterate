@@ -378,7 +378,7 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
 
   /** Deliver to ONE subscription mount BY ROW IDENTITY — never by name through the table (a
    *  broad default route must not intercept deliveries). The target is evaluated and called
-   *  with the delivery args (an event batch + its ScannedOffsetRange, or a state change
+   *  with the delivery args (an event batch + its ScannedRange, or a state change
    *  payload). */
   async deliverTo(state: State, providedAtOffset: number, args: unknown[]): Promise<unknown> {
     const row = state.mounts.find((m) => m.providedAtOffset === providedAtOffset);

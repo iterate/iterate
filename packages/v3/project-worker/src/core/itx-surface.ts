@@ -391,11 +391,11 @@ export class Itx extends RpcTarget {
    *  depends only on the target's shape (see DeliveryPolicy in core/events.ts):
    *    • a LIVE CALLBACK (any capnweb function/RpcTarget): parked as an rpc stub (itx.rpcStubs),
    *      then delivered ONE-DIRECTIONALLY — the stream fire-and-forgets each committed batch as
-   *      `(events, scannedOffsetRange)` over the paged-in stub, no acks, no server cursor.
+   *      `(events, range)` over the paged-in stub, no acks, no server cursor.
    *      The CLIENT owns its offset: check the ranges chain, heal any gap with read(afterOffset).
    *    • an ABSENT target (an itx expression — a webhook, a stateless worker): the
    *      subscription-forwarder facet holds a cursor per target, calls the target's terminal
-   *      path with `(events, scannedOffsetRange)` per batch (the awaited call IS the ack), and
+   *      path with `(events, range)` per batch (the awaited call IS the ack), and
    *      applies the one bounded-retry-then-halt policy.
    *  Add `liveState: {key}` for state mode: the target receives each of the key's change
    *  payloads `{key, from, to, patch}` as it commits; the CLIENT chains revisions (seed through

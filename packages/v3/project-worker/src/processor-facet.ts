@@ -12,7 +12,7 @@
 //     parent-chosen env is impossible for a built-in class: it inherits the WORKER's env).
 //   • BACK-CHANNEL by NAME, never a live stub: the facet re-resolves `env.CONTEXT
 //     .getByName(parentName)` per use (stubs must not outlive their RPC turn).
-//   • DELIVERY via `processEventBatch(events, scannedOffsetRange)` — the parent pushes every commit with its
+//   • DELIVERY via `processEventBatch(events, range)` — the parent pushes every commit with its
 //     scanned-offset-range proof; the base class reduces the fast path and gap-repairs from the log
 //     otherwise. No registry: the processor IS its own runner (core/processor.ts).
 //
@@ -32,7 +32,7 @@ import {
   type ProcessorStorage,
   type ProcessorStream,
   type ReduceArgs,
-  type ScannedOffsetRange,
+  type ScannedRange,
 } from "./core/processor.ts";
 import type { BuiltInsEnv } from "./built-ins.ts";
 import { SubscriptionForwarderProcessor } from "./subscription-forwarder-processor.ts";
@@ -126,11 +126,8 @@ export class ProcessorFacet extends DurableObject<Env> {
 
   /** The parent pushes every commit here with its scanned-offset-range proof. Fire-and-forget from the
    *  parent's side; the base class serializes, reduces the fast path, gap-repairs otherwise. */
-  async processEventBatch(
-    events: StreamEvent[],
-    scannedOffsetRange: ScannedOffsetRange,
-  ): Promise<void> {
-    await this.#p().processEventBatch(events, scannedOffsetRange);
+  async processEventBatch(events: StreamEvent[], range: ScannedRange): Promise<void> {
+    await this.#p().processEventBatch(events, range);
   }
 
   /** Catch up from the parent's log, then report the reduce (offset + reduced state). */

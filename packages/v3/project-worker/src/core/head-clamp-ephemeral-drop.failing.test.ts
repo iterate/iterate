@@ -82,7 +82,7 @@ describe("head-clamp stale-push named-ephemeral drop", () => {
     // one commit: durable tick@2 + ephemeral chunk@3 → range (1,3]
     const committed = await stream.append({ type: "tick" }, { type: "chunk", ephemeral: true });
     // the commit's fire-and-forget push lands FIRST…
-    await p.processEventBatch(committed, { scannedAfterOffset: 1, scannedThroughOffset: 3 });
+    await p.processEventBatch(committed, { after: 1, through: 3 });
     // …then a barrier wake (now a no-op — already at head)
     await p.waitUntilProcessed({ offset: 3, timeoutMs: 1000 });
     expect((await p.snapshot()).state.seen).toEqual(["tick@1", "tick@2", "chunk@3"]);
@@ -101,7 +101,7 @@ describe("head-clamp stale-push named-ephemeral drop", () => {
     await p.waitUntilProcessed({ offset: 3, timeoutMs: 1000 });
     // now the commit's own fire-and-forget push arrives — but progress already == 3, so it is
     // judged a stale redelivery and discarded whole.
-    await p.processEventBatch(committed, { scannedAfterOffset: 1, scannedThroughOffset: 3 });
+    await p.processEventBatch(committed, { after: 1, through: 3 });
     // chunk@3 was NAMED, ephemeral, deliverable, and handed to a LIVE processor — it must appear.
     expect((await p.snapshot()).state.seen).toEqual(["tick@1", "tick@2", "chunk@3"]);
   });

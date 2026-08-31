@@ -54,7 +54,7 @@ function memoryStream(path = "/") {
       });
       pushed.push(...committed);
       if (maxAssigned > scannedAfterOffset) {
-        const scannedOffsetRange = { scannedAfterOffset, scannedThroughOffset: maxAssigned };
+        const scannedOffsetRange = { after: scannedAfterOffset, through: maxAssigned };
         // THE PUMP: fire-and-forget, exactly like the DO (an awaited push would deadlock a
         // processor that appends during its own batch).
         for (const p of procs)
@@ -333,7 +333,7 @@ describe("the push door (scan scannedOffsetRanges)", () => {
     const { processor, tick } = setup();
     tick();
     await processor.wake();
-    await processor.processEventBatch([], { scannedAfterOffset: 0, scannedThroughOffset: 1 });
+    await processor.processEventBatch([], { after: 0, through: 1 });
     expect(processor.trace.filter((t) => t.startsWith("start"))).toEqual(["start 1"]);
   });
 });

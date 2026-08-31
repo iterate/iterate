@@ -11,7 +11,7 @@
 import { DurableObject } from "cloudflare:workers";
 // @ts-expect-error — resolved inside the loaded isolate (the user's module), external at build
 import * as user from "./cap.js";
-import type { StreamProcessor, ScannedOffsetRange } from "./core/processor.ts";
+import type { StreamProcessor, ScannedRange } from "./core/processor.ts";
 import type { FacetIdentity } from "./processor-facet.ts";
 import type { StreamEvent, StreamEventInput } from "./core/events.ts";
 
@@ -63,8 +63,8 @@ export class ProcessorFacetRunner extends DurableObject<RunnerEnv> {
     return this.#p;
   }
 
-  processEventBatch(events: StreamEvent[], scannedOffsetRange: ScannedOffsetRange): Promise<void> {
-    return this.#processor().processEventBatch(events, scannedOffsetRange);
+  processEventBatch(events: StreamEvent[], range: ScannedRange): Promise<void> {
+    return this.#processor().processEventBatch(events, range);
   }
   snapshot() {
     return this.#processor().snapshot();

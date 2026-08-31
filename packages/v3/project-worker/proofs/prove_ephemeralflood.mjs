@@ -31,12 +31,11 @@ let lastThrough; // the client-held offset: delivered ranges must CHAIN
 await itx.subscribe({
   name: "flood-ear",
   consumes: ["chunk"],
-  target: (events, scannedOffsetRange) => {
+  target: (events, range) => {
     const arrivedAtMs = Date.now();
     callbackInvocations++;
-    if (lastThrough !== undefined && scannedOffsetRange.scannedAfterOffset !== lastThrough)
-      contiguityBroken = true; // a gap would be heal-by-pull in a real client; here it must not happen
-    lastThrough = scannedOffsetRange.scannedThroughOffset;
+    if (lastThrough !== undefined && range.after !== lastThrough) contiguityBroken = true; // a gap would be heal-by-pull in a real client; here it must not happen
+    lastThrough = range.through;
     for (const e of events)
       received.push({ seq: e.payload.seq, latencyMs: arrivedAtMs - e.payload.sentAtMs });
   },
@@ -84,11 +83,7 @@ check(
 );
 const seen = new Set(received.map((r) => r.seq));
 check(seen.size === TOTAL, "every seq arrived exactly once (no dup, no loss)", `${seen.size}`);
-check(
-  !contiguityBroken,
-  "delivered ScannedOffsetRanges CHAIN (client contiguity holds, zero pulls)",
-  "",
-);
+check(!contiguityBroken, "delivered ScannedRanges CHAIN (client contiguity holds, zero pulls)", "");
 check(
   callbackInvocations < TOTAL,
   "BATCH-FIRST: far fewer callback invocations than events",

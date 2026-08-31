@@ -91,8 +91,8 @@ describe("StreamProcessor delivery.caughtUp is tied to the SHOWN head", () => {
     });
     // Two contiguous pushes, both enqueued before the chain drains: #pushedThroughOffset === 2
     // by the time the first (through=1) push runs.
-    const first = p.processEventBatch([ev(1)], { scannedAfterOffset: 0, scannedThroughOffset: 1 });
-    const second = p.processEventBatch([ev(2)], { scannedAfterOffset: 1, scannedThroughOffset: 2 });
+    const first = p.processEventBatch([ev(1)], { after: 0, through: 1 });
+    const second = p.processEventBatch([ev(2)], { after: 1, through: 2 });
     await Promise.all([first, second]);
     expect(p.caughtUps).toBe(1);
   });
@@ -107,7 +107,7 @@ describe("StreamProcessor delivery.caughtUp is tied to the SHOWN head", () => {
       path: "/",
       projectId: "prj_t",
     });
-    await p.processEventBatch([ev(1)], { scannedAfterOffset: 0, scannedThroughOffset: 1 });
+    await p.processEventBatch([ev(1)], { after: 0, through: 1 });
     expect(p.caughtUps).toBe(1);
   });
 });

@@ -38,7 +38,7 @@ async function until<T>(
 }
 const settle = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-type Range = { scannedAfterOffset: number; scannedThroughOffset: number };
+type Range = { after: number; through: number };
 type Invocation = { events: any[]; range: Range };
 
 /** A subscriber callback that records every invocation (deep-cloned — capnweb payloads must not
@@ -97,8 +97,8 @@ test("connected lane: delivered ranges CHAIN across a consumes-filtered quiet ga
   expect(d2.events.map((e) => e.offset)).toEqual([hit2.offset]);
   // THE contract: the skipped span rides the next delivered range — d2 starts EXACTLY where d1
   // ended (one comparison client-side; a gap here would force a pull that must not be needed).
-  expect(d2.range.scannedAfterOffset).toBe(d1.range.scannedThroughOffset);
-  expect(d2.range.scannedThroughOffset).toBe(hit2.offset);
+  expect(d2.range.after).toBe(d1.range.through);
+  expect(d2.range.through).toBe(hit2.offset);
 });
 
 test("connected lane: consumes naming an ephemeral type opts in; the consumes-less default excludes ephemerals", async () => {
@@ -262,7 +262,7 @@ test("forwarder: resume while HEALTHY redelivers exactly the events after afterO
   // exactly-from-afterOffset: m2 and m3 once more, m1 (== afterOffset) NEVER redelivered
   expect(redelivered).toEqual([m2.offset, m3.offset]);
   // and the redelivered range starts surgically at the requested cursor
-  expect(c.invocations[before].range.scannedAfterOffset).toBe(m1.offset);
+  expect(c.invocations[before].range.after).toBe(m1.offset);
 });
 
 test("FIXED (defect 13): resume with afterOffset beyond head is clamped — later events deliver", async () => {
@@ -458,7 +458,7 @@ test("an append of 900 events in one batch arrives as ONE callback invocation (b
   await until("all 900 delivered", () => c.offsets().length >= 900, 30_000);
   expect(c.invocations).toHaveLength(1); // ONE commit = ONE delivery — the batch is never split
   expect(c.invocations[0].events).toHaveLength(900);
-  expect(c.invocations[0].range.scannedThroughOffset).toBe(committed[899].offset);
+  expect(c.invocations[0].range.through).toBe(committed[899].offset);
 });
 
 // ─────────────────────────────── speculative (not yet run to ground) ───────────────────────────────

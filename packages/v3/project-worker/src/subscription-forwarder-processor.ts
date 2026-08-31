@@ -25,7 +25,7 @@ import {
   StreamProcessor,
   type ProcessEventArgs,
   type ReduceArgs,
-  type ScannedOffsetRange,
+  type ScannedRange,
 } from "./core/processor.ts";
 import type { StreamEvent } from "./core/events.ts";
 import { consumesEvent } from "./core/processor.ts";
@@ -213,16 +213,16 @@ export class SubscriptionForwarderProcessor extends StreamProcessor<ForwarderSta
         }
         const page = await this.stream.read(progress.confirmedOffset, 100);
         if (page.scannedThroughOffset <= progress.confirmedOffset) return; // caught up
-        const scannedOffsetRange = {
-          scannedAfterOffset: progress.confirmedOffset,
-          scannedThroughOffset: page.scannedThroughOffset,
-        };
+        const range = {
+          after: progress.confirmedOffset,
+          through: page.scannedThroughOffset,
+        } satisfies ScannedRange;
         const events = page.events.filter((e) => consumesEvent(row.consumes, e));
         if (events.length === 0) {
           // everything in the range was filtered — confirm through it, no call
           this.#putProgress(row.providedAtOffset, {
             ...progress,
-            confirmedOffset: scannedOffsetRange.scannedThroughOffset,
+            confirmedOffset: range.through,
           });
           continue;
         }
@@ -233,7 +233,7 @@ export class SubscriptionForwarderProcessor extends StreamProcessor<ForwarderSta
           await Promise.race([
             this.#parent().deliverToSubscriptionMount({
               providedAtOffset: row.providedAtOffset,
-              args: [events, scannedOffsetRange],
+              args: [events, range],
             }),
             new Promise((_, reject) => {
               deliveryWatchdog = setTimeout(
@@ -250,7 +250,7 @@ export class SubscriptionForwarderProcessor extends StreamProcessor<ForwarderSta
           if (fresh === undefined) return;
           if ((fresh.rev ?? 0) !== (progress.rev ?? 0)) continue;
           this.#putProgress(row.providedAtOffset, {
-            confirmedOffset: scannedOffsetRange.scannedThroughOffset,
+            confirmedOffset: range.through,
             attempt: 0,
             rev: progress.rev,
           });

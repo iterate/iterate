@@ -95,7 +95,7 @@ test("throughput+latency guard: 1000 ephemeral chunks flood through one-directio
   // ── hard invariants (must never regress) ──
   expect(received.length, "no loss: every chunk delivered").toBe(TOTAL);
   expect(new Set(received.map((r) => r.seq)).size, "no dup: every seq exactly once").toBe(TOTAL);
-  expect(contiguityBroken, "delivered ScannedOffsetRanges chain (zero pulls)").toBe(false);
+  expect(contiguityBroken, "delivered ScannedRanges chain (zero pulls)").toBe(false);
   expect(callbackInvocations, "batch-first: far fewer callbacks than events").toBeLessThan(TOTAL);
 
   // ── generous floors (compare the printed line for real regressions) ──

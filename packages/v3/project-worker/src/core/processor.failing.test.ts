@@ -40,7 +40,7 @@ function memoryStream(path = "/") {
       });
       pushed.push(...committed);
       if (maxAssigned > scannedAfterOffset) {
-        const scannedOffsetRange = { scannedAfterOffset, scannedThroughOffset: maxAssigned };
+        const scannedOffsetRange = { after: scannedAfterOffset, through: maxAssigned };
         // THE PUMP: fire-and-forget, exactly like the DO.
         for (const p of procs)
           void p.processEventBatch(committed, scannedOffsetRange).catch(() => {});
@@ -185,7 +185,7 @@ describe("rule 3 — runInBackground never blocks the batch commit", () => {
     }
     const p = new Bg({ stream: mem.stream, storage, path: "/", projectId: "p" });
     const committed = mem.stream.append({ type: "e" }) as StreamEvent[];
-    await p.processEventBatch(committed, { scannedAfterOffset: 0, scannedThroughOffset: 1 });
+    await p.processEventBatch(committed, { after: 0, through: 1 });
     // The batch is durably committed BEFORE the background work lands (overtaking allowed):
     expect(bgDone).toBe(false);
     expect(storage.get<{ reducedThroughOffset: number }>("reduce:bg:progress")).toMatchObject({
@@ -195,7 +195,7 @@ describe("rule 3 — runInBackground never blocks the batch commit", () => {
     expect(bgDone).toBe(true); // and the attempt did run (droppable, not dropped here)
     // the failed background attempt never poisoned the chain — the next batch still commits
     const next = mem.stream.append({ type: "e" }) as StreamEvent[];
-    await p.processEventBatch(next, { scannedAfterOffset: 1, scannedThroughOffset: 2 });
+    await p.processEventBatch(next, { after: 1, through: 2 });
     expect((await p.snapshot()).offset).toBe(2);
   });
 });
@@ -226,7 +226,7 @@ describe("rule 4 — one durable commit per batch, all-or-nothing", () => {
       { type: "e", payload: { boom: true } },
     ) as StreamEvent[];
     const before = storage.writes;
-    await p.processEventBatch(committed, { scannedAfterOffset: 0, scannedThroughOffset: 3 });
+    await p.processEventBatch(committed, { after: 0, through: 3 });
     expect(storage.writes - before).toBe(2); // ONE persist: cursor + state, nothing extra
     expect(effects).toEqual([1, 2, 3]); // each event's processEvent ran exactly once
     const snap = await p.snapshot();
@@ -260,9 +260,7 @@ describe("rule 4 — one durable commit per batch, all-or-nothing", () => {
       { type: "e" },
       { type: "e" },
     ) as StreamEvent[];
-    await expect(
-      p.processEventBatch(committed, { scannedAfterOffset: 0, scannedThroughOffset: 3 }),
-    ).rejects.toThrow(/boom/);
+    await expect(p.processEventBatch(committed, { after: 0, through: 3 })).rejects.toThrow(/boom/);
     expect(storage.writes).toBe(0); // events 1+2 fully processed, yet NOTHING persisted
     await p.wake(); // retried whole — 1 and 2 run again (droppable-attempt semantics)
     expect(effects).toEqual([1, 2, 3, 1, 2, 3]);
@@ -295,7 +293,7 @@ describe("rule 5 — exactly one caughtUp per at-head batch", () => {
     const { Rec, deliveries } = deliveryRecorder("lastfiltered", ["tick"]);
     const p = new Rec({ stream: mem.stream, storage: memoryStorage(), path: "/", projectId: "p" });
     const committed = mem.stream.append({ type: "tick" }, { type: "noise" }) as StreamEvent[];
-    await p.processEventBatch(committed, { scannedAfterOffset: 0, scannedThroughOffset: 2 });
+    await p.processEventBatch(committed, { after: 0, through: 2 });
     expect(deliveries.filter((d) => d.caughtUp)).toHaveLength(1);
     expect(deliveries).toEqual([{ offset: 1, caughtUp: true }]); // the tick, not a null pass
   });
@@ -305,7 +303,7 @@ describe("rule 5 — exactly one caughtUp per at-head batch", () => {
     const { Rec, deliveries } = deliveryRecorder("nonecons", ["tick"]);
     const p = new Rec({ stream: mem.stream, storage: memoryStorage(), path: "/", projectId: "p" });
     const committed = mem.stream.append({ type: "noise" }, { type: "noise" }) as StreamEvent[];
-    await p.processEventBatch(committed, { scannedAfterOffset: 0, scannedThroughOffset: 2 });
+    await p.processEventBatch(committed, { after: 0, through: 2 });
     expect(deliveries).toEqual([{ offset: null, caughtUp: true }]);
   });
 
@@ -421,7 +419,7 @@ describe("version bump re-reduce", () => {
     const committed = mem.stream.append({ type: "e" }) as StreamEvent[]; // offset 3 — v1 never saw it
     const p2 = makeVersioned(mem, storage, "2.0.0", effects);
     // The in-flight push lands on the bumped incarnation's chain (contiguous with the durable cursor).
-    await p2.processEventBatch(committed, { scannedAfterOffset: 2, scannedThroughOffset: 3 });
+    await p2.processEventBatch(committed, { after: 2, through: 3 });
     expect((await p2.snapshot()).state.n).toBe(3); // the reduce saw it…
     expect(effects).toContain("effect 3"); // …but its side effects must have run too
   });
@@ -538,7 +536,7 @@ describe("ephemeral windows and repair", () => {
     // A durable push with a STALE scannedAfterOffset (1 — before the in-memory-only cursor 3):
     mem.procs.length = 0; // hand-deliver, so the pump doesn't also push the true range
     const [t4] = mem.stream.append({ type: "tick" }) as StreamEvent[]; // offset 4
-    await a.processEventBatch([t4], { scannedAfterOffset: 1, scannedThroughOffset: 4 });
+    await a.processEventBatch([t4], { after: 1, through: 4 });
     // The ephemerals were NOT consumed a second time and tick@4 arrived exactly once.
     expect(a.seen).toEqual(["tick@1", "chunk@2", "chunk@3", "tick@4"]);
     expect((await a.snapshot()).state.n).toBe(4);
