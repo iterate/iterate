@@ -827,8 +827,9 @@ export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
     this.#facetWorkInFlight++;
     try {
       const facet = await this.#resolveFacet(ref);
-      // A top-level `.fetch` forwards to the facet's own fetch (a 101 flows DO→facet natively),
-      // never through invokePath's await-walk. A method walks receiver-preservingly (invokePath).
+      // A top-level `.fetch` forwards to the facet's own fetch — the one channel that carries a
+      // 101 natively (core/fetch-capabilities.ts doctrine, points 1 & 4) — never through
+      // invokePath's await-walk. A method walks receiver-preservingly (invokePath).
       if (path.length === 1 && path[0] === "fetch")
         return await (facet as Fetcher).fetch(args[0] as Request);
       const what =

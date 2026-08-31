@@ -248,6 +248,8 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         const h = statelessHandle(source, className);
         return new InvokeHandle((seg, args) => {
           if (seg.length === 1 && seg[0] === "run") return h.run(...args);
+          // Terminal fetch rides the entrypoint's REAL fetch channel — the only hop kind that
+          // carries socket Responses (core/fetch-capabilities.ts doctrine, points 1 & 4).
           if (seg.length === 1 && seg[0] === "fetch") return h.fetch(args[0] as Request);
           throw new Error(
             `load(src).getEntrypoint().${seg.join(".")}: a WorkerEntrypoint exposes run|fetch`,

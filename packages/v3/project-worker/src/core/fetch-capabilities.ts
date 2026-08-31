@@ -54,6 +54,13 @@ export type WebSocketHooks = {
 
 export const CAPABILITY_FETCH_HEADER = "x-itx-cap";
 
+/** The ENCODE side of the lane (exact mirror of `serveCapabilityFetchLane`'s parse): a dotted
+ *  string rides verbatim, an Expression rides as JSON. Callers stamping the header use this so
+ *  the two rules can never drift apart. */
+export function encodeCapabilityFetchHeader(cap: string | Expression): string {
+  return typeof cap === "string" ? cap : JSON.stringify(cap);
+}
+
 /** Normalize any spelling to the canonical terminal-fetch call (doctrine point 1): strip a
  *  trailing `fetch` step (property or call) and append the one `fetch` PROPERTY step — the live
  *  Request always rides as the runtime arg, never as expression data. A `fetch(...)` call
@@ -93,7 +100,7 @@ export async function serveCapabilityFetchLane(
 }
 
 // ═══════════════════════════════════ WORKAROUND ══════════════════════════════════════
-// Everything below exists ONLY because of doctrine point 3 (workerd RPC cannot carry sockets;
+// Everything below exists ONLY because of doctrine point 4 (workerd RPC cannot carry sockets;
 // see the header). It serves fetch calls on LIVE capabilities — capabilities backed by a running
 // provider reached over an RPC leg (a capnweb client via the /api relay, or a dynamic worker via
 // env.ITX) rather than by loadable code. The mechanism:
@@ -113,22 +120,26 @@ export async function serveCapabilityFetchLane(
 //   sockets are hibernatable, so an open upgrade survives eviction and costs nothing idle.
 //
 // DELETE-DAY CHECKLIST (all deletions, nothing rewritten): remove this whole fenced section,
-// then delete its call sites — the isFetchShapedCall branch in HibernatableRpcStubManager.invoke,
-// RetainedCallbackInvoker.fetch (rpc-stub-relay.ts), and the acceptFetchUpgradeLeg door +
-// handleWebSocketMessage/Close wiring in the stream DO. Terminal-fetch calls then ride the plain
-// invoke() walk like any other call, their Responses — sockets included — crossing the RPC legs.
+// then delete its call sites —
+//   • the isFetchShapedCall branch in HibernatableRpcStubManager.invoke, the manager's second
+//     ctor param + #liveFetch field (hibernatable-rpc-stub.ts), and the
+//     `LiveCapabilityFetchTransport &` half of RetainedCallbackInvoker;
+//   • RetainedCallbackInvoker's `fetch` method (rpc-stub-relay.ts);
+//   • the stream DO's `#liveCapabilityFetch` field, its acceptFetchUpgradeLeg door, and the
+//     handleWebSocketMessage/Close forwarding (stream-durable-object.ts);
+//   • the directory's `liveCapabilityFetch` dep + ctor pass-through (rpc-stub-directory.ts).
+// Terminal-fetch calls then ride the plain invoke() walk like any other call, their Responses —
+// sockets included — crossing the RPC legs.
 // ═════════════════════════════════════════════════════════════════════════════════════
 
 const FETCH_UPGRADE_SOCKET_HEADER = "x-itx-fetch-upgrade";
-const FETCH_UPGRADE_EYEBALL_TAG = "itx-fetch-upgrade-eyeball";
-const FETCH_UPGRADE_LEG_TAG = "itx-fetch-upgrade-leg";
-/** How long a dial may take before its pending upgradeId is swept (mirrors the page timeout). */
-const FETCH_UPGRADE_DIAL_TIMEOUT_MS = 10_000;
 
-/** Eyeball-side socket attachment (survives hibernation — so the upgrade does too). */
-type FetchUpgradeEyeballAttachment = { fetchUpgradeEyeball: { upgradeId: string } };
-/** Upgrade-leg-side socket attachment. */
-type FetchUpgradeLegAttachment = { fetchUpgradeLeg: { upgradeId: string } };
+/** One upgrade socket's attachment (survives hibernation — so the upgrade does too): which
+ *  upgrade it belongs to and which SIDE it is (`eyeball` = the caller's pair half, `leg` = the
+ *  transport's dedicated socket). The peer is the same upgradeId on the other side. */
+type FetchUpgradeAttachment = { fetchUpgrade: { upgradeId: string; side: "eyeball" | "leg" } };
+const upgradeTag = (side: "eyeball" | "leg", upgradeId: string) =>
+  `itx-fetch-upgrade-${side}:${upgradeId}`;
 
 /** The transport's answer when the provider upgraded: the socket already rides the dedicated
  *  leg, so only this marker crosses the RPC hop. */
@@ -138,6 +149,15 @@ type FetchUpgradeMarker = { webSocketUpgrade: true };
 export type LiveCapabilityFetchTransport = {
   fetch(upgradeId: string, capPath: string[], request: Request): Promise<unknown>;
 };
+
+/** workerd enforces the RFC's 123-BYTE (UTF-8) close-reason cap and THROWS over it — a UTF-16
+ *  .slice(0, 123) is not enough for multibyte reasons. Truncate by encoded bytes, whole chars. */
+function truncateCloseReason(reason: string): string {
+  if (new TextEncoder().encode(reason).length <= 123) return reason;
+  let out = reason;
+  while (out.length > 0 && new TextEncoder().encode(out).length > 123) out = out.slice(0, -1);
+  return out;
+}
 
 /** Close codes a handler may pass to close(): 1000 or app codes; everything reserved/invalid
  *  (1004-1006, 1015, out-of-range — e.g. an abnormal-closure 1006 being FORWARDED) clamps to 1000. */
@@ -162,10 +182,10 @@ type ProviderSocket = {
 
 /** TRANSPORT SIDE of a live-capability fetch (runs where the provider is legally touchable —
  *  today that is the capnweb session's request context; a NATIVE provider's socket answer still
- *  dies on its own RPC leg, pinned in dynamic-live-ws.e2e.test.ts). Dials the provider's real
- *  fetch — with the upgradeId stamped as the x-itx-fetch-upgrade request header, so a provider
- *  that cannot answer with a socket can one day dial its OWN leg instead — and branches ONLY on
- *  the answer:
+ *  dies on its own RPC leg, pinned in dynamic-live-ws.e2e.test.ts — a future dial-back fix must
+ *  deliver the upgradeId to the provider WITHOUT riding the Request headers verbatim, because a
+ *  provider that forwards its received Request would smuggle the header back into our own
+ *  upgrade-leg door). Dials the provider's real fetch and branches ONLY on the answer:
  *    • socketless Response → returned as-is (crosses the RPC leg fine);
  *    • socket-bearing Response → accept the socket HERE, open the dedicated upgrade leg into the
  *      DO, wire the frames, and return the marker instead. */
@@ -175,9 +195,7 @@ export async function dialLiveCapabilityFetch(
   upgradeId: string,
   host: { fetch(url: string, init?: RequestInit): Promise<Response> },
 ): Promise<Response | FetchUpgradeMarker> {
-  const headers = new Headers(request.headers);
-  headers.set(FETCH_UPGRADE_SOCKET_HEADER, upgradeId);
-  const response = (await providerFetch(new Request(request, { headers }))) as {
+  const response = (await providerFetch(request)) as {
     status?: number;
     webSocket?: ProviderSocket | null;
   };
@@ -186,37 +204,24 @@ export async function dialLiveCapabilityFetch(
   // Leg first, listeners second, accept LAST — accepting before the awaited leg round-trip would
   // drop any frame the provider sends immediately after upgrading (a server hello).
   const leg = await openFetchUpgradeLeg(host, upgradeId);
-  providerSocket.addEventListener("message", (ev) => {
-    try {
-      leg.send(ev.data as string | ArrayBuffer);
-    } catch {
-      /* leg closing — its close handler tears the provider side down */
-    }
-  });
-  providerSocket.addEventListener("close", (ev) => {
-    try {
-      leg.close(clampCloseCode(ev.code), (ev.reason ?? "").slice(0, 123));
-    } catch {
-      /* already closing */
-    }
-  });
-  leg.addEventListener("message", (ev) => {
-    try {
-      providerSocket.send((ev as MessageEvent).data as string | ArrayBuffer);
-    } catch {
-      /* provider closing */
-    }
-  });
-  leg.addEventListener("close", (ev) => {
-    try {
-      providerSocket.close(
-        clampCloseCode((ev as CloseEvent).code),
-        ((ev as CloseEvent).reason ?? "").slice(0, 123),
-      );
-    } catch {
-      /* already closing */
-    }
-  });
+  const wire = (from: ProviderSocket, to: ProviderSocket) => {
+    from.addEventListener("message", (ev) => {
+      try {
+        to.send(ev.data as string | ArrayBuffer);
+      } catch {
+        /* peer closing — its close event tears the pair down */
+      }
+    });
+    from.addEventListener("close", (ev) => {
+      try {
+        to.close(clampCloseCode(ev.code), truncateCloseReason(ev.reason ?? ""));
+      } catch {
+        /* already closing */
+      }
+    });
+  };
+  wire(providerSocket, leg as unknown as ProviderSocket);
+  wire(leg as unknown as ProviderSocket, providerSocket);
   providerSocket.accept?.();
   return { webSocketUpgrade: true };
 }
@@ -241,9 +246,10 @@ async function openFetchUpgradeLeg(
  *  webSocketMessage / webSocketClose alongside the other doors. */
 export class LiveCapabilityFetchServer {
   readonly #hooks: WebSocketHooks;
-  /** Dials in flight (upgradeId → asked-at ms) — the gate `acceptFetchUpgradeLeg` checks. Lazily
-   *  swept; the serve()'s finally is the primary cleanup (a crashed transport rejects the dial). */
-  #pendingDials = new Map<string, number>();
+  /** Dials in flight — the gate `acceptFetchUpgradeLeg` checks. serve()'s finally is the ONLY
+   *  cleanup needed (it always runs; no timer, no sweep — a sweep would 409 the leg of a merely
+   *  SLOW dial that is still legitimately in flight). */
+  #pendingDials = new Set<string>();
 
   constructor(hooks: WebSocketHooks) {
     this.#hooks = hooks;
@@ -259,8 +265,7 @@ export class LiveCapabilityFetchServer {
     request: Request,
   ): Promise<unknown> {
     const upgradeId = crypto.randomUUID();
-    this.#sweepPendingDials();
-    this.#pendingDials.set(upgradeId, Date.now());
+    this.#pendingDials.add(upgradeId);
     let result: unknown;
     try {
       result = await transport.fetch(upgradeId, capPath, request);
@@ -268,17 +273,19 @@ export class LiveCapabilityFetchServer {
       this.#pendingDials.delete(upgradeId);
     }
     if ((result as Partial<FetchUpgradeMarker> | null)?.webSocketUpgrade !== true) return result;
-    const leg = this.#hooks.getWebSockets(`${FETCH_UPGRADE_LEG_TAG}:${upgradeId}`)[0];
-    if (leg === undefined)
+    if (this.#hooks.getWebSockets(upgradeTag("leg", upgradeId)).length === 0)
       throw new Error(`fetch upgrade ${upgradeId}: dial acked but no upgrade leg arrived`);
+    return this.#acceptUpgradeSocket("eyeball", upgradeId);
+  }
+
+  /** Mint + hibernatably accept ONE side of an upgrade (tagged and attached for peer routing),
+   *  answering a real 101 carrying the other half of the pair. */
+  #acceptUpgradeSocket(side: "eyeball" | "leg", upgradeId: string): Response {
     const pair = new WebSocketPair();
-    this.#hooks.acceptWebSocket(pair[1], [
-      FETCH_UPGRADE_EYEBALL_TAG,
-      `${FETCH_UPGRADE_EYEBALL_TAG}:${upgradeId}`,
-    ]);
+    this.#hooks.acceptWebSocket(pair[1], [upgradeTag(side, upgradeId)]);
     pair[1].serializeAttachment({
-      fetchUpgradeEyeball: { upgradeId },
-    } satisfies FetchUpgradeEyeballAttachment);
+      fetchUpgrade: { upgradeId, side },
+    } satisfies FetchUpgradeAttachment);
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
@@ -289,18 +296,9 @@ export class LiveCapabilityFetchServer {
     if (upgradeId === null) return null;
     if ((request.headers.get("Upgrade") ?? "").toLowerCase() !== "websocket")
       return new Response(`fetch-upgrade leg: expected a websocket upgrade\n`, { status: 400 });
-    this.#sweepPendingDials();
     if (!this.#pendingDials.has(upgradeId))
       return new Response(`unknown fetch upgrade ${upgradeId} (dial first)\n`, { status: 409 });
-    const pair = new WebSocketPair();
-    this.#hooks.acceptWebSocket(pair[1], [
-      FETCH_UPGRADE_LEG_TAG,
-      `${FETCH_UPGRADE_LEG_TAG}:${upgradeId}`,
-    ]);
-    pair[1].serializeAttachment({
-      fetchUpgradeLeg: { upgradeId },
-    } satisfies FetchUpgradeLegAttachment);
-    return new Response(null, { status: 101, webSocket: pair[0] });
+    return this.#acceptUpgradeSocket("leg", upgradeId);
   }
 
   /** Route one WebSocket message: TRUE = an upgrade frame, forwarded RAW to its peer socket
@@ -324,7 +322,7 @@ export class LiveCapabilityFetchServer {
     const peer = this.#peerOf(ws);
     if (peer === undefined) return false;
     try {
-      peer?.close(clampCloseCode(code), reason.slice(0, 123));
+      peer?.close(clampCloseCode(code), truncateCloseReason(reason));
     } catch {
       /* already closing */
     }
@@ -339,28 +337,10 @@ export class LiveCapabilityFetchServer {
     } catch {
       return undefined;
     }
-    const a = att as
-      | (Partial<FetchUpgradeEyeballAttachment> & Partial<FetchUpgradeLegAttachment>)
-      | null;
-    if (a?.fetchUpgradeEyeball)
-      return (
-        this.#hooks.getWebSockets(
-          `${FETCH_UPGRADE_LEG_TAG}:${a.fetchUpgradeEyeball.upgradeId}`,
-        )[0] ?? null
-      );
-    if (a?.fetchUpgradeLeg)
-      return (
-        this.#hooks.getWebSockets(
-          `${FETCH_UPGRADE_EYEBALL_TAG}:${a.fetchUpgradeLeg.upgradeId}`,
-        )[0] ?? null
-      );
-    return undefined;
-  }
-
-  #sweepPendingDials(): void {
-    const cutoff = Date.now() - FETCH_UPGRADE_DIAL_TIMEOUT_MS;
-    for (const [upgradeId, atMs] of this.#pendingDials)
-      if (atMs < cutoff) this.#pendingDials.delete(upgradeId);
+    const upgrade = (att as Partial<FetchUpgradeAttachment> | null)?.fetchUpgrade;
+    if (!upgrade) return undefined;
+    const peerSide = upgrade.side === "eyeball" ? "leg" : "eyeball";
+    return this.#hooks.getWebSockets(upgradeTag(peerSide, upgrade.upgradeId))[0] ?? null;
   }
 }
 

@@ -92,7 +92,7 @@ async function rejectionOf(
 const codeOf = (e: unknown): string | undefined =>
   typeof e === "object" && e !== null && "code" in e ? String((e as any).code) : undefined;
 
-/** Presence: the keys currently held by this context (`[{ key, description? }]`). */
+/** Presence: the keys currently held by this context (`[{ key }]`). */
 const listStubs = (itx: any): Promise<any[]> => itx.invokeCapability("itx.rpcStubs.list()");
 
 class Tools extends RpcTarget {
@@ -150,7 +150,7 @@ test("same-key re-provide replaces the incumbent while online; a mount naming th
   const observer = await harness.itx(ctx);
   // First live provider under key 'dup'.
   const s1 = harness.session(ctx);
-  await s1.get().rpcStubs.provide(new Tools("one"), { key: "dup", description: "first transport" });
+  await s1.get().rpcStubs.provide(new Tools("one"), { key: "dup" });
   await until("first 'dup' transport listed", async () =>
     (await listStubs(observer)).some((r) => r.key === "dup"),
   );
@@ -162,9 +162,7 @@ test("same-key re-provide replaces the incumbent while online; a mount naming th
   // rpc-stub-directory.fetch drops the predecessor with reason "replaced", keyFinal=false, so no
   // mount naming the key is auto-revoked).
   const s2 = harness.session(ctx);
-  await s2
-    .get()
-    .rpcStubs.provide(new Tools("two"), { key: "dup", description: "second transport" });
+  await s2.get().rpcStubs.provide(new Tools("two"), { key: "dup" });
   await until("exactly one 'dup' transport, now serving 'two'", async () => {
     const dups = (await listStubs(observer)).filter((r) => r.key === "dup");
     if (dups.length !== 1) return undefined;

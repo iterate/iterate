@@ -226,17 +226,15 @@ export class HibernatableRpcStubManager {
     return this.#sockets().find((ws) => this.#attachment(ws)?.stubKey === stubKey);
   }
   #attachment(ws: WebSocket): HibernatableRpcStubRecord | undefined {
-    const a = this.#rawAttachment(ws) as HibernatableRpcStubRecord | null;
-    return a && typeof a.stubKey === "string" ? a : undefined;
-  }
-  #rawAttachment(ws: WebSocket): unknown {
+    let a: HibernatableRpcStubRecord | null;
     try {
-      return ws.deserializeAttachment() as unknown;
+      a = ws.deserializeAttachment() as HibernatableRpcStubRecord | null;
     } catch {
       // A malformed attachment reads as "no attachment" — the socket is then invisible to the
       // registry and dies at its next close; better than wedging every enumeration.
       return undefined;
     }
+    return a && typeof a.stubKey === "string" ? a : undefined;
   }
 
   async #pageIn(stubKey: string): Promise<{ invoker: RetainedCallbackInvoker; inFlight: number }> {

@@ -22,7 +22,7 @@
 
 import { RpcTarget } from "capnweb";
 import type { StreamDurableObject } from "../stream-durable-object.ts";
-import { CAPABILITY_FETCH_HEADER } from "./fetch-capabilities.ts";
+import { CAPABILITY_FETCH_HEADER, encodeCapabilityFetchHeader } from "./fetch-capabilities.ts";
 import type { DeliveryPolicy } from "./events.ts";
 import { print, type Expression, type ItxExpression } from "./expression.ts";
 import { InvokeHandle } from "./invoke-handle.ts";
@@ -215,7 +215,7 @@ export class Itx extends RpcTarget {
    *  capnweb clients need no separate /cap door). */
   fetchCap(cap: ItxExpression, request: Request): Promise<Response> {
     const headers = new Headers(request.headers);
-    headers.set(CAPABILITY_FETCH_HEADER, typeof cap === "string" ? cap : JSON.stringify(cap));
+    headers.set(CAPABILITY_FETCH_HEADER, encodeCapabilityFetchHeader(cap));
     return this.#host.fetch(new Request(request, { headers }));
   }
 
