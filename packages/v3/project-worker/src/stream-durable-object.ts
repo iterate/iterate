@@ -31,12 +31,7 @@ import {
   type WorkerSource,
 } from "./core/worker-loader.ts";
 import { createLogger } from "./core/logs.ts";
-import {
-  breakerRemaining,
-  CoreStreamProcessor,
-  isCoreControl,
-  type CoreState,
-} from "./core-processor.ts";
+import { admit, breakerRemaining, CoreStreamProcessor, type CoreState } from "./core-processor.ts";
 import { codedError, errorCode, reportIssue } from "./core/errors.ts";
 import {
   type DeliveryPolicy,
@@ -51,7 +46,7 @@ import {
   type Expression,
   type ItxExpression,
 } from "./core/expression.ts";
-import { readReduceCheckpoint, writeReduceCheckpoint } from "./core/reduce-checkpoint.ts";
+import { InlineCore } from "./core/inline-core.ts";
 import { invokePath } from "./core/dispatch.ts";
 import { InvokeHandle } from "./core/invoke-handle.ts";
 import { StreamAlarmArmer, StreamEventLog } from "./core/event-log.ts";
@@ -223,38 +218,16 @@ export class StreamDurableObject extends DurableObject<Env> {
     for (const input of inputs)
       if (typeof input.type !== "string" || input.type.trim() === "")
         throw new Error("append: every event needs a non-empty type");
-    // THE CORE PROCESSOR SPEAKS FIRST (the apps/os shape): pause refuses every non-control
-    // append; the token-bucket breaker meters durable growth. Control events always pass — a
-    // paused or tripped stream must accept its own resume.
-    const nonControl = inputs.filter((i) => !isCoreControl(i.type));
-    if (nonControl.length > 0) {
-      const core = this.#coreState();
-      if (core.paused) throw codedError("STREAM_PAUSED", `stream paused: ${core.paused.reason}`);
-      let counted = nonControl.filter((i) => !i.ephemeral).length;
-      if (counted > 0 && breakerRemaining(core, Date.now()) < counted) {
-        // Before refusing: a retry of an ALREADY-COMMITTED idempotencyKey will dedupe to zero
-        // durable growth, and the breaker meters GROWTH — don't tax the reconciling retry (retry
-        // storms are exactly when the bucket is tight). Re-count excluding sure dedupe hits; the
-        // probe runs only on the about-to-trip path, so the common case pays no extra SELECT.
-        counted = nonControl.filter(
-          (i) =>
-            !i.ephemeral &&
-            !(i.idempotencyKey && this.#eventLog.hasIdempotencyKey(i.idempotencyKey)),
-        ).length;
-        if (counted > 0 && breakerRemaining(core, Date.now()) < counted)
-          throw codedError(
-            "STREAM_BREAKER_OPEN",
-            `stream circuit breaker open — ${counted} durable event(s) exceed the bucket`,
-          );
-      }
-    }
+    // THE CORE PROCESSOR SPEAKS FIRST (the apps/os shape): it reads its own reduced state and
+    // refuses a paused/tripped append. All pause/breaker reasoning lives in core-processor.ts.
+    admit(this.#coreState(), inputs, Date.now(), (k) => this.#eventLog.hasIdempotencyKey(k));
     // THE INLINE REDUCES run INSIDE the log's transaction: the routing table and the core
     // state are atomically exact as of the last committed event, always — the pump-races-the-
     // provide class is unspellable, not carefully avoided. (Reduce errors are caught per
     // event; a bad event skips, it never aborts the commit.)
     const { committed, distinct, scannedAfterOffset, nextOffset } = this.#eventLog.append(
       inputs,
-      (justCommitted, after, next) => this.#reduceInlineAtCommit(justCommitted, after, next),
+      (justCommitted, after, next) => this.#inlineCore.reduceAtCommit(justCommitted, after, next),
     );
     if (nextOffset > scannedAfterOffset) {
       // A prior-batch idempotency dedupe echoes an ALREADY-DELIVERED below-range offset into
@@ -318,26 +291,24 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
   }
 
-  // ── THE INLINE CORE: reduce-only processors reduced synchronously at the commit point ──
-  // The runner apparatus (chain, cursors, gap repair, resurrection) is the price of being AWAY
-  // from the commit point; these reduces run AT it and pay none of it. Checkpoint = one versioned
-  // kv value per slug, committed atomically with the batch; rebuild = replay the durable log
-  // (version skew, eviction, first contact — all the same path). Inline reduces see DURABLE
-  // events only, so the checkpoint always rebuilds bit-identically.
-  readonly #inlineCache = new Map<
-    string,
-    { proc: ReduceOnlyProcessor<unknown>; state: unknown; throughOffset: number }
-  >();
+  // ── THE INLINE CORE: reduce-only processors reduced at the stream's commit point. The engine —
+  // rehydrate / catch up / reduce-at-commit / checkpoint — lives in core/inline-core.ts; this DO
+  // owns only the DEFS (which processors are inline), because BUILDING them is its wiring below. ──
+  readonly #inlineCore = new InlineCore({
+    kv: this.ctx.storage.kv,
+    read: (after, limit) => this.read(after, limit),
+    head: () => this.#eventLog.highestAssignedOffset(),
+    defs: () => this.#inlineDefs(),
+  });
   #capabilityTableInstance?: CapabilityTableProcessor;
 
-  /** The two inline-core reduced states, typed in ONE place (the `#inline(slug).state` cast used to
-   *  be hand-written at ~9 sites). `#table()` = the capability mount table; `#coreState()` = the
-   *  core reduce (pause/breaker). */
+  /** The two inline-core reduced states, typed in ONE place. `#table()` = the capability mount
+   *  table; `#coreState()` = the core reduce (pause/breaker). */
   #table(): CapabilityTable {
-    return this.#inline(CAPABILITY_TABLE_SLUG).state as CapabilityTable;
+    return this.#inlineCore.entry(CAPABILITY_TABLE_SLUG).state as CapabilityTable;
   }
   #coreState(): CoreState {
-    return this.#inline(CORE_SLUG).state as CoreState;
+    return this.#inlineCore.entry(CORE_SLUG).state as CoreState;
   }
 
   /** THE capability host, parent-constructed: same class, same contract, zero distance. */
@@ -391,77 +362,6 @@ export class StreamDurableObject extends DurableObject<Env> {
         proc: this.#capabilityTableProcessor() as ReduceOnlyProcessor<unknown>,
       },
     ];
-  }
-
-  /** Rehydrate (checkpoint, else initial) and catch up to the durable head — all synchronous. */
-  #inline(slug: string): {
-    proc: ReduceOnlyProcessor<unknown>;
-    state: unknown;
-    throughOffset: number;
-  } {
-    let entry = this.#inlineCache.get(slug);
-    if (!entry) {
-      const def = this.#inlineDefs().find((d) => d.slug === slug);
-      if (!def) throw new Error(`no inline processor "${slug}"`);
-      const cp = readReduceCheckpoint(this.ctx.storage.kv, slug, def.proc.contract.version, () =>
-        def.proc.contract.initialState(),
-      );
-      entry = cp
-        ? { proc: def.proc, state: cp.state, throughOffset: cp.reducedThroughOffset }
-        : { proc: def.proc, state: def.proc.contract.initialState(), throughOffset: 0 };
-      this.#inlineCache.set(slug, entry);
-    }
-    const head = this.#eventLog.highestAssignedOffset();
-    while (entry.throughOffset < head) {
-      const page = this.read(entry.throughOffset, 500);
-      for (const e of page.events) if (e.offset <= head) this.#reduceInline(entry, e);
-      entry.throughOffset = Math.min(page.scannedThroughOffset, head);
-      if (page.events.length < 500) break;
-    }
-    return entry;
-  }
-
-  #reduceInline(
-    entry: { proc: ReduceOnlyProcessor<unknown>; state: unknown },
-    e: StreamEvent,
-  ): void {
-    if (!consumesEvent(entry.proc.contract.consumes, e)) return;
-    try {
-      entry.state = entry.proc.reduce({ event: e, state: entry.state }) ?? entry.state;
-    } catch (err) {
-      reportIssue("stream-do.inline-reduce", err, {
-        slug: entry.proc.contract.slug,
-        offset: e.offset,
-      });
-    }
-  }
-
-  /** Called INSIDE append's transaction: reduce every fresh durable event through each inline
-   *  processor, checkpoint on change. */
-  #reduceInlineAtCommit(
-    committed: StreamEvent[],
-    scannedAfterOffset: number,
-    nextOffset: number,
-  ): void {
-    for (const def of this.#inlineDefs()) {
-      const entry = this.#inline(def.slug); // caught up to the PRE-batch head (cache is old)
-      const before = entry.state;
-      for (const e of committed) {
-        if (e.offset <= scannedAfterOffset || e.ephemeral) continue;
-        this.#reduceInline(entry, e);
-      }
-      entry.throughOffset = nextOffset;
-      // Inline writes ONLY on change (it re-catches-up cheaply from the log on rebuild, so an
-      // unadvanced cursor is harmless) — unlike the facet, which advances the cursor every batch.
-      if (entry.state !== before)
-        writeReduceCheckpoint(
-          this.ctx.storage.kv,
-          def.slug,
-          { reducerVersion: def.proc.contract.version, reducedThroughOffset: nextOffset },
-          entry.state,
-          true,
-        );
-    }
   }
 
   read(afterOffset = 0, limit = 500): { events: StreamEvent[]; scannedThroughOffset: number } {
@@ -934,7 +834,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       );
     }
     if (isInlineSlug(ref)) {
-      const entry = this.#inline(ref);
+      const entry = this.#inlineCore.entry(ref);
       return {
         snapshot: () => ({ offset: entry.throughOffset, state: entry.state }),
         waitUntilProcessed: () => ({ ok: true }),

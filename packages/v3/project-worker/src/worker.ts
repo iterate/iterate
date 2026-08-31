@@ -27,7 +27,7 @@ export class DummyControlPlane extends WorkerEntrypoint {
 }
 
 // Bumped every deploy so a smoke test can wait for THIS build to propagate (workers.dev lags ~1-2min/colo).
-const CODE_VERSION = "live-39";
+const CODE_VERSION = "live-40";
 
 /** The `?ctx=` slug when a request names none. */
 const DEFAULT_CTX = "prj_demo";

@@ -18,8 +18,9 @@
 // must always accept its own resume.
 
 import { z } from "zod";
-import { defineProcessorContract, type StreamEvent } from "./core/events.ts";
+import { defineProcessorContract, type StreamEvent, type StreamEventInput } from "./core/events.ts";
 import type { ReduceArgs, ReduceOnlyProcessor } from "./core/processor.ts";
+import { codedError } from "./core/errors.ts";
 
 export const STREAM_PAUSED = "events.iterate.com/stream/paused";
 export const STREAM_RESUMED = "events.iterate.com/stream/resumed";
@@ -111,4 +112,32 @@ export function breakerRemaining(state: CoreState, nowMs: number): number {
 /** Control events are exempt from pause and never spend — a stream must accept its own resume. */
 export function isCoreControl(type: string): boolean {
   return CONTROL_TYPES.has(type);
+}
+
+/** THE admission decision — the parent's enforcement, reading this reduce at the commit point: a
+ *  paused stream refuses every non-control append; the token-bucket breaker meters DURABLE growth.
+ *  Throws STREAM_PAUSED / STREAM_BREAKER_OPEN; a clean return admits the batch. Control events always
+ *  pass. `hasIdempotencyKey` lets a reconciling retry through a tight bucket — a retry of an
+ *  already-committed key dedupes to zero durable growth, and the breaker meters GROWTH, so it isn't
+ *  taxed. The dedupe probe runs ONLY on the about-to-trip path, so the common case pays no SELECT. */
+export function admit(
+  state: CoreState,
+  inputs: StreamEventInput[],
+  nowMs: number,
+  hasIdempotencyKey: (key: string) => boolean,
+): void {
+  const nonControl = inputs.filter((i) => !isCoreControl(i.type));
+  if (nonControl.length === 0) return;
+  if (state.paused) throw codedError("STREAM_PAUSED", `stream paused: ${state.paused.reason}`);
+  let counted = nonControl.filter((i) => !i.ephemeral).length;
+  if (counted > 0 && breakerRemaining(state, nowMs) < counted) {
+    counted = nonControl.filter(
+      (i) => !i.ephemeral && !(i.idempotencyKey && hasIdempotencyKey(i.idempotencyKey)),
+    ).length;
+    if (counted > 0 && breakerRemaining(state, nowMs) < counted)
+      throw codedError(
+        "STREAM_BREAKER_OPEN",
+        `stream circuit breaker open — ${counted} durable event(s) exceed the bucket`,
+      );
+  }
 }
