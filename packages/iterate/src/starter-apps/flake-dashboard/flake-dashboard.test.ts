@@ -121,7 +121,7 @@ test("renders the dashboard once caught up and settles the attempt durably", asy
   expect(renderDashboard.mock.calls.length).toBe(rendersSoFar + 1);
 });
 
-test("a failed render settles as failed and is retried when new data arrives", async () => {
+test("a failed render settles as failed and the retry can still settle success at the same offset", async () => {
   const renderDashboard = vi
     .fn(async (_state: FlakeDashboardState) => ({
       status: "succeeded" as const,
@@ -132,12 +132,17 @@ test("a failed render settles as failed and is retried when new data arrives", a
   const h = makeHarness(renderDashboard);
   await h.append(birth(), runRecorded(1, [record("deploy", "pass", { at: day(0) })]));
 
-  expect(h.events(flakeEventTypes.dashboardRenderSettled).at(-1)!.payload).toMatchObject({
-    result: { status: "failed", error: "GitHub is down" },
-  });
-  expect(h.state().render).toBeNull();
-
-  await h.append(runRecorded(2, [record("deploy", "pass", { at: day(1) })]));
+  // The failed settlement's own delivery re-drives a retry at the SAME data
+  // offset, and the success must land — the failed settlement must not have
+  // claimed the offset's only idempotency key (its status is part of the key).
+  const settled = h.events(flakeEventTypes.dashboardRenderSettled);
+  expect(settled.map((event) => (event.payload as any).result.status)).toEqual([
+    "failed",
+    "succeeded",
+  ]);
+  expect((settled[0]!.payload as any).throughOffset).toBe(
+    (settled[1]!.payload as any).throughOffset,
+  );
   expect(h.state().render).toMatchObject({ issueNumber: 7 });
 });
 

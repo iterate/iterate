@@ -185,7 +185,11 @@ export class FlakeDashboardProcessor extends StreamProcessor<
       try {
         await this.#appendTolerantOfSettledRace(append, {
           type: flakeEventTypes.dashboardRenderSettled,
-          idempotencyKey: this.idempotencyKey(`dashboard-render:${throughOffset}`),
+          // The status is part of the key: a failed settlement must not claim
+          // the offset's only key, or a retried render's SUCCESS at the same
+          // offset would idempotency-conflict forever and the offset could
+          // never be marked rendered.
+          idempotencyKey: this.idempotencyKey(`dashboard-render:${throughOffset}:${result.status}`),
           payload: { throughOffset, result },
         });
       } finally {

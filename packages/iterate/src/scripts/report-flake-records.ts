@@ -32,7 +32,16 @@ async function main(): Promise<void> {
         .split("\n")
         .filter((line) => line.trim() !== "")
         .flatMap((line) => {
-          const parsed = FlakeRecord.safeParse(JSON.parse(line));
+          // A torn or garbage line (a crashed worker mid-append) must skip,
+          // not abort the whole report — JSON.parse throws are malformed too.
+          let json: unknown;
+          try {
+            json = JSON.parse(line);
+          } catch {
+            console.warn(`[flake-report] skipping malformed line in ${file}: ${line}`);
+            return [];
+          }
+          const parsed = FlakeRecord.safeParse(json);
           if (!parsed.success) {
             console.warn(`[flake-report] skipping malformed line in ${file}: ${line}`);
             return [];
