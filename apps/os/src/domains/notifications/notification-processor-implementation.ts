@@ -64,6 +64,10 @@ export class NotificationProcessor extends StreamProcessor<NotificationProcessor
               audience: { kind: "project" },
               title: event.payload.requests.length === 1 ? "Approval needed" : "Approvals needed",
               body: approvalPushBody(event.payload.requests),
+              requests: event.payload.requests.map((request) => ({
+                method: request.method,
+                url: request.url,
+              })),
               destination: agentPath
                 ? { kind: "agent-chat", path: agentPath }
                 : { kind: "approvals", approvalRequestEventOffset: event.offset },

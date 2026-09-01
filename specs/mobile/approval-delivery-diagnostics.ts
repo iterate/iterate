@@ -28,12 +28,7 @@ export async function withApprovalDeliveryDiagnostic<Result>(input: {
   try {
     return await input.wait();
   } catch (cause) {
-    const diagnostic = await approvalDeliveryDiagnostic(input).catch(
-      (diagnosticError: unknown) => ({
-        diagnosticError:
-          diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError),
-      }),
-    );
+    const diagnostic = await approvalDeliveryDiagnostic(input).catch(String);
     throw new Error(
       `${input.description}\nApproval delivery diagnostic:\n${JSON.stringify(diagnostic, null, 2)}`,
       { cause },
