@@ -174,6 +174,29 @@ test("a hung body goes red at the wrapper's own deadline and records the hang", 
   }
 });
 
+test("a relative FLAKE_RECORD_DIR is rebased against GITHUB_WORKSPACE", async () => {
+  // Root `pnpm test` runs every workspace with its own cwd; without the
+  // rebase each package would write under itself and the repo-root CI
+  // reporter would find nothing (the bug this test pins).
+  const previous = { dir: process.env.FLAKE_RECORD_DIR, root: process.env.GITHUB_WORKSPACE };
+  const workspaceRoot = mkdtempSync(join(tmpdir(), "flake-workspace-"));
+  process.env.GITHUB_WORKSPACE = workspaceRoot;
+  process.env.FLAKE_RECORD_DIR = "test-results/flake-records";
+  try {
+    const body = registerWithFakeRunner(/flaked/, async () => {
+      throw new Error("flaked again");
+    });
+    await expect(body()).rejects.toThrow(/flaked/);
+    const files = readdirSync(join(workspaceRoot, "test-results/flake-records"));
+    expect(files).toHaveLength(1);
+  } finally {
+    if (previous.dir === undefined) delete process.env.FLAKE_RECORD_DIR;
+    else process.env.FLAKE_RECORD_DIR = previous.dir;
+    if (previous.root === undefined) delete process.env.GITHUB_WORKSPACE;
+    else process.env.GITHUB_WORKSPACE = previous.root;
+  }
+});
+
 test("without FLAKE_RECORD_DIR nothing is written anywhere", async () => {
   const previous = process.env.FLAKE_RECORD_DIR;
   delete process.env.FLAKE_RECORD_DIR;

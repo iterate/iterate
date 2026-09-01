@@ -142,15 +142,26 @@ export function createFlake<TestFn extends (...args: any[]) => any>(
  * when the variable is unset (local runs). Per-pid files keep parallel test
  * workers from interleaving writes. Recording failures are logged, never
  * thrown — telemetry must not change a test's outcome.
+ *
+ * A relative FLAKE_RECORD_DIR is rebased against GITHUB_WORKSPACE (the same
+ * rule as TEST_TELEMETRY_ARTIFACT_DIR in ci-telemetry.ts): root `pnpm test`
+ * runs each workspace with its own cwd, so without the rebase every package
+ * would write under its own directory and the CI reporter — which reads from
+ * the repo root — would find nothing.
  */
 async function appendFlakeRecord(record: FlakeRecord): Promise<void> {
   const dir = typeof process === "undefined" ? undefined : process.env.FLAKE_RECORD_DIR;
   if (!dir) return;
   try {
     const { appendFileSync, mkdirSync } = await import("node:fs");
-    const { join } = await import("node:path");
-    mkdirSync(dir, { recursive: true });
-    appendFileSync(join(dir, `flake-records-${process.pid}.jsonl`), JSON.stringify(record) + "\n");
+    const { join, resolve } = await import("node:path");
+    const repositoryRoot = process.env.GITHUB_WORKSPACE;
+    const resolved = repositoryRoot ? resolve(repositoryRoot, dir) : dir;
+    mkdirSync(resolved, { recursive: true });
+    appendFileSync(
+      join(resolved, `flake-records-${process.pid}.jsonl`),
+      JSON.stringify(record) + "\n",
+    );
   } catch (error) {
     console.error("[flake-test] failed to append flake record:", error);
   }

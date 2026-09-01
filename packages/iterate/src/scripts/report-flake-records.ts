@@ -9,7 +9,7 @@
 // attempt races a hard deadline. Flake reporting must never redden or slow
 // CI; a broken prd only gaps the data.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { connectItx } from "../node.ts";
 import {
   flakeDashboardCreationEvents,
@@ -20,7 +20,14 @@ import { FlakeRecord } from "../starter-apps/flake-dashboard/contract.ts";
 const DEADLINE_MS = 20_000;
 
 async function main(): Promise<void> {
-  const recordDir = process.env.FLAKE_RECORD_DIR;
+  // Same rebase rule as the recorder (and TEST_TELEMETRY_ARTIFACT_DIR): a
+  // relative dir resolves against GITHUB_WORKSPACE, so writer and reader
+  // agree on one location regardless of each workspace's own cwd.
+  const configuredDir = process.env.FLAKE_RECORD_DIR;
+  const recordDir =
+    configuredDir && process.env.GITHUB_WORKSPACE
+      ? resolve(process.env.GITHUB_WORKSPACE, configuredDir)
+      : configuredDir;
   if (!recordDir || !existsSync(recordDir)) {
     console.log(`[flake-report] no record dir at ${recordDir || "(unset)"} — nothing to report`);
     return;
