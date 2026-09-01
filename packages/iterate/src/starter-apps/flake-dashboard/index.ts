@@ -10,6 +10,10 @@ export const FlakeDashboardApp = {
       async processEvent(event: StreamEvent): Promise<void> {
         if (event.path !== flakesStreamPath) return;
         using project = await env.ITX.get();
+        // workers.get returns an untyped RPC capability; the assertion is the
+        // only place to say what answers. It is safe because the ref pins
+        // className to FlakeDashboardApp, whose own method surface is exactly
+        // what is asserted here (same pattern as the guestbook app).
         using worker = project.workers.get(flakeDashboardWorkerRef) as DynamicWorkerCapability<
           Pick<FlakeDashboardWorker, "syncEvent">
         >;
