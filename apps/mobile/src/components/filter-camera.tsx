@@ -459,8 +459,7 @@ export default class FilterCamera extends Component<Props, State> {
     // up = bigger. "features" grows cutouts in place; "face" scales the
     // whole face layout.
     if (this.#adjust.mode !== "hole") {
-      const clampScale = (value: number) => Math.min(2.5, Math.max(0.4, value));
-      const value = clampScale(pointer.startScale * (1 - dy / 280));
+      const value = Math.min(2.5, Math.max(0.4, pointer.startScale * (1 - dy / 280)));
       if (this.#adjust.mode === "features") {
         this.#adjust = { ...this.#adjust, featureScale: value };
         this.setState({ adjustLabel: `features ${value.toFixed(2)}×` });
