@@ -98,6 +98,9 @@ export async function createMobileFixture(
 
   return {
     createAgent: agentHelper.createAgent,
+    /** Admin itx for the signup-born project — the spec's server-side hand
+     * (egress rules, device enrollment, journal reads). */
+    itx,
     [Symbol.asyncDispose]() {
       return resources.disposeAsync();
     },
@@ -119,16 +122,21 @@ export async function createMobileFixture(
     const popupPromise = page.waitForEvent("popup", { timeout: 15_000 });
     await page.getByRole("button", { name: "Sign in" }).click();
     const popup = await popupPromise;
-    await popup.getByTestId("email-login-button").click();
+    // The popup is a raw Page — no spinner-waiter middleware — and its
+    // cross-server auth navigations run cold on fresh preview deploys
+    // (CI-measured >1s), so these two waits carry explicit timeouts.
+    const emailLoginButton = popup.getByTestId("email-login-button");
+    await emailLoginButton.waitFor({ state: "visible", timeout: 15_000 }); // timeout: popup page has no spinner-waiter
+    await emailLoginButton.click();
     await signUpWithEmailOtp(popup, {
       // A constant prefix, NOT the slug: the signup display name embeds this,
       // and a slug-containing name makes getByText(projectSlug) ambiguous.
-      email: uniqueSignupEmail("mobile-live-status"),
+      email: uniqueSignupEmail(slugPrefix),
       projectSlug,
       testInfo,
     });
     // Project selection auto-continues for test identities — consent is next.
-    await popup.getByRole("button", { name: "Allow access" }).click();
+    await popup.getByRole("button", { name: "Allow access" }).click({ timeout: 15_000 }); // timeout: popup page has no spinner-waiter
     await page.getByText("New chat").waitFor();
     (page as any).videoMode?.setStartTime();
   }

@@ -7,9 +7,12 @@ size: small
 
 ## Status summary
 
-Implemented and verified: both specs migrated to `createAgentHelper`, both pass
-locally (approvals 51s paired run, notifications 35.6s). PR #2563 awaiting
-review. Remaining: CI green + review threads.
+Implemented and verified: both specs migrated to `createAgentHelper`, plus a
+follow-up simplification pass on approvals (fixture signup, no journal waits,
+no manual timeouts — 19s locally, was ~28s). PR #2563 awaiting review.
+Remaining: CI green (first run hit a sick preview slot — config-repo 403s
+across every PR) + review threads. Notifications gets the same simplification
+audit after this lands.
 
 ## Motivation
 
@@ -68,6 +71,27 @@ Two problems with the raw `intercept`:
 - **Model name**: the helper configures `intercepted/typed`; the specs' journal
   assertions and prose move off `intercepted/driver`. The guarantee asserted is
   unchanged — a model only this process's handler can serve.
+
+## Follow-up: approvals simplification pass (requested after the migration)
+
+- [x] drop `test.setTimeout(120_000)` — it LOWERED the 240s default
+      (`SPEC_TEST_TIMEOUT_MS`); the "two REAL agent turns" comment existed only
+      to justify it _both deleted; the turns are still real agent turns on a
+      scripted model, nothing changed there_
+- [x] sign up via `helpers.createMobileFixture` — deletes the hand-rolled
+      popup flow, `connectItxReady`, `resolveOsBaseUrl`, and the try/finally
+      (the echo tunnel is `await using` now) _fixture gained an `itx` handle;
+      its signup email prefix now derives from slugPrefix (was hardcoded
+      mobile-live-status) and its popup waits carry approvals' explicit
+      timeouts_
+- [x] remove the journal waits and timing hacks: the 6s rules-cache outwait
+      (post-append chain is always > the 5s staleness bound in
+      project-durable-object.ts `#egressRules`), the cold-isolate warm-up run,
+      `awaitAgentScriptStart`, the settle `expect.poll` (replaced by waiting
+      for each script's narrated outcome in the feed), the outcome-count
+      `expect.poll` (single journal READ after the UI shows both), and the
+      pre-Notifications root/device `waitForEvent` sync _spinner-waiter +
+      turnPending cover the whole turn; verified twice locally at ~19s_
 
 ## Observed, out of scope
 
