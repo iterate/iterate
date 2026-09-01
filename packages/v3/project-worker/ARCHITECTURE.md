@@ -1,3 +1,8 @@
+> **⚠️ SUPERSEDED.** This document describes an earlier shape of the clean room and is kept as
+> history. The current surface is `docs/clean-room-api-walkthrough.md`; the layer map is
+> `LAYERS.md`; the design of record for subscriptions and processors is
+> `docs/design-onion-subscriptions-processors.md`.
+
 # Clean-room inner core — architecture & API
 
 A stock-take of `packages/v3/project-worker` as it stands (branch `wip/kernel-wayfinder-2026-07-30`). This is the

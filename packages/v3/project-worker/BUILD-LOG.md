@@ -1801,3 +1801,16 @@ end-to-end 15267 ev/s | p50 36ms p95 42ms | batching 50×` (was ~5,400 ev/s, p50
   RpcTarget). Every move is a `git mv`; imports were rewritten mechanically against the new tree,
   path mentions in comments likewise; unit-lane pins moved with their subject.
 - GATES: typecheck clean (3 tsconfigs) · unit+harness+workers 347 passed / 1 xfail · e2e 34 passed / 2 xfail · tutorial-proof 8/8 · oxlint 0/0 · knip clean.
+
+## 2026-09-02 — the onion, step 5: the walkthrough, rewritten from source
+
+- `docs/clean-room-api-walkthrough.md` now describes the code as it is after steps 0–4: the session
+  shape (`authenticate().projects.get(id)`, `cd`), the two banded sections of `IterateContext`
+  (axioms / sugar), mounts as pure data, the subscriptions table and the one delivery loop (push to
+  a brand that owns its progress, else a stream-kept cursor), `StreamProcessorDurableObject`
+  hosted through the ordinary `getDurableObjectClass`, zero-write ephemerals with their
+  incarnation contract, the layer events table, the tree by primitive, and the four flows redrawn.
+- The four superseded design documents (`ARCHITECTURE.md`, `docs/iterate-context.md`,
+  `ITX-KERNEL-SHAPE.md`, `docs/state-of-play.md`) each carry ONE short banner pointing at the
+  walkthrough, the layer map, and the design of record; their long, drifting banners are gone.
+- One stray path comment in `wrangler.jsonc` (`core/worker-loader.ts`) followed the step 4 move.

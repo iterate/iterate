@@ -1,8 +1,7 @@
-> **⚠️ SUPERSEDED (2026-08-30).** The "maximum simple" refactor LANDED: built-ins now resolve
-> DIRECTLY (no config, no mounts, no provenance — `core/config.ts` deleted); `itx.connections`/`connect()`
-> → the `rpcStubs` kernel primitive; `workers.get({source})`/`facets.get(ref)` mirror; `runScript(lambda)`;
-> `itx.connectToCapnweb(url)` replaces `itx.os`. Read `src/built-ins.ts` + `capability-table-processor.ts`
-> for the real surface. The config-gated / exokernel-grant model described below was NOT built (deliberately).
+> **⚠️ SUPERSEDED.** This document describes an earlier shape of the clean room and is kept as
+> history. The current surface is `docs/clean-room-api-walkthrough.md`; the layer map is
+> `LAYERS.md`; the design of record for subscriptions and processors is
+> `docs/design-onion-subscriptions-processors.md`.
 
 # ITX kernel shape — design (WIP, 2026-08-29)
 

@@ -1,13 +1,7 @@
-> **⚠️ SUPERSEDED (2026-08-30).** The "maximum simple" refactor LANDED: built-ins now resolve
-> DIRECTLY (no config, no mounts, no provenance — `core/config.ts` deleted); `itx.connections`/`connect()`
-> → the `rpcStubs` kernel primitive; `workers.get({source})`/`facets.get(ref)` mirror; `runScript(lambda)`;
-> `itx.connectToCapnweb(url)` replaces `itx.os`. Read `src/built-ins.ts` + `capability-table-processor.ts`
-> for the real surface. The config-gated / exokernel-grant model described below was NOT built (deliberately).
-> (2026-09-01 — `rpcStubs` is BACK as a built-in, the physical axiom (`itx.rpcStubs.provide/get/list/close`).
-> The ONE `itx.provide(path, target)` door STAYS as sugar over it: a live target is parked under `path`, then
-> an ordinary mount `path ⇒ itx.rpcStubs.get('<path>')` is appended. The `live: true` event flag, its
-> one-row-per-path supersession and the auto-revoke-on-close machinery were DELETED — the mount event is pure
-> data again; presence is `itx.rpcStubs.list()`, never the table. Same pointers apply.)
+> **⚠️ SUPERSEDED.** This document describes an earlier shape of the clean room and is kept as
+> history. The current surface is `docs/clean-room-api-walkthrough.md`; the layer map is
+> `LAYERS.md`; the design of record for subscriptions and processors is
+> `docs/design-onion-subscriptions-processors.md`.
 
 # Clean room — state of play (2026-08-17)
 
