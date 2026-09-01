@@ -333,3 +333,15 @@ MediaRecorder mechanisms, both hardened:
   cartoon-style cards are stylized drawings and stay. Prompts updated so
   future regenerations stay face-free. (403s parked per Misha — ignoring
   until mentioned.)
+
+## Feedback round 15 (realistic animal masks)
+
+- The cat filter became the Animal filter: 11 photorealistic
+  transparent-background portraits (cat, dog, goat, tiger, bear, monkey,
+  gorilla, lion, horse, fox, mouse — `generate-animal-faces.mjs`, ~2.5MB),
+  cycled by the settings-row mode button. The mask tracks the head, and
+  your eyes/mouth are remapped onto the ANIMAL's eye/mouth positions via
+  hand-tuned per-image anchors (ANIMAL_FACES in definitions.ts —
+  re-check anchors after regenerating art).
+- Preview 403s fixed on main (#2567, repo-name casing) — PR fully green;
+  known-red note removed, preview-8/17 unparked.

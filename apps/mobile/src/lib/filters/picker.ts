@@ -7,7 +7,7 @@
 export const FILTER_PICKER = [
   { id: "potato", label: "Potato", emoji: "🥔" },
   { id: "eyes-lips", label: "Eyes & lips", emoji: "👄" },
-  { id: "cat", label: "Cat", emoji: "🐱" },
+  { id: "cat", label: "Animal", emoji: "🐱" },
   { id: "flashcards", label: "Flashcards", emoji: "🍎" },
   { id: "sing", label: "Sing", emoji: "🎤" },
   { id: "face-drop", label: "Face drop", emoji: "🫥" },

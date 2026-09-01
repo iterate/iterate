@@ -15,6 +15,7 @@
 // remapped onto a character (the buried potato), or pinned to a screen
 // region (the flashcards keep your face in the top half).
 
+import { ANIMAL_FACE_IMAGES } from "./animal-faces.generated.ts";
 import { FILTER_BACKDROPS } from "./backdrops.generated.ts";
 import { FLASHCARD_IMAGES_CARTOON } from "./flashcards-cartoon.generated.ts";
 import { FLASHCARD_IMAGES_ENCYCLOPAEDIA } from "./flashcards-encyclopaedia.generated.ts";
@@ -267,17 +268,53 @@ export const FILTER_DRAWERS: Record<string, (args: FilterFrameArgs) => void> = {
   cat: (args) => {
     const backdrops = ["cat-study", "cat-garden", "cat-livingroom"];
     drawBackdrop(args, backdrops[args.backgroundIndex % backdrops.length]);
-    // Unlike the potato, the cat is a mask: it follows your face.
+    // A photorealistic animal face worn as a mask: it follows your head
+    // (position, roll, size), and YOUR eyes and mouth are remapped onto the
+    // ANIMAL's eye and mouth positions (hand-tuned anchors per image).
+    const animal = ANIMAL_FACES[args.modeIndex % ANIMAL_FACES.length];
+    const image = cachedImage(`animal-${animal.id}`, ANIMAL_FACE_IMAGES[animal.id]);
     const { box } = args.face;
-    drawEmoji(
-      args.ctx,
-      "🐱",
-      box.cx,
-      box.cy,
-      Math.max(box.width, box.height * 0.8) * 2.4,
-      box.angle,
-    );
-    drawFaceCutoutsInPlace(args);
+    const angle = box.angle;
+    const width = Math.max(box.width, box.height * 0.8) * 2.1 * animal.scale;
+    if (image) {
+      const height = width * (image.naturalHeight / image.naturalWidth);
+      args.ctx.save();
+      args.ctx.translate(box.cx, box.cy);
+      args.ctx.rotate(angle);
+      args.ctx.drawImage(image, -width / 2, -height / 2, width, height);
+      args.ctx.restore();
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+      const at = (anchor: { x: number; y: number }) => {
+        const dx = (anchor.x - 0.5) * width;
+        const dy = (anchor.y - 0.5) * height;
+        return { x: box.cx + dx * cos - dy * sin, y: box.cy + dx * sin + dy * cos };
+      };
+      const leftEye = at(animal.leftEye);
+      const rightEye = at(animal.rightEye);
+      const mouth = at(animal.mouth);
+      drawFeatureCutout(args, "eyes", args.face.leftEye, {
+        cx: leftEye.x,
+        cy: leftEye.y,
+        width: width * animal.eyeWidth,
+        angle,
+      });
+      drawFeatureCutout(args, "eyes", args.face.rightEye, {
+        cx: rightEye.x,
+        cy: rightEye.y,
+        width: width * animal.eyeWidth,
+        angle,
+      });
+      drawFeatureCutout(args, "lips", args.face.lips, {
+        cx: mouth.x,
+        cy: mouth.y,
+        width: width * animal.mouthWidth,
+        angle,
+      });
+    } else {
+      // Image still decoding: plain masked face so the frame isn't empty.
+      drawFaceCutoutsInPlace(args);
+    }
   },
   flashcards: (args) => {
     const { ctx, width, height, face } = args;
@@ -834,7 +871,126 @@ const FLASHCARD_STYLES = [
 
 /** Mode labels per filter id; the pipeline shows a cycle button when a
  * filter has more than one. */
+/** The Animal mask filter's cast. Anchor coordinates are normalized [0..1]
+ * positions of each animal's eyes and mouth WITHIN its generated portrait,
+ * hand-tuned by looking at the images (regenerating the art means
+ * re-checking these). eyeWidth/mouthWidth are cutout sizes as fractions of
+ * the drawn face width; scale adjusts how large the head sits on yours. */
+const ANIMAL_FACES = [
+  {
+    id: "cat",
+    label: "🐱 Cat",
+    leftEye: { x: 0.36, y: 0.475 },
+    rightEye: { x: 0.645, y: 0.475 },
+    mouth: { x: 0.5, y: 0.71 },
+    eyeWidth: 0.13,
+    mouthWidth: 0.2,
+    scale: 1,
+  },
+  {
+    id: "dog",
+    label: "🐶 Dog",
+    leftEye: { x: 0.375, y: 0.455 },
+    rightEye: { x: 0.625, y: 0.455 },
+    mouth: { x: 0.5, y: 0.8 },
+    eyeWidth: 0.12,
+    mouthWidth: 0.2,
+    scale: 1.05,
+  },
+  {
+    id: "goat",
+    label: "🐐 Goat",
+    leftEye: { x: 0.295, y: 0.42 },
+    rightEye: { x: 0.705, y: 0.42 },
+    mouth: { x: 0.5, y: 0.795 },
+    eyeWidth: 0.12,
+    mouthWidth: 0.18,
+    scale: 1,
+  },
+  {
+    id: "tiger",
+    label: "🐯 Tiger",
+    leftEye: { x: 0.365, y: 0.4 },
+    rightEye: { x: 0.635, y: 0.4 },
+    mouth: { x: 0.5, y: 0.72 },
+    eyeWidth: 0.12,
+    mouthWidth: 0.22,
+    scale: 1.1,
+  },
+  {
+    id: "bear",
+    label: "🐻 Bear",
+    leftEye: { x: 0.36, y: 0.4 },
+    rightEye: { x: 0.64, y: 0.4 },
+    mouth: { x: 0.5, y: 0.71 },
+    eyeWidth: 0.11,
+    mouthWidth: 0.2,
+    scale: 1.1,
+  },
+  {
+    id: "monkey",
+    label: "🐵 Monkey",
+    leftEye: { x: 0.4, y: 0.355 },
+    rightEye: { x: 0.6, y: 0.355 },
+    mouth: { x: 0.5, y: 0.62 },
+    eyeWidth: 0.11,
+    mouthWidth: 0.18,
+    scale: 1,
+  },
+  {
+    id: "gorilla",
+    label: "🦍 Gorilla",
+    leftEye: { x: 0.4, y: 0.4 },
+    rightEye: { x: 0.6, y: 0.4 },
+    mouth: { x: 0.5, y: 0.72 },
+    eyeWidth: 0.1,
+    mouthWidth: 0.2,
+    scale: 1.1,
+  },
+  {
+    id: "lion",
+    label: "🦁 Lion",
+    leftEye: { x: 0.38, y: 0.41 },
+    rightEye: { x: 0.615, y: 0.41 },
+    mouth: { x: 0.5, y: 0.67 },
+    eyeWidth: 0.1,
+    mouthWidth: 0.18,
+    scale: 1.2,
+  },
+  {
+    id: "horse",
+    label: "🐴 Horse",
+    leftEye: { x: 0.27, y: 0.44 },
+    rightEye: { x: 0.73, y: 0.44 },
+    mouth: { x: 0.5, y: 0.93 },
+    eyeWidth: 0.12,
+    mouthWidth: 0.2,
+    scale: 1.15,
+  },
+  {
+    id: "fox",
+    label: "🦊 Fox",
+    leftEye: { x: 0.365, y: 0.5 },
+    rightEye: { x: 0.645, y: 0.5 },
+    mouth: { x: 0.49, y: 0.8 },
+    eyeWidth: 0.12,
+    mouthWidth: 0.18,
+    scale: 1,
+  },
+  {
+    id: "mouse",
+    label: "🐭 Mouse",
+    leftEye: { x: 0.335, y: 0.47 },
+    rightEye: { x: 0.66, y: 0.47 },
+    mouth: { x: 0.5, y: 0.8 },
+    eyeWidth: 0.12,
+    mouthWidth: 0.18,
+    scale: 1,
+  },
+];
+
 export const FILTER_MODES: Record<string, string[]> = {
+  cat: ANIMAL_FACES.map((animal) => animal.label),
   flashcards: FLASHCARD_STYLES.map((style) => style.label),
 };
 
