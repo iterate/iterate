@@ -10,50 +10,35 @@
 // (apps/os/src/lib/collect-secret-link.ts), which is what keeps the app's
 // parser honest about that encoding.
 //
-// ZERO model turns: the message carrying the link is appended over admin itx.
+// The message carrying the link is appended over admin itx; the app's own
+// "I submitted the secret" messages open turns that the fixture's scripted
+// model answers.
 
 import { expect } from "@playwright/test";
-import { connectItxReady } from "iterate/node";
 import { buildCollectSecretUrl } from "../../apps/os/src/lib/collect-secret-link.ts";
-import { localOsDevServer } from "../../apps/os/scripts/dev.ts";
-import { signUpWithEmailOtp, uniqueSignupEmail } from "../test-support/email-otp-signup.ts";
-import { resolveAdminSecret } from "../test-support/forged-session.ts";
 import { test } from "../test-support/test.ts";
 
 const SECRET_PATH = "/secrets/integrations/stripe/api-key";
 
-test("provides a secret from the thread, with no browser in the way", async ({
-  page,
-}, testInfo) => {
-  const osBaseUrl = await resolveOsBaseUrl();
-  const projectSlug = `mobile-collect-secret-${Date.now().toString(36)}`;
+test("provides a secret from the thread, with no browser in the way", async ({ page, helpers }) => {
+  await using fixture = await helpers.createMobileFixture("mobile-collect-secret");
+  const { itx } = fixture;
 
-  await signUpToProject(page, testInfo, osBaseUrl, projectSlug);
-  const projectId = new URL(page.url()).pathname.split("/")[2]!;
+  const agent = await fixture.createAgent();
+  agent.responses.set(async () => "ok");
+  await page.goto(agent.mobileUrl);
 
-  await page.getByText("New chat").click();
-  const pathHeading = page.getByRole("heading", { name: /^mobile\// });
-  await pathHeading.waitFor();
-  const agentPath = `/agents/${await pathHeading.textContent()}`;
-
-  using itx = await connectItxReady({
-    auth: { type: "admin-secret", secret: await resolveAdminSecret() },
-    baseUrl: osBaseUrl,
-    projectId,
-  });
-  using agent = itx.agents.get(agentPath);
-  await agent.create();
   // The message an agent sends when it needs a credential it must never see.
   const link = buildCollectSecretUrl({
-    baseUrl: osBaseUrl,
-    projectSlug,
+    baseUrl: fixture.baseUrl,
+    projectSlug: fixture.projectSlug,
     search: {
       egress: ["https://api.stripe.com"],
       path: SECRET_PATH,
       description: "Stripe restricted key — Developers → API keys",
       // What collectFromUser sets when an agent scope mints the link: the
       // agent to tell once the secret is stored.
-      notify: agentPath,
+      notify: agent.path,
     },
   });
   // web-message-sent is the agent's reply into the thread — the same event a
@@ -122,36 +107,3 @@ test("provides a secret from the thread, with no browser in the way", async ({
   const events = await secretStream.getEvents({});
   expect(events.map((event) => event.type)).toContain("events.iterate.com/secret/updated");
 });
-
-async function signUpToProject(
-  page: test.Page,
-  testInfo: test.TestInfo,
-  osBaseUrl: string,
-  projectSlug: string,
-): Promise<void> {
-  await page.goto("/");
-  await page.getByPlaceholder("https://os.iterate.com").fill(osBaseUrl);
-  // timeout: OIDC discovery + client registration have no loading UI for the spinner waiter
-  const popupPromise = page.waitForEvent("popup", { timeout: 15_000 });
-  await page.getByRole("button", { name: "Sign in" }).click();
-  const popup = await popupPromise;
-  await popup.getByTestId("email-login-button").click();
-  await signUpWithEmailOtp(popup, {
-    email: uniqueSignupEmail("mobile-collect-secret"),
-    projectSlug,
-    testInfo,
-  });
-  // Project selection auto-continues for test identities (project-access.tsx)
-  // — consent is the next interactive page.
-  await popup.getByRole("button", { name: "Allow access" }).click();
-  await page.getByText("New chat").waitFor();
-  // Video-mode demos start at the interesting part, not the OAuth ceremony.
-  page.videoMode?.setStartTime();
-}
-
-async function resolveOsBaseUrl(): Promise<string> {
-  const configured = process.env.APP_CONFIG_BASE_URL?.replace(/\/+$/, "");
-  if (configured) return configured;
-  const target = await localOsDevServer.resolveTarget();
-  return target.baseUrl;
-}
