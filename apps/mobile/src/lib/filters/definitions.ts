@@ -81,6 +81,9 @@ export type FilterFrameArgs = {
   /** Cycled by the pipeline's mode button for filters that declare
    * FILTER_MODES (the flashcards' picture style). */
   modeIndex: number;
+  /** Cycled by the second mode button (FILTER_MODES_2 — the flashcards'
+   * background). */
+  modeIndex2: number;
   /** Head movement relative to the baseline captured when the filter
    * started: canvas-pixel offsets and a z-ish scale (face width ratio, >1 =
    * closer). {0,0,1} while untracked. */
@@ -271,11 +274,48 @@ export const FILTER_DRAWERS: Record<string, (args: FilterFrameArgs) => void> = {
     drawFaceCutoutsInPlace(args);
   },
   flashcards: (args) => {
-    const card = FLASHCARDS[args.backgroundIndex % FLASHCARDS.length];
+    const { ctx, width, height, face, timeMs } = args;
+    const deck = flashcardDeck;
+    if (deck.seed === null) deck.seed = Date.now() % 1000;
+    if (deck.order === null) deck.order = seededOrder(FLASHCARDS.length, deck.seed);
+
+    // Chip taps (drawn below): ↺ replays the same seed from card one; 🎲
+    // rolls a new seed. Any other tap advances the card (backgroundIndex).
+    const chipHeight = height * 0.045;
+    const chipTop = height * 0.012;
+    const resetChip = { x: width * 0.02, width: width * 0.13 };
+    const seedChip = { x: width * 0.17, width: width * 0.2 };
+    if (args.tap && args.tap.seq !== deck.lastTapSeq) {
+      deck.lastTapSeq = args.tap.seq;
+      if (args.tap.y < chipTop + chipHeight * 1.6) {
+        if (args.tap.x >= resetChip.x && args.tap.x <= resetChip.x + resetChip.width) {
+          deck.baseIndex = args.backgroundIndex;
+        } else if (args.tap.x >= seedChip.x && args.tap.x <= seedChip.x + seedChip.width) {
+          deck.seed = Date.now() % 1000;
+          deck.order = seededOrder(FLASHCARDS.length, deck.seed);
+          deck.baseIndex = args.backgroundIndex;
+        }
+      }
+    }
+    const cardStep = args.backgroundIndex - deck.baseIndex;
+    const card =
+      FLASHCARDS[
+        deck.order[((cardStep % deck.order.length) + deck.order.length) % deck.order.length]
+      ];
     const style = FLASHCARD_STYLES[args.modeIndex % FLASHCARD_STYLES.length];
-    const { ctx, width, height, face } = args;
-    ctx.fillStyle = card.background;
+    const backgroundOption = FLASHCARD_BACKGROUNDS[args.modeIndex2 % FLASHCARD_BACKGROUNDS.length];
+
+    ctx.fillStyle =
+      backgroundOption.color === null
+        ? card.background
+        : backgroundOption.color === "rainbow"
+          ? `hsl(${(cardStep * 47 + 200) % 360} 65% 45%)`
+          : backgroundOption.color;
     ctx.fillRect(0, 0, width, height);
+    const chromeColor = backgroundOption.darkChrome
+      ? "rgba(20,20,25,0.75)"
+      : "rgba(255,255,255,0.85)";
+
     // The picture of the thing — no word on the card; the grown-up says it.
     if (card.swatch) {
       ctx.fillStyle = card.swatch;
@@ -283,7 +323,7 @@ export const FILTER_DRAWERS: Record<string, (args: FilterFrameArgs) => void> = {
       ctx.arc(width / 2, height * 0.62, width * 0.3, 0, Math.PI * 2);
       ctx.fill();
       ctx.lineWidth = width * 0.015;
-      ctx.strokeStyle = "#ffffff";
+      ctx.strokeStyle = chromeColor;
       ctx.stroke();
     } else {
       const image = cachedImage(
@@ -302,6 +342,23 @@ export const FILTER_DRAWERS: Record<string, (args: FilterFrameArgs) => void> = {
         ctx.restore();
       }
     }
+
+    // Deck chips, top-left: replay + seed.
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "center";
+    ctx.font = `600 ${Math.round(chipHeight * 0.5)}px -apple-system, sans-serif`;
+    for (const [chip, label] of [
+      [resetChip, "↺"],
+      [seedChip, `🎲 ${String(deck.seed).padStart(3, "0")}`],
+    ] as const) {
+      ctx.fillStyle = backgroundOption.darkChrome ? "rgba(0,0,0,0.08)" : "rgba(0,0,0,0.35)";
+      ctx.beginPath();
+      ctx.roundRect(chip.x, chipTop, chip.width, chipHeight, chipHeight / 2);
+      ctx.fill();
+      ctx.fillStyle = chromeColor;
+      ctx.fillText(label, chip.x + chip.width / 2, chipTop + chipHeight / 2);
+    }
+
     // The grown-up fills the space above the card: eyes and lips pinned to
     // a big face zone (patches keep the head's roll and grow as you lean
     // in). The adjust button's "face" mode (args.adjust.faceScale) scales
@@ -805,7 +862,6 @@ const PICTURE_WORDS = [
   "apple",
   "water",
   "milk",
-  "baby",
   "tomato",
   "cucumber",
   "door",
@@ -879,6 +935,24 @@ const PICTURE_WORDS = [
   "blocks",
   "cloud",
   "snow",
+  "honey",
+  "toast",
+  "peanut butter",
+  "broccoli",
+  "ice lolly",
+  "ice cream",
+  "pear",
+  "kiwi",
+  "eye",
+  "chin",
+  "penguin",
+  "giraffe",
+  "piano",
+  "taxi",
+  "scooter",
+  "digger",
+  "fire engine",
+  "motorbike",
 ];
 
 const CARD_COLORS = [
@@ -902,21 +976,57 @@ const CARD_COLORS = [
   "#4a235a",
 ];
 
-const FLASHCARDS: { word: string; background: string; swatch?: string }[] = shuffle([
+const FLASHCARDS: { word: string; background: string; swatch?: string }[] = [
   ...PICTURE_WORDS.map((word, i) => ({ word, background: CARD_COLORS[i % CARD_COLORS.length] })),
   { word: "red", background: "#34495e", swatch: "#e74c3c" },
   { word: "blue", background: "#34495e", swatch: "#3498db" },
   { word: "green", background: "#34495e", swatch: "#2ecc71" },
   { word: "yellow", background: "#34495e", swatch: "#f1c40f" },
-]);
+];
 
-function shuffle<T>(items: T[]): T[] {
-  for (let i = items.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [items[i], items[j]] = [items[j], items[i]];
+// The deck order comes from a small visible seed, so a practice run can be
+// replayed exactly: ↺ restarts the same order, 🎲 rolls a new seed.
+const flashcardDeck = {
+  seed: null as number | null,
+  baseIndex: 0,
+  order: null as number[] | null,
+  lastTapSeq: -1,
+};
+
+/** Deterministic Fisher–Yates from a numeric seed (mulberry32). */
+function seededOrder(count: number, seed: number): number[] {
+  let state = seed + 0x6d2b79f5;
+  const random = () => {
+    state = Math.imul(state ^ (state >>> 15), state | 1);
+    state ^= state + Math.imul(state ^ (state >>> 7), state | 61);
+    return ((state ^ (state >>> 14)) >>> 0) / 4294967296;
+  };
+  const order = Array.from({ length: count }, (_, i) => i);
+  for (let i = count - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    [order[i], order[j]] = [order[j], order[i]];
   }
-  return items;
+  return order;
 }
+
+const FLASHCARD_BACKGROUNDS: {
+  label: string;
+  /** null = the per-card palette colour. */
+  color: string | null;
+  /** Swatch cards need a visible outline on light backgrounds. */
+  darkChrome?: boolean;
+}[] = [
+  { label: "🎨 Colours", color: null },
+  { label: "⬜ White", color: "#ffffff", darkChrome: true },
+  { label: "⬛ Black", color: "#0b0b0f" },
+  { label: "📜 Cream", color: "#f6f1e7", darkChrome: true },
+  { label: "🌈 Rainbow", color: "rainbow" },
+];
+
+/** A second, independent mode group (its own button). */
+export const FILTER_MODES_2: Record<string, string[]> = {
+  flashcards: FLASHCARD_BACKGROUNDS.map((background) => background.label),
+};
 
 // Data-URI images decode lazily; cached across frames. Returns null for the
 // first frame or two while the image decodes (callers draw without it).

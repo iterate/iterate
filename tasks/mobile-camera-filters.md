@@ -293,3 +293,22 @@ MediaRecorder mechanisms, both hardened:
   fragile; the recorder now runs timesliced (1s chunks) and surfaces
   recorder.onerror. Observe on-device — if it still freezes, next lever is
   re-muxing on the native side.
+
+## Feedback round 12 (flashcards is a hit)
+
+- Background button (second mode group, own button above the style cycler):
+  🎨 per-card colours / ⬜ white / ⬛ black / 📜 cream / 🌈 rainbow — chrome
+  (swatch outlines, chips) flips dark on light backgrounds. Generic
+  mechanism: FILTER_MODES_2 + args.modeIndex2.
+- Seeded deck: order comes from a visible 3-digit seed (Date.now()%1000);
+  on-canvas chips top-left — ↺ replays the same order from card one, 🎲
+  rolls a new seed. Chips are filter-drawn + args.tap hit-tested (the
+  pattern project filters can copy).
+- Card set: smiling child removed; door reopened, book/pasta/bus
+  regenerated (open door, picture book, bowl of pasta, red London
+  double-decker); added honey, toast, peanut butter, broccoli, ice lolly,
+  ice cream, pear, kiwi, eye, chin, penguin, giraffe, piano, taxi (black
+  cab), scooter, digger, fire engine, motorbike — 98 pictures + 4 colours
+  per style, London-appropriate vehicles.
+- Mask jaggedness question answered (fixable by sampling at destination
+  resolution; not done this round).

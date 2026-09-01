@@ -39,6 +39,7 @@ test("a project filter file evaluates and draws through the helpers kit", () => 
     face: fallbackFaceGeometry(400, 800),
     backgroundIndex: 0,
     modeIndex: 1,
+    modeIndex2: 0,
     facePose: { dx: 0, dy: 0, scale: 1 },
     maskStretch: { eyes: { x: 1, y: 1 }, nose: { x: 1, y: 1 }, lips: { x: 1, y: 1 } },
     featureHits: [],

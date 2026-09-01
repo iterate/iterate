@@ -24,6 +24,7 @@ import {
   evaluateDynamicFilter,
   FILTER_DRAWERS,
   FILTER_MODES,
+  FILTER_MODES_2,
   type DynamicFilterDefinition,
   type FeatureHit,
   type FilterFrameArgs,
@@ -130,6 +131,7 @@ export default class FilterCamera extends Component<Props, State> {
   #disposed = false;
   #backgroundIndex = 0;
   #modeIndex = 0;
+  #modeIndex2 = 0;
   // First tracked face after the filter starts: the reference the potato's
   // full head-tracking moves relative to.
   #faceBaseline: { cx: number; cy: number; width: number } | null = null;
@@ -377,6 +379,7 @@ export default class FilterCamera extends Component<Props, State> {
       face,
       backgroundIndex: this.#backgroundIndex,
       modeIndex: this.#modeIndex,
+      modeIndex2: this.#modeIndex2,
       facePose,
       maskStretch: this.#maskStretch,
       featureHits,
@@ -643,6 +646,22 @@ export default class FilterCamera extends Component<Props, State> {
           onPointerUp={this.#onPointerUp}
           onPointerCancel={this.#onPointerUp}
         />
+        {(FILTER_MODES_2[this.props.filterId] || []).length > 1 && !this.state.recording ? (
+          <button
+            className="mode mode2"
+            onClick={() => {
+              this.#modeIndex2 += 1;
+              this.forceUpdate();
+            }}
+            type="button"
+          >
+            {
+              FILTER_MODES_2[this.props.filterId]![
+                this.#modeIndex2 % FILTER_MODES_2[this.props.filterId]!.length
+              ]
+            }
+          </button>
+        ) : null}
         {this.#modesForActiveFilter().length > 1 && !this.state.recording ? (
           <button
             className="mode"
@@ -736,6 +755,7 @@ const styles = `
     text-align: center;
   }
   .pill.error { background: rgba(180, 30, 30, 0.85); }
+  .mode2 { bottom: calc(238px + env(safe-area-inset-bottom)); }
   .adjustMode {
     left: auto;
     right: 12px;
