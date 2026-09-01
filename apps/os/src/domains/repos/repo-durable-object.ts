@@ -67,7 +67,7 @@ import { SingleFlightValue } from "./single-flight-value.ts";
 import { githubFastForwardTransferDepth, githubSyncBaseCommitOid } from "./github-sync-utils.ts";
 import { importGithubArtifactWithInitialPushCapture } from "./artifact-import.ts";
 import { getOrCreateArtifact, type GetOrCreateArtifactResult } from "./artifact-creation.ts";
-import { artifactWriteToken, seedArtifactRepo } from "./artifact-seeding.ts";
+import { artifactGitAccess, seedArtifactRepo } from "./artifact-seeding.ts";
 import { downloadPublicGithubTemplate } from "./public-github-template.ts";
 
 const ARTIFACT_HEAD_VISIBILITY_RETRIES = 5;
@@ -1035,7 +1035,7 @@ export class RepoDurableObject extends DurableObject<Env> {
       this.#headFilesSnapshot.clear();
       this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
     }
-    this.#artifactTokenPromise = undefined;
+    this.#artifactGitAccessPromise = undefined;
     this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
     this.#writeBranchAuthority(branch, { observedPushes: [], pushedFloor: undefined });
   }
@@ -1456,7 +1456,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     // token minted against its predecessor — drop the cache (only then; the
     // usual already-exists case keeps the one-token-per-isolate economy).
     const artifact = await this.getOrCreateArtifact(this.artifactName());
-    if (artifact.created) this.#artifactTokenPromise = undefined;
+    if (artifact.created) this.#artifactGitAccessPromise = undefined;
     await this.#transferGithubHistoryInProcess({
       branch,
       depth: transferDepth,
@@ -1793,10 +1793,13 @@ export class RepoDurableObject extends DurableObject<Env> {
         },
       );
     });
+    // The server-returned remote carries the repo's stored-name casing —
+    // never rebuild this URL from the codec name (see artifactGitAccess).
+    const { remote } = await this.requireArtifacts().get(artifactName);
     return {
       artifactName,
       defaultBranch: REPO_DEFAULT_BRANCH,
-      remote: this.artifactRemote(artifactName),
+      remote,
     };
   }
 
@@ -1815,7 +1818,7 @@ export class RepoDurableObject extends DurableObject<Env> {
       this.getOrCreateArtifact(artifactName),
     );
     const defaultBranch = REPO_DEFAULT_BRANCH;
-    const remote = this.artifactRemote(artifactName);
+    const remote = artifact.remote;
 
     // A prior push is authoritative evidence that an existing Artifact is
     // already seeded. Recovery only needs to journal repos/created; cloning the
@@ -1831,8 +1834,11 @@ export class RepoDurableObject extends DurableObject<Env> {
     // only that path mints a replacement after its readiness barrier.
     const token =
       artifact.initialWriteToken ??
-      (await timedStep("create-timing", timing, "artifact-token", () =>
-        artifactWriteToken(this.requireArtifacts(), artifactName),
+      (await timedStep(
+        "create-timing",
+        timing,
+        "artifact-token",
+        async () => (await artifactGitAccess(this.requireArtifacts(), artifactName)).token,
       ));
 
     const seeded = await timedStep("create-timing", timing, "artifact-seed", () =>
@@ -1869,24 +1875,22 @@ export class RepoDurableObject extends DurableObject<Env> {
   // One token per isolate lifetime, not per operation: every read path
   // (getFilesSnapshot on each cold build resolve, readFile, listFiles) goes
   // through gitAccess, and minting a fresh 365-day write token per call
-  // proliferates credentials for no benefit.
-  #artifactTokenPromise: Promise<string> | undefined;
+  // proliferates credentials for no benefit. The server-returned remote URL
+  // rides along in the same cache.
+  #artifactGitAccessPromise: Promise<{ remote: string; token: string }> | undefined;
 
   async gitAccess(): Promise<{ defaultBranch: string; remote: string; token: string }> {
-    const artifactName = this.artifactName();
-    this.#artifactTokenPromise ??= artifactWriteToken(this.requireArtifacts(), artifactName).catch(
-      (error: unknown) => {
-        this.#artifactTokenPromise = undefined;
-        // A missing Artifacts repo is the pre-seed window (createArtifactRepo
-        // hasn't run), the same "not ready yet" every unseeded clone signals.
-        throw classifyRepoAccessError(error);
-      },
-    );
-    return {
-      defaultBranch: REPO_DEFAULT_BRANCH,
-      remote: this.artifactRemote(artifactName),
-      token: await this.#artifactTokenPromise,
-    };
+    this.#artifactGitAccessPromise ??= artifactGitAccess(
+      this.requireArtifacts(),
+      this.artifactName(),
+    ).catch((error: unknown) => {
+      this.#artifactGitAccessPromise = undefined;
+      // A missing Artifacts repo is the pre-seed window (createArtifactRepo
+      // hasn't run), the same "not ready yet" every unseeded clone signals.
+      throw classifyRepoAccessError(error);
+    });
+    const { remote, token } = await this.#artifactGitAccessPromise;
+    return { defaultBranch: REPO_DEFAULT_BRANCH, remote, token };
   }
 
   private async getOrCreateArtifact(name: string): Promise<GetOrCreateArtifactResult> {
@@ -1904,10 +1908,6 @@ export class RepoDurableObject extends DurableObject<Env> {
       path: this.#name.path,
       projectId: this.#name.projectId,
     });
-  }
-
-  private artifactRemote(artifactName: string) {
-    return `https://${this.env.ARTIFACTS_ACCOUNT_ID}.artifacts.cloudflare.net/git/${this.env.ARTIFACTS_NAMESPACE}/${artifactName}.git`;
   }
 }
 

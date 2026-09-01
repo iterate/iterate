@@ -12,11 +12,13 @@ export type GetOrCreateArtifactResult =
       created: true;
       initialWriteToken: string;
       lastPushAt: null;
+      remote: string;
     }
   | {
       created: false;
       initialWriteToken: null;
       lastPushAt: string | null;
+      remote: string;
     };
 
 /**
@@ -26,6 +28,12 @@ export type GetOrCreateArtifactResult =
  * A successful create returns the initial write token Cloudflare minted with
  * the repo. Preserve it: immediately calling get()+createToken() is both
  * redundant and a create/read consistency race.
+ *
+ * `remote` is the SERVER-returned git URL, and callers must use it verbatim
+ * instead of rebuilding a URL from `name`: Artifacts stores repo names with
+ * its own casing (newer repos lowercased) and matches git-wire URLs
+ * case-sensitively, so a rebuilt URL with the request casing can 403 against
+ * a perfectly healthy repo (live-observed 2026-09-01).
  *
  * An ALREADY_EXISTS response can mean a prior attempt committed but its
  * response was lost. In that case the create plane may reserve the name
@@ -38,8 +46,8 @@ export async function getOrCreateArtifact(
     create(
       name: string,
       input: { setDefaultBranch: string },
-    ): Promise<Pick<ArtifactsCreateRepoResult, "token">>;
-    get(name: string): Promise<{ lastPushAt: string | null }>;
+    ): Promise<Pick<ArtifactsCreateRepoResult, "remote" | "token">>;
+    get(name: string): Promise<{ lastPushAt: string | null; remote: string }>;
   },
   name: string,
   input: { defaultBranch: string },
@@ -50,19 +58,25 @@ export async function getOrCreateArtifact(
       created: true,
       initialWriteToken: stripArtifactTokenExpiry(created.token),
       lastPushAt: null,
+      remote: created.remote,
     };
   } catch (error) {
     if ((error as { code?: string }).code !== "ALREADY_EXISTS") throw error;
   }
 
   const existing = await waitForExistingArtifact(artifacts, name);
-  return { created: false, initialWriteToken: null, lastPushAt: existing.lastPushAt };
+  return {
+    created: false,
+    initialWriteToken: null,
+    lastPushAt: existing.lastPushAt,
+    remote: existing.remote,
+  };
 }
 
 async function waitForExistingArtifact(
-  artifacts: { get(name: string): Promise<{ lastPushAt: string | null }> },
+  artifacts: { get(name: string): Promise<{ lastPushAt: string | null; remote: string }> },
   name: string,
-): Promise<{ lastPushAt: string | null }> {
+): Promise<{ lastPushAt: string | null; remote: string }> {
   const deadline = Date.now() + EXISTING_ARTIFACT_READY_TIMEOUT_MS;
   let lastError: unknown;
   let retryDelayMs = EXISTING_ARTIFACT_READY_INITIAL_RETRY_MS;
