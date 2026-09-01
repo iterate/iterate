@@ -82,6 +82,21 @@
         "import": "./dist/node.mjs",
         "default": "./dist/node.mjs"
       },
+      "./starter-apps/flake-dashboard": {
+        "types": "./dist/starter-apps/flake-dashboard/index.d.ts",
+        "import": "./dist/starter-apps/flake-dashboard/index.mjs",
+        "default": "./dist/starter-apps/flake-dashboard/index.mjs"
+      },
+      "./starter-apps/flake-dashboard/contract": {
+        "types": "./dist/starter-apps/flake-dashboard/contract.d.ts",
+        "import": "./dist/starter-apps/flake-dashboard/contract.mjs",
+        "default": "./dist/starter-apps/flake-dashboard/contract.mjs"
+      },
+      "./starter-apps/flake-dashboard/configured-worker": {
+        "types": "./dist/starter-apps/flake-dashboard/worker.d.ts",
+        "import": "./dist/starter-apps/flake-dashboard/configured-worker.mjs",
+        "default": "./dist/starter-apps/flake-dashboard/configured-worker.mjs"
+      },
       "./starter-apps/github-ai-linter": {
         "types": "./dist/starter-apps/github-ai-linter/index.d.ts",
         "import": "./dist/starter-apps/github-ai-linter/index.mjs",

@@ -136,6 +136,8 @@ export default defineConfig([
     // in the build script instead.
     entry: {
       sdk: "src/sdk.ts",
+      "starter-apps/flake-dashboard/index": "src/starter-apps/flake-dashboard/index.ts",
+      "starter-apps/flake-dashboard/contract": "src/starter-apps/flake-dashboard/contract.ts",
       "starter-apps/github-ai-linter/index": "src/starter-apps/github-ai-linter/index.ts",
       "starter-apps/github-ai-linter/worker": "src/starter-apps/github-ai-linter/worker.ts",
       "starter-apps/guestbook/index": "src/starter-apps/guestbook/index.ts",

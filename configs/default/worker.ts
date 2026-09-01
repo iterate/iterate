@@ -1,4 +1,5 @@
 import { DocsApp } from "@iterate-com/docs";
+import { FlakeDashboardApp } from "iterate/starter-apps/flake-dashboard";
 import { GithubAiLinter } from "iterate/starter-apps/github-ai-linter";
 import { GuestbookApp } from "iterate/starter-apps/guestbook";
 import { MediaApp } from "iterate/starter-apps/media";
@@ -35,6 +36,10 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       repoPath: "/repos/config",
     },
   });
+  // Folds createFlake test outcomes appended to /flakes by the repo's CI
+  // reporter into the GitHub "Flake dashboard" issue. Inert for projects
+  // whose /flakes stream never receives events.
+  #flakeDashboardApp = FlakeDashboardApp.create(this.env);
   #docsApp = DocsApp.create(this.env, {
     auth: { policy: "project-member" },
     proxy: {
@@ -344,6 +349,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     }
 
     await this.#aiLintApp.processEvent(event);
+    await this.#flakeDashboardApp.processEvent(event);
     await this.#guestbookApp.processEvent(event);
     await this.#mediaApp.processEvent(event);
     await this.#notesApp.processEvent(event);
