@@ -46,8 +46,7 @@ type RpcStubDirectoryDeps = {
 
 export class RpcStubDirectory {
   readonly #deps: RpcStubDirectoryDeps;
-  /** The transport mechanics. VOCABULARY across the two layers: the manager's `stubKey` IS our
-   *  `transportId`; its `path` is the mount path (the stub's one identity). */
+  /** The transport mechanics — sockets, pages, paged-in stubs (core/hibernatable-rpc-stub.ts). */
   readonly #stubs: HibernatableRpcStubManager;
   /** transportId → the reservation, for transports whose stub pager WebSocket hasn't arrived yet.
    *  In memory on purpose: if the DO dies in between, the upgrade 409s and the relay re-attaches.
@@ -100,19 +99,20 @@ export class RpcStubDirectory {
       // provides would all linger. When THIS pager opens, drop every OTHER same-path transport now
       // (the newest transport wins). "replaced" ⇒ a transport swap, not a real close.
       for (const r of this.#stubs.all())
-        if (r.path === path && r.stubKey !== transportId) this.#stubs.drop(r.stubKey, "replaced");
+        if (r.path === path && r.transportId !== transportId)
+          this.#stubs.drop(r.transportId, "replaced");
     }
     return response;
   }
 
   /** The page answer: a fresh RetainedCallbackInvoker stub, kept warm until the quiesce. */
   activate(input: { transportId: string; invoker: RetainedCallbackInvoker }) {
-    return this.#stubs.activate({ stubKey: input.transportId, invoker: input.invoker });
+    return this.#stubs.activate(input);
   }
 
   drop(path: string, reason: string): void {
     const record = this.find(path);
-    if (record) this.#stubs.drop(record.stubKey, reason);
+    if (record) this.#stubs.drop(record.transportId, reason);
   }
 
   /** A pager WebSocket closed (wire this to webSocketClose/webSocketError, AFTER the DO's own
@@ -122,16 +122,16 @@ export class RpcStubDirectory {
     const record = this.#stubs.closed(ws);
     if (record)
       void this.#stubClosed(record, reason).catch((e) =>
-        reportIssue("rpc-stub.close", e, { path: record.path ?? record.stubKey }),
+        reportIssue("rpc-stub.close", e, { path: record.path ?? record.transportId }),
       );
   }
 
   async #stubClosed(record: HibernatableRpcStubRecord, reason: string): Promise<void> {
-    const path = record.path ?? record.stubKey;
+    const path = record.path ?? record.transportId;
     // "replaced" is the SAME logical path changing transports — never a path-final close.
     const pathFinal =
       reason !== "replaced" &&
-      !this.#stubs.all().some((r) => r.path === path && r.stubKey !== record.stubKey);
+      !this.#stubs.all().some((r) => r.path === path && r.transportId !== record.transportId);
     await this.#deps.onFinalClose({ path, pathFinal });
   }
 
@@ -154,7 +154,7 @@ export class RpcStubDirectory {
   invoke(path: string, segments: string[], args: unknown[]): Promise<unknown> {
     const record = this.find(path);
     if (!record) throw codedError("CONNECTION_OFFLINE", `live capability "${path}" is offline`);
-    return this.#stubs.invoke(record.stubKey, segments, args);
+    return this.#stubs.invoke(record.transportId, segments, args);
   }
 
   /** The idle quiesce (paged-in stubs pin the DO; a page gets them back). */

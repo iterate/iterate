@@ -86,14 +86,16 @@ export class ProjectSession extends RpcTarget {
     return this;
   }
 
-  /** Pure addressing → a context's itx (the root by default). */
+  /** Pure addressing → a context's itx (the root by default). The normalized context path rides
+   *  along so the context can namespace its entries in the SESSION-shared Parking (two contexts
+   *  may mount live stubs at the same capability path — they must never touch each other's). */
   get(context?: string): IterateContext {
-    return new IterateContext(this.#contextStub(context), this.#parking, this.#waitUntil);
+    const path = normalizePath(context ?? "/");
+    return new IterateContext(this.#contextStub(path), path, this.#parking, this.#waitUntil);
   }
 
-  /** A context's stream DO by path (the root by default). */
-  #contextStub(context?: string): IterateContextStub {
-    const path = normalizePath(context ?? "/");
+  /** A context's stream DO by NORMALIZED path. */
+  #contextStub(path: string): IterateContextStub {
     return path === "/"
       ? this.#root
       : this.#contextNamespace.getByName(
@@ -107,18 +109,32 @@ export class ProjectSession extends RpcTarget {
  *  transport — it lands here and becomes a `DO.invoke(["itx", "a", ["b", x]])` call Expression. */
 export class IterateContext extends RpcTarget {
   readonly #context: IterateContextStub;
+  readonly #contextPath: string;
   readonly #parking: Parking;
   readonly #waitUntil: (p: Promise<unknown>) => void;
 
   constructor(
     context: IterateContextStub,
+    contextPath: string,
     parking: Parking,
     waitUntil: (p: Promise<unknown>) => void,
   ) {
     super();
     this.#context = context;
+    this.#contextPath = contextPath;
     this.#parking = parking;
     this.#waitUntil = waitUntil;
+  }
+
+  /** The Parking key for a live relay: `"<contextPath> <capabilityPath>"`. The Parking is
+   *  SESSION-lived and shared by every IterateContext the session hands out, while a capability
+   *  path is only unique PER CONTEXT (each context DO has its own capability table) — keying by
+   *  capability path alone let two contexts providing at the same path dispose each other's relay
+   *  (the pager close then auto-revoked a healthy live mount). A space separator is unambiguous:
+   *  a capability path is dotted IDENT segments (parseCapabilityPath) and can never contain one,
+   *  so the composite splits back at its last space — no (context, capability) pair collides. */
+  #parkingKey(capabilityPath: string): string {
+    return `${this.#contextPath} ${capabilityPath}`;
   }
 
   /** THE dispatch door (built-ins + provided capabilities) — the ONE way to call the itx surface.
@@ -194,12 +210,21 @@ export class IterateContext extends RpcTarget {
       pathString,
       this.#waitUntil,
     );
-    this.#parking.add(pathString, relay);
-    return this.#context.provideCapability({
-      path: pathString,
-      live: true,
-      ...(delivery && { delivery }),
-    });
+    const parkingKey = this.#parkingKey(pathString);
+    this.#parking.add(parkingKey, relay);
+    try {
+      return await this.#context.provideCapability({
+        path: pathString,
+        live: true,
+        ...(delivery && { delivery }),
+      });
+    } catch (e) {
+      // The DO refused the mount (STREAM_PAUSED / STREAM_BREAKER_OPEN / a validation throw): the
+      // relay just parked would otherwise linger for the whole session — retained stub, pager
+      // socket, and a DO transport that serves nothing. Tear it down and let the refusal propagate.
+      this.#parking.dispose(parkingKey);
+      throw e;
+    }
   }
 
   /** Reach a FETCH-shaped capability through the session itself (the fork's
@@ -227,7 +252,7 @@ export class IterateContext extends RpcTarget {
           }
         : input,
     );
-    for (const path of revokedLivePaths) this.#parking.dispose(path);
+    for (const path of revokedLivePaths) this.#parking.dispose(this.#parkingKey(path));
   }
 
   /** Enable a facet-hosted processor on this context's stream. Sugar for "load a class as a
@@ -290,7 +315,7 @@ export class IterateContext extends RpcTarget {
   async unsubscribe(input: { name: string }): Promise<void> {
     const path = `itx.subscribers.${input.name}`;
     await this.#context.revokeCapability({ path, all: true });
-    this.#parking.dispose(path);
+    this.#parking.dispose(this.#parkingKey(path));
   }
 
   /** Recovery from a forwarder HALT (or an operator cursor seek) — absent targets only;
@@ -303,8 +328,9 @@ export class IterateContext extends RpcTarget {
 // THE NATURAL DOTTED SURFACE. Insert the dynamic-capability fallback into `IterateContext.prototype`'s chain
 // so an unknown segment (`itx.slack`, `itx.kv`) becomes an accumulated invokeCapability dispatch,
 // while the declared methods/getters above (invokeCapability / provide / subscribe / …) always win.
-// The default invokerFor is the instance itself — `IterateContext.invokeCapability({ path, args })` is exactly
-// the door the path proxy calls. Runs once at module load, after the class body. See
+// The receiver IS the invoker — the accumulated access folds into ONE `invokeCapability(expression)`
+// call (`[...root, ...prefix, [method, ...args]]`), and `IterateContext.invokeCapability` is exactly
+// the door the fold dispatches onto. Runs once at module load, after the class body. See
 // core/dotted-path-proxy.ts for the workerd brand-check reason this is a prototype hop and not a
 // Proxy AROUND the instance.
 installPrototypeInvokeCapabilityFallback(IterateContext, ["itx"]);
@@ -319,5 +345,7 @@ export function itxFor(
   context: IterateContextStub,
   waitUntil: (p: Promise<unknown>) => void,
 ): IterateContext {
-  return new IterateContext(context, new Parking(), waitUntil);
+  // A FRESH Parking per call (this lane parks nothing session-long), so its keys can never collide
+  // across contexts — the context-path half of the composite key is a constant here.
+  return new IterateContext(context, "/", new Parking(), waitUntil);
 }

@@ -60,11 +60,12 @@ export type RetainedCallbackInvoker = LiveCapabilityFetchTransport & {
   dup?(): RetainedCallbackInvoker;
 };
 
-/** One stub's durable record — the socket attachment (survives hibernation). `stubKey` is the
- *  manager's identity for it; `path` is the capability path the stub is mounted at (its one
- *  addressing fact, stamped by `attach`; absent on a socket that has been opened but not yet
- *  attached — `all()` filters those out). */
-export type HibernatableRpcStubRecord = { stubKey: string; path?: string };
+/** One stub's durable record — the socket attachment (survives hibernation). `transportId` is the
+ *  per-transport identity (minted by the directory's attach reservation, carried by the pager
+ *  socket); `path` is the capability path the stub is mounted at (its one addressing fact, stamped
+ *  by `attach`; absent on a socket that has been opened but not yet attached — `all()` filters
+ *  those out). */
+export type HibernatableRpcStubRecord = { transportId: string; path?: string };
 /** An ATTACHED record — `path` present. `all()` returns only these. */
 type AttachedRpcStubRecord = HibernatableRpcStubRecord & { path: string };
 
@@ -107,8 +108,8 @@ export class HibernatableRpcStubManager {
   }
 
   /** Accept a stub pager WebSocket upgrade for an attach-gated transport (the directory read the
-   *  header and checked the reservation — the stubKey arrives decided, parsed once). */
-  acceptStubPagerSocket(stubKey: string, request: Request): Response {
+   *  header and checked the reservation — the transportId arrives decided, parsed once). */
+  acceptStubPagerSocket(transportId: string, request: Request): Response {
     if ((request.headers.get("Upgrade") ?? "").toLowerCase() !== "websocket")
       return new Response(
         `stub pager: expected a websocket upgrade with ${STUB_PAGER_WEBSOCKET_HEADER}\n`,
@@ -116,17 +117,17 @@ export class HibernatableRpcStubManager {
       );
     const pair = new WebSocketPair();
     this.#hooks.acceptWebSocket(pair[1], [STUB_PAGER_WEBSOCKET_TAG]);
-    pair[1].serializeAttachment({ stubKey } satisfies HibernatableRpcStubRecord);
+    pair[1].serializeAttachment({ transportId } satisfies HibernatableRpcStubRecord);
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
   /** Stamp a stub's mount `path` onto its (already-open) pager socket — carried through
    *  hibernation, and what `all()` filters on. */
-  attach(stubKey: string, path: string): void {
-    const ws = this.#socketFor(stubKey);
+  attach(transportId: string, path: string): void {
+    const ws = this.#socketFor(transportId);
     if (ws === undefined)
-      throw new Error(`hibernatable rpc stub ${stubKey} has no pager websocket`);
-    ws.serializeAttachment({ stubKey, path } satisfies AttachedRpcStubRecord);
+      throw new Error(`hibernatable rpc stub ${transportId} has no pager websocket`);
+    ws.serializeAttachment({ transportId, path } satisfies AttachedRpcStubRecord);
   }
 
   /** Every attached stub — DERIVED from the surviving pager sockets, so a fresh DO incarnation
@@ -140,8 +141,8 @@ export class HibernatableRpcStubManager {
   /** THE one call door: page the stub in if absent, then `invoke(path, args)` on it. The stub
    *  stays warm afterwards — steady traffic is pure RPC, no socket round-trips. Fire-and-forget
    *  callers just don't await (a failed delivery is the client's heal-by-pull). */
-  async invoke(stubKey: string, path: string[], args: unknown[]): Promise<unknown> {
-    const retained = await this.#pageIn(stubKey);
+  async invoke(transportId: string, path: string[], args: unknown[]): Promise<unknown> {
+    const retained = await this.#pageIn(transportId);
     retained.inFlight += 1;
     try {
       // THE FETCH-SHAPED RULE (owner-decreed): EVERY fetch-shaped call on a live capability rides
@@ -159,17 +160,20 @@ export class HibernatableRpcStubManager {
 
   /** The edge's answer to a page: it hands back a fresh stub over Workers RPC. Returns
    *  undefined for a stale page (none pending). */
-  activate(input: { stubKey: string; invoker: RetainedCallbackInvoker }): { ok: true } | undefined {
-    const pending = this.#pagesPending.get(input.stubKey);
+  activate(input: {
+    transportId: string;
+    invoker: RetainedCallbackInvoker;
+  }): { ok: true } | undefined {
+    const pending = this.#pagesPending.get(input.transportId);
     if (pending === undefined) return undefined;
-    const prev = this.#retained.get(input.stubKey);
-    this.#retained.set(input.stubKey, {
+    const prev = this.#retained.get(input.transportId);
+    this.#retained.set(input.transportId, {
       invoker: input.invoker.dup?.() ?? input.invoker,
       inFlight: 0,
     });
     if (prev) disposeStub(prev.invoker);
     clearTimeout(pending.timer);
-    this.#pagesPending.delete(input.stubKey);
+    this.#pagesPending.delete(input.transportId);
     pending.resolve();
     return { ok: true };
   }
@@ -177,35 +181,35 @@ export class HibernatableRpcStubManager {
   /** THE IDLE DISPOSAL (call from the DO's quiesce alarm): drop every paged-in stub so the DO
    *  can hibernate. Losing them costs exactly one page on the next call — that is the deal. */
   disposeRetainedStubs(): void {
-    for (const [stubKey, retained] of this.#retained) {
+    for (const [transportId, retained] of this.#retained) {
       if (retained.inFlight > 0)
         stubLog.warn("disposing a stub with calls in flight (idle quiesce)", {
           event: "stub.disposed-in-flight",
-          stubKey,
+          transportId,
           inFlight: retained.inFlight,
         });
-      this.#retained.delete(stubKey);
+      this.#retained.delete(transportId);
       disposeStub(retained.invoker);
     }
   }
 
   /** Close a stub's pager WebSocket (revoke / kick / replace) and forget it. */
-  drop(stubKey: string, reason: string): void {
-    const ws = this.#socketFor(stubKey);
+  drop(transportId: string, reason: string): void {
+    const ws = this.#socketFor(transportId);
     if (ws)
       try {
         ws.close(1000, reason);
       } catch {
         /* already closing */
       }
-    this.#forget(stubKey);
+    this.#forget(transportId);
   }
 
   /** A pager WebSocket closed — the stub is gone with it. Hands back the record so the caller
    *  can run its own lifecycle (ephemeral facts, auto-revoke, session settlement). */
   closed(ws: WebSocket): HibernatableRpcStubRecord | undefined {
     const record = this.#attachment(ws);
-    if (record) this.#forget(record.stubKey);
+    if (record) this.#forget(record.transportId);
     return record;
   }
 
@@ -224,8 +228,8 @@ export class HibernatableRpcStubManager {
       .getWebSockets(STUB_PAGER_WEBSOCKET_TAG)
       .filter((ws) => ws.readyState === WebSocket.OPEN);
   }
-  #socketFor(stubKey: string): WebSocket | undefined {
-    return this.#sockets().find((ws) => this.#attachment(ws)?.stubKey === stubKey);
+  #socketFor(transportId: string): WebSocket | undefined {
+    return this.#sockets().find((ws) => this.#attachment(ws)?.transportId === transportId);
   }
   #attachment(ws: WebSocket): HibernatableRpcStubRecord | undefined {
     let a: HibernatableRpcStubRecord | null;
@@ -236,19 +240,21 @@ export class HibernatableRpcStubManager {
       // registry and dies at its next close; better than wedging every enumeration.
       return undefined;
     }
-    return a && typeof a.stubKey === "string" ? a : undefined;
+    return a && typeof a.transportId === "string" ? a : undefined;
   }
 
-  async #pageIn(stubKey: string): Promise<{ invoker: RetainedCallbackInvoker; inFlight: number }> {
-    let retained = this.#retained.get(stubKey);
+  async #pageIn(
+    transportId: string,
+  ): Promise<{ invoker: RetainedCallbackInvoker; inFlight: number }> {
+    let retained = this.#retained.get(transportId);
     if (retained === undefined) {
-      const ws = this.#socketFor(stubKey);
+      const ws = this.#socketFor(transportId);
       if (ws === undefined)
         throw codedError(
           "CONNECTION_OFFLINE",
-          `hibernatable rpc stub ${stubKey} offline (no pager websocket)`,
+          `hibernatable rpc stub ${transportId} offline (no pager websocket)`,
         );
-      let pending = this.#pagesPending.get(stubKey);
+      let pending = this.#pagesPending.get(transportId);
       if (pending === undefined) {
         let resolve!: () => void;
         let reject!: (e: Error) => void;
@@ -257,11 +263,11 @@ export class HibernatableRpcStubManager {
           reject = rej;
         });
         const timer = setTimeout(() => {
-          if (this.#pagesPending.delete(stubKey))
-            reject(new Error(`hibernatable rpc stub ${stubKey}: page timed out`));
+          if (this.#pagesPending.delete(transportId))
+            reject(new Error(`hibernatable rpc stub ${transportId}: page timed out`));
         }, PAGE_TIMEOUT_MS);
         pending = { resolve, reject, timer, arrived };
-        this.#pagesPending.set(stubKey, pending);
+        this.#pagesPending.set(transportId, pending);
         try {
           ws.send(JSON.stringify({ type: "page" } satisfies StubPageMessage));
         } catch {
@@ -269,25 +275,25 @@ export class HibernatableRpcStubManager {
         }
       }
       await pending.arrived;
-      retained = this.#retained.get(stubKey);
+      retained = this.#retained.get(transportId);
       if (retained === undefined)
-        throw new Error(`hibernatable rpc stub ${stubKey}: page answered empty`);
+        throw new Error(`hibernatable rpc stub ${transportId}: page answered empty`);
     }
     return retained;
   }
 
-  #forget(stubKey: string): void {
-    const retained = this.#retained.get(stubKey);
+  #forget(transportId: string): void {
+    const retained = this.#retained.get(transportId);
     if (retained) {
-      this.#retained.delete(stubKey);
+      this.#retained.delete(transportId);
       disposeStub(retained.invoker);
     }
-    const pending = this.#pagesPending.get(stubKey);
+    const pending = this.#pagesPending.get(transportId);
     if (pending) {
       clearTimeout(pending.timer);
-      this.#pagesPending.delete(stubKey);
+      this.#pagesPending.delete(transportId);
       pending.reject(
-        codedError("CONNECTION_OFFLINE", `hibernatable rpc stub ${stubKey} went offline`),
+        codedError("CONNECTION_OFFLINE", `hibernatable rpc stub ${transportId} went offline`),
       );
     }
   }
@@ -298,11 +304,11 @@ export class HibernatableRpcStubManager {
  *  it — the pager is a pager (fetch-upgrade traffic has its own socket: openFetchUpgradeLeg). */
 export async function openStubPagerWebSocket(
   host: { fetch(url: string, init?: RequestInit): Promise<Response> },
-  stubKey: string,
+  transportId: string,
   onPage: () => void,
 ): Promise<WebSocket> {
   const response = await host.fetch("https://stub-pager.internal/", {
-    headers: { Upgrade: "websocket", [STUB_PAGER_WEBSOCKET_HEADER]: stubKey },
+    headers: { Upgrade: "websocket", [STUB_PAGER_WEBSOCKET_HEADER]: transportId },
   });
   if (!response.webSocket)
     throw new Error(`stub pager upgrade returned ${response.status} without a WebSocket`);

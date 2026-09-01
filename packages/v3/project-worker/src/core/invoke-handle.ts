@@ -12,8 +12,9 @@
 // RpcTarget IS the native `cloudflare:workers` RpcTarget on workerd), so the second call pipelines.
 //
 // The prototype-hop fallback (dotted-path-proxy.ts) folds unknown dotted members (`.hello`,
-// `.demo.timer.callLater`) into ONE `invokeCapability({ path, args })` — the SAME fold the pathProxy
-// did, now carried on a pipelinable brand. Providers are UNCHANGED (still a plain `RpcTarget`
+// `.demo.timer.callLater`) into ONE `invokeCapability(expression)` — `[...prefix, [method, ...args]]`,
+// relative to the handle (empty scope root); the SAME fold the pathProxy did, now carried on a
+// pipelinable brand. Providers are UNCHANGED (still a plain `RpcTarget`
 // subclass like `new Demo()` — which capnweb already requires to pass a capability by reference);
 // the client is UNCHANGED (still just capnweb). The whole cost is this one wrapper on OUR side.
 
@@ -32,7 +33,7 @@ export class InvokeHandle extends RpcTarget {
     super();
     this.#dispatch = dispatch;
   }
-  /** THE fold door the prototype hop dispatches onto (default `invokerFor` = the instance itself).
+  /** THE fold door the prototype hop dispatches onto (the receiver IS the invoker — this instance).
    *  The `ItxExpression` is RELATIVE to this handle (empty scope root — the hop is installed with
    *  `[]`): property-read steps then a final call step, unpacked back into `(path, args)`. */
   invokeCapability(call: ItxExpression): unknown {

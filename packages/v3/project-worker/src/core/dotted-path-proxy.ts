@@ -10,8 +10,8 @@
 // PORTED (not verbatim) from apps/os/src/domains/itx/utils.ts
 // (installPrototypeInvokeCapabilityFallback + createInvokeCapabilityPathProxy), proven by
 // apps/os/src/domains/itx/path-proxy.test.ts. `IterateContext.invokeCapability(ItxExpression)` is the exact
-// InvokeCapabilityTarget shape this expects (installed with scope root `["itx"]`), so the default
-// invokerFor (the instance itself) wires it with zero glue.
+// InvokeCapabilityTarget shape this expects (installed with scope root `["itx"]`), and the receiver
+// IS the invoker — so it wires with zero glue.
 
 import type { Expression, ItxExpression } from "./expression.ts";
 
@@ -76,7 +76,8 @@ function isReserved(key: string): boolean {
  * Builds the dotted-path fallback used by dynamic itx capabilities.
  *
  * A function-backed proxy (not an RpcTarget instance): each missing property extends the path,
- * and applying the function performs one explicit invokeCapability({ path, args }) call.
+ * and applying the function folds the whole accumulated access into ONE
+ * `invokeCapability(expression)` call — `[...root, ...prefix, [method, ...args]]`.
  */
 export function createInvokeCapabilityPathProxy(
   invoker: InvokeCapabilityTarget,
