@@ -52,6 +52,16 @@ export type AgentUiLlmStep = {
   cancelReason?: AgentLlmRequestCancelReason;
   errorMessage?: string;
   startedAtMs: number;
+  /** DERIVED live window (ephemeral render/message-delta events from a
+   * project's derivation processor): the streamed prose so far, format
+   * syntax already stripped. Only ever present in the volatile overlay —
+   * ephemeral events never reach the durable fold — so it never persists. */
+  liveProse?: string;
+  /** liveProse split at delta boundaries, same contract as responseWindows. */
+  liveProseWindows?: string[];
+  /** DERIVED live window (ephemeral render/script-delta): the streamed
+   * script body and live status label. Volatile-only, like liveProse. */
+  liveScript?: { code: string; status?: string };
 };
 
 export type AgentUiCodeStep = {
@@ -468,6 +478,9 @@ const AgentUiLlmStepSchema = z
     cancelReason: AgentLlmRequestCancelReason.optional(),
     errorMessage: z.string().optional(),
     startedAtMs: z.number().finite(),
+    liveProse: z.string().optional(),
+    liveProseWindows: z.array(z.string()).optional(),
+    liveScript: z.strictObject({ code: z.string(), status: z.string().optional() }).optional(),
   })
   .refine((step) => step.cancelReason == null || step.outcome === "cancelled", {
     message: "cancelReason requires a cancelled outcome",
@@ -702,6 +715,8 @@ const STREAM_RESUMED = "events.iterate.com/stream/resumed";
 const AGENT_PAUSED = "events.iterate.com/agent/paused";
 const AGENT_RESUMED = "events.iterate.com/agent/resumed";
 const AGENT_SUMMARY_UPDATED = "events.iterate.com/agent/summary-updated";
+const RENDER_MESSAGE_DELTA = "events.iterate.com/render/message-delta";
+const RENDER_SCRIPT_DELTA = "events.iterate.com/render/script-delta";
 const STREAM_WAKE_LABEL = "Stream durable object woke";
 
 // ---------------------------------------------------------------------------
@@ -713,9 +728,18 @@ function reduceAgentUiEvent(
   event: Event,
   items: AgentUiItem[],
 ): AgentUiState {
+  // The kernel's derivation link: an event whose envelope carries
+  // `source.offset` was derived from the raw event at that offset by a
+  // project's derivation processor. The derived views are then the story —
+  // mark the step so pretty rendering stops showing the raw response text.
+  // (web-message-sent's llmRequestOffset marking below predates this and
+  // stays for events without the envelope link.)
+  const sourceOffset = previous.live === null ? undefined : event.source?.offset;
+  const superseded =
+    sourceOffset === undefined ? previous : markStepInterpretedBySource(previous, sourceOffset);
   const state: AgentUiState = {
-    ...previous,
-    eventCount: previous.eventCount + 1,
+    ...superseded,
+    eventCount: superseded.eventCount + 1,
   };
   const timestampMs = Date.parse(event.createdAt);
   // Committed events are expected to carry an ISO timestamp. A malformed
@@ -887,6 +911,46 @@ function reduceAgentUiEvent(
         thinkingText:
           step.status === "running" ? step.thinkingText + thinkingDelta : step.thinkingText,
       }));
+    }
+
+    // DERIVED live-window facts from a project's derivation processor
+    // (ephemeral — these only ever flow through the volatile overlay). The
+    // payloads are cumulative: each delta replaces the previous view.
+    case RENDER_MESSAGE_DELTA: {
+      const payload = readPayloadRecord(event);
+      const llmRequestOffset =
+        typeof payload?.llmRequestOffset === "number" ? payload.llmRequestOffset : null;
+      const text = typeof payload?.text === "string" ? payload.text : null;
+      if (llmRequestOffset == null || text == null) return state;
+      return updateLlmStep(state, llmRequestOffset, (step) => {
+        if (step.status !== "running" || text === step.liveProse) return step;
+        const previousProse = step.liveProse || "";
+        return {
+          ...step,
+          liveProse: text,
+          // Same windows contract as responseWindows: extend with the new
+          // suffix so the token-reveal stagger animates only fresh text; a
+          // non-prefix update (shouldn't happen — deltas are cumulative)
+          // replaces wholesale.
+          liveProseWindows: text.startsWith(previousProse)
+            ? [...(step.liveProseWindows || []), text.slice(previousProse.length)]
+            : [text],
+        };
+      });
+    }
+
+    case RENDER_SCRIPT_DELTA: {
+      const payload = readPayloadRecord(event);
+      const llmRequestOffset =
+        typeof payload?.llmRequestOffset === "number" ? payload.llmRequestOffset : null;
+      const code = typeof payload?.code === "string" ? payload.code : null;
+      if (llmRequestOffset == null || code == null) return state;
+      const status = typeof payload?.status === "string" ? payload.status : undefined;
+      return updateLlmStep(state, llmRequestOffset, (step) =>
+        step.status === "running"
+          ? { ...step, liveScript: { code, ...(status === undefined ? {} : { status }) } }
+          : step,
+      );
     }
 
     case AGENT_LLM_REQUEST_SETTLED: {
@@ -1510,6 +1574,24 @@ function updateLlmStep(
   if (step == null || step.kind !== "llm") return state;
   const steps = [...state.live.steps];
   steps[index] = update(step);
+  return { ...state, live: { ...state.live, steps } };
+}
+
+/** Mark the llm step whose committed assistant event a derived event points
+ * at (via the `source.offset` envelope link) as interpreted. */
+function markStepInterpretedBySource(state: AgentUiState, sourceOffset: number): AgentUiState {
+  if (state.live == null) return state;
+  const index = state.live.steps.findIndex(
+    (step) =>
+      step.kind === "llm" &&
+      step.assistantEventOffset === sourceOffset &&
+      step.interpreted !== true,
+  );
+  if (index === -1) return state;
+  const step = state.live.steps[index];
+  if (step.kind !== "llm") return state;
+  const steps = [...state.live.steps];
+  steps[index] = { ...step, interpreted: true };
   return { ...state, live: { ...state.live, steps } };
 }
 

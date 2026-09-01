@@ -24,6 +24,9 @@ export type StreamEvent<Type extends string = string, Payload = unknown> = {
   metadata?: Record<string, unknown>;
   source?: StreamEventSource;
   idempotencyKey?: string;
+  /** Memory-only live-window event (never durably delivered or persisted);
+   * absent means durable. */
+  ephemeral?: true;
   offset: number;
   createdAt: string;
 };

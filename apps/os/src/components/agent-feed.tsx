@@ -785,7 +785,12 @@ function AgentLiveStatus({
 
 function liveStepHasVisibleContent(step: AgentUiStep) {
   if (step.kind === "code") return step.code !== "";
-  return step.thinkingText !== "" || step.responseText !== "";
+  return (
+    step.thinkingText !== "" ||
+    step.responseText !== "" ||
+    !!step.liveProse ||
+    step.liveScript !== undefined
+  );
 }
 
 /**
@@ -821,6 +826,13 @@ function LiveStepStream({ step }: { step: AgentUiStep }) {
     );
   }
 
+  // DERIVED live window: a project derivation processor is classifying the
+  // stream (ephemeral render/message-delta + render/script-delta), so prose
+  // streams as prose and script text as code — with the status label as it
+  // arrives — and no raw format syntax ever shows. The raw fallback below
+  // stays for turns nothing derives (legacy projects, no processor).
+  const derivedLive = step.liveProse !== undefined || step.liveScript !== undefined;
+
   return (
     <div className="flex flex-col gap-1.5 py-1">
       {step.thinkingText === "" ? null : (
@@ -829,7 +841,31 @@ function LiveStepStream({ step }: { step: AgentUiStep }) {
           {step.responseText === "" ? <StreamingCursor /> : null}
         </div>
       )}
-      {step.responseText === "" ? null : looksLikeCode(step.responseText) ? (
+      {derivedLive ? (
+        <>
+          {!step.liveProse ? null : (
+            <div
+              className="max-w-2xl whitespace-pre-wrap px-1.5 text-sm leading-relaxed"
+              data-testid="agent-live-derived-prose"
+            >
+              <TokenRevealText windows={step.liveProseWindows || [step.liveProse]} />
+              {step.liveScript === undefined ? <StreamingCursor /> : null}
+            </div>
+          )}
+          {step.liveScript === undefined ? null : (
+            <>
+              {step.liveScript.status === undefined ? null : (
+                <div className="px-1.5 font-mono text-xs text-muted-foreground">
+                  {step.liveScript.status}
+                </div>
+              )}
+              {step.liveScript.code === "" ? null : (
+                <StreamingCodeBlock code={step.liveScript.code} />
+              )}
+            </>
+          )}
+        </>
+      ) : step.responseText === "" ? null : looksLikeCode(step.responseText) ? (
         <StreamingCodeBlock code={step.responseText} />
       ) : (
         <div className="max-w-2xl whitespace-pre-wrap px-1.5 text-sm leading-relaxed">
