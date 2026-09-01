@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: implemented
 size: small
 ---
 
@@ -7,7 +7,9 @@ size: small
 
 ## Status summary
 
-Spec'd and ready to implement. No code changes yet beyond this task file.
+Implemented and verified: both specs migrated to `createAgentHelper`, both pass
+locally (approvals 51s paired run, notifications 35.6s). PR #2563 awaiting
+review. Remaining: CI green + review threads.
 
 ## Motivation
 
@@ -35,17 +37,21 @@ Two problems with the raw `intercept`:
 
 ## Checklist
 
-- [ ] approvals.spec.ts: replace agent birth + config append + raw
+- [x] approvals.spec.ts: replace agent birth + config append + raw
       `itx.ai.intercept` with `createAgentHelper` +
       `createAgent({ path: agentPath })` + `responses.set(handler)`
-- [ ] approvals.spec.ts: update the journal assertion + comments from
-      `intercepted/driver` to the helper's `intercepted/typed`
-- [ ] notifications.spec.ts: same swap for the watched-thread lane (the orphan
+      _commit f6c91baf6; the warm-up runScript now runs after createAgent
+      instead of concurrent with the config append_
+- [x] approvals.spec.ts: update the journal assertion + comments from
+      `intercepted/driver` to the helper's `intercepted/typed` _same commit_
+- [x] notifications.spec.ts: same swap for the watched-thread lane (the orphan
       and elsewhere agents run scripts directly, no turns — untouched)
-- [ ] both: keep the content-routing handlers (route by last user message)
+      _same commit_
+- [x] both: keep the content-routing handlers (route by last user message)
       inside `responses.set(fn)` — the queue's fingerprint replay also gives
-      retried attempts the same script for free
-- [ ] run both specs locally; typecheck/lint/format/knip
+      retried attempts the same script for free _handlers moved verbatim into
+      `responses.set`_
+- [x] run both specs locally; typecheck/lint/format/knip _all green; see log_
 
 ## Decisions (made while fleshing out)
 
@@ -72,4 +78,16 @@ Two problems with the raw `intercept`:
 
 ## Implementation log
 
-(appended during implementation)
+- typecheck / lint / knip / format all green in the worktree (lint re-run
+  after oxfmt reflow).
+- Local spec runs needed three attempts, none related to this diff:
+  1. `pnpm spec --project mobile <files>` — playwright's `--project` is
+     variadic and swallowed the file args; use `--project=mobile`.
+  2. "Process from config.webServer exited early", twice: the `dev.ts start
+     --detach` webServer entry exits immediately when the dev server is
+     already booting/restarting but not yet health-checkable (second
+     occurrence was the dev server's own post-spec-run auto-restart, pid
+     changed under the run). Retry once the server answers /api/health.
+- Green runs: approvals passed in the paired run (`1 passed`, notifications
+  in that run failed at the sign-in popup before any migrated code — cold
+  auth-worker latency); notifications alone passed 35.6s.
