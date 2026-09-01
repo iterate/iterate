@@ -140,6 +140,81 @@ test("waitForEvent: an EPHEMERAL event resolves a parked waiter (and never hits 
   });
 });
 
+test("waitForEvent: one event resolves MULTIPLE parked waiters, in park order", async () => {
+  await runInDurableObject(stub("prj_wait_multi"), async (_instance, state) => {
+    const stream = bareStream(state.storage);
+    stream.append({ type: "seed" });
+    // Two waiters parked for the same type: one matching commit must resolve BOTH (a waiter is
+    // never consumed exclusively), and settlement order is park order (FIFO per event).
+    const order: string[] = [];
+    const w1 = stream.waitForEvent({ type: "ping", timeoutMs: 5_000 }).then((e) => {
+      order.push("first");
+      return e;
+    });
+    const w2 = stream.waitForEvent({ type: "ping", timeoutMs: 5_000 }).then((e) => {
+      order.push("second");
+      return e;
+    });
+    const [receipt] = stream.append({ type: "ping", payload: { n: 1 } });
+    const [got1, got2] = await Promise.all([w1, w2]);
+    expect(got1.offset).toBe(receipt.offset);
+    expect(got2.offset).toBe(receipt.offset);
+    expect(order).toEqual(["first", "second"]);
+  });
+});
+
+test("waitForEvent: a nested onCommit re-append cannot outrun the outer commit — the waiter gets the EARLIER offset", async () => {
+  await runInDurableObject(stub("prj_wait_nested"), async (_instance, state) => {
+    // The pinned ordering property (Stream doc): waiters settle BEFORE onCommit. If a refactor
+    // ran #onCommit first, this nested matching append (a live-state-delta stand-in — the real
+    // fan-out does exactly this) would resolve the parked waiter with the LATER (nested) event.
+    let nestedReceipt: StreamEvent | undefined;
+    const stream: Stream = new Stream({
+      storage: state.storage,
+      path: "/",
+      admit: () => {},
+      reduceAtCommit: () => {},
+      onCommit: (fresh) => {
+        if (!nestedReceipt && fresh.some((e) => e.type === "ping" && !e.ephemeral))
+          [nestedReceipt] = stream.append({ type: "ping", ephemeral: true, payload: { n: 2 } });
+      },
+    });
+    stream.append({ type: "seed" });
+    const pending = stream.waitForEvent({ type: "ping", timeoutMs: 5_000 });
+    const [outer] = stream.append({ type: "ping", payload: { n: 1 } });
+    const got = await pending;
+    expect(got.offset).toBe(outer.offset); // the OUTER commit's event, in offset order
+    expect(got.payload).toEqual({ n: 1 });
+    expect(nestedReceipt).toBeDefined(); // the nested commit really happened…
+    expect(nestedReceipt!.offset).toBeGreaterThan(outer.offset); // …at a later offset
+  });
+});
+
+test("append with ZERO inputs is a pure no-op — no rows, no offsets, no woken (it rides the first real append)", async () => {
+  await runInDurableObject(stub("prj_wait_empty"), async (_instance, state) => {
+    const batches: StreamEvent[][] = [];
+    const stream = bareStream(state.storage, { batches });
+    // Empty append on a VIRGIN stream: nothing minted, nothing committed, no fan-out — and the
+    // wake record is NOT burned (pre-arc parity: an empty append must never manufacture a
+    // woken-only durable batch).
+    expect(stream.append()).toEqual([]);
+    const tables = state.storage.sql
+      .exec("SELECT name FROM sqlite_master WHERE type = 'table'")
+      .toArray()
+      .map((r) => String(r.name));
+    expect(tables).not.toContain("events");
+    expect(state.storage.kv.get("incarnation")).toBeUndefined();
+    expect(state.storage.kv.get("maxAssignedOffset")).toBeUndefined();
+    expect(batches).toHaveLength(0);
+    // The woken rides the first REAL append: offset 1 = woken, offset 2 = the event.
+    const [receipt] = stream.append({ type: "hello" });
+    expect(receipt.offset).toBe(2);
+    const page = stream.read(0);
+    expect(page.events[0].type).toBe("events.iterate.com/stream/woken");
+    expect(page.events[0].offset).toBe(1);
+  });
+});
+
 test("woken: the first commit of an incarnation carries the wake record first, exactly once", async () => {
   await runInDurableObject(stub("prj_wait_woken"), async (_instance, state) => {
     const batches: StreamEvent[][] = [];

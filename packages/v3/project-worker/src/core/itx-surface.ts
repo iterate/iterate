@@ -213,17 +213,21 @@ export class IterateContext extends RpcTarget {
 
   /** Pop a mount off the shadow stack (what it shadowed is restored) — by capability path (the
    *  newest winner at that exact path) or by identity (`{ providedAtOffset }`). Revoking a LIVE
-   *  mount also tears its transport down (DO-side) and disposes the local Parking relay. */
+   *  mount also tears its transport down (DO-side) and disposes the local Parking relay — on BOTH
+   *  spellings: the DO returns the revoked live rows' paths and each relay is disposed here (the
+   *  by-offset door — the pipelined provide+revoke spelling — must not leave a dead relay parked
+   *  until session end). */
   async revoke(input: string | string[] | { providedAtOffset: number }): Promise<void> {
-    if (typeof input === "string" || Array.isArray(input)) {
-      const pathString = parseCapabilityPath(
-        typeof input === "string" ? input : input.join("."),
-      ).join(".");
-      const { revokedLive } = await this.#context.revokeCapability({ path: pathString });
-      if (revokedLive) this.#parking.dispose(pathString);
-      return;
-    }
-    await this.#context.revokeCapability(input);
+    const { revokedLivePaths } = await this.#context.revokeCapability(
+      typeof input === "string" || Array.isArray(input)
+        ? {
+            path: parseCapabilityPath(typeof input === "string" ? input : input.join(".")).join(
+              ".",
+            ),
+          }
+        : input,
+    );
+    for (const path of revokedLivePaths) this.#parking.dispose(path);
   }
 
   /** Enable a facet-hosted processor on this context's stream. Sugar for "load a class as a

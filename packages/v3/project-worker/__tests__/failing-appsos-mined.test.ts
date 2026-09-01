@@ -179,6 +179,8 @@ test("probing the core snapshot mints no storage — a virgin ctx reports incarn
   //   incarnation 2. The probe is the CORE REDUCE's snapshot (runtime state IS reduced state —
   //   hostState() died in C5): `incarnation` folds from the stream/woken wake record, absent on a
   //   virgin stream (no append ⇒ no woken), and the inline snapshot reads reduced state only.
+  //   The other half of the doctrine — the probe must not ARM THE QUIET-CLOCK ALARM either — is
+  //   pinned where storage.getAlarm() is reachable: __workers-tests__/do-doors.test.ts.
   const ctx = "prj_am_lazy";
   const itx = await harness.itx(ctx);
   const coreState = async (): Promise<any> =>
@@ -189,6 +191,27 @@ test("probing the core snapshot mints no storage — a virgin ctx reports incarn
   await append(itx, { type: "mark", payload: { n: 1 } });
   const second = await coreState();
   expect(second.incarnation).toBe(1);
+});
+
+// ─────────────────────────────── PROVIDE DOOR CANONICALIZATION ───────────────────────────────
+
+test("a NON-CANONICAL subscribers spelling through the raw provide door still lands a LANED row (durable lane)", async () => {
+  // The ghost-subscription pin: provideCapability canonicalizes ONCE at the top, so the lane is
+  // stamped from the same spelling the reduce stores. Pre-fix, " itx.subscribers.x" dodged the
+  // raw-string `startsWith` lane check but reduced to the canonical path — a laneless subscriber
+  // row that NO fan-out lane serves and resumeSubscription cannot heal: a silently-dead
+  // subscription with a success receipt. (The connected-lane ghost is pinned in
+  // __workers-tests__/do-doors.test.ts, where the DO door is callable raw.)
+  const itx = await harness.itx("prj_am_ghostlane");
+  await itx.provide(" itx.subscribers.ghost", "itx.whoami", {
+    delivery: { consumes: ["mark"] },
+  });
+  const snap = await itx.invokeCapability("itx.facets.get('capability-table').snapshot()");
+  const row = (snap.state.mounts as { path: string[]; lane?: string }[]).find(
+    (m) => m.path.join(".") === "itx.subscribers.ghost",
+  );
+  expect(row).toBeDefined(); // stored CANONICAL
+  expect(row!.lane).toBe("durable"); // an absent-facet expression target = the forwarder's lane
 });
 
 // ─────────────────────────────── SUBSCRIBE SUGAR ───────────────────────────────

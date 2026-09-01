@@ -401,6 +401,15 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   #lastActivityMs = 0;
   #noteActivity(): void {
     this.#lastActivityMs = Date.now();
+    // VIRGIN-PROBE GUARD (the storage-lazy doctrine, core/stream.ts header): skip the quiet-clock
+    // arm when there is NOTHING the quiet clock exists for — no live facet to quiesce and a stream
+    // that never wrote (`currentIncarnation()` is a non-minting kv read). Without this, a bare
+    // probe (`itx.facets.get('core').snapshot()` rides invoke → here) wrote a durable alarm on a
+    // NEVER-TOUCHED context: one storage write + one billed wake, and workerd defers auto-deleting
+    // the empty object until the pointless alarm fires. `#lastActivityMs` still updates, so the
+    // first real write (or facet materialization — facetInvoke's `finally` re-notes after
+    // `#liveFacets` grows) arms with an honest quiet-period start.
+    if (this.#liveFacets.size === 0 && this.#stream.currentIncarnation() === 0) return;
     this.#stream.armNoLaterThan(this.#lastActivityMs + 60_000);
   }
   // In-memory on purpose: a fresh incarnation always runs one resurrection pass, and losing
@@ -956,7 +965,13 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
     processor?: ProcessorPolicy;
   }): Promise<{ providedAtOffset: number }> {
     this.#stream.touch();
-    const pathString = typeof input.path === "string" ? input.path : input.path.join(".");
+    // CANONICALIZE ONCE, at the top (the one-canonicalizer rule, same spelling as rpcStubAttach):
+    // the lane stamp below keys off this string, and the reduce stores the CANONICAL path — so
+    // stamping from the raw input let a non-canonical subscribers spelling
+    // (" itx.subscribers.x") land a LANELESS, silently-dead subscriber row.
+    const pathString = parseCapabilityPath(
+      typeof input.path === "string" ? input.path : input.path.join("."),
+    ).join(".");
     const targetExpr = input.target === undefined ? undefined : toExpression(input.target);
     // Classify the delivery lane ONCE, here at the provide door — it is stamped on the mount event
     // and every commit-time reader reads it back (no per-commit target re-sniff). Non-subscriber
@@ -976,15 +991,33 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
       if (!this.#facetEntries().some((e) => e.slug === SUBSCRIPTION_FORWARDER_SLUG))
         await this.enableProcessor(SUBSCRIPTION_FORWARDER_SLUG);
     }
-    return this.#capabilityTableProcessor().provide({ ...input, ...(lane && { lane }) });
+    const receipt = await this.#capabilityTableProcessor().provide({
+      ...input,
+      path: pathString,
+      ...(lane && { lane }),
+    });
+    // WATERMARK GC ON SUPERSESSION: a LIVE re-provide REPLACES the incumbent row in place (the
+    // one-live-row-per-path reduce rule) with NO capability-revoked event, so the revoke-path GC
+    // never sees the superseded row's providedAtOffset — across reconnect churn the
+    // delivered-through map grew one dead entry per re-provide. Swept HERE (not the quiesce
+    // alarm) because this door is the only one that supersedes: one pass over the just-reduced
+    // table right after the commit keeps the map ⊆ the live rows' keys, with no second sweep to
+    // hold in step. Expression provides never supersede, so they skip it.
+    if (input.live) {
+      const mounted = new Set(this.#table().mounts.map((m) => m.providedAtOffset));
+      for (const key of [...this.#subscriptionDeliveredThrough.keys()])
+        if (!mounted.has(key)) this.#subscriptionDeliveredThrough.delete(key);
+    }
+    return receipt;
   }
 
   /** Revoke by the mount's identity — or by its capability path (pops the newest winner at
    *  that exact path; what it shadowed is restored). Revoking a LIVE row ALSO tears its
    *  transport down (it is necessarily the last live row at the path — the one-per-path reduce
    *  rule), AFTER the revoked event lands so the transport close's own auto-revoke finds nothing
-   *  left to do. Returns whether any popped row was live, so the edge can dispose its local
-   *  Parking relay for the path. */
+   *  left to do. Returns the revoked LIVE rows' path strings, so the edge can dispose its local
+   *  Parking relay per path — on BOTH revoke spellings (a bare `revokedLive` boolean left the
+   *  by-offset caller unable to say WHICH relay to drop, so it dropped none). */
   async revokeCapability(input: {
     providedAtOffset?: number;
     path?: string | string[];
@@ -994,7 +1027,7 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
      *  re-elected and the "disabled" thing keeps running (prove_disable_shadow.mjs /
      *  probe_resub_zombie.mjs). */
     all?: boolean;
-  }): Promise<{ revokedLive: boolean }> {
+  }): Promise<{ revokedLivePaths: string[] }> {
     const table = this.#table();
     let rows: CapabilityTable["mounts"];
     if (input.all) {
@@ -1011,7 +1044,7 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
           providedAtOffset: input.providedAtOffset,
         });
         this.#subscriptionDeliveredThrough.delete(input.providedAtOffset);
-        return { revokedLive: false };
+        return { revokedLivePaths: [] };
       }
     } else {
       if (!input.path) throw new Error("revokeCapability: pass providedAtOffset or path");
@@ -1029,9 +1062,9 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
       this.#subscriptionDeliveredThrough.delete(row.providedAtOffset);
     }
     // TEAR THE TRANSPORT of every revoked live row, events-first (see the doc above).
-    const liveRows = rows.filter((r) => r.live);
-    for (const r of liveRows) this.#rpcStubs.drop(r.path.join("."), "revoked");
-    return { revokedLive: liveRows.length > 0 };
+    const revokedLivePaths = rows.filter((r) => r.live).map((r) => r.path.join("."));
+    for (const path of revokedLivePaths) this.#rpcStubs.drop(path, "revoked");
+    return { revokedLivePaths };
   }
 
   // ── native fetch: the stub pager door, the fetch lane, observability, egress ──
@@ -1061,8 +1094,12 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   // the breaker are the core reduce (`itx.facets.get('core').snapshot()` — the wake record folds
   // incarnation); mounts, enabled processors, and live-capability PRESENCE are the capability
   // table (`itx.facets.get('capability-table').snapshot()` — facet-lane rows ARE the processors,
-  // rows where `live` ARE the presence list). Both snapshots read the inline reduces only — a
-  // probe is never the write that mints storage. The one non-event-derivable residue is below:
+  // rows where `live` ARE the presence list). Both snapshots read the inline reduces only — on a
+  // VIRGIN context a probe mints nothing, the quiet-clock alarm included (#noteActivity skips the
+  // arm when no facet is live and the stream never wrote; pinned in
+  // __workers-tests__/do-doors.test.ts). On a touched context a probe refreshes the quiet clock —
+  // an alarm write against already-minted storage, never a mint. The one non-event-derivable
+  // residue is below:
 
   /** IN-MEMORY TRANSPORT FACTS ({stubs, pagedIn, pagesPending, dormant}) — a DO-only Workers-RPC
    *  verb for the hibernation/quiesce probes, deliberately OFF the itx surface: these are socket

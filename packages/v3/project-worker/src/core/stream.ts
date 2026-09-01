@@ -171,6 +171,12 @@ export class Stream {
    *  nextOffset in-txn; reading kv there would make an inline rehydrate replay the just-inserted
    *  rows = double-reduce = table corruption). */
   append(...inputs: StreamEventInput[]): StreamEvent[] {
+    // A ZERO-INPUT append is a PURE no-op (pre-arc parity): no admit, no touch, no wake record.
+    // Without this, a defensive `itx.append(...maybeEmpty)` on a fresh incarnation would MINT a
+    // woken-only durable batch (row + offset watermark + the whole fan-out) — and on a PAUSED
+    // fresh stream would commit the wake record despite the pause (admit([]) sees no non-control
+    // events to refuse). The wake record rides the first REAL append instead.
+    if (inputs.length === 0) return [];
     // THE commit door every path funnels through (public stream/contexts/env.ITX + internal):
     // an event must carry a non-blank type, and `ephemeral` is literal `true` or ABSENT — a
     // boolean `false` is a LOUD input error, never a silent synonym for durable (the apps/os
