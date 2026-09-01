@@ -57,7 +57,12 @@ st82hhnwtw and dnz4tp5rd0 (org 0p91s0lz49), jobs k7ff0dgzpb and sglcxb8gt4.
   global scope, but the plugin graph imports `cloudflare:workers`, which
   node --test can't load without mocking — the per-PR preview deploy is the
   real guard for this class, and it did catch it._
-- [ ] CI green + review on the PR
+- [ ] CI green + review on the PR _All lanes green except preview e2e, which
+  is red repo-wide with an environmental Artifacts-service 403 on config-repo
+  creation (same 128-failure signature on mobile-only #2556; last green
+  preview Aug 30). Crucially the deploys themselves are clean on this PR —
+  zero 10021s across two runs plus a retry, which is this task's goal.
+  Escalated to Misha; memory saved as preview-artifacts-403-config-repo._
 
 ## Implementation notes
 
