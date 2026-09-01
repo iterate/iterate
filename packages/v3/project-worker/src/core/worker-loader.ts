@@ -5,7 +5,7 @@
 // as a facet with a source-change restart marker; `resolveSource` normalizes a source to modules.
 //
 // A loaded worker's `env.ITX` is a Workers-RPC service binding to the `ItxEntrypoint`. It reaches
-// the genuine itx scope with `env.ITX.get()` — a real `Itx` RpcTarget — and then writes plain
+// the genuine itx scope with `env.ITX.get()` — a real `IterateContext` RpcTarget — and then writes plain
 // dotted access (`itx.demo.timer.callLater(cb)`), identical to what a capnweb client writes after
 // `session.get()`. There is no client-side wrapper: the scope IS a real RpcTarget, so mid-chain
 // handles and callbacks pipeline natively over both lanes (no accumulating Proxy, no fold shim).

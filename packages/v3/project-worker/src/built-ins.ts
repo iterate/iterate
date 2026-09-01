@@ -25,7 +25,7 @@ import type { Expression } from "./core/expression.ts";
 import { InvokeHandle } from "./core/invoke-handle.ts";
 import type { Context } from "./core/stream.ts";
 import type { StreamEventInput } from "./core/events.ts";
-import type { StreamDurableObject } from "./stream-durable-object.ts";
+import type { IterateContextDurableObject } from "./stream-durable-object.ts";
 
 /** The `rpcStubs` view every context has: the live-stub registry, surfaced. One entry per held
  *  live capnweb stub (client callbacks and parked subscribers — one registry). */
@@ -52,7 +52,7 @@ type FacetsView = {
 
 /** The bindings roots-building needs — present in BOTH hosts (the worker env). */
 export interface BuiltInsEnv {
-  CONTEXT: DurableObjectNamespace<StreamDurableObject>;
+  CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;
   LOADER: WorkerLoader;
   ITX_KV?: KVNamespace;
   SECRETS_KV?: KVNamespace;

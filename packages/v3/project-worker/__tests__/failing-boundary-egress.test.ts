@@ -7,12 +7,12 @@
 // Scope (never duplicating DEFECTS.md families A–K):
 //   • THE FENCE IS ON THE WRONG DOOR — DEFECTS.md defect 34's fix (reject public appends carrying
 //     a `capability-table/` idempotencyKey) was placed in the `stream` BUILT-IN's append wrapper,
-//     NOT in StreamDurableObject.append (the real commit door). The existing defect-34 lock
+//     NOT in IterateContextDurableObject.append (the real commit door). The existing defect-34 lock
 //     (failing-appsos-mined.test.ts:90) only exercises the fenced `stream.append` door; this file
 //     proves the SAME ☠ authority loss is still reachable through `itx.cd(path).append`
 //     (own context AND siblings), which reach DO.append directly and bypass the fence.
 //   • THE ENVELOPE BOUNDARY IS A SMALL SET OF RUNTIME GUARDS — capnweb-validate was removed
-//     (2026-08-20), so the append-input checks are StreamDurableObject.append's own: the typeless
+//     (2026-08-20), so the append-input checks are IterateContextDurableObject.append's own: the typeless
 //     guard (non-string / blank `type` → loud reject) and the `ephemeral` literal-true guard.
 //     The remaining zod refinements the schema promises (`strictObject` excess-key rejection,
 //     runner-only `source`) are NOT enforced at the door — a runtime StreamEventInput.parse() would.
@@ -54,7 +54,7 @@ async function rejection(p: Promise<unknown>): Promise<Error & { code?: string }
 
 test("boundary: the runtime guards reject a non-string type AND a non-literal-true ephemeral", async () => {
   // capnweb-validate was removed (2026-08-20): there is no TS-type allow-list on the RPC boundary
-  // anymore. What remains are the explicit runtime guards in StreamDurableObject.append — a
+  // anymore. What remains are the explicit runtime guards in IterateContextDurableObject.append — a
   // non-string / blank `type` is rejected loudly, and (since the append-door tightening) so is an
   // `ephemeral` that is present but not literal `true` (the schema's `z.literal(true)` contract,
   // now actually enforced at the commit door instead of silently committing a durable event).
@@ -69,7 +69,7 @@ test("boundary: the runtime guards reject a non-string type AND a non-literal-tr
 
 test("stream.append rejects an empty or whitespace-only event type", async () => {
   // FIXED (⚠, boundary bypass): the append door's runtime guard is `typeof type !== "string" ||
-  //   type.trim() === ""` (StreamDurableObject.append) — it covers the schema's `.trim().min(1)`
+  //   type.trim() === ""` (IterateContextDurableObject.append) — it covers the schema's `.trim().min(1)`
   //   contract, so a "" or "   " type is a loud input error instead of committing a typeless,
   //   un-routable log entry. (This is the SOLE enforcement — capnweb-validate was removed.)
   const itx = await harness.itx("prj_be_emptytype");

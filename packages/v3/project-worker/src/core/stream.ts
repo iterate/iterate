@@ -24,7 +24,7 @@ import {
 import type { ItxExpression } from "./expression.ts";
 
 /** One page of the log: the events after an offset, plus how far the scan reached (the range a
- *  client chains for contiguity). Structurally identical to StreamDurableObject.read's return. */
+ *  client chains for contiguity). Structurally identical to IterateContextDurableObject.read's return. */
 interface StreamPage {
   events: StreamEvent[];
   scannedThroughOffset: number;
@@ -453,7 +453,7 @@ export class Stream {
 // What one context reaches another THROUGH — a sibling by name, or the own-path parent. Naming it
 // with the REAL event types (StreamEventInput / StreamEvent / StreamPage) and making the whole
 // surface Promise-returning is what lets every backing satisfy it with ZERO casts:
-//   • a sibling `DurableObjectStub<StreamDurableObject>` — Workers-RPC methods already return
+//   • a sibling `DurableObjectStub<IterateContextDurableObject>` — Workers-RPC methods already return
 //     Promises of these exact types, so it IS a Context structurally (no `as unknown as`);
 //   • the own parent — `localContext(this)`, whose only wrap is `read` (sync on the class, async
 //     on the wire — one microtask on a path that then does real I/O anyway);
@@ -461,14 +461,14 @@ export class Stream {
 
 /** A CONTEXT reachable over the wire: the stream verbs (append/read), plus `invoke` for capability
  *  dispatch. This is what `itx.cd('/x')` routes through and what `deps.context(path)`
- *  returns. The StreamDurableObject is one; a sibling DO stub and the own-path adapter satisfy it. */
+ *  returns. The IterateContextDurableObject is one; a sibling DO stub and the own-path adapter satisfy it. */
 export interface Context {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   read(afterOffset?: number, limit?: number): Promise<StreamPage>;
   invoke(call: ItxExpression): Promise<unknown>;
 }
 
-/** The own StreamDurableObject (same isolate) as a uniform-async Context. The ONLY wrap is `read`
+/** The own IterateContextDurableObject (same isolate) as a uniform-async Context. The ONLY wrap is `read`
  *  (sync on the class, async on the seam); `append` and `invoke` are already async. Built once per
  *  DO, never per call. */
 export function localContext(self: {

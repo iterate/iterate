@@ -2,7 +2,7 @@
 // open call is what keeps it alive), a SECOND session appends the matching event, and the parked
 // promise resolves with the committed event. Plus the coded timeout. The park/settle mechanics are
 // pinned deterministically in __workers-tests__/stream.test.ts; this file proves the doors — edge
-// `Itx.waitForEvent` → DO → Stream — end to end.
+// `IterateContext.waitForEvent` → DO → Stream — end to end.
 
 import { expect, test } from "vitest";
 import { freshCtx, openItx, sleep } from "./support/client.ts";

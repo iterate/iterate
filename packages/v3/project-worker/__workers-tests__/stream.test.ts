@@ -12,12 +12,12 @@ import { canonicalName } from "../src/core/durable-object-names.ts";
 import { errorCode } from "../src/core/errors.ts";
 import { Stream } from "../src/core/stream.ts";
 import type { StreamEvent, StreamEventInput } from "../src/core/events.ts";
-import type { StreamDurableObject } from "../src/stream-durable-object.ts";
+import type { IterateContextDurableObject } from "../src/stream-durable-object.ts";
 
 const stub = (ctx: string) =>
-  (env as unknown as { CONTEXT: DurableObjectNamespace<StreamDurableObject> }).CONTEXT.getByName(
-    canonicalName(ctx),
-  );
+  (
+    env as unknown as { CONTEXT: DurableObjectNamespace<IterateContextDurableObject> }
+  ).CONTEXT.getByName(canonicalName(ctx));
 
 /** A bare Stream over real storage. `admit` defaults to open; `onCommit` records each `fresh`
  *  batch so tests can assert what the fan-out was fed. */

@@ -15,7 +15,7 @@
 //     want stored itx capabilities, `[restore]` lands on this class and resolves through the
 //     ROUTED door, keeping deletion-is-revocation for stored stubs.
 //
-// The surface is exactly what loaded code speaks: `get()` (hand back the real `Itx` scope — the
+// The surface is exactly what loaded code speaks: `get()` (hand back the real `IterateContext` scope — the
 // dotted door, which owns its own dispatch), the SDK runner's stream verbs
 // (`append`/`read`/`waitForEvent`), and `fetch` (globalOutbound egress → the DO's
 // secret-substituting terminal).
@@ -24,22 +24,22 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { itxForHost } from "./core/itx-surface.ts";
 import type { StreamEvent, StreamEventInput } from "./core/events.ts";
 import type { WaitForEventFilter } from "./core/stream.ts";
-import type { StreamDurableObject } from "./stream-durable-object.ts";
+import type { IterateContextDurableObject } from "./stream-durable-object.ts";
 
 interface Env {
-  CONTEXT: DurableObjectNamespace<StreamDurableObject>;
+  CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;
 }
 
 export class ItxEntrypoint extends WorkerEntrypoint<Env> {
   /** The owning context, re-resolved per call (never a retained stub — the back-channel rule). */
-  #host(): DurableObjectStub<StreamDurableObject> {
+  #host(): DurableObjectStub<IterateContextDurableObject> {
     const props = (this.ctx as unknown as { props?: { contextName?: string } }).props;
     if (!props?.contextName)
       throw new Error("ItxEntrypoint requires props.contextName (mint via ctx.exports)");
     return this.env.CONTEXT.getByName(props.contextName);
   }
 
-  /** THE handoff for the Workers-RPC lane: hand back the genuine itx scope (an `Itx` RpcTarget), so
+  /** THE handoff for the Workers-RPC lane: hand back the genuine itx scope (an `IterateContext` RpcTarget), so
    *  loaded code writes plain dotted access — `const itx = await env.ITX.get(); itx.demo.timer.x(…)`
    *  — identical to a capnweb client after `session.get()`, and mid-chain handles pipeline natively.
    *  A service binding addresses THIS entrypoint class; `.get()` bridges it to the scope. */
@@ -58,7 +58,7 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env> {
     return this.#host().read(afterOffset, limit);
   }
 
-  /** Wait for the next matching event — loaded-worker parity with the edge `Itx` method (the
+  /** Wait for the next matching event — loaded-worker parity with the edge `IterateContext` method (the
    *  contract lives in Stream.waitForEvent: type filter, afterOffset default = the head, 30s/120s
    *  timeout → WAIT_TIMEOUT). The parked wait lives on the DO; this call just holds the leg open. */
   waitForEvent(filter?: WaitForEventFilter): Promise<StreamEvent> {

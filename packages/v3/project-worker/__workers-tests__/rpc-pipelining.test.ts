@@ -15,7 +15,7 @@ import { env } from "cloudflare:workers";
 import { expect, test } from "vitest";
 import { evaluate } from "../src/core/dispatch.ts";
 import { canonicalName } from "../src/core/durable-object-names.ts";
-import type { StreamDurableObject } from "../src/stream-durable-object.ts";
+import type { IterateContextDurableObject } from "../src/stream-durable-object.ts";
 
 test("cloudflare:workers exports RpcPromise and native RPC calls are instanceof it", async () => {
   const RpcPromise = (cloudflareWorkers as unknown as { RpcPromise: abstract new () => unknown })
@@ -23,7 +23,7 @@ test("cloudflare:workers exports RpcPromise and native RPC calls are instanceof 
   expect(typeof RpcPromise).toBe("function");
 
   const stub = (
-    env as unknown as { CONTEXT: DurableObjectNamespace<StreamDurableObject> }
+    env as unknown as { CONTEXT: DurableObjectNamespace<IterateContextDurableObject> }
   ).CONTEXT.getByName(canonicalName("prj_rpc_pipelining"));
   const p = stub.hostState();
   expect(p).toBeInstanceOf(RpcPromise);
@@ -42,7 +42,7 @@ test("the step walk threads a NATIVE RpcPromise unawaited — regression = this 
     abstract new () => unknown
   >;
   const stub = (
-    env as unknown as { CONTEXT: DurableObjectNamespace<StreamDurableObject> }
+    env as unknown as { CONTEXT: DurableObjectNamespace<IterateContextDurableObject> }
   ).CONTEXT.getByName(canonicalName("prj_rpc_pipelining"));
   const scope = { itx: { host: () => stub.hostState() } };
   const { value } = await evaluate(scope, ["itx", ["host"], "incarnation"]);

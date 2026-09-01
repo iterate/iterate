@@ -128,7 +128,7 @@ test.fails("within the provider's invocation: WEBSOCKET fetch of the dyn-provide
 });
 
 // BUG-OR-CONTRACT (VERIFIED, measured 2026-08-31): a dyn-provided live capability DIES WITH THE
-// PROVIDING INVOCATION. The Itx scope a dynamic worker gets from env.ITX.get() lives in the
+// PROVIDING INVOCATION. The IterateContext scope a dynamic worker gets from env.ITX.get() lives in the
 // ItxEntrypoint loopback's request context; the parking + pager socket holding the provider
 // transport die when that context ends (the run() call chain completing), and the mount
 // auto-revokes — worker B then sees default-deny:

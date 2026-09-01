@@ -39,7 +39,7 @@ import { env } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { afterAll, beforeAll, expect, test, vi } from "vitest";
 import { canonicalName } from "../src/core/durable-object-names.ts";
-import type { StreamDurableObject } from "../src/stream-durable-object.ts";
+import type { IterateContextDurableObject } from "../src/stream-durable-object.ts";
 
 const CTX = "prj_hibscale";
 const CLIENTS = 200;
@@ -70,9 +70,9 @@ async function state(): Promise<StreamState> {
 }
 
 const contextStub = () =>
-  (env as unknown as { CONTEXT: DurableObjectNamespace<StreamDurableObject> }).CONTEXT.getByName(
-    canonicalName(CTX),
-  );
+  (
+    env as unknown as { CONTEXT: DurableObjectNamespace<IterateContextDurableObject> }
+  ).CONTEXT.getByName(canonicalName(CTX));
 
 // capnweb sessions live for the whole file; dispose at teardown (the harness.ts lesson: sessions
 // left open turn into unhandled-rejection noise).

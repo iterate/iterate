@@ -19,7 +19,7 @@
 //
 // PURE WORKERS-RPC: capnweb never terminates here (hard rule) — the stateless `/api` worker
 // relays. Dispatch is ONE door: `invoke(call)` — parse → route the table → substitute → evaluate
-// → replay, all against the inline capability table; this class only delegates. (`Itx` builds the
+// → replay, all against the inline capability table; this class only delegates. (`IterateContext` builds the
 // call Expression client-side; there is no separate dotted-string door on the DO.)
 
 import { DurableObject } from "cloudflare:workers";
@@ -150,9 +150,11 @@ const laneOf = (target: Expression): SubscriptionLane =>
  *  mount first appears). */
 const SUBSCRIPTION_FORWARDER_SLUG = "subscription-forwarder";
 
-function parseStreamDurableObjectName(name: string | undefined) {
+function parseIterateContextDurableObjectName(name: string | undefined) {
   if (!name)
-    throw new Error("StreamDurableObject must be addressed by name (reach it via getByName).");
+    throw new Error(
+      "IterateContextDurableObject must be addressed by name (reach it via getByName).",
+    );
   return DurableObjectNameCodec.parse(name);
 }
 
@@ -170,11 +172,11 @@ const streamLog = createLogger("stream-do");
 
 // The parent hosts the INLINE CORE (host scope + routing table + core reduce), so it needs the
 // full roots env the facet used to inherit.
-export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
+export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   /** WHO THIS DO IS — parsed ONCE from the unforgeable codec name; carries projectId, path
    *  AND its canonical string form (`.name`). A stream is only ever reached `getByName`; an
    *  id-addressed instance fails right here in the constructor, before it can touch anything. */
-  readonly #address = parseStreamDurableObjectName(this.ctx.id.name);
+  readonly #address = parseIterateContextDurableObjectName(this.ctx.id.name);
   /** The live rpc-stub registry — the domain layer over the hibernatable RPC stubs (see
    *  rpc-stub-directory.ts). Live-only: presence via list(), no durable session history. */
   /** The live-capability fetch subsystem (core/fetch-capabilities.ts) — the DO wires its three
@@ -921,7 +923,7 @@ export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
 
   // ── dispatch (ONE path: the routing table — the INLINE core reduce, zero distance) ──
 
-  /** Resolve + run one call against the current table. The ONE dispatch door — `Itx` builds the
+  /** Resolve + run one call against the current table. The ONE dispatch door — `IterateContext` builds the
    *  call Expression client-side and hands it here (a full expression can spell mid-path call args
    *  a dotted string never could: `itx.streams.get('/').append({...})`). */
   async invoke(call: ItxExpression, depth = 0): Promise<unknown> {

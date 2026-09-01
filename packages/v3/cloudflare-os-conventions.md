@@ -96,7 +96,7 @@ config carries `"$schema"` pointing at wrangler's schema.
    build) — that part is our call, not theirs, and it's fine.
 3. **Consider `ctx.exports` for same-script DO namespaces** (`CONTEXT`, `STATEFUL_WORKER` in
    project-worker): delete the `durable_objects.bindings` entries, keep `migrations`, reach namespaces as
-   `ctx.exports.StreamDurableObject`. Needs the `enable_ctx_exports` compat flag. The cross-script
+   `ctx.exports.IterateContextDurableObject`. Needs the `enable_ctx_exports` compat flag. The cross-script
    `CONTEXT` binding in control-plane-shell must stay explicit (`ctx.exports` is per-script). This is
    optional taste, not urgent — do it only if the binding/class drift ever actually bites.
 4. **When we grow a deploy/manifest script, copy fail-closed parsing**: enumerate the config keys the

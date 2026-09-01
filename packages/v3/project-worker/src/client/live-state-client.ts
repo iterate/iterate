@@ -10,7 +10,7 @@ import {
   type LiveStateStore,
 } from "./live-state-store.ts";
 
-/** The slice of an itx session this needs — a capnweb `Itx` proxy satisfies it structurally. */
+/** The slice of an itx session this needs — a capnweb `IterateContext` proxy satisfies it structurally. */
 export type LiveItx = {
   subscribe(input: {
     name?: string;

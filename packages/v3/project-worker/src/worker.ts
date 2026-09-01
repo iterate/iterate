@@ -1,11 +1,11 @@
 // The PROJECT WORKER — the stateless edge. capnweb terminates at `/api`; everything else forwards to the
-// StreamDurableObject over Workers RPC (the DO does the real work and stays hibernatable). `DummyControlPlane` is
+// IterateContextDurableObject over Workers RPC (the DO does the real work and stays hibernatable). `DummyControlPlane` is
 // the solo-mode fallback entrypoint (the deployed config binds FALLBACK to the real control-plane shell instead).
 
 import * as cloudflareWorkers from "cloudflare:workers";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { newWorkersRpcResponse } from "capnweb";
-import { StreamDurableObject } from "./stream-durable-object.ts";
+import { IterateContextDurableObject } from "./stream-durable-object.ts";
 import { registerPipelinedRpcBrand } from "./core/dispatch.ts";
 import { CAPABILITY_FETCH_HEADER } from "./core/fetch-capabilities.ts";
 import { canonicalName } from "./core/durable-object-names.ts";
@@ -22,12 +22,12 @@ const { RpcPromise: NativeRpcPromise, RpcProperty: NativeRpcProperty } =
 registerPipelinedRpcBrand(NativeRpcPromise);
 registerPipelinedRpcBrand(NativeRpcProperty);
 
-export { StreamDurableObject };
+export { IterateContextDurableObject };
 export { ProcessorFacet } from "./processor-facet.ts";
 export { ItxEntrypoint } from "./itx-entrypoint.ts";
 
 interface Env {
-  CONTEXT: DurableObjectNamespace<StreamDurableObject>;
+  CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;
 }
 
 // The SOLO fallback: the egress terminal, trivially — platform-secret substitution (none in solo)

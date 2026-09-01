@@ -26,7 +26,7 @@ export function soloWorkerConfig(): Record<string, unknown> {
   const config = readWranglerConfig();
   config.main = join(PACKAGE_DIR, String(config.main));
   config.build = { ...(config.build as object), cwd: PACKAGE_DIR };
-  config.migrations = [{ tag: "local", new_sqlite_classes: ["StreamDurableObject"] }];
+  config.migrations = [{ tag: "local", new_sqlite_classes: ["IterateContextDurableObject"] }];
   config.services = [
     { binding: "FALLBACK", service: String(config.name), entrypoint: "DummyControlPlane" },
   ];

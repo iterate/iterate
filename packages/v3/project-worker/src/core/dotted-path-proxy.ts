@@ -1,21 +1,21 @@
 // core/dotted-path-proxy.ts — THE NATURAL DOTTED CLIENT SURFACE.
 //
 // A client is JUST capnweb (itx-surface.ts invariant): what it holds is a plain capnweb proxy
-// of the server-side `Itx` RpcTarget. This module is what lets that proxy be spoken as deep
+// of the server-side `IterateContext` RpcTarget. This module is what lets that proxy be spoken as deep
 // dotted property access — `itx.slack.chat.postMessage({...})`, `itx.kv.put('k','v')`,
-// `itx.rpcStubs.get('b').hello()` — even though `Itx` declares only fixed methods
+// `itx.rpcStubs.get('b').hello()` — even though `IterateContext` declares only fixed methods
 // (invokeCapability / provide / …). Every unknown segment accumulates into ONE `invokeCapability`
 // dispatch carrying an `ItxExpression`; declared methods always win.
 //
 // PORTED (not verbatim) from apps/os/src/domains/itx/utils.ts
 // (installPrototypeInvokeCapabilityFallback + createInvokeCapabilityPathProxy), proven by
-// apps/os/src/domains/itx/path-proxy.test.ts. `Itx.invokeCapability(ItxExpression)` is the exact
+// apps/os/src/domains/itx/path-proxy.test.ts. `IterateContext.invokeCapability(ItxExpression)` is the exact
 // InvokeCapabilityTarget shape this expects (installed with scope root `["itx"]`), so the default
 // invokerFor (the instance itself) wires it with zero glue.
 
 import type { Expression, ItxExpression } from "./expression.ts";
 
-/** The dispatch door every dotted miss collapses onto. `Itx` implements it directly (root `itx`); a
+/** The dispatch door every dotted miss collapses onto. `IterateContext` implements it directly (root `itx`); a
  *  mid-chain `InvokeHandle` implements it relative to itself (empty root). The accumulated dotted
  *  access folds into ONE `ItxExpression` — `[...root, ...prefix, [method, ...args]]`. */
 type InvokeCapabilityTarget = {

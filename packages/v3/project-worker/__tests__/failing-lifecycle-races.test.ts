@@ -194,7 +194,7 @@ test("FIXED (defect 29): every enableProcessor drives the enablement commit into
 
 test("FIXED (defect 30): a processor mount through the ordinary provide door is HALF-ENABLED — /state lists it, every commit errors, snapshot throws", async () => {
   // BUG: #facetEntries derives enablement purely from facet-target mounts at itx.subscribers.<slug>
-  //   — which ANY provide can mint (verified: Itx.provide passes even the UNDECLARED `processor`
+  //   — which ANY provide can mint (verified: IterateContext.provide passes even the UNDECLARED `processor`
   //   field untouched — there is no boundary schema; a raw appended capability-provided event too).
   //   But a facet only functions after enableProcessor's SECOND, non-event-sourced leg:
   //   configure(), which stashes identity in the facet's own kv. provide alone creates the

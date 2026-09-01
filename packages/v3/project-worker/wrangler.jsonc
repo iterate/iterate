@@ -26,13 +26,21 @@
   // THE context DO: one per {projectId, path}, codec-named — the stream, the routing table, and
   // every hibernatable socket in one addressable parent.
   "durable_objects": {
-    "bindings": [{ "name": "CONTEXT", "class_name": "StreamDurableObject" }],
+    "bindings": [{ "name": "CONTEXT", "class_name": "IterateContextDurableObject" }],
   },
   // RESET (2026-08-29): the worker + its DOs were destroyed and redeployed from a clean slate, so
   // the old v1→v8 chain (which renamed classes that never exist in a fresh namespace) is dead
   // history — collapsed to ONE fresh migration for the sole live class. This mirrors what
   // wrangler.test.jsonc always did for fresh pool storage. prod is resettable by design.
-  "migrations": [{ "tag": "reset-1", "new_sqlite_classes": ["StreamDurableObject"] }],
+  // rename-2 (2026-09-01): the class renames to IterateContextDurableObject IN PLACE — a DO class
+  // rename is a DEPLOY EVENT (renamed_classes migration), so the deployed namespace keeps its data.
+  "migrations": [
+    { "tag": "reset-1", "new_sqlite_classes": ["StreamDurableObject"] },
+    {
+      "tag": "rename-2",
+      "renamed_classes": [{ "from": "StreamDurableObject", "to": "IterateContextDurableObject" }],
+    },
+  ],
 
   // The DO's fallback (target-core §4.4). SELF-HOST/HOSTED: a service binding to the real control-plane shell
   // worker (deployed from packages/v3/control-plane-shell). SOLO would instead bind

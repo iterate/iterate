@@ -1,5 +1,5 @@
 // core/itx-surface.ts — the client-facing capnweb surface + the stateless RELAY. This is the ONE place capnweb
-// terminates (the `/api` worker); it reaches the StreamDurableObject only over Workers RPC (the hard rule).
+// terminates (the `/api` worker); it reaches the IterateContextDurableObject only over Workers RPC (the hard rule).
 //
 // INVARIANT (owner): THE CLIENT IS JUST CAPNWEB. Every class in this file is a SERVER-side
 // RpcTarget; what a client holds is a plain capnweb proxy of it. There is no client SDK and
@@ -7,7 +7,7 @@
 // would need client-side smarts belongs HERE, behind an RpcTarget method.
 //
 // A client dials `/api` and gets a `ProjectSession`:
-//   • `get(context?)` → the `Itx` of that context (the root by default). Pure addressing.
+//   • `get(context?)` → the `IterateContext` of that context (the root by default). Pure addressing.
 //   • to offer a LIVE capability, `itx.rpcStubs.provide(stub, { key })` — the client's live capnweb
 //     stub is retained here and reachable as `itx.rpcStubs.get(key)`; name it at a path by mounting
 //     `itx.provide({ path, target: "itx.rpcStubs.get('<key>')" })`. Re-providing the same key
@@ -21,7 +21,7 @@
 // quiesce (a page gets it back). So the DO holds no stub while idle and hibernates with any number of clients.
 
 import { RpcTarget } from "capnweb";
-import type { StreamDurableObject } from "../stream-durable-object.ts";
+import type { IterateContextDurableObject } from "../stream-durable-object.ts";
 import { CAPABILITY_FETCH_HEADER, encodeCapabilityFetchHeader } from "./fetch-capabilities.ts";
 import type { DeliveryPolicy, StreamEvent } from "./events.ts";
 import type { WaitForEventFilter } from "./stream.ts";
@@ -39,16 +39,16 @@ import {
   type RetainedProviderStub,
 } from "./rpc-stub-relay.ts";
 
-/** `session` at `/api` (bound to one projectId). `get(context?)` yields an `Itx`. */
+/** `session` at `/api` (bound to one projectId). `get(context?)` yields an `IterateContext`. */
 export class ProjectSession extends RpcTarget {
-  readonly #hostNamespace: DurableObjectNamespace<StreamDurableObject>;
+  readonly #hostNamespace: DurableObjectNamespace<IterateContextDurableObject>;
   readonly #projectId: string;
   readonly #root: ItxHostStub;
   readonly #parking = new Parking(); // held for the session so retained callbacks + pager sockets aren't GC'd
   readonly #waitUntil: (p: Promise<unknown>) => void;
 
   constructor(
-    hostNamespace: DurableObjectNamespace<StreamDurableObject>,
+    hostNamespace: DurableObjectNamespace<IterateContextDurableObject>,
     projectId: string,
     ctx: ExecutionContext,
   ) {
@@ -76,8 +76,8 @@ export class ProjectSession extends RpcTarget {
   }
 
   /** Pure addressing → a context's itx (the root by default). */
-  get(context?: string): Itx {
-    return new Itx(this.#contextHost(context), this.#parking, this.#waitUntil);
+  get(context?: string): IterateContext {
+    return new IterateContext(this.#contextHost(context), this.#parking, this.#waitUntil);
   }
 
   /** A context's stream DO by path (the root by default). */
@@ -166,7 +166,7 @@ class ProvidedStub extends RpcTarget {
 /** The iterate context (`itx`). Dotted capability calls + the built-in collections forward to the DO over
  *  Workers RPC. capnweb terminates upstream in `/api`, so a client stub `itx.a.b(x)` never touches the DO's
  *  transport — it lands here and becomes a `DO.invoke(["itx", "a", ["b", x]])` call Expression. */
-export class Itx extends RpcTarget {
+export class IterateContext extends RpcTarget {
   readonly #host: ItxHostStub;
   readonly #parking: Parking;
   readonly #waitUntil: (p: Promise<unknown>) => void;
@@ -317,21 +317,24 @@ export class Itx extends RpcTarget {
   }
 }
 
-// THE NATURAL DOTTED SURFACE. Insert the dynamic-capability fallback into `Itx.prototype`'s chain
+// THE NATURAL DOTTED SURFACE. Insert the dynamic-capability fallback into `IterateContext.prototype`'s chain
 // so an unknown segment (`itx.slack`, `itx.kv`) becomes an accumulated invokeCapability dispatch,
 // while the declared methods/getters above (invoke / provide / subscribe / rpcStubs / …) always win.
-// The default invokerFor is the instance itself — `Itx.invokeCapability({ path, args })` is exactly
+// The default invokerFor is the instance itself — `IterateContext.invokeCapability({ path, args })` is exactly
 // the door the path proxy calls. Runs once at module load, after the class body. See
 // core/dotted-path-proxy.ts for the workerd brand-check reason this is a prototype hop and not a
 // Proxy AROUND the instance.
-installPrototypeInvokeCapabilityFallback(Itx, ["itx"]);
+installPrototypeInvokeCapabilityFallback(IterateContext, ["itx"]);
 
 /** Build the itx scope for a context reached over Workers-RPC — the `ItxEntrypoint` / loaded-worker
- *  lane. It is the SAME genuine `Itx` RpcTarget the capnweb client gets from `session.get()`
- *  (`Itx extends RpcTarget from "capnweb"`, which IS the native `cloudflare:workers` RpcTarget on
+ *  lane. It is the SAME genuine `IterateContext` RpcTarget the capnweb client gets from `session.get()`
+ *  (`IterateContext extends RpcTarget from "capnweb"`, which IS the native `cloudflare:workers` RpcTarget on
  *  workerd), so a loaded worker holds a real, pipelinable scope and writes exactly what a capnweb
  *  client writes: `const itx = await env.ITX.get(); itx.demo.timer.callLater(cb)`. No capnweb relays
  *  — a loaded worker's callbacks ride as Workers-RPC stubs through the call args, not the pager. */
-export function itxForHost(host: ItxHostStub, waitUntil: (p: Promise<unknown>) => void): Itx {
-  return new Itx(host, new Parking(), waitUntil);
+export function itxForHost(
+  host: ItxHostStub,
+  waitUntil: (p: Promise<unknown>) => void,
+): IterateContext {
+  return new IterateContext(host, new Parking(), waitUntil);
 }

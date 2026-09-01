@@ -9,7 +9,7 @@
 // That surface is proven by apps/os/src/domains/itx/path-proxy.test.ts and the live slack shape
 // in apps/os/src/domains/integrations/slack-api.test.ts.
 //
-// In THIS clean room the client is JUST capnweb (itx-surface.ts invariant) and the Itx
+// In THIS clean room the client is JUST capnweb (itx-surface.ts invariant) and the IterateContext
 // RpcTarget answers only its fixed methods (invokeCapability / invoke / provide / …), so the
 // natural dotted spelling is expected to be MISSING today. Every test below asserts the
 // CORRECT (apps/os-proven) behavior, adapted to our built-ins (whoami / kv / stream /
@@ -180,7 +180,7 @@ test("explicit door: deep slack replay through a live bridge works today", async
 
 // ── the natural dotted surface (apps/os-proven; missing here) ──
 
-// BUG: the Itx RpcTarget (src/core/itx-surface.ts) answers ONLY its fixed methods — there is no
+// BUG: the IterateContext RpcTarget (src/core/itx-surface.ts) answers ONLY its fixed methods — there is no
 //   prototype-hop / path-proxy fallback, so an unknown dotted root never becomes an
 //   invokeCapability dispatch.
 // EXPECTED (apps/os/src/domains/itx/path-proxy.test.ts:50-61 "falls back only for unknown
@@ -197,7 +197,7 @@ test("root dotted call: await itx.whoami() falls back to the capability table", 
   expect(who).toMatchObject({ projectId: c("who"), path: "/" });
 });
 
-// BUG: same missing fallback, one level deeper — `kv` resolves to undefined ON the Itx
+// BUG: same missing fallback, one level deeper — `kv` resolves to undefined ON the IterateContext
 //   RpcTarget and the follow-path walk explodes on the next segment.
 // EXPECTED (apps/os/src/domains/itx/path-proxy.test.ts:55-56 — stub.nested.math.add /
 //   stub.tools.greeter.sayHello accumulate path segments and dispatch once): itx.kv.put →
@@ -248,7 +248,7 @@ test("mid-chain call: itx.rpcStubs.get('b').hello() answers from a live rpc stub
 //   door): `itx.slack.chat.postMessage({...})` → { ok: true, … } and the bridge-side SDK
 //   receives the exact call.
 // ACTUAL: rejects with TypeError: Cannot read properties of undefined (reading 'chat') — the
-//   walk dies on `slack` being undefined on the Itx RpcTarget; the bridge never hears anything.
+//   walk dies on `slack` being undefined on the IterateContext RpcTarget; the bridge never hears anything.
 // WHY IT MATTERS: "every other client of the project then just speaks
 //   itx.slack.chat.postMessage(...)" is prove_slack.mjs's OWN promise (line 5) — today that
 //   sentence is only true for callers willing to hand-build { path, args }.
@@ -419,4 +419,4 @@ test("reserved segments are hidden at EVERY depth: transport words never dispatc
   expect(snap.state.counts["resv-mark"]).toBe(1);
 });
 
-// UNSPELLABLE (instance-fields todo): Itx keeps ALL state in #private fields by design — there is no own property for a dotted probe to shadow, so apps/os's /instance property/ guard has nothing to guard here.
+// UNSPELLABLE (instance-fields todo): IterateContext keeps ALL state in #private fields by design — there is no own property for a dotted probe to shadow, so apps/os's /instance property/ guard has nothing to guard here.

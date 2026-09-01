@@ -1,7 +1,7 @@
 // calllater.e2e.test.ts — the "get demo → rpc target → callLater(timeoutMs, cb)" shape, live.
 // A Demo/Timer capability is provided at itx.demo; a callback passed to callLater fires back
 // later in the CALLER's isolate. Proven on BOTH lanes: a plain capnweb client, AND a dynamic
-// worker that reaches the scope via `env.ITX.get()` (the WorkerEntrypoint → Itx handoff).
+// worker that reaches the scope via `env.ITX.get()` (the WorkerEntrypoint → IterateContext handoff).
 // (was proofs/prove_calllater.mjs)
 
 import { RpcTarget } from "capnweb";

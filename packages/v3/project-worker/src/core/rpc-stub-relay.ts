@@ -7,16 +7,16 @@
 //
 // This module owns that whole dance behind a TWO-SYMBOL API — `startRpcStubRelay` (park a stub, hand
 // back a disposable relay) and `Parking` (the session-lived registry that keeps relays alive) — so
-// itx-surface.ts reads as its narrative (ProjectSession → Itx → the built-in collections), with the
+// itx-surface.ts reads as its narrative (ProjectSession → IterateContext → the built-in collections), with the
 // pager sockets, the shared broken-flag, and shadow-relay disposal hidden here.
 
 import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
-import type { StreamDurableObject } from "../stream-durable-object.ts";
+import type { IterateContextDurableObject } from "../stream-durable-object.ts";
 import { codedError } from "./errors.ts";
 import { dialLiveCapabilityFetch } from "./fetch-capabilities.ts";
 import { disposeStub, openStubPagerWebSocket } from "./hibernatable-rpc-stub.ts";
 
-export type ItxHostStub = DurableObjectStub<StreamDurableObject>;
+export type ItxHostStub = DurableObjectStub<IterateContextDurableObject>;
 
 /** A retained provider stub (capnweb) from the client. ON THE WIRE it is a callable stub Proxy
  *  (`typeof === "function"` — capnweb pipelines property access through it), so a structural

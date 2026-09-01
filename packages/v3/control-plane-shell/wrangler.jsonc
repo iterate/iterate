@@ -17,7 +17,9 @@
     "bindings": [
       {
         "name": "CONTEXT",
-        "class_name": "StreamDurableObject",
+        // Deploys in LOCKSTEP with (after) project-worker's rename-2 migration — the class_name
+        // must match what the project-worker script currently exports.
+        "class_name": "IterateContextDurableObject",
         "script_name": "project-worker",
       },
     ],

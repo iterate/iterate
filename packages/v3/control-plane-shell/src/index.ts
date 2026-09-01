@@ -11,14 +11,14 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { substituteHeaderSecrets } from "@v3/shared/egress";
 // Type-only: the class lives in (and stays deployed with) the project-worker script — see the
 // cross-script CONTEXT binding in wrangler.jsonc.
-import type { StreamDurableObject } from "project-worker";
+import type { IterateContextDurableObject } from "project-worker";
 
 interface Env {
   PLATFORM_SECRETS_KV?: KVNamespace; // first-party keys (hosted only); keyed by bare name (not project-prefixed)
-  // CROSS-SCRIPT binding to the project worker's StreamDurableObject namespace (D27): a context IS a stream,
+  // CROSS-SCRIPT binding to the project worker's IterateContextDurableObject namespace (D27): a context IS a stream,
   // so the control plane can name + write into a PROJECT's context. A project can only ever name its
   // OWN contexts (constructive isolation) — so this reach is outer→inner ONLY.
-  CONTEXT?: DurableObjectNamespace<StreamDurableObject>;
+  CONTEXT?: DurableObjectNamespace<IterateContextDurableObject>;
 }
 
 export class ControlPlaneShell extends WorkerEntrypoint<Env> {

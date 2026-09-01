@@ -2,7 +2,7 @@
 // workerd (the pool-workers lane — the ONLY lane that can force the quiesce alarm
 // (runDurableObjectAlarm) and a graceful teardown (evictDurableObject) deterministically).
 //
-// Target surface: StreamDurableObject.alarm()/#noteActivity/#alarmArmer/resurrection pass/
+// Target surface: IterateContextDurableObject.alarm()/#noteActivity/#alarmArmer/resurrection pass/
 // #facetWorkInFlight/quiesce-abort (src/stream-durable-object.ts), the subscription-forwarder
 // (src/subscription-forwarder-processor.ts), and the rpc-stub directory
 // (src/rpc-stub-directory.ts).
@@ -38,12 +38,12 @@ import { env } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { afterAll, expect, test, vi } from "vitest";
 import { canonicalName } from "../src/core/durable-object-names.ts";
-import type { StreamDurableObject } from "../src/stream-durable-object.ts";
+import type { IterateContextDurableObject } from "../src/stream-durable-object.ts";
 
 const stub = (ctx: string) =>
-  (env as unknown as { CONTEXT: DurableObjectNamespace<StreamDurableObject> }).CONTEXT.getByName(
-    canonicalName(ctx),
-  );
+  (
+    env as unknown as { CONTEXT: DurableObjectNamespace<IterateContextDurableObject> }
+  ).CONTEXT.getByName(canonicalName(ctx));
 
 /** A tiny userspace processor: counts every durable event. Loaded through the Worker Loader
  *  (the only facet kind the pool lane can materialize — see the header). */

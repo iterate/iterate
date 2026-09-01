@@ -22,12 +22,12 @@ import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { afterAll, expect, test, vi } from "vitest";
 import { canonicalName } from "../src/core/durable-object-names.ts";
 import { STUB_PAGER_WEBSOCKET_HEADER } from "../src/core/hibernatable-rpc-stub.ts";
-import type { StreamDurableObject } from "../src/stream-durable-object.ts";
+import type { IterateContextDurableObject } from "../src/stream-durable-object.ts";
 
 const stub = (ctx: string) =>
-  (env as unknown as { CONTEXT: DurableObjectNamespace<StreamDurableObject> }).CONTEXT.getByName(
-    canonicalName(ctx),
-  );
+  (
+    env as unknown as { CONTEXT: DurableObjectNamespace<IterateContextDurableObject> }
+  ).CONTEXT.getByName(canonicalName(ctx));
 
 /** Open a pager upgrade straight at the DO's fetch door (what openStubPagerWebSocket does
  *  relay-side) — the raw request lets us carry a SWEPT transportId, which no live relay would. */
