@@ -72,12 +72,12 @@ test("crisp-1: routing, live caps, shadow stack, dynamic-worker mounts, capabili
   const echoed = await itxB.invokeCapability(["itx", "tools", ["echo", "hello"]]);
   // live cap: B invokes A's provider
   expect(echoed).toBe("echo-A:hello");
-  const s1 = await itxA.hostState();
-  // The paged-in stub stays WARM after a call now (disposal is the 60s quiesce alarm —
-  // prove_hibernate owns the don't-pin property); what must hold here: stubs attached + paged in.
-  // stub pager: 3 attached, tools stub paged in and warm
-  expect(s1.stubs).toBeGreaterThanOrEqual(3);
-  expect(s1.pagedIn).toBeGreaterThanOrEqual(1);
+  // PRESENCE: three live rows in the capability table (proverA, proverB, tools — the mount path
+  // IS each stub's identity; the echoed call above already proved a paged-in stub SERVES, and the
+  // raw socket counters are the DO-only transportState(), off this capnweb lane).
+  const s1 = await itxA.invokeCapability("itx.facets.get('capability-table').snapshot()");
+  const liveNow = (s1?.state?.mounts ?? []).filter((m: { live?: true }) => m.live);
+  expect(liveNow.length).toBeGreaterThanOrEqual(3);
 
   // 4. THE SHADOW STACK: same path mounted twice — newest wins; revoking the mount restores.
   //    Live rows don't stack (one live row per path, superseded in place), so the stack is proven

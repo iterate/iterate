@@ -71,7 +71,31 @@ const readHead = async (itx: any): Promise<number> => {
   };
   return events.length ? events[events.length - 1].offset : 0;
 };
-const doState = async (ctx: string): Promise<any> => (await harness.itx(ctx)).hostState();
+/** ACTIVE subscriber rows off the capability-table snapshot (newest mount per name wins — the
+ *  shadow-stack projection the deleted hostState() used to serve). */
+const subscriberRows = async (ctx: string): Promise<any[]> => {
+  const snap: any = await (
+    await harness.itx(ctx)
+  ).invokeCapability("itx.facets.get('capability-table').snapshot()");
+  const byName = new Map<string, any>();
+  for (const m of snap.state.mounts as any[]) {
+    if (m.path.length !== 3 || m.path[0] !== "itx" || m.path[1] !== "subscribers") continue;
+    const cur = byName.get(m.path[2]);
+    if (!cur || m.providedAtOffset > cur.providedAtOffset)
+      byName.set(m.path[2], { name: m.path[2], ...m });
+  }
+  return [...byName.values()];
+};
+/** Enabled facet processors = the facet-lane subscriber rows (a processor IS such a row). */
+const facetProcessorSlugs = async (ctx: string): Promise<string[]> =>
+  (await subscriberRows(ctx)).filter((r) => r.lane === "facet").map((r) => r.name);
+/** PRESENCE by count — live table rows (the transport socket counters are DO-only transportState()). */
+const liveRowCount = async (ctx: string): Promise<number> => {
+  const snap: any = await (
+    await harness.itx(ctx)
+  ).invokeCapability("itx.facets.get('capability-table').snapshot()");
+  return (snap.state.mounts as any[]).filter((m) => m.live).length;
+};
 
 /** Expected tally counts = groupBy(type) over the DURABLE log (tally consumes "*", durable only). */
 const durableCountsByType = (events: any[]): Record<string, number> => {
@@ -126,14 +150,13 @@ test("shadow stack: 10 concurrent provides on ONE path end deterministic (newest
 
 // ─────────────────────────── 2. facet-processor enablement lineage ───────────────────────────
 
-test("enableProcessor('tally') from two sessions concurrently: one effective lineage, exact counts, /state lists tally once", async () => {
+test("enableProcessor('tally') from two sessions concurrently: one effective lineage, exact counts, the table lists tally once", async () => {
   const ctx = "prj_lr_dualenable";
   const itxA = await harness.itx(ctx);
   const itxB = await harness.itx(ctx);
   await Promise.all([itxA.enableProcessor("tally"), itxB.enableProcessor("tally")]);
 
-  const state = await doState(ctx);
-  expect(state.facetProcessors.filter((s: string) => s === "tally")).toHaveLength(1);
+  expect((await facetProcessorSlugs(ctx)).filter((s: string) => s === "tally")).toHaveLength(1);
 
   for (let i = 0; i < 3; i++) await append(itxA, { type: "seen", payload: { i } });
   const head = await readHead(itxA);
@@ -210,8 +233,7 @@ test("FIXED (defect 30): a processor mount through the ordinary provide door is 
   const ctx = "prj_lr_halfenable";
   const itx = await harness.itx(ctx);
   await itx.provide("itx.subscribers.tally", "itx.facets.get('tally')");
-  const state = await doState(ctx);
-  expect(state.facetProcessors).toContain("tally"); // listed as enabled (this passes — the lie)
+  expect(await facetProcessorSlugs(ctx)).toContain("tally"); // listed as enabled (this passes — the lie)
   await append(itx, { type: "mark" });
   const snap: any = await itx.invokeCapability("itx.facets.get('tally').snapshot()"); // throws "not configured"
   expect(snap.state.counts.mark).toBe(1);
@@ -266,8 +288,7 @@ test("disable mid-drive: appends survive, no ongoing error storm, re-enable rebu
   const disabled = itx.disableProcessor("tally");
   await Promise.all([...burst, disabled]); // appends must all survive the disable
 
-  const state = await doState(ctx);
-  expect(state.facetProcessors).not.toContain("tally");
+  expect(await facetProcessorSlugs(ctx)).not.toContain("tally");
   await expect(itx.invokeCapability("itx.facets.get('tally').snapshot()")).rejects.toThrow(
     /no facet.*"tally"/,
   );
@@ -335,8 +356,7 @@ test("FIXED: double-enable then ONE disableProcessor disables it (clears the WHO
 
   await itx.disableProcessor("tally"); // ONE disable
 
-  const state = await doState(ctx);
-  expect(state.facetProcessors).not.toContain("tally"); // RED: still contains "tally"
+  expect(await facetProcessorSlugs(ctx)).not.toContain("tally"); // RED: still contains "tally"
   await expect(itx.invokeCapability("itx.facets.get('tally').snapshot()")).rejects.toThrow(
     /no facet.*"tally"/,
   );
@@ -413,7 +433,7 @@ test("churn 20×: no ghost deliveries; the connection registry returns to baseli
   const ctx = "prj_lr_churn";
   const session = harness.session(ctx);
   const itx = await session.authenticate().get();
-  const baseline: any = await doState(ctx);
+  const baselineLiveRows = await liveRowCount(ctx);
   const c = collector();
 
   for (let i = 0; i < 20; i++) {
@@ -426,18 +446,15 @@ test("churn 20×: no ghost deliveries; the connection registry returns to baseli
   await append(itx, { type: "mark", payload: { n: 2 } });
   await settle(800);
   expect(c.invocations).toHaveLength(0);
-  const state: any = await doState(ctx);
-  expect(state.subscriptionMounts).toEqual([]);
+  expect(await subscriberRows(ctx)).toEqual([]);
 
-  // dispose the session: the registry must return to baseline (no leaked stubs/sockets)
+  // dispose the session: presence (live table rows) must return to baseline — no lying rows
+  // (transport socket counts are DO-only transportState(), pinned in __workers-tests__)
   const DISPOSE: symbol | undefined = (Symbol as { dispose?: symbol }).dispose;
   if (DISPOSE) (session as Record<symbol, () => void>)[DISPOSE]?.();
   await until(
-    "stub registry back to baseline",
-    async () => {
-      const s: any = await doState(ctx);
-      return s.stubs === baseline.stubs;
-    },
+    "live-row presence back to baseline",
+    async () => (await liveRowCount(ctx)) === baselineLiveRows,
     20_000,
   );
 });

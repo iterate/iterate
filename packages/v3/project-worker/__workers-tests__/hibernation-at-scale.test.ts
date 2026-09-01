@@ -67,9 +67,13 @@ type TransportState = {
 async function state(): Promise<TransportState> {
   return (await contextStub().transportState()) as unknown as TransportState;
 }
-/** Incarnation (the hibernation tell) still reads off hostState until C5 re-routes it. */
+/** Incarnation (the hibernation tell) — the core reduce's fold of the stream/woken wake record
+ *  (`itx.facets.get('core').snapshot()`; absent until a first-ever commit reduces one). */
 async function incarnationNow(): Promise<number> {
-  return ((await contextStub().hostState()) as unknown as { incarnation: number }).incarnation;
+  const snap = (await contextStub().invoke("itx.facets.get('core').snapshot()")) as {
+    state: { incarnation?: number };
+  };
+  return snap.state.incarnation ?? 0;
 }
 
 const contextStub = () =>

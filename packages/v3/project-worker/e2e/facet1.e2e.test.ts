@@ -5,9 +5,9 @@
 // (was proofs/prove_facet1.mjs)
 
 import { expect, test } from "vitest";
-import { freshCtx, bareItx } from "./support/client.ts";
+import { freshCtx, bareItx, facetProcessorSlugs } from "./support/client.ts";
 
-test("facet spine: cold catch-up + driven folds + host state lists the facet processor", async () => {
+test("facet spine: cold catch-up + driven folds + the table lists the facet processor", async () => {
   const itx = bareItx(freshCtx("facet"));
 
   // one mount BEFORE enabling — the facet must count it via cold catch-up
@@ -33,8 +33,9 @@ test("facet spine: cold catch-up + driven folds + host state lists the facet pro
   expect(s2.state?.counts?.["events.iterate.com/capability-table/capability-revoked"]).toBe(1);
   expect(s2.offset).toBeGreaterThanOrEqual(5);
 
-  // host state lists the facet processor (was `/state` → itx.hostState())
-  const st = await itx.hostState();
-  expect(Array.isArray(st.facetProcessors)).toBe(true);
-  expect(st.facetProcessors).toContain("tally");
+  // the capability table lists the facet processor (was /state → hostState() → the table's
+  // facet-lane rows — a processor IS a subscriber mount)
+  const slugs = await facetProcessorSlugs(itx);
+  expect(Array.isArray(slugs)).toBe(true);
+  expect(slugs).toContain("tally");
 });

@@ -32,28 +32,28 @@ import { canonicalName, DurableObjectNameCodec, normalizePath } from "./durable-
 import {
   Parking,
   startRpcStubRelay,
-  type ItxHostStub,
+  type IterateContextStub,
   type ProviderStub,
   type RetainedProviderStub,
 } from "./rpc-stub-relay.ts";
 
 /** `session` at `/api` (bound to one projectId). `get(context?)` yields an `IterateContext`. */
 export class ProjectSession extends RpcTarget {
-  readonly #hostNamespace: DurableObjectNamespace<IterateContextDurableObject>;
+  readonly #contextNamespace: DurableObjectNamespace<IterateContextDurableObject>;
   readonly #projectId: string;
-  readonly #root: ItxHostStub;
+  readonly #root: IterateContextStub;
   readonly #parking = new Parking(); // held for the session so retained callbacks + pager sockets aren't GC'd
   readonly #waitUntil: (p: Promise<unknown>) => void;
 
   constructor(
-    hostNamespace: DurableObjectNamespace<IterateContextDurableObject>,
+    contextNamespace: DurableObjectNamespace<IterateContextDurableObject>,
     projectId: string,
     ctx: ExecutionContext,
   ) {
     super();
-    this.#hostNamespace = hostNamespace;
+    this.#contextNamespace = contextNamespace;
     this.#projectId = DurableObjectNameCodec.parse(projectId).projectId;
-    this.#root = hostNamespace.getByName(canonicalName(projectId));
+    this.#root = contextNamespace.getByName(canonicalName(projectId));
     this.#waitUntil = (p) => ctx.waitUntil(p);
   }
 
@@ -75,15 +75,15 @@ export class ProjectSession extends RpcTarget {
 
   /** Pure addressing → a context's itx (the root by default). */
   get(context?: string): IterateContext {
-    return new IterateContext(this.#contextHost(context), this.#parking, this.#waitUntil);
+    return new IterateContext(this.#contextStub(context), this.#parking, this.#waitUntil);
   }
 
   /** A context's stream DO by path (the root by default). */
-  #contextHost(context?: string): ItxHostStub {
+  #contextStub(context?: string): IterateContextStub {
     const path = normalizePath(context ?? "/");
     return path === "/"
       ? this.#root
-      : this.#hostNamespace.getByName(
+      : this.#contextNamespace.getByName(
           DurableObjectNameCodec.stringify({ projectId: this.#projectId, path }),
         );
   }
@@ -93,13 +93,17 @@ export class ProjectSession extends RpcTarget {
  *  Workers RPC. capnweb terminates upstream in `/api`, so a client stub `itx.a.b(x)` never touches the DO's
  *  transport — it lands here and becomes a `DO.invoke(["itx", "a", ["b", x]])` call Expression. */
 export class IterateContext extends RpcTarget {
-  readonly #host: ItxHostStub;
+  readonly #context: IterateContextStub;
   readonly #parking: Parking;
   readonly #waitUntil: (p: Promise<unknown>) => void;
 
-  constructor(host: ItxHostStub, parking: Parking, waitUntil: (p: Promise<unknown>) => void) {
+  constructor(
+    context: IterateContextStub,
+    parking: Parking,
+    waitUntil: (p: Promise<unknown>) => void,
+  ) {
     super();
-    this.#host = host;
+    this.#context = context;
     this.#parking = parking;
     this.#waitUntil = waitUntil;
   }
@@ -110,14 +114,7 @@ export class IterateContext extends RpcTarget {
    *  sugar `itx.a.b(x)` folds into `["itx","a",["b",x]]` (see the prototype fallback at the bottom
    *  of this file) and lands right here. */
   invokeCapability(call: ItxExpression): Promise<unknown> {
-    return this.#host.invoke(call);
-  }
-
-  /** OBSERVABILITY (read-only): the context host's incarnation, core fold (paused/breaker), active
-   *  subscription mounts, and transport facts — one JSON snapshot. Replaces the old `/state`
-   *  HTTP door; there is no second transport, just this method over capnweb. */
-  hostState(): Promise<Record<string, unknown>> {
-    return this.#host.hostState();
+    return this.#context.invoke(call);
   }
 
   /** Append events to this context's log — the flattened stream verb, same commit pipeline as the
@@ -125,7 +122,7 @@ export class IterateContext extends RpcTarget {
    *  inline reduces, and the fan-out all live on the DO (Stream.append owns the contract); this
    *  method just proxies. Returns the committed events with their assigned offsets. */
   append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
-    return this.#host.append(...events);
+    return this.#context.append(...events);
   }
 
   /** Read a page of the durable log after `afterOffset` (default 0; `limit` default 500).
@@ -135,7 +132,7 @@ export class IterateContext extends RpcTarget {
     afterOffset?: number,
     limit?: number,
   ): Promise<{ events: StreamEvent[]; scannedThroughOffset: number }> {
-    return this.#host.read(afterOffset, limit);
+    return this.#context.read(afterOffset, limit);
   }
 
   /** Wait for the next event matching `filter` — or the first committed durable match after an
@@ -144,7 +141,7 @@ export class IterateContext extends RpcTarget {
    *  30s/120s timeout → WAIT_TIMEOUT, non-minting); this method just proxies, and the client's
    *  own open call is what keeps the wait alive. */
   waitForEvent(filter?: WaitForEventFilter): Promise<StreamEvent> {
-    return this.#host.waitForEvent(filter);
+    return this.#context.waitForEvent(filter);
   }
 
   /** THE ONE PROVIDE DOOR — mount a capability at `path`. `target` is EITHER:
@@ -163,7 +160,7 @@ export class IterateContext extends RpcTarget {
   ): Promise<{ providedAtOffset: number }> {
     const delivery = opts?.delivery;
     if (typeof target === "string" || Array.isArray(target))
-      return this.#host.provideCapability({ path, target, ...(delivery && { delivery }) });
+      return this.#context.provideCapability({ path, target, ...(delivery && { delivery }) });
     if (
       typeof target !== "function" &&
       !(target instanceof RpcTarget) &&
@@ -179,13 +176,13 @@ export class IterateContext extends RpcTarget {
       ".",
     );
     const relay = await startRpcStubRelay(
-      this.#host,
+      this.#context,
       target as RetainedProviderStub,
       pathString,
       this.#waitUntil,
     );
     this.#parking.add(pathString, relay);
-    return this.#host.provideCapability({
+    return this.#context.provideCapability({
       path: pathString,
       live: true,
       ...(delivery && { delivery }),
@@ -198,7 +195,7 @@ export class IterateContext extends RpcTarget {
   fetchCap(cap: ItxExpression, request: Request): Promise<Response> {
     const headers = new Headers(request.headers);
     headers.set(CAPABILITY_FETCH_HEADER, encodeCapabilityFetchHeader(cap));
-    return this.#host.fetch(new Request(request, { headers }));
+    return this.#context.fetch(new Request(request, { headers }));
   }
 
   /** Pop a mount off the shadow stack (what it shadowed is restored) — by capability path (the
@@ -209,11 +206,11 @@ export class IterateContext extends RpcTarget {
       const pathString = parseCapabilityPath(
         typeof input === "string" ? input : input.join("."),
       ).join(".");
-      const { revokedLive } = await this.#host.revokeCapability({ path: pathString });
+      const { revokedLive } = await this.#context.revokeCapability({ path: pathString });
       if (revokedLive) this.#parking.dispose(pathString);
       return;
     }
-    await this.#host.revokeCapability(input);
+    await this.#context.revokeCapability(input);
   }
 
   /** Enable a facet-hosted processor on this context's stream. Sugar for "load a class as a
@@ -226,11 +223,11 @@ export class IterateContext extends RpcTarget {
     slug: string,
     ref?: { source: string | Expression; className: string },
   ): Promise<{ ok: true }> {
-    return this.#host.enableProcessor(slug, ref);
+    return this.#context.enableProcessor(slug, ref);
   }
 
   disableProcessor(slug: string): Promise<{ ok: true }> {
-    return this.#host.disableProcessor(slug);
+    return this.#context.disableProcessor(slug);
   }
 
   /** Subscribe — sugar for a subscription mount at `itx.subscribers.<name>`, through the ONE
@@ -275,14 +272,14 @@ export class IterateContext extends RpcTarget {
    *  expression mount (prove_disable_shadow.mjs). */
   async unsubscribe(input: { name: string }): Promise<void> {
     const path = `itx.subscribers.${input.name}`;
-    await this.#host.revokeCapability({ path, all: true });
+    await this.#context.revokeCapability({ path, all: true });
     this.#parking.dispose(path);
   }
 
   /** Recovery from a forwarder HALT (or an operator cursor seek) — absent targets only;
    *  connected targets have no server cursor to move. */
   resumeSubscription(input: { name: string; afterOffset?: number }): Promise<{ ok: true }> {
-    return this.#host.resumeSubscription(input);
+    return this.#context.resumeSubscription(input);
   }
 }
 
@@ -301,9 +298,9 @@ installPrototypeInvokeCapabilityFallback(IterateContext, ["itx"]);
  *  workerd), so a loaded worker holds a real, pipelinable scope and writes exactly what a capnweb
  *  client writes: `const itx = await env.ITX.get(); itx.demo.timer.callLater(cb)`. No capnweb relays
  *  — a loaded worker's callbacks ride as Workers-RPC stubs through the call args, not the pager. */
-export function itxForHost(
-  host: ItxHostStub,
+export function itxFor(
+  context: IterateContextStub,
   waitUntil: (p: Promise<unknown>) => void,
 ): IterateContext {
-  return new IterateContext(host, new Parking(), waitUntil);
+  return new IterateContext(context, new Parking(), waitUntil);
 }

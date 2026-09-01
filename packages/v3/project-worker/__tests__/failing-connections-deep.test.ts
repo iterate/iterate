@@ -3,7 +3,7 @@
 // src/core/itx-surface.ts). A live stub's lifetime is coupled to its MOUNT PATH: `itx.revoke(path)`
 // (or `unsubscribe`, or session end) tears the row AND the transport; an unexpectedly-dropped
 // transport auto-revokes the row (the reverse coupling). So this file hunts:
-//   • subscribe → unsubscribe disposes the parked stub (hostState().stubs returns to zero),
+//   • subscribe → unsubscribe disposes the parked stub (its live row leaves the table),
 //   • a provide/revoke/subscribe/unsubscribe/disconnect STORM returns the DO to baseline,
 //   • re-provide at one path replaces ONLY that path's transport and leaves a separate live stub
 //     (even mid-invoke) untouched.
@@ -58,13 +58,11 @@ const livePaths = async (itx: any): Promise<string[]> => {
     .map((m) => (m.path as string[]).join("."));
 };
 
-/** The DO's read-only observability (never mints storage), over the one door as `itx.hostState()`:
- *  the transport table's in-memory counters ride at the top level — `stubs` (attached pager
- *  sockets), `pagedIn`, `dormant`. */
-async function streamState(ctx: string): Promise<any> {
-  return (await harness.itx(ctx)).hostState();
-}
-const stubCount = async (ctx: string): Promise<number> => (await streamState(ctx)).stubs;
+/** PRESENCE by count — live table rows (the event-sourced fact a parked stub leaves behind; the
+ *  raw transport socket counters are the DO-only `transportState()`, off this capnweb lane and
+ *  pinned in __workers-tests__ where the DO stub is in hand). */
+const liveRowCount = async (ctx: string): Promise<number> =>
+  (await livePaths(await harness.itx(ctx))).length;
 
 class Tools extends RpcTarget {
   #tag: string;
@@ -93,29 +91,30 @@ class HangTools extends RpcTarget {
 
 // ── the hunt ──
 
-test("subscribe → unsubscribe disposes the parked stub — /state.stubs returns to zero", async () => {
+test("subscribe → unsubscribe disposes the parked stub — its live row leaves the table", async () => {
   const ctx = c("unsub-leak");
   const observer = await harness.itx(ctx);
-  expect(await stubCount(ctx)).toBe(0); // baseline: nothing attached
+  expect(await liveRowCount(ctx)).toBe(0); // baseline: nothing parked
 
   const sub = await observer.subscribe({ target: () => undefined });
-  await until("the parked subscriber's stub is attached", async () => (await stubCount(ctx)) === 1);
+  await until(
+    "the parked subscriber's live row landed",
+    async () => (await liveRowCount(ctx)) === 1,
+  );
 
   await observer.unsubscribe({ name: sub.name });
 
-  // unsubscribe revokes the subscriber row AND tears its transport (path-coupled), so the
-  // parked stub goes offline and the registry returns to zero (and dormant — nothing paged in).
-  await until("the parked subscriber stub disposed on unsubscribe", async () => {
-    const s = await streamState(ctx);
-    return s.stubs === 0 && s.dormant === true;
+  // unsubscribe revokes the subscriber row AND tears its transport (path-coupled), so presence
+  // (the table) returns to zero — the event-sourced spelling of "nothing left parked".
+  await until("the parked subscriber row revoked on unsubscribe", async () => {
+    return (await liveRowCount(ctx)) === 0;
   });
-  expect((await livePaths(observer)).length).toBe(0); // presence (the table) agrees
 });
 
 test("storm of provide/mount/revoke/subscribe/unsubscribe/disconnect returns the DO to baseline (no leaked stubs)", async () => {
   const ctx = c("storm");
   const observer = await harness.itx(ctx);
-  expect(await stubCount(ctx)).toBe(0);
+  expect(await liveRowCount(ctx)).toBe(0);
 
   for (let i = 0; i < 6; i++) {
     // (a) subscribe then unsubscribe — the parked-stub disposal path.
@@ -131,11 +130,8 @@ test("storm of provide/mount/revoke/subscribe/unsubscribe/disconnect returns the
     (s as any)[Symbol.dispose]?.();
   }
 
-  // Every transport opened by the storm is gone; the registry is back to zero and dormant.
-  await until("the storm left NO leaked stubs", async () => {
-    const st = await streamState(ctx);
-    return st.stubs === 0 && st.dormant === true;
-  });
+  // Every live row the storm mounted is gone — each revoke/unsubscribe/disconnect tore its
+  // transport AND popped its row (auto-revoke is an async append; poll).
   await until(
     "presence (the table) back to baseline",
     async () => (await livePaths(observer)).length === 0,

@@ -31,11 +31,13 @@ test("charset gate: a legitimate ctx (hyphen, underscore, uppercase, digits) is 
 });
 
 test("charset gate: a ':' in the ctx is rejected at the edge (no DO is addressed)", async () => {
-  // worker.ts host() runs canonicalName(ctx) for the /cap door — a ':' throws THERE, before any DO
-  // is addressed. A healthy ctx answers (its session resolves hostState); the breach ctx errors out
-  // of the HTTP door with a 5xx (the gate fired in the edge handler, before egress).
+  // worker.ts contextStub() runs canonicalName(ctx) for the /cap door — a ':' throws THERE, before
+  // any DO is addressed. A healthy ctx answers (its session resolves a read-only snapshot); the
+  // breach ctx errors out of the HTTP door with a 5xx (the gate fired in the edge handler, before
+  // egress).
   const good = await harness.itx("prj_fixreg_ok");
-  expect(typeof (await good.hostState()).incarnation).toBe("number");
+  const probe: any = await good.invokeCapability("itx.facets.get('core').snapshot()");
+  expect(typeof probe.offset).toBe("number");
   const bad = await fetch(
     new URL(`/cap?ctx=${encodeURIComponent("prj_x:evil")}&cap=whoami`, harness.url),
   );

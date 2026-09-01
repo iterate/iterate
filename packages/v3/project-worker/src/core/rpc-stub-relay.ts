@@ -18,7 +18,8 @@ import { codedError } from "./errors.ts";
 import { dialLiveCapabilityFetch } from "./fetch-capabilities.ts";
 import { disposeStub, openStubPagerWebSocket } from "./hibernatable-rpc-stub.ts";
 
-export type ItxHostStub = DurableObjectStub<IterateContextDurableObject>;
+/** The context DO's Workers-RPC stub — what the edge proxies to and this relay pages against. */
+export type IterateContextStub = DurableObjectStub<IterateContextDurableObject>;
 
 /** A retained provider stub (capnweb) from the client. ON THE WIRE it is a callable stub Proxy
  *  (`typeof === "function"` — capnweb pipelines property access through it), so a structural
@@ -38,12 +39,16 @@ class RetainedCallbackInvoker extends WorkersRpcTarget {
    *  pins. capnweb fires onRpcBroken BEFORE it rejects the in-flight import, so a call caught below
    *  sees this already true — no race. */
   #broken: { value: boolean };
-  #host: ItxHostStub;
-  constructor(provider: RetainedProviderStub, broken: { value: boolean }, host: ItxHostStub) {
+  #context: IterateContextStub;
+  constructor(
+    provider: RetainedProviderStub,
+    broken: { value: boolean },
+    context: IterateContextStub,
+  ) {
     super();
     this.#provider = provider;
     this.#broken = broken;
-    this.#host = host;
+    this.#context = context;
   }
 
   /** Walk dotted segments off the retained capnweb stub (property access pipelines through it). */
@@ -68,7 +73,7 @@ class RetainedCallbackInvoker extends WorkersRpcTarget {
   async fetch(upgradeId: string, capPath: string[], request: Request): Promise<unknown> {
     try {
       const recv = this.#receiver(capPath) as { fetch(req: Request): Promise<unknown> };
-      return await dialLiveCapabilityFetch((r) => recv.fetch(r), request, upgradeId, this.#host);
+      return await dialLiveCapabilityFetch((r) => recv.fetch(r), request, upgradeId, this.#context);
     } catch (e) {
       this.#recodeIfBroken(e, "mid-fetch");
     }
@@ -125,25 +130,25 @@ export class Parking {
  *  or at session end); its close makes the DO drop the stub (⇒ the live mount at the path
  *  auto-revokes). */
 export async function startRpcStubRelay(
-  host: ItxHostStub,
+  context: IterateContextStub,
   provider: RetainedProviderStub,
   path: string,
   waitUntil: (p: Promise<unknown>) => void,
 ): Promise<CapnwebCallbackRelay> {
-  const { transportId } = await host.rpcStubAttach({ path });
+  const { transportId } = await context.rpcStubAttach({ path });
   const retained = provider.dup();
   // ONE shared broken flag for the whole relay — every paged-in invoker reads it; the single
   // onRpcBroken registration below flips it. (Registering per page would leak a listener per page:
   // capnweb has no offRpcBroken. See rpc-stub-broken-leak.failing.test.ts.)
   const broken = { value: false };
-  const pagerWebSocket = await openStubPagerWebSocket(host, transportId, () => {
+  const pagerWebSocket = await openStubPagerWebSocket(context, transportId, () => {
     // The page answer: re-mint the Workers-RPC stub around the retained capnweb callback and
     // hand it to the DO, which keeps it warm until its idle quiesce.
     waitUntil(
-      host
+      context
         .rpcStubActivate({
           transportId,
-          invoker: new RetainedCallbackInvoker(retained, broken, host),
+          invoker: new RetainedCallbackInvoker(retained, broken, context),
         })
         .catch(() => undefined), // a stale page (nobody waiting) returns undefined; offline throws — ignore
     );

@@ -3,7 +3,8 @@
 // `itx.provide(path, stub)` — the MOUNT PATH is the stub's identity (no keys) and it is called as
 // `itx.<path>.method(...)`. PRESENCE is event-driven: the capability table's rows where `live`
 // (read via the capability-table facet snapshot); the transport table holds only in-memory socket
-// facts (`hostState().stubs/pagedIn/dormant`). Re-providing the same path replaces the transport
+// facts (the DO-only `transportState()` verb — off this capnweb lane). Re-providing the same path
+// replaces the transport
 // AND supersedes the live row in place (one live row per path); the transport's final close
 // auto-revokes the row.
 // Run:
@@ -292,11 +293,14 @@ test("concurrent provides at one path collapse to ONE live transport and ONE liv
   const observer = await harness.itx(ctx);
   const sessions = [1, 2, 3, 4].map(() => harness.session(ctx));
   await Promise.all(sessions.map((s, i) => s.get().provide("itx.solo", new Tools(`r${i}`))));
+  // The four provides SUPERSEDE in place (one live row per path, by reduce rule) and the winner's
+  // transport serves. (The raw one-transport count is a DO-only transportState() fact — this
+  // capnweb lane asserts the event-sourced presence + a live invoke through the surviving row.)
   await until(
-    "exactly one transport attached (hostState().stubs)",
+    "the surviving transport serves itx.solo",
     async () => {
-      const st = await observer.hostState();
-      return st.stubs === 1;
+      const out = await observer.invokeCapability("itx.solo.hello()");
+      return typeof out === "string" && out.startsWith("hello-from-");
     },
     10_000,
   );

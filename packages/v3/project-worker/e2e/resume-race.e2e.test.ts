@@ -20,7 +20,14 @@
 // redelivers from the reset cursor.
 
 import { expect, test } from "vitest";
-import { freshCtx, openItx, sleep, until } from "./support/client.ts";
+import {
+  facetProcessorSlugs,
+  freshCtx,
+  openItx,
+  sleep,
+  subscriberMounts,
+  until,
+} from "./support/client.ts";
 
 // Was RED when authored (the resume's rev-bump suppressed #onDeliveryFailure's retry scheduling,
 // stalling the row until the ~60s idle alarm); the bug is FIXED — this is now the regression pin.
@@ -98,11 +105,10 @@ test("resume racing an in-flight forwarder delivery that then fails must re-deli
   expect(laterOffsets).toContain(m1.offset);
   expect(laterOffsets).toContain(m2.offset);
 
-  // host-state sanity: the row is on the durable lane and the forwarder facet is enabled.
-  const state = await itx.hostState();
-  const row = state.subscriptionMounts?.find((r: { name: string }) => r.name === "race");
+  // table sanity: the row is on the durable lane and the forwarder facet is enabled.
+  const row = (await subscriberMounts(itx)).find((r: { name: string }) => r.name === "race");
   expect(row?.lane).toBe("durable");
-  expect(state.facetProcessors).toContain("subscription-forwarder");
+  expect(await facetProcessorSlugs(itx)).toContain("subscription-forwarder");
 });
 
 // The SUCCESS variant of the reset CAS (was __tests__/failing-delivery.test.ts's "forwarder reset
@@ -169,9 +175,8 @@ test("resume racing an in-flight forwarder delivery that then SUCCEEDS: the rese
   const [m2] = await append({ type: "mark", payload: { n: 2 } });
   await until("m2 delivered after recovery", () => seen.flatMap((s) => s.offs).includes(m2.offset));
 
-  // host-state sanity: the row is on the durable lane and the forwarder facet is enabled.
-  const state = await itx.hostState();
-  const row = state.subscriptionMounts?.find((r: { name: string }) => r.name === "racewin");
+  // table sanity: the row is on the durable lane and the forwarder facet is enabled.
+  const row = (await subscriberMounts(itx)).find((r: { name: string }) => r.name === "racewin");
   expect(row?.lane).toBe("durable");
-  expect(state.facetProcessors).toContain("subscription-forwarder");
+  expect(await facetProcessorSlugs(itx)).toContain("subscription-forwarder");
 });

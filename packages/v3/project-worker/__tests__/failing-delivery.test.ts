@@ -43,6 +43,25 @@ const settle = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 type Range = { after: number; through: number };
 
+/** ACTIVE subscriber rows off the capability-table snapshot (newest mount per name wins — the
+ *  shadow-stack projection the deleted hostState() used to serve). Presence facts read the SAME
+ *  event-sourced door: a live row's existence IS "the stub is mounted"; transport socket counts
+ *  are DO-only (`transportState()`, off this capnweb lane). */
+async function subscriberRows(itx: any): Promise<any[]> {
+  const snap: any = await itx.invokeCapability("itx.facets.get('capability-table').snapshot()");
+  const byName = new Map<string, any>();
+  for (const m of snap.state.mounts as any[]) {
+    if (m.path.length !== 3 || m.path[0] !== "itx" || m.path[1] !== "subscribers") continue;
+    const cur = byName.get(m.path[2]);
+    if (!cur || m.providedAtOffset > cur.providedAtOffset)
+      byName.set(m.path[2], { name: m.path[2], ...m });
+  }
+  return [...byName.values()];
+}
+/** Enabled facet processors = the facet-lane subscriber rows (a processor IS such a row). */
+const facetProcessorSlugs = async (itx: any): Promise<string[]> =>
+  (await subscriberRows(itx)).filter((r) => r.lane === "facet").map((r) => r.name);
+
 /** A subscriber callback that records every invocation (deep-cloned — capnweb payloads must not
  *  be read after the callback's turn). Works verbatim on BOTH lanes: connected targets get it
  *  directly, absent targets reach it through a parked live-capability alias (mountHook). */
@@ -198,7 +217,7 @@ test("FIXED (defect 11): consumes ['*'] delivers every durable event on the forw
   //   "everything filtered", the cursor silently confirms through and nothing ever delivers.
   // EXPECTED: consumes:["*"] behaves like the processor consumes rule — every durable event.
   // ACTUAL: zero deliveries, cursor advances silently, no halt, no error — the worst failure
-  //   shape (looks healthy in /state while dropping everything).
+  //   shape (the mount row looks healthy while dropping everything).
   // WHY IT MATTERS: same spelling trap as the connected lane, but here it also LOOKS alive:
   //   the row pumps, confirms offsets, and never calls the target once.
   const itx = await harness.itx("prj_fd_star_fwd");
@@ -393,7 +412,7 @@ test("forwarder: row isolation — one halted row never blocks its neighbor", as
   expect([...good.offsets()].sort((a, b) => a - b)).toEqual([m1.offset, m2.offset]); // no dups
 });
 
-test("forwarder auto-enables exactly once across many absent-target subscribes (/state)", async () => {
+test("forwarder auto-enables exactly once across many absent-target subscribes", async () => {
   const ctx = "prj_fd_auto";
   const itx = await harness.itx(ctx);
   await Promise.all(
@@ -401,11 +420,10 @@ test("forwarder auto-enables exactly once across many absent-target subscribes (
       itx.subscribe({ name: `auto-${i}`, target: `itx.sink${i}`, consumes: ["never"] }),
     ),
   );
-  const state: any = await itx.hostState();
-  expect(state.facetProcessors.filter((s: string) => s === "subscription-forwarder")).toHaveLength(
-    1,
-  );
-  const rows = state.subscriptionMounts.filter((r: any) => r.name.startsWith("auto-"));
+  expect(
+    (await facetProcessorSlugs(itx)).filter((s: string) => s === "subscription-forwarder"),
+  ).toHaveLength(1);
+  const rows = (await subscriberRows(itx)).filter((r: any) => r.name.startsWith("auto-"));
   expect(rows).toHaveLength(3);
   for (const r of rows) expect(r.lane).toBe("durable");
 });
@@ -416,8 +434,7 @@ test("liveState subscribe with an ABSENT target is rejected loudly at provide", 
     itx.subscribe({ name: "lsbad", liveState: { key: "chat" }, target: "itx.wherever" }),
   ).rejects.toThrow(/needs a LIVE callback target/);
   // and the rejected mount left nothing behind
-  const state: any = await itx.hostState();
-  expect(state.subscriptionMounts).toEqual([]);
+  expect(await subscriberRows(itx)).toEqual([]);
 });
 
 // ─────────────────────────────── CROSS-LANE + PATHOLOGICAL ───────────────────────────────
@@ -525,7 +542,7 @@ test("MEASURED FINDING: a connected subscriber that stops reading mid-flood is N
   // onFinalClose → auto-revoke) is proven live below.
   // EXPECTED (design): a client that stops reading its /api socket eventually overflows the
   //   server's send buffer; workerd closes the socket; the relay's onRpcBroken closes the stub
-  //   pager; the DO auto-revokes the mount (hostState().subscriptionMounts drops it).
+  //   pager; the DO auto-revokes the mount (the capability table's row drops).
   // ACTUAL (measured, local workerd via wrangler createTestHarness): 60.0MiB of payload flooded
   //   into a TCP-paused subscriber produced NO close, NO delivery.event-batch.dropped warn, NO
   //   CONNECTION_OFFLINE — the mount stayed listed and the stub stayed attached (stubs=1).
@@ -548,11 +565,12 @@ test("MEASURED FINDING: a connected subscriber that stops reading mid-flood is N
   // one probe proves the lane end-to-end BEFORE the stall
   await append(itx, { type: "flood", ephemeral: true, payload: { probe: true } });
   await until("probe delivered over the victim socket", () => c.invocations.length >= 1);
-  const before: any = await itx.hostState();
-  expect(before.subscriptionMounts).toContainEqual(
-    expect.objectContaining({ name: "victim", lane: "connected" }),
+  const before = await subscriberRows(itx);
+  // the victim's row is LIVE (its parked stub's presence — the event-sourced fact; the raw
+  // transport count is a DO-only transportState() fact, unreachable from this capnweb lane)
+  expect(before).toContainEqual(
+    expect.objectContaining({ name: "victim", lane: "connected", live: true }),
   );
-  expect(before.stubs).toBe(1);
   const droppedWarns = () =>
     (JSON.stringify(harness.logs()).match(/delivery\.event-batch\.dropped/g) ?? []).length;
   const droppedBefore = droppedWarns(); // logs are harness-global — assert the DELTA, not zero
@@ -565,10 +583,8 @@ test("MEASURED FINDING: a connected subscriber that stops reading mid-flood is N
   // (two 256KiB events — each hop's message stays under production's 1MiB WebSocket-message cap).
   // Bounded at 60MiB; bail the moment the mount is reaped (it never was — see ACTUAL).
   const chunk = "x".repeat(256 * 1024);
-  const victimReaped = async () => {
-    const s: any = await itx.hostState();
-    return !s.subscriptionMounts.some((m: any) => m.name === "victim");
-  };
+  const victimReaped = async () =>
+    !(await subscriberRows(itx)).some((m: any) => m.name === "victim");
   let floodedBytes = 0;
   let reaped = false;
   for (let i = 0; i < 120 && !reaped; i++) {
@@ -589,17 +605,16 @@ test("MEASURED FINDING: a connected subscriber that stops reading mid-flood is N
       if (!reaped) await settle(150);
     }
   }
-  const after: any = await itx.hostState();
+  const after = await subscriberRows(itx);
   console.log(
     `overflow: flooded ${(floodedBytes / 1024 / 1024).toFixed(1)}MiB into a paused socket; ` +
-      `reaped=${reaped}; stubs=${after.stubs}; dropped-warn delta=${droppedWarns() - droppedBefore}`,
+      `reaped=${reaped}; dropped-warn delta=${droppedWarns() - droppedBefore}`,
   );
   // THE FINDING, pinned: the full 60MiB went in and NOTHING happened — no close, no reap, no
   // dropped-delivery warn. workerd absorbed it all in memory.
   expect(floodedBytes).toBe(120 * 2 * 256 * 1024);
   expect(reaped).toBe(false);
-  expect(after.subscriptionMounts).toContainEqual(expect.objectContaining({ name: "victim" }));
-  expect(after.stubs).toBe(1);
+  expect(after).toContainEqual(expect.objectContaining({ name: "victim", live: true }));
   expect(droppedWarns() - droppedBefore).toBe(0);
 
   // THE CHAIN IS SOUND: hard-kill the stalled socket (RST — no close handshake a paused reader
@@ -608,8 +623,7 @@ test("MEASURED FINDING: a connected subscriber that stops reading mid-flood is N
   const tKill = Date.now();
   wsB.terminate();
   await until("mount reaped after the socket died", victimReaped, 15_000);
-  const final: any = await itx.hostState();
-  expect(final.subscriptionMounts).toEqual([]); // the victim was this ctx's only mount
-  expect(final.stubs).toBe(0);
+  // the victim was this ctx's only mount; its auto-revoke proves the transport died end-to-end
+  expect(await subscriberRows(itx)).toEqual([]);
   console.log(`socket kill → mount reaped in ${Date.now() - tKill}ms`);
 }, 55_000);

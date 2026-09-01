@@ -172,18 +172,22 @@ test("a paused-stream refusal carries code STREAM_PAUSED across the /api hop", a
 
 // ─────────────────────────────── STORAGE LAZINESS (Kenton #6101 doctrine) ───────────────────────────────
 
-test("probing /state mints no storage — a virgin ctx reports incarnation 0, first append makes it 1", async () => {
+test("probing the core snapshot mints no storage — a virgin ctx reports incarnation 0, first append makes it 1", async () => {
   // PARITY LOCK: a read/probe must never be the write that mints backing storage (workerd
-  //   auto-deletes empty objects; the Kenton PR #6101 doctrine cited in stream-durable-object.ts
-  //   StreamEventLog). If the probe minted storage, the incarnation would already be bumped and
-  //   the first append would land on incarnation 2.
+  //   auto-deletes empty objects; the Kenton PR #6101 doctrine in core/stream.ts). If the probe
+  //   minted storage, the incarnation would already be bumped and the first append would land on
+  //   incarnation 2. The probe is the CORE REDUCE's snapshot (runtime state IS reduced state —
+  //   hostState() died in C5): `incarnation` folds from the stream/woken wake record, absent on a
+  //   virgin stream (no append ⇒ no woken), and the inline snapshot reads reduced state only.
   const ctx = "prj_am_lazy";
   const itx = await harness.itx(ctx);
+  const coreState = async (): Promise<any> =>
+    ((await itx.invokeCapability("itx.facets.get('core').snapshot()")) as any).state;
   // Connecting + probing is pure read: no append yet, so no storage minted, incarnation still 0.
-  const first: any = await itx.hostState();
-  expect(first.incarnation).toBe(0);
+  const first = await coreState();
+  expect(first.incarnation ?? 0).toBe(0);
   await append(itx, { type: "mark", payload: { n: 1 } });
-  const second: any = await itx.hostState();
+  const second = await coreState();
   expect(second.incarnation).toBe(1);
 });
 

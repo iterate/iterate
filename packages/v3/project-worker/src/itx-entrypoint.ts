@@ -21,7 +21,7 @@
 // secret-substituting terminal).
 
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { itxForHost } from "./core/itx-surface.ts";
+import { itxFor } from "./core/itx-surface.ts";
 import type { StreamEvent, StreamEventInput } from "./core/events.ts";
 import type { WaitForEventFilter } from "./core/stream.ts";
 import type { IterateContextDurableObject } from "./stream-durable-object.ts";
@@ -32,7 +32,7 @@ interface Env {
 
 export class ItxEntrypoint extends WorkerEntrypoint<Env> {
   /** The owning context, re-resolved per call (never a retained stub — the back-channel rule). */
-  #host(): DurableObjectStub<IterateContextDurableObject> {
+  #context(): DurableObjectStub<IterateContextDurableObject> {
     const props = (this.ctx as unknown as { props?: { contextName?: string } }).props;
     if (!props?.contextName)
       throw new Error("ItxEntrypoint requires props.contextName (mint via ctx.exports)");
@@ -44,38 +44,38 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env> {
    *  — identical to a capnweb client after `session.get()`, and mid-chain handles pipeline natively.
    *  A service binding addresses THIS entrypoint class; `.get()` bridges it to the scope. */
   get(): unknown {
-    return itxForHost(this.#host(), (p) => this.ctx.waitUntil(p));
+    return itxFor(this.#context(), (p) => this.ctx.waitUntil(p));
   }
 
   append(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
-    return this.#host().append(...inputs);
+    return this.#context().append(...inputs);
   }
 
   read(
     afterOffset?: number,
     limit?: number,
   ): Promise<{ events: StreamEvent[]; scannedThroughOffset: number }> {
-    return this.#host().read(afterOffset, limit);
+    return this.#context().read(afterOffset, limit);
   }
 
   /** Wait for the next matching event — loaded-worker parity with the edge `IterateContext` method (the
    *  contract lives in Stream.waitForEvent: type filter, afterOffset default = the head, 30s/120s
    *  timeout → WAIT_TIMEOUT). The parked wait lives on the DO; this call just holds the leg open. */
   waitForEvent(filter?: WaitForEventFilter): Promise<StreamEvent> {
-    return this.#host().waitForEvent(filter);
+    return this.#context().waitForEvent(filter);
   }
 
   /** globalOutbound: every fetch a loaded worker makes lands here → the DO's egress terminal
    *  (secret placeholder substitution → FALLBACK). */
   override fetch(request: Request): Promise<Response> {
-    return this.#host().fetch(request);
+    return this.#context().fetch(request);
   }
 }
 
-/** Mint the loopback stub for one context. `hostCtx` is any ctx carrying `exports` (worker
+/** Mint the loopback stub for one context. `exportsCtx` is any ctx carrying `exports` (worker
  *  ExecutionContext, DO state, facet state — all expose the worker's export table). */
-export function itxEntrypointFor(hostCtx: unknown, contextName: string): Fetcher {
-  const exports = (hostCtx as { exports?: Record<string, unknown> }).exports;
+export function itxEntrypointFor(exportsCtx: unknown, contextName: string): Fetcher {
+  const exports = (exportsCtx as { exports?: Record<string, unknown> }).exports;
   const make = exports?.ItxEntrypoint as
     | ((opts: { props: { contextName: string } }) => Fetcher)
     | undefined;

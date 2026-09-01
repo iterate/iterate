@@ -27,7 +27,7 @@ import type { Context } from "./core/stream.ts";
 import type { StreamEventInput } from "./core/events.ts";
 import type { IterateContextDurableObject } from "./stream-durable-object.ts";
 
-/** The DEP shape (host-injected): the facet door reaches ANY method a facet's durable object
+/** The DEP shape (context-injected): the facet door reaches ANY method a facet's durable object
  *  exposes (facet stubs are non-transferable, so the walk happens parent-side). `ref` is a STRING
  *  (address an already-running facet by name — processors, named instances) OR `{ source, className,
  *  name? }` (materialize the loaded `className` durable object as a facet — the form `itx.load(...)
@@ -37,7 +37,7 @@ type FacetsView = {
   get(ref: string | { source?: unknown; className?: string; name?: string }): unknown;
 };
 
-/** The bindings roots-building needs — present in BOTH hosts (the worker env). */
+/** The bindings roots-building needs — present in BOTH hosting lanes (the worker env). */
 export interface BuiltInsEnv {
   CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;
   LOADER: WorkerLoader;
@@ -109,7 +109,7 @@ interface BuiltInScope {
   connectToCapnweb(url: string): unknown;
 }
 
-/** What the hosting side injects: identity, bindings, and the three host-specific seams. */
+/** What the CONTEXT (the stream DO) injects: identity, bindings, and the three context seams. */
 interface BuildBuiltInsDeps {
   projectId: string;
   path: string;
@@ -125,12 +125,12 @@ interface BuildBuiltInsDeps {
    *  durable object hosted as a facet of this stream; accepted trade: a busy stateful facet pins
    *  its stream). */
   facets: FacetsView;
-  /** The ctx whose `exports` mints the ItxEntrypoint loopback (the loaded-worker
-   *  host — see itx-entrypoint.ts for why it is never a raw getByName stub). */
-  hostCtx: unknown;
+  /** The ctx whose `exports` mints the ItxEntrypoint loopback — a loaded worker's whole world
+   *  (see itx-entrypoint.ts for why it is never a raw getByName stub). */
+  exportsCtx: unknown;
 }
 
-/** Assemble the host scope for one context. Every entry closes over the context's identity —
+/** Assemble the built-in scope for one context. Every entry closes over the context's identity —
  *  PRE-SCOPED, not policed: cross-project access is unspellable by construction. The builder
  *  must never register `itx` (asserted below — the resolver's recursion symbol always wins). */
 export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> {
@@ -146,7 +146,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       const { worker } = await loadConfinedWorker({
         env,
         invoke: deps.invoke,
-        host: itxEntrypointFor(deps.hostCtx, contextName),
+        host: itxEntrypointFor(deps.exportsCtx, contextName),
         kind: "code",
         owner: contextName,
         source,
@@ -285,6 +285,6 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         return (target[path.at(-1)!] as (...a: unknown[]) => unknown)(...args);
       }),
   } satisfies BuiltInScope;
-  if (Object.hasOwn(scope, "itx")) throw new Error("host scope must never register 'itx'");
+  if (Object.hasOwn(scope, "itx")) throw new Error("built-in scope must never register 'itx'");
   return scope;
 }

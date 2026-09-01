@@ -12,11 +12,11 @@
 //      is still online (defect 1) → the commit pump resumes delivery to the FIRST callback.
 //
 // The client both REPLACED (re-subscribe same name) and UNSUBSCRIBED that name, yet delivery
-// continues to a callback it can no longer see or address. Delivery-after-unsubscribe + stale host state.
+// continues to a callback it can no longer see or address. Delivery-after-unsubscribe + a stale table.
 // (was proofs/probe_resub_zombie.mjs)
 
 import { expect, test } from "vitest";
-import { freshCtx, bareItx, sleep } from "./support/client.ts";
+import { freshCtx, bareItx, sleep, subscriberMounts } from "./support/client.ts";
 
 // Was RED when authored (re-subscribe left the first relay online and unsubscribe-by-path restored
 // the shadowed older mount → zombie delivery to cb1). FIXED — this is now the regression pin.
@@ -70,12 +70,10 @@ test("re-subscribe + unsubscribe on the same name must not leave a zombie delive
   await itx.invokeCapability("itx.append({ type: 'mark', payload: { n: 2 } })");
   await sleep(3000);
 
-  const st = await itx.hostState();
-
   // THE CONTRACT the bug violated: after unsubscribe('s'), no callback under 's' receives anything.
   // The FIRST callback receives NOTHING (no zombie delivery to the shadowed mount)…
   expect(cb1).toBe(0);
   expect(cb1seqs).not.toContain(2);
-  // …and host state shows NO subscription named 's'
-  expect(st.subscriptionMounts?.some((r: { name: string }) => r.name === "s")).toBeFalsy();
+  // …and the capability table shows NO subscription named 's'
+  expect((await subscriberMounts(itx)).some((r: { name: string }) => r.name === "s")).toBeFalsy();
 });

@@ -66,6 +66,27 @@ export function disposeSessions(): void {
 
 export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+/** ACTIVE subscriber rows off the capability-table snapshot (newest mount per name wins — the
+ *  shadow-stack projection the deleted hostState() used to serve): `[{ name, lane, live?, … }]`.
+ *  The event-sourced observability door: facet-lane rows ARE the enabled processors, rows where
+ *  `live` ARE the presence list (transport socket counts stay DO-only — `transportState()`). */
+export async function subscriberMounts(itx: any): Promise<any[]> {
+  const snap: any = await itx.invokeCapability("itx.facets.get('capability-table').snapshot()");
+  const byName = new Map<string, any>();
+  for (const m of snap.state.mounts as any[]) {
+    if (m.path.length !== 3 || m.path[0] !== "itx" || m.path[1] !== "subscribers") continue;
+    const cur = byName.get(m.path[2]);
+    if (!cur || m.providedAtOffset > cur.providedAtOffset)
+      byName.set(m.path[2], { name: m.path[2], ...m });
+  }
+  return [...byName.values()];
+}
+
+/** Enabled facet processors = the facet-lane subscriber rows' slugs (a processor IS such a row). */
+export async function facetProcessorSlugs(itx: any): Promise<string[]> {
+  return (await subscriberMounts(itx)).filter((r) => r.lane === "facet").map((r) => r.name);
+}
+
 /** Poll `fn` until it returns a truthy/defined value or time out. Absorbs transient throws (a call
  *  racing an eviction). */
 export const until = async <T>(

@@ -5,7 +5,13 @@
 // (was proofs/prove_push.mjs)
 
 import { expect, test } from "vitest";
-import { freshCtx, openItx, until } from "./support/client.ts";
+import {
+  facetProcessorSlugs,
+  freshCtx,
+  openItx,
+  subscriberMounts,
+  until,
+} from "./support/client.ts";
 import { seedSources } from "./support/sources.ts";
 
 test("absent-target forwarder lane: retry→halt policy, resume recovery, auto-enablement", async () => {
@@ -74,10 +80,9 @@ test("absent-target forwarder lane: retry→halt policy, resume recovery, auto-e
   );
   expect(digested4).toBe("4"); // resume({afterOffset}) skipped the poison, delivered the good mark
 
-  // 6. host state: the row rides the forwarder lane; the forwarder facet was auto-enabled
-  const state = await itx.hostState();
-  const row = state.subscriptionMounts?.find((r: { name: string }) => r.name === "digest");
-  // host state: absent-target row on the durable lane, forwarder facet auto-enabled
+  // 6. the capability table: the row rides the forwarder lane; the forwarder facet was auto-enabled
+  const row = (await subscriberMounts(itx)).find((r: { name: string }) => r.name === "digest");
+  // the table: absent-target row on the durable lane, forwarder facet auto-enabled
   expect(row?.lane).toBe("durable");
-  expect(state.facetProcessors).toContain("subscription-forwarder");
+  expect(await facetProcessorSlugs(itx)).toContain("subscription-forwarder");
 });

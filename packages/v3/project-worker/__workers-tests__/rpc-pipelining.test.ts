@@ -25,10 +25,10 @@ test("cloudflare:workers exports RpcPromise and native RPC calls are instanceof 
   const stub = (
     env as unknown as { CONTEXT: DurableObjectNamespace<IterateContextDurableObject> }
   ).CONTEXT.getByName(canonicalName("prj_rpc_pipelining"));
-  const p = stub.hostState();
+  const p = stub.transportState();
   expect(p).toBeInstanceOf(RpcPromise);
   const state = (await p) as Record<string, unknown>;
-  expect(typeof state.incarnation).toBe("number");
+  expect(typeof state.stubs).toBe("number");
 });
 
 test("the step walk threads a NATIVE RpcPromise unawaited — regression = this fails", async () => {
@@ -44,8 +44,8 @@ test("the step walk threads a NATIVE RpcPromise unawaited — regression = this 
   const stub = (
     env as unknown as { CONTEXT: DurableObjectNamespace<IterateContextDurableObject> }
   ).CONTEXT.getByName(canonicalName("prj_rpc_pipelining"));
-  const scope = { itx: { host: () => stub.hostState() } };
-  const { value } = await evaluate(scope, ["itx", ["host"], "incarnation"]);
+  const scope = { itx: { transport: () => stub.transportState() } };
+  const { value } = await evaluate(scope, ["itx", ["transport"], "stubs"]);
   // NOT the settled number — the chain is still open (a pipelined property off a pipelined call)
   expect(value instanceof RpcProperty || value instanceof RpcPromise).toBe(true);
   expect(typeof (await value)).toBe("number"); // the terminal await settles the pipelined chain

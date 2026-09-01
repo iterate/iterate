@@ -70,7 +70,7 @@ test("a relay registers onRpcBroken ONCE, not once per page (retained-stub liste
   const provider = { dup: () => retained };
 
   const pager = new FakePagerWebSocket();
-  const host = {
+  const context = {
     rpcStubAttach: async (_opts: { key: string }) => ({ transportId: "t1" }),
     fetch: async () => ({ status: 101, webSocket: pager }),
     // The invoker is constructed EAGERLY as this call's argument, so its onRpcBroken registration
@@ -79,7 +79,7 @@ test("a relay registers onRpcBroken ONCE, not once per page (retained-stub liste
   };
 
   const relay = await startRpcStubRelay(
-    host as unknown as Parameters<typeof startRpcStubRelay>[0],
+    context as unknown as Parameters<typeof startRpcStubRelay>[0],
     provider as unknown as Parameters<typeof startRpcStubRelay>[1],
     "key-1",
     () => {}, // waitUntil

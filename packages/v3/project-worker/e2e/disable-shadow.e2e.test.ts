@@ -7,18 +7,19 @@
 // ROOT CAUSE: stream-durable-object.ts disableProcessor() → revokeCapability({ path:
 // `itx.subscribers.<slug>` }) → revokeCapability picks `.sort(desc)[0]` (the single NEWEST mount)
 // and revokes only it. #activeSubscriptionMounts() then re-elects the older survivor as the active
-// mount → #facetEntries() still lists the slug → host state shows it enabled, the next commit
-// re-materializes the facet.
+// mount → #facetEntries() still lists the slug → the capability table shows it enabled, the next
+// commit re-materializes the facet.
 //
 // CONTROL (single enable → single disable) is included and MUST pass (proves the harness is sane).
 // (was proofs/prove_disable_shadow.mjs)
 
 import { expect, test } from "vitest";
-import { freshCtx, bareItx, sleep } from "./support/client.ts";
+import { freshCtx, bareItx, facetProcessorSlugs, sleep } from "./support/client.ts";
 
-// Drive one ctx through: enable ×N, append+snapshot, ONE disable, then probe host state and the facet.
-// Returns the two asserted facts: whether host state still lists the slug, and whether snapshot throws
-// NO_FACET (a truly-disabled processor throws). Each call opens its OWN fresh session.
+// Drive one ctx through: enable ×N, append+snapshot, ONE disable, then probe the table and the facet.
+// Returns the two asserted facts: whether the table still lists the slug (a facet-lane subscriber
+// row), and whether snapshot throws NO_FACET (a truly-disabled processor throws). Each call opens
+// its OWN fresh session.
 async function run(
   prefix: string,
   enableTimes: number,
@@ -36,8 +37,7 @@ async function run(
   // THE DISABLE — one call
   await itx.disableProcessor("tally");
 
-  const st1 = (await itx.hostState()) as { facetProcessors: string[] };
-  const stillListed = st1.facetProcessors.includes("tally");
+  const stillListed = (await facetProcessorSlugs(itx)).includes("tally");
 
   // Does the facet still answer? A truly-disabled processor throws NO_FACET.
   let snapErr: string | undefined;
@@ -63,7 +63,7 @@ async function run(
 // CONTROL: single enable, single disable → the processor is genuinely off.
 test("[control] single enable then disable: processor is genuinely off", async () => {
   const control = await run("disshadow-ctl", 1);
-  // host state no longer lists tally
+  // the table no longer lists tally
   expect(control.stillListed).toBe(false);
   // snapshot throws NO_FACET
   expect(control.throws).toBe(true);
@@ -73,7 +73,7 @@ test("[control] single enable then disable: processor is genuinely off", async (
 // only the newest shadowed mount, so the processor stayed running. FIXED — now the regression pin.
 test("double-enable then ONE disable: processor MUST be off", async () => {
   const bug = await run("disshadow-bug", 2);
-  // host state must NOT list tally (else the shadowed mount resurfaced)
+  // the table must NOT list tally (else the shadowed mount resurfaced)
   expect(bug.stillListed).toBe(false);
   // snapshot must throw NO_FACET (else the facet still answers — processor not disabled)
   expect(bug.throws).toBe(true);

@@ -47,8 +47,8 @@ const CODE_VERSION = "live-41";
 const DEFAULT_CTX = "prj_demo";
 const ctxSlug = (url: URL) => url.searchParams.get("ctx") ?? DEFAULT_CTX;
 
-/** The context host DO for a request's `?ctx=`. The DO does the real work. */
-function host(env: Env, url: URL) {
+/** The context DO's stub for a request's `?ctx=`. The DO does the real work. */
+function contextStub(env: Env, url: URL) {
   return env.CONTEXT.getByName(canonicalName(ctxSlug(url)));
 }
 
@@ -76,12 +76,12 @@ export default {
       return newWorkersRpcResponse(request, new ProjectSession(env.CONTEXT, ctxSlug(url), ctx));
 
     // THE FETCH LANE — the ONE fetch door: reach a fetch-shaped capability (WS upgrades and all) by a
-    // serialized ItxExpression in `?cap=`. Set `x-itx-cap` and forward to the context host.
+    // serialized ItxExpression in `?cap=`. Set `x-itx-cap` and forward to the context DO.
     if (url.pathname === "/cap") {
       const headers = new Headers(request.headers);
       const cap = url.searchParams.get("cap");
       if (cap) headers.set(CAPABILITY_FETCH_HEADER, cap);
-      return host(env, url).fetch(new Request(request, { headers }));
+      return contextStub(env, url).fetch(new Request(request, { headers }));
     }
 
     return new Response("project-worker — /api (capnweb), /cap, /demo, /version\n", {

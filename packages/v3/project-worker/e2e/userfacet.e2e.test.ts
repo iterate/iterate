@@ -5,7 +5,7 @@
 // (was proofs/prove_userfacet.mjs)
 
 import { expect, test } from "vitest";
-import { freshCtx, bareItx } from "./support/client.ts";
+import { freshCtx, bareItx, facetProcessorSlugs } from "./support/client.ts";
 import { seedSources } from "./support/sources.ts";
 
 test("userspace facet processor folds side-by-side with the built-in tally", async () => {
@@ -39,9 +39,8 @@ test("userspace facet processor folds side-by-side with the built-in tally", asy
   expect(sb.state?.counts?.["events.iterate.com/capability-table/capability-revoked"]).toBe(1);
   expect(sb.offset).toBeGreaterThanOrEqual(5);
 
-  const st = await itx.hostState();
-  // host state lists both facet processors
-  expect(Array.isArray(st.facetProcessors)).toBe(true);
-  expect(st.facetProcessors).toContain("user-tally");
-  expect(st.facetProcessors).toContain("tally");
+  const slugs = await facetProcessorSlugs(itx);
+  // the capability table lists both facet processors (facet-lane subscriber rows)
+  expect(slugs).toContain("user-tally");
+  expect(slugs).toContain("tally");
 });

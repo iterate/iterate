@@ -32,7 +32,7 @@ import {
   type WorkerSource,
 } from "./core/worker-loader.ts";
 import { createLogger } from "./core/logs.ts";
-import { admit, breakerRemaining, CoreStreamProcessor, type CoreState } from "./core-processor.ts";
+import { admit, CoreStreamProcessor, type CoreState } from "./core-processor.ts";
 import { codedError, errorCode, reportIssue } from "./core/errors.ts";
 import {
   type DeliveryPolicy,
@@ -160,8 +160,8 @@ const isInlineSlug = (slug: string): boolean =>
 const CORE_PROCESSOR = new CoreStreamProcessor();
 const streamLog = createLogger("stream-do");
 
-// The parent hosts the INLINE CORE (host scope + routing table + core reduce), so it needs the
-// full roots env the facet used to inherit.
+// The parent hosts the INLINE CORE (built-in scope + routing table + core reduce), so it needs
+// the full roots env the facet used to inherit.
 export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   /** WHO THIS DO IS — parsed ONCE from the unforgeable codec name; carries projectId, path
    *  AND its canonical string form (`.name`). A stream is only ever reached `getByName`; an
@@ -210,7 +210,7 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   /** THE STREAM — the commit point (see core/stream.ts: validation + admission + idempotency +
    *  offsets + the wake record + waitForEvent + the alarm armer, one DI'd class). The name check
    *  already happened in the constructor (`#address`); the stream itself is storage-lazy. Its
-   *  three host deps close over this DO: `admit` reads the core reduce (all pause/breaker
+   *  three deps close over this DO: `admit` reads the core reduce (all pause/breaker
    *  reasoning lives in core-processor.ts), `reduceAtCommit` runs the INLINE REDUCES inside the
    *  commit transaction (the routing table and the core state are atomically exact as of the last
    *  committed event, always — the pump-races-the-provide class is unspellable, not carefully
@@ -352,7 +352,7 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
       facets: {
         get: (ref) => new InvokeHandle((path, args) => this.facetInvoke(ref, path, args)),
       },
-      hostCtx: this.ctx,
+      exportsCtx: this.ctx,
     });
     const proc = new CapabilityTableProcessor({
       stream: {
@@ -1048,33 +1048,12 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
     return this.#egress(request);
   }
 
-  /** OBSERVABILITY, over the one door: incarnation (the hibernation tell) + the core fold + the
-   *  mount table + the transport facts, reached as `itx.hostState()` over capnweb (there is no
-   *  second HTTP transport). Read-only on purpose — reading it must never be the write that mints
-   *  storage (a probe of a never-touched context stays a 404-less no-op; workerd auto-deletes
-   *  empty DOs). */
-  hostState(): Record<string, unknown> {
-    const cs = this.#coreState();
-    return {
-      incarnation: this.#stream.currentIncarnation(),
-      facetProcessors: this.#facetEntries().map((e) => e.slug),
-      core: {
-        paused: cs.paused,
-        breaker: cs.breaker && {
-          capacity: cs.breaker.capacity,
-          refillPerSecond: cs.breaker.refillPerSecond,
-          remaining: Math.floor(breakerRemaining(cs, Date.now())),
-        },
-      },
-      subscriptionMounts: this.#activeSubscriptionMounts().map((r) => ({
-        name: r.name,
-        providedAtOffset: r.providedAtOffset,
-        // The stamped lane, verbatim (with the live-state refinement of the connected lane).
-        lane: r.lane === "connected" && r.liveState ? "connected-live-state" : r.lane,
-      })),
-      ...this.transportState(),
-    };
-  }
+  // OBSERVABILITY has no dedicated verb: runtime state IS reduced state. Incarnation, pause, and
+  // the breaker are the core reduce (`itx.facets.get('core').snapshot()` — the wake record folds
+  // incarnation); mounts, enabled processors, and live-capability PRESENCE are the capability
+  // table (`itx.facets.get('capability-table').snapshot()` — facet-lane rows ARE the processors,
+  // rows where `live` ARE the presence list). Both snapshots read the inline reduces only — a
+  // probe is never the write that mints storage. The one non-event-derivable residue is below:
 
   /** IN-MEMORY TRANSPORT FACTS ({stubs, pagedIn, pagesPending, dormant}) — a DO-only Workers-RPC
    *  verb for the hibernation/quiesce probes, deliberately OFF the itx surface: these are socket

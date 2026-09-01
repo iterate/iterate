@@ -2,13 +2,14 @@
 // the commit point (the apps/os shape). Control is ordinary events; enforcement is the parent
 // reading the fold. Proves: pause refuses appends (control passes), resume heals, the token-
 // bucket breaker trips on the (N+1)th durable append and refills by wall time, breaker-off
-// restores unlimited, and hostState() exposes the core truth.
+// restores unlimited, and the core reduce's snapshot exposes the core truth (runtime state IS
+// reduced state — hostState() died in C5).
 // (was proofs/prove_core.mjs)
 
 import { expect, test } from "vitest";
 import { freshCtx, openItx, sleep } from "./support/client.ts";
 
-test("core fold: pause/resume, token-bucket breaker, ephemeral bypass, hostState observability", async () => {
+test("core fold: pause/resume, token-bucket breaker, ephemeral bypass, core-snapshot observability", async () => {
   const itx = openItx(freshCtx("core"));
 
   const append = (type: string, payload?: Record<string, unknown>): Promise<unknown> =>
@@ -89,9 +90,10 @@ test("core fold: pause/resume, token-bucket breaker, ephemeral bypass, hostState
   // empty configure turns the breaker off — 5 rapid appends admitted (a throw here fails the test)
 
   // ── observability ──
-  const hostState = await itx.hostState();
-  // hostState exposes the core fold (unpaused, breaker off)
-  expect(hostState.core).toBeTruthy();
-  expect(hostState.core.paused).toBe(null);
-  expect(hostState.core.breaker).toBe(null);
+  const snap = await itx.invokeCapability("itx.facets.get('core').snapshot()");
+  // the core reduce's snapshot exposes the fold (unpaused, breaker off, incarnation from woken)
+  expect(snap.state).toBeTruthy();
+  expect(snap.state.paused).toBe(null);
+  expect(snap.state.breaker).toBe(null);
+  expect(snap.state.incarnation).toBeGreaterThanOrEqual(1);
 });

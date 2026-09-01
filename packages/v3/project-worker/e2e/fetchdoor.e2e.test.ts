@@ -28,7 +28,7 @@ const openWs = (url: string): EyeballWebSocket => new WebSocket(url) as unknown 
 
 const CAP = encodeURIComponent("itx.site"); // the fetch door resolves an itx expression (the ONE addressing form)
 
-test("fetchdoor: seeded site over /cap (GET + WS), deleted routes fall through, /version + hostState still work", async () => {
+test("fetchdoor: seeded site over /cap (GET + WS), deleted routes fall through, /version + the core snapshot still work", async () => {
   const ctx = freshCtx("cook1");
 
   // Mount the seeded /site.js on the fetch door: a mount whose target is a stateless dynamic worker
@@ -63,7 +63,7 @@ test("fetchdoor: seeded site over /cap (GET + WS), deleted routes fall through, 
   // 4b. WS upgrade through /cap → echo (web→code fold, 101 through the graph)
   expect(wsResult).toBe("site-echo:hello-from-eyeball");
 
-  // ── 6. deleted routes fall through to help text; /version + hostState still work ──
+  // ── 6. deleted routes fall through to help text; /version + the snapshot door still work ──
   const call = await fetch(`${base()}/call?path=itx.whoami&ctx=${ctx}`);
   const callBody = await call.text();
   // 6a. /call falls through to help text
@@ -102,7 +102,8 @@ test("fetchdoor: seeded site over /cap (GET + WS), deleted routes fall through, 
   // 6d. /version still works (tag-agnostic — never goes stale)
   expect(version.length).toBeGreaterThan(0);
 
-  // 6e. the old HTTP /state was folded into itx.hostState() (the ONE observability door) — still works
-  const stateBody = await itx.hostState();
-  expect(typeof stateBody.incarnation).toBe("number");
+  // 6e. observability is the core reduce's snapshot (the old /state → hostState() → the inline
+  // facet door; the provide above already committed, so the wake record has folded)
+  const snap = await itx.invokeCapability("itx.facets.get('core').snapshot()");
+  expect(typeof snap.state.incarnation).toBe("number");
 });

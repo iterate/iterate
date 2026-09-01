@@ -8,7 +8,7 @@
 // reservation whose stub pager WebSocket never arrives — a relay that died mid-handshake — is
 // dropped LAZILY after ATTACH_PENDING_TTL_MS = 10s: the sweep runs on the next attach()/fetch(),
 // NEVER on a timer (a pending timer would pin the DO out of hibernation). The pending map is
-// invisible to hostState() on purpose, so the sweep is observed through its ONE external
+// invisible to transportState() on purpose, so the sweep is observed through its ONE external
 // consequence, the 409 door: a pager upgrade carrying a swept transportId 409s ("attach first"),
 // telling a relay that outlived the reservation to re-attach.
 //
