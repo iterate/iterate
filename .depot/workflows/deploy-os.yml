@@ -10,36 +10,38 @@ concurrency:
   group: deploy-auth-os-production
   cancel-in-progress: false
 on:
-  # PAUSED 2026-09-01: deploying os-prd right now would break it. Cloudflare
-  # Artifacts has a bug where redeploying a worker whose `artifacts` binding
-  # predates ~2026-09-01 makes that binding mint tokens the git endpoints
-  # reject with 403 (this is what broke every preview slot's e2e today —
-  # each CI preview deploy poisoned its slot). os-prd's binding is from May,
-  # so its next deploy would poison production the same way. Restore the
-  # push trigger below once Cloudflare confirms the fix (verify by
-  # redeploying one preview slot and creating a project on it first).
-  #
-  # push:
-  #   branches:
-  #     - main
-  #   paths:
-  #     - .depot/workflows/deploy-os.yml
-  #     - .depot/workflows/deploy-auth.yml
-  #     - envs.ts
-  #     - scripts/lib/**
-  #     - apps/os/**
-  #     # New-project template seeding pins github references to the DEPLOYED
-  #     # revision's SHA, so a template content change is unreachable until the
-  #     # OS app redeploys and moves its pin (same reasoning as the preview
-  #     # workflow's configs/** entry).
-  #     - configs/**
-  #     - packages/iterate/**
-  #     - apps/auth/**
-  #     - apps/auth-contract/**
-  #     - apps/os/src/domains/streams/**
-  #     - packages/shared/**
-  #     - packages/ui/**
-  #     - patches/**
+  push:
+    branches:
+      # PAUSED 2026-09-01 (normally: main). Deploying os-prd right now would
+      # break it: Cloudflare Artifacts has a bug where redeploying a worker
+      # whose `artifacts` binding predates ~2026-09-01 makes that binding mint
+      # tokens the git endpoints reject with 403 (this is what broke every
+      # preview slot's e2e today — each CI preview deploy poisoned its slot).
+      # os-prd's binding is from May, so its next deploy would poison
+      # production the same way. This placeholder branch never receives
+      # pushes, which disables the trigger while keeping the paths list
+      # intact for depot-workflows.test.ts. Restore `- main` once Cloudflare
+      # confirms the fix (verify by redeploying one preview slot and creating
+      # a project on it first).
+      - _deploys-paused-cloudflare-artifacts-403
+    paths:
+      - .depot/workflows/deploy-os.yml
+      - .depot/workflows/deploy-auth.yml
+      - envs.ts
+      - scripts/lib/**
+      - apps/os/**
+      # New-project template seeding pins github references to the DEPLOYED
+      # revision's SHA, so a template content change is unreachable until the
+      # OS app redeploys and moves its pin (same reasoning as the preview
+      # workflow's configs/** entry).
+      - configs/**
+      - packages/iterate/**
+      - apps/auth/**
+      - apps/auth-contract/**
+      - apps/os/src/domains/streams/**
+      - packages/shared/**
+      - packages/ui/**
+      - patches/**
   workflow_dispatch:
     inputs:
       ref:
