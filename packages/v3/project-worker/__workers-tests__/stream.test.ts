@@ -262,3 +262,49 @@ test("woken: a refused or rolled-back first batch does NOT burn the wake record"
     expect(page.events.filter((e) => e.type === "events.iterate.com/stream/woken")).toHaveLength(1);
   });
 });
+
+// ── EPHEMERALS COST ZERO WRITES (the header contract, pinned against real storage) ──
+
+test("an ephemeral-only append writes NOTHING — no row, no high-water mark — yet hands out offsets and reaches the fan-out", async () => {
+  await runInDurableObject(stub("prj_eph_zero_writes"), async (_instance, state) => {
+    const batches: StreamEvent[][] = [];
+    const stream = bareStream(state.storage, { batches });
+    // One durable first: the wake record + this row mint storage and the mark (offsets 1, 2).
+    await stream.append({ type: "durable" });
+    const markAfterDurable = state.storage.kv.get("maxAssignedOffset");
+    expect(markAfterDurable).toBe(2);
+    const rowsBefore = state.storage.sql.exec("SELECT count(*) AS n FROM events").one().n;
+    // A flood of ephemeral-only batches: offsets advance in memory, storage stays byte-identical.
+    for (let i = 0; i < 25; i++)
+      stream.append({ type: "chunk", ephemeral: true }, { type: "chunk", ephemeral: true });
+    expect(stream.highestAssignedOffset()).toBe(2 + 50);
+    expect(state.storage.kv.get("maxAssignedOffset")).toBe(markAfterDurable); // NOT written
+    expect(state.storage.sql.exec("SELECT count(*) AS n FROM events").one().n).toBe(rowsBefore);
+    // …and every batch reached onCommit with contiguous ranges (the fan-out saw all 50).
+    expect(batches.slice(1).flat()).toHaveLength(50);
+    expect(batches.at(-1)![1].offset).toBe(52);
+    // The next DURABLE batch commits the mark PAST the ephemerals it never wrote — every offset
+    // handed out this incarnation is covered by the durable row's transaction.
+    const [d] = await stream.append({ type: "durable" });
+    expect(d.offset).toBe(53);
+    expect(state.storage.kv.get("maxAssignedOffset")).toBe(53);
+  });
+});
+
+test("across incarnations an ephemeral-only tail's offsets are REUSED by the next durable — the documented contract, and why every checkpoint advances only on a durable", async () => {
+  await runInDurableObject(stub("prj_eph_reuse"), async (_instance, state) => {
+    const first = bareStream(state.storage);
+    await first.append({ type: "durable" }); // offsets 1 (woken), 2
+    first.append({ type: "chunk", ephemeral: true }, { type: "chunk", ephemeral: true }); // 3, 4 — memory only
+    expect(first.highestAssignedOffset()).toBe(4);
+    // A NEW incarnation over the same storage resumes from the last DURABLE mark…
+    const second = bareStream(state.storage);
+    expect(second.highestAssignedOffset()).toBe(2);
+    // …so its first commit (which carries a fresh wake record, durable) hands out 3 again.
+    const [d] = await second.append({ type: "durable" });
+    expect(d.offset).toBe(4); // woken took 3, this durable took 4 — both numbers the dead ephemerals held
+    expect(state.storage.kv.get("maxAssignedOffset")).toBe(4);
+    // The log itself is exact: durables 1, 2 from the first life, 3 (woken), 4 from the second.
+    expect((await second.read(0)).events.map((e) => e.offset)).toEqual([1, 2, 3, 4]);
+  });
+});

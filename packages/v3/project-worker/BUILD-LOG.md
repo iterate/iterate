@@ -1768,3 +1768,21 @@ end-to-end 15267 ev/s | p50 36ms p95 42ms | batching 50×` (was ~5,400 ev/s, p50
 - GATES: tsc ×3 · vitest 345 pass + 1 xfail (44 files: unit 184, harness 127 + 5 xfail → the five re-pinned
   as passing, workers 30) · e2e 34 pass + 2 xfail (26 files; resume-race×2 / disable-shadow / resub-zombie
   folded and deleted) · tutorial-proof 8/8 · oxlint 0 · oxfmt clean · knip 0.
+
+## 2026-09-02 — the onion, step 2b: ephemerals cost zero writes
+
+- An ephemeral-only append no longer touches storage AT ALL: no row (as before), no transaction, and no
+  high-water mark — `Stream.append` takes a fast path (offsets from memory, straight to the fan-out).
+  Before, every ephemeral batch paid ONE kv write (`maxAssignedOffset`) so an offset could never be
+  reused across incarnations. The mark is now committed only with a batch that stored a durable row,
+  atomically with those rows — so every offset such a batch handed out, ephemeral ones included, is
+  covered.
+- THE CONTRACT, written into the Stream header and pinned in `__workers-tests__/stream.test.ts`: an
+  ephemeral's offset is unique WITHIN an incarnation; a later incarnation resumes from the last
+  durable mark and may hand an ephemeral-only tail's numbers to durables. Safe because every persisted
+  checkpoint in the package already advanced only on a durable batch (the processor engine's
+  `sawDurable`, the inline reduces' write-on-change, the subscription cursor's durable-boundary rule) —
+  so the feared engine change (persist the last durable offset, not `range.through`) was unnecessary;
+  the `stream/woken` record, durable in each incarnation's first batch, marks the boundary for anyone
+  chaining ranges across it.
+- GATES: typecheck clean · unit+harness+workers 347 passed / 1 xfail · e2e 34 passed / 2 xfail · tutorial-proof 8/8 · lint 0/0. MEASURED (same laptop, same probes as step 2+3): perf-guard 14493 → 47619 ev/s, p50 20 → 10 ms; ephemeral flood 15267 → 52632 ev/s, p50 36 → 17 ms — the transaction-plus-mark write per ephemeral batch was two thirds of the cost.

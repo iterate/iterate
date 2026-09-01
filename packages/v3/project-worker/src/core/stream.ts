@@ -7,6 +7,17 @@
 // gate), `reduceAtCommit` (the inline reduces, IN-txn), `onCommit` (the post-commit fan-out) —
 // so nothing here reaches back into the DO.
 //
+// EPHEMERALS COST ZERO WRITES. An ephemeral event takes an offset from the shared sequence but is
+// never stored — and an ephemeral-only batch touches storage NOT AT ALL: no row, no transaction, not
+// even the high-water mark. Its offsets live in this incarnation's memory. The consequence is the
+// one contract every offset-keyed consumer already honours: an ephemeral's offset is unique WITHIN
+// an incarnation, and a later incarnation — which resumes from the last DURABLE mark — may hand the
+// same number to a durable. Every persisted checkpoint in this package advances only on a batch
+// that carried a durable (the processor engine, the inline reduces, the subscription cursors), and
+// such a batch's high-water mark is committed with it, so no durable is ever skipped; the
+// `stream/woken` record, durable in the first batch of each incarnation, marks the boundary for
+// anyone chaining ranges across it.
+//
 // Deliberately storage-lazy: a stream that never writes must never mint backing storage (workerd
 // auto-deletes empty objects; a probed snapshot, a read, or a timed-out waitForEvent on a
 // never-touched ctx must leave nothing behind — the Kenton PR #6101 doctrine).
@@ -91,11 +102,10 @@ export class Stream {
    *  the incarnation, so the NEXT incarnation's first commit carries a fresh woken event. Set only
    *  AFTER the commit lands (a rolled-back first batch must re-inject on the retry). */
   #wokenRecorded = false;
-  /** The highest offset EVER ASSIGNED — including to ephemeral events whose bodies are gone.
-   *  Backed by ONE tiny kv value (the deliberate write that makes a pure-ephemeral append cost
-   *  exactly one storage write): offset REUSE after an incarnation dies is a data-corruption
-   *  class, because consumers key durable truth by offset. The kv value is the ONE source —
-   *  append's transactionSync commits it with the sql rows atomically. */
+  /** The highest offset assigned THIS INCARNATION — ephemerals included. Seeded from the kv
+   *  high-water mark (`maxAssignedOffset`), which append commits ONLY with a batch that stored a
+   *  durable row, atomically with those rows; an ephemeral-only batch advances this cache alone
+   *  (see the header: an ephemeral's offset is unique within an incarnation). */
   #highestAssignedOffsetCache?: number;
   /** Parked waitForEvent callers, FIFO. Fed from `fresh` in append's post-commit tail. */
   readonly #waiters: EventWaiter[] = [];
@@ -212,15 +222,32 @@ export class Stream {
         ...inputs,
       ];
     const scannedAfterOffset = this.highestAssignedOffset();
+    for (const input of inputs)
+      if (input.ephemeral && input.idempotencyKey)
+        throw codedError(
+          "EPHEMERAL_IDEMPOTENCY_KEY",
+          "ephemeral events cannot carry an idempotencyKey — nothing idempotent about the unreplayable",
+        );
+    // THE EPHEMERAL FAST PATH: nothing to store, nothing to look up (ephemerals carry no
+    // idempotency key), so no transaction and no high-water write — offsets are handed out from
+    // memory and the batch goes straight to the fan-out. This is what lets a 5000 ev/s flood of
+    // ephemerals leave SQLite untouched (the flood proofs measure it).
+    if (inputs.every((input) => input.ephemeral)) {
+      let nextOffset = scannedAfterOffset;
+      const createdAt = new Date().toISOString();
+      const fresh = inputs.map(
+        (input) => ({ ...input, createdAt, offset: ++nextOffset, path: this.#path }) as StreamEvent,
+      );
+      this.#highestAssignedOffsetCache = nextOffset;
+      this.#reduceAtCommit(fresh, scannedAfterOffset, nextOffset); // a no-op fold (ephemerals never reduce) that keeps the inline cursors current
+      this.#settleWaiters(fresh);
+      this.#onCommit(fresh, scannedAfterOffset, nextOffset);
+      return fresh;
+    }
     const { committed, distinct, nextOffset } = this.#storage.transactionSync(() => {
       const committed: StreamEvent[] = [];
       let nextOffset = scannedAfterOffset;
       for (const input of inputs) {
-        if (input.ephemeral && input.idempotencyKey)
-          throw codedError(
-            "EPHEMERAL_IDEMPOTENCY_KEY",
-            "ephemeral events cannot carry an idempotencyKey — nothing idempotent about the unreplayable",
-          );
         if (input.idempotencyKey) {
           const hit = this.#storage.sql
             .exec("SELECT offset, body FROM events WHERE idempotency_key = ?", input.idempotencyKey)
@@ -259,7 +286,10 @@ export class Stream {
       const seen = new Set<number>();
       const distinct = committed.filter((e) => !seen.has(e.offset) && (seen.add(e.offset), true));
       if (nextOffset > scannedAfterOffset) {
-        this.#storage.kv.put("maxAssignedOffset", nextOffset); // THE one deliberate write
+        // The high-water mark rides the durable rows' transaction — this batch stored at least one
+        // (an all-ephemeral batch never gets here), so every offset it handed out, ephemeral ones
+        // included, is covered by this write.
+        this.#storage.kv.put("maxAssignedOffset", nextOffset);
         this.#reduceAtCommit(distinct, scannedAfterOffset, nextOffset);
       }
       return { committed, distinct, nextOffset };

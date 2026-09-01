@@ -29,8 +29,10 @@ physical — `itx.rpcStubs.list()`, plus two EPHEMERAL events as it changes (`rp
 ## Layer 1 — the stream (one `Stream` class, held by the one context DO)
 
 `core/stream.ts` (`Stream`, a dependency-injected JS class) is the commit point: an append-only
-event log with monotonic offsets shared by durable AND ephemeral events (ephemerals consume
-offsets, never rows), idempotency at the door, the stream/woken wake record, `waitForEvent`,
+event log with monotonic offsets shared by durable AND ephemeral events (an ephemeral consumes an
+offset, never a row — and an ephemeral-only batch costs NO write at all: no transaction, not even
+the high-water mark; its offsets are unique within the incarnation, and every persisted checkpoint
+in the package advances only on a batch that carried a durable), idempotency at the door, the stream/woken wake record, `waitForEvent`,
 `read` with the scanned-offset-range proof, and the alarm armer. `stream-durable-object.ts`
 (`IterateContextDurableObject`, one DO per `{projectId, path}` context) holds a Stream and drives
 it — its injected callbacks run the inline reduces in-transaction (pause/breaker enforcement lives
