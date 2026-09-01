@@ -925,6 +925,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     path: "worker.ts",
     content:
       "import { DocsApp } from \"@iterate-com/docs\";\n" +
+      "import { FlakeDashboardApp } from \"iterate/starter-apps/flake-dashboard\";\n" +
       "import { GithubAiLinter } from \"iterate/starter-apps/github-ai-linter\";\n" +
       "import { GuestbookApp } from \"iterate/starter-apps/guestbook\";\n" +
       "import { MediaApp } from \"iterate/starter-apps/media\";\n" +
@@ -961,6 +962,10 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      repoPath: \"/repos/config\",\n" +
       "    },\n" +
       "  });\n" +
+      "  // Folds createFlake test outcomes appended to /flakes by the repo's CI\n" +
+      "  // reporter (scripts/flakes/report-flake-records.ts) into the GitHub \"Flake\n" +
+      "  // dashboard\" issue. Inert until CI is pointed at this project.\n" +
+      "  #flakeDashboardApp = FlakeDashboardApp.create(this.env);\n" +
       "  #docsApp = DocsApp.create(this.env, {\n" +
       "    auth: { policy: \"project-member\" },\n" +
       "    proxy: {\n" +
@@ -1270,6 +1275,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    }\n" +
       "\n" +
       "    await this.#aiLintApp.processEvent(event);\n" +
+      "    await this.#flakeDashboardApp.processEvent(event);\n" +
       "    await this.#guestbookApp.processEvent(event);\n" +
       "    await this.#mediaApp.processEvent(event);\n" +
       "    await this.#notesApp.processEvent(event);\n" +
