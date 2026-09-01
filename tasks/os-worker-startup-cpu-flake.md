@@ -42,6 +42,21 @@ st82hhnwtw and dnz4tp5rd0 (org 0p91s0lz49), jobs k7ff0dgzpb and sglcxb8gt4.
   the generated itx api stays byte-identical. Regenerated
   config-repo-template.generated.ts (embeds template package.json with the
   new zod pin). Full monorepo tests, typecheck, lint, knip, format all pass._
+- [x] Fix the auth worker startup crash the bump exposed _First CI round: the
+  auth preview deploy died with an uncaught ZodError at global scope. zod ≥4.4
+  rejects a missing object key for a non-optional `z.custom(...)` field
+  (direct `.parse(undefined)` still passes — only the missing-key path
+  changed), and better-auth 1.6.9's `deviceAuthorization` declares its
+  `schema` option exactly that way and parses options at plugin construction.
+  Passed `schema: {}` in apps/auth/src/server/auth-plugins.ts — a no-op for
+  better-auth's mergeSchema — with a comment; upstream better-auth has already
+  made the field optional, so the workaround dies with the next better-auth
+  bump. Verified by constructing the real plugin against workspace zod, plus
+  `wrangler check startup` on the built auth worker (~31ms non-idle, boots
+  clean). Considered a unit test importing auth.schema-only.ts to pin worker
+  global scope, but the plugin graph imports `cloudflare:workers`, which
+  node --test can't load without mocking — the per-PR preview deploy is the
+  real guard for this class, and it did catch it._
 - [ ] CI green + review on the PR
 
 ## Implementation notes
