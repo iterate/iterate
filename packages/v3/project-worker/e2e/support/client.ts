@@ -67,9 +67,11 @@ export function disposeSessions(): void {
 export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /** ACTIVE subscriber rows off the capability-table snapshot (newest mount per name wins — the
- *  shadow-stack projection the deleted hostState() used to serve): `[{ name, lane, live?, … }]`.
- *  The event-sourced observability door: facet-lane rows ARE the enabled processors, rows where
- *  `live` ARE the presence list (transport socket counts stay DO-only — `transportState()`). */
+ *  shadow-stack projection the deleted hostState() used to serve): `[{ name, lane, target, … }]`.
+ *  The event-sourced observability door: facet-lane rows ARE the enabled processors; a live
+ *  callback's row is an ordinary mount whose `target` names the registry
+ *  (`itx.rpcStubs.get('…')`). The table never says who is ONLINE — that is `presence()` below
+ *  (transport socket counts stay DO-only — `transportState()`). */
 export async function subscriberMounts(itx: any): Promise<any[]> {
   const snap: any = await itx.invokeCapability("itx.facets.get('capability-table').snapshot()");
   const byName = new Map<string, any>();
@@ -80,6 +82,21 @@ export async function subscriberMounts(itx: any): Promise<any[]> {
       byName.set(m.path[2], { name: m.path[2], ...m });
   }
   return [...byName.values()];
+}
+
+/** PRESENCE — the registry keys with an open transport RIGHT NOW (`itx.rpcStubs.list()`, the
+ *  physical built-in). Shrinks when a provider's session dies; a mount never does. */
+export async function presence(itx: any): Promise<string[]> {
+  return (await itx.rpcStubs.list()) as string[];
+}
+
+/** The paths of the table's LIVE MOUNTS — rows whose target names the `itx.rpcStubs` registry.
+ *  Pure data: this set does NOT shrink when a provider dies; it shrinks on revoke/unsubscribe. */
+export async function rpcStubMountPaths(itx: any): Promise<string[]> {
+  const snap: any = await itx.invokeCapability("itx.facets.get('capability-table').snapshot()");
+  return (snap.state.mounts as { path: string[]; target: unknown }[])
+    .filter((m) => Array.isArray(m.target) && m.target[0] === "itx" && m.target[1] === "rpcStubs")
+    .map((m) => m.path.join("."));
 }
 
 /** Enabled facet processors = the facet-lane subscriber rows' slugs (a processor IS such a row). */

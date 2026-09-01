@@ -118,7 +118,9 @@ test("itx.slack — a live bridge replays the natural dotted spelling onto the S
   expect(sdkCalls.some(([m, o]) => m === "chat.postMessage" && o.channel === "#zero")).toBe(true);
   await bridgeItx.revoke("itx.slack2");
 
-  // 5. revoke the live mount → the transport is torn down with the row, default-deny answers
+  // 5. the PROVIDER revokes by path → the mount pops (default-deny answers: NO_CAPABILITY_MATCH,
+  //    never "offline" — an explicit revoke removes the row) AND the bridge session closes its own
+  //    parked stub under the path.
   await bridgeItx.revoke("itx.slack");
   const denied = await until("revoke propagated", async () => {
     try {
@@ -133,6 +135,8 @@ test("itx.slack — a live bridge replays the natural dotted spelling onto the S
       return String(e);
     }
   });
-  // after revoke("itx.slack") the capability is gone (default-deny)
-  expect(denied).toMatch(/no capability matches|offline/);
+  // after revoke("itx.slack") the capability is gone (default-deny — the ONE code an explicit
+  // revoke yields)
+  expect(denied).toMatch(/no capability matches/);
+  expect(denied).not.toMatch(/offline/);
 });

@@ -206,7 +206,8 @@ export class HibernatableRpcStubManager {
   }
 
   /** A pager WebSocket closed — the stub is gone with it. Hands back the record so the caller
-   *  can run its own lifecycle (ephemeral facts, auto-revoke, session settlement). */
+   *  can note it (the directory simply forgets the transport; a mount naming the stub stays and
+   *  answers CONNECTION_OFFLINE — the mount is data, the socket was weather). */
   closed(ws: WebSocket): HibernatableRpcStubRecord | undefined {
     const record = this.#attachment(ws);
     if (record) this.#forget(record.transportId);

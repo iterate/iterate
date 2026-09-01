@@ -126,8 +126,9 @@ test("baseline: /cap serves HTTP and a 101 WebSocket echo from a LOADED-WORKER c
 
 // ─────────────────────── 2. LIVE CAPABILITY, plain HTTP fetch (non-upgrade) ───────────────────────
 // The Request is minted by a REAL eyeball (not a capnweb client): eyeball → worker /cap → DO
-// fetch lane → capability table live row → Workers RPC invoker → relay → capnweb
-// → the NODE provider's fetch(). Its Response rides every hop back out. (prove_rich pinned
+// fetch lane → capability table mount (target `itx.rpcStubs.get('itx.site')`) → the rpcStubs
+// built-in → Workers RPC invoker → relay → capnweb → the NODE provider's fetch(). Its Response
+// rides every hop back out. (prove_rich pinned
 // Request/Response over capnweb between two capnweb clients; this pins the EYEBALL-originated
 // path in the harness.)
 

@@ -1,5 +1,5 @@
 // built-ins.ts — THE BUILT-INS: a plain record whose KEYS are the physical-layer roots (`whoami`,
-// `kv`, `append`, `read`, `cd`, `facets`, `load`, `runScript`, `connectToCapnweb`). A call
+// `kv`, `append`, `read`, `cd`, `rpcStubs`, `facets`, `load`, `runScript`, `connectToCapnweb`). A call
 // `itx.<root>…` resolves DIRECTLY against these (capability-table-processor.ts `resolve`, built-in
 // first) — no config, no mount. Userspace `provide` mounts resolve against `{ itx }` alone and
 // recurse through the `itx` symbol to reach a root; a bare root is unspellable, so the built-ins
@@ -26,6 +26,20 @@ import { InvokeHandle } from "./core/invoke-handle.ts";
 import type { Context } from "./core/stream.ts";
 import type { StreamEventInput } from "./core/events.ts";
 import type { IterateContextDurableObject } from "./stream-durable-object.ts";
+
+/** The `rpcStubs` view every context has: the live-stub REGISTRY, surfaced. One entry per parked
+ *  live capnweb value (client callbacks and live subscribers — one registry), keyed by the string
+ *  it was parked under (the mount path, when it came through `itx.provide(path, fn)`). Physical
+ *  by nature: nothing here is event-sourced; a mount reaches an entry through the pure-data
+ *  target `itx.rpcStubs.get('<key>')`. */
+type RpcStubsView = {
+  /** One stub by key: a pipelinable handle over its transport (page → RetainedCallbackInvoker leg
+   *  → invoke). Deep dots walk; a root call reaches the bare parked callable; offline ⇒
+   *  CONNECTION_OFFLINE at call time. */
+  get(key: string): unknown;
+  /** PRESENCE — the keys with an open transport right now. */
+  list(): string[] | Promise<string[]>;
+};
 
 /** The DEP shape (context-injected): the facet door reaches ANY method a facet's durable object
  *  exposes (facet stubs are non-transferable, so the walk happens parent-side). `ref` is a STRING
@@ -94,6 +108,12 @@ interface BuiltInScope {
   read(afterOffset?: number, limit?: number): Promise<unknown>;
   /** Navigate to a SIBLING context, routed through its own table. */
   cd(path: string): unknown;
+  /** The live rpc-stub REGISTRY — physical, never event-sourced: a client's live capnweb value
+   *  parked under a key (the edge's `itx.rpcStubs.provide(value, { key? })` — relay-side, DON'T-PIN).
+   *  `get(key)` is how a MOUNT names one: `itx.provide(path, fn)` is sugar for parking under `path`
+   *  and mounting the pure-data target `itx.rpcStubs.get('<path>')`. Offline ⇒ CONNECTION_OFFLINE
+   *  at call time; `list()` is presence (which keys have a transport right now). */
+  rpcStubs: RpcStubsView;
   /** Address a facet that is ALREADY RUNNING by name (an enabled processor, a named instance). No
    *  source — to LOAD and host a class, use `itx.load(src).getDurableObjectClass(name).get(name?)`. */
   facets: { get(name: string): unknown };
@@ -121,6 +141,9 @@ interface BuildBuiltInsDeps {
   /** A context stream by path — the own-path parent adapter same-isolate, by-name DO stubs
    *  facet-side. Both satisfy Context (uniform-async, real-typed — see core/stream.ts). */
   context: (path: string) => Context;
+  /** The rpcStubs view — PARENT-LOCAL closures over the context's transport table (the pager
+   *  sockets live in the DO and can never move). */
+  rpcStubs: RpcStubsView;
   /** `facets.get(ref)` — address a facet by name, OR materialize `{ source, className }` (a loaded
    *  durable object hosted as a facet of this stream; accepted trade: a busy stateful facet pins
    *  its stream). */
@@ -215,6 +238,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         const last = segments[segments.length - 1] as string;
         return sibling.invoke(["itx", ...segments.slice(0, -1), [last, ...args]]);
       }),
+    rpcStubs: deps.rpcStubs,
     facets: {
       get: (name: string) => {
         if (typeof name !== "string")

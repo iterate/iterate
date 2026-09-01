@@ -2,24 +2,25 @@
 // RPC stubs. The manager (core/hibernatable-rpc-stub.ts) knows sockets, pages and stubs; THIS class
 // knows what a live stub MEANS on the stream:
 //
-//   • PATH: the capability path the stub is mounted at (`itx.provide(path, stub)`) — the stub's
-//     ONE identity. The live mount row in the capability table and this transport table share it;
-//     re-providing the same path replaces the transport (reconnect). Many transports can carry one
-//     path over time; the newest wins.
+//   • PATH: the capability-path-shaped string the stub is parked under — the REGISTRY KEY, and
+//     the stub's one identity here. `itx.provide(path, stub)` parks under the mount path, so a
+//     mount reaches the stub through the pure-data target `itx.rpcStubs.get('<path>')`; the
+//     registry itself knows nothing about mounts. Re-parking the same path replaces the transport
+//     (reconnect). Many transports can carry one path over time; the newest wins.
 //   • TRANSPORT ID: a fresh per-transport id (the stub pager socket carries it) so a NEW transport
 //     under an existing path can attach BEFORE the old one drops — the swap the reconnect property
 //     rides on. Internal; callers never see it.
 //
-// PRESENCE IS NOT HERE: "what live capabilities exist" is the capability table (rows where live —
-// an event-sourced reduce). This table holds only the in-memory transport facts (which paths have
-// an open pager, what is paged in) — surfaced whole via `state()` for the hibernation probes.
+// THIS IS THE `itx.rpcStubs` BUILT-IN'S BACKING TABLE — physical, never event-sourced. PRESENCE
+// (which paths have an open pager right now) is `list()`; the whole in-memory socket census
+// (paged-in, pending pages, dormant) is `state()` for the hibernation probes. A stub that dies
+// leaves nothing behind but its absence: the mount that named it stays in the capability table
+// (calls answer CONNECTION_OFFLINE) until someone revokes it or the provider re-parks.
 //
 // Two-phase attach: `attach` mints the transportId FIRST, THEN the relay opens the stub pager
-// WebSocket carrying it; an unknown id 409s so a relay that outlived a DO restart re-attaches. What
-// a dead stub leaves behind (auto-revoking the live mount at its path) is the composing DO's
-// business — injected as `onFinalClose`.
+// WebSocket carrying it; an unknown id 409s so a relay that outlived a DO restart re-attaches.
 
-import { codedError, reportIssue } from "./core/errors.ts";
+import { codedError } from "./core/errors.ts";
 import type { LiveCapabilityFetchServer, WebSocketHooks } from "./core/fetch-capabilities.ts";
 import {
   HibernatableRpcStubManager,
@@ -39,13 +40,9 @@ type RpcStubDirectoryDeps = {
   /** The DO's live-capability fetch subsystem (core/fetch-capabilities.ts) — the manager routes
    *  terminal-fetch invokes into its serve(). */
   liveCapabilityFetch: LiveCapabilityFetchServer;
-  /** A stub died for good — the DO auto-revokes the live mount at its path. `pathFinal` ⇒ no
-   *  replacement transport carries the path either. */
-  onFinalClose(input: { path: string; pathFinal: boolean }): Promise<void>;
 };
 
 export class RpcStubDirectory {
-  readonly #deps: RpcStubDirectoryDeps;
   /** The transport mechanics — sockets, pages, paged-in stubs (core/hibernatable-rpc-stub.ts). */
   readonly #stubs: HibernatableRpcStubManager;
   /** transportId → the reservation, for transports whose stub pager WebSocket hasn't arrived yet.
@@ -62,7 +59,6 @@ export class RpcStubDirectory {
   }
 
   constructor(deps: RpcStubDirectoryDeps) {
-    this.#deps = deps;
     this.#stubs = new HibernatableRpcStubManager(deps.hooks, deps.liveCapabilityFetch);
   }
 
@@ -110,29 +106,11 @@ export class RpcStubDirectory {
     return this.#stubs.activate(input);
   }
 
-  drop(path: string, reason: string): void {
-    const record = this.find(path);
-    if (record) this.#stubs.drop(record.transportId, reason);
-  }
-
   /** A pager WebSocket closed (wire this to webSocketClose/webSocketError, AFTER the DO's own
-   *  live-capability close routing): for a path whose LAST transport just went, the DO's
-   *  onFinalClose (auto-revoke the live mount at it) — fire-and-forget safe. */
-  closed(ws: WebSocket, reason: string): void {
-    const record = this.#stubs.closed(ws);
-    if (record)
-      void this.#stubClosed(record, reason).catch((e) =>
-        reportIssue("rpc-stub.close", e, { path: record.path ?? record.transportId }),
-      );
-  }
-
-  async #stubClosed(record: HibernatableRpcStubRecord, reason: string): Promise<void> {
-    const path = record.path ?? record.transportId;
-    // "replaced" is the SAME logical path changing transports — never a path-final close.
-    const pathFinal =
-      reason !== "replaced" &&
-      !this.#stubs.all().some((r) => r.path === path && r.transportId !== record.transportId);
-    await this.#deps.onFinalClose({ path, pathFinal });
+   *  live-capability close routing): the transport is simply gone. Nothing else happens — the
+   *  mount that named the stub is data, not a session fact, and stays. */
+  closed(ws: WebSocket): void {
+    this.#stubs.closed(ws);
   }
 
   // ── the views + the delivery leg ──
@@ -141,16 +119,15 @@ export class RpcStubDirectory {
     return this.#stubs.all().find((r) => r.path === path);
   }
 
-  /** The paths with a surviving pager transport — the resurrection pass diffs live table rows
-   *  against this (a crashed close-time append leaves a lying row; the attachments rehydrate free
-   *  from the hibernated sockets). */
-  attachedPaths(): string[] {
+  /** PRESENCE — the paths with an open pager transport right now (`itx.rpcStubs.list()`). The
+   *  attachments rehydrate free from the hibernated sockets, so this is exact after a wake. */
+  list(): string[] {
     return this.#stubs.all().map((r) => r.path);
   }
 
-  /** Invoke the live stub mounted at `path` — the ONE door for both resolved capability calls
-   *  (`itx.<path>.method()` → the resolver's live branch) and the commit pump's one-directional
-   *  delivery (empty segments = the bare subscriber callback itself). */
+  /** Invoke the stub parked at `path` — the ONE door behind `itx.rpcStubs.get(path)`: resolved
+   *  capability calls (`itx.<mount>.method()` through a mount targeting it) and the commit pump's
+   *  one-directional delivery (empty segments = the bare subscriber callback itself). */
   invoke(path: string, segments: string[], args: unknown[]): Promise<unknown> {
     const record = this.find(path);
     if (!record) throw codedError("CONNECTION_OFFLINE", `live capability "${path}" is offline`);

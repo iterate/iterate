@@ -1,13 +1,15 @@
 // crisp1.e2e.test.ts — the crisp-1 architecture proof against the local project-worker.
-// Covers: routing seeds, live caps through the ONE provide door (the mount path IS the stub's
-// identity), THE SHADOW STACK (override → revoke → restore, on expression mounts), expression
-// mounts running dynamic workers (stateless fetch+WS, stateful deep call), the capability-table
-// presence view (live rows), default-deny, and the warm paged-in stub.
+// Covers: routing seeds, live caps through the ONE provide door (the mount path IS the registry
+// key the stub is parked under), THE SHADOW STACK (override → revoke → restore, on expression
+// mounts), expression mounts running dynamic workers (stateless fetch+WS, stateful deep call),
+// the two views of a live capability — PRESENCE (`itx.rpcStubs.list()`, physical) and the
+// table's live MOUNTS (rows targeting the registry, pure data) — default-deny, and the warm
+// paged-in stub.
 // (was proofs/prove_crisp1.mjs)
 
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import { freshCtx, session, until } from "./support/client.ts";
+import { freshCtx, presence, rpcStubMountPaths, session } from "./support/client.ts";
 import { seedSources } from "./support/sources.ts";
 
 // The one raw HTTP door with no capnweb equivalent is /cap (fetch-shaped caps + WS upgrades) and
@@ -72,17 +74,22 @@ test("crisp-1: routing, live caps, shadow stack, dynamic-worker mounts, capabili
   const echoed = await itxB.invokeCapability(["itx", "tools", ["echo", "hello"]]);
   // live cap: B invokes A's provider
   expect(echoed).toBe("echo-A:hello");
-  // PRESENCE: three live rows in the capability table (proverA, proverB, tools — the mount path
-  // IS each stub's identity; the echoed call above already proved a paged-in stub SERVES, and the
-  // raw socket counters are the DO-only transportState(), off this capnweb lane).
-  const s1 = await itxA.invokeCapability("itx.facets.get('capability-table').snapshot()");
-  const liveNow = (s1?.state?.mounts ?? []).filter((m: { live?: true }) => m.live);
-  expect(liveNow.length).toBeGreaterThanOrEqual(3);
+  // THE TWO VIEWS of the three live caps (proverA, proverB, tools): PRESENCE is the registry —
+  // `itx.rpcStubs.list()` names every key with an open transport (the mount path IS the key);
+  // the TABLE holds their mounts — ordinary rows whose target is `itx.rpcStubs.get('<path>')`.
+  // The echoed call above already proved a paged-in stub SERVES; the raw socket counters are the
+  // DO-only transportState(), off this capnweb lane.
+  const online = await presence(itxA);
+  const mountedLive = await rpcStubMountPaths(itxA);
+  for (const p of ["itx.proverA", "itx.proverB", "itx.tools"]) {
+    expect(online).toContain(p);
+    expect(mountedLive).toContain(p);
+  }
 
   // 4. THE SHADOW STACK: same path mounted twice — newest wins; revoking the mount restores.
-  //    Live rows don't stack (one live row per path, superseded in place), so the stack is proven
-  //    on EXPRESSION mounts: each provider parks its live stub at its own path, then alias-mounts
-  //    itx.greeter onto it — expression mounts keep full shadow-stack semantics.
+  //    A live mount shadows like any other mount, but the door dedupes an IDENTICAL re-provide
+  //    (a reconnect is zero events), so the stack is proven on DISTINCT EXPRESSION mounts: each
+  //    provider parks its live stub at its own path, then alias-mounts itx.greeter onto it.
   await itxA.provide("itx.greeterA", new ToolsA());
   await itxA.provide("itx.greeter", "itx.greeterA");
   await itxB.provide("itx.greeterB", new ToolsB());
@@ -146,36 +153,26 @@ test("crisp-1: routing, live caps, shadow stack, dynamic-worker mounts, capabili
   // stateful worker calls BACK through env.ITX
   expect(whoDeep?.projectId).toBe(ctx);
 
-  // 7. PRESENCE is the capability table: rows where `live` (the path IS each stub's identity),
-  //    a dotted single-target call, and fan-out via snapshot + map over the live paths.
-  //    Presence reads poll inside `until` — table appends (provides/auto-revokes) are async.
-  const liveRows = await until("both prover mounts live in the table", async () => {
-    const snap = await itxA.invokeCapability("itx.facets.get('capability-table').snapshot()");
-    const rows = (snap?.state?.mounts ?? []).filter((m: { live?: true }) => m.live);
-    return ["itx.proverA", "itx.proverB"].every((p) =>
-      rows.some((m: { path: string[] }) => m.path.join(".") === p),
-    )
-      ? rows
-      : undefined;
-  });
-  // the capability table lists both prover mounts as live rows
-  expect(Array.isArray(liveRows)).toBe(true);
-  expect(
-    ["itx.proverA", "itx.proverB"].every((p) =>
-      liveRows.some((m: { path: string[] }) => m.path.join(".") === p),
-    ),
-  ).toBe(true);
+  // 7. PRESENCE is the registry (`itx.rpcStubs.list()` — no polling: a provide resolves only
+  //    after its pager is open, and the greeter revokes above popped MOUNTS, never stubs), a
+  //    dotted single-target call, and fan-out via presence + map over the keys.
+  const livePaths = await presence(itxA);
+  // the registry lists both provers (and their mounts are still in the table — data, untouched)
+  expect(livePaths).toContain("itx.proverA");
+  expect(livePaths).toContain("itx.proverB");
+  expect(await rpcStubMountPaths(itxA)).toEqual(
+    expect.arrayContaining(["itx.proverA", "itx.proverB"]),
+  );
   const single = await itxA.invokeCapability("itx.proverB.hello()");
   // the dotted path reaches ONE live capability
   expect(single).toBe("from B");
-  // fan-out is snapshot + map over the live paths — no built-in `each`; the caller owns the allSettled.
-  const livePaths = liveRows.map((m: { path: string[] }) => m.path.join("."));
+  // fan-out is presence + map over the keys — no built-in `each`; the caller owns the allSettled.
   const fans = (
     await Promise.all(
       livePaths.map((p: string) => itxA.invokeCapability(`${p}.hello()`).catch(() => undefined)),
     )
   ).filter((v: unknown) => v !== undefined);
-  // fan-out via the table's live rows + map (no each) reaches every held live capability
+  // fan-out via the registry's keys + map (no each) reaches every held live capability
   expect(fans).toContain("from B");
   expect(fans).toContain("from A");
 

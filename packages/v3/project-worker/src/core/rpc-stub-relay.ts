@@ -5,12 +5,14 @@
 // wants the client (a delivery, a request/response call), it PAGES the relay over a stub-pager
 // WebSocket, and the relay answers with a fresh Workers-RPC leg wrapping the retained capnweb stub.
 //
-// The stub's DO-side identity IS the capability path it is mounted at (one canonicalized string —
-// no separate key). This module owns the whole dance behind a TWO-SYMBOL API — `startRpcStubRelay`
-// (park a stub, hand back a disposable relay) and `Parking` (the session-lived registry that keeps
-// relays alive; the caller keys it) — so itx-surface.ts reads as its narrative (ProjectSession →
-// IterateContext → the built-in collections), with the pager sockets and the shared broken-flag
-// hidden here.
+// The stub's DO-side identity is the string it is parked under in the `itx.rpcStubs` built-in —
+// the canonicalized capability path, when it came through `itx.provide(path, fn)`. Parking is
+// PHYSICAL and separate from mounting: the mount is an ordinary capability-table event whose
+// target is `itx.rpcStubs.get('<path>')`. This module owns the whole dance behind a TWO-SYMBOL
+// API — `startRpcStubRelay` (park a stub, hand back a disposable relay) and `Parking` (the
+// session-lived registry that keeps relays alive; the caller keys it) — so itx-surface.ts reads as
+// its narrative (ProjectSession → IterateContext → the built-in collections), with the pager
+// sockets and the shared broken-flag hidden here.
 
 import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
 import type { IterateContextDurableObject } from "../stream-durable-object.ts";
@@ -105,11 +107,10 @@ export interface CapnwebCallbackRelay {
  *  hands out, and a capability path is only unique PER CONTEXT, so IterateContext keys by the
  *  composite `"<contextPath> <capabilityPath>"` (see #parkingKey) — the bare path would let two
  *  contexts providing at the same path destroy each other's relay. Re-adding the SAME key is a
- *  TRANSPORT REPLACEMENT (a re-provide at the same context + path): by the time the new relay's
- *  pager is open, the DO has already dropped the old transport as "replaced", so disposing the
- *  incumbent here is a harmless double-close that just keeps this map from accumulating dead
- *  relays. (The old shadow-a-relay bookkeeping died with the one-live-row-per-path reduce rule —
- *  the resub zombie is structurally impossible now.) */
+ *  TRANSPORT REPLACEMENT (a re-park at the same context + path — a reconnect): by the time the
+ *  new relay's pager is open, the DO has already dropped the old transport as "replaced", so
+ *  disposing the incumbent here is a harmless double-close that just keeps this map from
+ *  accumulating dead relays. */
 export class Parking {
   readonly #relays = new Map<string, CapnwebCallbackRelay>();
   add(key: string, relay: CapnwebCallbackRelay): void {
@@ -128,11 +129,11 @@ export class Parking {
   }
 }
 
-/** Park a live capnweb stub as an rpc stub at its mount `path` (the canonicalized string — the
- *  stub's one identity): reserve a transport on the DO, dup the provider stub, open the stub pager
- *  WebSocket, and answer every page with a fresh stub. The relay lives until disposed (explicitly,
- *  or at session end); its close makes the DO drop the stub (⇒ the live mount at the path
- *  auto-revokes). */
+/** Park a live capnweb stub in the DO's `itx.rpcStubs` registry under `path` (the canonicalized
+ *  string — the stub's one identity there): reserve a transport on the DO, dup the provider stub,
+ *  open the stub pager WebSocket, and answer every page with a fresh stub. The relay lives until
+ *  disposed (explicitly, or at session end); its close makes the DO drop the stub — and nothing
+ *  else: whatever mounts named it stay, answering CONNECTION_OFFLINE. */
 export async function startRpcStubRelay(
   context: IterateContextStub,
   provider: RetainedProviderStub,

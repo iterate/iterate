@@ -145,8 +145,9 @@ test("egress: a platform-scope token does NOT trip our door (the next door owns 
 
 // (Deleted across the connections → path-identity migrations: the "connectionKey / connectionId
 // shared lookup namespace" todo described an attack on the removed connection directory —
-// connect({connectionKey}), the dual connectionId/connectionKey namespace, and onFinalClose
-// auto-revoke by connectionKey. There are no keys and no lookup namespace left to collide in: a
-// live capability's one identity is its mount path in the capability table
-// (`itx.provide(path, stub)`), so the defect is structurally gone. It was also a malicious-client
+// connect({connectionKey}), the dual connectionId/connectionKey namespace, and the auto-revoke
+// by connectionKey on a transport's final close. The `itx.rpcStubs` registry has ONE key — the
+// canonical capability path a stub was parked under — a mount names it as pure data
+// (`itx.rpcStubs.get('<path>')`), and nothing is revoked on close, so there is no second
+// namespace left to collide in: the defect is structurally gone. It was also a malicious-client
 // concern, which the trusted-client model does not defend against.)

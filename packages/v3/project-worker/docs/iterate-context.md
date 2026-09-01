@@ -3,8 +3,11 @@
 > → the `rpcStubs` kernel primitive; `workers.get({source})`/`facets.get(ref)` mirror; `runScript(lambda)`;
 > `itx.connectToCapnweb(url)` replaces `itx.os`. Read `src/built-ins.ts` + `capability-table-processor.ts`
 > for the real surface. The config-gated / exokernel-grant model described below was NOT built (deliberately).
-> (Since then — 2026-09-01 — `rpcStubs` itself dissolved too: ONE `itx.provide(path, target)` door, the
-> mount path IS a live stub's identity, presence = capability-table rows where `live`. Same pointers apply.)
+> (2026-09-01 — `rpcStubs` is BACK as a built-in, the physical axiom (`itx.rpcStubs.provide/get/list/close`).
+> The ONE `itx.provide(path, target)` door STAYS as sugar over it: a live target is parked under `path`, then
+> an ordinary mount `path ⇒ itx.rpcStubs.get('<path>')` is appended. The `live: true` event flag, its
+> one-row-per-path supersession and the auto-revoke-on-close machinery were DELETED — the mount event is pure
+> data again; presence is `itx.rpcStubs.list()`, never the table. Same pointers apply.)
 
 # The Iterate Context — a concrete design (v1, for annotation)
 
@@ -264,7 +267,8 @@ on demand. Where the idle boundary sits is the tuning knob between "cheap to inv
 5. The relay (alive inside the tab's still-open worker invocation) calls `Stream.read(after)`
    and invokes `onEvents`. **The tab never pinned the DO.**
 6. Tab closes → worker execution context cancels → pager socket closes → `Stream.webSocketClose`
-   wakes the DO → tells the facet "client left." Presence drops.
+   wakes the DO → the transport is dropped. Presence drops (`itx.rpcStubs.list()` no longer names
+   it); the mount stays in the table until revoked — nothing is told "client left."
 
 ### W2 — provide a live capability, invoke it warm, then after eviction (proves R10)
 

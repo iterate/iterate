@@ -72,7 +72,7 @@ const readHead = async (itx: any): Promise<number> => {
   return events.length ? events[events.length - 1].offset : 0;
 };
 /** ACTIVE subscriber rows off the capability-table snapshot (newest mount per name wins — the
- *  shadow-stack projection the deleted hostState() used to serve). */
+ *  shadow-stack projection fan-out delivers to; a row is pure data, never a liveness claim). */
 const subscriberRows = async (ctx: string): Promise<any[]> => {
   const snap: any = await (
     await harness.itx(ctx)
@@ -89,12 +89,16 @@ const subscriberRows = async (ctx: string): Promise<any[]> => {
 /** Enabled facet processors = the facet-lane subscriber rows (a processor IS such a row). */
 const facetProcessorSlugs = async (ctx: string): Promise<string[]> =>
   (await subscriberRows(ctx)).filter((r) => r.lane === "facet").map((r) => r.name);
-/** PRESENCE by count — live table rows (the transport socket counters are DO-only transportState()). */
-const liveRowCount = async (ctx: string): Promise<number> => {
-  const snap: any = await (
-    await harness.itx(ctx)
-  ).invokeCapability("itx.facets.get('capability-table').snapshot()");
-  return (snap.state.mounts as any[]).filter((m) => m.live).length;
+/** PRESENCE — the keys with an open transport right now (`itx.rpcStubs.list()`, the physical
+ *  registry; the raw socket counters are DO-only transportState()). */
+const presence = async (itx: any): Promise<string[]> => (await itx.rpcStubs.list()) as string[];
+/** LIVE MOUNTS by count — table rows whose target names the registry (`itx.rpcStubs.get('…')`).
+ *  Pure data: shrinks only on revoke/unsubscribe, never when a stub dies. */
+const liveMountCount = async (itx: any): Promise<number> => {
+  const snap: any = await itx.invokeCapability("itx.facets.get('capability-table').snapshot()");
+  return (snap.state.mounts as any[]).filter(
+    (m) => Array.isArray(m.target) && m.target[0] === "itx" && m.target[1] === "rpcStubs",
+  ).length;
 };
 
 /** Expected tally counts = groupBy(type) over the DURABLE log (tally consumes "*", durable only). */
@@ -429,11 +433,13 @@ test("reentrancy characterized: a forwarder delivery targeting itx.append neithe
 
 // ─────────────────────────── 6. subscribe/unsubscribe churn ───────────────────────────
 
-test("churn 20×: no ghost deliveries; the connection registry returns to baseline after session dispose", async () => {
+test("churn 20×: no ghost deliveries; presence AND the table return to baseline after session dispose", async () => {
   const ctx = "prj_lr_churn";
+  const observer = await harness.itx(ctx); // outlives the churning session
   const session = harness.session(ctx);
   const itx = await session.authenticate().get();
-  const baselineLiveRows = await liveRowCount(ctx);
+  const baselinePresence = (await presence(observer)).length;
+  const baselineMounts = await liveMountCount(observer);
   const c = collector();
 
   for (let i = 0; i < 20; i++) {
@@ -447,25 +453,31 @@ test("churn 20×: no ghost deliveries; the connection registry returns to baseli
   await settle(800);
   expect(c.invocations).toHaveLength(0);
   expect(await subscriberRows(ctx)).toEqual([]);
+  // every churn subscribe was unsubscribed in-loop (the revoke is awaited), so the TABLE is
+  // already back at baseline — the dispose below has nothing to clean up there
+  expect(await liveMountCount(observer)).toBe(baselineMounts);
 
-  // dispose the session: presence (live table rows) must return to baseline — no lying rows
+  // dispose the session: PRESENCE (the physical registry) must return to baseline — every relay
+  // the churn parked is gone (each unsubscribe closed its own; the pager closes are async, poll).
   // (transport socket counts are DO-only transportState(), pinned in __workers-tests__)
   const DISPOSE: symbol | undefined = (Symbol as { dispose?: symbol }).dispose;
   if (DISPOSE) (session as Record<symbol, () => void>)[DISPOSE]?.();
   await until(
-    "live-row presence back to baseline",
-    async () => (await liveRowCount(ctx)) === baselineLiveRows,
+    "presence back to baseline",
+    async () => (await presence(observer)).length === baselinePresence,
     20_000,
   );
+  expect(await liveMountCount(observer)).toBe(baselineMounts); // and the dispose revoked NOTHING
 });
 
-// (Deleted with the rpcStubs migration; the path-identity model has since dissolved the setup:
-// the defect-31 "unsubscribe reaps the parked connection via the last naming mount" case needed
-// one connection named by SEVERAL mounts, which can no longer be spelled — a live stub's identity
-// IS its single mount path (`itx.provide(path, stub)`, at most one live row per path), and
-// unsubscribe / `itx.revoke(path)` tears the mount and its transport down together, so
-// reap-on-revoke is definitionally 1:1 and there is nothing left to assert. The churn test above
-// still guards subscribe/unsubscribe stub hygiene end-to-end.)
+// (Deleted with the rpcStubs migration: the defect-31 "unsubscribe reaps the parked connection
+// via the last naming mount" case has no counterpart. A mount never OWNS a stub — it is pure
+// data naming the `itx.rpcStubs` built-in (`itx.rpcStubs.get('<key>')`), and while SEVERAL
+// mounts may name one key, revoking any of them only pops its own row. The stub's lifetime is
+// physical and session-bound: it goes at session end, on `rpcStubs.close(key)`, or with
+// `itx.revoke(path)` / `unsubscribe` from the SESSION THAT PARKED IT — never by a refcount over
+// the mounts, so there is no reap-on-last-revoke to assert. The churn test above still guards
+// subscribe/unsubscribe stub hygiene end-to-end.)
 
 // ─────────────────────────── 7. waitUntilProcessed against a future offset ───────────────────────────
 

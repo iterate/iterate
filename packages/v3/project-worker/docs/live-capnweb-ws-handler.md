@@ -50,12 +50,12 @@ socket cannot cross.
    terminates in the **stateless project worker (the RELAY)** against
    `ProjectSession` — the one capnweb entrypoint, a hard rule
    (`packages/v3/project-worker/src/worker.ts:52-56`).
-2. The provider calls `itx.provideCapability({ path:["wsbackend"], type:"live",
-capability:{ fetch } })`. The `{ fetch }` object is a **retained capnweb stub
-   held in the relay**; the relay opens a Hibernatable Pager to the
-   `ItxDurableObject` and parks only `{ socketId }` in the DO — no stub, so the DO
-   still hibernates (`itx-durable-object.ts:280-283` `parkCapability`; the
-   don't-pin transport, `BUILD-LOG.md` Increment 18).
+2. The provider calls `itx.provide("itx.wsbackend", { fetch })`. The `{ fetch }` object is a
+   **retained capnweb stub held in the relay**, parked in the `itx.rpcStubs` built-in under
+   `itx.wsbackend`; the relay opens a stub pager WebSocket to the context DO, which records
+   only a transport id — no stub, so the DO still hibernates (the don't-pin transport,
+   `BUILD-LOG.md` Increment 18). The mount itself is the ordinary table row
+   `itx.wsbackend ⇒ itx.rpcStubs.get('itx.wsbackend')` — pure data, never the socket.
 3. An eyeball hits an app host that upgrades. The edge sets `x-itx-cap` and
    forwards to the host DO (`worker.ts:60-65`); `ItxDurableObject.fetch` sees
    `x-itx-cap` and calls `#fetchCapability("wsbackend", request)`

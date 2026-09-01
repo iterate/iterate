@@ -1656,3 +1656,18 @@ before changes. Fixed test.fails flipped to plain regression tests.
   pre-session), typecheck now covers e2e/specs/**tests**/**workers-tests** (tsconfig.tests.json).
 - `@cloudflare/vitest-pool-workers` → `@cloudflare/vitest-plugin@^1.0.0` (the 2026-08-19 rename;
   same API), workers-types bumped to its peer floor.
+
+## 2026-09-01 — C7: the mount is data, the stub is physical
+
+- REVERSES the event-layer half of C4 (`75c07e06b`), keeps its door. A live provide is no longer a special
+  `live: true` row: `itx.rpcStubs` is BACK as a BUILT-IN (the physical registry — edge `provide(fn, {key})` /
+  `get(key)` / `list()` / `close(key)`; DO root `get`/`list`) and `itx.provide(path, fn)` is SUGAR: park under
+  the canonical path, then append the ORDINARY mount `path ⇒ itx.rpcStubs.get('<path>')`. `target` is required
+  on every mount, `live` is gone from event/row/input; capability-table contract 3.0.0 → 4.0.0.
+- One shadow-stack reduce for every mount (no per-path singleton, no supersession); the DO's provide door is
+  IDEMPOTENT (same winner target+delivery+processor ⇒ its offset, nothing appended), so a reconnect's
+  re-provide appends ZERO events — only the transport is replaced.
+- NO auto-revoke, NO presence self-heal: a dead stub leaves only its absence — its mount STAYS, answering
+  CONNECTION_OFFLINE until revoked or re-parked; `revokeCapability` returns void and never touches transports
+  (edge `itx.revoke(path)` also closes this session's stub). PRESENCE is `itx.rpcStubs.list()`, never the table.
+- `RpcStubDirectory`: `onFinalClose`/`drop()` deleted, `attachedPaths()` → `list()`; `laneOf`: `itx.rpcStubs.get('k')…` ⇒ connected.

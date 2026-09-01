@@ -174,11 +174,24 @@ const codeOf = (e: unknown): string | undefined =>
     ? String((e as { code: unknown }).code)
     : undefined;
 
-/** PRESENCE — the capability table's live rows (event-driven): dotted path strings. */
-const livePaths = async (itx: any): Promise<string[]> => {
+/** PRESENCE — the keys with an open transport right now (`itx.rpcStubs.list()`, the physical
+ *  registry). Shrinks the moment a provider dies; never consults the capability table. */
+const presence = async (itx: any): Promise<string[]> => (await itx.rpcStubs.list()) as string[];
+
+/** THE LIVE MOUNTS — capability-table rows whose target names the registry
+ *  (`itx.rpcStubs.get('<key>')`; a parsed Expression in the snapshot). Pure data: shrinks only on
+ *  an explicit revoke/unsubscribe, never when a stub dies. */
+const liveMountPaths = async (itx: any): Promise<string[]> => {
   const snap: any = await itx.invokeCapability("itx.facets.get('capability-table').snapshot()");
   return (snap.state.mounts as any[])
-    .filter((m) => m.live)
+    .filter(
+      (m) =>
+        Array.isArray(m.target) &&
+        m.target[0] === "itx" &&
+        m.target[1] === "rpcStubs" &&
+        Array.isArray(m.target[2]) &&
+        m.target[2][0] === "get",
+    )
     .map((m) => (m.path as string[]).join("."));
 };
 
@@ -278,7 +291,7 @@ test("pipelining: invokes on the NOT-YET-RESOLVED itx from get() = ONE round tri
   });
 });
 
-test("pipelining: provide(path, fn) + revoke on its UNRESOLVED result = ONE round trip, and the live mount dies whole", async () => {
+test("pipelining: provide(path, fn) + revoke on its UNRESOLVED result = ONE round trip; the mount dies, the stub outlives it until the session ends", async () => {
   const ctx = c("pipe3");
   const w = wireSession(ctx);
   const itx = await w.session.authenticate().get();
@@ -299,25 +312,29 @@ test("pipelining: provide(path, fn) + revoke on its UNRESOLVED result = ONE roun
   expect(t["in:resolve"]).toBe(1);
   await settle(300);
   console.log("[wire] pipeline provide+revoke:", JSON.stringify(tally(w.since(mark))));
-  // Pinned EXACTLY (measured): the extras are 1 outbound release (the provision import — the
-  // handle-drop release of the old ProvidedStub is GONE with the handle) and 1 INBOUND release
-  // (the server dropping its dup of the exported callback after the revoke tore the relay down)
-  // — all cleanup, still one round trip.
+  // Pinned EXACTLY (measured): the one extra is 1 outbound release (the provision import — the
+  // handle-drop release of the old ProvidedStub is GONE with the handle). There is NO inbound
+  // release any more: the old `in:release` was the server dropping its dup of the exported
+  // callback when the revoke tore the relay down — a revoke by OFFSET revokes the MOUNT only, the
+  // relay keeps its retained dup parked under 'itx.piptool' until this session ends, so the
+  // server has nothing to release. All cleanup, still one round trip.
   expect(tally(w.since(mark))).toEqual({
     "out:push": 2,
     "out:pull": 1,
     "in:resolve": 1,
-    "in:release": 1,
     "out:release": 1,
   });
-  // Correctness under pipelining: the provide really parked the stub and appended the live row;
-  // the revoke popped THE row and tore its transport (row + relay die together — one identity).
-  const gone = await until("the live mount revoked (default-deny restored)", async () => {
+  // Correctness under pipelining: the provide really parked the stub AND appended its mount; the
+  // revoke-by-OFFSET popped THE row (default-deny restored) and touched nothing physical — the
+  // stub stays parked under 'itx.piptool' and listed by presence until this session ends or
+  // `rpcStubs.close` (`itx.revoke(path)` is the spelling that also closes it).
+  const gone = await until("the mount revoked (default-deny restored)", async () => {
     const err = await errorOf(itx.invokeCapability(["itx", ["piptool", 1]]));
     return codeOf(err) === "NO_CAPABILITY_MATCH";
   });
   expect(gone).toBe(true);
-  expect(await livePaths(itx)).toEqual([]); // presence (the table) agrees
+  expect(await liveMountPaths(itx)).toEqual([]); // the table has no row at the path
+  expect(await presence(itx)).toEqual(["itx.piptool"]); // the stub outlives its mount
 });
 
 // ═══════════════════════════════ 2. FRAMES PER CALL (regression pins) ═══════════════════════════════
@@ -412,7 +429,7 @@ test("deep chaining: 3+ segment dotted paths through a live provider (getter →
   const w = wireSession(ctx);
   const itx = await w.session.authenticate().get();
   await until("the slack bridge is attached", async () =>
-    (await livePaths(itx)).includes("itx.slack"),
+    (await presence(itx)).includes("itx.slack"),
   );
 
   // String half: deep dots + a trailing call, straight through the mount path.
@@ -445,24 +462,29 @@ test("deep chaining: 3+ segment dotted paths through a live provider (getter →
 // (The natural-dotted-client-surface hunt — `itx.kv.put(...)` as plain proxy access — lives in a
 // sibling file; this file owns the wire.)
 
-test("disposal: `using` on the /api session stub tears its live provides down at scope exit", async () => {
-  // (The old per-stub `using`-ProvidedStub handle died with the unification — a live capability's
-  // lifecycle is its PATH: itx.revoke(path) for explicit teardown, session end for everything
-  // else. This test pins the session half; the pipelined provide+revoke test above pins the
-  // explicit half.)
+test("disposal: `using` on the /api session stub drops its parked stubs at scope exit — the mounts stay, answering CONNECTION_OFFLINE", async () => {
+  // (The old per-stub `using`-ProvidedStub handle died with the unification. A live capability is
+  // two things with two lifetimes: the STUB is session-lived — `Symbol.dispose` on the session
+  // disposes every relay it parked, so `itx.rpcStubs.list()` stops listing them; the MOUNT is
+  // data and stays until an explicit `itx.revoke(path)` — the pipelined provide+revoke test
+  // above pins that half. This test pins the session half.)
   const ctx = c("using");
   const observer = await harness.itx(ctx);
   {
     using scoped = newWebSocketRpcSession(`ws://${harness.url.host}/api?ctx=${ctx}`) as any;
     await scoped.get().provide("itx.scoped", new Tools("scoped"));
-    await until("the live row present while the scope lives", async () =>
-      (await livePaths(observer)).includes("itx.scoped"),
+    await until("the stub present while the scope lives", async () =>
+      (await presence(observer)).includes("itx.scoped"),
     );
+    expect(await observer.invokeCapability("itx.scoped.hello()")).toBe("hello-from-scoped");
   } // ← Symbol.dispose fires here: capnweb says goodbye, ProjectSession tears every relay down
   await until(
-    "the live row auto-revoked after scope exit",
-    async () => !(await livePaths(observer)).includes("itx.scoped"),
+    "the stub gone from presence after scope exit",
+    async () => !(await presence(observer)).includes("itx.scoped"),
   );
+  expect(await liveMountPaths(observer)).toContain("itx.scoped"); // the mount is data — it stays
+  const err = await errorOf(observer.invokeCapability("itx.scoped.hello()"));
+  expect(codeOf(err)).toBe("CONNECTION_OFFLINE"); // mounted-but-offline, seen from another session
 });
 
 test("disposal: dup() survives disposal of the original; the LAST dispose kills the stub with the pinned error", async () => {

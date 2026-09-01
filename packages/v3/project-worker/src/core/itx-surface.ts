@@ -22,10 +22,14 @@
 // A client dials `/api` and gets a `ProjectSession`:
 //   • `get(context?)` → the `IterateContext` of that context (the root by default). Pure addressing.
 //   • ONE provide door: `itx.provide(path, target)` — target is an itx EXPRESSION (a durable
-//     mount) or a LIVE capnweb value (function/RpcTarget). A live target is retained HERE and the
-//     mount path IS its identity: calling `itx.<path>.method(x)` reaches it through the capability
-//     table's live row. Re-providing the same path replaces the transport (reconnect). `subscribe`
+//     mount) or a LIVE capnweb value (function/RpcTarget). A live target is SUGAR over two axioms:
+//     the value is parked in the `itx.rpcStubs` built-in under the path (retained HERE — the
+//     physical half), then the ordinary mount event `path ⇒ itx.rpcStubs.get('<path>')` is
+//     appended (the pure-data half). Calling `itx.<path>.method(x)` resolves the mount like any
+//     other. Re-providing the same path re-parks (reconnect) and appends nothing. `subscribe`
 //     parks its live callbacks through the same door, at `itx.subscribers.<name>`.
+//   • `itx.rpcStubs` — the registry itself, for the two-step spelling: `provide(value, { key })`
+//     parks, `get(key)` / `list()` ride the dotted surface to the DO's built-in.
 //
 // DON'T-PIN: the retained capnweb callback stub lives HERE, in this stateless worker (the relay). The relay
 // opens a STUB PAGER WebSocket to the DO (core/hibernatable-rpc-stub.ts); the DO records only the stub's
@@ -41,6 +45,7 @@ import type { DeliveryPolicy, StreamEvent, StreamEventInput } from "./events.ts"
 import type { WaitForEventFilter } from "./stream.ts";
 import { parseCapabilityPath, type Expression, type ItxExpression } from "./expression.ts";
 import { installPrototypeInvokeCapabilityFallback } from "./dotted-path-proxy.ts";
+import { InvokeHandle } from "./invoke-handle.ts";
 import { canonicalName, DurableObjectNameCodec, normalizePath } from "./durable-object-names.ts";
 import {
   Parking,
@@ -104,6 +109,82 @@ export class ProjectSession extends RpcTarget {
   }
 }
 
+/** The `itx.rpcStubs` REGISTRY, edge half — the physical axiom under a live provide. `provide` is
+ *  the one member that must live HERE (only the edge holds the client's capnweb session, so only
+ *  the edge can retain a stub — DON'T-PIN); `get`/`list` fold onto the DO's built-in exactly as the
+ *  dotted surface would. Parking is SEPARATE from mounting: nothing in this class appends an
+ *  event. A declared getter on `IterateContext` (not the dotted fallback) because `provide` and
+ *  `close` are edge verbs. */
+class RpcStubs extends RpcTarget {
+  readonly #context: IterateContextStub;
+  readonly #parking: Parking;
+  readonly #parkingKey: (key: string) => string;
+  readonly #waitUntil: (p: Promise<unknown>) => void;
+  constructor(
+    context: IterateContextStub,
+    parking: Parking,
+    parkingKey: (key: string) => string,
+    waitUntil: (p: Promise<unknown>) => void,
+  ) {
+    super();
+    this.#context = context;
+    this.#parking = parking;
+    this.#parkingKey = parkingKey;
+    this.#waitUntil = waitUntil;
+  }
+
+  /** Park a live capnweb value (a function or an RpcTarget) under `key` — a canonical capability
+   *  path string (the DO asserts the spelling; `itx.provide(path, fn)` passes the mount path).
+   *  Re-parking the same key REPLACES the transport (reconnect). Nothing is mounted: name the stub
+   *  from a mount with `itx.provide(path, "itx.rpcStubs.get('<key>')")`, or call it directly as
+   *  `itx.rpcStubs.get('<key>').method(x)`. */
+  async provide(target: ProviderStub, opts: { key: string }): Promise<{ key: string }> {
+    if (
+      typeof target !== "function" &&
+      !(target instanceof RpcTarget) &&
+      typeof (target as { dup?: unknown } | null)?.dup !== "function"
+    )
+      throw new TypeError(
+        "rpcStubs.provide(target, { key }): target must be a LIVE capnweb value (function | RpcTarget)",
+      );
+    // Validate/normalize BEFORE attaching — an invalid key must never burn a transport reservation.
+    const key = parseCapabilityPath(opts.key).join(".");
+    const relay = await startRpcStubRelay(
+      this.#context,
+      target as RetainedProviderStub,
+      key,
+      this.#waitUntil,
+    );
+    this.#parking.add(this.#parkingKey(key), relay);
+    return { key };
+  }
+
+  /** A parked stub by key — a pipelinable handle (`itx.rpcStubs.get('k').method(x)` rides one round
+   *  trip on every lane; core/invoke-handle.ts). Offline ⇒ CONNECTION_OFFLINE at call time. */
+  get(key: string): unknown {
+    return new InvokeHandle((path, args) =>
+      this.#context.invoke([
+        "itx",
+        "rpcStubs",
+        ["get", key],
+        ...path.slice(0, -1),
+        [path.at(-1)!, ...args],
+      ]),
+    );
+  }
+
+  /** PRESENCE — the keys with an open transport right now (the DO's built-in). */
+  list(): Promise<unknown> {
+    return this.#context.invoke(["itx", "rpcStubs", ["list"]]);
+  }
+
+  /** Dispose THIS session's relay for `key`: the pager closes and the DO drops the stub. A no-op
+   *  for a key this session never parked. Mounts naming the key are untouched (`itx.revoke`). */
+  close(key: string): void {
+    this.#parking.dispose(this.#parkingKey(parseCapabilityPath(key).join(".")));
+  }
+}
+
 /** The iterate context (`itx`). Dotted capability calls + the built-in collections forward to the DO over
  *  Workers RPC. capnweb terminates upstream in `/api`, so a client stub `itx.a.b(x)` never touches the DO's
  *  transport — it lands here and becomes a `DO.invoke(["itx", "a", ["b", x]])` call Expression. */
@@ -130,11 +211,18 @@ export class IterateContext extends RpcTarget {
    *  SESSION-lived and shared by every IterateContext the session hands out, while a capability
    *  path is only unique PER CONTEXT (each context DO has its own capability table) — keying by
    *  capability path alone let two contexts providing at the same path dispose each other's relay
-   *  (the pager close then auto-revoked a healthy live mount). A space separator is unambiguous:
+   *  (a healthy live capability went offline). A space separator is unambiguous:
    *  a capability path is dotted IDENT segments (parseCapabilityPath) and can never contain one,
    *  so the composite splits back at its last space — no (context, capability) pair collides. */
   #parkingKey(capabilityPath: string): string {
     return `${this.#contextPath} ${capabilityPath}`;
+  }
+
+  /** The live-stub registry (`itx.rpcStubs.provide/get/list/close`) — the physical axiom `provide`
+   *  composes with a mount. A declared getter so it wins over the dotted fallback (the fallback
+   *  would fold `get`/`list` correctly but cannot park). */
+  get rpcStubs(): RpcStubs {
+    return new RpcStubs(this.#context, this.#parking, (k) => this.#parkingKey(k), this.#waitUntil);
   }
 
   /** THE dispatch door (built-ins + provided capabilities) — the ONE way to call the itx surface.
@@ -176,11 +264,12 @@ export class IterateContext extends RpcTarget {
   /** THE ONE PROVIDE DOOR — mount a capability at `path`. `target` is EITHER:
    *    • an itx EXPRESSION (a dotted string or the parsed array — what the event stores; full
    *      shadow-stack semantics), OR
-   *    • a LIVE capnweb value (a function or an RpcTarget): the stub is retained HERE (relay-side
-   *      — DON'T-PIN) and the MOUNT PATH is its identity — `itx.<path>.method(x)` reaches it, the
-   *      capability table records `live: true` (no durable target), and the transport's final
-   *      close auto-revokes the row. Re-providing the same path REPLACES the transport
-   *      (reconnect — one live row per path, superseded in place).
+   *    • a LIVE capnweb value (a function or an RpcTarget) — SUGAR over two axioms: park the value
+   *      in `itx.rpcStubs` under the path (retained HERE, relay-side — DON'T-PIN), then mount the
+   *      pure-data target `itx.rpcStubs.get('<path>')`. `itx.<path>.method(x)` resolves that mount
+   *      like any other. Re-providing the same path re-parks (reconnect — the transport is
+   *      replaced) and, the mount being identical, appends NOTHING (the door is idempotent). If
+   *      the provider vanishes the mount STAYS: calls answer CONNECTION_OFFLINE until `revoke`.
    *  Anything else is a loud TypeError. Returns the mount's identity for `revoke`. */
   async provide(
     path: string | string[],
@@ -198,31 +287,22 @@ export class IterateContext extends RpcTarget {
       throw new TypeError(
         "provide(path, target): target must be an itx expression (string | array) or a LIVE capnweb value (function | RpcTarget)",
       );
-    // ONE canonicalizer for the live-stub identity — validate/normalize BEFORE attaching (an
-    // invalid path must never burn a transport reservation), attach the transport FIRST, append
-    // the provided event SECOND (the event records a capability that can already serve).
-    const pathString = parseCapabilityPath(typeof path === "string" ? path : path.join(".")).join(
-      ".",
-    );
-    const relay = await startRpcStubRelay(
-      this.#context,
-      target as RetainedProviderStub,
-      pathString,
-      this.#waitUntil,
-    );
-    const parkingKey = this.#parkingKey(pathString);
-    this.#parking.add(parkingKey, relay);
+    // Park FIRST, mount SECOND (the event records a capability that can already serve). The
+    // registry key IS the canonical mount path — one canonicalizer, done inside rpcStubs.provide.
+    const { key } = await this.rpcStubs.provide(target, {
+      key: typeof path === "string" ? path : path.join("."),
+    });
     try {
       return await this.#context.provideCapability({
-        path: pathString,
-        live: true,
+        path: key,
+        target: ["itx", "rpcStubs", ["get", key]],
         ...(delivery && { delivery }),
       });
     } catch (e) {
       // The DO refused the mount (STREAM_PAUSED / STREAM_BREAKER_OPEN / a validation throw): the
       // relay just parked would otherwise linger for the whole session — retained stub, pager
       // socket, and a DO transport that serves nothing. Tear it down and let the refusal propagate.
-      this.#parking.dispose(parkingKey);
+      this.rpcStubs.close(key);
       throw e;
     }
   }
@@ -237,22 +317,21 @@ export class IterateContext extends RpcTarget {
   }
 
   /** Pop a mount off the shadow stack (what it shadowed is restored) — by capability path (the
-   *  newest winner at that exact path) or by identity (`{ providedAtOffset }`). Revoking a LIVE
-   *  mount also tears its transport down (DO-side) and disposes the local Parking relay — on BOTH
-   *  spellings: the DO returns the revoked live rows' paths and each relay is disposed here (the
-   *  by-offset door — the pipelined provide+revoke spelling — must not leave a dead relay parked
-   *  until session end). */
+   *  newest winner at that exact path) or by identity (`{ providedAtOffset }`). The by-PATH
+   *  spelling is the inverse of `provide(path, fn)`: it also closes THIS session's parked stub
+   *  under that path, if any (a local fact — no DO round trip, no other session's stub is touched).
+   *  The by-offset spelling revokes the mount only; a stub this session parked stays addressable
+   *  as `itx.rpcStubs.get('…')` until `rpcStubs.close` or session end. */
   async revoke(input: string | string[] | { providedAtOffset: number }): Promise<void> {
-    const { revokedLivePaths } = await this.#context.revokeCapability(
-      typeof input === "string" || Array.isArray(input)
-        ? {
-            path: parseCapabilityPath(typeof input === "string" ? input : input.join(".")).join(
-              ".",
-            ),
-          }
-        : input,
-    );
-    for (const path of revokedLivePaths) this.#parking.dispose(this.#parkingKey(path));
+    if (typeof input === "string" || Array.isArray(input)) {
+      const path = parseCapabilityPath(typeof input === "string" ? input : input.join(".")).join(
+        ".",
+      );
+      await this.#context.revokeCapability({ path });
+      this.rpcStubs.close(path);
+      return;
+    }
+    await this.#context.revokeCapability(input);
   }
 
   /** Enable a facet-hosted processor on this context's stream. Sugar for "load a class as a
@@ -275,13 +354,14 @@ export class IterateContext extends RpcTarget {
   /** Subscribe — sugar for a subscription mount at `itx.subscribers.<name>`, through the ONE
    *  provide door. How it is SERVED depends only on the target's shape (see DeliveryPolicy in
    *  core/events.ts):
-   *    • a LIVE CALLBACK (any capnweb function/RpcTarget): parked AT `itx.subscribers.<name>`
-   *      itself (the path is the stub's identity), then delivered ONE-DIRECTIONALLY — the stream
-   *      fire-and-forgets each committed batch as `(events, range)` over the paged-in stub, no
-   *      acks, no server cursor. The CLIENT owns its offset: check the ranges chain, heal any gap
-   *      with read(afterOffset). Re-subscribing the SAME name REPLACES the transport (the old
-   *      callback's parked stub gets the replaced-close; there is a brief commit window where the
-   *      old row delivers to the new callback — one-directional lane, the ranges chain covers it).
+   *    • a LIVE CALLBACK (any capnweb function/RpcTarget): parked in `itx.rpcStubs` under
+   *      `itx.subscribers.<name>` and mounted there (target `itx.rpcStubs.get('…')`), then
+   *      delivered ONE-DIRECTIONALLY — the stream fire-and-forgets each committed batch as
+   *      `(events, range)` over the paged-in stub, no acks, no server cursor. The CLIENT owns its
+   *      offset: check the ranges chain, heal any gap with read(afterOffset). Re-subscribing the
+   *      SAME name REPLACES the transport (the old callback's parked stub gets the replaced-close)
+   *      and appends nothing when the policy is unchanged; a changed policy shadows the old row,
+   *      and fan-out delivers to the winner only.
    *    • an ABSENT target (an itx expression — a webhook, a stateless worker): the
    *      subscription-forwarder facet holds a cursor per target, calls the target's terminal
    *      path with `(events, range)` per batch (the awaited call IS the ack), and
@@ -315,7 +395,7 @@ export class IterateContext extends RpcTarget {
   async unsubscribe(input: { name: string }): Promise<void> {
     const path = `itx.subscribers.${input.name}`;
     await this.#context.revokeCapability({ path, all: true });
-    this.#parking.dispose(this.#parkingKey(path));
+    this.rpcStubs.close(path);
   }
 
   /** Recovery from a forwarder HALT (or an operator cursor seek) — absent targets only;

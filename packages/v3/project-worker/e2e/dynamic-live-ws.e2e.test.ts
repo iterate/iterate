@@ -126,12 +126,15 @@ test.fails("within the provider's invocation: WEBSOCKET fetch of the dyn-provide
   expect(out).toEqual({ status: 101, echo: "dyn-echo:hi-self" });
 });
 
-// BUG-OR-CONTRACT (VERIFIED, measured 2026-08-31): a dyn-provided live capability DIES WITH THE
+// BUG-OR-CONTRACT (VERIFIED, re-measured 2026-09-01): a dyn-provided live STUB DIES WITH THE
 // PROVIDING INVOCATION. The IterateContext scope a dynamic worker gets from env.ITX.get() lives in the
 // ItxEntrypoint loopback's request context; the parking + pager socket holding the provider
-// transport die when that context ends (the run() call chain completing), and the mount
-// auto-revokes — worker B then sees default-deny:
-//   404 "no capability matches itx.wsdyn.fetch (default-deny; provide a capability first)"
+// transport die when that context ends (the run() call chain completing), so the DO drops the
+// stub from its `itx.rpcStubs` registry. The MOUNT at itx.wsdyn is pure data and STAYS (nothing
+// auto-revokes a mount because a socket dropped) — worker B resolves it and hits the offline
+// registry entry, which the fetch lane reports as
+//   500 "fetch lane error: Error: live capability \"itx.wsdyn\" is offline" (CONNECTION_OFFLINE)
+// — mounted-but-offline, not default-deny; measured here as `expected 500 to be 200`.
 // (holding the itx stub on the provider's globalThis does NOT keep the remote context alive).
 // EXPECTED (the scenario this pins): provide in one invocation, fetch from another worker later.
 // Whether the fix is a detached-provider primitive (session-shaped parking for dyn workers) or a

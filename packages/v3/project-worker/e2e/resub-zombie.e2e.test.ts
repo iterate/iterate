@@ -1,22 +1,25 @@
-// resub-zombie.e2e.test.ts — ADVERSARIAL PROOF (RED on live-31): re-subscribe same name +
-// unsubscribe resurrects a ZOMBIE subscription that keeps delivering to the FIRST callback.
+// resub-zombie.e2e.test.ts — THE RE-SUBSCRIBE / UNSUBSCRIBE ZOMBIE PIN. Was RED on live-31: a
+// re-subscribe under the same name left the FIRST callback's parked stub online, and unsubscribe
+// popped only the newest mount, restoring the shadowed older one — delivery kept flowing to a
+// callback the client could no longer see or address (delivery-after-unsubscribe + a stale table).
 //
-// ROOT CAUSE (two cooperating defects):
-//   1. itx.subscribe() ALWAYS mints a fresh relay+key and calls Parking.addNamed(name, relay)
-//      (core/itx-surface.ts:108-111 + :416). addNamed OVERWRITES #named[name] but leaves the
-//      previous relay in #relays, NEVER disposed — so the first callback's parked stub stays ONLINE.
-//   2. unsubscribe(name) revokes BY PATH (core/itx-surface.ts:431); revokeCapability-by-path pops
-//      only the NEWEST winner and RESTORES the shadowed older mount
-//      (stream-durable-object.ts:1008-1012). disposeNamed(name) disposes only the relay in #named
-//      (the newest). So after unsubscribe: the OLD mount M1 becomes the winner again, its target key
-//      is still online (defect 1) → the commit pump resumes delivery to the FIRST callback.
-//
-// The client both REPLACED (re-subscribe same name) and UNSUBSCRIBED that name, yet delivery
-// continues to a callback it can no longer see or address. Delivery-after-unsubscribe + a stale table.
+// WHAT THE PIN GUARDS NOW, under "the mount is data, the stub is physical":
+//   1. Re-subscribing the SAME name re-parks under the same registry key (`itx.subscribers.s`):
+//      the session's Parking disposes the first relay (its pager closes, the DO drops that
+//      transport — "replaced"), so the first callback is physically unreachable. The provide door
+//      is IDEMPOTENT for an unchanged policy, so the table keeps ONE row at the path — there is
+//      no shadowed older mount to resurrect.
+//   2. unsubscribe(name) clears EVERY row at the path (`all: true`) AND closes this session's
+//      stub under it — no mount is re-elected, no callback stays reachable.
 // (was proofs/probe_resub_zombie.mjs)
 
 import { expect, test } from "vitest";
 import { freshCtx, bareItx, sleep, subscriberMounts } from "./support/client.ts";
+
+const rowsAt = async (itx: any, path: string): Promise<unknown[]> =>
+  (await itx.invokeCapability("itx.facets.get('capability-table').snapshot()")).state.mounts.filter(
+    (m: { path: string[] }) => m.path.join(".") === path,
+  );
 
 // Was RED when authored (re-subscribe left the first relay online and unsubscribe-by-path restored
 // the shadowed older mount → zombie delivery to cb1). FIXED — this is now the regression pin.
@@ -59,9 +62,12 @@ test("re-subscribe + unsubscribe on the same name must not leave a zombie delive
     target: (events: unknown[]) => (cb2 += events.length),
   });
 
+  // the door was idempotent: the re-subscribe (same target, same policy) appended NO second row
+  expect(await rowsAt(itx, "itx.subscribers.s")).toHaveLength(1);
+
   await itx.invokeCapability("itx.append({ type: 'mark', payload: { n: 1 } })");
   await sleep(2500);
-  // while both subscribed: only newest (cb2) delivered
+  // while both subscribed: only newest (cb2) delivered — cb1's transport was replaced
   expect(cb2).toBe(1);
   expect(cb1).toBe(0);
 

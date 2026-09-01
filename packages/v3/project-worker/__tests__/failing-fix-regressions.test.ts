@@ -45,9 +45,10 @@ test("charset gate: a ':' in the ctx is rejected at the edge (no DO is addressed
 });
 
 // (Deleted across the connections → rpcStubs → path-identity migrations: the "reap guard — a
-// connection named by TWO mounts survives revoking one; the last revoke reaps it" case can no
-// longer be spelled. There is no shared stub registry for two mounts to name: a live stub's
-// identity IS its one mount path (`itx.provide(path, stub)`, at most one live row per path), and
-// `itx.revoke(path)` tears that stub's transport down with the mount — reap-on-revoke is
-// definitionally 1:1, with no cross-mount refcount to guard. It also read back an
+// connection named by TWO mounts survives revoking one; the last revoke reaps it" case has no
+// counterpart. A mount never owns a stub: it is pure data naming the `itx.rpcStubs` built-in
+// (`itx.rpcStubs.get('<key>')`), and while several mounts MAY name one key, revoking any of them
+// only pops its own row — the stub's lifetime is physical and session-bound (session end,
+// `rpcStubs.close(key)`, or `itx.revoke(path)` from the session that parked it), never a refcount
+// over mounts. There is no reap-on-revoke to guard. It also read back an
 // itx.connections.get('<connId>') target expression, a surface that no longer exists.)

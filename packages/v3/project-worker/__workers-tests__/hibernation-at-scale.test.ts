@@ -56,8 +56,10 @@ class EchoTarget extends RpcTarget {
   }
 }
 
-/** The DO-only transport facts (transportState(): in-memory socket truths — not event-derivable;
- *  this pool-workers lane holds the raw DO stub, so it speaks the Workers-RPC verb directly). */
+/** The DO-only transport facts (transportState(): the whole in-memory socket census — physical
+ *  truths, never event-derivable; `itx.rpcStubs.list()` is the itx-surface half, PRESENCE = the
+ *  keys with a transport right now. This pool-workers lane holds the raw DO stub, so it speaks
+ *  the Workers-RPC verb directly). */
 type TransportState = {
   stubs: number;
   pagedIn: number;
@@ -122,8 +124,9 @@ async function quiesceLikeProduction(): Promise<void> {
 
 beforeAll(async () => {
   // ONE client session carrying all 200 stubs (capnweb multiplexes; each itx.provide(path, stub)
-  // parks its own EchoTarget relay-side, opens its own stub pager WebSocket into the DO, and
-  // appends its live capability-provided row — presence is the table, event volume is fine).
+  // parks its own EchoTarget relay-side in the `itx.rpcStubs` registry, opens its own stub pager
+  // WebSocket into the DO, and mounts the pure-data target `itx.rpcStubs.get('itx.cN')` — the
+  // registry is presence, the table is the mount; event volume is fine).
   const clientItx = await (await openSession()).get();
   const BATCH = 25; // concurrent provides per wave — enough parallelism without a thundering herd
   for (let base = 0; base < CLIENTS; base += BATCH) {
@@ -206,12 +209,12 @@ test("SCALE WAKE: after another eviction, a fan-out reaches ALL 200 clients", as
   expect(evicted.pagedIn).toBe(0);
 
   const t0 = Date.now();
-  // fan-out = the capability table's live rows (event-driven presence) + map over the paths
-  // (no built-in `each`); the caller owns the allSettled.
-  const snap = (await callerItx.invokeCapability(
-    "itx.facets.get('capability-table').snapshot()",
-  )) as { state: { mounts: { path: string[]; live?: true }[] } };
-  const paths = snap.state.mounts.filter((m) => m.live).map((m) => m.path.join("."));
+  // fan-out = PRESENCE (`itx.rpcStubs.list()` — the registry keys with a transport; the mount
+  // path IS each key, so every key is callable dotted) + map over the paths (no built-in
+  // `each`); the caller owns the allSettled. The list itself is a pin: the attachments
+  // rehydrated from the hibernated pager sockets — exactly the fleet, nothing dropped.
+  const paths = (await callerItx.invokeCapability("itx.rpcStubs.list()")) as string[];
+  expect(paths.length).toBe(CLIENTS);
   const answers = (
     await Promise.all(
       paths.map((path) => callerItx.invokeCapability(`${path}.echo('hi')`).catch(() => undefined)),

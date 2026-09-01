@@ -91,7 +91,8 @@ test("FIXED (defect 34/46 at the root): squatting capability-table/revoke: is ha
   //   INTERNAL_STREAM_IDEMPOTENCY_PREFIX). Revoke here must still succeed and drop the mount.
   // ACTUAL: revoke rejects with IDEMPOTENCY_CONFLICT; the capability stays live forever.
   // WHY IT MATTERS: ☠ authority loss. A client (or a compromised one) can permanently pin a
-  //   granted capability — including a live connection's auto-revoke on disconnect — by
+  //   granted capability — a live capability's mount included: its ONLY exit is an explicit
+  //   revoke (a dead provider leaves it mounted-but-offline; nothing auto-revokes it) — by
   //   pre-committing one benign event under the revoke key. Losing the ability to REVOKE is the
   //   worst failure a capability system can have.
   const itx = await harness.itx("prj_am_forge");

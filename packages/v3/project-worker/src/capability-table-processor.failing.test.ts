@@ -87,22 +87,30 @@ const setup = () => {
     );
   const resolveNow = (call: Expression, depth = 0) =>
     host.resolve(reduceAll(), call, undefined, depth);
-  // The fake TRANSPORT TABLE behind the injected liveStub bridge — keyed by mount path.
+  // The fake `itx.rpcStubs` BUILT-IN — the physical registry a live mount's target names.
   const liveStubs = new Map<string, unknown>();
-  const host: CapabilityTableProcessor = new CapabilityTableProcessor({
-    stream,
-    builtIns: builtIns as unknown as Record<string, unknown>,
-    resolveCurrent: resolveNow,
-    liveStub: (pathString) =>
+  const rpcStubs = {
+    get: (key: string) =>
       new InvokeHandle((segments, args) => {
-        const cap = liveStubs.get(pathString);
-        if (cap === undefined) throw new Error(`live capability "${pathString}" is offline`);
+        const cap = liveStubs.get(key);
+        if (cap === undefined) throw new Error(`live capability "${key}" is offline`);
         if (segments.length === 0) return (cap as (...a: unknown[]) => unknown)(...args);
         let recv = cap as Record<string, unknown>;
         for (const seg of segments.slice(0, -1)) recv = recv[seg] as Record<string, unknown>;
         return (recv[segments.at(-1)!] as (...a: unknown[]) => unknown)(...args);
       }),
+    list: () => [...liveStubs.keys()],
+  };
+  const host: CapabilityTableProcessor = new CapabilityTableProcessor({
+    stream,
+    builtIns: { ...builtIns, rpcStubs } as unknown as Record<string, unknown>,
+    resolveCurrent: resolveNow,
   });
+  /** The edge sugar `itx.provide(path, fn)`, spelled out: park, then mount the pure-data target. */
+  const provideLive = (path: string, cap: unknown, extra: Record<string, unknown> = {}) => {
+    liveStubs.set(path, cap);
+    return host.provide({ path, target: `itx.rpcStubs.get('${path}')`, ...extra });
+  };
   return {
     stream,
     events,
@@ -111,7 +119,7 @@ const setup = () => {
     invoke: (call: string) => resolveNow(parse(call)),
     reduceAll,
     resolveNow,
-    _connect: (path: string, cap: unknown) => liveStubs.set(path, cap),
+    provideLive,
   };
 };
 
@@ -128,9 +136,8 @@ describe("provide → print → reduce → parse: an un-round-trippable target v
     // WHY IT MATTERS: a provide() that returns success while producing an unroutable table is a
     //      silent authority-loss. The offset handed back is a lie — revoke has nothing to pop and
     //      the capability is simply gone, with only a warn line in the log.
-    const { host, invoke, _connect } = setup();
-    _connect("itx.c", { echo: (n: unknown) => `echo:${n}` });
-    await host.provide({ path: "itx.c", live: true });
+    const { host, invoke, provideLive } = setup();
+    await provideLive("itx.c", { echo: (n: unknown) => `echo:${n}` });
     const { providedAtOffset } = await host.provide({
       path: "itx.big",
       target: ["itx", "c", ["echo", 1e21]] as Expression,
@@ -227,18 +234,17 @@ describe("deliverTo", () => {
     );
   });
 
-  test("deliverTo on a LIVE row calls the BARE parked callable (empty call path)", async () => {
-    const { host, reduceAll, _connect } = setup();
+  test("deliverTo on a live mount (target itx.rpcStubs.get) calls the BARE parked callable (empty call path)", async () => {
+    const { host, reduceAll, provideLive } = setup();
     const seen: unknown[] = [];
-    _connect("itx.subscribers.cb", (...args: unknown[]) => {
-      seen.push(args);
-      return "delivered";
-    });
-    const { providedAtOffset } = await host.provide({
-      path: "itx.subscribers.cb",
-      live: true,
-      delivery: { consumes: ["mark"] },
-    });
+    const { providedAtOffset } = await provideLive(
+      "itx.subscribers.cb",
+      (...args: unknown[]) => {
+        seen.push(args);
+        return "delivered";
+      },
+      { delivery: { consumes: ["mark"] } },
+    );
     const result = await host.deliverTo(reduceAll(), providedAtOffset, [
       [{ type: "mark" }],
       { after: 0, through: 1 },

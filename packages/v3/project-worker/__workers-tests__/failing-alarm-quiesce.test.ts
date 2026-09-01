@@ -80,6 +80,19 @@ const stateOf = (ctx: string): Promise<Record<string, any>> =>
   runInDurableObject(stub(ctx), async (inst) =>
     (inst as unknown as { transportState(): Record<string, any> }).transportState(),
   );
+/** Poll the census until `stubs` reaches `n` (bounded). A transport leaves the census when its
+ *  pager socket's CLOSE lands at the DO — a physical fact that arrives a beat after the edge
+ *  disposes its relay, never inside the RPC that triggered it. */
+async function untilStubs(ctx: string, n: number, timeoutMs = 5_000): Promise<Record<string, any>> {
+  const t0 = Date.now();
+  for (;;) {
+    const s = await stateOf(ctx);
+    if (s.stubs === n) return s;
+    if (Date.now() - t0 > timeoutMs)
+      throw new Error(`untilStubs(${ctx}, ${n}): still ${s.stubs} after ${timeoutMs}ms`);
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
 
 /** Reproduce the production 60s idle quiesce ON DEMAND: fake Date only (+61s — sockets, the alarm
  *  scheduler and real timers stay real), fire the armed alarm, restore real time. Mirrors
@@ -235,19 +248,23 @@ test("PAGE-IN RACES THE QUIESCE ALARM: a connection invoke fired concurrently wi
 });
 
 test("SCALE DROP + QUIESCE + EVICT + WAKE: a dropped connection stays dropped; the fan-out reaches EXACTLY the survivors", async () => {
-  // Item (5). Extends hibernation-at-scale's "eviction preserves the fleet" with an unsubscribe
-  // (connection kick) racing the wake. PINS: the drop is honored across the eviction (the kicked
-  // client's hibernatable pager socket is gone, not resurrected) and the post-wake fan-out reaches
-  // every survivor and only the survivors. (A subscription RESUME across the quiesce needs the
-  // forwarder facet — test.todo below.)
+  // Item (5). Extends hibernation-at-scale's "eviction preserves the fleet" with a provider
+  // dropping one of its own capabilities before the wake. PINS: the drop is honored across the
+  // eviction (the dropped client's hibernatable pager socket is gone, not resurrected) and the
+  // post-wake fan-out reaches every survivor and only the survivors. (A subscription RESUME
+  // across the quiesce needs the forwarder facet — test.todo below.)
   const ctx = "prj_scale_drop";
   const K = 6;
   const clientItx = await (await openSession(ctx)).get();
   for (let i = 0; i < K; i++) await clientItx.provide(`itx.k${i}`, new Echo(i));
   const caller = await (await openSession(ctx)).get();
 
-  await caller.revoke("itx.k3"); // the kick: revoking the live row tears its transport too
-  const dropped = await stateOf(ctx);
+  // The drop must come from the PROVIDER'S OWN session: `itx.revoke(path)` pops the mount on the
+  // DO and closes THIS session's parked stub under the path. A revoke from `caller` would pop
+  // the mount only — the DO never touches a transport on revoke, and `caller` parked nothing
+  // under `itx.k3`, so its stub would stay in the census (answering nothing, mount gone).
+  await clientItx.revoke("itx.k3");
+  const dropped = await untilStubs(ctx, K - 1); // the relay's close lands at the DO a beat later
   expect(dropped.stubs).toBe(K - 1);
 
   const q = await quiesce(ctx);
@@ -256,12 +273,20 @@ test("SCALE DROP + QUIESCE + EVICT + WAKE: a dropped connection stays dropped; t
   const evicted = await stateOf(ctx);
   expect(evicted.stubs).toBe(K - 1); // survivors' hibernatable sockets rode the eviction; k3 stayed gone
 
-  // fan-out = the capability table's live rows + map over the paths (no built-in `each`); the
-  // caller owns the allSettled.
+  // The mount at itx.k3 is gone from the table (revoke popped it), and the survivors' mounts
+  // stayed — the table is data, untouched by the eviction.
   const snap = (await caller.invokeCapability("itx.facets.get('capability-table').snapshot()")) as {
-    state: { mounts: { path: string[]; live?: true }[] };
+    state: { mounts: { path: string[] }[] };
   };
-  const paths = snap.state.mounts.filter((m) => m.live).map((m) => m.path.join("."));
+  const mounted = snap.state.mounts.map((m) => m.path.join("."));
+  expect(mounted).not.toContain("itx.k3");
+  for (let i = 0; i < K; i++) if (i !== 3) expect(mounted).toContain(`itx.k${i}`);
+  // fan-out = PRESENCE (`itx.rpcStubs.list()` — the keys whose hibernated pager sockets rode
+  // the eviction; k3's did not) + map over the paths (no built-in `each`); the caller owns the
+  // allSettled.
+  const paths = (await caller.invokeCapability("itx.rpcStubs.list()")) as string[];
+  expect(paths).toHaveLength(K - 1);
+  expect(paths).not.toContain("itx.k3");
   const answers = (
     await Promise.all(
       paths.map((path) => caller.invokeCapability(`${path}.echo('hi')`).catch(() => undefined)),

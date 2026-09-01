@@ -38,8 +38,9 @@ export type DeliveryPolicy = {
  *  target-sniff drifted once and double-delivered). Three genuinely-different behaviors:
  *   • `facet`     — a co-located facet the commit pump drives (a processor; its target is
  *                   `itx.facets.get('<slug>')`).
- *   • `connected` — a live rpc-stub, served fire-and-forget from the commit path (zero server
- *                   state, so the DO still hibernates).
+ *   • `connected` — a live rpc-stub (its target is `itx.rpcStubs.get('<key>')`), served
+ *                   fire-and-forget from the commit path (zero server state, so the DO still
+ *                   hibernates).
  *   • `durable`   — an absent target (webhook, foreign worker) served by the subscription-forwarder
  *                   facet, which owns the cursor + bounded-retry ladder. */
 export type SubscriptionLane = "facet" | "connected" | "durable";

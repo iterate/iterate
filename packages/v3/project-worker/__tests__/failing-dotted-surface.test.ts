@@ -223,12 +223,13 @@ test("direct write, expression read: itx.append lands in the ONE log", async () 
   expect(page.events.some((e: any) => e.type === "mark")).toBe(true);
 });
 
-// The dotted spelling of a live capability: the mount path IS the stub, so the client just
-// speaks the path (`itx.b.hello()` — ONE invokeCapability fold; the resolver's live branch hands
-// the call to the transport table's InvokeHandle). The old declared-getter mid-chain
-// (`itx.rpcStubs.get('b').hello()`, two dispatches) died with the rpcStubs surface; the
-// mid-chain-pipelining property itself stays pinned on the surviving handle chains
-// (__workers-tests__/rpc-pipelining.test.ts + e2e/dw2dw — load/facets handles).
+// The dotted spelling of a live capability: the client just speaks the mount path (`itx.b.hello()`
+// — ONE invokeCapability fold). The mount is pure data whose TARGET names the physical registry
+// (`itx.rpcStubs.get('itx.b')`); the resolver evaluates that target against the built-in and its
+// InvokeHandle pipelines the `.hello()` remainder into one DO-side dispatch. The registry spelling
+// `itx.rpcStubs.get('itx.b').hello()` is therefore not dead — it is the mount's target, and a valid
+// direct call in its own right (one round trip; the mid-chain-pipelining property stays pinned on
+// the handle chains in __workers-tests__/rpc-pipelining.test.ts + e2e/dw2dw — load/facets handles).
 test("dotted call through the mount path: itx.b.hello() answers from a live capability", async () => {
   const itx = await connectedRig(c("conn"), "b");
   expect(await itx.b.hello()).toBe("hello-from-b");

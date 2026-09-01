@@ -1,5 +1,7 @@
 // The capability table's executable spec — shadow stack, built-ins-first, default-deny,
-// recursion, string-at-rest payloads, delivery + processor policies riding the mount event.
+// recursion, string-at-rest payloads, delivery + processor policies riding the mount event, and
+// the live-capability shape: a mount is PURE DATA naming the `itx.rpcStubs` built-in (the
+// physical registry), so reconnect is zero events and a dead stub leaves its mount offline.
 import { describe, expect, test } from "vitest";
 import { parse, type Expression } from "./core/expression.ts";
 import { CapabilityTableProcessor } from "./capability-table-processor.ts";
@@ -85,23 +87,34 @@ const setup = () => {
     );
   const resolveNow = (call: Expression, depth = 0) =>
     host.resolve(reduceAll(), call, undefined, depth);
-  // The fake TRANSPORT TABLE behind the injected liveStub bridge — keyed by mount path, exactly
-  // like the DO's RpcStubDirectory. _connect/_disconnect simulate a pager attach / final close.
+  // The fake `itx.rpcStubs` BUILT-IN — the physical registry behind a live provide, keyed by the
+  // string the stub was parked under, exactly like the DO's RpcStubDirectory. _connect/_disconnect
+  // simulate a pager attach / final close. A mount names an entry through the pure-data target
+  // `itx.rpcStubs.get('<key>')`; nothing about the registry is in the log.
   const liveStubs = new Map<string, unknown>();
-  const host: CapabilityTableProcessor = new CapabilityTableProcessor({
-    stream,
-    builtIns: builtIns as unknown as Record<string, unknown>,
-    resolveCurrent: resolveNow,
-    liveStub: (pathString) =>
+  const rpcStubs = {
+    get: (key: string) =>
       new InvokeHandle((segments, args) => {
-        const cap = liveStubs.get(pathString);
-        if (cap === undefined) throw new Error(`live capability "${pathString}" is offline`);
+        const cap = liveStubs.get(key);
+        if (cap === undefined) throw new Error(`live capability "${key}" is offline`);
         if (segments.length === 0) return (cap as (...a: unknown[]) => unknown)(...args);
         let recv = cap as Record<string, unknown>;
         for (const seg of segments.slice(0, -1)) recv = recv[seg] as Record<string, unknown>;
         return (recv[segments.at(-1)!] as (...a: unknown[]) => unknown)(...args);
       }),
+    list: () => [...liveStubs.keys()],
+  };
+  const host: CapabilityTableProcessor = new CapabilityTableProcessor({
+    stream,
+    builtIns: { ...builtIns, rpcStubs } as unknown as Record<string, unknown>,
+    resolveCurrent: resolveNow,
   });
+  /** The edge sugar `itx.provide(path, fn)`, spelled out: park under the path, mount the
+   *  pure-data target. */
+  const provideLive = (path: string, cap: unknown, extra: Record<string, unknown> = {}) => {
+    liveStubs.set(path, cap);
+    return host.provide({ path, target: `itx.rpcStubs.get('${path}')`, ...extra });
+  };
   return {
     stream,
     events,
@@ -110,6 +123,7 @@ const setup = () => {
     invoke: (call: string) => resolveNow(parse(call)),
     reduceAll,
     resolveNow,
+    provideLive,
     _connect: (path: string, cap: unknown) => liveStubs.set(path, cap),
     _disconnect: (path: string) => liveStubs.delete(path),
   };
@@ -180,27 +194,22 @@ describe("event mounts + the shadow stack", () => {
     expect(payload.target).toBe("itx.facets.get('tab-1')"); // print-canonicalized
   });
 
-  test("a LIVE provide stores `live: true` and NO target (the flag is the truth)", async () => {
-    const { host, events } = setup();
-    await host.provide({ path: "itx.cam", live: true });
-    const payload = events.at(-1)!.payload as { path: string; target?: string; live?: true };
-    expect(payload).toEqual({ path: "itx.cam", live: true }); // no durable target exists
+  test("a LIVE provide is an ordinary mount whose target names the registry — pure data, nothing about the socket", async () => {
+    const { events, provideLive } = setup();
+    await provideLive("itx.cam", { shot: () => "frame" });
+    const payload = events.at(-1)!.payload as Record<string, unknown>;
+    expect(payload).toEqual({ path: "itx.cam", target: "itx.rpcStubs.get('itx.cam')" });
   });
 
-  test("the door demands exactly one of target/live", async () => {
+  test("the door demands a target rooted at itx (a bare built-in root is unspellable)", async () => {
     const { host } = setup();
-    await expect(host.provide({ path: "itx.x" })).rejects.toThrow(/exactly one of/);
-    await expect(host.provide({ path: "itx.x", target: "itx.kv", live: true })).rejects.toThrow(
-      /exactly one of/,
-    );
+    await expect(host.provide({ path: "itx.x", target: "kv" })).rejects.toThrow(/rooted at "itx"/);
   });
 
   test("shadowing: newest same-path EXPRESSION mount wins; revoke-by-offset restores what's beneath", async () => {
-    const { host, invoke, _connect } = setup();
-    _connect("itx.tab1", { hello: () => "from tab-1" });
-    _connect("itx.tab2", { hello: () => "from tab-2" });
-    await host.provide({ path: "itx.tab1", live: true });
-    await host.provide({ path: "itx.tab2", live: true });
+    const { host, invoke, provideLive } = setup();
+    await provideLive("itx.tab1", { hello: () => "from tab-1" });
+    await provideLive("itx.tab2", { hello: () => "from tab-2" });
     const first = await host.provide({ path: "itx.greeter", target: "itx.tab1" });
     const second = await host.provide({ path: "itx.greeter", target: "itx.tab2" });
     expect(await invoke("itx.greeter.hello()")).toBe("from tab-2"); // newest wins
@@ -210,24 +219,27 @@ describe("event mounts + the shadow stack", () => {
     await expect(invoke("itx.greeter.hello()")).rejects.toThrow(/no capability matches/);
   });
 
-  test("ONE live row per path: a live re-provide SUPERSEDES in place — no shadow, no restore", async () => {
-    const { host, invoke, reduceAll, _connect } = setup();
-    _connect("itx.cam", { shot: () => "frame" });
-    await host.provide({ path: "itx.cam", live: true });
-    const second = await host.provide({ path: "itx.cam", live: true }); // the reconnect record
+  test("RECONNECT IS ZERO EVENTS: the mount is data, the stub is physical — re-parking serves the same mount", async () => {
+    const { host, invoke, events, reduceAll, provideLive, _connect, _disconnect } = setup();
+    const mount = await provideLive("itx.cam", { shot: () => "frame 1" });
+    const logLength = events.length;
+    // The provider drops and comes back: the registry entry is replaced, the log is untouched.
+    _disconnect("itx.cam");
+    await expect(invoke("itx.cam.shot()")).rejects.toThrow(/offline/);
+    _connect("itx.cam", { shot: () => "frame 2" });
+    expect(await invoke("itx.cam.shot()")).toBe("frame 2");
+    expect(events).toHaveLength(logLength);
     const rows = reduceAll().mounts.filter((m) => m.path.join(".") === "itx.cam");
-    expect(rows).toHaveLength(1); // superseded in place — the table stays bounded across reconnects
-    expect(rows[0].providedAtOffset).toBe(second.providedAtOffset);
-    expect(await invoke("itx.cam.shot()")).toBe("frame");
-    // Revoking THE live row leaves nothing live beneath (it is necessarily the last).
-    await host.revoke({ providedAtOffset: second.providedAtOffset });
+    expect(rows.map((r) => r.providedAtOffset)).toEqual([mount.providedAtOffset]);
+    // Revoking the one mount → default-deny, even though the stub is still parked.
+    await host.revoke({ providedAtOffset: mount.providedAtOffset });
     await expect(invoke("itx.cam.shot()")).rejects.toThrow(/no capability matches/);
+    expect(await invoke("itx.rpcStubs.list()")).toEqual(["itx.cam"]); // presence is physical
   });
 
-  test("a revoked EXPRESSION mount above a live row restores the live row beneath", async () => {
-    const { host, invoke, _connect } = setup();
-    _connect("itx.mixed", { who: () => "the live stub" });
-    await host.provide({ path: "itx.mixed", live: true });
+  test("a revoked EXPRESSION mount above a live mount restores the live mount beneath", async () => {
+    const { host, invoke, provideLive } = setup();
+    await provideLive("itx.mixed", { who: () => "the live stub" });
     const alias = await host.provide({ path: "itx.mixed", target: "itx.whoami" });
     expect(await invoke("itx.mixed()")).toEqual({ projectId: "prj_t", path: "/" }); // expr shadows
     await host.revoke({ providedAtOffset: alias.providedAtOffset });
@@ -242,15 +254,14 @@ describe("event mounts + the shadow stack", () => {
   });
 
   test("default route: a LIVE stub at bare `itx` catches whole missed calls (ancestry with zero machinery)", async () => {
-    const { host, invoke, _connect } = setup();
+    const { invoke, provideLive } = setup();
     const osCalls: string[] = [];
-    _connect("itx", {
+    await provideLive("itx", {
       anything: (...a: unknown[]) => {
         osCalls.push(`anything(${a.join(",")})`);
         return "handled upstream";
       },
     });
-    await host.provide({ path: "itx", live: true });
     expect(await invoke("itx.anything('x')")).toBe("handled upstream");
     expect(osCalls).toEqual(["anything(x)"]);
     // built-ins still resolve BEFORE the default route (built-in-first, unshadowable)
@@ -269,24 +280,24 @@ describe("event mounts + the shadow stack", () => {
     );
   });
 
-  test("live-capability shape: the mount path IS the stub — mounted-but-offline vs never-provided", async () => {
-    const { host, invoke, _connect, _disconnect } = setup();
-    _connect("itx.robot", { move: (n: unknown) => `moved ${n}` });
-    const provision = await host.provide({ path: "itx.robot", live: true });
+  test("live-capability shape: mounted-but-offline (forever, until revoked) vs never-provided", async () => {
+    const { host, invoke, reduceAll, provideLive, _disconnect } = setup();
+    const provision = await provideLive("itx.robot", { move: (n: unknown) => `moved ${n}` });
     expect(await invoke("itx.robot.move(10)")).toBe("moved 10");
-    // transport death = the row still exists but can't serve (CONNECTION_OFFLINE territory);
-    // revoke pops the row → default-deny (NO_CAPABILITY_MATCH — never-provided semantics)
+    // Transport death = the mount still exists but can't serve: CONNECTION_OFFLINE, and it STAYS
+    // that way — no auto-revoke ever pops a mount because a socket dropped (the mount is the
+    // user's intent; the socket is weather). Revoke pops the mount → default-deny.
     _disconnect("itx.robot");
     await expect(invoke("itx.robot.move(10)")).rejects.toThrow(/offline/);
+    await expect(invoke("itx.robot.move(10)")).rejects.toThrow(/offline/);
+    expect(reduceAll().mounts.some((m) => m.path.join(".") === "itx.robot")).toBe(true);
     await host.revoke({ providedAtOffset: provision.providedAtOffset });
     await expect(invoke("itx.robot.move(10)")).rejects.toThrow(/no capability matches/);
   });
 
   test("delivery + processor policies ride the mount event and land in the reduced table", async () => {
-    const { host, reduceAll } = setup();
-    await host.provide({
-      path: "itx.subscribers.watcher",
-      live: true,
+    const { host, reduceAll, provideLive } = setup();
+    await provideLive("itx.subscribers.watcher", () => undefined, {
       delivery: { consumes: ["mark"], liveState: undefined },
     });
     await host.provide({
