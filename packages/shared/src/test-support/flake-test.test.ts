@@ -1,19 +1,54 @@
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { expect, test, vi } from "vitest";
 import { createFlake } from "./flake-test.ts";
 
-// The wrapper in real use, registered through vitest itself: both land on
-// vitest's native `test.fails`, so they report in the "expected fail" summary
-// count. A matching failure AND a pass are both green — only an unexpected
-// error would go red. (Named "self-test" so dashboard tooling can ignore them.)
-const flake = createFlake(test, /the dice came up bad/);
-flake("flake-test self-test: a matching failure is green", async () => {
-  throw new Error("boom: the dice came up bad this run");
-});
-flake("flake-test self-test: a pass is green too", async () => {
-  expect(1 + 1).toBe(2);
+// The integration proof runs vitest itself on the fixture in
+// ./flake-test-fixture — one case per outcome — and asserts vitest's OWN
+// verdicts. A child process (rather than registering flake tests here
+// directly) keeps the main suite's expected-fail metrics clean: the sentinel
+// is the one deliberate expected-fail row, and this stays a plain test that
+// goes red deterministically if the wrapper stops satisfying the machinery.
+test("vitest's real expected-fail machinery produces the contracted verdicts", async () => {
+  const require = createRequire(import.meta.url);
+  const vitestPackagePath = require.resolve("vitest/package.json");
+  const vitestBin = join(
+    dirname(vitestPackagePath),
+    (JSON.parse(readFileSync(vitestPackagePath, "utf8")) as any).bin.vitest,
+  );
+  const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "flake-test-fixture");
+  const outputFile = join(mkdtempSync(join(tmpdir(), "flake-fixture-")), "results.json");
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      vitestBin,
+      "run",
+      "--config",
+      join(fixtureDir, "vitest.config.ts"),
+      "--reporter=json",
+      `--outputFile=${outputFile}`,
+    ],
+    { cwd: fixtureDir, encoding: "utf8", timeout: 30_000 },
+  );
+
+  // The fixture's unexpected-error case must turn the whole child run red.
+  expect(result.status).toBe(1);
+  const results = JSON.parse(readFileSync(outputFile, "utf8")) as any;
+  const statuses = Object.fromEntries(
+    results.testResults.flatMap((file: any) =>
+      file.assertionResults.map((a: any) => [a.title, a.status]),
+    ),
+  );
+  expect(statuses).toEqual({
+    "matched flake failure is green": "passed",
+    "a pass is green": "passed",
+    "an unexpected error is red": "failed",
+  });
 });
 
 test("registration lands on the runner's own expected-fail variant", async () => {
