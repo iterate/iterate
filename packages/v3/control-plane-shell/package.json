@@ -12,9 +12,9 @@
     "@v3/shared": "workspace:*"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260621.1",
+    "@cloudflare/workers-types": "^5.20260831.1",
     "project-worker": "workspace:*",
     "typescript": "^5.9.3",
-    "wrangler": "4.107.0"
+    "wrangler": "4.127.1"
   }
 }

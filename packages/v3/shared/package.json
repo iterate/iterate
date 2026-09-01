@@ -10,7 +10,7 @@
     "./egress": "./src/egress.ts"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260621.1",
+    "@cloudflare/workers-types": "^5.20260831.1",
     "typescript": "^5.9.3"
   }
 }

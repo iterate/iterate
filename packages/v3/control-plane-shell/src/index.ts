@@ -50,10 +50,12 @@ export default {
       const type = url.searchParams.get("type") ?? "project-created";
       if (!env.CONTEXT) return new Response("no CONTEXT bound\n", { status: 500 });
       const name = `${projectId}.iterate${path.startsWith("/") ? path : `/${path}`}`;
-      const [event] = await env.CONTEXT.getByName(name).append({
+      // workers-types' Rpc.Serializable rejects `unknown`, so a stub method returning StreamEvent
+      // (payload: Record<string, unknown>) types as `never` — the value is a plain committed event.
+      const [event] = (await env.CONTEXT.getByName(name).append({
         type,
         payload: { by: "control-plane", projectId },
-      });
+      })) as unknown as { offset: number }[];
       return Response.json({ ok: true, wroteInto: name, offset: event.offset });
     }
     return new Response("iterate control-plane (shell)\n", {

@@ -3,7 +3,7 @@
   // topology). Its own package (D40, one package per worker); the deployed worker name is unchanged.
   "name": "iterate-control-plane",
   "main": "src/index.ts",
-  "compatibility_date": "2026-07-01",
+  "compatibility_date": "2026-09-01",
   "account_id": "04b3b57291ef2626c6a8daa9d47065a7",
   "workers_dev": true,
 

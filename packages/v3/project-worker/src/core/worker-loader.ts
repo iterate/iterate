@@ -58,7 +58,7 @@ export function confinedWorker(
 ) {
   const deploy = env.CF_VERSION_METADATA?.id ?? "unversioned";
   return env.LOADER.get(`${key.kind}:${deploy}:${key.owner}:${key.contentHash}`, () => ({
-    compatibilityDate: "2026-07-01",
+    compatibilityDate: "2026-09-01",
     // Chain-enable Kenton's persistent-stub machinery: a loaded worker may STORE its env.ITX
     // (a ctx.exports-minted entrypoint stub) in its own durable storage and get a replay-on-use
     // handle back — every chain member needs the flag (see itx-entrypoint.ts).

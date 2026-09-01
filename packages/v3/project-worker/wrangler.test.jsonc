@@ -20,7 +20,7 @@
   "name": "project-worker",
   "main": "src/worker.ts",
   "compatibility_flags": ["allow_irrevocable_stub_storage"],
-  "compatibility_date": "2026-07-01",
+  "compatibility_date": "2026-09-01",
   "worker_loaders": [{ "binding": "LOADER" }],
   "version_metadata": { "binding": "CF_VERSION_METADATA" },
   "durable_objects": {
