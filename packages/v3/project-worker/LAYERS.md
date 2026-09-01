@@ -67,8 +67,9 @@ evaluate the target and ASK THE VALUE what it is:
 
 - a `FacetHandle` (`itx.facets.get(…)`, `…getDurableObjectClass(C).get(name)`) or an `RpcStubHandle`
   (`itx.rpcStubs.get(…)`) OWNS ITS PROGRESS — a facet keeps its own checkpoint and gap-repairs, a
-  live client owns its offset and heals with `read` — so it gets a fire-and-forget PUSH of
-  `(events, { after, through })`, serialized per subscription, zero server state;
+  live client owns its offset and heals with `read` — so it gets a PUSH of
+  `(events, { after, through })`, serialized per subscription (fire-and-forget to a stub, awaited
+  to a facet), zero server state;
 - anything else (a Worker-Loader entrypoint's `processEventBatch`, a sibling context, a remote)
   cannot, so THE STREAM KEEPS A CURSOR — in memory, written to kv only at durable boundaries — and
   delivers at-least-once (the awaited call is the ack; one retry ladder; halt fact; retries on the
@@ -91,8 +92,9 @@ publishing). It is hosted like ANY class: `itx.load(src).getDurableObjectClass('
 
 ## Layer 5 — the edge (sessions and the relay)
 
-`iterate-context.ts`: capnweb terminates at `/api`, never in a DO (`UnauthenticatedSession →
-authenticate() → Session → projects.get(id) → IterateContext`, `cd(path)` for the rest). The edge
+`session.ts` + `iterate-context.ts`: capnweb terminates in `worker.ts`'s `/api`, never in a DO
+(`session.ts`: `UnauthenticatedSession → authenticate() → Session → projects.get(id)`;
+`iterate-context.ts`: `IterateContext`, `cd(path)` for the rest). The edge
 is a PROXY for the DO's verbs, plus the two jobs only it can do: FOLD dotted sugar into one
 `invokeCapability(expression)` (a terminal `.fetch(request)` rides the fetch channel), and PARK
 live stubs in the session's `Parking` (`context/rpc-stub-relay.ts`) — the DON'T-PIN relay the pager

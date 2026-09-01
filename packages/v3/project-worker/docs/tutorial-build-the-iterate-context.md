@@ -708,7 +708,7 @@ The edge `IterateContext` is a thin proxy: it folds `itx.a.b(x)` into one call
 expression and hands it to the DO's single dispatch door, `invoke(call)`. The DO
 resolves the path against its table and calls whatever is mounted there. For a
 live capability, the edge keeps the client's stub in memory — _parks_ it — and
-the DO reaches back for it per call.
+the DO reaches back for it on the first call after each idle period.
 
 One hard rule: **capnweb terminates only at the stateless edge; the DO speaks
 plain Workers RPC and knows nothing about sessions.** This split is what makes
@@ -745,7 +745,8 @@ export default class extends WorkerEntrypoint {
 }
 ```
 
-Each `getEntrypoint().run()` is a fresh isolate. For a _stateful_ mini-app — a
+A `getEntrypoint()` is a stateless isolate: no storage, reused warm while the
+source hash is unchanged. For a _stateful_ mini-app — a
 todo list an agent builds for itself — load a durable class instead. It becomes
 a **facet** of the context's DO: its own storage, shared lifecycle.
 
@@ -789,8 +790,8 @@ while any provider is connected. A thousand devices each providing one
 capability is a thousand DOs pinned awake, billing around the clock.
 
 The fix is a **pager**. The DO holds no stub at all. Instead, the edge opens one
-_hibernatable_ WebSocket to the DO per provided capability, carrying only a
-`transportId` in its durable socket attachment. The DO hibernates freely. When a
+_hibernatable_ WebSocket to the DO per provided capability, carrying
+`{ transportId, path }` in its durable socket attachment. The DO hibernates freely. When a
 call arrives for a stub it doesn't hold, it sends the one message the pager ever
 carries:
 
@@ -808,8 +809,9 @@ hook is the page.
 export class IterateContextDurableObject extends DurableObject {
   #rpcStubs = new RpcStubDirectory({
     hooks: { acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags) },
-    // (elided here: hooks also needs getWebSockets, and the directory takes one
-    // more dep — the live-capability fetch server)
+    // (elided here: hooks also needs getWebSockets, and the directory takes two
+    // more deps — onPresence, which mints the ephemeral rpc-stub/attached and
+    // /detached events, and the live-capability fetch server)
   });
 
   fetch(request: Request) {
@@ -851,7 +853,7 @@ never sees. The client writes a sentinel, not a key:
 ```ts
 // runs: the edge worker — add to the context's surface
 async fetch(request: Request): Promise<Response> {
-  const withSecret = await substituteHeaderSecrets(request, (name) =>
+  const withSecret = await substituteHeaderSecrets(request, "project", (name) =>
     this.env.SECRETS_KV.get(`secret:${name}`),
   );
   return fetch(withSecret);
@@ -932,24 +934,25 @@ something.
 
 ```ts
 // runs: the edge worker — this is now what /api serves
-class UnauthenticatedRpcTarget extends RpcTarget {
+class UnauthenticatedSession extends RpcTarget {
   authenticate(credentials: { type: "shared-secret"; secret: string }) {
     if (credentials.secret !== this.env.SHARED_SECRET) throw new Error("bad credentials");
-    return new IterateContext(/* ... */); // only reachable past the check
+    return new Session(/* ... */); // only reachable past the check: session.projects.get(id) → IterateContext
   }
 }
 ```
 
 ```ts
 // runs: the client
-const api = newWebSocketRpcSession("wss://example.com/api");
-const itx = api.authenticate({ type: "shared-secret", secret: SECRET });
+using api = newWebSocketRpcSession("wss://example.com/api");
+const itx = api.authenticate({ type: "shared-secret", secret: SECRET }).projects.get("prj_demo");
 await itx.whoami();
 ```
 
-(`authenticate` returns the RPC stub directly — and note there's no `await` on
-it: you can call methods on the unresolved stub, so authenticate-and-first-call
-ride one round trip. That pipelining is capnweb, free of charge.)
+(`authenticate` returns an RPC stub, and `projects.get` another — and note
+there's no `await` on either: you can call methods on the unresolved stubs, so
+authenticate, address a project, and make the first call all ride one round
+trip. That pipelining is capnweb, free of charge.)
 
 **That's the second primitive**: fetch through the context in both directions —
 out with secrets injected, in to anything fetch-shaped, even when the thing
@@ -986,9 +989,9 @@ await itx.subscribe({
 consumes? }`; a live callback is first parked in `itx.rpcStubs` (Chapter 1) and
   the target names it. HOW it is served is not declared: after each commit the
   context evaluates the target and looks at the value. A parked stub or a facet
-  _owns its progress_, so it gets a fire-and-forget push of `(events, range)` over
-  the pager — no acks, no server cursor; the client owns its offset and heals any
-  gap with `read`. Anything else (a loaded entrypoint's `processEventBatch`, a
+  _owns its progress_, so it gets a push of `(events, range)`: over the pager,
+  fire-and-forget, for a stub; awaited, in-DO, for a facet. No server cursor for
+  either; a client owns its offset and heals any gap with `read`. Anything else (a loaded entrypoint's `processEventBatch`, a
   sibling context) cannot, so the stream keeps a cursor for it and delivers
   at-least-once, retrying on its own alarm and halting with a fact after too many
   failures. Same name replaces; an identical subscribe appends nothing.
@@ -1039,7 +1042,8 @@ for every FUTURE item:
 
 - **LiveState** — a processor's reduced state, made live: after each batch it
   appends an ephemeral `live-state/changed` delta `{key, from, to, patch}`;
-  clients seed from `snapshot()`'s `{rev, state}`, chain patches by revision,
+  clients seed from `liveSnapshot()`'s `{rev, state}` (a mini-app's own
+  door, such as `state()`, returns its `LiveState`'s snapshot), chain patches by revision,
   and re-read on any mismatch — lossy, always healable. A small React hook
   (`useLiveState`) rides this on the client.
 - **Projects & routing** — a project is just the prefix of every context DO name
@@ -1055,8 +1059,8 @@ for every FUTURE item:
 
 **Ahead**
 
-- **Real auth** — `authenticate()` in the shipped tree is today a no-op
-  returning `this`; the HMAC-signed session machinery exists in the control
+- **Real auth** — `authenticate()` in the shipped tree is today a no-op gate
+  returning the `Session` (the catalog: `projects.get(id)`); the HMAC-signed session machinery exists in the control
   plane and drops into that one method without changing a single caller.
 - **Trust** — the current model is _trusted clients_: intra-project
   coordination, no malicious-client defense, no signed events. Signing and

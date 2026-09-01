@@ -166,7 +166,8 @@ const inbox = agent.cd("../inbox"); // relative resolves; absolute by convention
 const cli = newHttpBatchRpcSession("https://<worker>/api").authenticate().projects.get("prj_demo");
 ```
 
-`projects.get` takes a project id only; passing a context name is refused. One
+`projects.get` takes a project id (the root context's full name is accepted too);
+a non-root context name is refused, reach those with `cd`. One
 session may hold contexts of many projects; the session's `Parking` is keyed by
 canonical context name plus capability path, so they never touch each other's
 relays.
@@ -302,6 +303,9 @@ Semantics worth knowing:
 - `provide` with a live value parks the stub **first**, then appends the mount,
   so the event records a capability that can already serve. If the DO refuses
   the mount, the relay is disposed again.
+- `provide` with an expression target is idempotent too: the same target at the
+  same path answers the existing `providedAtOffset` and appends nothing.
+  `revoke(path)` with no mount at that path throws.
 - Presence (which live keys have an open transport) is `itx.rpcStubs.list()`,
   never the capability table. The table is pure data.
 - Mounts carry nothing but `{ path, target }`. Delivery policy, processor
@@ -348,9 +352,17 @@ type StreamEventInput = {
 
 /** A committed event: the input plus the identity the stream assigned. */
 type StreamEvent = StreamEventInput & { offset: number; createdAt: string; path: string };
+```
 
+`src/stream/stream.ts`
+
+```ts
 type WaitForEventFilter = { type?: string; afterOffset?: number; timeoutMs?: number };
+```
 
+`src/stream/processor.ts`
+
+```ts
 /** The contiguity proof a delivery carries: the half-open offset window (after, through]. */
 type ScannedRange = { after: number; through: number };
 ```
@@ -391,7 +403,7 @@ interface BuiltInScope {
 
   /** Another context of the same project, routed through ITS table. Same resolver as the edge cd.
    *  Own path → same isolate; anything else → a Workers-RPC call to that DO. */
-  cd(path: string): ContextHandle;
+  cd(path: string): InvokeHandle;
 
   /** Egress: {{secret:project:NAME}} substituted, then FALLBACK — the same terminal a loaded
    *  worker's globalOutbound lands on. */
@@ -418,7 +430,7 @@ interface BuiltInScope {
   load(source: WorkerSource): {
     /** A stateless WorkerEntrypoint isolate: ANY method it exports, by name. `props` is
      *  Cloudflare's WorkerStubEntrypointOptions.props, read back as this.ctx.props. */
-    getEntrypoint(className?: string, opts?: { props?: unknown }): EntrypointHandle;
+    getEntrypoint(className?: string, opts?: { props?: unknown }): InvokeHandle;
     /** A DurableObject class hosted as a durable FACET of this context (own storage).
      *  `.get()` with no name is named by the class. */
     getDurableObjectClass(className: string): { get(name?: string): FacetHandle };
@@ -443,7 +455,7 @@ type SubscriptionListEntry = {
   halted?: { afterOffset: number; attempts: number; error?: string };
 };
 
-// ContextHandle / EntrypointHandle are InvokeHandle (context/invoke-handle.ts): a real RpcTarget
+// cd and getEntrypoint return a plain InvokeHandle (context/invoke-handle.ts): a real RpcTarget
 // whose unknown dotted members fold into one dispatch, so the chain pipelines over every lane.
 // FacetHandle and RpcStubHandle are InvokeHandle SUBCLASSES — brands the delivery loop reads
 // (section 6). Spell whatever the target exposes.
@@ -721,6 +733,7 @@ await itx.kv.put("src/presence.js", PRESENCE_SRC);
 await itx.enableProcessor("presence", {
   source: "itx.kv.get('src/presence.js')",
   className: "Presence",
+  consumes: ["tick", "poke"], // what is SENT; the contract above says what is folded
 });
 await itx.append({ type: "tick" });
 await itx.facets.get("presence").snapshot(); // { offset, state: { ticks: 1 } }
@@ -733,10 +746,21 @@ How it is hosted: `enableProcessor` is nothing but a subscription whose target
 is `itx.load(source).getDurableObjectClass(className).get(name).processEventBatch`.
 The DO loads your module plus `processor.js` into one isolate, takes the class
 by name, and hosts it as a facet named `name` with `props: { contextName, name }`.
-Every commit the delivery loop evaluates the target, sees a `FacetHandle`, and
-pushes `processEventBatch(events, range)` to it; the engine inside the facet
-keeps its own checkpoint and gap-repairs from the log when a range does not
-chain. There is no runner module and no host-side processor registry.
+Every commit that carries an event the subscription consumes, the delivery loop
+evaluates the target, sees a `FacetHandle`, and pushes
+`processEventBatch(events, range)` to it (awaited, so the facet's batches stay
+in order); the engine inside the facet keeps its own checkpoint and gap-repairs
+from the log when a range does not chain. There is no runner module and no
+host-side processor registry.
+
+Two filters, in two places: the subscription's `consumes` decides what is
+**sent** (absent means every durable event), the contract's `consumes` decides
+what the engine **folds**. A processor that folds ephemerals must name them on
+`enableProcessor` too, or they never reach it.
+
+The DO remembers `{ source, className }` for each facet name in its own kv
+(`facet:<name>`), which is how `itx.facets.get(name)` re-materializes a facet
+after an eviction without the load expression in hand.
 
 ### 5.4 Live state for mini-apps, and the client side
 
@@ -850,16 +874,21 @@ stream's post-commit hook. For every subscription it filters the batch by
 
 - A `FacetHandle` or an `RpcStubHandle` **owns its progress**: a facet keeps its
   own checkpoint and gap-repairs from the log; a live client owns its offset and
-  heals a range gap with `read(through)`. It gets a fire-and-forget push of
-  `(events, { after, through })`, serialized per subscription. A stalled tab
-  never blocks the chain; `CONNECTION_OFFLINE` is swallowed. No cursor row.
+  heals a range gap with `read(through)`. It gets a push of
+  `(events, { after, through })`, serialized per subscription: fire-and-forget
+  for a live stub (a stalled tab never blocks the chain; `CONNECTION_OFFLINE`
+  is swallowed), awaited for a facet (its batches stay in order and the idle
+  quiesce never aborts it mid-reduce). No cursor row either way.
 - Anything else (a Worker-Loader entrypoint, a sibling context via `cd`, a
   mount alias to one) cannot own progress, so **the stream keeps a cursor**:
   at-least-once, the awaited call is the ack, one bounded retry ladder
-  (1s·2ⁿ, ≤30 min, 15 attempts; an error with `retryable: false` halts at once),
-  then a `subscription-delivery-halted` fact. Retries ride the DO's own alarm.
-  The cursor lives in memory and is written to kv only when a delivered batch
-  contained a durable event.
+  (1s·2ⁿ⁻¹ with ±20% jitter, capped at 30 min, 15 attempts; an error with
+  `retryable: false` halts at once), then a `subscription-delivery-halted` fact.
+  Retries ride the DO's own alarm, with a 20 s watchdog per attempt. The cursor
+  is born at the subscription's `configuredAtOffset`, lives in memory, and is
+  written to kv only at durable boundaries: a delivered batch that held a
+  durable event, a ladder step, a halt, a resume. An ephemeral-only advance
+  touches no storage.
 
 Nothing reads a "kind" off an event: the kind is the evaluated value's brand,
 minted by the built-in that produced it, so an alias classifies correctly
@@ -888,6 +917,14 @@ batch the filter skipped still rides inside the next delivered range and a push
 subscriber's chain stays contiguous. A cursor target additionally receives
 ephemerals when it is caught up (they ride the pushed batch), never when it is
 behind.
+
+Small print: a subscription name is one segment, `[A-Za-z0-9_-]+` (it doubles
+as a facet name and a registry key tail). A resume's seek is clamped to the
+stream head. An unnamed `subscribe` is removed when the session ends. The DO's
+quiet clock is 60 s: an alarm that finds no delivery in flight and no activity
+for a minute aborts every live facet and disposes paged-in stubs; the next call
+re-materializes them, and a context that was never written to arms no alarm at
+all.
 
 ---
 
@@ -1161,7 +1198,7 @@ itself.
 | InvokeHandle       | a pipelinable `RpcTarget` returned mid-chain (`cd`, `load(...)`); `FacetHandle` and `RpcStubHandle` are its two brands                             |
 | rpc stub           | a live capnweb value parked for a session under a key; `itx.rpcStubs.get(key)` is how a mount or a subscription names it; presence is `list()`     |
 | subscription       | a named row `{ target, consumes? }` in the subscriptions table; delivered every commit by the one loop                                             |
-| push               | delivery to a target that owns its progress (a facet, a live stub): fire-and-forget `(events, range)`                                              |
+| push               | delivery to a target that owns its progress: `(events, range)`, fire-and-forget to a live stub, awaited to a facet                                 |
 | stream-kept cursor | delivery to a target that cannot own progress: at-least-once from a kv cursor, retry ladder, halt fact                                             |
 | processor          | a `StreamProcessorDurableObject` subclass hosted as a facet and subscribed to `processEventBatch`; `enableProcessor` is the sugar                  |
 | inline reduce      | a reduce-only processor run inside the commit transaction: `core`, `capability-table`, `subscriptions`                                             |
