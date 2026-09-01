@@ -39,7 +39,7 @@ Recorded outcome line fields (CTRF-ish names): test name, file, outcome (`pass` 
 ## Phase 1 (this PR)
 
 - [x] `createFlake` in `packages/shared/src/test-support/flake-test.ts` — expected-fail registration, pattern gate, deadline race, recorder append _(mirrors failing-test.ts structure; recorder is env-gated via FLAKE_RECORD_DIR, per-pid JSONL files)_
-- [x] Unit tests: matched failure → green; pass → green (+ recorded as pass); non-matching error → red; hang → red; recorder lines written only when `FLAKE_RECORD_DIR` set; fixture-parsing `toString` passthrough preserved _(flake-test.test.ts, incl. two real registrations through vitest's own test.fails)_
+- [x] Unit tests: matched failure → green; pass → green (+ recorded as pass); non-matching error → red; hang → red; recorder lines written only when `FLAKE_RECORD_DIR` set; fixture-parsing `toString` passthrough preserved _(flake-test.test.ts; integration proof spawns vitest on a fixture and asserts its JSON-reporter verdicts, so the main suite carries no extra expected-fail rows — the sentinel is the only deliberate one)_
 - [x] Sentinel flake test using `createFlake` (month-stamped, ~10%) _(flake-sentinel.test.ts; gated to end 2026-10-01, roll forward monthly)_
 - [x] Docs: extend `docs/testing.md`'s "Flaky-test quarantine protocol" — flaky-but-runnable tests move to `createFlake` (keeps running, keeps reporting) instead of `test.skip`; the skip protocol remains for broken lanes and pathologically slow tests _(new "Known-flaky tests" section beside the `failing` one)_
 
