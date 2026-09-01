@@ -43,14 +43,9 @@ Recorded outcome line fields (CTRF-ish names): test name, file, outcome (`pass` 
 - [x] Sentinel flake test using `createFlake` (month-stamped, ~10%) _(flake-sentinel.test.ts; gated to end 2026-10-01, roll forward monthly)_
 - [x] Docs: extend `docs/testing.md`'s "Flaky-test quarantine protocol" — flaky-but-runnable tests move to `createFlake` (keeps running, keeps reporting) instead of `test.skip`; the skip protocol remains for broken lanes and pathologically slow tests _(new "Known-flaky tests" section beside the `failing` one)_
 
-## Phase 2 (follow-up PR)
+## Phases 2–3
 
-- [ ] Flake event contract + dashboard stream processor (fold stats, render GitHub issue via obligation)
-- [ ] CI post-step: batch recorder files → itx append (fire-and-forget, short timeout). Note: the always-running CI telemetry finalizer (`docs/ci-test-telemetry.md`) already collects per-test raw artifacts from every runner — the batching hook likely belongs there rather than a new workflow step. PostHog's `test_outcome` can't distinguish pass from flake-fail (both satisfy expected-fail), which is exactly what the recorder lines add.
-
-## Phase 3 (follow-up PR)
-
-- [ ] Transition automation: unwrap / propose-`failing` PRs as processor side effects
+Split out to `tasks/flake-dashboard.md` (stream + processor + issue render, CI wiring, transition automation).
 
 ## Prior art (researched during grilling)
 
