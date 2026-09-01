@@ -18,7 +18,8 @@ type ErrorCode =
   | "CONNECTION_OFFLINE" // the named itx connection is not attached right now
   | "NOT_A_METHOD" // the dotted path's terminal segment is not callable on the target
   | "NO_FACET" // no facet-hosted processor is enabled under that slug
-  | "EPHEMERAL_IDEMPOTENCY_KEY"; // ephemeral + idempotencyKey is a contradiction, always rejected
+  | "EPHEMERAL_IDEMPOTENCY_KEY" // ephemeral + idempotencyKey is a contradiction, always rejected
+  | "WAIT_TIMEOUT"; // waitForEvent expired with no matching event committed
 // (There is no separate boundary-validation library: the append door's own runtime guards
 // throw plain Errors; a client is JUST capnweb, so malformed args surface as ordinary errors.)
 

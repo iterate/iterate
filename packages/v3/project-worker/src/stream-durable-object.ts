@@ -54,9 +54,8 @@ import {
 import { InlineCore } from "./core/inline-core.ts";
 import { invokePath } from "./core/dispatch.ts";
 import { InvokeHandle } from "./core/invoke-handle.ts";
-import { StreamAlarmArmer, StreamEventLog } from "./core/event-log.ts";
 import { hashSource } from "./core/hash.ts";
-import { localContext } from "./core/stream.ts";
+import { localContext, Stream, type WaitForEventFilter } from "./core/stream.ts";
 import { RpcStubDirectory } from "./rpc-stub-directory.ts";
 import {
   STUB_PAGER_KEEPALIVE_REQUEST,
@@ -217,60 +216,63 @@ export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
           );
     },
   });
-  readonly #alarmArmer = new StreamAlarmArmer(this.ctx.storage);
-  /** THE COMMIT POINT — see StreamEventLog above. The name check already happened in the
-   *  constructor (`#address`); the log itself is storage-lazy. */
-  readonly #eventLog = new StreamEventLog(this.ctx.storage, this.#address.path);
-
-  /** Commit events: idempotency-checked, offsets assigned from ONE shared sequence (ephemeral
-   *  events consume offsets but never touch the log — their bodies exist only in this batch and
-   *  in whatever pushes deliver them; after a reboot their offsets survive as valid gaps), then
-   *  every enabled facet processor is PUSHED the batch with its scanned-offset-range proof. */
-  async append(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
-    // THE commit door every path funnels through (public stream/contexts/env.ITX + internal):
-    // an event must carry a non-blank type, and `ephemeral` is literal `true` or ABSENT — a
-    // boolean `false` is a LOUD input error, never a silent synonym for durable (the apps/os
-    // contract core/events.ts declares; every consumer tests truthiness, so an unpoliced `false`
-    // would silently commit durable). This runtime guard is the SOLE enforcement (no
-    // capnweb-validate boundary).
-    for (const input of inputs) {
-      if (typeof input.type !== "string" || input.type.trim() === "")
-        throw new Error("append: every event needs a non-empty type");
-      if ("ephemeral" in input && input.ephemeral !== undefined && input.ephemeral !== true)
-        throw new Error(
-          `append: ephemeral must be literal true or absent — got ${JSON.stringify(input.ephemeral)} on "${input.type}"`,
-        );
-    }
-    // THE CORE PROCESSOR SPEAKS FIRST (the apps/os shape): it reads its own reduced state and
-    // refuses a paused/tripped append. All pause/breaker reasoning lives in core-processor.ts.
-    admit(this.#coreState(), inputs, Date.now(), (k) => this.#eventLog.hasIdempotencyKey(k));
-    // THE INLINE REDUCES run INSIDE the log's transaction: the routing table and the core
-    // state are atomically exact as of the last committed event, always — the pump-races-the-
-    // provide class is unspellable, not carefully avoided. (Reduce errors are caught per
-    // event; a bad event skips, it never aborts the commit.)
-    const { committed, distinct, scannedAfterOffset, nextOffset } = this.#eventLog.append(
-      inputs,
-      (justCommitted, after, next) => this.#inlineCore.reduceAtCommit(justCommitted, after, next),
-    );
-    if (nextOffset > scannedAfterOffset) {
-      // A prior-batch idempotency dedupe echoes an ALREADY-DELIVERED below-range offset into
-      // `distinct` (see event-log). Drop it before the fan-out — the range is (after,
-      // nextOffset]; a durable at/below the floor was delivered on its own commit. Ephemerals are
-      // minted IN range (they can't carry an idempotency key), so this never drops one; it just makes
-      // the two fan-out sites match the inline reduce's guard.
-      const fresh = distinct.filter((e) => e.offset > scannedAfterOffset);
-      // THE PUMP: drive every facet, then push the batch to connected subscribers. Live-state
-      // changes never ride a drive — every reduce is unconsumable to them (the platform rule) — so
-      // a live-state-only batch skips the drives and the next real range covers the skipped span.
+  /** THE STREAM — the commit point (see core/stream.ts: validation + admission + idempotency +
+   *  offsets + the wake record + waitForEvent + the alarm armer, one DI'd class). The name check
+   *  already happened in the constructor (`#address`); the stream itself is storage-lazy. Its
+   *  three host deps close over this DO: `admit` reads the core reduce (all pause/breaker
+   *  reasoning lives in core-processor.ts), `reduceAtCommit` runs the INLINE REDUCES inside the
+   *  commit transaction (the routing table and the core state are atomically exact as of the last
+   *  committed event, always — the pump-races-the-provide class is unspellable, not carefully
+   *  avoided; reduce errors are caught per event, a bad event skips, it never aborts the commit),
+   *  and `onCommit` is the post-commit fan-out below. */
+  readonly #stream = new Stream({
+    storage: this.ctx.storage,
+    path: this.#address.path,
+    admit: (inputs) =>
+      admit(this.#coreState(), inputs, Date.now(), (k) => this.#stream.hasIdempotencyKey(k)),
+    reduceAtCommit: (justCommitted, after, next) =>
+      this.#inlineCore.reduceAtCommit(justCommitted, after, next),
+    // THE PUMP, fed `fresh` (the full in-range distinct batch, live-state/changed included):
+    // drive every facet, then push the batch to connected subscribers, then publish the inline
+    // reduces' own live-state deltas. Live-state changes never ride a drive — every reduce is
+    // unconsumable to them (the platform rule) — so this callback derives `drivable` itself and
+    // a live-state-only batch skips the drives (the next real range covers the skipped span).
+    onCommit: (fresh, scannedAfterOffset, nextOffset) => {
       const drivable = fresh.filter((e) => e.type !== "events.iterate.com/live-state/changed");
       if (drivable.length > 0) this.#driveFacets(drivable, scannedAfterOffset, nextOffset);
       // CONNECTED subscription mounts get the batch pushed one-directionally, right now, from the
       // commit path — a synchronous fire-and-forget WebSocket send. (DURABLE targets ride the
       // subscription-forwarder facet, which is one of the drives above.)
       this.#deliverToConnectedSubscriptions(fresh, scannedAfterOffset, nextOffset);
-    }
+      // INLINE LIVE STATE, post-commit (the InlineCore seam — the stream stays ignorant of which
+      // reduces are inline): each commit-changed entry `set`s its state, appending the standard
+      // ephemeral live-state/changed delta back through this DO's own append door (a nested
+      // commit — terminating, because the delta changes no inline state).
+      this.#inlineCore.publishLiveStateChanges();
+    },
+  });
+
+  /** Commit events: idempotency-checked, offsets assigned from ONE shared sequence (ephemeral
+   *  events consume offsets but never touch the log — their bodies exist only in this batch and
+   *  in whatever pushes deliver them; after a reboot their offsets survive as valid gaps), then
+   *  every enabled facet processor is PUSHED the batch with its scanned-offset-range proof.
+   *  A thin wrapper: the whole pipeline lives in Stream.append; the tail runs #noteActivity on
+   *  every LANDED append regardless of offset growth — a fully-deduped batch still refreshes the
+   *  quiet clock (a REFUSED one doesn't, same as ever: arming the quiet-clock alarm is a storage
+   *  write a rejected probe must not pay). */
+  async append(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
+    const committed = this.#stream.append(...inputs);
     this.#noteActivity();
     return committed;
+  }
+
+  /** Wait for the next event matching `filter` (or the first committed durable match already in
+   *  the log after an explicit `afterOffset`) — see Stream.waitForEvent for the whole contract.
+   *  Deliberately NOT #noteActivity'd: like read(), a wait is a non-minting probe (the caller's
+   *  own open RPC keeps this DO awake for the wait's duration; a timed-out wait on a virgin
+   *  stream must leave it virgin — no alarm write either). */
+  waitForEvent(filter?: WaitForEventFilter): Promise<StreamEvent> {
+    return this.#stream.waitForEvent(filter);
   }
 
   /** Per-facet drive state: `chain` serializes this facet's batches (a slow materialization must
@@ -315,13 +317,18 @@ export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
   }
 
   // ── THE INLINE CORE: reduce-only processors reduced at the stream's commit point. The engine —
-  // rehydrate / catch up / reduce-at-commit / checkpoint — lives in core/inline-core.ts; this DO
-  // owns only the DEFS (which processors are inline), because BUILDING them is its wiring below. ──
+  // rehydrate / catch up / reduce-at-commit / checkpoint / publish-live-state — lives in
+  // core/inline-core.ts; this DO owns only the DEFS (which processors are inline), because
+  // BUILDING them is its wiring below. ──
   readonly #inlineCore = new InlineCore({
     kv: this.ctx.storage.kv,
     read: (after, limit) => this.read(after, limit),
-    head: () => this.#eventLog.highestAssignedOffset(),
+    head: () => this.#stream.highestAssignedOffset(),
     defs: () => this.#inlineDefs(),
+    // The live-state deltas ride this DO's OWN append door, so they are admitted, committed, and
+    // fanned out like any other ephemeral event (and a paused stream refuses them — the
+    // lossy-by-contract gap LiveState.set contains).
+    sink: { append: (event) => this.append(event) },
   });
   #capabilityTableInstance?: CapabilityTableProcessor;
 
@@ -388,7 +395,7 @@ export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
   }
 
   read(afterOffset = 0, limit = 500): { events: StreamEvent[]; scannedThroughOffset: number } {
-    return this.#eventLog.read(afterOffset, limit);
+    return this.#stream.read(afterOffset, limit);
   }
 
   // ── the #6800 quiesce: idle facets un-pinned so this actor can hibernate ──
@@ -396,7 +403,7 @@ export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
   #lastActivityMs = 0;
   #noteActivity(): void {
     this.#lastActivityMs = Date.now();
-    this.#alarmArmer.armNoLaterThan(this.#lastActivityMs + 60_000);
+    this.#stream.armNoLaterThan(this.#lastActivityMs + 60_000);
   }
   // In-memory on purpose: a fresh incarnation always runs one resurrection pass, and losing
   // the flag with an eviction is exactly the point.
@@ -411,7 +418,7 @@ export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
   readonly #liveFacets = new Set<string>();
 
   async alarm(): Promise<void> {
-    this.#alarmArmer.markFired();
+    this.#stream.markFired();
     // Facets have no alarms (workerd#6810) — the parent proxies. The subscription-forwarder's
     // due retries pump here; it re-arms itself through armSubscriptionRetry when work remains.
     // AWAITED, deliberately, so the pump completes BEFORE the quiesce check below: (a) the abort
@@ -470,7 +477,7 @@ export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
       // actor awake, and a page always gets it back — dispose them with the idle facets.
       this.#rpcStubs.disposeRetainedStubs();
     } else {
-      this.#alarmArmer.armNoLaterThan(this.#lastActivityMs + 60_000);
+      this.#stream.armNoLaterThan(this.#lastActivityMs + 60_000);
     }
   }
 
@@ -597,7 +604,7 @@ export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
   /** The alarm proxy (facets have no alarms — workerd#6810): the forwarder reports its earliest
    *  nextAttemptAtMs and the parent's alarm pumps it when due. */
   armSubscriptionRetry(input: { atMs: number }): { ok: true } {
-    this.#alarmArmer.armNoLaterThan(input.atMs);
+    this.#stream.armNoLaterThan(input.atMs);
     return { ok: true };
   }
 
@@ -616,7 +623,7 @@ export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
     // like any other event (auditable, ordered by the drive chain — no side-channel verb). A
     // beyond-head afterOffset is CLAMPED to the head so an operator fat-finger can't park the
     // cursor past reality and wedge the row forever.
-    const head = this.#eventLog.highestAssignedOffset();
+    const head = this.#stream.highestAssignedOffset();
     await this.append({
       type: "events.iterate.com/stream/subscription-resumed",
       payload: {
@@ -764,7 +771,7 @@ export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
     slug: string,
     ref?: { source: string | Expression; className: string },
   ): Promise<{ ok: true }> {
-    this.#eventLog.touch();
+    this.#stream.touch();
     if (isInlineSlug(slug))
       throw new Error(`"${slug}" is an inline core processor — it is always on, never a facet`);
     if (!/^[A-Za-z0-9_-]+$/.test(slug))
@@ -934,7 +941,7 @@ export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
     delivery?: DeliveryPolicy;
     processor?: ProcessorPolicy;
   }): Promise<{ providedAtOffset: number }> {
-    this.#eventLog.touch();
+    this.#stream.touch();
     const pathString = typeof input.path === "string" ? input.path : input.path.join(".");
     const targetExpr = toExpression(input.target);
     // Classify the delivery lane ONCE, here at the provide door — it is stamped on the mount event
@@ -1027,7 +1034,7 @@ export class StreamDurableObject extends DurableObject<BuiltInsEnv> {
   hostState(): Record<string, unknown> {
     const cs = this.#coreState();
     return {
-      incarnation: this.#eventLog.currentIncarnation(),
+      incarnation: this.#stream.currentIncarnation(),
       facetProcessors: this.#facetEntries().map((e) => e.slug),
       core: {
         paused: cs.paused,

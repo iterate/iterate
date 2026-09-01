@@ -168,12 +168,10 @@ test("read(afterOffset beyond head) never claims a scan of unassigned offsets", 
   //   this answer sits beyond head and every event later assigned in (head, afterOffset] is
   //   silently skipped forever — offset-keyed data loss from one overshooting read.
   const itx = await harness.itx("prj_bug_readbeyond");
-  const committed = await append(
-    itx,
-    { type: "mark", payload: { n: 1 } },
-    { type: "mark", payload: { n: 2 } },
-  );
-  const head = committed[1].offset;
+  await append(itx, { type: "mark", payload: { n: 1 } }, { type: "mark", payload: { n: 2 } });
+  // The TRUE head comes from a short-page read (platform events — woken, live-state deltas —
+  // consume offsets beyond the last receipt, so a receipt offset under-approximates it).
+  const head = (await read(itx)).scannedThroughOffset;
   const page = await read(itx, head + 100);
   expect(page.events).toEqual([]);
   expect(page.scannedThroughOffset).toBeLessThanOrEqual(head);
@@ -195,13 +193,18 @@ test("a mid-batch idempotency conflict rolls the whole batch back atomically", a
     ),
   );
   expect(err.message).toContain('idempotency key "kc" already names a different event');
-  // No orphaned rows above the recorded max offset…
+  // No orphaned rows above the recorded max offset (platform events — woken — share the log,
+  // so assert presence/absence, not the exact row list)…
   const page = await read(itx);
-  expect(page.events.map((e) => e.type)).toEqual(["seed"]);
-  // …and no orphaned OFFSETS either: the next append lands exactly at seed.offset + 1
-  // (a leaked max-offset would open a gap; a leaked row would collide on the primary key).
+  const types = page.events.map((e) => e.type);
+  expect(types).toContain("seed");
+  expect(types).not.toContain("fresh-before");
+  expect(types).not.toContain("fresh-after");
+  expect(seed.offset).toBeGreaterThan(0);
+  // …and no orphaned OFFSETS either: the next append lands exactly one past the pre-rollback
+  // head (a leaked max-offset would open a gap; a leaked row would collide on the primary key).
   const [probe] = await append(itx, { type: "probe", payload: {} });
-  expect(probe.offset).toBe(seed.offset + 1);
+  expect(probe.offset).toBe(page.scannedThroughOffset + 1);
 });
 
 test("a dedupe hit interleaved with fresh events assigns no double offsets", async () => {
@@ -214,12 +217,13 @@ test("a dedupe hit interleaved with fresh events assigns no double offsets", asy
     { type: "fresh", payload: { n: 2 } },
   );
   expect(batch[1].offset).toBe(orig.offset); // the hit answers with the ORIGINAL identity
-  expect(batch[0].offset).toBe(orig.offset + 1);
-  expect(batch[2].offset).toBe(orig.offset + 2); // the hit did not burn an offset in between
+  expect(batch[2].offset).toBe(batch[0].offset + 1); // the hit did not burn an offset in between
   const page = await read(itx);
   const offsets = page.events.map((e) => e.offset);
-  expect(offsets).toEqual([orig.offset, orig.offset + 1, orig.offset + 2]);
-  expect(new Set(offsets).size).toBe(offsets.length);
+  expect(new Set(offsets).size).toBe(offsets.length); // no offset assigned twice
+  // the original and both fresh events are each in the log exactly once
+  expect(offsets).toEqual(expect.arrayContaining([orig.offset, batch[0].offset, batch[2].offset]));
+  expect(page.events.filter((e) => e.idempotencyKey === "kd")).toHaveLength(1);
 });
 
 test("concurrent appends from two sessions to one ctx keep offsets unique", async () => {
@@ -231,11 +235,13 @@ test("concurrent appends from two sessions to one ctx keep offsets unique", asyn
   ]);
   const offsets = results.map(([e]) => e.offset);
   expect(new Set(offsets).size).toBe(20);
-  // and the log agrees: 20 rows, offsets 1..20 with no gap and no reuse
+  // and the log agrees: exactly 20 race rows, offsets unique and matching the receipts
+  // (platform events — woken, live-state deltas — share the sequence, so the race offsets
+  // need not be 1..20; uniqueness and receipt/log agreement are the property)
   const page = await read(a);
-  expect(page.events.map((e) => e.offset).sort((x, y) => x - y)).toEqual(
-    Array.from({ length: 20 }, (_, i) => i + 1),
-  );
+  const raceOffsets = page.events.filter((e) => e.type === "race").map((e) => e.offset);
+  expect(raceOffsets).toHaveLength(20);
+  expect([...raceOffsets].sort((x, y) => x - y)).toEqual([...offsets].sort((x, y) => x - y));
 });
 
 test("pause refuses durable AND ephemeral appends, mixed batches wholesale — control passes", async () => {
@@ -390,11 +396,16 @@ test("ephemeral + idempotencyKey is refused loudly and atomically mid-batch", as
     ),
   );
   expect(err.message).toContain("ephemeral events cannot carry an idempotencyKey");
-  // the fresh insert before the contradiction rolled back with it
+  // the fresh insert before the contradiction rolled back with it (assert presence/absence —
+  // platform events like woken share the log)
   const page = await read(itx);
-  expect(page.events.map((e) => e.type)).toEqual(["seed"]);
+  const types = page.events.map((e) => e.type);
+  expect(types).toContain("seed");
+  expect(types).not.toContain("fresh");
+  expect(seed.offset).toBeGreaterThan(0);
+  // dense continuation from the pre-rollback head — the refused batch burned no offsets
   const [probe] = await append(itx, { type: "probe", payload: {} });
-  expect(probe.offset).toBe(seed.offset + 1);
+  expect(probe.offset).toBe(page.scannedThroughOffset + 1);
 });
 
 test("breaker overdraft: an admitted batch drives tokens NEGATIVE, and the debt is CARRIED, not clamped", async () => {

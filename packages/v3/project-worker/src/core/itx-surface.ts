@@ -23,7 +23,8 @@
 import { RpcTarget } from "capnweb";
 import type { StreamDurableObject } from "../stream-durable-object.ts";
 import { CAPABILITY_FETCH_HEADER, encodeCapabilityFetchHeader } from "./fetch-capabilities.ts";
-import type { DeliveryPolicy } from "./events.ts";
+import type { DeliveryPolicy, StreamEvent } from "./events.ts";
+import type { WaitForEventFilter } from "./stream.ts";
 import { print, type Expression, type ItxExpression } from "./expression.ts";
 import { InvokeHandle } from "./invoke-handle.ts";
 import { installPrototypeInvokeCapabilityFallback } from "./dotted-path-proxy.ts";
@@ -197,6 +198,15 @@ export class Itx extends RpcTarget {
    *  HTTP door; there is no second transport, just this method over capnweb. */
   hostState(): Promise<Record<string, unknown>> {
     return this.#host.hostState();
+  }
+
+  /** Wait for the next event matching `filter` — or the first committed durable match after an
+   *  explicit `afterOffset` (the default is the head at call time: "the next occurrence"). The
+   *  parked wait lives on the DO (Stream.waitForEvent owns the whole contract — type filter,
+   *  30s/120s timeout → WAIT_TIMEOUT, non-minting); this method just proxies, and the client's
+   *  own open call is what keeps the wait alive. */
+  waitForEvent(filter?: WaitForEventFilter): Promise<StreamEvent> {
+    return this.#host.waitForEvent(filter);
   }
 
   /** Mount a capability: bind a capability path to a target expression (string half preferred —

@@ -1,0 +1,189 @@
+// __workers-tests__/stream.test.ts — the `Stream` class (core/stream.ts) against REAL
+// DurableObjectStorage, inside workerd (the pool lane): waitForEvent's park/settle/timeout
+// mechanics, the storage-lazy virgin guarantee, and the per-incarnation wake record. Each test
+// borrows a dedicated ctx's DO purely for its storage (runInDurableObject) and constructs a BARE
+// Stream over it with no-op host deps — the DO's own #stream is never exercised in these ctxs, so
+// the two instances never contend.
+
+import { runInDurableObject } from "cloudflare:test";
+import { env } from "cloudflare:workers";
+import { expect, test } from "vitest";
+import { canonicalName } from "../src/core/durable-object-names.ts";
+import { errorCode } from "../src/core/errors.ts";
+import { Stream } from "../src/core/stream.ts";
+import type { StreamEvent, StreamEventInput } from "../src/core/events.ts";
+import type { StreamDurableObject } from "../src/stream-durable-object.ts";
+
+const stub = (ctx: string) =>
+  (env as unknown as { CONTEXT: DurableObjectNamespace<StreamDurableObject> }).CONTEXT.getByName(
+    canonicalName(ctx),
+  );
+
+/** A bare Stream over real storage. `admit` defaults to open; `onCommit` records each `fresh`
+ *  batch so tests can assert what the fan-out was fed. */
+function bareStream(
+  storage: DurableObjectStorage,
+  opts?: { admit?: (inputs: StreamEventInput[]) => void; batches?: StreamEvent[][] },
+): Stream {
+  return new Stream({
+    storage,
+    path: "/",
+    admit: opts?.admit ?? (() => {}),
+    reduceAtCommit: () => {},
+    onCommit: (fresh) => opts?.batches?.push(fresh),
+  });
+}
+
+test("waitForEvent: a parked waiter resolves with the committed event, fed from the fresh batch", async () => {
+  await runInDurableObject(stub("prj_wait_park"), async (_instance, state) => {
+    const batches: StreamEvent[][] = [];
+    const stream = bareStream(state.storage, { batches });
+    stream.append({ type: "seed" });
+    const pending = stream.waitForEvent({ type: "ping", timeoutMs: 5_000 });
+    const [receipt] = stream.append({ type: "ping", payload: { n: 1 } });
+    const got = await pending;
+    expect(got.type).toBe("ping");
+    expect(got.offset).toBe(receipt.offset);
+    expect(got.payload).toEqual({ n: 1 });
+    // the resolving event was exactly the one the commit tail fanned out
+    expect(batches.at(-1)?.some((e) => e.offset === got.offset)).toBe(true);
+  });
+});
+
+test("waitForEvent: the type filter holds a waiter through non-matching commits", async () => {
+  await runInDurableObject(stub("prj_wait_filter"), async (_instance, state) => {
+    const stream = bareStream(state.storage);
+    stream.append({ type: "seed" });
+    const pending = stream.waitForEvent({ type: "wanted", timeoutMs: 5_000 });
+    stream.append({ type: "other" });
+    const raced = await Promise.race([
+      pending.then(() => "resolved"),
+      new Promise((r) => setTimeout(() => r("parked"), 100)),
+    ]);
+    expect(raced).toBe("parked"); // a non-matching commit left it parked
+    const [receipt] = stream.append({ type: "wanted" });
+    expect((await pending).offset).toBe(receipt.offset);
+  });
+});
+
+test("waitForEvent: an explicit afterOffset resolves from history immediately — first match, paged scan", async () => {
+  await runInDurableObject(stub("prj_wait_history"), async (_instance, state) => {
+    const stream = bareStream(state.storage);
+    // >500 durable events so the initial scan must PAGE read() to reach the match.
+    for (let batch = 0; batch < 6; batch++)
+      stream.append(
+        ...Array.from({ length: 100 }, (_, i) => ({
+          type: "filler",
+          payload: { n: batch * 100 + i },
+        })),
+      );
+    const [first] = stream.append({ type: "needle", payload: { which: "first" } });
+    stream.append({ type: "needle", payload: { which: "second" } });
+    const got = await stream.waitForEvent({ type: "needle", afterOffset: 0, timeoutMs: 5_000 });
+    expect(got.offset).toBe(first.offset); // the FIRST match in offset order, not the newest
+    expect(got.payload).toEqual({ which: "first" });
+  });
+});
+
+test("waitForEvent: the default afterOffset means the NEXT occurrence — history does not resolve it", async () => {
+  await runInDurableObject(stub("prj_wait_next"), async (_instance, state) => {
+    const stream = bareStream(state.storage);
+    const [past] = stream.append({ type: "ping" });
+    // A matching event already in the log must NOT satisfy a default (head-anchored) wait.
+    const timedOut = await stream.waitForEvent({ type: "ping", timeoutMs: 150 }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(errorCode(timedOut)).toBe("WAIT_TIMEOUT");
+    // The next occurrence does.
+    const pending = stream.waitForEvent({ type: "ping", timeoutMs: 5_000 });
+    const [next] = stream.append({ type: "ping" });
+    const got = await pending;
+    expect(got.offset).toBe(next.offset);
+    expect(got.offset).toBeGreaterThan(past.offset);
+  });
+});
+
+test("waitForEvent: a timed-out wait on a VIRGIN stream leaves it virgin (no storage minted)", async () => {
+  await runInDurableObject(stub("prj_wait_virgin"), async (_instance, state) => {
+    const stream = bareStream(state.storage);
+    const err = await stream.waitForEvent({ timeoutMs: 100 }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(errorCode(err)).toBe("WAIT_TIMEOUT");
+    // Nothing minted: no event tables, no incarnation bump, no offset watermark.
+    const tables = state.storage.sql
+      .exec("SELECT name FROM sqlite_master WHERE type = 'table'")
+      .toArray()
+      .map((r) => String(r.name));
+    expect(tables).not.toContain("events");
+    expect(tables).not.toContain("event_chunks");
+    expect(state.storage.kv.get("incarnation")).toBeUndefined();
+    expect(state.storage.kv.get("maxAssignedOffset")).toBeUndefined();
+    expect(stream.currentIncarnation()).toBe(0);
+    expect(stream.highestAssignedOffset()).toBe(0);
+  });
+});
+
+test("waitForEvent: an EPHEMERAL event resolves a parked waiter (and never hits the log)", async () => {
+  await runInDurableObject(stub("prj_wait_ephemeral"), async (_instance, state) => {
+    const stream = bareStream(state.storage);
+    stream.append({ type: "seed" });
+    const pending = stream.waitForEvent({ type: "blip", timeoutMs: 5_000 });
+    const [receipt] = stream.append({ type: "blip", ephemeral: true, payload: { live: 1 } });
+    const got = await pending;
+    expect(got.offset).toBe(receipt.offset);
+    expect(got.ephemeral).toBe(true);
+    // catchable only while parked: the body never reached a row
+    expect(stream.read(0).events.some((e) => e.type === "blip")).toBe(false);
+  });
+});
+
+test("woken: the first commit of an incarnation carries the wake record first, exactly once", async () => {
+  await runInDurableObject(stub("prj_wait_woken"), async (_instance, state) => {
+    const batches: StreamEvent[][] = [];
+    const stream = bareStream(state.storage, { batches });
+    const receipts = stream.append({ type: "hello" });
+    // per-input receipts: the platform's wake record is NOT echoed back to the caller
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0].type).toBe("hello");
+    expect(receipts[0].offset).toBe(2);
+    // …but it IS the first durable fact of the incarnation, and the fan-out saw it
+    const page = stream.read(0);
+    expect(page.events[0].type).toBe("events.iterate.com/stream/woken");
+    expect(page.events[0].offset).toBe(1);
+    expect(page.events[0].payload).toEqual({ incarnation: stream.currentIncarnation() });
+    expect(batches[0][0].type).toBe("events.iterate.com/stream/woken");
+    // exactly once per incarnation
+    stream.append({ type: "again" });
+    const woken = stream.read(0).events.filter((e) => e.type === "events.iterate.com/stream/woken");
+    expect(woken).toHaveLength(1);
+  });
+});
+
+test("woken: a refused or rolled-back first batch does NOT burn the wake record", async () => {
+  await runInDurableObject(stub("prj_wait_wokenroll"), async (_instance, state) => {
+    // (a) admission refusal: no commit, no woken — the stream stays virgin.
+    const refusing = bareStream(state.storage, {
+      admit: (inputs) => {
+        if (inputs.some((i) => i.type === "nope")) throw new Error("refused at the door");
+      },
+    });
+    expect(() => refusing.append({ type: "nope" })).toThrow("refused at the door");
+    expect(refusing.read(0).events).toHaveLength(0);
+    // (b) a mid-batch rollback AFTER injection: the txn throw leaves the flag unset, so the
+    // NEXT landed commit carries the wake record.
+    expect(() =>
+      refusing.append(
+        { type: "a", payload: { v: 1 }, idempotencyKey: "k" },
+        { type: "a", payload: { v: 2 }, idempotencyKey: "k" }, // same key, different body → conflict
+      ),
+    ).toThrow(/idempotency key/);
+    const [ok] = refusing.append({ type: "ok" });
+    const page = refusing.read(0);
+    expect(page.events[0].type).toBe("events.iterate.com/stream/woken");
+    expect(page.events[1].offset).toBe(ok.offset);
+    expect(page.events.filter((e) => e.type === "events.iterate.com/stream/woken")).toHaveLength(1);
+  });
+});

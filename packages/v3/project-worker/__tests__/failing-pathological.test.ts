@@ -240,10 +240,13 @@ describe("arbitrary-size payloads (row chunking — the apps/os contract)", () =
     const itx = await harness.itx("prj_chunk_dense");
     const blob = "d".repeat(3 * 1024 * 1024);
     const [before] = await append(itx, [{ type: "small-before" }]);
+    // The TRUE head (platform events — woken, live-state deltas — may sit past the receipt).
+    const headBeforeBig = (await itx.invokeCapability(["itx", "stream", ["read", before.offset]]))
+      .scannedThroughOffset;
     const committedBig = await append(itx, [{ type: "big", payload: { blob } }]);
     expect(committedBig).toHaveLength(1); // ONE event committed for one input — not split
     const [after] = await append(itx, [{ type: "small-after" }]);
-    expect(committedBig[0].offset).toBe(before.offset + 1); // dense…
+    expect(committedBig[0].offset).toBe(headBeforeBig + 1); // dense…
     expect(after.offset).toBe(committedBig[0].offset + 1); // …on both sides
     // The big offset alone carries the WHOLE body (chunk rows are invisible to reads):
     const page = await itx.invokeCapability(["itx", "stream", ["read", before.offset, 500]]);
@@ -294,12 +297,16 @@ describe("arbitrary-size payloads (row chunking — the apps/os contract)", () =
         { type: "pin", payload: { v: 2 }, idempotencyKey: "pin" }, // same key, DIFFERENT body → conflict
       ]),
     ).rejects.toThrow(/idempotency key "pin" already names a different event/);
-    // Nothing partial survived the rollback…
+    // Nothing partial survived the rollback (presence/absence — woken shares the log)…
     const page = await itx.invokeCapability(["itx", "stream", ["read", 0, 500]]);
-    expect(page.events.map((e: { type: string }) => e.type)).toEqual(["pin"]);
-    // …and the allocator did not burn offsets for the rolled-back batch: dense continuation.
+    const types = page.events.map((e: { type: string }) => e.type);
+    expect(types.filter((t: string) => t === "pin")).toHaveLength(1);
+    expect(types).not.toContain("big-victim");
+    expect(pin.offset).toBeGreaterThan(0);
+    // …and the allocator did not burn offsets for the rolled-back batch: dense continuation
+    // from the pre-rollback head.
     const [next] = await append(itx, [{ type: "after-rollback" }]);
-    expect(next.offset).toBe(pin.offset + 1);
+    expect(next.offset).toBe(page.scannedThroughOffset + 1);
   }, 60_000);
 
   test("read paging across a chunked event keeps the scanned-offset-range proof honest", async () => {
@@ -314,22 +321,22 @@ describe("arbitrary-size payloads (row chunking — the apps/os contract)", () =
     //      cursors would advance to phantom offsets and repairs would skip real events.
     const itx = await harness.itx("prj_chunk_paging");
     const blob = "p".repeat(3 * 1024 * 1024);
-    await append(itx, [{ type: "e1" }, { type: "e2" }]);
-    const [big] = await append(itx, [{ type: "big", payload: { blob } }]); // offset 3
-    await append(itx, [{ type: "e4" }, { type: "e5" }]);
-    // Page 1: limit 3 lands exactly ON the chunked event.
-    const page1 = await itx.invokeCapability(["itx", "stream", ["read", 0, 3]]);
-    expect(page1.events.map((e: { offset: number }) => e.offset)).toEqual([1, 2, 3]);
+    const [, e2] = await append(itx, [{ type: "e1" }, { type: "e2" }]);
+    const [big] = await append(itx, [{ type: "big", payload: { blob } }]);
+    const [e4, e5] = await append(itx, [{ type: "e4" }, { type: "e5" }]);
+    // Page 1: a FULL page (limit 2 from just before e2) lands exactly ON the chunked event.
+    const page1 = await itx.invokeCapability(["itx", "stream", ["read", e2.offset - 1, 2]]);
+    expect(page1.events.map((e: { offset: number }) => e.offset)).toEqual([e2.offset, big.offset]);
     expect(page1.scannedThroughOffset).toBe(big.offset); // the EVENT offset — never a chunk row's
-    expect(page1.events[2].payload.blob === blob).toBe(true); // the body rode the page whole
+    expect(page1.events[1].payload.blob === blob).toBe(true); // the body rode the page whole
     // Page 2 chains contiguously from the proof.
     const page2 = await itx.invokeCapability([
       "itx",
       "stream",
       ["read", page1.scannedThroughOffset, 500],
     ]);
-    expect(page2.events.map((e: { offset: number }) => e.offset)).toEqual([4, 5]);
-    expect(page2.scannedThroughOffset).toBe(5);
+    expect(page2.events.map((e: { offset: number }) => e.offset)).toEqual([e4.offset, e5.offset]);
+    expect(page2.scannedThroughOffset).toBe(e5.offset);
   }, 60_000);
 });
 

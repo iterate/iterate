@@ -16,12 +16,14 @@
 //     ROUTED door, keeping deletion-is-revocation for stored stubs.
 //
 // The surface is exactly what loaded code speaks: `get()` (hand back the real `Itx` scope — the
-// dotted door, which owns its own dispatch), the SDK runner's stream verbs (`append`/`read`), and
-// `fetch` (globalOutbound egress → the DO's secret-substituting terminal).
+// dotted door, which owns its own dispatch), the SDK runner's stream verbs
+// (`append`/`read`/`waitForEvent`), and `fetch` (globalOutbound egress → the DO's
+// secret-substituting terminal).
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { itxForHost } from "./core/itx-surface.ts";
 import type { StreamEvent, StreamEventInput } from "./core/events.ts";
+import type { WaitForEventFilter } from "./core/stream.ts";
 import type { StreamDurableObject } from "./stream-durable-object.ts";
 
 interface Env {
@@ -54,6 +56,13 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env> {
     limit?: number,
   ): Promise<{ events: StreamEvent[]; scannedThroughOffset: number }> {
     return this.#host().read(afterOffset, limit);
+  }
+
+  /** Wait for the next matching event — loaded-worker parity with the edge `Itx` method (the
+   *  contract lives in Stream.waitForEvent: type filter, afterOffset default = the head, 30s/120s
+   *  timeout → WAIT_TIMEOUT). The parked wait lives on the DO; this call just holds the leg open. */
+  waitForEvent(filter?: WaitForEventFilter): Promise<StreamEvent> {
+    return this.#host().waitForEvent(filter);
   }
 
   /** globalOutbound: every fetch a loaded worker makes lands here → the DO's egress terminal

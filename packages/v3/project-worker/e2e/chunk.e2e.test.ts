@@ -14,13 +14,16 @@ test("5MB chunked body: single dense event, byte-identical round-trip, idempoten
 
   // A small event, then a 5MB body, then a small event — dense offsets on both sides.
   const [before] = await append(itx, [{ type: "small-before" }]);
+  // The TRUE head (platform events — woken, live-state deltas — may sit past the receipt).
+  const headBeforeBig = (await itx.invokeCapability(["itx", "stream", ["read", before.offset]]))
+    .scannedThroughOffset;
   const blob = "y".repeat(5 * 1024 * 1024);
   const big = await append(itx, [{ type: "big", payload: { blob } }]);
   const [after] = await append(itx, [{ type: "small-after" }]);
   // 5MB body committed as ONE event (not split)
   expect(big.length).toBe(1);
-  // chunked event is dense with its predecessor
-  expect(big[0].offset).toBe(before.offset + 1);
+  // chunked event is dense with the head before it
+  expect(big[0].offset).toBe(headBeforeBig + 1);
   // and dense with its successor
   expect(after.offset).toBe(big[0].offset + 1);
 

@@ -30,10 +30,13 @@ const CONTROL_TYPES = new Set([
 
 const CoreContract = defineProcessorContract({
   slug: "core",
-  version: "1.0.0",
+  version: "1.1.0", // 1.1.0: reduces stream/woken into `incarnation` (stale checkpoints refold)
   description:
-    "The stream's operational truth, reduced inline at the commit point: append pause and the token-bucket circuit breaker.",
+    "The stream's operational truth, reduced inline at the commit point: the current incarnation, append pause, and the token-bucket circuit breaker.",
   stateSchema: z.object({
+    /** From the wake record (stream/woken) — absent until the stream's first-ever commit reduces
+     *  one. Growth across idle is the hibernation tell, now readable as ordinary reduced state. */
+    incarnation: z.number().optional(),
     paused: z.object({ reason: z.string() }).nullable().default(null),
     breaker: z
       .object({
@@ -46,6 +49,11 @@ const CoreContract = defineProcessorContract({
       .default(null),
   }),
   events: {
+    "events.iterate.com/stream/woken": {
+      description:
+        "The platform's wake record — the Stream prepends it into the first committed batch of each incarnation (never appended by clients or this processor).",
+      payloadSchema: z.object({ incarnation: z.number() }),
+    },
     "events.iterate.com/stream/paused": {
       description: "Refuse every non-control append until resumed.",
       payloadSchema: z.object({ reason: z.string().default("paused") }),
@@ -69,6 +77,12 @@ export class CoreStreamProcessor implements ReduceOnlyProcessor<CoreState> {
   readonly contract = CoreContract;
 
   reduce({ event, state }: ReduceArgs<CoreState>): CoreState | undefined {
+    if (event.type === "events.iterate.com/stream/woken") {
+      // The platform's own wake record (injected by Stream.append after admission, once per
+      // incarnation): fold the incarnation and spend NO token — the wake is never client growth.
+      const { incarnation } = (event.payload ?? {}) as { incarnation?: number };
+      return { ...state, incarnation };
+    }
     if (event.type === "events.iterate.com/stream/paused") {
       const { reason } = (event.payload ?? {}) as { reason?: string };
       return { ...state, paused: { reason: reason ?? "paused" } };
