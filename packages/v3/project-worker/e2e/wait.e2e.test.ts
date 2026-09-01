@@ -11,14 +11,14 @@ test("waitForEvent round trip: parked via session A, appended via session B, res
   const ctx = freshCtx("wait");
   const itxA = openItx(ctx);
   const itxB = openItx(ctx);
-  await itxB.invokeCapability(`itx.stream.append({ type: 'seed' })`);
+  await itxB.invokeCapability(`itx.append({ type: 'seed' })`);
   // Anchor at the CURRENT head explicitly: the wait then resolves whether it parks first or the
   // append lands first (no ordering flake) — while the sleep below makes the parked path the one
   // actually exercised.
-  const head = (await itxA.invokeCapability("itx.stream.read(0)")).scannedThroughOffset;
+  const head = (await itxA.invokeCapability("itx.read(0)")).scannedThroughOffset;
   const pending = itxA.waitForEvent({ type: "ping", afterOffset: head, timeoutMs: 20_000 });
   await sleep(300);
-  await itxB.invokeCapability(`itx.stream.append({ type: 'ping', payload: { n: 1 } })`);
+  await itxB.invokeCapability(`itx.append({ type: 'ping', payload: { n: 1 } })`);
   const got = await pending;
   expect(got.type).toBe("ping");
   expect(got.payload).toEqual({ n: 1 });

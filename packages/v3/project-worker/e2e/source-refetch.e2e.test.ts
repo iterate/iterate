@@ -90,7 +90,7 @@ test("userspace processor source is evaluated exactly ONCE (at materialization, 
 
   // 4) append M durable 'mark' events — M separate commits, each a pump run
   for (let i = 0; i < M; i++) {
-    await itx.invokeCapability(["itx", "stream", ["append", { type: "mark", payload: { i } }]]);
+    await itx.invokeCapability(["itx", ["append", { type: "mark", payload: { i } }]]);
   }
 
   // 5) wait for the M fire-and-forget drives to settle (counter-stability, NOT snapshot polling)

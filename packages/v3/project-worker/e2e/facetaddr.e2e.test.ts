@@ -8,7 +8,7 @@ import { freshCtx, openItx } from "./support/client.ts";
 test("facet address: table routing, alias/shadow, barrier verb, probe-resistance", async () => {
   const itx = openItx(freshCtx("addr"));
   await itx.enableProcessor("tally");
-  await itx.invokeCapability(`itx.stream.append({ type: 'mark' })`);
+  await itx.invokeCapability(`itx.append({ type: 'mark' })`);
 
   // 1. a facet method through the SEEDED address
   const snap = await itx.invokeCapability(`itx.facets.get('tally').snapshot()`);

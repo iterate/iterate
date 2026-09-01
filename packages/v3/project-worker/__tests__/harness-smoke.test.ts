@@ -20,10 +20,9 @@ test("append + read through the real event log", async () => {
   const itx = await harness.itx("prj_harness_log");
   const [committed] = await itx.invokeCapability([
     "itx",
-    "stream",
     ["append", { type: "mark", payload: { n: 1 } }],
   ]);
   expect(committed.offset).toBeGreaterThanOrEqual(1);
-  const page = await itx.invokeCapability(["itx", "stream", ["read"]]);
+  const page = await itx.invokeCapability(["itx", ["read"]]);
   expect(page.events.some((e: any) => e.type === "mark")).toBe(true);
 });

@@ -20,7 +20,7 @@ afterAll(async () => {
 // ── tiny verbs over the real client surface (the smoke test's voice) ──
 
 const append = (itx: any, ...events: unknown[]): Promise<any[]> =>
-  itx.invokeCapability(["itx", "stream", ["append", ...events]]);
+  itx.invokeCapability(["itx", ["append", ...events]]);
 
 async function until<T>(
   label: string,
@@ -71,7 +71,7 @@ test("ephemeral: false is a LOUD input error at the append door, and commits not
   const err = await rejection(append(itx, { type: "sneaky", ephemeral: false as unknown as true }));
   expect(err.message).toMatch(/ephemeral must be literal true or absent/);
   // nothing committed — the log has no durable "sneaky" row
-  const page = await itx.invokeCapability(["itx", "stream", ["read", 0, 50]]);
+  const page = await itx.invokeCapability(["itx", ["read", 0, 50]]);
   expect(page.events.map((e: { type: string }) => e.type)).not.toContain("sneaky");
 });
 

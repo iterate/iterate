@@ -12,12 +12,12 @@ const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 
 test("first append commits the woken event first; core's reduced state carries the incarnation", async () => {
   const itx = openItx(freshCtx("woken"));
-  const receipts = await itx.invokeCapability(`itx.stream.append({ type: 'hello' })`);
+  const receipts = await itx.invokeCapability(`itx.append({ type: 'hello' })`);
   // one receipt per INPUT — the wake record is the platform's, not the caller's
   expect(receipts).toHaveLength(1);
   expect(receipts[0].type).toBe("hello");
 
-  const page = await itx.invokeCapability("itx.stream.read(0)");
+  const page = await itx.invokeCapability("itx.read(0)");
   expect(page.events[0].type).toBe("events.iterate.com/stream/woken");
   expect(page.events[0].offset).toBe(1);
   const incarnation = page.events[0].payload.incarnation;
@@ -29,8 +29,8 @@ test("first append commits the woken event first; core's reduced state carries t
   expect(snap.state.incarnation).toBe(incarnation);
 
   // exactly once per incarnation
-  await itx.invokeCapability(`itx.stream.append({ type: 'again' })`);
-  const page2 = await itx.invokeCapability("itx.stream.read(0)");
+  await itx.invokeCapability(`itx.append({ type: 'again' })`);
+  const page2 = await itx.invokeCapability("itx.read(0)");
   expect(
     page2.events.filter((e: { type: string }) => e.type === "events.iterate.com/stream/woken"),
   ).toHaveLength(1);
@@ -38,7 +38,7 @@ test("first append commits the woken event first; core's reduced state carries t
 
 test("inline reduced states are live: capability-table and core changes ride the connected lane", async () => {
   const itx = openItx(freshCtx("inlinelive"));
-  await itx.invokeCapability(`itx.stream.append({ type: 'seed' })`);
+  await itx.invokeCapability(`itx.append({ type: 'seed' })`);
 
   type Delta = { key: string; from: number; to: number; patch: unknown[] };
   const tableDeltas: Delta[] = [];
@@ -65,7 +65,7 @@ test("inline reduced states are live: capability-table and core changes ride the
 
   // a core change (breaker reconfigure) → a delta keyed "core"
   await itx.invokeCapability(
-    `itx.stream.append({ type: 'events.iterate.com/stream/breaker-configured', payload: { capacity: 100, refillPerSecond: 1 } })`,
+    `itx.append({ type: 'events.iterate.com/stream/breaker-configured', payload: { capacity: 100, refillPerSecond: 1 } })`,
   );
   const coreDelta = await until("core delta", () => coreDeltas.find((d) => d.key === "core"));
   expect(coreDelta.to).toBe(coreDelta.from + 1);

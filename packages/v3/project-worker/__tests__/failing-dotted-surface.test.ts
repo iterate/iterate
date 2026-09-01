@@ -205,7 +205,7 @@ test("root dotted call: await itx.whoami() falls back to the capability table", 
 //   The explicit door proves the capability itself works (DEFAULT_CONFIG_MOUNTS mounts itx.kv).
 // ACTUAL: rejects with TypeError: Cannot read properties of undefined (reading 'put') — a raw
 //   JS property miss on the server, uncoded ({ remote: true } only).
-// WHY IT MATTERS: depth-2 built-ins (kv, stream, secrets) are the bread-and-butter calls; the
+// WHY IT MATTERS: depth-2 built-ins (kv, secrets) are the bread-and-butter calls; the
 //   error also violates core/errors.ts (nothing machine-readable rides it).
 test("depth-2 dotted: itx.kv.put('k','v') then itx.kv.get('k') round trips", async () => {
   const itx = await harness.itx(c("kv"));
@@ -213,19 +213,16 @@ test("depth-2 dotted: itx.kv.put('k','v') then itx.kv.get('k') round trips", asy
   expect(await itx.kv.get("k")).toBe("v");
 });
 
-// BUG: the dotted spelling of the commonest write in the platform does not exist.
-// EXPECTED (apps/os/src/domains/itx/path-proxy.test.ts:50-61 — declared members and dynamic
-//   paths are ONE coexisting surface): `itx.stream.append({...})` commits through the same log
-//   the explicit door reads back — dotted write, explicit read, one surface.
-// ACTUAL: rejects with TypeError: Cannot read properties of undefined (reading 'append').
-// WHY IT MATTERS: built-ins.ts's own comment sells `stream` as "the commonest write is
-//   dotted-door spellable" — true only from inside loaded workers (itx.js), false for the
-//   capnweb client the platform tells everyone is the whole SDK.
-test("dotted write, explicit read: itx.stream.append lands in the ONE log", async () => {
+// FIXED (was: the dotted spelling of the commonest write did not exist; then it rode the
+//   prototype fallback as `itx.stream.append`). The flattening moved the stream verbs to the TOP
+//   level on BOTH surfaces: `itx.append(...)` here is the DECLARED IterateContext method (the
+//   direct lane — core/itx-surface.ts), and the read stays an EXPRESSION so the builtin `read`
+//   ROOT keeps resolver coverage (built-ins.ts own-key + Object.hasOwn gate). One log serves both.
+test("direct write, expression read: itx.append lands in the ONE log", async () => {
   const itx = await harness.itx(c("stream"));
-  const [committed] = await itx.stream.append({ type: "mark", payload: { n: 1 } });
+  const [committed] = await itx.append({ type: "mark", payload: { n: 1 } });
   expect(committed.offset).toBeGreaterThanOrEqual(1);
-  const page: any = await itx.invokeCapability(["itx", "stream", ["read"]]);
+  const page: any = await itx.invokeCapability(["itx", ["read"]]);
   expect(page.events.some((e: any) => e.type === "mark")).toBe(true);
 });
 
@@ -367,10 +364,10 @@ test("reserved segments are hidden at EVERY depth: transport words never dispatc
   const ctx = c("resv");
   const itx = await harness.itx(ctx);
   await itx.enableProcessor("tally");
-  await itx.stream.append({ type: "resv-mark", payload: {} }); // dotted write — one durable row
+  await itx.append({ type: "resv-mark", payload: {} }); // direct write — one durable row
   // Baseline: the durable head and tally's reduce of it (enable commits a mount event too).
   const readHead = async (): Promise<number> => {
-    const { events } = (await itx.invokeCapability(["itx", "stream", ["read", 0, 500]])) as {
+    const { events } = (await itx.invokeCapability(["itx", ["read", 0, 500]])) as {
       events: { offset: number }[];
     };
     return events.length ? events[events.length - 1].offset : 0;

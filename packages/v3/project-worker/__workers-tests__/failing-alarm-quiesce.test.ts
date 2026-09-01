@@ -66,8 +66,7 @@ const snapCounter = (ctx: string, slug = "counter") =>
 // ephemeral per event, and those consume offsets — so a durable event's offset now exceeds the count
 // of durable events before it. The exact-once invariant is `n === durable-event-count`.)
 const durableCount = async (ctx: string): Promise<number> =>
-  ((await stub(ctx).invoke(["itx", "stream", ["read", 0, 500]])) as { events: unknown[] }).events
-    .length;
+  ((await stub(ctx).invoke(["itx", ["read", 0, 500]])) as { events: unknown[] }).events.length;
 
 async function enableCounter(ctx: string, slug = "counter"): Promise<void> {
   const s = stub(ctx);

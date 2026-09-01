@@ -30,12 +30,12 @@ test("re-subscribe + unsubscribe on the same name must not leave a zombie delive
     consumes: ["ctl"],
     target: (events: unknown[]) => (ctrl += events.length),
   });
-  await itx.invokeCapability("itx.stream.append({ type: 'ctl', payload: { n: 1 } })");
+  await itx.invokeCapability("itx.append({ type: 'ctl', payload: { n: 1 } })");
   await sleep(2000);
   expect(ctrl).toBe(1); // control: single subscribe delivers
   await itx.unsubscribe({ name: "control" });
   await sleep(800);
-  await itx.invokeCapability("itx.stream.append({ type: 'ctl', payload: { n: 2 } })");
+  await itx.invokeCapability("itx.append({ type: 'ctl', payload: { n: 2 } })");
   await sleep(2500);
   // control: NO delivery after unsubscribe (unsubscribe works for a single sub)
   expect(ctrl).toBe(1);
@@ -59,7 +59,7 @@ test("re-subscribe + unsubscribe on the same name must not leave a zombie delive
     target: (events: unknown[]) => (cb2 += events.length),
   });
 
-  await itx.invokeCapability("itx.stream.append({ type: 'mark', payload: { n: 1 } })");
+  await itx.invokeCapability("itx.append({ type: 'mark', payload: { n: 1 } })");
   await sleep(2500);
   // while both subscribed: only newest (cb2) delivered
   expect(cb2).toBe(1);
@@ -67,7 +67,7 @@ test("re-subscribe + unsubscribe on the same name must not leave a zombie delive
 
   await itx.unsubscribe({ name: "s" }); // client expects: subscription 's' fully gone
   await sleep(1000);
-  await itx.invokeCapability("itx.stream.append({ type: 'mark', payload: { n: 2 } })");
+  await itx.invokeCapability("itx.append({ type: 'mark', payload: { n: 2 } })");
   await sleep(3000);
 
   const st = await itx.hostState();

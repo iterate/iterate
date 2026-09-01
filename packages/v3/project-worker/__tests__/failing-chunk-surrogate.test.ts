@@ -46,7 +46,6 @@ test("a surrogate pair straddling a chunk boundary round-trips byte-identically"
 
   const [committed] = await itx.invokeCapability([
     "itx",
-    "stream",
     ["append", { type: "big", payload: { blob } }],
   ]);
   // The append echo is the in-memory object — always intact; the real test is storage read-back.
@@ -54,7 +53,7 @@ test("a surrogate pair straddling a chunk boundary round-trips byte-identically"
 
   // Read back through a FRESH session -> forces a real reassembly from event_chunks, not an echo.
   const itx2 = await harness.itx("prj_chunk_surrogate");
-  const page = await itx2.invokeCapability(["itx", "stream", ["read", committed.offset - 1, 10]]);
+  const page = await itx2.invokeCapability(["itx", ["read", committed.offset - 1, 10]]);
   const back = page.events.find((e: any) => e.offset === committed.offset);
   expect(back).toBeTruthy();
 

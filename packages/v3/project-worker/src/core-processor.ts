@@ -6,9 +6,9 @@
 // resume/reconfigure are appends — auditable, replayable, revocable like everything else);
 // enforcement is the parent reading this reduce at the commit point. No verbs, no machinery:
 //
-//   itx.stream.append({ type: 'events.iterate.com/stream/paused',  payload: { reason } })
-//   itx.stream.append({ type: 'events.iterate.com/stream/resumed' })
-//   itx.stream.append({ type: 'events.iterate.com/stream/breaker-configured',
+//   itx.append({ type: 'events.iterate.com/stream/paused',  payload: { reason } })
+//   itx.append({ type: 'events.iterate.com/stream/resumed' })
+//   itx.append({ type: 'events.iterate.com/stream/breaker-configured',
 //                       payload: { capacity: 100, refillPerSecond: 1 } })   // omit → breaker OFF
 //
 // TIME RIDES THE EVENTS: the reduce refills the bucket from each counted event's own createdAt

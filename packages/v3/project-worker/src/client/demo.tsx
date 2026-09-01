@@ -66,7 +66,7 @@ function Demo() {
   // A failed append (a dropped socket, a paused stream) must surface on the page, not vanish as an
   // unhandled rejection while the status still says "live".
   const append = (event: Record<string, unknown>) =>
-    void itx?.invokeCapability(["itx", "stream", ["append", event]]).catch((e: unknown) => {
+    void itx?.invokeCapability(["itx", ["append", event]]).catch((e: unknown) => {
       setConnectError(`append failed: ${e instanceof Error ? e.message : String(e)}`);
     });
 

@@ -1,5 +1,5 @@
 // ephemeral.e2e.test.ts — the ephemeral lane: shared offsets, named-type opt-in,
-// "*" never sweeps, appends through the routing table (itx.stream.append).
+// "*" never sweeps, appends through the routing table (itx.append).
 // (was proofs/prove_ephemeral.mjs)
 
 import { expect, test } from "vitest";
@@ -18,7 +18,7 @@ test("ephemeral lane: named-type folds ephemeral chunks, '*' never sweeps them, 
   await itx.enableProcessor("tally");
 
   // 2. durable mark, three ephemeral chunks, another durable mark — all through the table
-  const mark = await itx.invokeCapability(`itx.stream.append({ type: 'mark' })`);
+  const mark = await itx.invokeCapability(`itx.append({ type: 'mark' })`);
   // durable append via itx.invoke (full expression) — enablement mounts consume earlier offsets
   expect(Array.isArray(mark)).toBe(true);
   expect(mark[0].offset).toBeGreaterThanOrEqual(1);
@@ -26,13 +26,13 @@ test("ephemeral lane: named-type folds ephemeral chunks, '*' never sweeps them, 
   //  sequence — assert the shared-sequence INVARIANT instead: strictly increasing offsets)
   let lastOffset = mark[0].offset;
   for (let i = 0; i < 3; i++) {
-    const c = await itx.invokeCapability(`itx.stream.append({ type: 'chunk', ephemeral: true })`);
+    const c = await itx.invokeCapability(`itx.append({ type: 'chunk', ephemeral: true })`);
     // ephemeral append i+1 (shared offset sequence, strictly > lastOffset)
     expect(c[0].ephemeral).toBe(true);
     expect(c[0].offset).toBeGreaterThan(lastOffset);
     lastOffset = c[0].offset;
   }
-  await itx.invokeCapability(`itx.stream.append({ type: 'mark' })`);
+  await itx.invokeCapability(`itx.append({ type: 'mark' })`);
 
   // 3. the NAMED consumer folded the chunks; "*" saw none; both cursors cover the whole window
   // (drives are fire-and-forget — wait for the reduce to land rather than racing it)
@@ -59,9 +59,7 @@ test("ephemeral lane: named-type folds ephemeral chunks, '*' never sweeps them, 
   // 4. ephemeral misuse is a loud error
   let bad = "";
   try {
-    await itx.invokeCapability(
-      `itx.stream.append({ type: 'x', ephemeral: true, idempotencyKey: 'k' })`,
-    );
+    await itx.invokeCapability(`itx.append({ type: 'x', ephemeral: true, idempotencyKey: 'k' })`);
   } catch (e) {
     bad = String(e);
   }

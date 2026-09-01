@@ -57,7 +57,7 @@ export default class Mine extends WorkerEntrypoint {
 
   // 4. disableProcessor: enable, disable, snapshot now refuses
   await itx.enableProcessor("tally");
-  await itx.invokeCapability(`itx.stream.append({ type: 'mark' })`);
+  await itx.invokeCapability(`itx.append({ type: 'mark' })`);
   await itx.disableProcessor("tally");
   let denied = "";
   try {

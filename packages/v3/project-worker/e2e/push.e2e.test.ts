@@ -32,7 +32,7 @@ test("absent-target forwarder lane: retry→halt policy, resume recovery, auto-e
   expect(sub.name).toBe("digest"); // subscribe returns the row name
 
   // 3. three good marks → the worker's own kv shows 3 (the awaited call IS the ack)
-  for (let i = 0; i < 3; i++) await itx.invokeCapability(`itx.stream.append({ type: 'mark' })`);
+  for (let i = 0; i < 3; i++) await itx.invokeCapability(`itx.append({ type: 'mark' })`);
   const digested3 = await until(
     "digest=3",
     async () => {
@@ -47,9 +47,9 @@ test("absent-target forwarder lane: retry→halt policy, resume recovery, auto-e
   // IMMEDIATELY with an audit fact — no ladder burned on an error that can never succeed
   // (the stamped-flag doctrine from core/errors.ts). No skip, no pinning: ONE policy.
   const [poisoned] = await itx.invokeCapability(
-    `itx.stream.append({ type: 'mark', payload: { poison: true } })`,
+    `itx.append({ type: 'mark', payload: { poison: true } })`,
   );
-  await itx.invokeCapability(`itx.stream.append({ type: 'mark' })`); // a good one stuck behind it
+  await itx.invokeCapability(`itx.append({ type: 'mark' })`); // a good one stuck behind it
   const tallyAfterHalt = await until(
     "halt audit fact",
     async () => {

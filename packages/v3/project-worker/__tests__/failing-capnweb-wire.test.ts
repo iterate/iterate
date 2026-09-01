@@ -357,7 +357,6 @@ test("one-directional delivery: 100 ephemeral chunks arrive as inbound frames; t
   for (let i = 0; i < 100; i++)
     await producer.invokeCapability([
       "itx",
-      "stream",
       ["append", { type: "chunk", ephemeral: true, payload: { n: i } }],
     ]);
   await until("all 100 chunks delivered", () => received.length >= 100, 30_000);
@@ -386,7 +385,6 @@ test("one-directional delivery: 100 ephemeral chunks arrive as inbound frames; t
   for (let i = 100; i < 120; i++)
     await producer.invokeCapability([
       "itx",
-      "stream",
       ["append", { type: "chunk", ephemeral: true, payload: { n: i } }],
     ]);
   await until("20 more chunks delivered THROUGH the stall", () => received.length >= 120, 20_000);

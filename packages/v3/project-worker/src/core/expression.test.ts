@@ -13,8 +13,8 @@ const TABLE: [string, Expression][] = [
   ["itx.rpcStubs.get('robot-arm-1').ping()", ["itx", "rpcStubs", ["get", "robot-arm-1"], ["ping"]]],
   ["itx.facets.get({className:'Counter'})", ["itx", "facets", ["get", { className: "Counter" }]]],
   [
-    "itx.stream.append({type:'evt',payload:{n:1,ok:true,tags:['a','b']}})",
-    ["itx", "stream", ["append", { type: "evt", payload: { n: 1, ok: true, tags: ["a", "b"] } }]],
+    "itx.append({type:'evt',payload:{n:1,ok:true,tags:['a','b']}})",
+    ["itx", ["append", { type: "evt", payload: { n: 1, ok: true, tags: ["a", "b"] } }]],
   ],
   ["itx.math.add(1,-2.5,true,null)", ["itx", "math", ["add", 1, -2.5, true, null]]], // primitives
 ];

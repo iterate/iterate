@@ -25,7 +25,7 @@ async function run(
 ): Promise<{ stillListed: boolean; throws: boolean }> {
   const itx = bareItx(freshCtx(prefix));
   const append = (...events: unknown[]): Promise<unknown> =>
-    itx.invokeCapability(["itx", "stream", ["append", ...events]]);
+    itx.invokeCapability(["itx", ["append", ...events]]);
   const snap = (): Promise<{ state?: { counts?: Record<string, number> }; offset: number }> =>
     itx.invokeCapability("itx.facets.get('tally').snapshot()");
 

@@ -59,13 +59,13 @@ test("a dynamic-worker processor's live state combines reduced (ticks) + runtime
   expect(store.get()).toEqual({ ticks: 0, lastPokeMs: 0 });
 
   // REDUCED change: a durable 'tick' advances the fold → one delta syncs `ticks`; runtime untouched.
-  await itx.invokeCapability("itx.stream.append({ type: 'tick' })");
+  await itx.invokeCapability("itx.append({ type: 'tick' })");
   await until("ticks synced", () => store.get()?.ticks === 1);
   expect(store.get()!.lastPokeMs).toBe(0);
 
   // RUNTIME change: a 'poke' EPHEMERAL event bumps the runtime field in processEvent (no reduce) →
   // one out-of-band delta syncs `lastPokeMs`; the reduced field is preserved.
-  await itx.invokeCapability("itx.stream.append({ type: 'poke', ephemeral: true })");
+  await itx.invokeCapability("itx.append({ type: 'poke', ephemeral: true })");
   await until("poke synced", () => (store.get()?.lastPokeMs ?? 0) > 0);
   expect(store.get()!.ticks).toBe(1);
 
@@ -76,7 +76,7 @@ test("a dynamic-worker processor's live state combines reduced (ticks) + runtime
 
   // A second reduced change still chains from here (no re-seed needed after the runtime delta).
   const pokedAt = store.get()!.lastPokeMs;
-  await itx.invokeCapability("itx.stream.append({ type: 'tick' })");
+  await itx.invokeCapability("itx.append({ type: 'tick' })");
   await until("second tick synced", () => store.get()?.ticks === 2);
   expect(store.get()).toEqual({ ticks: 2, lastPokeMs: pokedAt });
 });

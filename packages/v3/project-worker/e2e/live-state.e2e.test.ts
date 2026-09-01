@@ -82,9 +82,9 @@ test("live state chains client-side from the door — mini-app + processor flavo
   expect(typeof seedRev).toBe("number");
   expect((proc.doc as { marks: number }).marks).toBe(0);
 
-  await itx.invokeCapability(`itx.stream.append({ type: 'mark' })`);
+  await itx.invokeCapability(`itx.append({ type: 'mark' })`);
   await until("mark folded", () => ((proc.doc as { marks?: number })?.marks ?? 0) >= 1);
-  await itx.invokeCapability(`itx.stream.append({ type: 'mark' })`);
+  await itx.invokeCapability(`itx.append({ type: 'mark' })`);
   await until("second mark", () => ((proc.doc as { marks?: number })?.marks ?? 0) >= 2);
   // processor patches chained from the seed rev, zero re-reads
   expect(proc.applied).toBe(2);

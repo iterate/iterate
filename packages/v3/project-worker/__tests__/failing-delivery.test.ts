@@ -59,9 +59,9 @@ function collector() {
 }
 
 const append = (itx: any, ...events: unknown[]) =>
-  itx.invokeCapability(["itx", "stream", ["append", ...events]]);
+  itx.invokeCapability(["itx", ["append", ...events]]);
 const readAll = async (itx: any): Promise<any[]> =>
-  (await itx.invokeCapability(["itx", "stream", ["read", 0, 500]])).events;
+  (await itx.invokeCapability(["itx", ["read", 0, 500]])).events;
 
 // Provisions/handles retained for the whole file so nothing client-side disposes a parked
 // callback while a test still needs it.

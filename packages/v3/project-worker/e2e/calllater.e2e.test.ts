@@ -55,7 +55,7 @@ export default class Consumer extends WorkerEntrypoint {
     const itx = await this.env.ITX.get();
     await new Promise((resolve) =>
       itx.demo.timer.callLater(250, async () => {
-        await itx.stream.append({ type: 'pinged-from-worker' }); // AWAIT so it lands before we return
+        await itx.append({ type: 'pinged-from-worker' }); // AWAIT so it lands before we return
         resolve();
       }),
     );
@@ -67,7 +67,7 @@ export default class Consumer extends WorkerEntrypoint {
   // dynamic worker cap ran to completion (its callback resolved it)
   expect(ran?.ran).toBe(true);
   const got = await until("worker callback appended to the stream", async () => {
-    const page = await itx.invokeCapability(["itx", "stream", ["read", 0, 500]]);
+    const page = await itx.invokeCapability(["itx", ["read", 0, 500]]);
     return page.events.find((e: { type: string }) => e.type === "pinged-from-worker");
   });
   // dynamic worker: env.ITX.get().demo.timer.callLater(cb) — the callback ran back inside the worker

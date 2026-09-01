@@ -1,5 +1,5 @@
 // built-ins.ts — THE BUILT-INS: a plain record whose KEYS are the physical-layer roots (`whoami`,
-// `kv`, `stream`, `cd`, `rpcStubs`, `facets`, `load`, `runScript`, `connectToCapnweb`). A call
+// `kv`, `append`, `read`, `cd`, `rpcStubs`, `facets`, `load`, `runScript`, `connectToCapnweb`). A call
 // `itx.<root>…` resolves DIRECTLY against these (capability-table-processor.ts `resolve`, built-in
 // first) — no config, no mount. Userspace `provide` mounts resolve against `{ itx }` alone and
 // recurse through the `itx` symbol to reach a root; a bare root is unspellable, so the built-ins
@@ -98,11 +98,13 @@ interface BuiltInScope {
     delete(key: string): Promise<{ ok: true }>;
     list(prefix?: string): Promise<{ keys: string[] }>;
   };
-  /** This context's append-only event log (the facets that REDUCE it are `itx.facets.get(name)`). */
-  stream: {
-    append(...events: StreamEventInput[]): Promise<unknown>;
-    read(afterOffset?: number, limit?: number): Promise<unknown>;
-  };
+  /** Append to this context's append-only event log (the facets that REDUCE it are
+   *  `itx.facets.get(name)`). A top-level root, so the expression surface mirrors the edge
+   *  RpcTarget exactly: `itx.append({...})` is one spelling on every lane. */
+  append(...events: StreamEventInput[]): Promise<unknown>;
+  /** Read a page of the durable log — `itx.read(afterOffset?, limit?)`, the flattened twin of
+   *  `append` (non-minting: a probe never wakes storage). */
+  read(afterOffset?: number, limit?: number): Promise<unknown>;
   /** Navigate to a SIBLING context, routed through its own table. */
   cd(path: string): unknown;
   /** The live rpc-stub registry (`get`/`list`/`close`; `provide` is relay-side — DON'T-PIN). */
@@ -215,10 +217,9 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         }
       },
     },
-    stream: {
-      append: (...e: StreamEventInput[]) => own().append(...e),
-      read: (after?: number, limit?: number) => own().read(after, limit),
-    },
+    // Own-enumerable closures (NOT prototype methods) — the resolver's `Object.hasOwn` gate is why.
+    append: (...e: StreamEventInput[]) => own().append(...e),
+    read: (after?: number, limit?: number) => own().read(after, limit),
     // `cd` routes through the SIBLING's own table, EXCEPT append/read, which skip the facet hop
     // straight to the log door (the physical fast path). Codec-named, so only THIS project is reachable.
     cd: (siblingPath: string) =>

@@ -60,7 +60,7 @@ test("resume racing an in-flight forwarder delivery that then fails must re-deli
   });
   expect(sub.name).toBeTruthy(); // subscribed on the forwarder lane
 
-  const append = (ev: unknown) => itx.invokeCapability(`itx.stream.append(${JSON.stringify(ev)})`);
+  const append = (ev: unknown) => itx.invokeCapability(`itx.append(${JSON.stringify(ev)})`);
 
   // 1. m1 → the forwarder delivers [m1]; the callback holds it in flight.
   const [m1] = await append({ type: "mark", payload: { n: 1 } });
@@ -144,7 +144,7 @@ test("resume racing an in-flight forwarder delivery that then SUCCEEDS: the rese
   });
   expect(sub.name).toBeTruthy(); // subscribed on the forwarder lane
 
-  const append = (ev: unknown) => itx.invokeCapability(`itx.stream.append(${JSON.stringify(ev)})`);
+  const append = (ev: unknown) => itx.invokeCapability(`itx.append(${JSON.stringify(ev)})`);
 
   // 1. m1 → the forwarder delivers [m1]; the callback holds it in flight.
   const [m1] = await append({ type: "mark", payload: { n: 1 } });

@@ -38,7 +38,7 @@ async function until<T>(
 }
 
 const append = (itx: any, ...events: unknown[]) =>
-  itx.invokeCapability(["itx", "stream", ["append", ...events]]);
+  itx.invokeCapability(["itx", ["append", ...events]]);
 const kvPut = (itx: any, k: string, v: string) =>
   itx.invokeCapability(["itx", "kv", ["put", k, v]]);
 
@@ -251,7 +251,7 @@ test("cd('') resolves to THIS context (self) and answers rather than wedging", a
     ),
   ]);
   expect((raced as any[])[0].type).toBe("self-ping");
-  const page = await itx.invokeCapability(["itx", "stream", ["read", 0, 50]]);
+  const page = await itx.invokeCapability(["itx", ["read", 0, 50]]);
   expect(page.events.map((e: any) => e.type)).toContain("self-ping");
 });
 

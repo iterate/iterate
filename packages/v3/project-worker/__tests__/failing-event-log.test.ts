@@ -19,7 +19,7 @@ afterAll(async () => {
 // ── tiny verbs over the real client surface (no framework — the smoke test's voice) ──
 
 const append = (itx: any, ...events: unknown[]): Promise<any[]> =>
-  itx.invokeCapability(["itx", "stream", ["append", ...events]]);
+  itx.invokeCapability(["itx", ["append", ...events]]);
 
 const read = (
   itx: any,
@@ -28,7 +28,6 @@ const read = (
 ): Promise<{ events: any[]; scannedThroughOffset: number }> =>
   itx.invokeCapability([
     "itx",
-    "stream",
     [
       "read",
       ...(afterOffset === undefined

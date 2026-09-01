@@ -12,9 +12,7 @@ test("core fold: pause/resume, token-bucket breaker, ephemeral bypass, hostState
   const itx = openItx(freshCtx("core"));
 
   const append = (type: string, payload?: Record<string, unknown>): Promise<unknown> =>
-    itx.invokeCapability(
-      `itx.stream.append(${JSON.stringify({ type, ...(payload && { payload }) })})`,
-    );
+    itx.invokeCapability(`itx.append(${JSON.stringify({ type, ...(payload && { payload }) })})`);
   // Runs `fn`; returns "ok" if it rejects with a message matching `re`, null if it resolves, else
   // the (truncated) mismatched error message.
   const rejects = async (fn: () => Promise<unknown>, re: RegExp): Promise<string | null> => {
@@ -78,12 +76,10 @@ test("core fold: pause/resume, token-bucket breaker, ephemeral bypass, hostState
   // ephemeral events are never counted (they cost no storage)
   // placeholder no-op from the proof — a durable append the empty bucket rejects (kept for fidelity)
   await rejects(() => append("chunk-ish"), /x/).catch(() => null);
-  const ephOk = await itx
-    .invokeCapability(`itx.stream.append({ type: 'chunk', ephemeral: true })`)
-    .then(
-      () => true,
-      (e: unknown) => String(e).slice(0, 80),
-    );
+  const ephOk = await itx.invokeCapability(`itx.append({ type: 'chunk', ephemeral: true })`).then(
+    () => true,
+    (e: unknown) => String(e).slice(0, 80),
+  );
   // ephemeral appends bypass the breaker (durable growth is what it meters)
   expect(ephOk).toBe(true);
 

@@ -6,7 +6,7 @@ import { expect, test } from "vitest";
 import { freshCtx, openItx } from "./support/client.ts";
 
 const append = (itx: any, events: unknown[]) =>
-  itx.invokeCapability(["itx", "stream", ["append", ...events]]);
+  itx.invokeCapability(["itx", ["append", ...events]]);
 
 test("5MB chunked body: single dense event, byte-identical round-trip, idempotent dedupe", async () => {
   const ctx = freshCtx("chunk");
@@ -15,7 +15,7 @@ test("5MB chunked body: single dense event, byte-identical round-trip, idempoten
   // A small event, then a 5MB body, then a small event — dense offsets on both sides.
   const [before] = await append(itx, [{ type: "small-before" }]);
   // The TRUE head (platform events — woken, live-state deltas — may sit past the receipt).
-  const headBeforeBig = (await itx.invokeCapability(["itx", "stream", ["read", before.offset]]))
+  const headBeforeBig = (await itx.invokeCapability(["itx", ["read", before.offset]]))
     .scannedThroughOffset;
   const blob = "y".repeat(5 * 1024 * 1024);
   const big = await append(itx, [{ type: "big", payload: { blob } }]);
@@ -29,7 +29,7 @@ test("5MB chunked body: single dense event, byte-identical round-trip, idempoten
 
   // Read it back through a FRESH session (same ctx) — a real storage reassembly, not an echo.
   const itx2 = openItx(ctx);
-  const page = await itx2.invokeCapability(["itx", "stream", ["read", before.offset, 500]]);
+  const page = await itx2.invokeCapability(["itx", ["read", before.offset, 500]]);
   const back = page.events.find((e: { offset: number }) => e.offset === big[0].offset);
   // 5MB event reads back
   expect(back?.type).toBe("big");

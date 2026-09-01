@@ -64,7 +64,7 @@ test("throughput+latency guard: 1000 ephemeral chunks flood through one-directio
       ephemeral: true as const,
       payload: { seq: seq + i, sentAtMs: Date.now(), pad: PAYLOAD },
     }));
-    appendCalls.push(itx.invokeCapability(["itx", "stream", ["append", ...batch]]));
+    appendCalls.push(itx.invokeCapability(["itx", ["append", ...batch]]));
   }
   await Promise.all(appendCalls);
   const appendsDoneAtMs = Date.now();

@@ -28,7 +28,7 @@ test("plain forwarder delivery failure retries via the ladder (no resume in play
     start: "beginning",
   });
 
-  await itx.invokeCapability(`itx.stream.append({"type":"mark"})`);
+  await itx.invokeCapability(`itx.append({"type":"mark"})`);
   const t0 = Date.now();
   while (Date.now() - t0 < 15000 && invocations < 2) await sleep(200);
   // plain failure retried within 15s (retry ladder works)

@@ -48,7 +48,7 @@ test("ephemeral flood: all chunks delivered exactly once, batched, under latency
       ephemeral: true,
       payload: { seq: seq + i, sentAtMs: Date.now(), pad },
     }));
-    appendCalls.push(itx.invokeCapability(["itx", "stream", ["append", ...batch]]));
+    appendCalls.push(itx.invokeCapability(["itx", ["append", ...batch]]));
   }
   await Promise.all(appendCalls);
   const appendsDoneAtMs = Date.now();

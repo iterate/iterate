@@ -23,7 +23,7 @@
 import { RpcTarget } from "capnweb";
 import type { IterateContextDurableObject } from "../stream-durable-object.ts";
 import { CAPABILITY_FETCH_HEADER, encodeCapabilityFetchHeader } from "./fetch-capabilities.ts";
-import type { DeliveryPolicy, StreamEvent } from "./events.ts";
+import type { DeliveryPolicy, StreamEvent, StreamEventInput } from "./events.ts";
 import type { WaitForEventFilter } from "./stream.ts";
 import { print, type Expression, type ItxExpression } from "./expression.ts";
 import { InvokeHandle } from "./invoke-handle.ts";
@@ -185,10 +185,10 @@ export class IterateContext extends RpcTarget {
   }
 
   /** THE dispatch door (built-ins + provided capabilities) — the ONE way to call the itx surface.
-   *  Takes an `ItxExpression`: a dotted string (`"itx.streams.get('/').append({...})"`) OR the parsed
-   *  array (`["itx","streams",["get","/"],["append",{...}]]`); both carry mid-path call args, and both
-   *  work here. The dotted sugar `itx.a.b(x)` folds into `["itx","a",["b",x]]` (see the prototype
-   *  fallback at the bottom of this file) and lands right here. */
+   *  Takes an `ItxExpression`: a dotted string (`"itx.append({...})"`) OR the parsed array
+   *  (`["itx",["append",{...}]]`); both carry mid-path call args, and both work here. The dotted
+   *  sugar `itx.a.b(x)` folds into `["itx","a",["b",x]]` (see the prototype fallback at the bottom
+   *  of this file) and lands right here. */
   invokeCapability(call: ItxExpression): Promise<unknown> {
     return this.#host.invoke(call);
   }
@@ -198,6 +198,24 @@ export class IterateContext extends RpcTarget {
    *  HTTP door; there is no second transport, just this method over capnweb. */
   hostState(): Promise<Record<string, unknown>> {
     return this.#host.hostState();
+  }
+
+  /** Append events to this context's log — the flattened stream verb, same commit pipeline as the
+   *  expression spelling `itx.append({...})` (built-ins.ts root). Validation, idempotency, the
+   *  inline reduces, and the fan-out all live on the DO (Stream.append owns the contract); this
+   *  method just proxies. Returns the committed events with their assigned offsets. */
+  append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
+    return this.#host.append(...events);
+  }
+
+  /** Read a page of the durable log after `afterOffset` (default 0; `limit` default 500).
+   *  `scannedThroughOffset` is the client's contiguity cursor — chain it for the next page. A
+   *  non-minting probe: reading a virgin stream leaves it virgin. */
+  read(
+    afterOffset?: number,
+    limit?: number,
+  ): Promise<{ events: StreamEvent[]; scannedThroughOffset: number }> {
+    return this.#host.read(afterOffset, limit);
   }
 
   /** Wait for the next event matching `filter` — or the first committed durable match after an

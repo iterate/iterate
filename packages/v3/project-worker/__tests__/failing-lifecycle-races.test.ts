@@ -57,16 +57,16 @@ function collector() {
 }
 
 const append = (itx: any, ...events: unknown[]) =>
-  itx.invokeCapability(["itx", "stream", ["append", ...events]]);
+  itx.invokeCapability(["itx", ["append", ...events]]);
 const readAll = async (itx: any): Promise<any[]> =>
-  (await itx.invokeCapability(["itx", "stream", ["read", 0, 500]])).events;
+  (await itx.invokeCapability(["itx", ["read", 0, 500]])).events;
 // The DURABLE head — the last durable row's offset, NOT scannedThroughOffset. Under default-on
 // live state, a "*" processor (tally) emits a live-state ephemeral per event; those inflate
 // scannedThroughOffset, but the pump deliberately skips driving facets for live-state-only commits
 // (stream-durable-object.ts) so a facet's offset trails the raw head by its own trailing emit. A
 // facet only ever catches up to the DURABLE head, which is what "has it reduced the log" means.
 const readHead = async (itx: any): Promise<number> => {
-  const { events } = (await itx.invokeCapability(["itx", "stream", ["read", 0, 500]])) as {
+  const { events } = (await itx.invokeCapability(["itx", ["read", 0, 500]])) as {
     events: { offset: number }[];
   };
   return events.length ? events[events.length - 1].offset : 0;
@@ -350,7 +350,7 @@ test("FIXED: double-enable then ONE disableProcessor disables it (clears the WHO
 
 // ─────────────────────────── 5. append-during-drive reentrancy ───────────────────────────
 
-test("reentrancy characterized: a forwarder delivery targeting itx.stream.append neither deadlocks nor runs away — the delivery call shape is refused and the row halts loudly", async () => {
+test("reentrancy characterized: a forwarder delivery targeting itx.append neither deadlocks nor runs away — the delivery call shape is refused and the row halts loudly", async () => {
   // deliverTo PERMITS the spelling (any absent itx expression is a legal target) and the
   // delivery call is append(eventsArray, range) — whose first arg is an ARRAY. append's runtime
   // typeless guard refuses it (an array has no string `type` → "append: every event needs a
@@ -367,7 +367,7 @@ test("reentrancy characterized: a forwarder delivery targeting itx.stream.append
     name: "reenter",
     consumes: ["seed"],
     maxAttempts: 2,
-    target: "itx.stream.append",
+    target: "itx.append",
   });
   const [seed] = await append(itx, { type: "seed", payload: { n: 1 } });
   await until("control subscriber saw the seed", () => ctrl.offsets().includes(seed.offset));
