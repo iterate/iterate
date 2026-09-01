@@ -1,7 +1,8 @@
 // The phone approver, end to end in a browser — and entirely INSIDE the
 // conversation: a plain chat message ("Run the approve-me burst") reaches an
-// agent on an intercepted/* model, served by THIS spec's itx.ai.intercept
-// handler pairing each command with a codemode script. The script runs a
+// agent on an intercepted/* model, served by THIS spec's response handler
+// (the fixture agent helper's churn-surviving interceptor) pairing each
+// command with a codemode script. The script runs a
 // burst deterministically, the requests park at the egress approval gate as ONE
 // batch, and the approval dialog appears in-thread where the human is
 // already looking. Approve all behind the Face ID stand-in (the web build
@@ -10,7 +11,7 @@
 // thread.
 //
 // DETERMINISTIC turns, asserted from the journal: every llm-request in the
-// thread names model intercepted/driver — a model no real provider can serve, only
+// thread names model intercepted/typed — a model no real provider can serve, only
 // the handler in this process. The scripts narrate their own outcomes with
 // `itx.chat.sendMessage(...)` and return nothing, so each turn's script ends
 // the loop and no second request follows.
@@ -32,7 +33,7 @@ import { connectItxReady } from "iterate/node";
 import { localOsDevServer } from "../../apps/os/scripts/dev.ts";
 import { withTunnel } from "../../apps/os/e2e/test-support/tunnel.ts";
 import { signUpWithEmailOtp, uniqueSignupEmail } from "../test-support/email-otp-signup.ts";
-import { resolveAdminSecret } from "../test-support/forged-session.ts";
+import { createAgentHelper, resolveAdminSecret } from "../test-support/forged-session.ts";
 import { test } from "../test-support/test.ts";
 import { withApprovalDeliveryDiagnostic } from "./approval-delivery-diagnostics.ts";
 
@@ -146,24 +147,28 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     await page.getByText("New chat").click();
     await page.getByPlaceholder("Message").waitFor();
     const agentPath = decodeURIComponent(new URL(page.url()).searchParams.get("path")!);
-    // Point the chat's agent at an intercepted/* model (an ordinary journaled config
-    // event) and drop the newborn debounce so each command's turn opens fast.
-    // The client defers creation to the first message, so birth the agent
-    // explicitly first (get-or-create, the same create call the client uses).
-    using agent = itx.agents.get(agentPath);
-    await agent.create();
+    // The fixture agent helper owns what this spec used to hand-roll: the
+    // agent's birth (get-or-create — the client defers creation to the first
+    // message), the intercepted/* config append with a dropped newborn
+    // debounce, and the interceptor serving the model — churn-surviving, on a
+    // connection dedicated to the interception (a raw itx.ai.intercept dies
+    // silently with this spec's admin session on a mid-spec DO restart; see
+    // installResilientAiInterceptor).
+    await using agentHelper = createAgentHelper({
+      baseUrl: osBaseUrl,
+      projectId,
+      projectSlug,
+      slugPrefix: "mobile-approvals",
+      getAgent: (path) => itx.agents.get(path),
+    });
+    const agent = await agentHelper.createAgent({ path: agentPath });
     // Cold script isolates on a fresh preview deploy take many seconds before
     // script-run-started, and no spinner covers that window (a known product
     // latency, documented in notifications.spec.ts). One throwaway run pays
-    // the cold start now — concurrent with the config append, awaited before
-    // the first command. The settle poll below filters to agent-authored
-    // executions so this run stays invisible to the count.
-    const scriptIsolateWarm = agent.capabilityHost.runScript("async () => 'warm'");
-    await agent.append({
-      type: "events.iterate.com/agent/configured",
-      payload: { config: { llm: { model: "intercepted/driver" }, llmRequestDebounceMs: 250 } },
-    });
-    await scriptIsolateWarm;
+    // the cold start now, awaited before the first command. The settle poll
+    // below filters to agent-authored executions so this run stays invisible
+    // to the count.
+    await agent.capabilityHost.runScript("async () => 'warm'");
     // Any rules-cache time the setup didn't absorb passes as marked dead air
     // so the rendered video skips the idle.
     await (page.videoMode
@@ -191,8 +196,8 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
         "```",
       ].join("\n");
 
-    // The "model": commands pair with scripts right here, in-test, over the
-    // live capnweb hop — the interception this repo grew for exactly this.
+    // The "model": commands pair with scripts right here, in-test, routed by
+    // the command text — the interception this repo grew for exactly this.
     const bursts: Record<string, { marker: string; statusUpdates: object[] }> = {
       "Run the approve-me burst": {
         marker: "approve-me",
@@ -208,9 +213,11 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
         ],
       },
     };
-    using _interception = await itx.ai.intercept(async ({ source, body }) => {
-      if (source !== "agent-turn") throw new Error(`unexpected source: ${source}`);
-      const message = [...body.messages].reverse().find((m) => m.role === "user")?.content ?? "";
+    // Standing responder (the queue fingerprints calls, so a RETRIED llm
+    // attempt replays the script it got last time).
+    agent.responses.set(async (call) => {
+      const message =
+        [...call.body.messages].reverse().find((m) => m.role === "user")?.content ?? "";
       const burst = bursts[message.trim()];
       if (!burst) throw new Error(`unexpected message: ${message}`);
       return burstScript(burst.marker, burst.statusUpdates);
@@ -316,14 +323,14 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
 
     // The headline guarantee, journal-certified: the ENTIRE conversation —
     // two commands, two bursts, two decisions, two narrated outcomes — opened
-    // exactly two LLM requests, both on intercepted/driver, a model only THIS spec's
+    // exactly two LLM requests, both on intercepted/typed, a model only THIS spec's
     // handler can serve. Nothing nondeterministic ever ran.
     const llmRequests = await itx.streams.get(agentPath).getEvents({
       eventTypes: ["events.iterate.com/agent/llm-request-requested"],
     });
     expect(llmRequests.map((event) => (event.payload as { model: string }).model)).toEqual([
-      "intercepted/driver",
-      "intercepted/driver",
+      "intercepted/typed",
+      "intercepted/typed",
     ]);
 
     // A decision releases the script immediately, while the notification

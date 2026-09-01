@@ -30,7 +30,7 @@ import { connectItxReady } from "iterate/node";
 import { localOsDevServer } from "../../apps/os/scripts/dev.ts";
 import { withTunnel } from "../../apps/os/e2e/test-support/tunnel.ts";
 import { signUpWithEmailOtp, uniqueSignupEmail } from "../test-support/email-otp-signup.ts";
-import { resolveAdminSecret } from "../test-support/forged-session.ts";
+import { createAgentHelper, resolveAdminSecret } from "../test-support/forged-session.ts";
 import { test } from "../test-support/test.ts";
 import { withApprovalDeliveryDiagnostic } from "./approval-delivery-diagnostics.ts";
 
@@ -179,22 +179,28 @@ test("the approval push is suppressed in the watched thread and sent when you're
     await page.getByText("New chat").click();
     await page.getByPlaceholder("Message").waitFor();
     const watchedPath = decodeURIComponent(new URL(page.url()).searchParams.get("path")!);
-    const watchedAgent = itx.agents.get(watchedPath);
     // Start this act through the visible composer: the message's turn runs
-    // on an intercepted/* model, served by THIS spec's interceptor pairing the
-    // command with the park script — deterministic, and the run carries the
-    // agent's own script provenance like a real turn. The agent is birthed
-    // and pointed at intercepted/driver first (the client defers creation to the
-    // first message, and the birth batch's model default must not outrank
-    // the fake config).
-    await watchedAgent.create();
-    await watchedAgent.append({
-      type: "events.iterate.com/agent/configured",
-      payload: { config: { llm: { model: "intercepted/driver" }, llmRequestDebounceMs: 250 } },
+    // on an intercepted/* model, served by THIS spec's response handler
+    // pairing the command with the park script — deterministic, and the run
+    // carries the agent's own script provenance like a real turn. The fixture
+    // agent helper owns the ritual: agent birth first (the client defers
+    // creation to the first message, and the birth batch's model default must
+    // not outrank the fake config), the intercepted/* config append, and a
+    // churn-surviving interceptor on a connection dedicated to the
+    // interception (a raw itx.ai.intercept dies silently with this spec's
+    // admin session on a mid-spec DO restart; see
+    // installResilientAiInterceptor).
+    await using agentHelper = createAgentHelper({
+      baseUrl: osBaseUrl,
+      projectId,
+      projectSlug,
+      slugPrefix: "mobile-notifs",
+      getAgent: (path) => itx.agents.get(path),
     });
-    using _interception = await itx.ai.intercept(async ({ source, body }) => {
-      if (source !== "agent-turn") throw new Error(`unexpected source: ${source}`);
-      const message = [...body.messages].reverse().find((m) => m.role === "user")?.content ?? "";
+    const watchedAgent = await agentHelper.createAgent({ path: watchedPath });
+    watchedAgent.responses.set(async (call) => {
+      const message =
+        [...call.body.messages].reverse().find((m) => m.role === "user")?.content ?? "";
       if (!/park one watched request/i.test(message)) {
         throw new Error(`unexpected message: ${message}`);
       }
