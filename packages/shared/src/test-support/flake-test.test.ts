@@ -33,7 +33,19 @@ test("vitest's real expected-fail machinery produces the contracted verdicts", a
       "--reporter=json",
       `--outputFile=${outputFile}`,
     ],
-    { cwd: fixtureDir, encoding: "utf8", timeout: 30_000 },
+    {
+      cwd: fixtureDir,
+      encoding: "utf8",
+      timeout: 30_000,
+      // Strip the parent runner's own variables: nested VITEST_* can make the
+      // child collect no tests, and an inherited FLAKE_RECORD_DIR would leak
+      // the fixture's synthetic outcomes into real flake telemetry.
+      env: Object.fromEntries(
+        Object.entries(process.env).filter(
+          ([key]) => !key.startsWith("VITEST") && key !== "FLAKE_RECORD_DIR" && key !== "TEST",
+        ),
+      ),
+    },
   );
 
   // The fixture's unexpected-error case must turn the whole child run red.
@@ -52,6 +64,10 @@ test("vitest's real expected-fail machinery produces the contracted verdicts", a
 });
 
 test("registration lands on the runner's own expected-fail variant", async () => {
+  // Scoped record dir: this test executes a wrapped body, and without the
+  // scope its outcome would land in whatever FLAKE_RECORD_DIR the surrounding
+  // run has set — synthetic data leaking into real flake telemetry.
+  using _recordDir = flakeRecordDir();
   const registered: { args: unknown[]; body: (...bodyArgs: unknown[]) => Promise<unknown> }[] = [];
   const plain = vi.fn();
   const fakeVitest = Object.assign(plain, {
