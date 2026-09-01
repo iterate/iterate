@@ -147,11 +147,13 @@ export const run = (command: string, args: string[], cwd: string) =>
 // pnpm dlx prefixes install noise and eas-cli appends upgrade notices, so
 // slice out the JSON payload rather than parsing the whole stream.
 export const easJson = (args: string[]) => {
-  const output = run(
-    "pnpm",
-    ["dlx", "eas-cli@21.0.1", ...args, "--non-interactive", "--json"],
-    mobileDir,
-  );
+  // build:view rejects --non-interactive outright (eas-cli 21.0.1:
+  // "Nonexistent flag") — it prompts for nothing anyway. Every other
+  // command we run wants it so CI can never hang on a prompt. Seen live:
+  // refresh-install-qr died on its first real run (2026-08-31), leaving
+  // "build still running" captions unflipped.
+  const flags = args[0] === "build:view" ? ["--json"] : ["--non-interactive", "--json"];
+  const output = run("pnpm", ["dlx", "eas-cli@21.0.1", ...args, ...flags], mobileDir);
   const start = output.search(/[[{]/);
   const end = Math.max(output.lastIndexOf("]"), output.lastIndexOf("}"));
   if (start === -1 || end < start) {
