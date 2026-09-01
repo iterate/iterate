@@ -1,3 +1,4 @@
+// iterate-lint-disable terminology/no-metaphorical-lane-door-seam -- `lane` is this repo's established name for a CI test-execution category (TEST_TELEMETRY_LANE, docs/testing.md "test lanes"); renaming this field would fork that vocabulary
 import {
   isIdempotencyConflict,
   StreamProcessor,
