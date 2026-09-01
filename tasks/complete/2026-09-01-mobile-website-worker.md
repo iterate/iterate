@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: large
 branch: mobile-website
 ---
@@ -14,8 +14,7 @@ mobile.iterate.com is also a **universal-link prefix** now — the worker
 serves apple-app-site-association (team 5N6A5Q26NT, dug out of the build's
 embedded.mobileprovision) for `/preview-channel/*`, bare paths are
 canonical, and app.json gains the applinks entitlement (fingerprint moves →
-this PR triggers the one build carrying it). Remaining: merge → first
-deploy → cutover runbook below → phone-verify the universal link.
+this PR triggers the one build carrying it). Merged (#2558); cutover runbook executed and verified live 2026-09-01 (site, snapshot, AASA, 301s, in-place install with build b43a12e5). Only the on-phone universal-link tap remains a human check.
 
 ## Why (Misha, condensed)
 
