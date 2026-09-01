@@ -25,7 +25,7 @@ export async function withTunnel(
   if (typeof args[0] === "function") {
     options = { fetch: args[0] };
   } else {
-    options = args[0] as TunnelOptions;
+    options = args[0];
   }
   const path = options.path ?? "";
   if (e2eTargetNeedsPublicTunnel()) {

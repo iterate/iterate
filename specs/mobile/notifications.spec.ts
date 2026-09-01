@@ -107,6 +107,13 @@ test("the approval push is suppressed in the watched thread and sent when you're
   await page.getByRole("button", { name: "Send" }).click();
 
   await page.getByRole("button", { name: "Approve (Face ID)" }).waitFor();
+  // The dialog above derives from the watched batch's approval, so it is
+  // journaled by now — anchor the elsewhere wait past it.
+  const watchedApproval = await rootStream.waitForEvent({
+    afterOffset: beforeEnrollmentApprovalRequest.offset,
+    eventTypes: ["events.iterate.com/project/human-approval-requested"],
+    timeoutMs: 15_000,
+  });
 
   await page.goBack();
   await page.getByLabel("Open project menu").click();
@@ -127,7 +134,7 @@ test("the approval push is suppressed in the watched thread and sent when you're
     }
   `);
   const elsewhereApproval = await rootStream.waitForEvent({
-    afterOffset: beforeEnrollmentApprovalRequest.offset,
+    afterOffset: watchedApproval.offset,
     eventTypes: ["events.iterate.com/project/human-approval-requested"],
     timeoutMs: 30_000,
   });

@@ -875,14 +875,18 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "files:\n" +
       "  [\n" +
       "    \"**/*.{ts,tsx,mts,cts}\",\n" +
-      "    \"!**/*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx,mts,cts}\",\n" +
-      "    \"!**/{__tests__,test,tests,spec,specs}/**\",\n" +
+      "    \"!**/*.{test,spec,test-worker,fixtures}.{js,jsx,mjs,cjs,ts,tsx,mts,cts}\",\n" +
+      "    \"!**/{__tests__,test,tests,spec,specs,e2e,test-support,fixtures}/**\",\n" +
+      "    \"!**/*{test-helper,test-support,test-harness,fixture}*.{ts,tsx,mts,cts}\",\n" +
+      "    \"!**/vitest*.config.*\",\n" +
       "  ]\n" +
       "---\n" +
       "\n" +
       "# Explain type casts\n" +
       "\n" +
-      "Every type cast must have a nearby explanation of why it is safe and cannot reasonably be avoided.\n",
+      "Every type cast must have a nearby explanation of why it is safe and cannot reasonably be avoided.\n" +
+      "\n" +
+      "Test code is exempt. The negated globs cover the common layouts, but any file that exists only to support tests (helpers, fixtures, harnesses, fake services) is also out of scope even if its name doesn't match one of them.\n",
   },
   {
     path: "rules/typescript/no-inferable-type-annotation.md",
