@@ -67,5 +67,5 @@ test("waitForEvent: the timeout crosses the edge as code WAIT_TIMEOUT", async ()
     (e: unknown) => e as Error & { code?: string },
   );
   expect(err).not.toBeNull();
-  expect(err!.code).toBe("WAIT_TIMEOUT"); // the own-property code survives every hop (core/errors.ts)
+  expect(err!.code).toBe("WAIT_TIMEOUT"); // the own-property code survives every hop (lib/errors.ts)
 });

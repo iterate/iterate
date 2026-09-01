@@ -83,7 +83,7 @@ test("stream.append rejects an empty or whitespace-only event type", async () =>
 
 // ═══════════════════ EGRESS / SECRETS — the terminal now FAILS LOUD (S4 fixed) ═══════════════════
 //
-// FIXED (☠ S4, terminal leak): the DO's egress terminal (#egress in stream-durable-object.ts) is
+// FIXED (☠ S4, terminal leak): the DO's egress terminal (#egress in iterate-context-durable-object.ts) is
 // the LAST door that owns the project scope — a `{{secret:project:NAME}}` token that survives
 // substitution means no such secret is stored, and forwarding it would leak the secret's NAME to
 // the external destination and send a garbage credential in its place. The door now scans the

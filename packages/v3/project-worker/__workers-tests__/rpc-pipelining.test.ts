@@ -13,9 +13,9 @@ import "../src/worker.ts";
 import * as cloudflareWorkers from "cloudflare:workers";
 import { env } from "cloudflare:workers";
 import { expect, test } from "vitest";
-import { evaluate } from "../src/core/dispatch.ts";
-import { canonicalName } from "../src/core/durable-object-names.ts";
-import type { IterateContextDurableObject } from "../src/stream-durable-object.ts";
+import { evaluate } from "../src/context/dispatch.ts";
+import { canonicalName } from "../src/context/durable-object-names.ts";
+import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
 
 test("cloudflare:workers exports RpcPromise and native RPC calls are instanceof it", async () => {
   const RpcPromise = (cloudflareWorkers as unknown as { RpcPromise: abstract new () => unknown })

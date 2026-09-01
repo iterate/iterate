@@ -1786,3 +1786,18 @@ end-to-end 15267 ev/s | p50 36ms p95 42ms | batching 50×` (was ~5,400 ev/s, p50
   the `stream/woken` record, durable in each incarnation's first batch, marks the boundary for anyone
   chaining ranges across it.
 - GATES: typecheck clean · unit+harness+workers 347 passed / 1 xfail · e2e 34 passed / 2 xfail · tutorial-proof 8/8 · lint 0/0. MEASURED (same laptop, same probes as step 2+3): perf-guard 14493 → 47619 ev/s, p50 20 → 10 ms; ephemeral flood 15267 → 52632 ev/s, p50 36 → 17 ms — the transaction-plus-mark write per ephemeral batch was two thirds of the cost.
+
+## 2026-09-02 — the onion, step 4: layout by primitive
+
+- `src/core/` is gone (it was not a name). The tree now follows the tutorial's chapters: `context/`
+  (capabilities, dispatch, the stub table, the loader, naming), `fetch/`, `stream/` (the log, its
+  events, the engine, the inline reduces, subscriptions + the one delivery loop, live state), `sdk/`
+  (what `processor.js` bundles), `lib/` (errors, logs, hash, patch). The five files a reader meets
+  first stay at the root: `worker.ts`, `session.ts`, `iterate-context.ts`,
+  `iterate-context-durable-object.ts`, `itx-entrypoint.ts`.
+- Renames: `stream-durable-object.ts` → `iterate-context-durable-object.ts` (it stopped being "the
+  stream's DO" several steps ago); `capability-table-processor.ts` → `capability-table.ts`;
+  `core/itx-surface.ts` split into `session.ts` (gate + catalog) and `iterate-context.ts` (the
+  RpcTarget). Every move is a `git mv`; imports were rewritten mechanically against the new tree,
+  path mentions in comments likewise; unit-lane pins moved with their subject.
+- GATES: typecheck clean (3 tsconfigs) · unit+harness+workers 347 passed / 1 xfail · e2e 34 passed / 2 xfail · tutorial-proof 8/8 · oxlint 0/0 · knip clean.

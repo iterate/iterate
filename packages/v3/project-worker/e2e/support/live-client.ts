@@ -1,9 +1,9 @@
 // e2e/support/live-client.ts — the CLIENT half of live state, for E2E tests. Seed through the
 // producer's door {rev, state}, apply each delivered {from, to, patch} whose `from` matches the held
 // rev, re-read the door on any mismatch. Exposes the applied/dropped/reseeds counters the live-state
-// proof asserts. Uses the real RFC-6902-subset applyPatch (src/core/patch.ts) — one patch impl.
+// proof asserts. Uses the real RFC-6902-subset applyPatch (src/lib/patch.ts) — one patch impl.
 
-import { applyPatch, type PatchOp } from "../../src/core/patch.ts";
+import { applyPatch, type PatchOp } from "../../src/lib/patch.ts";
 
 /** One live-state change frame — the payload of an `events.iterate.com/live-state/changed` event as
  *  delivered inside a subscription batch: apply `patch` iff `from` matches. */

@@ -1,4 +1,4 @@
-// __workers-tests__/stream.test.ts — the `Stream` class (core/stream.ts) against REAL
+// __workers-tests__/stream.test.ts — the `Stream` class (stream/stream.ts) against REAL
 // DurableObjectStorage, inside workerd (the pool lane): waitForEvent's park/settle/timeout
 // mechanics, the storage-lazy virgin guarantee, and the per-incarnation wake record. Each test
 // borrows a dedicated ctx's DO purely for its storage (runInDurableObject) and constructs a BARE
@@ -8,11 +8,11 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { expect, test } from "vitest";
-import { canonicalName } from "../src/core/durable-object-names.ts";
-import { errorCode } from "../src/core/errors.ts";
-import { Stream } from "../src/core/stream.ts";
-import type { StreamEvent, StreamEventInput } from "../src/core/events.ts";
-import type { IterateContextDurableObject } from "../src/stream-durable-object.ts";
+import { canonicalName } from "../src/context/durable-object-names.ts";
+import { errorCode } from "../src/lib/errors.ts";
+import { Stream } from "../src/stream/stream.ts";
+import type { StreamEvent, StreamEventInput } from "../src/stream/events.ts";
+import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
 
 const stub = (ctx: string) =>
   (

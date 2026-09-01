@@ -5,11 +5,11 @@
 import * as cloudflareWorkers from "cloudflare:workers";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { newWorkersRpcResponse } from "capnweb";
-import { IterateContextDurableObject } from "./stream-durable-object.ts";
-import { registerPipelinedRpcBrand } from "./core/dispatch.ts";
-import { CAPABILITY_FETCH_HEADER } from "./core/fetch-capabilities.ts";
-import { canonicalName } from "./core/durable-object-names.ts";
-import { UnauthenticatedSession } from "./core/itx-surface.ts";
+import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
+import { registerPipelinedRpcBrand } from "./context/dispatch.ts";
+import { CAPABILITY_FETCH_HEADER } from "./fetch/fetch-capabilities.ts";
+import { canonicalName } from "./context/durable-object-names.ts";
+import { UnauthenticatedSession } from "./session.ts";
 import { DEMO_PAGE_HTML } from "./generated/demo-page.ts";
 
 // Native workerd RPC promises pipeline exactly like capnweb ones — thread them unawaited through

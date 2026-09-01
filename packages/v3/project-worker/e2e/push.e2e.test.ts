@@ -87,7 +87,7 @@ test("cursor lane: the digest worker is delivered from a stream-kept cursor; ret
   ]);
 
   // 3. a poison mark: digest stamps `retryable: false`, so the loop HALTS NOW — no ladder burned on
-  //    an error that can never succeed (the stamped-flag doctrine, core/errors.ts) — and appends the
+  //    an error that can never succeed (the stamped-flag doctrine, lib/errors.ts) — and appends the
   //    halted FACT; a good mark stuck behind it waits. ONE policy, no skip, no pinning.
   const [poisoned] = await itx.append({ type: "mark", payload: { poison: true } });
   const [stuck] = await itx.append({ type: "mark" });

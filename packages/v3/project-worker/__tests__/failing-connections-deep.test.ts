@@ -1,6 +1,6 @@
 // __tests__/failing-connections-deep.test.ts — the live-transport table, resource-lifecycle EDGES
-// beyond failing-connections.test.ts (src/rpc-stub-directory.ts + src/core/hibernatable-rpc-stub.ts +
-// src/core/itx-surface.ts). A live capability is TWO things with two lifetimes: the STUB, parked in
+// beyond failing-connections.test.ts (src/context/rpc-stub-directory.ts + src/context/hibernatable-rpc-stub.ts +
+// src/iterate-context.ts). A live capability is TWO things with two lifetimes: the STUB, parked in
 // the `itx.rpcStubs` built-in under the canonical path (physical — it lives until its session ends,
 // `rpcStubs.close`, or `itx.revoke(path)` / `unsubscribe` from the session that parked it), and the
 // MOUNT, an ordinary capability-table row naming it (`itx.rpcStubs.get('<path>')` — pure data; it
@@ -80,7 +80,7 @@ async function rejectionOf(
   return out.e;
 }
 
-/** The machine-readable error channel (core/errors.ts): classify by code, never by message. */
+/** The machine-readable error channel (lib/errors.ts): classify by code, never by message. */
 const codeOf = (e: unknown): string | undefined =>
   typeof e === "object" && e !== null && "code" in e ? String((e as any).code) : undefined;
 

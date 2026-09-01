@@ -8,8 +8,8 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { expect, test } from "vitest";
-import { canonicalName } from "../src/core/durable-object-names.ts";
-import type { IterateContextDurableObject } from "../src/stream-durable-object.ts";
+import { canonicalName } from "../src/context/durable-object-names.ts";
+import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
 
 const PROBE_SRC = /* js */ `
 import { DurableObject } from "cloudflare:workers";

@@ -1,5 +1,5 @@
 // __tests__/failing-delivery.test.ts — BUG HUNT over THE ONE subscription delivery loop
-// (src/subscription-delivery.ts). Nothing is declared: the loop evaluates each subscription's
+// (src/stream/subscription-delivery.ts). Nothing is declared: the loop evaluates each subscription's
 // target and looks at the value —
 //   • a LIVE STUB (`itx.rpcStubs.get(…)`, what `subscribe({ target: fn })` parks) or a FACET OWNS
 //     ITS PROGRESS ⇒ a fire-and-forget PUSH of `(events, { after, through })`, ranges must CHAIN,
@@ -207,7 +207,7 @@ test("push: consumes naming an ephemeral type opts in; the consumes-less default
 test("FIXED (defect 10): consumes ['*'] delivers every durable event to a push target", async () => {
   // WAS-BUG: the connected lane filtered with `row.consumes.includes(e.type)` — "*" was a literal
   //   type name and matched nothing: a silently-dead subscription with no error anywhere.
-  // NOW: one rule for every target — `consumesEvent` (core/processor.ts): "*" = every durable event.
+  // NOW: one rule for every target — `consumesEvent` (stream/processor.ts): "*" = every durable event.
   const itx = await harness.itx("prj_fd_star_conn");
   const star = collector();
   const control = collector();

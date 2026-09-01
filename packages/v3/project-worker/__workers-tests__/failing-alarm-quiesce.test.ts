@@ -3,8 +3,8 @@
 // (runDurableObjectAlarm) and force a graceful teardown (evictDurableObject) deterministically).
 //
 // Target surface: IterateContextDurableObject.alarm()/#noteActivity/#liveFacets/#facetWorkInFlight
-// (src/stream-durable-object.ts), the delivery loop's cursor lane + `pumpAll`
-// (src/subscription-delivery.ts), and the rpc-stub directory (src/rpc-stub-directory.ts).
+// (src/iterate-context-durable-object.ts), the delivery loop's cursor lane + `pumpAll`
+// (src/stream/subscription-delivery.ts), and the rpc-stub directory (src/context/rpc-stub-directory.ts).
 //
 // THE ALARM DOES TWO THINGS, IN ORDER — this file pins both:
 //   1. `pumpAll`: every CURSOR subscription (a target that cannot own its progress — a stateless
@@ -35,8 +35,8 @@ import {
 import { env } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { afterAll, expect, test, vi } from "vitest";
-import { canonicalName } from "../src/core/durable-object-names.ts";
-import type { IterateContextDurableObject } from "../src/stream-durable-object.ts";
+import { canonicalName } from "../src/context/durable-object-names.ts";
+import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
 
 const stub = (ctx: string) =>
   (

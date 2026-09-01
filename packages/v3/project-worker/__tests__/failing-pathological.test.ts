@@ -158,7 +158,7 @@ test("a ~256KB payload round-trips byte-identically (the in-bounds control)", as
 //     equality proven in stream-storage.test.ts:94-116).
 //   • Idempotency dedupe reassembles the FULL stored body (getByIdempotencyKey,
 //     stream-storage.ts:177-185) and compares sameIdempotentEvent over it — including
-//     same-batch hits (stream-durable-object.ts:2011, 2031-2061).
+//     same-batch hits (iterate-context-durable-object.ts:2011, 2031-2061).
 //   • Atomicity: every storage method is synchronous inside one event-loop task under the
 //     DO output gate, and the FK cascade ties chunk rows to their event row — a mid-batch
 //     throw persists nothing (stream-storage.ts:59, 762-766).
@@ -253,7 +253,7 @@ describe("arbitrary-size payloads (row chunking — the apps/os contract)", () =
     // BUG: unassertable today — the first large append already rejects (SQLITE_TOOBIG).
     // EXPECTED (apps/os contract): dedupe reassembles the FULL stored body from its chunk
     //      rows (getByIdempotencyKey, stream-storage.ts:177-185) and compares it
-    //      structurally (stream-durable-object.ts:2031-2061) — so a retry of a committed
+    //      structurally (iterate-context-durable-object.ts:2031-2061) — so a retry of a committed
     //      large event returns the SAME offset, and the body reads back once,
     //      byte-identically.
     // ACTUAL: nothing large ever commits, so the retry lane for large bodies is untestable
@@ -354,7 +354,7 @@ export class FanProbe extends StreamProcessorDurableObject {
 `;
 
 test("50 userspace processors materialize in the harness; one append fans out to all 50 in <5s while the stream stays responsive", async () => {
-  // Was a documented gap: confinedWorker (core/worker-loader.ts) sets
+  // Was a documented gap: confinedWorker (context/worker-loader.ts) sets
   // compatibilityFlags:["allow_irrevocable_stub_storage"] on every LOADER.get worker, and the
   // OLD local workerd (wrangler 4.107.0 → workerd 1.20260701) refused experimental flags without
   // --experimental, so the loader lane was untestable in the harness. RESOLVED by bumping wrangler

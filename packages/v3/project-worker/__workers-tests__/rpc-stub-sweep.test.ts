@@ -4,7 +4,7 @@
 // can never spell, which is why __tests__/failing-connections.test.ts carried it as a test.todo.
 // This file replaces that todo).
 //
-// Target surface: RpcStubDirectory #pending + #sweepPending (src/rpc-stub-directory.ts). An attach
+// Target surface: RpcStubDirectory #pending + #sweepPending (src/context/rpc-stub-directory.ts). An attach
 // reservation whose stub pager WebSocket never arrives — a relay that died mid-handshake — is
 // dropped LAZILY after ATTACH_PENDING_TTL_MS = 10s: the sweep runs on the next attach()/fetch(),
 // NEVER on a timer (a pending timer would pin the DO out of hibernation). The pending map is
@@ -20,9 +20,9 @@ import { SELF } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { afterAll, expect, test, vi } from "vitest";
-import { canonicalName } from "../src/core/durable-object-names.ts";
-import { STUB_PAGER_WEBSOCKET_HEADER } from "../src/core/hibernatable-rpc-stub.ts";
-import type { IterateContextDurableObject } from "../src/stream-durable-object.ts";
+import { canonicalName } from "../src/context/durable-object-names.ts";
+import { STUB_PAGER_WEBSOCKET_HEADER } from "../src/context/hibernatable-rpc-stub.ts";
+import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
 
 const stub = (ctx: string) =>
   (

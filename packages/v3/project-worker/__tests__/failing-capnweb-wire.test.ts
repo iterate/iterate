@@ -168,7 +168,7 @@ async function until<T>(
 }
 const settle = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** The machine-readable error channel (core/errors.ts): classify by code, never by message. */
+/** The machine-readable error channel (lib/errors.ts): classify by code, never by message. */
 const codeOf = (e: unknown): string | undefined =>
   typeof e === "object" && e !== null && "code" in e
     ? String((e as { code: unknown }).code)
@@ -405,7 +405,7 @@ test("one-directional delivery: 100 ephemeral chunks arrive as inbound frames; t
 }, 90_000);
 
 test("one-directional delivery: batches keep flowing with the subscriber's outbound STALLED — nothing outbound is load-bearing", async () => {
-  // BUG (src/subscription-delivery.ts #dispatch): the per-subscription push chain AWAITS
+  // BUG (src/stream/subscription-delivery.ts #dispatch): the per-subscription push chain AWAITS
   //   `call([events, range])` — i.e. the client's `resolve` answer — before the next batch for that
   //   subscription may go out. A client whose outbound is stalled (or a callback that never
   //   answers) therefore stalls ITS OWN later deliveries, and the pending push pins `#inFlight`

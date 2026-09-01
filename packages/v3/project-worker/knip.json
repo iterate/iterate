@@ -1,6 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@5/schema.json",
-  "entry": ["src/sdk.ts", "src/client/demo.tsx", "specs/*.spec.ts", "**/*.test.ts"],
+  "entry": ["src/sdk/index.ts", "src/client/demo.tsx", "specs/*.spec.ts", "**/*.test.ts"],
   "project": ["src/**/*.{ts,tsx}"],
   "ignoreExportsUsedInFile": true,
   "ignoreDependencies": ["cloudflare", "@v3/shared", "@playwright/test"],

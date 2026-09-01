@@ -7,7 +7,7 @@
 //   itx.load(src).getDurableObjectClass('Counter').get().demo.timer.callLater(ms, cb)
 // The mid-path load→class→instance returns HANDLES that B then walks `.demo.timer.callLater`
 // on — the case that only pipelines because each handle is a genuine, branded RpcTarget
-// (core/invoke-handle.ts) and not a bare Proxy (NonPipelinable over Workers RPC, workerd#6873).
+// (context/invoke-handle.ts) and not a bare Proxy (NonPipelinable over Workers RPC, workerd#6873).
 // The callback B passes rides the membrane the other way and fires back INSIDE B.
 //
 // Proven on BOTH consumer lanes: a plain capnweb client, AND worker B via env.ITX.get().

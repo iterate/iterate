@@ -9,7 +9,7 @@
 // That surface is proven by apps/os/src/domains/itx/path-proxy.test.ts and the live slack shape
 // in apps/os/src/domains/integrations/slack-api.test.ts.
 //
-// In THIS clean room the client is JUST capnweb (itx-surface.ts invariant) and the IterateContext
+// In THIS clean room the client is JUST capnweb (iterate-context.ts invariant) and the IterateContext
 // RpcTarget answers only its fixed methods (invokeCapability / invoke / provide / …), so the
 // natural dotted spelling is expected to be MISSING today. Every test below asserts the
 // CORRECT (apps/os-proven) behavior, adapted to our built-ins (whoami / kv / append / read)
@@ -178,7 +178,7 @@ test("explicit door: deep slack replay through a live bridge works today", async
 
 // ── the natural dotted surface (apps/os-proven; missing here) ──
 
-// BUG: the IterateContext RpcTarget (src/core/itx-surface.ts) answers ONLY its fixed methods — there is no
+// BUG: the IterateContext RpcTarget (src/iterate-context.ts) answers ONLY its fixed methods — there is no
 //   prototype-hop / path-proxy fallback, so an unknown dotted root never becomes an
 //   invokeCapability dispatch.
 // EXPECTED (apps/os/src/domains/itx/path-proxy.test.ts:50-61 "falls back only for unknown
@@ -204,7 +204,7 @@ test("root dotted call: await itx.whoami() falls back to the capability table", 
 // ACTUAL: rejects with TypeError: Cannot read properties of undefined (reading 'put') — a raw
 //   JS property miss on the server, uncoded ({ remote: true } only).
 // WHY IT MATTERS: depth-2 built-ins (kv, secrets) are the bread-and-butter calls; the
-//   error also violates core/errors.ts (nothing machine-readable rides it).
+//   error also violates lib/errors.ts (nothing machine-readable rides it).
 test("depth-2 dotted: itx.kv.put('k','v') then itx.kv.get('k') round trips", async () => {
   const itx = await harness.itx(c("kv"));
   expect(await itx.kv.put("k", "v")).toMatchObject({ ok: true });
@@ -214,7 +214,7 @@ test("depth-2 dotted: itx.kv.put('k','v') then itx.kv.get('k') round trips", asy
 // FIXED (was: the dotted spelling of the commonest write did not exist; then it rode the
 //   prototype fallback as `itx.stream.append`). The flattening moved the stream verbs to the TOP
 //   level on BOTH surfaces: `itx.append(...)` here is the DECLARED IterateContext method (the
-//   direct lane — core/itx-surface.ts), and the read stays an EXPRESSION so the builtin `read`
+//   direct lane — iterate-context.ts), and the read stays an EXPRESSION so the builtin `read`
 //   ROOT keeps resolver coverage (built-ins.ts own-key + Object.hasOwn gate). One log serves both.
 test("direct write, expression read: itx.append lands in the ONE log", async () => {
   const itx = await harness.itx(c("stream"));
@@ -258,7 +258,7 @@ test("slack-style deep SDK replay: itx.slack.chat.postMessage({...})", async () 
 //   from slack-api.test.ts's own fixture) REACHES the capability table (the hop landed), dispatches
 //   invokeCapability(["itx", "slack", "api", ["postMessage"]]), routes through the parked-connection
 //   relay, and the remote SlackReplayTarget's absent `.api` surfaces as a raw JS TypeError inside
-//   RetainedCallbackInvoker.invoke (core/itx-surface.ts). We propagate that reject as-is — the
+//   RetainedCallbackInvoker.invoke (iterate-context.ts). We propagate that reject as-is — the
 //   NOT_A_METHOD re-grammar (an apps/os error-normalizer nicety) has no clean-room consumer.
 test("a dotted mid-path miss REJECTS (the invented namespace resolves to nothing callable)", async () => {
   const { itx } = await slackRig(c("miss"));
@@ -350,7 +350,7 @@ test("JSON.stringify of a dangling chain node must not dispatch, and the node st
 
 // SUPERSEDED (pipelining todo): the e2e connect call-then-call rides a ONE-SHOT batch that cannot survive an extra round trip, and dispatch.test.ts's 'pipelined RPC promise threading' pins the walk contract.
 
-// PINS core/dotted-path-proxy.ts's reserved-word promise AGAINST THE LIVE SURFACE (unit half:
+// PINS context/dotted-path-proxy.ts's reserved-word promise AGAINST THE LIVE SURFACE (unit half:
 // core/dotted-path-proxy.test.ts "hides reserved path segments from function-backed path
 // proxies"). RESERVED_DYNAMIC_PATH_SEGMENTS hides JS/transport machinery ('then', 'dup',
 // 'onRpcBroken', …) at the prototype hop AND inside every path proxy it hands out, so a

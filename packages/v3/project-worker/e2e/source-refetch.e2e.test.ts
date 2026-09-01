@@ -3,7 +3,7 @@
 //
 // THE FIX (agent-C): every commit reaches a processor through its subscription's target —
 // `itx.load(src).getDurableObjectClass(C).get(name).processEventBatch` — so the delivery loop calls
-// stream-durable-object.ts `#facet(name, memo)` per commit → worker-loader.ts `loadConfinedWorker`.
+// iterate-context-durable-object.ts `#facet(name, memo)` per commit → worker-loader.ts `loadConfinedWorker`.
 // That used to `resolveSource(...)` (`await invoke(toExpression(source))` — a code fetch) +
 // `hashSource` on EVERY commit, to compute the contentHash. Now `#facet` keeps a per-facet
 // `#resolvedFacetSource` memo keyed by the PRINTED source expression: on a warm facet it passes the
@@ -54,7 +54,7 @@ export class Mark extends StreamProcessorDurableObject {
 
 // The SOURCE expression: evaluating it bumps srcEvals (observable, non-re-entrant) and returns the
 // module code. Simple single-quoted body → JSON.stringify handles all escaping; the expression
-// parser JSON5-parses the arg and its matchingParen skips the quoted string (see core/expression.ts).
+// parser JSON5-parses the arg and its matchingParen skips the quoted string (see context/expression.ts).
 const LAMBDA =
   "async (itx) => { const n = Number((await itx.kv.get('srcEvals')) ?? 0) + 1; await itx.kv.put('srcEvals', String(n)); return await itx.kv.get('src/mark-refetch.js'); }";
 const SOURCE = `itx.runScript(${JSON.stringify(LAMBDA)})`;

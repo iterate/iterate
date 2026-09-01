@@ -9,11 +9,11 @@
 //     its `from` matches the held rev; a mismatch means a missed delta (or a reborn producer's fresh
 //     epoch) — resync by re-reading the door, exactly like apps/os's revision-gap resync.
 //
-// The patch format is core/patch.ts (an RFC-6902 subset), so this store shares ONE applyPatch with
+// The patch format is lib/patch.ts (an RFC-6902 subset), so this store shares ONE applyPatch with
 // the producer — no second diff implementation. No capnweb import: a caller wires the transport and
 // hands deltas in, so the same store backs a node test client and the React hook (client/react.tsx).
 
-import { applyPatch, type PatchOp } from "../core/patch.ts";
+import { applyPatch, type PatchOp } from "../lib/patch.ts";
 
 /** One live-state delta off the wire — the payload of an `events.iterate.com/live-state/changed`
  *  ephemeral event, delivered raw to the subscriber. */

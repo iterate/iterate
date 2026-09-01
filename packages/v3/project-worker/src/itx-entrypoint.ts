@@ -21,10 +21,10 @@
 // secret-substituting terminal).
 
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { itxFor } from "./core/itx-surface.ts";
-import type { StreamEvent, StreamEventInput } from "./core/events.ts";
-import type { WaitForEventFilter } from "./core/stream.ts";
-import type { IterateContextDurableObject } from "./stream-durable-object.ts";
+import { itxFor } from "./iterate-context.ts";
+import type { StreamEvent, StreamEventInput } from "./stream/events.ts";
+import type { WaitForEventFilter } from "./stream/stream.ts";
+import type { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 
 interface Env {
   CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;

@@ -21,9 +21,9 @@ import { runInDurableObject, SELF } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { afterAll, expect, test } from "vitest";
-import { canonicalName } from "../src/core/durable-object-names.ts";
-import { print, type Expression } from "../src/core/expression.ts";
-import type { IterateContextDurableObject } from "../src/stream-durable-object.ts";
+import { canonicalName } from "../src/context/durable-object-names.ts";
+import { print, type Expression } from "../src/context/expression.ts";
+import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
 
 const stub = (ctx: string) =>
   (

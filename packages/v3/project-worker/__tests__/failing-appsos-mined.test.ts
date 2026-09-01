@@ -80,7 +80,7 @@ test("ephemeral: false is a LOUD input error at the append door, and commits not
 
 test("FIXED (defect 34/46 at the root): squatting capability-table/revoke: is harmless — revoke is keyless", async () => {
   // BUG: CapabilityTableProcessor.revoke appends its revoked event with a FIXED idempotency key
-  //   `capability-table/revoke:${providedAtOffset}` (capability-table-processor.ts:229) to make
+  //   `capability-table/revoke:${providedAtOffset}` (capability-table.ts:229) to make
   //   a double-revoke idempotent. Nothing reserves that key namespace: a public `stream.append`
   //   may commit ANY event under it first. When the system later revokes that offset, the
   //   append hits an IDEMPOTENCY_CONFLICT (same key, different body) and revocation THROWS — the
@@ -120,7 +120,7 @@ test("FIXED (defect 34/46 at the root): squatting capability-table/revoke: is ha
 
 test("an idempotent retry with reordered payload keys dedupes to the same offset", async () => {
   // PARITY LOCK: the commit-point dedupe compares bodies key-order-insensitively (jsonEqual,
-  //   core/events.ts; apps/os idempotency.ts "Object key ORDER is insignificant").
+  //   stream/events.ts; apps/os idempotency.ts "Object key ORDER is insignificant").
   const itx = await harness.itx("prj_am_keyorder");
   const [a] = await append(itx, {
     type: "j",
@@ -154,7 +154,7 @@ test("an idempotent retry whose METADATA differs is a loud conflict (metadata is
 // ─────────────────────────────── ERROR GRAMMAR (codes survive the hop) ───────────────────────────────
 
 test("a default-deny miss carries code NO_CAPABILITY_MATCH across the /api hop", async () => {
-  // PARITY LOCK (the error-grammar doctrine, core/errors.ts): classify by machine-readable
+  // PARITY LOCK (the error-grammar doctrine, lib/errors.ts): classify by machine-readable
   //   `code`, never message/name/instanceof — own props survive DO→relay→client. apps/os shares
   //   the workshop plain-Error + `code` shape.
   const itx = await harness.itx("prj_am_code_miss");
@@ -176,7 +176,7 @@ test("a paused-stream refusal carries code STREAM_PAUSED across the /api hop", a
 
 test("probing the core snapshot mints no storage — a virgin ctx reports incarnation 0, first append makes it 1", async () => {
   // PARITY LOCK: a read/probe must never be the write that mints backing storage (workerd
-  //   auto-deletes empty objects; the Kenton PR #6101 doctrine in core/stream.ts). If the probe
+  //   auto-deletes empty objects; the Kenton PR #6101 doctrine in stream/stream.ts). If the probe
   //   minted storage, the incarnation would already be bumped and the first append would land on
   //   incarnation 2. The probe is the CORE REDUCE's snapshot (runtime state IS reduced state —
   //   hostState() died in C5): `incarnation` folds from the stream/woken wake record, absent on a
@@ -220,7 +220,7 @@ test("a NON-CANONICAL path spelling through the raw provide door is stored CANON
 // ─────────────────────────────── SUBSCRIBE SUGAR ───────────────────────────────
 
 test("concurrent anonymous subscribes get unique names and never shadow each other", async () => {
-  // PARITY LOCK (itx-surface subscribe: "concurrent anonymous subscribes must never shadow each
+  // PARITY LOCK (iterate-context.ts subscribe: "concurrent anonymous subscribes must never shadow each
   //   other"): each unnamed subscribe mints a unique `sub-<uuid>` name, so both deliver.
   const itx = await harness.itx("prj_am_anon");
   const a = collector();

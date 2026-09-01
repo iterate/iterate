@@ -18,7 +18,7 @@ afterAll(async () => {
   await harness?.stop();
 });
 
-const EVENT_CHUNK_SIZE = 512 * 1024; // must match core/event-log.ts
+const EVENT_CHUNK_SIZE = 512 * 1024; // must match src/stream/stream.ts
 const EMOJI = String.fromCodePoint(0x1f600); // "grinning face" = high+low surrogate pair
 
 test("a surrogate pair straddling a chunk boundary round-trips byte-identically", async () => {

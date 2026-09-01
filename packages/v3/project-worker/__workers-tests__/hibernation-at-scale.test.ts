@@ -4,7 +4,7 @@
 //   Hundreds of clients connect into ONE stream (each providing a live capnweb capability at its
 //   own mount path, with a hibernatable stub pager WebSocket), the stream DO EVICTS — losing every
 //   in-memory paged-in stub — and on wake it can STILL call every client's capability:
-//   page → paged-in stub → invoke (core/hibernatable-rpc-stub.ts).
+//   page → paged-in stub → invoke (context/hibernatable-rpc-stub.ts).
 //
 // This is proofs/prove_hibernate.mjs's property made deterministic: the live proof waits ~4min
 // holds for Cloudflare's own eviction; here cloudflare:test's evictDurableObject() forces the
@@ -38,8 +38,8 @@ import { evictDurableObject, runDurableObjectAlarm, SELF } from "cloudflare:test
 import { env } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { afterAll, beforeAll, expect, test, vi } from "vitest";
-import { canonicalName } from "../src/core/durable-object-names.ts";
-import type { IterateContextDurableObject } from "../src/stream-durable-object.ts";
+import { canonicalName } from "../src/context/durable-object-names.ts";
+import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
 
 const CTX = "prj_hibscale";
 const CLIENTS = 200;
@@ -57,7 +57,7 @@ class EchoTarget extends RpcTarget {
 }
 
 /** The DO-only transport facts (transportState(): the whole in-memory socket census — physical
- *  truths, never event-derivable; `itx.rpcStubs.list()` is the itx-surface half, PRESENCE = the
+ *  truths, never event-derivable; `itx.rpcStubs.list()` is the edge half, PRESENCE = the
  *  keys with a transport right now. This pool-workers lane holds the raw DO stub, so it speaks
  *  the Workers-RPC verb directly). */
 type TransportState = {

@@ -1,5 +1,5 @@
-// __tests__/failing-connections.test.ts — the live-transport table (src/rpc-stub-directory.ts +
-// src/core/hibernatable-rpc-stub.ts + src/core/itx-surface.ts). A live capability is
+// __tests__/failing-connections.test.ts — the live-transport table (src/context/rpc-stub-directory.ts +
+// src/context/hibernatable-rpc-stub.ts + src/iterate-context.ts). A live capability is
 // `itx.provide(path, stub)` — SUGAR over two axioms with two lifetimes: the STUB is PARKED in the
 // `itx.rpcStubs` built-in (the physical registry, keyed by the canonical path; it lives until its
 // session ends, `rpcStubs.close`, or `itx.revoke(path)` from the session that parked it), and an
@@ -94,7 +94,7 @@ async function rejectionOf(
   return out.e;
 }
 
-/** The machine-readable error channel (core/errors.ts): classify by code, never by message. */
+/** The machine-readable error channel (lib/errors.ts): classify by code, never by message. */
 const codeOf = (e: unknown): string | undefined =>
   typeof e === "object" && e !== null && "code" in e ? String((e as any).code) : undefined;
 
@@ -166,7 +166,7 @@ test("calling a path that was never provided rejects with code NO_CAPABILITY_MAT
     10_000,
     "invoke on a never-provided path",
   );
-  // The code must survive the DO → edge → capnweb hops (core/errors.ts contract).
+  // The code must survive the DO → edge → capnweb hops (lib/errors.ts contract).
   expect(codeOf(err)).toBe("NO_CAPABILITY_MATCH");
 });
 
@@ -269,7 +269,7 @@ test("disposing a client session drops its stubs promptly (presence) — its mou
 // An in-flight invoke on a provider that dies mid-call must reject with the CODED offline error —
 // the same condition, same code, whether the stub died before or during the call. The relay
 // re-codes the provider's raw dying-transport error to CONNECTION_OFFLINE LOCALLY so the CODE (never
-// a message) crosses the Workers-RPC hop back to the caller (core/errors.ts: classify by code).
+// a message) crosses the Workers-RPC hop back to the caller (lib/errors.ts: classify by code).
 test("killing the provider session mid-invoke rejects the in-flight call promptly with code CONNECTION_OFFLINE — and the mount stays offline", async () => {
   const ctx = c("midinvoke");
   const observer = await harness.itx(ctx);

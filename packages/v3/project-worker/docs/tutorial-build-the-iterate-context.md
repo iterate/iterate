@@ -1081,16 +1081,35 @@ reduced event.
 
 ### Appendix: map to the source tree
 
-| Tutorial                                                      | Real code (`packages/v3/project-worker`)                                                                                                                                                                                       |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Ch 1 edge worker + `IterateContext` + `provide`               | `src/worker.ts` (`/api`), `src/core/itx-surface.ts`                                                                                                                                                                            |
-| Ch 1 the context DO                                           | `IterateContextDurableObject`, `src/stream-durable-object.ts`                                                                                                                                                                  |
-| Ch 1 load / facets / tail replay                              | `src/built-ins.ts`, `facetInvoke` in the DO                                                                                                                                                                                    |
-| Ch 1 pager pair (the `itx.rpcStubs` built-in's backing table) | `RpcStubDirectory` + `HibernatableRpcStubManager`, `src/rpc-stub-directory.ts`, `src/core/hibernatable-rpc-stub.ts`; the built-in itself in `src/built-ins.ts`, the edge half (`provide`/`close`) in `src/core/itx-surface.ts` |
-| Ch 2 secret sentinel                                          | `{{secret:project:NAME}}` — `../shared/src/egress.ts`, the DO's `#egress` terminal                                                                                                                                             |
-| Ch 2 fetch-in / tunnel                                        | `/cap` in `src/worker.ts`, `src/core/fetch-capabilities.ts`, `upgradeWebSocketResponse` in the capnweb fork                                                                                                                    |
-| Ch 2 auth gate                                                | `UnauthenticatedSession.authenticate()` → `Session` → `projects.get(id)` in `src/core/itx-surface.ts`                                                                                                                          |
-| Ch 3 stream                                                   | `Stream` in `src/core/stream.ts`                                                                                                                                                                                               |
-| Ch 3 subscribe / the one delivery loop                        | `src/subscriptions.ts` (the events + reduce), `src/subscription-delivery.ts` (push vs stream-kept cursor, decided by the evaluated target)                                                                                     |
-| Ch 3 processors                                               | `src/stream-processor-durable-object.ts` (the SDK base, bundled into `processor.js`) around the engine in `src/core/processor.ts`                                                                                              |
-| Ch 4 LiveState / control plane                                | `src/core/live-state.ts`; `packages/v3/control-plane` (not yet wired)                                                                                                                                                          |
+The tree is laid out by primitive, one folder per chapter of this tutorial:
+
+```text
+src/
+  worker.ts                          the edge: `/api` (capnweb) and `/cap` (fetch-in)
+  session.ts                         UnauthenticatedSession → Session → ProjectCollection.get(id)
+  iterate-context.ts                 IterateContext, the client-facing RpcTarget (axioms + sugar) + itxFor
+  iterate-context-durable-object.ts  IterateContextDurableObject — composes the stream, the mounts, the stubs
+  itx-entrypoint.ts                  env.ITX for loaded code
+  context/   built-ins, capability-table, expression, dispatch, invoke-handle, dotted-path-proxy,
+             rpc-stub-directory, rpc-stub-relay, hibernatable-rpc-stub, worker-loader, durable-object-names
+  fetch/     fetch-capabilities
+  stream/    stream, events, processor (the engine), reduce-checkpoint, inline-core, core-processor,
+             subscriptions, subscription-delivery, live-state
+  sdk/       index (→ processor.js), stream-processor-durable-object
+  lib/       errors, logs, hash, patch
+  client/    the browser LiveState client + demo page      generated/  build outputs
+```
+
+| Tutorial                                                      | Real code (`packages/v3/project-worker`)                                                                                                                                                                                                         |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Ch 1 edge worker + `IterateContext` + `provide`               | `src/worker.ts` (`/api`), `src/iterate-context.ts`                                                                                                                                                                                               |
+| Ch 1 the context DO                                           | `IterateContextDurableObject`, `src/iterate-context-durable-object.ts`                                                                                                                                                                           |
+| Ch 1 load / facets / tail replay                              | `src/context/built-ins.ts`, `facetInvoke` in the DO                                                                                                                                                                                              |
+| Ch 1 pager pair (the `itx.rpcStubs` built-in's backing table) | `RpcStubDirectory` + `HibernatableRpcStubManager`, `src/context/rpc-stub-directory.ts`, `src/context/hibernatable-rpc-stub.ts`; the built-in itself in `src/context/built-ins.ts`, the edge half (`provide`/`close`) in `src/iterate-context.ts` |
+| Ch 2 secret sentinel                                          | `{{secret:project:NAME}}` — `../shared/src/egress.ts`, the DO's `#egress` terminal                                                                                                                                                               |
+| Ch 2 fetch-in / tunnel                                        | `/cap` in `src/worker.ts`, `src/fetch/fetch-capabilities.ts`, `upgradeWebSocketResponse` in the capnweb fork                                                                                                                                     |
+| Ch 2 auth gate                                                | `UnauthenticatedSession.authenticate()` → `Session` → `projects.get(id)` in `src/session.ts`                                                                                                                                                     |
+| Ch 3 stream                                                   | `Stream` in `src/stream/stream.ts`                                                                                                                                                                                                               |
+| Ch 3 subscribe / the one delivery loop                        | `src/stream/subscriptions.ts` (the events + reduce), `src/stream/subscription-delivery.ts` (push vs stream-kept cursor, decided by the evaluated target)                                                                                         |
+| Ch 3 processors                                               | `src/sdk/stream-processor-durable-object.ts` (the SDK base, bundled into `processor.js`) around the engine in `src/stream/processor.ts`                                                                                                          |
+| Ch 4 LiveState / control plane                                | `src/stream/live-state.ts`; `packages/v3/control-plane` (not yet wired)                                                                                                                                                                          |
