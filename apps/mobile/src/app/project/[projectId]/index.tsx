@@ -5,11 +5,13 @@
 // here regardless of where it started) and "New chat" opens an empty thread
 // instead of a voice session.
 
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useLiveState } from "iterate/sdk/itx/react";
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { ProjectDrawerButton } from "../../../components/project-drawer.tsx";
+import { startChatCall } from "../../../lib/voice-call-session.ts";
 import { newMobileAgentPath } from "../../../lib/chat.ts";
 import { getProjectItx } from "../../../lib/itx.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
@@ -92,6 +94,18 @@ export default function ChatListScreen() {
       params: { projectId, slug: slug || "", path: agentPath },
     });
 
+  /* A phone chat is just a new chat that starts as a call: dial its line
+   * (the chat agent is the backend) and land on its screen, where the
+   * hold-to-talk controls float and the thread fills as you talk. */
+  const startPhoneChat = useMutation({
+    mutationFn: async () => {
+      const chatPath = newMobileAgentPath(new Date());
+      const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
+      openChat(chatPath);
+      await startChatCall(baseUrl, projectId, chatPath);
+    },
+  });
+
   return (
     <View style={styles.screen}>
       <Stack.Screen
@@ -102,9 +116,24 @@ export default function ChatListScreen() {
           ),
         }}
       />
-      <Pressable style={styles.newChat} onPress={() => openChat(newMobileAgentPath(new Date()))}>
-        <Text style={styles.newChatText}>New chat</Text>
-      </Pressable>
+      <View style={styles.newChatRow}>
+        <Pressable
+          style={[styles.newChat, styles.newChatGrow]}
+          onPress={() => openChat(newMobileAgentPath(new Date()))}
+        >
+          <Text style={styles.newChatText}>New chat</Text>
+        </Pressable>
+        <Pressable
+          accessibilityLabel="New phone chat"
+          accessibilityRole="button"
+          style={styles.newCall}
+          onPress={() => {
+            if (!startPhoneChat.isPending) startPhoneChat.mutate();
+          }}
+        >
+          <Ionicons color={colors.background} name="call" size={20} />
+        </Pressable>
+      </View>
       {pushDevice.isError ? (
         <Text style={styles.pushStatus}>
           Phone notifications unavailable: {pushDevice.error.message}
@@ -164,13 +193,25 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     padding: spacing.lg,
   },
+  newChatRow: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    margin: spacing.md,
+    marginBottom: 0,
+  },
   newChat: {
     backgroundColor: colors.text,
     borderRadius: radius.md,
-    margin: spacing.md,
-    marginBottom: 0,
     alignItems: "center",
     paddingVertical: 14,
+  },
+  newChatGrow: { flex: 1 },
+  newCall: {
+    backgroundColor: colors.text,
+    borderRadius: radius.md,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 18,
   },
   newChatText: { color: colors.background, fontSize: 16, fontWeight: "600" },
   row: {

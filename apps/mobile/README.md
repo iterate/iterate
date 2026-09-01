@@ -69,9 +69,14 @@ install pages ([EAS builds list](https://expo.dev/accounts/mishanustom/projects/
 
 The runtime version uses the fingerprint policy: a merge that changes native
 code (new native module, Expo upgrade) produces updates old binaries ignore.
-CI notices there's no preview build for the new fingerprint and triggers one
-automatically — install that from its EAS page once, then OTA resumes. The
-same merges are the ones that need a manual dev-client rebuild
+Native builds are keyed on that fingerprint — **one build per unique
+fingerprint, ever** (`ensureBuildForRuntime`): a change that doesn't move it
+triggers no build, and a native-change PR's build is the one main reuses
+after merge. Old binaries can't hear about the new runtime through OTA (the
+update server filters by runtime before answering), so the app asks prd for
+the channel's CI-pushed snapshot and shows a "this channel's latest JS
+expects a different native build" banner with a Download button. The same
+merges are the ones that need a manual dev-client rebuild
 (`build:development:ios`), as above.
 
 `eas update` publishes stamp `src/build-info.json` via
@@ -100,34 +105,60 @@ on the PR — pick by what your phone already has:
 
 - **OTA** — an `iterate://preview-channel/<channel>` deep link that points the
   installed app at the PR's channel (confirm screen, then fetch + reload).
-  Needs a binary whose runtime already matches.
-- **Full install** — the EAS install page for a build made _for this PR's
-  channel_. Installing it is all you need; there is no second scan. One build
-  per PR branch, reused across pushes, so the first push to a mobile PR waits
-  ~15–20 minutes for it (the section says "build still running" until then).
+  Needs a binary whose runtime already matches. The QR encodes the raw scheme
+  URL so the camera opens the app directly, no browser hop.
+- **Full install** — the channel-stable interstitial
+  `mobile.iterate.com/install/<channel>`, which resolves the channel's expected
+  native build _at scan time_ from the CI-pushed snapshot (so a QR printed
+  three pushes ago still lands on the right build), installs it in place via
+  an OS-served itms-services manifest (the EAS build page stays linked for
+  details, and as the fallback while a build compiles), and keeps an
+  **Open in app** tap for the post-install channel switch.
 
-The fingerprint heuristic still decides which one is expanded, but getting it
-wrong now costs a scan rather than leaving you on main.
+Builds are shared across channels — one per runtime fingerprint, all plain
+`preview` profile. A JS-only PR triggers **no build** (its install QR
+resolves to main's binary for the same runtime); a native-change PR triggers
+the one build its runtime needs, ~15–20 minutes, and the section says "build
+still running" until then. Installing a binary lands on the binary's own
+channel, which is why the interstitial sequences install-then-Open-in-app:
+the first boot of a new binary clears any channel override, so the switch
+must come after the install.
 
-Baking a PR's channel into its build means writing the build profile's
-`channel` before `eas build` — eas-cli has no `--channel` flag — which is why
-`fingerprint.config.js` ignores `eas.json`. Without that ignore the rewritten
-file moves the runtime fingerprint and the resulting binary refuses the very
-updates the PR publishes.
+The fingerprint heuristic still decides which QR is expanded, but getting it
+wrong costs a scan rather than leaving you on main.
 
 A channel switch persists across restarts; get back with **Build info → Reset
 to default channel**. Installing a native build overpowers that persistence:
 the first boot of a new binary force-clears any pre-existing channel override
 (with a notice), so the build you installed is the build you run
-(`resetChannelOverrideForNewInstall` in `src/lib/build-state.ts`). With builds
-made per PR that guard is now purely protective — clearing the override lands
-you on the channel you installed for.
+(`resetChannelOverrideForNewInstall` in `src/lib/build-state.ts`).
 
-Lifecycle: closing a PR deletes its channel, update branch, and QR assets
-(`.depot/workflows/mobile-pr-preview-cleanup.yml`). Channel discovery is the
-PR bodies' QR sections — deliberately no in-app channel list, because listing
-channels needs the EAS API and we don't ship `EXPO_TOKEN` to the deployment
-(a CI-pushed snapshot could enable it tokenlessly later).
+Lifecycle: closing a PR deletes its channel, update branch, QR assets, and
+channel-status snapshot, and swaps the PR body's QR section for an honest
+placeholder (`.depot/workflows/mobile-pr-preview-cleanup.yml`). On a MERGE,
+the main publish then writes main's QR section into that same body — and
+when the merge changed the fingerprint with no pre-built PR build to reuse,
+a follow-up job waits out the fresh main build and upgrades the install link
+once it's installable (`scripts/ci/refresh-mobile-main-qr.ts`). The merged
+PR is the on-ramp back onto main; no hunting commit comments.
+
+Channel discovery is the PR bodies' QR sections — deliberately no in-app
+channel list, because listing channels needs the EAS API and we don't ship
+`EXPO_TOKEN` to the deployment. What the platform DOES know is the
+CI-pushed per-channel snapshot (`packages/shared/src/mobile-channel-status.ts`
+→ `PUT mobile.iterate.com/channel-status/<channel>`, admin bearer): each
+publish records the channel's runtime and expected native build; the install
+interstitial (`/install/<channel>`) and the app's staleness banner read it
+back tokenlessly.
+
+The web surface is the app's own worker — `apps/mobile/website/`,
+mobile.iterate.com, zero-framework, prd-only (kernel vs userland: none of it
+lives in apps/os, which keeps 301s for `/m/*` QRs already printed). The
+domain also carries the `apple-app-site-association`, so
+`https://mobile.iterate.com/preview-channel/<channel>` is a **universal
+link**: binaries carrying the `applinks:mobile.iterate.com` entitlement
+(app.json `ios.associatedDomains`) open the app directly from the PR body's
+tap link; older binaries fall back to the web interstitial bounce.
 
 ## Run and test it in a browser
 

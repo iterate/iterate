@@ -34,6 +34,7 @@ import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.t
 import {
   buildSignedFileUrl,
   checkSignedFileRequest,
+  parseRangeHeader,
   projectFileDataToBytes,
   sanitizeFileFilename as sanitizeName,
   type FileData,
@@ -199,10 +200,11 @@ export async function serveProjectFileRequest(input: {
   });
   if (!check.ok) return new Response(check.message, { status: check.status });
 
-  const object = await itxEnv.FILES_BUCKET.get(
-    fileObjectKey({ path: check.path, projectId: input.projectId }),
-  );
-  if (object === null || object.version !== check.version) {
+  const objectKey = fileObjectKey({ path: check.path, projectId: input.projectId });
+  // Size/version come from a metadata read first so the Range header can be
+  // resolved against the real object length before any bytes move.
+  const head = await itxEnv.FILES_BUCKET.head(objectKey);
+  if (head === null || head.version !== check.version) {
     return new Response("not found", { status: 404 });
   }
 
@@ -211,11 +213,39 @@ export async function serveProjectFileRequest(input: {
     // Signed query-string auth makes the response origin-agnostic; CORS stays
     // wide open so browser fetch() works from the dashboard origin.
     "access-control-allow-origin": "*",
+    // AVPlayer (iOS audio/video playback and thumbnailing) refuses to stream
+    // from servers that don't advertise and honor byte ranges.
+    "accept-ranges": "bytes",
     "cache-control": "private, no-store",
     "content-disposition": `inline; filename="${filename.replaceAll('"', "")}"`,
-    "content-length": String(object.size),
-    "content-type": object.httpMetadata?.contentType ?? "application/octet-stream",
-    etag: object.httpEtag,
+    "content-length": String(head.size),
+    "content-type": head.httpMetadata?.contentType ?? "application/octet-stream",
+    etag: head.httpEtag,
   });
-  return new Response(request.method === "HEAD" ? null : object.body, { headers });
+
+  const range =
+    request.method === "GET" ? parseRangeHeader(request.headers.get("range"), head.size) : null;
+  if (range === "unsatisfiable") {
+    headers.set("content-range", `bytes */${head.size}`);
+    headers.delete("content-length");
+    return new Response("range not satisfiable", { headers, status: 416 });
+  }
+
+  if (request.method === "HEAD") return new Response(null, { headers });
+
+  const object = await itxEnv.FILES_BUCKET.get(
+    objectKey,
+    range === null ? undefined : { range: { length: range.length, offset: range.offset } },
+  );
+  if (object === null || object.version !== check.version) {
+    return new Response("not found", { status: 404 });
+  }
+  if (range === null) return new Response(object.body, { headers });
+
+  headers.set("content-length", String(range.length));
+  headers.set(
+    "content-range",
+    `bytes ${range.offset}-${range.offset + range.length - 1}/${head.size}`,
+  );
+  return new Response(object.body, { headers, status: 206 });
 }

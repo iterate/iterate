@@ -28,7 +28,3 @@ export function photoLibraryAccessFrom(permission: {
   if (permission.granted) return "granted";
   return permission.canAskAgain ? "ask" : "unavailable";
 }
-
-/** How far back the strip reaches. ~24 tiles is three sideways flicks at
- * 100px; past that you wanted the full-screen picker, which is one tap away. */
-export const RECENT_PHOTOS_LIMIT = 24;

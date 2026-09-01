@@ -11,6 +11,7 @@
     "ios": {
       "bundleIdentifier": "com.iterate.mobile",
       "supportsTablet": false,
+      "associatedDomains": ["applinks:mobile.iterate.com"],
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
@@ -48,6 +49,34 @@
           "androidPermissions": [],
           "androidForegroundService": false,
           "disableFFmpeg": true
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Iterate uses the microphone to record voice clips you attach to chat messages."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Iterate uses the camera so you can snap a photo or record a video straight into a chat message.",
+          "microphonePermission": "Iterate uses the microphone when you record a video for a chat message.",
+          "recordAudioAndroid": true
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Iterate attaches your current location to a chat message only when you tap Location in the attachment sheet."
+        }
+      ],
+      "expo-video",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Iterate uses the microphone to record voice clips you attach to chat messages.",
+          "speechRecognitionPermission": "Iterate transcribes your voice clips on this device so the agent can read what you said."
         }
       ]
     ],

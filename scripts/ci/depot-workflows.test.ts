@@ -265,6 +265,9 @@ describe("Depot validation capacity", () => {
           .filter((entry) => entry.isDirectory())
           .map((entry) => `${directory}/${entry.name}/package.json`),
       ),
+      // Nested workspaces (pnpm-workspace.yaml lists them explicitly; the
+      // directory scan above only reaches one level).
+      "apps/mobile/website/package.json",
       "lint/package.json",
       "scripts/package.json",
     ].filter((file) => {

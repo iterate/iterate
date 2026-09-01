@@ -1,12 +1,14 @@
 import { expect, test, vi } from "vitest";
 import { getOrCreateArtifact } from "./artifact-creation.ts";
 
+const FAKE_REMOTE = "https://acct.artifacts.cloudflare.net/git/ns/project-repo.git";
+
 test("an existing seeded repo reports its last push", async () => {
   const artifacts = {
     create: vi.fn(async () => {
       throw artifactError("ALREADY_EXISTS");
     }),
-    get: vi.fn(async () => ({ lastPushAt: "2026-07-20T12:00:00.000Z" })),
+    get: vi.fn(async () => ({ remote: FAKE_REMOTE, lastPushAt: "2026-07-20T12:00:00.000Z" })),
   };
 
   const result = await getOrCreateArtifact(artifacts, "project-repo", {
@@ -17,12 +19,14 @@ test("an existing seeded repo reports its last push", async () => {
     created: false,
     initialWriteToken: null,
     lastPushAt: "2026-07-20T12:00:00.000Z",
+    remote: FAKE_REMOTE,
   });
 });
 
 test("a new repo preserves create's initial write token without reading it back", async () => {
   const artifacts = {
     create: vi.fn(async () => ({
+      remote: FAKE_REMOTE,
       token: "art_v1_initial?expires=1760000000",
     })),
     get: vi.fn(),
@@ -36,6 +40,7 @@ test("a new repo preserves create's initial write token without reading it back"
     created: true,
     initialWriteToken: "art_v1_initial",
     lastPushAt: null,
+    remote: FAKE_REMOTE,
   });
   expect(artifacts.create).toHaveBeenCalledExactlyOnceWith("project-repo", {
     setDefaultBranch: "trunk",
@@ -48,7 +53,7 @@ test("an unseeded existing repo remains eligible for recovery", async () => {
     create: vi.fn(async () => {
       throw artifactError("ALREADY_EXISTS");
     }),
-    get: vi.fn(async () => ({ lastPushAt: null })),
+    get: vi.fn(async () => ({ remote: FAKE_REMOTE, lastPushAt: null })),
   };
 
   const result = await getOrCreateArtifact(artifacts, "project-repo", {
@@ -59,6 +64,7 @@ test("an unseeded existing repo remains eligible for recovery", async () => {
     created: false,
     initialWriteToken: null,
     lastPushAt: null,
+    remote: FAKE_REMOTE,
   });
 });
 
@@ -73,7 +79,7 @@ test("an ambiguous create waits for the existing repo to become readable", async
         .fn()
         .mockRejectedValueOnce(artifactError("NOT_FOUND"))
         .mockRejectedValueOnce(artifactError("NOT_FOUND"))
-        .mockResolvedValueOnce({ lastPushAt: null }),
+        .mockResolvedValueOnce({ remote: FAKE_REMOTE, lastPushAt: null }),
     };
 
     const result = getOrCreateArtifact(artifacts, "project-repo", {
@@ -85,6 +91,7 @@ test("an ambiguous create waits for the existing repo to become readable", async
       created: false,
       initialWriteToken: null,
       lastPushAt: null,
+      remote: FAKE_REMOTE,
     });
     expect(artifacts.create).toHaveBeenCalledOnce();
     expect(artifacts.get).toHaveBeenCalledTimes(3);

@@ -1,10 +1,11 @@
 // Per-PR mobile previews: publishes the PR's JS bundle to an EAS Update
-// channel named after its branch, makes sure a native build exists that BOOTS
-// on that channel, then maintains a managed PR-body section with two QR codes
-// — an OTA link into the installed app and a full-install link — expanding
-// whichever the runtime-fingerprint heuristic says Misha needs. Both are
-// individually correct now, so guessing wrong costs a scan rather than
-// leaving you on main. Runs on PRs touching apps/mobile
+// channel named after its branch, makes sure a native build exists for its
+// runtime fingerprint (one build per unique fingerprint — a JS-only PR
+// reuses main's and triggers nothing), pushes the channel's expected-build
+// snapshot to prd OS, then maintains a managed PR-body section with two QR
+// codes — an OTA link into the installed app and a channel-stable install
+// interstitial — expanding whichever the runtime-fingerprint heuristic says
+// Misha needs. Runs on PRs touching apps/mobile
 // (.depot/workflows/mobile-pr-preview.yml); EXPO_TOKEN via Doppler like the
 // merge-to-main publish (scripts/ci/publish-mobile-update.ts).
 // Section rendering/QR/eas plumbing: scripts/ci/mobile-preview.ts.
@@ -16,20 +17,22 @@ import { deployedPreviewEnvs } from "../../envs.ts";
 import { leasedPreviewSlotFromBody } from "../preview/preview.ts";
 import { getOctokit, getRepo, readEventPayload } from "./github.ts";
 import {
+  bodySectionLabel,
   channelForBranch,
+  computeRuntimeFingerprint,
   easJson,
-  ensureBuildForPr,
-  latestInstalledRuntime,
+  ensureBuildForRuntime,
+  expoBuildUrl,
+  installInterstitialUrl,
+  mainInstalledRuntime,
   mobileDir,
   planPreview,
-  prdBaseUrl,
+  mobileWebsiteBaseUrl,
+  pushChannelStatus,
   renderPreviewSection,
   run,
   uploadQrAsset,
 } from "./mobile-preview.ts";
-
-/** markdownAnnotator label for the managed PR-body section. */
-export const bodySectionLabel = "mobile-pr-preview";
 
 /**
  * The expected-backend + test-sign-in stamp for a PR's bundle
@@ -79,7 +82,9 @@ async function publishMobilePrPreview() {
   // maintains it there), which gets stamped into the bundle as the expected
   // backend — so it must be read BEFORE the publish, not after.
   const { data: pr } = await github.rest.pulls.get({ ...repo, pull_number: pullRequest.number });
+  const runtimeFingerprint = computeRuntimeFingerprint();
   // Child processes inherit process.env; write-build-info.mjs reads these.
+  Object.assign(process.env, { MOBILE_RUNTIME_FINGERPRINT: runtimeFingerprint });
   Object.assign(
     process.env,
     bundleStampForPr({ body: pr.body || "", pullRequestNumber: pullRequest.number }),
@@ -107,31 +112,55 @@ async function publishMobilePrPreview() {
   console.log(
     `published update ${updates[0].id} to channel ${channel} (runtime ${publishedRuntime})`,
   );
+  if (publishedRuntime !== runtimeFingerprint) {
+    // The bundle now carries a lie about which native build it expects —
+    // stop before any QR/section is rendered from it.
+    throw new Error(
+      `published runtime ${publishedRuntime} != precomputed fingerprint ${runtimeFingerprint}`,
+    );
+  }
 
-  const installedRuntime = latestInstalledRuntime();
-  // A build that boots on THIS channel, not just one with a matching runtime:
-  // installing it is being on the PR's JS, with no second scan.
-  const installBuild = ensureBuildForPr({ channel, runtime: publishedRuntime });
+  const installedRuntime = await mainInstalledRuntime();
+  // Any build with a matching runtime — a JS-only PR reuses main's and
+  // triggers nothing. The channel hop after an install is the interstitial's
+  // "Open in app" tap.
+  const installBuild = ensureBuildForRuntime({ runtime: publishedRuntime });
+
+  // The snapshot behind the install interstitial and the app's staleness
+  // check — pushed before the body update so a scan of the fresh section
+  // resolves the fresh build.
+  await pushChannelStatus({
+    channel,
+    runtimeVersion: publishedRuntime,
+    buildId: installBuild.id,
+    installUrl: expoBuildUrl({ owner, slug, buildId: installBuild.id }),
+    buildFinished: installBuild.finished,
+    commit: headSha,
+    message,
+    publishedAt: new Date().toISOString(),
+    // Powers the in-place itms-services install; absent until the build
+    // finishes (the next push then carries it).
+    ipaUrl: installBuild.ipaUrl,
+    appVersion: appConfig.expo.version,
+    bundleId: appConfig.expo.ios.bundleIdentifier,
+  });
 
   const plan = planPreview({
-    baseUrl: prdBaseUrl,
+    baseUrl: mobileWebsiteBaseUrl,
     scheme,
     channel,
     publishedRuntime,
     installedRuntime,
-    installUrl: `https://expo.dev/accounts/${owner}/projects/${slug}/builds/${installBuild.id}`,
+    installUrl: installInterstitialUrl(mobileWebsiteBaseUrl, channel),
     installReady: installBuild.finished,
   });
 
+  // Both QR contents are channel-derived and sha-independent, so one asset
+  // of each per PR, reused across pushes. If either QR's content semantics
+  // ever change, these names must change too — uploads are skip-if-exists.
   const [deepLinkQrUrl, installQrUrl] = await Promise.all([
-    uploadQrAsset(
-      `mobile-pr-${pullRequest.number}-${headSha.slice(0, 9)}-ota-scheme.png`,
-      plan.otaQrContent,
-    ),
-    uploadQrAsset(
-      `mobile-pr-${pullRequest.number}-${headSha.slice(0, 9)}-install-${installBuild.id.slice(0, 8)}.png`,
-      plan.installUrl,
-    ),
+    uploadQrAsset(`mobile-pr-${pullRequest.number}-ota-scheme.png`, plan.otaQrContent),
+    uploadQrAsset(`mobile-pr-${pullRequest.number}-install-site.png`, plan.installUrl),
   ]);
 
   const section = renderPreviewSection({

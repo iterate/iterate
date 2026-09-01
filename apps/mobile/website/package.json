@@ -1,0 +1,24 @@
+{
+  "name": "@iterate-com/mobile-website",
+  "version": "0.0.0-dev",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "tsx ./scripts/deploy.ts",
+    "ensure-resources": "tsx ./scripts/ensure-resources.ts",
+    "test": "vitest run --reporter=default --reporter=../../../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@iterate-com/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:cloudflare",
+    "trpc-cli": "0.15.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.8",
+    "wrangler": "catalog:cloudflare"
+  }
+}

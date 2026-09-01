@@ -1,6 +1,7 @@
 name: Mobile PR Preview Cleanup
 permissions:
   contents: write # deletes the PR's QR assets from the gh-attach-assets release
+  pull-requests: write # rewrites the closed PR's preview section
 # Deliberately NO paths filter (matching cloudflare-preview-cleanup.yml):
 # publish reacts to intermediate pushes but `closed` evaluates the FINAL
 # diff, so a PR that published a channel and later reverted its mobile

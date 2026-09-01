@@ -3,6 +3,7 @@ import {
   buildSignedFileUrl,
   checkSignedFileRequest,
   fileUrlSignature,
+  parseRangeHeader,
   projectFileDataToBytes,
   sanitizeFileFilename,
 } from "./file-url-signing.ts";
@@ -183,5 +184,32 @@ describe("sanitizeFileFilename", () => {
     expect(sanitizeFileFilename("../../etc/passwd")).toBe("etc-passwd");
     expect(sanitizeFileFilename("")).toBe("file");
     expect(sanitizeFileFilename("x".repeat(200))).toHaveLength(100);
+  });
+});
+
+describe("parseRangeHeader", () => {
+  it("handles the shapes AVPlayer actually sends", () => {
+    // Open-ended probe from the start.
+    expect(parseRangeHeader("bytes=0-", 100)).toEqual({ offset: 0, length: 100 });
+    // Bounded range (inclusive end).
+    expect(parseRangeHeader("bytes=10-19", 100)).toEqual({ offset: 10, length: 10 });
+    // End clamped to the object.
+    expect(parseRangeHeader("bytes=90-500", 100)).toEqual({ offset: 90, length: 10 });
+    // Suffix probe for the tail (moov atom hunting).
+    expect(parseRangeHeader("bytes=-30", 100)).toEqual({ offset: 70, length: 30 });
+    expect(parseRangeHeader("bytes=-500", 100)).toEqual({ offset: 0, length: 100 });
+  });
+
+  it("serves the whole object for absent or exotic ranges", () => {
+    expect(parseRangeHeader(null, 100)).toBeNull();
+    expect(parseRangeHeader("bytes=0-10,20-30", 100)).toBeNull();
+    expect(parseRangeHeader("items=0-10", 100)).toBeNull();
+    expect(parseRangeHeader("bytes=-", 100)).toBeNull();
+  });
+
+  it("flags unsatisfiable ranges for a 416", () => {
+    expect(parseRangeHeader("bytes=100-", 100)).toBe("unsatisfiable");
+    expect(parseRangeHeader("bytes=50-40", 100)).toBe("unsatisfiable");
+    expect(parseRangeHeader("bytes=-0", 100)).toBe("unsatisfiable");
   });
 });
