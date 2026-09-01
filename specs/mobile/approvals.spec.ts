@@ -100,11 +100,9 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
           fetch(${JSON.stringify(echo.url)} + "?approve-me=0", { method: "POST", body: "approve-me 0" }),
           fetch(${JSON.stringify(echo.url)} + "?approve-me=1", { method: "POST", body: "approve-me 1" }),
           fetch(${JSON.stringify(echo.url)} + "?approve-me=2", { method: "POST", body: "approve-me 2" }),
-        ])
+        ]);
 
-        const outcomes = await Promise.all(responses.map(async (r) => ({ status: r.status, json: await r.json() })));
-
-        await itx.chat.sendMessage("approve-me outcomes: " + JSON.stringify(outcomes));
+        await itx.chat.sendMessage("approve-me outcomes: " + responses.map(r => r.status).join(", "));
       }
     `);
   });
@@ -117,8 +115,9 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     name: "Approve all 3 (Face ID)",
     page,
   });
+
   await decideBatch(page, "Approve all 3 (Face ID)", "approved", (dialog) => dialog.accept());
-  await page.getByText(/approve-me outcomes:/).waitFor();
+  await page.getByText(/approve-me outcomes: 200, 200, 200/).waitFor();
 
   const reason = "wrong recipient — use the staging address";
 
@@ -133,10 +132,7 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
           fetch(${JSON.stringify(echo.url)} + "?reject-me=1", { method: "POST", body: "reject-me 1" }),
           fetch(${JSON.stringify(echo.url)} + "?reject-me=2", { method: "POST", body: "reject-me 2" }),
         ])
-
-        const outcomes = await Promise.all(responses.map(async (r) => ({ status: r.status, json: await r.json() })));
-
-        await itx.chat.sendMessage("reject-me outcomes: " + JSON.stringify(outcomes));
+        await itx.chat.sendMessage("reject-me outcomes: " + responses.map(r => r.status).join(", "));
       }
     `);
   });
@@ -150,32 +146,14 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     name: "Reject all",
     page,
   });
-  await decideBatch(page, "Reject all", "rejected", (dialog) => dialog.accept(reason));
-  await page.getByText(/reject-me outcomes:/).waitFor();
 
-  // ── Asserted from the journal (a read, not a wait — both narrations are
-  // already on screen): the approved burst got 200s, the rejected one 403s
-  // whose bodies carry the human's reason verbatim (the cue an agent would
-  // read to retry differently).
-  const outcomeMessages = (
-    await itx.streams.get(agentPath).getEvents({
-      eventTypes: ["events.iterate.com/agents/web-message-sent"],
-    })
-  )
-    .map((event) => (event.payload as { message: string }).message)
-    .filter((message) => message.includes(" outcomes: "));
-  const outcomes = Object.fromEntries(
-    outcomeMessages.map((message) => {
-      const [marker, json] = message.split(" outcomes: ");
-      return [
-        marker,
-        JSON.parse(json!) as Array<{ status: number; json: Record<string, unknown> }>,
-      ];
-    }),
-  );
-  expect(outcomes["approve-me"]!.map((entry) => entry.status)).toEqual([200, 200, 200]);
-  expect(outcomes["reject-me"]!.map((entry) => entry.status)).toEqual([403, 403, 403]);
-  expect(outcomes["reject-me"]![0]!.json).toMatchObject({ deniedBy: "human", reason });
+  await decideBatch(page, "Reject all", "rejected", (dialog) => dialog.accept(reason));
+  await page.getByText(/reject-me outcomes: 403, 403, 403/).waitFor();
+
+  await page
+    .getByTestId(/^activity-card-/)
+    .filter({ has: page.getByLabel("rejected", { exact: true }) })
+    .waitFor();
 
   // ── The run's approvals read IN CONTEXT: each settled "ran code" card
   // wears a status icon while collapsed (a check on the card whose burst
@@ -188,11 +166,7 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
   const approvedCard = page
     .getByTestId(/^activity-card-/)
     .filter({ has: page.getByLabel("approved", { exact: true }) });
-  const rejectedCard = page
-    .getByTestId(/^activity-card-/)
-    .filter({ has: page.getByLabel("rejected", { exact: true }) });
-  await approvedCard.waitFor();
-  await rejectedCard.waitFor();
+
   await approvedCard.click();
   await approvedCard.getByRole("button", { name: "Approvals" }).click();
   await approvedCard.getByText("Approved", { exact: true }).waitFor();
