@@ -116,6 +116,15 @@ export default class FilterCamera extends Component<Props, State> {
   #maskStretch = loadMaskStretch();
   #featureHits: FeatureHit[] = [];
   #lastTap: { x: number; y: number; seq: number } | null = null;
+  #drag: {
+    startX: number;
+    startY: number;
+    dx: number;
+    dy: number;
+    active: boolean;
+    seq: number;
+  } | null = null;
+  #dragSeqCounter = 0;
   // Live mic analysis for pitch-driven filters. The context can start
   // suspended under autoplay rules; #onPointerDown re-resumes it.
   #audioContext: AudioContext | null = null;
@@ -339,6 +348,7 @@ export default class FilterCamera extends Component<Props, State> {
       featureHits,
       pitchHz,
       tap: this.#lastTap,
+      drag: this.#drag,
       timeMs: performance.now(),
     });
     try {
@@ -419,7 +429,24 @@ export default class FilterCamera extends Component<Props, State> {
     const dy = event.clientY - pointer.startY;
     if (!pointer.dragging && Math.hypot(dx, dy) < 12) return;
     pointer.dragging = true;
-    if (!pointer.hit) return;
+    if (!pointer.hit) {
+      // A drag on open scenery: reported to the filter (flashcards use it
+      // to scale the face), not a mask adjustment.
+      const start = this.#canvasPoint({ clientX: pointer.startX, clientY: pointer.startY });
+      const current = this.#canvasPoint(event);
+      if (this.#drag === null || !this.#drag.active) {
+        this.#dragSeqCounter += 1;
+      }
+      this.#drag = {
+        startX: start.x,
+        startY: start.y,
+        dx: current.x - start.x,
+        dy: current.y - start.y,
+        active: true,
+        seq: this.#dragSeqCounter,
+      };
+      return;
+    }
     // Right/left widens/narrows the mask; up/down heightens/flattens it.
     // This reshapes the CUTOUT around your feature — it never rescales the
     // sampled image.
@@ -437,6 +464,7 @@ export default class FilterCamera extends Component<Props, State> {
   #onPointerUp = () => {
     const pointer = this.#pointer;
     this.#pointer = null;
+    if (this.#drag?.active) this.#drag = { ...this.#drag, active: false };
     if (!pointer) return;
     if (!pointer.dragging) {
       // A plain tap: the filters' interactivity — next background/card, and

@@ -249,3 +249,11 @@ loading from failed.
   blink/mouth-open) written to be copied into a project repo as
   `filters/README.md` — that's the missing piece for "add a paper toss
   game" prompts to work; without it the project agent has nothing to go on.
+
+## Feedback round 8
+
+- Flashcards: the face now fills nearly all the space above the card (eyes
+  ~0.26w each, lips ~0.36w around an anchor at 0.24h), still scaling with
+  lean-in; sliding up/down starting on the card scales the whole face
+  (persisted in localStorage). New generic surface: `args.drag` for drags
+  that don't start on a feature cutout — documented in project-filters.md.

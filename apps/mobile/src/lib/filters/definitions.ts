@@ -96,6 +96,18 @@ export type FilterFrameArgs = {
    * filters can react positionally (the sing ladder plays notes). Every tap
    * also still increments backgroundIndex. */
   tap: { x: number; y: number; seq: number } | null;
+  /** A drag that did NOT start on a feature cutout (those adjust masks):
+   * canvas-pixel start point and current deltas, `active` while the finger
+   * is down, seq increments per drag so filters can snapshot state at its
+   * start (the flashcards' slide-to-scale face). */
+  drag: {
+    startX: number;
+    startY: number;
+    dx: number;
+    dy: number;
+    active: boolean;
+    seq: number;
+  } | null;
   helpers: FilterHelpers;
   timeMs: number;
 };
@@ -281,28 +293,62 @@ export const FILTER_DRAWERS: Record<string, (args: FilterFrameArgs) => void> = {
         ctx.restore();
       }
     }
-    // The grown-up stays pinned in the top half: eyes and lips remapped to
-    // fixed spots up there (patches keep the head's roll and grow as you
-    // lean in, but positions don't wander over the card).
-    const eyeY = height * 0.15;
+    // The grown-up fills the space above the card: eyes and lips pinned to
+    // a big face zone (patches keep the head's roll and grow as you lean
+    // in). Sliding up/down starting on the card scales the whole face,
+    // persisted across sessions.
+    const zoomState = flashcardFaceZoom;
+    if (!zoomState.loaded) {
+      zoomState.loaded = true;
+      try {
+        const raw = localStorage.getItem("iterate.flashcardFaceZoom.v1");
+        if (raw && Number.isFinite(Number(raw))) zoomState.value = Number(raw);
+      } catch {
+        // per-session zoom still works
+      }
+    }
+    const drag = args.drag;
+    if (drag && drag.startY > height * 0.4) {
+      if (drag.seq !== zoomState.dragSeq) {
+        zoomState.dragSeq = drag.seq;
+        zoomState.dragStartValue = zoomState.value;
+        zoomState.saved = false;
+      }
+      // Slide up = bigger, down = smaller.
+      zoomState.value = Math.min(
+        1.6,
+        Math.max(0.45, zoomState.dragStartValue * (1 - drag.dy / (height * 0.4))),
+      );
+      if (!drag.active && !zoomState.saved) {
+        zoomState.saved = true;
+        try {
+          localStorage.setItem("iterate.flashcardFaceZoom.v1", String(zoomState.value));
+        } catch {
+          // per-session zoom still works
+        }
+      }
+    }
+    const zoom = Math.min(1.8, Math.max(0.6, args.facePose.scale)) * zoomState.value;
     const angle = face.box.angle;
-    const zoom = Math.min(1.8, Math.max(0.6, args.facePose.scale));
+    // Face anchor: centered over the space between the top and the card.
+    const anchorY = height * 0.24;
+    const eyeY = anchorY - height * 0.07 * zoom;
     drawFeatureCutout(args, "eyes", face.leftEye, {
-      cx: width / 2 - width * 0.11,
+      cx: width / 2 - width * 0.19 * zoom,
       cy: eyeY,
-      width: width * 0.16 * zoom,
+      width: width * 0.26 * zoom,
       angle,
     });
     drawFeatureCutout(args, "eyes", face.rightEye, {
-      cx: width / 2 + width * 0.11,
+      cx: width / 2 + width * 0.19 * zoom,
       cy: eyeY,
-      width: width * 0.16 * zoom,
+      width: width * 0.26 * zoom,
       angle,
     });
     drawFeatureCutout(args, "lips", face.lips, {
       cx: width / 2,
-      cy: height * 0.25,
-      width: width * 0.22 * zoom,
+      cy: anchorY + height * 0.1 * zoom,
+      width: width * 0.36 * zoom,
       angle,
     });
   },
@@ -710,6 +756,14 @@ const faceDropState = {
   locked: [] as { dx: number; dy: number }[],
   cycleStartMs: 0,
   eyesClosed: false,
+};
+
+const flashcardFaceZoom = {
+  loaded: false,
+  value: 1,
+  dragSeq: -1,
+  dragStartValue: 1,
+  saved: true,
 };
 
 const paperTossState = {
