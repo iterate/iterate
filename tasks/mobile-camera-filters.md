@@ -270,3 +270,13 @@ loading from failed.
   flashcards-only card-slide zoom.
 - Flashcards default face: eyes closer together and lips tucked up — no
   gap for a nose that isn't there.
+
+## Feedback round 10 (video preview chrome)
+
+- Fullscreen video preview rebuilt: swipe down to dismiss (no ✕), tap
+  toggles minimal chrome — ⬇ save-to-Photos and play/pause (native
+  controls off; this chrome is where basic video editing will grow).
+  Composer chip previews get it too (same component).
+- Save-to-camera-roll extracted to `lib/save-to-camera-roll.ts`, shared by
+  the photo viewer's ⬇ and the video chrome; remote/data uris round-trip
+  through a cache file.

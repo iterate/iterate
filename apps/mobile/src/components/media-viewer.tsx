@@ -10,8 +10,7 @@ import { useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Animated, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import * as FileSystem from "expo-file-system/legacy";
-import * as MediaLibrary from "expo-media-library";
+import { saveMediaToCameraRoll } from "../lib/save-to-camera-roll.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
 import { Markdown } from "./markdown.tsx";
 
@@ -33,29 +32,7 @@ export function MediaViewer({
 }) {
   const [chromeVisible, setChromeVisible] = useState(false);
   const [expanded, setExpanded] = useState(false);
-  // Save the viewed media to the camera roll. Remote/data uris become a
-  // local cache file first — saveToLibraryAsync only takes local files.
-  const download = useMutation({
-    mutationFn: async () => {
-      let localUri = uri;
-      if (/^https?:/.test(uri)) {
-        const extension = /\.(jpe?g|png|gif|webp|heic|mp4|mov|webm)(\?|$)/i.exec(uri)?.[1] || "jpg";
-        const result = await FileSystem.downloadAsync(
-          uri,
-          `${FileSystem.cacheDirectory}download-${Date.now()}.${extension}`,
-        );
-        localUri = result.uri;
-      } else if (uri.startsWith("data:")) {
-        const match = /^data:image\/(\w+);base64,(.+)$/.exec(uri);
-        if (!match) throw new Error("Unrecognized data uri");
-        localUri = `${FileSystem.cacheDirectory}download-${Date.now()}.${match[1] === "jpeg" ? "jpg" : match[1]}`;
-        await FileSystem.writeAsStringAsync(localUri, match[2], {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-      }
-      await MediaLibrary.saveToLibraryAsync(localUri);
-    },
-  });
+  const download = useMutation({ mutationFn: () => saveMediaToCameraRoll(uri, "jpg") });
   const scale = useRef(new Animated.Value(1)).current;
   const translate = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
   // Committed gesture state between gestures (Animated.Value holds the live one).
