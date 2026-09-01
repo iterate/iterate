@@ -1,22 +1,20 @@
-// __tests__/failing-ws-fetch-capability.test.ts — BUG HUNT: does the hibernatable
-// LIVE-CAPABILITY lane work for WEBSOCKET FETCH? A capnweb client provides a fetch-shaped live
-// capability; a PLAIN Node WebSocket eyeball dials the fetch lane
-// (`ws://<host>/cap?ctx=<ctx>&cap=itx.ws-device`). The test is LAYERED so the failure point is
-// NAMED, not smeared:
-//   1. baseline — the SAME /cap WebSocket flow against a LOADED-WORKER capability (the
-//      prove_crisp1 case, kv-seeded source): proves the door itself.
-//   2. live-capability HTTP fetch (non-upgrade): a real eyeball Request rides DO → Workers RPC →
-//      relay → capnweb → Node provider, and the provider's Response rides all the way back out.
-//   3. the UPGRADE case through the live capability — the platform question.
-//   4. test.todo for what would make the platform half provable if Node fabrication is the
-//      only blocker.
-// Every test asserts CORRECT behavior; `test.fails` marks behavior VERIFIED BROKEN by running
-// (BUG/EXPECTED/ACTUAL blocks inline). Run:
-//   pnpm exec vitest run --config vitest.harness.config.ts __tests__/failing-ws-fetch-capability.test.ts
+// __tests__/failing-ws-fetch-capability.test.ts — the LIVE-CAPABILITY lane serves WEBSOCKET
+// FETCH from a NON-workerd provider (the device/ESP32 shape): a capnweb client on /api provides
+// a fetch-shaped live capability whose fetch() answers upgrades with the blessed workerd idiom —
+// `new WebSocketPair()` + `upgradeWebSocketResponse(pair[0])` (capnweb ≥0.12.2, the universal
+// pair + sender-side answer; docs/capnweb-upgrade-answer.md). A plain Node eyeball dials the
+// fetch lane (`ws://<host>/cap?ctx=<ctx>&cap=itx.ws-device`) and gets a real 101 + echo + clean
+// close. LAYERED so a regression names its hop:
+//   1. baseline — the SAME /cap WebSocket flow against a LOADED-WORKER capability: the door.
+//   2. live-capability HTTP fetch (non-upgrade): eyeball Request → DO → relay → capnweb → Node
+//      provider and back.
+//   3. the UPGRADE through the live capability — formerly a test.fails (Node could not
+//      fabricate the answer: no WebSocketPair, undici rejects 101), green since 0.12.2.
+// Run:
+//   pnpm exec vitest run --project harness __tests__/failing-ws-fetch-capability.test.ts
 
-import { request as httpRequest } from "node:http";
 import { afterAll, beforeAll, expect, test } from "vitest";
-import { RpcTarget } from "capnweb";
+import { RpcTarget, upgradeWebSocketResponse, WebSocketPair } from "capnweb";
 import { startProjectHarness, type ProjectHarness } from "./harness.ts";
 
 // Unique ctx per test AND per run (local DO storage may outlive one vitest invocation).
@@ -79,52 +77,6 @@ function wsRoundTrip(
       out.closeCode = (ev as CloseEvent).code;
       resolve(out);
     });
-  });
-}
-
-/** A raw HTTP/1.1 upgrade probe via node:http (undici's fetch strips Connection/Upgrade — the
- *  forbidden headers — so THIS is the only Node way to read the non-101 answer's status+body,
- *  which is where the fetch lane writes its error text). */
-function rawUpgradeProbe(
-  path: string,
-  timeoutMs = 10_000,
-): Promise<{ status?: number; body: string; upgraded: boolean; error?: string }> {
-  return new Promise((resolve) => {
-    const req = httpRequest({
-      host: harness.url.hostname,
-      port: harness.url.port,
-      path,
-      headers: {
-        Connection: "Upgrade",
-        Upgrade: "websocket",
-        "Sec-WebSocket-Key": Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString(
-          "base64",
-        ),
-        "Sec-WebSocket-Version": "13",
-      },
-    });
-    const timer = setTimeout(() => {
-      req.destroy();
-      resolve({ body: "", upgraded: false, error: `probe timeout after ${timeoutMs}ms` });
-    }, timeoutMs);
-    req.on("response", (res) => {
-      let body = "";
-      res.on("data", (chunk) => (body += chunk));
-      res.on("end", () => {
-        clearTimeout(timer);
-        resolve({ status: res.statusCode, body, upgraded: false });
-      });
-    });
-    req.on("upgrade", (res, socket) => {
-      clearTimeout(timer);
-      socket.destroy();
-      resolve({ status: res.statusCode, body: "", upgraded: true });
-    });
-    req.on("error", (e) => {
-      clearTimeout(timer);
-      resolve({ body: "", upgraded: false, error: String(e) });
-    });
-    req.end();
   });
 }
 
@@ -222,96 +174,30 @@ test("live capability HTTP fetch: an eyeball POST reaches the Node provider's fe
   expect(device.saw).toEqual(["POST /cap body=ping"]);
 });
 
-// ─────────────────────── 3. LIVE CAPABILITY, WebSocket UPGRADE — the platform question ───────────────────────
+// ─────────────────────── 3. LIVE CAPABILITY, WebSocket UPGRADE — green since capnweb 0.12.2 ───────────────────────
+// History: this was the platform's sharpest test.fails — the upgrade Request crossed every hop
+// to the Node provider (pinned green) and the platform lane carried a genuine workerd 101 end
+// to end (ws-fetch-live-101.test.ts), but a Node provider could not FABRICATE the answer: no
+// WebSocketPair, and undici's Response rejects status 101. capnweb 0.12.2's universal
+// WebSocketPair + upgradeWebSocketResponse close exactly that gap — the device below is the
+// workerd fetch-handler idiom, verbatim, running in Node.
 
-/** The upgrade-answering provider, instrumented: every observation is recorded so the failing
- *  hop is NAMED by data, not guessed. It attempts the workerd fabrication spelling faithfully
- *  and records each Node blocker it hits. */
+/** The device: a fetch-shaped live capability that upgrades WebSockets — the same source a
+ *  workerd provider would ship. */
 class WsDevice extends RpcTarget {
-  observations: string[] = [];
   async fetch(request: Request) {
     const upgrade = String(request?.headers?.get?.("upgrade") ?? "");
-    this.observations.push(`fetch invoked: ${request.method} upgrade=${JSON.stringify(upgrade)}`);
     if (upgrade.toLowerCase() !== "websocket") return new Response("http-fallback");
-    // The workerd spelling, attempted honestly in Node:
-    const Pair = (globalThis as { WebSocketPair?: new () => Record<0 | 1, unknown> }).WebSocketPair;
-    if (!Pair) this.observations.push("blocker: WebSocketPair is undefined in Node");
-    try {
-      new Response(null, { status: 101 });
-      this.observations.push("101 Response constructed (unexpected in Node)");
-    } catch (e) {
-      this.observations.push(`blocker: ${String(e)}`);
-    }
-    if (Pair) {
-      const pair = new Pair();
-      const server = pair[1] as {
-        accept(): void;
-        addEventListener(t: string, cb: (e: { data: unknown }) => void): void;
-        send(d: unknown): void;
-      };
-      server.accept();
-      server.addEventListener("message", (e) => server.send(`device-echo:${e.data}`));
-      return new Response(null, { status: 101, webSocket: pair[0] } as ResponseInit);
-    }
-    throw new Error(
-      `ws-device provider cannot fabricate a 101 in Node: ${this.observations.join(" | ")}`,
+    const pair = new WebSocketPair();
+    pair[1].accept();
+    pair[1].addEventListener("message", (e: { data: unknown }) =>
+      pair[1].send(`device-echo:${e.data}`),
     );
+    return upgradeWebSocketResponse(pair[0]);
   }
 }
 
-test("upgrade REQUEST forwarding: the eyeball's ws upgrade reaches the Node provider through every hop, and the provider's error rides back out as the non-101 answer", async () => {
-  const ctx = c("livewsprobe");
-  const provider = harness.session(ctx);
-  const itxA = await provider.authenticate().get();
-  const device = new WsDevice();
-  const key = crypto.randomUUID();
-  keep.push(await itxA.rpcStubs.provide(device, { key }));
-  await itxA.provide({ path: "itx.ws-device", target: `itx.rpcStubs.get('${key}')` });
-  // Sanity: the mount answers plain HTTP (so everything below is about the UPGRADE, not the mount).
-  const plain = await fetch(capUrl(ctx, "itx.ws-device", "http"));
-  expect(await plain.text()).toBe("http-fallback");
-
-  // The raw HTTP/1.1 upgrade dial (node:http — undici fetch strips the forbidden
-  // Connection/Upgrade headers, so this is the only Node way to read the non-101 answer).
-  const probe = await rawUpgradeProbe(`/cap?ctx=${ctx}&cap=${encodeURIComponent("itx.ws-device")}`);
-  await new Promise((r) => setTimeout(r, 300));
-  console.log("[wsfetch] raw upgrade probe:", JSON.stringify(probe).slice(0, 400));
-  console.log("[wsfetch] provider observations:", JSON.stringify(device.observations));
-
-  // POSITIVE PIN — request forwarding is NOT the blocker: the upgrade Request crossed eyeball →
-  // /cap → DO fetch lane → capability table → rpcStubs alias → Workers RPC invoker → relay →
-  // capnweb → the NODE provider, Upgrade header intact.
-  expect(device.observations).toContain('fetch invoked: GET upgrade="websocket"');
-  // The provider cannot fabricate a 101 in Node — BOTH blockers, named by the runtime itself.
-  expect(device.observations).toContain("blocker: WebSocketPair is undefined in Node");
-  expect(device.observations.some((o) => o.includes("must be in the range of 200 to 599"))).toBe(
-    true,
-  );
-  // And the provider's throw rides every hop BACK: the eyeball's answer is the fetch lane's 500
-  // carrying the provider's own words (error propagation through the live lane works).
-  expect(probe.upgraded).toBe(false);
-  expect(probe.status).toBe(500);
-  expect(probe.body).toContain("ws-device provider cannot fabricate a 101 in Node");
-});
-
-// BUG: a fetch-shaped LIVE capability cannot answer a WebSocket upgrade when its provider runs
-//   in Node — the failing hop is PROVIDER-SIDE FABRICATION, the very end of the lane: Node has
-//   no WebSocketPair, and undici's Response rejects status 101 ('init["status"] must be in the
-//   range of 200 to 599') and silently drops a `webSocket` init property. The platform carried
-//   the upgrade Request all the way to the provider and would have carried its answer back (both
-//   pinned by the passing forwarding test above) — but no conforming answer can exist in Node.
-// EXPECTED: parity with the loaded-worker case (prove_crisp1 in production): the eyeball's
-//   plain WebSocket opens (101), echoes, closes cleanly.
-// ACTUAL: the fetch lane answers 500 (the provider's throw), so the eyeball's WebSocket never
-//   opens — undici reports "Received network error or non-101 status code.", close code 1002.
-//   Whether OUR lane would forward a GENUINE 101 (capnweb serializing a webSocket-bearing
-//   Response, relay → Workers RPC → DO → eyeball) is PROVEN GREEN in workerd — the fetch-upgrade
-//   lane (ws-fetch-live-101.test.ts); only Node-side FABRICATION remains impossible.
-// WHY IT MATTERS: "clients are always connected" bridges are Node processes; a device that
-//   wants to OFFER a WebSocket endpoint (itx.ws-device) as a live capability simply cannot,
-//   today — every WS-fetch capability must be workerd-side loaded code, which the harness lane
-//   can't even run (the baseline bug above).
-test.fails("live capability WebSocket fetch: a plain eyeball WebSocket opens (101), echoes, and closes through the Node provider", async () => {
+test("live capability WebSocket fetch: a plain eyeball WebSocket opens (101), echoes, and closes through the Node provider", async () => {
   const ctx = c("livews");
   const provider = harness.session(ctx);
   const itxA = await provider.authenticate().get();
@@ -319,7 +205,10 @@ test.fails("live capability WebSocket fetch: a plain eyeball WebSocket opens (10
   const key = crypto.randomUUID();
   keep.push(await itxA.rpcStubs.provide(device, { key }));
   await itxA.provide({ path: "itx.ws-device", target: `itx.rpcStubs.get('${key}')` });
-  // THE CORRECT BEHAVIOR: the eyeball's WebSocket opens, echoes, closes.
+  // Sanity: the mount still answers plain HTTP (so the assertions below are about the UPGRADE).
+  const plain = await fetch(capUrl(ctx, "itx.ws-device", "http"));
+  expect(await plain.text()).toBe("http-fallback");
+
   const ws = await wsRoundTrip(capUrl(ctx, "itx.ws-device", "ws"), "hello-device");
   console.log("[wsfetch] ws round trip:", JSON.stringify(ws));
   expect(ws.error).toBeUndefined();
@@ -328,10 +217,6 @@ test.fails("live capability WebSocket fetch: a plain eyeball WebSocket opens (10
   expect(ws.closeCode).toBe(1000);
 });
 
-// ─────────────────────── 4. what WOULD make the platform half provable ───────────────────────
-
-// The platform question proper — does OUR lane forward a GENUINE 101 from a LIVE capability — is
-// ANSWERED GREEN in __workers-tests__/ws-fetch-live-101.test.ts: the dedicated fetch-upgrade leg (the DO
-// mints the eyeball pair natively, frames tunnel over the stub pager) carries a workerd provider's
-// genuine 101 + echo + close through every hop. Only provider-side fabrication in NODE stays
-// impossible (the test.fails above).
+// The workerd-provider half of the same lane is pinned in __workers-tests__/ws-fetch-live-101
+// .test.ts (the dedicated fetch-upgrade leg; the DO mints the eyeball pair natively). The tunnel
+// (proxy-to-localhost) shape of this same capability is __tests__/failing-tunnel-proxy.test.ts.
