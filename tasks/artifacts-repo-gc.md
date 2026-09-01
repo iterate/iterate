@@ -7,14 +7,15 @@ size: medium
 
 ## Status summary
 
-Investigation done, implementation in progress.
+Implementation complete; awaiting review.
 
 - Done: confirmed Artifacts repos were **never covered** by erase-data or
-  preview GC (coverage gap, not a broken deletion).
-- In progress: erase-data namespace wipe, `artifacts-gc` backfill script,
-  preview-resource-gc.md doc row.
-- Missing: a live run of the backfill against the real pile (needs Doppler
-  creds; command documented below).
+  preview GC (coverage gap, not a broken deletion); erase-data now wipes the
+  namespace (budgeted, skipped under `--preserve-auth`); `pnpm artifacts-gc`
+  backfill script with dry-run/age-cutoff/live-project-skip; doc row; triage
+  unit tests.
+- Missing: a live run of the backfill against the real pile — start with
+  `doppler` creds available: `pnpm --dir apps/os artifacts-gc --env preview_1 --dry-run`.
 
 ## Problem
 
@@ -64,12 +65,15 @@ herring for that incident but is a real hygiene problem.)
 
 ## Checklist
 
-- [ ] erase-data wipes the slot's Artifacts namespace repos (skipped under
-      `--preserve-auth`)
-- [ ] `artifacts-gc` backfill script with dry-run, age cutoff, live-project
-      skip, delete budget
-- [ ] `docs/preview-resource-gc.md` teardown table gains an Artifacts row
-- [ ] tests for the pure parts (live-project skip / cutoff filtering)
+- [x] erase-data wipes the slot's Artifacts namespace repos (skipped under
+      `--preserve-auth`) _— delete-then-relist pass in
+      `apps/os/scripts/erase-data.ts`, 90s budget like the R2 walk_
+- [x] `artifacts-gc` backfill script with dry-run, age cutoff, live-project
+      skip, delete budget _— `apps/os/scripts/artifacts-gc.ts`, run via
+      `pnpm artifacts-gc --env <name>`_
+- [x] `docs/preview-resource-gc.md` teardown table gains an Artifacts row
+- [x] tests for the pure parts (live-project skip / cutoff filtering) _—
+      `triageArtifactsRepoPage` covered in `artifacts-gc.test.ts`_
 
 ## Implementation log
 
@@ -78,6 +82,17 @@ herring for that incident but is a real hygiene problem.)
   `sort=created_at|updated_at|last_push_at|name`, `direction`, `limit` ≤ 200),
   `DELETE /accounts/{a}/artifacts/namespaces/{ns}/repos/{name}`.
 - `scripts/lib/env-context.ts`'s `cf()` returns `body.result` only (cursor
-  discarded) — both new paths use delete-then-relist instead of cursors,
+  discarded) — the erase-data pass uses delete-then-relist instead of cursors,
   matching the existing R2/KV wipe idiom and staying robust when concurrent
-  deletes would invalidate a cursor.
+  deletes would invalidate a cursor. The backfill needs to advance PAST repos
+  it skips, so it makes raw envelope calls (via the shared 429-retry helper)
+  and uses the cursor only for pure-skip pages, restarting from the head after
+  any deletion.
+- Live-project detection: the project-directory KV holds `project:<id>` keys,
+  so the live set is one prefix-listed key scan — no value fetches.
+- 2026-09-01 while implementing: found 13 files in this worktree (prompt
+  files + prompt-sections explainer) mangled by a stray oxfmt pass that
+  ignored `.oxfmtrc.json` ignorePatterns — not from this session's tools;
+  blobs exist nowhere in git history; pure reflow damage. Backed up to the
+  session scratchpad and restored to HEAD so the config-repo-template codegen
+  lint check could pass.
