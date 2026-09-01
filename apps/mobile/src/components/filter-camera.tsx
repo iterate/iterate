@@ -203,14 +203,22 @@ export default class FilterCamera extends Component<Props, State> {
     try {
       this.#stream?.getTracks().forEach((track) => track.stop());
       // Audio is requested up front so a recording started later already has
-      // a live mic track to mix in.
+      // a live mic track to mix in. The voice-call processing getUserMedia
+      // applies by default (echo cancellation, noise suppression, auto
+      // gain) makes recordings sound pumpy and filtered next to the native
+      // camera — turn it off for a natural mic. Tradeoff: the sing filter's
+      // tap-tones can bleed faintly into a recording made while they play.
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: this.props.facing === "front" ? "user" : "environment",
           width: { ideal: 1280 },
           height: { ideal: 720 },
         },
-        audio: true,
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        },
       });
       if (this.#disposed) {
         stream.getTracks().forEach((track) => track.stop());
