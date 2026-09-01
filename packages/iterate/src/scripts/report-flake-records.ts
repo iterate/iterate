@@ -1,8 +1,7 @@
-// iterate-lint-disable terminology/no-metaphorical-lane-door-seam -- `lane` is this repo's established name for a CI test-execution category (TEST_TELEMETRY_LANE, docs/testing.md "test lanes"); renaming this field would fork that vocabulary
 // Ships createFlake recorder lines (see
 // packages/shared/src/test-support/flake-test.ts) from FLAKE_RECORD_DIR to
 // the flake dashboard's /flakes stream on the configured iterate project, as
-// one run-recorded event per run+lane. Invoked by CI post-steps:
+// one run-recorded event per run+suite. Invoked by CI post-steps:
 // `pnpm tsx packages/iterate/src/scripts/report-flake-records.ts`.
 //
 // This is telemetry, not control: EVERY failure path — missing secrets, an
@@ -70,7 +69,8 @@ async function main(): Promise<void> {
   // run identity — otherwise the retry's fresh outcomes would idempotency-
   // conflict with the first attempt's and be dropped.
   const runId = `${process.env.GITHUB_RUN_ID || "local"}-${process.env.GITHUB_RUN_ATTEMPT || "1"}`;
-  const lane = process.env.TEST_TELEMETRY_LANE || "unknown";
+  // iterate-lint-disable-next-line terminology/no-metaphorical-lane-door-seam -- reads the existing TEST_TELEMETRY_LANE env var; renaming that wire name is tracked in tasks/rename-lane-vocabulary.md
+  const suite = process.env.TEST_TELEMETRY_LANE || "unknown";
   const [owner = "iterate", repo = "iterate"] = (process.env.GITHUB_REPOSITORY || "").split("/");
 
   using project = connectItx({
@@ -90,16 +90,16 @@ async function main(): Promise<void> {
   );
   await stream.append({
     type: "events.iterate.com/flakes/run-recorded",
-    idempotencyKey: `flakes/run:${runId}:${lane}`,
+    idempotencyKey: `flakes/run:${runId}:${suite}`,
     payload: {
       runId,
-      lane,
+      suite,
       branch: process.env.TEST_TELEMETRY_BRANCH || "unknown",
       commit: process.env.TEST_TELEMETRY_HEAD_SHA || "unknown",
       records,
     },
   });
-  console.log(`[flake-report] shipped ${records.length} records as run ${runId} lane ${lane}`);
+  console.log(`[flake-report] shipped ${records.length} records as run ${runId} suite ${suite}`);
 }
 
 let deadline: ReturnType<typeof setTimeout> | undefined;

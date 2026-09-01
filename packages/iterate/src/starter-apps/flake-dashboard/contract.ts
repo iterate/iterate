@@ -1,4 +1,3 @@
-// iterate-lint-disable terminology/no-metaphorical-lane-door-seam -- `lane` is this repo's established name for a CI test-execution category (TEST_TELEMETRY_LANE, docs/testing.md "test lanes"); renaming this field would fork that vocabulary
 import { z } from "zod";
 import { defineProcessorContract } from "../../processors/index.ts";
 
@@ -36,7 +35,7 @@ export const FlakeDashboardConfig = z.object({
 
 const FlakeRunRecorded = z.object({
   runId: z.string().min(1).max(200),
-  lane: z.string().min(1).max(200),
+  suite: z.string().min(1).max(200),
   branch: z.string().min(1).max(500),
   commit: z.string().min(1).max(100),
   records: z.array(FlakeRecord).min(1).max(10_000),
@@ -81,7 +80,7 @@ const DefaultBranchStreak = z.object({
 
 const TrackedTest = z.object({
   pattern: z.string(),
-  lanes: z.array(z.string()).default([]),
+  suites: z.array(z.string()).default([]),
   counts: z
     .object({
       pass: z.number().int().nonnegative().default(0),
@@ -155,7 +154,7 @@ export const FlakeDashboardProcessorContract = defineProcessorContract({
     },
     [flakeEventTypes.runRecorded]: {
       description:
-        "One CI run+lane's createFlake outcomes, appended by the CI reporter script (never by this processor). Idempotency-keyed on run+lane so CI retries cannot double-count.",
+        "One CI run+suite's createFlake outcomes, appended by the CI reporter script (never by this processor). Idempotency-keyed on run+suite so CI retries cannot double-count.",
       payloadSchema: FlakeRunRecorded,
     },
     [flakeEventTypes.transitionProposed]: {

@@ -1,4 +1,3 @@
-// iterate-lint-disable terminology/no-metaphorical-lane-door-seam -- `lane` is this repo's established name for a CI test-execution category (TEST_TELEMETRY_LANE, docs/testing.md "test lanes"); renaming this field would fork that vocabulary
 import {
   isIdempotencyConflict,
   StreamProcessor,
@@ -71,9 +70,9 @@ export class FlakeDashboardProcessor extends StreamProcessor<
                 : { outcome: record.outcome, runs: 1, firstAt: record.at, lastAt: record.at };
           tests[record.name] = {
             pattern: record.pattern,
-            lanes: existing?.lanes.includes(event.payload.lane)
-              ? existing.lanes
-              : [...(existing?.lanes || []), event.payload.lane],
+            suites: existing?.suites.includes(event.payload.suite)
+              ? existing.suites
+              : [...(existing?.suites || []), event.payload.suite],
             counts: {
               pass: counts.pass + (record.outcome === "pass" ? 1 : 0),
               flakeFail: counts.flakeFail + (record.outcome === "flake-fail" ? 1 : 0),

@@ -1,4 +1,3 @@
-// iterate-lint-disable terminology/no-metaphorical-lane-door-seam -- `lane` is this repo's established name for a CI test-execution category (TEST_TELEMETRY_LANE, docs/testing.md "test lanes"); renaming this field would fork that vocabulary
 import type { Project } from "../../sdk.ts";
 import type { FlakeDashboardRenderResult, FlakeDashboardState } from "./contract.ts";
 
@@ -95,7 +94,7 @@ function renderBody(state: FlakeDashboardState): string {
     return [
       `\`${name}\``,
       `\`/${test.pattern}/\``,
-      test.lanes.join(", "),
+      test.suites.join(", "),
       String(gated + test.counts.unexpectedError),
       rate,
       test.lastFlakeAt || "never",
@@ -107,7 +106,7 @@ function renderBody(state: FlakeDashboardState): string {
     DASHBOARD_MARKER,
     "Per-test outcomes of every [`createFlake`](https://github.com/iterate/iterate/blob/main/packages/shared/src/test-support/flake-test.ts)-wrapped test, folded from CI-reported runs. Maintained automatically — edits to this body will be overwritten.",
     "",
-    "test | allowed pattern | lanes | runs | flake rate | last flake | default-branch streak | proposed",
+    "test | allowed pattern | suites | runs | flake rate | last flake | default-branch streak | proposed",
     "--- | --- | --- | --- | --- | --- | --- | ---",
     ...(rows.length === 0 ? ["_no flake tests recorded yet_ | | | | | | |"] : rows),
     "",

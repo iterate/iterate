@@ -1,4 +1,3 @@
-// iterate-lint-disable terminology/no-metaphorical-lane-door-seam -- `lane` is this repo's established name for a CI test-execution category (TEST_TELEMETRY_LANE, docs/testing.md "test lanes"); renaming this field would fork that vocabulary
 import { expect, test, vi } from "vitest";
 import { makeProcessorHarness } from "../../processors/testing.ts";
 import {
@@ -16,7 +15,7 @@ test("folds CI-reported records into per-test stats", async () => {
       2,
       [record("deploy", "pass", { at: day(1) }), record("boot", "pass", { at: day(1) })],
       {
-        lane: "e2e",
+        suite: "e2e",
       },
     ),
   );
@@ -24,7 +23,7 @@ test("folds CI-reported records into per-test stats", async () => {
   expect(h.state().tests).toMatchObject({
     deploy: {
       pattern: "CPU startup time exceeded",
-      lanes: ["unit", "e2e"],
+      suites: ["unit", "e2e"],
       counts: { pass: 1, flakeFail: 1, unexpectedError: 0 },
       lastFlakeAt: day(0),
     },
@@ -196,14 +195,14 @@ function birth() {
 function runRecorded(
   n: number,
   records: ReturnType<typeof record>[],
-  overrides?: { branch?: string; lane?: string },
+  overrides?: { branch?: string; suite?: string },
 ) {
   return {
     type: flakeEventTypes.runRecorded,
-    idempotencyKey: `flakes/run:${n}:${overrides?.lane || "unit"}`,
+    idempotencyKey: `flakes/run:${n}:${overrides?.suite || "unit"}`,
     payload: {
       runId: `run-${n}`,
-      lane: overrides?.lane || "unit",
+      suite: overrides?.suite || "unit",
       branch: overrides?.branch || "main",
       commit: `commit-${n}`,
       records,
