@@ -777,8 +777,9 @@ function drawPaperBall(ctx: CanvasRenderingContext2D, cx: number, cy: number, ra
 // Flashcard picture styles the mode button cycles through. Styles with no
 // images yet (photo, until an Unsplash key exists) stay hidden.
 const FLASHCARD_STYLES = [
-  { id: "cartoon", label: "🖍️ Cartoon", images: FLASHCARD_IMAGES_CARTOON },
+  // Order matters: the first style is the default (modeIndex 0).
   { id: "encyclopaedia", label: "📷 Encyclopaedia", images: FLASHCARD_IMAGES_ENCYCLOPAEDIA },
+  { id: "cartoon", label: "🖍️ Cartoon", images: FLASHCARD_IMAGES_CARTOON },
   { id: "photo", label: "🌍 Real photos", images: FLASHCARD_IMAGES_PHOTO },
 ].filter((style) => Object.keys(style.images).length > 0);
 

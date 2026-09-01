@@ -77,9 +77,9 @@ const ADJUST_KEY = "iterate.filterAdjust.v1";
 type AdjustMode = "hole" | "features" | "face";
 
 const ADJUST_MODE_LABELS: Record<AdjustMode, string> = {
-  hole: "✏️ adjust: holes",
-  features: "🔍 adjust: features",
-  face: "😐 adjust: face",
+  hole: "✏️ holes",
+  features: "🔍 size",
+  face: "😐 face",
 };
 
 function loadAdjust(): { mode: AdjustMode; featureScale: number; faceScale: number } {
@@ -696,7 +696,11 @@ const styles = `
     text-align: center;
   }
   .pill.error { background: rgba(180, 30, 30, 0.85); }
-  .adjustMode { left: auto; right: 12px; }
+  .adjustMode {
+    left: auto;
+    right: 12px;
+    bottom: calc(142px + env(safe-area-inset-bottom));
+  }
   .mode {
     position: fixed;
     left: 12px;
