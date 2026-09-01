@@ -15,6 +15,7 @@
 // remapped onto a character (the buried potato), or pinned to a screen
 // region (the flashcards keep your face in the top half).
 
+import { ANIMAL_ANCHORS, type AnimalAnchors } from "./animal-anchors.generated.ts";
 import { ANIMAL_FACE_IMAGES } from "./animal-faces.generated.ts";
 import { FILTER_BACKDROPS } from "./backdrops.generated.ts";
 import { FLASHCARD_IMAGES_CARTOON } from "./flashcards-cartoon.generated.ts";
@@ -286,58 +287,66 @@ export const FILTER_DRAWERS: Record<string, (args: FilterFrameArgs) => void> = {
     }
     const height = width * (image.naturalHeight / image.naturalWidth);
 
-    // Your mouth openness (lip ring aspect), smoothed, drives the jaw.
+    // Your mouth openness (lip ring aspect), smoothed, drives the animal's
+    // OWN mouth: the portrait stays intact; opening reveals a dark mouth
+    // interior at the animal's mouth point while its chin/lower-lip region
+    // (a feathered patch sampled from the same portrait) drops with it.
     const lipRatio = args.face.lips.ry / Math.max(args.face.lips.rx, 1);
     const targetOpen = args.face.tracked ? Math.min(1, Math.max(0, (lipRatio - 0.38) / 0.55)) : 0;
     animalMouthState.open += (targetOpen - animalMouthState.open) * 0.45;
-    const jawDrop = animalMouthState.open * height * 0.07;
+    const open = animalMouthState.open;
 
     const ctx = args.ctx;
     ctx.save();
     ctx.translate(box.cx, box.cy);
     ctx.rotate(angle);
-    const splitY = animal.mouth.y - 0.02;
-    const sourceSplit = Math.round(image.naturalHeight * splitY);
-    const upperHeight = height * splitY;
-    // Upper face.
-    ctx.drawImage(
-      image,
-      0,
-      0,
-      image.naturalWidth,
-      sourceSplit,
-      -width / 2,
-      -height / 2,
-      width,
-      upperHeight,
-    );
-    if (jawDrop > 1) {
-      // Mouth interior revealed by the dropped jaw.
+    ctx.drawImage(image, -width / 2, -height / 2, width, height);
+    if (open > 0.04) {
+      const mouthLocalX = (animal.mouth.x - 0.5) * width;
+      const mouthLocalY = (animal.mouth.y - 0.5) * height;
+      const mouthWidthPx = animal.mouthWidth * width;
+      const drop = open * mouthWidthPx * 0.9;
+      // Interior first (lips-parted darkness, faint tongue).
       ctx.beginPath();
       ctx.ellipse(
-        (animal.mouth.x - 0.5) * width,
-        -height / 2 + upperHeight + jawDrop / 2,
-        animal.mouthWidth * width * 0.7,
-        Math.max(jawDrop * 0.75, 2),
+        mouthLocalX,
+        mouthLocalY + drop * 0.35,
+        mouthWidthPx * 0.62,
+        drop * 0.75 + 1,
         0,
         0,
         Math.PI * 2,
       );
-      ctx.fillStyle = "#2e1416";
+      ctx.fillStyle = "#241012";
       ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(
+        mouthLocalX,
+        mouthLocalY + drop * 0.72,
+        mouthWidthPx * 0.34,
+        Math.max(drop * 0.3, 1),
+        0,
+        0,
+        Math.PI * 2,
+      );
+      ctx.fillStyle = "#7c3b40";
+      ctx.fill();
+      // The animal's own chin/lower lip, dropped: a feathered patch sampled
+      // just below the mouth line from the portrait itself.
+      drawImageEllipsePatch(
+        ctx,
+        image,
+        {
+          cx: animal.mouth.x,
+          cy: animal.mouth.y + animal.mouthWidth * 0.55,
+          rx: animal.mouthWidth * 0.85,
+          ry: animal.mouthWidth * 0.6,
+        },
+        width,
+        height,
+        drop,
+      );
     }
-    // Jaw band, dropped by your mouth openness.
-    ctx.drawImage(
-      image,
-      0,
-      sourceSplit,
-      image.naturalWidth,
-      image.naturalHeight - sourceSplit,
-      -width / 2,
-      -height / 2 + upperHeight + jawDrop,
-      width,
-      height - upperHeight,
-    );
     ctx.restore();
 
     const cos = Math.cos(angle);
@@ -922,118 +931,111 @@ const FLASHCARD_STYLES = [
  * hand-tuned by looking at the images (regenerating the art means
  * re-checking these). eyeWidth/mouthWidth are cutout sizes as fractions of
  * the drawn face width; scale adjusts how large the head sits on yours. */
-const ANIMAL_FACES = [
-  {
-    id: "cat",
-    label: "🐱 Cat",
-    leftEye: { x: 0.37, y: 0.475 },
-    rightEye: { x: 0.665, y: 0.475 },
-    mouth: { x: 0.5, y: 0.685 },
+/** Hand-corrected anchors override the vision pass where it missed —
+ * verified with the harness annotation view (annotate mode). */
+const ANIMAL_ANCHOR_OVERRIDES: Record<string, Partial<AnimalAnchors>> = {
+  cat: {
+    leftEye: { x: 0.335, y: 0.5 },
+    rightEye: { x: 0.665, y: 0.5 },
+    mouth: { x: 0.5, y: 0.735 },
     eyeWidth: 0.13,
-    mouthWidth: 0.2,
-    scale: 1,
-  },
-  {
-    id: "dog",
-    label: "🐶 Dog",
-    leftEye: { x: 0.355, y: 0.36 },
-    rightEye: { x: 0.66, y: 0.36 },
-    mouth: { x: 0.5, y: 0.72 },
-    eyeWidth: 0.12,
-    mouthWidth: 0.22,
-    scale: 1.05,
-  },
-  {
-    id: "goat",
-    label: "🐐 Goat",
-    leftEye: { x: 0.3, y: 0.4 },
-    rightEye: { x: 0.685, y: 0.4 },
-    mouth: { x: 0.5, y: 0.71 },
-    eyeWidth: 0.12,
     mouthWidth: 0.18,
-    scale: 1,
   },
-  {
-    id: "tiger",
-    label: "🐯 Tiger",
-    leftEye: { x: 0.385, y: 0.42 },
-    rightEye: { x: 0.61, y: 0.42 },
-    mouth: { x: 0.5, y: 0.72 },
-    eyeWidth: 0.12,
-    mouthWidth: 0.22,
-    scale: 1.1,
-  },
-  {
-    id: "bear",
-    label: "🐻 Bear",
-    leftEye: { x: 0.36, y: 0.4 },
-    rightEye: { x: 0.635, y: 0.4 },
-    mouth: { x: 0.5, y: 0.7 },
-    eyeWidth: 0.11,
-    mouthWidth: 0.2,
-    scale: 1.1,
-  },
-  {
-    id: "monkey",
-    label: "🐵 Monkey",
-    leftEye: { x: 0.395, y: 0.395 },
-    rightEye: { x: 0.615, y: 0.395 },
-    mouth: { x: 0.5, y: 0.66 },
-    eyeWidth: 0.11,
-    mouthWidth: 0.18,
-    scale: 1,
-  },
-  {
-    id: "gorilla",
-    label: "🦍 Gorilla",
-    leftEye: { x: 0.41, y: 0.42 },
-    rightEye: { x: 0.6, y: 0.42 },
-    mouth: { x: 0.5, y: 0.73 },
+  dog: { mouth: { x: 0.5, y: 0.72 }, eyeWidth: 0.11, mouthWidth: 0.22 },
+  goat: {
+    leftEye: { x: 0.25, y: 0.385 },
+    rightEye: { x: 0.75, y: 0.385 },
+    mouth: { x: 0.49, y: 0.755 },
     eyeWidth: 0.1,
-    mouthWidth: 0.2,
-    scale: 1.1,
-  },
-  {
-    id: "lion",
-    label: "🦁 Lion",
-    leftEye: { x: 0.385, y: 0.4 },
-    rightEye: { x: 0.63, y: 0.4 },
-    mouth: { x: 0.5, y: 0.68 },
-    eyeWidth: 0.1,
-    mouthWidth: 0.18,
-    scale: 1.2,
-  },
-  {
-    id: "horse",
-    label: "🐴 Horse",
-    leftEye: { x: 0.36, y: 0.475 },
-    rightEye: { x: 0.65, y: 0.475 },
-    mouth: { x: 0.5, y: 0.9 },
-    eyeWidth: 0.09,
     mouthWidth: 0.14,
-    scale: 1.6,
   },
-  {
-    id: "fox",
-    label: "🦊 Fox",
-    leftEye: { x: 0.375, y: 0.5 },
-    rightEye: { x: 0.635, y: 0.5 },
-    mouth: { x: 0.5, y: 0.78 },
+  tiger: {
+    leftEye: { x: 0.36, y: 0.435 },
+    rightEye: { x: 0.63, y: 0.435 },
+    mouth: { x: 0.5, y: 0.76 },
     eyeWidth: 0.12,
-    mouthWidth: 0.18,
-    scale: 1,
+    mouthWidth: 0.2,
   },
-  {
-    id: "mouse",
-    label: "🐭 Mouse",
-    leftEye: { x: 0.34, y: 0.46 },
-    rightEye: { x: 0.645, y: 0.46 },
-    mouth: { x: 0.5, y: 0.75 },
-    eyeWidth: 0.12,
-    mouthWidth: 0.18,
-    scale: 1,
+  bear: {
+    leftEye: { x: 0.395, y: 0.41 },
+    rightEye: { x: 0.605, y: 0.41 },
+    mouth: { x: 0.5, y: 0.735 },
+    eyeWidth: 0.09,
+    mouthWidth: 0.17,
   },
+  monkey: {
+    leftEye: { x: 0.375, y: 0.375 },
+    rightEye: { x: 0.625, y: 0.375 },
+    mouth: { x: 0.5, y: 0.71 },
+    eyeWidth: 0.1,
+    mouthWidth: 0.2,
+  },
+  gorilla: {
+    leftEye: { x: 0.385, y: 0.415 },
+    rightEye: { x: 0.61, y: 0.415 },
+    mouth: { x: 0.5, y: 0.775 },
+    eyeWidth: 0.1,
+    mouthWidth: 0.18,
+  },
+  lion: {
+    leftEye: { x: 0.395, y: 0.42 },
+    rightEye: { x: 0.625, y: 0.42 },
+    mouth: { x: 0.5, y: 0.755 },
+    eyeWidth: 0.1,
+    mouthWidth: 0.16,
+  },
+  horse: {
+    leftEye: { x: 0.325, y: 0.46 },
+    rightEye: { x: 0.68, y: 0.46 },
+    mouth: { x: 0.5, y: 0.955 },
+    eyeWidth: 0.1,
+    mouthWidth: 0.16,
+  },
+  fox: {
+    leftEye: { x: 0.36, y: 0.545 },
+    rightEye: { x: 0.63, y: 0.545 },
+    mouth: { x: 0.5, y: 0.82 },
+    eyeWidth: 0.11,
+    mouthWidth: 0.15,
+  },
+  mouse: {
+    leftEye: { x: 0.33, y: 0.545 },
+    rightEye: { x: 0.67, y: 0.545 },
+    mouth: { x: 0.5, y: 0.83 },
+    eyeWidth: 0.11,
+    mouthWidth: 0.13,
+  },
+};
+
+const ANIMAL_META: { id: string; label: string; scale: number }[] = [
+  { id: "cat", label: "🐱 Cat", scale: 1 },
+  { id: "dog", label: "🐶 Dog", scale: 1.05 },
+  { id: "goat", label: "🐐 Goat", scale: 1 },
+  { id: "tiger", label: "🐯 Tiger", scale: 1.1 },
+  { id: "bear", label: "🐻 Bear", scale: 1.1 },
+  { id: "monkey", label: "🐵 Monkey", scale: 1 },
+  { id: "gorilla", label: "🦍 Gorilla", scale: 1.1 },
+  { id: "lion", label: "🦁 Lion", scale: 1.2 },
+  { id: "horse", label: "🐴 Horse", scale: 1.6 },
+  { id: "fox", label: "🦊 Fox", scale: 1 },
+  { id: "mouse", label: "🐭 Mouse", scale: 1 },
 ];
+
+const ANCHOR_FALLBACK: AnimalAnchors = {
+  leftEye: { x: 0.37, y: 0.42 },
+  rightEye: { x: 0.63, y: 0.42 },
+  mouth: { x: 0.5, y: 0.72 },
+  eyeWidth: 0.12,
+  mouthWidth: 0.18,
+};
+
+/** Exported for the harness annotation view. */
+export const ANIMAL_FACES = ANIMAL_META.map((meta) => ({
+  ...meta,
+  ...ANCHOR_FALLBACK,
+  ...(ANIMAL_ANCHORS[meta.id] || {}),
+  ...(ANIMAL_ANCHOR_OVERRIDES[meta.id] || {}),
+}));
 
 export const FILTER_MODES: Record<string, string[]> = {
   cat: ANIMAL_FACES.map((animal) => animal.label),
@@ -1183,6 +1185,83 @@ const FLASHCARDS: { word: string; background: string; swatch?: string }[] = [
 // Smoothed jaw-openness for the Animal mask (module state, like the other
 // filter game states).
 const animalMouthState = { open: 0 };
+
+// Scratch canvases for the animal chin patch (separate from the video
+// cutout scratches so the two never fight over sizing).
+let chinScratch: HTMLCanvasElement | null = null;
+let chinMaskScratch: HTMLCanvasElement | null = null;
+
+/** Sample a feathered elliptical patch from `image` (ellipse in normalized
+ * image coordinates) and draw it into the CURRENT (rotated, face-local)
+ * context at its own location shifted down by `dropPx` — the animal's chin
+ * following your jaw. */
+function drawImageEllipsePatch(
+  ctx: CanvasRenderingContext2D,
+  image: HTMLImageElement,
+  ellipse: { cx: number; cy: number; rx: number; ry: number },
+  drawWidth: number,
+  drawHeight: number,
+  dropPx: number,
+) {
+  const pad = 1.3;
+  const sourceWidth = Math.ceil(ellipse.rx * 2 * pad * image.naturalWidth);
+  const sourceHeight = Math.ceil(ellipse.ry * 2 * pad * image.naturalHeight);
+  if (sourceWidth <= 0 || sourceHeight <= 0) return;
+  chinScratch = chinScratch || document.createElement("canvas");
+  if (chinScratch.width < sourceWidth) chinScratch.width = sourceWidth;
+  if (chinScratch.height < sourceHeight) chinScratch.height = sourceHeight;
+  const sctx = chinScratch.getContext("2d")!;
+  sctx.save();
+  sctx.clearRect(0, 0, chinScratch.width, chinScratch.height);
+  sctx.drawImage(
+    image,
+    ellipse.cx * image.naturalWidth - sourceWidth / 2,
+    ellipse.cy * image.naturalHeight - sourceHeight / 2,
+    sourceWidth,
+    sourceHeight,
+    0,
+    0,
+    sourceWidth,
+    sourceHeight,
+  );
+  const maskScale = 8;
+  const maskWidth = Math.max(2, Math.round(sourceWidth / maskScale));
+  const maskHeight = Math.max(2, Math.round(sourceHeight / maskScale));
+  chinMaskScratch = chinMaskScratch || document.createElement("canvas");
+  if (chinMaskScratch.width < maskWidth) chinMaskScratch.width = maskWidth;
+  if (chinMaskScratch.height < maskHeight) chinMaskScratch.height = maskHeight;
+  const mctx = chinMaskScratch.getContext("2d")!;
+  mctx.clearRect(0, 0, chinMaskScratch.width, chinMaskScratch.height);
+  mctx.beginPath();
+  mctx.ellipse(
+    maskWidth / 2,
+    maskHeight / 2,
+    maskWidth / (2 * pad),
+    maskHeight / (2 * pad),
+    0,
+    0,
+    Math.PI * 2,
+  );
+  mctx.fillStyle = "#000";
+  mctx.fill();
+  sctx.globalCompositeOperation = "destination-in";
+  sctx.imageSmoothingEnabled = true;
+  sctx.drawImage(chinMaskScratch, 0, 0, maskWidth, maskHeight, 0, 0, sourceWidth, sourceHeight);
+  sctx.restore();
+  const destWidth = ellipse.rx * 2 * pad * drawWidth;
+  const destHeight = ellipse.ry * 2 * pad * drawHeight;
+  ctx.drawImage(
+    chinScratch,
+    0,
+    0,
+    sourceWidth,
+    sourceHeight,
+    (ellipse.cx - 0.5) * drawWidth - destWidth / 2,
+    (ellipse.cy - 0.5) * drawHeight - destHeight / 2 + dropPx,
+    destWidth,
+    destHeight,
+  );
+}
 
 const flashcardDeck = {
   seed: null as number | null,

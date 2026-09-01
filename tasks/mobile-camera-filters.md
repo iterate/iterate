@@ -359,3 +359,18 @@ MediaRecorder mechanisms, both hardened:
   framing + scale 1.6 compensation). All anchors re-tuned against the new
   art. CDN/R2 for image weight: suggested not for now (canvas-taint would
   break capture; core infra).
+
+## Feedback round 17 (real mouths, verified anchors)
+
+- Mouth rework: no more South-Park head split — the portrait stays intact;
+  opening your mouth draws a dark interior + tongue at the animal's mouth
+  point and drops a feathered chin patch sampled from the portrait itself
+  (drawImageEllipsePatch). Reads as the animal's own mouth opening.
+- Anchors: tried vision-model detection (detect-animal-anchors.mjs) — it
+  returned prior-driven boilerplate (five animals identical, three nulls),
+  kept as the generated base. The reliable loop is the harness's
+  ?annotate=1 grid (all portraits + crosshairs) reviewed visually;
+  corrections live in ANIMAL_ANCHOR_OVERRIDES. Two rounds pinned all 22
+  eyes + 11 mouths (the lion no longer wears its eyes on its cheeks).
+- Harness gained ?open=<ratio> to force mouth openness (the synthetic face
+  can't open its own).
