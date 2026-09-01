@@ -47,6 +47,9 @@ export async function getOrCreateArtifact(
       name: string,
       input: { setDefaultBranch: string },
     ): Promise<Pick<ArtifactsCreateRepoResult, "remote" | "token">>;
+    /** Must resolve to PLAIN repo data. The binding's get() returns an RPC
+     * stub whose data properties are not readable ("The RPC receiver does
+     * not implement the method"), so callers back this with the REST API. */
     get(name: string): Promise<{ lastPushAt: string | null; remote: string }>;
   },
   name: string,

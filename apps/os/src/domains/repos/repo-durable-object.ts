@@ -67,7 +67,7 @@ import { SingleFlightValue } from "./single-flight-value.ts";
 import { githubFastForwardTransferDepth, githubSyncBaseCommitOid } from "./github-sync-utils.ts";
 import { importGithubArtifactWithInitialPushCapture } from "./artifact-import.ts";
 import { getOrCreateArtifact, type GetOrCreateArtifactResult } from "./artifact-creation.ts";
-import { artifactGitAccess, seedArtifactRepo } from "./artifact-seeding.ts";
+import { artifactWriteToken, seedArtifactRepo } from "./artifact-seeding.ts";
 import { downloadPublicGithubTemplate } from "./public-github-template.ts";
 
 const ARTIFACT_HEAD_VISIBILITY_RETRIES = 5;
@@ -1036,6 +1036,7 @@ export class RepoDurableObject extends DurableObject<Env> {
       this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
     }
     this.#artifactGitAccessPromise = undefined;
+    this.ctx.storage.kv.delete(REPO_ARTIFACT_REMOTE_KEY);
     this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
     this.#writeBranchAuthority(branch, { observedPushes: [], pushedFloor: undefined });
   }
@@ -1793,9 +1794,8 @@ export class RepoDurableObject extends DurableObject<Env> {
         },
       );
     });
-    // The server-returned remote carries the repo's stored-name casing —
-    // never rebuild this URL from the codec name (see artifactGitAccess).
-    const { remote } = await this.requireArtifacts().get(artifactName);
+    const remote = (await this.artifactRepoInfo(artifactName)).remote;
+    this.ctx.storage.kv.put(REPO_ARTIFACT_REMOTE_KEY, remote);
     return {
       artifactName,
       defaultBranch: REPO_DEFAULT_BRANCH,
@@ -1834,11 +1834,8 @@ export class RepoDurableObject extends DurableObject<Env> {
     // only that path mints a replacement after its readiness barrier.
     const token =
       artifact.initialWriteToken ??
-      (await timedStep(
-        "create-timing",
-        timing,
-        "artifact-token",
-        async () => (await artifactGitAccess(this.requireArtifacts(), artifactName)).token,
+      (await timedStep("create-timing", timing, "artifact-token", () =>
+        artifactWriteToken(this.requireArtifacts(), artifactName),
       ));
 
     const seeded = await timedStep("create-timing", timing, "artifact-seed", () =>
@@ -1876,14 +1873,21 @@ export class RepoDurableObject extends DurableObject<Env> {
   // (getFilesSnapshot on each cold build resolve, readFile, listFiles) goes
   // through gitAccess, and minting a fresh 365-day write token per call
   // proliferates credentials for no benefit. The server-returned remote URL
-  // rides along in the same cache.
+  // rides along in the same cache, backed by durable storage so the REST
+  // lookup happens at most once per repo.
   #artifactGitAccessPromise: Promise<{ remote: string; token: string }> | undefined;
 
   async gitAccess(): Promise<{ defaultBranch: string; remote: string; token: string }> {
-    this.#artifactGitAccessPromise ??= artifactGitAccess(
-      this.requireArtifacts(),
-      this.artifactName(),
-    ).catch((error: unknown) => {
+    this.#artifactGitAccessPromise ??= (async () => {
+      const artifactName = this.artifactName();
+      const token = await artifactWriteToken(this.requireArtifacts(), artifactName);
+      let remote = this.ctx.storage.kv.get<string>(REPO_ARTIFACT_REMOTE_KEY);
+      if (typeof remote !== "string") {
+        remote = (await this.artifactRepoInfo(artifactName)).remote;
+        this.ctx.storage.kv.put(REPO_ARTIFACT_REMOTE_KEY, remote);
+      }
+      return { remote, token };
+    })().catch((error: unknown) => {
       this.#artifactGitAccessPromise = undefined;
       // A missing Artifacts repo is the pre-seed window (createArtifactRepo
       // hasn't run), the same "not ready yet" every unseeded clone signals.
@@ -1894,9 +1898,64 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 
   private async getOrCreateArtifact(name: string): Promise<GetOrCreateArtifactResult> {
-    return await getOrCreateArtifact(this.requireArtifacts(), name, {
-      defaultBranch: REPO_DEFAULT_BRANCH,
-    });
+    const artifacts = this.requireArtifacts();
+    const result = await getOrCreateArtifact(
+      {
+        create: (repoName, input) => artifacts.create(repoName, input),
+        // NOT artifacts.get(): the binding stub cannot serve data properties.
+        get: (repoName) => this.artifactRepoInfo(repoName),
+      },
+      name,
+      { defaultBranch: REPO_DEFAULT_BRANCH },
+    );
+    // Cache the server-returned remote for every later git operation — it
+    // carries the repo's STORED name casing, which the git wire matches
+    // case-sensitively (2026-09-01: URLs rebuilt from the codec's mixed-case
+    // name 403'd fleet-wide against lowercase-stored repos).
+    this.ctx.storage.kv.put(REPO_ARTIFACT_REMOTE_KEY, result.remote);
+    return result;
+  }
+
+  /**
+   * Plain repo info over the REST API. The name lookup is case-insensitive
+   * server-side, and the returned `remote` is the URL whose casing the git
+   * wire actually accepts. A missing repo throws with code "NOT_FOUND" so the
+   * existing unseeded/not-ready classification applies.
+   */
+  private async artifactRepoInfo(
+    name: string,
+  ): Promise<{ lastPushAt: string | null; remote: string }> {
+    const cloudflare = parseConfig(this.env).cloudflare;
+    if (!cloudflare.accountId || !cloudflare.artifactsNamespace || !cloudflare.apiToken) {
+      throw new Error(
+        "Artifacts repo info needs cloudflare accountId/artifactsNamespace/apiToken in config for the REST lookup.",
+      );
+    }
+    const response = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${cloudflare.accountId}/artifacts/namespaces/${cloudflare.artifactsNamespace}/repos/${name}`,
+      { headers: { authorization: `Bearer ${cloudflare.apiToken.exposeSecret()}` } },
+    );
+    const envelope = (await response.json().catch(() => null)) as {
+      errors?: Array<{ code?: number; message?: string }>;
+      result?: { last_push_at?: string | null; remote?: string };
+      success?: boolean;
+    } | null;
+    if (!envelope?.success || typeof envelope.result?.remote !== "string") {
+      const details =
+        envelope?.errors?.map((error) => `${error.code}: ${error.message}`).join("; ") ||
+        `HTTP ${response.status}`;
+      const error = new Error(`Artifacts repo info for "${name}" failed: ${details}`);
+      // 10200 is the REST "Repository not found" code — the same condition
+      // the binding reports as code "NOT_FOUND".
+      Object.assign(
+        error,
+        envelope?.errors?.some((entry) => entry.code === 10200)
+          ? { code: "NOT_FOUND" }
+          : { status: response.status },
+      );
+      throw error;
+    }
+    return { lastPushAt: envelope.result.last_push_at ?? null, remote: envelope.result.remote };
   }
 
   private requireArtifacts(): Artifacts {
@@ -2116,6 +2175,11 @@ async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: 
     ...extra,
   };
 }
+
+/** The server-returned git remote URL for this repo's Artifact — the casing
+ * the git wire accepts (see getOrCreateArtifact). One repo per DO, so no
+ * branch scoping. */
+const REPO_ARTIFACT_REMOTE_KEY = "repo-artifact-remote:v1";
 
 function repoHeadStorageKey(branch: string) {
   // The value is "latest head at this branch" ({ commitOid, contentHash }),

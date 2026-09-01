@@ -15,21 +15,10 @@ const REPO_WRITE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
 const REPO_SEED_COMMIT_TIMESTAMP_SECONDS = 1_577_836_800;
 const REPO_DIR = "/repo";
 
-/**
- * The repo's git-over-HTTPS coordinates: the SERVER-returned remote URL and a
- * freshly minted write token. The remote must be used verbatim — Artifacts
- * stores repo names with its own casing (newer repos lowercased) and matches
- * git-wire URLs case-sensitively, so a URL rebuilt from the request-time name
- * can 403 against a perfectly healthy repo (live-observed 2026-09-01, when a
- * service change surfaced the mismatch fleet-wide).
- */
-export async function artifactGitAccess(
-  artifacts: Artifacts,
-  name: string,
-): Promise<{ remote: string; token: string }> {
+export async function artifactWriteToken(artifacts: Artifacts, name: string): Promise<string> {
   const repo = await artifacts.get(name);
   const { plaintext } = await repo.createToken("write", REPO_WRITE_TOKEN_TTL_SECONDS);
-  return { remote: repo.remote, token: stripArtifactTokenExpiry(plaintext) };
+  return stripArtifactTokenExpiry(plaintext);
 }
 
 /**
