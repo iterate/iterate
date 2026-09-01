@@ -1,5 +1,5 @@
-// core/expression.ts — THE expression codec: the STRING half (itx.streams.get("/logs")) ⇄ the
-// STRUCTURED half (["itx", "streams", ["get", "/logs"]]). Args are ONE JSON5 grammar (no hand-rolled
+// core/expression.ts — THE expression codec: the STRING half (itx.facets.get("core")) ⇄ the
+// STRUCTURED half (["itx", "facets", ["get", "core"]]). Args are ONE JSON5 grammar (no hand-rolled
 // number/object parser; __proto__-safe); expressions are persisted NAMES, so deleting one IS
 // revocation. The capability-path matcher + evaluator/dispatcher are ./dispatch.ts.
 import JSON5 from "json5";
@@ -9,7 +9,7 @@ type Step = string | [method: string, ...args: unknown[]];
 /** A call written as data: a scope-root name then get/call steps. */
 export type Expression = Step[];
 /** THE dispatch target, in EITHER codec half — a dotted string that starts with the scope root
- *  (`"itx.streams.get('/logs')"`) OR the parsed structured form (`["itx","streams",["get","/logs"]]`).
+ *  (`"itx.facets.get('core')"`) OR the parsed structured form (`["itx","facets",["get","core"]]`).
  *  Both carry call args (the string via `.method(args)`), and `toExpression` normalizes either to the
  *  structured form — so either works wherever one works, at every door that dispatches. */
 export type ItxExpression = string | Expression;

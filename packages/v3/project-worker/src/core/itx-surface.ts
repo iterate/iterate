@@ -6,6 +6,19 @@
 // none may be introduced — a client's whole dependency is the capnweb package. Anything that
 // would need client-side smarts belongs HERE, behind an RpcTarget method.
 //
+// THE EDGE DOCTRINE — what the `IterateContext` RpcTarget is FOR (three roles):
+//   (a) PROXY: the stream verbs (append / read / waitForEvent) and capability dispatch
+//       (invokeCapability, provide / revoke, subscribe, enable-/disableProcessor, fetchCap)
+//       forward to the context DO over Workers RPC — the DO owns every contract, these methods
+//       just relay;
+//   (b) FOLD + PARK: the two jobs only the edge can do, because only the edge holds the client's
+//       capnweb session — path invocation (the prototype fallback at the bottom folds dotted
+//       sugar `itx.a.b(x)` into ONE invokeCapability expression) and the live-stub Parking (the
+//       DON'T-PIN relay — see below);
+//   (c) FUTURE — DO-free serving: this is where KV-cached mounted capabilities would land
+//       (answering cached table rows / kv / whoami at the edge WITHOUT waking the DO).
+//       Documented on purpose, deliberately NOT built.
+//
 // A client dials `/api` and gets a `ProjectSession`:
 //   • `get(context?)` → the `IterateContext` of that context (the root by default). Pure addressing.
 //   • ONE provide door: `itx.provide(path, target)` — target is an itx EXPRESSION (a durable

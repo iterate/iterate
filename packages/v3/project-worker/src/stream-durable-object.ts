@@ -1,27 +1,36 @@
-// stream-durable-object.ts — THE STREAM: one DO per `{projectId, path}` (codec-named
-// `{projectId}.iterate{path}`). The stream is the parent — LOG + SOCKETS + DOORS only; the
-// CAPABILITY TABLE (capability-table-processor.ts) is an inline reduce-only processor at its
-// PROCESSOR on it (processor-facet.ts), one among many:
+// stream-durable-object.ts — `IterateContextDurableObject`: THE CONTEXT, one DO per
+// `{projectId, path}` (codec-named `{projectId}.iterate{path}`). The DO is the parent —
+// STREAM + INLINE REDUCES + PROCESSORS + TRANSPORT + DOORS:
 //
-//   • the EVENT LOG — SQLite append/read, monotonic offsets, idempotency at the commit point;
+//   • the STREAM — a `Stream` (core/stream.ts), DI'd with this DO's storage: the whole commit
+//     pipeline (validation + admission + idempotency + offsets + chunking + the stream/woken
+//     wake record + waitForEvent + the alarm armer). The DO's append/read/waitForEvent are thin
+//     wrappers; the stream's three injected callbacks (admit / reduceAtCommit / onCommit) close
+//     over this class — nothing in core/stream.ts reaches back;
+//   • the INLINE CORE — two reduce-only processors reduced INSIDE the commit transaction, always
+//     on: the core reduce (pause/breaker/incarnation) and the CAPABILITY TABLE
+//     (capability-table-processor.ts), whose reduced state is the routing table. Runtime state IS
+//     reduced state — observability is their snapshots (`itx.facets.get('core')` /
+//     `itx.facets.get('capability-table')`), never a dedicated verb;
 //   • the PROCESSORS — every enabled one a workerd FACET driven after each commit (built-ins by
-//     slug, userspace classes via the Worker Loader); the capability host (whose reduced state
-//     is the routing table) is the built-in first member, lazily enabled on first use;
+//     slug, userspace classes via the Worker Loader); a processor is just a subscriber mount
+//     whose target is its own co-located facet;
 //   • the TRANSPORT — every hibernatable socket: each held rpc stub is a delivery WebSocket from
 //     the stateless relay (rpc-stub-directory.ts), so ANY number of connected clients leave this
 //     DO free to hibernate. OUT is one-directional fire-and-forget delivery (event batches + state
 //     changes); IN borrows a short RetainedCallbackInvoker leg per wake burst. A stub is addressed
-//     by the capability path it is mounted at (`itx.provide(path, stub)` — the path IS the stub's
-//     identity); PRESENCE is the capability table (rows where live — event-sourced), the transport
-//     table holds only in-memory socket facts (`transportState()`);
+//     by the capability path it is mounted at (the ONE provide door — `itx.provide(path, stub)`;
+//     the path IS the stub's identity); PRESENCE is the capability table (rows where live —
+//     event-sourced); the transport table holds only in-memory socket facts (`transportState()`,
+//     the one non-event-derivable verb);
 //   • the FETCH DOOR — the one place a 101 can enter: `x-itx-stub-pager` accepts a stub pager
 //     WebSocket, `x-itx-cap` resolves the fetch lane, anything else is EGRESS (secret
 //     placeholder substitution → the FALLBACK terminal).
 //
 // PURE WORKERS-RPC: capnweb never terminates here (hard rule) — the stateless `/api` worker
 // relays. Dispatch is ONE door: `invoke(call)` — parse → route the table → substitute → evaluate
-// → replay, all against the inline capability table; this class only delegates. (`IterateContext` builds the
-// call Expression client-side; there is no separate dotted-string door on the DO.)
+// → replay, all against the inline capability table; this class only delegates. (`IterateContext`
+// builds the call Expression client-side; there is no separate dotted-string door on the DO.)
 
 import { DurableObject } from "cloudflare:workers";
 import { substituteHeaderSecrets } from "@v3/shared/egress";
@@ -924,8 +933,8 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   // ── dispatch (ONE path: the routing table — the INLINE core reduce, zero distance) ──
 
   /** Resolve + run one call against the current table. The ONE dispatch door — `IterateContext` builds the
-   *  call Expression client-side and hands it here (a full expression can spell mid-path call args
-   *  a dotted string never could: `itx.streams.get('/').append({...})`). */
+   *  call Expression client-side and hands it here (the ARRAY half can carry call args a dotted
+   *  STRING never could — callbacks, Dates, bytes: `["itx","tools",["transform",21,cb]]`). */
   async invoke(call: ItxExpression, depth = 0): Promise<unknown> {
     this.#noteActivity();
     const state = this.#table();

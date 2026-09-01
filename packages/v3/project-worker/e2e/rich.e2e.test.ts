@@ -54,7 +54,6 @@ class ToolsRich extends RpcTarget {
 test("rich values through the longest path: Date, bytes, callbacks, RpcTarget args, Request/Response", async () => {
   const ctx = freshCtx("rich");
   const itxA = openItx(ctx);
-  await itxA.provide("itx.proverA", new ToolsA());
   const itxB = openItx(ctx);
   await seedSources(itxB, ["probe"]);
   await itxA.provide("itx.tools", new ToolsA());

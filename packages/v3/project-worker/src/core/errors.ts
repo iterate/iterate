@@ -15,7 +15,7 @@ type ErrorCode =
   | "IDEMPOTENCY_CONFLICT"
   | "STREAM_PAUSED"
   | "STREAM_BREAKER_OPEN"
-  | "CONNECTION_OFFLINE" // the named itx connection is not attached right now
+  | "CONNECTION_OFFLINE" // a live capability's transport is gone right now (row present, stub unreachable)
   | "NOT_A_METHOD" // the dotted path's terminal segment is not callable on the target
   | "NO_FACET" // no facet-hosted processor is enabled under that slug
   | "EPHEMERAL_IDEMPOTENCY_KEY" // ephemeral + idempotencyKey is a contradiction, always rejected

@@ -21,13 +21,16 @@ The first three are Cloudflare features. The fourth is ours — a poor-man's stu
 restore hook must route through whichever stateless worker holds the client's capnweb socket.
 The stub stays warm while traffic flows; the DO's quiesce disposes it (a page gets it back).
 
-## Layer 2 — the stream (one Durable Object class, the only one)
+## Layer 2 — the stream (one `Stream` class, held by the one context DO)
 
-`stream-durable-object.ts`: an append-only event log with monotonic offsets shared by durable
-AND ephemeral events (ephemerals consume offsets, never rows), idempotency at the commit point,
-`read` with the scanned-offset-range proof, and pause/breaker enforcement reduced inline. One
-DO per `{projectId, path}` context. Identity is always log-derived: a mount's id IS the offset
-of its capability-provided fact.
+`core/stream.ts` (`Stream`, a dependency-injected JS class) is the commit point: an append-only
+event log with monotonic offsets shared by durable AND ephemeral events (ephemerals consume
+offsets, never rows), idempotency at the door, the stream/woken wake record, `waitForEvent`,
+`read` with the scanned-offset-range proof, and the alarm armer. `stream-durable-object.ts`
+(`IterateContextDurableObject`, one DO per `{projectId, path}` context) holds a Stream and
+drives it — its injected callbacks run the inline reduces in-transaction (pause/breaker
+enforcement lives there) and the post-commit fan-out. Identity is always log-derived: a mount's
+id IS the offset of its capability-provided fact.
 
 ## Layer 3 — the capability table (one reduce, resolved at zero distance)
 
@@ -65,7 +68,7 @@ A subscriber mount's delivery LANE is a DECLARED fact — `laneOf` stamps it ONC
 capability-provided event at the provide door (`SubscriptionLane`), never re-sniffed from the
 target's shape at delivery time. Three lanes:
 
-- **reduce** (`itx.facets.get('slug')`): a co-located facet the commit PUMP drives — a processor.
+- **facet** (`itx.facets.get('slug')`): a co-located facet the commit PUMP drives — a processor.
 - **connected** (a LIVE callback parked at the subscription's own path): fire-and-forget batches + the GLOBAL
   ScannedOffsetRange over the paged-in stub, straight from the commit path — no acks, no server
   cursor, no coalescing; the client holds its own offset and heals by pull. Live-state deltas ride

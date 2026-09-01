@@ -3,6 +3,8 @@
 > → the `rpcStubs` kernel primitive; `workers.get({source})`/`facets.get(ref)` mirror; `runScript(lambda)`;
 > `itx.connectToCapnweb(url)` replaces `itx.os`. Read `src/built-ins.ts` + `capability-table-processor.ts`
 > for the real surface. The config-gated / exokernel-grant model described below was NOT built (deliberately).
+> (Since then — 2026-09-01 — `rpcStubs` itself dissolved too: ONE `itx.provide(path, target)` door, the
+> mount path IS a live stub's identity, presence = capability-table rows where `live`. Same pointers apply.)
 
 # The Iterate Context — a concrete design (v1, for annotation)
 
