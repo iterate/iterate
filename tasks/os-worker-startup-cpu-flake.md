@@ -57,12 +57,23 @@ st82hhnwtw and dnz4tp5rd0 (org 0p91s0lz49), jobs k7ff0dgzpb and sglcxb8gt4.
   global scope, but the plugin graph imports `cloudflare:workers`, which
   node --test can't load without mocking — the per-PR preview deploy is the
   real guard for this class, and it did catch it._
-- [ ] CI green + review on the PR _All lanes green except preview e2e, which
-  is red repo-wide with an environmental Artifacts-service 403 on config-repo
-  creation (same 128-failure signature on mobile-only #2556; last green
-  preview Aug 30). Crucially the deploys themselves are clean on this PR —
-  zero 10021s across two runs plus a retry, which is this task's goal.
-  Escalated to Misha; memory saved as preview-artifacts-403-config-repo._
+- [x] Fix ZodError message loss over Workers RPC _Once the (unrelated,
+  repo-wide) Artifacts 403 was fixed by #2567 and merged in, preview e2e
+  surfaced the bump's third landmine: zod 4.5 makes `ZodError.message` a lazy
+  own accessor, leaving the Error's internal message slot empty — and
+  structuredClone / Workers RPC serialize errors from internal slots, so a
+  ZodError crossing a DO/RPC hop arrived as bare "ZodError" with no issues.
+  Two e2e tests assert on validation messages and caught it; agents/API
+  callers read those messages too, so it's a product regression. Fixed with
+  a pnpm patch (patches/zod@4.5.4.patch) that materializes the message as an
+  own data property at construction — zod ≤4.4 behavior, cost on failure
+  paths only, startup re-measured unaffected. Not fixed upstream as of the
+  latest canary; worth filing a zod issue._
+- [ ] CI green + review on the PR _Earlier rounds: preview e2e was red
+  repo-wide with an environmental Artifacts 403 on config-repo creation
+  (same 128-failure signature on mobile-only #2556), fixed by #2567 —
+  merged into this branch. Deploys clean across all runs: zero 10021s,
+  which is this task's goal._
 
 ## Implementation notes
 
