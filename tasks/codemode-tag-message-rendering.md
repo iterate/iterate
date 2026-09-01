@@ -7,8 +7,10 @@ branch: codemode-tag-rendering
 # Render codemode-tag agent messages properly (mobile + web)
 
 **Status summary (2026-09-02):** design settled via plannotator grill (16
-decisions below); implementation starting. PR 1 (kernel + web) in progress on
-branch `codemode-tag-rendering`; PR 2 (media cutover) and follow-ups queued.
+decisions below, one implementation amendment — see "Amendment" under the
+design section); PR 1 (kernel + derivation + web) is functionally complete on
+branch `codemode-tag-rendering` with unit/harness coverage and an e2e spec;
+PR 2 (media cutover) and follow-ups queued.
 
 ## Design of record (settled 2026-09-02, plannotator grill)
 
@@ -114,24 +116,58 @@ payload:
   language: ts   # body not copied — Script tab dereferences offset 41
 ```
 
+### Amendment discovered during implementation (2026-09-02)
+
+The durable half of the approved render vocabulary ALREADY EXISTS as platform
+events: `agents/web-message-sent` is the assistant-message fact (push
+notifications, the turn loop, mobile chat, and read receipts all key off it),
+`capability-host/script-run-requested`/`-settled` are the script facts, and
+`agent/summary-updated` the live label. Emitting `render/message-said` etc.
+alongside them would double-append every message. So the implementation keeps
+the platform vocabulary for durable facts and adds the `source: {offset}`
+envelope link to them (decision 9's mechanics, existing names); the only NEW
+event types are the ephemeral live-window deltas (`render/message-delta`,
+`render/script-delta`). `source` also turned out to already exist as a
+top-level envelope object (`{processor?, copiedFrom?}`) — `offset` joined it
+as a third member. Decisions 7/9/12 are satisfied in spirit; their letter
+("new render/* durable types") is amended.
+
 ## Checklist
 
 ### PR 1 — kernel + codemode rendering + web (this branch)
 
-- [ ] Kernel: top-level `source: {offset}` envelope field on events.
-- [ ] Render vocabulary types (`render/message-said`, `render/script-requested`,
-      `render/script-settled`, `render/llm-request-made`, attachment facts).
-- [ ] Derivation processor in the codemode-tag template: line-buffered
+- [x] Kernel: top-level `source: {offset}` envelope field on events.
+      _Third member of the existing source envelope (packages/iterate
+      processors/schemas.ts); mirrored in packages/ui stream-event.ts._
+- [x] ~~Render vocabulary types (`render/message-said`, …)~~ _amended: durable
+      facts ride existing platform events + source.offset; only the ephemeral
+      deltas are new types (iterate/processors render-events.ts)._
+- [x] Derivation processor in the codemode-tag template: line-buffered
       streaming parse of assistant output; ephemeral deltas while live;
       durable facts at settlement.
-- [ ] agent-ui-reducer folds `render/*` (sorted by source-anchored offset)
-      with raw fallback for unsourced context-added events.
-- [ ] Web dashboard: prose bubbles from `message-said`; activity/script card
-      from `script-requested`/`script-settled` with `status` as live label;
-      Script|Result|Meta tabs dereference raw events via `source`.
-- [ ] Prose-only turns render as plain bubbles (the motivating mis-render).
-- [ ] Empty assistant messages tolerated/skipped (session capture #2 item 5).
-- [ ] Specs (playwright, local dev).
+      _configs/codemode-tag/codemode-interpreter.ts — a hosted facet
+      processor (at-least-once + keepalive, receives ephemeral chunks),
+      replacing worker.ts's observation-grade push-lane interpretation.
+      Harness tests incl. full replay in apps/os codemode-interpreter.test.ts._
+- [x] agent-ui-reducer folds `render/*` deltas + marks steps interpreted via
+      source.offset, raw stays as fallback for unsourced turns.
+      _liveProse/liveScript on the llm step (volatile overlay only);
+      markStepInterpretedBySource covers script-only turns._
+- [x] Web dashboard: derived live window streams prose as prose and script
+      as code with its status label; interpreted raw text no longer renders
+      in the round body (Full trace keeps it reachable); bubbles/cards keep
+      coming from web-message-sent / script-run events (amendment).
+      _agent-feed.tsx LiveStepStream, agent-activity-rounds.tsx LlmOnlyRound._
+- [x] Prose-only turns render as plain bubbles (the motivating mis-render).
+      _Interpreted steps hide raw text; the web-message-sent bubble is the
+      story. Covered by the e2e spec._
+- [x] Empty assistant messages tolerated/skipped (session capture #2 item 5).
+      _The interpreter emits nothing for an empty `none` outcome._
+- [x] Specs (playwright).
+      _specs/agent-codemode-tag-rendering.spec.ts — seeds a codemode-tag
+      project (create door now pins canonical template refs to the
+      deployment SHA, so previews test THIS branch's template) and asserts
+      derived rendering with no raw tags. Preview-only until merge._
 
 ### PR 2 — media cutover (stacked)
 

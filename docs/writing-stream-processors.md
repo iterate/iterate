@@ -358,14 +358,18 @@ Vendor work that is **idempotent-by-overwrite** inside a durable lane
 (re-downloading Slack-shared files to a per-event storage key) is acceptable:
 wasteful on replay, never wrong.
 
-One guarantee holds in both directions: **processors never see ephemeral
-events** (`append({ ephemeral: true })` — LLM streaming chunks and other
-transient signals). The wake lane drops them from delivery and catch-up reads
-exclude them, so neither a live reduction nor a replay ever contains one: you
-never need to filter them out yourself, and you cannot reduce or side-effect
-on one.
-Corollary: anything your reducer or `processEvent` depends on must NOT be appended
-ephemeral — the durable truth is always its own event (chunks →
+Ephemeral events (`append({ ephemeral: true })` — LLM streaming chunks and
+other transient signals) are opt-in per type: delivery hands one to a
+processor only when the contract's own catalogue marks that type
+`ephemeral: true` AND `consumes` names it explicitly — `"*"` never matches an
+ephemeral event, and catch-up reads exclude them regardless. So most
+processors never see one and never need to filter; a processor that opts in
+(a live-window derivation such as the codemode-tag template's interpreter)
+must treat them as side-effect input only: **never fold an ephemeral event
+into reduced state** — catch-up and replay do not contain them, so state
+derived from one diverges from re-reducing the durable log.
+Corollary: anything your reducer or a durable append depends on must NOT be
+appended ephemeral — the durable truth is always its own event (chunks →
 an assistant-role `agents/context-added` item).
 
 ### The replay test

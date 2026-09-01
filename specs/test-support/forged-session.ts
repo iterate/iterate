@@ -140,6 +140,9 @@ export async function createProjectFixture(
     baseURL: string | undefined;
     page: Page;
     projectCount?: number;
+    /** Config-repo template short name (e.g. "codemode-tag"); default template when omitted.
+     * Resolved against the deployment's own template options so previews pin their head SHA. */
+    configRepoTemplate?: string;
     testInfo: TestInfo;
   },
 ) {
@@ -158,6 +161,9 @@ export async function createProjectFixture(
       createAdminProjectAfterPreviewRollout({
         baseUrl,
         config,
+        ...(input.configRepoTemplate === undefined
+          ? {}
+          : { configRepoTemplate: input.configRepoTemplate }),
         slug: index === 0 ? projectSlug : uniqueFixtureSlug(`${slugPrefix}-${index + 1}`),
       }),
     ),
@@ -452,6 +458,7 @@ export async function resolveAdminSecret(): Promise<string> {
 async function createAdminProjectAfterPreviewRollout(input: {
   baseUrl: string;
   config: OsPlaywrightAuthConfig;
+  configRepoTemplate?: string;
   slug: string;
 }) {
   // create() resolves only after the bootstrap saga commits terminal
@@ -460,7 +467,16 @@ async function createAdminProjectAfterPreviewRollout(input: {
   // lifecycle poll is needed. The shared helper retries the initial admin
   // connection while a preview deployment finishes converging.
   using session = await connectPlaywrightAdminItx(input);
-  using created = await session.projects.get(input.slug).create({});
+  using created = await session.projects.get(input.slug).create(
+    input.configRepoTemplate === undefined
+      ? {}
+      : {
+          // Unpinned on purpose: the create door pins canonical-repo
+          // references to the deployment's own source SHA (previews: the PR
+          // head), so the spec seeds THIS branch's template folder.
+          configRepoTemplate: `github:iterate/iterate#path:configs/${input.configRepoTemplate}`,
+        },
+  );
   const description = await created.__describe();
   const project = { id: description.projectId, slug: input.slug };
 
