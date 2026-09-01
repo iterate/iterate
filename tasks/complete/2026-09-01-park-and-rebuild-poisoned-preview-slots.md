@@ -77,3 +77,16 @@ Cloudflare escalation (their state store outlives the script lifecycle).
 When Cloudflare confirms a fix: verify one parked slot (redeploy + creation
 probe), then `pnpm preview release --slot N --lease-id <id> --force` (or
 let the leases lapse Oct 1 — GC erases on reclaim). Lease ids above.
+
+## Resolution addendum (2026-09-01, late evening)
+
+Cloudflare identified the real bug: their git front-end began matching repo
+names in URLs case-sensitively while stored names are (mostly) lowercased —
+our codec-built mixed-case URLs 403'd. The whole "poisoned worker" model
+(including this task's name-keyed finding — worker deletion "not fixing"
+preview_2 was just the recreated worker still building mixed-case URLs) was
+a confound of probe-name casing. PR #2567 switches to the server-returned
+remote and was verified live on parked slots 2 and 3 (creation + reads
+work). Unparking follows its merge: the slots need no special treatment —
+every PR acquire erases and redeploys, which heals them — so releasing the
+six debug leases is all that's left.
