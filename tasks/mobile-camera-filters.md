@@ -312,3 +312,14 @@ MediaRecorder mechanisms, both hardened:
   per style, London-appropriate vehicles.
 - Mask jaggedness question answered (fixable by sampling at destination
   resolution; not done this round).
+
+## Feedback round 13 (settings row)
+
+- All filter controls collapse into ONE horizontal settings row (bottom,
+  above the capture bar, centered, scrolls if it ever overflows): style
+  cycler, background cycler, filter action buttons, adjust-mode cycler.
+  Fixes the stacked buttons covering each other and the ↺/🎲 canvas chips
+  hiding under the clock.
+- ↺/🎲 became generic settings-row **action buttons** (FILTER_ACTIONS /
+  `actions` on dynamic filters, presses arrive as `args.action {id, seq}`);
+  the deck seed is now a display-only readout drawn below the status bar.

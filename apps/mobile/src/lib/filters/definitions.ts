@@ -84,6 +84,9 @@ export type FilterFrameArgs = {
   /** Cycled by the second mode button (FILTER_MODES_2 — the flashcards'
    * background). */
   modeIndex2: number;
+  /** The most recent settings-row action button press (FILTER_ACTIONS /
+   * a dynamic filter's `actions`); seq increments per press. */
+  action: { id: string; seq: number } | null;
   /** Head movement relative to the baseline captured when the filter
    * started: canvas-pixel offsets and a z-ish scale (face width ratio, >1 =
    * closer). {0,0,1} while untracked. */
@@ -173,6 +176,9 @@ export type DynamicFilterDefinition = {
   emoji: string;
   /** Optional mode labels — the pipeline shows its cycle button for them. */
   modes?: string[];
+  /** Optional one-shot buttons for the settings row; presses arrive as
+   * args.action. */
+  actions?: { id: string; label: string }[];
   draw: (args: FilterFrameArgs) => void;
 };
 
@@ -279,22 +285,16 @@ export const FILTER_DRAWERS: Record<string, (args: FilterFrameArgs) => void> = {
     if (deck.seed === null) deck.seed = Date.now() % 1000;
     if (deck.order === null) deck.order = seededOrder(FLASHCARDS.length, deck.seed);
 
-    // Chip taps (drawn below): ↺ replays the same seed from card one; 🎲
-    // rolls a new seed. Any other tap advances the card (backgroundIndex).
-    const chipHeight = height * 0.045;
-    const chipTop = height * 0.012;
-    const resetChip = { x: width * 0.02, width: width * 0.13 };
-    const seedChip = { x: width * 0.17, width: width * 0.2 };
-    if (args.tap && args.tap.seq !== deck.lastTapSeq) {
-      deck.lastTapSeq = args.tap.seq;
-      if (args.tap.y < chipTop + chipHeight * 1.6) {
-        if (args.tap.x >= resetChip.x && args.tap.x <= resetChip.x + resetChip.width) {
-          deck.baseIndex = args.backgroundIndex;
-        } else if (args.tap.x >= seedChip.x && args.tap.x <= seedChip.x + seedChip.width) {
-          deck.seed = Date.now() % 1000;
-          deck.order = seededOrder(FLASHCARDS.length, deck.seed);
-          deck.baseIndex = args.backgroundIndex;
-        }
+    // Settings-row actions: ↺ replays the same seed from card one; 🎲 rolls
+    // a new seed. Taps on the scene just advance the card (backgroundIndex).
+    if (args.action && args.action.seq !== deck.lastActionSeq) {
+      deck.lastActionSeq = args.action.seq;
+      if (args.action.id === "replay") {
+        deck.baseIndex = args.backgroundIndex;
+      } else if (args.action.id === "reroll") {
+        deck.seed = Date.now() % 1000;
+        deck.order = seededOrder(FLASHCARDS.length, deck.seed);
+        deck.baseIndex = args.backgroundIndex;
       }
     }
     const cardStep = args.backgroundIndex - deck.baseIndex;
@@ -343,21 +343,13 @@ export const FILTER_DRAWERS: Record<string, (args: FilterFrameArgs) => void> = {
       }
     }
 
-    // Deck chips, top-left: replay + seed.
+    // Seed readout (display only — the settings row holds the buttons),
+    // drawn below the status bar/clock.
     ctx.textBaseline = "middle";
     ctx.textAlign = "center";
-    ctx.font = `600 ${Math.round(chipHeight * 0.5)}px -apple-system, sans-serif`;
-    for (const [chip, label] of [
-      [resetChip, "↺"],
-      [seedChip, `🎲 ${String(deck.seed).padStart(3, "0")}`],
-    ] as const) {
-      ctx.fillStyle = backgroundOption.darkChrome ? "rgba(0,0,0,0.08)" : "rgba(0,0,0,0.35)";
-      ctx.beginPath();
-      ctx.roundRect(chip.x, chipTop, chip.width, chipHeight, chipHeight / 2);
-      ctx.fill();
-      ctx.fillStyle = chromeColor;
-      ctx.fillText(label, chip.x + chip.width / 2, chipTop + chipHeight / 2);
-    }
+    ctx.font = `600 ${Math.round(height * 0.018)}px -apple-system, sans-serif`;
+    ctx.fillStyle = chromeColor;
+    ctx.fillText(`deck ${String(deck.seed).padStart(3, "0")}`, width / 2, height * 0.085);
 
     // The grown-up fills the space above the card: eyes and lips pinned to
     // a big face zone (patches keep the head's roll and grow as you lean
@@ -990,7 +982,7 @@ const flashcardDeck = {
   seed: null as number | null,
   baseIndex: 0,
   order: null as number[] | null,
-  lastTapSeq: -1,
+  lastActionSeq: -1,
 };
 
 /** Deterministic Fisher–Yates from a numeric seed (mulberry32). */
@@ -1026,6 +1018,15 @@ const FLASHCARD_BACKGROUNDS: {
 /** A second, independent mode group (its own button). */
 export const FILTER_MODES_2: Record<string, string[]> = {
   flashcards: FLASHCARD_BACKGROUNDS.map((background) => background.label),
+};
+
+/** One-shot action buttons rendered in the settings row; presses arrive as
+ * args.action. */
+export const FILTER_ACTIONS: Record<string, { id: string; label: string }[]> = {
+  flashcards: [
+    { id: "replay", label: "↺ replay" },
+    { id: "reroll", label: "🎲 reseed" },
+  ],
 };
 
 // Data-URI images decode lazily; cached across frames. Returns null for the

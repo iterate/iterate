@@ -22,6 +22,7 @@ import {
 import {
   buildFrameArgs,
   evaluateDynamicFilter,
+  FILTER_ACTIONS,
   FILTER_DRAWERS,
   FILTER_MODES,
   FILTER_MODES_2,
@@ -132,6 +133,7 @@ export default class FilterCamera extends Component<Props, State> {
   #backgroundIndex = 0;
   #modeIndex = 0;
   #modeIndex2 = 0;
+  #lastAction: { id: string; seq: number } | null = null;
   // First tracked face after the filter starts: the reference the potato's
   // full head-tracking moves relative to.
   #faceBaseline: { cx: number; cy: number; width: number } | null = null;
@@ -380,6 +382,7 @@ export default class FilterCamera extends Component<Props, State> {
       backgroundIndex: this.#backgroundIndex,
       modeIndex: this.#modeIndex,
       modeIndex2: this.#modeIndex2,
+      action: this.#lastAction,
       facePose,
       maskStretch: this.#maskStretch,
       featureHits,
@@ -432,6 +435,12 @@ export default class FilterCamera extends Component<Props, State> {
     const dynamic = this.#dynamicDefinition(this.props.filterId);
     if (dynamic && !(dynamic instanceof Error)) return dynamic.modes || [];
     return FILTER_MODES[this.props.filterId] || [];
+  }
+
+  #actionsForActiveFilter(): { id: string; label: string }[] {
+    const dynamic = this.#dynamicDefinition(this.props.filterId);
+    if (dynamic && !(dynamic instanceof Error)) return dynamic.actions || [];
+    return FILTER_ACTIONS[this.props.filterId] || [];
   }
 
   /** Pointer position in canvas device pixels (hits are recorded there). */
@@ -646,33 +655,68 @@ export default class FilterCamera extends Component<Props, State> {
           onPointerUp={this.#onPointerUp}
           onPointerCancel={this.#onPointerUp}
         />
-        {(FILTER_MODES_2[this.props.filterId] || []).length > 1 && !this.state.recording ? (
-          <button
-            className="mode mode2"
-            onClick={() => {
-              this.#modeIndex2 += 1;
-              this.forceUpdate();
-            }}
-            type="button"
-          >
-            {
-              FILTER_MODES_2[this.props.filterId]![
-                this.#modeIndex2 % FILTER_MODES_2[this.props.filterId]!.length
-              ]
-            }
-          </button>
-        ) : null}
-        {this.#modesForActiveFilter().length > 1 && !this.state.recording ? (
-          <button
-            className="mode"
-            onClick={() => {
-              this.#modeIndex += 1;
-              this.forceUpdate();
-            }}
-            type="button"
-          >
-            {this.#modesForActiveFilter()[this.#modeIndex % this.#modesForActiveFilter().length]}
-          </button>
+        {!this.state.recording ? (
+          <div className="settingsRow">
+            <div className="settingsRowInner">
+              {this.#modesForActiveFilter().length > 1 ? (
+                <button
+                  onClick={() => {
+                    this.#modeIndex += 1;
+                    this.forceUpdate();
+                  }}
+                  type="button"
+                >
+                  {
+                    this.#modesForActiveFilter()[
+                      this.#modeIndex % this.#modesForActiveFilter().length
+                    ]
+                  }
+                </button>
+              ) : null}
+              {(FILTER_MODES_2[this.props.filterId] || []).length > 1 ? (
+                <button
+                  onClick={() => {
+                    this.#modeIndex2 += 1;
+                    this.forceUpdate();
+                  }}
+                  type="button"
+                >
+                  {
+                    FILTER_MODES_2[this.props.filterId]![
+                      this.#modeIndex2 % FILTER_MODES_2[this.props.filterId]!.length
+                    ]
+                  }
+                </button>
+              ) : null}
+              {this.#actionsForActiveFilter().map((action) => (
+                <button
+                  key={action.id}
+                  onClick={() => {
+                    this.#lastAction = { id: action.id, seq: (this.#lastAction?.seq || 0) + 1 };
+                  }}
+                  type="button"
+                >
+                  {action.label}
+                </button>
+              ))}
+              <button
+                onClick={() => {
+                  const order: AdjustMode[] = ["hole", "features", "face"];
+                  const mode = order[(order.indexOf(this.#adjust.mode) + 1) % order.length];
+                  this.#adjust = { ...this.#adjust, mode };
+                  try {
+                    localStorage.setItem(ADJUST_KEY, JSON.stringify(this.#adjust));
+                  } catch {
+                    // per-session mode still applies
+                  }
+                  this.forceUpdate();
+                }}
+                type="button"
+              >
+                {ADJUST_MODE_LABELS[this.#adjust.mode]}
+              </button>
+            </div>
+          </div>
         ) : null}
         {this.state.filterError !== null ? (
           <div className="pill error">Filter error: {this.state.filterError}</div>
@@ -755,16 +799,27 @@ const styles = `
     text-align: center;
   }
   .pill.error { background: rgba(180, 30, 30, 0.85); }
-  .mode2 { bottom: calc(238px + env(safe-area-inset-bottom)); }
-  .adjustMode {
-    left: auto;
-    right: 12px;
-    bottom: calc(142px + env(safe-area-inset-bottom));
-  }
-  .mode {
+  /* One horizontal row for every filter setting: mode cyclers, one-shot
+     actions, the adjust mode. Fits on a phone; scrolls if a filter ever
+     grows more buttons. */
+  .settingsRow {
     position: fixed;
-    left: 12px;
-    bottom: calc(190px + env(safe-area-inset-bottom));
+    left: 0;
+    right: 0;
+    bottom: calc(150px + env(safe-area-inset-bottom));
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .settingsRowInner {
+    display: flex;
+    gap: 8px;
+    width: max-content;
+    margin: 0 auto;
+    padding: 0 12px;
+  }
+  .settingsRowInner button {
+    flex: 0 0 auto;
     background: rgba(11, 11, 15, 0.7);
     color: #fff;
     font: 13px -apple-system, sans-serif;
