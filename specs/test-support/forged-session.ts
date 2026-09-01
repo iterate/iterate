@@ -13,6 +13,7 @@ import {
   type ProjectAiInterceptor,
   type ProjectAiInterceptorInput,
 } from "iterate/node";
+import dedent from "dedent";
 import { doppler, localOsDevServer } from "../../apps/os/scripts/dev.ts";
 import { mintForgedAccessToken, mintForgedIdToken } from "../../scripts/auth/forge-token.ts";
 // Lazy circular import (function-call-time only): the helper dials its
@@ -362,6 +363,26 @@ export function createAgentHelper<
 
       /** fingerprint -> script, so retries get the same script as last time */
       previous: Map<string, (typeof this)["responders"][number]["fn"]> = new Map();
+
+      lastUserMessage(call: ProjectAiInterceptorInput) {
+        if (call.source !== "agent-turn") throw new Error(`unexpected source: ${call.source}`);
+        return call.body.messages.findLast((m) => m.role === "user")?.content;
+      }
+
+      codemodify(script: string) {
+        const code = dedent(script.toString()).trim();
+        // Match the product's codemode sniff (agent-response-format.ts): the
+        // fence body must START with `async (` or `async function`, or the
+        // turn is rejected as malformed and retried — a journal dance that
+        // once cost a debugging session over `async itx =>`. Fail here
+        // instead, in the spec's own stack.
+        if (!/^async\s*(?:function|\()/.test(code)) {
+          throw new Error(
+            `codemodify: script must start with \`async (\` or \`async function\` to pass the codemode response format (agent-response-format.ts). Got: ${code.slice(0, 60)}`,
+          );
+        }
+        return `\`\`\`ts\n${code}\n\`\`\``;
+      }
 
       set(script: Parameters<typeof this.setTimes>[1]) {
         this.setTimes(Infinity, script);

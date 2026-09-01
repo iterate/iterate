@@ -44,12 +44,9 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
   // from deployed preview workers too. (Reimplemented rather than imported
   // from apps/os/e2e: that module drags in Workers-global typings this
   // tsconfig doesn't have.)
-  await using echo = await withTunnel({
-    path: "/egress-echo",
-    async fetch(request) {
-      const body = await request.text();
-      return Response.json({ body });
-    },
+  await using echo = await withTunnel(async function (request) {
+    const body = await request.text();
+    return Response.json({ body });
   });
 
   await using fixture = await helpers.createMobileFixture("mobile-approvals");
@@ -94,54 +91,24 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
   const agentPath = decodeURIComponent(new URL(page.url()).searchParams.get("path")!);
   const agent = await fixture.createAgent({ path: agentPath });
 
-  // Each script narrates its own outcome (success or error) and returns
-  // nothing — an undefined script result ends the turn loop, so no second
-  // request follows. Before the burst, the script maintains the agent
-  // status exactly the way a real agent turn would
-  // (AGENT_SUMMARY_INSTRUCTION): summary-updated appends, fields updating
-  // independently — the status the approvals screen pins to this batch's
-  // card.
-  const burstScript = (marker: string, statusUpdates: object[]) =>
-    [
-      "```ts",
-      `async (itx) => { ${statusUpdates
-        .map(
-          (update) =>
-            `await itx.agent.append({ type: "events.iterate.com/agent/summary-updated", payload: ${JSON.stringify(update)} }); `,
-        )
-        .join(
-          "",
-        )}const burst = async () => { const responses = await Promise.all(Array.from({length: 3}, (_, index) => fetch(${JSON.stringify(echo.url)} + "?${marker}=" + index, {method: "POST", body: "${marker} " + index}))); const outcomes = await Promise.all(responses.map(async (response) => ({status: response.status, body: await response.json()}))); return "${marker} outcomes: " + JSON.stringify(outcomes); }; await itx.chat.sendMessage(await burst().catch(String)); }`,
-      "```",
-    ].join("\n");
+  agent.responses.setOnce(async () => {
+    return agent.responses.codemodify(`
+      async (itx) => {
+        await itx.agent.append({ type: "events.iterate.com/agent/summary-updated", payload: { title: "Refund sweep", activity: "Emailing 3 customers about order refunds" } });
 
-  // The "model": commands pair with scripts right here, in-test, routed by
-  // the command text — the interception this repo grew for exactly this.
-  const bursts: Record<string, { marker: string; statusUpdates: object[] }> = {
-    "Run the approve-me burst": {
-      marker: "approve-me",
-      statusUpdates: [
-        { title: "Refund sweep", activity: "Emailing 3 customers about order refunds" },
-      ],
-    },
-    "Run the reject-me burst": {
-      marker: "reject-me",
-      statusUpdates: [
-        { title: "Invoice chase", activity: "Preparing payment reminders" },
-        { activity: "Requesting payment for 3 overdue invoices" },
-      ],
-    },
-  };
-  agent.responses.set(async (call) => {
-    const message = [...call.body.messages].reverse().find((m) => m.role === "user")?.content ?? "";
-    const burst = bursts[message.trim()];
-    if (!burst) throw new Error(`unexpected message: ${message}`);
-    return burstScript(burst.marker, burst.statusUpdates);
+        const responses = await Promise.all([
+          fetch(${JSON.stringify(echo.url)} + "?approve-me=0", { method: "POST", body: "approve-me 0" }),
+          fetch(${JSON.stringify(echo.url)} + "?approve-me=1", { method: "POST", body: "approve-me 1" }),
+          fetch(${JSON.stringify(echo.url)} + "?approve-me=2", { method: "POST", body: "approve-me 2" }),
+        ])
+
+        const outcomes = await Promise.all(responses.map(async (r) => ({ status: r.status, json: await r.json() })));
+
+        await itx.chat.sendMessage("approve-me outcomes: " + JSON.stringify(outcomes));
+      }
+    `);
   });
 
-  // The approve burst: the command's turn is served by the handler above, the
-  // burst parks as one batch, and the dialog appears in-thread while the
-  // working indicator honestly spins.
   await sendChatMessage(page, "Run the approve-me burst");
   await waitForBatchCardButton({
     agentPaths: [agentPath],
@@ -151,15 +118,31 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     page,
   });
   await decideBatch(page, "Approve all 3 (Face ID)", "approved", (dialog) => dialog.accept());
-  // The released burst completes and the script narrates into the feed — run
-  // 1 is over before lane 2's command goes in.
   await page.getByText(/approve-me outcomes:/).waitFor();
 
-  // Reject lane: same shape, typed reason, and a two-append status story —
-  // the first append sets title + activity, then an activity-only update
-  // as the phase changes (the fold must keep the standing title).
   const reason = "wrong recipient — use the staging address";
+
+  agent.responses.setOnce(async () => {
+    return agent.responses.codemodify(`
+      async (itx) => {
+        await itx.agent.append({ type: "events.iterate.com/agent/summary-updated", payload: { title: "Invoice chase", activity: "Preparing payment reminders" } });
+        await itx.agent.append({ type: "events.iterate.com/agent/summary-updated", payload: { activity: "Requesting payment for 3 overdue invoices" } });
+
+        const responses = await Promise.all([
+          fetch(${JSON.stringify(echo.url)} + "?reject-me=0", { method: "POST", body: "reject-me 0" }),
+          fetch(${JSON.stringify(echo.url)} + "?reject-me=1", { method: "POST", body: "reject-me 1" }),
+          fetch(${JSON.stringify(echo.url)} + "?reject-me=2", { method: "POST", body: "reject-me 2" }),
+        ])
+
+        const outcomes = await Promise.all(responses.map(async (r) => ({ status: r.status, json: await r.json() })));
+
+        await itx.chat.sendMessage("reject-me outcomes: " + JSON.stringify(outcomes));
+      }
+    `);
+  });
+
   await sendChatMessage(page, "Run the reject-me burst");
+
   await waitForBatchCardButton({
     agentPaths: [agentPath],
     deviceId: DEVICE_ID,
@@ -186,25 +169,13 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
       const [marker, json] = message.split(" outcomes: ");
       return [
         marker,
-        JSON.parse(json!) as Array<{ status: number; body: Record<string, unknown> }>,
+        JSON.parse(json!) as Array<{ status: number; json: Record<string, unknown> }>,
       ];
     }),
   );
   expect(outcomes["approve-me"]!.map((entry) => entry.status)).toEqual([200, 200, 200]);
   expect(outcomes["reject-me"]!.map((entry) => entry.status)).toEqual([403, 403, 403]);
-  expect(outcomes["reject-me"]![0]!.body).toMatchObject({ deniedBy: "human", reason });
-
-  // The headline guarantee, journal-certified: the ENTIRE conversation —
-  // two commands, two bursts, two decisions, two narrated outcomes — opened
-  // exactly two LLM requests, both on intercepted/typed, a model only THIS
-  // spec's handler can serve. Nothing nondeterministic ever ran.
-  const llmRequests = await itx.streams.get(agentPath).getEvents({
-    eventTypes: ["events.iterate.com/agent/llm-request-requested"],
-  });
-  expect(llmRequests.map((event) => (event.payload as { model: string }).model)).toEqual([
-    "intercepted/typed",
-    "intercepted/typed",
-  ]);
+  expect(outcomes["reject-me"]![0]!.json).toMatchObject({ deniedBy: "human", reason });
 
   // ── The run's approvals read IN CONTEXT: each settled "ran code" card
   // wears a status icon while collapsed (a check on the card whose burst

@@ -16,7 +16,17 @@ export type TunnelOptions = {
   path?: string;
 };
 
-export async function withTunnel(options: TunnelOptions): Promise<TunnelHandle> {
+export async function withTunnel(fetch: TunnelFetchHandler): Promise<TunnelHandle>;
+export async function withTunnel(options: TunnelOptions): Promise<TunnelHandle>;
+export async function withTunnel(
+  ...args: [TunnelFetchHandler] | [TunnelOptions]
+): Promise<TunnelHandle> {
+  let options: TunnelOptions;
+  if (typeof args[0] === "function") {
+    options = { fetch: args[0] };
+  } else {
+    options = args[0] as TunnelOptions;
+  }
   const path = options.path ?? "";
   if (e2eTargetNeedsPublicTunnel()) {
     return await withPublicCaptunTunnel({ ...options, path });
