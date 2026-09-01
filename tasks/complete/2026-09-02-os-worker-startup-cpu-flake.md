@@ -1,14 +1,14 @@
 ---
-status: in-progress
+status: done
 size: small
 ---
 
 # os worker startup CPU flake
 
-**Status summary:** Root-caused and fixed. Startup CPU was dominated by zod
-v4 schema construction; bumping zod 4.3.6 → 4.5.4 cuts measured startup CPU
-~43% (and startup GC ~76%). One generator regex needed updating for zod 4.5's
-type printing. All tests/lint/knip/typecheck green. Remaining: PR review + CI.
+**Status summary:** Done — PR #2561 fully green (all lanes including preview
+deploy + e2e). zod 4.3.6 → 4.5.4 cuts measured startup CPU ~43% (GC ~76%);
+three pieces of bump fallout found and fixed along the way (generator regex,
+better-auth deviceAuthorization options, ZodError message loss over RPC).
 
 ## Problem
 
@@ -69,11 +69,11 @@ st82hhnwtw and dnz4tp5rd0 (org 0p91s0lz49), jobs k7ff0dgzpb and sglcxb8gt4.
   own data property at construction — zod ≤4.4 behavior, cost on failure
   paths only, startup re-measured unaffected. Not fixed upstream as of the
   latest canary; worth filing a zod issue._
-- [ ] CI green + review on the PR _Earlier rounds: preview e2e was red
-  repo-wide with an environmental Artifacts 403 on config-repo creation
-  (same 128-failure signature on mobile-only #2556), fixed by #2567 —
-  merged into this branch. Deploys clean across all runs: zero 10021s,
-  which is this task's goal._
+- [x] CI green + review on the PR _Fully green 2026-09-02 after merging
+  main (which brought #2567's fix for the unrelated repo-wide Artifacts 403
+  that had been masking e2e). Deploys clean across every run: zero 10021s,
+  which is this task's goal. No review threads at completion time; PR left
+  as draft for Misha._
 
 ## Implementation notes
 
