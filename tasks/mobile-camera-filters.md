@@ -280,3 +280,16 @@ loading from failed.
 - Save-to-camera-roll extracted to `lib/save-to-camera-roll.ts`, shared by
   the photo viewer's ⬇ and the video chrome; remote/data uris round-trip
   through a cache file.
+
+## Bug: recorded-video playback freezes partway (round 11 hardening)
+
+Reported twice on-device; not reproducible headless. Two likely WebKit
+MediaRecorder mechanisms, both hardened:
+- The raw mic track can carry timestamp gaps; AVPlayer slaves video to the
+  audio clock on playback, so a gappy/short audio track freezes the
+  picture. Recordings now mix the mic through a WebAudio
+  MediaStreamDestination (continuous timestamps).
+- Single-blob finalization of long recordings (the 30s cap is gone) is
+  fragile; the recorder now runs timesliced (1s chunks) and surfaces
+  recorder.onerror. Observe on-device — if it still freezes, next lever is
+  re-muxing on the native side.

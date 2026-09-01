@@ -149,6 +149,7 @@ export default class FilterCamera extends Component<Props, State> {
   // Live mic analysis for pitch-driven filters. The context can start
   // suspended under autoplay rules; #onPointerDown re-resumes it.
   #audioContext: AudioContext | null = null;
+  #audioSourceNode: MediaStreamAudioSourceNode | null = null;
   #audioAnalyser: AnalyserNode | null = null;
   #audioSamples: Float32Array<ArrayBuffer> | null = null;
   // One in-flight touch: where it started, which feature (if any) it grabbed
@@ -244,8 +245,10 @@ export default class FilterCamera extends Component<Props, State> {
       const context = new AudioContext();
       const analyser = context.createAnalyser();
       analyser.fftSize = 2048;
-      context.createMediaStreamSource(stream).connect(analyser);
+      const source = context.createMediaStreamSource(stream);
+      source.connect(analyser);
       this.#audioContext = context;
+      this.#audioSourceNode = source;
       this.#audioAnalyser = analyser;
       this.#audioSamples = new Float32Array(analyser.fftSize);
       void context.resume();
@@ -560,7 +563,22 @@ export default class FilterCamera extends Component<Props, State> {
     if (!canvas || this.state.status !== "live") throw new Error("The filter camera is not live");
     if (this.#recorder) return;
     const stream = canvas.captureStream(30);
-    for (const track of this.#stream?.getAudioTracks() || []) stream.addTrack(track);
+    // Mix the mic through WebAudio instead of adding the raw track: a
+    // processed track has continuous timestamps, and AVPlayer slaves video
+    // to the audio clock on playback — a gappy/short audio track is the
+    // classic "video freezes partway through" (on-device-reported).
+    let audioTracks = this.#stream?.getAudioTracks() || [];
+    let mixDestination: MediaStreamAudioDestinationNode | null = null;
+    if (this.#audioContext && this.#audioSourceNode) {
+      try {
+        mixDestination = this.#audioContext.createMediaStreamDestination();
+        this.#audioSourceNode.connect(mixDestination);
+        audioTracks = mixDestination.stream.getAudioTracks();
+      } catch {
+        mixDestination = null;
+      }
+    }
+    for (const track of audioTracks) stream.addTrack(track);
     const mimeType = ["video/mp4", "video/webm;codecs=vp9", "video/webm"].find((candidate) =>
       MediaRecorder.isTypeSupported(candidate),
     );
@@ -573,7 +591,19 @@ export default class FilterCamera extends Component<Props, State> {
     recorder.ondataavailable = (event) => {
       if (event.data.size > 0) this.#recorderChunks.push(event.data);
     };
+    recorder.onerror = (event) => {
+      void this.props.onCaptureError(
+        `Recording failed: ${String((event as { error?: Error }).error?.message || "MediaRecorder error")}`,
+      );
+    };
     recorder.onstop = () => {
+      if (mixDestination) {
+        try {
+          this.#audioSourceNode?.disconnect(mixDestination);
+        } catch {
+          // already disconnected (stream restarted mid-recording)
+        }
+      }
       const durationSeconds = (Date.now() - this.#recordingStartedAt) / 1000;
       const blob = new Blob(this.#recorderChunks, { type: mimeType });
       this.#recorder = null;
@@ -584,7 +614,9 @@ export default class FilterCamera extends Component<Props, State> {
         .then((base64) => this.props.onVideo({ base64, mimeType, durationSeconds }))
         .catch((error) => this.props.onCaptureError(String((error as Error).message || error)));
     };
-    recorder.start();
+    // Timesliced so chunks flush as they happen — single-blob finalization
+    // of long recordings is fragile in WebKit.
+    recorder.start(1000);
   }
 
   render() {
