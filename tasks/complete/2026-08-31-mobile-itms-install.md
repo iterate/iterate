@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: small
 branch: mobile-itms-install
 base: mobile-native-build-economy (#2555)
