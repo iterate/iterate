@@ -98,10 +98,12 @@ export async function createMobileFixture(
   );
 
   return {
+    baseUrl: osBaseUrl,
     createAgent: agentHelper.createAgent,
-    /** Admin itx for the signup-born project — the spec's server-side hand
-     * (egress rules, device enrollment, journal reads). */
+    /** Admin itx for the signup-born project. */
     itx,
+    projectId,
+    projectSlug,
     [Symbol.asyncDispose]() {
       return resources.disposeAsync();
     },
@@ -123,9 +125,6 @@ export async function createMobileFixture(
     const popupPromise = page.waitForEvent("popup", { timeout: 15_000 });
     await page.getByRole("button", { name: "Sign in" }).click();
     const popup = await popupPromise;
-    // The popup is a raw Page — no spinner-waiter middleware — and its
-    // cross-server auth navigations run cold on fresh preview deploys
-    // (CI-measured >1s), so these two waits carry explicit timeouts.
     const emailLoginButton = popup.getByTestId("email-login-button");
     await emailLoginButton.waitFor({ state: "visible", timeout: 15_000 }); // timeout: popup page has no spinner-waiter
     await emailLoginButton.click();
@@ -371,11 +370,9 @@ export function createAgentHelper<
 
       codemodify(script: string) {
         const code = dedent(script.toString()).trim();
-        // Match the product's codemode sniff (agent-response-format.ts): the
-        // fence body must START with `async (` or `async function`, or the
-        // turn is rejected as malformed and retried — a journal dance that
-        // once cost a debugging session over `async itx =>`. Fail here
-        // instead, in the spec's own stack.
+        // The codemode format (agent-response-format.ts) rejects anything not
+        // starting `async (`/`async function` — fail here, in the spec's own
+        // stack, instead of as a retried malformed turn.
         if (!/^async\s*(?:function|\()/.test(code)) {
           throw new Error(
             `codemodify: script must start with \`async (\` or \`async function\` to pass the codemode response format (agent-response-format.ts). Got: ${code.slice(0, 60)}`,
