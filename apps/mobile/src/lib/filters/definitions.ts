@@ -274,7 +274,7 @@ export const FILTER_DRAWERS: Record<string, (args: FilterFrameArgs) => void> = {
     drawFaceCutoutsInPlace(args);
   },
   flashcards: (args) => {
-    const { ctx, width, height, face, timeMs } = args;
+    const { ctx, width, height, face } = args;
     const deck = flashcardDeck;
     if (deck.seed === null) deck.seed = Date.now() % 1000;
     if (deck.order === null) deck.order = seededOrder(FLASHCARDS.length, deck.seed);
