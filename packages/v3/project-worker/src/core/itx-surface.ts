@@ -7,10 +7,9 @@
 // would need client-side smarts belongs HERE, behind an RpcTarget method.
 //
 // THE EDGE DOCTRINE — what the `IterateContext` RpcTarget is FOR (three roles):
-//   (a) PROXY: the stream verbs (append / read / waitForEvent) and capability dispatch
-//       (invokeCapability, provide / revoke, subscribe, enable-/disableProcessor, fetchCap)
-//       forward to the context DO over Workers RPC — the DO owns every contract, these methods
-//       just relay;
+//   (a) PROXY: the stream verbs (append / read / waitForEvent), egress (fetch) and capability
+//       dispatch (invokeCapability, provide / revoke, subscribe, enable-/disableProcessor) forward
+//       to the context DO over Workers RPC — the DO owns every contract, these methods just relay;
 //   (b) FOLD + PARK: the two jobs only the edge can do, because only the edge holds the client's
 //       capnweb session — path invocation (the prototype fallback at the bottom folds dotted
 //       sugar `itx.a.b(x)` into ONE invokeCapability expression) and the live-stub Parking (the
@@ -19,17 +18,24 @@
 //       (answering cached table rows / kv / whoami at the edge WITHOUT waking the DO).
 //       Documented on purpose, deliberately NOT built.
 //
-// A client dials `/api` and gets a `ProjectSession`:
-//   • `get(context?)` → the `IterateContext` of that context (the root by default). Pure addressing.
-//   • ONE provide door: `itx.provide(path, target)` — target is an itx EXPRESSION (a durable
-//     mount) or a LIVE capnweb value (function/RpcTarget). A live target is SUGAR over two axioms:
-//     the value is parked in the `itx.rpcStubs` built-in under the path (retained HERE — the
-//     physical half), then the ordinary mount event `path ⇒ itx.rpcStubs.get('<path>')` is
-//     appended (the pure-data half). Calling `itx.<path>.method(x)` resolves the mount like any
-//     other. Re-providing the same path re-parks (reconnect) and appends nothing. `subscribe`
-//     parks its live callbacks through the same door, at `itx.subscribers.<name>`.
-//   • `itx.rpcStubs` — the registry itself, for the two-step spelling: `provide(value, { key })`
-//     parks, `get(key)` / `list()` ride the dotted surface to the DO's built-in.
+// THE SESSION SHAPE (apps/os's, verbatim): a client dials `/api` and holds an `UnauthenticatedSession`
+// whose only door is `authenticate()` → a `Session` → `projects: ProjectCollection` →
+// `get(projectId)` → the project's ROOT `IterateContext` ("/"). Contexts within a project are
+// reached from a context with `cd(path)` (absolute by convention, relative resolves). One
+// session may hold contexts of many projects; the Parking (below) is keyed by canonical context
+// name so they never touch each other's relays.
+//
+//   using api = newWebSocketRpcSession("wss://<worker>/api");
+//   const itx = api.authenticate().projects.get("prj_123");
+//
+// ONE provide door: `itx.provide(path, target)` — target is an itx EXPRESSION (a durable mount) or
+// a LIVE capnweb value (function/RpcTarget). A live target is SUGAR over two axioms: the value is
+// parked in the `itx.rpcStubs` built-in under the path (retained HERE — the physical half), then the
+// ordinary mount event `path ⇒ itx.rpcStubs.get('<path>')` is appended (the pure-data half).
+// Calling `itx.<path>.method(x)` resolves the mount like any other. Re-providing the same path
+// re-parks (reconnect) and appends nothing. `itx.rpcStubs` is the registry itself, for the two-step
+// spelling: `provide(value, { key })` parks, `get(key)` / `list()` ride the dotted surface to the
+// DO's built-in.
 //
 // DON'T-PIN: the retained capnweb callback stub lives HERE, in this stateless worker (the relay). The relay
 // opens a STUB PAGER WebSocket to the DO (core/hibernatable-rpc-stub.ts); the DO records only the stub's
@@ -43,10 +49,19 @@ import type { IterateContextDurableObject } from "../stream-durable-object.ts";
 import { CAPABILITY_FETCH_HEADER, encodeCapabilityFetchHeader } from "./fetch-capabilities.ts";
 import type { DeliveryPolicy, StreamEvent, StreamEventInput } from "./events.ts";
 import type { WaitForEventFilter } from "./stream.ts";
-import { parseCapabilityPath, type Expression, type ItxExpression } from "./expression.ts";
+import {
+  parseCapabilityPath,
+  toExpression,
+  type Expression,
+  type ItxExpression,
+} from "./expression.ts";
 import { installPrototypeInvokeCapabilityFallback } from "./dotted-path-proxy.ts";
 import { InvokeHandle } from "./invoke-handle.ts";
-import { canonicalName, DurableObjectNameCodec, normalizePath } from "./durable-object-names.ts";
+import {
+  DurableObjectNameCodec,
+  resolveContextPath,
+  type DurableObjectAddress,
+} from "./durable-object-names.ts";
 import {
   Parking,
   startRpcStubRelay,
@@ -55,57 +70,76 @@ import {
   type RetainedProviderStub,
 } from "./rpc-stub-relay.ts";
 
-/** `session` at `/api` (bound to one projectId). `get(context?)` yields an `IterateContext`. */
-export class ProjectSession extends RpcTarget {
-  readonly #contextNamespace: DurableObjectNamespace<IterateContextDurableObject>;
-  readonly #projectId: string;
-  readonly #root: IterateContextStub;
-  readonly #parking = new Parking(); // held for the session so retained callbacks + pager sockets aren't GC'd
-  readonly #waitUntil: (p: Promise<unknown>) => void;
+type ContextNamespace = DurableObjectNamespace<IterateContextDurableObject>;
+type WaitUntil = (p: Promise<unknown>) => void;
 
-  constructor(
-    contextNamespace: DurableObjectNamespace<IterateContextDurableObject>,
-    projectId: string,
-    ctx: ExecutionContext,
-  ) {
+/** What `/api` serves: nothing but the gate. The ROOT capnweb target, so its lifetime IS the
+ *  socket's — capnweb disposes it when the client's session ends, and that is when every relay
+ *  this session parked is torn down (the DO-side stubs die with their session instead of lying
+ *  in the presence list). */
+export class UnauthenticatedSession extends RpcTarget {
+  readonly #parking = new Parking(); // held for the session so retained callbacks + pager sockets aren't GC'd
+  readonly #session: Session;
+
+  constructor(contexts: ContextNamespace, ctx: ExecutionContext) {
     super();
-    this.#contextNamespace = contextNamespace;
-    this.#projectId = DurableObjectNameCodec.parse(projectId).projectId;
-    this.#root = contextNamespace.getByName(canonicalName(projectId));
-    this.#waitUntil = (p) => ctx.waitUntil(p);
+    this.#session = new Session(contexts, this.#parking, (p) => ctx.waitUntil(p));
   }
 
-  /** capnweb invokes this when the client's /api session ends: tear every relay down so the
-   *  DO-side rpc stubs die with their session instead of lying in the presence list. */
   // Symbol.dispose referenced defensively (lib target predates it) — same trick as disposeStub.
   [(Symbol as { dispose?: symbol }).dispose ?? Symbol.for("dispose")](): void {
     this.#parking.disposeAll();
   }
 
-  /** THE introduction door (the `authenticate()` pattern: the only way to get an authenticated
-   *  session is to be handed one by a gate that checked something). Deliberately a NO-OP today —
-   *  the clean room's `?ctx=` front door is designation-without-introduction scaffolding, and
-   *  this method is where the real check lands without changing any caller: clients already go
-   *  `session.authenticate(credentials).get()`. */
-  authenticate(_credentials?: unknown): ProjectSession {
-    return this;
+  /** THE introduction door (the `authenticate()` pattern: the only way to hold authority is to be
+   *  handed it by a gate that checked something). Deliberately a NO-OP today — this is where the
+   *  real credential check lands without changing any caller: clients already spell
+   *  `api.authenticate(credentials).projects.get(id)`. */
+  authenticate(_credentials?: unknown): Session {
+    return this.#session;
+  }
+}
+
+/** What you authenticate into: a catalog that vends contexts. A session is NOT a context — it is
+ *  the directory you reach one through (apps/os: "a session is what authenticate() returns"). */
+export class Session extends RpcTarget {
+  readonly #projects: ProjectCollection;
+
+  constructor(contexts: ContextNamespace, parking: Parking, waitUntil: WaitUntil) {
+    super();
+    this.#projects = new ProjectCollection(contexts, parking, waitUntil);
   }
 
-  /** Pure addressing → a context's itx (the root by default). The normalized context path rides
-   *  along so the context can namespace its entries in the SESSION-shared Parking (two contexts
-   *  may mount live stubs at the same capability path — they must never touch each other's). */
-  get(context?: string): IterateContext {
-    const path = normalizePath(context ?? "/");
-    return new IterateContext(this.#contextStub(path), path, this.#parking, this.#waitUntil);
+  /** The project catalog. A GETTER, not a field: capnweb (like Workers RPC) exposes prototype
+   *  members only — an instance property is private state and is refused over the wire. */
+  get projects(): ProjectCollection {
+    return this.#projects;
+  }
+}
+
+/** The project catalog. `get(projectId)` is pure addressing → that project's ROOT context. No
+ *  `list`/`create` yet (owner: not now); when they come they ride a deployment context's events. */
+export class ProjectCollection extends RpcTarget {
+  readonly #contexts: ContextNamespace;
+  readonly #parking: Parking;
+  readonly #waitUntil: WaitUntil;
+
+  constructor(contexts: ContextNamespace, parking: Parking, waitUntil: WaitUntil) {
+    super();
+    this.#contexts = contexts;
+    this.#parking = parking;
+    this.#waitUntil = waitUntil;
   }
 
-  /** A context's stream DO by NORMALIZED path. */
-  #contextStub(path: string): IterateContextStub {
-    return path === "/"
-      ? this.#root
-      : this.#contextNamespace.getByName(
-          DurableObjectNameCodec.stringify({ projectId: this.#projectId, path }),
-        );
+  /** The project's root context ("/"). Side-effect free: nothing is minted until the context is
+   *  first written to. A project ID only — a context name belongs to `cd`. */
+  get(projectId: string): IterateContext {
+    const address = DurableObjectNameCodec.parse(projectId);
+    if (address.path !== "/")
+      throw new Error(
+        `projects.get(projectId): got a context name ${JSON.stringify(projectId)} — pass the project id and cd(path) from its root`,
+      );
+    return new IterateContext(this.#contexts, address, this.#parking, this.#waitUntil);
   }
 }
 
@@ -119,12 +153,12 @@ class RpcStubs extends RpcTarget {
   readonly #context: IterateContextStub;
   readonly #parking: Parking;
   readonly #parkingKey: (key: string) => string;
-  readonly #waitUntil: (p: Promise<unknown>) => void;
+  readonly #waitUntil: WaitUntil;
   constructor(
     context: IterateContextStub,
     parking: Parking,
     parkingKey: (key: string) => string,
-    waitUntil: (p: Promise<unknown>) => void,
+    waitUntil: WaitUntil,
   ) {
     super();
     this.#context = context;
@@ -185,37 +219,52 @@ class RpcStubs extends RpcTarget {
   }
 }
 
-/** The iterate context (`itx`). Dotted capability calls + the built-in collections forward to the DO over
- *  Workers RPC. capnweb terminates upstream in `/api`, so a client stub `itx.a.b(x)` never touches the DO's
- *  transport — it lands here and becomes a `DO.invoke(["itx", "a", ["b", x]])` call Expression. */
+/** The iterate context (`itx`) at one `{ projectId, path }`. Dotted capability calls + the
+ *  built-in collections forward to the DO over Workers RPC. capnweb terminates upstream in `/api`,
+ *  so a client stub `itx.a.b(x)` never touches the DO's transport — it lands here and becomes a
+ *  `DO.invoke(["itx", "a", ["b", x]])` call Expression. */
 export class IterateContext extends RpcTarget {
+  readonly #contexts: ContextNamespace;
+  readonly #address: DurableObjectAddress;
   readonly #context: IterateContextStub;
-  readonly #contextPath: string;
   readonly #parking: Parking;
-  readonly #waitUntil: (p: Promise<unknown>) => void;
+  readonly #waitUntil: WaitUntil;
 
   constructor(
-    context: IterateContextStub,
-    contextPath: string,
+    contexts: ContextNamespace,
+    address: DurableObjectAddress,
     parking: Parking,
-    waitUntil: (p: Promise<unknown>) => void,
+    waitUntil: WaitUntil,
   ) {
     super();
-    this.#context = context;
-    this.#contextPath = contextPath;
+    this.#contexts = contexts;
+    this.#address = address;
+    this.#context = contexts.getByName(address.name);
     this.#parking = parking;
     this.#waitUntil = waitUntil;
   }
 
-  /** The Parking key for a live relay: `"<contextPath> <capabilityPath>"`. The Parking is
-   *  SESSION-lived and shared by every IterateContext the session hands out, while a capability
-   *  path is only unique PER CONTEXT (each context DO has its own capability table) — keying by
-   *  capability path alone let two contexts providing at the same path dispose each other's relay
-   *  (a healthy live capability went offline). A space separator is unambiguous:
-   *  a capability path is dotted IDENT segments (parseCapabilityPath) and can never contain one,
-   *  so the composite splits back at its last space — no (context, capability) pair collides. */
+  /** The Parking key for a live relay: `"<contextName> <capabilityPath>"`. The Parking is
+   *  SESSION-lived and shared by every IterateContext the session hands out (across projects),
+   *  while a capability path is only unique PER CONTEXT — keying by capability path alone let two
+   *  contexts providing at the same path dispose each other's relay. A space separator is
+   *  unambiguous: a context name has no spaces and a capability path is dotted IDENT segments. */
   #parkingKey(capabilityPath: string): string {
-    return `${this.#contextPath} ${capabilityPath}`;
+    return `${this.#address.name} ${capabilityPath}`;
+  }
+
+  /** Another context of THIS project. Absolute by convention (`cd("/agents/support")`); relative
+   *  (`"agents/support"`, `"../inbox"`) resolves against this context's path — one resolver, shared
+   *  with the built-in `itx.cd(...)` root. Returns an EDGE context, so `provide(path, fn)` on it
+   *  parks in this same session. Pure addressing: nothing is minted. */
+  cd(path: string): IterateContext {
+    const address = DurableObjectNameCodec.parse(
+      DurableObjectNameCodec.stringify({
+        projectId: this.#address.projectId,
+        path: resolveContextPath(this.#address.path, path),
+      }),
+    );
+    return new IterateContext(this.#contexts, address, this.#parking, this.#waitUntil);
   }
 
   /** The live-stub registry (`itx.rpcStubs.provide/get/list/close`) — the physical axiom `provide`
@@ -229,9 +278,27 @@ export class IterateContext extends RpcTarget {
    *  Takes an `ItxExpression`: a dotted string (`"itx.append({...})"`) OR the parsed array
    *  (`["itx",["append",{...}]]`); both carry mid-path call args, and both work here. The dotted
    *  sugar `itx.a.b(x)` folds into `["itx","a",["b",x]]` (see the prototype fallback at the bottom
-   *  of this file) and lands right here. */
+   *  of this file) and lands right here.
+   *
+   *  ONE routing rule: a call whose TERMINAL step is `fetch(request)` carrying a live Request rides
+   *  the DO's FETCH CHANNEL with the capability in the `x-itx-cap` header, not `invoke` — the fetch
+   *  channel is the only hop kind that carries a socket-bearing Response back (a 101 from a tunnel
+   *  or a WS-serving worker; core/fetch-capabilities.ts doctrine, points 1 & 4). So
+   *  `itx.todos.web.fetch(request)` just works, upgrades included, and there is no second door. */
   invokeCapability(call: ItxExpression): Promise<unknown> {
-    return this.#context.invoke(call);
+    const expr = toExpression(call);
+    const last = expr.at(-1);
+    if (
+      Array.isArray(last) &&
+      last[0] === "fetch" &&
+      last.length === 2 &&
+      last[1] instanceof Request
+    ) {
+      const headers = new Headers(last[1].headers);
+      headers.set(CAPABILITY_FETCH_HEADER, encodeCapabilityFetchHeader(expr.slice(0, -1)));
+      return this.#context.fetch(new Request(last[1], { headers }));
+    }
+    return this.#context.invoke(expr);
   }
 
   /** Append events to this context's log — the flattened stream verb, same commit pipeline as the
@@ -259,6 +326,15 @@ export class IterateContext extends RpcTarget {
    *  own open call is what keeps the wait alive. */
   waitForEvent(filter?: WaitForEventFilter): Promise<StreamEvent> {
     return this.#context.waitForEvent(filter);
+  }
+
+  /** EGRESS through the context (the tutorial's chapter 2): `{{secret:project:NAME}}` placeholders
+   *  are substituted in the DO, then the request leaves through FALLBACK. A Request with no itx
+   *  header is egress by definition — the DO's fetch walks its doors (stub pager, live-capability
+   *  upgrade leg, `x-itx-cap`) and egress is what remains. The same terminal a loaded worker's
+   *  `globalOutbound` and the built-in `itx.fetch` root land on. */
+  fetch(request: Request): Promise<Response> {
+    return this.#context.fetch(request);
   }
 
   /** THE ONE PROVIDE DOOR — mount a capability at `path`. `target` is EITHER:
@@ -305,15 +381,6 @@ export class IterateContext extends RpcTarget {
       this.rpcStubs.close(key);
       throw e;
     }
-  }
-
-  /** Reach a FETCH-shaped capability through the session itself (the fork's
-   *  Upgrade-Response-over-RPC carries the Response — including a 101 — back over capnweb, so
-   *  capnweb clients need no separate /cap door). */
-  fetchCap(cap: ItxExpression, request: Request): Promise<Response> {
-    const headers = new Headers(request.headers);
-    headers.set(CAPABILITY_FETCH_HEADER, encodeCapabilityFetchHeader(cap));
-    return this.#context.fetch(new Request(request, { headers }));
   }
 
   /** Pop a mount off the shadow stack (what it shadowed is restored) — by capability path (the
@@ -416,16 +483,22 @@ export class IterateContext extends RpcTarget {
 installPrototypeInvokeCapabilityFallback(IterateContext, ["itx"]);
 
 /** Build the itx scope for a context reached over Workers-RPC — the `ItxEntrypoint` / loaded-worker
- *  lane. It is the SAME genuine `IterateContext` RpcTarget the capnweb client gets from `session.get()`
- *  (`IterateContext extends RpcTarget from "capnweb"`, which IS the native `cloudflare:workers` RpcTarget on
- *  workerd), so a loaded worker holds a real, pipelinable scope and writes exactly what a capnweb
- *  client writes: `const itx = await env.ITX.get(); itx.demo.timer.callLater(cb)`. No capnweb relays
- *  — a loaded worker's callbacks ride as Workers-RPC stubs through the call args, not the pager. */
+ *  lane. It is the SAME genuine `IterateContext` RpcTarget the capnweb client gets from
+ *  `projects.get()` (`IterateContext extends RpcTarget from "capnweb"`, which IS the native
+ *  `cloudflare:workers` RpcTarget on workerd), so a loaded worker holds a real, pipelinable scope and
+ *  writes exactly what a capnweb client writes: `const itx = await env.ITX.get();
+ *  itx.demo.timer.callLater(cb)`. No capnweb relays — a loaded worker's callbacks ride as
+ *  Workers-RPC stubs through the call args, not the pager. */
 export function itxFor(
-  context: IterateContextStub,
-  waitUntil: (p: Promise<unknown>) => void,
+  contexts: ContextNamespace,
+  contextName: string,
+  waitUntil: WaitUntil,
 ): IterateContext {
-  // A FRESH Parking per call (this lane parks nothing session-long), so its keys can never collide
-  // across contexts — the context-path half of the composite key is a constant here.
-  return new IterateContext(context, "/", new Parking(), waitUntil);
+  // A FRESH Parking per call (this lane parks nothing session-long), so its keys can never collide.
+  return new IterateContext(
+    contexts,
+    DurableObjectNameCodec.parse(contextName),
+    new Parking(),
+    waitUntil,
+  );
 }

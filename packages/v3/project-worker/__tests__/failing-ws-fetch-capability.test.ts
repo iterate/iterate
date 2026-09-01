@@ -3,7 +3,7 @@
 // a fetch-shaped live capability whose fetch() answers upgrades with the blessed workerd idiom —
 // `new WebSocketPair()` + `upgradeWebSocketResponse(pair[0])` (capnweb ≥0.12.2, the universal
 // pair + sender-side answer; docs/capnweb-upgrade-answer.md). A plain Node eyeball dials the
-// fetch lane (`ws://<host>/cap?ctx=<ctx>&cap=itx.ws-device`) and gets a real 101 + echo + clean
+// fetch lane (`ws://<host>/cap?context=<ctx>&cap=itx.ws-device`) and gets a real 101 + echo + clean
 // close. LAYERED so a regression names its hop:
 //   1. baseline — the SAME /cap WebSocket flow against a LOADED-WORKER capability: the door.
 //   2. live-capability HTTP fetch (non-upgrade): eyeball Request → DO → relay → capnweb → Node
@@ -32,7 +32,7 @@ afterAll(async () => {
 });
 
 const capUrl = (ctx: string, cap: string, scheme: "http" | "ws") =>
-  `${scheme}://${harness.url.host}/cap?ctx=${ctx}&cap=${encodeURIComponent(cap)}`;
+  `${scheme}://${harness.url.host}/cap?context=${ctx}&cap=${encodeURIComponent(cap)}`;
 
 /** One full eyeball WebSocket round trip: open → send → first message → close. Never throws —
  *  the caller asserts on the outcome (so a test.fails failure is an EXPECT, not a stray). */
@@ -147,8 +147,8 @@ class HttpDevice extends RpcTarget {
 
 test("live capability HTTP fetch: an eyeball POST reaches the Node provider's fetch() and its Response rides back out", async () => {
   const ctx = c("livehttp");
-  const provider = harness.session(ctx);
-  const itxA = await provider.authenticate().get();
+  const provider = harness.session();
+  const itxA = await provider.authenticate().projects.get(ctx);
   const device = new HttpDevice();
   await itxA.provide("itx.ws-device", device);
 
@@ -194,8 +194,8 @@ class WsDevice extends RpcTarget {
 
 test("live capability WebSocket fetch: a plain eyeball WebSocket opens (101), echoes, and closes through the Node provider", async () => {
   const ctx = c("livews");
-  const provider = harness.session(ctx);
-  const itxA = await provider.authenticate().get();
+  const provider = harness.session();
+  const itxA = await provider.authenticate().projects.get(ctx);
   const device = new WsDevice();
   await itxA.provide("itx.ws-device", device);
   // Sanity: the mount still answers plain HTTP (so the assertions below are about the UPGRADE).

@@ -27,7 +27,7 @@
 // (was proofs/prove_source_refetch.mjs)
 
 import { expect, test } from "vitest";
-import { freshCtx, bareItx, sleep } from "./support/client.ts";
+import { freshCtx, openItx, sleep } from "./support/client.ts";
 
 const SLUG = "mark-refetch";
 const M = 5; // durable 'mark' commits after warm-up
@@ -59,7 +59,7 @@ const LAMBDA =
 const SOURCE = `itx.runScript(${JSON.stringify(LAMBDA)})`;
 
 test("userspace processor source is evaluated exactly ONCE (at materialization, not per commit)", async () => {
-  const itx = bareItx(freshCtx("srcrefetch"));
+  const itx = openItx(freshCtx("srcrefetch"));
 
   // Settle detector that NEVER touches the facet: poll the kv counter until it stops climbing
   // (3 consecutive equal reads, ~1.5s quiet = drives settled).

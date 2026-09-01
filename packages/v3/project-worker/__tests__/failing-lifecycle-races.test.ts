@@ -436,8 +436,8 @@ test("reentrancy characterized: a forwarder delivery targeting itx.append neithe
 test("churn 20×: no ghost deliveries; presence AND the table return to baseline after session dispose", async () => {
   const ctx = "prj_lr_churn";
   const observer = await harness.itx(ctx); // outlives the churning session
-  const session = harness.session(ctx);
-  const itx = await session.authenticate().get();
+  const session = harness.session();
+  const itx = await session.authenticate().projects.get(ctx);
   const baselinePresence = (await presence(observer)).length;
   const baselineMounts = await liveMountCount(observer);
   const c = collector();

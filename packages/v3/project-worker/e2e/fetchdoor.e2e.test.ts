@@ -3,7 +3,7 @@
 // (was proofs/prove_fetchdoor.mjs)
 
 import { expect, test } from "vitest";
-import { freshCtx, bareItx } from "./support/client.ts";
+import { freshCtx, openItx } from "./support/client.ts";
 import { seedSources } from "./support/sources.ts";
 
 // The raw HTTP/WS routes (/cap, /call, /ws, /version) have no itx method — they exercise the worker's
@@ -34,12 +34,12 @@ test("fetchdoor: seeded site over /cap (GET + WS), deleted routes fall through, 
   // Mount the seeded /site.js on the fetch door: a mount whose target is a stateless dynamic worker
   // (its .fetch serves /cap). `type:'code'` provisioning was folded into the ONE provide door —
   // a capability is an itx EXPRESSION (load(src).getEntrypoint()), same as every other mount.
-  const itx = bareItx(ctx);
+  const itx = openItx(ctx);
   await seedSources(itx, ["site"]);
   await itx.provide("itx.site", "itx.load(\"itx.kv.get('src/site.js')\").getEntrypoint()");
 
   // ── 4a. GET through the one fetch door ──
-  const page = await fetch(`${base()}/cap?cap=${CAP}&ctx=${ctx}`);
+  const page = await fetch(`${base()}/cap?cap=${CAP}&context=${ctx}`);
   const html = await page.text();
   // 4a. GET /cap?cap=itx.site → 200 HTML (code mount on the fetch lane)
   expect(page.status).toBe(200);
@@ -47,7 +47,7 @@ test("fetchdoor: seeded site over /cap (GET + WS), deleted routes fall through, 
 
   // ── 4b. WebSocket upgrade through /cap → echo ──
   const wsResult = await new Promise<string>((resolve) => {
-    const ws = openWs(`${wsBase()}/cap?cap=${CAP}&ctx=${ctx}`);
+    const ws = openWs(`${wsBase()}/cap?cap=${CAP}&context=${ctx}`);
     const timer = setTimeout(() => resolve("TIMEOUT"), 15000);
     ws.onopen = () => ws.send("hello-from-eyeball");
     ws.onmessage = (e) => {
@@ -64,19 +64,19 @@ test("fetchdoor: seeded site over /cap (GET + WS), deleted routes fall through, 
   expect(wsResult).toBe("site-echo:hello-from-eyeball");
 
   // ── 6. deleted routes fall through to help text; /version + the snapshot door still work ──
-  const call = await fetch(`${base()}/call?path=itx.whoami&ctx=${ctx}`);
+  const call = await fetch(`${base()}/call?path=itx.whoami`);
   const callBody = await call.text();
   // 6a. /call falls through to help text
   expect(callBody).toContain("project-worker —");
   expect(callBody).not.toContain('"ok"');
 
-  const wsRoute = await fetch(`${base()}/ws?ctx=${ctx}`);
+  const wsRoute = await fetch(`${base()}/ws`);
   const wsBody = await wsRoute.text();
   // 6b. /ws falls through to help text
   expect(wsBody).toContain("project-worker —");
 
   const wsUpgrade = await new Promise<string>((resolve) => {
-    const ws = openWs(`${wsBase()}/ws?ctx=${ctx}`);
+    const ws = openWs(`${wsBase()}/ws`);
     const timer = setTimeout(() => {
       try {
         ws.close();

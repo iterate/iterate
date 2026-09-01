@@ -52,8 +52,8 @@ class LiveSite extends RpcTarget {
 
 const DISPOSE: symbol | undefined = (Symbol as { dispose?: symbol }).dispose;
 const sessions: unknown[] = [];
-async function openSession(ctx: string): Promise<any> {
-  const res = await SELF.fetch(`https://test.local/api?ctx=${ctx}`, {
+async function openSession(): Promise<any> {
+  const res = await SELF.fetch(`https://test.local/api`, {
     headers: { Upgrade: "websocket" },
   });
   if (!res.webSocket) throw new Error(`expected a 101 with a WebSocket, got ${res.status}`);
@@ -76,13 +76,13 @@ afterAll(async () => {
 
 /** Provide a fresh LiveSite over a live capnweb session at `itx.wsdev` — the ONE door. */
 async function mountLiveSite(ctx: string): Promise<LiveSite> {
-  const itx = await (await openSession(ctx)).get();
+  const itx = await (await openSession()).authenticate().projects.get(ctx);
   const site = new LiveSite();
   await itx.provide("itx.wsdev", site);
   return site;
 }
 
-const capUrl = (ctx: string) => `https://test.local/cap?ctx=${ctx}&cap=itx.wsdev`;
+const capUrl = (ctx: string) => `https://test.local/cap?context=${ctx}&cap=itx.wsdev`;
 
 // ─────────────── the passing halves: plain fetch works; the failing hop is NAMED ───────────────
 

@@ -18,7 +18,7 @@
 
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import { bareItx, freshCtx, session, until } from "./support/client.ts";
+import { openItx, freshCtx, session, until } from "./support/client.ts";
 
 // Disposing our own provider session mid-test surfaces the capnweb peer-close as an unhandled
 // rejection — the deliberate disconnect, not a failure. The e2e config's onUnhandledError filter
@@ -46,15 +46,18 @@ test("a provider drops and re-provides at the same path — offline in between (
   // the registry key the stub is parked under). Every session in this test shares ONE ctx (one
   // project DO).
   const ctx = freshCtx("recon");
-  const itx = bareItx(ctx);
+  const itx = openItx(ctx);
   const mountsAtP = async (): Promise<unknown[]> =>
     (
       await itx.invokeCapability("itx.facets.get('capability-table').snapshot()")
     ).state.mounts.filter((m: { path: string[] }) => m.path.join(".") === "itx.p");
 
   // 1. provider provides a live capability at itx.p → callable through the path.
-  let providerSession = session(ctx);
-  const first = await providerSession.get().provide("itx.p", new Tools("v1"));
+  let providerSession = session();
+  const first = await providerSession
+    .authenticate()
+    .projects.get(ctx)
+    .provide("itx.p", new Tools("v1"));
   const online = await until("callable online", async () =>
     (await itx.invokeCapability("itx.p.echo('a')")) === "echo-v1:a" ? true : undefined,
   );
@@ -79,8 +82,11 @@ test("a provider drops and re-provides at the same path — offline in between (
   // 3. provider RE-PROVIDES at the SAME path with a fresh capability instance — this re-parks
   //    under the same registry key (REPLACING the transport) and re-provides the SAME mount, which
   //    the door answers with the existing mount's identity: ZERO events.
-  providerSession = session(ctx);
-  const second = await providerSession.get().provide("itx.p", new Tools("v2"));
+  providerSession = session();
+  const second = await providerSession
+    .authenticate()
+    .projects.get(ctx)
+    .provide("itx.p", new Tools("v2"));
   expect(second.providedAtOffset).toBe(first.providedAtOffset); // the door handed back the one mount
 
   // 4. THE CONTRACT: the capability is callable AGAIN through the same path — it resolves to the

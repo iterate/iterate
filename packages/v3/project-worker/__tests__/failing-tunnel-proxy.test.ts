@@ -137,12 +137,12 @@ class TunnelProvider extends RpcTarget {
 }
 
 const capUrl = (ctx: string, scheme: "http" | "ws", path = "") =>
-  `${scheme}://${harness.url.host}/cap?ctx=${ctx}&cap=${encodeURIComponent("itx.bla")}${path}`;
+  `${scheme}://${harness.url.host}/cap?context=${ctx}&cap=${encodeURIComponent("itx.bla")}${path}`;
 
 /** Provide `itx.bla` from a fresh Node capnweb session — the CLI's exact posture. */
 async function provideTunnel(ctx: string): Promise<void> {
-  const provider = harness.session(ctx);
-  const itx = await provider.authenticate().get();
+  const provider = harness.session();
+  const itx = await provider.authenticate().projects.get(ctx);
   await itx.provide("itx.bla", new TunnelProvider());
 }
 
@@ -197,7 +197,7 @@ test("HTTP tunnel: an eyeball POST to itx.bla rides through the Node CLI provide
   expect(res.status).toBe(200);
   // localhost's own words prove the REQUEST crossed the tunnel (path+query intact), not just
   // that a response came back:
-  expect(body).toBe(`upstream-saw:POST /cap?ctx=${ctx}&cap=itx.bla body=ping-through-tunnel`);
+  expect(body).toBe(`upstream-saw:POST /cap?context=${ctx}&cap=itx.bla body=ping-through-tunnel`);
   expect(res.headers.get("x-upstream")).toBe("localhost-http");
 });
 

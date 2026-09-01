@@ -23,9 +23,9 @@ declare module "vitest" {
 }
 
 // ── the dummy REMOTE capnweb API (was proofs/dummy-capnweb, a separately-deployed worker; now a
-// tiny Node server the same globalSetup owns). connectToCapnweb inside the DO dials it over one
-// HTTP batch. `.math` is a NESTED RpcTarget passed by reference, so a genuine MULTI-HOP chain
-// exists (`connectToCapnweb(url).math.add(2,3)`: a property hop THEN a call). ──
+// tiny Node server the same globalSetup owns). connect.e2e's USERSPACE worker dials it over one
+// HTTP batch through the context's egress. `.math` is a NESTED RpcTarget passed by reference, so a
+// genuine MULTI-HOP chain exists (`api.math.add(2,3)`: a property hop THEN a call). ──
 class MathApi extends RpcTarget {
   add(a: number, b: number): number {
     return a + b;

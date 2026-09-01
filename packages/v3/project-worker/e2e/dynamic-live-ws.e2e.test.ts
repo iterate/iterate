@@ -5,7 +5,7 @@
 // lane. Every hop is native Workers RPC / native fetch; no capnweb client anywhere.
 
 import { expect, test } from "vitest";
-import { bareItx, freshCtx } from "./support/client.ts";
+import { openItx, freshCtx } from "./support/client.ts";
 
 const PROVIDER_SRC = `import { WorkerEntrypoint, RpcTarget } from "cloudflare:workers";
 class WsDevice extends RpcTarget {
@@ -89,15 +89,15 @@ export default class Consumer extends WorkerEntrypoint {
   }
 }`;
 
-async function seedBoth(itx: ReturnType<typeof bareItx>): Promise<void> {
+async function seedBoth(itx: ReturnType<typeof openItx>): Promise<void> {
   await itx.invokeCapability(["itx", "kv", ["put", "src/provider.js", PROVIDER_SRC]]);
   await itx.invokeCapability(["itx", "kv", ["put", "src/consumer.js", CONSUMER_SRC]]);
 }
-const runProvider = (itx: ReturnType<typeof bareItx>, mode: string): Promise<unknown> =>
+const runProvider = (itx: ReturnType<typeof openItx>, mode: string): Promise<unknown> =>
   itx.invokeCapability(`itx.load("itx.kv.get('src/provider.js')").getEntrypoint().run('${mode}')`);
 
 test("within the provider's invocation: a dyn-provided live capability serves PLAIN fetch", async () => {
-  const itx = bareItx(freshCtx("dynliveself"));
+  const itx = openItx(freshCtx("dynliveself"));
   await seedBoth(itx);
   const out = (await runProvider(itx, "self-plain")) as { status: number; body: string };
   // dyn-worker → env.ITX (Fetcher) → DO fetch lane → live stub invoke(['fetch']) → back into the
@@ -116,7 +116,7 @@ test("within the provider's invocation: a dyn-provided live capability serves PL
 // symmetric dial-back (the provider opens its OWN upgrade leg via its env.ITX Fetcher — it HAS
 // one) or an SDK-side provider shim; the plain-fetch half (test above) already works everywhere.
 test.fails("within the provider's invocation: WEBSOCKET fetch of the dyn-provided live capability", async () => {
-  const itx = bareItx(freshCtx("dynlivewsself"));
+  const itx = openItx(freshCtx("dynlivewsself"));
   await seedBoth(itx);
   const out = (await runProvider(itx, "self-ws")) as {
     status: number;
@@ -142,7 +142,7 @@ test.fails("within the provider's invocation: WEBSOCKET fetch of the dyn-provide
 // code — itx.load(...).getEntrypoint() / a named durable facet, both of which already serve WS")
 // is an owner call — see the session notes.
 test.fails("ACROSS invocations: worker B fetches the capability A provided (the detached-provider question)", async () => {
-  const itx = bareItx(freshCtx("dynlivex"));
+  const itx = openItx(freshCtx("dynlivex"));
   await seedBoth(itx);
   expect(await runProvider(itx, "provide")).toBe("provided");
   const out = (await itx.invokeCapability(

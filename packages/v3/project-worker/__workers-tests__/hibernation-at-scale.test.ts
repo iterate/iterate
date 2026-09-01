@@ -91,7 +91,7 @@ const sessions: unknown[] = [];
 /** Open a capnweb session to the worker over a WebSocket upgrade on SELF.fetch —
  *  newWebSocketRpcSession accepts the existing (accepted) socket per its typings. */
 async function openSession(): Promise<any> {
-  const res = await SELF.fetch(`https://test.local/api?ctx=${CTX}`, {
+  const res = await SELF.fetch(`https://test.local/api`, {
     headers: { Upgrade: "websocket" },
   });
   if (!res.webSocket) throw new Error(`expected a 101 with a WebSocket, got ${res.status}`);
@@ -127,7 +127,7 @@ beforeAll(async () => {
   // parks its own EchoTarget relay-side in the `itx.rpcStubs` registry, opens its own stub pager
   // WebSocket into the DO, and mounts the pure-data target `itx.rpcStubs.get('itx.cN')` — the
   // registry is presence, the table is the mount; event volume is fine).
-  const clientItx = await (await openSession()).get();
+  const clientItx = await (await openSession()).authenticate().projects.get(CTX);
   const BATCH = 25; // concurrent provides per wave — enough parallelism without a thundering herd
   for (let base = 0; base < CLIENTS; base += BATCH) {
     await Promise.all(
@@ -137,7 +137,7 @@ beforeAll(async () => {
       }),
     );
   }
-  callerItx = await (await openSession()).get();
+  callerItx = await (await openSession()).authenticate().projects.get(CTX);
 }, 120_000);
 
 afterAll(() => {

@@ -9,7 +9,7 @@ import { IterateContextDurableObject } from "./stream-durable-object.ts";
 import { registerPipelinedRpcBrand } from "./core/dispatch.ts";
 import { CAPABILITY_FETCH_HEADER } from "./core/fetch-capabilities.ts";
 import { canonicalName } from "./core/durable-object-names.ts";
-import { ProjectSession } from "./core/itx-surface.ts";
+import { UnauthenticatedSession } from "./core/itx-surface.ts";
 import { DEMO_PAGE_HTML } from "./generated/demo-page.ts";
 
 // Native workerd RPC promises pipeline exactly like capnweb ones — thread them unawaited through
@@ -32,8 +32,7 @@ interface Env {
 
 // The SOLO fallback: the egress terminal, trivially — platform-secret substitution (none in solo)
 // then a bare fetch. Bound as FALLBACK only in solo config (the deployed config binds the real
-// control-plane shell instead). Capability-level control-plane egress (`itx.os`) was removed with
-// config; it returns as `itx.connectToCapnweb(url)` when a real control plane lands.
+// control-plane shell instead).
 export class DummyControlPlane extends WorkerEntrypoint {
   async fetch(request: Request): Promise<Response> {
     return fetch(request);
@@ -42,15 +41,6 @@ export class DummyControlPlane extends WorkerEntrypoint {
 
 // Bumped every deploy so a smoke test can wait for THIS build to propagate (workers.dev lags ~1-2min/colo).
 const CODE_VERSION = "live-41";
-
-/** The `?ctx=` slug when a request names none. */
-const DEFAULT_CTX = "prj_demo";
-const ctxSlug = (url: URL) => url.searchParams.get("ctx") ?? DEFAULT_CTX;
-
-/** The context DO's stub for a request's `?ctx=`. The DO does the real work. */
-function contextStub(env: Env, url: URL) {
-  return env.CONTEXT.getByName(canonicalName(ctxSlug(url)));
-}
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -66,22 +56,34 @@ export default {
         headers: { "content-type": "text/html;charset=utf-8" },
       });
 
-    // THE ONE capnweb ENTRYPOINT (the hard rule): capnweb terminates HERE, in the stateless worker; the DO is
-    // reached only over Workers RPC. A client dials `/api` and gets a `ProjectSession` (`get(context?)` → itx).
+    // THE ONE capnweb ENTRYPOINT (the hard rule): capnweb terminates HERE, in the stateless worker;
+    // the DO is reached only over Workers RPC. A client dials `/api` and holds an
+    // `UnauthenticatedSession`: `authenticate().projects.get(projectId)` → the project's root itx.
     if (url.pathname === "/api")
       // newWorkersRpcResponse serves BOTH a WebSocket upgrade AND a one-shot HTTP batch —
       // a CLI script or cron does one POST, no socket handshake. (Batch sessions cannot hold
       // live capabilities: a live provide needs the relay to outlive the response —
       // the relay's park call simply fails there, which is the honest error.)
-      return newWorkersRpcResponse(request, new ProjectSession(env.CONTEXT, ctxSlug(url), ctx));
+      return newWorkersRpcResponse(request, new UnauthenticatedSession(env.CONTEXT, ctx));
 
-    // THE FETCH LANE — the ONE fetch door: reach a fetch-shaped capability (WS upgrades and all) by a
-    // serialized ItxExpression in `?cap=`. Set `x-itx-cap` and forward to the context DO.
+    // THE FETCH LANE — the plain-HTTP door onto fetch-shaped capabilities (WS upgrades and all), for
+    // callers with no capnweb session (curl, a browser tab, a webhook): `?context=` names the
+    // context (a project id = its root, or a full context name), `?cap=` the itx expression. The
+    // expression rides to the context DO in `x-itx-cap`. capnweb clients need no door: a terminal
+    // `itx.x.fetch(request)` takes the same lane from inside the session.
     if (url.pathname === "/cap") {
-      const headers = new Headers(request.headers);
+      const context = url.searchParams.get("context");
       const cap = url.searchParams.get("cap");
-      if (cap) headers.set(CAPABILITY_FETCH_HEADER, cap);
-      return contextStub(env, url).fetch(new Request(request, { headers }));
+      if (!context || !cap)
+        return new Response(
+          "/cap needs ?context=<project id | context name>&cap=<itx expression>\n",
+          {
+            status: 400,
+          },
+        );
+      const headers = new Headers(request.headers);
+      headers.set(CAPABILITY_FETCH_HEADER, cap);
+      return env.CONTEXT.getByName(canonicalName(context)).fetch(new Request(request, { headers }));
     }
 
     return new Response("project-worker — /api (capnweb), /cap, /demo, /version\n", {

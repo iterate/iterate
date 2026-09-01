@@ -50,8 +50,8 @@ class Echo extends RpcTarget {
 }
 const DISPOSE: symbol | undefined = (Symbol as { dispose?: symbol }).dispose;
 const sessions: unknown[] = [];
-async function openSession(ctx: string): Promise<any> {
-  const res = await SELF.fetch(`https://test.local/api?ctx=${ctx}`, {
+async function openSession(): Promise<any> {
+  const res = await SELF.fetch(`https://test.local/api`, {
     headers: { Upgrade: "websocket" },
   });
   if (!res.webSocket) throw new Error(`expected a 101 with a WebSocket, got ${res.status}`);
@@ -112,9 +112,9 @@ test("HAPPY PATH UNTOUCHED: attach + prompt pager upgrade within the TTL — pro
   // attach and open its pager IMMEDIATELY (well inside the 10s TTL), so the stub parks and a
   // separate caller reaches it through the mount path: page → paged-in stub → invoke.
   const ctx = "prj_sweep_happy";
-  const clientItx = await (await openSession(ctx)).get();
+  const clientItx = await (await openSession()).authenticate().projects.get(ctx);
   await clientItx.provide("itx.live", new Echo(7));
-  const caller = await (await openSession(ctx)).get();
+  const caller = await (await openSession()).authenticate().projects.get(ctx);
   const out = await caller.invokeCapability("itx.live.echo('hi')");
   expect(out).toBe("echo-7:hi");
 });

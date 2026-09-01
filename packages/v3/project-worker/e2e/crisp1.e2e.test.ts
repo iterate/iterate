@@ -25,7 +25,7 @@ test("crisp-1: routing, live caps, shadow stack, dynamic-worker mounts, capabili
   const capUrl = (scheme: "http" | "ws"): string => {
     const u = new URL("/cap", base());
     u.protocol = scheme === "ws" ? "ws:" : "http:";
-    u.searchParams.set("ctx", ctx);
+    u.searchParams.set("context", ctx);
     u.searchParams.set("cap", "itx.site");
     return u.toString();
   };
@@ -44,10 +44,10 @@ test("crisp-1: routing, live caps, shadow stack, dynamic-worker mounts, capabili
       return "from B";
     }
   }
-  const sessionA = session(ctx);
-  const itxA = await sessionA.get();
+  const sessionA = session();
+  const itxA = await sessionA.authenticate().projects.get(ctx);
   await itxA.provide("itx.proverA", new ToolsA());
-  const itxB = await session(ctx).get();
+  const itxB = await session().authenticate().projects.get(ctx);
   await itxB.provide("itx.proverB", new ToolsB());
   await seedSources(itxA, ["site", "counter"]);
 
@@ -56,7 +56,7 @@ test("crisp-1: routing, live caps, shadow stack, dynamic-worker mounts, capabili
   // 1b. the authenticate() introduction door (a NO-OP today; the shape the real gate lands in)
   const whoAuth = await sessionA
     .authenticate({ token: "ignored-today" })
-    .get()
+    .projects.get(ctx)
     .invokeCapability(["itx", ["whoami"]]);
   // authenticate() introduction door
   expect(whoAuth?.projectId).toBe(ctx);

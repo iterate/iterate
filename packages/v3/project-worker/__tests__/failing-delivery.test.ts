@@ -582,10 +582,10 @@ test("MEASURED FINDING: a connected subscriber that stops reading mid-flood is N
   const itx = await harness.itx(ctx); // connection A: setup, the flood, and observation
   // Connection B — THE VICTIM: its own client socket, because the retained callback stub lives in
   // that socket's relay session; the socket's death must become the stub's death.
-  const wsB = stallableWebSocket(`ws://${harness.url.host}/api?ctx=${ctx}`);
+  const wsB = stallableWebSocket(`ws://${harness.url.host}/api`);
   const sessionB: any = newWebSocketRpcSession(wsB as any);
   keep.push(sessionB);
-  const victim = sessionB.authenticate().get();
+  const victim = sessionB.authenticate().projects.get(ctx);
   const c = collector();
   await victim.subscribe({ name: "victim", consumes: ["flood"], target: c.fn });
   // one probe proves the lane end-to-end BEFORE the stall

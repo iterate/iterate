@@ -181,10 +181,9 @@ describe("evaluate/apply", () => {
 // THE CONTRACT (walkSteps): a value carrying a registered pipelinable-promise brand is NEVER
 // awaited mid-chain — property access and calls build on it directly, and only the caller's
 // terminal await settles the chain. Everything else (plain thenables included) keeps the
-// await-every-step behavior. For capnweb's one-shot HTTP batch this is CORRECTNESS (a mid-chain
-// await flushes the batch — the LIVE pin is e2e/connect.e2e.test.ts's call-then-call test, which
-// structurally CANNOT pass if any step awaits); for native workerd RPC (worker.ts registers the
-// cloudflare:workers RpcPromise at boot) it collapses a chain into one pipelined round trip.
+// await-every-step behavior. For native workerd RPC (worker.ts registers the cloudflare:workers
+// RpcPromise/RpcProperty at boot) this collapses a facet or loaded-entrypoint chain into one
+// pipelined round trip; the brand list is EMPTY in this Node lane, so the test registers its own.
 
 describe("pipelined RPC promise threading", () => {
   /** A thenable that records every await and chains svc/add like a remote API — the test brand. */

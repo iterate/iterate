@@ -1,19 +1,20 @@
 // edge.e2e.test.ts — the edge-adoption batch: one-shot HTTP batch at /api (no WebSocket),
-// fetchCap through the session (the commissioned fork feature), disableProcessor, the repo.
+// a fetch-shaped capability through the session as a dotted `.fetch(request)` (the commissioned fork
+// feature carries the Response back), disableProcessor, the repo.
 // (was proofs/prove_edge.mjs)
 
 import { expect, test } from "vitest";
 import { freshCtx, httpBatch, openItx } from "./support/client.ts";
 import { seedSources } from "./support/sources.ts";
 
-test("edge adoption: one-shot HTTP batch whoami, kv-source worker, fetchCap, disableProcessor", async () => {
+test("edge adoption: one-shot HTTP batch whoami, kv-source worker, dotted .fetch(request), disableProcessor", async () => {
   // The batch and the live session share ONE ctx (the proof used a single CTX for both).
   const ctx = freshCtx("edge");
 
   // 1. ONE-SHOT HTTP BATCH: a CLI-shaped client — no WebSocket anywhere
-  const who = await httpBatch(ctx)
+  const who = await httpBatch()
     .authenticate()
-    .get()
+    .projects.get(ctx)
     .invokeCapability(["itx", ["whoami"]]);
   // one-shot HTTP batch: whoami without a socket
   expect(who?.projectId).toBe(ctx);
@@ -44,11 +45,12 @@ export default class Mine extends WorkerEntrypoint {
   // kv-stored source runs as a worker (itx round-trip inside)
   expect(out).toBe(`from-kv:${ctx}`);
 
-  // 3. fetchCap: a fetch-shaped capability through the SESSION (no /cap door)
+  // 3. a fetch-shaped capability through the SESSION (no /cap door): the terminal `.fetch(request)`
+  //    rides the DO's fetch channel with the capability in x-itx-cap — one routing rule, no verb
   await itx.provide("itx.site", `itx.load("itx.kv.get('src/site.js')").getEntrypoint()`);
-  const resp = await itx.fetchCap("itx.site", new Request("https://itx.site/"));
+  const resp = await itx.site.fetch(new Request("https://itx.site/"));
   const html = await resp.text();
-  // fetchCap carries the Response over capnweb
+  // the Response rides back over capnweb
   expect(resp.status).toBe(200);
   expect(html).toContain("dynamic web capability");
 

@@ -1671,3 +1671,42 @@ before changes. Fixed test.fails flipped to plain regression tests.
   CONNECTION_OFFLINE until revoked or re-parked; `revokeCapability` returns void and never touches transports
   (edge `itx.revoke(path)` also closes this session's stub). PRESENCE is `itx.rpcStubs.list()`, never the table.
 - `RpcStubDirectory`: `onFinalClose`/`drop()` deleted, `attachedPaths()` → `list()`; `laneOf`: `itx.rpcStubs.get('k')…` ⇒ connected.
+
+## 2026-09-01 — the onion, step 0: latest Workers + the ctx.props facet probe
+
+- The onion design (docs/design-onion-subscriptions-processors.md — six candidate designs compared, one
+  chosen) leans on ONE platform fact: a facet started from a Worker-Loader class minted with
+  `getDurableObjectClass(name, { props })` sees those props as `ctx.props`. PROVEN in
+  `__workers-tests__/facet-props.test.ts`, with two more facts pinned: a facet's `ctx.id.name` is its
+  PARENT's codec name; `ctx.exports` is populated inside a facet.
+- workers-types 4.x → 5.20260901.1 (project-worker, shared, control-plane-shell), vitest-plugin → 1.1.2,
+  compatibility_date → 2026-09-01 everywhere (the repo's 24h minimumReleaseAge kept wrangler at 4.127.1).
+- Learned: `Rpc.Serializable` rejects `unknown`, so a stub method returning a StreamEvent types as
+  `never` (compiles only because never is assignable to anything); a recursive JSON payload type hits
+  TS2589 inside Rpc.Serializable, so the one destructuring caller (the shell's /emit) casts, with the reason.
+
+## 2026-09-01 — the onion, step 1: sessions, cd, fetch, props; connectToCapnweb is userspace
+
+- THE SESSION SHAPE is apps/os's: `/api` serves `UnauthenticatedSession` → `authenticate()` → `Session`
+  → `projects: ProjectCollection` → `get(projectId)` → the project's ROOT `IterateContext`. `?ctx=` is
+  gone from `/api`; `ProjectSession.get(path)` is gone — another context is `itx.cd(path)` (absolute by
+  convention, relative + `..` resolve; ONE resolver, `resolveContextPath`, shared with the built-in root).
+  A session may hold contexts of many projects; the Parking is keyed by canonical context name.
+  `Session.projects` is a GETTER — capnweb, like Workers RPC, refuses instance properties over the wire.
+- `itx.fetch(request)` is the egress door on the edge AND a built-in root (the tutorial's chapter 2 as
+  written). `fetchCap` is gone: ONE routing rule in `invokeCapability` — a terminal `fetch(request)`
+  carrying a live Request rides the DO's fetch channel with the capability in `x-itx-cap` — so
+  `itx.todos.web.fetch(request)` just works, 101s included. `/cap` takes `?context=` (a project id names
+  the root, a full context name any context) and INSISTS on `?cap=`: the accidental "egress through /cap
+  without a cap" back door is closed; the egress tests now drive `itx.fetch` (the honest door).
+- `load(src).getEntrypoint(name?, { props? })`: Cloudflare's own `WorkerStubEntrypointOptions.props`,
+  read back as `this.ctx.props`; the entrypoint handle now reaches ANY exported method by name (`run`,
+  `processEventBatch`, …), not a `run|fetch` allow-list.
+- `itx.connectToCapnweb(url)` DELETED — the one built-in that mapped onto nothing Cloudflare ships. It is
+  userspace: a loaded `WorkerEntrypoint` imports capnweb's client from `./processor.js` (the SDK now
+  re-exports `newHttpBatchRpcSession`/`newWebSocketRpcSession`), reads the url from `ctx.props`, and dials
+  through the context's egress (`e2e/connect.e2e.test.ts` is that worker). With it went the capnweb
+  `RpcPromise` brand in `core/dispatch.ts` — the walk pipelines native workerd promises only.
+- Every lane re-spelled (`session().authenticate().projects.get(ctx)`, `/cap?context=`, dotted `.fetch`);
+  `bareItx` is gone (there is no bare door). Gates: tsc ×3 · vitest 332+1xf · e2e 36+2xf · tutorial-proof
+  8/8 · oxlint 0 · oxfmt · knip 0.

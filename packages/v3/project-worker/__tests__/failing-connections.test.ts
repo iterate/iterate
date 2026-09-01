@@ -42,8 +42,8 @@ afterAll(async () => {
 
 /** A capnweb session whose underlying WebSocket WE hold — so a test can sever the transport
  *  (network death) without any capnweb-level goodbye. */
-function rawSession(ctx: string): { session: any; ws: WebSocket } {
-  const ws = new WebSocket(`ws://${harness.url.host}/api?ctx=${ctx}`);
+function rawSession(): { session: any; ws: WebSocket } {
+  const ws = new WebSocket(`ws://${harness.url.host}/api`);
   rawSockets.push(ws);
   return { session: newWebSocketRpcSession(ws as any) as any, ws };
 }
@@ -173,11 +173,12 @@ test("calling a path that was never provided rejects with code NO_CAPABILITY_MAT
 test("stub pager upgrade with an unknown transportId is refused with 409 (attach first)", async () => {
   // Two-phase attach: the pager door must 409 an id it never minted, so a relay that outlived
   // a DO restart re-attaches instead of silently pairing a socket to nothing.
-  // Any worker route that forwards to the DO's fetch reaches the pager door, which is checked first;
-  // /cap forwards, and the pager header short-circuits before the cap/egress lanes.
-  const res = await fetch(`http://${harness.url.host}/cap?ctx=${c("pager409")}`, {
-    headers: { "x-itx-stub-pager": "424242" },
-  });
+  // /cap forwards to the DO's fetch, whose door walk checks the pager header FIRST — so the `cap`
+  // the route insists on is never consulted; the pager header short-circuits before the cap lane.
+  const res = await fetch(
+    `http://${harness.url.host}/cap?context=${c("pager409")}&cap=itx.whoami`,
+    { headers: { "x-itx-stub-pager": "424242" } },
+  );
   expect(res.status).toBe(409);
   expect(await res.text()).toContain("attach first");
 });
@@ -186,8 +187,8 @@ test("same-path re-provide replaces the transport while online and appends NOTHI
   const ctx = c("replace");
   const observer = await harness.itx(ctx);
   // First live provider at path itx.dupTool.
-  const s1 = harness.session(ctx);
-  await s1.get().provide("itx.dupTool", new Tools("one"));
+  const s1 = harness.session();
+  await s1.authenticate().projects.get(ctx).provide("itx.dupTool", new Tools("one"));
   await until("first itx.dupTool transport present", async () =>
     (await presence(observer)).includes("itx.dupTool"),
   );
@@ -200,8 +201,8 @@ test("same-path re-provide replaces the transport while online and appends NOTHI
   // the provide door, finding an IDENTICAL winner already at the path (same target
   // `itx.rpcStubs.get('itx.dupTool')`, same policies), answers with that mount's identity and
   // appends nothing. One transport, one row, zero new events — at every point in the swap.
-  const s2 = harness.session(ctx);
-  await s2.get().provide("itx.dupTool", new Tools("two"));
+  const s2 = harness.session();
+  await s2.authenticate().projects.get(ctx).provide("itx.dupTool", new Tools("two"));
   await until("itx.dupTool serves 'two' over exactly one transport", async () => {
     if ((await presence(observer)).filter((k) => k === "itx.dupTool").length !== 1)
       return undefined;
@@ -224,8 +225,8 @@ test("same-path re-provide replaces the transport while online and appends NOTHI
 test("disposing a client session drops its stubs promptly (presence) — its mounts STAY and answer CONNECTION_OFFLINE until revoked", async () => {
   const ctx = c("dispose");
   const observer = await harness.itx(ctx);
-  const sA = harness.session(ctx);
-  const itxA = sA.get();
+  const sA = harness.session();
+  const itxA = sA.authenticate().projects.get(ctx);
   // ONE door: the provide parks the stub under the path AND mounts `itx.rpcStubs.get('itx.ghosttool')`.
   await itxA.provide("itx.ghosttool", new Tools("ghost"));
   expect(await observer.invokeCapability(["itx", "ghosttool", ["hello"]])).toBe("hello-from-ghost");
@@ -273,8 +274,8 @@ test("killing the provider session mid-invoke rejects the in-flight call promptl
   const ctx = c("midinvoke");
   const observer = await harness.itx(ctx);
   const hangTools = new HangTools();
-  const { session: sA, ws: wsA } = rawSession(ctx);
-  await sA.get().provide("itx.hanger", hangTools);
+  const { session: sA, ws: wsA } = rawSession();
+  await sA.authenticate().projects.get(ctx).provide("itx.hanger", hangTools);
   await until("itx.hanger transport present", async () =>
     (await presence(observer)).includes("itx.hanger"),
   );
@@ -314,10 +315,10 @@ test("killing the provider session mid-invoke rejects the in-flight call promptl
 test("fan-out via the table's live mounts + map drops dead members (CONNECTION_OFFLINE) and the no-hello subscriber", async () => {
   const ctx = c("each");
   const observer = await harness.itx(ctx);
-  const sAlive = harness.session(ctx);
-  await sAlive.get().provide("itx.alive", new Tools("alive"));
-  const { session: sDead, ws: wsDead } = rawSession(ctx);
-  await sDead.get().provide("itx.doomed", new Tools("doomed"));
+  const sAlive = harness.session();
+  await sAlive.authenticate().projects.get(ctx).provide("itx.alive", new Tools("alive"));
+  const { session: sDead, ws: wsDead } = rawSession();
+  await sDead.authenticate().projects.get(ctx).provide("itx.doomed", new Tools("doomed"));
   // A parked subscriber (its mount at itx.subscribers.<name>) with NO hello() — the caller's
   // allSettled drops it.
   await observer.subscribe({ target: () => undefined });
@@ -371,8 +372,15 @@ test("fan-out via the table's live mounts + map drops dead members (CONNECTION_O
 test("concurrent provides at one path collapse to ONE live transport; the table holds ≥1 identical rows and the survivor serves", async () => {
   const ctx = c("race");
   const observer = await harness.itx(ctx);
-  const sessions = [1, 2, 3, 4].map(() => harness.session(ctx));
-  await Promise.all(sessions.map((s, i) => s.get().provide("itx.solo", new Tools(`r${i}`))));
+  const sessions = [1, 2, 3, 4].map(() => harness.session());
+  await Promise.all(
+    sessions.map((s, i) =>
+      s
+        .authenticate()
+        .projects.get(ctx)
+        .provide("itx.solo", new Tools(`r${i}`)),
+    ),
+  );
   await until(
     "the surviving transport serves itx.solo",
     async () => {

@@ -16,11 +16,25 @@ const PROJECT_ID = /^[A-Za-z0-9_-]+$/;
 
 /** A parsed DO address. `name` is its own canonical string form — parse once, carry both
  *  halves together (no separate re-stringify field at call sites). */
-type DurableObjectAddress = { projectId: string; path: string; name: string };
+export type DurableObjectAddress = { projectId: string; path: string; name: string };
 
 /** Normalize a path to leading-slash form (`""` → `"/"`, `"x"` → `"/x"`). */
 export function normalizePath(path: string): string {
   return path === "" ? "/" : path.startsWith("/") ? path : `/${path}`;
+}
+
+/** Resolve a `cd` target against a context's own path — the one resolver both `cd` doors (the
+ *  edge method and the built-in root) share. Absolute ("/agents/x") stands alone; relative
+ *  ("agents/x", "../inbox", ".") joins onto `base`. `.` and `..` resolve; the root cannot be
+ *  escaped ("/.." is "/"). The result is canonical: leading slash, no trailing slash but for "/". */
+export function resolveContextPath(base: string, target: string): string {
+  const segments: string[] = [];
+  for (const seg of `${target.startsWith("/") ? "" : base}/${target}`.split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") segments.pop();
+    else segments.push(seg);
+  }
+  return `/${segments.join("/")}`;
 }
 
 export const DurableObjectNameCodec = {
@@ -28,8 +42,8 @@ export const DurableObjectNameCodec = {
   stringify({ projectId, path }: { projectId: string; path: string }): string {
     return `${projectId}${DURABLE_OBJECT_HOST_SUFFIX}${normalizePath(path)}`;
   },
-  /** Parses a Durable Object name. A bare name (no `.iterate`) is that project's root — the
-   *  edge's convenience for `?ctx=prj_x`. */
+  /** Parses a Durable Object name. A bare name (no `.iterate`) is that project's root — what
+   *  `projects.get("prj_x")` and the /cap door's `?context=prj_x` hand in. */
   parse(name: string): DurableObjectAddress {
     const i = name.indexOf(DURABLE_OBJECT_HOST_SUFFIX);
     const parts =

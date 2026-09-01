@@ -5,10 +5,10 @@
 // (was proofs/prove_facet1.mjs)
 
 import { expect, test } from "vitest";
-import { freshCtx, bareItx, facetProcessorSlugs } from "./support/client.ts";
+import { freshCtx, openItx, facetProcessorSlugs } from "./support/client.ts";
 
 test("facet spine: cold catch-up + driven folds + the table lists the facet processor", async () => {
-  const itx = bareItx(freshCtx("facet"));
+  const itx = openItx(freshCtx("facet"));
 
   // one mount BEFORE enabling — the facet must count it via cold catch-up
   await itx.provide("itx.before", "itx.kv");

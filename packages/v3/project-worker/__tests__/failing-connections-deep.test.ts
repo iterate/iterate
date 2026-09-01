@@ -172,8 +172,11 @@ test("storm of provide/mount/revoke/subscribe/unsubscribe/disconnect: presence r
     await observer.revoke(`itx.cap${i}`);
     // (c) a live provide from a fresh session then a clean disconnect (dispose the client
     //     session) — NO revoke: the stub dies with its session, the mount is left behind.
-    const s = harness.session(ctx);
-    await s.get().provide(`itx.k${i}`, new Tools(`k${i}`));
+    const s = harness.session();
+    await s
+      .authenticate()
+      .projects.get(ctx)
+      .provide(`itx.k${i}`, new Tools(`k${i}`));
     (s as any)[Symbol.dispose]?.();
   }
 
@@ -210,8 +213,8 @@ test("re-provide at one path replaces ONLY that path's transport and leaves a se
   const ctx = c("reconnect-midinvoke");
   const observer = await harness.itx(ctx);
   const hangTools = new HangTools();
-  const sA = harness.session(ctx);
-  const itxA = sA.get();
+  const sA = harness.session();
+  const itxA = sA.authenticate().projects.get(ctx);
   await itxA.provide("itx.rk", new Tools("rk1"));
   // A SEPARATE live stub at its OWN path from the same session.
   await itxA.provide("itx.slow", hangTools);
@@ -228,8 +231,8 @@ test("re-provide at one path replaces ONLY that path's transport and leaves a se
   // Re-provide at the SAME path itx.rk → replaces ONLY that path's transport (never itx.slow):
   // the new pager opening drops the old itx.rk transport "replaced"; the identical mount is
   // answered by the idempotent door (nothing appended).
-  const sB = harness.session(ctx);
-  await sB.get().provide("itx.rk", new Tools("rk2"));
+  const sB = harness.session();
+  await sB.authenticate().projects.get(ctx).provide("itx.rk", new Tools("rk2"));
   await until("itx.rk now resolves to the NEW transport", async () => {
     try {
       return (await observer.invokeCapability("itx.rk.hello()")) === "hello-from-rk2";

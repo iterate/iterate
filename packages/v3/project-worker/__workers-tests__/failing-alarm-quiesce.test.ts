@@ -122,8 +122,8 @@ class Echo extends RpcTarget {
 }
 const DISPOSE: symbol | undefined = (Symbol as { dispose?: symbol }).dispose;
 const sessions: unknown[] = [];
-async function openSession(ctx: string): Promise<any> {
-  const res = await SELF.fetch(`https://test.local/api?ctx=${ctx}`, {
+async function openSession(): Promise<any> {
+  const res = await SELF.fetch(`https://test.local/api`, {
     headers: { Upgrade: "websocket" },
   });
   if (!res.webSocket) throw new Error(`expected a 101 with a WebSocket, got ${res.status}`);
@@ -229,9 +229,9 @@ test("PAGE-IN RACES THE QUIESCE ALARM: a connection invoke fired concurrently wi
   // pages a stub in while the 60s alarm fires resolves with the right per-client answer (the wake's
   // borrowed stub is not disposed out from under it).
   const ctx = "prj_pagein";
-  const clientItx = await (await openSession(ctx)).get();
+  const clientItx = await (await openSession()).authenticate().projects.get(ctx);
   for (let i = 0; i < 4; i++) await clientItx.provide(`itx.p${i}`, new Echo(i));
-  const caller = await (await openSession(ctx)).get();
+  const caller = await (await openSession()).authenticate().projects.get(ctx);
 
   vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
   let raced: unknown;
@@ -255,9 +255,9 @@ test("SCALE DROP + QUIESCE + EVICT + WAKE: a dropped connection stays dropped; t
   // across the quiesce needs the forwarder facet — test.todo below.)
   const ctx = "prj_scale_drop";
   const K = 6;
-  const clientItx = await (await openSession(ctx)).get();
+  const clientItx = await (await openSession()).authenticate().projects.get(ctx);
   for (let i = 0; i < K; i++) await clientItx.provide(`itx.k${i}`, new Echo(i));
-  const caller = await (await openSession(ctx)).get();
+  const caller = await (await openSession()).authenticate().projects.get(ctx);
 
   // The drop must come from the PROVIDER'S OWN session: `itx.revoke(path)` pops the mount on the
   // DO and closes THIS session's parked stub under the path. A revoke from `caller` would pop

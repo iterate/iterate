@@ -141,8 +141,8 @@ async function slackRig(ctx: string) {
  *  door (the door that provably works today). */
 async function connectedRig(ctx: string, name: string) {
   const itx = await harness.itx(ctx);
-  const s = harness.session(ctx);
-  await s.get().provide(`itx.${name}`, new Tools(name));
+  const s = harness.session();
+  await s.authenticate().projects.get(ctx).provide(`itx.${name}`, new Tools(name));
   await until(`live capability 'itx.${name}' answers via the string door`, async () => {
     return (await itx.invokeCapability(`itx.${name}.hello()`)) === `hello-from-${name}`;
   });

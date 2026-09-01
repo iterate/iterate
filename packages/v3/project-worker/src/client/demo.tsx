@@ -32,8 +32,9 @@ export class Presence extends StreamProcessor {
 async function connectAndEnable(): Promise<any> {
   const url = new URL("/api", location.href);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  url.searchParams.set("ctx", CTX);
-  const itx = await (newWebSocketRpcSession(url.toString()) as any).authenticate().get();
+  const itx = await (newWebSocketRpcSession(url.toString()) as any)
+    .authenticate()
+    .projects.get(CTX);
   await itx.invokeCapability(["itx", "kv", ["put", "src/presence.js", PRESENCE_SRC]]);
   await itx.enableProcessor("presence", {
     source: "itx.kv.get('src/presence.js')",

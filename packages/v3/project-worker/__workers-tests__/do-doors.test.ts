@@ -39,8 +39,8 @@ const mountsOf = async (ctx: string): Promise<MountRow[]> =>
 // hibernation-at-scale openSession pattern) ──
 const DISPOSE: symbol | undefined = (Symbol as { dispose?: symbol }).dispose;
 const sessions: unknown[] = [];
-async function openSession(ctx: string): Promise<any> {
-  const res = await SELF.fetch(`https://test.local/api?ctx=${ctx}`, {
+async function openSession(): Promise<any> {
+  const res = await SELF.fetch(`https://test.local/api`, {
     headers: { Upgrade: "websocket" },
   });
   if (!res.webSocket) throw new Error(`expected a 101 with a WebSocket, got ${res.status}`);
@@ -115,7 +115,7 @@ test("revokeCapability resolves to void on both spellings and never touches a tr
   const s = stub(ctx);
   // A PHYSICAL stub: a capnweb session parks a live fn under `itx.livecap` (its pager socket is
   // one transport in the DO's census) and mounts the pure-data target naming it.
-  const itx = await (await openSession(ctx)).get();
+  const itx = await (await openSession()).authenticate().projects.get(ctx);
   const live = (await itx.provide("itx.livecap", new Alive())) as { providedAtOffset: number };
   const alias = await s.provideCapability({ path: "itx.aliascap", target: "itx.whoami" });
   expect(await s.invoke("itx.livecap.ping()")).toBe("alive");

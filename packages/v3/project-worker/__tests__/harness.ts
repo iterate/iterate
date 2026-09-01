@@ -14,10 +14,12 @@ export type ProjectHarness = {
   server: TestHarness;
   /** Base URL of the running worker, e.g. http://127.0.0.1:1234. */
   url: URL;
-  /** A fresh authenticated itx for a project ctx (capnweb over WebSocket — the real client). */
+  /** A fresh session's authenticated itx for a project ctx — its root context (capnweb over
+   *  WebSocket, the real client): `session().authenticate().projects.get(ctx)`. */
   itx(ctx: string): any;
-  /** The raw capnweb session for a ctx (for connect() flows that need session identity). */
-  session(ctx: string): any;
+  /** A raw capnweb session (an `UnauthenticatedSession` stub) for flows that need the session
+   *  itself — its identity, its disposal. */
+  session(): any;
   /** Worker console output captured by the harness (wrangler getLogs) — assert on log lines. */
   logs(): unknown;
   /** Dispose every capnweb session this harness minted, then stop workerd (the cloudflare-os
@@ -31,8 +33,8 @@ export async function startProjectHarness(): Promise<ProjectHarness> {
   const { url } = await server.listen();
   const wsBase = `ws://${url.host}`;
   const sessions: unknown[] = [];
-  const openSession = (ctx: string) => {
-    const s = newWebSocketRpcSession(`${wsBase}/api?ctx=${ctx}`);
+  const openSession = () => {
+    const s = newWebSocketRpcSession(`${wsBase}/api`);
     sessions.push(s);
     return s as any;
   };
@@ -41,7 +43,7 @@ export async function startProjectHarness(): Promise<ProjectHarness> {
     server,
     url,
     session: openSession,
-    itx: (ctx: string) => openSession(ctx).authenticate().get(),
+    itx: (ctx: string) => openSession().authenticate().projects.get(ctx),
     logs: () => server.getLogs(),
     stop: async () => {
       for (const s of sessions) {

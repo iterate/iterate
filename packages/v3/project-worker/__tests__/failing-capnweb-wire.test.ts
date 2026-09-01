@@ -74,8 +74,8 @@ const kindOf = (data: string): string => {
  *  recorded at the moment they actually hit the socket — capnweb queues sends until open, so
  *  recording at ws.send is wire-truthful), and our "message" listener registers BEFORE capnweb's
  *  so inbound frames are recorded at arrival. */
-function wireSession(ctx: string): InstrumentedWire {
-  const ws = new WebSocket(`ws://${harness.url.host}/api?ctx=${ctx}`);
+function wireSession(): InstrumentedWire {
+  const ws = new WebSocket(`ws://${harness.url.host}/api`);
   const frames: WireFrame[] = [];
   let seq = 0;
   const record = (dir: "out" | "in", data: unknown) => {
@@ -242,17 +242,17 @@ class SlackReplayTarget extends RpcTarget {
 
 // ═══════════════════════════════ 1. PIPELINING of itx expressions on stubs ═══════════════════════════════
 
-test("pipelining: authenticate().get().invokeCapability(whoami) with zero awaits = ONE round trip", async () => {
+test("pipelining: authenticate().projects.get(ctx).invokeCapability(whoami) with zero awaits = ONE round trip", async () => {
   const ctx = c("pipe1");
-  const w = wireSession(ctx);
+  const w = wireSession();
   // The whole chain, no intermediate awaits — three pipelined calls, one pull, one answer.
   const who: any = await w.session
     .authenticate()
-    .get()
+    .projects.get(ctx)
     .invokeCapability(["itx", ["whoami"]]);
   expect(who).toMatchObject({ projectId: ctx, path: "/" });
   const frames = w.frames.slice();
-  expectOneRoundTrip(frames, "auth().get().invokeCapability()");
+  expectOneRoundTrip(frames, "auth().projects.get(ctx).invokeCapability()");
   const t = tally(frames);
   expect(t["out:push"]).toBe(3); // authenticate, get, invokeCapability — one push each
   expect(t["out:pull"]).toBe(1); // only the awaited tail is pulled
@@ -269,22 +269,23 @@ test("pipelining: authenticate().get().invokeCapability(whoami) with zero awaits
   });
 });
 
-test("pipelining: invokes on the NOT-YET-RESOLVED itx from get() = ONE round trip", async () => {
+test("pipelining: invokes on the NOT-YET-RESOLVED itx from cd() = ONE round trip", async () => {
   const ctx = c("pipe2");
-  const w = wireSession(ctx);
-  const itxPromise = w.session.get("/pipelined"); // NOT awaited — pure addressing to a context
+  const w = wireSession();
+  // NOT awaited — pure addressing: root context, then cd to a sub-context of the same project.
+  const itxPromise = w.session.authenticate().projects.get(ctx).cd("/pipelined");
   const who: any = await itxPromise.invokeCapability(["itx", ["whoami"]]);
   expect(who).toMatchObject({ projectId: ctx, path: "/pipelined" });
   const frames = w.frames.slice();
-  expectOneRoundTrip(frames, "get().invokeCapability()");
+  expectOneRoundTrip(frames, "auth().projects.get(ctx).cd().invokeCapability()");
   const t = tally(frames);
-  expect(t["out:push"]).toBe(2); // get, invokeCapability — one push each, no intermediate await
+  expect(t["out:push"]).toBe(4); // authenticate, projects.get, cd, invokeCapability — one push each
   expect(t["out:pull"]).toBe(1);
   expect(t["in:resolve"]).toBe(1);
   await settle(300);
-  console.log("[wire] pipeline get.invokeCapability:", JSON.stringify(tally(w.frames)));
+  console.log("[wire] pipeline cd.invokeCapability:", JSON.stringify(tally(w.frames)));
   expect(tally(w.frames)).toEqual({
-    "out:push": 2,
+    "out:push": 4,
     "out:pull": 1,
     "in:resolve": 1,
     "out:release": 1,
@@ -293,8 +294,8 @@ test("pipelining: invokes on the NOT-YET-RESOLVED itx from get() = ONE round tri
 
 test("pipelining: provide(path, fn) + revoke on its UNRESOLVED result = ONE round trip; the mount dies, the stub outlives it until the session ends", async () => {
   const ctx = c("pipe3");
-  const w = wireSession(ctx);
-  const itx = await w.session.authenticate().get();
+  const w = wireSession();
+  const itx = await w.session.authenticate().projects.get(ctx);
   const mark = w.mark();
   {
     // ONE door, one burst: the provide is NOT awaited; the revoke names the mount by pipelining
@@ -341,8 +342,8 @@ test("pipelining: provide(path, fn) + revoke on its UNRESOLVED result = ONE roun
 
 test("frames per call: ONE settled invokeCapability = exactly 2 outbound (push+pull) + 1 inbound (resolve)", async () => {
   const ctx = c("percall");
-  const w = wireSession(ctx);
-  const itx = await w.session.authenticate().get(); // settle the stub first
+  const w = wireSession();
+  const itx = await w.session.authenticate().projects.get(ctx); // settle the stub first
   await settle(200);
   const mark = w.mark();
   const who: any = await itx.invokeCapability(["itx", ["whoami"]]);
@@ -364,8 +365,8 @@ test("frames per call: ONE settled invokeCapability = exactly 2 outbound (push+p
 
 test("one-directional delivery: 100 ephemeral chunks arrive as inbound frames; the subscriber socket never sends push/pull; deliveries keep flowing with outbound STALLED", async () => {
   const ctx = c("oneway");
-  const w = wireSession(ctx);
-  const itx = await w.session.authenticate().get();
+  const w = wireSession();
+  const itx = await w.session.authenticate().projects.get(ctx);
   const received: number[] = [];
   await itx.subscribe({
     name: "wire",
@@ -423,11 +424,11 @@ test("one-directional delivery: 100 ephemeral chunks arrive as inbound frames; t
 test("deep chaining: 3+ segment dotted paths through a live provider (getter → object of fns) resolve correctly, costing the client ONE round trip", async () => {
   const ctx = c("deep");
   const slack = new SlackReplayTarget();
-  const provider = harness.session(ctx);
-  await provider.get().provide("itx.slack", slack);
+  const provider = harness.session();
+  await provider.authenticate().projects.get(ctx).provide("itx.slack", slack);
 
-  const w = wireSession(ctx);
-  const itx = await w.session.authenticate().get();
+  const w = wireSession();
+  const itx = await w.session.authenticate().projects.get(ctx);
   await until("the slack bridge is attached", async () =>
     (await presence(itx)).includes("itx.slack"),
   );
@@ -471,8 +472,8 @@ test("disposal: `using` on the /api session stub drops its parked stubs at scope
   const ctx = c("using");
   const observer = await harness.itx(ctx);
   {
-    using scoped = newWebSocketRpcSession(`ws://${harness.url.host}/api?ctx=${ctx}`) as any;
-    await scoped.get().provide("itx.scoped", new Tools("scoped"));
+    using scoped = newWebSocketRpcSession(`ws://${harness.url.host}/api`) as any;
+    await scoped.authenticate().projects.get(ctx).provide("itx.scoped", new Tools("scoped"));
     await until("the stub present while the scope lives", async () =>
       (await presence(observer)).includes("itx.scoped"),
     );
@@ -489,8 +490,8 @@ test("disposal: `using` on the /api session stub drops its parked stubs at scope
 
 test("disposal: dup() survives disposal of the original; the LAST dispose kills the stub with the pinned error", async () => {
   const ctx = c("dup");
-  const w = wireSession(ctx);
-  const itx: any = await w.session.authenticate().get();
+  const w = wireSession();
+  const itx: any = await w.session.authenticate().projects.get(ctx);
   const dup = itx.dup();
   itx[Symbol.dispose]();
   // The duplicate still works — refcounted, not killed by the sibling's disposal.
@@ -505,8 +506,8 @@ test("disposal: dup() survives disposal of the original; the LAST dispose kills 
 
 test("disposal: onRpcBroken fires on dirty transport death (the relay relies on this)", async () => {
   const ctx = c("broken");
-  const w = wireSession(ctx);
-  const itx: any = await w.session.authenticate().get();
+  const w = wireSession();
+  const itx: any = await w.session.authenticate().projects.get(ctx);
   const broken: unknown[] = [];
   itx.onRpcBroken((e: unknown) => broken.push(e));
   (w.session as any).onRpcBroken((e: unknown) => broken.push(e));

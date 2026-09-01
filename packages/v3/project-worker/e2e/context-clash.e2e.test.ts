@@ -17,9 +17,9 @@ import { freshCtx, session, sleep } from "./support/client.ts";
 
 test("TWO CONTEXTS of one session provide live fns at the SAME capability path — both stay callable", async () => {
   const ctx = freshCtx("ctxclash");
-  const s = session(ctx);
-  const a = s.get(); // the root context ("/")
-  const b = s.get("/sub"); // a sibling context — SAME session, so the SAME session Parking
+  const s = session();
+  const a = s.authenticate().projects.get(ctx); // the root context ("/")
+  const b = a.cd("/sub"); // another context of the project — SAME session, so the SAME session Parking
 
   await a.provide("itx.clash", (x: number) => x + 1);
   await b.provide("itx.clash", (x: number) => x + 100);

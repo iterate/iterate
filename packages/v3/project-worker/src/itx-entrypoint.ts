@@ -31,12 +31,17 @@ interface Env {
 }
 
 export class ItxEntrypoint extends WorkerEntrypoint<Env> {
-  /** The owning context, re-resolved per call (never a retained stub — the back-channel rule). */
-  #context(): DurableObjectStub<IterateContextDurableObject> {
+  /** The owning context's canonical name — the ONE prop this entrypoint is minted with. */
+  #contextName(): string {
     const props = (this.ctx as unknown as { props?: { contextName?: string } }).props;
     if (!props?.contextName)
       throw new Error("ItxEntrypoint requires props.contextName (mint via ctx.exports)");
-    return this.env.CONTEXT.getByName(props.contextName);
+    return props.contextName;
+  }
+
+  /** The owning context, re-resolved per call (never a retained stub — the back-channel rule). */
+  #context(): DurableObjectStub<IterateContextDurableObject> {
+    return this.env.CONTEXT.getByName(this.#contextName());
   }
 
   /** THE handoff for the Workers-RPC lane: hand back the genuine itx scope (an `IterateContext` RpcTarget), so
@@ -44,7 +49,7 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env> {
    *  — identical to a capnweb client after `session.get()`, and mid-chain handles pipeline natively.
    *  A service binding addresses THIS entrypoint class; `.get()` bridges it to the scope. */
   get(): unknown {
-    return itxFor(this.#context(), (p) => this.ctx.waitUntil(p));
+    return itxFor(this.env.CONTEXT, this.#contextName(), (p) => this.ctx.waitUntil(p));
   }
 
   append(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {

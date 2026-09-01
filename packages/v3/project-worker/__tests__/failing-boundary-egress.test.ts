@@ -90,19 +90,18 @@ test("stream.append rejects an empty or whitespace-only event type", async () =>
 // substituted request (URL first, then every header) and answers 502 BEFORE the FALLBACK terminal.
 // `platform`-scope tokens are not this door's business — the next door down owns those.
 //
-// Driving it (this file had no egress driver before): the only route into the terminal is /cap
-// WITHOUT ?cap (no `x-itx-cap` header is set, no stub-pager header) — the DO's fetch falls through
-// to #egress. In solo, FALLBACK=DummyControlPlane does a bare `fetch(request)` on the same /cap
-// URL — the defect-28 self-loop — so a request that PASSES the door is unbounded and unobservable.
-// The 502 cases below never reach FALLBACK, which is exactly what makes them observable: the
-// prompt, name-bearing 502 IS the proof the request never left (the FALLBACK terminal is the sole
-// exit, and had the door forwarded, the response would come back only after the loop churned).
+// Driving it: `itx.fetch(request)` — THE egress door (the tutorial's chapter 2), a Request through
+// the context's own terminal. (It used to be driven through /cap WITHOUT ?cap, an accidental back
+// door into the terminal; /cap now insists on a capability.) In solo, FALLBACK=DummyControlPlane
+// does a bare `fetch(request)`, so a request that PASSES the door goes out to the network. The 502
+// cases below never reach FALLBACK, which is exactly what makes them observable: the prompt,
+// name-bearing 502 IS the proof the request never left.
 
-/** Hit the DO's egress terminal: /cap with a unique ctx, NO ?cap, plus test query/headers.
- *  (WHATWG URL serialization keeps `{{`/`}}` literal in the query — verified — so a URL token
- *  arrives at the door byte-identical.) */
-const egress = (ctx: string, query: string, headers?: Record<string, string>) =>
-  fetch(new URL(`/cap?ctx=${ctx}${query}`, harness.url), { headers });
+/** Send a Request through a fresh context's egress terminal, with test query/headers. (WHATWG URL
+ *  serialization keeps `{{`/`}}` literal in the query — verified — so a URL token arrives at the
+ *  door byte-identical.) The Response rides back over capnweb. */
+const egress = (ctx: string, query: string, headers?: Record<string, string>): Promise<Response> =>
+  harness.itx(ctx).fetch(new Request(`https://egress.invalid/hunt?probe=1${query}`, { headers }));
 
 test("egress: a missing project secret in a HEADER is a loud 502 naming the header and the token", async () => {
   const res = await egress("prj_eg_header", "", {

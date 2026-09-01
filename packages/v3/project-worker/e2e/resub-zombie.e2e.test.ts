@@ -14,7 +14,7 @@
 // (was proofs/probe_resub_zombie.mjs)
 
 import { expect, test } from "vitest";
-import { freshCtx, bareItx, sleep, subscriberMounts } from "./support/client.ts";
+import { freshCtx, openItx, sleep, subscriberMounts } from "./support/client.ts";
 
 const rowsAt = async (itx: any, path: string): Promise<unknown[]> =>
   (await itx.invokeCapability("itx.facets.get('capability-table').snapshot()")).state.mounts.filter(
@@ -24,7 +24,7 @@ const rowsAt = async (itx: any, path: string): Promise<unknown[]> =>
 // Was RED when authored (re-subscribe left the first relay online and unsubscribe-by-path restored
 // the shadowed older mount → zombie delivery to cb1). FIXED — this is now the regression pin.
 test("re-subscribe + unsubscribe on the same name must not leave a zombie delivering to the first callback", async () => {
-  const itx = bareItx(freshCtx("zomb"));
+  const itx = openItx(freshCtx("zomb"));
 
   // ── CONTROL: a SINGLE subscribe then unsubscribe must stop delivery (unsubscribe works normally) ──
   let ctrl = 0;

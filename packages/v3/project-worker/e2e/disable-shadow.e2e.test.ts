@@ -14,7 +14,7 @@
 // (was proofs/prove_disable_shadow.mjs)
 
 import { expect, test } from "vitest";
-import { freshCtx, bareItx, facetProcessorSlugs, sleep } from "./support/client.ts";
+import { freshCtx, openItx, facetProcessorSlugs, sleep } from "./support/client.ts";
 
 // Drive one ctx through: enable ×N, append+snapshot, ONE disable, then probe the table and the facet.
 // Returns the two asserted facts: whether the table still lists the slug (a facet-lane subscriber
@@ -24,7 +24,7 @@ async function run(
   prefix: string,
   enableTimes: number,
 ): Promise<{ stillListed: boolean; throws: boolean }> {
-  const itx = bareItx(freshCtx(prefix));
+  const itx = openItx(freshCtx(prefix));
   const append = (...events: unknown[]): Promise<unknown> =>
     itx.invokeCapability(["itx", ["append", ...events]]);
   const snap = (): Promise<{ state?: { counts?: Record<string, number> }; offset: number }> =>

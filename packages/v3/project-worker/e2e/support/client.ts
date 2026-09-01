@@ -16,40 +16,33 @@ let counter = 0;
 export const freshCtx = (prefix: string): string =>
   `prj_${prefix}_${Date.now().toString(36)}_${counter++}`;
 
-const wsApi = (ctx: string): string => {
+const wsApi = (): string => {
   const u = new URL("/api", baseUrl());
   u.protocol = "ws:";
-  u.searchParams.set("ctx", ctx);
   return u.toString();
 };
 
 const openSessions: any[] = [];
 
-/** The raw capnweb session for a ctx (for flows that need the session identity or `[Symbol.dispose]`). */
-export function session(ctx: string): any {
-  const s = newWebSocketRpcSession(wsApi(ctx));
+/** A raw capnweb session — an `UnauthenticatedSession` stub: `authenticate().projects.get(ctx)` is
+ *  the itx. For flows that need the session itself (its identity, its `[Symbol.dispose]`). */
+export function session(): any {
+  const s = newWebSocketRpcSession(wsApi());
   openSessions.push(s);
   return s;
 }
 
-/** A fresh authenticated itx for a ctx — the default door (`.authenticate()` is a no-op today). */
+/** THE default door: a fresh session's authenticated itx for a project ctx (its root context).
+ *  `.authenticate()` is a no-op gate today; it is the only door — there is no bare one. */
 export function openItx(ctx: string): any {
-  return session(ctx).authenticate().get();
+  return session().authenticate().projects.get(ctx);
 }
 
-/** The BARE `.get()` door — no `.authenticate()` in the chain. Ports whose source proof entered bare
- *  use this, so the suite keeps exercising both entry doors. */
-export function bareItx(ctx: string): any {
-  return session(ctx).get();
-}
-
-/** A ONE-SHOT HTTP-batch session for a ctx — a CLI-shaped client, no WebSocket anywhere. Every call
- *  chained off it flushes as a single POST to /api. */
-export function httpBatch(ctx: string): any {
-  const u = new URL("/api", baseUrl());
-  u.searchParams.set("ctx", ctx);
+/** A ONE-SHOT HTTP-batch session — a CLI-shaped client, no WebSocket anywhere. Every call chained
+ *  off it flushes as a single POST to /api. Same shape: `.authenticate().projects.get(ctx)`. */
+export function httpBatch(): any {
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- the batch door itself is under test (edge.e2e proves a socketless CLI client works)
-  return newHttpBatchRpcSession(u.toString());
+  return newHttpBatchRpcSession(new URL("/api", baseUrl()).toString());
 }
 
 /** Dispose every session opened since the last call — wired to afterEach in support/setup.ts. */

@@ -357,6 +357,7 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
         p === path
           ? ownContext
           : this.env.CONTEXT.getByName(DurableObjectNameCodec.stringify({ projectId, path: p })),
+      egress: (request) => this.#egress(request),
       // The rpcStubs + facets views are PARENT-LOCAL — the pager sockets and the facets live
       // here and can never move (workerd#6702: sockets never leave the parent).
       rpcStubs: {

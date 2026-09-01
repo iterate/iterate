@@ -5,11 +5,11 @@
 // (was proofs/prove_userfacet.mjs)
 
 import { expect, test } from "vitest";
-import { freshCtx, bareItx, facetProcessorSlugs } from "./support/client.ts";
+import { freshCtx, openItx, facetProcessorSlugs } from "./support/client.ts";
 import { seedSources } from "./support/sources.ts";
 
 test("userspace facet processor folds side-by-side with the built-in tally", async () => {
-  const itx = bareItx(freshCtx("ufacet"));
+  const itx = openItx(freshCtx("ufacet"));
   await seedSources(itx, ["user-tally"]);
 
   // enable the USERSPACE processor (class arrives via the loader from a source expression),

@@ -15,7 +15,7 @@ import type { LiveStateSeed, LiveStateStore } from "./live-state-store.ts";
 export type LiveStateStatus = "connecting" | "live" | "error";
 
 /** Subscribe to a producer's live state and render its latest value. Pass a ready `itx` (a capnweb
- *  `session.get()`), the producer's `key`, and a `door` thunk that reads `{rev, state}`
+ *  `api.authenticate().projects.get(id)`), the producer's `key`, and a `door` thunk that reads `{rev, state}`
  *  (`() => itx.invokeCapability("itx.facets.get('slug').liveSnapshot()")`). Re-subscribes when the
  *  session, `key`, or `name` changes; unmount (and every re-subscribe) unsubscribes the previous
  *  server-side mount. */
