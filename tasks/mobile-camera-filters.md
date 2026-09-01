@@ -345,3 +345,17 @@ MediaRecorder mechanisms, both hardened:
   re-check anchors after regenerating art).
 - Preview 403s fixed on main (#2567, repo-name casing) — PR fully green;
   known-red note removed, preview-8/17 unparked.
+
+## Feedback round 16 (talking animals, friendlier cast)
+
+- The animal's mouth now moves with YOURS: the portrait splits at the mouth
+  line, the jaw band drops with your smoothed mouth openness, and a dark
+  mouth interior shows in the gap (talking-pet warp). Human eyes stay
+  pasted into the animal's sockets; your lips are no longer pasted on.
+- All 11 portraits regenerated with species-specific friendliness cues
+  ("friendly" is species-specific: no bared teeth for primates, slow-blink
+  for the cat, big pupils + forward ears for the big cats). Dog became a
+  labrador. Horse reshot twice to get the mouth in frame (zoomed-out
+  framing + scale 1.6 compensation). All anchors re-tuned against the new
+  art. CDN/R2 for image weight: suggested not for now (canvas-taint would
+  break capture; core infra).

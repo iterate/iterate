@@ -269,52 +269,98 @@ export const FILTER_DRAWERS: Record<string, (args: FilterFrameArgs) => void> = {
     const backdrops = ["cat-study", "cat-garden", "cat-livingroom"];
     drawBackdrop(args, backdrops[args.backgroundIndex % backdrops.length]);
     // A photorealistic animal face worn as a mask: it follows your head
-    // (position, roll, size), and YOUR eyes and mouth are remapped onto the
-    // ANIMAL's eye and mouth positions (hand-tuned anchors per image).
+    // (position, roll, size), YOUR eyes sit in the animal's eye sockets,
+    // and your mouth's MOVEMENTS drive the animal's jaw — the portrait is
+    // split at the mouth line, the jaw band drops with your mouth
+    // openness, and a dark mouth interior shows in the gap (the classic
+    // talking-pet warp).
     const animal = ANIMAL_FACES[args.modeIndex % ANIMAL_FACES.length];
     const image = cachedImage(`animal-${animal.id}`, ANIMAL_FACE_IMAGES[animal.id]);
     const { box } = args.face;
     const angle = box.angle;
     const width = Math.max(box.width, box.height * 0.8) * 2.1 * animal.scale;
-    if (image) {
-      const height = width * (image.naturalHeight / image.naturalWidth);
-      args.ctx.save();
-      args.ctx.translate(box.cx, box.cy);
-      args.ctx.rotate(angle);
-      args.ctx.drawImage(image, -width / 2, -height / 2, width, height);
-      args.ctx.restore();
-      const cos = Math.cos(angle);
-      const sin = Math.sin(angle);
-      const at = (anchor: { x: number; y: number }) => {
-        const dx = (anchor.x - 0.5) * width;
-        const dy = (anchor.y - 0.5) * height;
-        return { x: box.cx + dx * cos - dy * sin, y: box.cy + dx * sin + dy * cos };
-      };
-      const leftEye = at(animal.leftEye);
-      const rightEye = at(animal.rightEye);
-      const mouth = at(animal.mouth);
-      drawFeatureCutout(args, "eyes", args.face.leftEye, {
-        cx: leftEye.x,
-        cy: leftEye.y,
-        width: width * animal.eyeWidth,
-        angle,
-      });
-      drawFeatureCutout(args, "eyes", args.face.rightEye, {
-        cx: rightEye.x,
-        cy: rightEye.y,
-        width: width * animal.eyeWidth,
-        angle,
-      });
-      drawFeatureCutout(args, "lips", args.face.lips, {
-        cx: mouth.x,
-        cy: mouth.y,
-        width: width * animal.mouthWidth,
-        angle,
-      });
-    } else {
+    if (!image) {
       // Image still decoding: plain masked face so the frame isn't empty.
       drawFaceCutoutsInPlace(args);
+      return;
     }
+    const height = width * (image.naturalHeight / image.naturalWidth);
+
+    // Your mouth openness (lip ring aspect), smoothed, drives the jaw.
+    const lipRatio = args.face.lips.ry / Math.max(args.face.lips.rx, 1);
+    const targetOpen = args.face.tracked ? Math.min(1, Math.max(0, (lipRatio - 0.38) / 0.55)) : 0;
+    animalMouthState.open += (targetOpen - animalMouthState.open) * 0.45;
+    const jawDrop = animalMouthState.open * height * 0.07;
+
+    const ctx = args.ctx;
+    ctx.save();
+    ctx.translate(box.cx, box.cy);
+    ctx.rotate(angle);
+    const splitY = animal.mouth.y - 0.02;
+    const sourceSplit = Math.round(image.naturalHeight * splitY);
+    const upperHeight = height * splitY;
+    // Upper face.
+    ctx.drawImage(
+      image,
+      0,
+      0,
+      image.naturalWidth,
+      sourceSplit,
+      -width / 2,
+      -height / 2,
+      width,
+      upperHeight,
+    );
+    if (jawDrop > 1) {
+      // Mouth interior revealed by the dropped jaw.
+      ctx.beginPath();
+      ctx.ellipse(
+        (animal.mouth.x - 0.5) * width,
+        -height / 2 + upperHeight + jawDrop / 2,
+        animal.mouthWidth * width * 0.7,
+        Math.max(jawDrop * 0.75, 2),
+        0,
+        0,
+        Math.PI * 2,
+      );
+      ctx.fillStyle = "#2e1416";
+      ctx.fill();
+    }
+    // Jaw band, dropped by your mouth openness.
+    ctx.drawImage(
+      image,
+      0,
+      sourceSplit,
+      image.naturalWidth,
+      image.naturalHeight - sourceSplit,
+      -width / 2,
+      -height / 2 + upperHeight + jawDrop,
+      width,
+      height - upperHeight,
+    );
+    ctx.restore();
+
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    const at = (anchor: { x: number; y: number }) => {
+      const dx = (anchor.x - 0.5) * width;
+      const dy = (anchor.y - 0.5) * height;
+      return { x: box.cx + dx * cos - dy * sin, y: box.cy + dx * sin + dy * cos };
+    };
+    const leftEye = at(animal.leftEye);
+    const rightEye = at(animal.rightEye);
+    drawFeatureCutout(args, "eyes", args.face.leftEye, {
+      cx: leftEye.x,
+      cy: leftEye.y,
+      width: width * animal.eyeWidth,
+      angle,
+    });
+    drawFeatureCutout(args, "eyes", args.face.rightEye, {
+      cx: rightEye.x,
+      cy: rightEye.y,
+      width: width * animal.eyeWidth,
+      angle,
+    });
   },
   flashcards: (args) => {
     const { ctx, width, height, face } = args;
@@ -880,9 +926,9 @@ const ANIMAL_FACES = [
   {
     id: "cat",
     label: "🐱 Cat",
-    leftEye: { x: 0.36, y: 0.475 },
-    rightEye: { x: 0.645, y: 0.475 },
-    mouth: { x: 0.5, y: 0.71 },
+    leftEye: { x: 0.37, y: 0.475 },
+    rightEye: { x: 0.665, y: 0.475 },
+    mouth: { x: 0.5, y: 0.685 },
     eyeWidth: 0.13,
     mouthWidth: 0.2,
     scale: 1,
@@ -890,19 +936,19 @@ const ANIMAL_FACES = [
   {
     id: "dog",
     label: "🐶 Dog",
-    leftEye: { x: 0.375, y: 0.455 },
-    rightEye: { x: 0.625, y: 0.455 },
-    mouth: { x: 0.5, y: 0.8 },
+    leftEye: { x: 0.355, y: 0.36 },
+    rightEye: { x: 0.66, y: 0.36 },
+    mouth: { x: 0.5, y: 0.72 },
     eyeWidth: 0.12,
-    mouthWidth: 0.2,
+    mouthWidth: 0.22,
     scale: 1.05,
   },
   {
     id: "goat",
     label: "🐐 Goat",
-    leftEye: { x: 0.295, y: 0.42 },
-    rightEye: { x: 0.705, y: 0.42 },
-    mouth: { x: 0.5, y: 0.795 },
+    leftEye: { x: 0.3, y: 0.4 },
+    rightEye: { x: 0.685, y: 0.4 },
+    mouth: { x: 0.5, y: 0.71 },
     eyeWidth: 0.12,
     mouthWidth: 0.18,
     scale: 1,
@@ -910,8 +956,8 @@ const ANIMAL_FACES = [
   {
     id: "tiger",
     label: "🐯 Tiger",
-    leftEye: { x: 0.365, y: 0.4 },
-    rightEye: { x: 0.635, y: 0.4 },
+    leftEye: { x: 0.385, y: 0.42 },
+    rightEye: { x: 0.61, y: 0.42 },
     mouth: { x: 0.5, y: 0.72 },
     eyeWidth: 0.12,
     mouthWidth: 0.22,
@@ -921,8 +967,8 @@ const ANIMAL_FACES = [
     id: "bear",
     label: "🐻 Bear",
     leftEye: { x: 0.36, y: 0.4 },
-    rightEye: { x: 0.64, y: 0.4 },
-    mouth: { x: 0.5, y: 0.71 },
+    rightEye: { x: 0.635, y: 0.4 },
+    mouth: { x: 0.5, y: 0.7 },
     eyeWidth: 0.11,
     mouthWidth: 0.2,
     scale: 1.1,
@@ -930,9 +976,9 @@ const ANIMAL_FACES = [
   {
     id: "monkey",
     label: "🐵 Monkey",
-    leftEye: { x: 0.4, y: 0.355 },
-    rightEye: { x: 0.6, y: 0.355 },
-    mouth: { x: 0.5, y: 0.62 },
+    leftEye: { x: 0.395, y: 0.395 },
+    rightEye: { x: 0.615, y: 0.395 },
+    mouth: { x: 0.5, y: 0.66 },
     eyeWidth: 0.11,
     mouthWidth: 0.18,
     scale: 1,
@@ -940,9 +986,9 @@ const ANIMAL_FACES = [
   {
     id: "gorilla",
     label: "🦍 Gorilla",
-    leftEye: { x: 0.4, y: 0.4 },
-    rightEye: { x: 0.6, y: 0.4 },
-    mouth: { x: 0.5, y: 0.72 },
+    leftEye: { x: 0.41, y: 0.42 },
+    rightEye: { x: 0.6, y: 0.42 },
+    mouth: { x: 0.5, y: 0.73 },
     eyeWidth: 0.1,
     mouthWidth: 0.2,
     scale: 1.1,
@@ -950,9 +996,9 @@ const ANIMAL_FACES = [
   {
     id: "lion",
     label: "🦁 Lion",
-    leftEye: { x: 0.38, y: 0.41 },
-    rightEye: { x: 0.615, y: 0.41 },
-    mouth: { x: 0.5, y: 0.67 },
+    leftEye: { x: 0.385, y: 0.4 },
+    rightEye: { x: 0.63, y: 0.4 },
+    mouth: { x: 0.5, y: 0.68 },
     eyeWidth: 0.1,
     mouthWidth: 0.18,
     scale: 1.2,
@@ -960,19 +1006,19 @@ const ANIMAL_FACES = [
   {
     id: "horse",
     label: "🐴 Horse",
-    leftEye: { x: 0.27, y: 0.44 },
-    rightEye: { x: 0.73, y: 0.44 },
-    mouth: { x: 0.5, y: 0.93 },
-    eyeWidth: 0.12,
-    mouthWidth: 0.2,
-    scale: 1.15,
+    leftEye: { x: 0.36, y: 0.475 },
+    rightEye: { x: 0.65, y: 0.475 },
+    mouth: { x: 0.5, y: 0.9 },
+    eyeWidth: 0.09,
+    mouthWidth: 0.14,
+    scale: 1.6,
   },
   {
     id: "fox",
     label: "🦊 Fox",
-    leftEye: { x: 0.365, y: 0.5 },
-    rightEye: { x: 0.645, y: 0.5 },
-    mouth: { x: 0.49, y: 0.8 },
+    leftEye: { x: 0.375, y: 0.5 },
+    rightEye: { x: 0.635, y: 0.5 },
+    mouth: { x: 0.5, y: 0.78 },
     eyeWidth: 0.12,
     mouthWidth: 0.18,
     scale: 1,
@@ -980,9 +1026,9 @@ const ANIMAL_FACES = [
   {
     id: "mouse",
     label: "🐭 Mouse",
-    leftEye: { x: 0.335, y: 0.47 },
-    rightEye: { x: 0.66, y: 0.47 },
-    mouth: { x: 0.5, y: 0.8 },
+    leftEye: { x: 0.34, y: 0.46 },
+    rightEye: { x: 0.645, y: 0.46 },
+    mouth: { x: 0.5, y: 0.75 },
     eyeWidth: 0.12,
     mouthWidth: 0.18,
     scale: 1,
@@ -1134,6 +1180,10 @@ const FLASHCARDS: { word: string; background: string; swatch?: string }[] = [
 
 // The deck order comes from a small visible seed, so a practice run can be
 // replayed exactly: ↺ restarts the same order, 🎲 rolls a new seed.
+// Smoothed jaw-openness for the Animal mask (module state, like the other
+// filter game states).
+const animalMouthState = { open: 0 };
+
 const flashcardDeck = {
   seed: null as number | null,
   baseIndex: 0,

@@ -14,19 +14,25 @@ import { join } from "node:path";
 const apiKey = process.env.OPENAI_API_KEY;
 if (!apiKey) throw new Error("OPENAI_API_KEY is not set");
 
-const ANIMALS = [
-  "cat",
-  "dog",
-  "goat",
-  "tiger",
-  "bear",
-  "monkey",
-  "gorilla",
-  "lion",
-  "horse",
-  "fox",
-  "mouse",
-];
+// "Friendly" is species-specific: primates read bared teeth as threat,
+// cats read slow-blink as warmth, big cats read big pupils + forward ears
+// as unthreatening. Each animal gets its own cues instead of one adjective.
+const ANIMALS = {
+  cat: "a relaxed half-lidded slow-blink expression, softly rounded eyes with large pupils, whiskers and ears relaxed and forward",
+  dog: "a gentle soft-browed expression, calm warm eyes, ears relaxed",
+  goat: "a placid calm expression, soft eyes, ears relaxed outward",
+  tiger:
+    "a calm unthreatening expression, soft eyes with large round pupils, relaxed brow and whiskers, ears forward",
+  bear: "a calm teddy-bear softness, gentle small eyes, relaxed muzzle",
+  monkey: "a calm curious expression, softly raised brows, relaxed jaw, absolutely no bared teeth",
+  gorilla:
+    "a serene thoughtful expression, soft unfurrowed brow, gentle curious eyes, relaxed jaw, absolutely no bared teeth",
+  lion: "a calm gentle expression, soft warm eyes, relaxed brow, a fluffy mane",
+  horse:
+    "a gentle soft-eyed expression, ears relaxed and pointed forward, calm nostrils — zoomed out so the whole head is small and centered with generous empty space on every side, the muzzle, mouth and chin entirely visible well above the bottom edge",
+  fox: "a bright curious friendly expression, soft eyes, relaxed whiskers",
+  mouse: "a sweet curious expression, bright soft eyes, relaxed whiskers",
+};
 
 const scratch = mkdtempSync(join(tmpdir(), "animal-faces-"));
 
@@ -46,12 +52,13 @@ console.log(`${existing.size} existing faces kept`);
 
 async function generate(animal) {
   if (existing.has(animal)) return [animal, existing.get(animal)];
+  const expression = ANIMALS[animal];
   const response = await fetch("https://api.openai.com/v1/images/generations", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({
       model: "gpt-image-1",
-      prompt: `A photorealistic portrait of a ${animal}'s face looking directly at the camera, perfectly head-on and symmetrical, both eyes clearly visible and level, mouth closed, the head filling most of the frame, on a fully transparent background. Only the head — no body, no text.`,
+      prompt: `A photorealistic portrait of a ${animal}'s face looking directly at the camera, perfectly head-on and symmetrical, both eyes clearly visible and level, mouth closed, with ${expression} — warm soft lighting, kind and approachable, while staying a realistic photograph (not a cartoon or illustration). The head fills most of the frame, on a fully transparent background. Only the head — no body, no text.`,
       size: "1024x1024",
       quality: "medium",
       output_format: "png",
@@ -68,9 +75,10 @@ async function generate(animal) {
   return [animal, base64];
 }
 
+const names = Object.keys(ANIMALS);
 const results = [];
-for (let i = 0; i < ANIMALS.length; i += 4) {
-  results.push(...(await Promise.all(ANIMALS.slice(i, i + 4).map(generate))));
+for (let i = 0; i < names.length; i += 4) {
+  results.push(...(await Promise.all(names.slice(i, i + 4).map(generate))));
 }
 
 writeFileSync(
