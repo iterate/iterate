@@ -19,6 +19,7 @@
 
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { RpcTarget } from "capnweb";
+import { enableFixtureProcessor } from "../e2e/support/sources.ts";
 import { startProjectHarness, type ProjectHarness } from "./harness.ts";
 
 // Unique ctx per test AND per run (local DO storage may outlive one vitest invocation).
@@ -360,9 +361,9 @@ test("JSON.stringify of a dangling chain node must not dispatch, and the node st
 test("reserved segments are hidden at EVERY depth: transport words never dispatch as capability paths", async () => {
   const ctx = c("resv");
   const itx = await harness.itx(ctx);
-  await itx.enableProcessor("tally");
+  await enableFixtureProcessor(itx, "tally");
   await itx.append({ type: "resv-mark", payload: {} }); // direct write — one durable row
-  // Baseline: the durable head and tally's reduce of it (enable commits a mount event too).
+  // Baseline: the durable head and tally's reduce of it (enable commits a subscription event too).
   const readHead = async (): Promise<number> => {
     const { events } = (await itx.invokeCapability(["itx", ["read", 0, 500]])) as {
       events: { offset: number }[];

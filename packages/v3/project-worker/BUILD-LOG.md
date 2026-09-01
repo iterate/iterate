@@ -1710,3 +1710,61 @@ before changes. Fixed test.fails flipped to plain regression tests.
 - Every lane re-spelled (`session().authenticate().projects.get(ctx)`, `/cap?context=`, dotted `.fetch`);
   `bareItx` is gone (there is no bare door). Gates: tsc ×3 · vitest 332+1xf · e2e 36+2xf · tutorial-proof
   8/8 · oxlint 0 · oxfmt · knip 0.
+
+## 2026-09-01 — the onion, step 2+3: subscriptions are their own layer; a processor is a DurableObject
+
+- A MOUNT is `{ path, target }` and nothing else (capability-table 5.0.0): `delivery`, `processor`, `lane`
+  are gone from the event, the row, the door. `itx.subscribers.*` is no longer a convention.
+- SUBSCRIPTIONS are their own layer: a third inline reduce-only processor (`subscriptions.ts`, slug
+  `subscriptions`) folding apps/os's events — `subscription-configured { name, target, consumes? }` (same
+  name REPLACES), `-removed`, `-delivery-halted` (appended by the delivery loop), `-delivery-resumed`
+  (appended by an operator: un-halt, optional seek). Halt/resume are events like pause/resume; the
+  `resumeSubscription` verb is gone. Read door: `itx.subscriptions.list()/get(name)` (rows ⋈ cursors).
+- ONE delivery loop (`subscription-delivery.ts`), one rule, no lanes: evaluate the target through the ONE
+  dispatch door and ask the value what it is. A `FacetHandle` or an `RpcStubHandle` (two brands the
+  built-ins mint on `InvokeHandle`) OWNS ITS PROGRESS ⇒ fire-and-forget push of `(events, {after,
+through})`, serialized per subscription, zero server state. Anything else (a loaded entrypoint's
+  `processEventBatch`, a sibling context) ⇒ THE STREAM KEEPS A CURSOR — in memory, written to kv only
+  when a delivered batch carried a DURABLE (an ephemeral-only batch touches no storage) — at-least-once,
+  the awaited call is the ack, one ladder (1s·2ⁿ ≤30 min, 15 attempts, `retryable:false` halts now),
+  retries on the DO's own alarm. The subscription-forwarder facet, its alarm proxy, the three parent
+  doors, auto-enable, `maxAttempts`/`start`, live-state MODE (now `consumes: [live-state/changed]` +
+  client key filter), the resurrection pass and `revokeCapability.all` are DELETED.
+- A PROCESSOR is a `DurableObject` the author writes: `StreamProcessorDurableObject` (the SDK, bundled
+  into `processor.js`) — `reduce` / `processEvent` / `projectLiveState` around the UNCHANGED
+  `StreamProcessor` engine (wrap, not split: zero engine churn, Node-tested as before). Hosted like any
+  class through `itx.load(src).getDurableObjectClass('Presence').get('presence')`; identity is
+  `ctx.props { contextName, name }` minted by the parent (the step-0 probe) — `configure()`,
+  `FacetIdentity`, `runner.js`, `ProcessorFacet`, the `proc:`/`named:`/`stateful:` facet-name prefixes
+  are gone; a facet's name IS the subscription name IS the `.get(name)` name (an unnamed `.get()` is
+  named by its class). `enableProcessor(name, { source, className })` ⇒ `subscribe({ name, target:
+<load chain>.processEventBatch })`; `disableProcessor` ⇒ `unsubscribe` + `itx.facets.delete(name)`.
+  NO built-in processors remain — `tally` is a test fixture like `presence`.
+- PRESENCE gains its events: `rpc-stub/attached` / `rpc-stub/detached`, EPHEMERAL, appended by the
+  registry when a key gains its first / loses its last transport (a replaced transport is neither).
+  `itx.rpcStubs.list()` stays the truth; the log never claims a socket is open.
+- The consumes rule (`consumesEvent`) no longer refuses the live-state delta type — a SUBSCRIPTION may
+  name it; the ENGINE's `foldsEvent` keeps the "no reduce may fold a delta" guarantee.
+- Two bugs the re-spelled tests caught in the new loop, fixed before landing: the skipped-batch watermark
+  advanced before the `continue` (a filtered-out commit fell out of the next range); a subscription's
+  first cursor was never seeded in memory, so the generation compare failed and the first batch
+  re-delivered in a tight loop.
+- Five more defects the harness-lane re-spell found in the new loop, all fixed before landing: the push
+  AWAITED a live client's answer (a stalled tab blocked its own chain and pinned the quiesce — now
+  fire-and-forget for stubs, awaited only for facets, whose order matters); a fresh cursor row's first
+  push after a filtered commit read the log instead and dropped the pushed ephemerals (the log read now
+  stops at the pushed batch's start, so the row becomes contiguous with it and takes it); a push racing
+  `disableProcessor` re-materialized the deleted facet (the row is checked on both sides of the
+  evaluation); a resume seeking past the head parked the row forever (clamped to the head — defect 13
+  re-pinned); `enableProcessor("core", …)` was accepted (the inline reduces' names are reserved at the
+  subscriptions door). Plus: a new subscription's target is evaluated once at configure time, so a
+  processor with a `consumes` filter materializes at enable and `itx.facets.get(name)` answers before
+  its first consumed event; a `delivery-resumed` fact pumps its row on commit, whatever the row's
+  `consumes` says.
+- MEASURED (local workerd): connected-lane flood `flood(ephemeral): 2000/2000 | append 68966 ev/s |
+end-to-end 15267 ev/s | p50 36ms p95 42ms | batching 50×` (was ~5,400 ev/s, p50 ~215ms); the harness
+  guard `[perf-guard] 1000/1000 | end-to-end 14493 ev/s | p50 20ms p95 23ms | batching 50×`. The push
+  path writes nothing; the cursor lane writes kv only at durable boundaries.
+- GATES: tsc ×3 · vitest 345 pass + 1 xfail (44 files: unit 184, harness 127 + 5 xfail → the five re-pinned
+  as passing, workers 30) · e2e 34 pass + 2 xfail (26 files; resume-race×2 / disable-shadow / resub-zombie
+  folded and deleted) · tutorial-proof 8/8 · oxlint 0 · oxfmt clean · knip 0.

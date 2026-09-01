@@ -564,7 +564,7 @@ worker and restart it** — the constructor re-folds the mount table from the
 persisted log, and the mounted greeter still answers; the laptop's stub is gone
 with its socket, exactly as a socket should be.
 
-Two bridges to the real thing. First, the toy's commit point is `Stream.append`
+Three bridges to the real thing. First, the toy's commit point is `Stream.append`
 (dumb, returns the committed event) and the DO's `append` is where commit →
 fold → fan-out visibly compose. The real platform inverts that composition — the
 fold rides an injected hook _inside_ the commit transaction, so the routing table
@@ -574,7 +574,14 @@ real platform has one: the directory is a **built-in** named `itx.rpcStubs`, and
 a live provide _also_ appends an ordinary mount whose target is the expression
 `itx.rpcStubs.get('<path>')`. So the log says where every name points, live ones
 included, while never claiming a socket is open. The toy's live-before-durable
-check at each prefix is that mount, folded by hand.
+check at each prefix is that mount, folded by hand. Third, the toy makes a
+subscription a mount at `itx.subscribers.*`. The real platform gives
+subscriptions their own event — `subscription-configured { name, target,
+consumes? }`, folded by its own inline reduce — because a subscription names a
+_delivery_, not a capability: the target is still an expression (a parked stub,
+a facet, a loaded entrypoint's `processEventBatch`), and the context decides how
+to serve it by looking at what the expression evaluates to. Same fan-out, one
+layer up.
 
 ### The map
 
@@ -875,13 +882,14 @@ _fetch-shaped_ — and the platform gives every fetch-shaped capability a real
 HTTP door:
 
 ```
-GET https://example.com/cap?ctx=prj_demo&cap=itx.todos.web
+GET https://example.com/cap?context=prj_demo&cap=itx.todos.web
 ```
 
 The edge resolves the expression, and the capability's `fetch` answers with a
 real `Response` — status, headers, streaming body, even WebSocket upgrades.
-capnweb clients reach the same thing in-session as
-`itx.fetchCap(cap, request)`.
+capnweb clients need no door: the same dotted call with a live `Request` as
+its argument — `itx.todos.web.fetch(request)` — rides the same lane from inside
+the session, WebSocket upgrades included.
 
 ### The tunnel: fetch into a capability a _client_ provided
 
@@ -911,7 +919,7 @@ class Tunnel extends RpcTarget {
 await itx.provide("itx.bla", new Tunnel());
 ```
 
-Now `https://example.com/cap?ctx=prj_demo&cap=itx.bla` serves your
+Now `https://example.com/cap?context=prj_demo&cap=itx.bla` serves your
 `localhost:3000` — WebSockets included, hot reload and all. The frames ride the
 same capnweb session the provide came in on.
 
@@ -974,10 +982,16 @@ await itx.subscribe({
   mount is itself an event on this log), ephemeral events allowed.
 - **`read`** — a page of history plus how far the scan reached, so a client can
   chain pages without gaps.
-- **`subscribe`** — sugar for `provide("itx.subscribers.<name>", callback)`. A
-  subscription _is_ a provided capability: the commit path fire-and-forgets each
-  batch to it over Chapter 1's pager. No acks, no server cursor — the client
-  owns its offset and heals any gap with `read`.
+- **`subscribe`** — appends one event, `subscription-configured { name, target,
+consumes? }`; a live callback is first parked in `itx.rpcStubs` (Chapter 1) and
+  the target names it. HOW it is served is not declared: after each commit the
+  context evaluates the target and looks at the value. A parked stub or a facet
+  _owns its progress_, so it gets a fire-and-forget push of `(events, range)` over
+  the pager — no acks, no server cursor; the client owns its offset and heals any
+  gap with `read`. Anything else (a loaded entrypoint's `processEventBatch`, a
+  sibling context) cannot, so the stream keeps a cursor for it and delivers
+  at-least-once, retrying on its own alarm and halting with a fact after too many
+  failures. Same name replaces; an identical subscribe appends nothing.
 
 The commit machinery is one dependency-injected class, no framework:
 
@@ -995,8 +1009,9 @@ new Stream({
 ### Processors: react to the log, as facets
 
 A **stream processor** reduces the log into derived state — and it's just a
-facet (Chapter 1 machinery), driven a batch at a time from the stream's
-`onCommit` fan-out:
+facet (Chapter 1 machinery): a `DurableObject` extending the SDK's
+`StreamProcessorDurableObject`, whose `processEventBatch` is subscribed to the
+stream. `enableProcessor` is that subscribe, spelled for you:
 
 ```ts
 await itx.enableProcessor("unread-counts", {
@@ -1074,6 +1089,8 @@ reduced event.
 | Ch 1 pager pair (the `itx.rpcStubs` built-in's backing table) | `RpcStubDirectory` + `HibernatableRpcStubManager`, `src/rpc-stub-directory.ts`, `src/core/hibernatable-rpc-stub.ts`; the built-in itself in `src/built-ins.ts`, the edge half (`provide`/`close`) in `src/core/itx-surface.ts` |
 | Ch 2 secret sentinel                                          | `{{secret:project:NAME}}` — `../shared/src/egress.ts`, the DO's `#egress` terminal                                                                                                                                             |
 | Ch 2 fetch-in / tunnel                                        | `/cap` in `src/worker.ts`, `src/core/fetch-capabilities.ts`, `upgradeWebSocketResponse` in the capnweb fork                                                                                                                    |
-| Ch 2 auth gate                                                | `ProjectSession.authenticate()` in `src/core/itx-surface.ts`                                                                                                                                                                   |
-| Ch 3 stream + processors                                      | `Stream` in `src/core/stream.ts`, `src/core/processor.ts`                                                                                                                                                                      |
+| Ch 2 auth gate                                                | `UnauthenticatedSession.authenticate()` → `Session` → `projects.get(id)` in `src/core/itx-surface.ts`                                                                                                                          |
+| Ch 3 stream                                                   | `Stream` in `src/core/stream.ts`                                                                                                                                                                                               |
+| Ch 3 subscribe / the one delivery loop                        | `src/subscriptions.ts` (the events + reduce), `src/subscription-delivery.ts` (push vs stream-kept cursor, decided by the evaluated target)                                                                                     |
+| Ch 3 processors                                               | `src/stream-processor-durable-object.ts` (the SDK base, bundled into `processor.js`) around the engine in `src/core/processor.ts`                                                                                              |
 | Ch 4 LiveState / control plane                                | `src/core/live-state.ts`; `packages/v3/control-plane` (not yet wired)                                                                                                                                                          |

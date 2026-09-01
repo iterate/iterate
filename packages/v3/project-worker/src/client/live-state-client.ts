@@ -1,7 +1,9 @@
 // client/live-state-client.ts — wire an itx session's `subscribe` + a seed door to a LiveStateStore.
-// This is the whole cleanroom client: `itx.subscribe({ liveState: { key }, target })` delivers each
-// delta to the store; a `door` thunk reads `{rev, state}` for the first paint and every gap heal.
-// Transport lives here so the store (client/live-state-store.ts) and the React hook stay pure.
+// This is the whole cleanroom client: a subscription that consumes the one live-state event type
+// (`itx.subscribe({ target, consumes: ["events.iterate.com/live-state/changed"] })`) delivers every
+// key's deltas in batches; this filters the watched `key` and folds each delta into the store; a
+// `door` thunk reads `{rev, state}` for the first paint and every gap heal. Transport lives here so
+// the store (client/live-state-store.ts) and the React hook stay pure.
 
 import {
   createLiveStateStore,
@@ -14,10 +16,10 @@ import {
 export type LiveItx = {
   subscribe(input: {
     name?: string;
-    liveState: { key: string };
-    target: (delta: unknown) => void;
+    consumes?: string[];
+    target: (events: unknown[], range: unknown) => void;
   }): Promise<unknown>;
-  unsubscribe(input: { name: string }): Promise<unknown>;
+  unsubscribe(name: string): Promise<unknown>;
 };
 
 /** A connected live-state subscription: the store rendering it, and the dispose that tears the
@@ -68,11 +70,17 @@ export async function connectLiveState<S>(
   };
   const sub = (await itx.subscribe({
     name: opts.name,
-    liveState: { key: opts.key },
-    // capnweb hands the delta as a live proxy value — deep-copy to a plain object before folding.
-    target: (delta: unknown) => {
+    consumes: ["events.iterate.com/live-state/changed"],
+    // A batch of live-state deltas (every key's); keep the watched key's. capnweb hands each event
+    // as a live proxy value — deep-copy to a plain object before folding.
+    target: (events: unknown[]) => {
       if (disposed) return;
-      store.apply(JSON.parse(JSON.stringify(delta)) as LiveStateDelta, reseed);
+      for (const e of events) {
+        const delta = JSON.parse(
+          JSON.stringify((e as { payload: unknown }).payload),
+        ) as LiveStateDelta;
+        if (delta.key === opts.key) store.apply(delta, reseed);
+      }
     },
   })) as { name: string };
   store.seed(await opts.door());
@@ -81,7 +89,7 @@ export async function connectLiveState<S>(
     async dispose() {
       if (disposed) return;
       disposed = true;
-      await itx.unsubscribe({ name: sub.name }).catch(() => {
+      await itx.unsubscribe(sub.name).catch(() => {
         // a dead session can't unsubscribe — the socket close already dropped the relay stub
       });
     },

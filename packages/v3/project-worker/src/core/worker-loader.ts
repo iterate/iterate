@@ -165,14 +165,25 @@ export function versionedFacet(
     };
   },
   opts: {
-    worker: { getDurableObjectClass(name: string): DurableObjectClass | undefined };
+    worker: {
+      getDurableObjectClass(
+        name: string,
+        options?: { props?: unknown },
+      ): DurableObjectClass | undefined;
+    };
     className: string;
     facetName: string;
     markerKey: string;
     version: string;
+    /** Cloudflare's own `WorkerStubEntrypointOptions.props` — what the hosted class reads back as
+     *  `ctx.props` (a StreamProcessorDurableObject's `{ contextName, name }`). */
+    props?: unknown;
   },
 ): unknown {
-  const klass = opts.worker.getDurableObjectClass(opts.className);
+  const klass = opts.worker.getDurableObjectClass(
+    opts.className,
+    opts.props === undefined ? undefined : { props: opts.props },
+  );
   if (!klass) throw new Error(`loaded worker does not export class "${opts.className}"`);
   const prev = ctx.storage.kv.get(opts.markerKey) as string | undefined;
   if (prev !== undefined && prev !== opts.version) {

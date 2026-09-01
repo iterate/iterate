@@ -51,9 +51,12 @@ export class Keeper extends DurableObject {
     return await (await cap.get()).whoami();
   }
 }`,
+  // The stateless "project worker" shape: a WorkerEntrypoint whose processEventBatch(events, range) the
+  // stream calls at-least-once from a cursor it keeps (resolving IS the ack; throwing ⇒ retry;
+  // `retryable: false` ⇒ halt now).
   "src/digest.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Digest extends WorkerEntrypoint {
-  async run(events, window) {
+  async processEventBatch(events, range) {
     const poison = events.find((e) => e.payload && e.payload.poison);
     if (poison)
       throw Object.assign(new Error("digest: refusing poison at offset " + poison.offset), {
@@ -65,7 +68,7 @@ export default class Digest extends WorkerEntrypoint {
     return n;
   }
 }`,
-  "src/chunky.js": `import { StreamProcessor, defineProcessorContract, z } from "./processor.js";
+  "src/chunky.js": `import { StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
 const contract = defineProcessorContract({
   slug: "chunky",
   version: "1.0.0",
@@ -75,20 +78,20 @@ const contract = defineProcessorContract({
   consumes: ["chunk", "mark"],
   emits: [],
 });
-export class Chunky extends StreamProcessor {
+export class Chunky extends StreamProcessorDurableObject {
   contract = contract;
   reduce({ event, state }) {
     if (event.type === "chunk") return { ...state, chunks: state.chunks + 1 };
     if (event.type === "mark") return { ...state, marks: state.marks + 1 };
   }
-  liveState(state) { return { chunks: state.chunks, marks: state.marks }; }
+  projectLiveState(state) { return { chunks: state.chunks, marks: state.marks }; }
 }`,
   // A processor whose live state COMBINES reduced state (ticks, folded from durable 'tick' events)
   // with RUNTIME state (lastPokeMs — a plain field, NOT the reduce checkpoint, gone on eviction). A
   // 'poke' ephemeral event bumps the runtime field in processEvent and publishes its delta out of
   // band (the reduce never touches it). Proves reduced ⊕ runtime through ONE projection + ONE
   // revision chain (live-state-runtime.test.ts).
-  "src/presence.js": `import { StreamProcessor, defineProcessorContract, z } from "./processor.js";
+  "src/presence.js": `import { StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
 const contract = defineProcessorContract({
   slug: "presence",
   version: "1.0.0",
@@ -98,7 +101,7 @@ const contract = defineProcessorContract({
   consumes: ["tick", "poke"],
   emits: [],
 });
-export class Presence extends StreamProcessor {
+export class Presence extends StreamProcessorDurableObject {
   contract = contract;
   #lastPokeMs = 0; // RUNTIME: a field, not reduced state — reset to 0 on eviction, never refolded
   reduce({ event, state }) {
@@ -111,9 +114,9 @@ export class Presence extends StreamProcessor {
       this.publishLiveState(); // out-of-band runtime delta: no reduce changed, we emit ourselves
     }
   }
-  liveState(state) { return { ticks: state.ticks, lastPokeMs: this.#lastPokeMs }; }
+  projectLiveState(state) { return { ticks: state.ticks, lastPokeMs: this.#lastPokeMs }; }
 }`,
-  "src/user-tally.js": `import { StreamProcessor, defineProcessorContract, z } from "./processor.js";
+  "src/user-tally.js": `import { StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
 const contract = defineProcessorContract({
   slug: "user-tally",
   version: "1.0.0",
@@ -123,7 +126,25 @@ const contract = defineProcessorContract({
   consumes: ["*"],
   emits: [],
 });
-export class UserTally extends StreamProcessor {
+export class UserTally extends StreamProcessorDurableObject {
+  contract = contract;
+  reduce({ event, state }) {
+    return { counts: { ...state.counts, [event.type]: (state.counts[event.type] ?? 0) + 1 } };
+  }
+}`,
+  // The facet-spine demo processor (was the platform's built-in `tally`): counts every durable event
+  // by type. A userspace class like any other — there are no built-in processors.
+  "src/tally.js": `import { StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+const contract = defineProcessorContract({
+  slug: "tally",
+  version: "1.0.0",
+  description: "Counts committed events by type — the facet-spine demo processor.",
+  stateSchema: z.object({ counts: z.record(z.string(), z.number()).default({}) }),
+  events: {},
+  consumes: ["*"],
+  emits: [],
+});
+export class Tally extends StreamProcessorDurableObject {
   contract = contract;
   reduce({ event, state }) {
     return { counts: { ...state.counts, [event.type]: (state.counts[event.type] ?? 0) + 1 } };
@@ -151,3 +172,25 @@ export async function seedSources(itx: any, names: string[]): Promise<void> {
     await itx.invokeCapability(["itx", "kv", ["put", key, SOURCES[key]]]);
   }
 }
+
+/** The one spelling of "enable the fixture processor `name` from its seeded source": seeds it, then
+ *  `enableProcessor(name, { source, className })` — a processor is a named facet whose
+ *  `processEventBatch` is subscribed. `tally`, `chunky`, `presence`, `user-tally` are the fixtures. */
+export async function enableFixtureProcessor(
+  itx: any,
+  name: string,
+  className?: string,
+): Promise<void> {
+  const file = name === "user-tally" ? "user-tally" : name;
+  await seedSources(itx, [file]);
+  await itx.enableProcessor(name, {
+    source: `itx.kv.get('src/${file}.js')`,
+    className: className ?? FIXTURE_CLASS[name],
+  });
+}
+const FIXTURE_CLASS: Record<string, string> = {
+  tally: "Tally",
+  chunky: "Chunky",
+  presence: "Presence",
+  "user-tally": "UserTally",
+};

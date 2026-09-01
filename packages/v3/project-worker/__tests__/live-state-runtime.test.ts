@@ -39,10 +39,20 @@ type PresenceLive = { ticks: number; lastPokeMs: number };
 test("a dynamic-worker processor's live state combines reduced (ticks) + runtime (lastPokeMs); a client syncs both via ephemeral deltas", async () => {
   const itx = await harness.itx("prj_ls_runtime");
   await seedSources(itx, ["presence"]);
+  // Presence's contract consumes the EPHEMERAL 'poke', so its subscription must NAME it: the ONE
+  // consumes rule (absent = durable events only; naming a type opts its ephemerals in) sits in
+  // front of the facet's own contract filter — hence `consumes` on the enable.
+  const presenceClass =
+    "itx.load(\"itx.kv.get('src/presence.js')\").getDurableObjectClass('Presence')";
   await itx.enableProcessor("presence", {
     source: "itx.kv.get('src/presence.js')",
     className: "Presence",
+    consumes: ["tick", "poke"],
   });
+  // A FILTERED processor's facet only materializes on its first consumed push (the enablement
+  // commit itself is filtered out), so `itx.facets.get('presence')` would be NO_FACET until the
+  // first tick — materialize it once through the load chain before the first door read.
+  await itx.invokeCapability(`${presenceClass}.get('presence').wake()`);
 
   const door = async (): Promise<{ rev: number; state: PresenceLive }> =>
     JSON.parse(

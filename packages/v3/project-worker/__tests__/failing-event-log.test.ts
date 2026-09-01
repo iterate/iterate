@@ -163,7 +163,7 @@ test("read(afterOffset beyond head) never claims a scan of unassigned offsets", 
   //   only cover offsets that exist.
   // ACTUAL: scannedThroughOffset === afterOffset (head + 100 here).
   // WHY IT MATTERS: scanned ranges are the contiguity currency of every consumer (facet
-  //   cursors, subscription healing, resumeSubscription's operator seek). A cursor seeded from
+  //   cursors, subscription healing, the operator's delivery-resumed seek). A cursor seeded from
   //   this answer sits beyond head and every event later assigned in (head, afterOffset] is
   //   silently skipped forever — offset-keyed data loss from one overshooting read.
   const itx = await harness.itx("prj_bug_readbeyond");

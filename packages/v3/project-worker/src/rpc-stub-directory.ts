@@ -37,6 +37,11 @@ const ATTACH_PENDING_TTL_MS = 10_000;
 /** Everything the directory needs from its DO, injected — no hidden reach. */
 type RpcStubDirectoryDeps = {
   hooks: WebSocketHooks;
+  /** PRESENCE as it changes: a key gained its (only) transport, or lost its last one. The DO turns
+   *  these into the two ephemeral `rpc-stub/attached` / `rpc-stub/detached` events — live watchers
+   *  see presence move; the log never claims a socket is open. A REPLACED transport (same key, new
+   *  pager) is neither: the key never lost presence. */
+  onPresence: (kind: "attached" | "detached", key: string) => void;
   /** The DO's live-capability fetch subsystem (core/fetch-capabilities.ts) — the manager routes
    *  terminal-fetch invokes into its serve(). */
   liveCapabilityFetch: LiveCapabilityFetchServer;
@@ -45,6 +50,7 @@ type RpcStubDirectoryDeps = {
 export class RpcStubDirectory {
   /** The transport mechanics — sockets, pages, paged-in stubs (core/hibernatable-rpc-stub.ts). */
   readonly #stubs: HibernatableRpcStubManager;
+  readonly #onPresence: RpcStubDirectoryDeps["onPresence"];
   /** transportId → the reservation, for transports whose stub pager WebSocket hasn't arrived yet.
    *  In memory on purpose: if the DO dies in between, the upgrade 409s and the relay re-attaches.
    *  Lazily SWEPT (never a timer — a pending timer would pin the DO out of hibernation): the relay
@@ -60,6 +66,7 @@ export class RpcStubDirectory {
 
   constructor(deps: RpcStubDirectoryDeps) {
     this.#stubs = new HibernatableRpcStubManager(deps.hooks, deps.liveCapabilityFetch);
+    this.#onPresence = deps.onPresence;
   }
 
   // ── the lifecycle ──
@@ -88,6 +95,7 @@ export class RpcStubDirectory {
     const response = this.#stubs.acceptStubPagerSocket(transportId, request);
     if (response.status === 101) {
       this.#pending.delete(transportId);
+      const hadTransport = this.#stubs.all().some((r) => r.path === path);
       this.#stubs.attach(transportId, path);
       // ONE transport per path, enforced when a transport becomes VISIBLE. attach() (before the
       // pager opens) can only drop predecessors already in #stubs.all(); a CONCURRENT provide at
@@ -97,6 +105,7 @@ export class RpcStubDirectory {
       for (const r of this.#stubs.all())
         if (r.path === path && r.transportId !== transportId)
           this.#stubs.drop(r.transportId, "replaced");
+      if (!hadTransport) this.#onPresence("attached", path);
     }
     return response;
   }
@@ -110,7 +119,9 @@ export class RpcStubDirectory {
    *  live-capability close routing): the transport is simply gone. Nothing else happens — the
    *  mount that named the stub is data, not a session fact, and stays. */
   closed(ws: WebSocket): void {
-    this.#stubs.closed(ws);
+    const record = this.#stubs.closed(ws);
+    const path = (record as { path?: string } | undefined)?.path;
+    if (path !== undefined && !this.find(path)) this.#onPresence("detached", path);
   }
 
   // ── the views + the delivery leg ──

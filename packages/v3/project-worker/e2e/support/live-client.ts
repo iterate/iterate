@@ -5,8 +5,22 @@
 
 import { applyPatch, type PatchOp } from "../../src/core/patch.ts";
 
-/** One live-state change frame as delivered to a subscriber: apply `patch` iff `from` matches. */
+/** One live-state change frame — the payload of an `events.iterate.com/live-state/changed` event as
+ *  delivered inside a subscription batch: apply `patch` iff `from` matches. */
 export type Delta = { key?: string; from: number; to: number; patch: PatchOp[] };
+
+/** The subscription target for one watched `key`: a batch of live-state events (every key's) in,
+ *  the watched key's deltas into `client.consume`. Spell it as
+ *  `itx.subscribe({ name, target: deltasFor(client, key), consumes: [LIVE_STATE_CHANGED] })`. */
+export const LIVE_STATE_CHANGED = "events.iterate.com/live-state/changed";
+export const deltasFor =
+  (client: { consume(u: Delta): void }, key: string) =>
+  (events: unknown[]): void => {
+    for (const e of events) {
+      const delta = JSON.parse(JSON.stringify((e as { payload: Delta }).payload)) as Delta;
+      if (delta.key === key) client.consume(delta);
+    }
+  };
 
 export type LiveClient = {
   doc: unknown;

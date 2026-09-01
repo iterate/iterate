@@ -1,16 +1,21 @@
 // __workers-tests__/do-doors.test.ts — the IterateContextDurableObject's Workers-RPC doors,
 // pinned at zero distance (the pool lane is the only one that can BOTH call the DO verbs raw —
 // no capnweb edge folding the returns away — AND inspect the DO's own storage via
-// runInDurableObject). Three arc-review pins live here:
+// runInDurableObject). Three pins live here:
 //
-//   • the VIRGIN-PROBE alarm blind spot: the harness-lane storage-laziness test
-//     (failing-appsos-mined.test.ts) pins incarnation/tables but cannot read storage.getAlarm();
-//     this file closes that gap — a probe must not arm the quiet clock on a never-touched ctx;
-//   • the provide door's canonicalize-before-lane-stamp rule (a non-canonical subscribers
-//     spelling must land a LANED row, not a silently-dead laneless one);
-//   • revokeCapability's `void` return — a mount and a parked stub are SEPARATE things: revoking
-//     a live mount (either spelling) pops the row and never touches a transport. The stub stays
-//     in `itx.rpcStubs` until the session that parked it closes it.
+//   • the VIRGIN-PROBE alarm blind spot: a probe (`itx.facets.get('core').snapshot()`) must not
+//     arm the quiet clock on a never-touched ctx — the storage-lazy doctrine's one blind spot,
+//     which only storage.getAlarm() can see (the harness lane pins incarnation/tables but cannot
+//     read the alarm);
+//   • the provide door's SHAPE: it canonicalizes the path on its own (a Workers-RPC caller
+//     bypasses the edge canonicalizer), and a mount is `{ path, target, providedAtOffset }` and
+//     NOTHING else — no lane, no delivery, no processor field (capability-table 5.0.0: HOW a
+//     target is served is never written on a mount; the subscriptions layer decides by
+//     evaluating its own target, subscription-delivery.ts);
+//   • revokeCapability's `void` return on both spellings (`{ providedAtOffset }` | `{ path }`) — a
+//     mount and a parked stub are SEPARATE things: revoking a live mount pops the row and never
+//     touches a transport. The stub stays in `itx.rpcStubs` until the session that parked it
+//     closes it.
 
 import { runInDurableObject, SELF } from "cloudflare:test";
 import { env } from "cloudflare:workers";
@@ -27,7 +32,7 @@ const stub = (ctx: string) =>
 
 /** One capability-table row as the snapshot serializes it (the reduced state's `target` is the
  *  parsed Expression — `print` it to compare against the string the door was given). */
-type MountRow = { path: string[]; target: Expression; lane?: string; providedAtOffset: number };
+type MountRow = { path: string[]; target: Expression; providedAtOffset: number };
 const mountsOf = async (ctx: string): Promise<MountRow[]> =>
   (
     (await stub(ctx).invoke("itx.facets.get('capability-table').snapshot()")) as {
@@ -69,9 +74,9 @@ afterAll(async () => {
 
 test("a core-snapshot probe on a VIRGIN ctx arms NO alarm and mints NO storage — the first real append arms it", async () => {
   await runInDurableObject(stub("prj_doors_virginprobe"), async (instance, state) => {
-    // The hostState-replacement probe rides invoke() → #noteActivity; on a never-touched context
-    // it must not write the quiet-clock alarm (a durable write + a billed wake on a ctx that was
-    // only probed — the storage-lazy doctrine's blind spot the arc review caught).
+    // The probe rides invoke() → #noteActivity; on a never-touched context it must not write the
+    // quiet-clock alarm (a durable write + a billed wake on a ctx that was only probed — the
+    // storage-lazy doctrine's blind spot the arc review caught).
     const snap = (await instance.invoke("itx.facets.get('core').snapshot()")) as {
       state?: { incarnation?: number };
     };
@@ -90,24 +95,21 @@ test("a core-snapshot probe on a VIRGIN ctx arms NO alarm and mints NO storage �
   });
 });
 
-test("provideCapability canonicalizes BEFORE lane-stamping — a non-canonical subscribers spelling still gets its lane", async () => {
-  // A Workers-RPC caller bypasses the edge canonicalizer, so the DO door must hold on its own:
-  // pre-fix, the raw-string `startsWith("itx.subscribers.")` check missed " itx.subscribers.x"
-  // while the reduce stored the CANONICAL path — a LANELESS subscriber row no fan-out lane serves
-  // (connected wants lane 'connected', the pump 'facet', the forwarder 'durable': silently dead,
-  // with a success receipt). Pinned on the connected lane — a mount whose target names the
-  // `itx.rpcStubs` registry (the mount is pure data: nothing about a socket is needed to stamp
-  // it); the durable-lane ghost is pinned in the harness lane (failing-appsos-mined.test.ts),
-  // where the forwarder facet can actually materialize.
-  const ctx = "prj_doors_ghostlane";
+test("provideCapability canonicalizes the path itself — and a mount is `{ path, target, providedAtOffset }`, nothing else", async () => {
+  // A Workers-RPC caller bypasses the edge canonicalizer, so the DO door must hold on its own: a
+  // non-canonical spelling (leading whitespace) lands the CANONICAL path with the target verbatim.
+  // And the row carries no third kind of field — the old per-mount `lane` stamp went with the
+  // lanes: nothing about HOW a target is served is on a mount (a live stub's mount is pure data
+  // naming the `itx.rpcStubs` registry; a subscription is its own layer's event, not a mount).
+  const ctx = "prj_doors_canonical";
   await stub(ctx).provideCapability({
-    path: " itx.subscribers.ghost",
-    target: "itx.rpcStubs.get('itx.subscribers.ghost')",
+    path: " itx.aliased.ghost",
+    target: "itx.rpcStubs.get('itx.aliased.ghost')",
   });
-  const row = (await mountsOf(ctx)).find((m) => m.path.join(".") === "itx.subscribers.ghost");
+  const row = (await mountsOf(ctx)).find((m) => m.path.join(".") === "itx.aliased.ghost");
   expect(row).toBeDefined(); // stored CANONICAL — the one-canonicalizer rule
-  expect(print(row!.target)).toBe("itx.rpcStubs.get('itx.subscribers.ghost')"); // the target, verbatim
-  expect(row!.lane).toBe("connected"); // stamped from the canonical spelling
+  expect(print(row!.target)).toBe("itx.rpcStubs.get('itx.aliased.ghost')"); // the target, verbatim
+  expect(Object.keys(row!).sort()).toEqual(["path", "providedAtOffset", "target"]); // and nothing else
 });
 
 test("revokeCapability resolves to void on both spellings and never touches a transport — the stub outlives its mount", async () => {

@@ -124,7 +124,7 @@ export class InlineCore {
    *  (a PAUSED stream refuses the ephemeral delta, for one) as a revision-chain gap the client
    *  heals by re-seeding; the pause window's changes simply never emit (the pause event's own
    *  delta included — the reduce paused the stream before its delta could be admitted). No
-   *  feedback loop: live-state/changed is unconsumable (consumesEvent refuses it) and its commit
+   *  feedback loop: live-state/changed is ephemeral (never reaches an inline reduce) and its commit
    *  changes no inline state, so at most one delta append chases each changing batch. The drained
    *  set is snapshotted BEFORE the sets: each set() appends — a nested commit whose own tail
    *  re-enters here and must find nothing left to publish. */

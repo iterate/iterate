@@ -1,6 +1,6 @@
 // wave2-sweep.failing.test.ts — BUG-HUNT WAVE 2, unit lane: the wave-1 DEFECT SHAPES hunted in
 // the files wave 1 didn't reach (worker-loader cacheKey composition, the capability table's
-// ARRAY-path door, ProcessorFacet identity durability, shared egress).
+// ARRAY-path door, shared egress).
 //
 // Every test asserts CORRECT behavior. `test.fails(...)` marks a case VERIFIED failing by
 // running this file (each body opens with BUG/EXPECTED/ACTUAL/WHY IT MATTERS + its SHAPE).
@@ -13,7 +13,7 @@
 
 import { expect, test, vi } from "vitest";
 
-// ProcessorFacet extends DurableObject from "cloudflare:workers", which node cannot resolve —
+// (the DurableObject base from "cloudflare:workers" cannot be resolved by node —
 // mock JUST the base class (a ctx/env-stashing shell, exactly what the real base provides to
 // this subclass) so the facet's OWN logic runs unmodified.
 vi.mock("cloudflare:workers", () => ({
@@ -38,7 +38,6 @@ import {
   type StreamEventInput,
 } from "./core/events.ts";
 import { CapabilityTableProcessor } from "./capability-table-processor.ts";
-import { ProcessorFacet } from "./processor-facet.ts";
 import type { ProcessorStream } from "./core/processor.ts";
 
 // ═══════════════ 1. confinedWorker cacheKey — ":"-joined owner composition (S3) ═══════════════
@@ -164,70 +163,6 @@ test("a mount provided with a mis-segmented ARRAY path is REJECTED at the door (
   await expect(host.provide({ path: ["itx.kv"], target: "itx.whoami" })).rejects.toThrow(
     /round-trip/,
   );
-});
-
-// ═══════════════ 3. ProcessorFacet — configure() while warm serves the STALE identity (S1) ═══════════════
-
-const makeFacetHarness = () => {
-  const kv = new Map<string, unknown>();
-  const parent = {
-    append: (...evts: unknown[]) =>
-      evts.map((e, i) => ({ ...(e as object), offset: i + 1, createdAt: "", path: "/" })),
-    read: (after = 0, _limit = 500) => Promise.resolve({ events: [], scannedThroughOffset: after }),
-    deliverToSubscriptionMount: () => Promise.resolve(undefined),
-    armSubscriptionRetry: () => Promise.resolve({ ok: true as const }),
-  };
-  const ctx = {
-    storage: {
-      kv: {
-        get: (k: string) => kv.get(k),
-        put: (k: string, v: unknown) => void kv.set(k, v),
-        delete: (k: string) => void kv.delete(k),
-      },
-    },
-  };
-  const env = { CONTEXT: { getByName: () => parent } };
-  // The mocked DurableObject base stashes (ctx, env) exactly like the real one.
-  return { facet: new (ProcessorFacet as any)(ctx, env), kv };
-};
-
-test("FIXED (defect 45): re-configure of a WARM facet takes effect — the next call serves the NEW identity/props", async () => {
-  // BUG: ProcessorFacet.configure() writes the identity durably (kv "identity") but never
-  //      clears the memoized `#processor` — #p() returns the instance built from the OLD
-  //      identity for as long as the facet stays warm (processor-facet.ts configure()/#p()).
-  // EXPECTED: configure() is the ONE identity door ("re-enabling with different props SHADOWS
-  //      the old configuration" — the contract on FacetIdentity.props and ProcessorPolicy.props);
-  //      after it returns ok, the facet serves the new identity.
-  // ACTUAL: the warm instance keeps serving the OLD slug/props until the facet is aborted
-  //      (quiesce ≥60s away — and NEVER under continuous traffic, which keeps refreshing the
-  //      quiet period). Observable here by slug: configured tally → snapshot warms the instance
-  //      → re-configured subscription-forwarder → pumpSubscriptionDeliveries still finds tally:
-  //      `processor "tally" has no pumpSubscriptionDeliveries()`.
-  // WHY IT MATTERS (SHAPE S1, with the enableProcessor door as the amplifier): the parent's
-  //      enableProcessor(slug, ref, props) → provide + configure returns {ok: true} while the
-  //      running processor keeps the STALE props (the identical memoization lives in the
-  //      userspace runner too, and versionedFacet only restarts on CONTENT change — a props-only
-  //      re-enable restarts nothing). The event log says the new config is enabled; the facet
-  //      disagrees, silently, indefinitely under load.
-  const { facet } = makeFacetHarness();
-  const base = { parentName: "prj_u.iterate/", projectId: "prj_u", path: "/" };
-  expect(facet.configure({ ...base, slug: "tally" })).toEqual({ ok: true });
-  await facet.snapshot(); // warms #processor under the tally identity
-  expect(
-    facet.configure({ ...base, slug: "subscription-forwarder", props: { hint: "new" } }),
-  ).toEqual({ ok: true });
-  const pumped = await facet.pumpSubscriptionDeliveries();
-  expect(pumped).toEqual({ ok: true }); // ← throws: processor "tally" has no pumpSubscriptionDeliveries()
-});
-
-test("a COLD facet (fresh incarnation) picks up the last-configured identity", async () => {
-  // The durable half works: a facet rebuilt after abort reads the newest identity from kv. The
-  // defect above is ONLY the warm-instance memo.
-  const { facet, kv } = makeFacetHarness();
-  const base = { parentName: "prj_u.iterate/", projectId: "prj_u", path: "/" };
-  facet.configure({ ...base, slug: "subscription-forwarder" });
-  expect(await facet.pumpSubscriptionDeliveries()).toEqual({ ok: true });
-  expect((kv.get("identity") as { slug: string }).slug).toBe("subscription-forwarder");
 });
 
 // ═══════════════ 4. shared egress — substitution arithmetic pins (correct today) ═══════════════

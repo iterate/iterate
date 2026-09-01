@@ -127,11 +127,13 @@ describe("consumesEvent unified rule (Phase B / defects 10+11)", () => {
     expect(consumesEvent(["a"], { type: "a" })).toBe(true);
     expect(consumesEvent(["a"], { type: "b" })).toBe(false);
   });
-  test("the live-state/changed type is never consumable, even when explicitly named or under *", () => {
+  test("the live-state/changed type is an EPHEMERAL like any other to consumesEvent: never swept by default or '*', delivered when NAMED", () => {
+    // (The rule that no PROCESSOR may fold a delta lives in the engine — core/processor.ts
+    // `foldsEvent` — not here: a SUBSCRIPTION names the type to watch live state.)
     const t = "events.iterate.com/live-state/changed";
     expect(consumesEvent(undefined, { type: t, ephemeral: true })).toBe(false);
     expect(consumesEvent(["*"], { type: t, ephemeral: true })).toBe(false);
-    expect(consumesEvent([t], { type: t, ephemeral: true })).toBe(false);
+    expect(consumesEvent([t], { type: t, ephemeral: true })).toBe(true);
   });
 });
 

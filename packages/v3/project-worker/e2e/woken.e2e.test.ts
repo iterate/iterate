@@ -2,13 +2,12 @@
 // carries events.iterate.com/stream/woken at offset 1 (the platform's own record, injected by
 // Stream.append — never echoed as a receipt), the core processor reduces it into
 // `state.incarnation`, and the INLINE reduced states (core, capability-table) emit the standard
-// ephemeral live-state/changed deltas on change, observable on the connected lane like any facet
-// processor's.
+// ephemeral live-state/changed deltas on change, delivered to a subscriber that names the one
+// live-state event type — exactly like any facet processor's.
 
 import { expect, test } from "vitest";
 import { freshCtx, openItx, until } from "./support/client.ts";
-
-const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
+import { deltasFor, LIVE_STATE_CHANGED, type Delta } from "./support/live-client.ts";
 
 test("first append commits the woken event first; core's reduced state carries the incarnation", async () => {
   const itx = openItx(freshCtx("woken"));
@@ -36,22 +35,22 @@ test("first append commits the woken event first; core's reduced state carries t
   ).toHaveLength(1);
 });
 
-test("inline reduced states are live: capability-table and core changes ride the connected lane", async () => {
+test("inline reduced states are live: capability-table and core changes reach a live-state subscriber", async () => {
   const itx = openItx(freshCtx("inlinelive"));
   await itx.invokeCapability(`itx.append({ type: 'seed' })`);
 
-  type Delta = { key: string; from: number; to: number; patch: unknown[] };
+  // ONE event type carries every key's deltas; each watcher keeps its key (deltasFor)
   const tableDeltas: Delta[] = [];
   const coreDeltas: Delta[] = [];
   await itx.subscribe({
     name: "tablewatch",
-    liveState: { key: "capability-table" },
-    target: (u: unknown) => tableDeltas.push(clone(u) as Delta),
+    target: deltasFor({ consume: (d) => tableDeltas.push(d) }, "capability-table"),
+    consumes: [LIVE_STATE_CHANGED],
   });
   await itx.subscribe({
     name: "corewatch",
-    liveState: { key: "core" },
-    target: (u: unknown) => coreDeltas.push(clone(u) as Delta),
+    target: deltasFor({ consume: (d) => coreDeltas.push(d) }, "core"),
+    consumes: [LIVE_STATE_CHANGED],
   });
 
   // a capability-table change (a provide) → a delta keyed "capability-table"

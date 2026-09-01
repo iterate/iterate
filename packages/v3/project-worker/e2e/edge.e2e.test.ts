@@ -4,8 +4,8 @@
 // (was proofs/prove_edge.mjs)
 
 import { expect, test } from "vitest";
-import { freshCtx, httpBatch, openItx } from "./support/client.ts";
-import { seedSources } from "./support/sources.ts";
+import { freshCtx, httpBatch, openItx, processorNames } from "./support/client.ts";
+import { enableFixtureProcessor, seedSources } from "./support/sources.ts";
 
 test("edge adoption: one-shot HTTP batch whoami, kv-source worker, dotted .fetch(request), disableProcessor", async () => {
   // The batch and the live session share ONE ctx (the proof used a single CTX for both).
@@ -54,16 +54,18 @@ export default class Mine extends WorkerEntrypoint {
   expect(resp.status).toBe(200);
   expect(html).toContain("dynamic web capability");
 
-  // 4. disableProcessor: enable, disable, snapshot now refuses
-  await itx.enableProcessor("tally");
+  // 4. disableProcessor: enable (from the fixture source), disable, snapshot now refuses
+  await enableFixtureProcessor(itx, "tally");
   await itx.invokeCapability(`itx.append({ type: 'mark' })`);
+  expect(await processorNames(itx)).toEqual(["tally"]);
   await itx.disableProcessor("tally");
+  expect(await processorNames(itx)).toEqual([]); // the subscription row is gone…
   let denied = "";
   try {
     await itx.invokeCapability("itx.facets.get('tally').snapshot()");
   } catch (e) {
     denied = String(e);
   }
-  // disabled processor is gone (row + facet deleted)
+  // …and so is the facet, storage included (a re-enable is a clean rebuild from the log)
   expect(denied).toMatch(/no facet/);
 });

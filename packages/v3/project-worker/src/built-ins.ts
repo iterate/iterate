@@ -1,5 +1,5 @@
 // built-ins.ts — THE BUILT-INS: a plain record whose KEYS are the physical-layer roots (`whoami`,
-// `kv`, `append`, `read`, `cd`, `fetch`, `rpcStubs`, `facets`, `load`, `runScript`). A call
+// `kv`, `append`, `read`, `cd`, `fetch`, `rpcStubs`, `facets`, `subscriptions`, `load`, `runScript`). A call
 // `itx.<root>…` resolves DIRECTLY against these (capability-table-processor.ts `resolve`, built-in
 // first) — no config, no mount. Userspace `provide` mounts resolve against `{ itx }` alone and
 // recurse through the `itx` symbol to reach a root; a bare root is unspellable, so the built-ins
@@ -21,7 +21,7 @@ import { loadConfinedWorker, type WorkerSource } from "./core/worker-loader.ts";
 import { resolveContextPath } from "./core/durable-object-names.ts";
 import { itxEntrypointFor } from "./itx-entrypoint.ts";
 import type { Expression } from "./core/expression.ts";
-import { InvokeHandle } from "./core/invoke-handle.ts";
+import { FacetHandle, InvokeHandle, RpcStubHandle } from "./core/invoke-handle.ts";
 import type { Context } from "./core/stream.ts";
 import type { StreamEventInput } from "./core/events.ts";
 import type { IterateContextDurableObject } from "./stream-durable-object.ts";
@@ -34,10 +34,28 @@ import type { IterateContextDurableObject } from "./stream-durable-object.ts";
 type RpcStubsView = {
   /** One stub by key: a pipelinable handle over its transport (page → RetainedCallbackInvoker leg
    *  → invoke). Deep dots walk; a root call reaches the bare parked callable; offline ⇒
-   *  CONNECTION_OFFLINE at call time. */
-  get(key: string): unknown;
+   *  CONNECTION_OFFLINE at call time. Branded `RpcStubHandle`: the subscription delivery loop reads
+   *  the brand to know the callee owns its own progress. */
+  get(key: string): RpcStubHandle;
   /** PRESENCE — the keys with an open transport right now. */
   list(): string[] | Promise<string[]>;
+};
+
+/** The `subscriptions` view: the subscriptions table (an inline reduce) joined with each cursor
+ *  target's cursor (kv, effect-side truth). Small and read-only — `subscribe` is edge sugar over the
+ *  `subscription-configured` event, never a verb here. */
+type SubscriptionsView = {
+  list(): SubscriptionListEntry[];
+  get(name: string): SubscriptionListEntry | null;
+};
+export type SubscriptionListEntry = {
+  name: string;
+  target: string;
+  consumes?: string[];
+  configuredAtOffset: number;
+  /** Present only when the STREAM keeps the cursor (a target that cannot own its progress). */
+  cursor?: { confirmedOffset: number; attempt: number; nextAttemptAtMs?: number };
+  halted?: { afterOffset: number; attempts: number; error?: string };
 };
 
 /** The DEP shape (context-injected): the facet door reaches ANY method a facet's durable object
@@ -45,9 +63,11 @@ type RpcStubsView = {
  *  (address an already-running facet by name — processors, named instances) OR `{ source, className,
  *  name? }` (materialize the loaded `className` durable object as a facet — the form `itx.load(...)
  *  .getDurableObjectClass(...).get(...)` routes here internally). The PUBLIC `itx.facets` root is
- *  string-only; the object form is spelled through `itx.load`. */
+ *  string-only; the object form is spelled through `itx.load`. `delete` removes a facet, storage
+ *  included (the mirror of `ctx.facets.delete`). */
 type FacetsView = {
-  get(ref: string | { source?: unknown; className?: string; name?: string }): unknown;
+  get(ref: string | { source?: unknown; className?: string; name?: string }): FacetHandle;
+  delete(name: string): void;
 };
 
 /** The bindings roots-building needs — present in BOTH hosting lanes (the worker env). */
@@ -118,9 +138,13 @@ interface BuiltInScope {
    *  and mounting the pure-data target `itx.rpcStubs.get('<path>')`. Offline ⇒ CONNECTION_OFFLINE
    *  at call time; `list()` is presence (which keys have a transport right now). */
   rpcStubs: RpcStubsView;
-  /** Address a facet that is ALREADY RUNNING by name (an enabled processor, a named instance). No
-   *  source — to LOAD and host a class, use `itx.load(src).getDurableObjectClass(name).get(name?)`. */
-  facets: { get(name: string): unknown };
+  /** Address a facet that is ALREADY RUNNING by name (a processor, a named instance) — no source;
+   *  to LOAD and host a class, use `itx.load(src).getDurableObjectClass(name).get(name?)`. `delete`
+   *  removes it, storage included. */
+  facets: { get(name: string): unknown; delete(name: string): void };
+  /** The subscriptions layer, read: the table (an inline reduce) joined with the stream-kept
+   *  cursors. `subscribe` lives on the edge as sugar over the `subscription-configured` event. */
+  subscriptions: SubscriptionsView;
   /** Load dynamic code → a WORKER, then pick the host (mirror of Cloudflare's Worker Loader):
    *  `.getEntrypoint(name?, { props? })` → a stateless `WorkerEntrypoint` — ANY method it exports,
    *  reached by name (`run`, `fetch`, `processEventBatch`, …); `props` is Cloudflare's own
@@ -150,6 +174,8 @@ interface BuildBuiltInsDeps {
   /** The rpcStubs view — PARENT-LOCAL closures over the context's transport table (the pager
    *  sockets live in the DO and can never move). */
   rpcStubs: RpcStubsView;
+  /** The subscriptions view — the inline reduce ⋈ the delivery loop's cursors. */
+  subscriptions: SubscriptionsView;
   /** `facets.get(ref)` — address a facet by name, OR materialize `{ source, className }` (a loaded
    *  durable object hosted as a facet of this stream; accepted trade: a busy stateful facet pins
    *  its stream). */
@@ -262,7 +288,9 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           );
         return deps.facets.get(name);
       },
+      delete: (name: string) => deps.facets.delete(name),
     },
+    subscriptions: deps.subscriptions,
     // Each hop is its own InvokeHandle, so the whole `load(src).getEntrypoint().run()` /
     // `.getDurableObjectClass('C').get(name?)` chain pipelines on every lane (workerd#6873).
     load: (source: WorkerSource) => {

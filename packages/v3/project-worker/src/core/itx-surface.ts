@@ -28,14 +28,18 @@
 //   using api = newWebSocketRpcSession("wss://<worker>/api");
 //   const itx = api.authenticate().projects.get("prj_123");
 //
-// ONE provide door: `itx.provide(path, target)` — target is an itx EXPRESSION (a durable mount) or
-// a LIVE capnweb value (function/RpcTarget). A live target is SUGAR over two axioms: the value is
-// parked in the `itx.rpcStubs` built-in under the path (retained HERE — the physical half), then the
-// ordinary mount event `path ⇒ itx.rpcStubs.get('<path>')` is appended (the pure-data half).
-// Calling `itx.<path>.method(x)` resolves the mount like any other. Re-providing the same path
-// re-parks (reconnect) and appends nothing. `itx.rpcStubs` is the registry itself, for the two-step
-// spelling: `provide(value, { key })` parks, `get(key)` / `list()` ride the dotted surface to the
-// DO's built-in.
+// AXIOMS AND SUGAR, kept apart on the class body below. The axioms are the doors that need the edge
+// (a session-held stub, a live Request, the fold): `cd`, `invokeCapability`, `append`, `read`,
+// `waitForEvent`, `fetch`, `rpcStubs`. Everything else is SUGAR — one-line compositions of those
+// that append no event shape of their own:
+//   • `provide(path, target)` — an itx EXPRESSION mounts (`capability-provided { path, target }`); a
+//     LIVE capnweb value (function/RpcTarget) is parked in `itx.rpcStubs` under the path (retained
+//     HERE — the physical half), then the ordinary mount `path ⇒ itx.rpcStubs.get('<path>')` is
+//     appended (the pure-data half). Re-providing re-parks (reconnect) and appends nothing.
+//   • `subscribe({ name?, target, consumes? })` — the subscriptions layer's ONE event
+//     (`subscription-configured`); a live target parks under `itx.subscriptions.<name>` first.
+//   • `enableProcessor(name, { source, className })` — a subscription whose target is a facet's
+//     `processEventBatch`; `disableProcessor` removes it and deletes the facet.
 //
 // DON'T-PIN: the retained capnweb callback stub lives HERE, in this stateless worker (the relay). The relay
 // opens a STUB PAGER WebSocket to the DO (core/hibernatable-rpc-stub.ts); the DO records only the stub's
@@ -47,14 +51,10 @@
 import { RpcTarget } from "capnweb";
 import type { IterateContextDurableObject } from "../stream-durable-object.ts";
 import { CAPABILITY_FETCH_HEADER, encodeCapabilityFetchHeader } from "./fetch-capabilities.ts";
-import type { DeliveryPolicy, StreamEvent, StreamEventInput } from "./events.ts";
+import type { StreamEvent, StreamEventInput } from "./events.ts";
 import type { WaitForEventFilter } from "./stream.ts";
-import {
-  parseCapabilityPath,
-  toExpression,
-  type Expression,
-  type ItxExpression,
-} from "./expression.ts";
+import { parseCapabilityPath, toExpression, type ItxExpression } from "./expression.ts";
+import type { WorkerSource } from "./worker-loader.ts";
 import { installPrototypeInvokeCapabilityFallback } from "./dotted-path-proxy.ts";
 import { InvokeHandle } from "./invoke-handle.ts";
 import {
@@ -173,14 +173,7 @@ class RpcStubs extends RpcTarget {
    *  from a mount with `itx.provide(path, "itx.rpcStubs.get('<key>')")`, or call it directly as
    *  `itx.rpcStubs.get('<key>').method(x)`. */
   async provide(target: ProviderStub, opts: { key: string }): Promise<{ key: string }> {
-    if (
-      typeof target !== "function" &&
-      !(target instanceof RpcTarget) &&
-      typeof (target as { dup?: unknown } | null)?.dup !== "function"
-    )
-      throw new TypeError(
-        "rpcStubs.provide(target, { key }): target must be a LIVE capnweb value (function | RpcTarget)",
-      );
+    assertLiveValue(target, "rpcStubs.provide(target, { key })");
     // Validate/normalize BEFORE attaching — an invalid key must never burn a transport reservation.
     const key = parseCapabilityPath(opts.key).join(".");
     const relay = await startRpcStubRelay(
@@ -348,31 +341,19 @@ export class IterateContext extends RpcTarget {
    *      the provider vanishes the mount STAYS: calls answer CONNECTION_OFFLINE until `revoke`.
    *  Anything else is a loud TypeError. Returns the mount's identity for `revoke`. */
   async provide(
-    path: string | string[],
+    path: string,
     target: ItxExpression | ProviderStub,
-    opts?: { delivery?: DeliveryPolicy },
   ): Promise<{ providedAtOffset: number }> {
-    const delivery = opts?.delivery;
     if (typeof target === "string" || Array.isArray(target))
-      return this.#context.provideCapability({ path, target, ...(delivery && { delivery }) });
-    if (
-      typeof target !== "function" &&
-      !(target instanceof RpcTarget) &&
-      typeof (target as { dup?: unknown } | null)?.dup !== "function"
-    )
-      throw new TypeError(
-        "provide(path, target): target must be an itx expression (string | array) or a LIVE capnweb value (function | RpcTarget)",
-      );
+      return this.#context.provideCapability({ path, target });
+    assertLiveValue(target, "provide(path, target)");
     // Park FIRST, mount SECOND (the event records a capability that can already serve). The
     // registry key IS the canonical mount path — one canonicalizer, done inside rpcStubs.provide.
-    const { key } = await this.rpcStubs.provide(target, {
-      key: typeof path === "string" ? path : path.join("."),
-    });
+    const { key } = await this.rpcStubs.provide(target, { key: path });
     try {
       return await this.#context.provideCapability({
         path: key,
         target: ["itx", "rpcStubs", ["get", key]],
-        ...(delivery && { delivery }),
       });
     } catch (e) {
       // The DO refused the mount (STREAM_PAUSED / STREAM_BREAKER_OPEN / a validation throw): the
@@ -389,11 +370,9 @@ export class IterateContext extends RpcTarget {
    *  under that path, if any (a local fact — no DO round trip, no other session's stub is touched).
    *  The by-offset spelling revokes the mount only; a stub this session parked stays addressable
    *  as `itx.rpcStubs.get('…')` until `rpcStubs.close` or session end. */
-  async revoke(input: string | string[] | { providedAtOffset: number }): Promise<void> {
-    if (typeof input === "string" || Array.isArray(input)) {
-      const path = parseCapabilityPath(typeof input === "string" ? input : input.join(".")).join(
-        ".",
-      );
+  async revoke(input: string | { providedAtOffset: number }): Promise<void> {
+    if (typeof input === "string") {
+      const path = parseCapabilityPath(input).join(".");
       await this.#context.revokeCapability({ path });
       this.rpcStubs.close(path);
       return;
@@ -401,75 +380,99 @@ export class IterateContext extends RpcTarget {
     await this.#context.revokeCapability(input);
   }
 
-  /** Enable a facet-hosted processor on this context's stream. Sugar for "load a class as a
-   *  facet + subscribe it": `ref` is the same `source` + `className` that
-   *  `itx.load(src).getDurableObjectClass(className)` takes (userspace code through the Worker
-   *  Loader), and enabling appends a SUBSCRIPTION mount `itx.subscribers.<slug> →
-   *  itx.facets.get('<slug>')` that the commit pump drives. A processor is just a subscription to a
-   *  facet. Ref-less enables a built-in processor by slug. */
-  enableProcessor(
-    slug: string,
-    ref?: { source: string | Expression; className: string },
-  ): Promise<{ ok: true }> {
-    return this.#context.enableProcessor(slug, ref);
-  }
+  // ── SUBSCRIPTIONS: sugar over the subscriptions layer's one event (subscriptions.ts) ──
 
-  disableProcessor(slug: string): Promise<{ ok: true }> {
-    return this.#context.disableProcessor(slug);
-  }
-
-  /** Subscribe — sugar for a subscription mount at `itx.subscribers.<name>`, through the ONE
-   *  provide door. How it is SERVED depends only on the target's shape (see DeliveryPolicy in
-   *  core/events.ts):
-   *    • a LIVE CALLBACK (any capnweb function/RpcTarget): parked in `itx.rpcStubs` under
-   *      `itx.subscribers.<name>` and mounted there (target `itx.rpcStubs.get('…')`), then
-   *      delivered ONE-DIRECTIONALLY — the stream fire-and-forgets each committed batch as
-   *      `(events, range)` over the paged-in stub, no acks, no server cursor. The CLIENT owns its
-   *      offset: check the ranges chain, heal any gap with read(afterOffset). Re-subscribing the
-   *      SAME name REPLACES the transport (the old callback's parked stub gets the replaced-close)
-   *      and appends nothing when the policy is unchanged; a changed policy shadows the old row,
-   *      and fan-out delivers to the winner only.
-   *    • an ABSENT target (an itx expression — a webhook, a stateless worker): the
-   *      subscription-forwarder facet holds a cursor per target, calls the target's terminal
-   *      path with `(events, range)` per batch (the awaited call IS the ack), and
-   *      applies the one bounded-retry-then-halt policy. DURABLE ROWS ONLY: the forwarder's
-   *      cursor reads the log, so an EPHEMERAL event never reaches an absent target even when
-   *      `consumes` names its type — ephemerals ride only the connected lane.
-   *  Add `liveState: {key}` for state mode: the target receives each of the key's change
-   *  payloads `{key, from, to, patch}` as it commits; the CLIENT chains revisions (seed through
-   *  the producer's door, re-read it on any gap). Live callbacks only — an absent target has no
-   *  chain to keep. */
-  async subscribe(
-    input: DeliveryPolicy & {
-      name?: string;
-      target: ItxExpression | ProviderStub;
-    },
-  ): Promise<{ name: string; providedAtOffset: number }> {
-    // SUBSCRIBING IS PROVIDING — pure edge sugar: a unique name (concurrent anonymous subscribes
-    // must never shadow each other), then ONE ordinary provide at itx.subscribers.<name> with the
-    // delivery policy riding the event. A live callback parks at that path directly.
+  /** Subscribe: have each committed batch — filtered by `consumes` — delivered to `target` as
+   *  `(events, range)`. `target` is EITHER an itx EXPRESSION whose terminal is callable that way (a
+   *  facet's `.processEventBatch`, a loaded entrypoint's method, a sibling context's `.append`) OR a
+   *  LIVE capnweb callback, which is parked in `itx.rpcStubs` under `itx.subscriptions.<name>` and
+   *  targeted as `itx.rpcStubs.get('…')`. HOW it is served is not declared here: the context looks
+   *  at what the target evaluates to — a facet or a live stub owns its progress and gets a push (the
+   *  client heals a gap with `read`); anything else gets an at-least-once cursor the stream keeps.
+   *  Same name REPLACES; an identical subscribe appends NOTHING (a reconnect is zero events). An
+   *  unnamed subscription is SESSION-scoped: it is removed when this session ends. */
+  async subscribe(input: {
+    name?: string;
+    target: ItxExpression | ProviderStub;
+    consumes?: string[];
+  }): Promise<{ name: string }> {
+    const anonymous = input.name === undefined;
     const name = input.name ?? `sub-${crypto.randomUUID().slice(0, 8)}`;
-    const { name: _n, target, ...delivery } = input;
-    const { providedAtOffset } = await this.provide(`itx.subscribers.${name}`, target, {
-      delivery,
+    let target: ItxExpression;
+    if (typeof input.target === "string" || Array.isArray(input.target)) target = input.target;
+    else {
+      assertLiveValue(input.target, "subscribe({ target })");
+      const { key } = await this.rpcStubs.provide(input.target, {
+        key: `itx.subscriptions.${name}`,
+      });
+      target = ["itx", "rpcStubs", ["get", key]];
+    }
+    await this.#context.configureSubscription({
+      name,
+      target,
+      ...(input.consumes && { consumes: input.consumes }),
     });
-    return { name, providedAtOffset };
+    if (anonymous)
+      // Dies with the session: the removal rides waitUntil so the socket's close can complete.
+      this.#parking.add(this.#parkingKey(`subscription:${name}`), {
+        dispose: () =>
+          this.#waitUntil(this.#context.removeSubscription(name).catch(() => undefined)),
+      });
+    return { name };
   }
 
-  /** Revoke the subscription mount and dispose the parked stub (if it was a live callback).
-   *  Clears the WHOLE stack at the path — an off-switch must not restore an older shadowed
-   *  expression mount (prove_disable_shadow.mjs). */
-  async unsubscribe(input: { name: string }): Promise<void> {
-    const path = `itx.subscribers.${input.name}`;
-    await this.#context.revokeCapability({ path, all: true });
-    this.rpcStubs.close(path);
+  /** Remove a subscription (appends `subscription-removed`; a cursor target's cursor goes with it)
+   *  and close this session's parked callback under it, if any. */
+  async unsubscribe(name: string): Promise<void> {
+    await this.#context.removeSubscription(name);
+    this.rpcStubs.close(`itx.subscriptions.${name}`);
+    this.#parking.dispose(this.#parkingKey(`subscription:${name}`));
   }
 
-  /** Recovery from a forwarder HALT (or an operator cursor seek) — absent targets only;
-   *  connected targets have no server cursor to move. */
-  resumeSubscription(input: { name: string; afterOffset?: number }): Promise<{ ok: true }> {
-    return this.#context.resumeSubscription(input);
+  // ── PROCESSORS: sugar over subscribe + the facet built-ins ──
+
+  /** Enable a processor: host `className` (a `StreamProcessorDurableObject` subclass exported by
+   *  the loaded `source`) as the facet named `name`, and subscribe its `processEventBatch` to every
+   *  commit. Literally `subscribe({ name, target: itx.load(source).getDurableObjectClass(className)
+   *  .get(name).processEventBatch, consumes })` — a processor is a named facet that is pushed the
+   *  log. `consumes` is the SUBSCRIPTION's filter (what is sent; absent = every durable event); the
+   *  processor's contract is the FOLD's (what it reduces) — so a processor that folds ephemerals
+   *  names them here too, exactly as a live subscriber would. */
+  enableProcessor(
+    name: string,
+    ref: { source: WorkerSource; className: string; consumes?: string[] },
+  ): Promise<{ name: string }> {
+    return this.subscribe({
+      name,
+      target: [
+        "itx",
+        ["load", ref.source],
+        ["getDurableObjectClass", ref.className],
+        ["get", name],
+        "processEventBatch",
+      ],
+      ...(ref.consumes && { consumes: ref.consumes }),
+    });
   }
+
+  /** Disable a processor: unsubscribe it and DELETE its facet, storage included — a re-enable is a
+   *  clean rebuild from the log, never a resume from orphaned state. */
+  async disableProcessor(name: string): Promise<void> {
+    await this.unsubscribe(name);
+    await this.#context.invoke(["itx", "facets", ["delete", name]]);
+  }
+}
+
+/** The one shape check for a live capnweb value: a function, an RpcTarget, or a stub (has dup). */
+function assertLiveValue(target: unknown, where: string): void {
+  if (
+    typeof target !== "function" &&
+    !(target instanceof RpcTarget) &&
+    typeof (target as { dup?: unknown } | null)?.dup !== "function"
+  )
+    throw new TypeError(
+      `${where}: target must be an itx expression (string | array) or a LIVE capnweb value (function | RpcTarget)`,
+    );
 }
 
 // THE NATURAL DOTTED SURFACE. Insert the dynamic-capability fallback into `IterateContext.prototype`'s chain

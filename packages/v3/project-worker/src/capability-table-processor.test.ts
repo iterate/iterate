@@ -1,5 +1,5 @@
 // The capability table's executable spec — shadow stack, built-ins-first, default-deny,
-// recursion, string-at-rest payloads, delivery + processor policies riding the mount event, and
+// recursion, string-at-rest payloads (a mount is `{ path, target }` and nothing else), and
 // the live-capability shape: a mount is PURE DATA naming the `itx.rpcStubs` built-in (the
 // physical registry), so reconnect is zero events and a dead stub leaves its mount offline.
 import { describe, expect, test } from "vitest";
@@ -293,22 +293,5 @@ describe("event mounts + the shadow stack", () => {
     expect(reduceAll().mounts.some((m) => m.path.join(".") === "itx.robot")).toBe(true);
     await host.revoke({ providedAtOffset: provision.providedAtOffset });
     await expect(invoke("itx.robot.move(10)")).rejects.toThrow(/no capability matches/);
-  });
-
-  test("delivery + processor policies ride the mount event and land in the reduced table", async () => {
-    const { host, reduceAll, provideLive } = setup();
-    await provideLive("itx.subscribers.watcher", () => undefined, {
-      delivery: { consumes: ["mark"], liveState: undefined },
-    });
-    await host.provide({
-      path: "itx.subscribers.tally",
-      target: "itx.facets.get('tally')",
-      processor: { className: "Tally" },
-    });
-    const table = reduceAll();
-    const sub = table.mounts.find((m) => m.path.join(".") === "itx.subscribers.watcher")!;
-    const proc = table.mounts.find((m) => m.path.join(".") === "itx.subscribers.tally")!;
-    expect(sub.delivery).toEqual({ consumes: ["mark"] });
-    expect(proc.processor).toEqual({ className: "Tally" });
   });
 });

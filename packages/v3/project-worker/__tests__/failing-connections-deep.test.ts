@@ -6,7 +6,8 @@
 // MOUNT, an ordinary capability-table row naming it (`itx.rpcStubs.get('<path>')` — pure data; it
 // lives until an explicit revoke/unsubscribe and is NEVER auto-revoked when the stub dies). So
 // this file hunts:
-//   • subscribe → unsubscribe disposes the parked stub AND revokes its mount (the explicit exit),
+//   • subscribe → unsubscribe disposes the parked stub AND removes its row (the explicit exit) —
+//     a live subscription is a row of the SUBSCRIPTIONS table, never a capability mount,
 //   • a provide/mount/revoke/subscribe/unsubscribe/disconnect STORM returns PRESENCE to baseline
 //     and leaves behind exactly the disconnected sessions' mounts (offline; revocable from any
 //     session, after which the table is at baseline too),
@@ -17,6 +18,7 @@
 
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { RpcTarget } from "capnweb";
+import { subscriptions } from "../e2e/support/client.ts";
 import { startProjectHarness, type ProjectHarness } from "./harness.ts";
 
 // Unique ctx per test AND per run (local DO storage may outlive one vitest invocation).
@@ -131,24 +133,28 @@ class HangTools extends RpcTarget {
 
 // ── the hunt ──
 
-test("subscribe → unsubscribe disposes the parked stub AND revokes its mount — presence and the table both return to baseline", async () => {
+test("subscribe → unsubscribe disposes the parked stub AND removes its row — presence and the subscriptions table both return to baseline", async () => {
   const ctx = c("unsub-leak");
   const observer = await harness.itx(ctx);
   expect(await presence(observer)).toEqual([]); // baseline: nothing parked
   expect(await liveMountPaths(observer)).toEqual([]); // and nothing mounted
+  expect(await subscriptions(observer)).toEqual([]); // and no rows
 
   const sub = await observer.subscribe({ target: () => undefined });
-  const path = `itx.subscribers.${sub.name}`;
+  const key = `itx.subscriptions.${sub.name}`;
   await until("the parked subscriber has a transport", async () =>
-    (await presence(observer)).includes(path),
+    (await presence(observer)).includes(key),
   );
-  expect(await liveMountPaths(observer)).toEqual([path]); // the mount landed with the (awaited) provide
+  // the ROW landed (awaited configure); a subscription is NOT a capability mount
+  expect((await subscriptions(observer)).map((r) => r.name)).toEqual([sub.name]);
+  expect(await liveMountPaths(observer)).toEqual([]);
 
-  await observer.unsubscribe({ name: sub.name });
+  await observer.unsubscribe(sub.name);
 
-  // unsubscribe = revoke EVERY row at the path (awaited — the table is clean on return) + close
-  // this session's stub under it (the relay's dispose closes the pager; the DO drops the
-  // transport a beat later — poll presence). Two lifetimes, one explicit exit.
+  // unsubscribe = remove the row (awaited — the table is clean on return) + close this session's
+  // stub under it (the relay's dispose closes the pager; the DO drops the transport a beat later —
+  // poll presence). Two lifetimes, one explicit exit.
+  expect(await subscriptions(observer)).toEqual([]);
   expect(await liveMountPaths(observer)).toEqual([]);
   await until(
     "the parked stub gone from presence",
@@ -165,7 +171,7 @@ test("storm of provide/mount/revoke/subscribe/unsubscribe/disconnect: presence r
   for (let i = 0; i < 6; i++) {
     // (a) subscribe then unsubscribe — the parked-stub disposal path (mount + stub both go).
     const sub = await observer.subscribe({ target: () => undefined });
-    await observer.unsubscribe({ name: sub.name });
+    await observer.unsubscribe(sub.name);
     // (b) provide a live cap at a path, then revoke the path — ONE door in, one door out
     //     (revoke-by-PATH pops the mount AND closes this session's stub under it).
     await observer.provide(`itx.cap${i}`, new Tools(`s${i}`));

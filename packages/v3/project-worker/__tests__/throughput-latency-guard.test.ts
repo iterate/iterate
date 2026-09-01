@@ -1,8 +1,9 @@
 // __tests__/throughput-latency-guard.test.ts — THE FAST NO-REGRESSION GUARD for the simplification
 // pass. It is the in-harness twin of proofs/prove_ephemeralflood.mjs (which runs against the live
 // deployment and needs a deploy each time): a producer floods voice-chunk-shaped EPHEMERAL events
-// in batched, pipelined appends while a CONNECTED subscriber receives them one-directionally
-// (fire-and-forget batches over the paged-in hibernatable RPC stub — no acks, no server cursor).
+// in batched, pipelined appends while a LIVE (push) subscriber receives them one-directionally
+// (fire-and-forget batches over the paged-in hibernatable RPC stub — it owns its offset, no
+// server cursor).
 // Producer and subscriber run in THIS process against the real worker booted by the harness, so
 // the measured latency is the FULL path (client → capnweb /api → append+commit → delivery → client).
 //
@@ -32,7 +33,7 @@ afterAll(async () => {
 test("throughput+latency guard: 1000 ephemeral chunks flood through one-directional batched delivery", async () => {
   const itx = await harness.itx(`prj_perf_${Date.now().toString(36)}`);
 
-  // ── the subscriber: a live callback, event mode, named-type opt-in (ephemerals need naming) ──
+  // ── the subscriber: a live callback (a push target), named-type opt-in (ephemerals need naming) ──
   const received: Array<{ seq: number; latencyMs: number }> = [];
   let callbackInvocations = 0;
   let contiguityBroken = false;
@@ -42,14 +43,13 @@ test("throughput+latency guard: 1000 ephemeral chunks flood through one-directio
     consumes: ["chunk"],
     target: (
       events: Array<{ payload: { seq: number; sentAtMs: number } }>,
-      scannedOffsetRange: { scannedAfterOffset: number; scannedThroughOffset: number },
+      range: { after: number; through: number },
     ) => {
       const arrivedAtMs = Date.now();
       callbackInvocations++;
       // Delivered ranges must CHAIN — a gap would be heal-by-pull in a real client; not here.
-      if (lastThrough !== undefined && scannedOffsetRange.scannedAfterOffset !== lastThrough)
-        contiguityBroken = true;
-      lastThrough = scannedOffsetRange.scannedThroughOffset;
+      if (lastThrough !== undefined && range.after !== lastThrough) contiguityBroken = true;
+      lastThrough = range.through;
       for (const e of events)
         received.push({ seq: e.payload.seq, latencyMs: arrivedAtMs - e.payload.sentAtMs });
     },
@@ -94,7 +94,7 @@ test("throughput+latency guard: 1000 ephemeral chunks flood through one-directio
   // ── hard invariants (must never regress) ──
   expect(received.length, "no loss: every chunk delivered").toBe(TOTAL);
   expect(new Set(received.map((r) => r.seq)).size, "no dup: every seq exactly once").toBe(TOTAL);
-  expect(contiguityBroken, "delivered ScannedRanges chain (zero pulls)").toBe(false);
+  expect(contiguityBroken, "delivered ranges chain (zero pulls)").toBe(false);
   expect(callbackInvocations, "batch-first: far fewer callbacks than events").toBeLessThan(TOTAL);
 
   // ── generous floors (compare the printed line for real regressions) ──

@@ -59,22 +59,12 @@ export function disposeSessions(): void {
 
 export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-/** ACTIVE subscriber rows off the capability-table snapshot (newest mount per name wins — the
- *  shadow-stack projection the deleted hostState() used to serve): `[{ name, lane, target, … }]`.
- *  The event-sourced observability door: facet-lane rows ARE the enabled processors; a live
- *  callback's row is an ordinary mount whose `target` names the registry
- *  (`itx.rpcStubs.get('…')`). The table never says who is ONLINE — that is `presence()` below
- *  (transport socket counts stay DO-only — `transportState()`). */
-export async function subscriberMounts(itx: any): Promise<any[]> {
-  const snap: any = await itx.invokeCapability("itx.facets.get('capability-table').snapshot()");
-  const byName = new Map<string, any>();
-  for (const m of snap.state.mounts as any[]) {
-    if (m.path.length !== 3 || m.path[0] !== "itx" || m.path[1] !== "subscribers") continue;
-    const cur = byName.get(m.path[2]);
-    if (!cur || m.providedAtOffset > cur.providedAtOffset)
-      byName.set(m.path[2], { name: m.path[2], ...m });
-  }
-  return [...byName.values()];
+/** The subscriptions table joined with the stream-kept cursors — `itx.subscriptions.list()`, the
+ *  layer's read door: `[{ name, target, consumes?, configuredAtOffset, cursor?, halted? }]`. A
+ *  cursor is present only for a target the stream delivers at-least-once (one that cannot own its
+ *  progress); a processor's row has none (its facet keeps its own checkpoint). */
+export async function subscriptions(itx: any): Promise<any[]> {
+  return (await itx.subscriptions.list()) as any[];
 }
 
 /** PRESENCE — the registry keys with an open transport RIGHT NOW (`itx.rpcStubs.list()`, the
@@ -84,7 +74,7 @@ export async function presence(itx: any): Promise<string[]> {
 }
 
 /** The paths of the table's LIVE MOUNTS — rows whose target names the `itx.rpcStubs` registry.
- *  Pure data: this set does NOT shrink when a provider dies; it shrinks on revoke/unsubscribe. */
+ *  Pure data: this set does NOT shrink when a provider dies; it shrinks on revoke. */
 export async function rpcStubMountPaths(itx: any): Promise<string[]> {
   const snap: any = await itx.invokeCapability("itx.facets.get('capability-table').snapshot()");
   return (snap.state.mounts as { path: string[]; target: unknown }[])
@@ -92,9 +82,11 @@ export async function rpcStubMountPaths(itx: any): Promise<string[]> {
     .map((m) => m.path.join("."));
 }
 
-/** Enabled facet processors = the facet-lane subscriber rows' slugs (a processor IS such a row). */
-export async function facetProcessorSlugs(itx: any): Promise<string[]> {
-  return (await subscriberMounts(itx)).filter((r) => r.lane === "facet").map((r) => r.name);
+/** Enabled processors = subscriptions whose target is a facet's processEventBatch (the load chain). */
+export async function processorNames(itx: any): Promise<string[]> {
+  return (await subscriptions(itx))
+    .filter((s) => /getDurableObjectClass\(.*\)\.get\(.*\)\.processEventBatch$/.test(s.target))
+    .map((s) => s.name);
 }
 
 /** Poll `fn` until it returns a truthy/defined value or time out. Absorbs transient throws (a call

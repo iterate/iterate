@@ -663,7 +663,11 @@ describe("live state (the delta patches on the wire)", () => {
     expect(changes(mem)).toHaveLength(0);
   });
 
-  test("the loop guard: live-state change events are unconsumable, even named", async () => {
+  test("the loop guard: a processor's reduce never sees a live-state delta, even when its contract names the type", async () => {
+    // The refusal lives in the ENGINE (`foldsEvent`), not in `consumesEvent`: naming
+    // `events.iterate.com/live-state/changed` in a SUBSCRIPTION's `consumes` is how a live tab
+    // receives deltas, so `consumesEvent` says yes to a named delta — and the engine still never
+    // folds one (a delta feeding a reduce is the feedback-loop class, made unspellable here).
     const contract3 = defineProcessorContract({
       slug: "sneaky",
       version: "1.0.0",

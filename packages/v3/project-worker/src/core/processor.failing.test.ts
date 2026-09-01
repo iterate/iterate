@@ -641,7 +641,7 @@ describe("ephemeral windows and repair", () => {
         return { n: state.n + 1 };
       }
       liveState(state: { n: number }): unknown {
-        return { n: state.n }; // emits live-state/changed — which even "*"+named must never consume
+        return { n: state.n }; // emits live-state/changed — which the ENGINE never folds, even for "*"+named (foldsEvent, not consumesEvent, is the guard)
       }
     }
     const p = new StarPlus({

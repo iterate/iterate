@@ -4,10 +4,11 @@
 
 import { expect, test } from "vitest";
 import { freshCtx, openItx } from "./support/client.ts";
+import { enableFixtureProcessor } from "./support/sources.ts";
 
 test("facet address: table routing, alias/shadow, barrier verb, probe-resistance", async () => {
   const itx = openItx(freshCtx("addr"));
-  await itx.enableProcessor("tally");
+  await enableFixtureProcessor(itx, "tally");
   await itx.invokeCapability(`itx.append({ type: 'mark' })`);
 
   // 1. a facet method through the SEEDED address

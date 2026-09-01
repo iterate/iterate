@@ -10,41 +10,6 @@ import type { EventDefinition, ProcessorContract } from "./processor.ts";
 import { jsonEqual } from "./patch.ts";
 export { jsonEqual };
 
-/** THE delivery policy — one spelling for every host of it (the subscribe inputs, the provide
- *  payload). Rides the capability-provided event itself, so subscription config is
- *  event-sourced, never silent kv. How a subscription mount is SERVED depends only on its
- *  target's shape:
- *    • CONNECTED target (a LIVE callback provided at the subscription's own path): fire-and-
- *      forget event batches over the paged-in hibernatable RPC stub — no acks, no server
- *      cursor, no retries (the client heals by pull);
- *      `maxAttempts`/`start` are meaningless here and ignored.
- *    • ABSENT target (a webhook, an itx expression): the subscription-forwarder facet holds a
- *      cursor per target and applies the ONE failure policy — bounded retries then HALT with an
- *      audit event; `maxAttempts` bounds the ladder (default 15), `start` places the first
- *      cursor.
- *  `liveState` rows get neither cursor nor ladder — the key's change payloads are forwarded as
- *  they commit and the CLIENT chains revisions through the producer's door (connected targets
- *  only; an absent target has no chain to keep, so it re-seeds through the door instead). */
-export type DeliveryPolicy = {
-  consumes?: string[];
-  maxAttempts?: number;
-  start?: "beginning" | "now";
-  liveState?: { key: string };
-};
-
-/** THE DELIVERY LANE of a subscriber mount (`itx.subscribers.<name>`) — stamped ONCE on the
- *  `capability-provided` event at provide time, then read verbatim wherever the lane matters. It is
- *  a declared fact, NOT re-inferred from the target's shape at each read site (that scattered
- *  target-sniff drifted once and double-delivered). Three genuinely-different behaviors:
- *   • `facet`     — a co-located facet the commit pump drives (a processor; its target is
- *                   `itx.facets.get('<slug>')`).
- *   • `connected` — a live rpc-stub (its target is `itx.rpcStubs.get('<key>')`), served
- *                   fire-and-forget from the commit path (zero server state, so the DO still
- *                   hibernates).
- *   • `durable`   — an absent target (webhook, foreign worker) served by the subscription-forwarder
- *                   facet, which owns the cursor + bounded-retry ladder. */
-export type SubscriptionLane = "facet" | "connected" | "durable";
-
 /** What `append` accepts: the event body, before the stream assigns its committed identity. */
 const EventInputShape = z.strictObject({
   /** Convention: `events.iterate.com/<domain>/<fact>`. */

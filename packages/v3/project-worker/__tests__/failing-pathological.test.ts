@@ -333,9 +333,12 @@ describe("arbitrary-size payloads (row chunking — the apps/os contract)", () =
 
 // ══════════════════════════ 50 processors fan-out on one stream ══════════════════════════
 
+// A userspace processor: a `StreamProcessorDurableObject` (the SDK base, `./processor.js`) hosted
+// as a facet through `itx.load(src).getDurableObjectClass('FanProbe').get(name)` — what
+// `enableProcessor(name, { source, className })` subscribes.
 const FAN_PROCESSOR_SOURCE = /* js */ `
-import { StreamProcessor } from "./processor.js";
-export default class FanProbe extends StreamProcessor {
+import { StreamProcessorDurableObject } from "./processor.js";
+export class FanProbe extends StreamProcessorDurableObject {
   contract = {
     slug: "fan-probe",
     version: "1",
@@ -364,12 +367,15 @@ test("50 userspace processors materialize in the harness; one append fans out to
 
   const enableT0 = performance.now();
   for (let i = 0; i < 50; i++) {
-    await itx.enableProcessor(`fan${i}`, { source: "itx.kv.get('procsrc')", className: "default" });
+    await itx.enableProcessor(`fan${i}`, {
+      source: "itx.kv.get('procsrc')",
+      className: "FanProbe",
+    });
   }
   const enableMs = performance.now() - enableT0;
   console.log(`[fan-out] enabled 50 userspace processors in ${enableMs.toFixed(0)}ms`);
 
-  // ONE append → the pump drives all 50 facets.
+  // ONE append → the delivery loop pushes all 50 facets.
   const t0 = performance.now();
   const [marker] = await itx.invokeCapability(["itx", ["append", { type: "fanout-marker" }]]);
 
@@ -392,7 +398,7 @@ test("50 userspace processors materialize in the harness; one append fans out to
   );
 
   // Sanity: a mid-pack processor really reduced the log (each enable event + the marker).
-  const snap = await itx.invokeCapability(`itx.subscribers.fan7.snapshot()`);
+  const snap = await itx.invokeCapability(`itx.facets.get('fan7').snapshot()`);
   expect(snap.offset).toBeGreaterThanOrEqual(marker.offset);
   expect((snap.state as { n: number }).n).toBeGreaterThan(0);
 
@@ -400,10 +406,10 @@ test("50 userspace processors materialize in the harness; one append fans out to
   expect(whoMs, `whoami during fan-out ${whoMs.toFixed(1)}ms`).toBeLessThan(1500);
 }, 240_000);
 
-test("50 CONNECTED live subscribers: one append fans out to all 50 in <5s and the stream stays responsive (the loader-free fan-out lane)", async () => {
+test("50 LIVE push subscribers: one append fans out to all 50 in <5s and the stream stays responsive (the loader-free fan-out)", async () => {
   // The commit-path half of the fan-out story (the loader half now runs too — see the fan-out
-  // test above): 50 live capnweb callbacks parked as ItxConnections, delivered fire-and-forget
-  // from the commit path. Wall time = append → the LAST subscriber sees the marker.
+  // test above): 50 live capnweb callbacks parked in `itx.rpcStubs`, pushed fire-and-forget from
+  // the commit path. Wall time = append → the LAST subscriber sees the marker.
   const itx = await harness.itx("prj_path_subfan");
   const timers: ReturnType<typeof setTimeout>[] = [];
   const waiters: Promise<number>[] = [];
@@ -421,8 +427,8 @@ test("50 CONNECTED live subscribers: one append fans out to all 50 in <5s and th
         );
       }),
     );
-    // A live function target: parked as an anonymous ItxConnection, served on the connected
-    // lane — each committed batch arrives as (events, scannedOffsetRange).
+    // A live function target: parked under `itx.subscriptions.<name>`, a push target (it owns its
+    // offset) — each committed batch arrives as (events, { after, through }).
     const target = (events: { type: string }[], _range: unknown) => {
       if (events.some((e) => e.type === "sub-fanout-marker")) sawMarker(performance.now());
     };

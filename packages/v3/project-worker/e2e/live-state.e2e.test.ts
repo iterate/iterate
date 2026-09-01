@@ -1,14 +1,17 @@
 // live-state.e2e.test.ts — LIVE STATE, client-chained (the owner's simplification): each change event
 // says "I am the diff relative to rev X"; the stream is a PURE FORWARDER (no per-row server state).
-// The client does: subscribe → read the producer's door {rev, state} → apply payloads whose `from`
-// matches its rev, re-read the door on any mismatch. Proves: the client loop converges byte-identical
-// with the door, the steady path needs zero re-reads, revisions chain exactly (mini-app AND processor
-// flavors), out-of-order/duplicate frames are harmless, and the change events are unconsumable.
+// Live state is not a subscription MODE: a client subscribes to the one event type
+// (`consumes: ["events.iterate.com/live-state/changed"]`), receives every key's deltas in ordinary
+// event batches, and keeps its key (`deltasFor`). The client does: subscribe → read the producer's
+// door {rev, state} → apply payloads whose `from` matches its rev, re-read the door on any mismatch.
+// Proves: the client loop converges byte-identical with the door, the steady path needs zero
+// re-reads, revisions chain exactly (mini-app AND processor flavors), out-of-order/duplicate frames
+// are harmless, and the change events are unconsumable.
 // (was proofs/prove_livestate.mjs)
 
 import { expect, test } from "vitest";
 import { freshCtx, openItx, until } from "./support/client.ts";
-import { liveClient, type Delta } from "./support/live-client.ts";
+import { deltasFor, LIVE_STATE_CHANGED, liveClient } from "./support/live-client.ts";
 import { seedSources } from "./support/sources.ts";
 
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
@@ -17,7 +20,7 @@ test("live state chains client-side from the door — mini-app + processor flavo
   const itx = openItx(freshCtx("live"));
   await seedSources(itx, ["chatroom", "chunky"]);
 
-  // ── mini-app flavor: the chatroom (SDK liveState helper) ──
+  // ── mini-app flavor: the chatroom (SDK LiveState helper) ──
   await itx.provide(
     "itx.chat",
     `itx.load("itx.kv.get('src/chatroom.js')").getDurableObjectClass('Chatroom').get()`,
@@ -26,8 +29,8 @@ test("live state chains client-side from the door — mini-app + processor flavo
   const chat = liveClient(async () => clone(await itx.invokeCapability("itx.chat.state()")));
   await itx.subscribe({
     name: "chatwatch",
-    liveState: { key: "chat" },
-    target: (u: unknown) => chat.consume(clone(u) as Delta),
+    target: deltasFor(chat, "chat"),
+    consumes: [LIVE_STATE_CHANGED],
   });
   await chat.seed();
   const chatSeedRev = chat.rev!; // an incarnation EPOCH, not 0 — reborn holders never re-use old revs
@@ -74,8 +77,8 @@ test("live state chains client-side from the door — mini-app + processor flavo
   );
   await itx.subscribe({
     name: "chunkywatch",
-    liveState: { key: "chunky" },
-    target: (u: unknown) => proc.consume(clone(u) as Delta),
+    target: deltasFor(proc, "chunky"),
+    consumes: [LIVE_STATE_CHANGED],
   });
   await proc.seed();
   const seedRev = proc.rev!;

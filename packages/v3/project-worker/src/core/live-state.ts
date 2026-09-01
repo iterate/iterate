@@ -25,8 +25,9 @@ import { diff } from "./patch.ts";
 // THE one live-state change type is the literal "events.iterate.com/live-state/changed" — ephemeral,
 // payload `{key, from, to, patch}`: the delta patch rides the event (LiveView-style), chained by
 // producer-owned revisions (`from` = the previous emission's `to`). HARD RULE: no processor can ever
-// consume it (consumesEvent refuses it before contracts are consulted), so state-change
+// FOLD it (the engine's `foldsEvent` refuses it before contracts are consulted), so state-change
 // notifications can never feed a reduce — the feedback-loop class is unspellable, not discouraged.
+// A SUBSCRIPTION may name the type to watch live state; that is delivery, not a fold.
 
 /** The only thing a LiveState needs from its host: somewhere to append the delta. Both a
  *  `ProcessorStream` (`this.stream`) and the itx scope (`env.ITX`) satisfy it — the shape is the

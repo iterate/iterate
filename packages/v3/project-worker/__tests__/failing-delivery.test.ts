@@ -1,8 +1,14 @@
-// __tests__/failing-delivery.test.ts — BUG HUNT over the two subscription delivery lanes:
-//   • CONNECTED lane: stream-durable-object.ts #deliverToConnectedSubscriptions (fire-and-forget
-//     batches + the #subscriptionDeliveredThrough watermark, ranges must CHAIN);
-//   • ABSENT/FORWARDER lane: subscription-forwarder-processor.ts (per-row cursor, the ONE
-//     bounded-retry-then-halt policy, subscription-resumed cursor surgery).
+// __tests__/failing-delivery.test.ts — BUG HUNT over THE ONE subscription delivery loop
+// (src/subscription-delivery.ts). Nothing is declared: the loop evaluates each subscription's
+// target and looks at the value —
+//   • a LIVE STUB (`itx.rpcStubs.get(…)`, what `subscribe({ target: fn })` parks) or a FACET OWNS
+//     ITS PROGRESS ⇒ a fire-and-forget PUSH of `(events, { after, through })`, ranges must CHAIN,
+//     the client heals a gap with `read`; no cursor row;
+//   • anything else — here a Worker-Loader entrypoint's `processEventBatch` — cannot ⇒ THE STREAM
+//     KEEPS A CURSOR (`itx.subscriptions.get(name).cursor`), at-least-once, the awaited call is the
+//     ack, one ladder (1s·2ⁿ ≤ 30min, 15 attempts; `retryable: false` halts at once) then the
+//     `subscription-delivery-halted` FACT; recovery is the operator's ONE event,
+//     `subscription-delivery-resumed { name, afterOffset? }`, a plain append.
 //
 // Every test asserts CORRECT behavior. `test.fails` marks behavior VERIFIED BROKEN by running
 // against the real worker (wrangler createTestHarness) — each carries BUG/EXPECTED/ACTUAL/WHY.
@@ -10,8 +16,9 @@
 
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
-import { newWebSocketRpcSession } from "capnweb";
+import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { afterAll, beforeAll, expect, test } from "vitest";
+import { seedSources } from "../e2e/support/sources.ts";
 import { startProjectHarness, type ProjectHarness } from "./harness.ts";
 
 let harness: ProjectHarness;
@@ -43,29 +50,21 @@ const settle = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 type Range = { after: number; through: number };
 
-/** ACTIVE subscriber rows off the capability-table snapshot (newest mount per name wins — the
- *  shadow-stack projection fan-out delivers to). A row is PURE DATA: a connected row's `target`
- *  names the `itx.rpcStubs` built-in (`itx.rpcStubs.get('itx.subscribers.<name>')`) and says
- *  nothing about whether that stub is online — PRESENCE is `itx.rpcStubs.list()` (the physical
- *  registry, below); the raw socket census is DO-only (`transportState()`, off this lane). */
-async function subscriberRows(itx: any): Promise<any[]> {
-  const snap: any = await itx.invokeCapability("itx.facets.get('capability-table').snapshot()");
-  const byName = new Map<string, any>();
-  for (const m of snap.state.mounts as any[]) {
-    if (m.path.length !== 3 || m.path[0] !== "itx" || m.path[1] !== "subscribers") continue;
-    const cur = byName.get(m.path[2]);
-    if (!cur || m.providedAtOffset > cur.providedAtOffset)
-      byName.set(m.path[2], { name: m.path[2], ...m });
-  }
-  return [...byName.values()];
-}
-/** Enabled facet processors = the facet-lane subscriber rows (a processor IS such a row). */
-const facetProcessorSlugs = async (itx: any): Promise<string[]> =>
-  (await subscriberRows(itx)).filter((r) => r.lane === "facet").map((r) => r.name);
+const CONFIGURED = "events.iterate.com/stream/subscription-configured";
+const HALTED = "events.iterate.com/stream/subscription-delivery-halted";
+const RESUMED = "events.iterate.com/stream/subscription-delivery-resumed";
+
+/** The subscriptions table joined with the stream-kept cursors (`itx.subscriptions.list()`): a row
+ *  is PURE DATA — `{ name, target, consumes?, configuredAtOffset, cursor?, halted? }`. A live
+ *  subscriber's target names the registry (`itx.rpcStubs.get('itx.subscriptions.<name>')`) and says
+ *  nothing about whether that stub is online — PRESENCE is `itx.rpcStubs.list()`. `cursor` is
+ *  present ONLY for a target the stream delivers at-least-once. */
+const rows = async (itx: any): Promise<any[]> => (await itx.subscriptions.list()) as any[];
+const row = async (itx: any, name: string): Promise<any> => itx.subscriptions.get(name);
 
 /** A subscriber callback that records every invocation (deep-cloned — capnweb payloads must not
- *  be read after the callback's turn). Works verbatim on BOTH lanes: connected targets get it
- *  directly, absent targets reach it through a parked live-capability alias (mountHook). */
+ *  be read after the callback's turn). Works verbatim on BOTH kinds of target: a push target gets
+ *  it directly; a cursor target reaches it through the hooked worker below. */
 function collector() {
   const invocations: { events: any[]; range: Range }[] = [];
   return {
@@ -84,36 +83,90 @@ const readAll = async (itx: any): Promise<any[]> =>
   (await itx.invokeCapability(["itx", ["read", 0, 500]])).events;
 /** PRESENCE — the keys with an open transport right now (`itx.rpcStubs.list()`). */
 const presence = async (itx: any): Promise<string[]> => (await itx.rpcStubs.list()) as string[];
-/** Every table row at exactly `path` (the raw shadow stack — no winner projection). */
-async function mountRowsAt(itx: any, path: string): Promise<any[]> {
-  const snap: any = await itx.invokeCapability("itx.facets.get('capability-table').snapshot()");
-  return (snap.state.mounts as any[]).filter((m) => (m.path as string[]).join(".") === path);
-}
-/** How many `capability-provided` events the durable log holds at `path` — the "re-providing an
- *  identical mount appends NOTHING" instrument. */
-const providedEventsAt = async (itx: any, path: string): Promise<number> =>
-  (await readAll(itx)).filter(
-    (e) =>
-      e.type === "events.iterate.com/capability-table/capability-provided" &&
-      e.payload?.path === path,
-  ).length;
+/** How many `subscription-configured` events the durable log holds for `name` — the "an identical
+ *  re-subscribe appends NOTHING" instrument. */
+const configuredEventsFor = async (itx: any, name: string): Promise<number> =>
+  (await readAll(itx)).filter((e) => e.type === CONFIGURED && e.payload?.name === name).length;
+const haltFactsFor = async (itx: any, name: string): Promise<any[]> =>
+  (await readAll(itx)).filter((e) => e.type === HALTED && e.payload?.name === name);
 
 // Client-side sessions retained for the whole file so nothing disposes a parked callback while
-// a test still needs it (a live mount's transport dies with its providing session).
+// a test still needs it (a live subscriber's transport dies with its providing session).
 const keep: unknown[] = [];
 
-/** Mount a live callback at `itx.<name>` and return the PATH — the subscription then names the
- *  path string, an ABSENT target expression from the subscription lane's point of view (NOT the
- *  live callback itself), so it rides the subscription-forwarder facet, yet each delivery still
- *  calls back into this test process through the path's live mount. */
-async function mountHook(itx: any, name: string, fn: (...args: any[]) => unknown): Promise<string> {
-  await itx.provide(`itx.${name}`, fn);
-  return `itx.${name}`;
+// ── the CURSOR-LANE rig: a stateless project worker whose deliveries land in this process ──
+
+/** The stateless "project worker" shape whose progress THE STREAM must keep (a Worker-Loader
+ *  entrypoint cannot own it): its `processEventBatch(events, range)` hands the batch to a LIVE hook
+ *  the test mounted at `itx.<hook>`, so the collector sees exactly what the cursor lane delivered
+ *  (offsets, ranges, attempts) and a hook that throws makes the awaited delivery FAIL — a plain
+ *  throw, the ladder's case (the never-retryable case is the `digest` fixture's poison). Source is
+ *  kv like every other loaded module (e2e/support/sources.ts). */
+const HOOKED_SOURCE = (hook: string) => `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class Hooked extends WorkerEntrypoint {
+  async processEventBatch(events, range) {
+    const itx = await this.env.ITX.get();
+    return await itx.${hook}.deliver(events, range);
+  }
+}`;
+class Hook extends RpcTarget {
+  readonly #fn: (events: any[], range: Range) => unknown;
+  constructor(fn: (events: any[], range: Range) => unknown) {
+    super();
+    this.#fn = fn;
+  }
+  deliver(events: any[], range: Range): unknown {
+    return this.#fn(events, range);
+  }
+}
+/** Subscribe `name` on the CURSOR lane: park the live hook at `itx.<name>Hook`, seed + mount the
+ *  hooked worker at `itx.<name>Worker`, subscribe its `processEventBatch` BY EXPRESSION (an
+ *  entrypoint handle ⇒ the stream keeps the cursor). Names are one JS identifier. */
+async function cursorSubscribe(
+  itx: any,
+  name: string,
+  fn: (events: any[], range: Range) => unknown,
+  consumes?: string[],
+): Promise<void> {
+  const hook = `${name}Hook`;
+  await itx.provide(`itx.${hook}`, new Hook(fn));
+  await itx.invokeCapability(["itx", "kv", ["put", `src/${hook}.js`, HOOKED_SOURCE(hook)]]);
+  await itx.provide(
+    `itx.${name}Worker`,
+    `itx.load("itx.kv.get('src/${hook}.js')").getEntrypoint()`,
+  );
+  await itx.subscribe({
+    name,
+    target: `itx.${name}Worker.processEventBatch`,
+    ...(consumes && { consumes }),
+  });
+}
+/** The `digest` fixture (e2e/support/sources.ts) on the cursor lane: counts delivered events into
+ *  kv `digested`; a `payload.poison` mark makes it throw `retryable: false` — the halt-NOW case. */
+async function digestSubscribe(itx: any, name: string, consumes?: string[]): Promise<void> {
+  await seedSources(itx, ["digest"]);
+  await itx.provide("itx.digest", `itx.load("itx.kv.get('src/digest.js')").getEntrypoint()`);
+  await itx.subscribe({
+    name,
+    target: "itx.digest.processEventBatch",
+    ...(consumes && { consumes }),
+  });
+}
+const digested = async (itx: any): Promise<number> =>
+  Number((await itx.invokeCapability(["itx", "kv", ["get", "digested"]])) ?? 0);
+/** Run a cursor-lane scenario and ALWAYS unsubscribe its rows afterwards — a removed row stops its
+ *  pump, so one test's deliveries (a ladder retry, a held delivery) never outlive the test. */
+async function withCursorRows(itx: any, names: string[], body: () => Promise<void>): Promise<void> {
+  try {
+    await body();
+  } finally {
+    for (const name of names) await itx.unsubscribe(name).catch(() => undefined);
+  }
 }
 
-// ─────────────────────────────── CONNECTED LANE ───────────────────────────────
+// ─────────────────────────────── PUSH: a live callback owns its progress ───────────────────────────────
 
-test("connected lane: delivered ranges CHAIN across a consumes-filtered quiet gap", async () => {
+test("push: delivered ranges CHAIN across a consumes-filtered quiet gap", async () => {
   const itx = await harness.itx("prj_fd_chain");
   const c = collector();
   await itx.subscribe({ name: "chain", consumes: ["hit"], target: c.fn });
@@ -134,7 +187,7 @@ test("connected lane: delivered ranges CHAIN across a consumes-filtered quiet ga
   expect(d2.range.through).toBe(hit2.offset);
 });
 
-test("connected lane: consumes naming an ephemeral type opts in; the consumes-less default excludes ephemerals", async () => {
+test("push: consumes naming an ephemeral type opts in; the consumes-less default excludes ephemerals", async () => {
   const itx = await harness.itx("prj_fd_eph");
   const optedIn = collector(); // names the ephemeral type — must receive it
   const dflt = collector(); // no consumes — durable events only
@@ -145,23 +198,16 @@ test("connected lane: consumes naming an ephemeral type opts in; the consumes-le
   await until("opted-in got the ephemeral", () => optedIn.offsets().includes(chunk.offset));
   await until("default got the durable", () => dflt.offsets().includes(note.offset));
   await settle(300);
-  // the filter is exact: the opted-in row saw ONLY its named type; the default row NEVER saw
-  // the ephemeral (ephemerals must be named to be delivered — same rule as processors)
+  // the filter is exact (the ONE consumes rule, consumesEvent): the opted-in row saw ONLY its
+  // named type; the default row NEVER saw the ephemeral (ephemerals must be named to be delivered)
   expect(optedIn.types()).toEqual(["chunk"]);
   expect(dflt.types()).not.toContain("chunk");
 });
 
-test("FIXED (defect 10): consumes ['*'] delivers every durable event on the connected lane", async () => {
-  // BUG: #deliverToConnectedSubscriptions filters with `row.consumes.includes(e.type)` — the
-  //   "*" wildcard is treated as a literal type name and matches nothing.
-  // EXPECTED: the lane's own comment says the consumes filter is "the processor consumes rule,
-  //   mirrored", and that rule (core/processor.ts #consumes) reads `consumes.includes("*") ||
-  //   consumes.includes(e.type)` for durable events — so consumes:["*"] must deliver every
-  //   durable event, exactly like omitting consumes.
-  // ACTUAL: a subscriber with consumes:["*"] receives zero deliveries, forever, silently.
-  // WHY IT MATTERS: "*" is the standard spelling everywhere else in this codebase (tally,
-  //   user-tally, every apps/os processor) — porting that spelling into a subscription produces
-  //   a silently-dead subscription with no error anywhere.
+test("FIXED (defect 10): consumes ['*'] delivers every durable event to a push target", async () => {
+  // WAS-BUG: the connected lane filtered with `row.consumes.includes(e.type)` — "*" was a literal
+  //   type name and matched nothing: a silently-dead subscription with no error anywhere.
+  // NOW: one rule for every target — `consumesEvent` (core/processor.ts): "*" = every durable event.
   const itx = await harness.itx("prj_fd_star_conn");
   const star = collector();
   const control = collector();
@@ -173,45 +219,49 @@ test("FIXED (defect 10): consumes ['*'] delivers every durable event on the conn
   expect(star.offsets()).toContain(note.offset);
 });
 
-test("connected lane: unsubscribe stops deliveries at the revoke offset", async () => {
+test("push: unsubscribe stops deliveries at the removal offset", async () => {
   const itx = await harness.itx("prj_fd_bye");
   const c = collector();
   await itx.subscribe({ name: "bye", consumes: ["mark"], target: c.fn });
   const [m1] = await append(itx, { type: "mark" });
   const [m2] = await append(itx, { type: "mark" });
-  await until("both pre-revoke marks", () => c.offsets().length >= 2);
-  await itx.unsubscribe({ name: "bye" });
+  await until("both pre-removal marks", () => c.offsets().length >= 2);
+  await itx.unsubscribe("bye");
   await append(itx, { type: "mark" });
   await append(itx, { type: "mark" });
   await settle(600);
-  // nothing at or beyond the revoke offset may arrive — the mount died inside the revoke commit
+  // nothing at or beyond the removal offset may arrive — the row died inside the removal commit
   expect([...c.offsets()].sort((a, b) => a - b)).toEqual([m1.offset, m2.offset]);
+  expect(await row(itx, "bye")).toBeNull();
 });
 
-test("connected lane: re-subscribing the same name REPLACES — the old callback's transport is dropped and it stops receiving; the log does not grow", async () => {
+test("push: re-subscribing the same name REPLACES — the old callback's transport is dropped and it stops receiving; the log does not grow", async () => {
   const itx = await harness.itx("prj_fd_shadow");
   const a = collector();
   const b = collector();
   await itx.subscribe({ name: "dup", consumes: ["mark"], target: a.fn });
-  const providedBefore = await providedEventsAt(itx, "itx.subscribers.dup");
+  const configuredBefore = await configuredEventsFor(itx, "dup");
   await itx.subscribe({ name: "dup", consumes: ["mark"], target: b.fn }); // replaces a's transport
   const [m] = await append(itx, { type: "mark" });
-  await until("the replacing row delivered", () => b.offsets().includes(m.offset));
+  await until("the replacing callback delivered", () => b.offsets().includes(m.offset));
   await settle(400);
   expect(b.offsets()).toEqual([m.offset]);
   // the replaced callback is dead for delivery: the re-subscribe re-parked under the SAME key
-  // (`itx.subscribers.dup` — the session's Parking disposes the incumbent relay, and the DO drops
-  // the old transport "replaced" when the new pager opens), so a's stub has no transport left
+  // (`itx.subscriptions.dup` — the session's Parking disposes the incumbent relay, and the DO
+  // drops the old transport "replaced" when the new pager opens), so a's stub has no transport left
   expect(a.offsets()).toEqual([]);
-  // ...and the MOUNT was untouched: same path, same target `itx.rpcStubs.get('itx.subscribers.dup')`,
-  // same policy ⇒ the provide door found its own identical winner and appended NOTHING — one row
-  // at the path, the log unchanged (a CHANGED policy would shadow instead; fan-out delivers to the
-  // winner either way).
-  expect(await providedEventsAt(itx, "itx.subscribers.dup")).toBe(providedBefore);
-  expect(await mountRowsAt(itx, "itx.subscribers.dup")).toHaveLength(1);
+  // ...and the ROW was untouched: same name, same target `itx.rpcStubs.get('itx.subscriptions.dup')`,
+  // same consumes ⇒ the configure door found its own identical row and appended NOTHING — one row
+  // for the name (there is no shadow stack: same name REPLACES), the log unchanged.
+  expect(await configuredEventsFor(itx, "dup")).toBe(configuredBefore);
+  const dup = await row(itx, "dup");
+  expect(dup.target).toBe("itx.rpcStubs.get('itx.subscriptions.dup')");
+  expect(dup.cursor).toBeUndefined(); // a push target: the client owns its offset
+  expect((await rows(itx)).filter((r) => r.name === "dup")).toHaveLength(1);
+  expect((await presence(itx)).filter((k) => k === "itx.subscriptions.dup")).toHaveLength(1);
 });
 
-test("connected lane: a throwing subscriber callback never hurts the producer and is never retried", async () => {
+test("push: a throwing subscriber callback never hurts the producer and is never retried", async () => {
   const itx = await harness.itx("prj_fd_thrower");
   let throws = 0;
   const witness = collector();
@@ -231,265 +281,367 @@ test("connected lane: a throwing subscriber callback never hurts the producer an
   await settle(700); // a retry storm would keep incrementing
   expect(throws).toBe(2); // exactly one offer per batch — fire-and-forget means no ladder here
   expect([...witness.offsets()].sort((a, b) => a - b)).toEqual([m1.offset, m2.offset]);
+  expect((await row(itx, "thrower")).cursor).toBeUndefined(); // no cursor, so nothing to halt
 });
 
-// ─────────────────────────────── FORWARDER LANE ───────────────────────────────
+// ─────────────────────────────── CURSOR: the stream keeps the offset ───────────────────────────────
 
-test("FIXED (defect 11): consumes ['*'] delivers every durable event on the forwarder lane", async () => {
-  // BUG: the pump filters with `page.events.filter((e) => row.consumes!.includes(e.type))`
-  //   (subscription-forwarder-processor.ts) — "*" is a literal there too; every page is
-  //   "everything filtered", the cursor silently confirms through and nothing ever delivers.
-  // EXPECTED: consumes:["*"] behaves like the processor consumes rule — every durable event.
-  // ACTUAL: zero deliveries, cursor advances silently, no halt, no error — the worst failure
-  //   shape (the mount row looks healthy while dropping everything).
-  // WHY IT MATTERS: same spelling trap as the connected lane, but here it also LOOKS alive:
-  //   the row pumps, confirms offsets, and never calls the target once.
-  const itx = await harness.itx("prj_fd_star_fwd");
+// FIXED (cursor ack, 2026-09-01): a cursor subscription's FIRST delivery used to redeliver in a hot
+// loop (~800/s, measured here) — the row was not seeded before the first call, so the generation
+// check read "no row" as "removed" and looped without acking; the halt path sat behind the same
+// check. The cursor is now born in memory at `configuredAtOffset` before the first call. Every test
+// in this section drove that fix; `withCursorRows` still removes its rows afterwards (hygiene: a
+// removed row stops its pump, so one test's traffic never outlives it).
+
+test("cursor: consumes ['*'] delivers every durable event; the row carries a cursor at `through` with the ladder idle", async () => {
+  const itx = await harness.itx("prj_fd_star_cur");
   const star = collector();
   const control = collector();
-  const starHook = await mountHook(itx, "starHook", star.fn);
-  const controlHook = await mountHook(itx, "controlHook", control.fn);
-  await itx.subscribe({ name: "star", consumes: ["*"], target: starHook });
-  await itx.subscribe({ name: "control", consumes: ["note"], target: controlHook });
-  const [note] = await append(itx, { type: "note" });
-  await until("control got it (the lane works)", () => control.offsets().includes(note.offset));
-  await settle(400);
-  expect(star.offsets()).toContain(note.offset);
-});
-
-test("forwarder lane: ephemeral events NEVER deliver to absent targets, even when consumes names the type", async () => {
-  // CONTRACT PIN (decided — document, don't reject): the forwarder pump reads DURABLE rows only,
-  // so an absent-target subscription never sees an ephemeral instance of a type its consumes
-  // names — while a durable instance of the SAME type delivers normally. Subscribe cannot warn
-  // at mount time: ephemerality is per-EVENT, not per-type, so consumes:["blip"] is a perfectly
-  // valid spelling that simply filters whatever durable "blip"s exist. (Contrast the connected
-  // lane above, where naming the type is exactly how a subscriber opts IN to ephemerals.)
-  const itx = await harness.itx("prj_fd_eph_fwd");
-  const c = collector();
-  const hook = await mountHook(itx, "ephFwdHook", c.fn);
-  await itx.subscribe({ name: "eph-fwd", consumes: ["blip"], target: hook });
-  const [eph] = await append(itx, { type: "blip", ephemeral: true, payload: { kind: "eph" } });
-  await settle(800); // bounded negative wait — the pump gets ample time to (not) deliver
-  expect(c.invocations).toEqual([]);
-  const [durable] = await append(itx, { type: "blip", payload: { kind: "durable" } });
-  // the durable delivery is also the barrier: the pump has now confirmed PAST the ephemeral
-  await until("the durable blip delivers", () => c.offsets().includes(durable.offset));
-  await settle(300);
-  expect(c.offsets()).toEqual([durable.offset]); // exactly the durable instance, nothing else
-  expect(c.offsets()).not.toContain(eph.offset);
-});
-
-test("forwarder: maxAttempts 1 halts after exactly ONE attempt, leaves the audit fact, and stays halted", async () => {
-  const itx = await harness.itx("prj_fd_halt1");
-  let attempts = 0;
-  const hook = await mountHook(itx, "haltHook", () => {
-    attempts++;
-    throw new Error("target down");
+  await withCursorRows(itx, ["star", "control"], async () => {
+    await cursorSubscribe(itx, "star", star.fn, ["*"]);
+    await cursorSubscribe(itx, "control", control.fn, ["note"]);
+    const [note] = await append(itx, { type: "note" });
+    await until(
+      "control got it (the lane works)",
+      () => control.offsets().includes(note.offset),
+      8_000,
+    );
+    await until("star got it", () => star.offsets().includes(note.offset), 8_000);
+    await settle(500);
+    expect(control.offsets()).toEqual([note.offset]); // exactly once — the awaited call was the ack
+    expect(star.offsets().filter((o) => o === note.offset)).toHaveLength(1);
+    // the stream keeps their cursors: at/after the note, attempt 0, no retry armed, not halted
+    for (const name of ["star", "control"]) {
+      const r = await until(
+        `${name} row confirmed past the note`,
+        async () => {
+          const r = await row(itx, name);
+          return r?.cursor && r.cursor.confirmedOffset >= note.offset ? r : undefined;
+        },
+        8_000,
+      );
+      expect(r.cursor.attempt).toBe(0);
+      expect(r.cursor.nextAttemptAtMs).toBeUndefined();
+      expect(r.halted).toBeUndefined();
+    }
   });
-  await itx.subscribe({ name: "halty", target: hook, consumes: ["mark"], maxAttempts: 1 });
-  await append(itx, { type: "mark" });
-  const halt = await until("halt audit fact on the stream", async () =>
-    (await readAll(itx)).find(
-      (e) =>
-        e.type === "events.iterate.com/stream/subscription-delivery-halted" &&
-        e.payload?.name === "halty",
-    ),
-  );
-  expect(halt.payload.reason).toMatch(/1 delivery attempts failed/);
-  expect(attempts).toBe(1); // the ladder burned exactly one attempt before halting
-  await append(itx, { type: "mark" }); // fresh traffic must not resurrect a halted row
-  await settle(800);
-  expect(attempts).toBe(1);
 });
 
-test("forwarder: resume errors are loud and matchable (unknown name; connected rows have no cursor)", async () => {
-  const itx = await harness.itx("prj_fd_resumeerr");
-  await expect(itx.resumeSubscription({ name: "never-was" })).rejects.toThrow(
-    /no subscription "never-was"/,
-  );
+test("cursor: ephemerals DO reach a caught-up cursor target (they ride the pushed batch, never the log) — including a FRESH row's first batch after unrelated commits", async () => {
+  // (Replaces the deleted "ephemerals never deliver to absent targets" pin: the old forwarder read
+  // DURABLE rows only. The one loop remembers the freshest pushed batch per cursor subscription and
+  // hands it over when the cursor is contiguous with it — so a caught-up cursor target sees the
+  // ephemerals it named; only a target that is BEHIND (repairing from the log) misses them.)
+  // BUG (subscription-delivery.ts onCommit): a FRESH row's first delivered range starts at
+  //   `#deliveredThrough.get(name) ?? scannedAfterOffset` — the watermark is unset until the first
+  //   delivery, so `after` is the CURRENT commit's scannedAfterOffset. Any filtered commit between
+  //   the configuration and the first consumed batch (an unrelated event; in practice the
+  //   subscriber's own `rpc-stub/attached` presence ephemeral landing a beat after subscribe) moves
+  //   it past `configuredAtOffset`, so #pump finds `pushed.after !== row.confirmedOffset`, treats the
+  //   caught-up row as BEHIND, reads the log instead — and the ephemerals in that first batch are
+  //   silently dropped (durables still arrive, from the log).
+  // EXPECTED: "caught up" means no CONSUMED event is outstanding; the first pushed batch is
+  //   contiguous with a fresh row, ephemerals included. Candidate fix: seed the watermark at the
+  //   configured commit — onCommit already walks `fresh` for `subscription-removed`; on a
+  //   `subscription-configured` set `#deliveredThrough[name] = event.offset` (the post-eviction
+  //   fallback stays `scannedAfterOffset`, where "behind" is honest).
+  // ACTUAL: the ephemeral blip never reaches the hooked worker; the cursor confirms past it from an
+  //   empty log page.
+  // WHY IT MATTERS: a stateless worker that names an ephemeral type (voice chunks, presence) loses
+  //   the first batch after every subscribe whenever anything else committed in between — the
+  //   design's one ephemeral promise for cursor targets, broken exactly at the start.
+  const itx = await harness.itx("prj_fd_eph_cur");
+  const c = collector();
+  await withCursorRows(itx, ["ephcur"], async () => {
+    await cursorSubscribe(itx, "ephcur", c.fn, ["blip"]);
+    await append(itx, { type: "unrelated" }); // a filtered durable commit — the row is still caught up
+    const [eph] = await append(itx, { type: "blip", ephemeral: true, payload: { kind: "eph" } });
+    await until("the ephemeral blip delivers", () => c.offsets().includes(eph.offset), 8_000);
+    const [durable] = await append(itx, { type: "blip", payload: { kind: "durable" } });
+    await until("the durable blip delivers", () => c.offsets().includes(durable.offset), 8_000);
+    await settle(400);
+    expect(c.offsets()).toEqual([eph.offset, durable.offset]); // both, once each, in order
+    // ranges chain across the two deliveries exactly like a push subscriber's
+    expect(c.invocations[1].range.after).toBe(c.invocations[0].range.through);
+    // the cursor stands at the durable head (an ephemeral-only batch advances it in memory only)
+    expect((await row(itx, "ephcur")).cursor.confirmedOffset).toBe(durable.offset);
+  });
+});
+
+test("cursor: retryable:false HALTS after exactly ONE attempt, leaves the halted FACT, marks the row, and stays halted under fresh traffic", async () => {
+  // (Replaces the deleted `maxAttempts: 1` pin: there is no knob — the ladder is fixed at 15; the
+  // one way to halt NOW is the stamped flag, honored over an invented taxonomy.)
+  const itx = await harness.itx("prj_fd_halt");
+  await withCursorRows(itx, ["digest"], async () => {
+    await digestSubscribe(itx, "digest", ["mark"]);
+    const [good] = await append(itx, { type: "mark" });
+    await until("the good mark digested", async () => (await digested(itx)) === 1, 8_000);
+    const [poison] = await append(itx, { type: "mark", payload: { poison: true } });
+    const halted = await until("row halted", async () => (await row(itx, "digest"))?.halted, 8_000);
+    expect(halted.attempts).toBe(1); // retryable: false → one attempt, not fifteen
+    expect(halted.error).toMatch(/poison/);
+    expect(halted.afterOffset).toBeGreaterThanOrEqual(good.offset); // the cursor stood after the good mark…
+    expect(halted.afterOffset).toBeLessThan(poison.offset); // …and before the poison
+    const facts = await haltFactsFor(itx, "digest");
+    expect(facts).toHaveLength(1); // exactly one audit fact
+    expect(facts[0].payload).toMatchObject({
+      name: "digest",
+      attempts: 1,
+      afterOffset: halted.afterOffset,
+    });
+    await append(itx, { type: "mark" }); // fresh traffic must not resurrect a halted row
+    await settle(1_200);
+    expect(await digested(itx)).toBe(1); // nothing more was delivered
+    expect(await haltFactsFor(itx, "digest")).toHaveLength(1);
+  });
+});
+
+test("cursor: a plain throw climbs the ladder on the DO's alarm — attempt 1 with a retry armed, redelivered within seconds, attempt back to 0", async () => {
+  const itx = await harness.itx("prj_fd_ladder");
+  let calls = 0;
+  const c = collector();
+  await withCursorRows(itx, ["ladder"], async () => {
+    await cursorSubscribe(
+      itx,
+      "ladder",
+      (events, range) => {
+        if (++calls === 1) throw new Error("target down for the first delivery");
+        c.fn(events, range);
+      },
+      ["mark"],
+    );
+    const [m1] = await append(itx, { type: "mark" });
+    // delivery #1 throws (a plain Error — retryable) → attempt 1, the next try armed on the alarm
+    const backingOff = await until(
+      "ladder step",
+      async () => {
+        const r = await row(itx, "ladder");
+        return r?.cursor && r.cursor.attempt >= 1 ? r : undefined;
+      },
+      8_000,
+    );
+    expect(backingOff.cursor.nextAttemptAtMs).toBeGreaterThan(Date.now() - 5_000);
+    expect(backingOff.halted).toBeUndefined();
+    // ~1s later the alarm pumps: the SAME batch redelivers and the ladder resets
+    await until("redelivered", () => c.offsets().includes(m1.offset), 8_000);
+    expect(calls).toBe(2);
+    const healed = await until(
+      "ladder reset",
+      async () => {
+        const r = await row(itx, "ladder");
+        return r?.cursor && r.cursor.attempt === 0 && r.cursor.confirmedOffset >= m1.offset
+          ? r
+          : undefined;
+      },
+      8_000,
+    );
+    expect(healed.cursor.nextAttemptAtMs).toBeUndefined();
+    expect(await haltFactsFor(itx, "ladder")).toEqual([]); // the ladder is not a halt
+  });
+});
+
+test("the view: a push target's row has NO cursor; a resumed fact for an unknown name commits and changes nothing", async () => {
+  // (Replaces the deleted "resume errors are loud" pin: `resumeSubscription` is gone. Recovery is a
+  // plain append of `subscription-delivery-resumed`; the reduce ignores a name it has no row for.)
+  const itx = await harness.itx("prj_fd_view");
   const c = collector();
   await itx.subscribe({ name: "conny", consumes: ["mark"], target: c.fn });
-  await expect(itx.resumeSubscription({ name: "conny" })).rejects.toThrow(/no server cursor/);
+  const before = await rows(itx);
+  expect(before).toHaveLength(1);
+  expect(before[0].cursor).toBeUndefined();
+  const [fact] = await append(itx, { type: RESUMED, payload: { name: "never-was" } });
+  expect(fact.offset).toBeGreaterThan(0); // the append is not refused — it is just a fact nobody reduces into a row
+  expect(await rows(itx)).toEqual(before);
+  expect(await row(itx, "never-was")).toBeNull();
 });
 
-test("forwarder: resume while HEALTHY redelivers exactly the events after afterOffset (cursor surgery)", async () => {
+test("cursor: a resumed { afterOffset } while HEALTHY redelivers exactly the events after afterOffset (cursor surgery), applied at the row's next pump", async () => {
   const itx = await harness.itx("prj_fd_replay");
   const c = collector();
-  const hook = await mountHook(itx, "replayHook", c.fn);
-  await itx.subscribe({ name: "replay", consumes: ["mark"], target: hook });
-  const [m1] = await append(itx, { type: "mark", payload: { n: 1 } });
-  const [m2] = await append(itx, { type: "mark", payload: { n: 2 } });
-  const [m3] = await append(itx, { type: "mark", payload: { n: 3 } });
-  await until("first wave", () => c.offsets().length >= 3);
-  expect([...c.offsets()].sort((a, b) => a - b)).toEqual([m1.offset, m2.offset, m3.offset]);
-  const before = c.invocations.length;
-  await itx.resumeSubscription({ name: "replay", afterOffset: m1.offset });
-  await until("redelivery", () => c.offsets().length >= 5);
-  await settle(400);
-  const redelivered = c.invocations.slice(before).flatMap((i) => i.events.map((e) => e.offset));
-  // exactly-from-afterOffset: m2 and m3 once more, m1 (== afterOffset) NEVER redelivered
-  expect(redelivered).toEqual([m2.offset, m3.offset]);
-  // and the redelivered range starts surgically at the requested cursor
-  expect(c.invocations[before].range.after).toBe(m1.offset);
+  await withCursorRows(itx, ["replay"], async () => {
+    await cursorSubscribe(itx, "replay", c.fn, ["mark"]);
+    const [m1] = await append(itx, { type: "mark", payload: { n: 1 } });
+    const [m2] = await append(itx, { type: "mark", payload: { n: 2 } });
+    const [m3] = await append(itx, { type: "mark", payload: { n: 3 } });
+    await until("first wave", () => c.offsets().length >= 3, 8_000);
+    expect([...c.offsets()].sort((a, b) => a - b)).toEqual([m1.offset, m2.offset, m3.offset]);
+    const before = c.invocations.length;
+    // The operator's ONE recovery event — a plain append. It is level-triggered onto the cursor
+    // row: the pump applies it the next time it runs for this row (the next consumed commit, or
+    // the DO's alarm) — the resumed event itself is not a "mark", so m4 is that trigger.
+    await append(itx, { type: RESUMED, payload: { name: "replay", afterOffset: m1.offset } });
+    const [m4] = await append(itx, { type: "mark", payload: { n: 4 } });
+    await until("redelivery", () => c.offsets().includes(m4.offset), 8_000);
+    await settle(400);
+    const redelivered = c.invocations.slice(before).flatMap((i) => i.events.map((e) => e.offset));
+    // exactly-from-afterOffset: m2 and m3 once more, then m4; m1 (== afterOffset) NEVER redelivered
+    expect(redelivered).toEqual([m2.offset, m3.offset, m4.offset]);
+    // and the redelivered range starts surgically at the requested cursor
+    expect(c.invocations[before].range.after).toBe(m1.offset);
+    const r = await row(itx, "replay");
+    expect(r.cursor.confirmedOffset).toBeGreaterThanOrEqual(m4.offset);
+    expect(r.halted).toBeUndefined();
+  });
 });
 
-test("FIXED (defect 13): resume with afterOffset beyond head is clamped — later events deliver", async () => {
-  // BUG: pump.reset stores afterOffset verbatim; #pumpRow then reads read(cursor) whose
-  //   scannedThroughOffset is max(afterOffset, head) — with cursor > head that is always ==
-  //   cursor, so `page.scannedThroughOffset <= progress.confirmedOffset` reports caught-up
-  //   FOREVER while real events commit at offsets below the cursor.
-  // EXPECTED: an over-shot afterOffset clamps to the head (or errors loudly at
-  //   resumeSubscription) — either way the NEXT appended event must deliver.
-  // ACTUAL: every event appended after the resume lands at an offset below the parked cursor
-  //   and is silently skipped until the stream organically burns past the overshoot (here:
-  //   1000 offsets away — effectively never).
-  // WHY IT MATTERS: resumeSubscription is THE operator recovery verb; a fat-fingered
-  //   afterOffset during an incident converts a halted-but-recoverable row into a silently
-  //   dead one with no error and no audit fact.
+test("cursor: a resumed afterOffset BEYOND head must not deaden the row — the next appended event still delivers", async () => {
+  // BUG: the cursor lane stores a resumed `afterOffset` verbatim. #pump then reads
+  //   `read(confirmedOffset, 100)`, whose `scannedThroughOffset` is ≤ head (event-log pin), so with
+  //   confirmedOffset > head the page reports "caught up" FOREVER while real events commit at
+  //   offsets below the cursor; the pushed batch never matches either (`pushed.after !== cursor`).
+  //   The old forwarder had exactly this defect (13) and clamped; the re-homed lane does not.
+  // EXPECTED: an over-shot afterOffset clamps to the head (or the reduce refuses it loudly) —
+  //   either way the NEXT appended event must deliver.
+  // ACTUAL: every event appended after the resume lands below the parked cursor and is silently
+  //   skipped until the stream organically burns past the overshoot (1000 offsets here).
+  // WHY IT MATTERS: `subscription-delivery-resumed` is THE operator recovery event; a fat-fingered
+  //   afterOffset during an incident converts a recoverable row into a silently dead one with no
+  //   error and no fact.
   const itx = await harness.itx("prj_fd_beyond");
   const c = collector();
-  const hook = await mountHook(itx, "beyondHook", c.fn);
-  await itx.subscribe({ name: "beyond", consumes: ["mark"], target: hook });
-  const [m1] = await append(itx, { type: "mark", payload: { n: 1 } });
-  await until("lane works", () => c.offsets().includes(m1.offset));
-  await itx.resumeSubscription({ name: "beyond", afterOffset: m1.offset + 1000 });
-  const [m2] = await append(itx, { type: "mark", payload: { n: 2 } });
-  await until("the event after the resume delivers", () => c.offsets().includes(m2.offset), 5_000);
+  await withCursorRows(itx, ["beyond"], async () => {
+    await cursorSubscribe(itx, "beyond", c.fn, ["mark"]);
+    const [m1] = await append(itx, { type: "mark", payload: { n: 1 } });
+    await until("lane works", () => c.offsets().includes(m1.offset), 8_000);
+    await append(itx, {
+      type: RESUMED,
+      payload: { name: "beyond", afterOffset: m1.offset + 1000 },
+    });
+    const [m2] = await append(itx, { type: "mark", payload: { n: 2 } });
+    await until(
+      "the event after the resume delivers",
+      () => c.offsets().includes(m2.offset),
+      5_000,
+    );
+  });
 });
 
-test("FIXED (defect 12): unsubscribe during an in-flight delivery leaves no ghost halt", async () => {
-  // BUG: pump.forget (revoke) deletes the row's SubscriptionDeliveryProgress, but the CAS in
-  //   #pumpRow compares `(fresh?.rev ?? 0) !== (progress.rev ?? 0)` — a DELETED record (fresh
-  //   = undefined) and a never-reset one (rev undefined) both coerce to 0, so the in-flight
-  //   delivery's success path happily re-puts the record (resurrecting storage for a revoked
-  //   row), loops, reads the next durable event (the revoke fact itself), and tries to deliver
-  //   it — which throws "no subscription mount at offset N" — and the failure ladder then
-  //   HALTS and appends a subscription-delivery-halted audit fact for a row that was cleanly
-  //   unsubscribed.
-  // EXPECTED: after unsubscribe, the row attempts nothing further — no delivery attempts, no
-  //   halt audit fact, no resurrected progress record.
-  // ACTUAL: a spurious events.iterate.com/stream/subscription-delivery-halted for the revoked
-  //   name lands on the stream (and an orphaned progress record is re-minted in facet storage).
-  // WHY IT MATTERS: halt audit facts are the operator's signal that a live subscription needs
-  //   attention; a revoked row emitting one is a false alarm — and the resurrected progress
-  //   row is a permanent storage leak keyed by a mount that no longer exists.
+test("FIXED (defect 12): unsubscribe during an in-flight delivery leaves no ghost halt and no resurrected cursor", async () => {
+  // WAS-BUG: the forwarder's in-flight delivery re-put a revoked row's progress record and then
+  //   tried to deliver the revoke fact itself, halting a cleanly unsubscribed row with a false
+  //   alarm. NOW: the removal is reduced inline and `forget(name)` drops the cursor; the in-flight
+  //   delivery's generation check sees the row is gone and yields — nothing is written, nothing
+  //   is appended.
   const itx = await harness.itx("prj_fd_ghost");
   let release!: () => void;
   const gate = new Promise<void>((r) => (release = r));
   let invocations = 0;
-  const hook = await mountHook(itx, "ghostHook", async () => {
-    invocations++;
-    await gate; // hold THIS delivery in flight while the row is revoked underneath it
-  });
-  await itx.subscribe({ name: "ghost", target: hook, maxAttempts: 1 });
-  const [mark] = await append(itx, { type: "mark" });
-  await until("delivery in flight", () => invocations >= 1);
-  await itx.unsubscribe({ name: "ghost" });
-  // barrier: the forwarder's reduce has passed the revoke commit (its cursor moved beyond it)
-  await until(
-    "forwarder reduced the revoke",
-    async () =>
-      (await itx.invokeCapability("itx.facets.get('subscription-forwarder').snapshot()")).offset >
-      mark.offset,
-  );
-  release();
-  // correct behavior: the revoked row goes quiet — poll generously for the spurious audit fact
-  let haltEvent: any;
-  const t0 = Date.now();
-  while (Date.now() - t0 < 5_000 && !haltEvent) {
-    haltEvent = (await readAll(itx)).find(
-      (e) =>
-        e.type === "events.iterate.com/stream/subscription-delivery-halted" &&
-        e.payload?.name === "ghost",
+  await withCursorRows(itx, ["ghost"], async () => {
+    await cursorSubscribe(
+      itx,
+      "ghost",
+      async () => {
+        invocations++;
+        await gate; // hold THIS delivery in flight while the row is removed underneath it
+      },
+      ["mark"],
     );
-    if (!haltEvent) await settle(150);
-  }
-  expect(invocations).toBe(1); // the callback itself was never re-offered (sanity)
-  expect(haltEvent).toBeUndefined(); // and no halt audit fact may exist for a revoked row
-});
-
-test("forwarder: row isolation — one halted row never blocks its neighbor", async () => {
-  const itx = await harness.itx("prj_fd_iso");
-  let badAttempts = 0;
-  const good = collector();
-  const badHook = await mountHook(itx, "isoBad", () => {
-    badAttempts++;
-    throw new Error("permanently down");
+    await append(itx, { type: "mark" });
+    await until("delivery in flight", () => invocations >= 1, 8_000);
+    await itx.unsubscribe("ghost"); // reduced inline: on return the row is gone and its cursor forgotten
+    expect(await row(itx, "ghost")).toBeNull();
+    release();
+    // correct behavior: the removed row goes quiet — poll generously for the spurious fact
+    let haltEvent: any;
+    const t0 = Date.now();
+    while (Date.now() - t0 < 4_000 && !haltEvent) {
+      [haltEvent] = await haltFactsFor(itx, "ghost");
+      if (!haltEvent) await settle(150);
+    }
+    expect(invocations).toBe(1); // the callback itself was never re-offered (sanity)
+    expect(haltEvent).toBeUndefined(); // and no halt fact may exist for a removed row
+    expect(await row(itx, "ghost")).toBeNull(); // no resurrected row or cursor
   });
-  const goodHook = await mountHook(itx, "isoGood", good.fn);
-  await itx.subscribe({ name: "bad", target: badHook, consumes: ["mark"], maxAttempts: 1 });
-  await itx.subscribe({ name: "good", target: goodHook, consumes: ["mark"] });
-  const [m1] = await append(itx, { type: "mark", payload: { n: 1 } });
-  await until("bad halted", async () =>
-    (await readAll(itx)).some(
-      (e) =>
-        e.type === "events.iterate.com/stream/subscription-delivery-halted" &&
-        e.payload?.name === "bad",
-    ),
-  );
-  await until("good got m1", () => good.offsets().includes(m1.offset));
-  const [m2] = await append(itx, { type: "mark", payload: { n: 2 } });
-  await until("good keeps delivering AFTER the neighbor halted", () =>
-    good.offsets().includes(m2.offset),
-  );
-  expect(badAttempts).toBe(1);
-  expect([...good.offsets()].sort((a, b) => a - b)).toEqual([m1.offset, m2.offset]); // no dups
 });
 
-test("forwarder auto-enables exactly once across many absent-target subscribes", async () => {
-  const ctx = "prj_fd_auto";
-  const itx = await harness.itx(ctx);
+test("cursor: row isolation — one halted row never blocks its neighbor", async () => {
+  const itx = await harness.itx("prj_fd_iso");
+  const good = collector();
+  await withCursorRows(itx, ["bad", "good"], async () => {
+    await digestSubscribe(itx, "bad", ["mark"]); // halts NOW on the poison (retryable: false)
+    await cursorSubscribe(itx, "good", good.fn, ["mark"]);
+    const [m1] = await append(itx, { type: "mark", payload: { poison: true, n: 1 } });
+    await until("bad halted", async () => (await row(itx, "bad"))?.halted, 8_000);
+    await until("good got m1", () => good.offsets().includes(m1.offset), 8_000);
+    const [m2] = await append(itx, { type: "mark", payload: { n: 2 } });
+    await until(
+      "good keeps delivering AFTER the neighbor halted",
+      () => good.offsets().includes(m2.offset),
+      8_000,
+    );
+    expect((await row(itx, "bad")).halted.attempts).toBe(1);
+    expect((await row(itx, "good")).halted).toBeUndefined();
+    expect(await digested(itx)).toBe(0); // bad never digested anything: the poison was its first batch
+    expect([...good.offsets()].sort((a, b) => a - b)).toEqual([m1.offset, m2.offset]); // no dups
+  });
+});
+
+test("there is no forwarder: cursor subscriptions enable no processor and mint no facet; a row appears per name, cursor-less until a delivery", async () => {
+  // (Replaces the deleted "forwarder auto-enables exactly once" pin: the cursor lane is kernel code
+  // in the DO over its own kv and alarm — nothing to auto-enable, nothing to list as a processor.)
+  const itx = await harness.itx("prj_fd_auto");
   await Promise.all(
     [1, 2, 3].map((i) =>
-      itx.subscribe({ name: `auto-${i}`, target: `itx.sink${i}`, consumes: ["never"] }),
+      itx.subscribe({
+        name: `auto-${i}`,
+        target: `itx.sink${i}.processEventBatch`,
+        consumes: ["never"],
+      }),
     ),
   );
-  expect(
-    (await facetProcessorSlugs(itx)).filter((s: string) => s === "subscription-forwarder"),
-  ).toHaveLength(1);
-  const rows = (await subscriberRows(itx)).filter((r: any) => r.name.startsWith("auto-"));
-  expect(rows).toHaveLength(3);
-  for (const r of rows) expect(r.lane).toBe("durable");
-});
-
-test("liveState subscribe with an ABSENT target is rejected loudly at provide", async () => {
-  const itx = await harness.itx("prj_fd_lsbad");
+  const listed = await rows(itx);
+  expect(listed.map((r) => r.name).sort()).toEqual(["auto-1", "auto-2", "auto-3"]);
+  for (const r of listed) {
+    expect(r.cursor).toBeUndefined(); // nothing consumed yet ⇒ nothing delivered ⇒ no cursor row
+    expect(r.halted).toBeUndefined();
+  }
   await expect(
-    itx.subscribe({ name: "lsbad", liveState: { key: "chat" }, target: "itx.wherever" }),
-  ).rejects.toThrow(/needs a LIVE callback target/);
-  // and the rejected mount left nothing behind
-  expect(await subscriberRows(itx)).toEqual([]);
+    itx.invokeCapability("itx.facets.get('subscription-forwarder').snapshot()"),
+  ).rejects.toThrow(/no facet/);
+  // and the subscriptions table's own snapshot is the same truth, as reduced state
+  const snap: any = await itx.invokeCapability("itx.facets.get('subscriptions').snapshot()");
+  expect(Object.keys(snap.state.subscriptions).sort()).toEqual(["auto-1", "auto-2", "auto-3"]);
 });
 
-// ─────────────────────────────── CROSS-LANE + PATHOLOGICAL ───────────────────────────────
+// (Deleted with live-state MODE: `subscribe({ liveState: { key } })` no longer exists — a tab
+// subscribes `consumes: ["events.iterate.com/live-state/changed"]` and filters `payload.key`
+// client-side; pinned in live-state-runtime.test.ts and failing-wave2-sweep.test.ts.)
 
-test("cross-lane agreement: a connected and a forwarder subscriber see the SAME offsets in order", async () => {
+// ─────────────────────────────── BOTH KINDS + PATHOLOGICAL ───────────────────────────────
+
+test("agreement: a push subscriber and a cursor subscriber see the SAME offsets in order", async () => {
   const itx = await harness.itx("prj_fd_lanes");
-  const conn = collector();
-  const fwd = collector();
-  await itx.subscribe({ name: "lane-conn", consumes: ["mark"], target: conn.fn });
-  const hook = await mountHook(itx, "laneHook", fwd.fn);
-  await itx.subscribe({ name: "lane-fwd", consumes: ["mark"], target: hook });
-  const committed: any[] = [];
-  for (let i = 0; i < 5; i++)
-    committed.push(...(await append(itx, { type: "mark", payload: { i } })));
-  const offsets = committed.map((e) => e.offset);
-  await until("both lanes done", () => conn.offsets().length >= 5 && fwd.offsets().length >= 5);
-  expect([...conn.offsets()].sort((a, b) => a - b)).toEqual(offsets);
-  expect([...fwd.offsets()].sort((a, b) => a - b)).toEqual(offsets);
-  // within every single delivery, offsets ascend (batch order is log order on both lanes)
-  for (const lane of [conn, fwd])
-    for (const inv of lane.invocations) {
-      const off = inv.events.map((e) => e.offset);
-      expect(off).toEqual([...off].sort((a, b) => a - b));
-    }
+  const pushed = collector();
+  const cursored = collector();
+  await withCursorRows(itx, ["viaCursor"], async () => {
+    await itx.subscribe({ name: "via-push", consumes: ["mark"], target: pushed.fn });
+    await cursorSubscribe(itx, "viaCursor", cursored.fn, ["mark"]);
+    const committed: any[] = [];
+    for (let i = 0; i < 5; i++)
+      committed.push(...(await append(itx, { type: "mark", payload: { i } })));
+    const offsets = committed.map((e) => e.offset);
+    await until(
+      "both done",
+      () => pushed.offsets().length >= 5 && cursored.offsets().length >= 5,
+      8_000,
+    );
+    await settle(400);
+    expect([...pushed.offsets()].sort((a, b) => a - b)).toEqual(offsets);
+    expect([...cursored.offsets()].sort((a, b) => a - b)).toEqual(offsets); // exactly once each
+    // within every single delivery, offsets ascend (batch order is log order for both kinds)
+    for (const side of [pushed, cursored])
+      for (const inv of side.invocations) {
+        const off = inv.events.map((e) => e.offset);
+        expect(off).toEqual([...off].sort((a, b) => a - b));
+      }
+  });
 });
 
-test("PATHOLOGICAL: 200 connected subscription mounts — one append fans out to all 200 in under 2s", async () => {
+test("PATHOLOGICAL: 200 push subscribers — one append fans out to all 200 in under 2s", async () => {
   const itx = await harness.itx("prj_fd_fanout");
   const counts = new Array(200).fill(0);
   let received = 0;
-  // consumes:["ping"] keeps the 200 setup provides from fanning out N² deliveries
+  // consumes:["ping"] keeps the 200 setup subscribes from fanning out N² deliveries
   for (let base = 0; base < 200; base += 25) {
     await Promise.all(
       Array.from({ length: Math.min(25, 200 - base) }, (_, j) => {
@@ -510,12 +662,12 @@ test("PATHOLOGICAL: 200 connected subscription mounts — one append fans out to
   await append(itx, { type: "ping", payload: { round: 1 } });
   await until("warm round complete", () => received >= 200, 30_000, 10);
   const coldWallMs = Date.now() - tWarm;
-  // the measured round: steady-state fan-out of ONE append across 200 mounts
+  // the measured round: steady-state fan-out of ONE append across 200 subscribers
   const t0 = Date.now();
   await append(itx, { type: "ping", payload: { round: 2 } });
   await until("all 200 received round 2", () => received >= 400, 10_000, 10);
   const wallMs = Date.now() - t0;
-  console.log(`fan-out: cold(first-page) ${coldWallMs}ms, warm ${wallMs}ms for 200 mounts`);
+  console.log(`fan-out: cold(first-page) ${coldWallMs}ms, warm ${wallMs}ms for 200 subscribers`);
   expect(wallMs).toBeLessThan(2_000);
   await settle(300);
   expect(counts.every((c) => c === 2)).toBe(true); // exactly once per round, no dup fan-out
@@ -558,20 +710,20 @@ function stallableWebSocket(url: string): StallableWebSocket {
   return new WsWebSocket(url) as StallableWebSocket;
 }
 
-test("MEASURED FINDING: a connected subscriber that stops reading mid-flood is NOT closed by local workerd (≥60MiB buffers silently) — but a real socket close drops its stub instantly; the MOUNT stays until unsubscribe", async () => {
-  // The lane's design comment (stream-durable-object.ts, connected lane): "the socket buffer is
-  // the only queue; overflow closes the socket and the close IS the heal signal". This test ran
-  // that claim to ground against local workerd. It is NOT a test.fails: the buffering policy is
-  // workerd's, not this codebase's — what IS ours (close → onRpcBroken → pager close → the DO
-  // drops the transport → `itx.rpcStubs.list()` stops listing the key, while the MOUNT stays in
-  // the table and deliveries to it are swallowed as CONNECTION_OFFLINE) is proven live below.
+test("MEASURED FINDING: a push subscriber that stops reading mid-flood is NOT closed by local workerd (≥60MiB buffers silently) — but a real socket close drops its stub instantly; the ROW stays until unsubscribe", async () => {
+  // The loop's design comment (subscription-delivery.ts): a push is fire-and-forget; the socket
+  // buffer is the only queue. This test ran that claim to ground against local workerd. It is NOT
+  // a test.fails: the buffering policy is workerd's, not this codebase's — what IS ours (close →
+  // onRpcBroken → pager close → the DO drops the transport → `itx.rpcStubs.list()` stops listing
+  // the key, while the ROW stays in the subscriptions table and pushes to it are swallowed as
+  // CONNECTION_OFFLINE) is proven live below.
   // EXPECTED (design): a client that stops reading its /api socket eventually overflows the
   //   server's send buffer; workerd closes the socket; the relay's onRpcBroken closes the stub
-  //   pager; the DO drops the transport (presence shrinks). Nothing touches the capability
-  //   table — a mount is data, never a liveness claim.
+  //   pager; the DO drops the transport (presence shrinks). Nothing touches the subscriptions
+  //   table — a row is data, never a liveness claim.
   // ACTUAL (measured, local workerd via wrangler createTestHarness): 60.0MiB of payload flooded
-  //   into a TCP-paused subscriber produced NO close, NO delivery.event-batch.dropped warn, NO
-  //   CONNECTION_OFFLINE — the stub stayed present and the mount stayed listed. workerd buffers
+  //   into a TCP-paused subscriber produced NO close, NO delivery.push.dropped warn, NO
+  //   CONNECTION_OFFLINE — the stub stayed present and the row stayed listed. workerd buffers
   //   the outgoing WebSocket without any local limit we could reach. The chain itself is sound:
   //   hard-killing the stalled socket dropped the stub from presence in 10–30ms.
   // RESIDUAL: live Cloudflare is NOT proven either way here — real edge sockets have real buffer
@@ -591,15 +743,17 @@ test("MEASURED FINDING: a connected subscriber that stops reading mid-flood is N
   // one probe proves the lane end-to-end BEFORE the stall
   await append(itx, { type: "flood", ephemeral: true, payload: { probe: true } });
   await until("probe delivered over the victim socket", () => c.invocations.length >= 1);
-  const before = await subscriberRows(itx);
-  // the victim's row is a CONNECTED mount (pure data — `itx.rpcStubs.get('itx.subscribers.victim')`);
-  // whether that stub is ONLINE is the registry's fact, read separately (the raw transport count
-  // is a DO-only transportState() fact, unreachable from this capnweb lane)
-  expect(before).toContainEqual(expect.objectContaining({ name: "victim", lane: "connected" }));
-  const victimOnline = async () => (await presence(itx)).includes("itx.subscribers.victim");
+  // the victim's row is a PUSH row (pure data — target `itx.rpcStubs.get('itx.subscriptions.victim')`,
+  // no cursor); whether that stub is ONLINE is the registry's fact, read separately (the raw
+  // transport count is a DO-only transportState() fact, unreachable from this capnweb lane)
+  const victimRow = { name: "victim", target: "itx.rpcStubs.get('itx.subscriptions.victim')" };
+  const before = await rows(itx);
+  expect(before).toContainEqual(expect.objectContaining(victimRow));
+  expect(before.find((r) => r.name === "victim").cursor).toBeUndefined();
+  const victimOnline = async () => (await presence(itx)).includes("itx.subscriptions.victim");
   expect(await victimOnline()).toBe(true);
   const droppedWarns = () =>
-    (JSON.stringify(harness.logs()).match(/delivery\.event-batch\.dropped/g) ?? []).length;
+    (JSON.stringify(harness.logs()).match(/delivery\.push\.dropped/g) ?? []).length;
   const droppedBefore = droppedWarns(); // logs are harness-global — assert the DELTA, not zero
 
   // THE STALL: stop reading the victim's TCP socket. The kernel recv buffer fills, the TCP window
@@ -630,7 +784,7 @@ test("MEASURED FINDING: a connected subscriber that stops reading mid-flood is N
       if (!stubDropped) await settle(150);
     }
   }
-  const after = await subscriberRows(itx);
+  const after = await rows(itx);
   console.log(
     `overflow: flooded ${(floodedBytes / 1024 / 1024).toFixed(1)}MiB into a paused socket; ` +
       `stubDropped=${stubDropped}; dropped-warn delta=${droppedWarns() - droppedBefore}`,
@@ -639,7 +793,7 @@ test("MEASURED FINDING: a connected subscriber that stops reading mid-flood is N
   // dropped-delivery warn. workerd absorbed it all in memory.
   expect(floodedBytes).toBe(120 * 2 * 256 * 1024);
   expect(stubDropped).toBe(false);
-  expect(after).toContainEqual(expect.objectContaining({ name: "victim", lane: "connected" }));
+  expect(after).toContainEqual(expect.objectContaining(victimRow));
   expect(await victimOnline()).toBe(true);
   expect(droppedWarns() - droppedBefore).toBe(0);
 
@@ -655,19 +809,17 @@ test("MEASURED FINDING: a connected subscriber that stops reading mid-flood is N
     15_000,
   );
   console.log(`socket kill → stub dropped from presence in ${Date.now() - tKill}ms`);
-  // THE MOUNT IS DATA: the row is still in the table — nothing auto-revokes it because a socket
-  // died. The producer is unaffected: an append still commits, and the delivery to the dead stub
-  // is swallowed as CONNECTION_OFFLINE (no dropped-delivery warn — offline is the benign case the
-  // lane expects, not a drop worth a line).
-  expect(await subscriberRows(itx)).toContainEqual(
-    expect.objectContaining({ name: "victim", lane: "connected" }),
-  );
+  // THE ROW IS DATA: it is still in the table — nothing auto-removes it because a socket died.
+  // The producer is unaffected: an append still commits, and the push to the dead stub is
+  // swallowed as CONNECTION_OFFLINE (no dropped-delivery warn — offline is the benign case the
+  // loop expects, not a drop worth a line).
+  expect(await rows(itx)).toContainEqual(expect.objectContaining(victimRow));
   await append(itx, { type: "flood", ephemeral: true, payload: { afterKill: true } });
   await settle(300);
   expect(droppedWarns() - droppedBefore).toBe(0);
   // The explicit exit — unsubscribe from ANY session (here A, which never parked the stub, so its
-  // `rpcStubs.close` half is a local no-op; the revoke clears every row at the path). The victim
-  // was this ctx's only mount.
-  await itx.unsubscribe({ name: "victim" });
-  expect(await subscriberRows(itx)).toEqual([]);
+  // `rpcStubs.close` half is a local no-op; the removal drops the row). The victim was this ctx's
+  // only subscription.
+  await itx.unsubscribe("victim");
+  expect(await rows(itx)).toEqual([]);
 }, 55_000);

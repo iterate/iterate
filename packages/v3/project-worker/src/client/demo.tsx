@@ -14,19 +14,19 @@ const CTX = "prj_demo_livestate";
 
 // The demo processor, inline (a self-contained page needs no repo files): reduced `ticks` folded
 // from durable 'tick' events, runtime `lastPokeMs` bumped by a 'poke' ephemeral in processEvent.
-const PRESENCE_SRC = `import { StreamProcessor, defineProcessorContract, z } from "./processor.js";
+const PRESENCE_SRC = `import { StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
 const contract = defineProcessorContract({
   slug: "presence", version: "1.0.0",
   description: "Reduced tick count beside a runtime lastPokeMs.",
   stateSchema: z.object({ ticks: z.number().default(0) }), events: {},
   consumes: ["tick", "poke"], emits: [],
 });
-export class Presence extends StreamProcessor {
+export class Presence extends StreamProcessorDurableObject {
   contract = contract;
   #lastPokeMs = 0;
   reduce({ event, state }) { if (event.type === "tick") return { ...state, ticks: state.ticks + 1 }; }
   processEvent({ event }) { if (event && event.type === "poke") { this.#lastPokeMs = Date.now(); this.publishLiveState(); } }
-  liveState(state) { return { ticks: state.ticks, lastPokeMs: this.#lastPokeMs }; }
+  projectLiveState(state) { return { ticks: state.ticks, lastPokeMs: this.#lastPokeMs }; }
 }`;
 
 async function connectAndEnable(): Promise<any> {

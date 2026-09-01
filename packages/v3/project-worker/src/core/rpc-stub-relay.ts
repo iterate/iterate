@@ -102,18 +102,19 @@ export interface CapnwebCallbackRelay {
   dispose(): void;
 }
 
-/** Session-lived registry of live relays (retained callbacks + pager sockets) so they aren't GC'd —
- *  ONE relay per key. THE CALLER OWNS THE KEY: one session's Parking spans every IterateContext it
- *  hands out, and a capability path is only unique PER CONTEXT, so IterateContext keys by the
- *  composite `"<contextPath> <capabilityPath>"` (see #parkingKey) — the bare path would let two
- *  contexts providing at the same path destroy each other's relay. Re-adding the SAME key is a
- *  TRANSPORT REPLACEMENT (a re-park at the same context + path — a reconnect): by the time the
- *  new relay's pager is open, the DO has already dropped the old transport as "replaced", so
- *  disposing the incumbent here is a harmless double-close that just keeps this map from
- *  accumulating dead relays. */
+/** Session-lived registry of what dies with the session: live relays (retained callbacks + pager
+ *  sockets, so they aren't GC'd) and anything else the session must undo at its end (an anonymous
+ *  subscription's removal) — ONE entry per key. THE CALLER OWNS THE KEY: one session's Parking spans
+ *  every IterateContext it hands out, and a capability path is only unique PER CONTEXT, so
+ *  IterateContext keys by the composite `"<contextName> <capabilityPath>"` (see #parkingKey) — the
+ *  bare path would let two contexts providing at the same path destroy each other's relay. Re-adding
+ *  the SAME key is a TRANSPORT REPLACEMENT (a re-park at the same context + path — a reconnect): by
+ *  the time the new relay's pager is open, the DO has already dropped the old transport as
+ *  "replaced", so disposing the incumbent here is a harmless double-close that just keeps this map
+ *  from accumulating dead relays. */
 export class Parking {
-  readonly #relays = new Map<string, CapnwebCallbackRelay>();
-  add(key: string, relay: CapnwebCallbackRelay): void {
+  readonly #relays = new Map<string, { dispose(): void }>();
+  add(key: string, relay: { dispose(): void }): void {
     this.#relays.get(key)?.dispose();
     this.#relays.set(key, relay);
   }

@@ -52,3 +52,16 @@ export class InvokeHandle extends RpcTarget {
   }
 }
 installPrototypeInvokeCapabilityFallback(InvokeHandle, []);
+
+// ── the two BRANDS the subscription delivery loop reads ──
+// A subscription's target evaluates to SOMETHING; the loop asks the value what it is. These two
+// kinds OWN THEIR PROGRESS, so a push needs no cursor on the stream side: a facet keeps its own
+// checkpoint and gap-repairs from the log (core/processor.ts), a live client owns its offset (it
+// chains delivered ranges and heals with read). Anything else — a Worker-Loader entrypoint, a
+// sibling context, a remote — cannot, and the stream keeps a cursor for it (subscription-delivery.ts).
+// Nothing is declared on any event; the brand is minted where the built-in mints the handle.
+
+/** `itx.facets.get(name)` / `load(src).getDurableObjectClass(C).get(name)` — a facet of this context. */
+export class FacetHandle extends InvokeHandle {}
+/** `itx.rpcStubs.get(key)` — a live stub parked in the registry. */
+export class RpcStubHandle extends InvokeHandle {}

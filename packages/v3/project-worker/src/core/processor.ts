@@ -131,19 +131,24 @@ export type ReduceOnlyProcessor<State> = {
  *  projection, so a throw skips the emit while `undefined` is a real (patchable) value. */
 const PROJECTION_FAILED = Symbol("live-state-projection-failed");
 
-/** THE ONE consumes rule — the reduce, both delivery lanes (connected + forwarder), and the
- *  inline core all call this; there is no second copy to drift. `consumes` undefined = every
- *  durable event (a subscriber's default). "*" = every durable event. A NAMED type opts that
- *  type in, INCLUDING ephemerals ("*" NEVER sweeps ephemerals). The live-state/changed type is
- *  never consumable (the loop guard). */
+/** THE ONE consumes rule — the processor engine, the subscription delivery loop, and the inline
+ *  core all call this; there is no second copy to drift. `consumes` undefined = every durable event
+ *  (a subscriber's default). "*" = every durable event. A NAMED type opts that type in, INCLUDING
+ *  ephemerals ("*" NEVER sweeps ephemerals) — so a live-state watcher spells
+ *  `consumes: ["events.iterate.com/live-state/changed"]` and filters `payload.key` itself. */
 export function consumesEvent(
   consumes: readonly string[] | undefined,
   event: { type: string; ephemeral?: boolean },
 ): boolean {
-  if (event.type === "events.iterate.com/live-state/changed") return false;
   if (event.ephemeral) return consumes?.includes(event.type) ?? false;
   return consumes === undefined || consumes.includes("*") || consumes.includes(event.type);
 }
+
+/** What the ENGINE folds: the contract's consumes, minus the one type no processor may ever reduce or
+ *  react to — a live-state delta. Deltas are notifications ABOUT state; letting one feed a reduce is
+ *  the feedback-loop class, made unspellable here rather than discouraged. */
+const foldsEvent = (consumes: readonly string[], event: { type: string; ephemeral?: boolean }) =>
+  event.type !== "events.iterate.com/live-state/changed" && consumesEvent(consumes, event);
 
 export abstract class StreamProcessor<State> {
   abstract readonly contract: ProcessorContract<State>;
@@ -389,7 +394,7 @@ export abstract class StreamProcessor<State> {
       const page = await this.stream.read(after, 500);
       for (const event of page.events) {
         if (event.offset > target) break;
-        if (consumesEvent(this.contract.consumes, event))
+        if (foldsEvent(this.contract.consumes, event))
           state = this.reduce({ event, state }) ?? state;
       }
       const scannedTo = Math.min(page.scannedThroughOffset, target);
@@ -470,7 +475,7 @@ export abstract class StreamProcessor<State> {
 
     const consumable = events.filter(
       (e) =>
-        consumesEvent(this.contract.consumes, e) &&
+        foldsEvent(this.contract.consumes, e) &&
         (e.ephemeral || e.offset > progress.reducedThroughOffset),
     );
     let caughtUpDelivered = false;

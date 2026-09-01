@@ -1,6 +1,6 @@
 // failing-wave2-sweep.test.ts — BUG-HUNT WAVE 2, harness lane: the wave-1 DEFECT SHAPES hunted
 // in the surfaces wave 1 didn't reach — the built-ins views (prefixed kv, secrets, contexts),
-// processor enablement (both doors), and the connected live-state delivery lane — against the
+// processor enablement (both doors), and live-state deltas delivered as EVENTS — against the
 // REAL worker (wrangler createTestHarness → local workerd, real DOs, real KV).
 //
 // Every test asserts CORRECT behavior. `test.fails` marks behavior VERIFIED BROKEN by running
@@ -11,6 +11,8 @@
 // Run: pnpm exec vitest run --config vitest.harness.config.ts __tests__/failing-wave2-sweep.test.ts
 
 import { afterAll, beforeAll, expect, test } from "vitest";
+import { processorNames, subscriptions } from "../e2e/support/client.ts";
+import { seedSources } from "../e2e/support/sources.ts";
 import { startProjectHarness, type ProjectHarness } from "./harness.ts";
 
 let harness: ProjectHarness;
@@ -92,23 +94,16 @@ test("secrets.set rejects a name the egress substitution grammar cannot express"
   ).rejects.toThrow(); // ← resolves {ok: true} — the dead write is accepted
 });
 
-// ═══════════ 3. connected live-state lane — payload-less change event (S6) ═══════════
+// ═══════════ 3. live-state deltas as EVENTS — payload-less change event (S6) ═══════════
 
-// FIXED (defect 44): #deliverToConnectedSubscriptions guards the payload with ?.key.
+// FIXED (defect 44): live state is not a MODE any more — the DO never reads `payload.key`. A tab
+// subscribes `consumes: ["events.iterate.com/live-state/changed"]` and receives every key's deltas
+// as EVENTS in the ordinary `(events, range)` batch; the client filters `payload.key` itself.
 test("a payload-less live-state/changed event never rejects an append that already committed", async () => {
-  // BUG: stream-durable-object.ts #deliverToConnectedSubscriptions (live-state branch) reads
-  //      `(e.payload as { key?: string }).key` with no guard. `payload` is OPTIONAL on every
-  //      event (core/events.ts eventInputShape), and any client may append the live-state type
-  //      bare. The TypeError throws SYNCHRONOUSLY out of the delivery loop — which append()
-  //      calls AFTER the log transaction committed — so the RPC rejects while the event stands.
-  // EXPECTED: append resolves (the commit happened); a malformed change payload degrades to a
-  //      skipped/logged delivery, exactly like the event-mode lane's caught .catch().
-  // ACTUAL (verified): append rejects "TypeError: Cannot read properties of undefined (reading
-  //      'key')" AFTER the commit point — the stream head has already advanced past the event's
-  //      offset (a durable event's row would stand identically). The caller retries (no
-  //      idempotency key on an ephemeral) and every retry re-fails the same way while offsets
-  //      keep burning; every subscription row AFTER the live-state row in the loop is starved of
-  //      that batch's delivery too.
+  // BUG (was): the connected live-state branch read `(e.payload as { key?: string }).key` with no
+  //      guard; a bare event threw SYNCHRONOUSLY out of the post-commit delivery loop, so append
+  //      REJECTED after the commit point and starved every later row of that batch.
+  // EXPECTED: append resolves (the commit happened); a malformed delta is the SUBSCRIBER's to skip.
   // WHY IT MATTERS (SHAPE S6, wave-1 defect-8's delivery-lane twin): a commit-then-reject is a
   //      lie in the ONE place clients decide between "safe to retry" and "already happened" —
   //      and userspace can trip it with a single hand-appended bare event.
@@ -116,14 +111,17 @@ test("a payload-less live-state/changed event never rejects an append that alrea
   const seen: unknown[] = [];
   await itx.subscribe({
     name: "watch",
-    liveState: { key: "avatar" },
-    target: (payload: unknown) => void seen.push(payload),
+    consumes: ["events.iterate.com/live-state/changed"],
+    target: (events: { payload?: { key?: string } }[]) => {
+      for (const e of events)
+        if (e.payload?.key === "avatar") seen.push(JSON.parse(JSON.stringify(e.payload)));
+    },
   });
   // The lane itself works: a WELL-FORMED change payload for the watched key is delivered.
   await append(itx, {
     type: "events.iterate.com/live-state/changed",
     ephemeral: true,
-    payload: { key: "avatar", from: 0, to: 1, patch: {} },
+    payload: { key: "avatar", from: 0, to: 1, patch: [] },
   });
   await until("well-formed change delivered", () => seen.length >= 1);
   // The bug: a BARE change event (no payload) must still commit-and-resolve.
@@ -131,77 +129,71 @@ test("a payload-less live-state/changed event never rejects an append that alrea
     type: "events.iterate.com/live-state/changed",
     ephemeral: true,
   });
-  expect(bare.offset).toBeGreaterThan(0); // ← the await above rejects: TypeError on undefined payload
+  expect(bare.offset).toBeGreaterThan(0);
+  expect(seen).toHaveLength(1); // the bare event reached the tab as an event and was filtered there
 });
 
-// ═══════════ 4+5. enableProcessor — success receipts for processors that can never run (S1) ═══════════
+// ═══════════ 4+5. enableProcessor — refused at the door, never a dead row (S1) ═══════════
 
-test("enableProcessor rejects a slug the mount grammar re-segments (a dotted slug)", async () => {
-  // BUG: enableProcessor(slug) builds the mount path by string interpolation
-  //      (`itx.subscribers.${slug}`) — a dotted slug ("a.b") parses into FOUR segments, so the
-  //      committed mount is itx.subscribers.a.b, which #facetEntries (a 3-segment subscriber
-  //      mount) never matches. The verb then happily materializes and configures an ORPHAN facet
-  //      ("proc:a.b") that no drive, snapshot, or alarm will ever reach, and returns {ok: true}.
-  // EXPECTED: a slug that cannot round-trip as ONE path segment is rejected at the door (the
-  //      space spelling already is — parseCapabilityPath throws on "itx.subscribers.a b" — the
-  //      dot spelling silently re-segments instead: two spellings, two behaviors).
-  // ACTUAL: {ok: true}; itx.facets.get('a.b').snapshot() then rejects NO_FACET; the processor never runs.
-  // WHY IT MATTERS (SHAPE S1, with an S5 seam — the slug is embedded in a parsed grammar in one
-  //      door and compared as an opaque string in the others): an ok-receipt for a processor
-  //      that never observes a single event is the silent version of the exact failure
-  //      enableProcessor exists to make loud.
+test("enableProcessor rejects a name that is not ONE segment (a dotted name)", async () => {
+  // A processor's name is its facet name, its subscription name, its `.get(name)` name — ONE
+  // segment ([A-Za-z0-9_-]+). "a.b" is refused at the door (SubscriptionName) instead of being
+  // re-segmented by a path grammar into an orphan no delivery would ever reach (WAS-BUG S1/S5:
+  // two spellings, two behaviors, an ok-receipt for a processor that never ran).
   const itx = await harness.itx("prj_w2dot");
+  await seedSources(itx, ["tally"]);
   await expect(
     (async () => {
-      await itx.enableProcessor("a.b");
+      await itx.enableProcessor("a.b", {
+        source: "itx.kv.get('src/tally.js')",
+        className: "Tally",
+      });
     })(),
-  ).rejects.toThrow(); // ← resolves {ok: true}; the orphan facet proc:a.b is configured and dead
+  ).rejects.toThrow(/one segment/);
+  expect(await subscriptions(itx)).toEqual([]); // nothing landed
 });
 
-test("enableProcessor rejects a slug that names NO built-in (and carries no source ref)", async () => {
-  // BUG: enableProcessor(slug) with no ref never checks the slug against the built-in facet map
-  //      (FACET_PROCESSORS in processor-facet.ts: tally, subscription-forwarder). The mount
-  //      commits, the ProcessorFacet materializes and stores its identity, and {ok: true} comes
-  //      back — but the facet's first touch throws `no built-in processor "<slug>"` from #p().
-  // EXPECTED: the enable verb fails loudly at the door — the set of built-ins is static and
-  //      known to the parent's worker (the same map the facet will consult).
-  // ACTUAL: {ok: true}; from then on EVERY commit's drive rejects inside the fire-and-forget
-  //      chain and is swallowed by reportIssue (SHAPE S2 — the error exists only as a log line),
-  //      while snapshot/waitUntilProcessed reject for any caller who checks.
-  // WHY IT MATTERS (SHAPE S1 + S2): the receipt says enabled; the log says nothing (to the
-  //      caller); the facet burns an error per commit forever — the exact "misbehaving processor
-  //      with no remedy" the disableProcessor docstring says this family exists to prevent.
+test("enableProcessor REQUIRES a source ref — there are no built-in processors to name", async () => {
+  // Every processor is userspace code loaded from a source (`{ source, className }`); a bare
+  // `enableProcessor(name)` has nothing to host and rejects (WAS-BUG S1+S2: a built-in map lookup
+  // that never happened at the door and burned a swallowed facet error per commit forever).
   const itx = await harness.itx("prj_w2ghost");
   await expect(
     (async () => {
       await itx.enableProcessor("no-such-builtin");
     })(),
-  ).rejects.toThrow(); // ← resolves {ok: true}; every later commit burns a swallowed facet error
+  ).rejects.toThrow();
+  expect(await subscriptions(itx)).toEqual([]);
 });
 
-// ═══════════ 6. the two enablement doors diverge — mounts are NOT the whole registry (S5) ═══════════
+// ═══════════ 6. the two enablement doors AGREE — the row IS the registry (S5) ═══════════
 
-test("a processor enabled by its MOUNT alone (the documented event-sourced door) serves snapshot", async () => {
-  // BUG: stream-durable-object.ts documents "enablement IS a mount ... the mounts ARE the
-  //      registry" (#facetEntries), and the capability-provided payload schema carries the
-  //      processor policy for exactly this door. But only the enableProcessor VERB calls
-  //      facet.configure(); a mount provided directly (provide at a facet-target
-  //      itx.subscribers.<slug> — an ordinary, documented client verb) creates a registry entry
-  //      whose facet was never configured: every drive and every snapshot throws "not configured".
-  // EXPECTED: the two doors agree — a facet-target mount at itx.subscribers.tally is sufficient for
-  //      the tally facet to run (the parent HAS the full identity: its own name, projectId, path,
-  //      the mount's slug and props — it can configure on first materialization).
-  // ACTUAL: provide succeeds, the drive errors are swallowed per commit (S2), and
-  //      itx.facets.get('tally').snapshot() rejects "not configured (call configure() first)".
-  // WHY IT MATTERS (SHAPE S5 — one rule, two implementations drifting; the same class as the
-  //      wave-1 consumes-filter split): the log-replay story ("rebuild is cursor-driven",
-  //      "re-enabling rebuilds from the log") quietly depends on the OTHER door having run once
-  //      — an event-sourced world that cannot actually be rebuilt from its events.
+test("a processor enabled by its RAW EVENT alone (the documented event-sourced door) serves snapshot", async () => {
+  // WAS-BUG (S5): enablement had two implementations — the event-sourced mount and a configure()
+  //      side channel only the verb ran — so a mount provided directly was half-enabled: listed,
+  //      erroring on every commit, snapshot rejecting "not configured". NOW there is ONE door: the
+  //      `subscription-configured` event whose target is the facet's `processEventBatch`;
+  //      `enableProcessor` is sugar over it and identity rides `ctx.props` at materialization —
+  //      rebuild-from-log is true.
   const itx = await harness.itx("prj_w2mount");
-  await itx.provide("itx.subscribers.tally", "itx.facets.get('tally')");
-  await append(itx, { type: "seed" });
-  const snap = await itx.invokeCapability("itx.facets.get('tally').snapshot()"); // ← rejects: ProcessorFacet: not configured
-  expect(snap.state).toHaveProperty("counts");
+  await seedSources(itx, ["tally"]);
+  await append(itx, {
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: {
+      name: "tally",
+      target:
+        "itx.load(\"itx.kv.get('src/tally.js')\").getDurableObjectClass('Tally').get('tally').processEventBatch",
+    },
+  });
+  const [seed] = await append(itx, { type: "seed" });
+  const snap: any = await until("tally materialized and reduced the seed", async () => {
+    const s: any = await itx
+      .invokeCapability("itx.facets.get('tally').snapshot()")
+      .catch(() => undefined); // NO_FACET for the instant before the first push materializes it
+    return s && s.offset >= seed.offset && s;
+  });
+  expect(snap.state.counts).toMatchObject({ seed: 1 });
+  expect(await processorNames(itx)).toEqual(["tally"]);
 });
 
 // ═══════════ 7. kv list — the first KV page presented as the whole truth (S7) ═══════════
@@ -257,5 +249,4 @@ test("cd('') resolves to THIS context (self) and answers rather than wedging", a
 
 // The former section-9 test.todo block (quiesce/alarm suspicions) is gone: its items were stale
 // (the #lastActivityMs capture-restore was already removed) or fixed at the root (alarm() awaits
-// the forwarder pump before the quiesce check; disableProcessor calls ctx.facets.delete
-// unconditionally — the storage-keeping fallback was dead code on every runtime).
+// the cursor pump before the quiesce check; disableProcessor deletes the facet, storage included).

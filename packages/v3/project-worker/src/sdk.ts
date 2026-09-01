@@ -7,7 +7,11 @@
 // get zod and full contract schemas as part of the SDK).
 
 export {
-  StreamProcessor,
+  StreamProcessorDurableObject,
+  type ItxBinding,
+  type StreamProcessorProps,
+} from "./stream-processor-durable-object.ts";
+export {
   type ProcessorContract,
   type ProcessorSnapshot,
   type ProcessorStream,

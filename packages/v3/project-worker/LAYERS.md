@@ -1,89 +1,97 @@
-# The five layers — what's built on what
+# The layers — what's built on what
 
-Plain-language map of this package, bottom-up. Each layer only uses the ones below it. Written
-to answer: "capability vs subscription vs processor vs connection — which is an example of
-which?" Answer, up front: **everything above layer 2 is a capability mount; the differences are
-just which policy rides the mount event and which lane serves it.**
+Plain-language map of this package, bottom-up: the onion. Each layer only uses the ones below it,
+and each layer's config is its OWN pure event family; anything physical (a socket, a stub, a facet)
+lives in a built-in and is named by expression. Written to answer: "capability vs subscription vs
+processor vs live stub — which is an example of which?" Answer, up front: **a mount is a name for a
+target; a subscription is a name for a delivery; a processor is a subscription whose target is a
+facet's `processEventBatch`; a live stub is the physical thing all three may name.**
 
-## Layer 1 — restorable references (things you can call after a restart)
+## Layer 0 — the axioms (built-ins; physical or platform)
 
-Every callable thing is a live object plus a small piece of durable data that gets the object
-back later.
+Every callable thing is a live object plus a small piece of durable data that gets the object back.
 
-| Kind                       | The durable data                      | Who restores it                                                                          | Where                                                                     |
-| -------------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| Durable Object by name     | its codec name (`prj_x.iterate/path`) | Cloudflare (`getByName`)                                                                 | `core/durable-object-names.ts` (`DurableObjectNameCodec`)                 |
-| Worker entrypoint by props | the props object                      | Cloudflare (`ctx.exports`, persistent stubs)                                             | `itx-entrypoint.ts`                                                       |
-| Loaded isolate / facet     | cacheKey + source modules             | Cloudflare (Worker Loader, `ctx.facets`)                                                 | `core/worker-loader.ts` (`confinedWorker`, `versionedFacet`, `asModules`) |
-| **Hibernatable RPC stub**  | a stub pager WebSocket attachment     | **us** — `{type:"page"}` pages the edge worker, which re-mints the stub over Workers RPC | `core/hibernatable-rpc-stub.ts` (`HibernatableRpcStubManager`)            |
+| Built-in / kind                                                     | The durable data                                                            | Who restores it                                                                          | Where                                                                              |
+| ------------------------------------------------------------------- | --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| a context (`cd`, the DO)                                            | its codec name (`prj_x.iterate/path`)                                       | Cloudflare (`getByName`)                                                                 | `core/durable-object-names.ts`, `stream-durable-object.ts`                         |
+| `env.ITX` (a loaded worker's world)                                 | the props `{ contextName }`                                                 | Cloudflare (`ctx.exports`, persistent stubs)                                             | `itx-entrypoint.ts`                                                                |
+| `load(src).getEntrypoint()` / `.getDurableObjectClass(C).get(name)` | cacheKey + source; a facet's `props { contextName, name }` and startup memo | Cloudflare (Worker Loader, `ctx.facets`)                                                 | `core/worker-loader.ts`, the DO's `#facet`                                         |
+| **`rpcStubs`** (a live stub)                                        | a stub pager WebSocket attachment                                           | **us** — `{type:"page"}` pages the edge worker, which re-mints the stub over Workers RPC | `core/hibernatable-rpc-stub.ts`, `rpc-stub-directory.ts`, `core/rpc-stub-relay.ts` |
+| the stream (`append`/`read`)                                        | the log (SQLite)                                                            | —                                                                                        | `core/stream.ts`                                                                   |
+| `kv`, `whoami`, `fetch`                                             | KV / the address / FALLBACK                                                 | —                                                                                        | `built-ins.ts`                                                                     |
 
-The first three are Cloudflare features. The fourth is ours — a poor-man's sturdy ref whose
-restore hook must route through whichever stateless worker holds the client's capnweb socket.
-The stub stays warm while traffic flows; the DO's quiesce disposes it (a page gets it back).
+The first three rows are Cloudflare features. `rpcStubs` is ours — a poor-man's sturdy ref whose
+restore hook must route through whichever stateless worker holds the client's capnweb socket. The
+stub stays warm while traffic flows; the DO's quiesce disposes it (a page gets it back). PRESENCE is
+physical — `itx.rpcStubs.list()`, plus two EPHEMERAL events as it changes (`rpc-stub/attached` /
+`rpc-stub/detached`); the log never claims a socket is open.
 
-## Layer 2 — the stream (one `Stream` class, held by the one context DO)
+## Layer 1 — the stream (one `Stream` class, held by the one context DO)
 
 `core/stream.ts` (`Stream`, a dependency-injected JS class) is the commit point: an append-only
 event log with monotonic offsets shared by durable AND ephemeral events (ephemerals consume
 offsets, never rows), idempotency at the door, the stream/woken wake record, `waitForEvent`,
 `read` with the scanned-offset-range proof, and the alarm armer. `stream-durable-object.ts`
-(`IterateContextDurableObject`, one DO per `{projectId, path}` context) holds a Stream and
-drives it — its injected callbacks run the inline reduces in-transaction (pause/breaker
-enforcement lives there) and the post-commit fan-out. Identity is always log-derived: a mount's
-id IS the offset of its capability-provided fact.
+(`IterateContextDurableObject`, one DO per `{projectId, path}` context) holds a Stream and drives
+it — its injected callbacks run the inline reduces in-transaction (pause/breaker enforcement lives
+there) and the post-commit fan-out. Identity is always log-derived: a mount's id IS the offset of
+its capability-provided fact; a subscription's, of its subscription-configured fact.
 
-## Layer 3 — the capability table (one reduce, resolved at zero distance)
+Three reduce-only processors run INLINE at the commit point (`core/inline-core.ts` — zero runner
+apparatus): `core` (pause / breaker / incarnation), `capability-table` (layer 2), `subscriptions`
+(layer 3). Runtime state IS reduced state: `itx.facets.get('core' | 'capability-table' |
+'subscriptions').snapshot()`.
 
-`capability-table-processor.ts`, hosted INLINE at the commit point: capability-provided/-revoked
-events (string-at-rest expression halves) reduce into the mount stack. One dispatch path:
-parse → longest-path-prefix match (final segment may consume boundary args, ties → newest) →
-substitute → evaluate → replay the remainder. A built-in root (`built-ins.ts`) resolves DIRECTLY
-(built-ins first); userspace mounts see only `itx` — a bare root is unspellable, so the built-ins
-are unshadowable. EVERY attachment is a mount here: plain capabilities, subscriptions (delivery
-policy + the stamped lane on the event), processors (processor policy: source/className), live
-capabilities (an ORDINARY mount whose target is `itx.rpcStubs.get('<path>')` — the stub itself is
-parked in the `itx.rpcStubs` built-in under that path; the row is pure data, the log records the
-mount and never the socket). One reduce for all of them: a shadow stack — newest same-path row
-wins, revoke-by-offset pops one — and the provide door is IDEMPOTENT (same winner target +
-policy ⇒ nothing appended), so a reconnect's re-provide adds no row.
+## Layer 2 — mounts (the capability table)
 
-## Layer 4 — processors (cursor + two switches + declared dependencies)
+`capability-table-processor.ts`: `capability-provided { path, target }` / `capability-revoked
+{ providedAtOffset }` reduce into the mount stack. That is the WHOLE event — no policies, no flags.
+One dispatch path: parse → longest-path-prefix match (final segment may consume boundary args, ties
+→ newest) → evaluate the target against `{ itx }` → replay the remainder. A built-in root resolves
+DIRECTLY (built-ins first); userspace mounts see only `itx` — a bare root is unspellable, so the
+built-ins are unshadowable. A live capability is no exception: `itx.provide(path, fn)` is SUGAR that
+parks `fn` in `rpcStubs` under `path` and mounts `path ⇒ itx.rpcStubs.get('<path>')`. The door is
+idempotent (a reconnect appends nothing).
 
-`core/processor.ts`: contract + `reduce` (pure switch) + `processEvent` (effect switch) +
-declared deps; the runner (serial chain, cursor, gap repair from the scanned-offset-range
-proof) lives in the same class. Two seats, chosen by shape: reduce-only → INLINE at the commit
-point (the capability table, the core processor — zero runner apparatus); has effects → a
-workerd FACET (`processor-facet.ts`), built-in by slug or userspace via the Worker Loader +
-injected SDK. Stateful loaded classes are facets here too (the dedicated runner DO died).
-`subscription-forwarder-processor.ts` is the model citizen: contract, two switches, one
-`readonly #pump` dependency.
+## Layer 3 — subscriptions (own reduce, ONE delivery loop)
 
-## Layer 5 — rpc stubs and delivery (the edges of the system)
+`subscriptions.ts`: `subscription-configured { name, target, consumes? }` (same name REPLACES),
+`subscription-removed`, `subscription-delivery-halted` (appended by the loop), `subscription-
+delivery-resumed` (appended by an operator; un-halt, optional seek). Pure data; the layer knows only
+the stream and the codec.
 
-`core/itx-surface.ts`: capnweb terminates at `/api`, never in a DO. A client offers a live
-capability through the ONE provide door — `itx.provide(path, stub)` — sugar over two axioms: the
-callback is PARKED in the `itx.rpcStubs` built-in under `path` (retained relay-side, paged into
-the DO on demand — the poor-man's sturdy ref, `hibernatable-rpc-stub.ts`), then the ordinary
-mount `path ⇒ itx.rpcStubs.get('<path>')` is appended. Calling it is just
-`itx.<path>.method(...)` (or, registry-direct, `itx.rpcStubs.get('<path>').method(...)`).
-PRESENCE is PHYSICAL — `itx.rpcStubs.list()`, the keys with an open transport right now — never
-the table; the whole socket census is `transportState()`, a DO-only verb.
+`subscription-delivery.ts`: after every commit, for each subscription whose `consumes` matches,
+evaluate the target and ASK THE VALUE what it is:
 
-A subscriber mount's delivery LANE is a DECLARED fact — `laneOf` stamps it ONCE on the
-capability-provided event at the provide door (`SubscriptionLane`), never re-sniffed from the
-target's shape at delivery time. Three lanes:
+- a `FacetHandle` (`itx.facets.get(…)`, `…getDurableObjectClass(C).get(name)`) or an `RpcStubHandle`
+  (`itx.rpcStubs.get(…)`) OWNS ITS PROGRESS — a facet keeps its own checkpoint and gap-repairs, a
+  live client owns its offset and heals with `read` — so it gets a fire-and-forget PUSH of
+  `(events, { after, through })`, serialized per subscription, zero server state;
+- anything else (a Worker-Loader entrypoint's `processEventBatch`, a sibling context, a remote)
+  cannot, so THE STREAM KEEPS A CURSOR — in memory, written to kv only at durable boundaries — and
+  delivers at-least-once (the awaited call is the ack; one retry ladder; halt fact; retries on the
+  DO's own alarm).
 
-- **facet** (`itx.facets.get('slug')`): a co-located facet the commit PUMP drives — a processor.
-- **connected** (target `itx.rpcStubs.get('…')` — a LIVE callback parked at the subscription's own path): fire-and-forget batches + the GLOBAL
-  ScannedOffsetRange over the paged-in stub, straight from the commit path — no acks, no server
-  cursor, no coalescing; the client holds its own offset and heals by pull. Live-state deltas ride
-  the same lane, revision-chained, door-healed. Measured: p50 ~215ms end-to-end, ~50× batching
-  (prove_ephemeralflood).
-- **durable** (any other expression): the subscription-forwarder facet holds a
-  SubscriptionDeliveryProgress cursor per mount and applies the ONE failure policy — bounded
-  retries → HALT + audit fact; recovery is a durable subscription-resumed event.
+Nothing is declared or stamped; an alias classifies correctly because it evaluates to the same
+handle. `itx.subscriptions.list()` is the read door (rows ⋈ cursors). Edge sugar: `subscribe`,
+`unsubscribe`; an unnamed subscription is session-scoped.
 
-A live stub that dies leaves only its absence: it drops out of `itx.rpcStubs.list()`, while its
-mount STAYS — calls answer CONNECTION_OFFLINE — until someone revokes it or the provider re-parks
-the same path (reconnect). Nothing auto-revokes; the table never claimed liveness. Everything a
-client ever does — Slack-bridge RpcTargets included (prove_slack) — is these five layers composed.
+## Layer 4 — processors (sugar over layers 0 and 3)
+
+`stream-processor-durable-object.ts` (the SDK, bundled into `processor.js`): a processor IS a
+`DurableObject` the author writes — `reduce` (pure switch), `processEvent` (effect switch),
+`projectLiveState` — around the `StreamProcessor` engine in `core/processor.ts` (serial chain,
+checkpoint, gap repair from the scanned-range proof, at-head pass, version refold, live-state
+publishing). It is hosted like ANY class: `itx.load(src).getDurableObjectClass('Presence')
+.get('presence')`, identity in `ctx.props`. `enableProcessor(name, { source, className })` is
+`subscribe({ name, target: that chain + ".processEventBatch" })`; `disableProcessor` is
+`unsubscribe` + `itx.facets.delete(name)`. There are no built-in processors — `tally` is a fixture.
+
+## Layer 5 — the edge (sessions and the relay)
+
+`core/itx-surface.ts`: capnweb terminates at `/api`, never in a DO (`UnauthenticatedSession →
+authenticate() → Session → projects.get(id) → IterateContext`, `cd(path)` for the rest). The edge
+is a PROXY for the DO's verbs, plus the two jobs only it can do: FOLD dotted sugar into one
+`invokeCapability(expression)` (a terminal `.fetch(request)` rides the fetch channel), and PARK
+live stubs in the session's `Parking` (`core/rpc-stub-relay.ts`) — the DON'T-PIN relay the pager
+pages. Everything a client ever does — Slack-bridge RpcTargets included — is these layers composed.

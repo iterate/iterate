@@ -18,7 +18,15 @@
 
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import { openItx, freshCtx, session, until } from "./support/client.ts";
+import {
+  openItx,
+  freshCtx,
+  presence,
+  session,
+  sleep,
+  subscriptions,
+  until,
+} from "./support/client.ts";
 
 // Disposing our own provider session mid-test surfaces the capnweb peer-close as an unhandled
 // rejection — the deliberate disconnect, not a failure. The e2e config's onUnhandledError filter
@@ -104,4 +112,72 @@ test("a provider drops and re-provides at the same path — offline in between (
   expect(providedAtP(logAfter)).toHaveLength(1);
   expect(logAfter.events.length).toBe(logBefore.events.length);
   expect(await mountsAtP()).toHaveLength(1);
+});
+
+// The same property one layer up (was resub-zombie.e2e): a LIVE SUBSCRIBER is a stub parked under
+// `itx.subscriptions.<name>` plus one subscription row naming it. Re-subscribing the same name
+// re-parks under the same key — the session disposes the first relay (its transport is REPLACED, the
+// first callback physically unreachable) — and the identical row appends NOTHING (same name
+// replaces; there is no shadow stack). `unsubscribe(name)` drops the one row and closes this
+// session's stub: no callback under that name receives anything afterwards.
+test("a live subscriber re-subscribes under the same name — the transport is replaced (one row, zero events); unsubscribe stops delivery for good", async () => {
+  const itx = openItx(freshCtx("resub"));
+  await itx.append({ type: "seed" });
+  const rowsNamed = async (name: string): Promise<unknown[]> =>
+    (await subscriptions(itx)).filter((r: { name: string }) => r.name === name);
+
+  // ── CONTROL: a single live subscribe delivers; unsubscribe(name) stops it ──
+  let ctrl = 0;
+  await itx.subscribe({
+    name: "control",
+    consumes: ["ctl"],
+    target: (events: unknown[]) => {
+      ctrl += events.length;
+    },
+  });
+  await itx.append({ type: "ctl", payload: { n: 1 } });
+  await until("control delivered", () => ctrl === 1);
+  await itx.unsubscribe("control");
+  expect(await rowsNamed("control")).toHaveLength(0);
+  await itx.append({ type: "ctl", payload: { n: 2 } });
+  await sleep(1500);
+  expect(ctrl).toBe(1); // NO delivery after unsubscribe
+
+  // ── re-subscribe the SAME name with a second callback ──
+  let cb1 = 0;
+  let cb2 = 0;
+  await itx.subscribe({
+    name: "s",
+    consumes: ["mark"],
+    target: (events: unknown[]) => {
+      cb1 += events.length;
+    },
+  });
+  const logBefore = await itx.read(0, 500);
+  await itx.subscribe({
+    name: "s", // the client's model: this REPLACES cb1
+    consumes: ["mark"],
+    target: (events: unknown[]) => {
+      cb2 += events.length;
+    },
+  });
+  // the identical row appended NOTHING, the table holds ONE row named s, and the key is present
+  const logAfter = await itx.read(0, 500);
+  expect(logAfter.events.length).toBe(logBefore.events.length);
+  expect(await rowsNamed("s")).toHaveLength(1);
+  expect(await presence(itx)).toContain("itx.subscriptions.s");
+
+  await itx.append({ type: "mark", payload: { n: 1 } });
+  await until("cb2 delivered", () => cb2 === 1);
+  await sleep(1000);
+  expect(cb1).toBe(0); // only the newest callback is reachable — cb1's transport was replaced
+
+  // ── unsubscribe once: the row and this session's stub are gone; nobody under s hears the next mark ──
+  await itx.unsubscribe("s");
+  expect(await rowsNamed("s")).toHaveLength(0);
+  await until("stub closed", async () => !(await presence(itx)).includes("itx.subscriptions.s"));
+  await itx.append({ type: "mark", payload: { n: 2 } });
+  await sleep(1500);
+  expect(cb1).toBe(0);
+  expect(cb2).toBe(1);
 });

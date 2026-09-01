@@ -363,7 +363,7 @@ test("frames per call: ONE settled invokeCapability = exactly 2 outbound (push+p
 
 // ═══════════════════════════════ 3. ONE-DIRECTIONAL DELIVERY at the wire ═══════════════════════════════
 
-test("one-directional delivery: 100 ephemeral chunks arrive as inbound frames; the subscriber socket never sends push/pull; deliveries keep flowing with outbound STALLED", async () => {
+test("one-directional delivery: 100 ephemeral chunks arrive as inbound frames; the subscriber socket never sends push/pull — it only ever ANSWERS", async () => {
   const ctx = c("oneway");
   const w = wireSession();
   const itx = await w.session.authenticate().projects.get(ctx);
@@ -375,7 +375,7 @@ test("one-directional delivery: 100 ephemeral chunks arrive as inbound frames; t
       for (const e of events) if (e.type === "chunk") received.push(e.payload.n);
     },
   });
-  await settle(400); // let the park/mount fully settle before the census window opens
+  await settle(400); // let the park/row fully settle before the census window opens
 
   const producer = await harness.itx(ctx); // a SECOND session appends
   const mark = w.mark();
@@ -399,25 +399,57 @@ test("one-directional delivery: 100 ephemeral chunks arrive as inbound frames; t
   //   in:  1 push (the delivery call) + 1 pull (the relay awaits the callback's result)
   //        + 1 release (the server dropping its import of the answer),
   //   out: 1 resolve (the callback's `undefined` answer) — a RESPONSE, never an initiation.
-  // So "one-directional" at the wire = the client only ever ANSWERS; the stall proof below
-  // shows even those answers are not load-bearing for delivery.
+  // So "one-directional" at the wire = the client only ever ANSWERS.
   expect(t).toEqual({ "in:push": 100, "in:pull": 100, "in:release": 100, "out:resolve": 100 });
+  expect(received).toEqual([...Array(100).keys()]); // in order, no loss, no dups
+}, 90_000);
 
-  // THE STALL PROOF: nothing outbound is awaited/blocking — deliveries keep arriving with the
-  // client's outbound artificially held.
+test("one-directional delivery: batches keep flowing with the subscriber's outbound STALLED — nothing outbound is load-bearing", async () => {
+  // BUG (src/subscription-delivery.ts #dispatch): the per-subscription push chain AWAITS
+  //   `call([events, range])` — i.e. the client's `resolve` answer — before the next batch for that
+  //   subscription may go out. A client whose outbound is stalled (or a callback that never
+  //   answers) therefore stalls ITS OWN later deliveries, and the pending push pins `#inFlight`
+  //   (the quiesce never fires) with no watchdog on the push path. The connected lane this
+  //   replaced was `void …invoke(…).catch(…)` — never awaited.
+  // EXPECTED (the loop's own header, "fire-and-forget PUSH … serialized per subscription", and the
+  //   design's §4.2 pseudo): only the EVALUATION is serialized; the client's answers are not
+  //   load-bearing — deliveries arrive at append rate while the client's answers are held.
+  // ACTUAL: with outbound held, the batch after the first never arrives; everything lands the
+  //   moment the client flushes its answers.
+  // WHY IT MATTERS: one-directional delivery is the hibernation story (a tab that answers late must
+  //   not back-pressure the DO) and the throughput story (batches flow at append rate, not at the
+  //   client's round-trip rate).
+  const ctx = c("stall");
+  const w = wireSession();
+  const itx = await w.session.authenticate().projects.get(ctx);
+  const received: number[] = [];
+  await itx.subscribe({
+    name: "wire",
+    consumes: ["chunk"],
+    target: (events: any[]) => {
+      for (const e of events) if (e.type === "chunk") received.push(e.payload.n);
+    },
+  });
+  const producer = await harness.itx(ctx);
+  const chunk = (n: number) =>
+    producer.invokeCapability([
+      "itx",
+      ["append", { type: "chunk", ephemeral: true, payload: { n } }],
+    ]);
+  await chunk(0); // one probe proves the lane before the stall
+  await until("the probe delivered", () => received.length >= 1, 10_000);
+  await settle(300); // its answer flushes before the stall
+
+  // THE STALL PROOF: hold every outbound frame; deliveries must keep arriving regardless.
   w.stallOutbound();
   const stallMark = w.mark();
-  for (let i = 100; i < 120; i++)
-    await producer.invokeCapability([
-      "itx",
-      ["append", { type: "chunk", ephemeral: true, payload: { n: i } }],
-    ]);
-  await until("20 more chunks delivered THROUGH the stall", () => received.length >= 120, 20_000);
+  for (let i = 1; i <= 20; i++) await chunk(i);
+  await until("20 more chunks delivered THROUGH the stall", () => received.length >= 21, 8_000);
   const stalledWindow = w.since(stallMark);
   expect(stalledWindow.every((f) => f.dir === "in")).toBe(true); // zero outbound frames flushed
   w.flushOutbound();
-  expect(received.slice(0, 120)).toEqual([...Array(120).keys()]); // in order, no loss, no dups
-}, 90_000);
+  expect(received).toEqual([...Array(21).keys()]); // in order, no loss, no dups
+}, 60_000);
 
 // ═══════════════════════════════ 4. DEEP CHAINING through live capabilities ═══════════════════════════════
 

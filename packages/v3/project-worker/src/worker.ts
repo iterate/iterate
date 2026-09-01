@@ -23,7 +23,6 @@ registerPipelinedRpcBrand(NativeRpcPromise);
 registerPipelinedRpcBrand(NativeRpcProperty);
 
 export { IterateContextDurableObject };
-export { ProcessorFacet } from "./processor-facet.ts";
 export { ItxEntrypoint } from "./itx-entrypoint.ts";
 
 interface Env {

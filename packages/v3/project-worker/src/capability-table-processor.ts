@@ -3,22 +3,21 @@
 // host the same way). Its reduced state IS the table:
 //
 //   ┌───────────────── the capability table (per context) ─────────────────┐
-//   │  BUILT-INS      (kv, append, read, cd, …; resolved DIRECTLY —        │  built-ins first;
-//   │                  no mount, no config; unshadowable physical layer)    │  then longest
+//   │  BUILT-INS      (kv, append, read, cd, fetch, rpcStubs, facets, …;    │  built-ins first;
+//   │                  resolved DIRECTLY — no mount; unshadowable)          │  then longest
 //   │  userspace      (capability-provided/-revoked; SHADOW STACK: newest   │  path wins, ties
 //   │  mounts          same-path wins; revoke-by-offset pops that entry)    │  → recency; else
 //   └──────────────────────────────────────────────────────────────────────┘  DEFAULT-DENY
 //
-// A MOUNT binds a CAPABILITY PATH ("itx.chat") to a TARGET EXPRESSION — always. A LIVE capability
-// (`itx.provide(path, stub)`) is no exception: the stub is parked in the `itx.rpcStubs` BUILT-IN
-// (a physical registry, keyed by the path string) and the mount's target is the ordinary expression
-// `itx.rpcStubs.get('<path>')` — the log records the mount, never the socket. Mounts optionally
-// carry a DELIVERY policy (subscriptions) or a PROCESSOR policy (facet-processor enablement) —
-// every userspace attachment to a stream is a mount, all event-sourced, all shadowable/revocable,
-// all PURE DATA: replaying the log rebuilds the table exactly; what a target EVALUATES to (a stub
-// that is offline, a kv key that is gone) is the physical layer's business at call time. STRING AT
-// REST: the event payload stores both halves in the string half of the codec (the log reads like
-// what a human wrote); reduce parses ONCE into the structured in-memory table.
+// A MOUNT binds a CAPABILITY PATH ("itx.chat") to a TARGET EXPRESSION — and nothing else. That is
+// the whole event: `{ path, target }`. A LIVE capability (`itx.provide(path, stub)`) is no exception:
+// the stub is parked in the `itx.rpcStubs` BUILT-IN (physical, keyed by the path string) and the
+// mount's target is the ordinary expression `itx.rpcStubs.get('<path>')` — the log records the
+// mount, never the socket. Subscriptions are NOT mounts: they are the layer above, with their own
+// events (subscriptions.ts). STRING AT REST: the event payload stores both halves in the string half
+// of the codec (the log reads like what a human wrote); reduce parses ONCE into the structured
+// in-memory table. Replaying the log rebuilds the table exactly; what a target EVALUATES to (a stub
+// that is offline, a kv key that is gone) is the physical layer's business at call time.
 //
 // Resolution of a call: `itx.<root>…` where `<root>` is a BUILT-IN resolves directly against the
 // physical scope (as if by an implicit mount `itx.<root> ⇒ <root>`). Otherwise, match every
@@ -30,11 +29,7 @@ import { z } from "zod";
 import { codedError } from "./core/errors.ts";
 import { expressionEndingInFetch } from "./core/fetch-capabilities.ts";
 import { createLogger } from "./core/logs.ts";
-import {
-  defineProcessorContract,
-  type DeliveryPolicy,
-  type SubscriptionLane,
-} from "./core/events.ts";
+import { defineProcessorContract } from "./core/events.ts";
 import {
   parse,
   parseCapabilityPath,
@@ -50,21 +45,9 @@ import type { ProcessorStream, ReduceArgs, ReduceOnlyProcessor } from "./core/pr
 
 const tableLog = createLogger("capability-table");
 
-/** Per-instance facet-processor enablement policy — rides the mount event like `delivery`. */
-export type ProcessorPolicy = {
-  /** Userspace source expression (string half), resolved to modules at materialization.
-   *  Absent = a built-in facet class named by the mount's slug. */
-  source?: string;
-  /** Which exported class of the userspace modules is the StreamProcessor subclass — the SAME
-   *  `className` a stateful `itx.facets.get({ source, className })` names, unified deliberately:
-   *  enabling a processor is loading a class as a facet, plus driving it with this stream's
-   *  commits. Defaults to the module's default export. */
-  className?: string;
-};
-
 const CapabilityTableContract = defineProcessorContract({
   slug: "capability-table",
-  version: "4.0.0",
+  version: "5.0.0",
   description:
     "The context's capability table: reduces capability-provided/-revoked events into the mount stack that every call resolves against.",
   stateSchema: z.object({
@@ -77,10 +60,6 @@ const CapabilityTableContract = defineProcessorContract({
           target: z.custom<Expression>(() => true),
           /** The mount's identity — the offset of its capability-provided event. */
           providedAtOffset: z.number().int().positive(),
-          delivery: z.record(z.string(), z.unknown()).optional(),
-          processor: z.record(z.string(), z.unknown()).optional(),
-          /** SUBSCRIPTION mounts only — the declared delivery lane (see `SubscriptionLane`). */
-          lane: z.enum(["facet", "connected", "durable"]).optional(),
         }),
       )
       .default([]),
@@ -88,33 +67,8 @@ const CapabilityTableContract = defineProcessorContract({
   events: {
     "events.iterate.com/capability-table/capability-provided": {
       description:
-        "Mount a capability at `path` → a `target` expression (string half of the codec — the log stays human-readable; same-path mounts SHADOW, newest wins). A live stub's mount targets `itx.rpcStubs.get('<path>')`.",
-      payloadSchema: z.object({
-        path: z.string(),
-        target: z.string(),
-        /** SUBSCRIPTION mounts only (path itx.subscribers.<name>). */
-        delivery: z
-          .object({
-            consumes: z.array(z.string()).optional(),
-            maxAttempts: z.number().int().positive().optional(),
-            start: z.enum(["beginning", "now"]).optional(),
-            /** LIVE STATE mode: the key's state change events are forwarded as they commit;
-             *  the CLIENT chains revisions and re-reads the producer's door on any gap. */
-            liveState: z.object({ key: z.string() }).optional(),
-          })
-          .optional(),
-        /** PROCESSOR policy — rides a facet-target subscriber mount
-         *  (`itx.subscribers.<slug> → itx.facets.get('<slug>')`): the class that facet loads. */
-        processor: z
-          .object({
-            source: z.string().optional(),
-            className: z.string().optional(),
-          })
-          .optional(),
-        /** The delivery lane, stamped ONCE here (see `SubscriptionLane`) — every reader reads it
-         *  instead of re-inferring from the target's shape. Subscriber mounts only. */
-        lane: z.enum(["facet", "connected", "durable"]).optional(),
-      }),
+        "Mount a capability at `path` → a `target` expression (string half of the codec — the log stays human-readable; same-path mounts SHADOW, newest wins). That is the whole event. A live stub's mount targets `itx.rpcStubs.get('<path>')`.",
+      payloadSchema: z.object({ path: z.string(), target: z.string() }),
     },
     "events.iterate.com/capability-table/capability-revoked": {
       description:
@@ -171,13 +125,7 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
   reduce({ event, state }: ReduceArgs<State>): State | undefined {
     if (event.ephemeral) return undefined;
     if (event.type === "events.iterate.com/capability-table/capability-provided") {
-      const { path, target, delivery, processor, lane } = event.payload as {
-        path: string;
-        target: string;
-        delivery?: Record<string, unknown>;
-        processor?: Record<string, unknown>;
-        lane?: "facet" | "connected" | "durable";
-      };
+      const { path, target } = event.payload as { path: string; target: string };
       let parsed: { path: CapabilityPath; target: Expression };
       try {
         parsed = { path: parseCapabilityPath(path), target: parse(target) };
@@ -189,18 +137,7 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
         });
         return undefined;
       }
-      return {
-        mounts: [
-          ...state.mounts,
-          {
-            ...parsed,
-            providedAtOffset: event.offset,
-            ...(delivery && { delivery }),
-            ...(processor && { processor }),
-            ...(lane && { lane }),
-          },
-        ],
-      };
+      return { mounts: [...state.mounts, { ...parsed, providedAtOffset: event.offset }] };
     }
     if (event.type === "events.iterate.com/capability-table/capability-revoked") {
       const { providedAtOffset } = event.payload as { providedAtOffset: number };
@@ -214,11 +151,6 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
   async provide(input: {
     path: string | CapabilityPath;
     target: ItxExpression;
-    delivery?: DeliveryPolicy;
-    processor?: ProcessorPolicy;
-    /** The delivery lane, stamped on the event (see `SubscriptionLane`). The host computes it once
-     *  at the provide door; every reader reads it back rather than re-inferring from the target. */
-    lane?: SubscriptionLane;
   }): Promise<{ providedAtOffset: number }> {
     const path = typeof input.path === "string" ? parseCapabilityPath(input.path) : input.path;
     const target = toExpression(input.target);
@@ -248,13 +180,7 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
     const [event] = await this.stream.append(
       this.contract.buildEvent({
         type: "events.iterate.com/capability-table/capability-provided",
-        payload: {
-          path: pathString,
-          target: targetString,
-          ...(input.delivery && { delivery: input.delivery }),
-          ...(input.processor && { processor: input.processor }),
-          ...(input.lane && { lane: input.lane }),
-        },
+        payload: { path: pathString, target: targetString },
       }),
     );
     return { providedAtOffset: event.offset };
@@ -337,9 +263,9 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
     return this.resolve(state, expressionEndingInFetch(expr), [request]);
   }
 
-  /** Pure routing: the winning userspace `provide` mount ROW for a call (the caller branches on
-   *  its `live`/`target`), or null (built-ins are resolved before this — see `resolve`). Longest
-   *  matching path wins; ties → newest mount (`providedAtOffset`). */
+  /** Pure routing: the winning userspace `provide` mount ROW for a call, or null (built-ins are
+   *  resolved before this — see `resolve`). Longest matching path wins; ties → newest mount
+   *  (`providedAtOffset`). */
   #route(state: State, call: Expression): { mount: State["mounts"][number]; m: Match } | null {
     if (typeof call[0] !== "string")
       throw new Error("cannot call the scope symbol itself — name a capability first");
@@ -368,16 +294,5 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
       const last = segments[segments.length - 1] as string;
       return this.#resolveCurrent(["itx", ...segments.slice(0, -1), [last, ...args]], depth);
     });
-  }
-
-  /** Deliver to ONE subscription mount BY ROW IDENTITY — never by name through the table (a
-   *  broad default route must not intercept deliveries). The target is evaluated and called with
-   *  the delivery args (an event batch + its ScannedRange, or a state change payload); a live
-   *  callback's target evaluates to its transport handle, so the args land on the bare parked
-   *  callable (applyRoot — the empty call path). */
-  async deliverTo(state: State, providedAtOffset: number, args: unknown[]): Promise<unknown> {
-    const row = state.mounts.find((m) => m.providedAtOffset === providedAtOffset);
-    if (!row) throw new Error(`no subscription mount at offset ${providedAtOffset}`);
-    return apply({ itx: this.#itxAtDepth(1) }, row.target, { boundaryArgs: args, remainder: [] });
   }
 }

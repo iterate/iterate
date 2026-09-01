@@ -7,6 +7,7 @@
 // test. Run: pnpm exec vitest run --config vitest.harness.config.ts __tests__/failing-appsos-mined.test.ts
 
 import { afterAll, beforeAll, expect, test } from "vitest";
+import { seedSources } from "../e2e/support/sources.ts";
 import { startProjectHarness, type ProjectHarness } from "./harness.ts";
 
 let harness: ProjectHarness;
@@ -196,23 +197,24 @@ test("probing the core snapshot mints no storage — a virgin ctx reports incarn
 
 // ─────────────────────────────── PROVIDE DOOR CANONICALIZATION ───────────────────────────────
 
-test("a NON-CANONICAL subscribers spelling through the raw provide door still lands a LANED row (durable lane)", async () => {
-  // The ghost-subscription pin: provideCapability canonicalizes ONCE at the top, so the lane is
-  // stamped from the same spelling the reduce stores. Pre-fix, " itx.subscribers.x" dodged the
-  // raw-string `startsWith` lane check but reduced to the canonical path — a laneless subscriber
-  // row that NO fan-out lane serves and resumeSubscription cannot heal: a silently-dead
-  // subscription with a success receipt. (The connected-lane ghost is pinned in
-  // __workers-tests__/do-doors.test.ts, where the DO door is callable raw.)
+test("a NON-CANONICAL path spelling through the raw provide door is stored CANONICAL and routes", async () => {
+  // The one-canonicalizer pin: provideCapability canonicalizes ONCE at the top, so the reduce
+  // stores exactly the path every later door (dispatch, revoke-by-path, the rpcStubs key) compares
+  // against — a stray space can never mint a row no route serves (the ghost-row shape). The DO-door
+  // half is pinned in __workers-tests__/do-doors.test.ts, where the raw door is callable.
   const itx = await harness.itx("prj_am_ghostlane");
-  await itx.provide(" itx.subscribers.ghost", "itx.whoami", {
-    delivery: { consumes: ["mark"] },
-  });
+  await itx.provide(" itx.ghost", "itx.whoami");
   const snap = await itx.invokeCapability("itx.facets.get('capability-table').snapshot()");
-  const row = (snap.state.mounts as { path: string[]; lane?: string }[]).find(
-    (m) => m.path.join(".") === "itx.subscribers.ghost",
+  const row = (snap.state.mounts as { path: string[] }[]).find(
+    (m) => m.path.join(".") === "itx.ghost",
   );
   expect(row).toBeDefined(); // stored CANONICAL
-  expect(row!.lane).toBe("durable"); // an absent-facet expression target = the forwarder's lane
+  expect(await itx.invokeCapability(["itx", ["ghost"]])).toMatchObject({
+    projectId: "prj_am_ghostlane",
+  }); // and routed
+  await itx.revoke("itx.ghost"); // the canonical spelling is what revoke-by-path finds
+  const err = await rejection(itx.invokeCapability(["itx", ["ghost"]]));
+  expect(err.message).toContain("no capability matches");
 });
 
 // ─────────────────────────────── SUBSCRIBE SUGAR ───────────────────────────────
@@ -233,13 +235,38 @@ test("concurrent anonymous subscribes get unique names and never shadow each oth
   );
 });
 
-test("an inline core slug (core / capability-table) can be neither enabled nor disabled as a facet", async () => {
+test("an inline core slug (core / capability-table / subscriptions) cannot be disabled as a facet", async () => {
   // PARITY LOCK: the inline reduce-only cores are always-on, never facets — an authority
   //   boundary (contrast apps/os "hosted processor subscriptions cannot be removed",
   //   core-processor.test.ts:495).
   const itx = await harness.itx("prj_am_inline");
-  await expect(itx.enableProcessor("core")).rejects.toThrow(/inline core/);
-  await expect(itx.disableProcessor("capability-table")).rejects.toThrow(/inline core/);
+  for (const slug of ["core", "capability-table", "subscriptions"]) {
+    const err = await rejection(itx.disableProcessor(slug));
+    expect(err.message).toMatch(/inline core/);
+  }
+});
+
+test("enableProcessor refuses an inline core slug (core / capability-table / subscriptions)", async () => {
+  // BUG: `enableProcessor("core", ref)` is ACCEPTED — a subscription row named "core" is appended
+  //   whose target materializes a hosted facet also named "core", shadowed by the inline reduce of
+  //   the same name (`itx.facets.get('core')` answers the inline snapshot; the hosted facet is
+  //   unreachable by name yet pushed every commit) — and `disableProcessor("core")` then throws on
+  //   the facet delete, so the verb cannot undo it (`unsubscribe("core")` can).
+  // EXPECTED: the three inline slugs are refused at the ENABLE door exactly as the disable door
+  //   refuses them (the parity lock above).
+  // ACTUAL: resolves; `itx.subscriptions.list()` lists a row named "core".
+  // WHY IT MATTERS: a name collision with the kernel's own reduces yields a processor that runs but
+  //   cannot be addressed or disabled by name — the "misbehaving processor with no remedy" shape.
+  const itx = await harness.itx("prj_am_inline_enable");
+  await seedSources(itx, ["tally"]);
+  await expect(
+    (async () => {
+      await itx.enableProcessor("core", {
+        source: "itx.kv.get('src/tally.js')",
+        className: "Tally",
+      });
+    })(),
+  ).rejects.toThrow(/inline core/);
 });
 
 // ─────────────────────────────── GUARANTEE DELIBERATELY NOT GIVEN (parity) ───────────────────────────────
@@ -254,18 +281,20 @@ test.fails("configuring a subscription verifies the receiver end-to-end", async 
   //   unusable. apps/os documents the exact non-guarantee as a `test.fails` —
   //   guarantees-not-given.test.ts:344 "configuring a copy subscription verifies the receiver
   //   end-to-end".
-  // ACTUAL: subscribe resolves; the forwarder later delivers to `itx.does-not-exist`, hits
-  //   NO_CAPABILITY_MATCH, and halts after the (here 1-attempt) ladder.
+  // ACTUAL: subscribe resolves; the delivery loop later fails to evaluate `itx.does-not-exist`
+  //   (NO_CAPABILITY_MATCH) on every consumed commit — a reported issue per commit, and (the head
+  //   never evaluating) no cursor row and no halted fact for an operator to find.
   // WHY IT MATTERS: documents that the clean room inherits apps/os's deliberate late-failure
-  //   trade — a fat-fingered target is loud but LATE (halt audit + resume verb), never rejected
-  //   at the call site. FIX: n/a — deliberate; this test pins the boundary for future changes.
+  //   trade — a fat-fingered target fails LATE, never at the call site. FIX: n/a — deliberate;
+  //   this test pins the boundary for future changes.
   const itx = await harness.itx("prj_am_configverify");
   await expect(
-    itx.subscribe({
-      name: "unusable",
-      consumes: ["mark"],
-      target: "itx.does-not-exist",
-      maxAttempts: 1,
-    }),
+    (async () => {
+      await itx.subscribe({
+        name: "unusable",
+        consumes: ["mark"],
+        target: "itx.does-not-exist.processEventBatch",
+      });
+    })(),
   ).rejects.toThrow(/verif|unusable|receiver|no capability/i);
 });

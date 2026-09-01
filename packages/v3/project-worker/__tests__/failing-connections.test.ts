@@ -312,16 +312,21 @@ test("killing the provider session mid-invoke rejects the in-flight call promptl
 // member is NOT removed from the table for the caller (nothing auto-revokes a mount): it stays
 // listed and its call REJECTS with CONNECTION_OFFLINE, which the allSettled drops. (Fanning out
 // over `itx.rpcStubs.list()` instead would skip it up front — presence is the physical set.)
-test("fan-out via the table's live mounts + map drops dead members (CONNECTION_OFFLINE) and the no-hello subscriber", async () => {
+test("fan-out via the table's live mounts + map drops dead members (CONNECTION_OFFLINE); a live subscriber is not a mount and never enters the fan-out", async () => {
   const ctx = c("each");
   const observer = await harness.itx(ctx);
   const sAlive = harness.session();
   await sAlive.authenticate().projects.get(ctx).provide("itx.alive", new Tools("alive"));
   const { session: sDead, ws: wsDead } = rawSession();
   await sDead.authenticate().projects.get(ctx).provide("itx.doomed", new Tools("doomed"));
-  // A parked subscriber (its mount at itx.subscribers.<name>) with NO hello() — the caller's
-  // allSettled drops it.
-  await observer.subscribe({ target: () => undefined });
+  // A parked live SUBSCRIBER: physically present (its stub under itx.subscriptions.<name>) but a
+  // row of the SUBSCRIPTIONS table, not a capability mount — the fan-out over live mounts never
+  // sees it, so a callback with no hello() cannot pollute the census.
+  const sub = await observer.subscribe({ target: () => undefined });
+  await until("the subscriber is present", async () =>
+    (await presence(observer)).includes(`itx.subscriptions.${sub.name}`),
+  );
+  expect(await liveMountPaths(observer)).not.toContain(`itx.subscriptions.${sub.name}`);
 
   /** fan-out = live mounts → map itx.<path>.hello() → allSettled; answers + rejection codes by path. */
   const fanOut = async (): Promise<{
