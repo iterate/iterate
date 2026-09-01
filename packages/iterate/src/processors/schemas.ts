@@ -39,6 +39,17 @@ export const StreamEventInput = z
               .optional(),
           })
           .optional(),
+        /**
+         * Offset, on the SAME stream, of the event this one was derived from.
+         * A derivation processor parses a raw event (say an assistant
+         * `agents/context-added`) and emits derived facts (say
+         * `render/message-said`) pointing back at it. Renderers treat any
+         * derived event as the thing to show and fall back to rendering a raw
+         * event only when nothing sources it; feeds sort derived events where
+         * their source sits so late re-derivation lands in place. Like the
+         * processor stamp, this is a claim, not authentication.
+         */
+        offset: z.number().int().nonnegative().optional(),
         copiedFrom: z
           .array(
             z.strictObject({
