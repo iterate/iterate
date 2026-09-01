@@ -323,3 +323,13 @@ MediaRecorder mechanisms, both hardened:
 - ↺/🎲 became generic settings-row **action buttons** (FILTER_ACTIONS /
   `actions` on dynamic filters, presses arrive as `args.action {id, seq}`);
   the deck seed is now a display-only readout drawn below the status bar.
+
+## Feedback round 14 (no whole AI faces)
+
+- The photo-style cards that rendered whole AI-generated faces are gone:
+  doll regenerated as an obvious button-eyed rag doll (was an uncanny
+  lifelike child with pigtails), nose and chin regenerated as strict
+  close-ups with no eyes visible. Eye/ear were already proper close-ups;
+  cartoon-style cards are stylized drawings and stay. Prompts updated so
+  future regenerations stay face-free. (403s parked per Misha — ignoring
+  until mentioned.)

@@ -130,7 +130,7 @@ const SPECIAL_NOUNS = {
   blocks: "a stack of colorful toy building blocks",
   bath: "a bathtub with bubbles",
   brush: "a hairbrush",
-  nose: "a friendly nose on a simple face",
+  nose: "an extreme close-up of a nose only, cropped so tightly that no eyes and no mouth are visible",
   ear: "an ear",
   hand: "an open hand",
   foot: "a bare foot",
@@ -145,12 +145,13 @@ const SPECIAL_NOUNS = {
   "ice lolly": "a fruit ice lolly on a wooden stick",
   "ice cream": "an ice cream cone with a scoop of vanilla",
   eye: "a single friendly open human eye",
-  chin: "the chin and jaw of a friendly face, lower face only",
+  chin: "an extreme close-up of a chin and jawline only, cropped just below the lower lip, no eyes or nose visible",
   taxi: "a black London taxi cab",
   scooter: "a child's kick scooter",
   digger: "a yellow digger excavator",
   "fire engine": "a red British fire engine",
   motorbike: "a motorbike on its stand",
+  doll: "a soft rag doll toy with yarn hair and stitched button eyes, obviously a stuffed toy, propped sitting",
 };
 const noun = (word) => SPECIAL_NOUNS[word] || `a ${word}`;
 
