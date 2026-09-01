@@ -77,8 +77,8 @@ test("ABANDONED ATTACH IS LAZILY SWEPT: 11s later the next attach drops it — t
   const ctx = "prj_sweep";
   const s = stub(ctx);
 
-  // A relay that dies mid-handshake: reserve a transport for k1, NEVER open its pager.
-  const { transportId: abandoned } = await s.rpcStubAttach({ key: "k1" });
+  // A relay that dies mid-handshake: reserve a transport for itx.k1, NEVER open its pager.
+  const { transportId: abandoned } = await s.rpcStubAttach({ path: "itx.k1" });
 
   // +11s of fake Date, then a second attach — its #sweepPending sees k1's reservation past the
   // 10s TTL and drops it. (k2's own atMs is stamped at the faked future instant, so it sits safely
@@ -87,7 +87,7 @@ test("ABANDONED ATTACH IS LAZILY SWEPT: 11s later the next attach drops it — t
   vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
   try {
     vi.setSystemTime(Date.now() + 11_000);
-    fresh = (await s.rpcStubAttach({ key: "k2" })).transportId;
+    fresh = (await s.rpcStubAttach({ path: "itx.k2" })).transportId;
   } finally {
     vi.useRealTimers();
   }
@@ -98,23 +98,23 @@ test("ABANDONED ATTACH IS LAZILY SWEPT: 11s later the next attach drops it — t
   expect(swept.status).toBe(409);
   expect(await swept.text()).toContain("attach first");
 
-  // The FRESH un-swept reservation proceeds: its pager upgrades and the k2 stub attaches.
+  // The FRESH un-swept reservation proceeds: its pager upgrades and the itx.k2 stub attaches.
   const ok = await openPager(ctx, fresh);
   expect(ok.status).toBe(101);
   ok.webSocket!.accept();
-  const state = (await s.hostState()) as unknown as { stubs: number };
-  expect(state.stubs).toBe(1); // k2 attached; the swept k1 reservation left NOTHING behind
+  const state = (await s.transportState()) as unknown as { stubs: number };
+  expect(state.stubs).toBe(1); // itx.k2 attached; the swept itx.k1 reservation left NOTHING behind
   ok.webSocket!.close(1000, "test done");
 });
 
 test("HAPPY PATH UNTOUCHED: attach + prompt pager upgrade within the TTL — provide over /api, a caller's invoke answers", async () => {
-  // The production sequence the sweep must never bite: rpcStubs.provide makes the relay attach and
-  // open its pager IMMEDIATELY (well inside the 10s TTL), so the stub parks and a separate caller
-  // reaches it: page → paged-in stub → invoke.
+  // The production sequence the sweep must never bite: itx.provide(path, stub) makes the relay
+  // attach and open its pager IMMEDIATELY (well inside the 10s TTL), so the stub parks and a
+  // separate caller reaches it through the mount path: page → paged-in stub → invoke.
   const ctx = "prj_sweep_happy";
   const clientItx = await (await openSession(ctx)).get();
-  await clientItx.rpcStubs.provide(new Echo(7), { key: "live" });
+  await clientItx.provide("itx.live", new Echo(7));
   const caller = await (await openSession(ctx)).get();
-  const out = await caller.invokeCapability("itx.rpcStubs.get('live').echo('hi')");
+  const out = await caller.invokeCapability("itx.live.echo('hi')");
   expect(out).toBe("echo-7:hi");
 });

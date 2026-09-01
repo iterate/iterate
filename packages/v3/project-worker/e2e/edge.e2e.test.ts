@@ -45,10 +45,7 @@ export default class Mine extends WorkerEntrypoint {
   expect(out).toBe(`from-kv:${ctx}`);
 
   // 3. fetchCap: a fetch-shaped capability through the SESSION (no /cap door)
-  await itx.provide({
-    path: "itx.site",
-    target: `itx.load("itx.kv.get('src/site.js')").getEntrypoint()`,
-  });
+  await itx.provide("itx.site", `itx.load("itx.kv.get('src/site.js')").getEntrypoint()`);
   const resp = await itx.fetchCap("itx.site", new Request("https://itx.site/"));
   const html = await resp.text();
   // fetchCap carries the Response over capnweb

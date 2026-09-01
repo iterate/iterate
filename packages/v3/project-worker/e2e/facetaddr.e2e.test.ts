@@ -23,7 +23,7 @@ test("facet address: table routing, alias/shadow, barrier verb, probe-resistance
   expect(true).toBe(true);
 
   // 3. userspace ALIAS + shadow-stack (the address is an ordinary capability)
-  const prov = await itx.provide({ path: "itx.counts", target: "itx.facets.get('tally')" });
+  const prov = await itx.provide("itx.counts", "itx.facets.get('tally')");
   const aliased = await itx.invokeCapability(["itx", "counts", ["snapshot"]]);
   // aliased facet address via the dotted door
   expect(aliased?.state?.counts?.mark).toBe(1);

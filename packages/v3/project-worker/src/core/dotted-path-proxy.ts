@@ -3,7 +3,7 @@
 // A client is JUST capnweb (itx-surface.ts invariant): what it holds is a plain capnweb proxy
 // of the server-side `IterateContext` RpcTarget. This module is what lets that proxy be spoken as deep
 // dotted property access — `itx.slack.chat.postMessage({...})`, `itx.kv.put('k','v')`,
-// `itx.rpcStubs.get('b').hello()` — even though `IterateContext` declares only fixed methods
+// `itx.myLiveCap.hello()` — even though `IterateContext` declares only fixed methods
 // (invokeCapability / provide / …). Every unknown segment accumulates into ONE `invokeCapability`
 // dispatch carrying an `ItxExpression`; declared methods always win.
 //

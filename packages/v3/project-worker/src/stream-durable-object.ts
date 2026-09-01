@@ -11,8 +11,9 @@
 //     the stateless relay (rpc-stub-directory.ts), so ANY number of connected clients leave this
 //     DO free to hibernate. OUT is one-directional fire-and-forget delivery (event batches + state
 //     changes); IN borrows a short RetainedCallbackInvoker leg per wake burst. A stub is addressed
-//     by its caller-chosen key (`itx.rpcStubs.get(key)`); the registry is LIVE-ONLY (presence via
-//     list(), no durable session history — that "connections view" returns later);
+//     by the capability path it is mounted at (`itx.provide(path, stub)` — the path IS the stub's
+//     identity); PRESENCE is the capability table (rows where live — event-sourced), the transport
+//     table holds only in-memory socket facts (`transportState()`);
 //   • the FETCH DOOR — the one place a 101 can enter: `x-itx-stub-pager` accepts a stub pager
 //     WebSocket, `x-itx-cap` resolves the fetch lane, anything else is EGRESS (secret
 //     placeholder substitution → the FALLBACK terminal).
@@ -41,6 +42,7 @@ import {
 } from "./core/events.ts";
 import {
   parse,
+  parseCapabilityPath,
   print,
   toExpression,
   type Expression,
@@ -101,6 +103,8 @@ type SubscriptionMount = DeliveryPolicy & {
   name: string;
   providedAtOffset: number; // the row's identity
   target?: Expression;
+  /** LIVE row — the subscriber is the live stub parked at the mount's own path (no target). */
+  live?: true;
   /** The delivery lane (see `SubscriptionLane`) — the ONE fact every fan-out reader switches on,
    *  stamped at the provide door and projected here verbatim. `facet` = pump-driven facet,
    *  `connected` = live stub, `durable` = forwarder. */
@@ -110,24 +114,10 @@ type SubscriptionMount = DeliveryPolicy & {
   processor?: ProcessorPolicy;
 };
 
-// ── deriving a subscriber's LANE from its target shape — done ONCE, at the provide door ──
-// These two matchers used to be consulted at ~7 read sites to re-classify a mount on every commit;
-// now `laneOf` calls them ONCE when a mount is born and STORES the result as `lane` on the event
-// (see `SubscriptionLane`). `rpcStubTarget` also survives as the auto-revoke KEY extractor
-// (identity, not classification — no drift hazard). Every reader reads `row.lane`.
-
-/** Match an RPC-STUB target: `itx.rpcStubs.get('<key>')`, optionally followed by a trailing dotted
- *  path (the callable on the retained callback that receives the delivery — `apply()` walks the raw
- *  target for that). Yields the `key` (lane derivation + auto-revoke identity); a trailing CALL step
- *  means the stub is a method receiver, not a delivery callable → NOT a connected lane. */
-const rpcStubTarget = (t?: Expression): { key: string } | undefined => {
-  if (!t || t.length < 3 || t[0] !== "itx" || t[1] !== "rpcStubs") return undefined;
-  const call = t[2];
-  if (!Array.isArray(call) || call.length !== 2 || call[0] !== "get" || typeof call[1] !== "string")
-    return undefined;
-  if (t.slice(3).some((step) => typeof step !== "string")) return undefined;
-  return { key: call[1] };
-};
+// ── deriving a subscriber's LANE — done ONCE, at the provide door ──
+// `laneOf` classifies a mount ONCE when it is born and STORES the result as `lane` on the event
+// (see `SubscriptionLane`); every reader reads `row.lane`. A LIVE provide (`live: true`) IS the
+// connected lane — declared, never sniffed from a target shape.
 
 /** Match a FACET target: `itx.facets.get('<slug>')` — a subscriber whose target is a co-located
  *  facet the commit pump drives (a processor). Used only by `laneOf`. */
@@ -139,12 +129,12 @@ const facetTarget = (t?: Expression): { slug: string } | undefined => {
   return { slug: call[1] };
 };
 
-/** THE lane classifier, called once per mount at the provide door — `itx.facets.get('slug')` ⇒
- *  facet (pump-driven), `itx.rpcStubs.get('key')` ⇒ connected (live stub), anything else ⇒
- *  durable (the forwarder facet's cursored lane). The result is stored on the mount so no reader
- *  ever re-derives it. */
-const laneOf = (target: Expression): SubscriptionLane =>
-  facetTarget(target) ? "facet" : rpcStubTarget(target) ? "connected" : "durable";
+/** THE lane classifier, called once per mount at the provide door — `live: true` ⇒ connected (a
+ *  parked live stub), `itx.facets.get('slug')` ⇒ facet (pump-driven), anything else ⇒ durable
+ *  (the forwarder facet's cursored lane). The result is stored on the mount so no reader ever
+ *  re-derives it. */
+const laneOf = (input: { live?: true; target?: Expression }): SubscriptionLane =>
+  input.live ? "connected" : facetTarget(input.target) ? "facet" : "durable";
 
 /** The subscription-forwarder facet's slug (auto-enabled when an absent-target subscription
  *  mount first appears). */
@@ -177,8 +167,6 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
    *  AND its canonical string form (`.name`). A stream is only ever reached `getByName`; an
    *  id-addressed instance fails right here in the constructor, before it can touch anything. */
   readonly #address = parseIterateContextDurableObjectName(this.ctx.id.name);
-  /** The live rpc-stub registry — the domain layer over the hibernatable RPC stubs (see
-   *  rpc-stub-directory.ts). Live-only: presence via list(), no durable session history. */
   /** The live-capability fetch subsystem (core/fetch-capabilities.ts) — the DO wires its three
    *  halves directly: the upgrade-leg door (fetch), frame forwarding (webSocketMessage), and
    *  peer close (webSocketClose); the rpc-stub directory borrows it for serve(). */
@@ -206,16 +194,17 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
       },
       getWebSockets: (tag) => this.ctx.getWebSockets(tag),
     },
-    // AUTO-REVOKE: when the LAST transport for a key is gone, a mount naming it can never deliver
-    // again — pop it. A transport SWAP (keyFinal false) leaves the mount serving the survivor.
-    onFinalClose: async ({ key, keyFinal }) => {
-      if (!keyFinal) return;
-      const table = this.#table();
-      for (const m of table.mounts)
-        if (rpcStubTarget(m.target)?.key === key)
-          await this.revokeCapability({ providedAtOffset: m.providedAtOffset }).catch((e) =>
-            reportIssue("stream-do.auto-revoke", e, { providedAtOffset: m.providedAtOffset }),
-          );
+    // AUTO-REVOKE: when the LAST transport for a path is gone, THE live row at that path can never
+    // deliver again — pop it (one live row per path, by reduce rule; revokeCapability finds none
+    // when a revoke already tore the transport — the benign order). A transport SWAP (pathFinal
+    // false) leaves the row serving the survivor.
+    onFinalClose: async ({ path, pathFinal }) => {
+      if (!pathFinal) return;
+      const row = this.#table().mounts.find((m) => m.live && m.path.join(".") === path);
+      if (row)
+        await this.revokeCapability({ providedAtOffset: row.providedAtOffset }).catch((e) =>
+          reportIssue("stream-do.auto-revoke", e, { providedAtOffset: row.providedAtOffset }),
+        );
     },
   });
   /** THE STREAM — the commit point (see core/stream.ts: validation + admission + idempotency +
@@ -358,16 +347,8 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
         p === path
           ? ownContext
           : this.env.CONTEXT.getByName(DurableObjectNameCodec.stringify({ projectId, path: p })),
-      // The rpcStubs + facets views are PARENT-LOCAL — the pager sockets and facets
-      // live here and can never move (workerd#6702: sockets never leave the parent).
-      rpcStubs: {
-        // A GENUINE RpcTarget (not a bare pathProxy) so `itx.rpcStubs.get('b').hello()`
-        // pipelines the mid-chain `.hello()` on every lane — workerd's classifier rejects a
-        // Proxy (#6873). The fold is identical: `.hello()` → invoke(key, ['hello'], []).
-        get: (key) => new InvokeHandle((path, args) => this.#rpcStubs.invoke(key, path, args)),
-        list: () => this.#rpcStubs.list(),
-        close: (key) => this.#rpcStubs.close(key),
-      },
+      // The facets view is PARENT-LOCAL — the facets live here and can never move
+      // (workerd#6702: sockets never leave the parent).
       facets: {
         get: (ref) => new InvokeHandle((path, args) => this.facetInvoke(ref, path, args)),
       },
@@ -381,6 +362,12 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
       builtIns,
       // Resolve one call against the CURRENT table (the `itx` recursion symbol re-enters here).
       resolveCurrent: (call, depth) => this.invoke(call, depth),
+      // THE LIVE-STUB BRIDGE: a live row's target is the stub parked at its path. A GENUINE
+      // RpcTarget (not a bare pathProxy) so `itx.mycap.hello()` pipelines the mid-chain `.hello()`
+      // on every lane — workerd's classifier rejects a Proxy (#6873). The fold:
+      // `.hello()` → #rpcStubs.invoke(path, ['hello'], []); offline ⇒ CONNECTION_OFFLINE.
+      liveStub: (pathString) =>
+        new InvokeHandle((segments, args) => this.#rpcStubs.invoke(pathString, segments, args)),
     });
     this.#capabilityTableInstance = proc;
     return proc;
@@ -457,6 +444,18 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
             .catch((e) => reportIssue("stream-do.facet-resurrection", e, { slug })),
         ),
       );
+      // PRESENCE SELF-HEAL: diff the LIVE table rows against the surviving pager attachments and
+      // append any missed capability-revoked (a crashed — or admit-refused — close-time append
+      // otherwise leaves a lying row forever; the attachments rehydrate free from the hibernated
+      // sockets, so the diff costs nothing). Same idempotent revoke door as the auto-revoke.
+      const attached = new Set(this.#rpcStubs.attachedPaths());
+      for (const m of this.#table().mounts)
+        if (m.live && !attached.has(m.path.join(".")))
+          await this.revokeCapability({ providedAtOffset: m.providedAtOffset }).catch((e) =>
+            reportIssue("stream-do.presence-self-heal", e, {
+              providedAtOffset: m.providedAtOffset,
+            }),
+          );
     }
     if (Date.now() - this.#lastActivityMs >= 60_000 && this.#facetWorkInFlight === 0) {
       // workerd #6800: a live facet client holds this actor idle-but-non-hibernatable,
@@ -484,7 +483,7 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   }
 
   // ── SUBSCRIPTION DELIVERY, connected lane: one-directional, from the commit path ──
-  // A CONNECTED subscription mount (target itx.rpcStubs.get(…)) is served by raw
+  // A CONNECTED subscription mount (a LIVE row at itx.subscribers.<name>) is served by raw
   // fire-and-forget invokes on the connection's paged-in stub: the filtered batch plus the
   // GLOBAL ScannedRange. No acks, no server cursor, no retry ladder, no watchdogs, no
   // outbound coalescing (owner decision — the socket buffer is the only queue; overflow closes
@@ -504,7 +503,8 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
           name: m.path[2],
           providedAtOffset: m.providedAtOffset,
           ...((m.delivery ?? {}) as DeliveryPolicy),
-          target: m.target,
+          ...(m.target && { target: m.target }),
+          ...(m.live && { live: true as const }),
           // Read the stamped lane verbatim — every `itx.subscribers.*` mount is laned at the provide
           // door (provideCapability / enableProcessor), so there is nothing to re-derive.
           lane: m.lane as SubscriptionLane,
@@ -932,29 +932,37 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
     return this.#capabilityTableProcessor().resolve(state, toExpression(call), undefined, depth);
   }
 
-  /** Mount a userspace capability (its target recurses through itx; built-ins resolve directly). A
+  /** Mount a userspace capability: EITHER a target expression (recurses through itx; built-ins
+   *  resolve directly) OR `live: true` (the capability is the live stub whose transport is
+   *  attached at the same path — the relay attached it FIRST, this event is the record). A
    *  subscription mount with an ABSENT target auto-enables the subscription-forwarder facet
-   *  FIRST, so the mount's own commit already drives the forwarder. liveState demands a
-   *  CONNECTED target: an absent target holds no revision chain, so a dropped payload could
-   *  never be noticed — reject at the door, not at delivery time. */
+   *  FIRST, so the mount's own commit already drives the forwarder. liveState demands a LIVE
+   *  callback: an absent target holds no revision chain, so a dropped payload could never be
+   *  noticed — reject at the door, not at delivery time. */
   async provideCapability(input: {
     path: string | string[];
-    target: ItxExpression;
+    target?: ItxExpression;
+    live?: true;
     delivery?: DeliveryPolicy;
     processor?: ProcessorPolicy;
   }): Promise<{ providedAtOffset: number }> {
     this.#stream.touch();
     const pathString = typeof input.path === "string" ? input.path : input.path.join(".");
-    const targetExpr = toExpression(input.target);
+    const targetExpr = input.target === undefined ? undefined : toExpression(input.target);
     // Classify the delivery lane ONCE, here at the provide door — it is stamped on the mount event
     // and every commit-time reader reads it back (no per-commit target re-sniff). Non-subscriber
     // mounts (plain aliases) carry no lane. `durable` is the absent target — the forwarder's lane.
     const isSubscriber = pathString.startsWith("itx.subscribers.");
-    const lane = isSubscriber ? laneOf(targetExpr) : undefined;
+    const lane = isSubscriber
+      ? laneOf({
+          ...(input.live && { live: true as const }),
+          ...(targetExpr && { target: targetExpr }),
+        })
+      : undefined;
     if (lane === "durable") {
       if (input.delivery?.liveState)
         throw new Error(
-          "a live-state subscription needs a live rpc-stub target (itx.rpcStubs.get(…)) — an absent target has no revision chain to keep",
+          "a live-state subscription needs a LIVE callback target — an absent target has no revision chain to keep",
         );
       if (!this.#facetEntries().some((e) => e.slug === SUBSCRIPTION_FORWARDER_SLUG))
         await this.enableProcessor(SUBSCRIPTION_FORWARDER_SLUG);
@@ -963,47 +971,58 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   }
 
   /** Revoke by the mount's identity — or by its capability path (pops the newest winner at
-   *  that exact path; what it shadowed is restored). */
+   *  that exact path; what it shadowed is restored). Revoking a LIVE row ALSO tears its
+   *  transport down (it is necessarily the last live row at the path — the one-per-path reduce
+   *  rule), AFTER the revoked event lands so the transport close's own auto-revoke finds nothing
+   *  left to do. Returns whether any popped row was live, so the edge can dispose its local
+   *  Parking relay for the path. */
   async revokeCapability(input: {
     providedAtOffset?: number;
     path?: string | string[];
     /** Clear EVERY mount at `path` — the subscription/processor OFF-SWITCH. The default (and
-     *  `itx.revoke({path})`) pops only the NEWEST winner and restores what it shadowed; an
+     *  `itx.revoke(path)`) pops only the NEWEST winner and restores what it shadowed; an
      *  off-switch must remove the whole enablement shadow stack, or an older shadowed mount is
      *  re-elected and the "disabled" thing keeps running (prove_disable_shadow.mjs /
      *  probe_resub_zombie.mjs). */
     all?: boolean;
-  }): Promise<void> {
+  }): Promise<{ revokedLive: boolean }> {
+    const table = this.#table();
+    let rows: CapabilityTable["mounts"];
     if (input.all) {
       if (!input.path) throw new Error("revokeCapability: `all` needs a path");
       const pathString = typeof input.path === "string" ? input.path : input.path.join(".");
-      const offsets = this.#table()
-        .mounts.filter((m) => m.path.join(".") === pathString)
-        .map((m) => m.providedAtOffset);
-      for (const providedAtOffset of offsets) {
-        await this.#capabilityTableProcessor().revoke({ providedAtOffset });
-        this.#subscriptionDeliveredThrough.delete(providedAtOffset);
+      rows = table.mounts.filter((m) => m.path.join(".") === pathString);
+    } else if (input.providedAtOffset !== undefined) {
+      // By identity: append the revoked event even for an already-gone row (idempotent through
+      // the reduce — a benign double-revoke, e.g. the transport-close auto-revoke racing an
+      // explicit revoke, must stay silent).
+      rows = table.mounts.filter((m) => m.providedAtOffset === input.providedAtOffset);
+      if (rows.length === 0) {
+        await this.#capabilityTableProcessor().revoke({
+          providedAtOffset: input.providedAtOffset,
+        });
+        this.#subscriptionDeliveredThrough.delete(input.providedAtOffset);
+        return { revokedLive: false };
       }
-      return;
-    }
-    let providedAtOffset = input.providedAtOffset;
-    if (providedAtOffset === undefined) {
+    } else {
       if (!input.path) throw new Error("revokeCapability: pass providedAtOffset or path");
       const pathString = typeof input.path === "string" ? input.path : input.path.join(".");
-      const table = this.#table();
       const winner = table.mounts
         .filter((m) => m.path.join(".") === pathString)
         .sort((a, b) => b.providedAtOffset - a.providedAtOffset)[0];
       if (!winner) throw new Error(`no mount at path ${JSON.stringify(pathString)}`);
-      providedAtOffset = winner.providedAtOffset;
+      rows = [winner];
     }
-    await this.#capabilityTableProcessor().revoke({ providedAtOffset });
-    // Revoke doubles as GC for the delivered-through watermark keyed by the mount's identity.
-    // (The forwarder GCs its own SubscriptionDeliveryProgress on the revoked event.)
-    this.#subscriptionDeliveredThrough.delete(providedAtOffset);
-    // NOTE: a mount naming an rpc stub is NOT reaped here — the stub's lifecycle is owned by its
-    // ProvidedStub handle (dispose it ⇒ the transport closes ⇒ onFinalClose auto-revokes its
-    // mounts). Revoking a mount just drops the alias; the stub stays until its holder disposes it.
+    for (const row of rows) {
+      await this.#capabilityTableProcessor().revoke({ providedAtOffset: row.providedAtOffset });
+      // Revoke doubles as GC for the delivered-through watermark keyed by the mount's identity.
+      // (The forwarder GCs its own SubscriptionDeliveryProgress on the revoked event.)
+      this.#subscriptionDeliveredThrough.delete(row.providedAtOffset);
+    }
+    // TEAR THE TRANSPORT of every revoked live row, events-first (see the doc above).
+    const liveRows = rows.filter((r) => r.live);
+    for (const r of liveRows) this.#rpcStubs.drop(r.path.join("."), "revoked");
+    return { revokedLive: liveRows.length > 0 };
   }
 
   // ── native fetch: the stub pager door, the fetch lane, observability, egress ──
@@ -1030,9 +1049,10 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   }
 
   /** OBSERVABILITY, over the one door: incarnation (the hibernation tell) + the core fold + the
-   *  mount/stub registries, reached as `itx.hostState()` over capnweb (there is no second HTTP
-   *  transport). Read-only on purpose — reading it must never be the write that mints storage
-   *  (a probe of a never-touched context stays a 404-less no-op; workerd auto-deletes empty DOs). */
+   *  mount table + the transport facts, reached as `itx.hostState()` over capnweb (there is no
+   *  second HTTP transport). Read-only on purpose — reading it must never be the write that mints
+   *  storage (a probe of a never-touched context stays a 404-less no-op; workerd auto-deletes
+   *  empty DOs). */
   hostState(): Record<string, unknown> {
     const cs = this.#coreState();
     return {
@@ -1052,8 +1072,16 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
         // The stamped lane, verbatim (with the live-state refinement of the connected lane).
         lane: r.lane === "connected" && r.liveState ? "connected-live-state" : r.lane,
       })),
-      ...this.#rpcStubs.state(),
+      ...this.transportState(),
     };
+  }
+
+  /** IN-MEMORY TRANSPORT FACTS ({stubs, pagedIn, pagesPending, dormant}) — a DO-only Workers-RPC
+   *  verb for the hibernation/quiesce probes, deliberately OFF the itx surface: these are socket
+   *  facts, not event-derivable state. PRESENCE (which live capabilities exist) is the capability
+   *  table — rows where `live` — via the capability-table snapshot. */
+  transportState(): Record<string, unknown> {
+    return this.#rpcStubs.state();
   }
 
   /** EGRESS: substitute `{{secret:project:NAME}}` placeholders, then the FALLBACK terminal. A
@@ -1102,9 +1130,15 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   // ── the rpc-stub RPC verbs (the directory owns the lifecycle — see rpc-stub-directory.ts;
   // these are the relay-facing doors) ──
 
-  /** Reserve a transport for `key` — the relay calls this, then opens the pager carrying the
-   *  returned transportId. */
-  rpcStubAttach(input: { key: string }): { transportId: string } {
+  /** Reserve a transport for the live capability mounted at `path` — the relay calls this
+   *  (with the CANONICALIZED path string, asserted here: one canonicalizer, no drift), then opens
+   *  the pager carrying the returned transportId. */
+  rpcStubAttach(input: { path: string }): { transportId: string } {
+    const canonical = parseCapabilityPath(input.path).join(".");
+    if (canonical !== input.path)
+      throw new Error(
+        `rpcStubAttach: path ${JSON.stringify(input.path)} is not canonical (expected ${JSON.stringify(canonical)}) — canonicalize at the edge with parseCapabilityPath(...).join(".")`,
+      );
     return this.#rpcStubs.attach(input);
   }
 

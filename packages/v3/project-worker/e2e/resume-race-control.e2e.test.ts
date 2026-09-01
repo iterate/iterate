@@ -9,7 +9,6 @@ import { freshCtx, openItx, sleep } from "./support/client.ts";
 
 test("plain forwarder delivery failure retries via the ladder (no resume in play)", async () => {
   const itx = openItx(freshCtx("ctl"));
-  const keep: unknown[] = [];
 
   let invocations = 0;
   const fn = async (events: { offset: number }[]) => {
@@ -18,9 +17,9 @@ test("plain forwarder delivery failure retries via the ladder (no resume in play
     return { ok: true, offs: events.map((e) => e.offset) };
   };
 
-  const key = crypto.randomUUID();
-  keep.push(await itx.rpcStubs.provide(fn, { key }));
-  await itx.provide({ path: "itx.ctlHook", target: `itx.rpcStubs.get('${key}')` });
+  // park the live callback AT itx.ctlHook (path = identity); the subscription's target is the
+  // EXPRESSION "itx.ctlHook", so the row rides the forwarder lane.
+  await itx.provide("itx.ctlHook", fn);
   await itx.subscribe({
     name: "ctl",
     target: "itx.ctlHook",

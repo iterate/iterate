@@ -174,6 +174,14 @@ const codeOf = (e: unknown): string | undefined =>
     ? String((e as { code: unknown }).code)
     : undefined;
 
+/** PRESENCE — the capability table's live rows (event-driven): dotted path strings. */
+const livePaths = async (itx: any): Promise<string[]> => {
+  const snap: any = await itx.invokeCapability("itx.facets.get('capability-table').snapshot()");
+  return (snap.state.mounts as any[])
+    .filter((m) => m.live)
+    .map((m) => (m.path as string[]).join("."));
+};
+
 const errorOf = async (p: Promise<unknown>): Promise<unknown> => {
   try {
     await p;
@@ -270,47 +278,46 @@ test("pipelining: invokes on the NOT-YET-RESOLVED itx from get() = ONE round tri
   });
 });
 
-test("pipelining: rpcStubs.provide(...).revoke() on the UNRESOLVED handle = ONE round trip, and the mount auto-revokes", async () => {
+test("pipelining: provide(path, fn) + revoke on its UNRESOLVED result = ONE round trip, and the live mount dies whole", async () => {
   const ctx = c("pipe3");
   const w = wireSession(ctx);
   const itx = await w.session.authenticate().get();
-  // A plain by-value mount that NAMES the (not-yet-provided) stub key. When the stub goes offline
-  // (revoke ⇒ its transport closes) the DO's onFinalClose auto-revokes every mount naming its key —
-  // set up BEFORE the measured window so the burst below is exactly provide + revoke.
-  const KEY = "piptool";
-  await itx.provide({ path: "itx.piptool", target: `itx.rpcStubs.get('${KEY}')` });
   const mark = w.mark();
   {
-    // The returned ProvidedStub is used BEFORE it resolves: .revoke() (a declared METHOD, so still
-    // pipelinable) rides the same burst.
-    using stub = itx.rpcStubs.provide((x: number) => x + 1, { key: KEY });
-    await stub.revoke();
+    // ONE door, one burst: the provide is NOT awaited; the revoke names the mount by pipelining
+    // the unresolved result's providedAtOffset as its argument (capnweb serializes it as a
+    // pipeline reference, so the server delivers the revoke only after the provide resolved —
+    // the same ordering the old ProvidedStub.revoke() method ride gave us, without the handle).
+    const provision = itx.provide("itx.piptool", (x: number) => x + 1);
+    await itx.revoke({ providedAtOffset: provision.providedAtOffset });
   }
   const frames = w.since(mark);
-  expectOneRoundTrip(frames, "rpcStubs.provide().revoke()");
+  expectOneRoundTrip(frames, "provide(path, fn) + revoke(result)");
   const t = tally(frames);
   expect(t["out:push"]).toBe(2); // provide, revoke
   expect(t["out:pull"]).toBe(1); // only revoke's result is awaited
   expect(t["in:resolve"]).toBe(1);
   await settle(300);
-  console.log("[wire] pipeline rpcStubs.provide.revoke:", JSON.stringify(tally(w.since(mark))));
-  // Pinned EXACTLY (measured): the extras are outbound releases (the provision import + the exported
-  // callback the provide carried, plus the `using` handle drop) and 1 INBOUND release (the server
-  // dropping its dup of that callback after the revoke) — all cleanup, still one round trip.
+  console.log("[wire] pipeline provide+revoke:", JSON.stringify(tally(w.since(mark))));
+  // Pinned EXACTLY (measured): the extras are 1 outbound release (the provision import — the
+  // handle-drop release of the old ProvidedStub is GONE with the handle) and 1 INBOUND release
+  // (the server dropping its dup of the exported callback after the revoke tore the relay down)
+  // — all cleanup, still one round trip.
   expect(tally(w.since(mark))).toEqual({
     "out:push": 2,
     "out:pull": 1,
     "in:resolve": 1,
     "in:release": 1,
-    "out:release": 2,
+    "out:release": 1,
   });
-  // Correctness under pipelining: the provide really registered the stub, the revoke really took it
-  // offline, and the DO auto-revoked the mount that named its key (onFinalClose).
-  const gone = await until("the mount naming the revoked stub auto-revoked", async () => {
+  // Correctness under pipelining: the provide really parked the stub and appended the live row;
+  // the revoke popped THE row and tore its transport (row + relay die together — one identity).
+  const gone = await until("the live mount revoked (default-deny restored)", async () => {
     const err = await errorOf(itx.invokeCapability(["itx", ["piptool", 1]]));
     return codeOf(err) === "NO_CAPABILITY_MATCH";
   });
   expect(gone).toBe(true);
+  expect(await livePaths(itx)).toEqual([]); // presence (the table) agrees
 });
 
 // ═══════════════════════════════ 2. FRAMES PER CALL (regression pins) ═══════════════════════════════
@@ -400,18 +407,18 @@ test("deep chaining: 3+ segment dotted paths through a live provider (getter →
   const ctx = c("deep");
   const slack = new SlackReplayTarget();
   const provider = harness.session(ctx);
-  await provider.get().rpcStubs.provide(slack, { key: "slack" });
+  await provider.get().provide("itx.slack", slack);
 
   const w = wireSession(ctx);
   const itx = await w.session.authenticate().get();
   await until("the slack bridge is attached", async () =>
-    ((await itx.invokeCapability("itx.rpcStubs.list()")) as any[]).some((r) => r.key === "slack"),
+    (await livePaths(itx)).includes("itx.slack"),
   );
 
-  // String half: deep dots + a trailing call.
+  // String half: deep dots + a trailing call, straight through the mount path.
   const mark1 = w.mark();
   const posted: any = await itx.invokeCapability(
-    "itx.rpcStubs.get('slack').chat.postMessage({ channel: '#wire', text: 'deep' })",
+    "itx.slack.chat.postMessage({ channel: '#wire', text: 'deep' })",
   );
   expect(posted).toMatchObject({ ok: true, ts: "1755.000100", channel: "#wire" });
   expectOneRoundTrip(w.since(mark1), "deep chain (string half)");
@@ -420,11 +427,10 @@ test("deep chaining: 3+ segment dotted paths through a live provider (getter →
   expect(t1["out:pull"]).toBe(1);
   expect(t1["in:resolve"]).toBe(1);
 
-  // Array half: a mid-path call with structured args.
+  // Array half: structured args through the same path.
   const listed: any = await itx.invokeCapability([
     "itx",
-    "rpcStubs",
-    ["get", "slack"],
+    "slack",
     "conversations",
     ["list", { limit: 1 }],
   ]);
@@ -439,58 +445,24 @@ test("deep chaining: 3+ segment dotted paths through a live provider (getter →
 // (The natural-dotted-client-surface hunt — `itx.kv.put(...)` as plain proxy access — lives in a
 // sibling file; this file owns the wire.)
 
-test("disposal: `using` on the /api session stub tears its rpc stubs down at scope exit", async () => {
+test("disposal: `using` on the /api session stub tears its live provides down at scope exit", async () => {
+  // (The old per-stub `using`-ProvidedStub handle died with the unification — a live capability's
+  // lifecycle is its PATH: itx.revoke(path) for explicit teardown, session end for everything
+  // else. This test pins the session half; the pipelined provide+revoke test above pins the
+  // explicit half.)
   const ctx = c("using");
   const observer = await harness.itx(ctx);
   {
     using scoped = newWebSocketRpcSession(`ws://${harness.url.host}/api?ctx=${ctx}`) as any;
-    await scoped.get().rpcStubs.provide(new Tools("scoped"), { key: "scoped" });
-    await until("'scoped' listed while the scope lives", async () =>
-      ((await observer.invokeCapability("itx.rpcStubs.list()")) as any[]).some(
-        (r) => r.key === "scoped",
-      ),
+    await scoped.get().provide("itx.scoped", new Tools("scoped"));
+    await until("the live row present while the scope lives", async () =>
+      (await livePaths(observer)).includes("itx.scoped"),
     );
   } // ← Symbol.dispose fires here: capnweb says goodbye, ProjectSession tears every relay down
   await until(
-    "'scoped' left the presence list after scope exit",
-    async () =>
-      !((await observer.invokeCapability("itx.rpcStubs.list()")) as any[]).some(
-        (r) => r.key === "scoped",
-      ),
+    "the live row auto-revoked after scope exit",
+    async () => !(await livePaths(observer)).includes("itx.scoped"),
   );
-});
-
-// CONTRACT: disposing a ProvidedStub handle (core/itx-surface.ts) closes its transport ⇒ the DO
-//   drops the stub ⇒ onFinalClose auto-revokes every mount that named its key. `using stub = await
-//   itx.rpcStubs.provide(...)` — the spelling the capnweb README teaches (stubs returned in a result
-//   are OWNED by the caller; disposal releases the associated resources) — therefore cleans up the
-//   live stub AND, via the reverse-direction auto-revoke, any mount pointing at it, at scope exit.
-//   (The mount is a SEPARATE by-value alias; a caller may also drop it explicitly with itx.revoke.)
-// WHY IT MATTERS: without Symbol.dispose → revoke() on the handle, `using` would leak the retained
-//   callback + the pager socket until the whole session died, and any mount naming the stub would
-//   keep answering a provider nobody holds.
-test("disposal: `using` on a ProvidedStub drops the stub AND auto-revokes its mount at scope exit", async () => {
-  const ctx = c("provdispose");
-  const observer = await harness.itx(ctx);
-  const w = wireSession(ctx);
-  const itx = await w.session.authenticate().get();
-  {
-    using stub = await itx.rpcStubs.provide(new Tools("scopedtool"), { key: "scopedtool" });
-    await itx.provide({ path: "itx.scopedtool", target: "itx.rpcStubs.get('scopedtool')" });
-    expect(await observer.invokeCapability(["itx", "scopedtool", ["hello"]])).toBe(
-      "hello-from-scopedtool",
-    );
-    void stub; // used via `using` only
-  } // ← the ownership handle is disposed — the stub goes offline and its mount must not outlive it
-  const gone = await until(
-    "the mount auto-revoked after the stub handle was disposed",
-    async () => {
-      const err = await errorOf(observer.invokeCapability(["itx", "scopedtool", ["hello"]]));
-      return codeOf(err) === "NO_CAPABILITY_MATCH";
-    },
-    5_000,
-  ).catch(() => false);
-  expect(gone).toBe(true);
 });
 
 test("disposal: dup() survives disposal of the original; the LAST dispose kills the stub with the pinned error", async () => {

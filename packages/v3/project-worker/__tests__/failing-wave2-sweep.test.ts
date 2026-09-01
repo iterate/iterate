@@ -198,7 +198,7 @@ test("a processor enabled by its MOUNT alone (the documented event-sourced door)
   //      "re-enabling rebuilds from the log") quietly depends on the OTHER door having run once
   //      — an event-sourced world that cannot actually be rebuilt from its events.
   const itx = await harness.itx("prj_w2mount");
-  await itx.provide({ path: "itx.subscribers.tally", target: "itx.facets.get('tally')" });
+  await itx.provide("itx.subscribers.tally", "itx.facets.get('tally')");
   await append(itx, { type: "seed" });
   const snap = await itx.invokeCapability("itx.facets.get('tally').snapshot()"); // ← rejects: ProcessorFacet: not configured
   expect(snap.state).toHaveProperty("counts");

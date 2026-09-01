@@ -22,9 +22,8 @@ const RUN = Date.now().toString(36);
 const c = (name: string) => `prj_wsfetch${RUN}_${name}`;
 
 let harness: ProjectHarness;
-// Client-side handles retained for the file's lifetime (a GC'd provision would tear a mount
-// down mid-test); the harness disposes its sessions at stop().
-const keep: unknown[] = [];
+// Live mounts ride their providing session (the harness disposes its sessions at stop()) — no
+// client-side handle to retain: the mount path is the stub's identity.
 beforeAll(async () => {
   harness = await startProjectHarness();
 }, 120_000);
@@ -108,10 +107,7 @@ test("baseline: /cap serves HTTP and a 101 WebSocket echo from a LOADED-WORKER c
   const ctx = c("baseline");
   const itx = await harness.itx(ctx);
   await itx.invokeCapability(["itx", "kv", ["put", "src/site.js", SITE_SOURCE]]);
-  await itx.provide({
-    path: "itx.site",
-    target: "itx.load(\"itx.kv.get('src/site.js')\").getEntrypoint()",
-  });
+  await itx.provide("itx.site", "itx.load(\"itx.kv.get('src/site.js')\").getEntrypoint()");
 
   // HTTP through the door
   const page = await fetch(capUrl(ctx, "itx.site", "http"));
@@ -130,7 +126,7 @@ test("baseline: /cap serves HTTP and a 101 WebSocket echo from a LOADED-WORKER c
 
 // ─────────────────────── 2. LIVE CAPABILITY, plain HTTP fetch (non-upgrade) ───────────────────────
 // The Request is minted by a REAL eyeball (not a capnweb client): eyeball → worker /cap → DO
-// fetch lane → capability table → rpcStubs.get alias → Workers RPC invoker → relay → capnweb
+// fetch lane → capability table live row → Workers RPC invoker → relay → capnweb
 // → the NODE provider's fetch(). Its Response rides every hop back out. (prove_rich pinned
 // Request/Response over capnweb between two capnweb clients; this pins the EYEBALL-originated
 // path in the harness.)
@@ -153,9 +149,7 @@ test("live capability HTTP fetch: an eyeball POST reaches the Node provider's fe
   const provider = harness.session(ctx);
   const itxA = await provider.authenticate().get();
   const device = new HttpDevice();
-  const key = crypto.randomUUID();
-  keep.push(await itxA.rpcStubs.provide(device, { key }));
-  await itxA.provide({ path: "itx.ws-device", target: `itx.rpcStubs.get('${key}')` });
+  await itxA.provide("itx.ws-device", device);
 
   const res = await fetch(capUrl(ctx, "itx.ws-device", "http"), {
     method: "POST",
@@ -202,9 +196,7 @@ test("live capability WebSocket fetch: a plain eyeball WebSocket opens (101), ec
   const provider = harness.session(ctx);
   const itxA = await provider.authenticate().get();
   const device = new WsDevice();
-  const key = crypto.randomUUID();
-  keep.push(await itxA.rpcStubs.provide(device, { key }));
-  await itxA.provide({ path: "itx.ws-device", target: `itx.rpcStubs.get('${key}')` });
+  await itxA.provide("itx.ws-device", device);
   // Sanity: the mount still answers plain HTTP (so the assertions below are about the UPGRADE).
   const plain = await fetch(capUrl(ctx, "itx.ws-device", "http"));
   expect(await plain.text()).toBe("http-fallback");

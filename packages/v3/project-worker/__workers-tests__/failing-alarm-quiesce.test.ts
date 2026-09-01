@@ -74,9 +74,11 @@ async function enableCounter(ctx: string, slug = "counter"): Promise<void> {
   await s.enableProcessor(slug, { source: "itx.kv.get('procsrc')", className: "default" });
 }
 
+// The DO-only transport facts ({stubs, pagedIn, pagesPending, dormant}) — the quiesce probes are
+// in-memory socket truths, so they speak transportState(), never the table.
 const stateOf = (ctx: string): Promise<Record<string, any>> =>
   runInDurableObject(stub(ctx), async (inst) =>
-    (inst as unknown as { hostState(): Record<string, any> }).hostState(),
+    (inst as unknown as { transportState(): Record<string, any> }).transportState(),
   );
 
 /** Reproduce the production 60s idle quiesce ON DEMAND: fake Date only (+61s — sockets, the alarm
@@ -215,7 +217,7 @@ test("PAGE-IN RACES THE QUIESCE ALARM: a connection invoke fired concurrently wi
   // borrowed stub is not disposed out from under it).
   const ctx = "prj_pagein";
   const clientItx = await (await openSession(ctx)).get();
-  for (let i = 0; i < 4; i++) await clientItx.rpcStubs.provide(new Echo(i), { key: `p${i}` });
+  for (let i = 0; i < 4; i++) await clientItx.provide(`itx.p${i}`, new Echo(i));
   const caller = await (await openSession(ctx)).get();
 
   vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
@@ -223,7 +225,7 @@ test("PAGE-IN RACES THE QUIESCE ALARM: a connection invoke fired concurrently wi
   try {
     vi.setSystemTime(Date.now() + 61_000);
     const alarmP = runDurableObjectAlarm(stub(ctx));
-    const invokeP = caller.invokeCapability("itx.rpcStubs.get('p2').echo('race')");
+    const invokeP = caller.invokeCapability("itx.p2.echo('race')");
     const [, inv] = await Promise.all([alarmP, invokeP]);
     raced = inv;
   } finally {
@@ -241,10 +243,10 @@ test("SCALE DROP + QUIESCE + EVICT + WAKE: a dropped connection stays dropped; t
   const ctx = "prj_scale_drop";
   const K = 6;
   const clientItx = await (await openSession(ctx)).get();
-  for (let i = 0; i < K; i++) await clientItx.rpcStubs.provide(new Echo(i), { key: `k${i}` });
+  for (let i = 0; i < K; i++) await clientItx.provide(`itx.k${i}`, new Echo(i));
   const caller = await (await openSession(ctx)).get();
 
-  await caller.invokeCapability("itx.rpcStubs.close('k3')"); // drop one
+  await caller.revoke("itx.k3"); // the kick: revoking the live row tears its transport too
   const dropped = await stateOf(ctx);
   expect(dropped.stubs).toBe(K - 1);
 
@@ -254,15 +256,15 @@ test("SCALE DROP + QUIESCE + EVICT + WAKE: a dropped connection stays dropped; t
   const evicted = await stateOf(ctx);
   expect(evicted.stubs).toBe(K - 1); // survivors' hibernatable sockets rode the eviction; k3 stayed gone
 
-  // fan-out = list() + map over get(key).echo (no built-in `each`); the caller owns the allSettled.
-  const keys = ((await caller.invokeCapability("itx.rpcStubs.list()")) as { key: string }[]).map(
-    (r) => r.key,
-  );
+  // fan-out = the capability table's live rows + map over the paths (no built-in `each`); the
+  // caller owns the allSettled.
+  const snap = (await caller.invokeCapability("itx.facets.get('capability-table').snapshot()")) as {
+    state: { mounts: { path: string[]; live?: true }[] };
+  };
+  const paths = snap.state.mounts.filter((m) => m.live).map((m) => m.path.join("."));
   const answers = (
     await Promise.all(
-      keys.map((k) =>
-        caller.invokeCapability(`itx.rpcStubs.get('${k}').echo('hi')`).catch(() => undefined),
-      ),
+      paths.map((path) => caller.invokeCapability(`${path}.echo('hi')`).catch(() => undefined)),
     )
   ).filter((v): v is string => v !== undefined);
   const got = new Set(answers);

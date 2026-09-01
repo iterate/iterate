@@ -26,8 +26,8 @@ The stub stays warm while traffic flows; the DO's quiesce disposes it (a page ge
 `stream-durable-object.ts`: an append-only event log with monotonic offsets shared by durable
 AND ephemeral events (ephemerals consume offsets, never rows), idempotency at the commit point,
 `read` with the scanned-offset-range proof, and pause/breaker enforcement reduced inline. One
-DO per `{projectId, path}` context. Identity is always log-derived: a connection's id IS the
-offset of its ephemeral connection-opened fact.
+DO per `{projectId, path}` context. Identity is always log-derived: a mount's id IS the offset
+of its capability-provided fact.
 
 ## Layer 3 — the capability table (one reduce, resolved at zero distance)
 
@@ -38,7 +38,8 @@ substitute → evaluate → replay the remainder. A built-in root (`built-ins.ts
 (built-ins first); userspace mounts see only `itx` — a bare root is unspellable, so the built-ins
 are unshadowable. EVERY attachment is a mount here: plain capabilities, subscriptions (delivery
 policy + the stamped lane on the event), processors (processor policy: source/export/props),
-live-capability aliases (`path ⇒ itx.rpcStubs.get(key)`).
+live capabilities (`live: true` rows — no target expression; the mount path IS the parked
+stub's identity, at most one live row per path, a re-provide supersedes in place).
 
 ## Layer 4 — processors (cursor + two switches + declared dependencies)
 
@@ -54,17 +55,18 @@ injected SDK. Stateful loaded classes are facets here too (the dedicated runner 
 ## Layer 5 — rpc stubs and delivery (the edges of the system)
 
 `core/itx-surface.ts`: capnweb terminates at `/api`, never in a DO. A client offers a live
-capability with `itx.rpcStubs.provide(stub, { key })` — the callback is retained relay-side and
-paged into the DO on demand (the poor-man's sturdy ref, `hibernatable-rpc-stub.ts`); `get`/`list`
-address the held stubs, and a mount can alias one (`path ⇒ itx.rpcStubs.get(key)`). The registry is
-LIVE-ONLY (presence via `list()`, no durable session history).
+capability through the ONE provide door — `itx.provide(path, stub)` — the callback is retained
+relay-side and paged into the DO on demand (the poor-man's sturdy ref,
+`hibernatable-rpc-stub.ts`); the MOUNT PATH is the stub's identity, so calling it is just
+`itx.<path>.method(...)`. PRESENCE is event-driven — the capability table's rows where `live` —
+and the transport table keeps only in-memory socket facts (`transportState()`, a DO-only verb).
 
 A subscriber mount's delivery LANE is a DECLARED fact — `laneOf` stamps it ONCE on the
 capability-provided event at the provide door (`SubscriptionLane`), never re-sniffed from the
 target's shape at delivery time. Three lanes:
 
 - **reduce** (`itx.facets.get('slug')`): a co-located facet the commit PUMP drives — a processor.
-- **connected** (`itx.rpcStubs.get('key')`): fire-and-forget batches + the GLOBAL
+- **connected** (a LIVE callback parked at the subscription's own path): fire-and-forget batches + the GLOBAL
   ScannedOffsetRange over the paged-in stub, straight from the commit path — no acks, no server
   cursor, no coalescing; the client holds its own offset and heals by pull. Live-state deltas ride
   the same lane, revision-chained, door-healed. Measured: p50 ~215ms end-to-end, ~50× batching
@@ -73,5 +75,5 @@ target's shape at delivery time. Three lanes:
   SubscriptionDeliveryProgress cursor per mount and applies the ONE failure policy — bounded
   retries → HALT + audit fact; recovery is a durable subscription-resumed event.
 
-Mounts naming a dead stub auto-revoke on close. Everything a client ever does — Slack-bridge
-RpcTargets included (prove_slack) — is these five layers composed.
+A live row whose transport finally closes auto-revokes. Everything a client ever does —
+Slack-bridge RpcTargets included (prove_slack) — is these five layers composed.

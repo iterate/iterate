@@ -1,13 +1,12 @@
-// __tests__/failing-connections-deep.test.ts — the live RPC-STUB registry, resource-lifecycle EDGES
+// __tests__/failing-connections-deep.test.ts — the live-transport table, resource-lifecycle EDGES
 // beyond failing-connections.test.ts (src/rpc-stub-directory.ts + src/core/hibernatable-rpc-stub.ts +
-// src/core/itx-surface.ts). A stub's lifetime is owned by its ProvidedStub handle (or, for a
-// subscribe, by `unsubscribe`; or by session end). Revoking a MOUNT never touches the stub; the only
-// stub→mount coupling is the REVERSE — an unexpectedly-dropped stub auto-revokes ITS mounts. So this
-// file hunts:
-//   • subscribe → unsubscribe disposes the parked stub (/state.stubs returns to zero),
-//   • a connect/provide/revoke/subscribe/unsubscribe/disconnect STORM returns /state to baseline,
-//   • reconnect-same-key replaces ONLY that key and leaves a separate keyed stub (even mid-invoke)
-//     untouched.
+// src/core/itx-surface.ts). A live stub's lifetime is coupled to its MOUNT PATH: `itx.revoke(path)`
+// (or `unsubscribe`, or session end) tears the row AND the transport; an unexpectedly-dropped
+// transport auto-revokes the row (the reverse coupling). So this file hunts:
+//   • subscribe → unsubscribe disposes the parked stub (hostState().stubs returns to zero),
+//   • a provide/revoke/subscribe/unsubscribe/disconnect STORM returns the DO to baseline,
+//   • re-provide at one path replaces ONLY that path's transport and leaves a separate live stub
+//     (even mid-invoke) untouched.
 // Run:
 //   pnpm exec vitest run --project harness __tests__/failing-connections-deep.test.ts
 
@@ -51,12 +50,17 @@ async function until<T>(
   }
 }
 
-/** Presence: the keys currently held by this context (`[{ key, description? }]`). */
-const listStubs = (itx: any): Promise<any[]> => itx.invokeCapability("itx.rpcStubs.list()");
+/** PRESENCE — the capability table's live rows (event-driven): dotted path strings. */
+const livePaths = async (itx: any): Promise<string[]> => {
+  const snap: any = await itx.invokeCapability("itx.facets.get('capability-table').snapshot()");
+  return (snap.state.mounts as any[])
+    .filter((m) => m.live)
+    .map((m) => (m.path as string[]).join("."));
+};
 
 /** The DO's read-only observability (never mints storage), over the one door as `itx.hostState()`:
- *  the rpc-stub registry's live counters ride at the top level — `stubs` (attached pager sockets),
- *  `pagedIn`, `dormant`. */
+ *  the transport table's in-memory counters ride at the top level — `stubs` (attached pager
+ *  sockets), `pagedIn`, `dormant`. */
 async function streamState(ctx: string): Promise<any> {
   return (await harness.itx(ctx)).hostState();
 }
@@ -99,13 +103,13 @@ test("subscribe → unsubscribe disposes the parked stub — /state.stubs return
 
   await observer.unsubscribe({ name: sub.name });
 
-  // unsubscribe revokes the subscriber mount AND disposes the internally-held ProvidedStub, so the
+  // unsubscribe revokes the subscriber row AND tears its transport (path-coupled), so the
   // parked stub goes offline and the registry returns to zero (and dormant — nothing paged in).
   await until("the parked subscriber stub disposed on unsubscribe", async () => {
     const s = await streamState(ctx);
     return s.stubs === 0 && s.dormant === true;
   });
-  expect((await listStubs(observer)).length).toBe(0);
+  expect((await livePaths(observer)).length).toBe(0); // presence (the table) agrees
 });
 
 test("storm of provide/mount/revoke/subscribe/unsubscribe/disconnect returns the DO to baseline (no leaked stubs)", async () => {
@@ -117,16 +121,13 @@ test("storm of provide/mount/revoke/subscribe/unsubscribe/disconnect returns the
     // (a) subscribe then unsubscribe — the parked-stub disposal path.
     const sub = await observer.subscribe({ target: () => undefined });
     await observer.unsubscribe({ name: sub.name });
-    // (b) provide a live cap under a key, name it at a path, then revoke the mount AND dispose the
-    //     stub via its handle.
-    const key = crypto.randomUUID();
-    const prov = await observer.rpcStubs.provide(new Tools(`s${i}`), { key });
-    await observer.provide({ path: `itx.cap${i}`, target: `itx.rpcStubs.get('${key}')` });
-    await observer.revoke({ path: `itx.cap${i}` });
-    await prov.revoke();
-    // (c) a keyed provide from a fresh session then a clean disconnect (dispose the client session).
+    // (b) provide a live cap at a path, then revoke the path — ONE door in, one door out
+    //     (the revoke tears the row AND its transport).
+    await observer.provide(`itx.cap${i}`, new Tools(`s${i}`));
+    await observer.revoke(`itx.cap${i}`);
+    // (c) a live provide from a fresh session then a clean disconnect (dispose the client session).
     const s = harness.session(ctx);
-    await s.get().rpcStubs.provide(new Tools(`k${i}`), { key: `k${i}` });
+    await s.get().provide(`itx.k${i}`, new Tools(`k${i}`));
     (s as any)[Symbol.dispose]?.();
   }
 
@@ -135,46 +136,47 @@ test("storm of provide/mount/revoke/subscribe/unsubscribe/disconnect returns the
     const st = await streamState(ctx);
     return st.stubs === 0 && st.dormant === true;
   });
-  expect((await listStubs(observer)).length).toBe(0);
+  await until(
+    "presence (the table) back to baseline",
+    async () => (await livePaths(observer)).length === 0,
+  );
 });
 
-test("reconnect under the same key replaces ONLY that key and leaves a separate keyed stub (even mid-invoke) untouched", async () => {
+test("re-provide at one path replaces ONLY that path and leaves a separate live stub (even mid-invoke) untouched", async () => {
   const ctx = c("reconnect-midinvoke");
   const observer = await harness.itx(ctx);
   const hangTools = new HangTools();
   const sA = harness.session(ctx);
   const itxA = sA.get();
-  await itxA.rpcStubs.provide(new Tools("rk1"), { key: "rk" });
-  // A SEPARATE stub under its OWN key from the same session.
-  await itxA.rpcStubs.provide(hangTools, { key: "slow" });
-  await until("both the keyed stub and the separate stub are listed", async () => {
-    const list = await listStubs(observer);
-    return list.some((r) => r.key === "rk") && list.some((r) => r.key === "slow");
+  await itxA.provide("itx.rk", new Tools("rk1"));
+  // A SEPARATE live stub at its OWN path from the same session.
+  await itxA.provide("itx.slow", hangTools);
+  await until("both live rows present", async () => {
+    const paths = await livePaths(observer);
+    return paths.includes("itx.rk") && paths.includes("itx.slow");
   });
 
   // Put the separate stub MID-INVOKE (a call that never returns) across the reconnect.
-  const hanging: Promise<unknown> = observer.invokeCapability("itx.rpcStubs.get('slow').hang()");
+  const hanging: Promise<unknown> = observer.invokeCapability("itx.slow.hang()");
   hanging.catch(() => undefined);
   await until("hang() reached the separate stub", () => hangTools.hangStarted);
 
-  // Reconnect under the SAME key 'rk' → replaces ONLY that key's transport (never the 'slow' stub).
+  // Re-provide at the SAME path itx.rk → replaces ONLY that path's transport (never itx.slow).
   const sB = harness.session(ctx);
-  await sB.get().rpcStubs.provide(new Tools("rk2"), { key: "rk" });
-  await until("the key 'rk' now resolves to the NEW transport", async () => {
+  await sB.get().provide("itx.rk", new Tools("rk2"));
+  await until("itx.rk now resolves to the NEW transport", async () => {
     try {
-      return (
-        (await observer.invokeCapability("itx.rpcStubs.get('rk').hello()")) === "hello-from-rk2"
-      );
+      return (await observer.invokeCapability("itx.rk.hello()")) === "hello-from-rk2";
     } catch {
       return false;
     }
   });
 
-  // The separate 'slow' stub must be UNTOUCHED by the key replace: still the only other key, still
-  // resolvable, and its in-flight call still pending (not collaterally severed).
-  const keys = (await listStubs(observer)).map((r) => r.key);
-  expect(keys.filter((k) => k === "slow").length).toBe(1);
-  expect(await observer.invokeCapability("itx.rpcStubs.get('slow').hello()")).toBe("hang-tools");
+  // The separate itx.slow stub must be UNTOUCHED by the replace: still its own single live row,
+  // still resolvable, and its in-flight call still pending (not collaterally severed).
+  const paths = await livePaths(observer);
+  expect(paths.filter((path) => path === "itx.slow").length).toBe(1);
+  expect(await observer.invokeCapability("itx.slow.hello()")).toBe("hang-tools");
   const raced = await Promise.race([
     hanging.then(() => "settled").catch(() => "settled"),
     new Promise((r) => setTimeout(() => r("pending"), 1500)),

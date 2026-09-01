@@ -3,17 +3,21 @@
 // host the same way). Its reduced state IS the table:
 //
 //   ┌───────────────── the capability table (per context) ─────────────────┐
-//   │  BUILT-INS      (kv, stream, cd, rpcStubs, …; resolved DIRECTLY —     │  built-ins first;
+//   │  BUILT-INS      (kv, append, read, cd, …; resolved DIRECTLY —        │  built-ins first;
 //   │                  no mount, no config; unshadowable physical layer)    │  then longest
 //   │  userspace      (capability-provided/-revoked; SHADOW STACK: newest   │  path wins, ties
 //   │  mounts          same-path wins; revoke-by-offset pops that entry)    │  → recency; else
 //   └──────────────────────────────────────────────────────────────────────┘  DEFAULT-DENY
 //
-// A MOUNT binds a CAPABILITY PATH ("itx.chat") to a TARGET EXPRESSION, optionally carrying a
-// DELIVERY policy (subscriptions) or a PROCESSOR policy (facet-processor enablement) — every
-// userspace attachment to a stream is a mount, all event-sourced, all shadowable/revocable. STRING
-// AT REST: the event payload stores both sides in the string half of the codec (the log reads like
-// what a human wrote); reduce parses ONCE into the structured in-memory table.
+// A MOUNT binds a CAPABILITY PATH ("itx.chat") to a TARGET EXPRESSION — or, for a LIVE capability
+// (`itx.provide(path, stub)`), to the live stub parked at that same path (`live: true` on the
+// event; no durable target exists — the transport table is consulted at resolve time). Mounts
+// optionally carry a DELIVERY policy (subscriptions) or a PROCESSOR policy (facet-processor
+// enablement) — every userspace attachment to a stream is a mount, all event-sourced, all
+// shadowable/revocable. STRING AT REST: the event payload stores both halves in the string half of
+// the codec (the log reads like what a human wrote); reduce parses ONCE into the structured
+// in-memory table. LIVE rows are per-path singletons (a live provide SUPERSEDES the incumbent live
+// row — the provided event IS the reconnect record); expression mounts shadow-stack as ever.
 //
 // Resolution of a call: `itx.<root>…` where `<root>` is a BUILT-IN resolves directly against the
 // physical scope (as if by an implicit mount `itx.<root> ⇒ <root>`). Otherwise, match every
@@ -59,7 +63,7 @@ export type ProcessorPolicy = {
 
 const CapabilityTableContract = defineProcessorContract({
   slug: "capability-table",
-  version: "2.0.0",
+  version: "3.0.0",
   description:
     "The context's capability table: reduces capability-provided/-revoked events into the mount stack that every call resolves against.",
   stateSchema: z.object({
@@ -68,8 +72,12 @@ const CapabilityTableContract = defineProcessorContract({
         z.object({
           /** The capability path, parsed (segments). The EVENT stores the string. */
           path: z.array(z.string()),
-          /** The target expression, parsed. The EVENT stores the string. */
-          target: z.custom<Expression>(() => true),
+          /** The target expression, parsed (EXPRESSION mounts only — a live row has none; the
+           *  transport table, keyed by the same path, is its target). The EVENT stores the string. */
+          target: z.custom<Expression>(() => true).optional(),
+          /** LIVE row: the mount's target is the live stub parked at this path (see `live` on the
+           *  provided event). At most ONE live row per path — a live provide SUPERSEDES it. */
+          live: z.literal(true).optional(),
           /** The mount's identity — the offset of its capability-provided event. */
           providedAtOffset: z.number().int().positive(),
           delivery: z.record(z.string(), z.unknown()).optional(),
@@ -83,33 +91,44 @@ const CapabilityTableContract = defineProcessorContract({
   events: {
     "events.iterate.com/capability-table/capability-provided": {
       description:
-        "Mount `target` at `path` (both in the STRING half of the codec — the log stays human-readable). Same-path mounts SHADOW (newest wins).",
-      payloadSchema: z.object({
-        path: z.string(),
-        target: z.string(),
-        /** SUBSCRIPTION mounts only (path itx.subscribers.<name>). */
-        delivery: z
-          .object({
-            consumes: z.array(z.string()).optional(),
-            maxAttempts: z.number().int().positive().optional(),
-            start: z.enum(["beginning", "now"]).optional(),
-            /** LIVE STATE mode: the key's state change events are forwarded as they commit;
-             *  the CLIENT chains revisions and re-reads the producer's door on any gap. */
-            liveState: z.object({ key: z.string() }).optional(),
-          })
-          .optional(),
-        /** PROCESSOR policy — rides a facet-target subscriber mount
-         *  (`itx.subscribers.<slug> → itx.facets.get('<slug>')`): the class that facet loads. */
-        processor: z
-          .object({
-            source: z.string().optional(),
-            className: z.string().optional(),
-          })
-          .optional(),
-        /** The delivery lane, stamped ONCE here (see `SubscriptionLane`) — every reader reads it
-         *  instead of re-inferring from the target's shape. Subscriber mounts only. */
-        lane: z.enum(["facet", "connected", "durable"]).optional(),
-      }),
+        "Mount a capability at `path`: EITHER a `target` expression (string half of the codec — the log stays human-readable; same-path mounts SHADOW, newest wins) OR `live: true` (the target is the live stub parked at the path; at most one live row per path — a live provide SUPERSEDES the incumbent live row in place).",
+      payloadSchema: z
+        .object({
+          path: z.string(),
+          /** EXPRESSION mounts only — exactly one of `target` / `live`. */
+          target: z.string().optional(),
+          /** LIVE mounts only — the provided capability is the live stub parked at `path` (no
+           *  durable target expression exists; this flag is the truth). */
+          live: z.literal(true).optional(),
+          /** SUBSCRIPTION mounts only (path itx.subscribers.<name>). */
+          delivery: z
+            .object({
+              consumes: z.array(z.string()).optional(),
+              maxAttempts: z.number().int().positive().optional(),
+              start: z.enum(["beginning", "now"]).optional(),
+              /** LIVE STATE mode: the key's state change events are forwarded as they commit;
+               *  the CLIENT chains revisions and re-reads the producer's door on any gap. */
+              liveState: z.object({ key: z.string() }).optional(),
+            })
+            .optional(),
+          /** PROCESSOR policy — rides a facet-target subscriber mount
+           *  (`itx.subscribers.<slug> → itx.facets.get('<slug>')`): the class that facet loads. */
+          processor: z
+            .object({
+              source: z.string().optional(),
+              className: z.string().optional(),
+            })
+            .optional(),
+          /** The delivery lane, stamped ONCE here (see `SubscriptionLane`) — every reader reads it
+           *  instead of re-inferring from the target's shape. Subscriber mounts only. */
+          lane: z.enum(["facet", "connected", "durable"]).optional(),
+        })
+        // Exactly one of target/live — enforced AT THE DOOR (buildEvent parses this schema), and
+        // load-bearing: z.object STRIPS unknown keys, so a missing schema field would silently
+        // erase the flag from the stored event.
+        .refine((p) => (p.target !== undefined) !== (p.live === true), {
+          message: "capability-provided: exactly one of `target` (expression) / `live: true`",
+        }),
     },
     "events.iterate.com/capability-table/capability-revoked": {
       description:
@@ -138,7 +157,7 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
   readonly contract = CapabilityTableContract;
   /** The parent's own append/read, in-process. */
   readonly stream: ProcessorStream;
-  /** The built-ins: a plain record whose keys (kv, stream, cd, rpcStubs, …) are the physical-layer
+  /** The built-ins: a plain record whose keys (kv, append, read, cd, …) are the physical-layer
    *  roots. A call `itx.<root>…` resolves DIRECTLY against these (no config, no mount) — see
    *  `resolve`. Userspace `provide` mounts (event-sourced) name NEW paths and their targets recurse
    *  through the `itx` symbol; they cannot spell a bare root, so the built-ins are unshadowable. */
@@ -147,15 +166,22 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
    *  recursion symbol re-enters through this, so alias mounts compose and default routes forward
    *  whole calls. A constructor dependency (not a reassigned stub): there is no un-wired state. */
   readonly #resolveCurrent: (call: Expression, depth?: number) => Promise<unknown>;
+  /** THE LIVE-STUB BRIDGE: the pipelinable handle for the live stub mounted at a path (the host
+   *  folds it onto its transport table — `directory.invoke(pathString, segments, args)`). A live
+   *  row resolves through this instead of a target expression; boundary-arg callOn, remainder
+   *  replay, and the fetch-shaped rule all ride the handle unchanged. */
+  readonly #liveStub: (pathString: string) => InvokeHandle;
 
   constructor(args: {
     stream: ProcessorStream;
     builtIns: Record<string, unknown>;
     resolveCurrent: (call: Expression, depth?: number) => Promise<unknown>;
+    liveStub: (pathString: string) => InvokeHandle;
   }) {
     this.stream = args.stream;
     this.#builtIns = args.builtIns;
     this.#resolveCurrent = args.resolveCurrent;
+    this.#liveStub = args.liveStub;
   }
 
   // The capability table is pure reduce — no side effects (which is exactly what qualifies it
@@ -166,16 +192,21 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
   reduce({ event, state }: ReduceArgs<State>): State | undefined {
     if (event.ephemeral) return undefined;
     if (event.type === "events.iterate.com/capability-table/capability-provided") {
-      const { path, target, delivery, processor, lane } = event.payload as {
+      const { path, target, live, delivery, processor, lane } = event.payload as {
         path: string;
-        target: string;
+        target?: string;
+        live?: true;
         delivery?: Record<string, unknown>;
         processor?: Record<string, unknown>;
         lane?: "facet" | "connected" | "durable";
       };
-      let parsed: { path: CapabilityPath; target: Expression };
+      let parsed: { path: CapabilityPath; target?: Expression; live?: true };
       try {
-        parsed = { path: parseCapabilityPath(path), target: parse(target) };
+        // A LIVE row has no target to parse — the flag is the truth (the transport table, keyed
+        // by the same path, is its target).
+        parsed = live
+          ? { path: parseCapabilityPath(path), live: true }
+          : { path: parseCapabilityPath(path), target: parse(target as string) };
       } catch (error) {
         tableLog.warn("skipping malformed capability-provided", {
           event: "capability-table.malformed-mount.skipped",
@@ -184,18 +215,23 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
         });
         return undefined;
       }
-      return {
-        mounts: [
-          ...state.mounts,
-          {
-            ...parsed,
-            providedAtOffset: event.offset,
-            ...(delivery && { delivery }),
-            ...(processor && { processor }),
-            ...(lane && { lane }),
-          },
-        ],
+      const row = {
+        ...parsed,
+        providedAtOffset: event.offset,
+        ...(delivery && { delivery }),
+        ...(processor && { processor }),
+        ...(lane && { lane }),
       };
+      // ONE LIVE ROW PER PATH, BY REDUCE RULE: a live provide at a path already holding a live row
+      // REPLACES that row in place (supersession — no shadow, no revoke event needed; the provided
+      // event IS the reconnect record). Expression mounts keep full shadow-stack semantics —
+      // including beneath a live row.
+      if (live) {
+        const pathString = parsed.path.join(".");
+        const i = state.mounts.findIndex((m) => m.live && m.path.join(".") === pathString);
+        if (i >= 0) return { mounts: state.mounts.map((m, j) => (j === i ? row : m)) };
+      }
+      return { mounts: [...state.mounts, row] };
     }
     if (event.type === "events.iterate.com/capability-table/capability-revoked") {
       const { providedAtOffset } = event.payload as { providedAtOffset: number };
@@ -205,10 +241,13 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
   }
 
   /** Provide = append the mount event (STRING at rest — programmatic inputs are canonicalized
-   *  through print). The offset that comes back IS the mount's identity. */
+   *  through print). Exactly one of `target` (an expression mount) / `live: true` (the live stub
+   *  parked at the path — no durable target exists). The offset that comes back IS the mount's
+   *  identity. */
   async provide(input: {
     path: string | CapabilityPath;
-    target: ItxExpression;
+    target?: ItxExpression;
+    live?: true;
     delivery?: DeliveryPolicy;
     processor?: ProcessorPolicy;
     /** The delivery lane, stamped on the event (see `SubscriptionLane`). The host computes it once
@@ -216,36 +255,40 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
     lane?: SubscriptionLane;
   }): Promise<{ providedAtOffset: number }> {
     const path = typeof input.path === "string" ? parseCapabilityPath(input.path) : input.path;
-    const target = toExpression(input.target);
-    if (target[0] !== "itx")
+    if ((input.target !== undefined) === (input.live === true))
+      throw new Error("provide: exactly one of `target` (expression) / `live: true`");
+    const target = input.live ? undefined : toExpression(input.target!);
+    if (target && target[0] !== "itx")
       throw new Error(
         `a provided capability's target must be rooted at "itx" (a bare built-in root is unspellable — targets recurse through the itx symbol)`,
       );
     // ROUND-TRIP THE STORED STRINGS NOW. The event stores strings; reduce re-parses them and
     // SKIPS anything that won't parse (a bad object key, an exponent number) — which would make
     // provide() report a providedAtOffset for a capability that silently never exists. Fail loud
-    // at the door instead: parse what we are about to store and demand it survives.
+    // at the door instead: parse what we are about to store and demand it survives. A LIVE row
+    // stores no target — only the path half runs.
     const pathString = path.join(".");
-    const targetString = print(target);
+    const targetString = target && print(target);
     try {
       const reparsedPath = parseCapabilityPath(pathString);
       if (
         reparsedPath.length !== path.length || // a pre-split array like ["itx.kv"] re-splits — reject
         reparsedPath.join(".") !== pathString ||
-        print(parse(targetString)) !== targetString
+        (targetString !== undefined && print(parse(targetString)) !== targetString)
       )
         throw new Error("re-parse diverged");
     } catch (cause) {
       throw new Error(
-        `provide: capability ${JSON.stringify(pathString)} → ${JSON.stringify(targetString)} does not round-trip (${cause instanceof Error ? cause.message : cause}); it would be stored and then silently dropped`,
+        `provide: capability ${JSON.stringify(pathString)} → ${targetString === undefined ? "(live)" : JSON.stringify(targetString)} does not round-trip (${cause instanceof Error ? cause.message : cause}); it would be stored and then silently dropped`,
       );
     }
     const [event] = await this.stream.append(
       this.contract.buildEvent({
         type: "events.iterate.com/capability-table/capability-provided",
         payload: {
-          path: path.join("."),
-          target: print(target),
+          path: pathString,
+          ...(targetString !== undefined && { target: targetString }),
+          ...(input.live && { live: true }),
           ...(input.delivery && { delivery: input.delivery }),
           ...(input.processor && { processor: input.processor }),
           ...(input.lane && { lane: input.lane }),
@@ -306,9 +349,20 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
           "NO_CAPABILITY_MATCH",
           `no capability matches ${JSON.stringify(print(expr))} (default-deny; provide a capability first)`,
         );
-      scope = { itx };
-      target = winner.target;
-      m = winner.m;
+      if (winner.mount.live) {
+        // A LIVE row's target is the stub parked at its path: hand the resolver bridge's handle in
+        // as the whole scope and fall into the SAME apply — boundary-arg callOn (applyRoot),
+        // remainder replay, and the fetch-shaped rule all ride the transport's invoke unchanged.
+        // No transport ⇒ CONNECTION_OFFLINE at call time (mounted-but-offline — a never-provided
+        // path already default-denied above).
+        scope = { stub: this.#liveStub(winner.mount.path.join(".")) };
+        target = ["stub"];
+        m = winner.m;
+      } else {
+        scope = { itx };
+        target = winner.mount.target!;
+        m = winner.m;
+      }
     }
     return await apply(
       scope,
@@ -327,27 +381,26 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
     return this.resolve(state, expressionEndingInFetch(expr), [request]);
   }
 
-  /** Pure routing: the winning userspace `provide` mount for a call, or null (built-ins are
-   *  resolved before this — see `resolve`). Longest matching path wins; ties → newest mount. */
-  #route(state: State, call: Expression): { target: Expression; m: Match } | null {
+  /** Pure routing: the winning userspace `provide` mount ROW for a call (the caller branches on
+   *  its `live`/`target`), or null (built-ins are resolved before this — see `resolve`). Longest
+   *  matching path wins; ties → newest mount (`providedAtOffset`). */
+  #route(state: State, call: Expression): { mount: State["mounts"][number]; m: Match } | null {
     if (typeof call[0] !== "string")
       throw new Error("cannot call the scope symbol itself — name a capability first");
-    // `providedAtOffset` is the tie-breaker (newest same-length mount wins) — needed WHILE ranking,
-    // not by the caller, so it stays local and the return is just the winner's target + match.
-    let best: { target: Expression; m: Match; length: number; providedAtOffset: number } | null =
-      null;
+    let best: { mount: State["mounts"][number]; m: Match } | null = null;
     for (const mount of state.mounts) {
       const m = match(mount.path, call);
       if (!m) continue;
-      const length = mount.path.length; // match is all-or-nothing, so this IS "how much matched"
+      // match is all-or-nothing, so path.length IS "how much matched".
       if (
         best === null ||
-        length > best.length ||
-        (length === best.length && mount.providedAtOffset > best.providedAtOffset)
+        mount.path.length > best.mount.path.length ||
+        (mount.path.length === best.mount.path.length &&
+          mount.providedAtOffset > best.mount.providedAtOffset)
       )
-        best = { target: mount.target, m, length, providedAtOffset: mount.providedAtOffset };
+        best = { mount, m };
     }
-    return best && { target: best.target, m: best.m };
+    return best;
   }
 
   /** The `itx` scope symbol at a given recursion depth: dotted/called access re-enters
@@ -362,12 +415,14 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
   }
 
   /** Deliver to ONE subscription mount BY ROW IDENTITY — never by name through the table (a
-   *  broad default route must not intercept deliveries). The target is evaluated and called
-   *  with the delivery args (an event batch + its ScannedRange, or a state change
+   *  broad default route must not intercept deliveries). A LIVE row delivers straight to the bare
+   *  parked callable (empty call path on its transport); an expression target is evaluated and
+   *  called with the delivery args (an event batch + its ScannedRange, or a state change
    *  payload). */
   async deliverTo(state: State, providedAtOffset: number, args: unknown[]): Promise<unknown> {
     const row = state.mounts.find((m) => m.providedAtOffset === providedAtOffset);
     if (!row) throw new Error(`no subscription mount at offset ${providedAtOffset}`);
-    return apply({ itx: this.#itxAtDepth(1) }, row.target, { boundaryArgs: args, remainder: [] });
+    if (row.live) return this.#liveStub(row.path.join(".")).applyRoot(args);
+    return apply({ itx: this.#itxAtDepth(1) }, row.target!, { boundaryArgs: args, remainder: [] });
   }
 }

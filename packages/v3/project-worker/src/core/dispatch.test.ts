@@ -52,9 +52,9 @@ describe("match", () => {
   test("ranking basis: the longer path consumes more of the call (less remainder to replay)", () => {
     // #route ranks by the winning mount's own `path.length`; a longer matching path claims more
     // segments, so it leaves a SHORTER remainder — the observable proof that it matched more.
-    const call = parse("itx.rpcStubs.abc.ping()");
-    const long = match(parseCapabilityPath("itx.rpcStubs.abc"), call)!;
-    const short = match(parseCapabilityPath("itx.rpcStubs"), call)!;
+    const call = parse("itx.robots.abc.ping()");
+    const long = match(parseCapabilityPath("itx.robots.abc"), call)!;
+    const short = match(parseCapabilityPath("itx.robots"), call)!;
     expect(long.remainder.length).toBeLessThan(short.remainder.length);
   });
 });
@@ -79,7 +79,7 @@ const scope = () => {
       openai: {
         chat: (o: { model: string; messages?: unknown[] }) => `chat(${o.model})`,
       },
-      rpcStubs: {
+      robots: {
         get: (key: string) => ({
           ping: () => `pong:${key}`,
           arm: {
@@ -115,7 +115,7 @@ describe("evaluate/apply", () => {
   test("alias mount end to end — remainder replays on the live stub", async () => {
     const s = scope();
     const m = match(parseCapabilityPath("itx.robot"), parse("itx.robot.arm.move(10)"))!;
-    const result = await apply(s, parse("itx.rpcStubs.get('robot-arm-1')"), m);
+    const result = await apply(s, parse("itx.robots.get('robot-arm-1')"), m);
     expect(result).toBe("moved");
     expect(s.log).toEqual(["move 10 @robot-arm-1"]);
   });

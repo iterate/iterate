@@ -6,6 +6,7 @@
 import { describe, expect, test } from "vitest";
 import { parse, type Expression } from "./core/expression.ts";
 import { CapabilityTableProcessor } from "./capability-table-processor.ts";
+import { InvokeHandle } from "./core/invoke-handle.ts";
 import { type ProcessorStream } from "./core/processor.ts";
 import {
   idempotencyConflictMessage,
@@ -54,7 +55,6 @@ function memoryStream(path = "/") {
 /** A tiny fake built-ins record — enough physical layer to route into. */
 const fakeBuiltIns = () => {
   const kv = new Map<string, string>();
-  const connections = new Map<string, Record<string, (...a: unknown[]) => unknown>>();
   const openaiCalls: unknown[] = [];
   return {
     kv: {
@@ -62,13 +62,6 @@ const fakeBuiltIns = () => {
       put: (k: string, v: string) => {
         kv.set(k, v);
         return { ok: true };
-      },
-    },
-    rpcStubs: {
-      get: (key: string) => {
-        const cap = connections.get(key);
-        if (cap === undefined) throw new Error(`client "${key}" is offline`);
-        return cap;
       },
     },
     whoami: () => ({ projectId: "prj_t", path: "/" }),
@@ -79,16 +72,13 @@ const fakeBuiltIns = () => {
       },
     },
     openaiCalls,
-    _connect: (key: string, cap: Record<string, (...a: unknown[]) => unknown>) =>
-      connections.set(key, cap),
-    _disconnect: (key: string) => connections.delete(key),
   };
 };
 
 const setup = () => {
   const { stream, events } = memoryStream();
   const builtIns = fakeBuiltIns();
-  // whoami/kv/rpcStubs/openai are KEYS in fakeBuiltIns() → `itx.<root>…` resolves DIRECTLY
+  // whoami/kv/openai are KEYS in fakeBuiltIns() → `itx.<root>…` resolves DIRECTLY
   // (built-ins first, unshadowable); no config, no base mounts.
   const reduceAll = () =>
     events.reduce(
@@ -97,10 +87,21 @@ const setup = () => {
     );
   const resolveNow = (call: Expression, depth = 0) =>
     host.resolve(reduceAll(), call, undefined, depth);
+  // The fake TRANSPORT TABLE behind the injected liveStub bridge — keyed by mount path.
+  const liveStubs = new Map<string, unknown>();
   const host: CapabilityTableProcessor = new CapabilityTableProcessor({
     stream,
     builtIns: builtIns as unknown as Record<string, unknown>,
     resolveCurrent: resolveNow,
+    liveStub: (pathString) =>
+      new InvokeHandle((segments, args) => {
+        const cap = liveStubs.get(pathString);
+        if (cap === undefined) throw new Error(`live capability "${pathString}" is offline`);
+        if (segments.length === 0) return (cap as (...a: unknown[]) => unknown)(...args);
+        let recv = cap as Record<string, unknown>;
+        for (const seg of segments.slice(0, -1)) recv = recv[seg] as Record<string, unknown>;
+        return (recv[segments.at(-1)!] as (...a: unknown[]) => unknown)(...args);
+      }),
   });
   return {
     stream,
@@ -110,6 +111,7 @@ const setup = () => {
     invoke: (call: string) => resolveNow(parse(call)),
     reduceAll,
     resolveNow,
+    _connect: (path: string, cap: unknown) => liveStubs.set(path, cap),
   };
 };
 
@@ -121,16 +123,17 @@ describe("provide → print → reduce → parse: an un-round-trippable target v
     //      (exponent branch) — the stored target re-parses on reduce and the mount enters the table.
     // EXPECTED: a target built from valid Expression data (a number is valid) mounts and routes.
     // ACTUAL: provide() RETURNS a providedAtOffset (the caller believes it succeeded), but every
-    //      later resolve default-denies because the stored string `itx.rpcStubs.get('c').echo(1e+21)`
+    //      later resolve default-denies because the stored string `itx.c.echo(1e+21)`
     //      fails to re-parse on reduce.
     // WHY IT MATTERS: a provide() that returns success while producing an unroutable table is a
     //      silent authority-loss. The offset handed back is a lie — revoke has nothing to pop and
     //      the capability is simply gone, with only a warn line in the log.
-    const { host, invoke, builtIns } = setup();
-    builtIns._connect("c", { echo: (n: unknown) => `echo:${n}` });
+    const { host, invoke, _connect } = setup();
+    _connect("itx.c", { echo: (n: unknown) => `echo:${n}` });
+    await host.provide({ path: "itx.c", live: true });
     const { providedAtOffset } = await host.provide({
       path: "itx.big",
-      target: ["itx", "rpcStubs", ["get", "c"], ["echo", 1e21]] as Expression,
+      target: ["itx", "c", ["echo", 1e21]] as Expression,
     });
     expect(providedAtOffset).toBeGreaterThan(0);
     // Resolve the mount (its target is a complete call) — it ROUTES now instead of vanishing.
@@ -212,17 +215,36 @@ describe("deliverTo", () => {
   });
 
   test("a non-callable subscription target errors loudly (never a silent drop)", async () => {
-    const { host, invoke, reduceAll, builtIns } = setup();
-    builtIns._connect("conn-1", { onEvents: () => "ok" });
+    const { host, invoke, reduceAll } = setup();
     const { providedAtOffset } = await host.provide({
       path: "itx.subscribers.plain",
-      target: "itx.rpcStubs.get('conn-1')", // evaluates to a plain object, not a function
+      target: "itx.openai", // evaluates to a plain object, not a function
       delivery: { consumes: ["mark"] },
     });
     void invoke; // (kept for parity with other tests' destructuring)
     await expect(host.deliverTo(reduceAll(), providedAtOffset, [{ batch: 1 }])).rejects.toThrow(
       /not callable/,
     );
+  });
+
+  test("deliverTo on a LIVE row calls the BARE parked callable (empty call path)", async () => {
+    const { host, reduceAll, _connect } = setup();
+    const seen: unknown[] = [];
+    _connect("itx.subscribers.cb", (...args: unknown[]) => {
+      seen.push(args);
+      return "delivered";
+    });
+    const { providedAtOffset } = await host.provide({
+      path: "itx.subscribers.cb",
+      live: true,
+      delivery: { consumes: ["mark"] },
+    });
+    const result = await host.deliverTo(reduceAll(), providedAtOffset, [
+      [{ type: "mark" }],
+      { after: 0, through: 1 },
+    ]);
+    expect(result).toBe("delivered");
+    expect(seen).toEqual([[[{ type: "mark" }], { after: 0, through: 1 }]]);
   });
 
   test("deliverTo on an unknown offset is a loud error", async () => {

@@ -23,8 +23,7 @@ export default class Provider extends WorkerEntrypoint {
   async run(mode) {
     const itx = await this.env.ITX.get();
     const device = new WsDevice();
-    const provided = await itx.rpcStubs.provide(device, { key: "wsdyn" });
-    await itx.provide({ path: "itx.wsdyn", target: "itx.rpcStubs.get('wsdyn')" });
+    const provided = await itx.provide("itx.wsdyn", device);
     // Held on globalThis so nothing GC-revokes DURING this invocation; note it does NOT keep the
     // capability alive past the invocation (see the lifetime test below).
     globalThis.__keep = { itx, provided, device };

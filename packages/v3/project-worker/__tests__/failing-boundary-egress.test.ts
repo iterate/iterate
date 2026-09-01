@@ -143,9 +143,10 @@ test("egress: a platform-scope token does NOT trip our door (the next door owns 
   expect(body).not.toContain("platform"); // and the platform token is nowhere in the refusal
 });
 
-// (Deleted with the rpcStubs migration: the "connectionKey / connectionId shared lookup namespace"
-// todo described an attack on the removed connection directory — connect({connectionKey}), the
-// dual connectionId/connectionKey namespace, and onFinalClose auto-revoke by connectionKey. The
-// rpcStubs registry keys stubs by a single client-chosen `key` (list() returns [{key}]); there is
-// no connectionId offset-string to collide with, so the defect is structurally gone. It was also a
-// malicious-client concern, which the trusted-client model does not defend against.)
+// (Deleted across the connections → path-identity migrations: the "connectionKey / connectionId
+// shared lookup namespace" todo described an attack on the removed connection directory —
+// connect({connectionKey}), the dual connectionId/connectionKey namespace, and onFinalClose
+// auto-revoke by connectionKey. There are no keys and no lookup namespace left to collide in: a
+// live capability's one identity is its mount path in the capability table
+// (`itx.provide(path, stub)`), so the defect is structurally gone. It was also a malicious-client
+// concern, which the trusted-client model does not defend against.)

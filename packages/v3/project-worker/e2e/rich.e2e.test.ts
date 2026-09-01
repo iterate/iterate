@@ -54,12 +54,10 @@ class ToolsRich extends RpcTarget {
 test("rich values through the longest path: Date, bytes, callbacks, RpcTarget args, Request/Response", async () => {
   const ctx = freshCtx("rich");
   const itxA = openItx(ctx);
-  await itxA.rpcStubs.provide(new ToolsA(), { key: "a", description: "rich provider" });
+  await itxA.provide("itx.proverA", new ToolsA());
   const itxB = openItx(ctx);
   await seedSources(itxB, ["probe"]);
-  const toolsKey = crypto.randomUUID();
-  await itxA.rpcStubs.provide(new ToolsA(), { key: toolsKey });
-  await itxA.provide({ path: "itx.tools", target: `itx.rpcStubs.get('${toolsKey}')` });
+  await itxA.provide("itx.tools", new ToolsA());
 
   // 1. a Date through the whole path
   const probed = await itxB.invokeCapability([
@@ -88,10 +86,7 @@ test("rich values through the longest path: Date, bytes, callbacks, RpcTarget ar
   // 4. the STATELESS RUN LANE (was the one JSON boundary — now a real RPC method): a Date and a
   //    client callback ride into a confined loaded isolate; note the ref needs NO `type`.
   await itxB.invokeCapability(`itx.append({ type: 'noop' })`); // ensure the stream exists
-  await itxB.provide({
-    path: "itx.probe",
-    target: `itx.load("itx.kv.get('src/probe.js')").getEntrypoint()`,
-  });
+  await itxB.provide("itx.probe", `itx.load("itx.kv.get('src/probe.js')").getEntrypoint()`);
   const rich = await itxB.invokeCapability([
     "itx",
     "probe",
@@ -102,9 +97,7 @@ test("rich values through the longest path: Date, bytes, callbacks, RpcTarget ar
   expect(rich?.cbResult).toBe(42);
 
   // 5. RpcTarget WITH METHODS as an arg (not just a bare function): A calls TWO methods on it
-  const richKey = crypto.randomUUID();
-  await itxA.rpcStubs.provide(new ToolsRich(), { key: richKey });
-  await itxA.provide({ path: "itx.rich", target: `itx.rpcStubs.get('${richKey}')` });
+  await itxA.provide("itx.rich", new ToolsRich());
   const nbResult = await itxB.invokeCapability(["itx", "rich", ["useNotebook", new Notebook()]]);
   expect(nbResult).toBe("one|two"); // provider called TWO methods on B's RpcTarget
 

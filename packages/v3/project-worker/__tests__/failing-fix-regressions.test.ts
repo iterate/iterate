@@ -25,7 +25,7 @@ afterAll(async () => {
 test("charset gate: a legitimate ctx (hyphen, underscore, uppercase, digits) is served, not rejected", async () => {
   const itx = await harness.itx("prj_FixReg-1_A");
   // A probe → whoami round-trip proves the ctx addressed the right project (and parsed cleanly).
-  await itx.provide({ path: "itx.probe", target: "itx.whoami" });
+  await itx.provide("itx.probe", "itx.whoami");
   const who = await itx.invokeCapability(["itx", ["probe"]]);
   expect(who).toMatchObject({ projectId: "prj_FixReg-1_A" });
 });
@@ -42,9 +42,10 @@ test("charset gate: a ':' in the ctx is rejected at the edge (no DO is addressed
   expect(bad.status).toBeGreaterThanOrEqual(500);
 });
 
-// (Deleted with the rpcStubs migration: the "reap guard — a connection named by TWO mounts
-// survives revoking one; the last revoke reaps it" case asserted reap-on-mount-revoke, the very
-// mechanism the migration removed. A stub's lifecycle is now owned by its ProvidedStub handle, not
-// by the mounts naming it — revoking a mount does NOT touch the stub — so there is nothing to
-// assert here. It also read back an itx.connections.get('<connId>') target expression, a surface
-// that no longer exists.)
+// (Deleted across the connections → rpcStubs → path-identity migrations: the "reap guard — a
+// connection named by TWO mounts survives revoking one; the last revoke reaps it" case can no
+// longer be spelled. There is no shared stub registry for two mounts to name: a live stub's
+// identity IS its one mount path (`itx.provide(path, stub)`, at most one live row per path), and
+// `itx.revoke(path)` tears that stub's transport down with the mount — reap-on-revoke is
+// definitionally 1:1, with no cross-mount refcount to guard. It also read back an
+// itx.connections.get('<connId>') target expression, a surface that no longer exists.)

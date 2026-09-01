@@ -21,7 +21,7 @@ test("connectToCapnweb dials a remote capnweb API and is mountable", async () =>
   expect(await itx.invokeCapability(`itx.connectToCapnweb('${remote()}').add(2, 40)`)).toBe(42);
 
   // 3. NAMED as a mount — this is exactly how `itx.os` becomes sugar over connectToCapnweb.
-  await itx.provide({ path: "itx.remoteApi", target: `itx.connectToCapnweb('${remote()}')` });
+  await itx.provide("itx.remoteApi", `itx.connectToCapnweb('${remote()}')`);
   expect(await itx.invokeCapability("itx.remoteApi.hello('mounted')")).toBe(
     "hi mounted from dummy-capnweb",
   );

@@ -21,8 +21,8 @@ test("userspace facet processor folds side-by-side with the built-in tally", asy
   await itx.enableProcessor("tally");
 
   // 2 provides + 1 revoke → offsets 1..3
-  const p1 = await itx.provide({ path: "itx.a", target: "itx.kv" });
-  await itx.provide({ path: "itx.b", target: "itx.kv" });
+  const p1 = await itx.provide("itx.a", "itx.kv");
+  await itx.provide("itx.b", "itx.kv");
   await itx.revoke({ providedAtOffset: p1.providedAtOffset });
 
   const su = await itx.invokeCapability("itx.facets.get('user-tally').snapshot()");

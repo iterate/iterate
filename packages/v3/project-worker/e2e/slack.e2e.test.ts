@@ -59,12 +59,8 @@ test("itx.slack — a live bridge replays the natural dotted spelling onto the S
   // ── bridge session (the provider) + a second ordinary client — both on ONE ctx ──
   const ctx = freshCtx("slack");
   const bridgeItx = openItx(ctx);
-  const slackKey = crypto.randomUUID();
-  const slackStub = await bridgeItx.rpcStubs.provide(new SlackReplayTarget(), {
-    key: slackKey,
-    description: "slack sdk bridge (node script)",
-  });
-  await bridgeItx.provide({ path: "itx.slack", target: `itx.rpcStubs.get('${slackKey}')` });
+  // ONE provide door: the live bridge stub mounts AT itx.slack (the path is its identity).
+  await bridgeItx.provide("itx.slack", new SlackReplayTarget());
 
   const itx = openItx(ctx);
 
@@ -101,7 +97,7 @@ test("itx.slack — a live bridge replays the natural dotted spelling onto the S
   expect(listed.channels[0].name).toBe("general");
 
   // 3. a mounted alias can shadow-route ONTO the live bridge like any capability
-  await itx.provide({ path: "itx.notify", target: "itx.slack.chat.postMessage" });
+  await itx.provide("itx.notify", "itx.slack.chat.postMessage");
   const aliased = await itx.invokeCapability(
     `itx.notify({ channel: '#alerts', text: 'aliased!' })`,
   );
@@ -110,12 +106,7 @@ test("itx.slack — a live bridge replays the natural dotted spelling onto the S
   expect(sdkCalls.some(([m, o]) => m === "chat.postMessage" && o.channel === "#alerts")).toBe(true);
 
   // 4. the SAME thing with ZERO declarations: replay literally onto the SDK instance
-  const slack2Key = crypto.randomUUID();
-  const slack2Stub = await bridgeItx.rpcStubs.provide(replayOnto(slackSdk), {
-    key: slack2Key,
-    description: "slack sdk bridge, zero-declaration replay",
-  });
-  await bridgeItx.provide({ path: "itx.slack2", target: `itx.rpcStubs.get('${slack2Key}')` });
+  await bridgeItx.provide("itx.slack2", replayOnto(slackSdk));
   const posted2 = await itx.invokeCapability([
     "itx",
     "slack2",
@@ -125,10 +116,10 @@ test("itx.slack — a live bridge replays the natural dotted spelling onto the S
   // replayOnto(sdk): the LITERAL SDK instance replayed with no per-method declarations
   expect(posted2?.ok).toBe(true);
   expect(sdkCalls.some(([m, o]) => m === "chat.postMessage" && o.channel === "#zero")).toBe(true);
-  await slack2Stub.revoke();
+  await bridgeItx.revoke("itx.slack2");
 
-  // 5. revoke the provided stub → the stub goes offline and its mount auto-revokes, default-deny answers
-  await slackStub.revoke();
+  // 5. revoke the live mount → the transport is torn down with the row, default-deny answers
+  await bridgeItx.revoke("itx.slack");
   const denied = await until("revoke propagated", async () => {
     try {
       await itx.invokeCapability([
@@ -142,6 +133,6 @@ test("itx.slack — a live bridge replays the natural dotted spelling onto the S
       return String(e);
     }
   });
-  // after slackStub.revoke() the capability is gone (default-deny)
+  // after revoke("itx.slack") the capability is gone (default-deny)
   expect(denied).toMatch(/no capability matches|offline/);
 });

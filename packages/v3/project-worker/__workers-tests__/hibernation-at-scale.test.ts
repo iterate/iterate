@@ -1,8 +1,8 @@
 // __workers-tests__/hibernation-at-scale.test.ts — THE HIBERNATION PROPERTY AT SCALE, inside
 // workerd (the pool-workers lane; see vitest.workers.config.ts):
 //
-//   Hundreds of clients connect into ONE stream (each parking a live capnweb capability as an
-//   ItxConnection with a hibernatable stub pager WebSocket), the stream DO EVICTS — losing every
+//   Hundreds of clients connect into ONE stream (each providing a live capnweb capability at its
+//   own mount path, with a hibernatable stub pager WebSocket), the stream DO EVICTS — losing every
 //   in-memory paged-in stub — and on wake it can STILL call every client's capability:
 //   page → paged-in stub → invoke (core/hibernatable-rpc-stub.ts).
 //
@@ -56,17 +56,20 @@ class EchoTarget extends RpcTarget {
   }
 }
 
-/** /state through the worker's observability door (read-only — never mints storage). */
-type StreamState = {
-  incarnation: number;
+/** The DO-only transport facts (transportState(): in-memory socket truths — not event-derivable;
+ *  this pool-workers lane holds the raw DO stub, so it speaks the Workers-RPC verb directly). */
+type TransportState = {
   stubs: number;
   pagedIn: number;
   pagesPending: number;
   dormant: boolean;
 };
-async function state(): Promise<StreamState> {
-  // Observability over the one door: the DO's hostState() method (the /state HTTP route is gone).
-  return (await contextStub().hostState()) as unknown as StreamState;
+async function state(): Promise<TransportState> {
+  return (await contextStub().transportState()) as unknown as TransportState;
+}
+/** Incarnation (the hibernation tell) still reads off hostState until C5 re-routes it. */
+async function incarnationNow(): Promise<number> {
+  return ((await contextStub().hostState()) as unknown as { incarnation: number }).incarnation;
 }
 
 const contextStub = () =>
@@ -114,18 +117,16 @@ async function quiesceLikeProduction(): Promise<void> {
 }
 
 beforeAll(async () => {
-  // ONE client session carrying all 200 stubs (capnweb multiplexes; each rpcStubs.provide() parks
-  // its own EchoTarget relay-side and opens its own stub pager WebSocket into the DO).
+  // ONE client session carrying all 200 stubs (capnweb multiplexes; each itx.provide(path, stub)
+  // parks its own EchoTarget relay-side, opens its own stub pager WebSocket into the DO, and
+  // appends its live capability-provided row — presence is the table, event volume is fine).
   const clientItx = await (await openSession()).get();
   const BATCH = 25; // concurrent provides per wave — enough parallelism without a thundering herd
   for (let base = 0; base < CLIENTS; base += BATCH) {
     await Promise.all(
       Array.from({ length: Math.min(BATCH, CLIENTS - base) }, (_, k) => {
         const i = base + k;
-        return clientItx.rpcStubs.provide(new EchoTarget(i), {
-          key: `c${i}`,
-          description: `scale client ${i}`,
-        });
+        return clientItx.provide(`itx.c${i}`, new EchoTarget(i));
       }),
     );
   }
@@ -153,7 +154,7 @@ test("SCALE ATTACH: 200 clients park 200 stubs, the DO stays dormant, spot invok
   const picks = new Set<number>();
   while (picks.size < 5) picks.add(Math.floor(Math.random() * CLIENTS));
   for (const i of picks) {
-    const out = await callerItx.invokeCapability(`itx.rpcStubs.get('c${i}').echo('x${i}')`);
+    const out = await callerItx.invokeCapability(`itx.c${i}.echo('x${i}')`);
     expect(out).toBe(`echo-${i}:x${i}`);
   }
 
@@ -163,6 +164,7 @@ test("SCALE ATTACH: 200 clients park 200 stubs, the DO stays dormant, spot invok
 
 test("EVICT THEN WAKE: eviction drops every in-memory stub; a call pages the relay back in and answers", async () => {
   const before = await state();
+  const beforeIncarnation = await incarnationNow();
   expect(before.pagedIn).toBeGreaterThanOrEqual(5); // warm from the previous test
 
   // The production sequence: quiesce (dispose the paged-in stubs — without this the eviction
@@ -181,17 +183,16 @@ test("EVICT THEN WAKE: eviction drops every in-memory stub; a call pages the rel
 
   // The wake path, several clients: page → fresh RetainedCallbackInvoker → invoke.
   for (const i of [3, 77, 141]) {
-    const out = await callerItx.invokeCapability(`itx.rpcStubs.get('c${i}').echo('wake${i}')`);
+    const out = await callerItx.invokeCapability(`itx.c${i}.echo('wake${i}')`);
     expect(out).toBe(`echo-${i}:wake${i}`);
   }
   const paged = await state();
   expect(paged.pagedIn).toBeGreaterThanOrEqual(3); // the pages grew the paged-in set back
 
-  // A REAL eviction shows as incarnation growth on the next durable write (StreamEventLog.touch
+  // A REAL eviction shows as incarnation growth on the next durable write (Stream.touch
   // bumps once per incarnation-that-writes; reads never bump).
-  await callerItx.provide({ path: "itx.hello", target: "itx.kv" });
-  const bumped = await state();
-  expect(bumped.incarnation).toBeGreaterThan(before.incarnation);
+  await callerItx.provide("itx.hello", "itx.kv");
+  expect(await incarnationNow()).toBeGreaterThan(beforeIncarnation);
 });
 
 test("SCALE WAKE: after another eviction, a fan-out reaches ALL 200 clients", async () => {
@@ -201,15 +202,15 @@ test("SCALE WAKE: after another eviction, a fan-out reaches ALL 200 clients", as
   expect(evicted.pagedIn).toBe(0);
 
   const t0 = Date.now();
-  // fan-out = list() + map over get(key).echo (no built-in `each`); the caller owns the allSettled.
-  const keys = ((await callerItx.invokeCapability("itx.rpcStubs.list()")) as { key: string }[]).map(
-    (r) => r.key,
-  );
+  // fan-out = the capability table's live rows (event-driven presence) + map over the paths
+  // (no built-in `each`); the caller owns the allSettled.
+  const snap = (await callerItx.invokeCapability(
+    "itx.facets.get('capability-table').snapshot()",
+  )) as { state: { mounts: { path: string[]; live?: true }[] } };
+  const paths = snap.state.mounts.filter((m) => m.live).map((m) => m.path.join("."));
   const answers = (
     await Promise.all(
-      keys.map((k) =>
-        callerItx.invokeCapability(`itx.rpcStubs.get('${k}').echo('hi')`).catch(() => undefined),
-      ),
+      paths.map((path) => callerItx.invokeCapability(`${path}.echo('hi')`).catch(() => undefined)),
     )
   ).filter((v): v is string => v !== undefined);
   const wallMs = Date.now() - t0;

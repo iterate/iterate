@@ -18,10 +18,10 @@ test("live state chains client-side from the door — mini-app + processor flavo
   await seedSources(itx, ["chatroom", "chunky"]);
 
   // ── mini-app flavor: the chatroom (SDK liveState helper) ──
-  await itx.provide({
-    path: "itx.chat",
-    target: `itx.load("itx.kv.get('src/chatroom.js')").getDurableObjectClass('Chatroom').get()`,
-  });
+  await itx.provide(
+    "itx.chat",
+    `itx.load("itx.kv.get('src/chatroom.js')").getDurableObjectClass('Chatroom').get()`,
+  );
 
   const chat = liveClient(async () => clone(await itx.invokeCapability("itx.chat.state()")));
   await itx.subscribe({

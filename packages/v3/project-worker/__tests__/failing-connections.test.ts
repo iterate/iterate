@@ -1,10 +1,11 @@
-// __tests__/failing-connections.test.ts — the live RPC-STUB registry (src/rpc-stub-directory.ts +
-// src/core/hibernatable-rpc-stub.ts + src/core/itx-surface.ts). The registry is LIVE-ONLY: presence
-// is `itx.rpcStubs.list()`, a stub lives while its transport is open and disappears when it closes.
-// There is no durable session history any more (the connection-session facts + the reap-on-
-// mount-revoke behaviour were deleted with `session.connect`/`provideCapability`/`itx.connections`).
-// A live capability is now `itx.rpcStubs.provide(stub, { key })`, addressed as
-// `itx.rpcStubs.get(key)` and named at a path by mounting `itx.rpcStubs.get('<key>')`.
+// __tests__/failing-connections.test.ts — the live-transport table (src/rpc-stub-directory.ts +
+// src/core/hibernatable-rpc-stub.ts + src/core/itx-surface.ts). A live capability is
+// `itx.provide(path, stub)` — the MOUNT PATH is the stub's identity (no keys) and it is called as
+// `itx.<path>.method(...)`. PRESENCE is event-driven: the capability table's rows where `live`
+// (read via the capability-table facet snapshot); the transport table holds only in-memory socket
+// facts (`hostState().stubs/pagedIn/dormant`). Re-providing the same path replaces the transport
+// AND supersedes the live row in place (one live row per path); the transport's final close
+// auto-revokes the row.
 // Run:
 //   pnpm exec vitest run --project harness __tests__/failing-connections.test.ts
 
@@ -92,8 +93,13 @@ async function rejectionOf(
 const codeOf = (e: unknown): string | undefined =>
   typeof e === "object" && e !== null && "code" in e ? String((e as any).code) : undefined;
 
-/** Presence: the keys currently held by this context (`[{ key }]`). */
-const listStubs = (itx: any): Promise<any[]> => itx.invokeCapability("itx.rpcStubs.list()");
+/** PRESENCE — the capability table's live rows (event-driven): dotted path strings. */
+const livePaths = async (itx: any): Promise<string[]> => {
+  const snap: any = await itx.invokeCapability("itx.facets.get('capability-table').snapshot()");
+  return (snap.state.mounts as any[])
+    .filter((m) => m.live)
+    .map((m) => (m.path as string[]).join("."));
+};
 
 class Tools extends RpcTarget {
   #tag: string;
@@ -122,15 +128,18 @@ class HangTools extends RpcTarget {
 
 // ── the hunt ──
 
-test("calling a stub key that never existed rejects with code CONNECTION_OFFLINE", async () => {
+test("calling a path that was never provided rejects with code NO_CAPABILITY_MATCH (default-deny)", async () => {
+  // ERROR-CONTRACT SHIFT (the unification): a never-provided path is indistinguishable from any
+  // other unmounted capability — default-deny. CONNECTION_OFFLINE narrows to "live row exists,
+  // transport gone" (pinned by the mid-invoke test below).
   const itx = await harness.itx(c("offline"));
   const err = await rejectionOf(
-    itx.invokeCapability("itx.rpcStubs.get('never-existed').hello()"),
+    itx.invokeCapability("itx.neverExisted.hello()"),
     10_000,
-    "invoke on a never-provided key",
+    "invoke on a never-provided path",
   );
   // The code must survive the DO → edge → capnweb hops (core/errors.ts contract).
-  expect(codeOf(err)).toBe("CONNECTION_OFFLINE");
+  expect(codeOf(err)).toBe("NO_CAPABILITY_MATCH");
 });
 
 test("stub pager upgrade with an unknown transportId is refused with 409 (attach first)", async () => {
@@ -145,26 +154,25 @@ test("stub pager upgrade with an unknown transportId is refused with 409 (attach
   expect(await res.text()).toContain("attach first");
 });
 
-test("same-key re-provide replaces the incumbent while online; a mount naming the key survives and follows the survivor", async () => {
+test("same-path re-provide replaces the incumbent while online; the path keeps resolving and follows the survivor", async () => {
   const ctx = c("replace");
   const observer = await harness.itx(ctx);
-  // First live provider under key 'dup'.
+  // First live provider at path itx.dupTool.
   const s1 = harness.session(ctx);
-  await s1.get().rpcStubs.provide(new Tools("one"), { key: "dup" });
-  await until("first 'dup' transport listed", async () =>
-    (await listStubs(observer)).some((r) => r.key === "dup"),
+  await s1.get().provide("itx.dupTool", new Tools("one"));
+  await until("first itx.dupTool live row present", async () =>
+    (await livePaths(observer)).includes("itx.dupTool"),
   );
-  // A mount that names the KEY (not a transport) — it must survive a replace and keep resolving.
-  await observer.provide({ path: "itx.dupTool", target: "itx.rpcStubs.get('dup')" });
   expect(await observer.invokeCapability(["itx", "dupTool", ["hello"]])).toBe("hello-from-one");
 
-  // Second LIVE session, same key → the newest transport wins (the concurrent-replace path in
-  // rpc-stub-directory.fetch drops the predecessor with reason "replaced", keyFinal=false, so no
-  // mount naming the key is auto-revoked).
+  // Second LIVE session, same path → the newest transport wins (the concurrent-replace path in
+  // rpc-stub-directory.fetch drops the predecessor with reason "replaced", pathFinal=false, so the
+  // live row is never auto-revoked) AND the reduce supersedes the row in place — exactly ONE live
+  // row at the path, at every point in the swap.
   const s2 = harness.session(ctx);
-  await s2.get().rpcStubs.provide(new Tools("two"), { key: "dup" });
-  await until("exactly one 'dup' transport, now serving 'two'", async () => {
-    const dups = (await listStubs(observer)).filter((r) => r.key === "dup");
+  await s2.get().provide("itx.dupTool", new Tools("two"));
+  await until("exactly one live row at itx.dupTool, now serving 'two'", async () => {
+    const dups = (await livePaths(observer)).filter((path) => path === "itx.dupTool");
     if (dups.length !== 1) return undefined;
     try {
       return (await observer.invokeCapability(["itx", "dupTool", ["hello"]])) === "hello-from-two"
@@ -174,30 +182,28 @@ test("same-key re-provide replaces the incumbent while online; a mount naming th
       return undefined;
     }
   });
-  // The key mount was never auto-revoked by the replace ("replaced" is never key-final).
+  // The row was never auto-revoked by the replace ("replaced" is never path-final).
   expect(await observer.invokeCapability(["itx", "dupTool", ["hello"]])).toBe("hello-from-two");
 });
 
-test("disposing a client session removes its stubs promptly and auto-revokes its live-cap mounts", async () => {
+test("disposing a client session removes its stubs promptly and auto-revokes its live rows", async () => {
   const ctx = c("dispose");
   const observer = await harness.itx(ctx);
   const sA = harness.session(ctx);
   const itxA = sA.get();
-  // Provide a live capability under a key and name it at a path.
-  await itxA.rpcStubs.provide(new Tools("ghost"), { key: "ghost" });
-  await observer.provide({ path: "itx.ghosttool", target: "itx.rpcStubs.get('ghost')" });
+  // ONE door: the provide parks the stub AND mounts it — the path is the identity.
+  await itxA.provide("itx.ghosttool", new Tools("ghost"));
   expect(await observer.invokeCapability(["itx", "ghosttool", ["hello"]])).toBe("hello-from-ghost");
-  await until("the provided stub listed", async () =>
-    (await listStubs(observer)).some((r) => r.key === "ghost"),
+  await until("the live row present", async () =>
+    (await livePaths(observer)).includes("itx.ghosttool"),
   );
 
   (sA as any)[Symbol.dispose]?.(); // the client session ends — every relay must die with it
 
-  await until(
-    "the session's stub left the registry",
-    async () => (await listStubs(observer)).length === 0,
-  );
-  await until("live-cap mount auto-revoked (default-deny restored)", async () => {
+  // The transport's final close auto-revokes THE live row: presence (the table) empties and the
+  // path returns to default-deny — the same fact, read twice.
+  await until("the live row auto-revoked", async () => (await livePaths(observer)).length === 0);
+  await until("default-deny restored at the path", async () => {
     try {
       await observer.invokeCapability(["itx", "ghosttool", ["hello"]]);
       return undefined;
@@ -205,13 +211,6 @@ test("disposing a client session removes its stubs promptly and auto-revokes its
       return codeOf(e) === "NO_CAPABILITY_MATCH";
     }
   });
-  // The stale key is now simply offline — coded, not a hang.
-  const err = await rejectionOf(
-    observer.invokeCapability("itx.rpcStubs.get('ghost').hello()"),
-    10_000,
-    "invoke on the disposed session's key",
-  );
-  expect(codeOf(err)).toBe("CONNECTION_OFFLINE");
 });
 
 // An in-flight invoke on a provider that dies mid-call must reject with the CODED offline error —
@@ -223,55 +222,58 @@ test("killing the provider session mid-invoke rejects the in-flight call promptl
   const observer = await harness.itx(ctx);
   const hangTools = new HangTools();
   const { session: sA, ws: wsA } = rawSession(ctx);
-  await sA.get().rpcStubs.provide(hangTools, { key: "hanger" });
-  await until("'hanger' listed", async () =>
-    (await listStubs(observer)).some((r) => r.key === "hanger"),
+  await sA.get().provide("itx.hanger", hangTools);
+  await until("itx.hanger live row present", async () =>
+    (await livePaths(observer)).includes("itx.hanger"),
   );
-  expect(await observer.invokeCapability("itx.rpcStubs.get('hanger').hello()")).toBe("hang-tools");
+  expect(await observer.invokeCapability("itx.hanger.hello()")).toBe("hang-tools");
 
-  const inFlight: Promise<unknown> = observer.invokeCapability("itx.rpcStubs.get('hanger').hang()");
+  const inFlight: Promise<unknown> = observer.invokeCapability("itx.hanger.hang()");
   inFlight.catch(() => undefined); // settled later via rejectionOf — never an unhandled rejection
   await until("hang() reached the provider", () => hangTools.hangStarted);
 
   wsA.close(); // the provider dies with the call in flight
 
+  // CONNECTION_OFFLINE is the mounted-but-offline code: the row existed when the call went out;
+  // the transport died under it. (A NEVER-provided path is NO_CAPABILITY_MATCH — first test.)
   const err = await rejectionOf(inFlight, 20_000, "in-flight invoke on a dying provider");
   expect(codeOf(err)).toBe("CONNECTION_OFFLINE");
 });
 
-// Fan-out is NOT a built-in: the caller lists stubs and maps over them, owning the allSettled. This
-// pins that the list()+get(key) pattern drops dead members AND a parked subscriber with no matching
-// method — the exact coverage the old `each` had.
-test("fan-out via rpcStubs.list() + map drops dead members and the no-hello subscriber", async () => {
+// Fan-out is NOT a built-in: the caller reads the live table rows and maps over their paths,
+// owning the allSettled. This pins that the snapshot+dotted-call pattern drops dead members AND a
+// parked subscriber with no matching method — the exact coverage the old `each` had.
+test("fan-out via live table rows + map drops dead members and the no-hello subscriber", async () => {
   const ctx = c("each");
   const observer = await harness.itx(ctx);
   const sAlive = harness.session(ctx);
-  await sAlive.get().rpcStubs.provide(new Tools("alive"), { key: "alive" });
+  await sAlive.get().provide("itx.alive", new Tools("alive"));
   const { session: sDead, ws: wsDead } = rawSession(ctx);
-  await sDead.get().rpcStubs.provide(new Tools("doomed"), { key: "doomed" });
-  // A parked subscriber (its own generated key) with NO hello() — the caller's allSettled drops it.
+  await sDead.get().provide("itx.doomed", new Tools("doomed"));
+  // A parked subscriber (its live row at itx.subscribers.<name>) with NO hello() — the caller's
+  // allSettled drops it.
   await observer.subscribe({ target: () => undefined });
 
-  /** fan-out = list() → map get(key).hello() → allSettled (dead / no-hello members drop out). */
+  /** fan-out = live rows → map itx.<path>.hello() → allSettled (dead / no-hello members drop). */
   const fanOut = async (): Promise<unknown[]> => {
-    const rows = await listStubs(observer);
+    const paths = await livePaths(observer);
     const settled = await Promise.allSettled(
-      rows.map((r) => observer.invokeCapability(`itx.rpcStubs.get('${r.key}').hello()`)),
+      paths.map((path) => observer.invokeCapability(`${path}.hello()`)),
     );
     return settled
       .filter((s): s is PromiseFulfilledResult<unknown> => s.status === "fulfilled")
       .map((s) => s.value);
   };
 
-  await until("both keyed providers answer the fan-out", async () => {
+  await until("both live providers answer the fan-out", async () => {
     const fans = await fanOut();
     return fans.includes("hello-from-alive") && fans.includes("hello-from-doomed");
   });
 
   wsDead.close(); // one member dies
   await until(
-    "'doomed' left the registry",
-    async () => !(await listStubs(observer)).some((r) => r.key === "doomed"),
+    "itx.doomed auto-revoked out of the table",
+    async () => !(await livePaths(observer)).includes("itx.doomed"),
   );
   const fans = await until("fan-out = exactly the alive answer", async () => {
     const f = await fanOut();
@@ -280,25 +282,26 @@ test("fan-out via rpcStubs.list() + map drops dead members and the no-hello subs
   expect(fans).toEqual(["hello-from-alive"]);
 });
 
-// Concurrent provides under one key collapse to ONE live transport. attach() (before a pager opens)
-// can only drop predecessors already visible in #stubs.all(); the reconciliation happens when each
-// pager opens (rpc-stub-directory.fetch drops every OTHER same-key transport then), so at any settled
-// moment exactly one transport carries the key.
-test("concurrent provides under one key collapse to ONE live transport", async () => {
+// Concurrent provides at one path collapse to ONE live transport AND one live row. attach()
+// (before a pager opens) can only drop predecessors already visible in #stubs.all(); the
+// reconciliation happens when each pager opens (rpc-stub-directory.fetch drops every OTHER
+// same-path transport then), so at any settled moment exactly one transport carries the path —
+// and the reduce's supersession keeps the table at one row throughout.
+test("concurrent provides at one path collapse to ONE live transport and ONE live row", async () => {
   const ctx = c("race");
   const observer = await harness.itx(ctx);
   const sessions = [1, 2, 3, 4].map(() => harness.session(ctx));
-  await Promise.all(
-    sessions.map((s, i) => s.get().rpcStubs.provide(new Tools(`r${i}`), { key: "solo" })),
-  );
+  await Promise.all(sessions.map((s, i) => s.get().provide("itx.solo", new Tools(`r${i}`))));
   await until(
-    "exactly one 'solo' transport in the registry",
-    async () => (await listStubs(observer)).filter((r) => r.key === "solo").length === 1,
+    "exactly one transport attached (hostState().stubs)",
+    async () => {
+      const st = await observer.hostState();
+      return st.stubs === 1;
+    },
     10_000,
   );
+  expect((await livePaths(observer)).filter((p) => p === "itx.solo")).toHaveLength(1);
 });
 
 // The attach-without-pager leak is FIXED (lazy 10s sweep) and pinned DO-level, where rpcStubAttach
 // is reachable: __workers-tests__/rpc-stub-sweep.test.ts.
-// The transportId-collision shape (a client key equal to another stub's UUID) is pathological —
-// the trusted-client doctrine does not defend against it; dropped, not deferred.

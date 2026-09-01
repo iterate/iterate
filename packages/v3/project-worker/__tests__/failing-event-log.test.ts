@@ -375,7 +375,7 @@ test("bad mount events are skipped without wedging later provides", async () => 
     payload: { path: 42, target: ["not", "a", "string"] },
   });
   // the table still takes provides and resolves them — the checkpoint didn't wedge
-  const { providedAtOffset } = await itx.provide({ path: "itx.hello", target: "itx.whoami" });
+  const { providedAtOffset } = await itx.provide("itx.hello", "itx.whoami");
   expect(providedAtOffset).toBeGreaterThan(0);
   const who = await itx.invokeCapability(["itx", ["hello"]]);
   expect(who).toMatchObject({ projectId: "prj_table_badmount" });

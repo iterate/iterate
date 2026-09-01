@@ -7,7 +7,7 @@
 // real capnweb session; a real eyeball dials the /cap fetch door. Every hop is production-shaped:
 //
 //   eyeball SELF.fetch /cap → worker sets x-itx-cap → the DO's capability fetch lane →
-//   `itx.rpcStubs.get('<key>')` alias → core/fetch-capabilities.ts: the DO asks the paged-in
+//   the live row at `itx.wsdev` → core/fetch-capabilities.ts: the DO asks the paged-in
 //   invoker to dial (an RPC call that EXECUTES in the relay's session context; its return is the
 //   honest ack), the relay dials the provider's fetch() over capnweb and opens ONE dedicated
 //   fetch-upgrade leg back into the DO, the DO mints the eyeball's WebSocketPair natively, and
@@ -51,9 +51,6 @@ class LiveSite extends RpcTarget {
 
 const DISPOSE: symbol | undefined = (Symbol as { dispose?: symbol }).dispose;
 const sessions: unknown[] = [];
-// Client-side ProvidedStub handles retained for the file's lifetime (a GC'd provision would
-// close the transport and auto-revoke the mount mid-test).
-const keep: unknown[] = [];
 async function openSession(ctx: string): Promise<any> {
   const res = await SELF.fetch(`https://test.local/api?ctx=${ctx}`, {
     headers: { Upgrade: "websocket" },
@@ -76,13 +73,11 @@ afterAll(async () => {
   }
 });
 
-/** Provide a fresh LiveSite over a live capnweb session and alias it at `itx.wsdev`. */
+/** Provide a fresh LiveSite over a live capnweb session at `itx.wsdev` — the ONE door. */
 async function mountLiveSite(ctx: string): Promise<LiveSite> {
   const itx = await (await openSession(ctx)).get();
   const site = new LiveSite();
-  const key = crypto.randomUUID();
-  keep.push(await itx.rpcStubs.provide(site, { key }));
-  await itx.provide({ path: "itx.wsdev", target: `itx.rpcStubs.get('${key}')` });
+  await itx.provide("itx.wsdev", site);
   return site;
 }
 

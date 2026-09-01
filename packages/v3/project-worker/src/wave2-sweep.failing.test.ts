@@ -38,6 +38,7 @@ import {
   type StreamEventInput,
 } from "./core/events.ts";
 import { CapabilityTableProcessor } from "./capability-table-processor.ts";
+import { InvokeHandle } from "./core/invoke-handle.ts";
 import { ProcessorFacet } from "./processor-facet.ts";
 import type { ProcessorStream } from "./core/processor.ts";
 
@@ -145,6 +146,10 @@ const setupTable = () => {
     builtIns: builtIns as unknown as Record<string, unknown>,
     resolveCurrent: (call: Expression, depth = 0) =>
       host.resolve(reduceAll(), call, undefined, depth),
+    liveStub: (pathString) =>
+      new InvokeHandle(() => {
+        throw new Error(`no live stub "${pathString}" in this harness`);
+      }),
   });
   return { host };
 };

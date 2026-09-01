@@ -11,7 +11,7 @@ test("facet spine: cold catch-up + driven folds + host state lists the facet pro
   const itx = bareItx(freshCtx("facet"));
 
   // one mount BEFORE enabling — the facet must count it via cold catch-up
-  await itx.provide({ path: "itx.before", target: "itx.kv" });
+  await itx.provide("itx.before", "itx.kv");
 
   await itx.enableProcessor("tally");
   const s1 = await itx.invokeCapability("itx.facets.get('tally').snapshot()");
@@ -21,8 +21,8 @@ test("facet spine: cold catch-up + driven folds + host state lists the facet pro
   expect(s1.state?.counts?.["events.iterate.com/capability-table/capability-provided"]).toBe(2);
 
   // two more mounts + one revoke AFTER enabling — the drive path
-  const p2 = await itx.provide({ path: "itx.a", target: "itx.kv" });
-  await itx.provide({ path: "itx.b", target: "itx.kv" });
+  const p2 = await itx.provide("itx.a", "itx.kv");
+  await itx.provide("itx.b", "itx.kv");
   await itx.revoke({ providedAtOffset: p2.providedAtOffset });
 
   const s2 = await itx.invokeCapability("itx.facets.get('tally').snapshot()");

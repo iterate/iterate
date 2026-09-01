@@ -63,17 +63,16 @@ const append = (itx: any, ...events: unknown[]) =>
 const readAll = async (itx: any): Promise<any[]> =>
   (await itx.invokeCapability(["itx", ["read", 0, 500]])).events;
 
-// Provisions/handles retained for the whole file so nothing client-side disposes a parked
-// callback while a test still needs it.
+// Client-side sessions retained for the whole file so nothing disposes a parked callback while
+// a test still needs it (a live mount's transport dies with its providing session).
 const keep: unknown[] = [];
 
-/** Park a live callback and alias it at `itx.<name>` — an ABSENT target expression from the
- *  subscription lane's point of view (NOT a direct itx.rpcStubs.get(...) target), so a subscription
- *  naming it rides the subscription-forwarder facet, yet still calls back into this test process. */
+/** Mount a live callback at `itx.<name>` and return the PATH — the subscription then names the
+ *  path string, an ABSENT target expression from the subscription lane's point of view (NOT the
+ *  live callback itself), so it rides the subscription-forwarder facet, yet each delivery still
+ *  calls back into this test process through the path's live mount. */
 async function mountHook(itx: any, name: string, fn: (...args: any[]) => unknown): Promise<string> {
-  const key = crypto.randomUUID();
-  keep.push(await itx.rpcStubs.provide(fn, { key }));
-  await itx.provide({ path: `itx.${name}`, target: `itx.rpcStubs.get('${key}')` });
+  await itx.provide(`itx.${name}`, fn);
   return `itx.${name}`;
 }
 
@@ -154,17 +153,18 @@ test("connected lane: unsubscribe stops deliveries at the revoke offset", async 
   expect([...c.offsets()].sort((a, b) => a - b)).toEqual([m1.offset, m2.offset]);
 });
 
-test("connected lane: re-subscribing the same name shadows — the old callback stops receiving though its connection lives", async () => {
+test("connected lane: re-subscribing the same name REPLACES — the old callback's transport is dropped and it stops receiving", async () => {
   const itx = await harness.itx("prj_fd_shadow");
   const a = collector();
   const b = collector();
   await itx.subscribe({ name: "dup", consumes: ["mark"], target: a.fn });
-  await itx.subscribe({ name: "dup", consumes: ["mark"], target: b.fn }); // shadows a
+  await itx.subscribe({ name: "dup", consumes: ["mark"], target: b.fn }); // replaces a's transport
   const [m] = await append(itx, { type: "mark" });
-  await until("the shadowing row delivered", () => b.offsets().includes(m.offset));
+  await until("the replacing row delivered", () => b.offsets().includes(m.offset));
   await settle(400);
   expect(b.offsets()).toEqual([m.offset]);
-  // the shadowed row is dead for delivery even though its parked connection is still attached
+  // the replaced callback is dead for delivery — its parked connection was dropped at
+  // re-subscribe (close reason "replaced"; path = identity, one live row per path)
   expect(a.offsets()).toEqual([]);
 });
 
@@ -414,7 +414,7 @@ test("liveState subscribe with an ABSENT target is rejected loudly at provide", 
   const itx = await harness.itx("prj_fd_lsbad");
   await expect(
     itx.subscribe({ name: "lsbad", liveState: { key: "chat" }, target: "itx.wherever" }),
-  ).rejects.toThrow(/needs a live rpc-stub target/);
+  ).rejects.toThrow(/needs a LIVE callback target/);
   // and the rejected mount left nothing behind
   const state: any = await itx.hostState();
   expect(state.subscriptionMounts).toEqual([]);

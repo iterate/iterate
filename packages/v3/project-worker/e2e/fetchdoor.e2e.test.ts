@@ -36,10 +36,7 @@ test("fetchdoor: seeded site over /cap (GET + WS), deleted routes fall through, 
   // a capability is an itx EXPRESSION (load(src).getEntrypoint()), same as every other mount.
   const itx = bareItx(ctx);
   await seedSources(itx, ["site"]);
-  await itx.provide({
-    path: "itx.site",
-    target: "itx.load(\"itx.kv.get('src/site.js')\").getEntrypoint()",
-  });
+  await itx.provide("itx.site", "itx.load(\"itx.kv.get('src/site.js')\").getEntrypoint()");
 
   // ── 4a. GET through the one fetch door ──
   const page = await fetch(`${base()}/cap?cap=${CAP}&ctx=${ctx}`);

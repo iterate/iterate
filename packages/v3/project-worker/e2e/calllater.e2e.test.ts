@@ -27,14 +27,9 @@ class Demo extends RpcTarget {
 test("callLater(cb) fires back in the caller — capnweb client AND dynamic worker lanes", async () => {
   const ctx = freshCtx("calllater");
 
-  // bridge session provides itx.demo as a LIVE Demo capability.
+  // bridge session provides itx.demo as a LIVE Demo capability (one door; the path is its identity).
   const bridgeItx = openItx(ctx);
-  const demoKey = crypto.randomUUID();
-  const demoStub = await bridgeItx.rpcStubs.provide(new Demo(), {
-    key: demoKey,
-    description: "demo/timer/callLater bridge (node script)",
-  });
-  await bridgeItx.provide({ path: "itx.demo", target: `itx.rpcStubs.get('${demoKey}')` });
+  await bridgeItx.provide("itx.demo", new Demo());
 
   // ── lane 1: a plain capnweb client ──
   const itx = openItx(ctx);
@@ -73,5 +68,5 @@ export default class Consumer extends WorkerEntrypoint {
   // dynamic worker: env.ITX.get().demo.timer.callLater(cb) — the callback ran back inside the worker
   expect(got).toBeTruthy();
 
-  await demoStub.revoke();
+  await bridgeItx.revoke("itx.demo");
 });

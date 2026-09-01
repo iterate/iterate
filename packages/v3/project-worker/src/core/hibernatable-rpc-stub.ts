@@ -23,8 +23,9 @@
 //
 // The manager is the partial-fetch helper the DO composes in (`#rpcStubs.fetch(req)`
 // first, own doors after) — stub mechanics live here, domain meaning (RpcStubDirectory, session
-// facts) stays in the DO. Its one addressing fact is the directory's `connectionKey`, stamped by
-// `attach` and carried through hibernation on the pager socket.
+// facts) stays in the DO. Its one addressing fact is the directory's `path` (the capability path
+// the stub is mounted at), stamped by `attach` and carried through hibernation on the pager
+// socket.
 
 import { codedError } from "./errors.ts";
 import {
@@ -60,11 +61,12 @@ export type RetainedCallbackInvoker = LiveCapabilityFetchTransport & {
 };
 
 /** One stub's durable record — the socket attachment (survives hibernation). `stubKey` is the
- *  manager's identity for it; `connectionKey` is the caller's addressing key, stamped by `attach`
- *  (absent on a socket that has been opened but not yet attached — `all()` filters those out). */
-export type HibernatableRpcStubRecord = { stubKey: string; connectionKey?: string };
-/** An ATTACHED record — `connectionKey` present. `all()` returns only these. */
-type AttachedRpcStubRecord = HibernatableRpcStubRecord & { connectionKey: string };
+ *  manager's identity for it; `path` is the capability path the stub is mounted at (its one
+ *  addressing fact, stamped by `attach`; absent on a socket that has been opened but not yet
+ *  attached — `all()` filters those out). */
+export type HibernatableRpcStubRecord = { stubKey: string; path?: string };
+/** An ATTACHED record — `path` present. `all()` returns only these. */
+type AttachedRpcStubRecord = HibernatableRpcStubRecord & { path: string };
 
 // `Symbol.dispose` isn't in the current lib target; reference it defensively. THE one disposer
 // for any RPC-ish stub (Workers-RPC legs here, retained capnweb callbacks in itx-surface.ts).
@@ -118,13 +120,13 @@ export class HibernatableRpcStubManager {
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
-  /** Stamp a stub's `connectionKey` onto its (already-open) pager socket — carried through
+  /** Stamp a stub's mount `path` onto its (already-open) pager socket — carried through
    *  hibernation, and what `all()` filters on. */
-  attach(stubKey: string, connectionKey: string): void {
+  attach(stubKey: string, path: string): void {
     const ws = this.#socketFor(stubKey);
     if (ws === undefined)
       throw new Error(`hibernatable rpc stub ${stubKey} has no pager websocket`);
-    ws.serializeAttachment({ stubKey, connectionKey } satisfies AttachedRpcStubRecord);
+    ws.serializeAttachment({ stubKey, path } satisfies AttachedRpcStubRecord);
   }
 
   /** Every attached stub — DERIVED from the surviving pager sockets, so a fresh DO incarnation
@@ -132,7 +134,7 @@ export class HibernatableRpcStubManager {
   all(): AttachedRpcStubRecord[] {
     return this.#sockets()
       .map((ws) => this.#attachment(ws))
-      .filter((r): r is AttachedRpcStubRecord => r?.connectionKey !== undefined);
+      .filter((r): r is AttachedRpcStubRecord => r?.path !== undefined);
   }
 
   /** THE one call door: page the stub in if absent, then `invoke(path, args)` on it. The stub

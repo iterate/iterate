@@ -71,7 +71,7 @@ export default {
     if (url.pathname === "/api")
       // newWorkersRpcResponse serves BOTH a WebSocket upgrade AND a one-shot HTTP batch —
       // a CLI script or cron does one POST, no socket handshake. (Batch sessions cannot hold
-      // live capabilities: rpcStubs.provide needs the relay to outlive the response —
+      // live capabilities: a live provide needs the relay to outlive the response —
       // the relay's park call simply fails there, which is the honest error.)
       return newWorkersRpcResponse(request, new ProjectSession(env.CONTEXT, ctxSlug(url), ctx));
 

@@ -14,9 +14,9 @@ export { jsonEqual };
  *  payload). Rides the capability-provided event itself, so subscription config is
  *  event-sourced, never silent kv. How a subscription mount is SERVED depends only on its
  *  target's shape:
- *    • CONNECTED target (`itx.rpcStubs.get(…)`): fire-and-forget event batches over the
- *      paged-in hibernatable RPC stub — no acks, no server cursor, no retries (the client
- *      heals by pull);
+ *    • CONNECTED target (a LIVE callback provided at the subscription's own path): fire-and-
+ *      forget event batches over the paged-in hibernatable RPC stub — no acks, no server
+ *      cursor, no retries (the client heals by pull);
  *      `maxAttempts`/`start` are meaningless here and ignored.
  *    • ABSENT target (a webhook, an itx expression): the subscription-forwarder facet holds a
  *      cursor per target and applies the ONE failure policy — bounded retries then HALT with an

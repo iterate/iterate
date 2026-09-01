@@ -14,10 +14,7 @@ test("absent-target forwarder lane: retry→halt policy, resume recovery, auto-e
 
   // 1. mount the stateless digest cap + the "*" tally (to observe audit facts)
   await itx.enableProcessor("tally");
-  await itx.provide({
-    path: "itx.digest",
-    target: `itx.load("itx.kv.get('src/digest.js')").getEntrypoint()`,
-  });
+  await itx.provide("itx.digest", `itx.load("itx.kv.get('src/digest.js')").getEntrypoint()`);
 
   // 2. subscribe with an ABSENT target → the subscription-forwarder facet is auto-enabled and
   // owns the cursor. maxAttempts bounds the ONE retry-then-halt ladder (small here so the halt

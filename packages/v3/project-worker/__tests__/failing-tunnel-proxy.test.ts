@@ -21,9 +21,8 @@ const RUN = Date.now().toString(36);
 const c = (name: string) => `prj_tunnel${RUN}_${name}`;
 
 let harness: ProjectHarness;
-// Client-side handles retained for the file's lifetime (a GC'd provision would tear a mount
-// down mid-test); the harness disposes its sessions at stop().
-const keep: unknown[] = [];
+// Live mounts ride their providing session (the harness disposes its sessions at stop()) — no
+// client-side handle to retain: the mount path is the stub's identity.
 beforeAll(async () => {
   harness = await startProjectHarness();
 }, 120_000);
@@ -144,9 +143,7 @@ const capUrl = (ctx: string, scheme: "http" | "ws", path = "") =>
 async function provideTunnel(ctx: string): Promise<void> {
   const provider = harness.session(ctx);
   const itx = await provider.authenticate().get();
-  const key = crypto.randomUUID();
-  keep.push(await itx.rpcStubs.provide(new TunnelProvider(), { key }));
-  await itx.provide({ path: "itx.bla", target: `itx.rpcStubs.get('${key}')` });
+  await itx.provide("itx.bla", new TunnelProvider());
 }
 
 /** One full eyeball WebSocket round trip: open → send → first message → close. Never throws —

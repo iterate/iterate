@@ -95,7 +95,7 @@ test("FIXED (defect 34/46 at the root): squatting capability-table/revoke: is ha
   //   pre-committing one benign event under the revoke key. Losing the ability to REVOKE is the
   //   worst failure a capability system can have.
   const itx = await harness.itx("prj_am_forge");
-  const { providedAtOffset } = await itx.provide({ path: "itx.probe", target: "itx.whoami" });
+  const { providedAtOffset } = await itx.provide("itx.probe", "itx.whoami");
   expect(await itx.invokeCapability(["itx", ["probe"]])).toMatchObject({
     projectId: "prj_am_forge",
   });

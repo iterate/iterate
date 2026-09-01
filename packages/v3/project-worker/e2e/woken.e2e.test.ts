@@ -55,7 +55,7 @@ test("inline reduced states are live: capability-table and core changes ride the
   });
 
   // a capability-table change (a provide) → a delta keyed "capability-table"
-  await itx.provide({ path: "itx.zzz", target: "itx.whoami" });
+  await itx.provide("itx.zzz", "itx.whoami");
   const tableDelta = await until("capability-table delta", () =>
     tableDeltas.find((d) => d.key === "capability-table"),
   );

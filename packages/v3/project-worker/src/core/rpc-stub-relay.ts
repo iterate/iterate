@@ -1,14 +1,16 @@
 // core/rpc-stub-relay.ts — THE DON'T-PIN PLUMBING behind a live rpc stub. When a client hands the
-// project a capnweb callback (`itx.rpcStubs.provide(fn, {key})`), the retained stub must live in the
+// project a capnweb callback (`itx.provide(path, fn)`), the retained stub must live in the
 // STATELESS relay worker (this side of `/api`), NEVER in the Durable Object — else the DO can't
 // hibernate while any client is connected. So the stream DO records only a transport id; when it
 // wants the client (a delivery, a request/response call), it PAGES the relay over a stub-pager
 // WebSocket, and the relay answers with a fresh Workers-RPC leg wrapping the retained capnweb stub.
 //
-// This module owns that whole dance behind a TWO-SYMBOL API — `startRpcStubRelay` (park a stub, hand
-// back a disposable relay) and `Parking` (the session-lived registry that keeps relays alive) — so
-// itx-surface.ts reads as its narrative (ProjectSession → IterateContext → the built-in collections), with the
-// pager sockets, the shared broken-flag, and shadow-relay disposal hidden here.
+// The stub's identity IS the capability path it is mounted at (one canonicalized string — no
+// separate key). This module owns the whole dance behind a TWO-SYMBOL API — `startRpcStubRelay`
+// (park a stub, hand back a disposable relay) and `Parking` (the session-lived registry, keyed by
+// path, that keeps relays alive) — so itx-surface.ts reads as its narrative (ProjectSession →
+// IterateContext → the built-in collections), with the pager sockets and the shared broken-flag
+// hidden here.
 
 import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
 import type { IterateContextDurableObject } from "../stream-durable-object.ts";
@@ -24,12 +26,6 @@ export type ItxHostStub = DurableObjectStub<IterateContextDurableObject>;
  *  (`.dup()` keeps it past the provide call; other keys are its remote methods). */
 export type ProviderStub = unknown;
 export type RetainedProviderStub = { dup(): RetainedProviderStub; [k: string]: unknown };
-
-/** Is this a LIVE capnweb capability (a stub function or an RpcTarget) rather than an expression (a
- *  string or an Expression array)? Live things get parked as rpc stubs; expressions are mounted. */
-export function isLiveStub(target: unknown): boolean {
-  return typeof target === "function" || (typeof target === "object" && !Array.isArray(target));
-}
 
 /** The per-burst borrowed Workers-RPC leg: wraps the RETAINED CAPNWEB CALLBACK STUB and forwards
  *  `invoke(capPath, args)` onto it (a DIRECT dotted dispatch — never `.apply`), so a call from the
@@ -99,58 +95,42 @@ export interface CapnwebCallbackRelay {
   dispose(): void;
 }
 
-/** Session-lived registry of live relays (retained callbacks + pager sockets) so they aren't GC'd.
- *  `named` additionally keys a relay by subscription name so `unsubscribe` can dispose exactly it. */
+/** Session-lived registry of live relays (retained callbacks + pager sockets) so they aren't GC'd —
+ *  ONE relay per mount path (the stub's identity). Re-providing the same path is a TRANSPORT
+ *  REPLACEMENT: by the time the new relay's pager is open, the DO has already dropped the old
+ *  transport as "replaced", so disposing the incumbent here is a harmless double-close that just
+ *  keeps this map from accumulating dead relays. (The old shadow-a-relay bookkeeping died with the
+ *  one-live-row-per-path reduce rule — the resub zombie is structurally impossible now.) */
 export class Parking {
-  readonly #relays = new Set<CapnwebCallbackRelay>();
-  /** name → ALL relays parked under it. Re-subscribing the SAME name SHADOWS (the old callback
-   *  stops receiving but its connection stays live — failing-delivery.test.ts:158), so the older
-   *  relay is KEPT here, not disposed. `unsubscribe` then disposes the WHOLE set — else a shadowed
-   *  relay lingers online and a restored shadowed mount resumes delivering to it (the zombie,
-   *  probe_resub_zombie.mjs). */
-  readonly #named = new Map<string, Set<CapnwebCallbackRelay>>();
-  add(relay: CapnwebCallbackRelay): void {
-    this.#relays.add(relay);
+  readonly #relays = new Map<string, CapnwebCallbackRelay>();
+  add(path: string, relay: CapnwebCallbackRelay): void {
+    this.#relays.get(path)?.dispose();
+    this.#relays.set(path, relay);
   }
-  addNamed(name: string, relay: CapnwebCallbackRelay): void {
-    this.#relays.add(relay);
-    let set = this.#named.get(name);
-    if (!set) {
-      set = new Set();
-      this.#named.set(name, set);
-    }
-    set.add(relay);
-  }
-  remove(relay: CapnwebCallbackRelay): void {
-    this.#relays.delete(relay);
-  }
-  disposeNamed(name: string): void {
-    const relays = this.#named.get(name);
-    if (!relays) return;
-    this.#named.delete(name);
-    for (const relay of relays) {
-      this.#relays.delete(relay);
-      relay.dispose();
-    }
+  dispose(path: string): void {
+    const relay = this.#relays.get(path);
+    if (!relay) return;
+    this.#relays.delete(path);
+    relay.dispose();
   }
   disposeAll(): void {
-    for (const relay of this.#relays) relay.dispose();
+    for (const relay of this.#relays.values()) relay.dispose();
     this.#relays.clear();
-    this.#named.clear();
   }
 }
 
-/** Park a live capnweb stub as an rpc stub under `key`: reserve a transport on the DO, dup the
- *  provider stub, open the stub pager WebSocket, and answer every page with a fresh stub. The
- *  relay lives until disposed (explicitly, or at session end); its close makes the DO drop the stub
- *  (⇒ any mount naming the key auto-revokes). */
+/** Park a live capnweb stub as an rpc stub at its mount `path` (the canonicalized string — the
+ *  stub's one identity): reserve a transport on the DO, dup the provider stub, open the stub pager
+ *  WebSocket, and answer every page with a fresh stub. The relay lives until disposed (explicitly,
+ *  or at session end); its close makes the DO drop the stub (⇒ the live mount at the path
+ *  auto-revokes). */
 export async function startRpcStubRelay(
   host: ItxHostStub,
   provider: RetainedProviderStub,
-  key: string,
+  path: string,
   waitUntil: (p: Promise<unknown>) => void,
 ): Promise<CapnwebCallbackRelay> {
-  const { transportId } = await host.rpcStubAttach({ key });
+  const { transportId } = await host.rpcStubAttach({ path });
   const retained = provider.dup();
   // ONE shared broken flag for the whole relay — every paged-in invoker reads it; the single
   // onRpcBroken registration below flips it. (Registering per page would leak a listener per page:

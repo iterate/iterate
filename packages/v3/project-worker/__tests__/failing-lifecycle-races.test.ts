@@ -83,25 +83,19 @@ const durableCountsByType = (events: any[]): Record<string, number> => {
 const logsText = () => JSON.stringify(harness.logs());
 const countMatches = (text: string, re: RegExp) => (text.match(re) ?? []).length;
 
-// Provisions/handles retained for the whole file so nothing client-side disposes a parked
-// callback while a test still needs it.
-const keep: unknown[] = [];
-
 // ─────────────────────────── 1. concurrent provide/revoke, one path ───────────────────────────
 
 test("shadow stack: 10 concurrent provides on ONE path end deterministic (newest offset answers), a full concurrent revoke sweep restores default-deny, and the table is not wedged", async () => {
   const itx = await harness.itx("prj_lr_race");
-  // ten distinguishable live capabilities to alias at the contested path
+  // ten distinguishable live capabilities to alias at the contested path (path = identity)
   for (let i = 0; i < 10; i++) {
-    const key = crypto.randomUUID();
-    keep.push(await itx.rpcStubs.provide(() => i, { key }));
-    await itx.provide({ path: `itx.probe${i}`, target: `itx.rpcStubs.get('${key}')` });
+    await itx.provide(`itx.probe${i}`, () => i);
   }
   const race = () => itx.invokeCapability(["itx", ["race"]]);
 
   // wave 1: five concurrent provides at itx.race
   const wave1: { providedAtOffset: number }[] = await Promise.all(
-    Array.from({ length: 5 }, (_, i) => itx.provide({ path: "itx.race", target: `itx.probe${i}` })),
+    Array.from({ length: 5 }, (_, i) => itx.provide("itx.race", `itx.probe${i}`)),
   );
   const offsets1 = wave1.map((r) => r.providedAtOffset);
   expect(new Set(offsets1).size).toBe(5); // every mount got its own identity
@@ -111,7 +105,7 @@ test("shadow stack: 10 concurrent provides on ONE path end deterministic (newest
   // wave 2: five MORE provides racing five revokes of wave 1 — full interleave in one gather
   const ops: Promise<any>[] = [];
   for (let i = 0; i < 5; i++) {
-    ops.push(itx.provide({ path: "itx.race", target: `itx.probe${5 + i}` }));
+    ops.push(itx.provide("itx.race", `itx.probe${5 + i}`));
     ops.push(itx.revoke({ providedAtOffset: offsets1[i] }));
   }
   const results = await Promise.all(ops);
@@ -125,7 +119,7 @@ test("shadow stack: 10 concurrent provides on ONE path end deterministic (newest
   await expect(race()).rejects.toThrow(/no capability matches/); // default-deny restored
 
   // and the table is not wedged: a fresh provide works and answers
-  const again = await itx.provide({ path: "itx.race", target: "itx.probe7" });
+  const again = await itx.provide("itx.race", "itx.probe7");
   expect(again.providedAtOffset).toBeGreaterThan(Math.max(...offsets2));
   expect(await race()).toBe(7);
 });
@@ -194,8 +188,8 @@ test("FIXED (defect 29): every enableProcessor drives the enablement commit into
 
 test("FIXED (defect 30): a processor mount through the ordinary provide door is HALF-ENABLED — /state lists it, every commit errors, snapshot throws", async () => {
   // BUG: #facetEntries derives enablement purely from facet-target mounts at itx.subscribers.<slug>
-  //   — which ANY provide can mint (verified: IterateContext.provide passes even the UNDECLARED `processor`
-  //   field untouched — there is no boundary schema; a raw appended capability-provided event too).
+  //   — which ANY provide can mint (`itx.provide("itx.subscribers.<slug>", "itx.facets.get('<slug>')")`
+  //   is an ordinary client spelling; a raw appended capability-provided event works too).
   //   But a facet only functions after enableProcessor's SECOND, non-event-sourced leg:
   //   configure(), which stashes identity in the facet's own kv. provide alone creates the
   //   entry with no configure — a permanently broken enablement.
@@ -215,7 +209,7 @@ test("FIXED (defect 30): a processor mount through the ordinary provide door is 
   //   client-reachable today: one provide from any session wedges a slug in loud-error mode.
   const ctx = "prj_lr_halfenable";
   const itx = await harness.itx(ctx);
-  await itx.provide({ path: "itx.subscribers.tally", target: "itx.facets.get('tally')" });
+  await itx.provide("itx.subscribers.tally", "itx.facets.get('tally')");
   const state = await doState(ctx);
   expect(state.facetProcessors).toContain("tally"); // listed as enabled (this passes — the lie)
   await append(itx, { type: "mark" });
@@ -448,11 +442,13 @@ test("churn 20×: no ghost deliveries; the connection registry returns to baseli
   );
 });
 
-// (Deleted with the rpcStubs migration: the defect-31 "unsubscribe reaps the parked connection
-// via the last naming mount" case asserted reap-on-mount-revoke — a mechanism the migration
-// removed. A stub's lifecycle is now owned by its ProvidedStub handle (a subscribe's stub is
-// disposed by unsubscribe directly, not by mount revocation), so there is nothing to assert here.
-// The churn test above still guards subscribe/unsubscribe stub hygiene end-to-end.)
+// (Deleted with the rpcStubs migration; the path-identity model has since dissolved the setup:
+// the defect-31 "unsubscribe reaps the parked connection via the last naming mount" case needed
+// one connection named by SEVERAL mounts, which can no longer be spelled — a live stub's identity
+// IS its single mount path (`itx.provide(path, stub)`, at most one live row per path), and
+// unsubscribe / `itx.revoke(path)` tears the mount and its transport down together, so
+// reap-on-revoke is definitionally 1:1 and there is nothing left to assert. The churn test above
+// still guards subscribe/unsubscribe stub hygiene end-to-end.)
 
 // ─────────────────────────── 7. waitUntilProcessed against a future offset ───────────────────────────
 

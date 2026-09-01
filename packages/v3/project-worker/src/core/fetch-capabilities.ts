@@ -13,7 +13,7 @@
 //
 //   3. Fetch-shaped calls enter through TWO doors, both landing here: over HTTP via the
 //      capability fetch lane (`x-itx-cap`, below), and over the dotted door — any terminal
-//      `.fetch(request)` on a LIVE capability (`itx.rpcStubs.get(k).fetch(...)`) is recognized by
+//      `.fetch(request)` on a LIVE capability (`itx.<path>.fetch(...)` — a live table row) is recognized by
 //      `isFetchShapedCall` and routed into `LiveCapabilityFetchServer.serve`.
 //
 //   4. Two platform facts force everything unusual in this file, and BOTH are workarounds we

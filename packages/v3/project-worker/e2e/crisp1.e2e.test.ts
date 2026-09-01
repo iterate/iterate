@@ -1,12 +1,13 @@
 // crisp1.e2e.test.ts — the crisp-1 architecture proof against the local project-worker.
-// Covers: routing seeds, live-cap desugar (park+alias), THE SHADOW STACK (override → revoke →
-// restore), expression mounts running dynamic workers (stateless fetch+WS, stateful deep call),
-// rpcStubs view (get/list), default-deny, and the warm paged-in stub.
+// Covers: routing seeds, live caps through the ONE provide door (the mount path IS the stub's
+// identity), THE SHADOW STACK (override → revoke → restore, on expression mounts), expression
+// mounts running dynamic workers (stateless fetch+WS, stateful deep call), the capability-table
+// presence view (live rows), default-deny, and the warm paged-in stub.
 // (was proofs/prove_crisp1.mjs)
 
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import { freshCtx, session } from "./support/client.ts";
+import { freshCtx, session, until } from "./support/client.ts";
 import { seedSources } from "./support/sources.ts";
 
 // The one raw HTTP door with no capnweb equivalent is /cap (fetch-shaped caps + WS upgrades) and
@@ -17,7 +18,7 @@ const base = (): string => {
   return u;
 };
 
-test("crisp-1: routing, live caps, shadow stack, dynamic-worker mounts, rpcStubs view", async () => {
+test("crisp-1: routing, live caps, shadow stack, dynamic-worker mounts, capability-table view", async () => {
   const ctx = freshCtx("crisp");
   const capUrl = (scheme: "http" | "ws"): string => {
     const u = new URL("/cap", base());
@@ -43,9 +44,9 @@ test("crisp-1: routing, live caps, shadow stack, dynamic-worker mounts, rpcStubs
   }
   const sessionA = session(ctx);
   const itxA = await sessionA.get();
-  await itxA.rpcStubs.provide(new ToolsA(), { key: "a", description: "prover A" });
+  await itxA.provide("itx.proverA", new ToolsA());
   const itxB = await session(ctx).get();
-  await itxB.rpcStubs.provide(new ToolsB(), { key: "b", description: "prover B" });
+  await itxB.provide("itx.proverB", new ToolsB());
   await seedSources(itxA, ["site", "counter"]);
 
   // 1. whoami through the routing table (seed itx.whoami ⇒ roots.whoami) — via the ONE dispatch door
@@ -66,10 +67,8 @@ test("crisp-1: routing, live caps, shadow stack, dynamic-worker mounts, rpcStubs
   // kv round-trip via seed
   expect(got).toBe("hi-crisp");
 
-  // 3. live capability: provide from A (park an rpc stub under a key + mount it), invoke from B
-  const toolsKey = crypto.randomUUID();
-  await itxA.rpcStubs.provide(new ToolsA(), { key: toolsKey });
-  await itxA.provide({ path: "itx.tools", target: `itx.rpcStubs.get('${toolsKey}')` });
+  // 3. live capability: provide from A through the ONE door (the path IS the identity), invoke from B
+  await itxA.provide("itx.tools", new ToolsA());
   const echoed = await itxB.invokeCapability(["itx", "tools", ["echo", "hello"]]);
   // live cap: B invokes A's provider
   expect(echoed).toBe("echo-A:hello");
@@ -80,21 +79,22 @@ test("crisp-1: routing, live caps, shadow stack, dynamic-worker mounts, rpcStubs
   expect(s1.stubs).toBeGreaterThanOrEqual(3);
   expect(s1.pagedIn).toBeGreaterThanOrEqual(1);
 
-  // 4. THE SHADOW STACK: same path mounted twice — newest wins; revoking the mount restores
-  const greeterKeyA = crypto.randomUUID();
-  await itxA.rpcStubs.provide(new ToolsA(), { key: greeterKeyA });
-  await itxA.provide({ path: "itx.greeter", target: `itx.rpcStubs.get('${greeterKeyA}')` });
-  const greeterKeyB = crypto.randomUUID();
-  await itxB.rpcStubs.provide(new ToolsB(), { key: greeterKeyB });
-  await itxB.provide({ path: "itx.greeter", target: `itx.rpcStubs.get('${greeterKeyB}')` });
+  // 4. THE SHADOW STACK: same path mounted twice — newest wins; revoking the mount restores.
+  //    Live rows don't stack (one live row per path, superseded in place), so the stack is proven
+  //    on EXPRESSION mounts: each provider parks its live stub at its own path, then alias-mounts
+  //    itx.greeter onto it — expression mounts keep full shadow-stack semantics.
+  await itxA.provide("itx.greeterA", new ToolsA());
+  await itxA.provide("itx.greeter", "itx.greeterA");
+  await itxB.provide("itx.greeterB", new ToolsB());
+  await itxB.provide("itx.greeter", "itx.greeterB");
   const winB = await itxA.invokeCapability(["itx", "greeter", ["hello"]]);
   // shadow stack: newest mount wins
   expect(winB).toBe("from B");
-  await itxB.revoke({ path: "itx.greeter" });
+  await itxB.revoke("itx.greeter");
   const winA = await itxA.invokeCapability(["itx", "greeter", ["hello"]]);
   // shadow stack: revoke restores what was beneath
   expect(winA).toBe("from A");
-  await itxA.revoke({ path: "itx.greeter" });
+  await itxA.revoke("itx.greeter");
   let denied = "";
   try {
     await itxA.invokeCapability(["itx", "greeter", ["hello"]]);
@@ -105,10 +105,7 @@ test("crisp-1: routing, live caps, shadow stack, dynamic-worker mounts, rpcStubs
   expect(denied).toMatch(/no capability matches/);
 
   // 5. EXPRESSION MOUNT running a stateless dynamic worker (the fetch lane end-to-end)
-  await itxA.provide({
-    path: "itx.site",
-    target: "itx.load(['itx', 'kv', ['get', 'src/site.js']]).getEntrypoint()",
-  });
+  await itxA.provide("itx.site", "itx.load(['itx', 'kv', ['get', 'src/site.js']]).getEntrypoint()");
   const page = await fetch(capUrl("http"));
   const html = await page.text();
   // mounted worker serves HTML via /cap
@@ -132,11 +129,10 @@ test("crisp-1: routing, live caps, shadow stack, dynamic-worker mounts, rpcStubs
   expect(wsEcho).toBe("site-echo:hello-from-eyeball");
 
   // 6. EXPRESSION MOUNT running a STATEFUL worker — deep dotted call + callback into the host
-  await itxA.provide({
-    path: "itx.counter",
-    target:
-      "itx.load(['itx', 'kv', ['get', 'src/counter.js']]).getDurableObjectClass('Counter').get()",
-  });
+  await itxA.provide(
+    "itx.counter",
+    "itx.load(['itx', 'kv', ['get', 'src/counter.js']]).getDurableObjectClass('Counter').get()",
+  );
   const inc = await itxA.invokeCapability(["itx", "counter", ["increment", 2]]);
   // stateful worker: increment(2)
   expect(inc).toBe(2);
@@ -150,26 +146,36 @@ test("crisp-1: routing, live caps, shadow stack, dynamic-worker mounts, rpcStubs
   // stateful worker calls BACK through env.ITX
   expect(whoDeep?.projectId).toBe(ctx);
 
-  // 7. the rpcStubs view: list (held stub keys), single-target get, fan-out via list() + map
-  const heldStubs = await itxA.invokeCapability("itx.rpcStubs.list()");
-  // rpcStubs.list shows both keyed stubs
-  expect(Array.isArray(heldStubs)).toBe(true);
-  expect(["a", "b"].every((k) => heldStubs.some((c: { key: string }) => c.key === k))).toBe(true);
-  const single = await itxA.invokeCapability("itx.rpcStubs.get('b').hello()");
-  // rpcStubs.get(key) reaches ONE stub
+  // 7. PRESENCE is the capability table: rows where `live` (the path IS each stub's identity),
+  //    a dotted single-target call, and fan-out via snapshot + map over the live paths.
+  //    Presence reads poll inside `until` — table appends (provides/auto-revokes) are async.
+  const liveRows = await until("both prover mounts live in the table", async () => {
+    const snap = await itxA.invokeCapability("itx.facets.get('capability-table').snapshot()");
+    const rows = (snap?.state?.mounts ?? []).filter((m: { live?: true }) => m.live);
+    return ["itx.proverA", "itx.proverB"].every((p) =>
+      rows.some((m: { path: string[] }) => m.path.join(".") === p),
+    )
+      ? rows
+      : undefined;
+  });
+  // the capability table lists both prover mounts as live rows
+  expect(Array.isArray(liveRows)).toBe(true);
+  expect(
+    ["itx.proverA", "itx.proverB"].every((p) =>
+      liveRows.some((m: { path: string[] }) => m.path.join(".") === p),
+    ),
+  ).toBe(true);
+  const single = await itxA.invokeCapability("itx.proverB.hello()");
+  // the dotted path reaches ONE live capability
   expect(single).toBe("from B");
-  // fan-out is list() + map over get(key) — no built-in `each`; the caller owns the allSettled.
-  const stubKeys = (await itxA.invokeCapability("itx.rpcStubs.list()")).map(
-    (r: { key: string }) => r.key,
-  );
+  // fan-out is snapshot + map over the live paths — no built-in `each`; the caller owns the allSettled.
+  const livePaths = liveRows.map((m: { path: string[] }) => m.path.join("."));
   const fans = (
     await Promise.all(
-      stubKeys.map((k: string) =>
-        itxA.invokeCapability(`itx.rpcStubs.get('${k}').hello()`).catch(() => undefined),
-      ),
+      livePaths.map((p: string) => itxA.invokeCapability(`${p}.hello()`).catch(() => undefined)),
     )
   ).filter((v: unknown) => v !== undefined);
-  // fan-out via rpcStubs.list() + map (no each) reaches every held stub
+  // fan-out via the table's live rows + map (no each) reaches every held live capability
   expect(fans).toContain("from B");
   expect(fans).toContain("from A");
 

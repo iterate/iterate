@@ -26,7 +26,6 @@ import { freshCtx, openItx, sleep, until } from "./support/client.ts";
 // stalling the row until the ~60s idle alarm); the bug is FIXED — this is now the regression pin.
 test("resume racing an in-flight forwarder delivery that then fails must re-deliver promptly (no stall)", async () => {
   const itx = openItx(freshCtx("race"));
-  const keep: unknown[] = [];
 
   // ── the gated forwarder target: delivery #1 is held then REJECTED; later deliveries record + ok ──
   let invocations = 0;
@@ -45,11 +44,10 @@ test("resume racing an in-flight forwarder delivery that then fails must re-deli
     return { ok: true };
   };
 
-  // mountHook: park the live callback, alias it at itx.raceHook — an ABSENT target from the
+  // mountHook: park the live callback AT itx.raceHook (the mount path IS its identity). The
+  // subscription's target is the EXPRESSION "itx.raceHook" — an ABSENT target from the
   // subscription lane's view, so the subscription rides the subscription-forwarder facet.
-  const key = crypto.randomUUID();
-  keep.push(await itx.rpcStubs.provide(fn, { key }));
-  await itx.provide({ path: "itx.raceHook", target: `itx.rpcStubs.get('${key}')` });
+  await itx.provide("itx.raceHook", fn);
 
   // subscribe (durable/forwarder lane). start:beginning so the reset target (offset 0) is meaningful.
   const sub = await itx.subscribe({
@@ -113,7 +111,6 @@ test("resume racing an in-flight forwarder delivery that then fails must re-deli
 // success write is DISCARDED (`continue`), and the loop re-pumps from the reset cursor.
 test("resume racing an in-flight forwarder delivery that then SUCCEEDS: the reset wins — the success write must not advance the cursor, m1 redelivers", async () => {
   const itx = openItx(freshCtx("racewin"));
-  const keep: unknown[] = [];
 
   // ── the gated forwarder target: delivery #1 is held then returns OK; every delivery records ──
   let invocations = 0;
@@ -129,11 +126,10 @@ test("resume racing an in-flight forwarder delivery that then SUCCEEDS: the rese
     return { ok: true }; // SUCCESS — the write that must lose the CAS to the reset
   };
 
-  // mountHook: park the live callback, alias it at itx.raceHook — an ABSENT target from the
+  // mountHook: park the live callback AT itx.raceHook (the mount path IS its identity). The
+  // subscription's target is the EXPRESSION "itx.raceHook" — an ABSENT target from the
   // subscription lane's view, so the subscription rides the subscription-forwarder facet.
-  const key = crypto.randomUUID();
-  keep.push(await itx.rpcStubs.provide(fn, { key }));
-  await itx.provide({ path: "itx.raceHook", target: `itx.rpcStubs.get('${key}')` });
+  await itx.provide("itx.raceHook", fn);
 
   // subscribe (durable/forwarder lane). start:beginning so the reset target (offset 0) is meaningful.
   const sub = await itx.subscribe({

@@ -14,10 +14,10 @@ test("persistent stub: stash a live capability handle in DO storage, use the res
   const itx = openItx(ctx);
   await seedSources(itx, ["keeper"]);
 
-  await itx.provide({
-    path: "itx.keeper",
-    target: `itx.load("itx.kv.get('src/keeper.js')").getDurableObjectClass('Keeper').get()`,
-  });
+  await itx.provide(
+    "itx.keeper",
+    `itx.load("itx.kv.get('src/keeper.js')").getDurableObjectClass('Keeper').get()`,
+  );
 
   // 1. stash: storage.put(env.ITX) — throws unless the whole chain is restore-eligible
   const stashed = await itx.invokeCapability(["itx", "keeper", ["stash"]]);
