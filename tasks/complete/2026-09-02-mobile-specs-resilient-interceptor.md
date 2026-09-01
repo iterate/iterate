@@ -1,18 +1,19 @@
 ---
-status: implemented
-size: small
+status: done
+size: medium
 ---
 
-# Migrate mobile approvals + notifications specs to the resilient AI interceptor
+# Migrate mobile specs to the resilient AI interceptor (and modernise the folder)
 
 ## Status summary
 
-Implemented and verified: both specs migrated to `createAgentHelper`, plus a
-follow-up simplification pass on approvals (fixture signup, no journal waits,
-no manual timeouts — 19s locally, was ~28s). PR #2563 awaiting review.
-Remaining: CI green (first run hit a sick preview slot — config-repo 403s
-across every PR) + review threads. Notifications gets the same simplification
-audit after this lands.
+Done. Scope grew from the original two-spec migration into a full
+modernisation of specs/mobile/ (one commit per file): fixture signup
+everywhere, scripted turns instead of silent default-model LLM calls,
+inlined helpers, terse comments, plus the `requests` notification-payload
+product change so rows are findable by their held operations. Every spec in
+the folder passes locally, including notes/note-composer once main's #2567
+fixed the fleet-wide Artifacts 403s. PR #2563 marked ready.
 
 ## Motivation
 
