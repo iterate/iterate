@@ -12,7 +12,11 @@ import { openRepoTreeFile } from "./test-support/repo-tree.ts";
  * Depends on schemastore being reachable (the tsconfig schema) — the feature's
  * real client-side dependency.
  */
-test("a commented tsconfig still schema-validates (comments are tolerated)", async ({
+// parked: schema-lint squiggle stopped appearing in CI on 2026-09-01 — schemastore.org
+// changed infra that day (json. now 301s to www.) and the spec depends on a live 467KB
+// schema fetch from the CI browser; vendor the schema instead. See
+// tasks/repo-ide-jsonc-schema-fetch.md — revisit by 2026-09-16
+test.fixme("a commented tsconfig still schema-validates (comments are tolerated)", async ({
   helpers,
   page,
 }) => {
