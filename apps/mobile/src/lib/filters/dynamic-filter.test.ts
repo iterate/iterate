@@ -45,6 +45,7 @@ test("a project filter file evaluates and draws through the helpers kit", () => 
     pitchHz: null,
     tap: null,
     drag: null,
+    adjust: { featureScale: 1, faceScale: 1 },
     timeMs: 0,
   });
   definition.draw(args);

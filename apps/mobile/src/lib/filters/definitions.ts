@@ -96,10 +96,12 @@ export type FilterFrameArgs = {
    * filters can react positionally (the sing ladder plays notes). Every tap
    * also still increments backgroundIndex. */
   tap: { x: number; y: number; seq: number } | null;
-  /** A drag that did NOT start on a feature cutout (those adjust masks):
-   * canvas-pixel start point and current deltas, `active` while the finger
-   * is down, seq increments per drag so filters can snapshot state at its
-   * start (the flashcards' slide-to-scale face). */
+  /** A drag the pipeline did not consume (see the adjust-mode button: in
+   * "holes" mode, drags starting on a feature cutout reshape that mask and
+   * drags elsewhere arrive here; in the scale modes every drag is
+   * consumed): canvas-pixel start point and current deltas, `active` while
+   * the finger is down, seq increments per drag so filters can snapshot
+   * state at its start. */
   drag: {
     startX: number;
     startY: number;
@@ -108,6 +110,12 @@ export type FilterFrameArgs = {
     active: boolean;
     seq: number;
   } | null;
+  /** The user's global scale tuning (the adjust-mode button + drags):
+   * featureScale grows every cutout in place (centers fixed); faceScale
+   * scales the whole face — the cutout helper applies both to in-place
+   * masks and featureScale to remapped ones; filters that lay a face out
+   * themselves (flashcards, potato) multiply their layout by faceScale. */
+  adjust: { featureScale: number; faceScale: number };
   helpers: FilterHelpers;
   timeMs: number;
 };
@@ -217,27 +225,28 @@ export const FILTER_DRAWERS: Record<string, (args: FilterFrameArgs) => void> = {
       x: cx + (dx * Math.cos(tilt) - dy * Math.sin(tilt)) * size,
       y: cy + (dx * Math.sin(tilt) + dy * Math.cos(tilt)) * size,
     });
-    const leftEye = at(-0.16, -0.14);
-    const rightEye = at(0.16, -0.14);
-    const lips = at(0, 0.14);
+    const spread = args.adjust.faceScale;
+    const leftEye = at(-0.16 * spread, -0.14 * spread);
+    const rightEye = at(0.16 * spread, -0.14 * spread);
+    const lips = at(0, 0.14 * spread);
     // face.leftEye is the canvas-left eye (geometry normalizes the mirror
     // swap), so your left-on-screen eye lands on the potato's left.
     drawFeatureCutout(args, "eyes", args.face.leftEye, {
       cx: leftEye.x,
       cy: leftEye.y,
-      width: size * 0.28,
+      width: size * 0.28 * spread,
       angle: tilt,
     });
     drawFeatureCutout(args, "eyes", args.face.rightEye, {
       cx: rightEye.x,
       cy: rightEye.y,
-      width: size * 0.28,
+      width: size * 0.28 * spread,
       angle: tilt,
     });
     drawFeatureCutout(args, "lips", args.face.lips, {
       cx: lips.x,
       cy: lips.y,
-      width: size * 0.38,
+      width: size * 0.38 * spread,
       angle: tilt,
     });
   },
@@ -295,59 +304,29 @@ export const FILTER_DRAWERS: Record<string, (args: FilterFrameArgs) => void> = {
     }
     // The grown-up fills the space above the card: eyes and lips pinned to
     // a big face zone (patches keep the head's roll and grow as you lean
-    // in). Sliding up/down starting on the card scales the whole face,
-    // persisted across sessions.
-    const zoomState = flashcardFaceZoom;
-    if (!zoomState.loaded) {
-      zoomState.loaded = true;
-      try {
-        const raw = localStorage.getItem("iterate.flashcardFaceZoom.v1");
-        if (raw && Number.isFinite(Number(raw))) zoomState.value = Number(raw);
-      } catch {
-        // per-session zoom still works
-      }
-    }
-    const drag = args.drag;
-    if (drag && drag.startY > height * 0.4) {
-      if (drag.seq !== zoomState.dragSeq) {
-        zoomState.dragSeq = drag.seq;
-        zoomState.dragStartValue = zoomState.value;
-        zoomState.saved = false;
-      }
-      // Slide up = bigger, down = smaller.
-      zoomState.value = Math.min(
-        1.6,
-        Math.max(0.45, zoomState.dragStartValue * (1 - drag.dy / (height * 0.4))),
-      );
-      if (!drag.active && !zoomState.saved) {
-        zoomState.saved = true;
-        try {
-          localStorage.setItem("iterate.flashcardFaceZoom.v1", String(zoomState.value));
-        } catch {
-          // per-session zoom still works
-        }
-      }
-    }
-    const zoom = Math.min(1.8, Math.max(0.6, args.facePose.scale)) * zoomState.value;
+    // in). The adjust button's "face" mode (args.adjust.faceScale) scales
+    // this whole layout; spacing is deliberately tight — no phantom nose
+    // gap.
+    const zoom = Math.min(1.8, Math.max(0.6, args.facePose.scale)) * args.adjust.faceScale;
     const angle = face.box.angle;
     // Face anchor: centered over the space between the top and the card.
-    const anchorY = height * 0.24;
-    const eyeY = anchorY - height * 0.07 * zoom;
+    const anchorY = height * 0.23;
+    const eyeY = anchorY - height * 0.05 * zoom;
     drawFeatureCutout(args, "eyes", face.leftEye, {
-      cx: width / 2 - width * 0.19 * zoom,
+      cx: width / 2 - width * 0.15 * zoom,
       cy: eyeY,
       width: width * 0.26 * zoom,
       angle,
     });
     drawFeatureCutout(args, "eyes", face.rightEye, {
-      cx: width / 2 + width * 0.19 * zoom,
+      cx: width / 2 + width * 0.15 * zoom,
       cy: eyeY,
       width: width * 0.26 * zoom,
       angle,
     });
     drawFeatureCutout(args, "lips", face.lips, {
       cx: width / 2,
-      cy: anchorY + height * 0.1 * zoom,
+      cy: anchorY + height * 0.075 * zoom,
       width: width * 0.36 * zoom,
       angle,
     });
@@ -758,14 +737,6 @@ const faceDropState = {
   eyesClosed: false,
 };
 
-const flashcardFaceZoom = {
-  loaded: false,
-  value: 1,
-  dragSeq: -1,
-  dragStartValue: 1,
-  saved: true,
-};
-
 const paperTossState = {
   lastTapSeq: -1,
   score: 0,
@@ -1120,22 +1091,37 @@ function drawFeatureCutout(
   sctx.drawImage(maskScratch, 0, 0, mw, mh, 0, 0, sw, sh);
   sctx.restore();
 
+  const { featureScale, faceScale } = args.adjust;
   if (dest === null) {
-    ctx.drawImage(scratch, 0, 0, sw, sh, sx, sy, sw, sh);
-    args.featureHits.push({
-      kind,
-      cx: sx + sw / 2,
-      cy: sy + sh / 2,
-      radius: Math.max(sw, sh) / 2,
-    });
-    return;
+    if (featureScale === 1 && faceScale === 1) {
+      ctx.drawImage(scratch, 0, 0, sw, sh, sx, sy, sw, sh);
+      args.featureHits.push({
+        kind,
+        cx: sx + sw / 2,
+        cy: sy + sh / 2,
+        radius: Math.max(sw, sh) / 2,
+      });
+      return;
+    }
+    // Adjusted in-place mask: featureScale grows the patch around its own
+    // center; faceScale additionally spreads centers from the face's
+    // center (the whole face gets bigger).
+    const box = args.face.box;
+    dest = {
+      cx: box.cx + (feature.center.x - box.cx) * faceScale,
+      cy: box.cy + (feature.center.y - box.cy) * faceScale,
+      width: 2 * feature.rx * BASE_EXPAND[kind] * 1.3 * faceScale,
+      angle: feature.angle,
+    };
   }
   // Uniform scale anchored to the UNSTRETCHED feature size: the patch keeps
   // YOUR feature's aspect ratio, and adjusting the mask looseness only
   // reshapes the hole — dividing by the stretched patch size instead would
   // zoom the imagery as the mask grows (on-device-caught).
   const nominalWidth = 2 * feature.rx * BASE_EXPAND[kind] * 1.3;
-  const scale = dest.width / Math.max(nominalWidth, 1);
+  // featureScale also grows remapped cutouts in place (their dest centers
+  // are the filter's business and stay put).
+  const scale = (dest.width * featureScale) / Math.max(nominalWidth, 1);
   ctx.save();
   if (dest.alpha !== undefined) ctx.globalAlpha = dest.alpha;
   ctx.translate(dest.cx, dest.cy);

@@ -72,6 +72,26 @@ type State = {
 };
 
 const MASK_STRETCH_KEY = "iterate.filterMaskStretch.v1";
+const ADJUST_KEY = "iterate.filterAdjust.v1";
+
+type AdjustMode = "hole" | "features" | "face";
+
+const ADJUST_MODE_LABELS: Record<AdjustMode, string> = {
+  hole: "✏️ adjust: holes",
+  features: "🔍 adjust: features",
+  face: "😐 adjust: face",
+};
+
+function loadAdjust(): { mode: AdjustMode; featureScale: number; faceScale: number } {
+  const defaults = { mode: "hole" as AdjustMode, featureScale: 1, faceScale: 1 };
+  try {
+    const raw = localStorage.getItem(ADJUST_KEY);
+    if (raw) return { ...defaults, ...(JSON.parse(raw) as Partial<typeof defaults>) };
+  } catch {
+    // fall through to defaults
+  }
+  return defaults;
+}
 
 function loadMaskStretch(): MaskStretch {
   const defaults: MaskStretch = {
@@ -114,6 +134,7 @@ export default class FilterCamera extends Component<Props, State> {
   // full head-tracking moves relative to.
   #faceBaseline: { cx: number; cy: number; width: number } | null = null;
   #maskStretch = loadMaskStretch();
+  #adjust = loadAdjust();
   #featureHits: FeatureHit[] = [];
   #lastTap: { x: number; y: number; seq: number } | null = null;
   #drag: {
@@ -137,6 +158,8 @@ export default class FilterCamera extends Component<Props, State> {
     startY: number;
     hit: FeatureHit | null;
     startStretch: { x: number; y: number };
+    /** The active scale mode's value when the touch began. */
+    startScale: number;
     dragging: boolean;
   } | null = null;
   #adjustLabelTimer: ReturnType<typeof setTimeout> | null = null;
@@ -349,6 +372,7 @@ export default class FilterCamera extends Component<Props, State> {
       pitchHz,
       tap: this.#lastTap,
       drag: this.#drag,
+      adjust: { featureScale: this.#adjust.featureScale, faceScale: this.#adjust.faceScale },
       timeMs: performance.now(),
     });
     try {
@@ -418,6 +442,8 @@ export default class FilterCamera extends Component<Props, State> {
       startY: event.clientY,
       hit,
       startStretch: hit ? { ...this.#maskStretch[hit.kind] } : { x: 1, y: 1 },
+      startScale:
+        this.#adjust.mode === "features" ? this.#adjust.featureScale : this.#adjust.faceScale,
       dragging: false,
     };
   };
@@ -429,6 +455,21 @@ export default class FilterCamera extends Component<Props, State> {
     const dy = event.clientY - pointer.startY;
     if (!pointer.dragging && Math.hypot(dx, dy) < 12) return;
     pointer.dragging = true;
+    // In the scale modes every drag, anywhere, tunes the global scale —
+    // up = bigger. "features" grows cutouts in place; "face" scales the
+    // whole face layout.
+    if (this.#adjust.mode !== "hole") {
+      const clampScale = (value: number) => Math.min(2.5, Math.max(0.4, value));
+      const value = clampScale(pointer.startScale * (1 - dy / 280));
+      if (this.#adjust.mode === "features") {
+        this.#adjust = { ...this.#adjust, featureScale: value };
+        this.setState({ adjustLabel: `features ${value.toFixed(2)}×` });
+      } else {
+        this.#adjust = { ...this.#adjust, faceScale: value };
+        this.setState({ adjustLabel: `whole face ${value.toFixed(2)}×` });
+      }
+      return;
+    }
     if (!pointer.hit) {
       // A drag on open scenery: reported to the filter (flashcards use it
       // to scale the face), not a mask adjustment.
@@ -476,9 +517,10 @@ export default class FilterCamera extends Component<Props, State> {
       };
       return;
     }
-    if (pointer.hit) {
+    if (pointer.hit || this.#adjust.mode !== "hole") {
       try {
         localStorage.setItem(MASK_STRETCH_KEY, JSON.stringify(this.#maskStretch));
+        localStorage.setItem(ADJUST_KEY, JSON.stringify(this.#adjust));
       } catch {
         // per-session adjustment still applies
       }
@@ -577,6 +619,25 @@ export default class FilterCamera extends Component<Props, State> {
         {this.state.filterError !== null ? (
           <div className="pill error">Filter error: {this.state.filterError}</div>
         ) : null}
+        {!this.state.recording ? (
+          <button
+            className="mode adjustMode"
+            onClick={() => {
+              const order: AdjustMode[] = ["hole", "features", "face"];
+              const mode = order[(order.indexOf(this.#adjust.mode) + 1) % order.length];
+              this.#adjust = { ...this.#adjust, mode };
+              try {
+                localStorage.setItem(ADJUST_KEY, JSON.stringify(this.#adjust));
+              } catch {
+                // per-session mode still applies
+              }
+              this.forceUpdate();
+            }}
+            type="button"
+          >
+            {ADJUST_MODE_LABELS[this.#adjust.mode]}
+          </button>
+        ) : null}
         {this.state.adjustLabel !== null ? (
           <div className="pill">{this.state.adjustLabel}</div>
         ) : null}
@@ -636,6 +697,7 @@ const styles = `
     text-align: center;
   }
   .pill.error { background: rgba(180, 30, 30, 0.85); }
+  .adjustMode { left: auto; right: 12px; }
   .mode {
     position: fixed;
     left: 12px;

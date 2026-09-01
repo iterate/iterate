@@ -257,3 +257,16 @@ loading from failed.
   lean-in; sliding up/down starting on the card scales the whole face
   (persisted in localStorage). New generic surface: `args.drag` for drags
   that don't start on a feature cutout — documented in project-filters.md.
+
+## Feedback round 9 (adjust modes)
+
+- New adjust-mode button (bottom-right, persisted): cycles what drags do —
+  ✏️ **holes** (drag on a feature reshapes its mask; other drags reach
+  `args.drag`), 🔍 **features** (any drag scales every cutout in place,
+  centers fixed), 😐 **face** (any drag scales the whole face, centers
+  spread). Scales persist as `args.adjust {featureScale, faceScale}` — the
+  cutout helper applies them generically; layout-owning filters
+  (flashcards, potato) multiply their layout by faceScale. Replaces the
+  flashcards-only card-slide zoom.
+- Flashcards default face: eyes closer together and lips tucked up — no
+  gap for a nose that isn't there.
