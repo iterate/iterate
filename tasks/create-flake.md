@@ -5,7 +5,7 @@ size: large
 
 # createFlake helper + flake telemetry
 
-**Status summary:** Spec settled via a plannotator grilling session (7 revisions, all decisions below approved). Phase 1 (wrapper + recorder + sentinel) is the work in this PR; phases 2–3 (stream/dashboard, transition automation) are follow-ups.
+**Status summary:** Spec settled via a plannotator grilling session (7 revisions, all decisions below approved). Phase 1 (wrapper + recorder + sentinel + docs) is implemented in this PR — all checks green. Phases 2–3 (stream/dashboard, transition automation) are follow-ups.
 
 A sibling to `failing` (see `packages/shared/src/test-support/failing-test.ts`) for tests that are *known flaky* with exactly one allowed error pattern:
 
@@ -38,10 +38,10 @@ Recorded outcome line fields (CTRF-ish names): test name, file, outcome (`pass` 
 
 ## Phase 1 (this PR)
 
-- [ ] `createFlake` in `packages/shared/src/test-support/flake-test.ts` — expected-fail registration, pattern gate, deadline race, recorder append
-- [ ] Unit tests: matched failure → green; pass → green (+ recorded as pass); non-matching error → red; hang → red; recorder lines written only when `FLAKE_RECORD_DIR` set; fixture-parsing `toString` passthrough preserved
-- [ ] Sentinel flake test using `createFlake` (month-stamped, ~10%)
-- [ ] Docs: extend `docs/testing.md`'s "Flaky-test quarantine protocol" — flaky-but-runnable tests move to `createFlake` (keeps running, keeps reporting) instead of `test.skip`; the skip protocol remains for broken lanes and pathologically slow tests
+- [x] `createFlake` in `packages/shared/src/test-support/flake-test.ts` — expected-fail registration, pattern gate, deadline race, recorder append _(mirrors failing-test.ts structure; recorder is env-gated via FLAKE_RECORD_DIR, per-pid JSONL files)_
+- [x] Unit tests: matched failure → green; pass → green (+ recorded as pass); non-matching error → red; hang → red; recorder lines written only when `FLAKE_RECORD_DIR` set; fixture-parsing `toString` passthrough preserved _(flake-test.test.ts, incl. two real registrations through vitest's own test.fails)_
+- [x] Sentinel flake test using `createFlake` (month-stamped, ~10%) _(flake-sentinel.test.ts; gated to end 2026-10-01, roll forward monthly)_
+- [x] Docs: extend `docs/testing.md`'s "Flaky-test quarantine protocol" — flaky-but-runnable tests move to `createFlake` (keeps running, keeps reporting) instead of `test.skip`; the skip protocol remains for broken lanes and pathologically slow tests _(new "Known-flaky tests" section beside the `failing` one)_
 
 ## Phase 2 (follow-up PR)
 

@@ -520,7 +520,11 @@ protocol below instead of repeatedly making unrelated PRs pay for it.
 
 A flaky or pathologically slow test may be quarantined only after the current
 change is shown not to cause its failure. Failures on behavior changed by the
-PR remain ordinary blockers. For an unrelated test:
+PR remain ordinary blockers. If the test can still run and its flake failure
+has one recognizable error, prefer wrapping it with `createFlake` (see the
+section below) — it stays green, keeps running, and keeps reporting. The
+skip-based protocol below is for tests that
+cannot keep running (broken lanes, pathological latency):
 
 1. Record the test name, first-attempt error, run link or artifact, and timing.
 2. Add the narrowest explicit skip (`test.skip`/`fixme`, or a clearly logged
@@ -562,6 +566,39 @@ so conditions that prove nothing (a coincidental restart masking the bug
 for one observation) retry instead of succeeding —
 `apps/os/e2e/vitest/userspace-facet-source-version.e2e.test.ts` is the
 worked example; its `test.fails` predecessor false-alarmed 7+ times.
+
+### Known-flaky tests: `createFlake(test, …)`
+
+For a test that is genuinely flaky — sometimes passes, sometimes fails, and
+always with the SAME error — wrap it with `createFlake` from
+`@iterate-com/shared/test-support/flake-test` instead of skipping it:
+
+```ts
+const flake = createFlake(test, /CPU startup time exceeded \d+ms/);
+flake("Worker can be deployed", async () => {
+  const deployment = await system.deploy();
+  await expect.poll(() => fetch(deployment.url)).toMatchObject({ status: 200 });
+});
+```
+
+Like `failing`, it registers through the runner's expected-fail variant, but
+the contract differs: a pass and a failure matching the one allowed pattern
+are both green; anything else — a different error, or a body still running at
+the wrapper's deadline — is red. The test keeps running on every branch and,
+when `FLAKE_RECORD_DIR` is set (CI), appends each outcome as a JSON line for
+the flake dashboard, so the flake rate stays measured instead of hidden.
+
+The lifecycle is wrapper-switching, driven by that data: a test that seems
+flaky moves to `createFlake`; if it stops passing entirely, switch it to
+`failing`; once it passes consistently, unwrap it back to a plain test.
+`packages/shared/src/test-support/flake-sentinel.test.ts` is a deliberately
+~10%-flaky sentinel that proves the pipeline works — if its flake rate reads
+0%, distrust the dashboard, not the sentinel.
+
+Prefer `createFlake` over the skip-based quarantine protocol whenever the
+test can still run: a skipped test produces no data, so nothing can ever
+prove it deserves to come back. Reserve skips for broken lanes and
+pathologically slow tests.
 
 ### Parked tests expire
 
