@@ -471,14 +471,10 @@ function referenceResolutionSourceScheduling(
     return undefined;
   }
   const resolution = payload.referenceResolution;
-  if (resolution === null || typeof resolution !== "object" || Array.isArray(resolution)) {
-    return undefined;
-  }
-  const scheduling = (resolution as Record<string, unknown>).sourceScheduling;
-  if (scheduling === null || typeof scheduling !== "object" || Array.isArray(scheduling)) {
-    return undefined;
-  }
-  const { clearsWaitingFor, triggerSource } = scheduling as Record<string, unknown>;
+  if (!isUnknownRecord(resolution)) return undefined;
+  const scheduling = resolution.sourceScheduling;
+  if (!isUnknownRecord(scheduling)) return undefined;
+  const { clearsWaitingFor, triggerSource } = scheduling;
   if (
     typeof clearsWaitingFor !== "boolean" ||
     (triggerSource !== null && triggerSource !== "external" && triggerSource !== "agent-loop")
@@ -486,6 +482,10 @@ function referenceResolutionSourceScheduling(
     return undefined;
   }
   return { clearsWaitingFor, triggerSource };
+}
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function contextNeedsReferenceMaterialization(payload: AgentContextAddedPayload): boolean {
