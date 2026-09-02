@@ -60,8 +60,11 @@ test("captures a note from the global composer and manages it on /notes", async 
   // 💬 pre-types a pointer to the note; the question under it is the human's
   // to write, so nothing is sent on the way in.
   await page.getByLabel("Chat about this note").click();
-  // inputValue() does the waiting; expect only checks the string it returned.
-  expect(await page.getByPlaceholder("Message").inputValue()).toMatch(
+  // The Opening chat spinner keeps the locator waiting through the server-side
+  // note read and prior-message check; then require the exact seeded value.
+  const chatComposer = page.getByPlaceholder("Message");
+  await chatComposer.waitFor();
+  expect(await chatComposer.inputValue()).toMatch(
     /About my note `\/repos\/notes\/.*\.md`:[\s\S]*confirmed at home/,
   );
 
