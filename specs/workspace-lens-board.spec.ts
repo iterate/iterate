@@ -42,7 +42,7 @@ test("workspace lens board demo", async ({ page }) => {
   await page.goto(OS_PROJECT_URL);
 
   // 1. Ask a fresh agent for five jokes and a review link.
-  const composer = page.getByRole("textbox", { name: "Message a new agent" });
+  const composer = page.getByRole("combobox", { name: "Message a new agent" });
   await composer.waitFor({ timeout: 60_000 }); // timeout: cold live-preview route load — past the spinner-waiter's 30s ceiling
   // "your own workspace" on purpose: agents sometimes echo a workspace path
   // from earlier context instead of the one in their own boot context.
@@ -77,7 +77,7 @@ test("workspace lens board demo", async ({ page }) => {
 
   // 3. Tell the agent to incorporate the feedback and stage tasks.
   await page.goto(threadUrl);
-  const reply = page.getByRole("textbox", { name: "Message this agent" });
+  const reply = page.getByRole("combobox", { name: "Message this agent" });
   await reply.waitFor({ timeout: 60_000 }); // timeout: thread route cold load on the live preview — past the spinner-waiter's 30s ceiling
   await reply.fill(
     'thanks — incorporate my feedback in jokes.md, then create 5 task files under tasks/ in /repos/config in your workspace (one per joke, do NOT commit). Then send me a board link minted with itx.worker.docs.link({ workspace: <your workspace>, repo: "/repos/config" }) so I can review them.',
