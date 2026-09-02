@@ -318,7 +318,7 @@ export abstract class StreamProcessorDurableObject<State = unknown, Env = {}> ex
   protected publishLiveState(): void; // after a runtime field moved OUTSIDE a batch
   // the doors the delivery loop and itx.facets.get(name) reach
   processEventBatch(events: StreamEvent[], range: ScannedRange): Promise<void>;
-  appendCreatedAndWokenEvents(): Promise<void>;
+  catchUpFromLog(): Promise<void>;
   snapshot(): Promise<ProcessorSnapshot<State>>;
   liveSnapshot(): Promise<{ rev: number; state: unknown }>; // { rev, state: projectLiveState(reduced) } — the client's seed door
   waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void>;

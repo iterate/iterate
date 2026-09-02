@@ -491,7 +491,7 @@ Two rules that follow from the resolver:
 
 `itx.facets.get(name)` walks the facet's object. For a processor facet the
 doors are those of `StreamProcessorDurableObject` (section 5.3): `snapshot`,
-`liveSnapshot`, `waitUntilProcessed`, `wake`, `processEventBatch`. For a loaded
+`liveSnapshot`, `waitUntilProcessed`, `catchUpFromLog`, `processEventBatch`. For a loaded
 `DurableObject` class hosted as a facet, every method the class defines is
 reachable the same way, and a terminal `.fetch(request)` rides the facet's own
 fetch channel (so a 101 works).
@@ -683,7 +683,7 @@ abstract class StreamProcessorDurableObject<
 
   // ── the doors the delivery loop and itx.facets.get(name) reach ──
   processEventBatch(events: StreamEvent[], range: ScannedRange): Promise<void>;
-  appendCreatedAndWokenEvents(): Promise<void>;
+  catchUpFromLog(): Promise<void>;
   snapshot(): Promise<{ offset: number; state: State }>;
   liveSnapshot(): Promise<{ rev: number; state: unknown }>;
   /** The barrier: processed at least through `offset` (default timeout 10s). An offset above the

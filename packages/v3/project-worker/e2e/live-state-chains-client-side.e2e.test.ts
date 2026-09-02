@@ -122,7 +122,7 @@ test("a dynamic-worker processor's live state combines reduced (ticks) + runtime
   // A FILTERED processor's facet only materializes on its first consumed push (the enablement
   // commit itself is filtered out), so `itx.facets.get('presence')` would be NO_FACET until the
   // first tick — materialize it once through the load chain before the first door read.
-  await itx.invokeCapability(`${presenceClass}.get('presence').appendCreatedAndWokenEvents()`);
+  await itx.invokeCapability(`${presenceClass}.get('presence').catchUpFromLog()`);
 
   const door = async (): Promise<{ rev: number; state: PresenceLive }> =>
     clone(await itx.invokeCapability("itx.facets.get('presence').liveSnapshot()"));

@@ -55,7 +55,7 @@ describe("rule 2 — per-event barrier under slow blockers", () => {
       storage: memoryStorage(),
     });
     mem.stream.append({ type: "e" }, { type: "e" }, { type: "e" }) as StreamEvent[];
-    await p.appendCreatedAndWokenEvents();
+    await p.catchUpFromLog();
     for (const offset of [1, 2]) {
       expect(blockedDoneAt.get(offset)).toBeDefined();
       expect(startAt.get(offset + 1)!).toBeGreaterThanOrEqual(blockedDoneAt.get(offset)!);
@@ -90,7 +90,7 @@ describe("rule 2 — per-event barrier under slow blockers", () => {
       storage: memoryStorage(),
     });
     mem.stream.append({ type: "e" }, { type: "e" }) as StreamEvent[];
-    await p.appendCreatedAndWokenEvents();
+    await p.catchUpFromLog();
     await sleep(120); // let stragglers land so the trace is complete either way
     expect(trace.indexOf("start 2")).toBeGreaterThan(trace.indexOf("nested-done 1"));
   });
@@ -197,7 +197,7 @@ describe("rule 4 — one durable commit per batch, all-or-nothing", () => {
     ) as StreamEvent[];
     await expect(p.processEventBatch(committed, { after: 0, through: 3 })).rejects.toThrow(/boom/);
     expect(storage.writes).toBe(0); // events 1+2 fully processed, yet NOTHING persisted
-    await p.appendCreatedAndWokenEvents(); // retried whole — 1 and 2 run again (droppable-attempt semantics)
+    await p.catchUpFromLog(); // retried whole — 1 and 2 run again (droppable-attempt semantics)
     expect(effects).toEqual([1, 2, 3, 1, 2, 3]);
     expect(storage.writes).toBe(2); // and then exactly one persist
     expect((await p.snapshot()).state.n).toBe(3); // the reduce restarted from the persisted state
@@ -265,7 +265,7 @@ describe("rule 5 — exactly one caughtUp per at-head batch", () => {
     mem.stream.append(
       ...Array.from({ length: 500 }, () => ({ type: "tick" }) as StreamEventInput),
     ) as StreamEvent[];
-    await p.appendCreatedAndWokenEvents();
+    await p.catchUpFromLog();
     expect((await p.snapshot()).offset).toBe(500); // the reduce DID reach the head…
     expect(deliveries.filter((d) => d.caughtUp).length).toBeGreaterThanOrEqual(1); // …silently
   });
@@ -363,7 +363,7 @@ describe("version bump re-reduce", () => {
     const effects: string[] = [];
     const p1 = makeVersioned(mem, storage, "1.0.0", effects);
     mem.stream.append({ type: "e" }, { type: "e" }) as StreamEvent[];
-    await p1.appendCreatedAndWokenEvents(); // v1 processed offsets 1,2 — cursor 2 persisted
+    await p1.catchUpFromLog(); // v1 processed offsets 1,2 — cursor 2 persisted
     expect(effects).toEqual(["effect 1", "effect 2"]);
     const committed = mem.stream.append({ type: "e" }) as StreamEvent[]; // offset 3 — v1 never saw it
     const p2 = makeVersioned(mem, storage, "2.0.0", effects);
@@ -383,7 +383,7 @@ describe("version bump re-reduce", () => {
     const effects: string[] = [];
     const p1 = makeVersioned(mem, storage, "1.0.0", effects);
     mem.stream.append({ type: "e" }, { type: "e" }) as StreamEvent[];
-    await p1.appendCreatedAndWokenEvents(); // v1 processed 1,2 — effects ran once
+    await p1.catchUpFromLog(); // v1 processed 1,2 — effects ran once
     expect(effects).toEqual(["effect 1", "effect 2"]);
     const p2 = makeVersioned(mem, storage, "2.0.0", effects);
     await p2.waitUntilProcessed({ offset: 2, timeoutMs: 2000 });

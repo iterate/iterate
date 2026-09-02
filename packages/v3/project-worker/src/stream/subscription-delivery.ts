@@ -125,7 +125,7 @@ export class SubscriptionDelivery {
       // A configured row REPLACES: whatever the loop remembered about the old row under this name
       // (a stream-kept cursor, a pushed batch, a watermark) belonged to the old target, so it goes.
       // Then the new target is evaluated ONCE right away, whatever its `consumes` says: a processor's
-      // facet is MATERIALIZED at enable time (`wake` on the handle — so `itx.facets.get(name)`
+      // facet is MATERIALIZED at enable time (`catchUpFromLog` on the handle — so `itx.facets.get(name)`
       // answers before its first consumed event), and a target whose head cannot be evaluated is
       // reported here, once, instead of once per commit. The wake is the HEAD of this name's push
       // chain, so the first push (often this very event) queues behind it: one materialization,
@@ -140,7 +140,7 @@ export class SubscriptionDelivery {
             this.#resolve(sub.target)
               .then(({ head }) =>
                 head instanceof FacetHandle && this.#deps.subscriptions()[name]
-                  ? invokePath(head, ["wake"], [], `facet "${name}"`)
+                  ? invokePath(head, ["catchUpFromLog"], [], `facet "${name}"`)
                   : undefined,
               )
               .catch((error) => {

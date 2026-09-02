@@ -93,8 +93,8 @@ export abstract class StreamProcessorDurableObject<
     return this.#engine().processEventBatch(events, range);
   }
   /** Catch up from the log (the read-your-writes entry after an eviction). */
-  appendCreatedAndWokenEvents(): Promise<void> {
-    return this.#engine().appendCreatedAndWokenEvents();
+  catchUpFromLog(): Promise<void> {
+    return this.#engine().catchUpFromLog();
   }
   /** Caught up through the log, then `{ offset, state }`. */
   snapshot(): Promise<ProcessorSnapshot<State>> {

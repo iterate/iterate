@@ -228,7 +228,7 @@ export class ProcessorEngine<State> {
    *  atomically), which is what lets a client chain patches exactly instead of guessing which
    *  changes its snapshot already contains. */
   async liveSnapshot(): Promise<{ rev: number; state: unknown }> {
-    if (!this.#caughtUp()) await this.appendCreatedAndWokenEvents();
+    if (!this.#caughtUp()) await this.catchUpFromLog();
     return this.#liveHolder().snapshot();
   }
 
@@ -273,7 +273,7 @@ export class ProcessorEngine<State> {
   }
 
   /** Catch up from the own persisted cursor (cold boot, reads). A wake carries nothing. */
-  appendCreatedAndWokenEvents(): Promise<void> {
+  catchUpFromLog(): Promise<void> {
     return this.#enqueue(() => this.#catchUpBody());
   }
 
@@ -281,7 +281,7 @@ export class ProcessorEngine<State> {
 
   /** Reduce-and-effects caught up through the log, then the current snapshot. */
   async snapshot(): Promise<ProcessorSnapshot<State>> {
-    if (!this.#caughtUp()) await this.appendCreatedAndWokenEvents();
+    if (!this.#caughtUp()) await this.catchUpFromLog();
     const progress = this.#loadProgress();
     return { offset: progress.reducedThroughOffset, state: progress.state };
   }
@@ -318,7 +318,7 @@ export class ProcessorEngine<State> {
         );
       }, timeoutMs);
       this.#waitForEventWaiters.push(waiter);
-      void this.appendCreatedAndWokenEvents()
+      void this.catchUpFromLog()
         .then(() => {
           // The offset may have been reached by the wake's own catch-up OR by a version re-reduce
           // (which sets progress without a #processBatch that resolves waiters). Re-check here.

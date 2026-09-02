@@ -64,7 +64,7 @@ test("processor: a fresh facet's first snapshot (wake) with ephemerals at head c
   const highestDurableOffset = p0.events.at(-1)!.offset; // last durable row
   expect(p0.scannedThroughOffset).toBe(highestDurableOffset); // the ephemeral tail (≥ 2 offsets) is NOT proven by a read
 
-  // READ-DRIVEN catch-up through the load chain: snapshot → appendCreatedAndWokenEvents() → read → durables ≤ mark
+  // READ-DRIVEN catch-up through the load chain: snapshot → catchUpFromLog() → read → durables ≤ mark
   const before = (await s.invoke([
     ...loadChain("procsrc", "CounterDurableObject", "counter"),
     ["snapshot"],
