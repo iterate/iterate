@@ -68,7 +68,7 @@ Base types first (context/expression.ts), fully qualified: today's `Expression` 
 `ItxExpression`; today's `ItxExpression` (string | array — what a door accepts) is `ItxExpressionInput`,
 the `StreamEventInput`/`StreamEvent` pairing; a `Step` is an `ItxExpressionStep`; `CapabilityPath` is
 `ItxExpressionPrefix`. Every "steps" is `itxExpressionSteps`. "Rewrite" alone
-is the act; the stored row is a **rewrite rule** (`ItxExpressionRewriteRule`, event `rewrite-rule-updated`), the
+is the act; the stored row is a **rewrite rule** (`ItxExpressionRewriteRule`, event `rewrite-rule-configured`), the
 term-rewriting word routing.ts's header already uses; `rewrite` stays the verb (`itx.rewrite(match, target | null)`,
 null = stop rewriting `match`). The read collection on itx is
 `itx.expressionRewriteRules` — "itx" is the receiver, so the one redundant word is dropped, nothing else.
@@ -87,12 +87,12 @@ whoami · kv · cd · fetch · load · facets                                   
 // layer 2 · (b) itx-expression rewrite rules — pure data, ONE event
 /** A call starting with `match` runs as the same call with `match` replaced by `target`; `null` deletes the
  *  rule at `match`. Both halves are itx expressions; `match` may pin literal args. Appends
- *  `itx-expressions/rewrite-rule-updated { match, target | null }` — or nothing, when the table already says so. */
+ *  `itx-expressions/rewrite-rule-configured { match, target | null }` — or nothing, when the table already says so. */
 rewrite(match: ItxExpressionInput, target: ItxExpressionInput | null): Promise<StreamEvent | null>; // the committed event, or null when the table already said so
 expressionRewriteRules: { list(): ItxExpressionRewriteRule[]; get(match: ItxExpressionInput): ItxExpressionRewriteRule | null };
 // layer 3 · (a) rpc stubs — the axiom: physical, hibernatable, OPAQUE key. Presence is list().
 rpcStubs: { get(rpcStubKey: string): RpcStubHandle; list(): string[] };
-// layer 4 · subscriptions — ONE event `stream/subscription-updated { name, target | null, consumes? }`
+// layer 4 · subscriptions — ONE event `stream/subscription-configured { name, target | null, consumes? }`
 subscribe(input: { name?: string; target: ItxExpressionInput | null; consumes?: string[] }): Promise<{ name: string }>;
 subscriptions: { list(): SubscriptionListEntry[]; get(name: string): SubscriptionListEntry | null };
 // layer 5 · processors — two lines each over layer 4 + `load` + `facets.delete`
@@ -139,8 +139,8 @@ at the idle quiesce; presence = borrowed ∪ pager-backed. Transport verbs off t
 | `subscribe` / `unsubscribe` / `configureSubscription` / `removeSubscription`                                            | `subscribe({ name, target \| null, consumes? })` (root)                                                                                                      | —                                                                                                                                                   |
 | `invokeCapability`                                                                                                      | `invoke`                                                                                                                                                     | —                                                                                                                                                   |
 | `Mount { path, target, providedAtOffset }` · `state.mounts`                                                             | `ItxExpressionRewriteRule { match, target }` · `state.itxExpressionRewriteRules`                                                                             | —                                                                                                                                                   |
-| `capability-table/capability-provided` + `-revoked`                                                                     | ONE `itx-expressions/rewrite-rule-updated { match, target \| null }`                                                                                         | —                                                                                                                                                   |
-| `stream/subscription-configured` + `-removed`                                                                           | ONE `stream/subscription-updated { name, target \| null, consumes? }`                                                                                        | —                                                                                                                                                   |
+| `capability-table/capability-provided` + `-revoked`                                                                     | ONE `itx-expressions/rewrite-rule-configured { match, target \| null }`                                                                                      | —                                                                                                                                                   |
+| `stream/subscription-configured` + `-removed`                                                                           | ONE `stream/subscription-configured { name, target \| null, consumes? }` (today's name; `-removed` folds in)                                                 | —                                                                                                                                                   |
 | `CapabilityPath` · `parseCapabilityPath` · `canonicalCapabilityPath`                                                    | `ItxExpressionPrefix` · `parseItxExpressionPrefix` · `canonicalItxExpressionPrefix`                                                                          | `rpcStubKey` (opaque string)                                                                                                                        |
 | `context/capability-table.ts` + `context/routing.ts` · `CapabilityResolver`                                             | `context/itx-expression-rewriting.ts` (rules on top, the door + `ItxExpressionRewriter` below — ONE concept, one file, the table test stays)                 | —                                                                                                                                                   |
 | `matchMount` · `pickMount` · `rewriteCall` · `routeCall` · `MountMatch`                                                 | `matchItxExpressionPrefix` · `pickItxExpressionRewriteRule` · `applyItxExpressionRewriteRule` · `rewriteItxExpressionToBuiltIn` · `ItxExpressionPrefixMatch` | —                                                                                                                                                   |
@@ -156,7 +156,7 @@ at the idle quiesce; presence = borrowed ∪ pager-backed. Transport verbs off t
 
 1. **(a) rpc stubs**: fully qualified names, the two-if directory keyed by key, `itxExpressionSteps: ItxExpression`,
    `RPC_STUB_OFFLINE`, the canonical-key assertion deleted, `rpcStubs.lend/recall` at the edge.
-2. **(b) expression rewriting**: the vocabulary, ONE file, ONE event with stack semantics, `state.itxExpressionRewriteRules`,
+2. **(b) expression rewriting**: the vocabulary, ONE file, ONE event over a map, `state.itxExpressionRewriteRules`,
    `NO_ITX_EXPRESSION_MATCH`, `x-itx-expression`; subscriptions' ONE event.
 3. **The surface**: roots for `rewrite` · `expressionRewriteRules` · `subscribe` · `enableProcessor` · `disableProcessor` ·
    `waitForEvent`; the DO's four verbs deleted; the edge down to `cd` · `invoke` · `rewrite` · `subscribe` ·
@@ -174,7 +174,7 @@ at the idle quiesce; presence = borrowed ∪ pager-backed. Transport verbs off t
 ## 7. Why no offset on a rewrite-rule row (Jonas: "what is an actual case where this race matters?")
 
 Today's `providedAtOffset` does three jobs. **Identity for by-offset revoke** — gone in all four designs
-(a `null` pops the newest at the match). **The ranking tie-break** in `pickMount` — unnecessary: the table is a map with one entry per
+(a `null` deletes the entry at the match). **The ranking tie-break** in `pickMount` — unnecessary: the table is a map with one entry per
 match, and two rules with DIFFERENT matches can never tie (equal length and equal pinned-arg count means
 the same prefix). **A
 receipt** — `provideCapability` returns `{ providedAtOffset }` so a caller can tell "appended" from
@@ -219,7 +219,7 @@ points in the tutorial — the signature evolves when expressions arrive (a key 
 **8.3 The verb lives on the RPC target, not the DO** (annotation 4). `rewrite`, `subscribe`,
 `enableProcessor`/`disableProcessor` are methods of `IterateContext` (the edge class — which is ALSO what
 `env.ITX.get()` hands loaded code, so one class serves both). Each is visibly "build the event, append it":
-`rewrite` = `canonicalItxExpressionPrefix(match)` → `rewriteRuleUpdatedEvent(match, target)` →
+`rewrite` = `canonicalItxExpressionPrefix(match)` → `rewriteRuleConfiguredEvent(match, target)` →
 `this.invoke(["itx", ["append", event]])` → wrap the committed event in a handle. The DO has `append` (and
 the reads). Reconnect-is-zero-events: the verb reads `itx.expressionRewriteRules.get(match)` first and
 appends nothing when the table already says so (a read + an append on the edge; a raced duplicate is a
@@ -234,7 +234,7 @@ stub })` recalls the stub at scope end; `using rule = await itx.rewrite(match, t
 exported RpcTarget's `Symbol.dispose` BOTH when the client disposes the last stub AND when the session
 aborts (capnweb `src/rpc.ts` `abort()` disposes every export). So "dispose un-sets the rule" makes a rule
 created through the verb **session-scoped** — like a lent stub. A rule that must outlive its session is
-appended as the raw event (`itx.append(rewriteRuleUpdatedEvent(match, target))`) — the verb IS just append
+appended as the raw event (`itx.append(rewriteRuleConfiguredEvent(match, target))`) — the verb IS just append
 plus a handle, so the two spellings differ in exactly one thing: lifetime. Recommended, and honest about
 today: mounts are durable data that outlive sessions; under this design the durable spelling is the event,
 the scoped spelling is the verb. (Annotation 3 dissolves with the map: disposing the handle deletes the entry at that match.)
@@ -251,14 +251,11 @@ change freely. §6's first cost is struck.
 doctrine is running → `docs/proposals/guard-audit.md` (table: guard · what it defends against · real
 case? · DELETE/KEEP · lines saved · what a wrong deletion breaks).
 
-**8.8 The one event's name** (annotation 1) — options, one to pick:
-
-| option | event type                                                       | reads as                              | for / against                                                                     |
-| ------ | ---------------------------------------------------------------- | ------------------------------------- | --------------------------------------------------------------------------------- |
-| a      | `itx-expressions/rewrite-rule-updated { match, target \| null }` | "the rule at `match` is now T / gone" | setter shape, mirrors `subscription-updated`; "updated" is loose for a stack push |
-| b      | `itx-expressions/rewrite-rule-set { match, target \| null }`     | "set (or un-set) the rule at `match`" | matches B's setter verb; "set … null" is a known idiom (kv)                       |
-| c      | `itx-expressions/rewritten { match, target \| null }`            | "`match` is rewritten to T"           | shortest, a fact not a command; `null` reads oddly ("rewritten to nothing")       |
-| d      | two events, `rewrite-rule-added` / `rewrite-rule-removed`        | push / pop                            | most literal for a stack; but two events is exactly what round 1 rejected         |
-
-Recommendation: **(a)**, with the subscription twin `stream/subscription-updated { name, target \| null,
-consumes? }` — one shape for both tables, and the payload IS the verb's argument list.
+**8.8 The one event's name — DECIDED (Jonas): `rewrite-rule-configured`.** Full type
+`events.iterate.com/itx-expressions/rewrite-rule-configured { match, target | null }` — the row noun is
+"rewrite rule" and the fact mirrors today's `stream/subscription-configured` exactly; the family prefix
+`itx-expressions/` already carries the domain word, so it is not repeated in the fact
+(`itx-rewrite-configured` was the alternative). The subscription twin keeps its name and absorbs the
+removal: `stream/subscription-configured { name, target | null, consumes? }`;
+`subscription-removed` is deleted. The event builders are `rewriteRuleConfiguredEvent(match, target)` and
+`subscriptionConfiguredEvent(name, target, consumes)`.
