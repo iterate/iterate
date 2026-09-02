@@ -1,9 +1,9 @@
 // worker-loader.ts — THE loader: `loadConfinedWorker` turns a SOURCE (its modules, literally) into a
 // loaded worker through Cloudflare's `env.LOADER` (a `WorkerLoader`) — hash the modules, mint the
 // confined isolate under the billed cacheKey — and stops at the `WorkerStub`. The CALLER then chooses
-// the host, exactly like Cloudflare's own two-step: `worker.getEntrypoint(name?)` for a stateless
-// `WorkerEntrypoint` (built-ins.ts), or `worker.getDurableObjectClass(name)` hosted as a durable
-// facet of the context (iterate-context-durable-object.ts).
+// the host: `worker.getEntrypoint(name?)` for a stateless `WorkerEntrypoint` (built-ins.ts
+// `workers.get`), or `worker.getDurableObjectClass(name)` hosted as a durable facet of the context
+// (iterate-context-durable-object.ts `facets.get(name, spec)`).
 //
 // A loaded worker's `env.ITX` is a Workers-RPC service binding to the `ItxEntrypoint`. It reaches
 // the genuine itx scope with `env.ITX.get()` — a real `IterateContext` RpcTarget — and then writes plain
@@ -12,9 +12,9 @@
 // handles and callbacks pipeline natively over both lanes (no accumulating Proxy, no reduce shim).
 //
 // A loaded SOURCE EXPORTS its own host object — a `WorkerEntrypoint` (reached with
-// `itx.load(src).getEntrypoint(name?)`) or a `DurableObject` class (hosted with
-// `itx.facets.get(name, { source, className })`), mirroring Cloudflare's own `worker.getEntrypoint()`
-// / `worker.getDurableObjectClass()` + `ctx.facets.get(name, startup)`. There is
+// `itx.workers.get({ source, className? })`) or a `DurableObject` class (hosted with
+// `itx.facets.get(name, { source, className })`) — one door per host kind over Cloudflare's own
+// `worker.getEntrypoint()` / `worker.getDurableObjectClass()` + `ctx.facets.get(name, startup)`. There is
 // NO host-injected wrapper: the code the author wrote IS what runs. The one bare-lambda ergonomic —
 // `itx.runScript("async (itx, x) => …")` — wraps its string into a WorkerEntrypoint at the call
 // site (built-ins.ts `RUN_SCRIPT_ENTRYPOINT`), so even that bottoms out at an EXPORTED entrypoint.
@@ -49,7 +49,7 @@ type LoadConfinedWorkerOptions = {
   /** The owning context (a facet's owner is composed collision-free by `facetLoaderOwner`). */
   owner: string;
   source: WorkerSource;
-  /** Names the load site in errors (`facet "tally"`, `load.getEntrypoint`). */
+  /** Names the load site in errors (`facet "tally"`, `workers.get`). */
   where: string;
 };
 

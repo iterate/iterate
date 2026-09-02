@@ -74,7 +74,7 @@ test("dynamic worker → dynamic worker mid-chain pipelining, both consumer lane
   expect(clientPinged).toBe(true);
 
   // ── lane 2: worker B reaches worker A via env.ITX.get() — the dynamic-worker → dynamic-worker case ──
-  const ran = await itx.load(SRC_WORKER_B).getEntrypoint().run(aRef);
+  const ran = await itx.workers.get({ source: SRC_WORKER_B }).run(aRef);
   // dynamic worker B: env.ITX.get().facets.get('counterA', aRef).demo.timer.callLater(cb) ran and the callback fired inside B
   expect(ran?.ran).toBe(true);
   expect(ran?.pinged).toBe(true);

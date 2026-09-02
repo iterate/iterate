@@ -1,18 +1,22 @@
 // built-ins.ts — THE BUILT-INS: a plain record whose KEYS are the physical-layer roots (`whoami`,
 // `kv`, `append`, `read`, `waitForEvent`, `cd`, `fetch`, `rpcStubs`, `rewriteRules`,
-// `facets`, `subscriptions`, `load`, `runScript`). A call `itx.<root>…` resolves DIRECTLY against
+// `facets`, `subscriptions`, `workers`, `runScript`). A call `itx.<root>…` resolves DIRECTLY against
 // these (itx-expression-rewriting.ts `ItxExpressionResolver`, built-in first) — no rule. Rewrite
 // rules name `itx.…` targets that rewrite through the same rules to reach a root; a bare root is
 // unspellable, so the built-ins are unshadowable.
 //
-// LOADING DYNAMIC CODE — two doors, each the mirror of a Cloudflare one:
-//   • `itx.load(src).getEntrypoint(name?).run(...)` — a STATELESS `WorkerEntrypoint` (its own
-//     isolate, no storage) — the mirror of the Worker Loader's `worker.getEntrypoint()`.
+// LOADING DYNAMIC CODE — two doors, ONE PER HOST KIND, each a `get` on a noun:
+//   • `itx.workers.get({ source, className?, props? }).method(...)` — a STATELESS `WorkerEntrypoint`
+//     (its own isolate, no storage). No name: a stateless worker has no identity beyond its spec, so
+//     the spec IS the address (naming one is a rewrite rule's job).
 //   • `itx.facets.get(name, { source, className }).method(...)` — a `DurableObject` class hosted as
 //     the durable FACET `name` of this stream (own storage) — the mirror of `ctx.facets.get(name,
 //     startupCallback)`. Without the spec, `itx.facets.get(name)` ADDRESSES a facet that is already
 //     running (a processor, a named instance) — same door, no source.
-// `itx.runScript(lambda)` is sugar for the one bare-lambda case (wrap → `load(...).getEntrypoint().run`).
+// Both bottom out in Cloudflare's Worker Loader (`env.LOADER.get(cacheKey, …)` then
+// `worker.getEntrypoint()` / `worker.getDurableObjectClass()`); the two-step is folded into one door
+// per host on purpose (BUILD-LOG 2026-09-02). `itx.runScript(lambda)` is sugar for the one bare-lambda
+// case (wrap → `workers.get({ source }).run`).
 
 import type { ReachableContext, StreamPage, WaitForEventFilter } from "../stream/stream.ts";
 import type { StreamEvent, StreamEventInput } from "../stream/events.ts";
@@ -33,8 +37,8 @@ export type SubscriptionListEntry = {
 };
 
 /** The one bare-lambda wrapper — `itx.runScript("async (itx, x) => …")`. The lambda STRING becomes
- *  a `WorkerEntrypoint`'s default export, so `runScript` bottoms out at the SAME `load(...)
- *  .getEntrypoint()` path as any exported entrypoint (no separate loader branch). `run()` injects
+ *  a `WorkerEntrypoint`'s default export, so `runScript` bottoms out at the SAME `workers.get({
+ *  source })` path as any exported entrypoint (no separate loader branch). `run()` injects
  *  the itx scope via `env.ITX.get()` — mid-chain handles/callbacks pipeline natively, exactly like a
  *  capnweb client after `projects.get(id)`. */
 const RUN_SCRIPT_ENTRYPOINT = (script: string) => /* js */ `
@@ -118,15 +122,17 @@ export interface BuiltInScope {
     list(): SubscriptionListEntry[];
     get(name: string): SubscriptionListEntry | null;
   };
-  /** Load dynamic code → a WORKER, then `.getEntrypoint(name?, { props? })` → a stateless
-   *  `WorkerEntrypoint` (the mirror of Cloudflare's Worker Loader) — ANY method it exports, reached
-   *  by name (`run`, `fetch`, `processEventBatch`, …); `props` is Cloudflare's own
-   *  WorkerStubEntrypointOptions.props, read back as `this.ctx.props` (a url, a key name, …). A
-   *  `DurableObject` class is hosted through `itx.facets.get(name, { source, className })`, not here.
-   *  `source` is the worker's MODULES, literally: `{ "cap.js": code, … }`. */
-  load(source: WorkerSource): InvokeHandle;
+  /** The stateless host: `get({ source, className?, props? })` → a `WorkerEntrypoint` in its own
+   *  confined isolate (no DO, no storage) — ANY method it exports, reached by name (`run`, `fetch`,
+   *  `processEventBatch`, …). `className` names the exported class (default: the default export);
+   *  `props` is Cloudflare's own WorkerStubEntrypointOptions.props, read back as `this.ctx.props` (a
+   *  url, a key name, …). `source` is the worker's MODULES, literally: `{ "cap.js": code, … }`. No
+   *  name and no `list`: a stateless worker is its spec. */
+  workers: {
+    get(spec: { source: WorkerSource; className?: string; props?: unknown }): InvokeHandle;
+  };
   /** Run a stateless lambda STRING — sugar: wrap into a `WorkerEntrypoint`, then
-   *  `load(...).getEntrypoint().run(...)`. The one bare-lambda ergonomic (same as apps/os). */
+   *  `workers.get({ source }).run(...)`. The one bare-lambda ergonomic (same as apps/os). */
   runScript(script: string, ...args: unknown[]): Promise<unknown>;
 }
 
@@ -173,12 +179,12 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   const { projectId, path, iterateContextName, env } = deps;
   const { host } = deps;
 
-  /** THE stateless host — `worker.getEntrypoint(className?)`: a fresh confined isolate (no DO, no
-   *  storage, `env.ITX` bound) over the loaded WorkerEntrypoint, and ONE method on it by name — `run`,
+  /** THE stateless host — `itx.workers.get(spec)`: a fresh confined isolate (no DO, no storage,
+   *  `env.ITX` bound) over the loaded WorkerEntrypoint, and ONE method on it by name — `run`,
    *  `fetch`, `processEventBatch`, whatever the class declares. A terminal `fetch(request)` is this
    *  same call: `entrypoint.fetch(request)` IS the entrypoint's fetch channel, socket-bearing
    *  Responses included (fetch/rpc-stub-fetch.ts doctrine, points 1 & 4). The source EXPORTS the
-   *  entrypoint (no host-injected wrapper — the mirror of Cloudflare's `worker.getEntrypoint()`).
+   *  entrypoint (no host-injected wrapper — Cloudflare's `worker.getEntrypoint()` underneath).
    *  Re-resolves per call, but the loader caches by contentHash so a warm isolate is reused. */
   const callEntrypoint = async (
     source: WorkerSource,
@@ -193,7 +199,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       kind: "code",
       owner: iterateContextName,
       source,
-      where: "load.getEntrypoint",
+      where: "workers.get",
     });
     const entrypoint = worker.getEntrypoint(
       className,
@@ -201,7 +207,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     ) as Fetcher & Record<string, (...a: unknown[]) => Promise<unknown>>;
     const fn = entrypoint[method];
     if (typeof fn !== "function")
-      throw new Error(`load(src).getEntrypoint(): the entrypoint has no method "${method}"`);
+      throw new Error(`workers.get(spec): the entrypoint has no method "${method}"`);
     return Reflect.apply(fn, entrypoint, args);
   };
 
@@ -270,28 +276,20 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     },
     subscriptions: deps.subscriptions,
     rewriteRules: deps.rewriteRules,
-    // Each hop is its own InvokeHandle, so the whole `load(src).getEntrypoint().run()` chain
-    // pipelines on every lane (workerd#6873).
-    load: (source: WorkerSource) =>
-      new InvokeHandle((itxExpressionSteps) => {
-        const [first] = itxExpressionSteps;
-        const oneCall = itxExpressionSteps.length === 1 && Array.isArray(first) ? first : undefined;
-        if (oneCall?.[0] !== "getEntrypoint")
-          throw new Error(
-            `load(src).${print(itxExpressionSteps)}: call .getEntrypoint(name?); a DurableObject class is hosted through itx.facets.get(name, { source, className })`,
-          );
-        const [, className, options] = oneCall as [string, string?, { props?: unknown }?];
-        return new InvokeHandle((methodSteps) => {
+    // A genuine InvokeHandle, so `workers.get(spec).run()` pipelines on every lane (workerd#6873).
+    workers: {
+      get: (spec: { source: WorkerSource; className?: string; props?: unknown }) =>
+        new InvokeHandle((methodSteps) => {
           const [call] = methodSteps;
           if (methodSteps.length !== 1 || !Array.isArray(call) || call[0] === "")
             throw new Error(
-              `load(src).getEntrypoint().${print(methodSteps)}: a WorkerEntrypoint exposes flat methods`,
+              `workers.get(spec).${print(methodSteps)}: a WorkerEntrypoint exposes flat methods`,
             );
-          return callEntrypoint(source, className, options?.props, call[0], call.slice(1));
-        });
-      }),
+          return callEntrypoint(spec.source, spec.className, spec.props, call[0], call.slice(1));
+        }),
+    },
     // `RUN_SCRIPT_ENTRYPOINT` wraps the lambda string into a WorkerEntrypoint default export, so even
-    // this bare-lambda door bottoms out at `load(...).getEntrypoint().run(...)`.
+    // this bare-lambda door bottoms out at `workers.get({ source }).run(...)`.
     runScript: (script: string, ...args: unknown[]) =>
       callEntrypoint(
         { "cap.js": RUN_SCRIPT_ENTRYPOINT(script) },

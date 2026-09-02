@@ -118,7 +118,7 @@ test("stream-kept cursor: an alarm pump with ephemerals at head leaves the curso
   await s.append(
     subscriptionConfiguredEvent({
       name: "dig",
-      target: ["itx", ["load", DIGEST_MODULES], ["getEntrypoint"], "processEventBatch"],
+      target: ["itx", "workers", ["get", { source: DIGEST_MODULES }], "processEventBatch"],
       consumes: ["mark"],
     }),
   );

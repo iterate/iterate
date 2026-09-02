@@ -336,7 +336,7 @@ test("ALARM PUMPS THE CURSOR LANE: a failed at-least-once delivery is retried fr
   await s.append(
     subscriptionConfiguredEvent({
       name: "flaky",
-      target: ["itx", ["load", { "cap.js": FLAKY_SRC }], ["getEntrypoint"], "processEventBatch"],
+      target: ["itx", "workers", ["get", { source: { "cap.js": FLAKY_SRC } }], "processEventBatch"],
       consumes: ["mark"],
     }),
   );

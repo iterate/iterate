@@ -107,7 +107,7 @@ test("itx tour: built-in roots, lent stubs, the rule map, dynamic-worker rules, 
   expect(String(denied)).toMatch(/no rewrite rule matches/);
 
   // 5. EXPRESSION RULE running a stateless dynamic worker (the fetch lane end-to-end)
-  await itxA.provide("itx.site", `itx.load(${JSON.stringify(SOURCES.site)}).getEntrypoint()`);
+  await itxA.provide("itx.site", `itx.workers.get({ source: ${JSON.stringify(SOURCES.site)} })`);
   const page = await fetch(expressionUrl(ctx, "itx.site", "http"));
   const html = await page.text();
   // the loaded worker serves HTML via /expression

@@ -78,7 +78,7 @@ const itx = api.authenticate().projects.get("prj_123"); // the project ROOT cont
 const agent = itx.cd("/agents/support"); // absolute by convention; relative and ".." also resolve
 
 const greetSource = { "cap.js": GREET_SRC };
-using greet = await itx.provide("itx.greet", ["itx", ["load", greetSource], ["getEntrypoint"]]); // a rewrite rule
+using greet = await itx.provide("itx.greet", ["itx", "workers", ["get", { source: greetSource }]]); // a rewrite rule
 using robot = await itx.provide("itx.robot", robotObject); // SUGAR: lends to rpcStubs under the opaque key + rule itx.robot ⇒ itx.rpcStubs.get('robot')
 await itx.rpcStubs.list(); // presence, physical
 await itx.rewriteRules.list(); // the rules, printed
@@ -136,11 +136,12 @@ interface BuiltInScope {
   };
   /** A facet that is already running, by name. Re-materializes from the parent's startup memo after eviction. */
   facets: { get(name: string): FacetHandle; delete(name: string): void };
-  load(source: WorkerSource): {
-    /** `props` is Cloudflare's WorkerStubEntrypointOptions.props — a url, a key name, whatever the code wants. */
-    getEntrypoint(className?: string, opts?: { props?: unknown }): InvokeHandle; // run · fetch · processEventBatch · anything it exports
-  };
-  runScript(script: string, ...args: unknown[]): Promise<unknown>; // sugar over load(...).getEntrypoint().run — kept for the bare-lambda case
+  /** The stateless host (as built 2026-09-02: one door, no `load`/`getEntrypoint` two-step). `props` is
+   *  Cloudflare's WorkerStubEntrypointOptions.props — a url, a key name, whatever the code wants. */
+  workers: {
+    get(spec: { source: WorkerSource; className?: string; props?: unknown }): InvokeHandle;
+  }; // run · fetch · processEventBatch · anything it exports
+  runScript(script: string, ...args: unknown[]): Promise<unknown>; // sugar over workers.get({ source }).run — kept for the bare-lambda case
 }
 ```
 
@@ -169,8 +170,8 @@ export default class extends WorkerEntrypoint {
 const remoteSource = { "cap.js": REMOTE_SRC };
 using os = await itx.provide("itx.os", [
   "itx",
-  ["load", remoteSource],
-  ["getEntrypoint", undefined, { props: { url: "https://os.iterate.com/api" } }],
+  "workers",
+  ["get", { source: remoteSource, props: { url: "https://os.iterate.com/api" } }],
 ]);
 ```
 
@@ -459,7 +460,11 @@ export default class extends WorkerEntrypoint {
 
 ```ts
 const workerSource = { "cap.js": WORKER_SRC };
-using worker = await itx.provide("itx.worker", ["itx", ["load", workerSource], ["getEntrypoint"]]);
+using worker = await itx.provide("itx.worker", [
+  "itx",
+  "workers",
+  ["get", { source: workerSource }],
+]);
 using sub = await itx.subscribe({ name: "project-worker", target: "itx.worker.processEventBatch" });
 (await itx.subscriptions.get("project-worker")).cursor; // { confirmedOffset, attempt, nextAttemptAtMs? }
 await itx.append({

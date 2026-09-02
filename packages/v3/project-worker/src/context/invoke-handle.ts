@@ -1,5 +1,5 @@
 // context/invoke-handle.ts — a GENUINE, pipelinable RpcTarget for a MID-CHAIN capability handle
-// (a live row's transport bridge, `facets.get(name)`, `cd(path)`, `load(src).getEntrypoint()` /
+// (a live row's transport bridge, `facets.get(name)`, `cd(path)`, `workers.get(spec)` /
 // `facets.get(name, { source, className })`).
 //
 // A mid-chain handle must be a GENUINE RpcTarget: a mid-chain call returns it ACROSS an RPC

@@ -6,7 +6,7 @@
 import type { WorkerSource } from "../../src/context/worker-loader.ts";
 
 /** THE fixture sources, keyed by fixture NAME — each value is the worker's modules, handed over
- *  literally at every load site (`itx.load(SOURCES.probe)`, `facets.get(name, { source: … })`). */
+ *  literally at every load site (`itx.workers.get({ source: SOURCES.probe })`, `facets.get(name, { source: … })`). */
 export const SOURCES: Record<string, WorkerSource> = {
   counter: {
     "cap.js": `import { DurableObject } from "cloudflare:workers";

@@ -95,7 +95,7 @@ export default class Consumer extends WorkerEntrypoint {
 };
 
 const runProvider = (itx: ReturnType<typeof openItx>, mode: string): Promise<unknown> =>
-  itx.invoke(`itx.load(${JSON.stringify(SRC_PROVIDER)}).getEntrypoint().run('${mode}')`);
+  itx.invoke(`itx.workers.get({ source: ${JSON.stringify(SRC_PROVIDER)} }).run('${mode}')`);
 
 test("within the provider's invocation: a dyn-provided lent stub serves PLAIN fetch", async () => {
   const itx = openItx(freshCtx("dynliveself"));
@@ -139,13 +139,13 @@ test.fails("within the provider's invocation: WEBSOCKET fetch of the dyn-provide
 // EXPECTED (the scenario this pins): provide in one invocation, fetch from another worker later.
 // Whether the fix is a detached-provider primitive (session-shaped lending for dyn workers) or a
 // doctrine ruling ("lent stubs are invocation-scoped; detached fetch-shaped things must be LOADED
-// code — itx.load(...).getEntrypoint() / a named durable facet, both of which already serve WS")
+// code — itx.workers.get({ source: ... }) / a named durable facet, both of which already serve WS")
 // is an owner call — see the session notes.
 test.fails("ACROSS invocations: worker B fetches the stub A provided (the detached-provider question)", async () => {
   const itx = openItx(freshCtx("dynlivex"));
   expect(await runProvider(itx, "provide")).toBe("provided");
   const out = (await itx.invoke(
-    `itx.load(${JSON.stringify(SRC_CONSUMER)}).getEntrypoint().run('plain')`,
+    `itx.workers.get({ source: ${JSON.stringify(SRC_CONSUMER)} }).run('plain')`,
   )) as { status: number; body: string };
   expect(out.status).toBe(200);
   expect(out.body).toBe("dyn live site");

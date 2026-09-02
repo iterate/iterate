@@ -517,17 +517,15 @@ interface BuiltInScope {
     get(name: string): SubscriptionListEntry | null;
   };
 
-  /** Load code → a WORKER, then pick the host (mirror of Cloudflare's Worker Loader). */
-  load(source: WorkerSource): {
-    /** A stateless WorkerEntrypoint isolate: ANY method it exports, by name. `props` is
-     *  Cloudflare's WorkerStubEntrypointOptions.props, read back as this.ctx.props. */
-    getEntrypoint(className?: string, opts?: { props?: unknown }): InvokeHandle;
-    /** A DurableObject class hosted as a durable FACET of this context (own storage).
-     *  `.get()` with no name is named by the class. */
+  /** The stateless host: a WorkerEntrypoint in its own confined isolate — ANY method it exports,
+   *  by name. No name: a stateless worker is its spec. `props` is Cloudflare's
+   *  WorkerStubEntrypointOptions.props, read back as this.ctx.props. */
+  workers: {
+    get(spec: { source: WorkerSource; className?: string; props?: unknown }): InvokeHandle;
   };
 
   /** Sugar for a bare lambda string: wraps it into a WorkerEntrypoint and runs
-   *  load(...).getEntrypoint().run(...). The lambda receives (itx, ...args). */
+   *  workers.get({ source }).run(...). The lambda receives (itx, ...args). */
   runScript(script: string, ...args: unknown[]): Promise<unknown>;
 }
 
@@ -545,7 +543,7 @@ type SubscriptionListEntry = {
   halted?: { afterOffset: number; attempts: number; error?: string };
 };
 
-// cd and getEntrypoint return a plain InvokeHandle (context/invoke-handle.ts): a real RpcTarget
+// cd and workers.get return a plain InvokeHandle (context/invoke-handle.ts): a real RpcTarget
 // whose unknown dotted members reduce into one dispatch, so the chain pipelines over every lane.
 // FacetHandle and RpcStubHandle are InvokeHandle SUBCLASSES — brands the delivery loop reads
 // (section 6). Spell whatever the target exposes.
@@ -659,10 +657,10 @@ const greetSource = { "cap.js": GREET_SRC };
 ```
 
 ```ts
-await itx.load(greetSource).getEntrypoint().run("jonas");
-// a rewrite rule: itx.greet ⇒ itx.load(<source>).getEntrypoint() — the structured half carries the
+await itx.workers.get({ source: greetSource }).run("jonas");
+// a rewrite rule: itx.greet ⇒ itx.workers.get({ source }) — the structured half carries the
 // inline source as a plain object (the string half spells the same with JSON5 args)
-using greet = await itx.provide("itx.greet", ["itx", ["load", greetSource], ["getEntrypoint"]]);
+using greet = await itx.provide("itx.greet", ["itx", "workers", ["get", { source: greetSource }]]);
 await itx.greet.run("jonas"); // now reachable by name, through the rules
 const res = await itx.greet.fetch(new Request("https://x/")); // its fetch: the terminal-fetch rule
 
@@ -674,7 +672,11 @@ A stateless entrypoint cannot own progress, so subscribing one is the
 at-least-once case (section 6):
 
 ```ts
-using digest = await itx.provide("itx.digest", ["itx", ["load", digestSource], ["getEntrypoint"]]);
+using digest = await itx.provide("itx.digest", [
+  "itx",
+  "workers",
+  ["get", { source: digestSource }],
+]);
 using sub = await itx.subscribe({
   name: "digest",
   target: "itx.digest.processEventBatch",
@@ -1326,9 +1328,9 @@ sequenceDiagram
 ```
 
 A rule's target is itself an `itx.…` expression, so rewriting repeats and rules
-compose (`itx.greet ⇒ itx.load(...).getEntrypoint()`, `itx.hello ⇒ itx.greet.run`:
+compose (`itx.greet ⇒ itx.workers.get({ source })`, `itx.hello ⇒ itx.greet.run`:
 `itx.hello("jonas")` becomes `itx.greet.run("jonas")` becomes
-`itx.load(...).getEntrypoint().run("jonas")`). A match step may pin literal args,
+`itx.workers.get({ source }).run("jonas")`). A match step may pin literal args,
 which the match CONSUMES: with `itx.ai.run('gpt-5') ⇒ itx.openai.chat`, the call
 `itx.ai.run('gpt-5', inputs)` runs as `itx.openai.chat(inputs)`. A terminal
 `.fetch(request)` takes the DO's fetch channel instead of `invoke`, with the

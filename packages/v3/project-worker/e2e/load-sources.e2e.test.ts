@@ -1,7 +1,7 @@
-// load-sources.e2e.test.ts — itx.load(source), the Worker-Loader mirror. Load code → a WORKER, then
-// pick the host EXPLICITLY via the two accessors Cloudflare exposes: `.getEntrypoint()` (stateless
-// WorkerEntrypoint) and `itx.facets.get(name, { source, className })` (a DurableObject hosted as the
-// durable facet `name`). Plus `itx.facets.get(name)` — the same door, addressing a RUNNING facet. The
+// load-sources.e2e.test.ts — loading code: ONE door per host kind. `itx.workers.get({ source })` (a
+// stateless WorkerEntrypoint — its spec is its address) and `itx.facets.get(name, { source, className })`
+// (a DurableObject hosted as the durable facet `name`). Plus `itx.facets.get(name)` — the same door,
+// addressing a RUNNING facet. The
 // SOURCE is the worker's MODULES (module name → code, `"cap.js"` is the main module), handed over
 // INLINE at the load site; `itx.runScript(lambda)` is the source-less sugar.
 
@@ -12,7 +12,7 @@ import { freshCtx, openItx } from "./support/client.ts";
 const entrypoint = (body: string) =>
   `import { WorkerEntrypoint } from "cloudflare:workers";\nexport default class extends WorkerEntrypoint { ${body} }`;
 
-test("itx.load(src).getEntrypoint() (stateless) + itx.facets.get(name, spec) (durable facet) + itx.facets.get(name)", async () => {
+test("itx.workers.get({ source: src }) (stateless) + itx.facets.get(name, spec) (durable facet) + itx.facets.get(name)", async () => {
   const itx = openItx(freshCtx("load"));
 
   // The two sources, handed over INLINE — each EXPORTS its host object (the contract): a
@@ -28,8 +28,10 @@ export class CounterDurableObject extends DurableObject {
 }`,
   });
 
-  // 1. STATELESS: load → getEntrypoint() → a WorkerEntrypoint isolate, run it.
-  expect(await itx.invoke(`itx.load(${SRC_GREET}).getEntrypoint().run('jonas')`)).toBe("hi jonas");
+  // 1. STATELESS: workers.get({ source }) → a WorkerEntrypoint isolate, run it.
+  expect(await itx.invoke(`itx.workers.get({ source: ${SRC_GREET} }).run('jonas')`)).toBe(
+    "hi jonas",
+  );
 
   // 2. DURABLE NAMED: facets.get('c1', { source, className: 'CounterDurableObject' }) → a facet named 'c1' whose
   //    state persists across calls.
@@ -61,8 +63,8 @@ test("the load door takes the modules INLINE, and runScript(lambda) sugar", asyn
   // 1. THE source: the modules, handed over literally at the load site — nothing to fetch first.
   const inline = await itx.invoke([
     "itx",
-    ["load", { "cap.js": entrypoint("async run(x) { return x * 2; }") }],
-    ["getEntrypoint"],
+    "workers",
+    ["get", { source: { "cap.js": entrypoint("async run(x) { return x * 2; }") } }],
     ["run", 21],
   ]);
   expect(inline).toBe(42);
@@ -70,15 +72,17 @@ test("the load door takes the modules INLINE, and runScript(lambda) sugar", asyn
   // 2. inline code can call back into itx (env.ITX is bound in the confined isolate).
   const withItx = await itx.invoke([
     "itx",
+    "workers",
     [
-      "load",
+      "get",
       {
-        "cap.js": entrypoint(
-          "async run() { const itx = await this.env.ITX.get(); return (await itx.whoami()).projectId; }",
-        ),
+        source: {
+          "cap.js": entrypoint(
+            "async run() { const itx = await this.env.ITX.get(); return (await itx.whoami()).projectId; }",
+          ),
+        },
       },
     ],
-    ["getEntrypoint"],
     ["run"],
   ]);
   expect(withItx).toBe(ctx);

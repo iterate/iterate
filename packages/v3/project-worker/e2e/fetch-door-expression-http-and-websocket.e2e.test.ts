@@ -22,9 +22,9 @@ import { SOURCES } from "./support/sources.ts";
 test("/expression serves a LOADED WORKER behind a rewrite rule: GET → 200 HTML, WebSocket upgrade → 101 echo, clean close", async () => {
   const ctx = freshCtx("capcode");
   // A rule whose target is a stateless dynamic worker (its .fetch serves /expression) — the target
-  // is an itx EXPRESSION (load(src).getEntrypoint()), same as every other rule.
+  // is an itx EXPRESSION (workers.get({ source })), same as every other rule.
   const itx = openItx(ctx);
-  await itx.provide("itx.site", `itx.load(${JSON.stringify(SOURCES.site)}).getEntrypoint()`);
+  await itx.provide("itx.site", `itx.workers.get({ source: ${JSON.stringify(SOURCES.site)} })`);
 
   const page = await fetch(expressionUrl(ctx, "itx.site", "http"));
   expect(page.status).toBe(200);

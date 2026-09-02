@@ -33,6 +33,8 @@ flowchart LR
   verbs (`provide`, `subscribe`, `enableProcessor`, `disableProcessor`) build an event and append it.
 - **The DO is the parent** of: the stream, the core reduce (inline at commit), the one delivery
   loop, the facets (loaded DurableObject classes), the rpc-stub directory, the fetch door.
+- **Two hosts for loaded code, one door each:** `itx.workers.get(spec)` (stateless) and
+  `itx.facets.get(name, spec)` (durable).
 - **Bindings, named for what they hold.** `env.ITERATE_CONTEXT` is the project worker's
   `DurableObjectNamespace<IterateContextDurableObject>` (singular, the Cloudflare and apps/os
   convention: `PROJECT`, `STREAM`, `MY_DURABLE_OBJECT`). `env.ITX` is what a LOADED worker gets: a
@@ -164,8 +166,8 @@ must be rooted at `itx`, so a bare root is unspellable and the built-ins are uns
 | `rewriteRules`               | `.list() → { match, target }[]` · `.get(match)`                                                                         | a read of core state                                          |
 | `facets`                     | `.get(name) → FacetHandle` (a RUNNING facet) · `.get(name, { source, className })` (load and host it) · `.delete(name)` | `ctx.facets`; mirrors `ctx.facets.get(name, startupCallback)` |
 | `subscriptions`              | `.list() → SubscriptionListEntry[]` · `.get(name)`                                                                      | core state ⋈ the loop's cursors                               |
-| `load(source)`               | `.getEntrypoint(name?, { props? }).<method>(…)`                                                                         | Worker Loader; mirrors Cloudflare's `worker.getEntrypoint()`  |
-| `runScript(script, ...args)` | sugar: wrap the lambda string → `load(...).getEntrypoint().run(...)`                                                    | same                                                          |
+| `workers`                    | `.get({ source, className?, props? }) → InvokeHandle`, a stateless WorkerEntrypoint; any exported method                | Worker Loader; the stateless twin of `facets.get`             |
+| `runScript(script, ...args)` | sugar: wrap the lambda string → `workers.get({ source }).run(...)`                                                      | same                                                          |
 
 `WorkerSource` is the worker's modules, literally: `Record<string, string>`, module name → code,
 `"cap.js"` the main module. It is stored where it is named (a facet's startup memo, a
@@ -362,11 +364,12 @@ capnweb serialize sockets over plain RPC.
 ## 11. Code structure
 
 Two ways to count, both honest. **Code lines** (non-blank, non-comment) in non-test `src/`:
-4,481 on the morning of 2026-09-01 → 3,879 at `fe8168c13` → 3,851 after this review's four
-commits (the entrypoint verbs, the `rewrite` verb, the `getDurableObjectClass` chain and the
-producer-source branch went; the facet-delete effect and the typed interface came). **Raw lines**
-including comments and blanks: 6,208 in 36 files. About 38 percent of the source is comment. The
-first review figure of 6,234 was the raw count; it was never a thousand added lines of code.
+4,481 on the morning of 2026-09-01 → 3,879 at `fe8168c13` → 3,846 after this review's five
+commits (the entrypoint verbs, the `rewrite` verb, the `getDurableObjectClass` chain, the
+producer-source branch and the `load`/`getEntrypoint` two-step went; the facet-delete effect and the
+typed interface came). **Raw lines** including comments and blanks: 6,206 in 36 files. About 38
+percent of the source is comment. The first review figure of 6,234 was the raw count; it was never
+a thousand added lines of code.
 
 Tests: unit + workers 250; e2e 36 files after the source-refetch proof left with its premise.
 
@@ -409,8 +412,11 @@ Error codes (`src/lib/errors.ts`): `NO_ITX_EXPRESSION_MATCH`, `RPC_STUB_OFFLINE`
   `RewriteRuleHandle` for both cases; read root `itx.rewriteRules`; a rule's match must be rooted
   at `itx` (refused at the door). The bare-key question dissolved with the key.
 - **C, done:** ONE facet door `itx.facets.get(name, { source, className })` hosts; `itx.facets.get(name)`
-  addresses; `load(src)` keeps `getEntrypoint` only. `enableProcessor`'s target is
+  addresses. `enableProcessor`'s target is
   `itx.facets.get(name, spec).processEventBatch`; the hosting check in the DO is "a `facets.get` with a spec".
+- **E, done (your follow-up):** `itx.workers.get({ source, className?, props? })` is the stateless twin of
+  `facets.get`; `load` and the `getEntrypoint` step are deleted. One door per host kind, named for the
+  host; a stateless worker has no name because it has no identity beyond its spec.
 - **B, done:** sources are INLINE ONLY — `WorkerSource = Record<string, string>` (module name → code,
   `"cap.js"` the main module). The producer-expression branch (`"itx.kv.get('src/x.js')"`), the old
   inline wrapper object, the loader's `invoke` and `resolved` options and the DO's resolved-source

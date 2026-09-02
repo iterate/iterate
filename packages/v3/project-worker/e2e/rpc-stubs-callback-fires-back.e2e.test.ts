@@ -60,7 +60,7 @@ export default class Consumer extends WorkerEntrypoint {
   }
 }`,
   };
-  const ran = await itx.load(SRC_CONSUMER).getEntrypoint().run();
+  const ran = await itx.workers.get({ source: SRC_CONSUMER }).run();
   // dynamic worker cap ran to completion (its callback resolved it)
   expect(ran?.ran).toBe(true);
   const got = await until("worker callback appended to the stream", async () => {

@@ -2428,3 +2428,26 @@ options?)` with `options.rewrite`; chapter 1 reads `itx.provide("laptop", fn)`, 
 - Docs: as-built §2/§5/§11/§12 (B → decided; §11 recounted: code lines 3,851, raw 6,208), walkthrough,
   onion design, synthesis §9 addendum (C and B together).
 - GATES: tsc×3 · oxlint 0/0 · knip clean · unit+workers 250 · e2e 140p/2xf (36 files).
+
+## 2026-09-02 — `itx.workers.get(spec)`: the stateless twin of `facets.get`; `load` + `getEntrypoint` deleted
+
+- Jonas: "would it make sense to have workers.get alongside facets.get as the stateless version and
+  delete the load() verb and the whole getEntrypoint dance" → yes, and `load` goes with it. ONE door
+  per host kind, each a `get` on a noun: `itx.workers.get({ source, className?, props? }).method(…)`
+  (stateless — no name, because a stateless worker has no identity beyond its spec; naming one is a
+  rewrite rule's job) and `itx.facets.get(name, { source, className })` (durable). `runScript` is
+  sugar over `workers.get({ source }).run`.
+- Deleted: the `load` root, the `getEntrypoint` pass-through step (a handle whose only legal next
+  step was another handle), its "call .getEntrypoint(name?)" error branch. `callEntrypoint` is
+  unchanged underneath.
+- DIVERGENCE FROM CLOUDFLARE'S NAMING, on purpose (Kenton doctrine: justified here): the literal
+  `worker.getEntrypoint()` / `worker.getDurableObjectClass()` two-step is folded into one door per
+  host. What is mirrored instead is `ctx.facets.get(name, startup)` for the durable host and the
+  Worker Loader's `get(id, …)` for the stateless one, with the spec as the id. Both still bottom out in
+  `env.LOADER.get(cacheKey, …)` + `worker.getEntrypoint()` / `getDurableObjectClass()`.
+- Sweep: 14 test files (`itx.load(X).getEntrypoint()` → `itx.workers.get({ source: X })`;
+  `getEntrypoint('C', { props })` → `{ source, className: 'C', props }`; the array half `["load", M],
+["getEntrypoint"]` → `"workers", ["get", { source: M }]`); docs (as-built §1/§5/§11/§12, LAYERS,
+  walkthrough, onion design, loader/sdk comments). src 4 files +44/−46; tests 14 files +37/−35;
+  code lines 3,851 → 3,846.
+- GATES: tsc×3 · oxlint 0/0 · knip clean · unit+workers 250 · e2e 140p/2xf (36 files).

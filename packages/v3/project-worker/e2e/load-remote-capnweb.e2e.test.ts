@@ -1,6 +1,6 @@
 // load-remote-capnweb.e2e.test.ts — dialing a REMOTE capnweb API is USERSPACE: a loaded WorkerEntrypoint imports
 // capnweb's client from the SDK (`./processor.js`), reads the remote's url from Cloudflare's own
-// `ctx.props` (minted at `getEntrypoint(name, { props })`), and dials it over ONE one-shot HTTP
+// `ctx.props` (minted at `workers.get({ source, className, props })`), and dials it over ONE one-shot HTTP
 // batch through the context's egress. No built-in, no persistent socket, so the remote never pins
 // the context DO. Behind a rewrite rule at a name, it is exactly how an `itx.os` would be sugar. The remote is
 // the dummy capnweb API the globalSetup hosts in-process.
@@ -30,7 +30,7 @@ export class Remote extends WorkerEntrypoint {
 const rewriteRemoteApi = async (itx: any): Promise<void> => {
   await itx.provide(
     "itx.remoteApi",
-    `itx.load(${JSON.stringify(SRC_REMOTE)}).getEntrypoint('Remote', { props: { url: ${JSON.stringify(process.env.DUMMY_CAPNWEB_URL)} } })`,
+    `itx.workers.get({ source: ${JSON.stringify(SRC_REMOTE)}, className: 'Remote', props: { url: ${JSON.stringify(process.env.DUMMY_CAPNWEB_URL)} } })`,
   );
 };
 

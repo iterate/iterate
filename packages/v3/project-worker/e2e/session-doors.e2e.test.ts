@@ -32,14 +32,14 @@ export default class Mine extends WorkerEntrypoint {
   }
 }`,
   };
-  const out = await itx.invoke(`itx.load(${JSON.stringify(SRC_MINE)}).getEntrypoint().run()`);
+  const out = await itx.invoke(`itx.workers.get({ source: ${JSON.stringify(SRC_MINE)} }).run()`);
   // an inline source runs as a worker (itx round-trip inside)
   expect(out).toBe(`from-inline:${ctx}`);
 
   // 3. a fetch-shaped target through the SESSION (no /expression door): the terminal
   //    `.fetch(request)` rides the DO's fetch channel with the expression in x-itx-expression — one
   //    routing fork, no verb; `itx.site` is an ordinary rewrite rule onto the loaded entrypoint
-  await itx.provide("itx.site", `itx.load(${JSON.stringify(SOURCES.site)}).getEntrypoint()`);
+  await itx.provide("itx.site", `itx.workers.get({ source: ${JSON.stringify(SOURCES.site)} })`);
   const resp = await itx.site.fetch(new Request("https://itx.site/"));
   const html = await resp.text();
   // the Response rides back over capnweb

@@ -75,7 +75,7 @@ test("rich values through the longest path: Date, bytes, callbacks, RpcTarget ar
   // 4. the STATELESS RUN LANE (was the one JSON boundary — now a real RPC method): a Date and a
   //    client callback ride into a confined loaded isolate; note the ref needs NO `type`.
   await itxB.invoke(`itx.append({ type: 'noop' })`); // ensure the stream exists
-  await itxB.provide("itx.probe", `itx.load(${JSON.stringify(SOURCES.probe)}).getEntrypoint()`);
+  await itxB.provide("itx.probe", `itx.workers.get({ source: ${JSON.stringify(SOURCES.probe)} })`);
   const rich = await itxB.invoke([
     "itx",
     "probe",

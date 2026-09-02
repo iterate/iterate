@@ -26,7 +26,7 @@ export {
 } from "../stream/events.ts";
 export { z } from "zod";
 // capnweb's CLIENT constructors, so userspace can dial a remote capnweb API from inside its isolate
-// through the context's own egress — `itx.provide("itx.os", "itx.load(src).getEntrypoint('Remote',
+// through the context's own egress — `itx.provide("itx.os", "itx.workers.get({ source, className: 'Remote',
 // { props: { url } })")`. The server half is not here: inside workerd a class extends `RpcTarget`
 // from "cloudflare:workers". The HTTP batch is exported ON PURPOSE beside the WebSocket session: a
 // stateless entrypoint answering one method with one remote call has no session to hold across
