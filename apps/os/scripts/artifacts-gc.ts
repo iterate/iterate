@@ -55,8 +55,11 @@ export default async function artifactsGc(options: {
   if (ctx.name === "prd" && !options.yesIMeanPrd) {
     throw new Error("Refusing to GC PRODUCTION Artifacts repos without --yes-i-mean-prd.");
   }
-  const olderThanHours = options.olderThanHours || 24;
-  const maxDeletes = options.maxDeletes || 5000;
+  // ?? not ||: an explicit 0 is meaningful for both — a zero-hour cutoff
+  // deletes regardless of age (the live-project skip still applies), and a
+  // zero budget must not silently become the default.
+  const olderThanHours = options.olderThanHours ?? 24;
+  const maxDeletes = options.maxDeletes ?? 5000;
   const cutoffIso = new Date(Date.now() - olderThanHours * 3_600_000).toISOString();
   const namespace = `${env.osWorkerName}-repos`;
 
