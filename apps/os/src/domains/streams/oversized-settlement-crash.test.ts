@@ -94,7 +94,7 @@ describe("stream DO isolate under an oversized script settlement", () => {
   const failOOM = failing(it, /Incident kind: oom/);
   failOOM("survives the readers re-materializing an oversized settlement", () => {
     const incident = runReplay(INCIDENT_CHARS);
-    const message = `Incident kind: ${incident.kind}. Budget: ${ISOLATE_BUDGET_MB}MB. Output:\n${incident.output.slice(-500)}`;
+    const message = `Incident kind: ${incident.kind}.\n\nBudget: ${ISOLATE_BUDGET_MB}MB.\n\nOutput:\n${incident.output.slice(-500)}`;
     expect(incident.output, message).toContain("SURVIVED");
   });
 });
