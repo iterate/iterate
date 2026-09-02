@@ -126,9 +126,11 @@ export async function serveDevSdkTarball(): Promise<void> {
   const dir = process.env.ITERATE_DEV_SDK_TARBALL_DIR;
   const overrides = process.env.APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES;
   if (!dir || !overrides) return;
-  // The loopback URLs among the override specs are the tarballs dev.ts
-  // packed (one port for all); an explicit developer-provided overrides map
-  // may not carry any.
+  // The env var is dev.ts's own JSON.stringify of packLocalPackages's
+  // overrides — package name → spec string — and a hand-set value follows
+  // the same APP_CONFIG contract (the app parses it as that map). The
+  // loopback URLs among the specs are the tarballs dev.ts packed (one port
+  // for all); an explicit developer-provided map may not carry any.
   const specs = Object.values(JSON.parse(overrides) as Record<string, string>).filter(
     (candidate) => URL.canParse(candidate) && new URL(candidate).hostname === "127.0.0.1",
   );

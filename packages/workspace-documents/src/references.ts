@@ -162,7 +162,7 @@ export function referencesExtension(host: ReferenceHost): Extension {
   const openOnClick = EditorView.domEventHandlers({
     mousedown(event) {
       if (event.button !== 0) return false;
-      const pill = (event.target as HTMLElement | null)?.closest?.(".cm-reference");
+      const pill = event.target instanceof Element ? event.target.closest(".cm-reference") : null;
       if (!(pill instanceof HTMLElement)) return false;
       const kind = pill.dataset.referenceKind;
       const target = pill.dataset.referenceTarget;

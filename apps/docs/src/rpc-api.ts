@@ -111,6 +111,10 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
 
   /** The project's agents, newest first — the `@` completion source. */
   async agents(): Promise<{ path: string; title: string | null }[]> {
+    // The dial hands the RPC result back untyped. `agents.list` is the itx
+    // surface's own method: it resolves to the project's agent records, each
+    // with a `path` and an optional `title` (itx-api.generated.ts), and only
+    // those two fields are read here.
     const agents = (await this.#dial.withProject((project) => project.agents.list())) as {
       path: string;
       title?: string;
@@ -177,7 +181,9 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
     const normalized = normalizeRepoPath(repoPath);
     if (normalized === null) throw new Error("bad repo path");
     // Owner acts on purpose: the app minted this workspace for its notes
-    // view. Through the board's workspaceAt door the same path is a guest.
+    // view. Looked up by path through the board's workspaceAt instead, the
+    // same workspace is a guest (isGuestWorkspacePath), so the board can
+    // never commit or discard the notes overlay.
     return new TasksWorkspaceApi(this.#dial, notesWorkspacePath(normalized), normalized, {
       lazyCreate: true,
       ownerActs: true,

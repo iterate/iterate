@@ -102,7 +102,7 @@ export class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
    * addressed at an arbitrary workspace path never creates (plain get). */
   readonly #lazyCreate: boolean;
   /** The app minted this capability for a workspace it owns outright (the
-   * notes workspace, through the notes door): owner acts are allowed
+   * notes workspace, from DocsProjectApi.notes()): owner acts are allowed
    * regardless of the path-shape rule the board applies. */
   readonly #ownerActs: boolean;
   #created = false;

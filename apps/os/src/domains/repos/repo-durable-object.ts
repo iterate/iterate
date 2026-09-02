@@ -702,9 +702,10 @@ export class RepoDurableObject extends DurableObject<Env> {
     let parsed = parseCommitFilesInput(input);
     if (parsed.amendIfHead !== undefined && this.getGithubLink() !== null) {
       // A linked GitHub repository has readers of its own: rewriting main
-      // there would need a force push, and no force push can be a true
-      // compare-and-swap through the mirror lane. History stays append-only
-      // on linked repos — an ordinary commit stacks and the result says so.
+      // there would need a force push, and the mirror push (isomorphic-git,
+      // no expected old oid) cannot make a force push a compare-and-swap.
+      // History stays append-only on linked repos — an ordinary commit
+      // stacks and the result says so.
       parsed = { ...parsed, amendIfHead: undefined };
     }
     const repo = await this.gitAccess();
