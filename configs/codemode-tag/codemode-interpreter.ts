@@ -36,7 +36,7 @@ import {
   isIdempotencyConflict,
 } from "iterate/processors";
 import type { ProcessorState, ProcessEventArgs, ReduceArgs } from "iterate/processors";
-import { StreamProcessorDurableObject, type ProcessorHostDeps } from "iterate/sdk";
+import { StreamProcessorFacet, type ProcessorHostDeps } from "iterate/sdk";
 import { parseCodemodePartial, parseCodemodeResponse } from "./codemode-format.ts";
 
 /** Assistant output events stamped by the platform's LLM component carry the
@@ -511,12 +511,17 @@ export class CodemodeInterpreterProcessor extends StreamProcessor<CodemodeInterp
 }
 
 /**
- * The facet Durable Object hosting one interpreter per agent stream. No
- * fixed streamPath: the host learns its stream from the first wake request
- * (one facet per agent stream, keyed by the worker ref installed in that
- * stream's subscription).
+ * The facet hosting one interpreter per agent stream, placed INSIDE that
+ * stream's own Durable Object (facet-processor receiver). StreamProcessorFacet
+ * carries the placement protocol: identity arrives through the parent's
+ * first-contact configure() call, and alarms proxy through the parent (facets
+ * have no native alarms).
  */
-export class CodemodeInterpreterFacet extends StreamProcessorDurableObject<CodemodeInterpreterState> {
+export class CodemodeInterpreterFacet extends StreamProcessorFacet {
+  /** The interpreter's appends ride blockProcessorWhile — registered work the
+   * keepalive must revive after an eviction. */
+  protected override readonly recovery = true;
+
   protected createProcessor(deps: ProcessorHostDeps) {
     return new CodemodeInterpreterProcessor(deps, {
       writeWorkspaceFile: async (workspacePath, filePath, content) => {
