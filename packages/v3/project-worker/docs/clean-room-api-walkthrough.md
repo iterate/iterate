@@ -683,7 +683,7 @@ abstract class StreamProcessorDurableObject<
 
   // ── the doors the delivery loop and itx.facets.get(name) reach ──
   processEventBatch(events: StreamEvent[], range: ScannedRange): Promise<void>;
-  wake(): Promise<void>;
+  appendCreatedAndWokenEvents(): Promise<void>;
   snapshot(): Promise<{ offset: number; state: State }>;
   liveSnapshot(): Promise<{ rev: number; state: unknown }>;
   /** The barrier: processed at least through `offset` (default timeout 10s). An offset above the
@@ -955,7 +955,7 @@ the held rev triggers one single-flight re-read of the door.
   resumes from the last durable mark, and `stream/woken` (durable, appended by
   each incarnation's constructor) marks the boundary. Every persisted checkpoint
   in the package advances only on a batch that carried a durable.
-- The wake record: the DO's constructor calls `Stream.wake()` synchronously,
+- The wake record: the DO's constructor calls `Stream.appendCreatedAndWokenEvents()` synchronously,
   before any door opens. The first incarnation appends
   `stream/created { projectId, path }` at offset 1 and `stream/woken { incarnation }`
   at offset 2; every later incarnation appends its `woken` first. So the first
@@ -976,19 +976,19 @@ await itx.append({ type: "events.iterate.com/stream/resumed" });
 
 - The layers' own events, all plain appends you may read or write yourself:
 
-| Event                                                           | Payload                                   | Written by                                            |
-| --------------------------------------------------------------- | ----------------------------------------- | ----------------------------------------------------- |
-| `events.iterate.com/capability-table/capability-provided`       | `{ path, target }` (both strings)         | `provide`                                             |
-| `events.iterate.com/capability-table/capability-revoked`        | `{ providedAtOffset }`                    | `revoke`                                              |
-| `events.iterate.com/stream/subscription-configured`             | `{ name, target, consumes? }`             | `subscribe` / `enableProcessor`                       |
-| `events.iterate.com/stream/subscription-removed`                | `{ name }`                                | `unsubscribe` / `disableProcessor`                    |
-| `events.iterate.com/stream/subscription-delivery-halted`        | `{ name, afterOffset, attempts, error? }` | the delivery loop, after the ladder                   |
-| `events.iterate.com/stream/subscription-delivery-resumed`       | `{ name, afterOffset? }`                  | you, to un-halt and optionally seek                   |
-| `events.iterate.com/rpc-stub/attached` / `detached` (ephemeral) | `{ key }`                                 | the transport table, first/last transport of a key    |
-| `events.iterate.com/live-state/changed` (ephemeral)             | `{ key, from, to, patch }`                | `LiveState.set`                                       |
-| `events.iterate.com/stream/created`                             | `{ projectId, path }`                     | the DO constructor (`Stream.wake`), offset 1, once    |
-| `events.iterate.com/stream/woken`                               | `{ incarnation }`                         | the DO constructor (`Stream.wake`), every incarnation |
-| `events.iterate.com/stream/paused` / `resumed`                  | `{ reason }` / `{}`                       | you, or a policy facet such as `BreakerProcessor`     |
+| Event                                                           | Payload                                   | Written by                                                                   |
+| --------------------------------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------- |
+| `events.iterate.com/capability-table/capability-provided`       | `{ path, target }` (both strings)         | `provide`                                                                    |
+| `events.iterate.com/capability-table/capability-revoked`        | `{ providedAtOffset }`                    | `revoke`                                                                     |
+| `events.iterate.com/stream/subscription-configured`             | `{ name, target, consumes? }`             | `subscribe` / `enableProcessor`                                              |
+| `events.iterate.com/stream/subscription-removed`                | `{ name }`                                | `unsubscribe` / `disableProcessor`                                           |
+| `events.iterate.com/stream/subscription-delivery-halted`        | `{ name, afterOffset, attempts, error? }` | the delivery loop, after the ladder                                          |
+| `events.iterate.com/stream/subscription-delivery-resumed`       | `{ name, afterOffset? }`                  | you, to un-halt and optionally seek                                          |
+| `events.iterate.com/rpc-stub/attached` / `detached` (ephemeral) | `{ key }`                                 | the transport table, first/last transport of a key                           |
+| `events.iterate.com/live-state/changed` (ephemeral)             | `{ key, from, to, patch }`                | `LiveState.set`                                                              |
+| `events.iterate.com/stream/created`                             | `{ projectId, path }`                     | the DO constructor (`Stream.appendCreatedAndWokenEvents`), offset 1, once    |
+| `events.iterate.com/stream/woken`                               | `{ incarnation }`                         | the DO constructor (`Stream.appendCreatedAndWokenEvents`), every incarnation |
+| `events.iterate.com/stream/paused` / `resumed`                  | `{ reason }` / `{}`                       | you, or a policy facet such as `BreakerProcessor`                            |
 
 Refusals surface as coded errors: `STREAM_PAUSED`, `IDEMPOTENCY_CONFLICT`,
 `EPHEMERAL_IDEMPOTENCY_KEY`, `NO_CAPABILITY_MATCH`, `NO_FACET`,

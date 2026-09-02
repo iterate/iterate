@@ -19,7 +19,7 @@
 // an ordinary facet and trips the stream by appending `paused` with its reason. Core knows nothing
 // about it; e2e/support/sources.ts's BreakerProcessor is that pattern.
 //
-// created/woken are appended by the DO's CONSTRUCTOR (Stream.wake), synchronously, before any door
+// created/woken are appended by the DO's CONSTRUCTOR (Stream.appendCreatedAndWokenEvents), synchronously, before any door
 // opens — the apps/os shape: the log's first event is the birth certificate, every incarnation's
 // first event is its wake record. The platform's own records and the pause/resume pair are exempt
 // from pause — a paused stream must always accept its own resume.

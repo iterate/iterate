@@ -1011,7 +1011,7 @@ new Stream({
 });
 ```
 
-The DO's constructor calls `stream.wake()` before any door opens: the first
+The DO's constructor calls `stream.appendCreatedAndWokenEvents()` before any door opens: the first
 incarnation appends `stream/created { projectId, path }` at offset 1, then
 `stream/woken { incarnation }` at offset 2; every later incarnation appends its
 `woken` first, and core's own live-state delta takes offset 3 (an ephemeral). So your first

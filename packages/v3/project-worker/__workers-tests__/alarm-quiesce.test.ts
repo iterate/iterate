@@ -2,7 +2,7 @@
 // lane — the ONLY lane that can fire the DO's alarm (runDurableObjectAlarm) and force a graceful
 // teardown (evictDurableObject) deterministically).
 //
-// Target surface: IterateContextDurableObject.alarm()/#noteActivity/#liveFacets/#facetWorkInFlight
+// Target surface: IterateContextDurableObject.alarm()/#recordActivityForQuietClock/#liveFacets/#facetWorkInFlight
 // (src/iterate-context-durable-object.ts), the delivery loop's cursor lane + `pumpAll`
 // (src/stream/subscription-delivery.ts), and the rpc-stub directory (src/context/rpc-stub-directory.ts).
 //
@@ -186,7 +186,7 @@ test("DISABLE deletes the facet's storage; RE-ENABLE rebuilds from the log (no s
 
 test("PAGE-IN RACES THE QUIESCE ALARM: a stub invoke fired concurrently with the alarm still answers", async () => {
   // A quiesce disposes RETAINED stubs (#retained) but never touches a PENDING page (#pagesPending),
-  // and the invoke's own #noteActivity keeps the actor warm. PINS: an invoke that pages a stub in
+  // and the invoke's own #recordActivityForQuietClock keeps the actor warm. PINS: an invoke that pages a stub in
   // while the 60s alarm fires resolves with the right per-client answer (the wake's borrowed stub
   // is not disposed out from under it).
   const ctx = "prj_pagein";

@@ -146,7 +146,7 @@ describe("the concurrency contract", () => {
     tick();
     tick();
     tick();
-    await engine.wake();
+    await engine.appendCreatedAndWokenEvents();
     const starts = processor.trace.filter((t) => t.startsWith("start"));
     const dones = processor.trace.filter((t) => t.startsWith("blocked-done"));
     expect(starts).toEqual(["start 1", "start 2", "start 3"]);
@@ -188,7 +188,7 @@ describe("the concurrency contract", () => {
       storage: memoryStorage(),
     });
     mem.stream.append({ type: "e" }, { type: "e" }) as StreamEvent[];
-    await bg.wake();
+    await bg.appendCreatedAndWokenEvents();
     expect(order).toEqual(["fg 1", "fg 2"]); // background hasn't landed — it overtakes/loiters
     await new Promise((r) => setTimeout(r, 30));
     expect(order.slice(2).sort()).toEqual(["bg 1", "bg 2"]);
@@ -202,7 +202,7 @@ describe("the concurrency contract", () => {
       { type: "events.iterate.com/counter/ticked" },
       { type: "events.iterate.com/counter/ticked" },
     ) as StreamEvent[];
-    await engine.wake();
+    await engine.appendCreatedAndWokenEvents();
     await settle();
     // the whole 3-event scannedOffsetRange persists ONCE: cursor + state (2 writes). The milestone lands
     // as its own scannedOffsetRange — cursor only, its reduce didn't change state (1 write, no state blob).
@@ -212,15 +212,15 @@ describe("the concurrency contract", () => {
   test("rule 5 — at-head pass fires exactly once when the scannedOffsetRange reaches the head", async () => {
     const { engine, processor, stream } = setup();
     stream.append({ type: "unrelated" }) as StreamEvent[]; // consumed by nobody
-    await engine.wake();
+    await engine.appendCreatedAndWokenEvents();
     expect(processor.trace).toEqual(["at-head ticks=0"]); // no consumable events → eventless pass
   });
 
   test("redelivery dedupes against the persisted cursor", async () => {
     const { engine, processor, tick } = setup();
     tick();
-    await engine.wake();
-    await engine.wake(); // nothing new — no re-processing
+    await engine.appendCreatedAndWokenEvents();
+    await engine.appendCreatedAndWokenEvents(); // nothing new — no re-processing
     expect(processor.trace.filter((t) => t === "start 1")).toHaveLength(1);
   });
 
@@ -255,7 +255,7 @@ describe("the concurrency contract", () => {
     mem.stream.append({ type: "e" }) as StreamEvent[]; // the auto-push fails (attempt 1)
     await settle();
     expect(storage.get("reduce:flaky:progress")).toBeUndefined(); // nothing persisted
-    await flaky.wake(); // retried whole
+    await flaky.appendCreatedAndWokenEvents(); // retried whole
     expect(attempts).toBe(2);
     const snap = await flaky.snapshot();
     expect(snap.state.seen).toBe(1);
@@ -286,7 +286,7 @@ describe("the push door (scan scannedOffsetRanges)", () => {
   test("a stale scannedOffsetRange (already behind the cursor) is a no-op", async () => {
     const { engine, processor, tick } = setup();
     tick();
-    await engine.wake();
+    await engine.appendCreatedAndWokenEvents();
     await engine.processEventBatch([], { after: 0, through: 1 });
     expect(processor.trace.filter((t) => t.startsWith("start"))).toEqual(["start 1"]);
   });
@@ -464,7 +464,7 @@ describe("ephemeral events", () => {
       storage: memoryStorage(),
     });
     mem.stream.append({ type: "loud" }); // offset 1, durable
-    await p.wake();
+    await p.appendCreatedAndWokenEvents();
     // one commit: durable loud@2 + ephemeral chunk@3 → range (1,3]; hand-delivered below
     const committed = mem.stream.append(
       { type: "loud" },
@@ -536,7 +536,7 @@ describe("reduce cache + re-reduce", () => {
       { type: "events.iterate.com/counter/ticked" },
       { type: "events.iterate.com/counter/ticked" },
     ) as StreamEvent[];
-    await p1.wake();
+    await p1.appendCreatedAndWokenEvents();
     expect(effects).toHaveLength(2);
     // new incarnation with a bumped contract version: re-reduce, but NO new effects for old events
     const p2 = make("2.0.0", effects);
@@ -553,7 +553,7 @@ describe("emit rules + idempotency", () => {
     tick();
     tick();
     tick(); // ticks: 1,2,3,4 — milestone at state.ticks===3 (after 3rd tick)
-    await engine.wake();
+    await engine.appendCreatedAndWokenEvents();
     await settle();
     const milestones = events.filter((e) => e.type === "events.iterate.com/counter/milestone");
     expect(milestones).toHaveLength(1);
@@ -561,7 +561,7 @@ describe("emit rules + idempotency", () => {
     expect(milestones[0].source?.processor?.slug).toBe("counter");
     expect(milestones[0].source?.processor?.whileProcessing?.offset).toBe(3);
     // the milestone append itself lands on the stream and re-delivers — wake again, still one
-    await engine.wake();
+    await engine.appendCreatedAndWokenEvents();
     expect(events.filter((e) => e.type === "events.iterate.com/counter/milestone")).toHaveLength(1);
   });
 
@@ -587,7 +587,7 @@ describe("emit rules + idempotency", () => {
       storage: memoryStorage(),
     });
     mem.stream.append({ type: "e" }) as StreamEvent[];
-    await expect(rogue.wake()).rejects.toThrow(/without declaring/);
+    await expect(rogue.appendCreatedAndWokenEvents()).rejects.toThrow(/without declaring/);
   });
 
   test("waitUntilProcessed resolves at the cursor", async () => {
@@ -924,7 +924,7 @@ describe("eviction honors the persisted cursor", () => {
     const e1 = new ProcessorEngine(p1, { stream: mem.stream, storage });
     mem.procs.push(e1);
     for (let i = 0; i < 4; i++) mem.stream.append({ type: "boop" });
-    await e1.wake();
+    await e1.appendCreatedAndWokenEvents();
     expect(p1.effects).toEqual([1, 2, 3, 4]);
     // The cursor IS persisted (rule 4), even though state never changed.
     expect(storage.get("reduce:eff:progress")).toMatchObject({ reducedThroughOffset: 4 });
@@ -934,7 +934,7 @@ describe("eviction honors the persisted cursor", () => {
     const e2 = new ProcessorEngine(p2, { stream: mem.stream, storage });
     mem.procs.length = 0;
     mem.procs.push(e2);
-    await e2.wake();
+    await e2.appendCreatedAndWokenEvents();
     expect(p2.effects).toEqual([]); // the persisted cursor (4) means nothing to re-do
   });
 
@@ -945,14 +945,14 @@ describe("eviction honors the persisted cursor", () => {
     const e1 = new ProcessorEngine(p1, { stream: mem.stream, storage });
     mem.procs.push(e1);
     for (let i = 0; i < 4; i++) mem.stream.append({ type: "tick" });
-    await e1.wake();
+    await e1.appendCreatedAndWokenEvents();
     expect(p1.effects).toEqual([1, 2, 3, 4]);
 
     const p2 = new CountProcessor();
     const e2 = new ProcessorEngine(p2, { stream: mem.stream, storage });
     mem.procs.length = 0;
     mem.procs.push(e2);
-    await e2.wake();
+    await e2.appendCreatedAndWokenEvents();
     expect(p2.effects).toEqual([]); // cursor honored — no replay
   });
 
@@ -974,7 +974,7 @@ describe("waitUntilProcessed — resolution and failure modes", () => {
     const p1 = new ProcessorEngine(new CountProcessor(), { stream: mem.stream, storage });
     mem.procs.push(p1);
     for (let i = 0; i < 3; i++) mem.stream.append({ type: "tick" });
-    await p1.wake();
+    await p1.appendCreatedAndWokenEvents();
 
     // A bumped incarnation waits for an offset the re-reduce (ceiling = 3) covers. No new push, so
     // the wake's catch-up reads an empty page and never runs a batch — only the re-reduce advances
@@ -993,7 +993,7 @@ describe("waitUntilProcessed — resolution and failure modes", () => {
     const p = new ProcessorEngine(new CountProcessor(), { stream: mem.stream, storage });
     mem.procs.push(p);
     mem.stream.append({ type: "tick" }); // only offset 1 exists
-    await p.wake();
+    await p.appendCreatedAndWokenEvents();
     await expect(p.waitUntilProcessed({ offset: 5, timeoutMs: 120 })).rejects.toThrow(
       /did not reach offset 5/,
     );

@@ -22,7 +22,7 @@ import type { ProcessorEngine, ProcessorStream } from "./processor.ts";
 export function memoryStream(path = "/") {
   const durableEvents: StreamEvent[] = []; // the durable log — what `read` answers
   const pushedEvents: StreamEvent[] = []; // every committed event, ephemerals included (the pump's view)
-  const eventsByKey = new Map<string, StreamEvent>();
+  const eventsByIdempotencyKey = new Map<string, StreamEvent>();
   const procs: ProcessorEngine<any>[] = []; // the pump only needs `processEventBatch`
   let maxAssigned = 0;
   let reads = 0;
@@ -31,7 +31,7 @@ export function memoryStream(path = "/") {
       const scannedAfterOffset = maxAssigned;
       const committedEvents = events.map((event) => {
         if (event.idempotencyKey) {
-          const existingEvent = eventsByKey.get(event.idempotencyKey);
+          const existingEvent = eventsByIdempotencyKey.get(event.idempotencyKey);
           if (existingEvent) {
             if (sameIdempotentEvent(existingEvent, event)) return existingEvent;
             throw new Error(idempotencyConflictMessage(event.idempotencyKey, existingEvent.offset));
@@ -46,7 +46,8 @@ export function memoryStream(path = "/") {
         };
         if (!event.ephemeral) {
           durableEvents.push(committedEvent);
-          if (event.idempotencyKey) eventsByKey.set(event.idempotencyKey, committedEvent);
+          if (event.idempotencyKey)
+            eventsByIdempotencyKey.set(event.idempotencyKey, committedEvent);
         }
         return committedEvent;
       });

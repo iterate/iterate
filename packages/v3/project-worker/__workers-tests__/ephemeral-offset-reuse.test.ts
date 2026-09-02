@@ -61,16 +61,16 @@ test("processor: a fresh facet's first snapshot (wake) with ephemerals at head c
   // core's live-state delta (the configured row changed core) already sits at head (ephemeral); add one more so the tail is ≥ 2
   await s.append({ type: "blip", ephemeral: true });
   const p0 = await page(ctx);
-  const durableMark = p0.events.at(-1)!.offset; // last durable row
-  expect(p0.scannedThroughOffset).toBe(durableMark); // the ephemeral tail (≥ 2 offsets) is NOT proven by a read
+  const highestDurableOffset = p0.events.at(-1)!.offset; // last durable row
+  expect(p0.scannedThroughOffset).toBe(highestDurableOffset); // the ephemeral tail (≥ 2 offsets) is NOT proven by a read
 
-  // READ-DRIVEN catch-up through the load chain: snapshot → wake() → read → durables ≤ mark
+  // READ-DRIVEN catch-up through the load chain: snapshot → appendCreatedAndWokenEvents() → read → durables ≤ mark
   const before = (await s.invoke([
     ...loadChain("procsrc", "CounterDurableObject", "counter"),
     ["snapshot"],
   ])) as { offset: number; state: { n: number } };
   expect(before.state.n).toBe(p0.events.length); // reduced every durable
-  expect(before.offset).toBe(durableMark); // the persisted checkpoint is the durable mark, not the ephemeral head
+  expect(before.offset).toBe(highestDurableOffset); // the persisted checkpoint is the durable mark, not the ephemeral head
 
   await sleep(400); // let the facet's fire-and-forget live-state delta land before the clock jumps (else #lastActivityMs reads fresh and the quiesce skips)
   await quiesce(ctx); // abort the facet (un-pin) — its checkpoint (the durable mark) is durable in its own storage
@@ -81,7 +81,10 @@ test("processor: a fresh facet's first snapshot (wake) with ephemerals at head c
   await s.append({ type: "tick" });
   await sleep(400); // let the push land and the facet re-materialize
   const p1 = await page(ctx);
-  expect(p1.events.map((e) => e.offset).slice(-2)).toEqual([durableMark + 1, durableMark + 3]); // the log is exact
+  expect(p1.events.map((e) => e.offset).slice(-2)).toEqual([
+    highestDurableOffset + 1,
+    highestDurableOffset + 3,
+  ]); // the log is exact
   const after = (await s.invoke(["itx", "facets", ["get", "counter"], ["snapshot"]])) as {
     offset: number;
     state: { n: number };
@@ -114,32 +117,32 @@ test("stream-kept cursor: an alarm pump with ephemerals at head leaves the curso
     cursor?: { confirmedOffset: number };
   };
   const p0 = await page(ctx);
-  const durableMark = p0.events.at(-1)!.offset;
-  expect(row0.cursor!.confirmedOffset).toBe(durableMark); // acked on durable ground ✓
+  const highestDurableOffset = p0.events.at(-1)!.offset;
+  expect(row0.cursor!.confirmedOffset).toBe(highestDurableOffset); // acked on durable ground ✓
 
   await s.append({ type: "blip", ephemeral: true }, { type: "blip", ephemeral: true }); // head = mark+2, mark unchanged
   await runDurableObjectAlarm(s); // pumpAll → read(mark) proves only through the mark → caught up, no write
   const row1 = (await s.invoke("itx.subscriptions.get('dig')")) as {
     cursor?: { confirmedOffset: number };
   };
-  expect(row1.cursor!.confirmedOffset).toBe(durableMark); // the cursor never leaves durable ground
+  expect(row1.cursor!.confirmedOffset).toBe(highestDurableOffset); // the cursor never leaves durable ground
 
   await quiesce(ctx);
   await evictDurableObject(s);
   const rowKv = (await s.invoke("itx.subscriptions.get('dig')")) as {
     cursor?: { confirmedOffset: number };
   };
-  expect(rowKv.cursor!.confirmedOffset).toBe(durableMark); // what kv held through the eviction
+  expect(rowKv.cursor!.confirmedOffset).toBe(highestDurableOffset); // what kv held through the eviction
 
   await s.append({ type: "mark" }); // woken@mark+1 (the constructor's; its core delta took mark+2), mark@mark+3 — durable
   await sleep(600);
   const p1 = await page(ctx);
-  expect(p1.events.at(-1)!.offset).toBe(durableMark + 3);
+  expect(p1.events.at(-1)!.offset).toBe(highestDurableOffset + 3);
   const digested = JSON.parse(
     ((await s.invoke(["itx", "kv", ["get", "digested"]])) as string) ?? "[]",
   ) as string[];
   // at-least-once: the second mark, minted where a dead ephemeral sat, reaches the worker.
-  expect(digested).toContain(`mark@${durableMark + 3}`);
+  expect(digested).toContain(`mark@${highestDurableOffset + 3}`);
 });
 
 test("enable with a consumes filter: itx.facets.get(name) answers before the first consumed event (the facet is materialized at configure time)", async () => {
@@ -173,11 +176,11 @@ test("processor: a read-driven catch-up (snapshot after quiesce) with ephemerals
   await s.append({ type: "note" }); // NOT consumed by the subscription → not pushed → the facet now lags by one durable
   await s.append({ type: "blip", ephemeral: true }, { type: "blip", ephemeral: true }); // ephemeral tail of 2
   const p0 = await page(ctx);
-  const durableMark = p0.events.at(-1)!.offset;
+  const highestDurableOffset = p0.events.at(-1)!.offset;
   expect(p0.events.at(-1)!.type).toBe("note");
   await sleep(300);
   await quiesce(ctx); // abort the idle facet (checkpoint = tick offset, durable)
-  // the repo's own snapCounter shape: re-materialize by name → #pushedThroughOffset undefined → wake() → read(cursor) → [note], scannedThroughOffset = head
+  // the repo's own snapCounter shape: re-materialize by name → #pushedThroughOffset undefined → appendCreatedAndWokenEvents() → read(cursor) → [note], scannedThroughOffset = head
   const mid = (await s.invoke(["itx", "facets", ["get", "counter"], ["snapshot"]])) as {
     offset: number;
     state: { n: number };
@@ -186,15 +189,18 @@ test("processor: a read-driven catch-up (snapshot after quiesce) with ephemerals
   // from 0 (so the filter's unsent created@1 + woken@2 were reduced too), the push reduced tick, this
   // wake read note.
   expect(mid.state.n).toBe(5);
-  expect(p0.scannedThroughOffset).toBe(durableMark); // read() proves the durable log only
-  expect(mid.offset).toBe(durableMark); // so the checkpoint the wake persisted is the mark, not the head
+  expect(p0.scannedThroughOffset).toBe(highestDurableOffset); // read() proves the durable log only
+  expect(mid.offset).toBe(highestDurableOffset); // so the checkpoint the wake persisted is the mark, not the head
   await sleep(400);
   await quiesce(ctx);
   await evictDurableObject(s);
   await s.append({ type: "tick" }); // woken@mark+1 (the constructor's; its core delta took mark+2), tick@mark+3 — durable, at the dead ephemerals' offsets
   await sleep(500);
   const p1 = await page(ctx);
-  expect(p1.events.map((e) => e.offset).slice(-2)).toEqual([durableMark + 1, durableMark + 3]);
+  expect(p1.events.map((e) => e.offset).slice(-2)).toEqual([
+    highestDurableOffset + 1,
+    highestDurableOffset + 3,
+  ]);
   const after = (await s.invoke(["itx", "facets", ["get", "counter"], ["snapshot"]])) as {
     offset: number;
     state: { n: number };

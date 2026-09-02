@@ -1,6 +1,6 @@
 // __workers-tests__/stream.test.ts — the `Stream` class (stream/stream.ts) against REAL
 // DurableObjectStorage, inside workerd (the workers lane): waitForEvent's park/settle/timeout
-// mechanics, what construction writes, the wake record (`wake()` — an explicit call here;
+// mechanics, what construction writes, the wake record (`appendCreatedAndWokenEvents()` — an explicit call here;
 // in production the DO constructor's first act) and the pause check at the append door. Each test
 // borrows a dedicated ctx's DO purely for its storage (runInDurableObject), WIPES it (the DO's
 // constructor woke its own stream into it) and constructs a BARE Stream over it with no-op host
@@ -24,7 +24,7 @@ async function virgin(state: DurableObjectState): Promise<DurableObjectStorage> 
 
 /** A bare Stream over real storage. `onCommit` records each `fresh` batch so tests can assert what
  *  the fan-out was fed (core's own live-state delta rides it too: an ephemeral batch after every
- *  commit that changed core state). `wake()` is NOT called — a bare stream starts virgin; the tests
+ *  commit that changed core state). `appendCreatedAndWokenEvents()` is NOT called — a bare stream starts virgin; the tests
  *  about the wake record call it themselves. */
 function bareStream(storage: DurableObjectStorage, opts?: { batches?: StreamEvent[][] }): Stream {
   return new Stream({
@@ -204,7 +204,7 @@ test("append with ZERO events is a pure no-op — no rows, no offsets, no fan-ou
     expect(state.storage.kv.get("maxAssignedOffset")).toBeUndefined();
     expect(stream.highestAssignedOffset()).toBe(0);
     expect(batches).toHaveLength(0);
-    // The wake record is `wake()`'s (the DO constructor's) — never append's: with no wake, the
+    // The wake record is `appendCreatedAndWokenEvents()`'s (the DO constructor's) — never append's: with no wake, the
     // first real append is the log's first row, and the fan-out sees exactly that one event.
     const [receipt] = stream.append({ type: "hello" });
     expect(receipt.offset).toBe(1);
@@ -214,13 +214,13 @@ test("append with ZERO events is a pure no-op — no rows, no offsets, no fan-ou
   });
 });
 
-// ── THE WAKE RECORD (`wake()`): created + woken on a fresh store, woken only on a store with rows ──
+// ── THE WAKE RECORD (`appendCreatedAndWokenEvents()`): created + woken on a fresh store, woken only on a store with rows ──
 
-test("wake(): a fresh store gets created@1 + woken@2 in ONE fanned-out batch (core's delta takes 3); the first append lands at 4; a later incarnation over the same store gets woken only", async () => {
+test("appendCreatedAndWokenEvents(): a fresh store gets created@1 + woken@2 in ONE fanned-out batch (core's delta takes 3); the first append lands at 4; a later incarnation over the same store gets woken only", async () => {
   await runInDurableObject(stub("prj_wait_woken"), async (_instance, state) => {
     const batches: StreamEvent[][] = [];
     const first = bareStream(await virgin(state), { batches });
-    first.wake();
+    first.appendCreatedAndWokenEvents();
     // the birth certificate + the wake record, one durable batch, both fanned out
     const page = first.read(0);
     expect(page.events.map((e) => [e.type, e.offset])).toEqual([
@@ -249,7 +249,7 @@ test("wake(): a fresh store gets created@1 + woken@2 in ONE fanned-out batch (co
     expect(batches[2].map((e) => e.type)).toEqual(["hello"]);
     // a LATER incarnation over the same store: born once, so woken ONLY — as its first event
     const second = bareStream(state.storage, { batches }); // the SAME store, NOT wiped
-    second.wake();
+    second.appendCreatedAndWokenEvents();
     expect(second.currentIncarnation()).toBe(2);
     const all = second.read(0).events;
     expect(all.map((e) => e.type)).toEqual([
@@ -267,7 +267,7 @@ test("wake(): a fresh store gets created@1 + woken@2 in ONE fanned-out batch (co
 test("a stream/paused event pauses the stream through its own core reduce: every non-control append refuses with STREAM_PAUSED, wholesale; the resume lands and reopens", async () => {
   await runInDurableObject(stub("prj_wait_paused"), async (_instance, state) => {
     const stream = bareStream(await virgin(state));
-    stream.wake(); // created@1, woken@2, core's delta@3
+    stream.appendCreatedAndWokenEvents(); // created@1, woken@2, core's delta@3
     stream.append({ type: "events.iterate.com/stream/paused", payload: { reason: "x" } }); // @4
     expect(stream.coreReducedState.paused).toEqual({ reason: "x" });
     expect(stream.read(0).events.map((e) => e.type)).toEqual([
@@ -305,7 +305,7 @@ test("an ephemeral-only append writes NOTHING — no row, no high-water mark —
     const batches: StreamEvent[][] = [];
     const stream = bareStream(await virgin(state), { batches });
     // One durable first: this row mints storage and the mark (offset 1 — a bare stream has no wake
-    // record; see the wake() pins above for the DO's shape).
+    // record; see the appendCreatedAndWokenEvents() pins above for the DO's shape).
     await stream.append({ type: "durable" });
     const markAfterDurable = state.storage.kv.get("maxAssignedOffset");
     expect(markAfterDurable).toBe(1);
@@ -330,7 +330,7 @@ test("an ephemeral-only append writes NOTHING — no row, no high-water mark —
 test("across incarnations an ephemeral-only tail's offsets are REUSED by the next durable — the documented contract, and why every checkpoint advances only on a durable", async () => {
   await runInDurableObject(stub("prj_eph_reuse"), async (_instance, state) => {
     const first = bareStream(await virgin(state));
-    first.wake(); // created@1, woken@2, core's delta@3 (ephemeral) — the DO's shape
+    first.appendCreatedAndWokenEvents(); // created@1, woken@2, core's delta@3 (ephemeral) — the DO's shape
     await first.append({ type: "durable" }); // 4
     first.append({ type: "chunk", ephemeral: true }, { type: "chunk", ephemeral: true }); // 5, 6 — memory only
     expect(first.highestAssignedOffset()).toBe(6);
@@ -338,7 +338,7 @@ test("across incarnations an ephemeral-only tail's offsets are REUSED by the nex
     const second = bareStream(state.storage); // the SAME store, NOT wiped
     expect(second.highestAssignedOffset()).toBe(4);
     // …so its wake record (durable) is handed 5 again, its delta 6, and its first durable 7.
-    second.wake();
+    second.appendCreatedAndWokenEvents();
     const [d] = await second.append({ type: "durable" });
     expect(d.offset).toBe(7); // woken took 5, the delta 6 — both numbers the dead ephemerals held
     expect(state.storage.kv.get("maxAssignedOffset")).toBe(7);
@@ -355,14 +355,14 @@ test("read()'s short-page proof is the DURABLE mark, never the in-memory head (a
     stream.append({ type: "tick" }); // tick@1 — durable, mark 1
     stream.append({ type: "blip", ephemeral: true }, { type: "blip", ephemeral: true }); // @2 @3 in memory
     expect(stream.highestAssignedOffset()).toBe(3);
-    expect(stream.durableMark()).toBe(1);
+    expect(stream.highestDurableOffset()).toBe(1);
     // A reader must never learn an offset a later incarnation could hand to a durable: the proof
     // stops at the mark. (A persisted checkpoint or cursor built from this read is therefore safe.)
     expect(stream.read(0).scannedThroughOffset).toBe(1);
     expect(stream.read(1).scannedThroughOffset).toBe(1);
     // The next durable batch moves both.
     stream.append({ type: "tick" }); // @4
-    expect(stream.durableMark()).toBe(4);
+    expect(stream.highestDurableOffset()).toBe(4);
     expect(stream.read(0).scannedThroughOffset).toBe(4);
   });
 });

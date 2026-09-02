@@ -35,7 +35,7 @@ the high-water mark; its offsets are unique within the incarnation, and every pe
 in the package advances only on a batch that carried a durable), idempotency at the door, the wake record, `waitForEvent`,
 `read` with the scanned-offset-range proof, and the alarm armer. `iterate-context-durable-object.ts`
 (`IterateContextDurableObject`, one DO per `{projectId, path}` context) holds a Stream and drives
-it — its constructor calls `Stream.wake()` before any door opens (the first incarnation appends
+it — its constructor calls `Stream.appendCreatedAndWokenEvents()` before any door opens (the first incarnation appends
 `stream/created { projectId, path }` at offset 1, every incarnation `stream/woken { incarnation }`,
 so any door materializes a context), its injected callbacks run the core reduce in-transaction and
 the post-commit fan-out, and the pause check is one `if` in `Stream.append` reading the reduce's

@@ -4,8 +4,8 @@
 // runInDurableObject). Three pins live here:
 //
 //   • the QUIET CLOCK's reason to exist: a probe (`itx.facets.get('core').snapshot()`) on a
-//     never-touched ctx MATERIALIZES it (the constructor's `Stream.wake()` writes created + woken
-//     before any door opens) yet arms NO alarm — #noteActivity arms only when there is something
+//     never-touched ctx MATERIALIZES it (the constructor's `Stream.appendCreatedAndWokenEvents()` writes created + woken
+//     before any door opens) yet arms NO alarm — #recordActivityForQuietClock arms only when there is something
 //     to quiesce (a live facet, a paged-in rpc stub); only storage.getAlarm() can see that (the
 //     e2e lane pins the records but cannot read the alarm);
 //   • the provide door's SHAPE: it canonicalizes the path on its own (a Workers-RPC caller
@@ -44,9 +44,9 @@ class Alive extends RpcTarget {
 
 test("a core-snapshot probe on a NEVER-TOUCHED ctx materializes it (created@1 + woken@2, incarnation 1) yet arms NO alarm — no facet, no stub, nothing to quiesce; a plain append arms none either", async () => {
   await runInDurableObject(stub("prj_doors_virginprobe"), async (instance, state) => {
-    // ANY door materializes a context: the constructor's `Stream.wake()` wrote the birth certificate
+    // ANY door materializes a context: the constructor's `Stream.appendCreatedAndWokenEvents()` wrote the birth certificate
     // and the wake record before this probe could run (the apps/os shape). What the probe must NOT
-    // do is arm the quiet clock: #noteActivity arms only when there is something to quiesce — a
+    // do is arm the quiet clock: #recordActivityForQuietClock arms only when there is something to quiesce — a
     // live facet or a paged-in rpc stub — and this ctx has neither (a durable alarm write + a billed
     // wake for nothing was the arc review's catch).
     const snap = (await instance.invoke("itx.facets.get('core').snapshot()")) as {
@@ -74,7 +74,7 @@ test("a core-snapshot probe on a NEVER-TOUCHED ctx materializes it (created@1 + 
   });
 });
 
-// #noteActivity runs at the TOP of invoke(), BEFORE the call pages the stub in — so the rpcStubs
+// #recordActivityForQuietClock runs at the TOP of invoke(), BEFORE the call pages the stub in — so the rpcStubs
 // handle re-notes in a `finally` (like #invokeFacet does): a context whose only pinning resource is
 // a paged-in stub arms its quiet clock on THAT invoke, not one activity late.
 test("the quiet clock arms as soon as there IS something to quiesce: the invoke that pages an rpc stub in", async () => {

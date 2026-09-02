@@ -2043,3 +2043,15 @@ the verb is reduce, never fold.
   "fold" in code, tests and current docs.
 - GATES: tsc×3 · unit+workers 234 (24 files) · e2e 136p/2xf (35 files) · tutorial-proof 8 ·
   Playwright 2 · oxlint 0/0 · knip clean.
+- **Breadcrumb names (same day).** Helpers say what they do to what, so their comments could shrink:
+  `wake()` → `appendCreatedAndWokenEvents()`, `durableMark()` → `highestDurableOffset()`,
+  `coreSnapshot`/`coreLiveSnapshot` → `coreReducedStateSnapshot`/`coreLiveStateSnapshot`,
+  `#reassemble` → `#reassembleEventBodyFromChunks`, `#storeEvent` → `#insertEventRowAndChunks`,
+  `#settleWaiters` → `#resolveWaitForEventWaiters`, `#reduceCoreEvent` →
+  `#reduceEventIntoCoreReducedState`, `#waiters` → `#waitForEventWaiters`, `markFired` →
+  `noteAlarmFired`, the DO's `#noteActivity` → `#recordActivityForQuietClock`, `#resolver` →
+  `#capabilityResolver`. apps/os checked: its constructor appends created/woken synchronously
+  (`#finishInitialization` → the sync `#append`; `blockConcurrencyWhile` only rebuilds a stale
+  checkpoint) — the clean room does the same in two lines of the DO constructor (`new Stream` opens
+  storage, `appendCreatedAndWokenEvents` appends); the two appends cannot move INTO the Stream
+  constructor because the fan-out closure reaches DO fields that do not exist yet mid-construction.

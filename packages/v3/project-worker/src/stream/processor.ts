@@ -184,7 +184,7 @@ export class ProcessorEngine<State> {
   #chain: Promise<void> = Promise.resolve();
   #progress: ReduceCheckpoint<State> | null = null; // in-memory cache of the persisted reduce progress
   #pushedThroughOffset?: number; // highest scannedThroughOffset ever SHOWN to us (see processEventBatch)
-  #waiters: { offset: number; resolve: () => void }[] = [];
+  #waitForEventWaiters: { offset: number; resolve: () => void }[] = [];
 
   constructor(
     processor: StreamProcessor<State>,
@@ -228,7 +228,7 @@ export class ProcessorEngine<State> {
    *  atomically), which is what lets a client chain patches exactly instead of guessing which
    *  changes its snapshot already contains. */
   async liveSnapshot(): Promise<{ rev: number; state: unknown }> {
-    if (!this.#caughtUp()) await this.wake();
+    if (!this.#caughtUp()) await this.appendCreatedAndWokenEvents();
     return this.#liveHolder().snapshot();
   }
 
@@ -273,7 +273,7 @@ export class ProcessorEngine<State> {
   }
 
   /** Catch up from the own persisted cursor (cold boot, reads). A wake carries nothing. */
-  wake(): Promise<void> {
+  appendCreatedAndWokenEvents(): Promise<void> {
     return this.#enqueue(() => this.#catchUpBody());
   }
 
@@ -281,7 +281,7 @@ export class ProcessorEngine<State> {
 
   /** Reduce-and-effects caught up through the log, then the current snapshot. */
   async snapshot(): Promise<ProcessorSnapshot<State>> {
-    if (!this.#caughtUp()) await this.wake();
+    if (!this.#caughtUp()) await this.appendCreatedAndWokenEvents();
     const progress = this.#loadProgress();
     return { offset: progress.reducedThroughOffset, state: progress.state };
   }
@@ -310,30 +310,30 @@ export class ProcessorEngine<State> {
       };
       const timer = setTimeout(() => {
         // A timed-out waiter LEAVES the list — otherwise every later batch re-scans it forever.
-        this.#waiters.splice(this.#waiters.indexOf(waiter), 1);
+        this.#waitForEventWaiters.splice(this.#waitForEventWaiters.indexOf(waiter), 1);
         reject(
           new Error(
             `processor "${this.#contract.slug}" did not reach offset ${offset} in ${timeoutMs}ms`,
           ),
         );
       }, timeoutMs);
-      this.#waiters.push(waiter);
-      void this.wake()
+      this.#waitForEventWaiters.push(waiter);
+      void this.appendCreatedAndWokenEvents()
         .then(() => {
           // The offset may have been reached by the wake's own catch-up OR by a version re-reduce
           // (which sets progress without a #processBatch that resolves waiters). Re-check here.
-          const i = this.#waiters.indexOf(waiter);
+          const i = this.#waitForEventWaiters.indexOf(waiter);
           if (i !== -1 && this.#loadProgress().reducedThroughOffset >= offset) {
-            this.#waiters.splice(i, 1);
+            this.#waitForEventWaiters.splice(i, 1);
             waiter.resolve();
           }
         })
         // A rejecting self-pull (read threw) rejects THIS waiter promptly with the real error,
         // not a park-until-timeout with a generic message.
         .catch((error) => {
-          const i = this.#waiters.indexOf(waiter);
+          const i = this.#waitForEventWaiters.indexOf(waiter);
           if (i === -1) return; // already resolved/timed-out
-          this.#waiters.splice(i, 1);
+          this.#waitForEventWaiters.splice(i, 1);
           clearTimeout(timer);
           reject(error instanceof Error ? error : new Error(String(error)));
         });
@@ -584,9 +584,9 @@ export class ProcessorEngine<State> {
 
   /** Resolve the waiters a cursor advance satisfies (waitUntilProcessed); keep the rest. */
   #resolveWaiters(reducedThroughOffset: number): void {
-    for (const w of this.#waiters.splice(0)) {
+    for (const w of this.#waitForEventWaiters.splice(0)) {
       if (reducedThroughOffset >= w.offset) w.resolve();
-      else this.#waiters.push(w);
+      else this.#waitForEventWaiters.push(w);
     }
   }
 }
