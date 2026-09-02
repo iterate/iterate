@@ -207,19 +207,29 @@ video poster + playback, location card, file rows) with urls from `files[]`.
 `parseUserLocations` / `stripAttachmentXmlParts` and the xml emitters are
 deleted (decision 4: no dual-parse period).
 
-- [ ] render-events: `render/user-message-described` durable definition.
-- [ ] Mobile composer emits html vocabulary from composer-attachments.ts; old
-      xml part emission deleted; unit tests updated.
-- [ ] Interpreter derives user-message-described (new vocabulary only);
-      harness tests.
-- [ ] Reducer folds it (item upsert by id + attachments field + schema
-      mirrors + feed schema version bump); tests.
-- [ ] Web attachment parity: mosaic, audio player + transcript, video
-      poster/fullscreen, location cards, file rows.
-- [ ] Mobile presentation from the fold; old client-side xml parsers deleted.
+- [x] `render/user-message-described` durable definition — lives with its
+      parser/emitter in iterate/processors user-message-describer.ts.
+- [x] Mobile composer emits html vocabulary from composer-attachments.ts; old
+      xml part emission deleted; unit tests pin the emitter↔parser round trip.
+- [x] The DESCRIBER derives user-message-described (new vocabulary only) —
+      a separate reusable facet processor in the package, installed by BOTH
+      templates (the composer is the same mobile app on every project;
+      default-template chats need derivation too).
+- [x] Reducer folds it (bounded recent-user-messages window, queued-message
+      patching, item re-emission under the original id) and the feed
+      projector replaces the row in place (schema v9); tests.
+- [x] Web attachment parity: message-rich-attachments.tsx — media mosaic
+      (mosaic-layout moved to packages/ui, shared with mobile), native audio
+      + transcript, video, location cards, file rows; plain chips only for
+      underived files.
+- [x] Mobile presentation from the fold's message.attachments; legacy xml
+      parsers and strip helpers deleted; pending bubbles derive locally so
+      optimistic and settled renders match.
 - [ ] Export transform: mint fresh signed `src` at the edge (decision 2) —
-      may split out if the PR grows.
-- [ ] Spec: attachment-bearing message renders derived (web).
+      split out as follow-up (nothing consumes an export yet).
+- [x] Spec: specs/agent-attachment-rendering.spec.ts — default-template
+      project, server-appended composer wire shape, asserts derived caption +
+      location card and no raw part syntax.
 
 ### Follow-ups
 
