@@ -139,9 +139,9 @@ describe("serializeScriptResult", () => {
 
 // Bounding exists because of a measured brick on production (2026-09-02): an
 // image-crop script's sandbox stdout came back as a 7MB base64 PNG, was
-// journaled verbatim as one script-run-settled event, and every fold/delivery
-// lane re-materializing it OOMed the stream DO's 128MiB isolate on every
-// keepalive retry, wedging the stream permanently.
+// journaled verbatim as one script-run-settled event, and every processor
+// fold and subscriber delivery re-materializing it OOMed the stream DO's
+// 128MiB isolate on every keepalive retry, wedging the stream permanently.
 describe("boundScriptSettlement", () => {
   it("passes ordinary settlements through untouched", () => {
     const small: ScriptExecutionSettlement = {

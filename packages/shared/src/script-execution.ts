@@ -18,8 +18,9 @@ export const ScriptExecutionSettlement = z.discriminatedUnion("status", [
       .meta({
         description:
           "Present when the script succeeded but its return value was too large to journal " +
-          "as a durable event (settlement events fan out to every fold and delivery lane in " +
-          "the stream DO's isolate, so an oversized result is a memory bomb). `kind` says " +
+          "as a durable event (every processor fold and subscriber delivery re-materializes " +
+          "settlement events in the stream DO's isolate, so an oversized result is a memory " +
+          "bomb). `kind` says " +
           'what became of the value — today only "omitted" (it is gone).',
       }),
   }),

@@ -88,10 +88,10 @@ export function serializeScriptResult(result: unknown): JsonValue | undefined {
  * The largest serialized result a settlement event may carry inline.
  *
  * A `script-run-settled` event is journaled durably and then re-materialized
- * by every fold and delivery lane in the stream DO's isolate (agent facet,
- * capability-host facet, session deliveries, capture lanes — each holding
- * several copies: chunk blobs, the decoded string, the parsed object, the
- * validated copy). A 7MB settlement (an image-crop script's base64 stdout)
+ * by every reader in the stream DO's isolate — the agent facet's fold, the
+ * capability-host facet's fold, session deliveries, analytics capture — each
+ * holding several copies: chunk blobs, the decoded string, the parsed object,
+ * the validated copy. A 7MB settlement (an image-crop script's base64 stdout)
  * OOMed the 128MiB isolate on every retry and wedged the stream in a
  * keepalive wake loop (prod, 2026-09-02). ~1MiB keeps the worst-case
  * transient cost of one event in the tens of megabytes.

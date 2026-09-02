@@ -105,8 +105,9 @@ export function scriptCompletionInput(input: {
     // constructing the completion cannot introduce a new failure boundary.
     // Bounding is the append-side backstop: the execution entrypoint already
     // bounds worker outcomes, but every settlement source funnels through
-    // here, and an oversized event body would brick the stream (every fold
-    // and delivery lane re-materializes it in the shared DO isolate).
+    // here, and an oversized event body would brick the stream (every
+    // processor fold and subscriber delivery re-materializes it in the
+    // shared DO isolate).
     payload: {
       executionId: input.executionId,
       settlement: boundScriptSettlement(input.settlement),
