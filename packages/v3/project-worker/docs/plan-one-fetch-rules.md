@@ -249,7 +249,7 @@ match? }` / `fetch-rule-removed`, one inline reduce (~60 lines, the `stream/subs
   verification (WebCrypto over public keys), the CLI, live shadows. The gate is a facet: a `DurableObject`
   class hosted through `itx.load(src).getDurableObjectClass('ApprovalGateDurableObject').get(name)`.
   Since 2026-09-02 a processor host is an ordinary DO class with one `processor` field, so the gate
-  can BE a processor host that also defines a `fetch(request)` door: the pure `ApprovalGate extends
+  can BE a processor host that also defines a `fetch(request)` door: the pure `ApprovalGateProcessor extends
 StreamProcessor` folds `requested`/`decided` events (unit-tested bare), the host's `fetch` holds the
   request and awaits the decision (`env.ITX.waitForEvent`). No runner, no verb allow-list.
 - Signatures: no crypto change. Same `approval.v2` canonical bytes with `projectId → context` (the DO
@@ -432,7 +432,7 @@ vs ciphertext, body scanning, and the 202 long-hold tier are the honest gaps; "a
 eviction" is a promise the kernel must never make.
 
 **Q7 — Is the approval gate a processor?** With the split, a processor host is a DO class that may
-carry a `fetch` door: `ApprovalGate extends StreamProcessor` folds the approval events (pure,
+carry a `fetch` door: `ApprovalGateProcessor extends StreamProcessor` folds the approval events (pure,
 unit-tested), `ApprovalGateDurableObject` hosts it and holds requests. That makes "human in the loop"
 a rule whose target is a processor — events are the interface, the hold is a facet call. The question
 is whether a held fetch pinning the gate facet (≤ the delivery watchdog) is acceptable, or whether the

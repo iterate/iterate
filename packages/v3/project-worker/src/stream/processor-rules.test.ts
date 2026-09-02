@@ -38,7 +38,7 @@ describe("rule 2 — per-event barrier under slow blockers", () => {
     const startAt = new Map<number, number>();
     const blockedDoneAt = new Map<number, number>();
     const Contract = contractOf("slowbar", "1", ["e"]);
-    class Slow extends StreamProcessor<{ n: number }> {
+    class SlowProcessor extends StreamProcessor<{ n: number }> {
       readonly contract = Contract;
       override processEvent(args: ProcessEventArgs<{ n: number }>): undefined {
         if (!args.event) return;
@@ -50,7 +50,10 @@ describe("rule 2 — per-event barrier under slow blockers", () => {
         });
       }
     }
-    const p = new ProcessorEngine(new Slow(), { stream: mem.stream, storage: memoryStorage() });
+    const p = new ProcessorEngine(new SlowProcessor(), {
+      stream: mem.stream,
+      storage: memoryStorage(),
+    });
     mem.stream.append({ type: "e" }, { type: "e" }, { type: "e" }) as StreamEvent[];
     await p.wake();
     for (const offset of [1, 2]) {
@@ -66,7 +69,7 @@ describe("rule 2 — per-event barrier under slow blockers", () => {
     const mem = memoryStream();
     const trace: string[] = [];
     const Contract = contractOf("nested", "1", ["e"]);
-    class Nested extends StreamProcessor<{ n: number }> {
+    class NestedProcessor extends StreamProcessor<{ n: number }> {
       readonly contract = Contract;
       override processEvent(args: ProcessEventArgs<{ n: number }>): undefined {
         if (!args.event) return;
@@ -82,7 +85,10 @@ describe("rule 2 — per-event barrier under slow blockers", () => {
         });
       }
     }
-    const p = new ProcessorEngine(new Nested(), { stream: mem.stream, storage: memoryStorage() });
+    const p = new ProcessorEngine(new NestedProcessor(), {
+      stream: mem.stream,
+      storage: memoryStorage(),
+    });
     mem.stream.append({ type: "e" }, { type: "e" }) as StreamEvent[];
     await p.wake();
     await sleep(120); // let stragglers land so the trace is complete either way
@@ -98,7 +104,7 @@ describe("rule 3 — runInBackground never blocks the batch commit", () => {
     const storage = memoryStorage();
     let bgDone = false;
     const Contract = contractOf("bg", "1", ["e"]);
-    class Bg extends StreamProcessor<{ n: number }> {
+    class BgProcessor extends StreamProcessor<{ n: number }> {
       readonly contract = Contract;
       override reduce({ state }: ReduceArgs<{ n: number }>) {
         return { n: state.n + 1 };
@@ -112,7 +118,7 @@ describe("rule 3 — runInBackground never blocks the batch commit", () => {
         });
       }
     }
-    const p = new ProcessorEngine(new Bg(), { stream: mem.stream, storage });
+    const p = new ProcessorEngine(new BgProcessor(), { stream: mem.stream, storage });
     const committed = mem.stream.append({ type: "e" }) as StreamEvent[];
     await p.processEventBatch(committed, { after: 0, through: 1 });
     // The batch is durably committed BEFORE the background work lands (overtaking allowed):
@@ -137,7 +143,7 @@ describe("rule 4 — one durable commit per batch, all-or-nothing", () => {
     const storage = memoryStorage();
     const effects: number[] = [];
     const Contract = contractOf("redthrow", "1", ["e"]);
-    class RedThrow extends StreamProcessor<{ n: number }> {
+    class RedThrowProcessor extends StreamProcessor<{ n: number }> {
       readonly contract = Contract;
       override reduce({ event, state }: ReduceArgs<{ n: number }>) {
         if ((event.payload as { boom?: boolean } | undefined)?.boom)
@@ -148,7 +154,7 @@ describe("rule 4 — one durable commit per batch, all-or-nothing", () => {
         if (args.event) effects.push(args.event.offset);
       }
     }
-    const p = new ProcessorEngine(new RedThrow(), { stream: mem.stream, storage });
+    const p = new ProcessorEngine(new RedThrowProcessor(), { stream: mem.stream, storage });
     const committed = mem.stream.append(
       { type: "e" },
       { type: "e" },
@@ -169,7 +175,7 @@ describe("rule 4 — one durable commit per batch, all-or-nothing", () => {
     const effects: number[] = [];
     let attempts = 0;
     const Contract = contractOf("lastfail", "1", ["e"]);
-    class LastFail extends StreamProcessor<{ n: number }> {
+    class LastFailProcessor extends StreamProcessor<{ n: number }> {
       readonly contract = Contract;
       override reduce({ state }: ReduceArgs<{ n: number }>) {
         return { n: state.n + 1 };
@@ -183,7 +189,7 @@ describe("rule 4 — one durable commit per batch, all-or-nothing", () => {
         });
       }
     }
-    const p = new ProcessorEngine(new LastFail(), { stream: mem.stream, storage });
+    const p = new ProcessorEngine(new LastFailProcessor(), { stream: mem.stream, storage });
     const committed = mem.stream.append(
       { type: "e" },
       { type: "e" },
@@ -203,7 +209,7 @@ describe("rule 4 — one durable commit per batch, all-or-nothing", () => {
 const deliveryRecorder = (slug: string, consumes: readonly string[]) => {
   const deliveries: { offset: number | null; caughtUp: boolean }[] = [];
   const Contract = contractOf(slug, "1", consumes);
-  class Rec extends StreamProcessor<{ n: number }> {
+  class RecProcessor extends StreamProcessor<{ n: number }> {
     readonly contract = Contract;
     override reduce({ state }: ReduceArgs<{ n: number }>) {
       return { n: state.n + 1 };
@@ -217,14 +223,17 @@ const deliveryRecorder = (slug: string, consumes: readonly string[]) => {
       return null;
     }
   }
-  return { Rec, deliveries };
+  return { RecProcessor, deliveries };
 };
 
 describe("rule 5 — exactly one caughtUp per at-head batch", () => {
   test("last event of the batch NOT consumable → the last CONSUMABLE event carries the one caughtUp (no extra eventless pass)", async () => {
     const mem = memoryStream();
-    const { Rec, deliveries } = deliveryRecorder("lastfiltered", ["tick"]);
-    const p = new ProcessorEngine(new Rec(), { stream: mem.stream, storage: memoryStorage() });
+    const { RecProcessor, deliveries } = deliveryRecorder("lastfiltered", ["tick"]);
+    const p = new ProcessorEngine(new RecProcessor(), {
+      stream: mem.stream,
+      storage: memoryStorage(),
+    });
     const committed = mem.stream.append({ type: "tick" }, { type: "noise" }) as StreamEvent[];
     await p.processEventBatch(committed, { after: 0, through: 2 });
     expect(deliveries.filter((d) => d.caughtUp)).toHaveLength(1);
@@ -233,8 +242,11 @@ describe("rule 5 — exactly one caughtUp per at-head batch", () => {
 
   test("no consumable event at all → exactly one eventless caughtUp pass", async () => {
     const mem = memoryStream();
-    const { Rec, deliveries } = deliveryRecorder("nonecons", ["tick"]);
-    const p = new ProcessorEngine(new Rec(), { stream: mem.stream, storage: memoryStorage() });
+    const { RecProcessor, deliveries } = deliveryRecorder("nonecons", ["tick"]);
+    const p = new ProcessorEngine(new RecProcessor(), {
+      stream: mem.stream,
+      storage: memoryStorage(),
+    });
     const committed = mem.stream.append({ type: "noise" }, { type: "noise" }) as StreamEvent[];
     await p.processEventBatch(committed, { after: 0, through: 2 });
     expect(deliveries).toEqual([{ offset: null, caughtUp: true }]);
@@ -245,8 +257,11 @@ describe("rule 5 — exactly one caughtUp per at-head batch", () => {
     // read finds nothing new, the eventless at-head pass still runs — a log whose length is an
     // exact page multiple must not stall the at-head recovery work (obligation sweeps, "am I done").
     const mem = memoryStream();
-    const { Rec, deliveries } = deliveryRecorder("page500", ["tick"]);
-    const p = new ProcessorEngine(new Rec(), { stream: mem.stream, storage: memoryStorage() });
+    const { RecProcessor, deliveries } = deliveryRecorder("page500", ["tick"]);
+    const p = new ProcessorEngine(new RecProcessor(), {
+      stream: mem.stream,
+      storage: memoryStorage(),
+    });
     mem.stream.append(
       ...Array.from({ length: 500 }, () => ({ type: "tick" }) as StreamEventInput),
     ) as StreamEvent[];
@@ -261,8 +276,11 @@ describe("rule 5 — exactly one caughtUp per at-head batch", () => {
 describe("waitUntilProcessed", () => {
   test("resolves for an offset that arrives via GAP REPAIR (no push ever delivered)", async () => {
     const mem = memoryStream();
-    const { Rec } = deliveryRecorder("gapwait", ["tick"]);
-    const p = new ProcessorEngine(new Rec(), { stream: mem.stream, storage: memoryStorage() });
+    const { RecProcessor } = deliveryRecorder("gapwait", ["tick"]);
+    const p = new ProcessorEngine(new RecProcessor(), {
+      stream: mem.stream,
+      storage: memoryStorage(),
+    });
     // Three durable events exist but the processor was never pushed (fresh incarnation).
     mem.stream.append({ type: "tick" }, { type: "tick" }, { type: "tick" }) as StreamEvent[];
     await expect(p.waitUntilProcessed({ offset: 3, timeoutMs: 2000 })).resolves.toBeUndefined();
@@ -272,7 +290,7 @@ describe("waitUntilProcessed", () => {
   test("a waiter timing out concurrently with a resolving batch neither leaks nor disturbs other waiters", async () => {
     const mem = memoryStream();
     const Contract = contractOf("waiters", "1", ["e"]);
-    class Slow extends StreamProcessor<{ n: number }> {
+    class SlowProcessor extends StreamProcessor<{ n: number }> {
       readonly contract = Contract;
       override reduce({ state }: ReduceArgs<{ n: number }>) {
         return { n: state.n + 1 };
@@ -284,7 +302,10 @@ describe("waitUntilProcessed", () => {
         return null; // exact-offset suite: opt out of the default live-state emit
       }
     }
-    const p = new ProcessorEngine(new Slow(), { stream: mem.stream, storage: memoryStorage() });
+    const p = new ProcessorEngine(new SlowProcessor(), {
+      stream: mem.stream,
+      storage: memoryStorage(),
+    });
     mem.procs.push(p);
     mem.stream.append({ type: "e" }, { type: "e" }) as StreamEvent[];
     // A: unreachable offset, times out at ~25ms — DURING the batch's 60ms blocker.
@@ -377,7 +398,7 @@ describe("live state with a projection that throws only sometimes", () => {
   test("state advances through the throwing window; the chain resumes and stays linked", async () => {
     const mem = memoryStream();
     const Contract = contractOf("flakyproj", "1", ["tick"]);
-    class Flaky extends StreamProcessor<{ n: number }> {
+    class FlakyProcessor extends StreamProcessor<{ n: number }> {
       readonly contract = Contract;
       override reduce({ state }: ReduceArgs<{ n: number }>) {
         return { n: state.n + 1 };
@@ -387,7 +408,10 @@ describe("live state with a projection that throws only sometimes", () => {
         return { n: state.n };
       }
     }
-    const p = new ProcessorEngine(new Flaky(), { stream: mem.stream, storage: memoryStorage() });
+    const p = new ProcessorEngine(new FlakyProcessor(), {
+      stream: mem.stream,
+      storage: memoryStorage(),
+    });
     mem.procs.push(p);
     const changes = () =>
       mem.pushed.filter((e) => e.type === "events.iterate.com/live-state/changed");
@@ -420,7 +444,7 @@ describe("live state with a projection that throws only sometimes", () => {
 
 describe("ephemeral windows and repair", () => {
   const EphContract = contractOf("ephwin", "1", ["tick", "chunk"]); // chunk arrives ephemeral — NAMED
-  class Eph extends StreamProcessor<{ n: number }> {
+  class EphProcessor extends StreamProcessor<{ n: number }> {
     readonly contract = EphContract;
     readonly seen: string[] = [];
     override reduce({ event, state }: ReduceArgs<{ n: number }>) {
@@ -435,7 +459,7 @@ describe("ephemeral windows and repair", () => {
   test("LIVE instance: a durable push whose scannedAfterOffset is BEFORE the in-memory-only cursor repairs without double-consuming the ephemerals", async () => {
     const mem = memoryStream();
     const storage = memoryStorage();
-    const a = new Eph();
+    const a = new EphProcessor();
     const engine = new ProcessorEngine(a, { stream: mem.stream, storage });
     mem.procs.push(engine);
 
@@ -461,7 +485,7 @@ describe("ephemeral windows and repair", () => {
   test("EVICTION after an ephemeral-only window: the rebuilt incarnation repairs from its durable cursor; dead ephemerals are gaps, durables appear exactly once", async () => {
     const mem = memoryStream();
     const storage = memoryStorage();
-    mem.procs.push(new ProcessorEngine(new Eph(), { stream: mem.stream, storage })); // the doomed incarnation
+    mem.procs.push(new ProcessorEngine(new EphProcessor(), { stream: mem.stream, storage })); // the doomed incarnation
     mem.stream.append({ type: "tick" }) as StreamEvent[]; // offset 1 — durable, cursor 1 persisted
     await settle();
     const writesAfterDurable = storage.writes;
@@ -472,7 +496,7 @@ describe("ephemeral windows and repair", () => {
 
     // EVICTION: the old incarnation dies; a fresh one shares its storage (durable cursor 1).
     mem.procs.length = 0;
-    const b = new Eph();
+    const b = new EphProcessor();
     const engineB = new ProcessorEngine(b, { stream: mem.stream, storage });
     mem.procs.push(engineB);
     const readsBefore = mem.reads;
@@ -495,7 +519,7 @@ describe("ephemeral windows and repair", () => {
     const storage = memoryStorage();
     let attempts = 0;
     const Contract = contractOf("ephdrop", "1", ["tick", "chunk"]);
-    class Flaky extends StreamProcessor<{ n: number }> {
+    class FlakyProcessor extends StreamProcessor<{ n: number }> {
       readonly contract = Contract;
       readonly seen: string[] = [];
       override reduce({ event, state }: ReduceArgs<{ n: number }>) {
@@ -509,7 +533,7 @@ describe("ephemeral windows and repair", () => {
         });
       }
     }
-    const p = new Flaky();
+    const p = new FlakyProcessor();
     mem.procs.push(new ProcessorEngine(p, { stream: mem.stream, storage }));
     mem.stream.append({ type: "tick" }) as StreamEvent[]; // offset 1 — its push FAILS once (cursor stays 0)
     await settle();
@@ -525,7 +549,7 @@ describe("ephemeral windows and repair", () => {
   test('consumes ["*"] PLUS a named ephemeral in one contract: durables swept, the named ephemeral consumed, unnamed ephemerals skipped', async () => {
     const mem = memoryStream();
     const Contract = contractOf("starplus", "1", ["*", "chunk"]);
-    class StarPlus extends StreamProcessor<{ n: number }> {
+    class StarPlusProcessor extends StreamProcessor<{ n: number }> {
       readonly contract = Contract;
       readonly seen: string[] = [];
       override reduce({ event, state }: ReduceArgs<{ n: number }>) {
@@ -536,7 +560,7 @@ describe("ephemeral windows and repair", () => {
         return { n: state.n }; // emits live-state/changed — which the ENGINE never folds, even for "*"+named (foldsEvent, not consumesEvent, is the guard)
       }
     }
-    const p = new StarPlus();
+    const p = new StarPlusProcessor();
     const engine = new ProcessorEngine(p, { stream: mem.stream, storage: memoryStorage() });
     mem.procs.push(engine);
     mem.stream.append({ type: "tick" }) as StreamEvent[]; // durable → swept by "*" (emits a live-state change)

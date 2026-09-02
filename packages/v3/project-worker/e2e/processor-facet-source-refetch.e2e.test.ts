@@ -31,7 +31,7 @@ import { freshCtx, openItx, sleep } from "./support/client.ts";
 const SLUG = "mark-refetch";
 const M = 5; // durable 'mark' commits after warm-up
 
-// A TINY processor module — the pure `Mark extends StreamProcessor` plus its one-line host
+// A TINY processor module — the pure `MarkProcessor extends StreamProcessor` plus its one-line host
 // `MarkDurableObject extends StreamProcessorDurableObject`, seeded into kv so the source lambda merely
 // READS it back (no nested module-string escaping). The loader hosts the exported host class
 // (`className`) as the facet.
@@ -45,14 +45,14 @@ const contract = defineProcessorContract({
   consumes: ["mark"],
   emits: [],
 });
-class Mark extends StreamProcessor {
+class MarkProcessor extends StreamProcessor {
   contract = contract;
   reduce({ event, state }) {
     if (event.type === "mark") return { marks: state.marks + 1 };
   }
 }
 export class MarkDurableObject extends StreamProcessorDurableObject {
-  processor = new Mark();
+  processor = new MarkProcessor();
 }`;
 
 // The SOURCE expression: evaluating it writes ONE unique kv key (an atomic count — a read-modify-

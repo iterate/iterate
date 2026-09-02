@@ -21,7 +21,7 @@ test("itx.load: getEntrypoint (stateless) + getDurableObjectClass().get() (durab
   await itx.kv.put(
     "src/counter.js",
     `import { DurableObject } from "cloudflare:workers";
-export class Counter extends DurableObject {
+export class CounterDurableObject extends DurableObject {
   async bump() { const n = ((await this.ctx.storage.get('n')) ?? 0) + 1; await this.ctx.storage.put('n', n); return n; }
   async value() { return (await this.ctx.storage.get('n')) ?? 0; }
 }`,
@@ -34,14 +34,14 @@ export class Counter extends DurableObject {
     "hi jonas",
   );
 
-  // 2. DURABLE NAMED: load → getDurableObjectClass('Counter').get('c1') → a facet named 'c1' whose
+  // 2. DURABLE NAMED: load → getDurableObjectClass('CounterDurableObject').get('c1') → a facet named 'c1' whose
   //    state persists across calls.
   await itx.invokeCapability(
-    `itx.load(${SRC_COUNTER}).getDurableObjectClass('Counter').get('c1').bump()`,
+    `itx.load(${SRC_COUNTER}).getDurableObjectClass('CounterDurableObject').get('c1').bump()`,
   );
   expect(
     await itx.invokeCapability(
-      `itx.load(${SRC_COUNTER}).getDurableObjectClass('Counter').get('c1').bump()`,
+      `itx.load(${SRC_COUNTER}).getDurableObjectClass('CounterDurableObject').get('c1').bump()`,
     ),
   ).toBe(2);
 
@@ -52,7 +52,7 @@ export class Counter extends DurableObject {
   // 4. a DIFFERENT instance name is INDEPENDENT state.
   expect(
     await itx.invokeCapability(
-      `itx.load(${SRC_COUNTER}).getDurableObjectClass('Counter').get('c2').bump()`,
+      `itx.load(${SRC_COUNTER}).getDurableObjectClass('CounterDurableObject').get('c2').bump()`,
     ),
   ).toBe(1);
 });

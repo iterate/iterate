@@ -25,7 +25,7 @@ test("live state chains client-side from the door — mini-app + processor flavo
   // ── mini-app flavor: the chatroom (SDK LiveState helper) ──
   await itx.provide(
     "itx.chat",
-    `itx.load("itx.kv.get('src/chatroom.js')").getDurableObjectClass('Chatroom').get()`,
+    `itx.load("itx.kv.get('src/chatroom.js')").getDurableObjectClass('ChatroomDurableObject').get()`,
   );
 
   const chat = liveClient(async () => clone(await itx.invokeCapability("itx.chat.state()")));
@@ -103,13 +103,13 @@ test("live state chains client-side from the door — mini-app + processor flavo
 type PresenceLive = { ticks: number; lastPokeMs: number };
 
 test("a dynamic-worker processor's live state combines reduced (ticks) + runtime (lastPokeMs); a client syncs both via ephemeral deltas", async () => {
-  // Presence (e2e/support/sources.ts) exposes live state combining REDUCED state — `ticks`, folded
+  // PresenceProcessor (e2e/support/sources.ts) exposes live state combining REDUCED state — `ticks`, folded
   // from durable 'tick' events — with RUNTIME state — `lastPokeMs`, a plain field the reduce never
   // touches, bumped when a 'poke' EPHEMERAL reaches its processEvent. The client seeds through
   // `liveSnapshot()` and folds deltas with the SHIPPABLE store (the same one the browser hook uses).
   const itx = openItx(freshCtx("lsruntime"));
   await seedSources(itx, ["presence"]);
-  // Presence's contract consumes the EPHEMERAL 'poke', so its subscription must NAME it: the ONE
+  // PresenceProcessor's contract consumes the EPHEMERAL 'poke', so its subscription must NAME it: the ONE
   // consumes rule (absent = durable events only; naming a type opts its ephemerals in) sits in
   // front of the facet's own contract filter — hence `consumes` on the enable.
   const presenceClass =

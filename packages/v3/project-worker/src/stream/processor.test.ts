@@ -172,7 +172,7 @@ describe("the concurrency contract", () => {
       consumes: ["e"],
       emits: [],
     });
-    class Bg extends StreamProcessor<object> {
+    class BgProcessor extends StreamProcessor<object> {
       readonly contract = Contract;
       override processEvent(args: ProcessEventArgs<object>): undefined {
         if (!args.event) return;
@@ -183,7 +183,10 @@ describe("the concurrency contract", () => {
         order.push(`fg ${args.event.offset}`);
       }
     }
-    const bg = new ProcessorEngine(new Bg(), { stream: mem.stream, storage: memoryStorage() });
+    const bg = new ProcessorEngine(new BgProcessor(), {
+      stream: mem.stream,
+      storage: memoryStorage(),
+    });
     mem.stream.append({ type: "e" }, { type: "e" }) as StreamEvent[];
     await bg.wake();
     expect(order).toEqual(["fg 1", "fg 2"]); // background hasn't landed — it overtakes/loiters
@@ -234,7 +237,7 @@ describe("the concurrency contract", () => {
       consumes: ["e"],
       emits: [],
     });
-    class Flaky extends StreamProcessor<{ seen: number }> {
+    class FlakyProcessor extends StreamProcessor<{ seen: number }> {
       readonly contract = Contract;
       override reduce({ state }: ReduceArgs<{ seen: number }>) {
         return { seen: state.seen + 1 };
@@ -247,7 +250,7 @@ describe("the concurrency contract", () => {
         });
       }
     }
-    const flaky = new ProcessorEngine(new Flaky(), { stream: mem.stream, storage });
+    const flaky = new ProcessorEngine(new FlakyProcessor(), { stream: mem.stream, storage });
     mem.procs.push(flaky);
     mem.stream.append({ type: "e" }) as StreamEvent[]; // the auto-push fails (attempt 1)
     await settle();
@@ -310,7 +313,7 @@ const CaughtUpContract = defineProcessorContract({
   consumes: ["*"],
   emits: [],
 });
-class CaughtUpProbe extends StreamProcessor<{ n: number }> {
+class CaughtUpProbeProcessor extends StreamProcessor<{ n: number }> {
   readonly contract = CaughtUpContract;
   caughtUps = 0;
   override reduce({ state }: ReduceArgs<{ n: number }>) {
@@ -323,7 +326,7 @@ class CaughtUpProbe extends StreamProcessor<{ n: number }> {
 /** A probe over a stream with nothing to read; `readFails` makes every self-pull reject. Returns
  *  the author (`probe`, for its counter) and the engine that drives it. */
 const caughtUpProbe = (readFails?: Error) => {
-  const probe = new CaughtUpProbe();
+  const probe = new CaughtUpProbeProcessor();
   const engine = new ProcessorEngine(probe, {
     stream: {
       append: () => [],
@@ -366,7 +369,7 @@ describe("ephemeral events", () => {
     consumes: ["loud", "chunk"], // "chunk" arrives ephemeral — NAMED, so it is consumed
     emits: [],
   });
-  class Eph extends StreamProcessor<{ seen: string[] }> {
+  class EphProcessor extends StreamProcessor<{ seen: string[] }> {
     readonly contract = EphContract;
     override reduce({ event, state }: ReduceArgs<{ seen: string[] }>) {
       return { seen: [...state.seen, `${event.type}@${event.offset}`] };
@@ -386,7 +389,7 @@ describe("ephemeral events", () => {
     consumes: ["*"], // star NEVER sweeps ephemerals
     emits: [],
   });
-  class Star extends StreamProcessor<{ seen: string[] }> {
+  class StarProcessor extends StreamProcessor<{ seen: string[] }> {
     readonly contract = StarContract;
     override reduce({ event, state }: ReduceArgs<{ seen: string[] }>) {
       return { seen: [...state.seen, `${event.type}@${event.offset}`] };
@@ -400,8 +403,14 @@ describe("ephemeral events", () => {
     const mem = memoryStream();
     const ephStorage = memoryStorage();
     const starStorage = memoryStorage();
-    const eph = new ProcessorEngine(new Eph(), { stream: mem.stream, storage: ephStorage });
-    const star = new ProcessorEngine(new Star(), { stream: mem.stream, storage: starStorage });
+    const eph = new ProcessorEngine(new EphProcessor(), {
+      stream: mem.stream,
+      storage: ephStorage,
+    });
+    const star = new ProcessorEngine(new StarProcessor(), {
+      stream: mem.stream,
+      storage: starStorage,
+    });
     mem.procs.push(eph, star);
 
     mem.stream.append({ type: "loud" }) as StreamEvent[]; // offset 1, durable
@@ -428,7 +437,7 @@ describe("ephemeral events", () => {
   test("a rebuilt reduce omits ephemerals (never derive durable truth from one)", async () => {
     const mem = memoryStream();
     const storage = memoryStorage();
-    const a = new ProcessorEngine(new Eph(), { stream: mem.stream, storage });
+    const a = new ProcessorEngine(new EphProcessor(), { stream: mem.stream, storage });
     mem.procs.push(a);
     mem.stream.append({ type: "loud" }) as StreamEvent[];
     mem.stream.append({ type: "chunk", ephemeral: true }) as StreamEvent[];
@@ -437,7 +446,7 @@ describe("ephemeral events", () => {
     expect((await a.snapshot()).state.seen).toEqual(["loud@1", "chunk@2", "loud@3"]);
     // a fresh incarnation over the same storage: the ephemeral is gone from the log — the reduce
     // regresses to durable truth only, and the offsets are simply gaps
-    const b = new ProcessorEngine(new Eph(), { stream: mem.stream, storage });
+    const b = new ProcessorEngine(new EphProcessor(), { stream: mem.stream, storage });
     // (simulate: the last durable persist covered through offset 3; state includes chunk@2 only
     //  because that scannedOffsetRange ALSO contained a durable event — the documented divergence rule)
     expect((await b.snapshot()).state.seen).toContain("loud@3");
@@ -450,7 +459,10 @@ describe("ephemeral events", () => {
     // nothing twice yet still deliver its named ephemeral (pushes are an ephemeral's ONLY delivery,
     // and a live processor was handed it).
     const mem = memoryStream();
-    const p = new ProcessorEngine(new Eph(), { stream: mem.stream, storage: memoryStorage() });
+    const p = new ProcessorEngine(new EphProcessor(), {
+      stream: mem.stream,
+      storage: memoryStorage(),
+    });
     mem.stream.append({ type: "loud" }); // offset 1, durable
     await p.wake();
     // one commit: durable loud@2 + ephemeral chunk@3 → range (1,3]; hand-delivered below
@@ -477,14 +489,14 @@ describe("review round 1 regressions", () => {
       consumes: ["ping"],
       emits: ["echoed"],
     });
-    class Echoer extends StreamProcessor<object> {
+    class EchoerProcessor extends StreamProcessor<object> {
       readonly contract = Contract;
       override processEvent(args: ProcessEventArgs<object>): undefined {
         if (args.event?.type !== "ping") return;
         args.blockProcessorWhile(() => args.append({ type: "echoed", idempotencyKey: "once" }));
       }
     }
-    mem.procs.push(new ProcessorEngine(new Echoer(), { stream: mem.stream, storage }));
+    mem.procs.push(new ProcessorEngine(new EchoerProcessor(), { stream: mem.stream, storage }));
     mem.stream.append({ type: "ping" }) as StreamEvent[]; // pre-fix shape: would hang forever
     await settle();
     expect(mem.events.some((e) => e.type === "echoed")).toBe(true);
@@ -564,13 +576,13 @@ describe("emit rules + idempotency", () => {
       consumes: ["e"],
       emits: [],
     });
-    class Rogue extends StreamProcessor<object> {
+    class RogueProcessor extends StreamProcessor<object> {
       readonly contract = Contract;
       override processEvent(args: ProcessEventArgs<object>): undefined {
         if (args.event) args.blockProcessorWhile(() => args.append({ type: "not-declared" }));
       }
     }
-    const rogue = new ProcessorEngine(new Rogue(), {
+    const rogue = new ProcessorEngine(new RogueProcessor(), {
       stream: mem.stream,
       storage: memoryStorage(),
     });
@@ -597,7 +609,7 @@ describe("live state (the delta patches on the wire)", () => {
     consumes: ["tick"],
     emits: [],
   });
-  class Tally extends StreamProcessor<z.infer<typeof contract.stateSchema>> {
+  class TallyProcessor extends StreamProcessor<z.infer<typeof contract.stateSchema>> {
     contract = contract;
     reduce({ event, state }: ReduceArgs<z.infer<typeof contract.stateSchema>>) {
       if (event.type === "tick") return { ...state, count: state.count + 1 };
@@ -613,7 +625,10 @@ describe("live state (the delta patches on the wire)", () => {
 
   test("a reduce that changes the projection emits ONE ephemeral change event carrying the patch", async () => {
     const mem = memoryStream();
-    const p = new ProcessorEngine(new Tally(), { stream: mem.stream, storage: memoryStorage() });
+    const p = new ProcessorEngine(new TallyProcessor(), {
+      stream: mem.stream,
+      storage: memoryStorage(),
+    });
     mem.procs.push(p);
     mem.stream.append({ type: "tick" }) as StreamEvent[];
     await settle();
@@ -628,7 +643,10 @@ describe("live state (the delta patches on the wire)", () => {
 
   test("revisions chain: each emission's `from` equals the previous emission's `to`", async () => {
     const mem = memoryStream();
-    const p = new ProcessorEngine(new Tally(), { stream: mem.stream, storage: memoryStorage() });
+    const p = new ProcessorEngine(new TallyProcessor(), {
+      stream: mem.stream,
+      storage: memoryStorage(),
+    });
     mem.procs.push(p);
     mem.stream.append({ type: "tick" }) as StreamEvent[];
     await settle();
@@ -642,7 +660,10 @@ describe("live state (the delta patches on the wire)", () => {
 
   test("liveSnapshot() mints the rev the next emission chains from ({rev,state} atomically)", async () => {
     const mem = memoryStream();
-    const p = new ProcessorEngine(new Tally(), { stream: mem.stream, storage: memoryStorage() });
+    const p = new ProcessorEngine(new TallyProcessor(), {
+      stream: mem.stream,
+      storage: memoryStorage(),
+    });
     mem.procs.push(p);
     mem.stream.append({ type: "other" }) as StreamEvent[]; // advance the cursor, no projection change
     await settle();
@@ -664,7 +685,7 @@ describe("live state (the delta patches on the wire)", () => {
       consumes: ["tick"],
       emits: [],
     });
-    class Flat extends StreamProcessor<z.infer<typeof contract2.stateSchema>> {
+    class FlatProcessor extends StreamProcessor<z.infer<typeof contract2.stateSchema>> {
       contract = contract2;
       reduce({ state }: ReduceArgs<z.infer<typeof contract2.stateSchema>>) {
         return { seen: state.seen + 1 };
@@ -674,7 +695,10 @@ describe("live state (the delta patches on the wire)", () => {
       }
     }
     const mem = memoryStream();
-    const p = new ProcessorEngine(new Flat(), { stream: mem.stream, storage: memoryStorage() });
+    const p = new ProcessorEngine(new FlatProcessor(), {
+      stream: mem.stream,
+      storage: memoryStorage(),
+    });
     mem.procs.push(p);
     mem.stream.append({ type: "tick" }, { type: "tick" }) as StreamEvent[];
     await settle();
@@ -695,23 +719,23 @@ describe("live state (the delta patches on the wire)", () => {
       consumes: ["*", "events.iterate.com/live-state/changed"],
       emits: [],
     });
-    class Sneaky extends StreamProcessor<z.infer<typeof contract3.stateSchema>> {
+    class SneakyProcessor extends StreamProcessor<z.infer<typeof contract3.stateSchema>> {
       contract = contract3;
       reduce({ state }: ReduceArgs<z.infer<typeof contract3.stateSchema>>) {
         return { seen: state.seen + 1 };
       }
       // Opt out of its OWN live-state emit so the assertion counts only tally's change event — the
-      // point here is that Sneaky never CONSUMES a change event (the loop guard), not what it emits.
+      // point here is that SneakyProcessor never CONSUMES a change event (the loop guard), not what it emits.
       override projectLiveState() {
         return null;
       }
     }
     const mem = memoryStream();
-    const tally = new ProcessorEngine(new Tally(), {
+    const tally = new ProcessorEngine(new TallyProcessor(), {
       stream: mem.stream,
       storage: memoryStorage(),
     });
-    const sneaky = new ProcessorEngine(new Sneaky(), {
+    const sneaky = new ProcessorEngine(new SneakyProcessor(), {
       stream: mem.stream,
       storage: memoryStorage(),
     });
@@ -745,7 +769,7 @@ describe("live state (the delta patches on the wire)", () => {
       consumes: ["tick"],
       emits: [],
     });
-    class Runtime extends StreamProcessor<object> {
+    class RuntimeProcessor extends StreamProcessor<object> {
       contract = contract4;
       lastSeenOffset = 0; // RUNTIME state: on the instance, not in the reduce — gone with the host
       override processEvent(args: ProcessEventArgs<object>): undefined {
@@ -756,7 +780,10 @@ describe("live state (the delta patches on the wire)", () => {
       }
     }
     const mem = memoryStream();
-    const p = new ProcessorEngine(new Runtime(), { stream: mem.stream, storage: memoryStorage() });
+    const p = new ProcessorEngine(new RuntimeProcessor(), {
+      stream: mem.stream,
+      storage: memoryStorage(),
+    });
     mem.procs.push(p);
     mem.stream.append({ type: "tick" }, { type: "tick" }) as StreamEvent[]; // ONE batch, two events
     await settle();
@@ -779,14 +806,14 @@ describe("live state (the delta patches on the wire)", () => {
       consumes: ["tick"],
       emits: [],
     });
-    class Still extends StreamProcessor<{ n: number }> {
+    class StillProcessor extends StreamProcessor<{ n: number }> {
       contract = contract5;
       fired = 0; // a runtime field the DEFAULT projection does NOT fold in
       override processEvent(args: ProcessEventArgs<{ n: number }>): undefined {
         if (args.event) this.fired++;
       }
     }
-    const still = new Still();
+    const still = new StillProcessor();
     const mem = memoryStream();
     mem.procs.push(new ProcessorEngine(still, { stream: mem.stream, storage: memoryStorage() }));
     mem.stream.append({ type: "tick" }) as StreamEvent[];
@@ -809,7 +836,7 @@ describe("live state emission failure is contained", () => {
       consumes: ["tick"],
       emits: [],
     });
-    class Biggie extends StreamProcessor<z.infer<typeof contract.stateSchema>> {
+    class BiggieProcessor extends StreamProcessor<z.infer<typeof contract.stateSchema>> {
       contract = contract;
       reduce({ state }: ReduceArgs<z.infer<typeof contract.stateSchema>>) {
         return { n: state.n + 1 };
@@ -819,7 +846,10 @@ describe("live state emission failure is contained", () => {
       }
     }
     const mem = memoryStream();
-    const p = new ProcessorEngine(new Biggie(), { stream: mem.stream, storage: memoryStorage() });
+    const p = new ProcessorEngine(new BiggieProcessor(), {
+      stream: mem.stream,
+      storage: memoryStorage(),
+    });
     mem.procs.push(p);
     mem.stream.append({ type: "tick" }) as StreamEvent[];
     await settle();

@@ -19,11 +19,11 @@
 //      production sequence (support.ts's `quiesce`).
 //
 // PROCESSORS here are what they are everywhere: userspace two-class sources — a pure
-// `StreamProcessor` (`Counter`) and its one-line `StreamProcessorDurableObject` host
+// `StreamProcessor` (`CounterProcessor`) and its one-line `StreamProcessorDurableObject` host
 // (`CounterDurableObject`, the class the load chain names) — loaded through the Worker Loader and
 // hosted as facets (there are no built-in processors). The workers lane materializes them fine (the
 // loader accepts allow_irrevocable_stub_storage), so every facet-lifecycle pin rides the inline
-// `Counter` source below, enabled the way the edge's `enableProcessor` spells it — ONE
+// `CounterProcessor` source below, enabled the way the edge's `enableProcessor` spells it — ONE
 // `subscription-configured` whose target is the facet's `processEventBatch` through the load chain.
 // Live stubs (hibernatable stub pagers) work fully here too — see hibernation-at-scale.test.ts.
 
@@ -32,7 +32,7 @@ import { expect, test, vi } from "vitest";
 import { Echo, openSession, quiesce, stub } from "./support.ts";
 
 /** A tiny userspace processor: counts every durable event. The tally fixture's shape
- *  (e2e/support/sources.ts), reduced to one number — the pure `Counter` plus its host
+ *  (e2e/support/sources.ts), reduced to one number — the pure `CounterProcessor` plus its host
  *  `CounterDurableObject`, which is what the load chain names. */
 const COUNTER_SRC = /* js */ `
 import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
@@ -45,19 +45,19 @@ const contract = defineProcessorContract({
   consumes: ["*"],
   emits: [],
 });
-class Counter extends StreamProcessor {
+class CounterProcessor extends StreamProcessor {
   contract = contract;
   reduce({ state }) { return { n: state.n + 1 }; }
 }
 export class CounterDurableObject extends StreamProcessorDurableObject {
-  processor = new Counter();
+  processor = new CounterProcessor();
 }
 `;
 
 type FacetSnap = { offset: number; state: { n: number } };
 const snapCounter = (ctx: string, name = "counter") =>
   stub(ctx).invoke(["itx", "facets", ["get", name], ["snapshot"]]) as Promise<FacetSnap>;
-// The number of DURABLE events (read is durable-only). Counter consumes "*", so its `n` equals this
+// The number of DURABLE events (read is durable-only). CounterProcessor consumes "*", so its `n` equals this
 // — the exact-once invariant. (Not `n === offset`: every processor's live-state delta is an
 // ephemeral that consumes an offset, so a durable event's offset exceeds the count of durable
 // events before it.)
@@ -129,7 +129,7 @@ test("QUIESCE PRESERVES CURSOR+STATE: abort an idle facet, re-materialize from t
   // The next snapshot re-materializes the facet: it must resume from its own checkpoint.
   const after = await snapCounter(ctx);
   // Cursor NOT reset/regressed across the abort. It may ADVANCE past `before.offset`: the cold
-  // re-catch-up reads to scannedThroughOffset (the raw head), which grew as Counter's own trailing
+  // re-catch-up reads to scannedThroughOffset (the raw head), which grew as CounterProcessor's own trailing
   // live-state ephemerals landed after the last push — a head-tracking advance, not a replay. The
   // exact-once invariant is the reduced STATE (below), not the offset number.
   expect(after.offset).toBeGreaterThanOrEqual(before.offset);

@@ -1,7 +1,7 @@
 // client/demo.tsx — THE HOSTED DEMO. build-sdk.mjs bundles this (React + react-dom + the capnweb
 // fork + the useLiveState hook, all inlined — no CDN) into one self-contained HTML string the worker
 // serves at `/demo` (worker.ts). Open it against any deployment: it dials `/api` over capnweb exactly
-// like production, loads the Presence processor into a dynamic worker, subscribes to its live state,
+// like production, loads the `PresenceProcessor` into a dynamic worker, subscribes to its live state,
 // and renders reduced ⊕ runtime — the `ticks` fold and the `lastPokeMs` runtime field — updating live
 // as you press the buttons, each of which just appends an event on the stream.
 
@@ -14,7 +14,7 @@ const CTX = "prj_demo_livestate";
 
 // The demo processor, inline (a self-contained page needs no repo files): reduced `ticks` folded
 // from durable 'tick' events, runtime `lastPokeMs` bumped by a 'poke' ephemeral in processEvent (the
-// engine re-projects after the batch). Two classes: the pure `Presence`, and the one-line host
+// engine re-projects after the batch). Two classes: the pure `PresenceProcessor`, and the one-line host
 // `PresenceDurableObject` that `enableProcessor`'s `className` names.
 const PRESENCE_SRC = `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
 const contract = defineProcessorContract({
@@ -23,7 +23,7 @@ const contract = defineProcessorContract({
   stateSchema: z.object({ ticks: z.number().default(0) }), events: {},
   consumes: ["tick", "poke"], emits: [],
 });
-class Presence extends StreamProcessor {
+class PresenceProcessor extends StreamProcessor {
   contract = contract;
   #lastPokeMs = 0;
   reduce({ event, state }) { if (event.type === "tick") return { ...state, ticks: state.ticks + 1 }; }
@@ -31,7 +31,7 @@ class Presence extends StreamProcessor {
   projectLiveState(state) { return { ticks: state.ticks, lastPokeMs: this.#lastPokeMs }; }
 }
 export class PresenceDurableObject extends StreamProcessorDurableObject {
-  processor = new Presence();
+  processor = new PresenceProcessor();
 }`;
 
 async function connectAndEnable(): Promise<any> {

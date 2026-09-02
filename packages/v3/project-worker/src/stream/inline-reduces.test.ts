@@ -17,14 +17,14 @@ const contract = (slug: string) => ({
   initialState: () => ({ n: 0 }),
 });
 
-class Ticks extends StreamProcessor<{ n: number }> {
+class TicksProcessor extends StreamProcessor<{ n: number }> {
   readonly contract = contract("ticks");
   override reduce({ state }: ReduceArgs<{ n: number }>) {
     return { n: state.n + 1 };
   }
 }
 
-class TicksWithEffects extends StreamProcessor<{ n: number }> {
+class TicksWithEffectsProcessor extends StreamProcessor<{ n: number }> {
   readonly contract = contract("ticks-fx");
   override reduce({ state }: ReduceArgs<{ n: number }>) {
     return { n: state.n + 1 };
@@ -57,7 +57,7 @@ function inlineHost(procs: StreamProcessor<any>[]) {
 }
 
 test("a reduce-only StreamProcessor hosts INLINE: durables fold at commit, ephemerals never do", () => {
-  const { reduces, log, event, durable } = inlineHost([new Ticks()]);
+  const { reduces, log, event, durable } = inlineHost([new TicksProcessor()]);
   // a commit of two durables and one ephemeral, offsets 1..3, after the empty log
   const batch = [event(1), event(2, true), event(3)];
   log.push(batch[0], batch[2]);
@@ -67,6 +67,6 @@ test("a reduce-only StreamProcessor hosts INLINE: durables fold at commit, ephem
 });
 
 test("a processor that overrides processEvent is REFUSED at registration — effects cannot run at the commit point", () => {
-  const { reduces } = inlineHost([new TicksWithEffects()]);
+  const { reduces } = inlineHost([new TicksWithEffectsProcessor()]);
   expect(() => reduces.entry("ticks-fx")).toThrow(/overrides processEvent.*host it as a facet/);
 });

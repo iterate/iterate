@@ -6,7 +6,7 @@
 
 const SOURCES: Record<string, string> = {
   "src/counter.js": `import { DurableObject } from "cloudflare:workers";
-export class Counter extends DurableObject {
+export class CounterDurableObject extends DurableObject {
   async increment(by) { const n = ((await this.ctx.storage.get("n")) ?? 0) + by; await this.ctx.storage.put("n", n); return n; }
   async value() { return (await this.ctx.storage.get("n")) ?? 0; }
   async whoAmI() { return await (await this.env.ITX.get()).whoami(); }
@@ -17,7 +17,7 @@ export class Counter extends DurableObject {
 }`,
   "src/chatroom.js": `import { DurableObject } from "cloudflare:workers";
 import { LiveState } from "./processor.js";
-export class Chatroom extends DurableObject {
+export class ChatroomDurableObject extends DurableObject {
   #chat = new LiveState(this.env.ITX, "chat", { messages: [] });
   post(from, text) {
     this.#chat.set({ messages: [...this.#chat.get().messages, { from, text }] });
@@ -35,7 +35,7 @@ export default class Probe extends WorkerEntrypoint {
   }
 }`,
   "src/keeper.js": `import { DurableObject } from "cloudflare:workers";
-export class Keeper extends DurableObject {
+export class KeeperDurableObject extends DurableObject {
   async stash() {
     await this.ctx.storage.put("itx-cap", this.env.ITX);
     return { stashed: true };
@@ -73,7 +73,7 @@ const contract = defineProcessorContract({
   consumes: ["chunk", "mark"],
   emits: [],
 });
-class Chunky extends StreamProcessor {
+class ChunkyProcessor extends StreamProcessor {
   contract = contract;
   reduce({ event, state }) {
     if (event.type === "chunk") return { ...state, chunks: state.chunks + 1 };
@@ -82,7 +82,7 @@ class Chunky extends StreamProcessor {
   projectLiveState(state) { return { chunks: state.chunks, marks: state.marks }; }
 }
 export class ChunkyDurableObject extends StreamProcessorDurableObject {
-  processor = new Chunky();
+  processor = new ChunkyProcessor();
 }`,
   // A processor whose live state COMBINES reduced state (ticks, folded from durable 'tick' events)
   // with RUNTIME state (lastPokeMs — a plain field on the pure class, NOT the reduce checkpoint, gone
@@ -99,7 +99,7 @@ const contract = defineProcessorContract({
   consumes: ["tick", "poke"],
   emits: [],
 });
-class Presence extends StreamProcessor {
+class PresenceProcessor extends StreamProcessor {
   contract = contract;
   #lastPokeMs = 0; // RUNTIME: a field, not reduced state — reset to 0 on eviction, never refolded
   reduce({ event, state }) {
@@ -113,7 +113,7 @@ class Presence extends StreamProcessor {
   projectLiveState(state) { return { ticks: state.ticks, lastPokeMs: this.#lastPokeMs }; }
 }
 export class PresenceDurableObject extends StreamProcessorDurableObject {
-  processor = new Presence();
+  processor = new PresenceProcessor();
 }`,
   "src/user-tally.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
 const contract = defineProcessorContract({
@@ -125,14 +125,14 @@ const contract = defineProcessorContract({
   consumes: ["*"],
   emits: [],
 });
-class UserTally extends StreamProcessor {
+class UserTallyProcessor extends StreamProcessor {
   contract = contract;
   reduce({ event, state }) {
     return { counts: { ...state.counts, [event.type]: (state.counts[event.type] ?? 0) + 1 } };
   }
 }
 export class UserTallyDurableObject extends StreamProcessorDurableObject {
-  processor = new UserTally();
+  processor = new UserTallyProcessor();
 }`,
   // The facet-spine demo processor (was the platform's built-in `tally`): counts every durable event
   // by type. A userspace class like any other — there are no built-in processors.
@@ -146,14 +146,14 @@ const contract = defineProcessorContract({
   consumes: ["*"],
   emits: [],
 });
-class Tally extends StreamProcessor {
+class TallyProcessor extends StreamProcessor {
   contract = contract;
   reduce({ event, state }) {
     return { counts: { ...state.counts, [event.type]: (state.counts[event.type] ?? 0) + 1 } };
   }
 }
 export class TallyDurableObject extends StreamProcessorDurableObject {
-  processor = new Tally();
+  processor = new TallyProcessor();
 }`,
   "src/site.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Site extends WorkerEntrypoint {

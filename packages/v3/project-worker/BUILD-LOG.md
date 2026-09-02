@@ -1938,5 +1938,9 @@ DurableObject itself (wrap, not split); this reverses that one decision.
   subscriptions-shaped table recommended), `fetchCap`/`DEFAULT_CTX`/`?ctx=`/defect 28 already gone,
   the `cd` codec defect already fixed, the gate can be a processor host with a `fetch` door; a §6 lists
   the eight questions for the jam.
-- GATES: tsc×3 · unit+workers 217 (24 files) · e2e 140p/2xf (34 files) · tutorial-proof 8 ·
+- **Naming rule (Jonas):** every class extending `StreamProcessor` ends in `Processor`, every class
+  extending `DurableObject` ends in `DurableObject` — `PresenceProcessor` + `PresenceDurableObject`,
+  the plain toys `CounterDurableObject` / `ChatroomDurableObject` / `KeeperDurableObject`, every unit-
+  test processor. Applied across src, tests, e2e, docs and the gitignored tutorial-proof toys.
+- GATES: tsc×3 · unit+workers 219 (25 files) · e2e 140p/2xf (34 files) · tutorial-proof 8 ·
   Playwright 2 · oxlint 0/0 · knip clean.

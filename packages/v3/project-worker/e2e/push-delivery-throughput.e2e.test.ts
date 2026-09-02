@@ -125,13 +125,13 @@ test("200 push subscribers — one append fans out to all 200 in under 2s, exact
   expect(counts.every((c) => c === 2)).toBe(true); // exactly once per round, no dup fan-out
 }, 120_000);
 
-// A userspace processor: the pure `FanProbe extends StreamProcessor` plus its one-line host
+// A userspace processor: the pure `FanProbeProcessor extends StreamProcessor` plus its one-line host
 // `FanProbeDurableObject extends StreamProcessorDurableObject` (both from the SDK, `./processor.js`),
 // hosted as a facet through `itx.load(src).getDurableObjectClass('FanProbeDurableObject').get(name)`
 // — what `enableProcessor(name, { source, className })` subscribes.
 const FAN_PROCESSOR_SOURCE = /* js */ `
 import { StreamProcessor, StreamProcessorDurableObject } from "./processor.js";
-class FanProbe extends StreamProcessor {
+class FanProbeProcessor extends StreamProcessor {
   contract = {
     slug: "fan-probe",
     version: "1",
@@ -145,7 +145,7 @@ class FanProbe extends StreamProcessor {
   }
 }
 export class FanProbeDurableObject extends StreamProcessorDurableObject {
-  processor = new FanProbe();
+  processor = new FanProbeProcessor();
 }
 `;
 

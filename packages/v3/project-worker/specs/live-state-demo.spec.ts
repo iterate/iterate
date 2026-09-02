@@ -1,6 +1,6 @@
 // live-state-demo.spec.ts — the hosted /demo page driven in a real browser. The worker serves a
 // self-contained page (React + the capnweb fork + the useLiveState hook, all inlined); it mounts,
-// dials this worker's /api, and loads the Presence processor into a dynamic worker.
+// dials this worker's /api, and loads the `PresenceProcessor` into a dynamic worker.
 //
 // SWAPPABLE: set DEMO_BASE_URL to a preview/live deployment (or a self-hosted runtime) and the same
 // spec runs against it (playwright.config.ts skips booting a local worker then).

@@ -13,7 +13,7 @@ import { stub } from "./support.ts";
 
 const PROBE_SRC = /* js */ `
 import { DurableObject } from "cloudflare:workers";
-export class Probe extends DurableObject {
+export class ProbeDurableObject extends DurableObject {
   identity() {
     return {
       props: this.ctx.props ?? null,
@@ -34,7 +34,7 @@ test("a facet from getDurableObjectClass(name, { props }) sees ctx.props", async
       modules: { "probe.js": PROBE_SRC },
     }));
     const props = { contextName: state.id.name, name: "probe" };
-    const klass = worker.getDurableObjectClass("Probe", { props });
+    const klass = worker.getDurableObjectClass("ProbeDurableObject", { props });
     const facet = state.facets.get("probe", () => ({ class: klass })) as unknown as {
       identity(): Promise<{ props: unknown; idName: string | null; exportsKind: string }>;
     };

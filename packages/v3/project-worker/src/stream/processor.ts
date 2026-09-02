@@ -1,6 +1,6 @@
 // stream/processor.ts — THE PROCESSOR: two classes. `StreamProcessor` is what an author writes — a
 // PURE class (a contract and three hooks: `reduce` / `processEvent` / `projectLiveState`, no
-// constructor arguments, no storage, no stream), so `new Presence().reduce({ event, state })` is a
+// constructor arguments, no storage, no stream), so `new PresenceProcessor().reduce({ event, state })` is a
 // unit test. `ProcessorEngine` drives ONE such instance against a stream and a storage (serial
 // chain, checkpoint, gap repair, at-head pass, version refold, live-state publishing); the SDK's
 // `StreamProcessorDurableObject` (sdk/) builds one per hosted facet. The author surface mirrors

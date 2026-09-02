@@ -129,7 +129,7 @@ test("capability table tour: built-in roots, live caps, shadow stack, dynamic-wo
   // 6. EXPRESSION MOUNT running a STATEFUL worker — deep dotted call + callback into the host
   await itxA.provide(
     "itx.counter",
-    "itx.load(['itx', 'kv', ['get', 'src/counter.js']]).getDurableObjectClass('Counter').get()",
+    "itx.load(['itx', 'kv', ['get', 'src/counter.js']]).getDurableObjectClass('CounterDurableObject').get()",
   );
   const inc = await itxA.invokeCapability(["itx", "counter", ["increment", 2]]);
   // stateful worker: increment(2)

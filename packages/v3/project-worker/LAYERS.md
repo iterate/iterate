@@ -83,11 +83,12 @@ handle. `itx.subscriptions.list()` is the read door (rows ⋈ cursors). Edge sug
 
 A processor is two classes. `StreamProcessor` (`stream/processor.ts`) is the PURE one the author
 writes — a contract plus `reduce` (pure switch), `processEvent` (effect switch), `projectLiveState`;
-no constructor arguments, so `new Presence().reduce(...)` is a unit test. Its host is a
+no constructor arguments, so `new PresenceProcessor().reduce(...)` is a unit test. Its host is a
 `StreamProcessorDurableObject` (`sdk/stream-processor-durable-object.ts`, bundled into
-`processor.js`) with one field, `processor = new Presence()`; the host builds a `ProcessorEngine`
+`processor.js`) with one field, `processor = new PresenceProcessor()`; the host builds a `ProcessorEngine`
 (serial chain, checkpoint, gap repair from the scanned-range proof, at-head pass, version refold,
-live-state publishing) over its facet kv and `env.ITX`. The host is hosted like ANY class:
+live-state publishing) over its facet kv and `env.ITX`. A processor class ends in `Processor`, a Durable Object
+class in `DurableObject`. The host is hosted like ANY class:
 `itx.load(src).getDurableObjectClass('PresenceDurableObject').get('presence')`, identity in
 `ctx.props`. `enableProcessor(name, { source, className })` is
 `subscribe({ name, target: that chain + ".processEventBatch" })`; `disableProcessor` is

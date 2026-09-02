@@ -4,7 +4,7 @@
 //   get demo → Demo, get timer → Timer, timer.callLater(ms, cb).
 // Worker B is a SECOND dynamic worker (a stateless code cap) that reaches A THROUGH ITS OWN
 // `env.ITX.get()` and writes the natural dotted chain:
-//   itx.load(src).getDurableObjectClass('Counter').get().demo.timer.callLater(ms, cb)
+//   itx.load(src).getDurableObjectClass('CounterDurableObject').get().demo.timer.callLater(ms, cb)
 // The mid-path load→class→instance returns HANDLES that B then walks `.demo.timer.callLater`
 // on — the case that only pipelines because each handle is a genuine, branded RpcTarget
 // (context/invoke-handle.ts) and not a bare Proxy (NonPipelinable over Workers RPC, workerd#6873).
@@ -29,10 +29,10 @@ class Timer extends RpcTarget {
 class Demo extends RpcTarget {
   get timer() { return new Timer(); }
 }
-export class Counter extends DurableObject {
+export class CounterDurableObject extends DurableObject {
   get demo() { return new Demo(); }
 }
-export default Counter;`;
+export default CounterDurableObject;`;
 
 // ── worker B: reaches A via env.ITX.get() and writes the natural mid-chain dotted call ──
 const WORKER_B = `
@@ -59,7 +59,7 @@ test("dynamic worker → dynamic worker mid-chain pipelining, both consumer lane
 
   // aRef names worker A's stateful class: a source EXPRESSION + the exported className. load(source)
   // .getDurableObjectClass(className).get() loads the class and materializes it as a facet.
-  const aRef = { source: "itx.kv.get('src/counterA.js')", className: "Counter" };
+  const aRef = { source: "itx.kv.get('src/counterA.js')", className: "CounterDurableObject" };
 
   // ── lane 1: a plain capnweb client walks the mid-chain and the callback fires back HERE ──
   let clientPinged = false;

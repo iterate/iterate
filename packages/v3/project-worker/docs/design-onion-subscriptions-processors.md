@@ -78,7 +78,7 @@ await itx.subscribe({
 }); // cursor, at-least-once
 await itx.enableProcessor("presence", {
   source: "itx.kv.get('presence.js')",
-  className: "PresenceDurableObject", // the host; `processor = new Presence()` inside
+  className: "PresenceDurableObject", // the host; `processor = new PresenceProcessor()` inside
 }); // SUGAR over subscribe
 await itx.facets.get("presence").snapshot();
 await itx.subscriptions.list(); // config rows joined with cursors and halts
@@ -298,7 +298,7 @@ export abstract class StreamProcessorDurableObject<State = unknown, Env = {}> ex
   Env, // Env extends { ITX: ItxBinding } — as landed
   StreamProcessorProps
 > {
-  /** `processor = new Presence()` at the top of the subclass — the one thing an author writes here. */
+  /** `processor = new PresenceProcessor()` at the top of the subclass — the one thing an author writes here. */
   abstract readonly processor: StreamProcessor<State>;
   // what an author reaches
   /** The owning context's parsed address — the same `{ projectId, path, name }` object the DO holds as #address
@@ -329,7 +329,7 @@ The `stream/processor.ts` engine (serial chain, checkpoint, gap repair, at-head 
 refold, live-state publish) was first landed **wrapped, not split** (the DurableObject was the
 processor, hooks forwarded to it). Jonas then asked for the split (2026-09-02): the author's
 processor is a PURE `StreamProcessor` subclass — constructible bare, `reduce` callable in a Node
-test — and the DurableObject is a one-field HOST (`processor = new Presence()`) that builds a
+test — and the DurableObject is a one-field HOST (`processor = new PresenceProcessor()`) that builds a
 `ProcessorEngine` over the pure instance with its facet kv and `env.ITX`. The engine calls the
 processor's public hooks directly (no forwarding adapter); the three inline reduces are
 `StreamProcessor` subclasses too (hosted at the commit point, `reduce` only — `ReduceOnlyProcessor` is
@@ -341,7 +341,7 @@ returns, for a different reason than there (unit-testability, not facet-vs-DO ho
 
 With the forwarder re-homed into the kernel, nothing the platform needs runs as a facet processor.
 `core`, `capability-table` and `subscriptions` are inline reduces. Tally was only ever the
-facet-spine demo, so it becomes what the demo's `Presence` already is: a userspace source seeded by
+facet-spine demo, so it becomes what the demo's `PresenceProcessor` already is: a userspace source seeded by
 `e2e/support/sources.ts`, extending the same base. That deletes `processor-facet.ts`,
 `FACET_PROCESSORS`, `BUILT_IN_PROCESSOR_SLUGS`, the `ProcessorFacet` export, and the `itx.exports`
 root an earlier draft proposed. `enableProcessor` always has a source:
@@ -369,7 +369,7 @@ const contract = defineProcessorContract({
   consumes: ["tick", "poke"],
   emits: [],
 });
-class Presence extends StreamProcessor {
+class PresenceProcessor extends StreamProcessor {
   contract = contract;
   #lastPokeMs = 0;
   reduce({ event, state }) {
@@ -383,7 +383,7 @@ class Presence extends StreamProcessor {
   }
 }
 export class PresenceDurableObject extends StreamProcessorDurableObject {
-  processor = new Presence();
+  processor = new PresenceProcessor();
 }
 ```
 

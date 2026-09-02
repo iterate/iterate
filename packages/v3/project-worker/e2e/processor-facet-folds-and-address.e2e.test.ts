@@ -1,5 +1,5 @@
 // processor-facet-folds-and-address.e2e.test.ts — THE FACET SPINE live: a processor is a userspace
-// pure `StreamProcessor` (`Tally`) hosted by its one-line `StreamProcessorDurableObject` subclass
+// pure `StreamProcessor` (`TallyProcessor`) hosted by its one-line `StreamProcessorDurableObject` subclass
 // (`TallyDurableObject`) in a real workerd facet on the context DO (there are no built-in processors —
 // `tally` is a fixture source like any other). enableFixtureProcessor(tally) → events land → the facet
 // folds them → snapshot through the parent. Proves COLD CATCH-UP (an event appended BEFORE enable is

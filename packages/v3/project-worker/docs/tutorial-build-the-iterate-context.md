@@ -754,7 +754,7 @@ a **facet** of the context's DO: its own storage, shared lifecycle.
 // runs: the loaded isolate (the app an agent wrote for itself) — plain JS again
 import { DurableObject } from "cloudflare:workers";
 
-export class TodoApp extends DurableObject {
+export class TodoAppDurableObject extends DurableObject {
   async add(text) {
     const todos = (await this.ctx.storage.get("todos")) ?? [];
     todos.push(text);
@@ -769,7 +769,8 @@ export class TodoApp extends DurableObject {
 
 ```ts
 // runs: any client — mount it, then call it by path
-const app = "itx.load(\"itx.kv.get('todo.js')\").getDurableObjectClass('TodoApp').get('main')";
+const app =
+  "itx.load(\"itx.kv.get('todo.js')\").getDurableObjectClass('TodoAppDurableObject').get('main')";
 await itx.provide("itx.todos", app);
 
 await itx.todos.add("write the tutorial");
@@ -1015,13 +1016,13 @@ A **stream processor** reduces the log into derived state. The processor is a
 pure class extending the SDK's `StreamProcessor` (a contract and three hooks,
 unit-tested with `new`); its host is just a facet (Chapter 1 machinery): a
 `DurableObject` extending `StreamProcessorDurableObject` with one field,
-`processor = new UnreadCounter()`, whose `processEventBatch` is subscribed to the
+`processor = new UnreadCounterProcessor()`, whose `processEventBatch` is subscribed to the
 stream. `enableProcessor` is that subscribe, spelled for you:
 
 ```ts
 await itx.enableProcessor("unread-counts", {
   source: "itx.kv.get('counter.js')",
-  className: "UnreadCounterDurableObject", // the host; `processor = new UnreadCounter()` inside
+  className: "UnreadCounterDurableObject", // the host; `processor = new UnreadCounterProcessor()` inside
 });
 ```
 

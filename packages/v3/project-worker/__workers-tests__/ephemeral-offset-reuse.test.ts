@@ -17,12 +17,12 @@ const contract = defineProcessorContract({
   slug: "counter", version: "1.0.0", description: "counts durable events",
   stateSchema: z.object({ n: z.number().default(0) }), events: {}, consumes: ["*"], emits: [],
 });
-class Counter extends StreamProcessor {
+class CounterProcessor extends StreamProcessor {
   contract = contract;
   reduce({ state }) { return { n: state.n + 1 }; }
 }
 export class CounterDurableObject extends StreamProcessorDurableObject {
-  processor = new Counter();
+  processor = new CounterProcessor();
 }
 `;
 const DIGEST_SRC = /* js */ `

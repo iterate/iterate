@@ -107,7 +107,7 @@ describe("evaluate/apply", () => {
     const s = scope();
     const { value } = await evaluate(
       s,
-      parse("itx.facets.get({ className: 'Counter' }).counters.add(2)"),
+      parse("itx.facets.get({ className: 'CounterDurableObject' }).counters.add(2)"),
     );
     expect(value).toBe(42);
   });

@@ -582,7 +582,7 @@ await itx.subscribe({ name: "digest", target: "itx.digest.processEventBatch", co
 ```ts
 // stored with itx.kv.put("src/counter.js", ...)
 import { DurableObject } from "cloudflare:workers";
-export class Counter extends DurableObject {
+export class CounterDurableObject extends DurableObject {
   async bump() {
     const n = ((await this.ctx.storage.get("n")) ?? 0) + 1;
     await this.ctx.storage.put("n", n);
@@ -593,11 +593,11 @@ export class Counter extends DurableObject {
 
 ```ts
 const src = "itx.kv.get('src/counter.js')";
-await itx.load(src).getDurableObjectClass("Counter").get("c1").bump(); // 1
+await itx.load(src).getDurableObjectClass("CounterDurableObject").get("c1").bump(); // 1
 await itx.facets.get("c1").bump(); // 2, same instance, no source
 await itx.provide(
   "itx.counter",
-  `itx.load(${JSON.stringify(src)}).getDurableObjectClass('Counter').get('c1')`,
+  `itx.load(${JSON.stringify(src)}).getDurableObjectClass('CounterDurableObject').get('c1')`,
 );
 await itx.counter.bump(); // 3
 ```
@@ -614,9 +614,10 @@ A processor is two classes. The processor itself is **pure**: a class extending
 `StreamProcessor` with a contract and three hooks, constructed with `new` and
 nothing else, so a unit test calls its `reduce` directly. Its **host** is a
 `DurableObject` extending `StreamProcessorDurableObject` with one field,
-`processor = new Presence()`, hosted exactly like the counter above; the host
-knows how to fold the log. `src/sdk/index.ts` is the whole userspace SDK,
-bundled into `./processor.js`:
+`processor = new PresenceProcessor()`, hosted exactly like the counter above; the host
+knows how to fold the log. The names follow the base class: a processor class
+ends in `Processor`, a Durable Object class in `DurableObject`. `src/sdk/index.ts`
+is the whole userspace SDK, bundled into `./processor.js`:
 
 ```ts
 export { StreamProcessor }; // + ProcessorContract, ReduceArgs, ProcessEventArgs, ScannedRange, ...
@@ -654,7 +655,7 @@ abstract class StreamProcessorDurableObject<
   State = unknown,
   Env extends { ITX: ItxBinding } = { ITX: ItxBinding },
 > extends DurableObject<Env, StreamProcessorProps> {
-  /** The processor this object hosts — `processor = new Presence()` at the top of the subclass. */
+  /** The processor this object hosts — `processor = new PresenceProcessor()` at the top of the subclass. */
   abstract readonly processor: StreamProcessor<State>;
 
   // ── what you reach ──
@@ -678,7 +679,7 @@ abstract class StreamProcessorDurableObject<
 The engine underneath — `ProcessorEngine` in `src/stream/processor.ts` — is
 built by the host on first use over the facet's kv and `env.ITX`, and by a test
 over the in-memory stand-ins in `src/stream/test-support.ts`
-(`new ProcessorEngine(new Presence(), { stream, storage })`). Its types:
+(`new ProcessorEngine(new PresenceProcessor(), { stream, storage })`). Its types:
 
 ```ts
 type ProcessorContract<State> = {
@@ -745,8 +746,8 @@ const contract = defineProcessorContract({
   emits: [],
 });
 
-// The processor: pure. `new Presence().reduce({ event, state })` is a unit test.
-class Presence extends StreamProcessor {
+// The processor: pure. `new PresenceProcessor().reduce({ event, state })` is a unit test.
+class PresenceProcessor extends StreamProcessor {
   contract = contract;
   #lastPokeMs = 0; // runtime: a field, not reduced state — gone with the host, never refolded
   reduce({ event, state }) {
@@ -762,7 +763,7 @@ class Presence extends StreamProcessor {
 
 // The host: one line. This is what `className` names.
 export class PresenceDurableObject extends StreamProcessorDurableObject {
-  processor = new Presence();
+  processor = new PresenceProcessor();
 }
 ```
 
@@ -791,7 +792,7 @@ in order); the engine inside the facet keeps its own checkpoint and gap-repairs
 from the log when a range does not chain. There is no runner module and no
 host-side processor registry.
 
-Testing a processor needs no worker: `new Presence().reduce({ event, state })`
+Testing a processor needs no worker: `new PresenceProcessor().reduce({ event, state })`
 for the fold; for the effect rules (serial chain, blockers, at-head pass) build a
 `ProcessorEngine` over `memoryStream()` / `memoryStorage()` from
 `src/stream/test-support.ts`, the way `src/stream/processor.test.ts` does.
@@ -813,7 +814,7 @@ A durable class that is not a processor can still publish live state:
 import { DurableObject } from "cloudflare:workers";
 import { LiveState } from "./processor.js";
 
-export class Chatroom extends DurableObject {
+export class ChatroomDurableObject extends DurableObject {
   #live = new LiveState(this.env.ITX, "chat", { messages: [] }); // sink, key, initial
   state() {
     return this.#live.snapshot();

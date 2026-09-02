@@ -1,10 +1,10 @@
 // stream-processor-durable-object.ts — THE SDK HOST: the `DurableObject` shell that hosts ONE
 // `StreamProcessor` as a facet of its context. An author writes two classes — the processor, pure
-// (`class Presence extends StreamProcessor { contract; reduce(); processEvent() }`, unit-tested with
-// `new Presence()`), and its host, one line long:
+// (`class PresenceProcessor extends StreamProcessor { contract; reduce(); processEvent() }`, unit-tested with
+// `new PresenceProcessor()`), and its host, one line long:
 //
 //   export class PresenceDurableObject extends StreamProcessorDurableObject {
-//     processor = new Presence();
+//     processor = new PresenceProcessor();
 //   }
 //
 // The platform hosts the host through the ordinary
@@ -63,7 +63,7 @@ export abstract class StreamProcessorDurableObject<
   State = unknown,
   Env extends { ITX: ItxBinding } = { ITX: ItxBinding },
 > extends DurableObject<Env, StreamProcessorProps> {
-  /** The processor this object hosts — `processor = new Presence()` at the top of the subclass. */
+  /** The processor this object hosts — `processor = new PresenceProcessor()` at the top of the subclass. */
   abstract readonly processor: StreamProcessor<State>;
 
   // ── what an author reaches ──
