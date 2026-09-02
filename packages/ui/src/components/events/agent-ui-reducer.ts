@@ -1067,9 +1067,12 @@ function reduceAgentUiEvent(
         // just after the settle that flushed the card. Correct the settled
         // card (same id — consumers replace the item) — but only when it
         // really contains the run.
+        // The next round may already have opened a new live activity by the
+        // time this lands — executionId containment is the guard, not
+        // liveness: the named run being IN the retained card is what makes
+        // the correction safe.
         const settled = state.lastSettledActivity;
         if (
-          state.live == null &&
           settled !== null &&
           settled.steps.some(
             (step) => step.kind === "code" && step.executionId === script.executionId,
@@ -1516,7 +1519,18 @@ function correctProvisionalCodeStep(
   } else {
     delete provisionalActivities[corrected.id];
   }
-  return emitItem({ ...state, provisionalActivities }, items, corrected);
+  return emitItem(
+    {
+      ...state,
+      provisionalActivities,
+      // Keep the status-correction slot current: a stamped status landing
+      // after this durable correction must re-emit THIS version, not the
+      // stale inferred one.
+      ...(state.lastSettledActivity?.id === corrected.id && { lastSettledActivity: corrected }),
+    },
+    items,
+    corrected,
+  );
 }
 
 function applyDurableCodeOutcome(

@@ -2287,3 +2287,88 @@ describe("script-attributed summary updates (source.script)", () => {
     expect(last.activitySummary).toBeUndefined();
   });
 });
+
+describe("stamped corrections vs later turn state", () => {
+  const stamp = (executionId: string) => ({
+    script: { executionId, streamPath: "/agents/test", scriptRunRequestedEventOffset: 7 },
+  });
+  const request = (offset: number) => ({
+    type: "events.iterate.com/agent/llm-request-requested",
+    offset,
+    payload: {},
+  });
+  const requestSettled = (requestOffset: number) => ({
+    type: "events.iterate.com/agent/llm-request-settled",
+    payload: { requestOffset, result: { status: "succeeded", text: "await work()" } },
+  });
+  const scriptRequested = (executionId: string) => ({
+    type: "events.iterate.com/capability-host/script-run-requested",
+    payload: { executionId, code: "await work()", expiresAt: SCRIPT_EXPIRES_AT },
+  });
+
+  test("a stamped status corrects the settled card even after the next round went live", () => {
+    // The racing append can land after the follow-up request opened a new
+    // live activity — executionId containment, not liveness, gates the
+    // correction.
+    const state = reduceAll([
+      request(5),
+      requestSettled(5),
+      scriptRequested("x1"),
+      { type: "events.iterate.com/agents/web-message-sent", payload: { message: "one" } },
+      {
+        type: "events.iterate.com/capability-host/script-run-settled",
+        payload: { executionId: "x1", settlement: { status: "succeeded", result: 1 } },
+      },
+      request(20),
+      {
+        type: "events.iterate.com/agent/summary-updated",
+        payload: { activity: "Landed late" },
+        source: stamp("x1"),
+      },
+    ]);
+    expect(state.live).not.toBeNull();
+    const activities = state.items.filter((item) => item.kind === "activity");
+    expect(activities.at(-1)!.steps.at(-1)).toMatchObject({
+      kind: "code",
+      activitySummary: "Landed late",
+    });
+  });
+
+  test("a stamped status after a late durable completion re-emits the DURABLE card", () => {
+    // Boundary-settled runs get an inferred failure; the durable completion
+    // corrects it later. A stamped status after that must build on the
+    // durable version, not resurrect the inferred one.
+    const state = reduceAll([
+      request(5),
+      requestSettled(5),
+      {
+        type: "events.iterate.com/capability-host/script-run-requested",
+        // Already past its deadline when the reply's boundary hits, so the
+        // step closes INFERRED-failed and the activity settles provisional.
+        payload: {
+          executionId: "x1",
+          code: "await work()",
+          expiresAt: Date.parse("2026-06-11T00:00:03.500Z"),
+        },
+      },
+      { type: "events.iterate.com/agents/web-message-sent", payload: { message: "done" } },
+      {
+        type: "events.iterate.com/capability-host/script-run-settled",
+        payload: { executionId: "x1", settlement: { status: "succeeded", result: 1 } },
+        offset: 40,
+      },
+      {
+        type: "events.iterate.com/agent/summary-updated",
+        payload: { activity: "After the durable settle" },
+        source: stamp("x1"),
+      },
+    ]);
+    const activities = state.items.filter((item) => item.kind === "activity");
+    expect(activities.at(-1)!.steps.at(-1)).toMatchObject({
+      kind: "code",
+      success: true,
+      outcomeSource: "durable",
+      activitySummary: "After the durable settle",
+    });
+  });
+});
