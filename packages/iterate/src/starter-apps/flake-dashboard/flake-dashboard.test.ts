@@ -310,6 +310,22 @@ test("the webhook schema accepts only completed workflow_run deliveries on conne
   ).toBe(false);
 });
 
+test("a birth conflict means already born and the records still append", async () => {
+  // The poisoned-prd lesson: once ANY body exists under the birth key, every
+  // later offer conflicts — that must never cost the run's records.
+  const { itx, appended } = fakeItx({
+    artifacts: [{ id: 71, name: "flake-records-unit", size_in_bytes: 1000 }],
+    zips: {
+      71: zipSync({ "r.jsonl": strToU8(JSON.stringify(record("flake sentinel", "pass"))) }),
+    },
+    failAppendsMatching: /flakes\/created/,
+  });
+  await expect(makeApp(itx).processEvent(webhookEvent())).resolves.toBeUndefined();
+  expect(appended.map((event: any) => event.type)).toEqual([
+    "events.iterate.com/flakes/run-recorded",
+  ]);
+});
+
 test("an idempotency conflict on run-recorded means already ingested and does not throw", async () => {
   const { itx, appended } = fakeItx({
     artifacts: [{ id: 71, name: "flake-records-unit", size_in_bytes: 1000 }],

@@ -102,14 +102,21 @@ export class FlakeDashboardApp extends StreamProcessorDurableObject<FlakeDashboa
 
     const stream = itx.streams.get(flakesStreamPath);
     // Idempotency-keyed birth: whoever ingests first births the dashboard,
-    // pinned to the repository the records came from.
-    await stream.append(
-      ...flakeDashboardCreationEvents({
-        repository: params,
-        issueTitle: "Flake dashboard",
-        defaultBranch: repository.default_branch || "main",
-      }),
-    );
+    // pinned to the repository the records came from. A same-key/different-
+    // body conflict also means already born — it must not abort the record
+    // appends below (a poisoned birth key on prd once silently dropped every
+    // CI run's records this way).
+    try {
+      await stream.append(
+        ...flakeDashboardCreationEvents({
+          repository: params,
+          issueTitle: "Flake dashboard",
+          defaultBranch: repository.default_branch || "main",
+        }),
+      );
+    } catch (error) {
+      if (!isIdempotencyConflict(error)) throw error;
+    }
 
     for (const artifact of flakeArtifacts) {
       if (artifact.size_in_bytes > MAX_ARTIFACT_BYTES) {
