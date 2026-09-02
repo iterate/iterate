@@ -141,26 +141,33 @@ export class CapabilityResolver {
           "NO_CAPABILITY_MATCH",
           `no capability matches ${JSON.stringify(print(expr))} (default-deny; provide a capability first)`,
         );
-      // The target is an `itx.…` expression: resolve it through THIS method one level deeper — a
-      // built-in, or another mount (mounts compose by naming each other). Args at the mount fold into the target's
-      // final step when that step is a property (`itx.grok ⇒ itx.openai.chat`, called
-      // `itx.grok({...})`, resolves `itx.openai.chat({...})`); a target that already ends in a call is
-      // resolved as written and the args apply to what came back. A live capability's mount targets
-      // `itx.rpcStubs.get('<path>')` — the built-in hands back the transport's pipelinable handle, so
-      // the steps after the mount, root-calling (applyRoot) and the terminal-fetch rule all ride the
-      // same walk as any expression mount. No transport ⇒ CONNECTION_OFFLINE at call time
-      // (mounted-but-offline — a never-provided path already default-denied above).
-      let { target } = winner.mount;
-      let { argsAtMount } = winner;
+      // REWRITE, THEN RESOLVE AGAIN: the mount's target REPLACES the matched prefix and the call's
+      // remaining steps follow it, so the rewritten call goes through the table like any other — a
+      // longer mount under the target's path captures the deeper call (`itx.db ⇒ itx.kv` beside
+      // `itx.kv.deep ⇒ narrow`: `itx.db.deep.f()` IS `itx.kv.deep.f()` IS narrow's `f()`), and mounts
+      // compose by naming each other. Args at the mount fold into the target's final step when that
+      // step is a property (`itx.grok ⇒ itx.openai.chat`, called `itx.grok({…})`, resolves
+      // `itx.openai.chat({…})`). The ONE shape the grammar cannot spell — args at the mount on a target
+      // that already ends in a call (`itx.grok ⇒ itx.load(src).getEntrypoint()`) — resolves the target
+      // to a value and applies the args to what came back. A live capability's mount targets
+      // `itx.rpcStubs.get('<path>')`: the built-in hands back the transport's pipelinable handle;
+      // no transport ⇒ CONNECTION_OFFLINE at call time.
+      const { target } = winner.mount;
+      const { argsAtMount, stepsAfterMount: rest } = winner;
       const last = target.at(-1);
-      if (argsAtMount && typeof last === "string") {
-        target = [...target.slice(0, -1), [last, ...argsAtMount]];
-        argsAtMount = undefined;
+      if (!argsAtMount || typeof last === "string") {
+        const rewritten = argsAtMount
+          ? [...target.slice(0, -1), [last as string, ...argsAtMount], ...rest]
+          : [...target, ...rest];
+        return this.resolve(rewritten as Expression, extraArgs, depth + 1);
       }
-      value = await this.resolve(target, undefined, depth + 1);
+      value = await callOn(
+        await this.resolve(target, undefined, depth + 1),
+        undefined,
+        argsAtMount,
+      );
       receiver = undefined;
-      if (argsAtMount) value = await callOn(value, receiver, argsAtMount);
-      stepsAfterMount = winner.stepsAfterMount;
+      stepsAfterMount = rest;
     }
     ({ value, receiver } = await walkSteps({ value, receiver }, stepsAfterMount, "remainder"));
     if (extraArgs) value = await callOn(value, receiver, extraArgs);

@@ -206,7 +206,8 @@ describe("built-in resolution + default-deny", () => {
       type: "events.iterate.com/capability-table/capability-provided",
       payload: { path: "itx.evil", target: "kv" },
     });
-    await expect(invoke("itx.evil.get('a')")).rejects.toThrow(/no capability matches "kv"/);
+    // the rewritten call `kv.get('a')` is denied whole — nothing not rooted at itx ever matches
+    await expect(invoke("itx.evil.get('a')")).rejects.toThrow(/no capability matches "kv\.get/);
   });
 
   test("a malformed raw payload is skipped by the reduce, never wedging later resolves", async () => {
@@ -233,6 +234,18 @@ describe("event mounts + the shadow stack", () => {
     provide({ path: "itx.db", target: "itx.kv" });
     await invoke("itx.db.put('k', 'v')");
     expect(await invoke("itx.kv.get('k')")).toBe("v"); // same underlying kv — the mounts composed
+  });
+
+  test("a longer mount under the target's path CAPTURES the deeper call — a mount rewrites the call, it does not bind a value", async () => {
+    const { provide, invoke } = setup();
+    provide({ path: "itx.store", target: "itx.kv" });
+    provide({ path: "itx.store.deep", target: "itx.whoami" }); // longer than `itx.store`: wins for `.deep`
+    provide({ path: "itx.db", target: "itx.store" });
+    // `itx.db.deep()` rewrites to `itx.store.deep()`, which the longer mount claims — never a walk on
+    // the kv value's (non-existent) `deep`. (A BUILT-IN root stays unshadowable: a mount under
+    // `itx.kv.…` is never consulted, because `itx.kv…` resolves against the physical scope first.)
+    expect(await invoke("itx.db.deep()")).toEqual(await invoke("itx.whoami()"));
+    expect(await invoke("itx.db.get('missing')")).toBeNull(); // the shorter path still reaches kv
   });
 
   test("a LIVE provide is an ordinary mount whose target names the registry — pure data, nothing about the socket", () => {
