@@ -6,6 +6,7 @@ import { connectItx } from "iterate/sdk/itx/react";
 import { AgentPillComposer } from "~/components/agent-pill-composer.tsx";
 import { AttachmentChips, AttachmentFileInput } from "~/components/composer-attachments.tsx";
 import { useComposerAttachments } from "~/components/use-composer-attachments.ts";
+import { configRepoFileMentionProvider } from "~/components/config-repo-file-mentions.tsx";
 import { newWebAgentPath, sendAgentFirstTurn } from "~/lib/web-agent.ts";
 
 /**
@@ -22,6 +23,7 @@ export function NewAgentComposer({
 }) {
   const navigate = useNavigate();
   const attachments = useComposerAttachments();
+  const fileMentions = configRepoFileMentionProvider(projectId);
   const [message, setMessage] = useState("");
 
   const createAgent = useMutation({
@@ -71,6 +73,7 @@ export function NewAgentComposer({
           onSubmit: submit,
           canSubmit: message.trim() !== "" || attachments.files.length > 0,
           placeholder: "Message a new agent",
+          suggestionProviders: [fileMentions],
           onAttach: attachments.openFilePicker,
           onAddFiles: attachments.addFiles,
           ...(attachments.entries.length === 0

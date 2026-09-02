@@ -10,6 +10,7 @@ import {
 } from "~/lib/route-breadcrumbs.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
+import { configRepoFileMentionProvider } from "~/components/config-repo-file-mentions.tsx";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/streams/$")({
   staticData: streamPageStaticData(),
@@ -34,6 +35,7 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/agents/streams
 function ProjectAgentDetailContent() {
   const { project } = Route.useLoaderData();
   const { _splat: streamPath } = Route.useParams();
+  const fileMentions = configRepoFileMentionProvider(project.id);
   const agents =
     useLiveState(
       (itx) => itx.agents.liveState,
@@ -116,6 +118,7 @@ function ProjectAgentDetailContent() {
             onSubmit: submitAgentMessage,
             onSubmitFiles: submitAgentFiles,
             placeholder: "Message this agent",
+            suggestionProviders: [fileMentions],
           }}
           projectId={project.id}
           projectSlug={project.slug}

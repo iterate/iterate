@@ -21,6 +21,8 @@ import {
 } from "@iterate-com/ui/components/dropdown-menu";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { cn } from "@iterate-com/ui/lib/utils";
+import { ComposerTextarea } from "~/components/composer-textarea.tsx";
+import type { ComposerSuggestionProvider } from "~/components/composer-suggestions.ts";
 
 export type AgentComposerMode = "message" | "raw" | "examples";
 
@@ -35,6 +37,7 @@ type AgentComposerMessageConfig = {
   /** Accept dropped/selected files (same path as the file picker). */
   onAddFiles?: (files: FileList | null) => void;
   placeholder?: string;
+  suggestionProviders?: readonly ComposerSuggestionProvider[];
 };
 
 type AgentComposerRawConfig = {
@@ -260,20 +263,13 @@ export function AgentPillComposer({
             {message?.attachments == null ? null : (
               <div className="px-1 pb-1">{message.attachments}</div>
             )}
-            <textarea
-              ref={messageRef}
+            <ComposerTextarea
               value={message?.value ?? ""}
-              onChange={(event) => message?.onValueChange(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                  event.preventDefault();
-                  submit();
-                }
-              }}
-              rows={1}
-              aria-label={message?.placeholder ?? "Message this stream"}
+              onValueChange={(value) => message?.onValueChange(value)}
+              onSubmit={submit}
+              textareaRef={messageRef}
               placeholder={message?.placeholder ?? "Message this stream"}
-              className="field-sizing-content max-h-32 min-w-0 flex-1 resize-none bg-transparent px-2 py-2 text-base leading-snug outline-none"
+              providers={message?.suggestionProviders}
             />
           </div>
         )}

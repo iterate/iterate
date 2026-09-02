@@ -27,6 +27,8 @@ import type {
   RepoFileChange,
   RepoLogCommit,
   RepoLogResult,
+  SearchRepoFilesInput,
+  SearchRepoFilesResult,
 } from "./types.ts";
 import { countOccurrences, replaceLiteralOccurrences } from "./edit-utils.ts";
 import { replaceArtifactWithEmptyRepo } from "./artifact-replacement.ts";
@@ -69,6 +71,7 @@ import { importGithubArtifactWithInitialPushCapture } from "./artifact-import.ts
 import { getOrCreateArtifact, type GetOrCreateArtifactResult } from "./artifact-creation.ts";
 import { artifactWriteToken, seedArtifactRepo } from "./artifact-seeding.ts";
 import { downloadPublicGithubTemplate } from "./public-github-template.ts";
+import { searchRepoFilePaths } from "./repo-file-search.ts";
 
 const ARTIFACT_HEAD_VISIBILITY_RETRIES = 5;
 const REPO_DIR = "/repo";
@@ -1177,6 +1180,12 @@ export class RepoDurableObject extends DurableObject<Env> {
     }
     const { commitOid, files } = await this.getFilesSnapshot();
     return { commitOid, paths: Object.keys(files).sort() };
+  }
+
+  /** Fuzzy-match committed paths at HEAD and return only a bounded result. */
+  async searchFiles(input: SearchRepoFilesInput): Promise<SearchRepoFilesResult> {
+    const { commitOid, paths } = await this.listFiles();
+    return { commitOid, paths: searchRepoFilePaths(paths, input) };
   }
 
   /**

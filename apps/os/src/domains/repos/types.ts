@@ -60,6 +60,19 @@ export type EditRepoFileResult = CommitRepoFilesResult & {
   path: string;
 };
 
+/** Query for fuzzy matching committed paths without returning the full repo manifest. */
+export type SearchRepoFilesInput = {
+  query: string;
+  /** Defaults to 50 and is capped at 100. */
+  limit?: number;
+};
+
+/** Bounded fuzzy file matches at one committed repo head. */
+export type SearchRepoFilesResult = {
+  commitOid: string;
+  paths: string[];
+};
+
 /** One commit in a repo's history, as returned by `repo.log`. */
 export type RepoLogCommit = {
   oid: string;

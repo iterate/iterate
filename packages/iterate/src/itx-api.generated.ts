@@ -1243,6 +1243,8 @@ export interface Repo {
   edit(input: EditRepoFileInput): Promise<EditRepoFileResult>;
   /** All committed file paths at HEAD. */
   listFiles(): Promise<{ commitOid: string; paths: string[] }>;
+  /** Fuzzy-search committed paths at HEAD without returning the full manifest. */
+  searchFiles(input: SearchRepoFilesInput): Promise<SearchRepoFilesResult>;
   /**
    * Commit history of a branch, newest first — oid, message, author,
    * timestamp (epoch ms), parent oids. Deliberately without per-commit file
@@ -3648,6 +3650,19 @@ export type EditRepoFileInput = {
 export type EditRepoFileResult = CommitRepoFilesResult & {
   occurrenceCount: number;
   path: string;
+};
+
+/** Query for fuzzy matching committed paths without returning the full repo manifest. */
+export type SearchRepoFilesInput = {
+  query: string;
+  /** Defaults to 50 and is capped at 100. */
+  limit?: number;
+};
+
+/** Bounded fuzzy file matches at one committed repo head. */
+export type SearchRepoFilesResult = {
+  commitOid: string;
+  paths: string[];
 };
 
 /** What `repo.log` returns: newest-first commits on one branch. */

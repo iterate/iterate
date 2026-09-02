@@ -7,6 +7,7 @@ import { AgentPillComposer, type AgentComposerMode } from "~/components/agent-pi
 import { AttachmentChips, AttachmentFileInput } from "~/components/composer-attachments.tsx";
 import { useComposerAttachments } from "~/components/use-composer-attachments.ts";
 import { ExampleEventsPanel } from "~/components/example-events-panel.tsx";
+import type { ComposerSuggestionProvider } from "~/components/composer-suggestions.ts";
 
 const DEFAULT_RAW_EVENT_YAML =
   "type: events.iterate.com/os/manual-event\npayload:\n  message: Hello from OS\n";
@@ -20,6 +21,7 @@ const DEFAULT_RAW_EVENT_YAML =
  */
 export type StreamMessageComposer = {
   placeholder?: string;
+  suggestionProviders?: readonly ComposerSuggestionProvider[];
   onInterrupt?: (llmRequestOffset: number) => Promise<void>;
   onSubmit: (message: string) => Promise<StreamEvent>;
   onSubmitFiles?: (input: { files: File[]; message: string }) => Promise<StreamEvent>;
@@ -174,6 +176,9 @@ export function StreamViewComposer({
                 ...(messageComposer.placeholder == null
                   ? {}
                   : { placeholder: messageComposer.placeholder }),
+                ...(messageComposer.suggestionProviders == null
+                  ? {}
+                  : { suggestionProviders: messageComposer.suggestionProviders }),
               },
               ...(interrupt == null
                 ? {}

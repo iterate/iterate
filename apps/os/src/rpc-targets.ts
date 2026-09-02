@@ -267,6 +267,8 @@ import type {
   LinkGithubResult,
   RepoCommitDetails,
   RepoLogResult,
+  SearchRepoFilesInput,
+  SearchRepoFilesResult,
 } from "./domains/repos/types.ts";
 import type {
   BuiltinIntegrationSlug,
@@ -1620,6 +1622,8 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
         linkGithub:
           "Back this repo with a GitHub repository via a named GitHub connection ({ connection, owner, repo }); commits mirror out, fast-forward default-branch pushes import in, and webhooks arrive on this repo's stream.",
         listFiles: "List file paths.",
+        searchFiles:
+          "Fuzzy-search committed file paths without returning the full manifest ({ query, limit? }).",
         log: "Commit history, newest first ({ limit?, branch? }); per-commit file stats live on commitDetails.",
         pushToGithub:
           "Push the branch head to the linked GitHub repository now (repair verb; { force } to overwrite GitHub).",
@@ -1792,6 +1796,11 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
   /** All committed file paths at HEAD. */
   listFiles(): Promise<{ commitOid: string; paths: string[] }> {
     return this.#durableObjectStub.listFiles();
+  }
+
+  /** Fuzzy-search committed paths at HEAD without returning the full manifest. */
+  searchFiles(input: SearchRepoFilesInput): Promise<SearchRepoFilesResult> {
+    return this.#durableObjectStub.searchFiles(input);
   }
 
   /**
