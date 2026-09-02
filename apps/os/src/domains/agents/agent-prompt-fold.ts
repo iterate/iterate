@@ -379,7 +379,7 @@ export function reduceAgentEvents(events: readonly StreamEvent[]): AgentProcesso
 // Pure reduce helpers — exported for direct unit testing.
 // -----------------------------------------------------------------------------
 
-export type AgentContextSchedulingSemantics = {
+type AgentContextSchedulingSemantics = {
   triggerSource: "external" | "agent-loop" | null;
   clearsWaitingFor: boolean;
 };
