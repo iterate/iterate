@@ -19,7 +19,7 @@ export const stub = (ctx: string) =>
   ).ITERATE_CONTEXT.getByName(DurableObjectNameCodec.parse(ctx).name);
 
 /** One client's rpc stub, lent under its key: the per-instance tag (`echo-<i>:<s>`) proves no
- *  crosstalk. Provided as `itx.provide(rpcStubKey, new Echo(i), { rewrite: rpcStubKey })`, so
+ *  crosstalk. Provided as `itx.provide(rpcStubKey, new Echo(i))`, so
  *  the key is also the dotted match a caller spells. */
 export class Echo extends RpcTarget {
   readonly #i: number;

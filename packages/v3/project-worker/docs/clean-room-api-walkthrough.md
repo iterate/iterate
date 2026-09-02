@@ -96,14 +96,14 @@ packages/v3/project-worker/
                                  SessionTeardown (what a session undoes at its end)
     iterate-context.ts           IterateContext, the client-facing RpcTarget: a PROXY in front of the DO —
                                  cd · invoke · provide · rewrite · subscribe · enableProcessor · disableProcessor;
-                                 ProvidedRpcStubHandle / RewriteRuleHandle / SubscriptionHandle (disposable)
+                                 RewriteRuleHandle / SubscriptionHandle (disposable)
     iterate-context-durable-object.ts  THE CONTEXT DO: stream + the core reduce + delivery + facets +
                                  rpc stubs + the fetch doors. One class, ~600 lines. First line:
                                  #name = parseIterateContextDurableObjectName(ctx.id.name)
     itx-entrypoint.ts            ItxEntrypoint: what a loaded worker's env.ITX is
     context/                     chapter 1 — the context: rpc stubs, expressions, rewrite rules
       built-ins.ts               the kernel roots: whoami, kv, append, read, waitForEvent, cd, fetch,
-                                 rpcStubs, expressionRewriteRules, facets, subscriptions, load, runScript
+                                 rpcStubs, rewriteRules, facets, subscriptions, load, runScript
       expression.ts              the codec: "itx.a.b(1)" ⇄ ["itx","a",["b",1]]; ItxExpression /
                                  ItxExpressionInput / ItxExpressionPrefix; canonicalItxExpressionPrefix
       itx-expression-rewriting.ts  THE RULES 1–5 (match / pick / apply / rewrite-to-built-in), the ONE
@@ -239,7 +239,7 @@ class ProjectCollection extends RpcTarget {
 `src/iterate-context.ts`. The edge is A PROXY IN FRONT OF THE DO. The DO owns
 every contract; every DO built-in root rides the dotted hop with zero edge code
 — `itx.append(...)`, `itx.read(...)`, `itx.waitForEvent(...)`, `itx.fetch(request)`,
-`itx.kv.get(k)`, `itx.rpcStubs.list()`, `itx.expressionRewriteRules.list()`,
+`itx.kv.get(k)`, `itx.rpcStubs.list()`, `itx.rewriteRules.list()`,
 `itx.subscriptions.list()`, `itx.facets.get('tally').snapshot()`, and every
 rewritten name (`itx.myCap.hello()`). The class declares only what must be edge
 code, in the order the tutorial builds them:
@@ -258,24 +258,19 @@ class IterateContext extends RpcTarget {
    *  DO's `invoke`. */
   invoke(call: ItxExpressionInput): Promise<unknown>;
 
-  // ── (a) rpc stubs: THE ONE PHYSICAL ACT ──
-  /** Lend a live value (a function, an RpcTarget) to the DO's `itx.rpcStubs` registry under an
-   *  OPAQUE `rpcStubKey`, through a pager owned HERE (DON'T-PIN). It is then callable as
-   *  `itx.rpcStubs.get('<rpcStubKey>')(…)`. With `rewrite`, the rule
-   *  `rewrite ⇒ itx.rpcStubs.get('<rpcStubKey>')` is configured with it (so
-   *  `itx.<rewrite>.method(x)` reaches the value) and un-set when the stub disappears.
-   *  Re-providing the same key re-lends (reconnect — the pager is replaced). */
+  // ── THE ONE FRONT DOOR: make `match` mean `target` ──
+  /** A call starting with `match` runs as the same call with `match` replaced by `target` (`match`
+   *  may pin literal args: `itx.ai.run('gpt-5')`). `target` is EITHER a client's rpc stub (a function,
+   *  an RpcTarget) — THE ONE PHYSICAL ACT: lent to the DO's `itx.rpcStubs` registry through a pager
+   *  owned HERE (DON'T-PIN) under the key = the canonical match, plus the rule
+   *  `match ⇒ itx.rpcStubs.get('<match>')`, un-set by the DO when the stub's last pager closes;
+   *  re-providing the same match re-lends (reconnect — the pager is replaced) — OR an itx EXPRESSION,
+   *  a pure rewrite: literally `append(rewriteRuleConfiguredEvent(match, target))` — OR `null`, which
+   *  un-sets the rule at `match`. */
   provide(
-    rpcStubKey: string,
-    stub: ClientRpcStub,
-    options?: { rewrite?: ItxExpressionInput },
-  ): Promise<ProvidedRpcStubHandle>;
-
-  // ── (b) itx-expression rewrite rules: pure data, ONE event ──
-  /** A call starting with `match` runs as the same call with `match` replaced by `target`
-   *  (`match` may pin literal args: `itx.ai.run('gpt-5')`). `null` un-sets the rule at `match`.
-   *  Literally `append(rewriteRuleConfiguredEvent(match, target))`. */
-  rewrite(match: ItxExpressionInput, target: ItxExpressionInput | null): Promise<RewriteRuleHandle>;
+    match: ItxExpressionInput,
+    target: ClientRpcStub | ItxExpressionInput | null,
+  ): Promise<RewriteRuleHandle>;
 
   // ── subscriptions: ONE event, over (a) when the target is live ──
   /** Have each committed batch — filtered by `consumes` — delivered to `target` as
@@ -305,27 +300,21 @@ class IterateContext extends RpcTarget {
   // ── everything else: the DO's built-in roots and every rewrite rule ──
   /** Any undeclared dotted access reduces into invoke: itx.append({...}), itx.read(0),
    *  itx.waitForEvent({ type }), itx.fetch(request), itx.kv.get(k), itx.cd('/x').read(),
-   *  itx.facets.get('tally').snapshot(), itx.rpcStubs.list(), itx.expressionRewriteRules.get(m),
+   *  itx.facets.get('tally').snapshot(), itx.rpcStubs.list(), itx.rewriteRules.get(m),
    *  itx.myCap.hello(), itx.site.fetch(request). */
   [dotted: string]: unknown;
 }
 
-/** What `provide` and `rewrite` hand back: ONLY `[Symbol.dispose]` — the caller already holds the
- *  key or match it passed. Disposing UNDOES the act: a provided stub is recalled (and its rewrite
- *  rule un-set); a rewrite rule is un-set. */
-class ProvidedRpcStubHandle extends RpcTarget {
-  [Symbol.dispose](): void; // recall the stub (the DO un-sets what named it on its last pager close)
-}
+/** What `provide` hands back: ONLY `[Symbol.dispose]` — the caller already holds the match it
+ *  passed. Disposing UNDOES the act: a lent stub is recalled (the DO un-sets the rule that named it
+ *  on its last pager close); an expression rule is un-set by appending `null`. */
 class RewriteRuleHandle extends RpcTarget {
-  [Symbol.dispose](): void; // un-set the rule at `match`
-}
-class SubscriptionHandle extends RpcTarget {
-  get name(): string; // the generated name when none was given
-  [Symbol.dispose](): void; // remove the subscription (and recall a lent callback)
+  [Symbol.dispose](): void;
 }
 /** `subscribe`'s handle: disposing removes the row (and recalls the callback lent for it). */
-class SubscriptionHandle extends ProvidedRpcStubHandle {
+class SubscriptionHandle extends RpcTarget {
   get name(): string; // the generated `sub-<8hex>` when none was given
+  [Symbol.dispose](): void;
 }
 ```
 
@@ -337,7 +326,7 @@ minus the handle:
 
 ```ts
 // session-scoped: gone when `rule` leaves scope, or when this session ends
-using rule = await itx.rewrite("itx.db", "itx.kv");
+using rule = await itx.provide("itx.db", "itx.kv");
 // durable: the same event, appended by hand
 await itx.append(rewriteRuleConfiguredEvent("itx.db", "itx.kv"));
 await itx.append({
@@ -360,11 +349,11 @@ verbs.
 
 Semantics worth knowing:
 
-- `provide` with `rewrite` lends the stub **first**, then appends the rule, so
-  the event records a name that can already serve. If the DO refuses the rule
-  (a paused stream, a spelling the parser rejects), the lend is recalled and
-  the refusal propagates.
-- `rewrite` and `subscribe` always append; the reduce treats a `null` on a
+- `provide` with a live stub builds the rule event **first** (a spelling the
+  codec refuses throws with nothing lent), lends the stub, then appends the
+  rule, so the event records a name that can already serve. If the DO refuses
+  the rule (a paused stream), the lend is recalled and the refusal propagates.
+- `provide` and `subscribe` always append; the reduce treats a `null` on a
   match or name that has no row as a no-op (no state change, no live-state
   delta), and a same-valued set simply replaces the entry.
 - A lent stub's rule and subscriptions die with the stub: when a key's last
@@ -511,8 +500,8 @@ interface BuiltInScope {
   };
 
   /** The rewrite-rule table, READ (a slice of core; both halves printed). Written by the edge's
-   *  `rewrite` — sugar over the ONE `itx/rewrite-rule-configured` event — never a verb here. */
-  expressionRewriteRules: {
+   *  `provide` — sugar over the ONE `itx/rewrite-rule-configured` event — never a verb here. */
+  rewriteRules: {
     list(): { match: string; target: string }[];
     get(match: string): { match: string; target: string } | null;
   };
@@ -567,7 +556,7 @@ type SubscriptionListEntry = {
 Two rules that follow from the resolver:
 
 - A rewrite rule's target must be rooted at `itx`
-  (`itx.rewrite("itx.greet", "itx.kv.get")` is legal; `"kv.get"` is rejected
+  (`itx.provide("itx.greet", "itx.kv.get")` is legal; `"kv.get"` is rejected
   when the event is built). Userspace can only reach a root by recursing
   through the `itx` symbol, so the built-ins are unshadowable.
 - The prefix `itx` by itself is the shortest legal match and acts as a
@@ -637,7 +626,7 @@ policy — a token-bucket breaker is a facet processor that appends
 There is no separate status verb anywhere: runtime state IS reduced state.
 Identity, incarnation, pause, the rewrite rules and the subscription rows are one
 snapshot, `itx.facets.get('core').snapshot()`; the rules printed are
-`itx.expressionRewriteRules.list()`; presence is `itx.rpcStubs.list()`;
+`itx.rewriteRules.list()`; presence is `itx.rpcStubs.list()`;
 enabled processors are `itx.subscriptions.list()` entries whose target ends in
 `.processEventBatch`, and a halted delivery is a `halted` field. A snapshot reads
 the reduce only — it never arms the quiet-clock alarm.
@@ -676,7 +665,7 @@ const greetSource = { type: "inline", files: { "greet.js": GREET_SRC } };
 await itx.load(greetSource).getEntrypoint().run("jonas");
 // a rewrite rule: itx.greet ⇒ itx.load(<source>).getEntrypoint() — the structured half carries the
 // inline source as a plain object (the string half spells the same with JSON5 args)
-using greet = await itx.rewrite("itx.greet", ["itx", ["load", greetSource], ["getEntrypoint"]]);
+using greet = await itx.provide("itx.greet", ["itx", ["load", greetSource], ["getEntrypoint"]]);
 await itx.greet.run("jonas"); // now reachable by name, through the rules
 const res = await itx.greet.fetch(new Request("https://x/")); // its fetch: the terminal-fetch rule
 
@@ -688,7 +677,7 @@ A stateless entrypoint cannot own progress, so subscribing one is the
 at-least-once case (section 6):
 
 ```ts
-using digest = await itx.rewrite("itx.digest", ["itx", ["load", digestSource], ["getEntrypoint"]]);
+using digest = await itx.provide("itx.digest", ["itx", ["load", digestSource], ["getEntrypoint"]]);
 using sub = await itx.subscribe({
   name: "digest",
   target: "itx.digest.processEventBatch",
@@ -714,7 +703,7 @@ const counterSource = { type: "inline", files: { "counter.js": COUNTER_SRC } };
 ```ts
 await itx.load(counterSource).getDurableObjectClass("CounterDurableObject").get("c1").bump(); // 1
 await itx.facets.get("c1").bump(); // 2, same instance, no source
-using counter = await itx.rewrite("itx.counter", [
+using counter = await itx.provide("itx.counter", [
   "itx",
   ["load", counterSource],
   ["getDurableObjectClass", "CounterDurableObject"],
@@ -1083,7 +1072,7 @@ await itx.append({ type: "events.iterate.com/stream/resumed" });
 
 | Event                                                           | Payload                                    | Written by                                                                                                                                |
 | --------------------------------------------------------------- | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `events.iterate.com/itx/rewrite-rule-configured`                | `{ match, target \| null }` (both strings) | `rewrite`, `provide` (with `rewrite`); `null` on dispose / session end, or by the DO when the key's last pager closes                     |
+| `events.iterate.com/itx/rewrite-rule-configured`                | `{ match, target \| null }` (both strings) | `provide` (a live stub or an expression); `null` on dispose / session end, or by the DO when the key's last pager closes                  |
 | `events.iterate.com/stream/subscription-configured`             | `{ name, target \| null, consumes? }`      | `subscribe` / `enableProcessor`; `null` from `disableProcessor`, dispose, session end, or the DO when a lent callback's last pager closes |
 | `events.iterate.com/stream/subscription-delivery-halted`        | `{ name, afterOffset, attempts, error? }`  | the delivery loop, after the ladder                                                                                                       |
 | `events.iterate.com/stream/subscription-delivery-resumed`       | `{ name, afterOffset? }`                   | you, to un-halt and optionally seek                                                                                                       |
@@ -1197,7 +1186,7 @@ any halt or backoff.
 client, but this is the skeleton everything above forwards to. `IterateContext`
 calls `invoke` (and, for a terminal fetch, `fetch`); the edge relay calls the
 rpc-stub plumbing; facets reach the context only through `env.ITX`. There are
-NO configuration verbs here: the edge's `rewrite` / `subscribe` /
+NO configuration verbs here: the edge's `provide` / `subscribe` /
 `enableProcessor` / `disableProcessor` build an event and call `append` through
 `invoke`.
 
@@ -1358,14 +1347,14 @@ sequenceDiagram
   participant C as client (capnweb)
   participant E as edge relay (owns the stub)
   participant D as context DO
-  C->>E: itx.provide("robot", robotObject, { rewrite: "itx.robot" })
-  E->>D: attachRpcStubPager({ rpcStubKey: "robot" })
+  C->>E: itx.provide("itx.robot", robotObject)
+  E->>D: attachRpcStubPager({ rpcStubKey: "itx.robot" })
   D-->>E: { transportId }
   E->>D: open the pager WebSocket (x-itx-rpc-stub-pager, carries transportId)
-  Note over D: rpc-stub/attached { rpcStubKey: "robot" } (ephemeral)
-  E->>D: invoke(["itx", ["append", rewrite-rule-configured { match: "itx.robot", target: "itx.rpcStubs.get('robot')" }]])
+  Note over D: rpc-stub/attached { rpcStubKey: "itx.robot" } (ephemeral)
+  E->>D: invoke(["itx", ["append", rewrite-rule-configured { match: "itx.robot", target: "itx.rpcStubs.get('itx.robot')" }]])
   Note over D: the rule appended — pure data; the log never records the socket
-  E-->>C: ProvidedRpcStubHandle
+  E-->>C: RewriteRuleHandle
   Note over D: ... idle: DO hibernates, the pager socket survives ...
   C->>D: itx.robot.move(10)   (via edge, invoke)
   Note over D: rewrite → itx.rpcStubs.get('robot').move(10)
@@ -1479,7 +1468,7 @@ itself.
 | InvokeHandle          | a pipelinable `RpcTarget` returned mid-chain (`cd`, `load(...)`); `FacetHandle` and `RpcStubHandle` are its two brands                                                                                                                    |
 | rpc stub              | a live capnweb value a session LENDS under an opaque `rpcStubKey`; the edge owns it, the DO BORROWS it per page and RETURNS it at idle; `itx.rpcStubs.get(rpcStubKey)` is how a rule or a subscription names it; presence is `list()`     |
 | pager                 | the hibernatable WebSocket from the edge relay to the DO, one per key, carrying `{ transportId, rpcStubKey }`; the DO sends `{ type: "page" }` to get a fresh stub lent                                                                   |
-| session-scoped handle | what `provide` / `rewrite` / `subscribe` return (`ProvidedRpcStubHandle`, `RewriteRuleHandle`, `SubscriptionHandle`): disposable; disposing — or the session ending — undoes the act; the durable spelling is the raw event               |
+| session-scoped handle | what `provide` / `subscribe` return (`RewriteRuleHandle`, `SubscriptionHandle`): disposable; disposing — or the session ending — undoes the act; the durable spelling is the raw event                                                    |
 | subscription          | a named row `{ target, consumes? }` in the subscriptions table; delivered every commit by the one loop                                                                                                                                    |
 | push                  | delivery to a target that owns its progress: `(events, range)`, fire-and-forget to a lent stub, awaited to a facet                                                                                                                        |
 | stream-kept cursor    | delivery to a target that cannot own progress: at-least-once from a kv cursor, retry ladder, halt fact                                                                                                                                    |

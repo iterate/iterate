@@ -202,8 +202,7 @@ test("A BORROW RACES THE QUIESCE ALARM: a stub invoke fired concurrently with th
   // is borrowing is not returned out from under it).
   const ctx = "prj_pagein";
   const clientItx = await (await openSession()).authenticate().projects.get(ctx);
-  for (let i = 0; i < 4; i++)
-    await clientItx.provide(`itx.p${i}`, new Echo(i), { rewrite: `itx.p${i}` });
+  for (let i = 0; i < 4; i++) await clientItx.provide(`itx.p${i}`, new Echo(i));
   const caller = await (await openSession()).authenticate().projects.get(ctx);
 
   // THERE MUST BE AN ALARM TO RACE. Lending four stubs arms nothing — the quiet clock arms only
@@ -240,14 +239,12 @@ test("SCALE DROP + QUIESCE + EVICT + WAKE: a DISPOSED live provide stays gone; t
   const clientItx = await (await openSession()).authenticate().projects.get(ctx);
   const providedRpcStubs: any[] = [];
   for (let i = 0; i < K; i++)
-    providedRpcStubs.push(
-      await clientItx.provide(`itx.k${i}`, new Echo(i), { rewrite: `itx.k${i}` }),
-    );
+    providedRpcStubs.push(await clientItx.provide(`itx.k${i}`, new Echo(i)));
   const caller = await (await openSession()).authenticate().projects.get(ctx);
 
   // The drop must come from the PROVIDER'S OWN handle: disposing it recalls the stub THIS session
   // lent under `itx.k3` (its pager socket closes) AND un-sets the rule at `itx.k3`. A
-  // `caller.rewrite("itx.k3", null)` would un-set the rule only — pure data never touches a
+  // `caller.provide("itx.k3", null)` would un-set the rule only — pure data never touches a
   // transport, and `caller` lent nothing under `itx.k3`, so the stub would stay in the census
   // (unreachable dotted, rule gone).
   providedRpcStubs[3][Symbol.dispose]();

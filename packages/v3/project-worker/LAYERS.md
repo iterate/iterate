@@ -26,7 +26,7 @@ Every callable thing is a live object plus a small piece of durable data that ge
 | **`rpcStubs`** (a lent rpc stub)                                    | a pager WebSocket attachment `{ transportId, rpcStubKey }`                         | **us** — `{type:"page"}` pages the edge worker, which lends a fresh Workers-RPC stub over `lendRpcStub` | `context/rpc-stub-directory.ts`, `context/rpc-stub-relay.ts`           |
 | the stream (`append` / `read` / `waitForEvent`)                     | the log (SQLite)                                                                   | —                                                                                                       | `stream/stream.ts`                                                     |
 | `kv`, `whoami`, `fetch`                                             | KV / the address / FALLBACK                                                        | —                                                                                                       | `context/built-ins.ts`                                                 |
-| `expressionRewriteRules`, `subscriptions` (read views)              | slices of the core reduce (layer 1)                                                | —                                                                                                       | `context/built-ins.ts`, the DO                                         |
+| `rewriteRules`, `subscriptions` (read views)                        | slices of the core reduce (layer 1)                                                | —                                                                                                       | `context/built-ins.ts`, the DO                                         |
 
 The first three rows are Cloudflare features. `rpcStubs` is ours — a poor-man's sturdy ref whose
 restore hook must route through whichever stateless worker holds the client's capnweb socket. Its
@@ -80,19 +80,20 @@ SPECIFIC matching rule (longest match, then most pinned args; a match step may p
 `itx.ai.run('gpt-5')` — which are CONSUMED) rewrites the call, and rewriting repeats until the root
 is a built-in (32 rewrites is the budget; a call no rule matches is `NO_ITX_EXPRESSION_MATCH`,
 default-deny). A target must be rooted at `itx`, so a bare root is unspellable and the built-ins
-are unshadowable. A lent rpc stub is no exception: `itx.provide(rpcStubKey, stub, { rewrite })` lends
-`stub` to `rpcStubs` under the opaque key and configures the pure-data rule
-`rewrite ⇒ itx.rpcStubs.get('<rpcStubKey>')` — the log records the rule, never the socket. The rule
-dies with the stub: the handle's dispose un-sets it from the edge, and when the key's LAST pager
-closes the DO un-sets every rule and subscription whose target is that stub (a reconnect replaces
-the pager and is not a close).
+are unshadowable. A lent rpc stub is no exception: `itx.provide(match, stub)` lends
+`stub` to `rpcStubs` under the key = the canonical match and configures the pure-data rule
+`match ⇒ itx.rpcStubs.get('<match>')` — the log records the rule, never the socket. The rule dies
+with the stub: the handle's dispose recalls the stub, and when the key's LAST pager closes the DO
+un-sets every rule and subscription whose target is that stub (a reconnect replaces the pager and
+is not a close).
 
-The edge verb `itx.rewrite(match, target | null)` is literally "build the event, append it", and
-hands back a DISPOSABLE handle (`ProvidedRpcStubHandle` / `RewriteRuleHandle` / `SubscriptionHandle`): disposing it — or the session ending, when capnweb
-disposes every exported handle — un-sets the rule. So a rule made through the verb is
+THE ONE FRONT DOOR is `itx.provide(match, target)`: a live stub (the lend above plus its rule), an
+EXPRESSION (the rule alone — literally "build the event, append it"), or `null` (un-set). It hands
+back a DISPOSABLE `RewriteRuleHandle` (`subscribe`'s is a `SubscriptionHandle`): disposing it — or
+the session ending, when capnweb disposes every exported handle — un-sets the rule. So a rule made through the verb is
 SESSION-SCOPED; a rule that must outlive its session is the raw event,
 `itx.append(rewriteRuleConfiguredEvent(match, target))` — the verb minus the handle. The read
-view is `itx.expressionRewriteRules.list()` / `.get(match)`.
+view is `itx.rewriteRules.list()` / `.get(match)`.
 
 ## Layer 3 — subscriptions (own events, ONE delivery loop)
 
@@ -150,13 +151,14 @@ on exhaustion, appends `stream/paused { reason }`; an operator appends `stream/r
 (`session.ts`: `UnauthenticatedSession → authenticate() → Session → projects.get(id)`;
 `iterate-context.ts`: `IterateContext`, `cd(path)` for the rest). The edge is A PROXY IN FRONT OF
 THE DO: every DO built-in root (`itx.append`, `itx.read`, `itx.waitForEvent`, `itx.kv.get`,
-`itx.rpcStubs.list`, `itx.expressionRewriteRules.list`, …) rides the prototype hop into ONE
+`itx.rpcStubs.list`, `itx.rewriteRules.list`, …) rides the prototype hop into ONE
 `invoke(expression)` with zero edge code (a terminal `.fetch(request)` rides the fetch channel
 with the expression in `x-itx-expression`). The class declares only what must be edge code: `cd`
-(pure addressing, an EDGE context), `invoke` (the hop's landing door), `provide` (THE ONE PHYSICAL
-ACT — the client's capnweb stub must live here, never in the DO, so the lend happens here, through
-the DON'T-PIN pager relay `context/rpc-stub-relay.ts`'s `lendRpcStubOverPager`), and `rewrite` /
-`subscribe` / `enableProcessor` / `disableProcessor` — each visibly "build the event, append it";
+(pure addressing, an EDGE context), `invoke` (the hop's landing door), `provide` (THE ONE FRONT
+DOOR — a live target is the ONE PHYSICAL ACT: the client's capnweb stub must live here, never in the
+DO, so the lend happens here through the DON'T-PIN pager relay `context/rpc-stub-relay.ts`'s
+`lendRpcStubOverPager`; an expression target is the rule alone), and `subscribe` /
+`enableProcessor` / `disableProcessor` — each visibly "build the event, append it";
 the DO has `append` and no configuration verbs. Every lend is undone at session end by the
 session's `SessionTeardown` (`session.ts`), keyed `"<iterateContextName> <rpcStubKey>"`. Everything a
 client ever does — Slack-bridge RpcTargets included — is these layers composed.

@@ -23,7 +23,7 @@ test("live state chains client-side from the door — mini-app + processor flavo
   await seedSources(itx, ["chatroom", "chunky"]);
 
   // ── mini-app flavor: the chatroom (SDK LiveState helper), behind the rewrite rule itx.chat ──
-  await itx.rewrite(
+  await itx.provide(
     "itx.chat",
     `itx.load("itx.kv.get('src/chatroom.js')").getDurableObjectClass('ChatroomDurableObject').get()`,
   );

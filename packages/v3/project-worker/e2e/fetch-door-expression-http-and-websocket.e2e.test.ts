@@ -25,7 +25,7 @@ test("/expression serves a LOADED WORKER behind a rewrite rule: GET → 200 HTML
   // is an itx EXPRESSION (load(src).getEntrypoint()), same as every other rule.
   const itx = openItx(ctx);
   await seedSources(itx, ["site"]);
-  await itx.rewrite("itx.site", "itx.load(\"itx.kv.get('src/site.js')\").getEntrypoint()");
+  await itx.provide("itx.site", "itx.load(\"itx.kv.get('src/site.js')\").getEntrypoint()");
 
   const page = await fetch(expressionUrl(ctx, "itx.site", "http"));
   expect(page.status).toBe(200);
@@ -60,10 +60,7 @@ class HttpDevice extends RpcTarget {
 test("lent stub HTTP fetch: an eyeball POST reaches the Node provider's fetch() and its Response rides back out", async () => {
   const ctx = freshCtx("caplivehttp");
   const device = new HttpDevice();
-  await session()
-    .authenticate()
-    .projects.get(ctx)
-    .provide("itx.ws-device", device, { rewrite: "itx.ws-device" });
+  await session().authenticate().projects.get(ctx).provide("itx.ws-device", device);
 
   const res = await fetch(expressionUrl(ctx, "itx.ws-device", "http"), {
     method: "POST",
@@ -92,10 +89,7 @@ class WsDevice extends RpcTarget {
 
 test("lent stub WebSocket fetch: a plain eyeball WebSocket opens (101), echoes, and closes through the Node provider", async () => {
   const ctx = freshCtx("caplivews");
-  await session()
-    .authenticate()
-    .projects.get(ctx)
-    .provide("itx.ws-device", new WsDevice(), { rewrite: "itx.ws-device" });
+  await session().authenticate().projects.get(ctx).provide("itx.ws-device", new WsDevice());
   // Sanity: the rule still answers plain HTTP (so the assertions below are about the UPGRADE).
   const plain = await fetch(expressionUrl(ctx, "itx.ws-device", "http"));
   expect(await plain.text()).toBe("http-fallback");

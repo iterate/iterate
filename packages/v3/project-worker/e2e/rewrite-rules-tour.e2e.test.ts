@@ -38,9 +38,9 @@ test("itx tour: built-in roots, lent stubs, the rule map, dynamic-worker rules, 
   }
   const sessionA = session();
   const itxA = await sessionA.authenticate().projects.get(ctx);
-  await itxA.provide("itx.proverA", new ToolsA(), { rewrite: "itx.proverA" });
+  await itxA.provide("itx.proverA", new ToolsA());
   const itxB = await session().authenticate().projects.get(ctx);
-  await itxB.provide("itx.proverB", new ToolsB(), { rewrite: "itx.proverB" });
+  await itxB.provide("itx.proverB", new ToolsB());
   await seedSources(itxA, ["site", "counter"]);
 
   // 1. whoami — a built-in root, reached through the ONE dispatch door
@@ -62,7 +62,7 @@ test("itx tour: built-in roots, lent stubs, the rule map, dynamic-worker rules, 
   expect(got).toBe("hi-crisp");
 
   // 3. a lent stub: provide from A through the ONE door (rpcStubKey + the rule naming it), invoke from B
-  await itxA.provide("itx.tools", new ToolsA(), { rewrite: "itx.tools" });
+  await itxA.provide("itx.tools", new ToolsA());
   const echoed = await itxB.invoke(["itx", "tools", ["echo", "hello"]]);
   // lent stub: B invokes A's provider
   expect(echoed).toBe("echo-A:hello");
@@ -82,23 +82,21 @@ test("itx tour: built-in roots, lent stubs, the rule map, dynamic-worker rules, 
   //    match); setting the old target back RESTORES it; null DELETES it. Proven on DISTINCT
   //    EXPRESSION rules: each provider lends its stub behind its own rule, then points itx.greeter
   //    at that rule.
-  await itxA.provide("itx.greeterA", new ToolsA(), { rewrite: "itx.greeterA" });
-  await itxA.rewrite("itx.greeter", "itx.greeterA");
-  await itxB.provide("itx.greeterB", new ToolsB(), { rewrite: "itx.greeterB" });
-  await itxB.rewrite("itx.greeter", "itx.greeterB");
+  await itxA.provide("itx.greeterA", new ToolsA());
+  await itxA.provide("itx.greeter", "itx.greeterA");
+  await itxB.provide("itx.greeterB", new ToolsB());
+  await itxB.provide("itx.greeter", "itx.greeterB");
   const winB = await itxA.invoke(["itx", "greeter", ["hello"]]);
   // the map: a re-set replaces
   expect(winB).toBe("from B");
   expect(
-    (await itxA.expressionRewriteRules.list()).filter(
-      (r: { match: string }) => r.match === "itx.greeter",
-    ),
+    (await itxA.rewriteRules.list()).filter((r: { match: string }) => r.match === "itx.greeter"),
   ).toHaveLength(1); // ONE row per match — nothing is kept "beneath"
-  await itxB.rewrite("itx.greeter", "itx.greeterA");
+  await itxB.provide("itx.greeter", "itx.greeterA");
   const winA = await itxA.invoke(["itx", "greeter", ["hello"]]);
   // the map: setting the old target back restores it
   expect(winA).toBe("from A");
-  await itxA.rewrite("itx.greeter", null);
+  await itxA.provide("itx.greeter", null);
   let denied: unknown;
   try {
     await itxA.invoke(["itx", "greeter", ["hello"]]);
@@ -110,7 +108,7 @@ test("itx tour: built-in roots, lent stubs, the rule map, dynamic-worker rules, 
   expect(String(denied)).toMatch(/no rewrite rule matches/);
 
   // 5. EXPRESSION RULE running a stateless dynamic worker (the fetch lane end-to-end)
-  await itxA.rewrite("itx.site", "itx.load(['itx', 'kv', ['get', 'src/site.js']]).getEntrypoint()");
+  await itxA.provide("itx.site", "itx.load(['itx', 'kv', ['get', 'src/site.js']]).getEntrypoint()");
   const page = await fetch(expressionUrl(ctx, "itx.site", "http"));
   const html = await page.text();
   // the loaded worker serves HTML via /expression
@@ -134,7 +132,7 @@ test("itx tour: built-in roots, lent stubs, the rule map, dynamic-worker rules, 
   expect(wsEcho).toBe("site-echo:hello-from-eyeball");
 
   // 6. EXPRESSION RULE running a STATEFUL worker — deep dotted call + callback into the host
-  await itxA.rewrite(
+  await itxA.provide(
     "itx.counter",
     "itx.load(['itx', 'kv', ['get', 'src/counter.js']]).getDurableObjectClass('CounterDurableObject').get()",
   );
@@ -165,7 +163,7 @@ test("itx tour: built-in roots, lent stubs, the rule map, dynamic-worker rules, 
   // the dotted match reaches ONE lent stub
   expect(single).toBe("from B");
   // fan-out is presence + map over the keys — no built-in `each`; the caller owns the allSettled.
-  // (Every key here was lent with `rewrite` equal to its rpcStubKey, so a key IS a callable match.)
+  // (A lent stub's key IS its canonical match, so every key here is a callable match.)
   const fans = (
     await Promise.all(
       liveKeys.map((k: string) => itxA.invoke(`${k}.hello()`).catch(() => undefined)),

@@ -1,5 +1,5 @@
 // context/rpc-stub-relay.ts — THE DON'T-PIN PLUMBING behind a lent rpc stub, EDGE side. When a client
-// hands the project a capnweb value (`itx.provide(rpcStubKey, stub)`), the client's stub must live in the
+// hands the project a capnweb value (`itx.provide(match, stub)`), the client's stub must live in the
 // STATELESS relay worker (this side of `/api`), NEVER in the Durable Object — else the DO can't
 // hibernate while any client is connected. So the edge opens an RPC-STUB PAGER WebSocket to the DO
 // (a standing offer to lend the key back on demand); when the DO wants the client — a delivery, a

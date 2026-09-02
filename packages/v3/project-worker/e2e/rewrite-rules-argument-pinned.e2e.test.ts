@@ -10,8 +10,8 @@ import { freshCtx, openItx } from "./support/client.ts";
 test("itx.ai.run('special') rewrites past the plain itx.ai.run rule; pinned args are consumed; a client's rpc stub can sit behind a pinned match", async () => {
   const ctx = freshCtx("pinned");
   const itx = openItx(ctx);
-  await itx.rewrite("itx.ai.run", "itx.kv.get"); // the plain rule: itx.ai.run(k) → itx.kv.get(k)
-  await itx.rewrite("itx.ai.run('special')", "itx.whoami"); // pinned: itx.ai.run('special') → itx.whoami()
+  await itx.provide("itx.ai.run", "itx.kv.get"); // the plain rule: itx.ai.run(k) → itx.kv.get(k)
+  await itx.provide("itx.ai.run('special')", "itx.whoami"); // pinned: itx.ai.run('special') → itx.whoami()
   await itx.invoke("itx.kv.put('other', 'from-kv')");
   expect(await itx.invoke("itx.ai.run('special')")).toMatchObject({ projectId: ctx });
   expect(await itx.invoke("itx.ai.run('other')")).toBe("from-kv");
@@ -19,7 +19,6 @@ test("itx.ai.run('special') rewrites past the plain itx.ai.run rule; pinned args
   await itx.provide(
     "itx.ai.run('live')",
     (...unpinned: unknown[]) => `live:${JSON.stringify(unpinned)}`,
-    { rewrite: "itx.ai.run('live')" },
   );
   expect(await itx.invoke("itx.ai.run('live', 7)")).toBe("live:[7]");
   // the table is a MAP keyed by the CANONICAL pinned spelling; each row carries the parsed match
@@ -34,6 +33,6 @@ test("itx.ai.run('special') rewrites past the plain itx.ai.run rule; pinned args
   ]);
   // un-setting by the canonical pinned spelling deletes exactly that rule; the plain rule (rule 3:
   // less specific) matches the call from now on
-  await itx.rewrite("itx.ai.run('special')", null);
+  await itx.provide("itx.ai.run('special')", null);
   expect(await itx.invoke("itx.ai.run('special')")).toBeNull(); // the plain rule → kv.get('special') → null
 });

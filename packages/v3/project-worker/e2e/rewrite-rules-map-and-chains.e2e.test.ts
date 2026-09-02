@@ -14,38 +14,35 @@ const REWRITE_RULE_CONFIGURED = "events.iterate.com/itx/rewrite-rule-configured"
 test("the table is a MAP: 5 concurrent re-sets of ONE match leave exactly the last-committed target; null deletes (default-deny); a fresh set works", async () => {
   const itx = openItx(freshCtx("map"));
   // five distinguishable client rpc stubs, each behind its own rule
-  for (let i = 0; i < 5; i++)
-    await itx.provide(`itx.probe${i}`, () => i, { rewrite: `itx.probe${i}` });
+  for (let i = 0; i < 5; i++) await itx.provide(`itx.probe${i}`, () => i);
   const race = () => itx.invoke(["itx", ["race"]]);
 
   // five concurrent re-sets of itx.race — one event each, one row survives: the LAST committed
-  await Promise.all(Array.from({ length: 5 }, (_, i) => itx.rewrite("itx.race", `itx.probe${i}`)));
+  await Promise.all(Array.from({ length: 5 }, (_, i) => itx.provide("itx.race", `itx.probe${i}`)));
   const configured = (await readAll(itx)).filter(
     (e) => e.type === REWRITE_RULE_CONFIGURED && e.payload?.match === "itx.race",
   );
   expect(configured).toHaveLength(5); // every re-set appended exactly one event
   const lastTarget = configured.at(-1)!.payload.target as string;
-  expect(await itx.expressionRewriteRules.get("itx.race")).toEqual({
+  expect(await itx.rewriteRules.get("itx.race")).toEqual({
     match: "itx.race",
     target: lastTarget,
   });
   expect(
-    (await itx.expressionRewriteRules.list()).filter(
-      (r: { match: string }) => r.match === "itx.race",
-    ),
+    (await itx.rewriteRules.list()).filter((r: { match: string }) => r.match === "itx.race"),
   ).toHaveLength(1); // a map: same-match rules never coexist
   expect(await race()).toBe(Number(lastTarget.slice("itx.probe".length)));
 
   // a re-set REPLACES (no stack) …
-  await itx.rewrite("itx.race", "itx.probe2");
+  await itx.provide("itx.race", "itx.probe2");
   expect(await race()).toBe(2);
   // … and null DELETES — default-deny, nothing restored from "beneath"
-  await itx.rewrite("itx.race", null);
-  expect(await itx.expressionRewriteRules.get("itx.race")).toBeNull();
+  await itx.provide("itx.race", null);
+  expect(await itx.rewriteRules.get("itx.race")).toBeNull();
   expect(codeOf(await rejection(race()))).toBe("NO_ITX_EXPRESSION_MATCH");
 
   // and the table is not wedged: a fresh set works and answers
-  await itx.rewrite("itx.race", "itx.probe3");
+  await itx.provide("itx.race", "itx.probe3");
   expect(await race()).toBe(3);
 });
 
@@ -55,14 +52,14 @@ test("a NON-CANONICAL match spelling through the rewrite door is stored CANONICA
   // can never mint a row no call reaches.
   const ctx = freshCtx("canon");
   const itx = openItx(ctx);
-  await itx.rewrite(" itx.ghost", "itx.whoami");
+  await itx.provide(" itx.ghost", "itx.whoami");
   const snap = await itx.invoke("itx.facets.get('core').snapshot()");
   expect(snap.state.itxExpressionRewriteRules["itx.ghost"]).toMatchObject({
     match: ["itx", "ghost"],
     target: ["itx", "whoami"],
   }); // stored CANONICAL, parsed
   expect(await itx.invoke(["itx", ["ghost"]])).toMatchObject({ projectId: ctx }); // and rewritten
-  await itx.rewrite("itx.ghost", null); // the canonical spelling is what the un-set finds
+  await itx.provide("itx.ghost", null); // the canonical spelling is what the un-set finds
   const err = await rejection(itx.invoke(["itx", ["ghost"]]));
   expect(codeOf(err)).toBe("NO_ITX_EXPRESSION_MATCH");
   expect(err.message).toContain("no rewrite rule matches");
@@ -137,20 +134,20 @@ test("malformed rewrite-rule events are skipped without wedging later rules", as
     payload: { match: 42, target: ["not", "a", "string"] },
   });
   // the table still takes rules and resolves them — the checkpoint didn't wedge
-  await itx.rewrite("itx.hello", "itx.whoami");
+  await itx.provide("itx.hello", "itx.whoami");
   expect(await itx.invoke(["itx", ["hello"]])).toMatchObject({ projectId: ctx });
   // and the malformed rule is dead weight, not a row (default-deny still answers there)
   const missErr = await rejection(itx.invoke(["itx", ["broken"]]));
   expect(codeOf(missErr)).toBe("NO_ITX_EXPRESSION_MATCH");
-  expect(await itx.expressionRewriteRules.get("itx.broken")).toBeNull();
+  expect(await itx.rewriteRules.get("itx.broken")).toBeNull();
 });
 
 test("a rule is a REWRITE: a longer match under the target's prefix captures the deeper call", async () => {
   const ctx = freshCtx("rewrite");
   const itx = openItx(ctx);
-  await itx.rewrite("itx.store", "itx.kv");
-  await itx.rewrite("itx.store.deep", "itx.whoami"); // longer than `itx.store`: claims `.deep`
-  await itx.rewrite("itx.db", "itx.store");
+  await itx.provide("itx.store", "itx.kv");
+  await itx.provide("itx.store.deep", "itx.whoami"); // longer than `itx.store`: claims `.deep`
+  await itx.provide("itx.db", "itx.store");
   // `itx.db.deep()` rewrites to `itx.store.deep()`, which the longer match claims — the kv value's
   // (non-existent) `deep` is never walked.
   expect(await itx.invoke("itx.db.deep()")).toMatchObject({ projectId: ctx, path: "/" });

@@ -28,7 +28,7 @@ test("itx.slack — a live bridge replays the natural dotted spelling onto the S
   const bridgeItx = openItx(ctx);
   const slack = new SlackReplayTarget();
   // ONE provide door: the live bridge stub is lent under itx.slack with the rule at the same spelling.
-  const slackProvided = await bridgeItx.provide("itx.slack", slack, { rewrite: "itx.slack" });
+  const slackProvided = await bridgeItx.provide("itx.slack", slack);
 
   const itx = openItx(ctx);
 
@@ -63,7 +63,7 @@ test("itx.slack — a live bridge replays the natural dotted spelling onto the S
   expect(listed.channels[0].name).toBe("general");
 
   // 3. a pure rewrite rule can target the live bridge like any other expression
-  await itx.rewrite("itx.notify", "itx.slack.chat.postMessage");
+  await itx.provide("itx.notify", "itx.slack.chat.postMessage");
   const rewritten = await itx.invoke(`itx.notify({ channel: '#alerts', text: 'rewritten!' })`);
   expect(rewritten?.ok).toBe(true);
   expect(slack.calls.some(([m, o]) => m === "chat.postMessage" && o.channel === "#alerts")).toBe(
@@ -80,9 +80,7 @@ test("itx.slack — a live bridge replays the natural dotted spelling onto the S
       },
     },
   };
-  const slack2Provided = await bridgeItx.provide("itx.slack2", replayOnto(slackSdk), {
-    rewrite: "itx.slack2",
-  });
+  const slack2Provided = await bridgeItx.provide("itx.slack2", replayOnto(slackSdk));
   const posted2 = await itx.invoke([
     "itx",
     "slack2",

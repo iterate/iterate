@@ -21,7 +21,7 @@ test("facet spine: cold catch-up + driven reduces + the subscriptions table list
   const itx = openItx(freshCtx("facet"));
 
   // one rewrite rule BEFORE enabling — the facet must count it via cold catch-up
-  await itx.rewrite("itx.before", "itx.kv");
+  await itx.provide("itx.before", "itx.kv");
 
   await enableFixtureProcessor(itx, "tally");
   const s1 = await itx.invoke("itx.facets.get('tally').snapshot()");
@@ -31,9 +31,9 @@ test("facet spine: cold catch-up + driven reduces + the subscriptions table list
   expect(s1.state?.counts?.[CONFIGURED]).toBe(1);
 
   // two more rules + one un-set AFTER enabling — the push path
-  await itx.rewrite("itx.a", "itx.kv");
-  await itx.rewrite("itx.b", "itx.kv");
-  await itx.rewrite("itx.a", null);
+  await itx.provide("itx.a", "itx.kv");
+  await itx.provide("itx.b", "itx.kv");
+  await itx.provide("itx.a", null);
 
   const s2 = await itx.invoke("itx.facets.get('tally').snapshot()");
   // the facet reduces the pushed events (3 sets + 1 un-set, all rewrite-rule-configured). Its
@@ -93,10 +93,10 @@ test("facet address: the built-in door, a rewrite rule onto it, barrier verb, pr
   await itx.invoke(`itx.facets.get('tally').waitUntilProcessed({ offset: 1, timeoutMs: 5000 })`);
 
   // 3. a userspace REWRITE RULE onto the facet address (the address is an ordinary expression)
-  await itx.rewrite("itx.counts", "itx.facets.get('tally')");
+  await itx.provide("itx.counts", "itx.facets.get('tally')");
   const rewritten = await itx.invoke(["itx", "counts", ["snapshot"]]);
   expect(rewritten?.state?.counts?.mark).toBe(1);
-  await itx.rewrite("itx.counts", null);
+  await itx.provide("itx.counts", null);
 
   // 4. the facets.get(slug).snapshot() address still answers
   const sugar = await itx.invoke("itx.facets.get('tally').snapshot()");
@@ -115,9 +115,9 @@ test("two userspace facet processors reduce side-by-side — user-tally and tall
   await enableFixtureProcessor(itx, "tally");
 
   // 2 rule sets + 1 un-set
-  await itx.rewrite("itx.a", "itx.kv");
-  await itx.rewrite("itx.b", "itx.kv");
-  await itx.rewrite("itx.a", null);
+  await itx.provide("itx.a", "itx.kv");
+  await itx.provide("itx.b", "itx.kv");
+  await itx.provide("itx.a", null);
 
   // Both reduce the same 7 durable events (created, woken, 2 configured, 3 rewrite-rule-configured):
   // an enablement is a subscription-configured event, not a rewrite rule, so rule events = 3.

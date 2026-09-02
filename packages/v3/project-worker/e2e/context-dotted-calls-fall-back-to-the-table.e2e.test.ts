@@ -19,7 +19,7 @@ import { SlackReplayTarget, Tools } from "./support/targets.ts";
  *  client just speaks `itx.slack.chat.…`. */
 async function slackRig(ctx: string) {
   const slack = new SlackReplayTarget();
-  await openItx(ctx).provide("itx.slack", slack, { rewrite: "itx.slack" });
+  await openItx(ctx).provide("itx.slack", slack);
   const itx = openItx(ctx);
   // Sanity through the EXPLICIT door — the rule rewrites before any dotted attempt.
   await until("slack rule rewrites via the explicit door", async () => {
@@ -38,7 +38,7 @@ async function slackRig(ctx: string) {
 /** Lend a live Tools stub behind the rule `itx.<name>` and wait until it answers via the STRING door. */
 async function liveRig(ctx: string, name: string) {
   const itx = openItx(ctx);
-  await openItx(ctx).provide(`itx.${name}`, new Tools(name), { rewrite: `itx.${name}` });
+  await openItx(ctx).provide(`itx.${name}`, new Tools(name));
   await until(`lent stub 'itx.${name}' answers via the string door`, async () => {
     return (await itx.invoke(`itx.${name}.hello()`)) === `hello-from-${name}`;
   });

@@ -67,10 +67,7 @@ test("a provider drops and re-provides at the same key — default-deny in betwe
   // 1. provider provides a live stub under itx.p with the rule itx.p ⇒ itx.rpcStubs.get('itx.p') →
   //    callable through the spelling.
   let providerSession = session();
-  await providerSession
-    .authenticate()
-    .projects.get(ctx)
-    .provide("itx.p", new Tools("v1"), { rewrite: "itx.p" });
+  await providerSession.authenticate().projects.get(ctx).provide("itx.p", new Tools("v1"));
   const online = await until("callable online", async () =>
     (await itx.invoke("itx.p.echo('a')")) === "echo-v1:a" ? true : undefined,
   );
@@ -101,10 +98,7 @@ test("a provider drops and re-provides at the same key — default-deny in betwe
   // 3. provider RE-PROVIDES at the SAME key with a fresh instance — this re-lends under the same
   //    registry key and appends ONE more rule event (no dedupe; the map holds one rule again).
   providerSession = session();
-  await providerSession
-    .authenticate()
-    .projects.get(ctx)
-    .provide("itx.p", new Tools("v2"), { rewrite: "itx.p" });
+  await providerSession.authenticate().projects.get(ctx).provide("itx.p", new Tools("v2"));
 
   // 4. THE CONTRACT: the stub is callable AGAIN through the same spelling — it resolves to the
   //    reconnected provider (v2), with no re-addressing by the caller.

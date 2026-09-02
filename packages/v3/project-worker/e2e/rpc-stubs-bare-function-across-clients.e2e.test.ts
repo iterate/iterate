@@ -12,15 +12,11 @@ test("client A: provide('itx.runOnMyComputer', async fn, rewrite) · client B: a
   const laptop = openItx(ctx);
   const otherClient = openItx(ctx);
   const ran: unknown[][] = [];
-  await laptop.provide(
-    "itx.runOnMyComputer",
-    async (cmd: string, args: string[]) => {
-      ran.push([cmd, args]);
-      await new Promise((r) => setTimeout(r, 5)); // genuinely async, like execFile
-      return `stdout of ${cmd} ${args.join(" ")}`;
-    },
-    { rewrite: "itx.runOnMyComputer" },
-  );
+  await laptop.provide("itx.runOnMyComputer", async (cmd: string, args: string[]) => {
+    ran.push([cmd, args]);
+    await new Promise((r) => setTimeout(r, 5)); // genuinely async, like execFile
+    return `stdout of ${cmd} ${args.join(" ")}`;
+  });
   expect(await otherClient.runOnMyComputer("ls", ["-la"])).toBe("stdout of ls -la");
   expect(ran).toEqual([["ls", ["-la"]]]);
 });

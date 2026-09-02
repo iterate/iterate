@@ -122,7 +122,7 @@ class TunnelProvider extends RpcTarget {
 
 test("HTTP tunnel: an eyeball POST to itx.bla rides through the Node CLI provider to localhost and back, bodies intact both ways", async () => {
   const ctx = freshCtx("tunnelhttp");
-  await openItx(ctx).provide("itx.bla", new TunnelProvider(), { rewrite: "itx.bla" }); // the CLI's exact posture
+  await openItx(ctx).provide("itx.bla", new TunnelProvider()); // the CLI's exact posture
 
   const res = await fetch(expressionUrl(ctx, "itx.bla", "http"), {
     method: "POST",
@@ -140,7 +140,7 @@ test("HTTP tunnel: an eyeball POST to itx.bla rides through the Node CLI provide
 
 test("WS tunnel: an eyeball WebSocket on itx.bla opens (101), echoes off the LOCALHOST server, and closes clean", async () => {
   const ctx = freshCtx("tunnelws");
-  await openItx(ctx).provide("itx.bla", new TunnelProvider(), { rewrite: "itx.bla" });
+  await openItx(ctx).provide("itx.bla", new TunnelProvider());
 
   const ws = await wsRoundTrip(expressionUrl(ctx, "itx.bla", "ws"), "hello-through-tunnel");
   expect(ws.error).toBeUndefined();

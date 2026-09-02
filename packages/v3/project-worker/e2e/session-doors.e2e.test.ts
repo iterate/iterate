@@ -45,7 +45,7 @@ export default class Mine extends WorkerEntrypoint {
   // 3. a fetch-shaped target through the SESSION (no /expression door): the terminal
   //    `.fetch(request)` rides the DO's fetch channel with the expression in x-itx-expression — one
   //    routing fork, no verb; `itx.site` is an ordinary rewrite rule onto the loaded entrypoint
-  await itx.rewrite("itx.site", `itx.load("itx.kv.get('src/site.js')").getEntrypoint()`);
+  await itx.provide("itx.site", `itx.load("itx.kv.get('src/site.js')").getEntrypoint()`);
   const resp = await itx.site.fetch(new Request("https://itx.site/"));
   const html = await resp.text();
   // the Response rides back over capnweb

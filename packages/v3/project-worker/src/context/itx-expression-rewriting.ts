@@ -24,9 +24,9 @@
 //   5. Rewriting repeats until the root is a built-in; 32 rewrites is the budget (a self-referential
 //      rule errors, never spins); a call no rule matches is refused (default-deny).
 //
-// A LENT RPC STUB is no exception: `itx.provide(rpcStubKey, stub, { rewrite })` lends the stub to the
-// `itx.rpcStubs` built-in (physical) and configures the pure-data rule `rewrite ⇒
-// itx.rpcStubs.get('<rpcStubKey>')` — the log records the rule, never the socket. STRING AT REST: the
+// A LENT RPC STUB is no exception: `itx.provide(match, stub)` lends the stub to the `itx.rpcStubs`
+// built-in (physical) under the key = the canonical match and configures the pure-data rule `match ⇒
+// itx.rpcStubs.get('<match>')` — the log records the rule, never the socket. STRING AT REST: the
 // event stores both halves in the string half of the codec; the core reduce parses ONCE.
 
 import { codedError } from "../lib/errors.ts";
@@ -35,8 +35,8 @@ import { CoreContract, type ItxExpressionRewriteRule } from "../stream/core-proc
 import type { StreamEventInput } from "../stream/events.ts";
 import { callOn, walkSteps } from "./dispatch.ts";
 import {
-  canonicalItxExpressionPrefix,
   parse,
+  parseItxExpressionPrefix,
   print,
   toItxExpression,
   type ItxExpression,
@@ -148,6 +148,11 @@ export function rewriteRuleConfiguredEvent(
   match: ItxExpressionInput,
   target: ItxExpressionInput | null,
 ): StreamEventInput {
+  const matchPrefix = parseItxExpressionPrefix(match);
+  if (matchPrefix[0] !== "itx")
+    throw new Error(
+      `a rewrite rule's match must be rooted at "itx" (every call starts there — ${JSON.stringify(print(matchPrefix))} could never match one)`,
+    );
   const targetExpression = target === null ? null : parse(print(toItxExpression(target)));
   if (targetExpression && targetExpression[0] !== "itx")
     throw new Error(
@@ -156,7 +161,7 @@ export function rewriteRuleConfiguredEvent(
   return CoreContract.buildEvent({
     type: "events.iterate.com/itx/rewrite-rule-configured",
     payload: {
-      match: canonicalItxExpressionPrefix(match),
+      match: print(matchPrefix),
       target: targetExpression && print(targetExpression),
     },
   });

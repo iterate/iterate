@@ -6,7 +6,7 @@
 // fetch-upgrade leg, the itx-expression fetch lane, egress) and the rpc-stub plumbing
 // (`lendRpcStub`, `attachRpcStubPager`, `rpcStubTransportState`). There are NO configuration
 // verbs: every change to a context is an appended event, so a Workers-RPC caller configures a
-// rewrite rule exactly as the edge's `rewrite` does — `append(rewriteRuleConfiguredEvent(match,
+// rewrite rule exactly as the edge's `provide` does — `append(rewriteRuleConfiguredEvent(match,
 // target))` (context/itx-expression-rewriting.ts) — and a subscription with
 // `append(subscriptionConfiguredEvent(…))` (stream/subscriptions.ts). The pins:
 //
@@ -135,7 +135,7 @@ test("the quiet clock arms as soon as there IS something to quiesce: the invoke 
     // Lend a client's rpc stub (a hibernatable pager socket — a transport, not yet a borrowed stub) with
     // the rule `itx.armcap ⇒ itx.rpcStubs.get('itx.armcap')`…
     const itx = await (await openSession()).authenticate().projects.get(ctx);
-    await itx.provide("itx.armcap", new Alive(), { rewrite: "itx.armcap" });
+    await itx.provide("itx.armcap", new Alive());
     expect(await state.storage.getAlarm()).toBeNull(); // a lent stub alone quiesces nothing
     // …then a call borrows it: a BORROWED stub pins this actor, so the clock must arm NOW.
     expect(await itx.invoke("itx.armcap.ping()")).toBe("alive");
@@ -208,7 +208,7 @@ test("un-setting a rule is pure data — the lent stub's transport is untouched:
   // one transport in the DO's census) with the pure-data rule `itx.livecap ⇒
   // itx.rpcStubs.get('itx.livecap')` configured alongside it.
   const itx = await (await openSession()).authenticate().projects.get(ctx);
-  const provided = await itx.provide("itx.livecap", new Alive(), { rewrite: "itx.livecap" });
+  const provided = await itx.provide("itx.livecap", new Alive());
   expect(typeof provided[Symbol.dispose]).toBe("function"); // a DISPOSABLE handle — no offsets, no identities
   expect(await s.invoke("itx.livecap.ping()")).toBe("alive");
   const rpcStubPagersBefore = await rpcStubPagersOf(ctx);
@@ -234,7 +234,7 @@ test("disposing the provide HANDLE is the other half: the stub is recalled — i
   const ctx = "prj_doors_disposehandle";
   const s = stub(ctx);
   const itx = await (await openSession()).authenticate().projects.get(ctx);
-  const provided = await itx.provide("itx.doomed", new Alive(), { rewrite: "itx.doomed" });
+  const provided = await itx.provide("itx.doomed", new Alive());
   expect(await s.invoke("itx.doomed.ping()")).toBe("alive");
   expect(Object.keys(await rewriteRulesOf(ctx))).toEqual(["itx.doomed"]);
   expect(await rpcStubPagersOf(ctx)).toBe(1);

@@ -7,7 +7,7 @@
 > written. Sections 0–6 are kept in line with the code AS BUILT — including the itx-surface rename
 > of 2026-09-02 (`docs/proposals/itx-surface-SYNTHESIS.md`, §9 "as built"): the noun is **rewrite
 > rule** (`{ match, target }`, ONE event `itx/rewrite-rule-configured { match, target | null }`, a MAP
-> by canonical match), a live value enters through `provide(rpcStubKey, stub, { rewrite? })` under an
+> by canonical match), a live value enters through `provide(match, stub | expression | null)` under an
 > OPAQUE key, the dispatch door is `invoke`, and every verb hands back a DISPOSABLE handle. Sections
 > 7–9 are the decision and sequence record and keep the names of their day.
 
@@ -49,7 +49,7 @@ flowchart TB
     misc["kv · whoami · cd · fetch (egress)"]
   end
   subgraph L1["Layer 1 — itx-expression rewrite rules (ONE event, a slice of the core reduce)"]
-    rule["itx/rewrite-rule-configured { match, target | null } — a MAP by canonical match<br/>provide(rpcStubKey, stub, { rewrite }) = lend to rpcStubs + rule rewrite ⇒ itx.rpcStubs.get(rpcStubKey)"]
+    rule["itx/rewrite-rule-configured { match, target | null } — a MAP by canonical match<br/>provide(match, stub) = lend to rpcStubs + rule rewrite ⇒ itx.rpcStubs.get(rpcStubKey)"]
   end
   subgraph L2["Layer 2 — subscriptions (own events, reduced by the core reduce + ONE delivery loop)"]
     sub["subscription-configured { name, target | null, consumes? }<br/>push if the target owns progress (facet / rpc stub)<br/>else the stream keeps a kv cursor, at-least-once"]
@@ -76,10 +76,10 @@ const itx = api.authenticate().projects.get("prj_123"); // the project ROOT cont
 const agent = itx.cd("/agents/support"); // absolute by convention; relative and ".." also resolve
 
 const greetSource = { type: "inline", files: { "greet.js": GREET_SRC } };
-using greet = await itx.rewrite("itx.greet", ["itx", ["load", greetSource], ["getEntrypoint"]]); // a rewrite rule
-using robot = await itx.provide("robot", robotObject, { rewrite: "itx.robot" }); // SUGAR: lends to rpcStubs under the opaque key + rule itx.robot ⇒ itx.rpcStubs.get('robot')
+using greet = await itx.provide("itx.greet", ["itx", ["load", greetSource], ["getEntrypoint"]]); // a rewrite rule
+using robot = await itx.provide("itx.robot", robotObject); // SUGAR: lends to rpcStubs under the opaque key + rule itx.robot ⇒ itx.rpcStubs.get('robot')
 await itx.rpcStubs.list(); // presence, physical
-await itx.expressionRewriteRules.list(); // the rules, printed
+await itx.rewriteRules.list(); // the rules, printed
 
 using tab = await itx.subscribe({ name: "tab", target: (events, range) => render(events) }); // SUGAR; push (see "range" below)
 using worker = await itx.subscribe({
@@ -107,7 +107,7 @@ what the live-state client already does, and it is why a browser tab needs no se
 Unchanged from C7 except: `fetch` becomes a root, `rpcStubs` gains presence events,
 `getEntrypoint` takes Cloudflare's own `props`, and `connectToCapnweb` leaves. AS BUILT, three more
 roots: `waitForEvent` (so the edge declares nothing for it) and the two READ views of core's
-slices, `expressionRewriteRules` and `subscriptions`.
+slices, `rewriteRules` and `subscriptions`.
 
 ```ts
 interface BuiltInScope {
@@ -128,7 +128,7 @@ interface BuiltInScope {
   /** THE physical registry. Keys are OPAQUE rpcStubKeys the lender picks; a rewrite rule names one as itx.rpcStubs.get('<rpcStubKey>'). */
   rpcStubs: { get(rpcStubKey: string): RpcStubHandle; list(): string[] };
   /** The rewrite-rule table, READ (a slice of core, printed). Written only by the ONE event. */
-  expressionRewriteRules: {
+  rewriteRules: {
     list(): { match: string; target: string }[];
     get(match: string): { match: string; target: string } | null;
   };
@@ -166,7 +166,7 @@ export default class extends WorkerEntrypoint {
 
 ```ts
 const remoteSource = { type: "inline", files: { "remote.js": REMOTE_SRC } };
-using os = await itx.rewrite("itx.os", [
+using os = await itx.provide("itx.os", [
   "itx",
   ["load", remoteSource],
   ["getEntrypoint", undefined, { props: { url: "https://os.iterate.com/api" } }],
@@ -197,9 +197,9 @@ a row. Built-ins first; then the most SPECIFIC matching rule (longest match, the
 rewrites the call, repeating until the root is a built-in (32-rewrite budget; no match ⇒
 `NO_ITX_EXPRESSION_MATCH`, default-deny). The `delivery`, `processor` and `lane` fields of the old
 row are gone; `itx.subscribers.*` stops being a convention; a rewrite rule is a name for a target
-and nothing else. The edge verb is `rewrite(match, target | null)` → a disposable
-a disposable handle; a client's rpc stub enters through `provide(rpcStubKey, stub, { rewrite? })`, which
-lends under the OPAQUE key and configures the rule `rewrite ⇒ itx.rpcStubs.get('<rpcStubKey>')`.
+and nothing else. The edge verb is ONE: `provide(match, stub | expression | null)` → a disposable
+`RewriteRuleHandle`; a live stub is lent under the key = the canonical match and the rule
+`match ⇒ itx.rpcStubs.get('<match>')` is written with it; an expression is the rule alone.
 The rule dies with the stub: the handle's dispose un-sets it from the edge, and when the key's LAST
 pager closes the DO un-sets every rule and subscription whose target is that stub (a reconnect
 replaces the pager and is not a close).
@@ -458,7 +458,7 @@ export default class extends WorkerEntrypoint {
 
 ```ts
 const workerSource = { type: "inline", files: { "worker.js": WORKER_SRC } };
-using worker = await itx.rewrite("itx.worker", ["itx", ["load", workerSource], ["getEntrypoint"]]);
+using worker = await itx.provide("itx.worker", ["itx", ["load", workerSource], ["getEntrypoint"]]);
 using sub = await itx.subscribe({ name: "project-worker", target: "itx.worker.processEventBatch" });
 (await itx.subscriptions.get("project-worker")).cursor; // { confirmedOffset, attempt, nextAttemptAtMs? }
 await itx.append({
@@ -482,19 +482,19 @@ class ProjectCollection extends RpcTarget {
 } // the ROOT context; pure addressing
 
 // iterate-context.ts — A PROXY IN FRONT OF THE DO. Declares only what must be edge code, in the order the tutorial builds them;
-// every DO built-in root (append · read · waitForEvent · fetch · whoami · kv · rpcStubs.get/list · expressionRewriteRules · facets · subscriptions · load · runScript)
+// every DO built-in root (append · read · waitForEvent · fetch · whoami · kv · rpcStubs.get/list · rewriteRules · facets · subscriptions · load · runScript)
 // and every rewrite rule ride the prototype hop into ONE invoke(expression) with ZERO code here.
 class IterateContext extends RpcTarget {
   cd(path: string): IterateContext; // pure addressing, zero DO hops; returns an EDGE context
   invoke(call: ItxExpressionInput): Promise<unknown>; // THE dispatch door; a terminal .fetch(Request) rides the fetch lane (x-itx-expression; root egress included)
-  // (a) rpc stubs — THE ONE PHYSICAL ACT: the client's capnweb stub must live in this stateless worker, never in the DO
+  // THE ONE FRONT DOOR: make `match` mean `target`. A live stub is THE ONE PHYSICAL ACT (the client's
+  // capnweb stub must live in this stateless worker, never in the DO): lent under the key = the canonical
+  // match, plus the rule match ⇒ itx.rpcStubs.get('<match>'); an expression is the rule alone; null un-sets.
   provide(
-    rpcStubKey: string,
-    stub: ClientRpcStub,
-    options?: { rewrite?: ItxExpressionInput },
-  ): Promise<ProvidedRpcStubHandle>; // lend under the OPAQUE key (+ the rule rewrite ⇒ itx.rpcStubs.get('<rpcStubKey>'))
-  // (b) rewrite rules · subscriptions · processors — each is visibly "build the event, append it" (the DO has append and no configuration verbs)
-  rewrite(match: ItxExpressionInput, target: ItxExpressionInput | null): Promise<RewriteRuleHandle>;
+    match: ItxExpressionInput,
+    target: ClientRpcStub | ItxExpressionInput | null,
+  ): Promise<RewriteRuleHandle>;
+  // subscriptions · processors — each is visibly "build the event, append it" (the DO has append and no configuration verbs)
   subscribe(input: {
     name?: string;
     target: ItxExpressionInput | ClientRpcStub | null;
@@ -507,16 +507,17 @@ class IterateContext extends RpcTarget {
   disableProcessor(name: string): Promise<void>;
   [dotted: string]: unknown; // everything else
 }
-class ProvidedRpcStubHandle extends RpcTarget {
+class RewriteRuleHandle extends RpcTarget {
   [Symbol.dispose](): void;
-} // provide / rewrite: disposing (or session end) undoes the act
-class SubscriptionHandle extends ProvidedRpcStubHandle {
+} // provide: disposing (or session end) undoes the act — recalls a lent stub, appends null for an expression
+class SubscriptionHandle extends RpcTarget {
   get name(): string;
+  [Symbol.dispose](): void;
 } // subscribe: the generated name when none was given
 ```
 
 The banding survives: the client still holds one `itx`, but the code reads as the tutorial does —
-the physical act first, then verbs that are nothing but `append` plus a handle. `rewrite` and
+the physical act first, then verbs that are nothing but `append` plus a handle. `provide` and
 `subscribe` are declared on the edge only because their target may be a live value (which only the
 edge can lend); `enableProcessor` / `disableProcessor` because they are two appends spelled for you.
 Every verb that returns a handle returns a DISPOSABLE one, and capnweb disposes it at session end,

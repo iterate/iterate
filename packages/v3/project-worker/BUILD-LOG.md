@@ -2365,3 +2365,27 @@ options?)` with `options.rewrite`; chapter 1 reads `itx.provide("laptop", fn)`, 
   `getEntrypoint` only; D — edge `cd` vs built-in `cd` explained, keep both.
 - GATES: tsc×3 (+ the shell's) · oxlint 0/0 · knip clean · unit+workers 250 · e2e 141p/2xf (37 files; the
   full lane, twice: the first run caught the chatroom sink and the entrypoint-fetch detour).
+
+## 2026-09-02 — A: ONE front door — `provide(match, target)`, `rewrite` deleted
+
+- Jonas, in the review: "what if i wanted to provide and rewrite itx.ai.run('gpt-5') and provide a
+  function that implements it? … I do feel like maybe a single provide verb is actually clearer. And we
+  just explained that either we're providing real stuff or we're rewriting something." Then "ok" on the
+  recommendation. The two layers are untouched; only the edge verb collapsed.
+- **`provide(match, target: ClientRpcStub | ItxExpressionInput | null): Promise<RewriteRuleHandle>`.**
+  A live stub is lent under the key = the CANONICAL MATCH (`lendRpcStubOverPager(…, matchString, …)`)
+  and the rule `match ⇒ itx.rpcStubs.get('<match>')` appended — the rule event is BUILT before the
+  lend so a spelling the codec refuses throws with nothing lent; an expression is the rule alone;
+  `null` appends the un-set and disposes this session's teardown entry for the key. `rewrite` is gone;
+  `ProvidedRpcStubHandle` is gone (the durable thing made is always the rule, so `RewriteRuleHandle`
+  for both; disposing recalls a lent stub or appends `null` for an expression).
+- **The match must be rooted at `itx`** — `rewriteRuleConfiguredEvent` now refuses `provide("later", …)`
+  (a match no call could ever start with), the way it already refused a target not rooted at itx.
+- **Read root `itx.rewriteRules.list()/get(match)`** (was `expressionRewriteRules`; the event and the verb
+  already say "rewrite rule"). The `rpcStubKey` NOUN leaves the front door; it lives on inside
+  `RpcStubDirectory` and as `subscription:<name>` for a live subscriber.
+- Sweep: 47 `provide(K, stub, { rewrite: K })` collapsed to `provide(K, stub)`; every `.rewrite(` became
+  `.provide(`; the hand-rule e2e's bare key `later` became the match `itx.later`. The deferred bare-key
+  sweep dissolved: a key IS its match. Docs re-pointed (as-built §2/§4/§6/§7/§10/§12 — A moved to
+  "decided"; LAYERS; walkthrough; onion design; synthesis §9 addendum).
+- GATES: tsc×3 · oxlint 0/0 · knip clean · unit+workers 250 · e2e 141p/2xf (37 files).

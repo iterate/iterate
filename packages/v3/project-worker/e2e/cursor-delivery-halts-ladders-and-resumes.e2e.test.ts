@@ -66,9 +66,9 @@ async function cursorSubscribe(
   consumes?: string[],
 ): Promise<void> {
   const hook = `${name}Hook`;
-  await itx.provide(`itx.${hook}`, new Hook(fn), { rewrite: `itx.${hook}` });
+  await itx.provide(`itx.${hook}`, new Hook(fn));
   await itx.kv.put(`src/${hook}.js`, HOOKED_SOURCE(hook));
-  await itx.rewrite(
+  await itx.provide(
     `itx.${name}Worker`,
     `itx.load("itx.kv.get('src/${hook}.js')").getEntrypoint()`,
   );
@@ -82,7 +82,7 @@ async function cursorSubscribe(
  *  kv `digested`; a `payload.poison` mark makes it throw `retryable: false` — the halt-NOW case. */
 async function digestSubscribe(itx: any, name: string, consumes?: string[]): Promise<void> {
   await seedSources(itx, ["digest"]);
-  await itx.rewrite("itx.digest", `itx.load("itx.kv.get('src/digest.js')").getEntrypoint()`);
+  await itx.provide("itx.digest", `itx.load("itx.kv.get('src/digest.js')").getEntrypoint()`);
   await itx.subscribe({
     name,
     target: "itx.digest.processEventBatch",
@@ -115,7 +115,7 @@ const ledgerLog = async (itx: any): Promise<LedgerEntry[]> =>
   JSON.parse(((await itx.kv.get("ledger:log")) as string | null) ?? "[]") as LedgerEntry[];
 const ledgerSubscribe = async (itx: any, firstCall: "throw" | "hold"): Promise<void> => {
   await itx.kv.put("src/ledger.js", LEDGER_SRC);
-  await itx.rewrite(
+  await itx.provide(
     "itx.ledger",
     `itx.load("itx.kv.get('src/ledger.js')").getEntrypoint('Ledger', { props: { firstCall: '${firstCall}' } })`,
   );
@@ -136,7 +136,7 @@ test("the digest worker is delivered from a stream-kept cursor; retryable:false 
   //    EXPRESSION — an entrypoint cannot own its progress, so THE STREAM keeps the cursor. Beside
   //    it, a live tab: a lent stub owns its progress, so its row has NO cursor. Same verb, no
   //    declaration.
-  await itx.rewrite("itx.digest", `itx.load("itx.kv.get('src/digest.js')").getEntrypoint()`);
+  await itx.provide("itx.digest", `itx.load("itx.kv.get('src/digest.js')").getEntrypoint()`);
   const sub = await itx.subscribe({
     name: "digest",
     target: "itx.digest.processEventBatch",

@@ -317,7 +317,7 @@ test("one-directional delivery: batches keep flowing with the subscriber's outbo
 test("deep chaining: 3+ segment dotted paths through a live provider (getter → object of fns) resolve correctly, costing the client ONE round trip", async () => {
   const ctx = freshCtx("deep");
   const slack = new SlackReplayTarget();
-  await openItx(ctx).provide("itx.slack", slack, { rewrite: "itx.slack" });
+  await openItx(ctx).provide("itx.slack", slack);
 
   const w = wireSession();
   const itx = await w.session.authenticate().projects.get(ctx);
@@ -357,10 +357,7 @@ test("disposal: `using` on the /api session stub recalls its lent stubs at scope
   const observer = openItx(ctx);
   {
     using scoped = session();
-    await scoped
-      .authenticate()
-      .projects.get(ctx)
-      .provide("itx.scoped", new Tools("scoped"), { rewrite: "itx.scoped" });
+    await scoped.authenticate().projects.get(ctx).provide("itx.scoped", new Tools("scoped"));
     await until("the stub present while the scope lives", async () =>
       (await presence(observer)).includes("itx.scoped"),
     );

@@ -32,7 +32,7 @@
 // PURE WORKERS-RPC: capnweb never terminates here (hard rule) — the stateless `/api` worker
 // relays. Dispatch is ONE door: `invoke(call)` — parse → rewrite through the rules → evaluate →
 // replay, all against the inline core state; this class only delegates. Every OTHER change to this
-// context is an appended event: the edge's `rewrite`/`subscribe`/`enableProcessor` verbs build one
+// context is an appended event: the edge's `provide`/`subscribe`/`enableProcessor` verbs build one
 // and call `append` — there are no configuration verbs here. The ONE event this class appends on its
 // own initiative is the un-set of whatever named an rpc stub whose last pager closed (onPresence);
 // the ONE effect it runs off a committed event is deleting the facet a removed subscription hosted.
@@ -290,7 +290,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         list: () => this.#subscriptionList(),
         get: (name) => this.#subscriptionList().find((s) => s.name === name) ?? null,
       },
-      expressionRewriteRules: {
+      rewriteRules: {
         list: () =>
           Object.values(this.#stream.coreReducedState.itxExpressionRewriteRules).map((rule) => ({
             match: print(rule.match),

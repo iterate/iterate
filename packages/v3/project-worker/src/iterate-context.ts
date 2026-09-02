@@ -14,17 +14,20 @@
 //   • `invoke`  — the landing door of the prototype hop at the bottom (`itx.a.b(x)` reduces to ONE
 //                 expression) plus the one fetch-lane fork; every built-in root (`itx.append(…)`,
 //                 `itx.read(…)`, `itx.waitForEvent(…)`, `itx.kv.get(…)`, `itx.rpcStubs.list()`,
-//                 `itx.expressionRewriteRules.list()`, …) rides it with ZERO code here;
-//   • `provide` — THE ONE PHYSICAL ACT: a client's rpc stub (a function, an RpcTarget) must live in this stateless
-//                 worker, never in the DO (DON'T-PIN, below), so the lend happens here. A rule or
-//                 subscription naming the lent key is un-set by the DO when the key's last pager
-//                 closes — the physical fact decides, not this session's teardown;
-//   • `rewrite` / `subscribe` / `enableProcessor` / `disableProcessor` — each is visibly "build the
-//                 event, append it": the DO has `append` and no configuration verbs. `subscribe` is
-//                 declared here because its target may be a client's rpc stub; `rewrite` for symmetry.
-// `provide`, `rewrite` and `subscribe` hand back a DISPOSABLE handle (`using`): disposing un-does the act.
-// capnweb also disposes every exported handle when the session ends, so a rule or subscription made
-// through the verb is SESSION-SCOPED; one that must outlive the session is the raw event —
+//                 `itx.rewriteRules.list()`, …) rides it with ZERO code here;
+//   • `provide` — THE ONE FRONT DOOR: make `match` mean `target`. A target that is a client's rpc stub
+//                 (a function, an RpcTarget) must live in this stateless worker, never in the DO
+//                 (DON'T-PIN, below), so the lend happens here — under the key = the canonical match —
+//                 plus the pure-data rule `match ⇒ itx.rpcStubs.get('<match>')`; an expression target
+//                 is that rule alone; `null` un-sets it. A rule or subscription naming a lent key is
+//                 un-set by the DO when the key's last pager closes — the physical fact decides, not
+//                 this session's teardown;
+//   • `subscribe` / `enableProcessor` / `disableProcessor` — each is visibly "build the event, append
+//                 it": the DO has `append` and no configuration verbs. `subscribe` is declared here
+//                 because its target may be a client's rpc stub.
+// `provide` and `subscribe` hand back a DISPOSABLE handle (`using`): disposing un-does the act. capnweb
+// also disposes every exported handle when the session ends, so a rule or subscription made through
+// the verb is SESSION-SCOPED; one that must outlive the session is the raw event —
 // `itx.append(rewriteRuleConfiguredEvent(match, target))` — the verb minus the handle.
 //
 // HOW A CLIENT REACHES ONE: `/api` → `UnauthenticatedSession.authenticate()` → `Session.projects.get(id)`
@@ -41,7 +44,11 @@
 import { RpcTarget } from "capnweb";
 import type { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 import { ITX_EXPRESSION_FETCH_HEADER } from "./fetch/rpc-stub-fetch.ts";
-import { toItxExpression, type ItxExpressionInput } from "./context/expression.ts";
+import {
+  canonicalItxExpressionPrefix,
+  toItxExpression,
+  type ItxExpressionInput,
+} from "./context/expression.ts";
 import { rewriteRuleConfiguredEvent } from "./context/itx-expression-rewriting.ts";
 import type { WorkerSource } from "./context/worker-loader.ts";
 import { installPrototypeInvokeFallback } from "./context/dotted-path-proxy.ts";
@@ -64,20 +71,9 @@ export type IterateContextNamespace = DurableObjectNamespace<IterateContextDurab
 export type WaitUntil = (p: Promise<unknown>) => void;
 
 /** What `provide` hands back: dispose it — or let the session end; capnweb disposes every exported
- *  handle then — and the stub is recalled (the DO un-sets what named it when its last pager closes). */
-export class ProvidedRpcStubHandle extends RpcTarget {
-  readonly #undo: () => void;
-  constructor(undo: () => void) {
-    super();
-    this.#undo = undo;
-  }
-  [Symbol.dispose](): void {
-    this.#undo();
-  }
-}
-
-/** What `rewrite` hands back: dispose it — or let the session end — and the rule at `match` is un-set.
- *  The caller already holds the match it passed, so the handle carries nothing else. */
+ *  handle then — and the rule at `match` is un-set: for a lent stub, by recalling the stub (the DO
+ *  un-sets what named it when its last pager closes); for an expression, by appending `null`. The
+ *  caller already holds the match it passed, so the handle carries nothing else. */
 export class RewriteRuleHandle extends RpcTarget {
   readonly #undo: () => void;
   constructor(undo: () => void) {
@@ -181,62 +177,64 @@ export class IterateContext extends RpcTarget {
     return this.#durableObject.invoke(itxExpression);
   }
 
-  // ── (a) rpc stubs: the one physical act ──
+  // ── THE ONE FRONT DOOR: make `match` mean `target` — (a) a lent rpc stub or (b) a pure rewrite ──
 
-  /** PROVIDE a client's rpc stub (a function, an RpcTarget) under an OPAQUE `rpcStubKey`: lend it to
-   *  the DO's `itx.rpcStubs` registry through a pager (owned HERE — DON'T-PIN). It is then callable as
-   *  `itx.rpcStubs.get('<rpcStubKey>')(…)`. With `options.rewrite`, the rule `rewrite ⇒
-   *  itx.rpcStubs.get('<rpcStubKey>')` is configured with it — `itx.<rewrite>.method(x)` reaches the
-   *  stub like any other rewrite — and un-set when the stub disappears. Re-providing the same key
-   *  re-lends (reconnect — the pager is replaced). Disposing the handle, or the session ending, recalls
-   *  the stub. `options` is where an idle policy or a timeout goes later. */
+  /** PROVIDE: from now on a call starting with `match` runs as the same call with `match` replaced by
+   *  `target` (context/itx-expression-rewriting.ts — `match` may pin literal args: `itx.ai.run('gpt-5')`).
+   *  `target` is EITHER
+   *    • a client's rpc stub (a function, an RpcTarget) — THE ONE PHYSICAL ACT: it is lent to the DO's
+   *      `itx.rpcStubs` registry through a pager owned HERE (DON'T-PIN) under the key = the canonical
+   *      `match`, and the pure-data rule `match ⇒ itx.rpcStubs.get('<match>')` is appended. The DO
+   *      un-sets that rule when the stub's LAST pager closes. Re-providing the same match re-lends
+   *      (reconnect — the pager is replaced);
+   *    • an itx EXPRESSION — a pure rewrite: literally `append(rewriteRuleConfiguredEvent(match, target))`;
+   *    • `null` — un-set the rule at `match` (and recall a stub THIS session lent under it).
+   *  Either way the durable thing made is the rule, so the handle is a `RewriteRuleHandle`: disposing
+   *  it, or the session ending, un-does the act. */
   async provide(
-    rpcStubKey: string,
-    stub: ClientRpcStub,
-    options: { rewrite?: ItxExpressionInput } = {},
-  ): Promise<ProvidedRpcStubHandle> {
+    match: ItxExpressionInput,
+    target: ClientRpcStub | ItxExpressionInput | null,
+  ): Promise<RewriteRuleHandle> {
+    const matchString = canonicalItxExpressionPrefix(match);
+    const sessionTeardownKey = this.#sessionTeardownKey(matchString);
+    if (target === null) {
+      await this.#append(rewriteRuleConfiguredEvent(matchString, null));
+      this.#sessionTeardown.dispose(sessionTeardownKey);
+      return new RewriteRuleHandle(() => undefined);
+    }
+    if (typeof target === "string" || Array.isArray(target)) {
+      await this.#append(rewriteRuleConfiguredEvent(matchString, target));
+      return new RewriteRuleHandle(() =>
+        this.#appendInBackground(rewriteRuleConfiguredEvent(matchString, null)),
+      );
+    }
+    // Built BEFORE the lend so a match the codec refuses throws with nothing lent.
+    const ruleEvent = rewriteRuleConfiguredEvent(matchString, [
+      "itx",
+      "rpcStubs",
+      ["get", matchString],
+    ]);
     const pager = await lendRpcStubOverPager(
       this.#durableObject,
-      stub,
-      rpcStubKey,
+      target,
+      matchString,
       this.#waitUntil,
     );
-    const sessionTeardownKey = this.#sessionTeardownKey(rpcStubKey);
     // Registered with the session so a dying session recalls it even when the handle was never
-    // disposed; re-providing the same key replaces the entry (the old pager was "replaced" anyway).
-    // The rule is NOT un-set here: the DO un-sets whatever names the key when its LAST pager closes
-    // (a reconnect replaces the pager, so a late-dying old session cannot clobber the new one's rule).
+    // disposed; re-providing the same match replaces the entry (the old pager was "replaced" anyway).
+    // The rule is NOT un-set by this session: the DO un-sets whatever names the key when its LAST
+    // pager closes (a reconnect replaces the pager, so a late-dying old session cannot clobber the
+    // new one's rule).
     this.#sessionTeardown.add(sessionTeardownKey, pager);
-    if (options.rewrite !== undefined)
-      try {
-        await this.#append(
-          rewriteRuleConfiguredEvent(options.rewrite, ["itx", "rpcStubs", ["get", rpcStubKey]]),
-        );
-      } catch (e) {
-        // The DO refused the rule (STREAM_PAUSED / a validation throw): recall the lend, or a stub
-        // nothing names would linger for the session. Let the refusal propagate.
-        this.#sessionTeardown.dispose(sessionTeardownKey);
-        throw e;
-      }
-    return new ProvidedRpcStubHandle(() => this.#sessionTeardown.dispose(sessionTeardownKey));
-  }
-
-  // ── (b) itx-expression rewrite rules: pure data, ONE event ──
-
-  /** REWRITE: a call starting with `match` runs as the same call with `match` replaced by `target`
-   *  (context/itx-expression-rewriting.ts — `match` may pin literal args: `itx.ai.run('gpt-5')`).
-   *  `null` un-sets the rule at `match`. Literally `append(rewriteRuleConfiguredEvent(match,
-   *  target))` — the returned handle un-sets the rule when disposed or when the session ends. */
-  async rewrite(
-    match: ItxExpressionInput,
-    target: ItxExpressionInput | null,
-  ): Promise<RewriteRuleHandle> {
-    const event = rewriteRuleConfiguredEvent(match, target);
-    await this.#append(event);
-    const matchString = (event.payload as { match: string }).match;
-    return new RewriteRuleHandle(() => {
-      if (target !== null) this.#appendInBackground(rewriteRuleConfiguredEvent(matchString, null));
-    });
+    try {
+      await this.#append(ruleEvent);
+    } catch (e) {
+      // The DO refused the rule (STREAM_PAUSED): recall the lend, or a stub nothing names would
+      // linger for the session. Let the refusal propagate.
+      this.#sessionTeardown.dispose(sessionTeardownKey);
+      throw e;
+    }
+    return new RewriteRuleHandle(() => this.#sessionTeardown.dispose(sessionTeardownKey));
   }
 
   // ── subscriptions: ONE event, over (a) when the target is live ──

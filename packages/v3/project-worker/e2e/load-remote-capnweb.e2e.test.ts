@@ -26,7 +26,7 @@ export class Remote extends WorkerEntrypoint {
 
 const rewriteRemoteApi = async (itx: any): Promise<void> => {
   await itx.kv.put("src/remote.js", REMOTE_SRC);
-  await itx.rewrite(
+  await itx.provide(
     "itx.remoteApi",
     `itx.load("itx.kv.get('src/remote.js')").getEntrypoint('Remote', { props: { url: ${JSON.stringify(process.env.DUMMY_CAPNWEB_URL)} } })`,
   );

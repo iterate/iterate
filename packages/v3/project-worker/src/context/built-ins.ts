@@ -1,5 +1,5 @@
 // built-ins.ts — THE BUILT-INS: a plain record whose KEYS are the physical-layer roots (`whoami`,
-// `kv`, `append`, `read`, `waitForEvent`, `cd`, `fetch`, `rpcStubs`, `expressionRewriteRules`,
+// `kv`, `append`, `read`, `waitForEvent`, `cd`, `fetch`, `rpcStubs`, `rewriteRules`,
 // `facets`, `subscriptions`, `load`, `runScript`). A call `itx.<root>…` resolves DIRECTLY against
 // these (itx-expression-rewriting.ts `ItxExpressionResolver`, built-in first) — no rule. Rewrite
 // rules name `itx.…` targets that rewrite through the same rules to reach a root; a bare root is
@@ -87,9 +87,9 @@ export interface BuiltInScope {
   fetch(request: Request): Promise<Response>;
   /** The rpc-stub REGISTRY — physical, never event-sourced: a client's live capnweb value lent under
    *  an OPAQUE key by its session (relay-side, DON'T-PIN — the edge owns it, this side borrows).
-   *  `get(rpcStubKey)` is how a REWRITE RULE names one: `itx.provide(key, stub, { rewrite })` is
-   *  sugar for lending under `key` and configuring the pure-data rule `rewrite ⇒
-   *  itx.rpcStubs.get('<key>')`. */
+   *  `get(rpcStubKey)` is how a REWRITE RULE names one: `itx.provide(match, stub)` lends the stub
+   *  under the key = the canonical match and configures the pure-data rule `match ⇒
+   *  itx.rpcStubs.get('<match>')`. */
   rpcStubs: {
     /** One stub by key: a pipelinable handle over its transport (borrowed, or paged then borrowed).
      *  Deep dots walk; a root call reaches the bare lent callable; offline ⇒ RPC_STUB_OFFLINE at call
@@ -100,9 +100,9 @@ export interface BuiltInScope {
     list(): string[];
   };
   /** The itx-expression rewrite-rule table, read (a slice of core) — the rules every call goes
-   *  through. Written by `itx.rewrite(match, target | null)` on the edge (sugar over the ONE
+   *  through. Written by `itx.provide(match, target | null)` on the edge (sugar over the ONE
    *  `itx/rewrite-rule-configured` event), never a verb here. */
-  expressionRewriteRules: {
+  rewriteRules: {
     list(): { match: string; target: string }[];
     get(match: string): { match: string; target: string } | null;
   };
@@ -151,7 +151,7 @@ interface BuildBuiltInsDeps {
   /** The subscriptions view — the core slice ⋈ the delivery loop's cursors. */
   subscriptions: BuiltInScope["subscriptions"];
   /** The rewrite-rule view — the core slice, printed. */
-  expressionRewriteRules: BuiltInScope["expressionRewriteRules"];
+  rewriteRules: BuiltInScope["rewriteRules"];
   /** The stream's waitForEvent (the own context's — a wait never crosses a hop). */
   waitForEvent: BuiltInScope["waitForEvent"];
   /** `facets.get(ref)` — address a facet by name, OR materialize `{ source, className, name? }` (a
@@ -269,7 +269,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       delete: (name: string) => deps.facets.delete(name),
     },
     subscriptions: deps.subscriptions,
-    expressionRewriteRules: deps.expressionRewriteRules,
+    rewriteRules: deps.rewriteRules,
     // Each hop is its own InvokeHandle, so the whole `load(src).getEntrypoint().run()` /
     // `.getDurableObjectClass('C').get(name?)` chain pipelines on every lane (workerd#6873).
     load: (source: WorkerSource) =>

@@ -58,7 +58,7 @@ policy or timeout goes later; the sugar has no options.
 (`itx.expressions.set`, `itx.subscriptions.set`, `itx.processors.set`); B's own first trade-off is
 that the sentence rule loses. C/D keep flat verbs and use nouns for READS. **Recommendation: flat
 verbs for writes, nouns for reads** — `itx.rewrite(match, target|null)`, `itx.subscribe({ name,
-target|null })`, `itx.enableProcessor` / `disableProcessor`; `itx.expressionRewriteRules.list()/get(match)`,
+target|null })`, `itx.enableProcessor` / `disableProcessor`; `itx.rewriteRules.list()/get(match)`,
 `itx.subscriptions.list()/get(name)`, `itx.rpcStubs.list()/get(key)`. Set-and-unset is still one door
 per layer (Jonas's "one thing"); only the spelling differs from B.
 
@@ -71,7 +71,7 @@ the `StreamEventInput`/`StreamEvent` pairing; a `Step` is an `ItxExpressionStep`
 is the act; the stored row is a **rewrite rule** (`ItxExpressionRewriteRule`, event `rewrite-rule-configured`), the
 term-rewriting word routing.ts's header already uses; `rewrite` stays the verb (`itx.rewrite(match, target | null)`,
 null = stop rewriting `match`). The read collection on itx is
-`itx.expressionRewriteRules` — "itx" is the receiver, so the one redundant word is dropped, nothing else.
+`itx.rewriteRules` — "itx" is the receiver, so the one redundant word is dropped, nothing else.
 
 ```ts
 // THE ITX SURFACE — written ONCE as the DO's built-in roots (context/built-ins.ts). A capnweb client,
@@ -89,7 +89,7 @@ whoami · kv · cd · fetch · load · facets                                   
  *  rule at `match`. Both halves are itx expressions; `match` may pin literal args. Appends
  *  `itx/rewrite-rule-configured { match, target | null }` — or nothing, when the table already says so. */
 rewrite(match: ItxExpressionInput, target: ItxExpressionInput | null): Promise<StreamEvent | null>; // the committed event, or null when the table already said so
-expressionRewriteRules: { list(): ItxExpressionRewriteRule[]; get(match: ItxExpressionInput): ItxExpressionRewriteRule | null };
+rewriteRules: { list(): ItxExpressionRewriteRule[]; get(match: ItxExpressionInput): ItxExpressionRewriteRule | null };
 // layer 3 · (a) rpc stubs — the axiom: physical, hibernatable, OPAQUE key. Presence is list().
 rpcStubs: { get(rpcStubKey: string): RpcStubHandle; list(): string[] };
 // layer 4 · subscriptions — ONE event `stream/subscription-configured { name, target | null, consumes? }`
@@ -150,7 +150,7 @@ at the idle quiesce; presence = borrowed ∪ pager-backed. Transport verbs off t
 | `BorrowedStub` (DO) · `BorrowedStub` (edge) · `LentProviderStub` · `ProviderStub`                                       | —                                                                                                                                                            | `BorrowedRpcStub` · `LentRpcStub` · `ClientRpcStub` · inlined                                                                                       |
 | `lendStubOverRelay` · `#lendStub` · `#recallStub` · `#teardownKey` · `rpcStubAttach` · `rpcStubLend` · `transportState` | —                                                                                                                                                            | `lendRpcStubOverPager` · `#lendRpcStub` · `#recallRpcStub` · `#sessionTeardownKey` · `attachRpcStubPager` · `lendRpcStub` · `rpcStubTransportState` |
 | `enableProcessor` / `disableProcessor` (edge-only) · `waitForEvent` (edge method)                                       | roots (zero edge code)                                                                                                                                       | —                                                                                                                                                   |
-| e2e `rpcStubMountPaths` · `processorNames` (regex)                                                                      | `itx.expressionRewriteRules.list()` · `itx.subscriptions.list()`                                                                                             | —                                                                                                                                                   |
+| e2e `rpcStubMountPaths` · `processorNames` (regex)                                                                      | `itx.rewriteRules.list()` · `itx.subscriptions.list()`                                                                                                       | —                                                                                                                                                   |
 
 ## 5. Commits (each green on tsc · oxlint · knip · unit+workers · e2e · tutorial-proof)
 
@@ -158,7 +158,7 @@ at the idle quiesce; presence = borrowed ∪ pager-backed. Transport verbs off t
    `RPC_STUB_OFFLINE`, the canonical-key assertion deleted, `rpcStubs.lend/recall` at the edge.
 2. **(b) expression rewriting**: the vocabulary, ONE file, ONE event over a map, `state.itxExpressionRewriteRules`,
    `NO_ITX_EXPRESSION_MATCH`, `x-itx-expression`; subscriptions' ONE event.
-3. **The surface**: roots for `rewrite` · `expressionRewriteRules` · `subscribe` · `enableProcessor` · `disableProcessor` ·
+3. **The surface**: roots for `rewrite` · `rewriteRules` · `subscribe` · `enableProcessor` · `disableProcessor` ·
    `waitForEvent`; the DO's four verbs deleted; the edge down to `cd` · `invoke` · `rewrite` · `subscribe` ·
    `rpcStubs.lend/recall`; `invoke` everywhere; every e2e re-pointed.
 4. **Docs**: walkthrough, tutorial file map and Part 0 order (C's "three bridges" wrinkle), BUILD-LOG.
@@ -168,7 +168,7 @@ at the idle quiesce; presence = borrowed ∪ pager-backed. Transport verbs off t
 - Wire and event-type changes: a flag day (prd is resettable; every e2e reading a code moves in the same commit).
 - The shadow stack and removal by identity are gone; a null deletes the entry at that match. The two e2e files that prove the stack are deleted.
 - The client's type is unenforced beyond the four declared edge members; a typo is `NO_ITX_EXPRESSION_MATCH`, not a missing method. (Already true for `itx.kv`, `itx.facets`, `itx.load`.)
-- Six new reserved dotted roots (`rewrite`, `expressionRewriteRules`, `subscribe`, `enableProcessor`, `disableProcessor`, `waitForEvent`).
+- Six new reserved dotted roots (`rewrite`, `rewriteRules`, `subscribe`, `enableProcessor`, `disableProcessor`, `waitForEvent`).
 - "Capability" and "mount" prose churn across headers, docs and BUILD-LOG (history docs untouched).
 
 ## 7. Why no offset on a rewrite-rule row (Jonas: "what is an actual case where this race matters?")
@@ -221,7 +221,7 @@ points in the tutorial — the signature evolves when expressions arrive (a key 
 `env.ITX.get()` hands loaded code, so one class serves both). Each is visibly "build the event, append it":
 `rewrite` = `canonicalItxExpressionPrefix(match)` → `rewriteRuleConfiguredEvent(match, target)` →
 `this.invoke(["itx", ["append", event]])` → wrap the committed event in a handle. The DO has `append` (and
-the reads). Reconnect-is-zero-events: the verb reads `itx.expressionRewriteRules.get(match)` first and
+the reads). Reconnect-is-zero-events: the verb reads `itx.rewriteRules.get(match)` first and
 appends nothing when the table already says so (a read + an append on the edge; a raced duplicate is a
 harmless no-op in the reduce — trusted clients). The DO's `provideCapability` / `revokeCapability` /
 `configureSubscription` / `removeSubscription` are deleted; nothing replaces them on the DO.
@@ -273,9 +273,17 @@ The code is the record; the differences from the sketches above, so this doc doe
   spelling is `itx.rpcStubs.get('<key>')(...args)`).
 - **The edge writes through `invoke(["itx", ["append", event]])`** — the same door a client's dotted
   `itx.append(...)` takes; the DO has no `append` verb the edge calls directly.
-- **Reads on the surface**: `itx.expressionRewriteRules.list()/get(match)` (strings), `itx.rpcStubs.list()`
+- **Reads on the surface**: `itx.rewriteRules.list()/get(match)` (strings), `itx.rpcStubs.list()`
   (presence = borrowed ∪ pager-backed), `itx.subscriptions.list()/get(name)`, `itx.waitForEvent(...)` — all
   built-in roots, zero edge code.
+- **2026-09-02, second review round (Plannotator on docs/itx-surface-as-built.md) — ONE FRONT DOOR.** Jonas:
+  "maybe a single provide verb is actually clearer… either we're providing real stuff or we're rewriting
+  something", then "ok" on the recommendation. `rewrite` is DELETED; `provide(match, target)` takes a live
+  stub (lent under the key = the canonical match, rule `match ⇒ itx.rpcStubs.get('<match>')`), an
+  expression (the rule alone) or `null` (un-set). `ProvidedRpcStubHandle` gone — `RewriteRuleHandle` for
+  both, since the durable thing made is the rule. Read root `itx.rewriteRules` (was
+  `expressionRewriteRules`). A rule's match must be rooted at `itx`. The rpcStubKey noun leaves the front
+  door; it survives inside `RpcStubDirectory` and as `subscription:<name>` for a live subscriber.
 - **Wire**: `x-itx-expression`, `/expression?context=…&itx=…`, `x-itx-rpc-stub-pager`; codes
   `NO_ITX_EXPRESSION_MATCH`, `RPC_STUB_OFFLINE`; events `itx/rewrite-rule-configured { match, target|null }`,
   `stream/subscription-configured { name, target|null, consumes? }`; core contract 4.0.0.

@@ -1,6 +1,6 @@
-// e2e/support/targets.ts — the live rpc-stub fixtures: RpcTargets a test PROVIDES under an rpc-stub
-// key with a rewrite rule at the same spelling (`itx.provide("itx.x", new Tools("x"),
-// { rewrite: "itx.x" })`) and then calls through the rules from another session.
+// e2e/support/targets.ts — the live rpc-stub fixtures: RpcTargets a test PROVIDES under a match
+// (`itx.provide("itx.x", new Tools("x"))` — lent under the key `itx.x`, rule at the same spelling)
+// and then calls through the rules from another session.
 
 import { RpcTarget } from "capnweb";
 

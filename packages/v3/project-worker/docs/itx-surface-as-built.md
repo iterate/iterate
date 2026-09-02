@@ -30,7 +30,7 @@ flowchart LR
   canonical match, written by one event. "A call starting with `match` runs as the same call with
   `match` replaced by `target`."
 - **Everything else is an event.** The DO has `append` and no configuration verbs. The edge's
-  verbs (`rewrite`, `subscribe`, `enableProcessor`, `disableProcessor`) build an event and append it.
+  verbs (`provide`, `subscribe`, `enableProcessor`, `disableProcessor`) build an event and append it.
 - **The DO is the parent** of: the stream, the core reduce (inline at commit), the one delivery
   loop, the facets (loaded DurableObject classes), the rpc-stub directory, the fetch door.
 - **Bindings, named for what they hold.** `env.ITERATE_CONTEXT` is the project worker's
@@ -50,23 +50,22 @@ using api = newWebSocketRpcSession("wss://<worker>/api");
 const itx = api.authenticate().projects.get("prj_demo"); // the root context "/"
 const support = itx.cd("/agents/support"); // pure addressing, no DO hop
 
-// ── 1. rpc stubs: provide + invoke ──
-using laptop = await itx.provide("laptop", {
+// ── 1. rpc stubs: provide a live stub — it is lent under the key = its match ──
+using laptop = await itx.provide("itx.laptop", {
   async ping() {
     return "pong";
   },
 });
-await itx.invoke("itx.rpcStubs.get('laptop').ping()"); // "pong"
+await itx.invoke("itx.rpcStubs.get('itx.laptop').ping()"); // "pong" — the physical door
+await itx.invoke("itx.laptop.ping()"); // "pong" — through the rule provide wrote
 
 // ── 2. itx expressions: the dotted sugar IS invoke ──
-await itx.rpcStubs.get("laptop").ping(); // the same call
+await itx.laptop.ping(); // the same call
 
-// ── 3. rewrite rules: a name for a target ──
-using rule = await itx.rewrite("itx.laptop", "itx.rpcStubs.get('laptop')");
-await itx.laptop.ping(); // "pong"
-using cam = await itx.provide("cam", camera, { rewrite: "itx.cam" }); // both in one
-await itx.rewrite("itx.ai.run('gpt-5')", "itx.openai.chat"); // a pinned arg
-await itx.rewrite("itx.laptop", null); // delete
+// ── 3. rewrite rules: provide an EXPRESSION and it is a pure rewrite ──
+using grok = await itx.provide("itx.grok", "itx.openai.chat"); // itx.grok(x) ⇒ itx.openai.chat(x)
+await itx.provide("itx.ai.run('gpt-5')", async (inputs) => …); // a live stub behind a pinned arg
+await itx.provide("itx.laptop", null); // delete
 
 // ── 4. subscriptions: a name for a delivery ──
 using tail = await itx.subscribe({
@@ -123,18 +122,17 @@ review the class's TYPE also carries every built-in root (section 5) by declarat
 (`export interface IterateContext extends Omit<BuiltInScope, "cd"> {}`): zero runtime, but a
 reader of the file sees the whole surface, and `env.ITX.get().append(…)` typechecks in loaded code.
 
-| Method                                                                                 | Returns                           | What physically happens                                                                                                                                                                             |
-| -------------------------------------------------------------------------------------- | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cd(path)`                                                                             | `IterateContext`                  | Pure addressing. Absolute by convention, relative resolves. Returns an EDGE context so a later `provide` lends in this session.                                                                     |
-| `invoke(call: ItxExpressionInput)`                                                     | `Promise<unknown>`                | THE door. `durableObject.invoke(expression)`. One fork: a terminal `fetch(Request)` rides `durableObject.fetch` with the expression in `x-itx-expression`.                                          |
-| `provide(rpcStubKey, stub: ClientRpcStub, options?: { rewrite? })`                     | `ProvidedRpcStubHandle`           | THE ONE PHYSICAL ACT. Opens a pager WebSocket to the DO (`lendRpcStubOverPager`), registers it with the session's teardown; with `rewrite`, appends the rule `rewrite ⇒ itx.rpcStubs.get('<key>')`. |
-| `rewrite(match, target \| null)`                                                       | `RewriteRuleHandle`               | `append(rewriteRuleConfiguredEvent(match, target))`. Nothing else.                                                                                                                                  |
-| `subscribe({ name?, target: ItxExpressionInput \| ClientRpcStub \| null, consumes? })` | `SubscriptionHandle` (has `name`) | A live target is lent under the key `subscription:<name>` first, then `append(subscriptionConfiguredEvent(…))` with target `itx.rpcStubs.get('subscription:<name>')`.                               |
-| `enableProcessor(name, { source, className, consumes? })`                              | `{ name }`                        | `append(subscriptionConfiguredEvent)` with target `itx.load(source).getDurableObjectClass(className).get(name).processEventBatch`. DURABLE, no handle.                                              |
-| `disableProcessor(name)`                                                               | `void`                            | ONE append: `{ name, target: null }`. The DO deletes the facet the row hosted before the append returns (section 9).                                                                                |
+| Method                                                                                 | Returns                           | What physically happens                                                                                                                                                                                                                                                    |
+| -------------------------------------------------------------------------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cd(path)`                                                                             | `IterateContext`                  | Pure addressing. Absolute by convention, relative resolves. Returns an EDGE context so a later `provide` lends in this session.                                                                                                                                            |
+| `invoke(call: ItxExpressionInput)`                                                     | `Promise<unknown>`                | THE door. `durableObject.invoke(expression)`. One fork: a terminal `fetch(Request)` rides `durableObject.fetch` with the expression in `x-itx-expression`.                                                                                                                 |
+| `provide(match, target: ClientRpcStub \| ItxExpressionInput \| null)`                  | `RewriteRuleHandle`               | THE ONE FRONT DOOR: make `match` mean `target`. A live stub is lent to the DO through a pager owned here (DON'T-PIN) under the key = the canonical match, and the rule `match ⇒ itx.rpcStubs.get('<match>')` is appended; an expression is the rule alone; `null` un-sets. |
+| `subscribe({ name?, target: ItxExpressionInput \| ClientRpcStub \| null, consumes? })` | `SubscriptionHandle` (has `name`) | A live target is lent under the key `subscription:<name>` first, then `append(subscriptionConfiguredEvent(…))` with target `itx.rpcStubs.get('subscription:<name>')`.                                                                                                      |
+| `enableProcessor(name, { source, className, consumes? })`                              | `{ name }`                        | `append(subscriptionConfiguredEvent)` with target `itx.load(source).getDurableObjectClass(className).get(name).processEventBatch`. DURABLE, no handle.                                                                                                                     |
+| `disableProcessor(name)`                                                               | `void`                            | ONE append: `{ name, target: null }`. The DO deletes the facet the row hosted before the append returns (section 9).                                                                                                                                                       |
 
-The three handles are server-side RpcTargets with one member, `[Symbol.dispose]`, plus a
-`name` getter on `SubscriptionHandle`. Disposing undoes the act. capnweb disposes every
+The two handles (`RewriteRuleHandle`, `SubscriptionHandle`) are server-side RpcTargets with one
+member, `[Symbol.dispose]`, plus a `name` getter on `SubscriptionHandle`. Disposing undoes the act. capnweb disposes every
 exported handle when the session ends, so **a verb's effect is session-scoped; the raw event
 is durable**.
 
@@ -163,7 +161,7 @@ must be rooted at `itx`, so a bare root is unspellable and the built-ins are uns
 | `cd(path)`                   | `→ InvokeHandle` onto a sibling context (append/read skip its rules; else `invoke`)      | `ITERATE_CONTEXT.getByName`                           |
 | `fetch(request)`             | egress: `{{secret:project:NAME}}` substituted → `FALLBACK`                               | the control plane                                     |
 | `rpcStubs`                   | `.get(rpcStubKey) → RpcStubHandle` · `.list() → string[]` (presence)                     | `RpcStubDirectory`                                    |
-| `expressionRewriteRules`     | `.list() → { match, target }[]` · `.get(match)`                                          | a read of core state                                  |
+| `rewriteRules`               | `.list() → { match, target }[]` · `.get(match)`                                          | a read of core state                                  |
 | `facets`                     | `.get(name) → FacetHandle` (a RUNNING facet) · `.delete(name)`                           | `ctx.facets`                                          |
 | `subscriptions`              | `.list() → SubscriptionListEntry[]` · `.get(name)`                                       | core state ⋈ the loop's cursors                       |
 | `load(source)`               | `.getEntrypoint(name?, { props? }).<method>(…)` · `.getDurableObjectClass(C).get(name?)` | Worker Loader; mirrors Cloudflare's own two accessors |
@@ -204,8 +202,8 @@ invokeRpcStub(rpcStubKey, steps):
   else           → RPC_STUB_OFFLINE
 ```
 
-- **Key**: opaque, chosen by the lender. The directory never parses it. Keys in examples are
-  bare (`"laptop"`, `"cam"`); `subscribe` uses `subscription:<name>`.
+- **Key**: opaque to the directory, which never parses it. `provide` uses the canonical match
+  (`"itx.laptop"`, `"itx.ai.run('gpt-5')"`); `subscribe` uses `subscription:<name>`.
 - **Reconnect**: a new pager under an existing key REPLACES the old one (newest wins). Not a
   detach.
 - **Presence**: `itx.rpcStubs.list()` = borrowed ∪ pager-backed. Two EPHEMERAL events as it
@@ -214,7 +212,7 @@ invokeRpcStub(rpcStubKey, steps):
 - **The rule dies with the stub, DO-side.** On a key's LAST pager close the DO appends
   `rewrite-rule-configured { match, null }` for every rule and `subscription-configured { name,
 null }` for every subscription whose target is `itx.rpcStubs.get('<key>')`. The edge's
-  teardown only closes the pager. Accepted: a pure `rewrite` handle disposed after another
+  teardown only closes the pager. Accepted: an expression rule's handle disposed after another
   session re-set the same match deletes it (last writer wins).
 - **DON'T-PIN**: the client's capnweb stub lives in the stateless worker for the session. The
   DO holds no stub while idle and hibernates with any number of clients attached.
@@ -248,10 +246,9 @@ Set replaces, `null` deletes. No stack, no offset, no identity beyond the match.
 string | null }`. Both halves are canonicalized through the codec at build time, so a bad
 spelling fails at the door, never silently in the reduce.
 
-**A live stub behind a pinned match works today** (`rewrite-rules-argument-pinned.e2e`):
-`provide("gpt5", fn, { rewrite: "itx.ai.run('gpt-5')" })`, then `itx.ai.run('gpt-5', inputs)`
-runs as `itx.rpcStubs.get('gpt5')(inputs)`, so `fn(inputs)`. What it costs is inventing the key.
-See open item A.
+**A live stub behind a pinned match** (`rewrite-rules-argument-pinned.e2e`):
+`provide("itx.ai.run('gpt-5')", fn)`, then `itx.ai.run('gpt-5', inputs)` runs as
+`itx.rpcStubs.get("itx.ai.run('gpt-5')")(inputs)`, so `fn(inputs)`. No key to invent: the key is the match.
 
 **A chain**:
 
@@ -343,14 +340,14 @@ initializer is one line over the scope:
 
 **Lifetimes.**
 
-| Thing                        | Made by                    | Dies when                                                              |
-| ---------------------------- | -------------------------- | ---------------------------------------------------------------------- |
-| a lent rpc stub              | `provide`, `subscribe(fn)` | handle disposed, or the session ends                                   |
-| a rule made by `provide`     | `provide({ rewrite })`     | the stub's last pager closes (the DO un-sets it)                       |
-| a rule made by `rewrite`     | `rewrite`                  | handle disposed, or the session ends (the handle appends `null`)       |
-| a subscription (expression)  | `subscribe`                | same as above                                                          |
-| a processor                  | `enableProcessor`          | its `null` event (verb or raw), which also deletes the facet it hosted |
-| anything spelled as an event | `itx.append(event)`        | its `null` event                                                       |
+| Thing                        | Made by                                 | Dies when                                                              |
+| ---------------------------- | --------------------------------------- | ---------------------------------------------------------------------- |
+| a lent rpc stub              | `provide(match, stub)`, `subscribe(fn)` | handle disposed, or the session ends                                   |
+| a rule for a live stub       | `provide(match, stub)`                  | the stub's last pager closes (the DO un-sets it)                       |
+| a rule for an expression     | `provide(match, expression)`            | handle disposed, or the session ends (the handle appends `null`)       |
+| a subscription (expression)  | `subscribe`                             | same as above                                                          |
+| a processor                  | `enableProcessor`                       | its `null` event (verb or raw), which also deletes the facet it hosted |
+| anything spelled as an event | `itx.append(event)`                     | its `null` event                                                       |
 
 **Fetch** (`src/fetch/rpc-stub-fetch.ts`, 286 lines, parked). A fetch-shaped capability is
 always called through a terminal `.fetch(request)`. Two doors: the plain-HTTP lane
@@ -404,33 +401,13 @@ Error codes (`src/lib/errors.ts`): `NO_ITX_EXPRESSION_MATCH`, `RPC_STUB_OFFLINE`
 - The edge `IterateContext` TYPE includes every built-in root (declaration merging).
 - `env.CONTEXT` → `env.ITERATE_CONTEXT` (project worker and control-plane shell); the prop
   `contextName` → `iterateContextName`. Singular, as Cloudflare and apps/os name DO bindings.
-- `authenticate()` stays a no-op gate. The two one-member handle classes stay two.
-- Deferred, not dropped: the e2e sweep from `"itx.tools"`-style keys to bare keys waits for
-  open item A, which may remove the key from the front door altogether.
+- `authenticate()` stays a no-op gate.
+- **A, done ("ok" on the recommendations):** ONE front door `provide(match, target)`; `rewrite`
+  deleted; a live stub is lent under the key = the canonical match; `ProvidedRpcStubHandle` gone,
+  `RewriteRuleHandle` for both cases; read root `itx.rewriteRules`; a rule's match must be rooted
+  at `itx` (refused at the door). The bare-key question dissolved with the key.
 
-### Open, with a proposal each
-
-**A. One front door: `provide(match, target)`, `rewrite` deleted.** Today there are two verbs
-that both write rules, and a stub needs a key the caller invents. The proposal keeps the two
-layers exactly as they are and collapses only the edge verb:
-
-```ts
-provide(match: ItxExpressionInput, target: ClientRpcStub | ItxExpressionInput | null): Promise<RewriteRuleHandle>
-  // a live stub   → lend it under key = canonical match, rule  match ⇒ itx.rpcStubs.get('<match>')
-  // an expression → rule  match ⇒ target
-  // null          → un-set the rule (and recall a stub this session lent under it)
-
-using cam  = await itx.provide("itx.cam", camera);                      // live
-await itx.provide("itx.ai.run('gpt-5')", async (inputs) => …);          // live, pinned arg
-await itx.provide("itx.grok", "itx.openai.chat");                        // pure rewrite
-await itx.provide("itx.cam", null);                                      // gone
-```
-
-The handle is `RewriteRuleHandle` in every case, because the durable thing made is the rule (the
-live case also lends). Lost: providing a stub with no rule (a bare key); `subscribe(fn)` still
-lends internally. The read root becomes `itx.rewriteRules.list()/get(match)` (the event and the
-verb already say "rewrite rule"; this answers annotation 10 too), `itx.rpcStubs.list()` stays as
-presence. Recommendation: yes. Roughly 40 call sites in tests and docs, net fewer lines.
+### Open, with a proposal each (B and C are in flight, in that order)
 
 **B. Inline-only sources.** Delete the producer-expression branch of `WorkerSource` (the
 `itx.kv.get('src/x.js')` pattern) and make a source `{ type: "inline", files }` only, or just

@@ -51,7 +51,7 @@ test("core reduce: pause/resume, ephemerals flow when unpaused, ONE core snapsho
   expect(ephOk).toBe(true);
 
   // ── observability: the ONE inline address ──
-  await itx.rewrite("itx.probe", "itx.whoami"); // a rewrite rule → core.itxExpressionRewriteRules
+  await itx.provide("itx.probe", "itx.whoami"); // a rewrite rule → core.itxExpressionRewriteRules
   await itx.subscribe({ name: "watch", target: "itx.probe", consumes: ["never"] }); // a row → core.subscriptions
   const snap = await itx.invoke("itx.facets.get('core').snapshot()");
   // identity from the birth certificate, incarnation from the wake record, pause from the pair

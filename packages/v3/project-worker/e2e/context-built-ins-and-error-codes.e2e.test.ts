@@ -14,7 +14,7 @@ test("a legitimate ctx (hyphen, underscore, uppercase, digits) is served; a ':' 
   // never be materialized at all; the prefix IS the whole isolation wall.
   const legit = freshCtx("FixReg-1_A"); // hyphen, underscore, uppercase, digits
   const good = openItx(legit);
-  await good.rewrite("itx.probe", "itx.whoami"); // a probe → whoami round trip proves the ctx addressed the right project
+  await good.provide("itx.probe", "itx.whoami"); // a probe → whoami round trip proves the ctx addressed the right project
   expect(await good.invoke(["itx", ["probe"]])).toMatchObject({ projectId: legit });
 
   const a = openItx(freshCtx("w2kv"));

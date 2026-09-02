@@ -70,7 +70,7 @@ test("the inline reduced state is live under ONE key, `core`: a rewrite rule and
   const seen = coreDeltas.length; // the subscribes above are themselves core changes
 
   // a REWRITE RULE (a rewrite) → a delta keyed "core" whose patch touches /itxExpressionRewriteRules
-  await itx.rewrite("itx.zzz", "itx.whoami");
+  await itx.provide("itx.zzz", "itx.whoami");
   const ruleDelta = await until("core delta for the rewrite rule", () =>
     coreDeltas
       .slice(seen)

@@ -13,7 +13,7 @@ test("persistent stub: stash a live itx handle in DO storage, use the restored h
   const itx = openItx(ctx);
   await seedSources(itx, ["keeper"]);
 
-  await itx.rewrite(
+  await itx.provide(
     "itx.keeper",
     `itx.load("itx.kv.get('src/keeper.js')").getDurableObjectClass('KeeperDurableObject').get()`,
   );
