@@ -5,17 +5,14 @@
 // rules name `itx.…` targets that rewrite through the same rules to reach a root; a bare root is
 // unspellable, so the built-ins are unshadowable.
 //
-// LOADING DYNAMIC CODE — `itx.load(source)` mirrors Cloudflare's Worker Loader: it loads the code
-// and hands back a WORKER, then you pick the host EXPLICITLY, the same two accessors Cloudflare
-// exposes:
+// LOADING DYNAMIC CODE — two doors, each the mirror of a Cloudflare one:
 //   • `itx.load(src).getEntrypoint(name?).run(...)` — a STATELESS `WorkerEntrypoint` (its own
-//     isolate, no storage) — the mirror of `worker.getEntrypoint()`.
-//   • `itx.load(src).getDurableObjectClass('C').get(name?).method(...)` — a `DurableObject` class
-//     hosted as a durable FACET of this stream (own storage; a `name` is an independent instance)
-//     — the mirror of `worker.getDurableObjectClass()` + `ctx.facets.get(name, { class })`.
-// `itx.facets.get(name)` is the SEPARATE door for a facet that is ALREADY RUNNING (processors,
-// named instances) — address by name, no source. `itx.runScript(lambda)` is sugar for the one
-// bare-lambda case (wrap → `load(...).getEntrypoint().run`).
+//     isolate, no storage) — the mirror of the Worker Loader's `worker.getEntrypoint()`.
+//   • `itx.facets.get(name, { source, className }).method(...)` — a `DurableObject` class hosted as
+//     the durable FACET `name` of this stream (own storage) — the mirror of `ctx.facets.get(name,
+//     startupCallback)`. Without the spec, `itx.facets.get(name)` ADDRESSES a facet that is already
+//     running (a processor, a named instance) — same door, no source.
+// `itx.runScript(lambda)` is sugar for the one bare-lambda case (wrap → `load(...).getEntrypoint().run`).
 
 import type { ReachableContext, StreamPage, WaitForEventFilter } from "../stream/stream.ts";
 import type { StreamEvent, StreamEventInput } from "../stream/events.ts";
@@ -106,10 +103,14 @@ export interface BuiltInScope {
     list(): { match: string; target: string }[];
     get(match: string): { match: string; target: string } | null;
   };
-  /** Address a facet that is ALREADY RUNNING by name (a processor, a named instance) — no source;
-   *  to LOAD and host a class, use `itx.load(src).getDurableObjectClass(name).get(name?)`. `delete`
-   *  removes it, storage included (the mirror of `ctx.facets.delete`). */
-  facets: { get(name: string): FacetHandle; delete(name: string): void };
+  /** The facets of this context. `get(name)` ADDRESSES one that is already running (a processor, a
+   *  named instance) — no source; `get(name, { source, className })` LOADS the class and hosts it as
+   *  the durable facet `name` (own storage) — the mirror of Cloudflare's `ctx.facets.get(name,
+   *  startupCallback)`. `delete` removes it, storage included (the mirror of `ctx.facets.delete`). */
+  facets: {
+    get(name: string, spec?: { source: WorkerSource; className: string }): FacetHandle;
+    delete(name: string): void;
+  };
   /** The subscriptions layer, read: the table (a slice of core) joined with the stream-kept
    *  cursors. Read-only — `subscribe` lives on the edge as sugar over the `subscription-configured`
    *  event, never a verb here. */
@@ -117,12 +118,12 @@ export interface BuiltInScope {
     list(): SubscriptionListEntry[];
     get(name: string): SubscriptionListEntry | null;
   };
-  /** Load dynamic code → a WORKER, then pick the host (mirror of Cloudflare's Worker Loader):
-   *  `.getEntrypoint(name?, { props? })` → a stateless `WorkerEntrypoint` — ANY method it exports,
-   *  reached by name (`run`, `fetch`, `processEventBatch`, …); `props` is Cloudflare's own
-   *  WorkerStubEntrypointOptions.props, read back as `this.ctx.props` (a url, a key name, …);
-   *  `.getDurableObjectClass(name)` → a `DurableObject` class whose `.get(instance?)` is a durable
-   *  facet of this stream. `source` is a producer expression, a bare string, or `{ type:"inline" }`. */
+  /** Load dynamic code → a WORKER, then `.getEntrypoint(name?, { props? })` → a stateless
+   *  `WorkerEntrypoint` (the mirror of Cloudflare's Worker Loader) — ANY method it exports, reached
+   *  by name (`run`, `fetch`, `processEventBatch`, …); `props` is Cloudflare's own
+   *  WorkerStubEntrypointOptions.props, read back as `this.ctx.props` (a url, a key name, …). A
+   *  `DurableObject` class is hosted through `itx.facets.get(name, { source, className })`, not here.
+   *  `source` is a producer expression, a bare string, or `{ type:"inline" }`. */
   load(source: WorkerSource): InvokeHandle;
   /** Run a stateless lambda STRING — sugar: wrap into a `WorkerEntrypoint`, then
    *  `load(...).getEntrypoint().run(...)`. The one bare-lambda ergonomic (same as apps/os). */
@@ -154,12 +155,12 @@ interface BuildBuiltInsDeps {
   rewriteRules: BuiltInScope["rewriteRules"];
   /** The stream's waitForEvent (the own context's — a wait never crosses a hop). */
   waitForEvent: BuiltInScope["waitForEvent"];
-  /** `facets.get(ref)` — address a facet by name, OR materialize `{ source, className, name? }` (a
-   *  loaded durable object hosted as a facet of this stream — the form `itx.load(...)
-   *  .getDurableObjectClass(...).get(...)` routes here; accepted trade: a busy stateful facet pins
-   *  its stream). The PUBLIC `itx.facets` root is string-only. */
+  /** `facets.get(ref)` — address a facet by name, OR materialize `{ name, source, className }` (a
+   *  loaded durable object hosted as the facet `name` of this stream — the public
+   *  `itx.facets.get(name, { source, className })` routes here; accepted trade: a busy stateful facet
+   *  pins its stream). */
   facets: {
-    get(ref: string | { source: WorkerSource; className: string; name?: string }): FacetHandle;
+    get(ref: string | { name: string; source: WorkerSource; className: string }): FacetHandle;
     delete(name: string): void;
   };
   /** The `env.ITX` / `globalOutbound` stub every worker this context loads receives — the
@@ -259,51 +260,38 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     fetch: (request: Request) => deps.egress(request),
     rpcStubs: deps.rpcStubs,
     facets: {
-      get: (name: string) => {
+      get: (name: string, spec?: { source: WorkerSource; className: string }) => {
         if (typeof name !== "string")
           throw new Error(
-            "itx.facets.get(name): address a RUNNING facet by name. To load & host a class use itx.load(src).getDurableObjectClass('Class').get(name?)",
+            "itx.facets.get(name, spec?): name the facet; pass { source, className } to load and host it",
           );
-        return deps.facets.get(name);
+        return deps.facets.get(
+          spec ? { name, source: spec.source, className: spec.className } : name,
+        );
       },
       delete: (name: string) => deps.facets.delete(name),
     },
     subscriptions: deps.subscriptions,
     rewriteRules: deps.rewriteRules,
-    // Each hop is its own InvokeHandle, so the whole `load(src).getEntrypoint().run()` /
-    // `.getDurableObjectClass('C').get(name?)` chain pipelines on every lane (workerd#6873).
+    // Each hop is its own InvokeHandle, so the whole `load(src).getEntrypoint().run()` chain
+    // pipelines on every lane (workerd#6873).
     load: (source: WorkerSource) =>
       new InvokeHandle((itxExpressionSteps) => {
         const [first] = itxExpressionSteps;
         const oneCall = itxExpressionSteps.length === 1 && Array.isArray(first) ? first : undefined;
-        if (oneCall?.[0] === "getEntrypoint") {
-          const [, className, options] = oneCall as [string, string?, { props?: unknown }?];
-          return new InvokeHandle((methodSteps) => {
-            const [call] = methodSteps;
-            if (methodSteps.length !== 1 || !Array.isArray(call) || call[0] === "")
-              throw new Error(
-                `load(src).getEntrypoint().${print(methodSteps)}: a WorkerEntrypoint exposes flat methods`,
-              );
-            return callEntrypoint(source, className, options?.props, call[0], call.slice(1));
-          });
-        }
-        if (oneCall?.[0] === "getDurableObjectClass") {
-          const className = oneCall[1];
-          if (typeof className !== "string")
-            throw new Error("load(src).getDurableObjectClass(name): name the exported class");
-          return new InvokeHandle((methodSteps) => {
-            const [call] = methodSteps;
-            // .get(instance?) → the durable facet; deps.facets.get reduces the rest into the DO's facet door.
-            if (methodSteps.length === 1 && Array.isArray(call) && call[0] === "get")
-              return deps.facets.get({ source, className, name: call[1] as string | undefined });
+        if (oneCall?.[0] !== "getEntrypoint")
+          throw new Error(
+            `load(src).${print(itxExpressionSteps)}: call .getEntrypoint(name?); a DurableObject class is hosted through itx.facets.get(name, { source, className })`,
+          );
+        const [, className, options] = oneCall as [string, string?, { props?: unknown }?];
+        return new InvokeHandle((methodSteps) => {
+          const [call] = methodSteps;
+          if (methodSteps.length !== 1 || !Array.isArray(call) || call[0] === "")
             throw new Error(
-              `load(src).getDurableObjectClass('${className}').${print(methodSteps)}: call .get(name?)`,
+              `load(src).getEntrypoint().${print(methodSteps)}: a WorkerEntrypoint exposes flat methods`,
             );
-          });
-        }
-        throw new Error(
-          `load(src).${print(itxExpressionSteps)}: call .getEntrypoint(name?) or .getDurableObjectClass(name)`,
-        );
+          return callEntrypoint(source, className, options?.props, call[0], call.slice(1));
+        });
       }),
     // `RUN_SCRIPT_ENTRYPOINT` wraps the lambda string into a WorkerEntrypoint default export, so even
     // this bare-lambda door bottoms out at `load(...).getEntrypoint().run(...)`.

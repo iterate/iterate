@@ -287,7 +287,7 @@ class IterateContext extends RpcTarget {
   // ── processors: DURABLE configuration, two lines each over the subscription event ──
   /** Host `className` (the StreamProcessorDurableObject host exported by `source`) as the facet
    *  named `name` and subscribe its `processEventBatch`. Literally the subscription event with the
-   *  target `itx.load(source).getDurableObjectClass(className).get(name).processEventBatch`.
+   *  target `itx.facets.get(name, { source, className }).processEventBatch`.
    *  No handle: a processor outlives the session that enabled it. */
   enableProcessor(
     name: string,
@@ -524,7 +524,6 @@ interface BuiltInScope {
     getEntrypoint(className?: string, opts?: { props?: unknown }): InvokeHandle;
     /** A DurableObject class hosted as a durable FACET of this context (own storage).
      *  `.get()` with no name is named by the class. */
-    getDurableObjectClass(className: string): { get(name?: string): FacetHandle };
   };
 
   /** Sugar for a bare lambda string: wraps it into a WorkerEntrypoint and runs
@@ -701,13 +700,12 @@ const counterSource = { type: "inline", files: { "counter.js": COUNTER_SRC } };
 ```
 
 ```ts
-await itx.load(counterSource).getDurableObjectClass("CounterDurableObject").get("c1").bump(); // 1
+await itx.facets.get("c1", { source: counterSource, className: "CounterDurableObject" }).bump(); // 1
 await itx.facets.get("c1").bump(); // 2, same instance, no source
 using counter = await itx.provide("itx.counter", [
   "itx",
-  ["load", counterSource],
-  ["getDurableObjectClass", "CounterDurableObject"],
-  ["get", "c1"],
+  "facets",
+  ["get", "c1", { source: counterSource, className: "CounterDurableObject" }],
 ]);
 await itx.counter.bump(); // 3
 ```
@@ -887,12 +885,12 @@ await itx.enableProcessor("presence", {
 await itx.append({ type: "tick" });
 await itx.facets.get("presence").snapshot(); // { offset, state: { ticks: 1 } }
 await itx.facets.get("presence").liveSnapshot(); // { rev, state: { ticks: 1, lastPokeMs: 0 } }
-await itx.subscriptions.get("presence"); // { name, target: "itx.load({...}).getDurableObjectClass('PresenceDurableObject').get('presence').processEventBatch", ... }
+await itx.subscriptions.get("presence"); // { name, target: "itx.facets.get('presence', { source: {...}, className: 'PresenceDurableObject' }).processEventBatch", ... }
 await itx.disableProcessor("presence"); // removes the subscription, deletes the facet + storage
 ```
 
 How it is hosted: `enableProcessor` is nothing but a subscription whose target
-is `itx.load(source).getDurableObjectClass(className).get(name).processEventBatch`.
+is `itx.facets.get(name, { source, className }).processEventBatch`.
 The DO loads your module plus `processor.js` into one isolate, takes the HOST
 class by name, and hosts it as a facet named `name` with `props: { iterateContextName, name }`.
 Every commit that carries an event the subscription consumes, the delivery loop

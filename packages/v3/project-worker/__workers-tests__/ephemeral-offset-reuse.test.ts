@@ -47,11 +47,11 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const alarmAt = (ctx: string): Promise<number | null> =>
   runInDurableObject(stub(ctx), (_inst, state) => state.storage.getAlarm());
 
-const loadChain = (src: string, cls: string, name: string): ItxExpression => [
+/** The hosting door as an expression: `itx.facets.get(name, { source, className })`. */
+const hostedFacet = (src: string, cls: string, name: string): ItxExpression => [
   "itx",
-  ["load", `itx.kv.get('${src}')`],
-  ["getDurableObjectClass", cls],
-  ["get", name],
+  "facets",
+  ["get", name, { source: `itx.kv.get('${src}')`, className: cls }],
 ];
 
 test("processor: a fresh facet's first snapshot (wake) with ephemerals at head checkpoints the durable mark; after quiesce + evict the tick re-minted at a dead ephemeral's offset is reduced exactly once", async () => {
@@ -62,7 +62,7 @@ test("processor: a fresh facet's first snapshot (wake) with ephemerals at head c
   await s.append(
     subscriptionConfiguredEvent({
       name: "counter",
-      target: [...loadChain("procsrc", "CounterDurableObject", "counter"), "processEventBatch"],
+      target: [...hostedFacet("procsrc", "CounterDurableObject", "counter"), "processEventBatch"],
       consumes: ["tick"],
     }),
   );
@@ -74,7 +74,7 @@ test("processor: a fresh facet's first snapshot (wake) with ephemerals at head c
 
   // READ-DRIVEN catch-up through the load chain: snapshot → catchUpFromLog() → read → durables ≤ mark
   const before = (await s.invoke([
-    ...loadChain("procsrc", "CounterDurableObject", "counter"),
+    ...hostedFacet("procsrc", "CounterDurableObject", "counter"),
     ["snapshot"],
   ])) as { offset: number; state: { n: number } };
   expect(before.state.n).toBe(p0.events.length); // reduced every durable
@@ -137,7 +137,7 @@ test("stream-kept cursor: an alarm pump with ephemerals at head leaves the curso
   // consumes nothing of `dig`'s and writes no durable row — its live-state delta is ephemeral, so the
   // durable mark this pin is about does not move) and read the schedule back before firing.
   await s.invoke(["itx", "kv", ["put", "procsrc", COUNTER_SRC]]);
-  await s.invoke([...loadChain("procsrc", "CounterDurableObject", "armer"), ["snapshot"]]);
+  await s.invoke([...hostedFacet("procsrc", "CounterDurableObject", "armer"), ["snapshot"]]);
   expect(await alarmAt(ctx)).not.toBeNull();
   // The alarm really runs: deliverEveryCursorSubscription → read(mark) proves only through the mark
   // → `dig` is caught up, nothing written.
@@ -173,7 +173,7 @@ test("enable with a consumes filter: itx.facets.get(name) answers before the fir
   await s.append(
     subscriptionConfiguredEvent({
       name: "c2",
-      target: [...loadChain("procsrc", "CounterDurableObject", "c2"), "processEventBatch"],
+      target: [...hostedFacet("procsrc", "CounterDurableObject", "c2"), "processEventBatch"],
       consumes: ["tick"],
     }),
   );
@@ -191,7 +191,7 @@ test("processor: a read-driven catch-up (snapshot after quiesce) with ephemerals
   await s.append(
     subscriptionConfiguredEvent({
       name: "counter",
-      target: [...loadChain("procsrc", "CounterDurableObject", "counter"), "processEventBatch"],
+      target: [...hostedFacet("procsrc", "CounterDurableObject", "counter"), "processEventBatch"],
       consumes: ["tick", "events.iterate.com/stream/subscription-configured"],
     }),
   );

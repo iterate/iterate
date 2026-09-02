@@ -23,7 +23,9 @@
   absolute paths by convention (relative and `..` also resolve); no `list`/`create` yet; plural
   collections end in `Collection`.
 - **A processor is a `DurableObject` subclass** of an SDK base, hosted through the ordinary
-  `getDurableObjectClass`. No runner adapter, no third accessor, and, it turns out, no built-in
+  `itx.facets.get(name, { source, className })` (as built 2026-09-02; the `load(src)
+.getDurableObjectClass(C).get(name)` chain this doc sketched was folded into that one door). No
+  runner adapter, no third accessor, and, it turns out, no built-in
   processor that runs as a facet (the one built-in `StreamProcessor` is the core reduce, inline).
 - **Durable at-least-once delivery to a stateless `processEventBatch` worker is a requirement.**
 - **Facet-owns-progress vs stream-keeps-offsets is a fair, real distinction.**
@@ -137,7 +139,6 @@ interface BuiltInScope {
   load(source: WorkerSource): {
     /** `props` is Cloudflare's WorkerStubEntrypointOptions.props — a url, a key name, whatever the code wants. */
     getEntrypoint(className?: string, opts?: { props?: unknown }): InvokeHandle; // run · fetch · processEventBatch · anything it exports
-    getDurableObjectClass(className: string): { get(instance?: string): FacetHandle };
   };
   runScript(script: string, ...args: unknown[]): Promise<unknown>; // sugar over load(...).getEntrypoint().run — kept for the bare-lambda case
 }
@@ -403,8 +404,8 @@ facet-spine demo, so it becomes what the demo's `PresenceProcessor` already is: 
 root an earlier draft proposed. `enableProcessor` always has a source:
 
 ```
-enableProcessor(name, { source, className, consumes? }) ⇒ append(subscriptionConfiguredEvent({ name, target: `itx.load(${src}).getDurableObjectClass('${className}').get('${name}').processEventBatch`, consumes }))  // DURABLE: returns { name }, no handle
-disableProcessor(name)                                  ⇒ append(subscriptionConfiguredEvent({ name, target: null })); itx.facets.delete(name)      // storage included
+enableProcessor(name, { source, className, consumes? }) ⇒ append(subscriptionConfiguredEvent({ name, target: `itx.facets.get('${name}', { source, className }).processEventBatch`, consumes }))  // DURABLE: returns { name }, no handle
+disableProcessor(name)                                  ⇒ append(subscriptionConfiguredEvent({ name, target: null }))  // the DO deletes the facet the row hosted, storage included
 ```
 
 A userspace processor, plain JS, two classes — the pure processor and its one-line host:

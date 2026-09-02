@@ -1,7 +1,7 @@
 // load-sources.e2e.test.ts — itx.load(source), the Worker-Loader mirror. Load code → a WORKER, then
 // pick the host EXPLICITLY via the two accessors Cloudflare exposes: `.getEntrypoint()` (stateless
-// WorkerEntrypoint) and `.getDurableObjectClass(name).get(instance?)` (a DurableObject hosted as a
-// durable facet). Plus `itx.facets.get(name)` — the separate address-a-RUNNING-facet door. The
+// WorkerEntrypoint) and `itx.facets.get(name, { source, className })` (a DurableObject hosted as the
+// durable facet `name`). Plus `itx.facets.get(name)` — the same door, addressing a RUNNING facet. The
 // SOURCE is either a producer expression (itx.kv.get — the "callback that produces the code") or
 // INLINE files handed over literally; `itx.runScript(lambda)` is the source-less sugar.
 
@@ -12,7 +12,7 @@ import { freshCtx, openItx } from "./support/client.ts";
 const entrypoint = (body: string) =>
   `import { WorkerEntrypoint } from "cloudflare:workers";\nexport default class extends WorkerEntrypoint { ${body} }`;
 
-test("itx.load: getEntrypoint (stateless) + getDurableObjectClass().get() (durable facet) + facets.get()", async () => {
+test("itx.load(src).getEntrypoint() (stateless) + itx.facets.get(name, spec) (durable facet) + itx.facets.get(name)", async () => {
   const itx = openItx(freshCtx("load"));
 
   // Seed the two sources into kv — each EXPORTS its host object (the contract): a WorkerEntrypoint or
@@ -32,25 +32,25 @@ export class CounterDurableObject extends DurableObject {
   // 1. STATELESS: load → getEntrypoint() → a WorkerEntrypoint isolate, run it.
   expect(await itx.invoke(`itx.load(${SRC_GREET}).getEntrypoint().run('jonas')`)).toBe("hi jonas");
 
-  // 2. DURABLE NAMED: load → getDurableObjectClass('CounterDurableObject').get('c1') → a facet named 'c1' whose
+  // 2. DURABLE NAMED: facets.get('c1', { source, className: 'CounterDurableObject' }) → a facet named 'c1' whose
   //    state persists across calls.
   await itx.invoke(
-    `itx.load(${SRC_COUNTER}).getDurableObjectClass('CounterDurableObject').get('c1').bump()`,
+    `itx.facets.get('c1', { source: ${SRC_COUNTER}, className: 'CounterDurableObject' }).bump()`,
   );
   expect(
     await itx.invoke(
-      `itx.load(${SRC_COUNTER}).getDurableObjectClass('CounterDurableObject').get('c1').bump()`,
+      `itx.facets.get('c1', { source: ${SRC_COUNTER}, className: 'CounterDurableObject' }).bump()`,
     ),
   ).toBe(2);
 
   // 3. ADDRESS BY NAME: itx.facets.get('c1') reaches the SAME running instance with NO source (via
-  //    the durable registration the .get('c1') materialization wrote).
+  //    the durable registration the hosting call wrote).
   expect(await itx.invoke(`itx.facets.get('c1').value()`)).toBe(2);
 
   // 4. a DIFFERENT instance name is INDEPENDENT state.
   expect(
     await itx.invoke(
-      `itx.load(${SRC_COUNTER}).getDurableObjectClass('CounterDurableObject').get('c2').bump()`,
+      `itx.facets.get('c2', { source: ${SRC_COUNTER}, className: 'CounterDurableObject' }).bump()`,
     ),
   ).toBe(1);
 });

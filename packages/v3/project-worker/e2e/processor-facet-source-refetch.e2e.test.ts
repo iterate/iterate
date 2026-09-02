@@ -2,7 +2,7 @@
 // source expression exactly ONCE per materialization — NOT on every commit.
 //
 // THE FIX (agent-C): every commit reaches a processor through its subscription's target —
-// `itx.load(src).getDurableObjectClass(C).get(name).processEventBatch` — so the delivery loop calls
+// `itx.facets.get(name, { source, className }).processEventBatch` — so the delivery loop calls
 // iterate-context-durable-object.ts `#facet(name, memo)` per commit → worker-loader.ts `loadConfinedWorker`.
 // That used to `resolveSource(...)` (`await invoke(toItxExpression(source))` — a code fetch) +
 // the loader's content hash on EVERY commit, to compute the contentHash. Now `#facet` keeps a per-facet

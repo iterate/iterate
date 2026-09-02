@@ -107,7 +107,7 @@ test("the raw event-sourced door agrees with the verb — a hand-appended subscr
     payload: {
       name: "tally",
       target:
-        "itx.load(\"itx.kv.get('src/tally.js')\").getDurableObjectClass('TallyDurableObject').get('tally').processEventBatch",
+        "itx.facets.get('tally', { source: \"itx.kv.get('src/tally.js')\", className: 'TallyDurableObject' }).processEventBatch",
     },
   });
   expect(await processorNames(itx)).toEqual(["tally"]); // listed as enabled — and it is

@@ -290,8 +290,8 @@ export class IterateContext extends RpcTarget {
   /** Enable a processor: host `className` (the `StreamProcessorDurableObject` subclass exported by
    *  the loaded `source` — the host whose `processor` field holds the pure `StreamProcessor`) as the
    *  facet named `name`, and subscribe its `processEventBatch` to every commit. Literally the
-   *  subscription event with the target `itx.load(source).getDurableObjectClass(className).get(name)
-   *  .processEventBatch` — a processor is a named facet that is pushed the log. DURABLE (no handle):
+   *  subscription event with the target `itx.facets.get(name, { source, className }).processEventBatch`
+   *  — a processor is a named facet that is pushed the log. DURABLE (no handle):
    *  a processor outlives the session that enabled it; `disableProcessor` is the explicit inverse.
    *  `consumes` is the SUBSCRIPTION's filter (what is sent; absent = every durable event). */
   async enableProcessor(
@@ -303,9 +303,8 @@ export class IterateContext extends RpcTarget {
         name,
         target: [
           "itx",
-          ["load", ref.source],
-          ["getDurableObjectClass", ref.className],
-          ["get", name],
+          "facets",
+          ["get", name, { source: ref.source, className: ref.className }],
           "processEventBatch",
         ],
         ...(ref.consumes && { consumes: ref.consumes }),
@@ -315,7 +314,7 @@ export class IterateContext extends RpcTarget {
   }
 
   /** Disable a processor: ONE event — `subscription-configured { name, target: null }`. The DO deletes
-   *  the facet the removed row HOSTED (its `itx.load(…).getDurableObjectClass(…).get(…)` target),
+   *  the facet the removed row HOSTED (its `itx.facets.get(name, { source, className })` target),
    *  storage included, before the append returns — a re-enable is a clean rebuild from the log, never
    *  a resume from orphaned state. The raw event is the same disablement. */
   async disableProcessor(name: string): Promise<void> {

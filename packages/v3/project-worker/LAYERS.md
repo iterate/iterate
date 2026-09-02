@@ -18,15 +18,15 @@ canonical match and written by ONE event.
 
 Every callable thing is a live object plus a small piece of durable data that gets the object back.
 
-| Built-in / kind                                                     | The durable data                                                                   | Who restores it                                                                                         | Where                                                                  |
-| ------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| a context (`cd`, the DO)                                            | its codec name (`prj_x.iterate/path`)                                              | Cloudflare (`getByName`)                                                                                | `context/durable-object-names.ts`, `iterate-context-durable-object.ts` |
-| `env.ITX` (a loaded worker's world)                                 | the props `{ iterateContextName }`                                                 | Cloudflare (`ctx.exports`, persistent stubs)                                                            | `itx-entrypoint.ts`                                                    |
-| `load(src).getEntrypoint()` / `.getDurableObjectClass(C).get(name)` | cacheKey + source; a facet's `props { iterateContextName, name }` and startup memo | Cloudflare (Worker Loader, `ctx.facets`)                                                                | `context/worker-loader.ts`, the DO's `#invokeFacet`                    |
-| **`rpcStubs`** (a lent rpc stub)                                    | a pager WebSocket attachment `{ transportId, rpcStubKey }`                         | **us** — `{type:"page"}` pages the edge worker, which lends a fresh Workers-RPC stub over `lendRpcStub` | `context/rpc-stub-directory.ts`, `context/rpc-stub-relay.ts`           |
-| the stream (`append` / `read` / `waitForEvent`)                     | the log (SQLite)                                                                   | —                                                                                                       | `stream/stream.ts`                                                     |
-| `kv`, `whoami`, `fetch`                                             | KV / the address / FALLBACK                                                        | —                                                                                                       | `context/built-ins.ts`                                                 |
-| `rewriteRules`, `subscriptions` (read views)                        | slices of the core reduce (layer 1)                                                | —                                                                                                       | `context/built-ins.ts`, the DO                                         |
+| Built-in / kind                                                         | The durable data                                                                   | Who restores it                                                                                         | Where                                                                  |
+| ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| a context (`cd`, the DO)                                                | its codec name (`prj_x.iterate/path`)                                              | Cloudflare (`getByName`)                                                                                | `context/durable-object-names.ts`, `iterate-context-durable-object.ts` |
+| `env.ITX` (a loaded worker's world)                                     | the props `{ iterateContextName }`                                                 | Cloudflare (`ctx.exports`, persistent stubs)                                                            | `itx-entrypoint.ts`                                                    |
+| `load(src).getEntrypoint()` / `facets.get(name, { source, className })` | cacheKey + source; a facet's `props { iterateContextName, name }` and startup memo | Cloudflare (Worker Loader, `ctx.facets`)                                                                | `context/worker-loader.ts`, the DO's `#invokeFacet`                    |
+| **`rpcStubs`** (a lent rpc stub)                                        | a pager WebSocket attachment `{ transportId, rpcStubKey }`                         | **us** — `{type:"page"}` pages the edge worker, which lends a fresh Workers-RPC stub over `lendRpcStub` | `context/rpc-stub-directory.ts`, `context/rpc-stub-relay.ts`           |
+| the stream (`append` / `read` / `waitForEvent`)                         | the log (SQLite)                                                                   | —                                                                                                       | `stream/stream.ts`                                                     |
+| `kv`, `whoami`, `fetch`                                                 | KV / the address / FALLBACK                                                        | —                                                                                                       | `context/built-ins.ts`                                                 |
+| `rewriteRules`, `subscriptions` (read views)                            | slices of the core reduce (layer 1)                                                | —                                                                                                       | `context/built-ins.ts`, the DO                                         |
 
 The first three rows are Cloudflare features. `rpcStubs` is ours — a poor-man's sturdy ref whose
 restore hook must route through whichever stateless worker holds the client's capnweb socket. Its
@@ -107,7 +107,7 @@ Pure data; the layer knows only the stream and the codec.
 `subscription-delivery.ts`: after every commit, for each subscription whose `consumes` matches,
 evaluate the target and ASK THE VALUE what it is:
 
-- a `FacetHandle` (`itx.facets.get(…)`, `…getDurableObjectClass(C).get(name)`) or an `RpcStubHandle`
+- a `FacetHandle` (`itx.facets.get(name)`, `itx.facets.get(name, { source, className })`) or an `RpcStubHandle`
   (`itx.rpcStubs.get(…)`) OWNS ITS PROGRESS — a facet keeps its own checkpoint and gap-repairs, a
   live client owns its offset and heals with `read` — so it gets a PUSH of
   `(events, { after, through })`, serialized per subscription (fire-and-forget to a stub, awaited
@@ -134,7 +134,7 @@ no constructor arguments, so `new PresenceProcessor().reduce(...)` is a unit tes
 (serial chain, checkpoint, gap repair from the scanned-range proof, at-head pass, version re-reduce,
 live-state publishing) over its facet kv and `env.ITX`. A processor class ends in `Processor`, a Durable Object
 class in `DurableObject`. The host is hosted like ANY class:
-`itx.load(src).getDurableObjectClass('PresenceDurableObject').get('presence')`, identity in
+`itx.facets.get('presence', { source, className: 'PresenceDurableObject' })`, identity in
 `ctx.props`. `enableProcessor(name, { source, className, consumes? })` appends the
 `subscription-configured` event whose target is that chain + `.processEventBatch`;
 `disableProcessor(name)` appends `subscription-configured { name, target: null }` and then

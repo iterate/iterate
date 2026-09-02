@@ -127,7 +127,7 @@ test("200 push subscribers — one append fans out to all 200 in under 2s, exact
 
 // A userspace processor: the pure `FanProbeProcessor extends StreamProcessor` plus its one-line host
 // `FanProbeDurableObject extends StreamProcessorDurableObject` (both from the SDK, `./processor.js`),
-// hosted as a facet through `itx.load(src).getDurableObjectClass('FanProbeDurableObject').get(name)`
+// hosted as a facet through `itx.facets.get(name, { source, className: 'FanProbeDurableObject' })`
 // — what `enableProcessor(name, { source, className })` subscribes.
 const FAN_PROCESSOR_SOURCE = /* js */ `
 import { StreamProcessor, StreamProcessorDurableObject } from "./processor.js";

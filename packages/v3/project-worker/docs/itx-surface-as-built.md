@@ -128,7 +128,7 @@ reader of the file sees the whole surface, and `env.ITX.get().append(…)` typec
 | `invoke(call: ItxExpressionInput)`                                                     | `Promise<unknown>`                | THE door. `durableObject.invoke(expression)`. One fork: a terminal `fetch(Request)` rides `durableObject.fetch` with the expression in `x-itx-expression`.                                                                                                                 |
 | `provide(match, target: ClientRpcStub \| ItxExpressionInput \| null)`                  | `RewriteRuleHandle`               | THE ONE FRONT DOOR: make `match` mean `target`. A live stub is lent to the DO through a pager owned here (DON'T-PIN) under the key = the canonical match, and the rule `match ⇒ itx.rpcStubs.get('<match>')` is appended; an expression is the rule alone; `null` un-sets. |
 | `subscribe({ name?, target: ItxExpressionInput \| ClientRpcStub \| null, consumes? })` | `SubscriptionHandle` (has `name`) | A live target is lent under the key `subscription:<name>` first, then `append(subscriptionConfiguredEvent(…))` with target `itx.rpcStubs.get('subscription:<name>')`.                                                                                                      |
-| `enableProcessor(name, { source, className, consumes? })`                              | `{ name }`                        | `append(subscriptionConfiguredEvent)` with target `itx.load(source).getDurableObjectClass(className).get(name).processEventBatch`. DURABLE, no handle.                                                                                                                     |
+| `enableProcessor(name, { source, className, consumes? })`                              | `{ name }`                        | `append(subscriptionConfiguredEvent)` with target `itx.facets.get(name, { source, className }).processEventBatch`. DURABLE, no handle.                                                                                                                                     |
 | `disableProcessor(name)`                                                               | `void`                            | ONE append: `{ name, target: null }`. The DO deletes the facet the row hosted before the append returns (section 9).                                                                                                                                                       |
 
 The two handles (`RewriteRuleHandle`, `SubscriptionHandle`) are server-side RpcTargets with one
@@ -151,21 +151,21 @@ How a client reaches one (`src/session.ts`):
 A plain record. A call `itx.<root>…` resolves DIRECTLY against these, no rule. A rule's target
 must be rooted at `itx`, so a bare root is unspellable and the built-ins are unshadowable.
 
-| Root                         | Signature                                                                                | Backed by                                             |
-| ---------------------------- | ---------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| `whoami()`                   | `→ { projectId, path }`                                                                  | the DO name                                           |
-| `kv`                         | `.get(k)` `.put(k, v)` `.delete(k)` `.list(prefix?)`                                     | `ITX_KV`, `${projectId}:` prefixed                    |
-| `append(...events)`          | `→ StreamEvent[]`                                                                        | the stream                                            |
-| `read(afterOffset?, limit?)` | `→ { events, scannedThroughOffset }`                                                     | the stream                                            |
-| `waitForEvent(filter?)`      | `{ type?, afterOffset?, timeoutMs? } → StreamEvent`                                      | the stream                                            |
-| `cd(path)`                   | `→ InvokeHandle` onto a sibling context (append/read skip its rules; else `invoke`)      | `ITERATE_CONTEXT.getByName`                           |
-| `fetch(request)`             | egress: `{{secret:project:NAME}}` substituted → `FALLBACK`                               | the control plane                                     |
-| `rpcStubs`                   | `.get(rpcStubKey) → RpcStubHandle` · `.list() → string[]` (presence)                     | `RpcStubDirectory`                                    |
-| `rewriteRules`               | `.list() → { match, target }[]` · `.get(match)`                                          | a read of core state                                  |
-| `facets`                     | `.get(name) → FacetHandle` (a RUNNING facet) · `.delete(name)`                           | `ctx.facets`                                          |
-| `subscriptions`              | `.list() → SubscriptionListEntry[]` · `.get(name)`                                       | core state ⋈ the loop's cursors                       |
-| `load(source)`               | `.getEntrypoint(name?, { props? }).<method>(…)` · `.getDurableObjectClass(C).get(name?)` | Worker Loader; mirrors Cloudflare's own two accessors |
-| `runScript(script, ...args)` | sugar: wrap the lambda string → `load(...).getEntrypoint().run(...)`                     | same                                                  |
+| Root                         | Signature                                                                                                               | Backed by                                                     |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `whoami()`                   | `→ { projectId, path }`                                                                                                 | the DO name                                                   |
+| `kv`                         | `.get(k)` `.put(k, v)` `.delete(k)` `.list(prefix?)`                                                                    | `ITX_KV`, `${projectId}:` prefixed                            |
+| `append(...events)`          | `→ StreamEvent[]`                                                                                                       | the stream                                                    |
+| `read(afterOffset?, limit?)` | `→ { events, scannedThroughOffset }`                                                                                    | the stream                                                    |
+| `waitForEvent(filter?)`      | `{ type?, afterOffset?, timeoutMs? } → StreamEvent`                                                                     | the stream                                                    |
+| `cd(path)`                   | `→ InvokeHandle` onto a sibling context (append/read skip its rules; else `invoke`)                                     | `ITERATE_CONTEXT.getByName`                                   |
+| `fetch(request)`             | egress: `{{secret:project:NAME}}` substituted → `FALLBACK`                                                              | the control plane                                             |
+| `rpcStubs`                   | `.get(rpcStubKey) → RpcStubHandle` · `.list() → string[]` (presence)                                                    | `RpcStubDirectory`                                            |
+| `rewriteRules`               | `.list() → { match, target }[]` · `.get(match)`                                                                         | a read of core state                                          |
+| `facets`                     | `.get(name) → FacetHandle` (a RUNNING facet) · `.get(name, { source, className })` (load and host it) · `.delete(name)` | `ctx.facets`; mirrors `ctx.facets.get(name, startupCallback)` |
+| `subscriptions`              | `.list() → SubscriptionListEntry[]` · `.get(name)`                                                                      | core state ⋈ the loop's cursors                               |
+| `load(source)`               | `.getEntrypoint(name?, { props? }).<method>(…)`                                                                         | Worker Loader; mirrors Cloudflare's `worker.getEntrypoint()`  |
+| `runScript(script, ...args)` | sugar: wrap the lambda string → `load(...).getEntrypoint().run(...)`                                                    | same                                                          |
 
 `WorkerSource` is `string | ItxExpression | { type: "inline", files }`. A string or array is a
 PRODUCER expression whose result is the code (open item B, section 12: delete this branch).
@@ -309,10 +309,10 @@ door and asks the value what it is:
 Nothing is declared on the event. The brand is minted where the built-in mints the handle.
 
 **The one effect of a removal.** When `subscription-configured { name, target: null }` commits
-and the removed row's target HOSTED a facet (`itx.load(src).getDurableObjectClass(C).get(name)…`,
-the shape `enableProcessor` writes), the DO deletes that facet, storage included, before the
+and the removed row's target HOSTED a facet (`itx.facets.get(name, { source, className })…`, the
+shape `enableProcessor` writes), the DO deletes that facet, storage included, before the
 append returns (`#deleteFacetsWhoseHostingSubscriptionWasRemoved`). A row that only ADDRESSED a
-running facet (`itx.facets.get(name)…`) deletes nothing. So the raw event is the disablement.
+running facet (`itx.facets.get(name)…`, no spec) deletes nothing. So the raw event is the disablement.
 
 ---
 
@@ -322,7 +322,7 @@ running facet (`itx.facets.get(name)…`) deletes nothing. So the raw event is t
 Two classes. `StreamProcessor` is pure: a contract plus `reduce` / `processEvent` /
 `projectLiveState`, no constructor args, unit-testable bare. Its host is a
 `StreamProcessorDurableObject` with one field, `processor = new PresenceProcessor()`.
-Hosted like any class: `itx.load(src).getDurableObjectClass('PresenceDurableObject').get('presence')`,
+Hosted like any class: `itx.facets.get('presence', { source, className: 'PresenceDurableObject' })`,
 identity in `ctx.props` as `{ iterateContextName, name }`. A processor IS a subscription whose
 target is that chain plus `.processEventBatch`. Durable configuration, no handle.
 
@@ -406,20 +406,17 @@ Error codes (`src/lib/errors.ts`): `NO_ITX_EXPRESSION_MATCH`, `RPC_STUB_OFFLINE`
   deleted; a live stub is lent under the key = the canonical match; `ProvidedRpcStubHandle` gone,
   `RewriteRuleHandle` for both cases; read root `itx.rewriteRules`; a rule's match must be rooted
   at `itx` (refused at the door). The bare-key question dissolved with the key.
+- **C, done:** ONE facet door `itx.facets.get(name, { source, className })` hosts; `itx.facets.get(name)`
+  addresses; `load(src)` keeps `getEntrypoint` only. `enableProcessor`'s target is
+  `itx.facets.get(name, spec).processEventBatch`; the hosting check in the DO is "a `facets.get` with a spec".
 
-### Open, with a proposal each (B and C are in flight, in that order)
+### Open, with a proposal each (B is in flight)
 
 **B. Inline-only sources.** Delete the producer-expression branch of `WorkerSource` (the
 `itx.kv.get('src/x.js')` pattern) and make a source `{ type: "inline", files }` only, or just
 the `files` record. Facet memos and subscription events then carry the code inline (events are
 fine at that size). Touches the loader (one branch), `e2e/support/sources.ts` and 16 e2e files,
 the tutorial. Recommendation: yes; it removes the one indirection a reader has to be taught.
-
-**C. One facet door.** `itx.facets.get(name, { source, className })` hosts and addresses in one
-call, the exact mirror of Cloudflare's `ctx.facets.get(name, startupCallback)`. `load(src)` keeps
-`getEntrypoint` only. `enableProcessor`'s target becomes
-`itx.facets.get(name, spec).processEventBatch`, and "a row that hosts a facet" is simply "a
-`facets.get` with a spec", which makes section 9's check one line. Recommendation: yes.
 
 **D. `cd` on the edge and in the built-ins.** Explained in section 5; both are needed as long as
 expressions evaluated inside the DO may name a sibling context. Recommendation: keep both.

@@ -4,7 +4,7 @@
 //   get demo → Demo, get timer → Timer, timer.callLater(ms, cb).
 // Worker B is a SECOND dynamic worker (a stateless loaded entrypoint) that reaches A THROUGH ITS OWN
 // `env.ITX.get()` and writes the natural dotted chain:
-//   itx.load(src).getDurableObjectClass('CounterDurableObject').get().demo.timer.callLater(ms, cb)
+//   itx.facets.get('counterA', { source, className: 'CounterDurableObject' }).demo.timer.callLater(ms, cb)
 // The mid-path load→class→instance returns HANDLES that B then walks `.demo.timer.callLater`
 // on — the case that only pipelines because each handle is a genuine, branded RpcTarget
 // (context/invoke-handle.ts) and not a bare Proxy (NonPipelinable over Workers RPC, workerd#6873).
@@ -39,12 +39,12 @@ const WORKER_B = `
 import { WorkerEntrypoint } from "cloudflare:workers";
 export default class ConsumerB extends WorkerEntrypoint {
   async run(aRef) {
-    // env.ITX.get() is the real scope. load(src).getDurableObjectClass(c).get() is a mid-chain
+    // env.ITX.get() is the real scope. facets.get(name, { source, className }) is a mid-chain
     // HANDLE; the getter chain .demo.timer and terminal .callLater(ms, cb) pipeline onto it natively
-    // — three consecutive stub-returning calls over Workers RPC, the deepest pipelining case.
+    // — consecutive stub-returning calls over Workers RPC, the deepest pipelining case.
     const itx = await this.env.ITX.get();
     let pinged = false;
-    await itx.load(aRef.source).getDurableObjectClass(aRef.className).get()
+    await itx.facets.get('counterA', { source: aRef.source, className: aRef.className })
       .demo.timer.callLater(200, () => { pinged = true; });
     if (pinged) await itx.append({ type: 'pinged-from-A-via-B' }); // observable at the client
     return { ran: true, pinged };
@@ -57,26 +57,24 @@ test("dynamic worker → dynamic worker mid-chain pipelining, both consumer lane
   await itx.invoke(["itx", "kv", ["put", "src/counterA.js", WORKER_A]]);
   await itx.invoke(["itx", "kv", ["put", "src/consumerB.js", WORKER_B]]);
 
-  // aRef names worker A's stateful class: a source EXPRESSION + the exported className. load(source)
-  // .getDurableObjectClass(className).get() loads the class and materializes it as a facet.
+  // aRef names worker A's stateful class: a source EXPRESSION + the exported className.
+  // facets.get('counterA', aRef) loads the class and materializes it as the facet 'counterA'.
   const aRef = { source: "itx.kv.get('src/counterA.js')", className: "CounterDurableObject" };
 
   // ── lane 1: a plain capnweb client walks the mid-chain and the callback fires back HERE ──
   let clientPinged = false;
-  await itx
-    .load(aRef.source)
-    .getDurableObjectClass(aRef.className)
-    .get()
+  await itx.facets
+    .get("counterA", { source: aRef.source, className: aRef.className })
     .demo.timer.callLater(200, () => {
       clientPinged = true;
     });
   await until("capnweb client callback fired", () => clientPinged, 30_000);
-  // capnweb client: load(aRef).getDurableObjectClass.get().demo.timer.callLater(cb) — callback fired back in the client
+  // capnweb client: facets.get('counterA', aRef).demo.timer.callLater(cb) — callback fired back in the client
   expect(clientPinged).toBe(true);
 
   // ── lane 2: worker B reaches worker A via env.ITX.get() — the dynamic-worker → dynamic-worker case ──
   const ran = await itx.load("itx.kv.get('src/consumerB.js')").getEntrypoint().run(aRef);
-  // dynamic worker B: env.ITX.get().load(...).getDurableObjectClass(...).get().demo.timer.callLater(cb) ran and the callback fired inside B
+  // dynamic worker B: env.ITX.get().facets.get('counterA', aRef).demo.timer.callLater(cb) ran and the callback fired inside B
   expect(ran?.ran).toBe(true);
   expect(ran?.pinged).toBe(true);
 

@@ -48,7 +48,7 @@ test("facet spine: cold catch-up + driven reduces + the subscriptions table list
   expect(await processorNames(itx)).toEqual(["tally"]);
   const row = (await subscriptions(itx)).find((r: { name: string }) => r.name === "tally");
   expect(row.target).toMatch(
-    /^itx\.load\(.*\)\.getDurableObjectClass\(["']TallyDurableObject["']\)\.get\(["']tally["']\)\.processEventBatch$/,
+    /^itx\.facets\.get\(["']tally["'],\s*\{.*className:\s*["']TallyDurableObject["'].*\}\)\.processEventBatch$/,
   );
   expect(row.cursor).toBeUndefined();
 });

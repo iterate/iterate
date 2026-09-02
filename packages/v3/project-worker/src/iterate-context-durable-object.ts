@@ -205,12 +205,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   /** THE ONE EFFECT of a subscription removal: a row whose target HOSTED a facet —
-   *  `itx.load(src).getDurableObjectClass(C).get(name)…`, the shape `enableProcessor` writes — takes
-   *  the facet with it, storage included, so `subscription-configured { name, target: null }` IS the
+   *  `itx.facets.get(name, { source, className })…`, the shape `enableProcessor` writes — takes the
+   *  facet with it, storage included, so `subscription-configured { name, target: null }` IS the
    *  disablement (raw event or verb alike) and a re-enable rebuilds from the log. A row that only
-   *  ADDRESSED a running facet (`itx.facets.get(name)…`) deletes nothing: it never owned it. Done
-   *  here, after the commit and before the append returns, because only the pre-commit state knows
-   *  what the removed row targeted. */
+   *  ADDRESSED a running facet (`itx.facets.get(name)…`, no spec) deletes nothing: it never owned it.
+   *  Done here, after the commit and before the append returns, because only the pre-commit state
+   *  knows what the removed row targeted. */
   #deleteFacetsWhoseHostingSubscriptionWasRemoved(
     committedEvents: StreamEvent[],
     subscriptionsBeforeCommit: CoreState["subscriptions"],
@@ -220,16 +220,15 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       const { name, target } = event.payload as { name: string; target: string | null };
       const removedRow = target === null ? subscriptionsBeforeCommit[name] : undefined;
       if (!removedRow) continue;
-      const [, loadStep, classStep, getStep] = removedRow.target;
+      const [, root, getStep] = removedRow.target;
       if (
-        Array.isArray(loadStep) &&
-        loadStep[0] === "load" &&
-        Array.isArray(classStep) &&
-        classStep[0] === "getDurableObjectClass" &&
+        root === "facets" &&
         Array.isArray(getStep) &&
-        getStep[0] === "get"
+        getStep[0] === "get" &&
+        getStep.length >= 3 && // a spec: the row hosted the facet
+        typeof getStep[1] === "string"
       )
-        this.#deleteFacet((getStep[1] as string | undefined) ?? (classStep[1] as string));
+        this.#deleteFacet(getStep[1]);
     }
   }
 
@@ -397,12 +396,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   // ── FACETS: loaded DurableObject classes hosted here (a processor is one whose
   // processEventBatch is subscribed) ──
 
-  /** THE facet door — `itx.facets.get(name).m()` and `itx.load(src).getDurableObjectClass(C).get(name).m()`
-   *  both land here. Facet stubs are non-transferable, so the walk happens where the stub lives. Top
+  /** THE facet door — `itx.facets.get(name).m()` (address a running facet) and
+   *  `itx.facets.get(name, { source, className }).m()` (load and host) both land here. Facet stubs are non-transferable, so the walk happens where the stub lives. Top
    *  to bottom: the startup memo → the load → the racing-delete check → the class + version marker →
    *  the call under the watchdog → copy + dispose the answer. */
   async #invokeFacet(
-    ref: string | { source: WorkerSource; className: string; name?: string },
+    ref: string | { name: string; source: WorkerSource; className: string },
     itxExpressionSteps: ItxExpression,
   ): Promise<unknown> {
     if (itxExpressionSteps.length === 0) throw new Error(`facet: name a method`);
@@ -426,7 +425,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // THE STARTUP MEMO `facet:<name>` = { source, className } in this DO's kv: a load spec writes it
     // (when it changed) BEFORE the load, so `itx.facets.get(name)` alone re-materializes the facet
     // after an eviction; a bare name reads it — an unknown name is NO_FACET.
-    const name = typeof ref === "string" ? ref : (ref.name ?? ref.className);
+    const name = typeof ref === "string" ? ref : ref.name;
     if (name === CORE_SLUG) throw new Error(`"${name}" is the core reduce — never a facet name`);
     let memo = this.ctx.storage.kv.get(`facet:${name}`) as
       | { source: string; className: string }

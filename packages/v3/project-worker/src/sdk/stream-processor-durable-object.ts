@@ -8,7 +8,7 @@
 //   }
 //
 // The platform hosts the host through the ordinary
-// `itx.load(src).getDurableObjectClass('PresenceDurableObject').get('presence')` — exactly the way
+// `itx.facets.get('presence', { source, className: 'PresenceDurableObject' })` — exactly the way
 // any stateful class is hosted; a processor is a named facet that additionally gets pushed every
 // commit. `processor` is a FIELD so it can take what its effects need from this object
 // (`new Notifier(this.env.ITX)`), and so the same class is constructed bare in a test.

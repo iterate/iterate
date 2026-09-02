@@ -1,6 +1,6 @@
 // context/invoke-handle.ts — a GENUINE, pipelinable RpcTarget for a MID-CHAIN capability handle
 // (a live row's transport bridge, `facets.get(name)`, `cd(path)`, `load(src).getEntrypoint()` /
-// `load(src).getDurableObjectClass(name).get(instance)`).
+// `facets.get(name, { source, className })`).
 //
 // A mid-chain handle must be a GENUINE RpcTarget: a mid-chain call returns it ACROSS an RPC
 // boundary (`itx.facets.get('b').hello()` is two dispatches — `get('b')` returns the handle, then
@@ -52,7 +52,7 @@ installPrototypeInvokeFallback(InvokeHandle, []);
 // sibling context, a remote — cannot, and the stream keeps a cursor for it (subscription-delivery.ts).
 // Nothing is declared on any event; the brand is minted where the built-in mints the handle.
 
-/** `itx.facets.get(name)` / `load(src).getDurableObjectClass(C).get(name)` — a facet of this context. */
+/** `itx.facets.get(name)` / `itx.facets.get(name, { source, className })` — a facet of this context. */
 export class FacetHandle extends InvokeHandle {}
 /** `itx.rpcStubs.get(key)` — a live stub lent to the registry. */
 export class RpcStubHandle extends InvokeHandle {}

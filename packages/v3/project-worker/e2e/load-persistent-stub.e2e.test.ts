@@ -15,7 +15,7 @@ test("persistent stub: stash a live itx handle in DO storage, use the restored h
 
   await itx.provide(
     "itx.keeper",
-    `itx.load("itx.kv.get('src/keeper.js')").getDurableObjectClass('KeeperDurableObject').get()`,
+    `itx.facets.get('keeper', { source: "itx.kv.get('src/keeper.js')", className: 'KeeperDurableObject' })`,
   );
 
   // 1. stash: storage.put(env.ITX) — throws unless the whole chain is restore-eligible

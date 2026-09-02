@@ -134,7 +134,7 @@ test("itx tour: built-in roots, lent stubs, the rule map, dynamic-worker rules, 
   // 6. EXPRESSION RULE running a STATEFUL worker — deep dotted call + callback into the host
   await itxA.provide(
     "itx.counter",
-    "itx.load(['itx', 'kv', ['get', 'src/counter.js']]).getDurableObjectClass('CounterDurableObject').get()",
+    "itx.facets.get('counter', { source: ['itx', 'kv', ['get', 'src/counter.js']], className: 'CounterDurableObject' })",
   );
   const inc = await itxA.invoke(["itx", "counter", ["increment", 2]]);
   // stateful worker: increment(2)

@@ -12,8 +12,9 @@
 // handles and callbacks pipeline natively over both lanes (no accumulating Proxy, no reduce shim).
 //
 // A loaded SOURCE EXPORTS its own host object — a `WorkerEntrypoint` (reached with
-// `itx.load(src).getEntrypoint(name?)`) or a `DurableObject` class (`…getDurableObjectClass(name)`),
-// mirroring Cloudflare's own `worker.getEntrypoint()` / `worker.getDurableObjectClass()`. There is
+// `itx.load(src).getEntrypoint(name?)`) or a `DurableObject` class (hosted with
+// `itx.facets.get(name, { source, className })`), mirroring Cloudflare's own `worker.getEntrypoint()`
+// / `worker.getDurableObjectClass()` + `ctx.facets.get(name, startup)`. There is
 // NO host-injected wrapper: the code the author wrote IS what runs. The one bare-lambda ergonomic —
 // `itx.runScript("async (itx, x) => …")` — wraps its string into a WorkerEntrypoint at the call
 // site (built-ins.ts `RUN_SCRIPT_ENTRYPOINT`), so even that bottoms out at an EXPORTED entrypoint.

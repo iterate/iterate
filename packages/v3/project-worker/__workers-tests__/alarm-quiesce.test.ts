@@ -79,20 +79,17 @@ async function enableCounter(ctx: string, name = "counter"): Promise<void> {
       name,
       target: [
         "itx",
-        ["load", "itx.kv.get('procsrc')"],
-        ["getDurableObjectClass", "CounterDurableObject"],
-        ["get", name],
+        "facets",
+        ["get", name, { source: "itx.kv.get('procsrc')", className: "CounterDurableObject" }],
         "processEventBatch",
       ],
     }),
   );
 }
-/** The edge's `disableProcessor(name)`: remove the row (`target: null` — the same event), then
- *  delete the facet — storage included. */
+/** The edge's `disableProcessor(name)`: ONE event — `target: null`; the DO deletes the facet the
+ *  row hosted, storage included, before the append returns. */
 async function disableCounter(ctx: string, name = "counter"): Promise<void> {
-  const s = stub(ctx);
-  await s.append(subscriptionConfiguredEvent({ name, target: null }));
-  await s.invoke(["itx", "facets", ["delete", name]]);
+  await stub(ctx).append(subscriptionConfiguredEvent({ name, target: null }));
 }
 
 // The DO-only transport facts ({stubs, borrowed, rpcStubPagesInFlight, dormant}) — the quiesce probes are

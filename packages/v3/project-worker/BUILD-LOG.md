@@ -2389,3 +2389,22 @@ options?)` with `options.rewrite`; chapter 1 reads `itx.provide("laptop", fn)`, 
   sweep dissolved: a key IS its match. Docs re-pointed (as-built §2/§4/§6/§7/§10/§12 — A moved to
   "decided"; LAYERS; walkthrough; onion design; synthesis §9 addendum).
 - GATES: tsc×3 · oxlint 0/0 · knip clean · unit+workers 250 · e2e 141p/2xf (37 files).
+
+## 2026-09-02 — C: ONE facet door — `itx.facets.get(name, { source, className })`
+
+- Jonas, on "two doors to a facet": "what would be better?" → the mirror of Cloudflare's own
+  `ctx.facets.get(name, startupCallback)`: ONE door. `itx.facets.get(name)` ADDRESSES a running facet
+  (a processor, a named instance); `itx.facets.get(name, { source, className })` LOADS the class and
+  hosts it as the durable facet `name`. The `load(src).getDurableObjectClass(C).get(name?)` chain is
+  DELETED — `load(src)` keeps `getEntrypoint` only (the stateless mirror). The facet name is now always
+  explicit (no `.get()` defaulting to the class name).
+- `enableProcessor`'s target is `itx.facets.get(name, { source, className }).processEventBatch`; the
+  DO's "did the removed row HOST a facet?" check is now "a `facets.get` with a spec" — one shape,
+  three lines. `#invokeFacet` takes `{ name, source, className }` with `name` required.
+- Sweep: every e2e/workers-test chain re-spelled (load-sources, load-mid-chain-pipelining — the
+  dyn-worker→dyn-worker pipelining case now pipelines `facets.get(name, spec).demo.timer.callLater`;
+  load-persistent-stub, live-state-chains, subscriptions-ephemeral-opt-in, lineage, tour,
+  alarm-quiesce, ephemeral-offset-reuse); `processorNames` matches `facets.get(…, {…}).processEventBatch`.
+  Docs: as-built §5/§9/§10/§12 (C → decided), LAYERS, walkthrough, onion design (a dated note where
+  the doc sketched the chain).
+- GATES: tsc×3 · oxlint 0/0 · knip clean · unit+workers 250 · e2e 141p/2xf (37 files).
