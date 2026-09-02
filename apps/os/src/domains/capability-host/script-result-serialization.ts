@@ -1,3 +1,5 @@
+import type { ScriptExecutionSettlement } from "@iterate-com/shared/script-execution";
+import { inferJsonType } from "../../lib/infer-json-type.ts";
 import type { JsonValue } from "../workers/schemas.ts";
 
 /**
@@ -80,4 +82,71 @@ export function serializeScriptResult(result: unknown): JsonValue | undefined {
    * returns something that serializes away, such as a bare function.
    */
   return json === undefined ? undefined : (JSON.parse(json) as JsonValue);
+}
+
+/**
+ * The largest serialized result a settlement event may carry inline.
+ *
+ * A `script-run-settled` event is journaled durably and then re-materialized
+ * by every reader in the stream DO's isolate — the agent facet's fold, the
+ * capability-host facet's fold, session deliveries, analytics capture — each
+ * holding several copies: chunk blobs, the decoded string, the parsed object,
+ * the validated copy. A 7MB settlement (an image-crop script's base64 stdout)
+ * OOMed the 128MiB isolate on every retry and wedged the stream in a
+ * keepalive wake loop (prod, 2026-09-02). ~1MiB keeps the worst-case
+ * transient cost of one event in the tens of megabytes.
+ */
+export const MAX_SCRIPT_RESULT_EVENT_CHARS = 1024 * 1024;
+
+/** Failure text is context, not payload — but an error message can embed the
+ * same oversized data a result can (a script throwing with a blob in the
+ * message), so it gets bounded at the same choke point. */
+export const MAX_SCRIPT_ERROR_EVENT_CHARS = 32_000;
+
+/** How much of an omitted result's compact JSON survives as a preview. */
+const OMITTED_RESULT_PREVIEW_CHARS = 2_000;
+
+/** Char budget for an omitted result's inferred type text. */
+const OMITTED_RESULT_TYPE_MAX_CHARS = 3_000;
+
+/**
+ * Bound a settlement to a journal-safe size. Idempotent, and identity for
+ * anything under the limits. An oversized success keeps its status — the
+ * script DID run, external effects happened — but the value is replaced by
+ * `oversized: {kind: "omitted"}` metadata: how big it was, a preview, and its
+ * inferred type,
+ * so the model can tell what it lost and adapt (write large data to workspace
+ * files instead of returning it).
+ *
+ * Applied at BOTH settlement choke points: `ScriptExecutionEntrypoint.run`
+ * (so the blob never crosses the RPC boundary into the DO isolate) and
+ * `scriptCompletionInput` (the append-side backstop for every other
+ * settlement source).
+ */
+export function boundScriptSettlement(
+  settlement: ScriptExecutionSettlement,
+): ScriptExecutionSettlement {
+  if (settlement.status === "failed") {
+    if (settlement.error.length <= MAX_SCRIPT_ERROR_EVENT_CHARS) return settlement;
+    // The suffix counts against the cap: a truncated error must itself be
+    // under the limit, or the second bounding pass (the append-side backstop)
+    // would re-truncate and stack suffixes.
+    const suffix = `… [error truncated from ${settlement.error.length} chars]`;
+    return {
+      ...settlement,
+      error: settlement.error.slice(0, MAX_SCRIPT_ERROR_EVENT_CHARS - suffix.length) + suffix,
+    };
+  }
+  if (settlement.result === undefined) return settlement;
+  const json = JSON.stringify(settlement.result);
+  if (json.length <= MAX_SCRIPT_RESULT_EVENT_CHARS) return settlement;
+  return {
+    status: "succeeded",
+    oversized: {
+      kind: "omitted",
+      serializedChars: json.length,
+      preview: json.slice(0, OMITTED_RESULT_PREVIEW_CHARS),
+      typeText: inferJsonType(settlement.result, { maxChars: OMITTED_RESULT_TYPE_MAX_CHARS }),
+    },
+  };
 }

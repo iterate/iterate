@@ -121,6 +121,15 @@ export async function runCapabilityHostScript(input: {
     throw new Error(`Script execution "${command.executionId}" has a malformed settlement event.`);
   }
   if (parsed.data.status === "failed") throw new Error(parsed.data.error);
+  if (parsed.data.result === undefined && parsed.data.oversized !== undefined) {
+    // The script ran to completion; only its return value was dropped. A
+    // silent `null` here would look like the script chose to return nothing.
+    throw new Error(
+      `Script execution "${command.executionId}" succeeded but its result ` +
+        `(${parsed.data.oversized.serializedChars} chars of JSON) was too large to retain. ` +
+        `Write large data to workspace files (itx.workspace) or return a summary.`,
+    );
+  }
   return {
     completedEvent,
     executionId: command.executionId,

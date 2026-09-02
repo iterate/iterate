@@ -3022,7 +3022,13 @@ export type AgentEventInput =
       {
         executionId: string;
         settlement:
-          | { status: "succeeded"; result?: JsonValue | undefined }
+          | {
+              status: "succeeded";
+              result?: JsonValue | undefined;
+              oversized?:
+                | { kind: "omitted"; serializedChars: number; preview: string; typeText: string }
+                | undefined;
+            }
           | {
               status: "failed";
               error: string;
