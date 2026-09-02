@@ -11,6 +11,7 @@
 // zero-lag end-to-end proof.
 
 import { describe, expect, it, vi } from "vitest";
+import { failing } from "@iterate-com/shared/test-support/failing-test";
 import { KEEPALIVE_ALARM_LEAD_MS, type ConsumedInput } from "iterate/processors";
 import {
   makeMemoryProgressStore,
@@ -163,6 +164,52 @@ describe("CapabilityHostProcessor script runs", () => {
     // nothing to do.
     expect(h.state().scriptExecutions).toEqual({});
   });
+
+  // Pinned prod incident (2026-09-02, os-prd): a web agent's image-crop script
+  // printed a base64 PNG to sandbox stdout and the ~7MB return value was
+  // journaled VERBATIM as one script-run-settled event (project misha, stream
+  // /agents/web/2026-09-02t08-30-16-937z, offset 2381, 7,051KB; otel traces
+  // 2f4ac441f25d6160d83109e1a2f44013 / 78d9c657c44d0719061fdc9da01227c9).
+  // Every reader of that durable event — the agent facet's fold, the
+  // capability-host fold, subscriber deliveries, posthog capture — then
+  // re-materialized it in the stream DO's shared 128MiB isolate, several
+  // copies each: "Durable Object's isolate exceeded its memory limit and was
+  // reset", and the platform's alarm retry plus subscriber retries re-booted
+  // it into the same work every ~5s (770+ stream/woken events over 3h; the
+  // UI showed the raw error and the agent was unusable).
+  //
+  // Desired behavior: the settlement journaling boundary bounds the result —
+  // a durable event is read back forever and must never be a memory bomb.
+  const journalsBounded = failing(it, /journaled verbatim/);
+  journalsBounded(
+    "an oversized script result is bounded before the settlement event journals it",
+    async () => {
+      const h = makeHostHarness();
+      await h.play(
+        ["append", ...NEW_HOST_EVENTS],
+        ["append", scriptRunRequested("agent-output:2373", h.clock.now + 60_000)],
+      );
+      // ~7.3M chars — the incident's shape: one giant base64 string in stdout.
+      await h.play(() =>
+        h.worker.succeed({ stdout: `__FILE_1__\n${"iVBORw0KGgo".repeat(660_000)}` }),
+      );
+
+      const settled = h.events(SETTLED);
+      expect(settled).toMatchObject([{ payload: { executionId: "agent-output:2373" } }]);
+      const settlementChars = JSON.stringify(settled[0]!.payload.settlement).length;
+      // 1 MiB plus envelope slack: far above any honest bounded settlement
+      // (preview + inferred type land around a few KB), far below the 7MB
+      // incident event.
+      if (settlementChars > 1_100_000) {
+        throw new Error(
+          `oversized script result journaled verbatim: the script-run-settled event carries ` +
+            `${settlementChars} chars of settlement JSON — every fold and subscriber that ever ` +
+            `reads this stream re-materializes it, which is what OOMed the 128MiB stream DO ` +
+            `isolate in production`,
+        );
+      }
+    },
+  );
 
   it("script obligations wait for the birth certificate; birth at head starts them", async () => {
     const h = makeHostHarness();
