@@ -1,34 +1,41 @@
-// Child half of oversized-settlement-crash.test.ts: replays the 2026-09-02
-// stream-DO death inside a process capped at the production isolate's memory
-// budget (the parent spawns this under --max-old-space-size). Run directly:
+// Reproduces the 2026-09-02 stream-DO death by driving the REAL
+// stream-processing machinery. The fan-out is genuine:
 //
-//   node --max-old-space-size=128 --import tsx oversized-settlement-crash.child.ts <resultChars>
+//   - a real StreamEventLog (chunk-blob storage over node:sqlite) holds the
+//     events; every read re-parses the chunks (JSON.parse + schema parse),
+//     the real per-read allocation;
+//   - a ~ProcessorStream adapter over that log feeds two REAL runners;
+//   - a real CapabilityHostProcessor folds the 7MB script-run-settled event
+//     (retainedScriptResult classification) and a real AgentProcessor folds
+//     the same stream — the two facets that shared the dead DO's isolate;
+//   - both runners' reduced states stay referenced at once, as they do in the
+//     live DO where both facet folds are resident in one isolate.
 //
-// Everything here is real product code — the settlement journals through
-// scriptCompletionInput (the append-side choke point, so a fix that bounds
-// settlements there changes THIS process's fate), lands in the real
-// chunk-blob StreamEventLog over node:sqlite, and is then re-materialized by
-// the same readers the production trace shows sharing the dead DO's isolate:
-// six subscription-cursor reads, the two processor folds' own page reads,
-// the capability-host fold's retained-result classification, and the agent
-// fold's render stringifications (posthog capture is one of the six cursors).
-// Each reader's product stays referenced (in-flight sends hold theirs in the
-// DO) so the copies coexist, exactly like the incident.
+// Run directly under the isolate budget:
+//   node --max-old-space-size=96 --import tsx oversized-settlement-crash.child.ts <resultChars>
 //
-// Prints one SURVIVED line and exits 0 when the budget holds. When it does
-// not, V8 aborts the process: "FATAL ERROR: Reached heap limit Allocation
-// failed - JavaScript heap out of memory" — the node spelling of the
-// production reset.
+// Prints one SURVIVED line and exits 0 when the budget holds; otherwise V8
+// aborts ("Reached heap limit … out of memory") — the node spelling of the
+// production isolate reset.
 import { DatabaseSync } from "node:sqlite";
-import type { StreamEvent } from "iterate/processors";
+import { StreamProcessorRunner } from "iterate/processors";
+import type {
+  ProcessorStream,
+  StreamEvent,
+  StreamEventInput,
+  StreamEventReadInput,
+} from "iterate/processors";
 import type { ScriptExecutionSettlement } from "@iterate-com/shared/script-execution";
-import { stringifyScriptResult, truncateScriptResult } from "../../lib/script-result-render.ts";
-import { retainedScriptResult } from "../capability-host/capability-host-preamble.ts";
+import type { Project } from "../../itx-api.generated.ts";
+import { AgentProcessor } from "../agents/agent-processor-implementation.ts";
+import type { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
+import { CapabilityHostProcessor } from "../capability-host/capability-host-processor-implementation.ts";
+import type { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { scriptCompletionInput } from "../capability-host/script-execution-settlement.ts";
 import { StreamEventLog } from "./stream-storage.ts";
 
-// Same SqlStorage wrapper as stream-storage.test.ts — node:sqlite standing in
-// for the DO's SQLite, feeding the real StreamEventLog.
+// node:sqlite standing in for the DO's ctx.storage.sql, same shim the storage
+// tests use.
 function wrapSqlStorage(db: DatabaseSync): SqlStorage {
   return {
     exec<T = unknown>(sql: string, ...bindings: (ArrayBuffer | null | number | string)[]) {
@@ -54,18 +61,84 @@ function wrapSqlStorage(db: DatabaseSync): SqlStorage {
   } as SqlStorage;
 }
 
+// The ~40-line adapter the wiring map called for: a ProcessorStream backed by
+// a real StreamEventLog, so runner reads go through the genuine chunk re-parse
+// rather than returning array references (which is what MemoryStream does, and
+// why MemoryStream can't reproduce the per-read allocation).
+class LogStream implements ProcessorStream {
+  readonly streamId = "11111111-1111-4111-8111-111111111111";
+  constructor(
+    private readonly log: StreamEventLog,
+    readonly path: string,
+  ) {}
+
+  async append(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
+    let offset = this.log.highestOffset();
+    const events: StreamEvent[] = inputs.map((input) => ({
+      ...input,
+      createdAt: new Date(0).toISOString(),
+      offset: ++offset,
+      path: this.path,
+    }));
+    this.log.insert(events);
+    return events;
+  }
+  appendIfStreamId(args: { streamId: string; events: StreamEventInput[] }): Promise<StreamEvent[]> {
+    if (args.streamId !== this.streamId) throw new Error("stream id changed");
+    return this.append(...args.events);
+  }
+  async getEvents(input: StreamEventReadInput = {}): Promise<StreamEvent[]> {
+    return this.log.getRange({
+      afterOffset: input.afterOffset ?? 0,
+      beforeOffset: input.beforeOffset ?? Number.MAX_SAFE_INTEGER,
+      eventTypes: input.eventTypes,
+      limit: input.limit ?? 500,
+    });
+  }
+  async getEventPage(input: StreamEventReadInput = {}) {
+    return {
+      streamId: this.streamId,
+      streamMaxOffset: this.log.highestOffset(),
+      events: await this.getEvents(input),
+    };
+  }
+  readEvents(input: StreamEventReadInput = {}) {
+    let afterOffset = input.afterOffset ?? 0;
+    const getEvents = this.getEvents.bind(this);
+    return {
+      async next() {
+        const page = await getEvents({ ...input, afterOffset });
+        afterOffset = page.at(-1)?.offset ?? afterOffset;
+        return page;
+      },
+      [Symbol.dispose]() {},
+    };
+  }
+  async getEvent(
+    input: { offset: number } | { idempotencyKey: string },
+  ): Promise<StreamEvent | undefined> {
+    return "offset" in input
+      ? this.log.getByOffset(input.offset)
+      : this.log.getByIdempotencyKey(input.idempotencyKey);
+  }
+  at(): ProcessorStream {
+    return this;
+  }
+}
+
 const resultChars = Number(process.argv[2]);
 if (!Number.isFinite(resultChars) || resultChars < 1) {
-  throw new Error(
-    `usage: oversized-settlement-crash.child.ts <resultChars>, got ${process.argv[2]}`,
-  );
+  throw new Error(`usage: <resultChars>, got ${process.argv[2]}`);
 }
 
 const PATH = "/agents/web/repro";
 const EXECUTION_ID = "agent-output:2373";
 const log = new StreamEventLog(wrapSqlStorage(new DatabaseSync(":memory:")), PATH);
+const stream = new LogStream(log, PATH);
 
-// The incident's payload shape: one giant base64 string in sandbox stdout.
+// Seed the incident: the agent-scope birth events, the script obligation the
+// agent requested, and the 7MB settlement — journaled through the real
+// scriptCompletionInput, exactly as the capability host commits it.
 const settlement: ScriptExecutionSettlement = {
   status: "succeeded",
   result: { stdout: `__FILE_1__\n${"iVBORw0KGgo".repeat(Math.ceil(resultChars / 11))}` },
@@ -75,67 +148,79 @@ const completion = scriptCompletionInput({
   idempotencyKey: `capability-host/script-run-settled@${EXECUTION_ID}`,
   settlement,
 });
-const settledEvent: StreamEvent = {
-  type: completion.type,
-  idempotencyKey: completion.idempotencyKey,
-  payload: completion.payload,
-  offset: 2381,
-  createdAt: "2026-09-02T11:36:57.000Z",
-  path: PATH,
-};
-log.insert([
+await stream.append(
+  { type: "events.iterate.com/agent/created", payload: {} },
+  {
+    type: "events.iterate.com/agent/configured",
+    payload: { config: { llm: { model: "test-model" } } },
+  },
+  { type: "events.iterate.com/capability-host/created", payload: { config: {}, fallback: null } },
   {
     type: "events.iterate.com/capability-host/script-run-requested",
-    payload: { executionId: EXECUTION_ID, code: "async () => cropTheImage()", expiresAt: 0 },
-    offset: 2373,
-    createdAt: "2026-09-02T11:36:52.000Z",
-    path: PATH,
+    idempotencyKey: `capability-host/script-run-requested@${EXECUTION_ID}`,
+    payload: { executionId: EXECUTION_ID, code: "async () => cropTheImage()", expiresAt: 1 },
   },
-  settledEvent,
-]);
-
-// The fan-out. `retained` keeps every reader's product alive together.
-const retained: unknown[] = [];
-const readWholeWindow = () =>
-  log.getRangeSized({ afterOffset: 0, beforeOffset: Number.MAX_SAFE_INTEGER, limit: 500 });
-
-// Six durable-delivery subscription cursors (the dead DO's subscription_cursors
-// table held six rows). A delivery is read + serialize + send: each cursor
-// holds both its materialized batch AND the serialized send body until the
-// receiver acknowledges, so all six pairs coexist during the catch-up burst.
-for (let cursor = 0; cursor < 6; cursor++) {
-  const batch = readWholeWindow();
-  retained.push({ batch, sendBody: JSON.stringify(batch.map((sized) => sized.event)) });
-}
-// The two processor facets (agent + capability-host) page the same window
-// through their own runner reads.
-const agentFoldPage = readWholeWindow();
-const hostFoldPage = readWholeWindow();
-retained.push(agentFoldPage, hostFoldPage);
-
-// Capability-host fold: classify the settlement into its retained row.
-const foldedSettlement = (
-  hostFoldPage.at(-1)!.event.payload as { settlement: ScriptExecutionSettlement }
-).settlement;
-retained.push(
-  retainedScriptResult({
-    executionId: EXECUTION_ID,
-    scriptOffset: 2373,
-    settledAtOffset: 2381,
-    settlement: foldedSettlement,
-  }),
+  {
+    type: "events.iterate.com/capability-host/script-run-started",
+    idempotencyKey: `capability-host/script-run-started@${EXECUTION_ID}`,
+    payload: { executionId: EXECUTION_ID },
+  },
+  { type: completion.type, idempotencyKey: completion.idempotencyKey, payload: completion.payload },
 );
 
-// Agent fold render (renderScriptSettlement's allocations): the pretty text,
-// the compact-JSON preamble-access measurement, and the truncated inline copy.
-const agentSettlement = (
-  agentFoldPage.at(-1)!.event.payload as { settlement: ScriptExecutionSettlement }
-).settlement;
-if (agentSettlement.status === "succeeded" && agentSettlement.result !== undefined) {
-  const text = stringifyScriptResult(agentSettlement.result);
-  retained.push(text, JSON.stringify(agentSettlement.result), truncateScriptResult(text, 30_000));
+// Two REAL runners over the one stream — the agent facet and the capability-
+// host facet, both resident as they are in the live DO. Each processor's
+// `reads` closes over its own runner, the same wiring the processor tests use.
+let capabilityRunner!: StreamProcessorRunner<CapabilityHostProcessorContract>;
+const capabilityHost = new CapabilityHostProcessor({
+  stream,
+  path: PATH,
+  projectId: null,
+  itx: {} as Project,
+  scriptExecutionEntrypoint: {
+    run: () => {
+      throw new Error("no script execution in a pure fold replay");
+    },
+  },
+  reads: {
+    snapshot: () => capabilityRunner.snapshot(),
+    // The ternary splits the overloaded arg union so each branch matches one
+    // overload — the same passthrough the processor test harnesses use.
+    waitUntilEvent: (input) =>
+      "offset" in input
+        ? capabilityRunner.waitUntilEvent(input)
+        : capabilityRunner.waitUntilEvent(input),
+  },
+});
+capabilityRunner = new StreamProcessorRunner({ processor: capabilityHost, stream });
+
+// No callLlm/writeWorkspaceFile: a pure fold replay drives no model turn, and
+// dropping writeWorkspaceFile keeps an oversized render inline (the harsher
+// memory path) instead of spilling it to a workspace file. The agent processor
+// takes no `reads` dep — its state comes from the runner's fold hooks.
+const agent = new AgentProcessor({ stream, path: PATH, projectId: null });
+const agentRunner: StreamProcessorRunner<AgentProcessorContract> = new StreamProcessorRunner({
+  processor: agent,
+  stream,
+});
+
+// Both facets fold the whole stream, concurrently. Their reduced states — each
+// holding a materialized view of the 7MB settlement — stay referenced together.
+const [capabilityState, agentState] = await Promise.all([
+  capabilityRunner.catchUp().then(() => capabilityRunner.snapshot()),
+  agentRunner.catchUp().then(() => agentRunner.snapshot()),
+]);
+
+// The delivery re-materialization: subscription cursors reading the same window
+// through the real chunk re-parse (six rows on the dead DO). Held alive with
+// their serialized send bodies, as in-flight deliveries are.
+const deliveries = [];
+for (let cursor = 0; cursor < 6; cursor++) {
+  const batch = await stream.getEvents({ afterOffset: 0, limit: 500 });
+  deliveries.push({ batch, sendBody: JSON.stringify(batch) });
 }
 
+const retained = { capabilityState, agentState, deliveries };
 console.log(
-  `SURVIVED readers=${retained.length} heapUsedMb=${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}`,
+  `SURVIVED facets=2 deliveries=${retained.deliveries.length} heapUsedMb=${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}`,
 );
