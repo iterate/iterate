@@ -57,7 +57,7 @@ test("a NON-CANONICAL path spelling through the provide door is stored CANONICAL
   const ctx = freshCtx("canon");
   const itx = openItx(ctx);
   await itx.provide(" itx.ghost", "itx.whoami");
-  const snap = await itx.invokeCapability("itx.facets.get('capability-table').snapshot()");
+  const snap = await itx.invokeCapability("itx.facets.get('core').snapshot()");
   const row = (snap.state.mounts as { path: string[] }[]).find(
     (m) => m.path.join(".") === "itx.ghost",
   );

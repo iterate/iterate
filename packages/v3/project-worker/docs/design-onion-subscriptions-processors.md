@@ -18,7 +18,7 @@
   collections end in `Collection`.
 - **A processor is a `DurableObject` subclass** of an SDK base, hosted through the ordinary
   `getDurableObjectClass`. No runner adapter, no third accessor, and, it turns out, no built-in
-  processors at all.
+  processor that runs as a facet (the one built-in `StreamProcessor` is the core reduce, inline).
 - **Durable at-least-once delivery to a stateless `processEventBatch` worker is a requirement.**
 - **Facet-owns-progress vs stream-keeps-offsets is a fair, real distinction.**
 - **Anything expressible in userspace is not a built-in.** `connectToCapnweb` goes.
@@ -42,10 +42,10 @@ flowchart TB
     facets["facets · load (Worker Loader)"]
     misc["kv · whoami · cd · fetch (egress)"]
   end
-  subgraph L1["Layer 1 — mounts (capability table, inline reduce)"]
+  subgraph L1["Layer 1 — mounts (capability table: own events, a slice of the core reduce)"]
     mount["capability-provided { path, target }<br/>a live provide = park in rpcStubs + mount itx.rpcStubs.get(path)"]
   end
-  subgraph L2["Layer 2 — subscriptions (own inline reduce + ONE delivery loop)"]
+  subgraph L2["Layer 2 — subscriptions (own events, folded by the core reduce + ONE delivery loop)"]
     sub["subscription-configured { name, target, consumes? }<br/>push if the target owns progress (facet / rpc stub)<br/>else the stream keeps a kv cursor, at-least-once"]
     view["itx.subscriptions.list() / get(name): rows ⋈ cursors"]
   end
@@ -174,8 +174,15 @@ a name for a target and nothing else.
 
 ### 4.1 Events and reduce
 
-A third inline reduce-only processor, slug `subscriptions`, beside `core` and `capability-table`
-(the layer gets its own reduce, not a bag on core). apps/os event names.
+Four events of the layer's own, folded by the ONE core reduce (`stream/core-processor.ts`,
+`CoreStreamProcessor`, slug `core`, contract 3.0.0 — the `subscriptions` slice beside `mounts`).
+DECIDED 2026-09-02, reversing this doc's earlier "own inline reduce beside `core` and
+`capability-table`" (§8): the layering lives in the EVENTS, and one fold serves every synchronous
+reader — the append door, the dispatcher, the delivery loop. Jonas: "a core stream processor that
+controls all the reduced state that is needed synchronously before append… the token bucket runs in
+a facet and appends stream/paused." `stream/subscriptions.ts` is the two COMMANDS that build the
+first two events (`subscriptionConfiguredEvent` / `subscriptionRemovedEvent`, `null` = idempotent
+no-op); the DO appends them. apps/os event names.
 
 ```ts
 "events.iterate.com/stream/subscription-configured": {
@@ -301,7 +308,7 @@ export abstract class StreamProcessorDurableObject<State = unknown, Env = {}> ex
   /** `processor = new PresenceProcessor()` at the top of the subclass — the one thing an author writes here. */
   abstract readonly processor: StreamProcessor<State>;
   // what an author reaches
-  /** The owning context's parsed address — the same `{ projectId, path, name }` object the DO holds as #address
+  /** The owning context's parsed address — the same `{ projectId, path, name }` object the DO holds as #name
    *  (`name` is the canonical codec string). Parsed once from ctx.props.contextName. */
   protected readonly context: DurableObjectAddress;
   /** This processor's own name: the facet name, the subscription name, the `.get(name)` name. From ctx.props.name. */
@@ -331,16 +338,25 @@ processor, hooks forwarded to it). Jonas then asked for the split (2026-09-02): 
 processor is a PURE `StreamProcessor` subclass — constructible bare, `reduce` callable in a Node
 test — and the DurableObject is a one-field HOST (`processor = new PresenceProcessor()`) that builds a
 `ProcessorEngine` over the pure instance with its facet kv and `env.ITX`. The engine calls the
-processor's public hooks directly (no forwarding adapter); the three inline reduces are
-`StreamProcessor` subclasses too (hosted at the commit point, `reduce` only — `ReduceOnlyProcessor` is
+processor's public hooks directly (no forwarding adapter); the core reduce is a `StreamProcessor`
+subclass too (hosted at the commit point by `InlineReduce`, `reduce` only — `ReduceOnlyProcessor` is
 gone), and re-projects live state after every batch so a
 runtime field bumped inside `processEvent` needs no explicit publish. apps/os's two-class shape
 returns, for a different reason than there (unit-testability, not facet-vs-DO hosting).
 
 ### 5.2 There are no built-in processors
 
-With the forwarder re-homed into the kernel, nothing the platform needs runs as a facet processor.
-`core`, `capability-table` and `subscriptions` are inline reduces. Tally was only ever the
+With the forwarder re-homed into the kernel, nothing the platform NEEDS runs as a facet processor.
+The one built-in `StreamProcessor` is the core reduce — slug `core`, folding the context's own
+control events (`stream/created`, `stream/woken`, `stream/paused`, `stream/resumed`, the two
+capability-table events, the four subscription events) into
+`{ projectId, path, createdAt, incarnation, paused, mounts, subscriptions }`, hosted inline at the
+commit point because every reader is synchronous. Anything that is NOT needed synchronously before
+an append is not built in at all: the token-bucket breaker left core (2026-09-02) and is
+`BreakerProcessor` (`e2e/support/sources.ts`), an ordinary userspace facet processor that folds
+durable events into a bucket and, on exhaustion, appends `stream/paused { reason }`; an operator
+appends `stream/resumed`. Core knows nothing about it — the pause check is one `if` in
+`Stream.append`. Tally was only ever the
 facet-spine demo, so it becomes what the demo's `PresenceProcessor` already is: a userspace source seeded by
 `e2e/support/sources.ts`, extending the same base. That deletes `processor-facet.ts`,
 `FACET_PROCESSORS`, `BUILT_IN_PROCESSOR_SLUGS`, the `ProcessorFacet` export, and the `itx.exports`
@@ -466,7 +482,7 @@ the expression), `fetchCap`, `resumeSubscription`, `provide(opts)`, `unsubscribe
 | Add                                                                                                                                        | Where                                                           | ~lines        |
 | ------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------- | ------------- |
 | `UnauthenticatedSession` / `Session` / `ProjectCollection`; `cd` relative; `fetch` root; `/cap?context=`; `getEntrypoint(name, { props })` | `session.ts`, `iterate-context.ts`, `built-ins.ts`, `worker.ts` | ~95           |
-| `subscriptions` inline reduce (4 events) + the `subscriptions` built-in view                                                               | `stream/subscriptions.ts`                                       | ~80           |
+| the 4 subscription events (folded by the core reduce) + their two commands + the `subscriptions` built-in view                             | `stream/core-processor.ts`, `stream/subscriptions.ts`           | ~80           |
 | the delivery loop + cursor lane over kv + alarm                                                                                            | `stream/subscription-delivery.ts`                               | ~140          |
 | `ProcessorEngine` (the engine, split from the pure `StreamProcessor`) + the `StreamProcessorDurableObject` host                            | `stream/`, `sdk/`                                               | ~30 net + ~60 |
 | `FacetHandle` / `RpcStubHandle` brands; `facet:<name>` startup memo; `facets.delete`                                                       | `invoke-handle.ts`, the DO, `built-ins.ts`                      | ~40           |
@@ -515,19 +531,19 @@ Nothing you can do today becomes impossible. Four things get coarser and two saf
 
 ## 8. Where the six candidates disagreed, and why each call went this way
 
-| Decision                                        | Candidates                                                                                                                                                     | Chosen                                       | Why                                                                                                                                                                                                                                                                                                                                        |
-| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| How the two kinds are told apart                | A: structural predicate on the expression string · B: declared `receiver.delivery?` field · C/D: by which event you appended · E: brand of the evaluated value | **E**                                        | No flag on the event, and alias-robust: the loop already evaluates the target before calling it, so it costs nothing to look at what came back. A's string predicate misclassifies an alias; B's field is a declaration the target already implies.                                                                                        |
-| Live browser tabs                               | A, C: stream keeps a cursor per tab (at-least-once, hold on offline) · B, D, E: push, client owns its offset                                                   | **push**                                     | Today's measured behaviour (p50 ~215 ms, zero server state) survives untouched; the live-state client already heals by `read`. A per-tab kv write per batch and per-tab back-pressure buy reconnect catch-up nobody asked for yet. If a device later needs it, that is a new requirement, not a flag.                                      |
-| Where the cursor lane lives                     | A, B, E: kernel loop in the DO over kv + alarm · C, D: a built-in facet processor                                                                              | **kernel loop**                              | Maps onto what Cloudflare ships (DO storage, DO alarm); a facet version needs an alarm proxy Cloudflare does not ship, three parent doors and an auto-enable rule. apps/os hosts its sender in the stream DO too. C's kernel is smaller on paper but adds two hops and ack serialization in front of every tab, an unmeasured latency bet. |
-| Where subscription rows are reduced             | A, B, E: the core reduce · C, D: a facet's own reduce · this doc: its own inline reduce                                                                        | **own inline reduce**                        | Your layering: subscriptions are a layer, so they get their own reduce beside `core` and `capability-table`, not a bag on the stream's operational truth. Same engine, one more slug.                                                                                                                                                      |
-| Whether a tab's subscription is an event at all | B: no, `openConnection` is physical, event types ride the pager attachment · others: `subscription-configured` targeting `itx.rpcStubs.get(...)`               | **an event**                                 | Your feedback 8 asked for an event that tells the stream to send events to a live subscriber. B's shape leaks nothing but loses that, and adds a verb. The leak (rows for dead named tabs) is bounded by distinct names and swept for anonymous ones.                                                                                      |
-| Presence                                        | all: `rpcStubs.list()`; B optional ephemeral connection events                                                                                                 | **list() + ephemeral attached/detached**     | Your "rpcStub and associated presence event". Ephemeral keeps C7's promise: the log never claims a socket is open.                                                                                                                                                                                                                         |
-| Processor identity                              | A, B, D: `env.ITX.whoami()` · C: keep `configure()` until props land · E: `ctx.props`                                                                          | **`ctx.props`**                              | You confirmed facets get `ctx.props` on current Workers; the installed types already carry `getDurableObjectClass(name, { props })` and `DurableObjectState<Props>.props`. One mint by the only party that knows the identity; no side channel, no `whoami` round trip.                                                                    |
-| Engine vs SDK base                              | C, D: merge the engine onto the DO base · E: split into a hook-parameterized runner + a thin base · B: keep apps/os two-class `createProcessor`                | **wrap** (landed; the row above chose split) | The engine stays dependency-free and Node-tested, unchanged; the DO base builds one instance with its hooks pointed at the author's methods; the inline reduces keep using it; the author writes one class.                                                                                                                                |
-| Built-in processors                             | D: ship as SDK-bundled source through the loader · B: `facets.get(name)` with a name→class map · E: `itx.exports.<Class>.get(name)` · this doc: none           | **none**                                     | With the forwarder in the kernel, no platform processor runs as a facet. Tally is a demo and becomes a test fixture like `Presence`. `itx.exports` was a root serving one demo class.                                                                                                                                                      |
-| Recovery                                        | A/B/E: `-cursor-set` + `-delivery-resumed` (apps/os pair) · C/D: one `-delivery-resumed { afterOffset? }`                                                      | **one event**                                | Resume, optionally from a new offset, reads as one operator intent. apps/os's pair stays available if the two ever need to differ.                                                                                                                                                                                                         |
-| `subscribe`/`unsubscribe` verbs                 | B: delete, append events directly · D: a subscription IS a provide · A, C, E: keep as edge sugar                                                               | **keep as sugar, a banded section**          | A live target needs the edge to park the stub, so sugar exists anyway; the same two lines serve expressions. Your annotation asked for sugar to be visibly apart from axioms: it is the second banded section of `IterateContext` (a second file would need declaration merging to type).                                                  |
+| Decision                                        | Candidates                                                                                                                                                     | Chosen                                                             | Why                                                                                                                                                                                                                                                                                                                                                                                               |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| How the two kinds are told apart                | A: structural predicate on the expression string · B: declared `receiver.delivery?` field · C/D: by which event you appended · E: brand of the evaluated value | **E**                                                              | No flag on the event, and alias-robust: the loop already evaluates the target before calling it, so it costs nothing to look at what came back. A's string predicate misclassifies an alias; B's field is a declaration the target already implies.                                                                                                                                               |
+| Live browser tabs                               | A, C: stream keeps a cursor per tab (at-least-once, hold on offline) · B, D, E: push, client owns its offset                                                   | **push**                                                           | Today's measured behaviour (p50 ~215 ms, zero server state) survives untouched; the live-state client already heals by `read`. A per-tab kv write per batch and per-tab back-pressure buy reconnect catch-up nobody asked for yet. If a device later needs it, that is a new requirement, not a flag.                                                                                             |
+| Where the cursor lane lives                     | A, B, E: kernel loop in the DO over kv + alarm · C, D: a built-in facet processor                                                                              | **kernel loop**                                                    | Maps onto what Cloudflare ships (DO storage, DO alarm); a facet version needs an alarm proxy Cloudflare does not ship, three parent doors and an auto-enable rule. apps/os hosts its sender in the stream DO too. C's kernel is smaller on paper but adds two hops and ack serialization in front of every tab, an unmeasured latency bet.                                                        |
+| Where subscription rows are reduced             | A, B, E: the core reduce · C, D: a facet's own reduce · this doc: its own inline reduce                                                                        | **the core reduce** (REVERSED 2026-09-02; was "own inline reduce") | First landed as its own inline reduce beside `core` and `capability-table`. Reversed once it ran: three inline reduces over one log was three checkpoints and three facet addresses for one synchronous fold with one set of readers. The layering is the EVENTS — the four subscription events stay the layer's own — but the fold is one (`state.subscriptions` on core), as A, B and E had it. |
+| Whether a tab's subscription is an event at all | B: no, `openConnection` is physical, event types ride the pager attachment · others: `subscription-configured` targeting `itx.rpcStubs.get(...)`               | **an event**                                                       | Your feedback 8 asked for an event that tells the stream to send events to a live subscriber. B's shape leaks nothing but loses that, and adds a verb. The leak (rows for dead named tabs) is bounded by distinct names and swept for anonymous ones.                                                                                                                                             |
+| Presence                                        | all: `rpcStubs.list()`; B optional ephemeral connection events                                                                                                 | **list() + ephemeral attached/detached**                           | Your "rpcStub and associated presence event". Ephemeral keeps C7's promise: the log never claims a socket is open.                                                                                                                                                                                                                                                                                |
+| Processor identity                              | A, B, D: `env.ITX.whoami()` · C: keep `configure()` until props land · E: `ctx.props`                                                                          | **`ctx.props`**                                                    | You confirmed facets get `ctx.props` on current Workers; the installed types already carry `getDurableObjectClass(name, { props })` and `DurableObjectState<Props>.props`. One mint by the only party that knows the identity; no side channel, no `whoami` round trip.                                                                                                                           |
+| Engine vs SDK base                              | C, D: merge the engine onto the DO base · E: split into a hook-parameterized runner + a thin base · B: keep apps/os two-class `createProcessor`                | **wrap** (landed; the row above chose split)                       | The engine stays dependency-free and Node-tested, unchanged; the DO base builds one instance with its hooks pointed at the author's methods; the core reduce keeps using it; the author writes one class.                                                                                                                                                                                         |
+| Built-in processors                             | D: ship as SDK-bundled source through the loader · B: `facets.get(name)` with a name→class map · E: `itx.exports.<Class>.get(name)` · this doc: none           | **none**                                                           | With the forwarder in the kernel, no platform processor runs as a facet. Tally is a demo and becomes a test fixture like `Presence`. `itx.exports` was a root serving one demo class.                                                                                                                                                                                                             |
+| Recovery                                        | A/B/E: `-cursor-set` + `-delivery-resumed` (apps/os pair) · C/D: one `-delivery-resumed { afterOffset? }`                                                      | **one event**                                                      | Resume, optionally from a new offset, reads as one operator intent. apps/os's pair stays available if the two ever need to differ.                                                                                                                                                                                                                                                                |
+| `subscribe`/`unsubscribe` verbs                 | B: delete, append events directly · D: a subscription IS a provide · A, C, E: keep as edge sugar                                                               | **keep as sugar, a banded section**                                | A live target needs the edge to park the stub, so sugar exists anyway; the same two lines serve expressions. Your annotation asked for sugar to be visibly apart from axioms: it is the second banded section of `IterateContext` (a second file would need declaration merging to type).                                                                                                         |
 
 ## 9. Sequence
 
@@ -554,7 +570,7 @@ src/
   context/   built-ins.ts capability-table.ts expression.ts dispatch.ts invoke-handle.ts dotted-path-proxy.ts
              rpc-stub-directory.ts rpc-stub-relay.ts hibernatable-rpc-stub.ts worker-loader.ts durable-object-names.ts
   fetch/     fetch-capabilities.ts
-  stream/    stream.ts events.ts processor.ts reduce-checkpoint.ts inline-reduces.ts core-processor.ts
+  stream/    stream.ts events.ts processor.ts reduce-checkpoint.ts inline-reduce.ts core-processor.ts
              subscriptions.ts subscription-delivery.ts live-state.ts
   sdk/       index.ts (→ processor.js) stream-processor-durable-object.ts (the host)
   lib/       errors.ts logs.ts hash.ts patch.ts        client/     generated/

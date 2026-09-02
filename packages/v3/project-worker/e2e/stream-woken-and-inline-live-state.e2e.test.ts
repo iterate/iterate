@@ -1,72 +1,93 @@
-// stream-woken-and-inline-live-state.e2e.test.ts — the WAKE RECORD + inline live state, LIVE: a fresh stream's first commit
-// carries events.iterate.com/stream/woken at offset 1 (the platform's own record, injected by
-// Stream.append — never echoed as a receipt), the core processor reduces it into
-// `state.incarnation`, and the INLINE reduced states (core, capability-table) emit the standard
-// ephemeral live-state/changed deltas on change, delivered to a subscriber that names the one
-// live-state event type — exactly like any facet processor's.
+// stream-woken-and-inline-live-state.e2e.test.ts — the WAKE RECORD + inline live state, LIVE. The
+// context DO's CONSTRUCTOR appends the platform's own records before any door opens (the apps/os
+// shape): the first-ever incarnation writes events.iterate.com/stream/created { projectId, path } at
+// offset 1 and events.iterate.com/stream/woken { incarnation } at offset 2; every later incarnation
+// writes woken as its first event. So ANY door on a never-touched context materializes it — a bare
+// read, a probe, an append — and the first user append lands past both records. The core reduce
+// folds them into `state.projectId / path / createdAt / incarnation`, and the ONE inline reduced
+// state (key `core`: identity, pause, mounts, subscriptions) emits the standard ephemeral
+// live-state/changed deltas on change, delivered to a subscriber that names the one live-state
+// event type — exactly like any facet processor's.
 
 import { expect, test } from "vitest";
 import { freshCtx, openItx, until } from "./support/client.ts";
 import { deltasFor, LIVE_STATE_CHANGED, type Delta } from "./support/live-client.ts";
 
-test("first append commits the woken event first; core's reduced state carries the incarnation", async () => {
-  const itx = openItx(freshCtx("woken"));
-  const receipts = await itx.invokeCapability(`itx.append({ type: 'hello' })`);
-  // one receipt per INPUT — the wake record is the platform's, not the caller's
-  expect(receipts).toHaveLength(1);
-  expect(receipts[0].type).toBe("hello");
-
+test("any door materializes a fresh context: read(0) starts with created then woken; the first append lands past them; core's reduced state carries identity + incarnation", async () => {
+  const ctx = freshCtx("woken");
+  const itx = openItx(ctx);
+  // A bare READ on a never-touched context already sees the two records — the constructor wrote
+  // them before this door opened.
   const page = await itx.invokeCapability("itx.read(0)");
-  expect(page.events[0].type).toBe("events.iterate.com/stream/woken");
-  expect(page.events[0].offset).toBe(1);
-  const incarnation = page.events[0].payload.incarnation;
-  expect(typeof incarnation).toBe("number");
+  expect(page.events.map((e: { type: string; offset: number }) => [e.type, e.offset])).toEqual([
+    ["events.iterate.com/stream/created", 1],
+    ["events.iterate.com/stream/woken", 2],
+  ]);
+  expect(page.events[0].payload).toEqual({ projectId: ctx, path: "/" });
+  const incarnation = page.events[1].payload.incarnation;
   expect(incarnation).toBeGreaterThanOrEqual(1);
 
-  // the core reduce folded it — runtime state IS reduced state
-  const snap = await itx.invokeCapability("itx.facets.get('core').snapshot()");
-  expect(snap.state.incarnation).toBe(incarnation);
+  // one receipt per INPUT — the platform's records are never echoed as receipts — and the first
+  // user append lands at offset 4: past created (1), woken (2) and core's ephemeral live-state
+  // delta for the wake commit (3; ephemerals share the offset sequence).
+  const receipts = await itx.invokeCapability(`itx.append({ type: 'hello' })`);
+  expect(receipts).toHaveLength(1);
+  expect(receipts[0].type).toBe("hello");
+  expect(receipts[0].offset).toBe(4);
 
-  // exactly once per incarnation
+  // the core reduce folded both records — runtime state IS reduced state
+  const snap = await itx.invokeCapability("itx.facets.get('core').snapshot()");
+  expect(snap.state).toMatchObject({ projectId: ctx, path: "/", incarnation });
+  expect(snap.state.createdAt).toBe(page.events[0].createdAt);
+
+  // exactly once per incarnation (and born exactly once, ever)
   await itx.invokeCapability(`itx.append({ type: 'again' })`);
-  const page2 = await itx.invokeCapability("itx.read(0)");
-  expect(
-    page2.events.filter((e: { type: string }) => e.type === "events.iterate.com/stream/woken"),
-  ).toHaveLength(1);
+  const types = (await itx.invokeCapability("itx.read(0)")).events.map(
+    (e: { type: string }) => e.type,
+  );
+  expect(types.filter((t: string) => t === "events.iterate.com/stream/woken")).toHaveLength(1);
+  expect(types.filter((t: string) => t === "events.iterate.com/stream/created")).toHaveLength(1);
 });
 
-test("inline reduced states are live: capability-table and core changes reach a live-state subscriber", async () => {
+test("the inline reduced state is live under ONE key, `core`: a mount and a subscription row both reach a live-state subscriber as `core` deltas", async () => {
   const itx = openItx(freshCtx("inlinelive"));
   await itx.invokeCapability(`itx.append({ type: 'seed' })`);
 
-  // ONE event type carries every key's deltas; each watcher keeps its key (deltasFor)
-  const tableDeltas: Delta[] = [];
+  // ONE event type carries every key's deltas; each watcher keeps its key (deltasFor). The
+  // former inline keys are watched too — they must stay silent (nothing publishes under them).
   const coreDeltas: Delta[] = [];
-  await itx.subscribe({
-    name: "tablewatch",
-    target: deltasFor({ consume: (d) => tableDeltas.push(d) }, "capability-table"),
-    consumes: [LIVE_STATE_CHANGED],
-  });
+  const formerKeys: Delta[] = [];
   await itx.subscribe({
     name: "corewatch",
     target: deltasFor({ consume: (d) => coreDeltas.push(d) }, "core"),
     consumes: [LIVE_STATE_CHANGED],
   });
+  for (const key of ["capability-table", "subscriptions"])
+    await itx.subscribe({
+      name: `former-${key}`,
+      target: deltasFor({ consume: (d) => formerKeys.push(d) }, key),
+      consumes: [LIVE_STATE_CHANGED],
+    });
+  const seen = coreDeltas.length; // the subscribes above are themselves core changes
 
-  // a capability-table change (a provide) → a delta keyed "capability-table"
+  // a MOUNT (a provide) → a delta keyed "core" whose patch touches /mounts
   await itx.provide("itx.zzz", "itx.whoami");
-  const tableDelta = await until("capability-table delta", () =>
-    tableDeltas.find((d) => d.key === "capability-table"),
+  const mountDelta = await until("core delta for the mount", () =>
+    coreDeltas.slice(seen).find((d) => d.patch.some((op) => op.path.startsWith("/mounts"))),
   );
-  expect(typeof tableDelta.from).toBe("number");
-  expect(tableDelta.to).toBe(tableDelta.from + 1); // each emission chains its producer revision
-  expect(Array.isArray(tableDelta.patch)).toBe(true);
+  expect(mountDelta.key).toBe("core");
+  expect(mountDelta.to).toBe(mountDelta.from + 1); // each emission chains its producer revision
 
-  // a core change (breaker reconfigure) → a delta keyed "core"
-  await itx.invokeCapability(
-    `itx.append({ type: 'events.iterate.com/stream/breaker-configured', payload: { capacity: 100, refillPerSecond: 1 } })`,
+  // a SUBSCRIPTION ROW (a subscribe) → a delta keyed "core" whose patch touches /subscriptions
+  await itx.subscribe({ name: "bystander", target: "itx.whoami", consumes: ["never"] });
+  const rowDelta = await until("core delta for the row", () =>
+    coreDeltas
+      .slice(seen)
+      .find((d) => d.patch.some((op) => op.path.startsWith("/subscriptions/bystander"))),
   );
-  const coreDelta = await until("core delta", () => coreDeltas.find((d) => d.key === "core"));
-  expect(coreDelta.to).toBe(coreDelta.from + 1);
-  expect(Array.isArray(coreDelta.patch)).toBe(true);
+  expect(rowDelta.key).toBe("core");
+  expect(rowDelta.to).toBe(rowDelta.from + 1);
+
+  // and nothing ever published under the former inline keys
+  expect(formerKeys).toEqual([]);
 });

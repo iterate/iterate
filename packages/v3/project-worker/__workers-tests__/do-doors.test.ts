@@ -3,10 +3,11 @@
 // no capnweb edge folding the returns away — AND inspect the DO's own storage via
 // runInDurableObject). Three pins live here:
 //
-//   • the VIRGIN-PROBE alarm blind spot: a probe (`itx.facets.get('core').snapshot()`) must not
-//     arm the quiet clock on a never-touched ctx — the storage-lazy doctrine's one blind spot,
-//     which only storage.getAlarm() can see (the e2e lane pins incarnation/tables but cannot
-//     read the alarm);
+//   • the QUIET CLOCK's reason to exist: a probe (`itx.facets.get('core').snapshot()`) on a
+//     never-touched ctx MATERIALIZES it (the constructor's `Stream.wake()` writes created + woken
+//     before any door opens) yet arms NO alarm — #noteActivity arms only when there is something
+//     to quiesce (a live facet, a paged-in rpc stub); only storage.getAlarm() can see that (the
+//     e2e lane pins the records but cannot read the alarm);
 //   • the provide door's SHAPE: it canonicalizes the path on its own (a Workers-RPC caller
 //     bypasses the edge canonicalizer), and a mount is `{ path, target, providedAtOffset }` and
 //     NOTHING else — no lane, no delivery, no processor field (capability-table 5.0.0: HOW a
@@ -23,12 +24,12 @@ import { expect, test } from "vitest";
 import { print, type Expression } from "../src/context/expression.ts";
 import { openSession, stub } from "./support.ts";
 
-/** One capability-table row as the snapshot serializes it (the reduced state's `target` is the
- *  parsed Expression — `print` it to compare against the string the door was given). */
+/** One mount row as the core snapshot serializes it (the mounts are `core` state; the reduced
+ *  `target` is the parsed Expression — `print` it to compare against the string the door was given). */
 type MountRow = { path: string[]; target: Expression; providedAtOffset: number };
 const mountsOf = async (ctx: string): Promise<MountRow[]> =>
   (
-    (await stub(ctx).invoke("itx.facets.get('capability-table').snapshot()")) as {
+    (await stub(ctx).invoke("itx.facets.get('core').snapshot()")) as {
       state: { mounts: MountRow[] };
     }
   ).state.mounts;
@@ -41,25 +42,50 @@ class Alive extends RpcTarget {
   }
 }
 
-test("a core-snapshot probe on a VIRGIN ctx arms NO alarm and mints NO storage — the first real append arms it", async () => {
+test("a core-snapshot probe on a NEVER-TOUCHED ctx materializes it (created@1 + woken@2, incarnation 1) yet arms NO alarm — no facet, no stub, nothing to quiesce; a plain append arms none either", async () => {
   await runInDurableObject(stub("prj_doors_virginprobe"), async (instance, state) => {
-    // The probe rides invoke() → #noteActivity; on a never-touched context it must not write the
-    // quiet-clock alarm (a durable write + a billed wake on a ctx that was only probed — the
-    // storage-lazy doctrine's blind spot the arc review caught).
+    // ANY door materializes a context: the constructor's `Stream.wake()` wrote the birth certificate
+    // and the wake record before this probe could run (the apps/os shape). What the probe must NOT
+    // do is arm the quiet clock: #noteActivity arms only when there is something to quiesce — a
+    // live facet or a paged-in rpc stub — and this ctx has neither (a durable alarm write + a billed
+    // wake for nothing was the arc review's catch).
     const snap = (await instance.invoke("itx.facets.get('core').snapshot()")) as {
-      state?: { incarnation?: number };
+      offset: number;
+      state: { projectId?: string; path?: string; createdAt?: string; incarnation?: number };
     };
-    expect(snap.state?.incarnation ?? 0).toBe(0);
+    expect(snap.state).toMatchObject({
+      projectId: "prj_doors_virginprobe",
+      path: "/",
+      incarnation: 1,
+    });
+    expect(typeof snap.state.createdAt).toBe("string");
+    expect(snap.offset).toBe(2); // folded through the wake record
     expect(await state.storage.getAlarm()).toBeNull(); // THE pin: no quiet-clock arm
-    const tables = state.storage.sql
-      .exec("SELECT name FROM sqlite_master WHERE type = 'table'")
-      .toArray()
-      .map((r) => String(r.name));
-    expect(tables).not.toContain("events");
-    expect(state.storage.kv.get("incarnation")).toBeUndefined();
-    // …and the guard is ONLY for virgin streams: the first real write arms the quiet clock, so
-    // the quiesce machinery still runs for every context that has anything to quiesce.
-    await instance.append({ type: "mark" });
+    expect(instance.read(0).events.map((e) => [e.type, e.offset])).toEqual([
+      ["events.iterate.com/stream/created", 1],
+      ["events.iterate.com/stream/woken", 2],
+    ]);
+    expect(state.storage.kv.get("incarnation")).toBe(1);
+    // A plain append is activity — but still nothing to quiesce, so still no alarm. (Offset 4: past
+    // created, woken and core's ephemeral live-state delta for the wake commit at 3.)
+    const [mark] = (await instance.append({ type: "mark" })) as unknown as { offset: number }[];
+    expect(mark.offset).toBe(4);
+    expect(await state.storage.getAlarm()).toBeNull();
+  });
+});
+
+// #noteActivity runs at the TOP of invoke(), BEFORE the call pages the stub in — so the rpcStubs
+// handle re-notes in a `finally` (like #invokeFacet does): a context whose only pinning resource is
+// a paged-in stub arms its quiet clock on THAT invoke, not one activity late.
+test("the quiet clock arms as soon as there IS something to quiesce: the invoke that pages an rpc stub in", async () => {
+  const ctx = "prj_doors_stubarms";
+  await runInDurableObject(stub(ctx), async (_instance, state) => {
+    // Park a live capability (a hibernatable pager socket — a transport, not yet a paged-in stub)…
+    const itx = await (await openSession()).authenticate().projects.get(ctx);
+    await itx.provide("itx.armcap", new Alive());
+    expect(await state.storage.getAlarm()).toBeNull(); // a parked stub alone quiesces nothing
+    // …then a call pages it in: a RETAINED stub pins this actor, so the clock must arm NOW.
+    expect(await itx.invokeCapability("itx.armcap.ping()")).toBe("alive");
     expect(await state.storage.getAlarm()).not.toBeNull();
   });
 });

@@ -255,9 +255,7 @@ test("concurrent provides at one path collapse to ONE live transport; the table 
   // ONE transport: the registry lists the key exactly once.
   expect((await presence(observer)).filter((k) => k === "itx.solo")).toHaveLength(1);
   // ≥ 1 rows at the path, every one of them the SAME pure-data mount.
-  const snap: any = await observer.invokeCapability(
-    "itx.facets.get('capability-table').snapshot()",
-  );
+  const snap: any = await observer.invokeCapability("itx.facets.get('core').snapshot()");
   const rows = (snap.state.mounts as any[]).filter((m) => m.path.join(".") === "itx.solo");
   expect(rows.length).toBeGreaterThanOrEqual(1);
   expect(new Set(rows.map((m) => JSON.stringify(m.target)))).toEqual(

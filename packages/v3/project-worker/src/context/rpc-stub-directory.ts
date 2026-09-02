@@ -146,6 +146,11 @@ export class RpcStubDirectory {
   }
 
   /** The idle quiesce (paged-in stubs pin the DO; a page gets them back). */
+  /** Any stub paged in right now (O(1)) — what makes the quiet clock worth arming. */
+  hasRetainedStubs(): boolean {
+    return this.#stubs.hasRetainedStubs();
+  }
+
   disposeRetainedStubs(): void {
     this.#stubs.disposeRetainedStubs();
   }

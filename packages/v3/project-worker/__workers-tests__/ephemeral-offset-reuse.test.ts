@@ -58,7 +58,7 @@ test("processor: a fresh facet's first snapshot (wake) with ephemerals at head c
     target: [...loadChain("procsrc", "CounterDurableObject", "counter"), "processEventBatch"],
     consumes: ["tick"],
   });
-  // the subscriptions inline reduce's live-state delta already sits at head (ephemeral); add one more so the tail is ≥ 2
+  // core's live-state delta (the configured row changed core) already sits at head (ephemeral); add one more so the tail is ≥ 2
   await s.append({ type: "blip", ephemeral: true });
   const p0 = await page(ctx);
   const durableMark = p0.events.at(-1)!.offset; // last durable row
@@ -76,18 +76,24 @@ test("processor: a fresh facet's first snapshot (wake) with ephemerals at head c
   await quiesce(ctx); // abort the facet (un-pin) — its checkpoint (the durable mark) is durable in its own storage
   await evictDurableObject(s); // fresh incarnation: offsets resume from the durable mark
 
-  await s.append({ type: "tick" }); // woken@mark+1, tick@mark+2 — both DURABLE, both at offsets the dead ephemerals held
+  // The fresh incarnation's constructor wrote woken@mark+1 (its commit's core live-state delta took
+  // mark+2, ephemeral); tick lands at mark+3 — all at offsets the dead ephemerals held.
+  await s.append({ type: "tick" });
   await sleep(400); // let the push land and the facet re-materialize
   const p1 = await page(ctx);
-  expect(p1.events.map((e) => e.offset).slice(-2)).toEqual([durableMark + 1, durableMark + 2]); // the log is exact
+  expect(p1.events.map((e) => e.offset).slice(-2)).toEqual([durableMark + 1, durableMark + 3]); // the log is exact
   const after = (await s.invoke(["itx", "facets", ["get", "counter"], ["snapshot"]])) as {
     offset: number;
     state: { n: number };
   };
-  // The pushed tick@mark+2 is folded exactly once. (Not "n = durable rows": the subscription's
-  // consumes filter never SENDS the new incarnation's woken record, and the engine folds what it is
-  // sent — the two-filter rule. The first incarnation's wake read the log from 0, hence `before`.)
-  expect(after.state.n).toBe(before.state.n + 1);
+  // The pushed tick@mark+3 is folded exactly once — and so is the new incarnation's woken@mark+1,
+  // ONCE, by a different path: the subscription's consumes filter never SENDS it (its own commit
+  // is filtered to nothing, and empty sends are skipped), so the tick's push range starts one past
+  // the facet's cursor and the engine's durable gap repair reads woken from the log and folds it
+  // (the contract consumes "*") — the two-filter rule: the subscription decides what is PUSHED, the
+  // contract decides what is FOLDED. (The first incarnation's wake read the log from 0 — created,
+  // woken, configured — hence `before`.)
+  expect(after.state.n).toBe(before.state.n + 2);
 });
 
 test("stream-kept cursor: an alarm pump with ephemerals at head leaves the cursor on the durable mark; after quiesce + evict the durables re-minted at those offsets are delivered", async () => {
@@ -125,15 +131,15 @@ test("stream-kept cursor: an alarm pump with ephemerals at head leaves the curso
   };
   expect(rowKv.cursor!.confirmedOffset).toBe(durableMark); // what kv held through the eviction
 
-  await s.append({ type: "mark" }); // woken@mark+1, mark@mark+2 — durable
+  await s.append({ type: "mark" }); // woken@mark+1 (the constructor's; its core delta took mark+2), mark@mark+3 — durable
   await sleep(600);
   const p1 = await page(ctx);
-  expect(p1.events.at(-1)!.offset).toBe(durableMark + 2);
+  expect(p1.events.at(-1)!.offset).toBe(durableMark + 3);
   const digested = JSON.parse(
     ((await s.invoke(["itx", "kv", ["get", "digested"]])) as string) ?? "[]",
   ) as string[];
   // at-least-once: the second mark, minted where a dead ephemeral sat, reaches the worker.
-  expect(digested).toContain(`mark@${durableMark + 2}`);
+  expect(digested).toContain(`mark@${durableMark + 3}`);
 });
 
 test("enable with a consumes filter: itx.facets.get(name) answers before the first consumed event (the facet is materialized at configure time)", async () => {
@@ -176,22 +182,25 @@ test("processor: a read-driven catch-up (snapshot after quiesce) with ephemerals
     offset: number;
     state: { n: number };
   };
-  // n = woken + configured + tick + note: the wake at configure time read the log from 0 (so the
-  // filter's unsent woken@1 was folded too), the push folded tick, this wake read note.
-  expect(mid.state.n).toBe(4);
+  // n = created + woken + configured + tick + note: the configured push's gap repair read the log
+  // from 0 (so the filter's unsent created@1 + woken@2 were folded too), the push folded tick, this
+  // wake read note.
+  expect(mid.state.n).toBe(5);
   expect(p0.scannedThroughOffset).toBe(durableMark); // read() proves the durable log only
   expect(mid.offset).toBe(durableMark); // so the checkpoint the wake persisted is the mark, not the head
   await sleep(400);
   await quiesce(ctx);
   await evictDurableObject(s);
-  await s.append({ type: "tick" }); // woken@mark+1, tick@mark+2 — durable, at the dead ephemerals' offsets
+  await s.append({ type: "tick" }); // woken@mark+1 (the constructor's; its core delta took mark+2), tick@mark+3 — durable, at the dead ephemerals' offsets
   await sleep(500);
   const p1 = await page(ctx);
-  expect(p1.events.map((e) => e.offset).slice(-2)).toEqual([durableMark + 1, durableMark + 2]);
+  expect(p1.events.map((e) => e.offset).slice(-2)).toEqual([durableMark + 1, durableMark + 3]);
   const after = (await s.invoke(["itx", "facets", ["get", "counter"], ["snapshot"]])) as {
     offset: number;
     state: { n: number };
   };
-  // the pushed tick@mark+2 is folded exactly once → n grows by exactly 1.
-  expect(after.state.n).toBe(mid.state.n + 1);
+  // the pushed tick@mark+3 is folded exactly once, and the new incarnation's woken@mark+1 exactly
+  // once via the engine's durable gap repair (the push range starts past the cursor; the contract
+  // consumes "*") → n grows by exactly 2.
+  expect(after.state.n).toBe(mid.state.n + 2);
 });

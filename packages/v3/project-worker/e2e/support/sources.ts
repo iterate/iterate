@@ -155,6 +155,53 @@ class TallyProcessor extends StreamProcessor {
 export class TallyDurableObject extends StreamProcessorDurableObject {
   processor = new TallyProcessor();
 }`,
+  // POLICY AS A FACET PROCESSOR: a token-bucket breaker that speaks core's control events. Every
+  // durable non-control event spends one token, refilled from the EVENT's createdAt (pure,
+  // replayable — a rebuild from the log lands on the same tokens); the crossing (tokens ≥ 0 → < 0)
+  // trips the stream by appending stream/paused with the breaker's reason, keyed so a replay can never
+  // double-pause. Core knows nothing about it — the pause check reads the reduced `paused` slice.
+  "src/breaker.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+const CAPACITY = 5; // tokens the bucket holds
+const REFILL_PER_SECOND = 1; // tokens restored per second of EVENT time
+const CONTROL = new Set([
+  "events.iterate.com/stream/created",
+  "events.iterate.com/stream/woken",
+  "events.iterate.com/stream/paused",
+  "events.iterate.com/stream/resumed",
+]);
+const contract = defineProcessorContract({
+  slug: "breaker",
+  version: "1.0.0",
+  description: "A token-bucket breaker: one token per durable event, refilled by event time; crossing zero pauses the stream.",
+  stateSchema: z.object({ tokens: z.number().default(CAPACITY), lastAtMs: z.number().default(0) }),
+  events: {},
+  consumes: ["*"],
+  emits: ["events.iterate.com/stream/paused"],
+});
+class BreakerProcessor extends StreamProcessor {
+  contract = contract;
+  reduce({ event, state }) {
+    if (CONTROL.has(event.type)) return; // the platform's records and the pause pair are free
+    const atMs = Date.parse(event.createdAt);
+    const refilled = state.lastAtMs
+      ? Math.min(CAPACITY, state.tokens + ((atMs - state.lastAtMs) / 1000) * REFILL_PER_SECOND)
+      : state.tokens;
+    return { tokens: refilled - 1, lastAtMs: atMs };
+  }
+  processEvent({ event, state, previousState, append, blockProcessorWhile }) {
+    if (!event || !(previousState.tokens >= 0 && state.tokens < 0)) return; // trip on the crossing only
+    blockProcessorWhile(() =>
+      append({
+        type: "events.iterate.com/stream/paused",
+        payload: { reason: "breaker: durable events exceeded the bucket" },
+        idempotencyKey: this.idempotencyKey("trip", event),
+      }),
+    );
+  }
+}
+export class BreakerDurableObject extends StreamProcessorDurableObject {
+  processor = new BreakerProcessor();
+}`,
   "src/site.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Site extends WorkerEntrypoint {
   async fetch(request) {
@@ -182,7 +229,7 @@ export async function seedSources(itx: any, names: string[]): Promise<void> {
  *  `enableProcessor(name, { source, className })` — a processor is a named facet whose
  *  `processEventBatch` is subscribed. `className` names the HOST (`<Name>DurableObject`, the one-line
  *  `StreamProcessorDurableObject` subclass), never the pure `StreamProcessor` it hosts. `tally`,
- *  `chunky`, `presence`, `user-tally` are the fixtures. */
+ *  `chunky`, `presence`, `user-tally`, `breaker` are the fixtures. */
 export async function enableFixtureProcessor(
   itx: any,
   name: string,
@@ -200,4 +247,5 @@ const FIXTURE_CLASS: Record<string, string> = {
   chunky: "ChunkyDurableObject",
   presence: "PresenceDurableObject",
   "user-tally": "UserTallyDurableObject",
+  breaker: "BreakerDurableObject",
 };

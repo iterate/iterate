@@ -1,15 +1,17 @@
-// stream-core-reduce.e2e.test.ts — THE CORE PROCESSOR live: the stream's operational truth folded INLINE at
-// the commit point (the apps/os shape). Control is ordinary events; enforcement is the parent
-// reading the fold. Proves: pause refuses appends (control passes), resume heals, the token-
-// bucket breaker trips on the (N+1)th durable append and refills by wall time, breaker-off
-// restores unlimited, and the core reduce's snapshot exposes the core truth (runtime state IS
-// reduced state — hostState() died in C5).
+// stream-core-reduce.e2e.test.ts — THE CORE REDUCE live: the stream's operational truth folded
+// INLINE at the commit point (the apps/os shape). Control is ordinary events; enforcement is the
+// parent reading the fold. Proves: pause refuses appends (control passes), resume heals, ephemerals
+// flow when unpaused, and the ONE core snapshot exposes the whole core truth — identity (created),
+// incarnation (woken), pause, the mounts and the subscription rows (runtime state IS reduced state
+// — hostState() died in C5; the breaker left core for a facet processor, see
+// processor-facet-breaker-pauses-the-stream.e2e).
 
 import { expect, test } from "vitest";
-import { freshCtx, openItx, sleep } from "./support/client.ts";
+import { freshCtx, openItx } from "./support/client.ts";
 
-test("core fold: pause/resume, token-bucket breaker, ephemeral bypass, core-snapshot observability", async () => {
-  const itx = openItx(freshCtx("core"));
+test("core fold: pause/resume, ephemerals flow when unpaused, ONE core snapshot carries identity + incarnation + pause + mounts + subscriptions", async () => {
+  const ctx = freshCtx("core");
+  const itx = openItx(ctx);
 
   const append = (type: string, payload?: Record<string, unknown>): Promise<unknown> =>
     itx.invokeCapability(`itx.append(${JSON.stringify({ type, ...(payload && { payload }) })})`);
@@ -41,56 +43,30 @@ test("core fold: pause/resume, token-bucket breaker, ephemeral bypass, core-snap
 
   await append("work"); // resumed: plain appends flow again (a throw here fails the test)
 
-  // ── circuit breaker ──
-  await append("events.iterate.com/stream/breaker-configured", {
-    capacity: 3,
-    refillPerSecond: 0.5,
-  });
-  let tripped: number | string | null = null;
-  let admitted = 0;
-  for (let i = 0; i < 6; i++) {
-    const r = await rejects(() => append("burst"), /circuit breaker open/);
-    if (r === "ok") {
-      tripped = i;
-      break;
-    }
-    if (r === null) admitted++;
-    else {
-      tripped = `wrong error: ${r}`;
-      break;
-    }
-  }
-  // breaker admits exactly its capacity (3) then trips on the 4th
-  expect(tripped).toBe(3);
-  expect(admitted).toBe(3);
-
-  // refill: 0.5 tokens/s → one token back after ~2s
-  await sleep(2600);
-  const afterRefill = await rejects(() => append("burst"), /circuit breaker open/);
-  // the bucket refills by wall time — one more append admitted after ~2.6s
-  expect(afterRefill).toBe(null);
-  const immediatelyAgain = await rejects(() => append("burst"), /circuit breaker open/);
-  // and the very next append trips again (the refill was one token)
-  expect(immediatelyAgain).toBe("ok");
-
-  // ephemeral events are never counted (they cost no storage)
+  // ephemerals flow too (they cost no storage; nothing in core meters them)
   const ephOk = await itx.invokeCapability(`itx.append({ type: 'chunk', ephemeral: true })`).then(
     () => true,
     (e: unknown) => String(e).slice(0, 80),
   );
-  // ephemeral appends bypass the breaker (durable growth is what it meters)
   expect(ephOk).toBe(true);
 
-  // breaker off
-  await append("events.iterate.com/stream/breaker-configured", {});
-  for (let i = 0; i < 5; i++) await append("free");
-  // empty configure turns the breaker off — 5 rapid appends admitted (a throw here fails the test)
-
-  // ── observability ──
+  // ── observability: the ONE inline address ──
+  await itx.provide("itx.probe", "itx.whoami"); // a mount → core.mounts
+  await itx.subscribe({ name: "watch", target: "itx.probe", consumes: ["never"] }); // a row → core.subscriptions
   const snap = await itx.invokeCapability("itx.facets.get('core').snapshot()");
-  // the core reduce's snapshot exposes the fold (unpaused, breaker off, incarnation from woken)
-  expect(snap.state).toBeTruthy();
-  expect(snap.state.paused).toBe(null);
-  expect(snap.state.breaker).toBe(null);
+  // identity from the birth certificate, incarnation from the wake record, pause from the pair
+  expect(snap.state).toMatchObject({ projectId: ctx, path: "/", paused: null });
+  expect(typeof snap.state.createdAt).toBe("string");
   expect(snap.state.incarnation).toBeGreaterThanOrEqual(1);
+  // the mounts and the subscription rows live in the SAME state — there is no second inline facet
+  expect(snap.state.mounts.map((m: { path: string[] }) => m.path.join("."))).toContain("itx.probe");
+  expect(Object.keys(snap.state.subscriptions)).toContain("watch");
+  expect(snap.state).not.toHaveProperty("breaker"); // policy left core — it is a facet processor now
+  for (const gone of ["capability-table", "subscriptions"]) {
+    const err = await itx.invokeCapability(`itx.facets.get('${gone}').snapshot()`).then(
+      () => null,
+      (e: unknown) => e as { code?: string },
+    );
+    expect(err?.code).toBe("NO_FACET"); // the former inline addresses are plain (absent) facet names
+  }
 });

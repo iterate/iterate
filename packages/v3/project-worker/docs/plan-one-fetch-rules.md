@@ -17,9 +17,10 @@ converged design, with the disagreements decided — and one decision (D3) REOPE
   three land on the DO's `#egress` today. This plan changes the BODY of that built-in, not its existence.
 - **Mounts carry NO policies.** capability-table 5.0.0 is `{ path, target }` and nothing else;
   `delivery` and `processor` are gone. The one filter the platform needed before evaluating a target
-  (a subscriber's `consumes`) became its OWN table — `subscription-configured { name, target, consumes? }`
-  reduced inline, `itx.subscriptions.list()`. D3 ("a rule is a mount with a `fetch` policy") therefore
-  contradicts the landed doctrine and is reopened below.
+  (a subscriber's `consumes`) became its OWN event family — `subscription-configured { name, target,
+consumes? }` and three siblings, folded by the one core reduce (`stream/core-processor.ts`, the
+  `subscriptions` slice beside `mounts`), read through `itx.subscriptions.list()`. D3 ("a rule is a
+  mount with a `fetch` policy") therefore contradicts the landed doctrine and is reopened below.
 - `itx.subscribers.*` is gone (it was the precedent D1 cited); `itx.connections` is `itx.rpcStubs`;
   `provideCapability` is `provide`; `fetchCap` is gone (a terminal `itx.x.fetch(request)` rides the
   fetch lane from inside a session, `iterate-context.ts`); `DEFAULT_CTX`/`?ctx=` are gone — the door
@@ -179,8 +180,9 @@ serve at `/`). The label is an IDENT, so it is a legal capability-path segment; 
 ### D3 Where a rule's MATCH lives — REOPENED by the onion (was: "a mount with a `fetch` policy")
 
 The six cuts converged on the shape below. The onion then established that a mount is `{ path,
-target }` and nothing else, and moved the one pre-target filter the platform has (`consumes`) into a
-table of its own. The rule shape stays; where the matcher lives is the open question — see §6 Q1.
+target }` and nothing else, and gave the one pre-target filter the platform has (`consumes`) an event
+family of its own, folded by the core reduce. The rule shape stays; where the matcher lives is the
+open question — see §6 Q1.
 
 ```jsonc
 {
@@ -204,9 +206,10 @@ table of its own. The rule shape stays; where the matcher lives is the open ques
   `matchEgressRule`/`hostMatches` from apps/os `egress-approvals.ts`, pure and Node-testable. `app` =
   the label the door derived from one of OUR hosts, so a rule can hold or gate ingress too ("every
   POST to app `site` needs approval") without a hostname ever entering the log. THREE homes for it:
-  - **(a) a `fetch-rules` table shaped like subscriptions** — `fetch-rule-configured { name, target,
-match? }` / `fetch-rule-removed`, one inline reduce (~60 lines, the `stream/subscriptions.ts`
-    shape), `itx.fetch.rules.list()` as the read door. Honest to the onion: a matcher is "which requests
+  - **(a) a `fetch-rules` event family shaped like subscriptions** — `fetch-rule-configured { name,
+target, match? }` / `fetch-rule-removed`, two commands in the `stream/subscriptions.ts` shape plus
+    one more slice of the core reduce (~60 lines; never a new inline host), `itx.fetch.rules.list()`
+    as the read door. Honest to the onion: a matcher is "which requests
     are SENT to this target, decided before the target is called" — exactly what `consumes` is for
     events. Non-matching rules cost nothing. RECOMMENDED.
   - **(b) no matcher in data** — every `itx.fetch.<name>` row is a plain mount; the door calls each
@@ -341,8 +344,8 @@ Net src ≈ +110 for two features, ≈ −30 machinery.
    pin, `redirect:"manual"`, `itx.secrets.put/list`); the DO's native fetch ends in
    `this.invoke(["itx", ["fetch", request]])`; declared `IterateContext.fetch`; `FALLBACK` optional;
    `DummyControlPlane` dies. Harness 502 tests unchanged.
-4. **C11 — rules as middleware.** The matcher's home per D3 (recommended: the `fetch-rules` table +
-   inline reduce), the rules walk inside the built-in before the host decision, the
+4. **C11 — rules as middleware.** The matcher's home per D3 (recommended: the `fetch-rules` events +
+   a core-reduce slice), the rules walk inside the built-in before the host decision, the
    `x-itx-fetch-below` stamp/resume/strip, hop guard. Tests: a catch-all loaded-worker wrapper that forwards reaches the tail
    exactly once (no loop); an auditing wrapper sees the upstream status; a WS 101 through a wrapper;
    two matching rules → newest; a wrapper that drops the stamp → 508. Every existing header-lane test
@@ -351,7 +354,8 @@ Net src ≈ +110 for two features, ≈ −30 machinery.
 6. **C13 — the approval gate** (userspace facet + shared pure module) and the `iterate approve`
    transport port. **C14 — `itx.auth` built-in.** **C15 — control plane:** owner-checked `upsertRoute`
    (today's `ON CONFLICT(host) DO UPDATE` is a silent last-writer steal), slug existence check so a
-   scanner's 404s stop waking virgin DOs, custom-hostname provisioning.
+   scanner's 404s stop waking — and, now that the DO constructor appends the wake record,
+   materializing — never-created contexts, custom-hostname provisioning.
 7. DEFER: KV-mirrored rules evaluated in `ItxEntrypoint` (DO-free egress for terminal-bound fetches —
    the strongest long-term argument FOR rules-as-data, and exactly the speculative machinery to not
    build now; measure DO duration first); bracket segments; body scanning; the 202 long-hold tier.
@@ -395,9 +399,10 @@ itx.apps.site` on its own egress and reach the app from inside (today's feature)
 ## 6. The jam — the trade-offs and philosophical questions (2026-09-02)
 
 **Q1 — Is a fetch rule a subscription?** Structurally, yes: `{ name, target, filter }`, evaluated
-before the target is called, newest wins, revocable by name, folded by an inline reduce, read through
+before the target is called, newest wins, revocable by name, folded by the core reduce, read through
 a list. The onion made subscriptions their own layer for exactly this reason (a filter is not a
-mount). Following it gives rules a third small table and keeps mounts pure; refusing it means either
+mount). Following it gives rules their own small event family — one more slice of the core reduce,
+not a new inline host — and keeps mounts pure; refusing it means either
 policy back on mounts (c) or a hop per rule per request (b). The deeper question: is a _request_
 enough like an _event_ that the two tables should be ONE (`itx.subscribe({ target, consumes:
 ["fetch/*"] })` with a request-shaped payload)? Probably not — a request needs an answer and a

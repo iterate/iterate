@@ -29,7 +29,7 @@ import { errorCode, reportIssue } from "../lib/errors.ts";
 import { createLogger } from "../lib/logs.ts";
 import type { StreamEvent, StreamEventInput } from "./events.ts";
 import { consumesEvent, type ScannedRange } from "./processor.ts";
-import type { Subscription, SubscriptionsState } from "./subscriptions.ts";
+import type { Subscription } from "./core-processor.ts";
 
 const log = createLogger("subscription-delivery");
 
@@ -58,8 +58,8 @@ type Deps = {
     delete(key: string): void;
     list<T>(options: { prefix: string }): Iterable<[string, T]>;
   };
-  /** The subscriptions table, current as of the last commit (an inline reduce). */
-  subscriptions: () => SubscriptionsState;
+  /** The subscription rows by name, current as of the last commit (the core reduce's slice). */
+  subscriptions: () => Readonly<Record<string, Subscription>>;
   read: (
     afterOffset: number,
     limit: number,
@@ -114,7 +114,7 @@ export class SubscriptionDelivery {
       // no retry armed — without this it would wait for the next matching commit or the quiet clock).
       if (e.type === "events.iterate.com/stream/subscription-delivery-resumed") {
         const name = (e.payload as { name: string }).name;
-        if (table.subscriptions[name])
+        if (table[name])
           void this.#pump(name).catch((error) =>
             reportIssue("subscription-delivery.resume-pump", error, { name }),
           );
@@ -130,13 +130,13 @@ export class SubscriptionDelivery {
       if (e.type === "events.iterate.com/stream/subscription-configured") {
         const name = (e.payload as { name: string }).name;
         this.forget(name);
-        const sub = table.subscriptions[name];
+        const sub = table[name];
         if (sub)
           this.#pushes.set(
             name,
             this.#resolve(sub.target)
               .then(({ head }) =>
-                head instanceof FacetHandle && this.#deps.subscriptions().subscriptions[name]
+                head instanceof FacetHandle && this.#deps.subscriptions()[name]
                   ? invokePath(head, ["wake"], [], `facet "${name}"`)
                   : undefined,
               )
@@ -148,7 +148,7 @@ export class SubscriptionDelivery {
           );
       }
     }
-    for (const [name, sub] of Object.entries(table.subscriptions)) {
+    for (const [name, sub] of Object.entries(table)) {
       const events = fresh.filter((e) => consumesEvent(sub.consumes, e));
       // A batch the filter skipped is NOT handed over — so the watermark stays put and the skipped
       // span rides inside the NEXT delivered range (the subscriber's chain stays contiguous).
@@ -175,7 +175,7 @@ export class SubscriptionDelivery {
       names.add(key.slice(CURSOR_PREFIX.length));
     await Promise.allSettled(
       [...names].map((name) => {
-        const sub = table.subscriptions[name];
+        const sub = table[name];
         if (!sub) {
           this.forget(name);
           return undefined;
@@ -214,7 +214,7 @@ export class SubscriptionDelivery {
       // The row must still exist on BOTH sides of the (async) evaluation: evaluating a processor's
       // load chain materializes its facet, so a push racing `disableProcessor` must not call — and
       // must not resurrect what `facets.delete` just removed.
-      const alive = () => this.#deps.subscriptions().subscriptions[name] !== undefined;
+      const alive = () => this.#deps.subscriptions()[name] !== undefined;
       if (!alive()) return;
       const { head, call } = await this.#resolve(sub.target);
       if (!alive()) return;
@@ -282,7 +282,7 @@ export class SubscriptionDelivery {
     this.#inFlight++;
     try {
       for (;;) {
-        const current = this.#deps.subscriptions().subscriptions[name];
+        const current = this.#deps.subscriptions()[name];
         if (!current) return this.forget(name);
         let row = this.cursor(name);
         if (!row) {
@@ -359,7 +359,7 @@ export class SubscriptionDelivery {
           // A delivery-resumed that landed DURING this attempt is not yet applied (the row's
           // generation is unchanged — nobody else pumps this name): loop back and apply it instead of
           // arming the old ladder or, worse, appending a halt on top of the operator's resume.
-          const latest = this.#deps.subscriptions().subscriptions[name];
+          const latest = this.#deps.subscriptions()[name];
           if (latest?.resumed && latest.resumed.atOffset !== row.resumedAt) continue;
           const attempt = row.attempt + 1;
           const message = error instanceof Error ? error.message : String(error);

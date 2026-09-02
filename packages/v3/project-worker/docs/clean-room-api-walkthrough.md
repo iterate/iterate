@@ -24,10 +24,11 @@ on top of the stream.
 - **Fetch.** In both directions: any capability can be a web server (reached via
   a terminal `.fetch(request)`), and every outbound fetch from project code is
   egress with `{{secret:project:NAME}}` substitution.
-- **The stream.** One append-only log per context. Three inline reduces fold it
-  at the commit point (`core`, `capability-table`, `subscriptions`); one
-  delivery loop hands every commit to the subscriptions; a processor is a
-  Durable Object class hosted as a facet and subscribed to the log.
+- **The stream.** One append-only log per context. One inline reduce (`core`)
+  folds the context's own control events at the commit point — identity, wake,
+  pause, the mounts, the subscriptions; one delivery loop hands every commit to
+  the subscriptions; a processor is a Durable Object class hosted as a facet and
+  subscribed to the log.
 
 Every context is one `IterateContextDurableObject`, named by the codec
 `{projectId}.iterate{path}` (`prj_demo.iterate/` is the project root,
@@ -48,7 +49,7 @@ flowchart LR
   end
   subgraph do["IterateContextDurableObject, one per {projectId, path}"]
     stream["Stream: log, offsets, idempotency, waitForEvent"]
-    inline["Inline reduces: core, capability-table, subscriptions"]
+    inline["InlineReduce: the core reduce (identity, wake, pause, mounts, subscriptions)"]
     delivery["SubscriptionDelivery: push or stream-kept cursor"]
     transport["RpcStubDirectory: pager sockets"]
     facets["Facets: loaded DurableObject classes,<br/>StreamProcessorDurableObject hosts"]
@@ -88,14 +89,15 @@ packages/v3/project-worker/
                                  Exports DummyControlPlane, ItxEntrypoint, IterateContextDurableObject.
     session.ts                   UnauthenticatedSession → Session → ProjectCollection (the gate + catalog)
     iterate-context.ts           IterateContext, the client-facing RpcTarget: axioms + sugar
-    iterate-context-durable-object.ts  THE CONTEXT DO: stream + inline reduces + delivery + facets +
-                                 transport + the fetch doors. One class, ~700 lines.
+    iterate-context-durable-object.ts  THE CONTEXT DO: stream + the core reduce + delivery + facets +
+                                 transport + the fetch doors. One class, ~700 lines. First line:
+                                 #name = parseIterateContextDurableObjectName(ctx.id.name)
     itx-entrypoint.ts            ItxEntrypoint: what a loaded worker's env.ITX is
     context/                     chapter 1 — capabilities, called in both directions
       built-ins.ts               the kernel roots: whoami, kv, append, read, cd, fetch, rpcStubs,
                                  facets, subscriptions, load, runScript
-      capability-table.ts        the mount table as a reduce-only processor: resolve / route /
-                                 provide / revoke / resolveFetch
+      capability-table.ts        the mounts' two commands (capabilityProvidedEvent / capabilityRevokedEvent)
+                                 + the reader: route(mounts, call), CapabilityResolver (resolve / resolveFetch)
       expression.ts              the codec: "itx.a.b(1)" ⇄ ["itx","a",["b",1]]
       dispatch.ts                match(path, call), evaluate / apply / invokePath
       dotted-path-proxy.ts       the prototype hop: unknown dotted members fold into ONE
@@ -114,9 +116,11 @@ packages/v3/project-worker/
       events.ts                  StreamEventInput / StreamEvent (zod), defineProcessorContract
       processor.ts               StreamProcessor (the pure author class), ProcessorEngine, consumesEvent
       reduce-checkpoint.ts       the one persisted reduce-checkpoint shape
-      inline-reduces.ts          InlineReduces: hosts reduce-only processors AT the commit point
-      core-processor.ts          the core inline reduce: pause, breaker, incarnation
-      subscriptions.ts           the subscriptions table: four events, one reduce, configure/remove
+      inline-reduce.ts           InlineReduce: hosts the ONE reduce-only processor AT the commit point
+      core-processor.ts          CoreStreamProcessor (slug core, 3.0.0): created/woken/paused/resumed
+                                 + the mounts + the subscriptions, one fold
+      subscriptions.ts           the subscriptions' two commands: subscriptionConfiguredEvent /
+                                 subscriptionRemovedEvent (null = idempotent no-op)
       subscription-delivery.ts   THE ONE DELIVERY LOOP: push to a facet or live stub, else a
                                  stream-kept cursor with a bounded retry ladder
       live-state.ts              LiveState<S>: revision chain + diff → ephemeral delta event
@@ -215,8 +219,9 @@ class Session extends RpcTarget {
 }
 
 class ProjectCollection extends RpcTarget {
-  /** Pure addressing → that project's ROOT context ("/"). Nothing is minted until the context
-   *  is first written to. A project id only; a context name belongs to `cd`. */
+  /** Pure addressing → that project's ROOT context ("/"). The DO itself is materialized by the
+   *  first door that reaches it (its constructor appends `stream/created` + `stream/woken`,
+   *  section 5.5). A project id only; a context name belongs to `cd`. */
   get(projectId: string): IterateContext;
 }
 ```
@@ -243,9 +248,10 @@ class IterateContext extends RpcTarget {
 
   // the stream verbs, flattened onto itx
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
-  /** afterOffset default 0, limit default 500. Non-minting: reading a virgin stream leaves it
-   *  virgin. `scannedThroughOffset` is the contiguity cursor to chain: a full page's last row, a
-   *  short page's DURABLE mark (never the in-memory head — ephemeral offsets are not proven). */
+  /** afterOffset default 0, limit default 500. A fresh context already holds its birth
+   *  certificate and wake record (offsets 1–2). `scannedThroughOffset` is the contiguity cursor
+   *  to chain: a full page's last row, a short page's DURABLE mark (never the in-memory head —
+   *  ephemeral offsets are not proven). */
   read(
     afterOffset?: number,
     limit?: number,
@@ -432,7 +438,7 @@ interface BuiltInScope {
    *  any method the facet's object exposes. `delete` removes it, storage included. */
   facets: { get(name: string): FacetHandle; delete(name: string): void };
 
-  /** The subscriptions layer, read: the table (an inline reduce) joined with the stream-kept cursors. */
+  /** The subscriptions layer, read: the core reduce's `subscriptions` slice joined with the stream-kept cursors. */
   subscriptions: {
     list(): SubscriptionListEntry[];
     get(name: string): SubscriptionListEntry | null;
@@ -482,7 +488,7 @@ Two rules that follow from the resolver:
   default route: it claims any call whose root is not a built-in. This is how
   ancestry is spelled (section 9.4).
 
-### 4.5 Facets you can address, and the three always-on inline reduces
+### 4.5 Facets you can address, and the one always-on core reduce
 
 `itx.facets.get(name)` walks the facet's object. For a processor facet the
 doors are those of `StreamProcessorDurableObject` (section 5.3): `snapshot`,
@@ -491,31 +497,33 @@ doors are those of `StreamProcessorDurableObject` (section 5.3): `snapshot`,
 reachable the same way, and a terminal `.fetch(request)` rides the facet's own
 fetch channel (so a 101 works).
 
-Three reduce-only processors are always on and run **inline** in the commit
-transaction. They have no facet, but `snapshot()`, `liveSnapshot()` and
-`waitUntilProcessed()` (always `{ ok: true }`) are exposed through the same door (they publish `live-state/changed` deltas like any
-processor, keyed by their slug), and their names are reserved (a subscription
-may not take them):
+One reduce-only processor is always on and runs **inline** in the commit
+transaction: `CoreStreamProcessor` (`src/stream/core-processor.ts`, slug `core`,
+contract 3.0.0), hosted by `InlineReduce`. It folds the context's own control
+events — and nothing else — into everything the DO needs synchronously at its
+doors: who it is, which incarnation runs, whether appends are paused, the mounts
+every call routes through, the subscriptions every commit is sent to. It has no
+facet, but `snapshot()`, `liveSnapshot()` and `waitUntilProcessed()` (always
+`{ ok: true }`) are exposed through the same door (it publishes
+`live-state/changed` deltas like any processor, keyed `core`), and the name
+`core` is reserved (a subscription may not take it; `facets.delete('core')` is
+refused):
 
 ```ts
 // itx.facets.get('core').snapshot().state
 type CoreState = {
-  incarnation?: number; // grows across hibernation wakes
-  paused: { reason: string } | null;
-  breaker: { capacity: number; refillPerSecond: number; tokens: number; lastAtMs: number } | null;
-};
-
-// itx.facets.get('capability-table').snapshot().state   (contract 5.0.0)
-type CapabilityTable = {
+  projectId?: string; // from stream/created (offset 1)
+  path?: string;
+  createdAt?: string;
+  incarnation?: number; // from stream/woken — grows across hibernation wakes
+  paused: { reason: string } | null; // stream/paused / stream/resumed
+  // THE CAPABILITY TABLE: a shadow stack — same-path mounts coexist, newest wins
   mounts: Array<{
     path: string[]; // ["itx","greet"]
     target: Expression; // always present; a live stub's is itx.rpcStubs.get('<path>')
     providedAtOffset: number; // the mount's identity
   }>;
-};
-
-// itx.facets.get('subscriptions').snapshot().state
-type SubscriptionsState = {
+  // THE SUBSCRIPTIONS TABLE: by name; a same-named configure REPLACES
   subscriptions: Record<
     string,
     {
@@ -529,9 +537,19 @@ type SubscriptionsState = {
 };
 ```
 
-There is no separate status verb anywhere: presence is `itx.rpcStubs.list()`,
+The layering is in the EVENTS, not in the fold: the mounts are Layer 1's two
+events (`capability-provided` / `capability-revoked`), the rows are Layer 2's
+four; the commands that build them live beside their readers
+(`context/capability-table.ts`, `stream/subscriptions.ts`). `core` holds no
+policy — a token-bucket breaker is a facet processor that appends
+`stream/paused` (section 5.3).
+
+There is no separate status verb anywhere: runtime state IS reduced state.
+Identity, incarnation, pause, the mounts and the subscription rows are one
+snapshot, `itx.facets.get('core').snapshot()`; presence is `itx.rpcStubs.list()`;
 enabled processors are `itx.subscriptions.list()` entries whose target ends in
-`.processEventBatch`, and a halted delivery is a `halted` field.
+`.processEventBatch`, and a halted delivery is a `halted` field. A snapshot reads
+the reduce only — it never arms the quiet-clock alarm.
 
 ---
 
@@ -721,10 +739,11 @@ type ProcessEventArgs<State> = {
 };
 ```
 
-The three built-ins (`core`, `capability-table`, `subscriptions`) are the same
+The core reduce (`CoreStreamProcessor`, section 4.5) is the same
 `StreamProcessor` class, hosted INLINE at the commit point instead of in a facet:
-only their `reduce` is ever called, and `InlineReduces` refuses a processor that
-overrides `processEvent` (its effects would silently never run).
+only its `reduce` is ever called, and `InlineReduce` refuses a processor that
+overrides `processEvent` (its effects would silently never run). A processor
+class is a contract plus a reduce — nothing else.
 
 A complete userspace processor (this is the one the `/demo` page loads):
 
@@ -806,6 +825,67 @@ The DO remembers `{ source, className }` for each facet name in its own kv
 (`facet:<name>`), which is how `itx.facets.get(name)` re-materializes a facet
 after an eviction without the load expression in hand.
 
+**A policy processor: the breaker.** Stream control is ordinary events the core
+reduce reads (section 5.5), so a policy that decides WHEN to pause is not
+kernel code — it is a facet processor that speaks those events.
+`BreakerProcessor` (`e2e/support/sources.ts`) folds every durable event into a
+token bucket and, when the bucket runs dry, appends `stream/paused` with its
+reason; the next non-control append is refused with `STREAM_PAUSED` by the one
+`if` in `Stream.append`, and an operator's `stream/resumed` lifts it. Core knows
+nothing about buckets:
+
+```ts
+const CAPACITY = 100; // tokens
+const REFILL_PER_SECOND = 1;
+
+const contract = defineProcessorContract({
+  slug: "breaker",
+  version: "1.0.0",
+  description: "Token bucket over durable log growth; trips the stream when empty.",
+  stateSchema: z.object({
+    tokens: z.number().default(CAPACITY),
+    lastAtMs: z.number().nullable().default(null),
+  }),
+  events: {},
+  consumes: ["*"],
+  emits: ["events.iterate.com/stream/paused"],
+});
+
+class BreakerProcessor extends StreamProcessor {
+  contract = contract;
+  reduce({ event, state }) {
+    // refill by wall time, then spend one token per durable event
+    const atMs = Date.parse(event.createdAt);
+    const refilled =
+      state.lastAtMs === null
+        ? CAPACITY
+        : Math.min(CAPACITY, state.tokens + ((atMs - state.lastAtMs) / 1000) * REFILL_PER_SECOND);
+    return { tokens: refilled - 1, lastAtMs: atMs };
+  }
+  processEvent({ state, previousState, append }) {
+    if (state.tokens < 0 && previousState.tokens >= 0)
+      // trip once, on the crossing
+      append({
+        type: "events.iterate.com/stream/paused",
+        payload: { reason: "breaker: bucket empty" },
+      });
+  }
+}
+export class BreakerDurableObject extends StreamProcessorDurableObject {
+  processor = new BreakerProcessor();
+}
+```
+
+```ts
+await itx.enableProcessor("breaker", {
+  source: "itx.kv.get('src/breaker.js')",
+  className: "BreakerDurableObject",
+});
+// ... a burst empties the bucket → the facet appends stream/paused ...
+await itx.append({ type: "spend" }); // rejects: STREAM_PAUSED "breaker: bucket empty"
+await itx.append({ type: "events.iterate.com/stream/resumed" }); // control events are exempt
+```
+
 ### 5.4 Live state for mini-apps, and the client side
 
 A durable class that is not a processor can still publish live state:
@@ -873,46 +953,56 @@ the held rev triggers one single-flight re-read of the door.
   reduce, and **costs no write**: an ephemeral-only append does no transaction
   and does not move the high-water mark. The contract that buys this: an
   ephemeral's offset is unique within an incarnation; a later incarnation
-  resumes from the last durable mark, and `stream/woken` (durable, first batch
-  of each incarnation) marks the boundary. Every persisted checkpoint in the
-  package advances only on a batch that carried a durable.
-- Stream control is ordinary events read by the core reduce (inline):
+  resumes from the last durable mark, and `stream/woken` (durable, appended by
+  each incarnation's constructor) marks the boundary. Every persisted checkpoint
+  in the package advances only on a batch that carried a durable.
+- The wake record: the DO's constructor calls `Stream.wake()` synchronously,
+  before any door opens. The first incarnation appends
+  `stream/created { projectId, path }` at offset 1 and `stream/woken { incarnation }`
+  at offset 2; every later incarnation appends its `woken` first. So the first
+  user append lands at offset 4 (core's live-state delta, an ephemeral, took 3), and any door —
+  a read, a snapshot, a facet call —
+  materializes a never-touched context. The quiet-clock alarm arms only once a
+  facet is live or a stub is paged in.
+- Stream control is ordinary events read by the core reduce (inline). A paused
+  stream refuses every non-control append with `STREAM_PAUSED`; the control
+  events (`created`, `woken`, `paused`, `resumed`) are exempt, so a paused stream
+  always accepts its own resume. Policy that decides WHEN to pause is a facet
+  processor (section 5.3), never kernel code:
 
 ```ts
 await itx.append({ type: "events.iterate.com/stream/paused", payload: { reason: "maintenance" } });
 await itx.append({ type: "events.iterate.com/stream/resumed" });
-await itx.append({
-  type: "events.iterate.com/stream/breaker-configured",
-  payload: { capacity: 100, refillPerSecond: 1 },
-});
-await itx.append({ type: "events.iterate.com/stream/breaker-configured" }); // empty payload = breaker off
 ```
 
 - The layers' own events, all plain appends you may read or write yourself:
 
-| Event                                                           | Payload                                   | Written by                                         |
-| --------------------------------------------------------------- | ----------------------------------------- | -------------------------------------------------- |
-| `events.iterate.com/capability-table/capability-provided`       | `{ path, target }` (both strings)         | `provide`                                          |
-| `events.iterate.com/capability-table/capability-revoked`        | `{ providedAtOffset }`                    | `revoke`                                           |
-| `events.iterate.com/stream/subscription-configured`             | `{ name, target, consumes? }`             | `subscribe` / `enableProcessor`                    |
-| `events.iterate.com/stream/subscription-removed`                | `{ name }`                                | `unsubscribe` / `disableProcessor`                 |
-| `events.iterate.com/stream/subscription-delivery-halted`        | `{ name, afterOffset, attempts, error? }` | the delivery loop, after the ladder                |
-| `events.iterate.com/stream/subscription-delivery-resumed`       | `{ name, afterOffset? }`                  | you, to un-halt and optionally seek                |
-| `events.iterate.com/rpc-stub/attached` / `detached` (ephemeral) | `{ key }`                                 | the transport table, first/last transport of a key |
-| `events.iterate.com/live-state/changed` (ephemeral)             | `{ key, from, to, patch }`                | `LiveState.set`                                    |
-| `events.iterate.com/stream/woken`                               | `{ incarnation }`                         | the stream, first commit of an incarnation         |
+| Event                                                           | Payload                                   | Written by                                            |
+| --------------------------------------------------------------- | ----------------------------------------- | ----------------------------------------------------- |
+| `events.iterate.com/capability-table/capability-provided`       | `{ path, target }` (both strings)         | `provide`                                             |
+| `events.iterate.com/capability-table/capability-revoked`        | `{ providedAtOffset }`                    | `revoke`                                              |
+| `events.iterate.com/stream/subscription-configured`             | `{ name, target, consumes? }`             | `subscribe` / `enableProcessor`                       |
+| `events.iterate.com/stream/subscription-removed`                | `{ name }`                                | `unsubscribe` / `disableProcessor`                    |
+| `events.iterate.com/stream/subscription-delivery-halted`        | `{ name, afterOffset, attempts, error? }` | the delivery loop, after the ladder                   |
+| `events.iterate.com/stream/subscription-delivery-resumed`       | `{ name, afterOffset? }`                  | you, to un-halt and optionally seek                   |
+| `events.iterate.com/rpc-stub/attached` / `detached` (ephemeral) | `{ key }`                                 | the transport table, first/last transport of a key    |
+| `events.iterate.com/live-state/changed` (ephemeral)             | `{ key, from, to, patch }`                | `LiveState.set`                                       |
+| `events.iterate.com/stream/created`                             | `{ projectId, path }`                     | the DO constructor (`Stream.wake`), offset 1, once    |
+| `events.iterate.com/stream/woken`                               | `{ incarnation }`                         | the DO constructor (`Stream.wake`), every incarnation |
+| `events.iterate.com/stream/paused` / `resumed`                  | `{ reason }` / `{}`                       | you, or a policy facet such as `BreakerProcessor`     |
 
-Refusals surface as coded errors: `STREAM_PAUSED`, `STREAM_BREAKER_OPEN`,
-`IDEMPOTENCY_CONFLICT`, `EPHEMERAL_IDEMPOTENCY_KEY`, `NO_CAPABILITY_MATCH`,
-`NO_FACET`, `CONNECTION_OFFLINE`, `WAIT_TIMEOUT`, `NOT_A_METHOD`.
+Refusals surface as coded errors: `STREAM_PAUSED`, `IDEMPOTENCY_CONFLICT`,
+`EPHEMERAL_IDEMPOTENCY_KEY`, `NO_CAPABILITY_MATCH`, `NO_FACET`,
+`CONNECTION_OFFLINE`, `WAIT_TIMEOUT`, `NOT_A_METHOD`.
 
 ---
 
 ## 6. Subscriptions and the one delivery loop
 
-`src/stream/subscriptions.ts` is the table (four events, one reduce,
-`configure` / `remove` doors that append idempotently against the current
-state). `src/stream/subscription-delivery.ts` is the loop, run from the
+`src/stream/subscriptions.ts` is the two commands that build the layer's events
+(`subscriptionConfiguredEvent` / `subscriptionRemovedEvent` — `null` when the
+current rows already say so, and the DO appends nothing); the core reduce folds
+the four events into `state.subscriptions`. `src/stream/subscription-delivery.ts` is the loop, run from the
 stream's post-commit hook. For every subscription it filters the batch by
 `consumes`, evaluates the target expression, and asks the **value** what it is:
 
@@ -937,7 +1027,7 @@ stream's post-commit hook. For every subscription it filters the batch by
 Nothing reads a "kind" off an event: the kind is the evaluated value's brand,
 minted by the built-in that produced it, so an alias classifies correctly
 because it evaluates to the same handle. `consumes` has one rule
-(`consumesEvent`, shared with the engine and the inline reduces): absent or `"*"`
+(`consumesEvent`, shared with the engine and the core reduce): absent or `"*"`
 means every durable event; naming a type opts it in, ephemerals included.
 
 ```ts
@@ -969,8 +1059,8 @@ quiet clock is 60 s: an alarm that finds no delivery or facet call in flight
 and no activity for a minute aborts every live facet and disposes paged-in
 stubs; the next call re-materializes them (a `facets.delete` that lands while a
 facet's source is loading wins: the load refuses with `NO_FACET` instead of
-resurrecting an orphan), and a never-written context with no live facet arms no
-alarm at all. Configuring a subscription drops whatever the loop remembered under
+resurrecting an orphan), and a context with no live facet and no paged-in stub
+arms no alarm at all. Configuring a subscription drops whatever the loop remembered under
 that name (the old target's cursor included) and wakes a facet target at once,
 as the head of that name's push chain. Re-subscribing a HALTED row with the same
 target un-halts it and restarts from now; to replay from the halt point, append
@@ -1117,11 +1207,11 @@ sequenceDiagram
   participant C as client (capnweb)
   participant E as IterateContext (edge)
   participant D as IterateContextDurableObject
-  participant T as CapabilityTableProcessor
+  participant T as CapabilityResolver (capability-table.ts)
   C->>E: itx.greet.run("jonas")
   Note over E: prototype hop folds to<br/>["itx","greet",["run","jonas"]]
   E->>D: invoke(expression)   (Workers RPC)
-  D->>T: resolve(tableState, expression)
+  D->>T: resolve(core.mounts, expression)
   alt root is a built-in (kv, cd, load, facets, rpcStubs, ...)
     T->>T: apply against { ...builtIns, itx }
   else userspace mount
@@ -1183,14 +1273,14 @@ sequenceDiagram
   participant A as caller (itx.append)
   participant D as context DO
   participant S as Stream
-  participant I as inline reduces (core, capability-table, subscriptions)
+  participant I as core reduce (InlineReduce over CoreStreamProcessor)
   participant L as SubscriptionDelivery
   participant F as facet (processor)
   participant P as live stub (tab)
   participant W as stateless worker (cursor)
   A->>D: append(events)
   D->>S: append(events)
-  S->>I: assertCanAppend: core state (paused? breaker tokens?)
+  S->>I: paused()? — one if; control events exempt
   alt every event ephemeral
     S->>S: offsets from memory — no transaction, no mark write
   else
@@ -1203,7 +1293,7 @@ sequenceDiagram
   L->>F: processEventBatch(events, range)   FacetHandle: awaited push
   L->>P: (events, range)                    RpcStubHandle: fire-and-forget push
   L->>W: processEventBatch(events, range)   else: from the stream-kept cursor, awaited = ack
-  I->>P: live-state/changed deltas for changed inline states
+  I->>P: live-state/changed delta (key "core") when the fold changed
   D-->>A: StreamEvent[]
 ```
 
@@ -1243,31 +1333,31 @@ itself.
 
 ## 10. Vocabulary
 
-| Word               | Meaning here                                                                                                                                       |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| context            | one `IterateContextDurableObject`, named `{projectId}.iterate{path}`; a stream + a capability table + a subscriptions table + transport            |
-| session            | what `/api` hands you: `UnauthenticatedSession → authenticate() → Session → projects.get(id)`; a session is not a context, it is how you reach one |
-| capability path    | dotted names starting with `itx`, no calls: `itx.greet`                                                                                            |
-| mount              | a row in the capability table, `{ path, target, providedAtOffset }`, created by a `capability-provided` event; nothing else rides it               |
-| shadow stack       | same-path mounts stack; newest wins; revoke pops one                                                                                               |
-| default route      | a mount at the bare path `itx`; claims any non-built-in call                                                                                       |
-| built-in           | a root of `BuiltInScope`; resolved before the table; unshadowable                                                                                  |
-| expression         | `["itx", ...steps]` or its string form; the persisted currency of every target                                                                     |
-| InvokeHandle       | a pipelinable `RpcTarget` returned mid-chain (`cd`, `load(...)`); `FacetHandle` and `RpcStubHandle` are its two brands                             |
-| rpc stub           | a live capnweb value parked for a session under a key; `itx.rpcStubs.get(key)` is how a mount or a subscription names it; presence is `list()`     |
-| subscription       | a named row `{ target, consumes? }` in the subscriptions table; delivered every commit by the one loop                                             |
-| push               | delivery to a target that owns its progress: `(events, range)`, fire-and-forget to a live stub, awaited to a facet                                 |
-| stream-kept cursor | delivery to a target that cannot own progress: at-least-once from a kv cursor, retry ladder, halt fact                                             |
-| processor          | a pure `StreamProcessor` (contract + hooks) inside a `StreamProcessorDurableObject` host, hosted as a facet and subscribed to `processEventBatch`  |
-| inline reduce      | a reduce-only processor run inside the commit transaction: `core`, `capability-table`, `subscriptions`                                             |
-| facet              | a workerd `ctx.facets` child of the DO with its own storage; hosts loaded `DurableObject` classes, processors included                             |
-| scanned range      | `{ after, through }` delivered with each batch; the contiguity proof subscribers chain                                                             |
-| ephemeral          | an event that takes an offset but is never stored and costs no write; delivered only to subscribers that name its type                             |
-| incarnation        | one life of the DO between evictions; `stream/woken` opens each; ephemeral offsets are unique within one                                           |
-| live state         | a `LiveState` holder's `{ rev, state }` plus `live-state/changed` deltas; clients chain revs and re-seed on a gap                                  |
-| pager              | the hibernatable WebSocket from edge relay to DO; the DO sends `{ type: "page" }` to get a fresh stub                                              |
-| egress             | any fetch leaving project code: `{{secret:project:NAME}}` substituted in the DO, then `FALLBACK.fetch`                                             |
-| fetch lane         | reaching a fetch-shaped capability: `/cap?context=&cap=` from outside, a terminal `itx.x.fetch(request)` from inside a session                     |
+| Word               | Meaning here                                                                                                                                                                                                       |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| context            | one `IterateContextDurableObject`, named `{projectId}.iterate{path}`; a stream + a capability table + a subscriptions table + transport                                                                            |
+| session            | what `/api` hands you: `UnauthenticatedSession → authenticate() → Session → projects.get(id)`; a session is not a context, it is how you reach one                                                                 |
+| capability path    | dotted names starting with `itx`, no calls: `itx.greet`                                                                                                                                                            |
+| mount              | a row in the capability table, `{ path, target, providedAtOffset }`, created by a `capability-provided` event; nothing else rides it                                                                               |
+| shadow stack       | same-path mounts stack; newest wins; revoke pops one                                                                                                                                                               |
+| default route      | a mount at the bare path `itx`; claims any non-built-in call                                                                                                                                                       |
+| built-in           | a root of `BuiltInScope`; resolved before the table; unshadowable                                                                                                                                                  |
+| expression         | `["itx", ...steps]` or its string form; the persisted currency of every target                                                                                                                                     |
+| InvokeHandle       | a pipelinable `RpcTarget` returned mid-chain (`cd`, `load(...)`); `FacetHandle` and `RpcStubHandle` are its two brands                                                                                             |
+| rpc stub           | a live capnweb value parked for a session under a key; `itx.rpcStubs.get(key)` is how a mount or a subscription names it; presence is `list()`                                                                     |
+| subscription       | a named row `{ target, consumes? }` in the subscriptions table; delivered every commit by the one loop                                                                                                             |
+| push               | delivery to a target that owns its progress: `(events, range)`, fire-and-forget to a live stub, awaited to a facet                                                                                                 |
+| stream-kept cursor | delivery to a target that cannot own progress: at-least-once from a kv cursor, retry ladder, halt fact                                                                                                             |
+| processor          | a pure `StreamProcessor` (contract + reduce, optional effects) inside a `StreamProcessorDurableObject` host, hosted as a facet and subscribed to `processEventBatch`; the core reduce is one hosted inline instead |
+| inline reduce      | the ONE reduce-only processor run inside the commit transaction: `core` (identity, wake, pause, mounts, subscriptions), hosted by `InlineReduce`                                                                   |
+| facet              | a workerd `ctx.facets` child of the DO with its own storage; hosts loaded `DurableObject` classes, processors included                                                                                             |
+| scanned range      | `{ after, through }` delivered with each batch; the contiguity proof subscribers chain                                                                                                                             |
+| ephemeral          | an event that takes an offset but is never stored and costs no write; delivered only to subscribers that name its type                                                                                             |
+| incarnation        | one life of the DO between evictions; the constructor's `stream/woken` opens each (offset 1 is the first one's `stream/created`); ephemeral offsets are unique within one                                          |
+| live state         | a `LiveState` holder's `{ rev, state }` plus `live-state/changed` deltas; clients chain revs and re-seed on a gap                                                                                                  |
+| pager              | the hibernatable WebSocket from edge relay to DO; the DO sends `{ type: "page" }` to get a fresh stub                                                                                                              |
+| egress             | any fetch leaving project code: `{{secret:project:NAME}}` substituted in the DO, then `FALLBACK.fetch`                                                                                                             |
+| fetch lane         | reaching a fetch-shaped capability: `/cap?context=&cap=` from outside, a terminal `itx.x.fetch(request)` from inside a session                                                                                     |
 
 ---
 

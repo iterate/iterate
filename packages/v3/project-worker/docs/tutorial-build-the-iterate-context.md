@@ -478,8 +478,9 @@ in the toy it is deliberately _dumb_: storage in, committed events out.
 ```ts
 // The log and its one commit point. (The real Stream takes reduceAtCommit/onCommit
 // as injected hooks so the fold runs INSIDE the commit transaction — atomicity the
-// toy gets for free, each sql.exec being atomic. Its deps also add `path` and
-// `assertCanAppend`; facets ride the DO's ctx itself — the deep chapter.)
+// toy gets for free, each sql.exec being atomic. Its deps also add `path`, `projectId`
+// and `paused` — the one `if` that can refuse an append; facets ride the DO's ctx
+// itself — the deep chapter.)
 class Stream {
   // storage is SQLite AND the alarm surface (the real Stream arms setAlarm through it)
   constructor(private storage: DurableObjectStorage) {
@@ -577,7 +578,7 @@ included, while never claiming a socket is open. The toy's live-before-durable
 check at each prefix is that mount, folded by hand. Third, the toy makes a
 subscription a mount at `itx.subscribers.*`. The real platform gives
 subscriptions their own event — `subscription-configured { name, target,
-consumes? }`, folded by its own inline reduce — because a subscription names a
+consumes? }`, folded by the one core reduce beside the mounts — because a subscription names a
 _delivery_, not a capability: the target is still an expression (a parked stub,
 a facet, a loaded entrypoint's `processEventBatch`), and the context decides how
 to serve it by looking at what the expression evaluates to. Same fan-out, one
@@ -605,8 +606,8 @@ pair baked into the DO's name; Chapter 4's naming codec owns that.)
 
 What v0 deliberately punts (each is a deep chapter): the pager carrying calls
 (the real one only pages — the stub rides Workers RPC); stateful facets; revoke
-(v0 re-provide just overwrites); idempotency, chunking, pause/breaker on the
-stream; real auth. Now the second pass — each primitive, done properly.
+(v0 re-provide just overwrites); idempotency, chunking, pause on the stream;
+real auth. Now the second pass — each primitive, done properly.
 
 ---
 
@@ -1004,11 +1005,19 @@ The commit machinery is one dependency-injected class, no framework:
 new Stream({
   storage, // the DO's SQLite + alarms
   path, // the context's own address, stamped on every event
-  assertCanAppend, // the gate that can refuse an append (pause / breaker)
-  reduceAtCommit, // hooks that run inside the commit transaction
+  projectId, // with `path`, the birth certificate's payload
+  paused, // the core reduce's pause slice — the one `if` that can refuse an append
+  reduceAtCommit, // the core reduce, run inside the commit transaction
   onCommit, // the post-commit fan-out: facets + subscribers
 });
 ```
+
+The DO's constructor calls `stream.wake()` before any door opens: the first
+incarnation appends `stream/created { projectId, path }` at offset 1, then
+`stream/woken { incarnation }` at offset 2; every later incarnation appends its
+`woken` first, and core's own live-state delta takes offset 3 (an ephemeral). So your first
+`append` lands at offset 4, and any door — a read, a
+snapshot — materializes a context.
 
 ### Processors: react to the log, as facets
 
@@ -1027,8 +1036,14 @@ await itx.enableProcessor("unread-counts", {
 ```
 
 A processor's reduced state is queryable through its `snapshot()` — and even the
-capability table itself is one of these processors: "what's mounted where" is
-just its reduced state, folded from the same log that everything else rides.
+capability table is reduced state: the context's own control events
+(`stream/created`, `stream/woken`, `stream/paused`, `capability-provided`,
+`subscription-configured`, …) fold into ONE core reduce — `CoreStreamProcessor`,
+the same `StreamProcessor` class you just wrote, run inline at the commit point
+and read as `itx.facets.get('core').snapshot()`. "What's mounted where" is one
+slice of it, folded from the same log that everything else rides. Policy that
+need not gate an append synchronously stays out of core: a token-bucket breaker
+is an ordinary facet processor that appends `stream/paused { reason }`.
 
 **That's the third primitive**: an append-only log with one commit point,
 subscribers served over the pager, and processors — facets that fold the log
@@ -1100,7 +1115,7 @@ src/
   context/   built-ins, capability-table, expression, dispatch, invoke-handle, dotted-path-proxy,
              rpc-stub-directory, rpc-stub-relay, hibernatable-rpc-stub, worker-loader, durable-object-names
   fetch/     fetch-capabilities
-  stream/    stream, events, processor (the engine), reduce-checkpoint, inline-reduces, core-processor,
+  stream/    stream, events, processor (the engine), reduce-checkpoint, inline-reduce, core-processor,
              subscriptions, subscription-delivery, live-state
   sdk/       index (→ processor.js), stream-processor-durable-object (the host)
   lib/       errors, logs, hash, patch
@@ -1121,6 +1136,6 @@ specs/       `pnpm spec` — Playwright drives the hosted /demo page
 | Ch 2 fetch-in / tunnel                                        | `/cap` in `src/worker.ts`, `src/fetch/fetch-capabilities.ts`, `upgradeWebSocketResponse` in the capnweb fork                                                                                                                                     |
 | Ch 2 auth gate                                                | `UnauthenticatedSession.authenticate()` → `Session` → `projects.get(id)` in `src/session.ts`                                                                                                                                                     |
 | Ch 3 stream                                                   | `Stream` in `src/stream/stream.ts`                                                                                                                                                                                                               |
-| Ch 3 subscribe / the one delivery loop                        | `src/stream/subscriptions.ts` (the events + reduce), `src/stream/subscription-delivery.ts` (push vs stream-kept cursor, decided by the evaluated target)                                                                                         |
+| Ch 3 subscribe / the one delivery loop                        | `src/stream/subscriptions.ts` (the two commands; the fold is `src/stream/core-processor.ts`), `src/stream/subscription-delivery.ts` (push vs stream-kept cursor, decided by the evaluated target)                                                |
 | Ch 3 processors                                               | `StreamProcessor` (pure author class) + `ProcessorEngine` in `src/stream/processor.ts`; the host `src/sdk/stream-processor-durable-object.ts` (bundled into `processor.js`)                                                                      |
 | Ch 4 LiveState / control plane                                | `src/stream/live-state.ts`; `packages/v3/control-plane` (not yet wired)                                                                                                                                                                          |

@@ -55,7 +55,8 @@ async function state(): Promise<TransportState> {
   return (await stub(CTX).transportState()) as unknown as TransportState;
 }
 /** Incarnation (the hibernation tell) — the core reduce's fold of the stream/woken wake record
- *  (`itx.facets.get('core').snapshot()`; absent until a first-ever commit reduces one). */
+ *  (`itx.facets.get('core').snapshot()`; present from the constructor's wake on — every
+ *  incarnation writes one before any door opens). */
 async function incarnationNow(): Promise<number> {
   const snap = (await stub(CTX).invoke("itx.facets.get('core').snapshot()")) as {
     state: { incarnation?: number };

@@ -1,9 +1,9 @@
 // stream/stream.ts — THE STREAM, a simple dependency-injected JS class:
 // SQLite rows + one kv high-water mark, idempotency at the door, one shared offset sequence,
-// chunked large bodies, the append validation + admission gate, the wake record, waitForEvent, and
+// chunked large bodies, the append validation + the pause check, the wake record, waitForEvent, and
 // the alarm armer. The DurableObject holds a `Stream` and drives it; everything the stream needs
-// from its host arrives through the enumerated constructor deps — `assertCanAppend` (the core-processor
-// gate), `reduceAtCommit` (the inline reduces, IN-txn), `onCommit` (the post-commit fan-out) —
+// from its host arrives through the enumerated constructor deps — `paused` (the core reduce's
+// pause slice), `reduceAtCommit` (the core reduce, IN-txn), `onCommit` (the post-commit fan-out) —
 // so nothing here reaches back into the DO.
 //
 // EPHEMERALS COST ZERO WRITES. An ephemeral event takes an offset from the shared sequence but is
@@ -12,24 +12,25 @@
 // one contract every offset-keyed consumer already honours: an ephemeral's offset is unique WITHIN
 // an incarnation, and a later incarnation — which resumes from the last DURABLE mark — may hand the
 // same number to a durable. Every persisted checkpoint in this package advances only on a batch
-// that carried a durable (the processor engine, the inline reduces, the subscription cursors), and
+// that carried a durable (the processor engine, the core reduce, the subscription cursors), and
 // such a batch's high-water mark is committed with it, so no durable is ever skipped; the
-// `stream/woken` record, durable in the first batch of each incarnation, marks the boundary for
+// `stream/woken` record, the first event of each incarnation (Stream.wake), marks the boundary for
 // anyone chaining ranges across it. And `read()` never PROVES a scan beyond the durable mark: a
 // short page's `scannedThroughOffset` is the mark, not the in-memory head — so nothing a reader
 // persists (a facet's checkpoint, a subscription cursor) can name an offset a later incarnation
 // could hand to a durable. Pushes still carry the full head in their ranges; only the log's own
 // proof is capped.
 //
-// Deliberately storage-lazy: a stream that never writes must never mint backing storage (workerd
-// auto-deletes empty objects; a probed snapshot, a read, or a timed-out waitForEvent on a
-// never-touched ctx must leave nothing behind — the Kenton PR #6101 doctrine).
+// Every context that is ever reached holds at least its birth certificate and a wake record: the DO
+// constructor calls `wake()` before any door opens (the apps/os shape), so a probe on a never-seen
+// context materializes it — deliberately; what is worth reaching is worth recording.
 //
 // The CONTEXT seam (`interface Context` + `localContext`) lives at the bottom: what one context
 // reaches another THROUGH, uniform-async and REAL-typed.
 
 import { codedError, reportIssue } from "../lib/errors.ts";
 import type { ItxExpression } from "../context/expression.ts";
+import { isCoreControl } from "./core-processor.ts";
 import {
   idempotencyConflictMessage,
   sameIdempotentEvent,
@@ -73,10 +74,12 @@ interface StreamDeps {
   storage: DurableObjectStorage;
   /** Idempotency-scope / logging identity — the event-identity stamp on every StreamEvent. */
   path: string;
-  /** The admission gate, consulted BEFORE the wake record and the commit (throws to refuse —
-   *  STREAM_PAUSED / STREAM_BREAKER_OPEN live in the host's core processor, not here). */
-  assertCanAppend: (inputs: StreamEventInput[]) => void;
-  /** The inline reduces, run INSIDE the commit transaction (the routing table and core state are
+  /** Who this stream belongs to — the birth certificate's payload (`wake`). */
+  projectId: string;
+  /** The core reduce's pause slice, read at the append door: a paused stream refuses every
+   *  non-control append with STREAM_PAUSED (the one `if` in `append`). */
+  paused: () => { reason: string } | null;
+  /** The core reduce, run INSIDE the commit transaction (the routing table and the pause state are
    *  atomically exact as of the last committed event — the pump-races-the-provide class is
    *  unspellable, not carefully avoided). */
   reduceAtCommit: (justCommitted: StreamEvent[], afterOffset: number, nextOffset: number) => void;
@@ -96,22 +99,19 @@ interface StreamDeps {
 export class Stream {
   readonly #storage: DurableObjectStorage;
   readonly #path: string;
-  readonly #assertCanAppend: StreamDeps["assertCanAppend"];
+  readonly #projectId: string;
+  readonly #paused: StreamDeps["paused"];
   readonly #reduceAtCommit: StreamDeps["reduceAtCommit"];
   readonly #onCommit: StreamDeps["onCommit"];
   #incarnation = 0; // durable, bumped once per incarnation that WRITES — growth across idle ⇒ it hibernated
   #storageReady = false;
-  /** Has this incarnation's wake record committed yet? In-memory on purpose: the flag dies with
-   *  the incarnation, so the NEXT incarnation's first commit carries a fresh woken event. Set only
-   *  AFTER the commit lands (a rolled-back first batch must re-inject on the retry). */
-  #wokenRecorded = false;
   /** The highest offset assigned THIS INCARNATION — ephemerals included. Seeded from the kv
    *  high-water mark (`maxAssignedOffset`), which append commits ONLY with a batch that stored a
    *  durable row, atomically with those rows; an ephemeral-only batch advances this cache alone
    *  (see the header: an ephemeral's offset is unique within an incarnation). */
   #highestAssignedOffsetCache?: number;
   /** The kv high-water mark (`maxAssignedOffset`) as of the last COMMITTED durable batch: the
-   *  DURABLE head. What `read()` proves a scan through, what the inline reduces fold up to, and
+   *  DURABLE head. What `read()` proves a scan through, what the core reduce folds up to, and
    *  what a resume's seek is clamped to — never the in-memory head above. */
   #durableMarkCache?: number;
   /** Parked waitForEvent callers, FIFO. Fed from `fresh` in append's post-commit tail. */
@@ -121,7 +121,8 @@ export class Stream {
   constructor(deps: StreamDeps) {
     this.#storage = deps.storage;
     this.#path = deps.path;
-    this.#assertCanAppend = deps.assertCanAppend;
+    this.#projectId = deps.projectId;
+    this.#paused = deps.paused;
     this.#reduceAtCommit = deps.reduceAtCommit;
     this.#onCommit = deps.onCommit;
   }
@@ -153,6 +154,27 @@ export class Stream {
     this.#storageReady = true;
   }
 
+  /** THE WAKE RECORD — the DO constructor calls this, synchronously, before any door opens (the
+   *  apps/os shape). The first incarnation ever appends `stream/created { projectId, path }` — offset
+   *  1, the birth certificate — and every incarnation appends `stream/woken { incarnation }`, so the
+   *  core reduce knows who it is and which incarnation runs before the first append, read or facet
+   *  call. Both are control events: a paused stream still records its wake. */
+  wake(): void {
+    this.touch();
+    const born = this.durableMark() === 0;
+    this.append(
+      ...(born
+        ? [
+            {
+              type: "events.iterate.com/stream/created",
+              payload: { projectId: this.#projectId, path: this.#path },
+            },
+          ]
+        : []),
+      { type: "events.iterate.com/stream/woken", payload: { incarnation: this.#incarnation } },
+    );
+  }
+
   /** Read-only (never the write that mints storage — observability probes ride this). */
   currentIncarnation(): number {
     return this.#storageReady
@@ -173,7 +195,7 @@ export class Stream {
   }
 
   /** Has the events table been created yet? A virgin stream has none, and READING must never mint
-   *  it (see touch()) — so read()/hasIdempotencyKey() probe through here. */
+   *  it (see touch()) — so read() probes through here. */
   #eventsTableExists(): boolean {
     return (
       this.#storageReady ||
@@ -183,7 +205,7 @@ export class Stream {
     );
   }
 
-  /** Commit a batch: validate → assertCanAppend → wake record → transactionSync → post-commit fan-out.
+  /** Commit a batch: validate → the pause check → transactionSync → post-commit fan-out.
    *
    *  The transaction is ATOMIC (transactionSync rolls back sql AND kv together): a mid-batch
    *  throw — an idempotency conflict after earlier inserts — must never leave rows above the
@@ -192,16 +214,11 @@ export class Stream {
    *  with the batch). THE PRE-BATCH FENCE: both caches (the assigned head AND the durable mark)
    *  are warmed at the top (`highestAssignedOffset()` warms the mark on the way) and assigned only
    *  AFTER the transaction returns; a throw leaves them untouched and true. Inside reduceAtCommit
-   *  the inline reduces catch up to `durableMark()`, which must therefore still be the PRE-batch
+   *  the core reduce catches up to `durableMark()`, which must therefore still be the PRE-batch
    *  value (kv already holds nextOffset in-txn; reading kv there would make an inline rehydrate
    *  replay the just-inserted rows = double-reduce = table corruption). */
   append(...inputs: StreamEventInput[]): StreamEvent[] {
-    // A ZERO-INPUT append is a PURE no-op. Under the storage-lazy doctrine NOTHING is minted at
-    // all: no assertCanAppend, no touch, no wake record. Without this, a defensive `itx.append(...maybeEmpty)` on a fresh
-    // incarnation would MINT a woken-only durable batch (row + offset watermark + the whole
-    // fan-out) — and on a PAUSED fresh stream would commit the wake record despite the pause
-    // (assertCanAppend([]) sees no non-control events to refuse). The wake record rides the first REAL
-    // append instead.
+    // A ZERO-INPUT append is a PURE no-op: no pause check, no touch, no fan-out.
     if (inputs.length === 0) return [];
     // THE commit door every path funnels through (public stream/contexts/env.ITX + internal):
     // an event must carry a non-blank type, and `ephemeral` is literal `true` or ABSENT — a
@@ -217,23 +234,14 @@ export class Stream {
           `append: ephemeral must be literal true or absent — got ${JSON.stringify(input.ephemeral)} on "${input.type}"`,
         );
     }
-    // THE CORE PROCESSOR SPEAKS FIRST (the apps/os shape): the host's gate reads its own reduced
-    // state and refuses a paused/tripped batch. All pause/breaker reasoning lives in the host's
-    // core-processor.ts — this class only asks.
-    this.#assertCanAppend(inputs);
+    // THE PAUSE CHECK — the core reduce's `paused` slice, read right here: a paused stream refuses
+    // every non-control append (control = the platform's own records + the pause/resume pair, so a
+    // paused stream always accepts its own resume). Policy that decides WHEN to pause (a breaker, a
+    // quota) is a facet processor appending `stream/paused` with its reason — never code here.
+    const paused = this.#paused();
+    if (paused && inputs.some((input) => !isCoreControl(input.type)))
+      throw codedError("STREAM_PAUSED", `stream paused: ${paused.reason}`);
     this.touch();
-    // THE WAKE RECORD: `events.iterate.com/stream/woken` `{incarnation}`, DURABLE, prepended into
-    // the FIRST committed batch of each incarnation (wake history is honest history — the apps/os
-    // shape; the core reduce folds it into its state). Injected AFTER assertCanAppend on purpose — the
-    // platform's own wake record is never subject to pause or the breaker — and never on a virgin
-    // stream that only probes (no append ⇒ no woken; storage-lazy doctrine holds). Its receipt is
-    // sliced off the return below: callers get one receipt per INPUT, exactly as before.
-    const injectWoken = !this.#wokenRecorded;
-    if (injectWoken)
-      inputs = [
-        { type: "events.iterate.com/stream/woken", payload: { incarnation: this.#incarnation } },
-        ...inputs,
-      ];
     const scannedAfterOffset = this.highestAssignedOffset();
     for (const input of inputs)
       if (input.ephemeral && input.idempotencyKey)
@@ -293,7 +301,7 @@ export class Stream {
       }
       // A dedupe hit echoes the OFFSET of the row it matched; when that row was inserted earlier
       // IN THIS batch (a retry beside its original), `committed` holds two entries for one offset.
-      // `distinct` keeps one per offset (first wins) so the inline reduces AND the delivery loop see
+      // `distinct` keeps one per offset (first wins) so the core reduce AND the delivery loop see
       // each durable event ONCE — while `committed` keeps the per-input
       // shape the RPC answer echoes back (each input still gets its own receipt).
       const seen = new Set<number>();
@@ -307,7 +315,6 @@ export class Stream {
       }
       return { committed, distinct, nextOffset };
     });
-    if (injectWoken) this.#wokenRecorded = true; // only a LANDED commit carries the wake record
     if (nextOffset > scannedAfterOffset) {
       this.#highestAssignedOffsetCache = nextOffset;
       this.#durableMarkCache = nextOffset; // the mark this transaction just committed
@@ -323,7 +330,7 @@ export class Stream {
       this.#settleWaiters(fresh);
       this.#onCommit(fresh, scannedAfterOffset, nextOffset);
     }
-    return injectWoken ? committed.slice(1) : committed;
+    return committed;
   }
 
   read(afterOffset = 0, limit = 500): StreamPage {
@@ -468,18 +475,6 @@ export class Stream {
       .toArray()
       .map((r) => String(r.chunk))
       .join("");
-  }
-
-  /** Does a durable row already carry this idempotencyKey? A cheap existence probe so the breaker
-   *  need not tax a retry that will DEDUPE to zero durable growth (never creates the events table —
-   *  a virgin stream has no keys). */
-  hasIdempotencyKey(key: string): boolean {
-    if (!this.#eventsTableExists()) return false;
-    return (
-      this.#storage.sql
-        .exec("SELECT 1 FROM events WHERE idempotency_key = ? LIMIT 1", key)
-        .toArray().length > 0
-    );
   }
 
   // ── the alarm armer ──

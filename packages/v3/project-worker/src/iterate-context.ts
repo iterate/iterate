@@ -219,7 +219,7 @@ export class IterateContext extends RpcTarget {
 
   /** Append events to this context's log — the flattened stream verb, same commit pipeline as the
    *  expression spelling `itx.append({...})` (built-ins.ts root). Validation, idempotency, the
-   *  inline reduces, and the fan-out all live on the DO (Stream.append owns the contract); this
+   *  core reduce, and the fan-out all live on the DO (Stream.append owns the contract); this
    *  method just proxies. Returns the committed events with their assigned offsets. */
   append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
     return this.#context.append(...events);
@@ -280,7 +280,7 @@ export class IterateContext extends RpcTarget {
         target: ["itx", "rpcStubs", ["get", key]],
       });
     } catch (e) {
-      // The DO refused the mount (STREAM_PAUSED / STREAM_BREAKER_OPEN / a validation throw): the
+      // The DO refused the mount (STREAM_PAUSED / a validation throw): the
       // relay just parked would otherwise linger for the whole session — retained stub, pager
       // socket, and a DO transport that serves nothing. Tear it down and let the refusal propagate.
       this.rpcStubs.close(key);

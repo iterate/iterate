@@ -1,7 +1,7 @@
 // processor-facet-enable-disable-lineage.e2e.test.ts — processor ENABLEMENT is a subscription row
 // whose target is the facet's processEventBatch (`enableProcessor` is sugar over exactly that
 // event; identity rides `ctx.props` at materialization — rebuild-from-log is true). Proves the
-// door's refusals (a dotted name, no source, an inline reduce's slug on either door), that the raw
+// door's refusals (a dotted name, no source, the core reduce's name on either door), that the raw
 // event-sourced door agrees with the verb, one effective lineage under a two-session enable race,
 // re-enable while WARM as a log no-op that never corrupts the reduce, double-enable + ONE disable
 // (same name REPLACES — no enablement stack), and the waitUntilProcessed barrier against a future
@@ -60,23 +60,42 @@ test("enableProcessor REQUIRES a source ref — there are no built-in processors
   expect(await subscriptions(itx)).toEqual([]);
 });
 
-test("an inline reduce's slug (core / capability-table / subscriptions) is refused at BOTH doors — never a facet to enable or disable", async () => {
-  // The inline reduce-only cores are always-on, never facets — an authority boundary. A name
-  // collision with the kernel's own reduces would yield a processor that runs but cannot be
-  // addressed or disabled by name.
+test("the core reduce's name is refused at BOTH doors — never a facet to enable or disable; the former inline names (capability-table, subscriptions) are ordinary names now", async () => {
+  // `core` is THE inline reduce — always on, never a facet — and its address
+  // (`itx.facets.get('core')`) is taken, so its name is refused at both doors: a processor that ran
+  // under it could never be addressed or disabled by name. Nothing else is reserved: the three
+  // inline reduces collapsed into core, so `capability-table` and `subscriptions` are plain names a
+  // processor may take, address and drop like any other.
   const itx = openItx(freshCtx("inline"));
   await seedSources(itx, ["tally"]);
-  for (const slug of ["core", "capability-table", "subscriptions"]) {
-    expect((await rejection(itx.disableProcessor(slug))).message).toMatch(/inline reduce/);
-    await expect(
-      (async () => {
-        await itx.enableProcessor(slug, {
-          source: "itx.kv.get('src/tally.js')",
-          className: "TallyDurableObject",
-        });
-      })(),
-    ).rejects.toThrow(/inline reduce/);
+  expect((await rejection(itx.disableProcessor("core"))).message).toMatch(/core reduce/);
+  await expect(
+    (async () => {
+      await itx.enableProcessor("core", {
+        source: "itx.kv.get('src/tally.js')",
+        className: "TallyDurableObject",
+      });
+    })(),
+  ).rejects.toThrow(/core reduce/);
+  for (const name of ["capability-table", "subscriptions"]) {
+    await itx.enableProcessor(name, {
+      source: "itx.kv.get('src/tally.js')",
+      className: "TallyDurableObject",
+    });
+    const [mark] = await append(itx, { type: "mark", payload: { name } });
+    const snap: any = await until(`${name} reduced the mark`, async () => {
+      const s: any = await itx
+        .invokeCapability(`itx.facets.get('${name}').snapshot()`)
+        .catch(() => undefined); // NO_FACET while it materializes
+      return s && s.offset >= mark.offset && s;
+    });
+    expect(snap.state.counts.mark).toBeGreaterThanOrEqual(1); // a tally, addressed under the former inline name
+    await itx.disableProcessor(name);
+    await expect(itx.invokeCapability(`itx.facets.get('${name}').snapshot()`)).rejects.toThrow(
+      /no facet/,
+    );
   }
+  expect(await subscriptions(itx)).toEqual([]);
 });
 
 // ── the row IS the enablement ──

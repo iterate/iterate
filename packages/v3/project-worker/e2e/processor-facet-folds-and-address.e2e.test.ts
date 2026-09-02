@@ -37,12 +37,12 @@ test("facet spine: cold catch-up + driven folds + the subscriptions table lists 
 
   const s2 = await itx.invokeCapability("itx.facets.get('tally').snapshot()");
   // the facet folds the pushed events (3 provided + 1 revoked). Its checkpoint sits at or past the
-  // 6 durable events (woken, before, configured, a, b, revoked) — live-state deltas are ephemerals
-  // in the SAME offset space, so the exact position depends on how many the inline reduces emitted;
-  // the counts pin the real fold.
+  // 7 durable events (created, woken, before, configured, a, b, revoked) — live-state deltas are
+  // ephemerals in the SAME offset space, so the exact position depends on how many the core reduce
+  // emitted; the counts pin the real fold.
   expect(s2.state?.counts?.[PROVIDED]).toBe(3);
   expect(s2.state?.counts?.[REVOKED]).toBe(1);
-  expect(s2.offset).toBeGreaterThanOrEqual(6);
+  expect(s2.offset).toBeGreaterThanOrEqual(7);
 
   // the subscriptions table lists the processor: ONE row whose target is the facet's
   // processEventBatch through the load chain, and NO cursor — the facet keeps its own checkpoint
@@ -126,18 +126,18 @@ test("two userspace facet processors fold side-by-side — user-tally and tally"
   await itx.provide("itx.b", "itx.kv");
   await itx.revoke({ providedAtOffset: p1.providedAtOffset });
 
-  // Both fold the same 6 durable events (woken, 2 configured, 2 provided, 1 revoked): an enablement
-  // is a subscription-configured event, not a mount, so provided = 2. Checkpoints sit at or past
-  // offset 6 (live-state deltas share the offset space).
+  // Both fold the same 7 durable events (created, woken, 2 configured, 2 provided, 1 revoked): an
+  // enablement is a subscription-configured event, not a mount, so provided = 2. Checkpoints sit at
+  // or past offset 7 (live-state deltas share the offset space).
   const su = await itx.invokeCapability("itx.facets.get('user-tally').snapshot()");
   expect(su.state?.counts?.[PROVIDED]).toBe(2);
   expect(su.state?.counts?.[REVOKED]).toBe(1);
-  expect(su.offset).toBeGreaterThanOrEqual(6);
+  expect(su.offset).toBeGreaterThanOrEqual(7);
 
   const sb = await itx.invokeCapability("itx.facets.get('tally').snapshot()");
   expect(sb.state?.counts?.[PROVIDED]).toBe(2);
   expect(sb.state?.counts?.[REVOKED]).toBe(1);
-  expect(sb.offset).toBeGreaterThanOrEqual(6);
+  expect(sb.offset).toBeGreaterThanOrEqual(7);
   expect(sb.state.counts).toEqual(su.state.counts); // the same reduce over the same log
 
   // the subscriptions table lists both processors (rows whose target is a facet's processEventBatch)

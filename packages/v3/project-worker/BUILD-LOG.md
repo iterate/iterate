@@ -1944,3 +1944,46 @@ DurableObject itself (wrap, not split); this reverses that one decision.
   test processor. Applied across src, tests, e2e, docs and the gitignored tutorial-proof toys.
 - GATES: tsc×3 · unit+workers 219 (25 files) · e2e 140p/2xf (34 files) · tutorial-proof 8 ·
   Playwright 2 · oxlint 0/0 · knip clean.
+
+## 2026-09-02 — ONE core reduce; the breaker is a facet; created/woken in the constructor
+
+Jonas: "a core stream processor that controls all the reduced state that is needed synchronously
+before append and during the append cycle … the token bucket runs in a facet and … appends a
+stream paused event with a reason." And: steal `stream/created` + `stream/woken` from apps/os,
+appended synchronously in the constructor; the DO's first line is `#name = parse(ctx.id.name)`.
+
+- **`CoreStreamProcessor` (3.0.0) is the one inline reduce.** Its state is everything the DO reads
+  synchronously: `projectId`/`path`/`createdAt` (from created), `incarnation` (from woken), `paused`,
+  `mounts`, `subscriptions` — ten control events, one `reduce`, no verbs. `capability-table` and
+  `subscriptions` are event families and slices, no longer inline hosts or facet addresses:
+  `itx.facets.get('core').snapshot().state.mounts` / `.subscriptions`; `itx.subscriptions.list()`
+  stays the joined view. Only `core` is a reserved subscription name.
+- **Commands build events; readers are pure.** `capabilityProvidedEvent`/`capabilityRevokedEvent` +
+  `route(mounts, call)` + `CapabilityResolver` (context/capability-table.ts);
+  `subscriptionConfiguredEvent`/`subscriptionRemovedEvent` (stream/subscriptions.ts, `null` = an
+  idempotent no-op). The DO appends what comes back. `CapabilityTableProcessor` and
+  `SubscriptionsProcessor` are gone. A no-op revoke returns no change (a benign double-revoke used to
+  rewrite the checkpoint and publish a delta).
+- **`InlineReduces` → `InlineReduce`**: one processor, refuses one that overrides `processEvent` at
+  construction. (Next: fold it into `Stream` and flatten `append` — Jonas wants the pipeline to read
+  as five steps.)
+- **The breaker left core.** `BreakerProcessor` + `BreakerDurableObject` (e2e/support/sources.ts,
+  `src/breaker.js`): a token bucket refilled from each event's `createdAt`, ignoring the four control
+  types, tripping once on the crossing by appending `stream/paused { reason }`; an operator's
+  `stream/resumed` restores flow (processor-facet-breaker-pauses-the-stream.e2e). `admit` /
+  `assertCanAppend`, `breaker-configured`, `STREAM_BREAKER_OPEN`, `breakerRemaining` and the
+  dedupe-aware admission probe (`hasIdempotencyKey`) are deleted; the pause check is one `if` in
+  `Stream.append` (created/woken/paused/resumed exempt).
+- **`Stream.wake()` from the constructor.** The first incarnation appends `stream/created
+{ projectId, path }` at offset 1 and `stream/woken { incarnation }` at 2 (core's live-state delta
+  takes 3, an ephemeral; the first user append lands at 4); every later incarnation appends `woken`
+  first. The storage-lazy "virgin probe mints nothing" doctrine is gone by decision — any door
+  materializes a context. The quiet clock arms only when a facet is live or a stub is paged in
+  (`hasRetainedStubs`, O(1)), and the rpcStubs handle re-notes after the call so the invoke that
+  pages a stub in arms it (was one activity late — a `test.fails` pin turned green).
+- DO: `readonly #name = parseIterateContextDurableObjectName(this.ctx.id.name)` is the first line
+  (`{ name, projectId, path }`, the apps/os shape). Docs: walkthrough (§4.5 one core reduce, §5.3
+  the breaker example, §5.5 the wake record), design doc (§4.1/§8 record the reversal), LAYERS,
+  tutorial, the fetch plan's D3.
+- GATES: tsc×3 · unit+workers 235 (25 files) · e2e 136p/2xf (35 files) · tutorial-proof 8 ·
+  Playwright 2 · oxlint 0/0 · knip clean.

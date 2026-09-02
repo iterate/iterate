@@ -1,12 +1,13 @@
-// stream-idempotency-breaker-pause-paging.e2e.test.ts — the event log's COMMIT POINT and the inline
-// reduces that sit at it (`Stream.append` in stream/stream.ts, the core
-// reduce's pause/breaker), end to end through `itx.append`/`itx.read`. Proves: the append door's
-// runtime guards (a non-string type, a non-literal-true `ephemeral`, ephemeral + idempotencyKey);
-// idempotency dedupe at the commit point (an in-batch hit reduced ONCE, a retry deduping through an
-// empty breaker bucket, a mid-batch conflict rolling the whole batch back, a hit burning no offset);
-// deep payloads near the codec's depth budget; the bare (payload-less) control events; pause and
-// breaker enforcement (wholesale, ephemerals never counted, debt carried, refill by wall time); and
-// read paging's scanned-offset-range proof (never past the durable mark, never beyond head).
+// stream-idempotency-pause-paging.e2e.test.ts — the event log's COMMIT POINT and the core reduce's
+// pause slice that sits at it (`Stream.append` in stream/stream.ts), end to end through
+// `itx.append`/`itx.read`. Proves: the append door's runtime guards (a non-string type, a
+// non-literal-true `ephemeral`, ephemeral + idempotencyKey); idempotency dedupe at the commit point
+// (an in-batch hit reduced ONCE by the commit-point reduce, a mid-batch conflict rolling the whole
+// batch back, a hit burning no offset); deep payloads near the codec's depth budget; the bare
+// (payload-less) pause; pause enforcement (wholesale, ephemerals refused too, the resume always
+// admitted); and read paging's scanned-offset-range proof (never past the durable mark, never beyond
+// head). Policy that DECIDES to pause (a breaker) is a facet processor —
+// processor-facet-breaker-pauses-the-stream.e2e.
 
 import { expect, test } from "vitest";
 import { append, freshCtx, openItx, readAll, rejection } from "./support/client.ts";
@@ -27,14 +28,6 @@ const read = (
           : [afterOffset, limit]),
     ],
   ]);
-
-const coreState = async (itx: any) =>
-  (await itx.invokeCapability("itx.facets.get('core').snapshot()")).state;
-
-const breakerConfigured = (capacity: number, refillPerSecond: number) => ({
-  type: "events.iterate.com/stream/breaker-configured",
-  payload: { capacity, refillPerSecond },
-});
 
 // ── the append door's runtime guards ──
 
@@ -82,47 +75,30 @@ test("ephemeral + idempotencyKey is refused loudly and atomically mid-batch", as
 // ── idempotency at the commit point ──
 
 test("an in-batch idempotency dedupe hit is reduced ONCE, not twice", async () => {
-  // append derives a per-offset `distinct` view (first-wins) that feeds the inline reduce AND the
-  // delivery, so each durable event is processed ONCE — while the returned `committed` keeps one
-  // receipt per input. One durable event = one reduce = one token spent.
+  // append derives a per-offset `distinct` view (first-wins) that feeds the inline core reduce AND
+  // the delivery, so each durable event is processed ONCE — while the returned `committed` keeps one
+  // receipt per input. The zero-distance witness is core's own mounts table: a capability-provided
+  // event duplicated in one batch under one idempotencyKey must produce exactly ONE mount (a double
+  // reduce would push a second row with the same providedAtOffset).
   const itx = openItx(freshCtx("dupbatch"));
-  await append(itx, breakerConfigured(10, 0.000001));
-  const pair = await append(
-    itx,
-    { type: "mark", payload: { n: 1 }, idempotencyKey: "dup-in-batch" },
-    { type: "mark", payload: { n: 1 }, idempotencyKey: "dup-in-batch" },
-  );
+  const provided = {
+    type: "events.iterate.com/capability-table/capability-provided",
+    payload: { path: "itx.dup", target: "itx.whoami" },
+    idempotencyKey: "dup-in-batch",
+  };
+  const pair = await append(itx, provided, provided);
   // The dedupe itself is right: both entries answer with the ONE committed offset…
   expect(pair).toHaveLength(2);
   expect(pair[1].offset).toBe(pair[0].offset);
   const page = await read(itx);
   expect(page.events.filter((e) => e.idempotencyKey === "dup-in-batch")).toHaveLength(1);
-  // …and the commit-point reduce spent exactly ONE token for it.
-  expect((await coreState(itx)).breaker.tokens).toBeCloseTo(9, 1);
-});
-
-test("an idempotent retry dedupes even when the breaker bucket is empty", async () => {
-  // The breaker meters DURABLE LOG GROWTH, and a dedupe hit grows nothing: on the about-to-trip path
-  // the gate re-counts excluding inputs whose idempotencyKey is already committed. (Retry storms are
-  // exactly when idempotency keys and a tight breaker coincide.)
-  const itx = openItx(freshCtx("retrybreaker"));
-  await append(itx, breakerConfigured(3, 0.000001));
-  const [orig] = await append(itx, {
-    type: "job",
-    payload: { id: "a" },
-    idempotencyKey: "retry-me",
-  });
-  await append(itx, { type: "job", payload: { id: "b" } }, { type: "job", payload: { id: "c" } });
-  // Sanity: the bucket really is empty for FRESH durable events…
-  const freshErr = await rejection(append(itx, { type: "job", payload: { id: "d" } }));
-  expect(freshErr.message).toContain("circuit breaker open");
-  // …but the idempotent RETRY adds zero durable growth and must dedupe, not trip.
-  const [replay] = await append(itx, {
-    type: "job",
-    payload: { id: "a" },
-    idempotencyKey: "retry-me",
-  });
-  expect(replay.offset).toBe(orig.offset);
+  // …and the commit-point reduce folded it exactly ONCE: one mount, at that offset.
+  const core = await itx.invokeCapability("itx.facets.get('core').snapshot()");
+  const mounts = (core.state.mounts as { path: string[]; providedAtOffset: number }[]).filter(
+    (m) => m.path.join(".") === "itx.dup",
+  );
+  expect(mounts).toHaveLength(1);
+  expect(mounts[0].providedAtOffset).toBe(pair[0].offset);
 });
 
 test("a mid-batch idempotency conflict rolls the whole batch back atomically", async () => {
@@ -241,7 +217,7 @@ test("an idempotent RETRY of a 64-deep payload dedupes instead of tripping the d
   expect(retry.offset).toBe(first.offset); // same key + same body = same event
 });
 
-// ── the core reduce: pause + breaker (control is ordinary events; enforcement reads the fold) ──
+// ── the core reduce's pause slice (control is ordinary events; enforcement reads the fold) ──
 
 test("a bare stream/paused event (no payload) actually pauses the stream", async () => {
   // CoreStreamProcessor.reduce defaults `event.payload ?? {}` — a pause that silently doesn't pause
@@ -250,18 +226,6 @@ test("a bare stream/paused event (no payload) actually pauses the stream", async
   await append(itx, { type: "events.iterate.com/stream/paused" });
   const err = await rejection(append(itx, { type: "mark", payload: { n: 1 } }));
   expect(err.message).toContain("stream paused");
-});
-
-test("a bare breaker-configured event (no payload) turns the breaker off", async () => {
-  // The documented empty-payload off-switch is the recovery path for a tripped stream; the
-  // spelling difference between `{}` and an absent payload must not decide whether recovery happens.
-  const itx = openItx(freshCtx("barebreakeroff"));
-  await append(itx, breakerConfigured(1, 0.000001));
-  await append(itx, { type: "spend", payload: { n: 1 } }); // bucket → 0
-  await append(itx, { type: "events.iterate.com/stream/breaker-configured" }); // documented off-switch
-  expect((await coreState(itx)).breaker).toBeNull();
-  const [after] = await append(itx, { type: "spend", payload: { n: 2 } });
-  expect(after.offset).toBeGreaterThan(0);
 });
 
 test("pause refuses durable AND ephemeral appends, mixed batches wholesale — control passes", async () => {
@@ -290,94 +254,6 @@ test("pause refuses durable AND ephemeral appends, mixed batches wholesale — c
   await append(itx, { type: "events.iterate.com/stream/resumed", payload: {} });
   const [after] = await append(itx, { type: "mark", payload: { resumed: true } });
   expect(after.offset).toBeGreaterThan(0);
-});
-
-test("breaker boundary: remaining === counted passes, empty bucket refuses durable but never ephemeral-only", async () => {
-  const itx = openItx(freshCtx("boundary"));
-  await append(itx, breakerConfigured(2, 0.000001));
-  // EXACTLY remaining === counted passes (the check is strict <)
-  const two = await append(
-    itx,
-    { type: "spend", payload: { n: 1 } },
-    { type: "spend", payload: { n: 2 } },
-  );
-  expect(two).toHaveLength(2);
-  // bucket now empty: one more durable is refused
-  const err = await rejection(append(itx, { type: "spend", payload: { n: 3 } }));
-  expect(err.message).toContain("circuit breaker open");
-  // counted=0 always passes: an ephemeral-only batch sails through the empty bucket…
-  const eph = await append(
-    itx,
-    { type: "blip", payload: { i: 1 }, ephemeral: true },
-    { type: "blip", payload: { i: 2 }, ephemeral: true },
-  );
-  expect(eph).toHaveLength(2);
-  expect(eph[1].offset).toBe(eph[0].offset + 1); // …still consuming real offsets
-  // a MIXED batch counts only its durable half — and that half is refused
-  const mixedErr = await rejection(
-    append(
-      itx,
-      { type: "blip", payload: {}, ephemeral: true },
-      { type: "spend", payload: { n: 4 } },
-    ),
-  );
-  expect(mixedErr.message).toContain("1 durable event(s) exceed the bucket");
-  // the `payload: {}` off-switch works too (the bare no-payload one is pinned above)
-  await append(itx, { type: "events.iterate.com/stream/breaker-configured", payload: {} });
-  expect((await coreState(itx)).breaker).toBeNull();
-  const [freed] = await append(itx, { type: "spend", payload: { n: 5 } });
-  expect(freed.offset).toBeGreaterThan(0);
-});
-
-test("breaker refills across a paused period and clamps at capacity", async () => {
-  const itx = openItx(freshCtx("pausedrefill"));
-  await append(itx, breakerConfigured(1, 1)); // capacity 1, one token per second
-  await append(itx, { type: "spend", payload: { n: 1 } }); // bucket → 0
-  const err = await rejection(append(itx, { type: "spend", payload: { n: 2 } }));
-  expect(err.message).toContain("circuit breaker open");
-  // pause does not freeze the bucket: refill rides elapsed time, not append traffic
-  await append(itx, { type: "events.iterate.com/stream/paused", payload: { reason: "soak" } });
-  await new Promise((r) => setTimeout(r, 2100));
-  await append(itx, { type: "events.iterate.com/stream/resumed", payload: {} });
-  const [after] = await append(itx, { type: "spend", payload: { n: 3 } });
-  expect(after.offset).toBeGreaterThan(0);
-  // 2.1s at 1/s would be 2.1 tokens UNclamped — the capacity clamp means the spend above
-  // emptied the bucket again, so an immediate second durable append is refused.
-  const err2 = await rejection(append(itx, { type: "spend", payload: { n: 4 } }));
-  expect(err2.message).toContain("circuit breaker open");
-});
-
-test("breaker overdraft: an admitted batch drives tokens NEGATIVE, and the debt is CARRIED, not clamped", async () => {
-  // DECIDED CONTRACT — carry the debt. Admission reads PRE-batch state, so a batch that carries
-  // its own breaker-configured event is admitted while the breaker is still off; the reduce then
-  // debits every durable event unconditionally (capacity 2, then d1..d4 → tokens -2). Clamping at
-  // zero would forgive the overdraft the moment it happened; carrying it means refill must climb
-  // THROUGH the debt before the stream takes durable writes again.
-  const itx = openItx(freshCtx("overdraft"));
-  const batch = await append(
-    itx,
-    breakerConfigured(2, 1), // 1 token/second — recovery below rides wall time
-    { type: "d", payload: { n: 1 } },
-    { type: "d", payload: { n: 2 } },
-    { type: "d", payload: { n: 3 } },
-    { type: "d", payload: { n: 4 } },
-  );
-  expect(batch).toHaveLength(5); // the whole batch passed the (pre-batch, breaker-off) gate
-  const committedAtMs = Date.now(); // the debt clock starts at the batch's event times
-  expect((await coreState(itx)).breaker.tokens).toBeCloseTo(-2, 1); // the overdraft, on the record
-  // the very next durable append trips…
-  const err = await rejection(append(itx, { type: "d", payload: { n: 5 } }));
-  expect(err.message).toContain("circuit breaker open");
-  // …and STAYS tripped past a full refill period: a clamp-at-zero bucket would hold ~1.2 tokens
-  // by now; a bucket at -2 has only climbed to ~-0.8. (Refusals commit nothing — no state moves.)
-  await new Promise((r) => setTimeout(r, 1200));
-  const still = await rejection(append(itx, { type: "d", payload: { n: 6 } }));
-  expect(still.message).toContain("circuit breaker open");
-  // once wall time covers the debt PLUS one token (3s at 1/s; sleep the remainder with margin),
-  // the stream takes durable writes again.
-  await new Promise((r) => setTimeout(r, Math.max(0, committedAtMs + 3500 - Date.now())));
-  const [freed] = await append(itx, { type: "d", payload: { n: 7 } });
-  expect(freed.offset).toBeGreaterThan(0);
 });
 
 // ── read paging: the scanned-offset-range proof ──

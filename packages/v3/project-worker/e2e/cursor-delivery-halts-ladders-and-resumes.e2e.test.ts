@@ -455,8 +455,8 @@ test("cursor subscriptions enable no processor and mint no facet; a row appears 
     expect(r.cursor).toBeUndefined(); // nothing consumed yet ⇒ nothing delivered ⇒ no cursor row
     expect(r.halted).toBeUndefined();
   }
-  // and the subscriptions table's own snapshot is the same truth, as reduced state
-  const snap: any = await itx.invokeCapability("itx.facets.get('subscriptions').snapshot()");
+  // and the core snapshot's subscription rows are the same truth, as reduced state
+  const snap: any = await itx.invokeCapability("itx.facets.get('core').snapshot()");
   expect(Object.keys(snap.state.subscriptions).sort()).toEqual(["auto-1", "auto-2", "auto-3"]);
 });
 

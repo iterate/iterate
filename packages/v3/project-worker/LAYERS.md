@@ -32,22 +32,31 @@ physical — `itx.rpcStubs.list()`, plus two EPHEMERAL events as it changes (`rp
 event log with monotonic offsets shared by durable AND ephemeral events (an ephemeral consumes an
 offset, never a row — and an ephemeral-only batch costs NO write at all: no transaction, not even
 the high-water mark; its offsets are unique within the incarnation, and every persisted checkpoint
-in the package advances only on a batch that carried a durable), idempotency at the door, the stream/woken wake record, `waitForEvent`,
+in the package advances only on a batch that carried a durable), idempotency at the door, the wake record, `waitForEvent`,
 `read` with the scanned-offset-range proof, and the alarm armer. `iterate-context-durable-object.ts`
 (`IterateContextDurableObject`, one DO per `{projectId, path}` context) holds a Stream and drives
-it — its injected callbacks run the inline reduces in-transaction (pause/breaker enforcement lives
-there) and the post-commit fan-out. Identity is always log-derived: a mount's id IS the offset of
-its capability-provided fact; a subscription's, of its subscription-configured fact.
+it — its constructor calls `Stream.wake()` before any door opens (the first incarnation appends
+`stream/created { projectId, path }` at offset 1, every incarnation `stream/woken { incarnation }`,
+so any door materializes a context), its injected callbacks run the core reduce in-transaction and
+the post-commit fan-out, and the pause check is one `if` in `Stream.append` reading the reduce's
+`paused` slice (control events — created/woken/paused/resumed — are exempt). Identity is always
+log-derived: a mount's id IS the offset of its capability-provided fact; a subscription's, of its
+subscription-configured fact.
 
-Three reduce-only processors run INLINE at the commit point (`stream/inline-reduces.ts` — zero runner
-apparatus): `core` (pause / breaker / incarnation), `capability-table` (layer 2), `subscriptions`
-(layer 3). Runtime state IS reduced state: `itx.facets.get('core' | 'capability-table' |
-'subscriptions').snapshot()`.
+ONE reduce-only processor runs INLINE at the commit point: `CoreStreamProcessor`
+(`stream/core-processor.ts`, slug `core`, contract 3.0.0), hosted by `stream/inline-reduce.ts` with
+zero runner apparatus. It folds the context's own control events into
+`{ projectId, path, createdAt, incarnation, paused, mounts, subscriptions }` — layer 2's mounts and
+layer 3's rows are slices of that one state, each layer keeping its OWN event family. Runtime state
+IS reduced state: `itx.facets.get('core').snapshot().state`. Policy is not in core: a token-bucket
+breaker is a facet processor that appends `stream/paused { reason }` (layer 4).
 
 ## Layer 2 — mounts (the capability table)
 
-`capability-table.ts`: `capability-provided { path, target }` / `capability-revoked
-{ providedAtOffset }` reduce into the mount stack. That is the WHOLE event — no policies, no flags.
+`capability-table.ts` is the two COMMANDS that build `capability-provided { path, target }` /
+`capability-revoked { providedAtOffset }` (the DO appends them) and the READER (`route(mounts, call)`
+and `CapabilityResolver`); the core reduce folds the events into `state.mounts`, a shadow stack. That
+is the WHOLE event — no policies, no flags.
 One dispatch path: parse → longest-path-prefix match (final segment may consume boundary args, ties
 → newest) → evaluate the target against `{ itx }` → replay the remainder. A built-in root resolves
 DIRECTLY (built-ins first); userspace mounts see only `itx` — a bare root is unspellable, so the
@@ -55,12 +64,14 @@ built-ins are unshadowable. A live capability is no exception: `itx.provide(path
 parks `fn` in `rpcStubs` under `path` and mounts `path ⇒ itx.rpcStubs.get('<path>')`. The door is
 idempotent (a reconnect appends nothing).
 
-## Layer 3 — subscriptions (own reduce, ONE delivery loop)
+## Layer 3 — subscriptions (own events, ONE delivery loop)
 
-`subscriptions.ts`: `subscription-configured { name, target, consumes? }` (same name REPLACES),
+Four events of its own: `subscription-configured { name, target, consumes? }` (same name REPLACES),
 `subscription-removed`, `subscription-delivery-halted` (appended by the loop), `subscription-
-delivery-resumed` (appended by an operator; un-halt, optional seek). Pure data; the layer knows only
-the stream and the codec.
+delivery-resumed` (appended by an operator; un-halt, optional seek). The core reduce folds them into
+`state.subscriptions`; `subscriptions.ts` is the two commands that build the first two
+(`subscriptionConfiguredEvent` / `subscriptionRemovedEvent`, `null` = idempotent no-op). Pure data;
+the layer knows only the stream and the codec.
 
 `subscription-delivery.ts`: after every commit, for each subscription whose `consumes` matches,
 evaluate the target and ASK THE VALUE what it is:
@@ -92,7 +103,11 @@ class in `DurableObject`. The host is hosted like ANY class:
 `itx.load(src).getDurableObjectClass('PresenceDurableObject').get('presence')`, identity in
 `ctx.props`. `enableProcessor(name, { source, className })` is
 `subscribe({ name, target: that chain + ".processEventBatch" })`; `disableProcessor` is
-`unsubscribe` + `itx.facets.delete(name)`. There are no built-in processors — `tally` is a fixture.
+`unsubscribe` + `itx.facets.delete(name)`. No built-in processor runs as a facet — `tally` is a
+fixture, and the one built-in `StreamProcessor` is the core reduce, hosted inline (layer 1). Policy
+that need not gate an append synchronously is a userspace facet processor speaking core's control
+events: `BreakerProcessor` (`e2e/support/sources.ts`) folds durable events into a token bucket and,
+on exhaustion, appends `stream/paused { reason }`; an operator appends `stream/resumed`.
 
 ## Layer 5 — the edge (sessions and the relay)
 

@@ -1,17 +1,17 @@
 // iterate-context-durable-object.ts — `IterateContextDurableObject`: THE CONTEXT, one DO per
 // `{projectId, path}` (codec-named `{projectId}.iterate{path}`). The DO is the parent —
-// STREAM + INLINE REDUCES + SUBSCRIPTION DELIVERY + FACETS + TRANSPORT + DOORS:
+// STREAM + THE CORE REDUCE + SUBSCRIPTION DELIVERY + FACETS + TRANSPORT + DOORS:
 //
 //   • the STREAM — a `Stream` (stream/stream.ts), DI'd with this DO's storage: the whole commit
-//     pipeline (validation + admission + idempotency + offsets + chunking + the stream/woken
-//     wake record + waitForEvent + the alarm armer). The DO's append/read/waitForEvent are thin
-//     wrappers; the stream's three injected callbacks (assertCanAppend / reduceAtCommit / onCommit) close
-//     over this class — nothing in stream/stream.ts reaches back;
-//   • the INLINE REDUCES — three reduce-only processors reduced INSIDE the commit transaction,
-//     always on, one per layer: the CORE reduce (pause/breaker/incarnation), the CAPABILITY TABLE
-//     (capability-table.ts — the routing table) and the SUBSCRIPTIONS table
-//     (subscriptions.ts — who is sent each batch). Runtime state IS reduced state — observability
-//     is their snapshots (`itx.facets.get('core' | 'capability-table' | 'subscriptions')`);
+//     pipeline (validation + the pause check + idempotency + offsets + chunking + waitForEvent +
+//     the alarm armer), plus `wake()` — the constructor's created/woken records. The DO's
+//     append/read/waitForEvent are thin wrappers; the stream's injected callbacks (paused /
+//     reduceAtCommit / onCommit) close over this class — nothing in stream/stream.ts reaches back;
+//   • the CORE REDUCE — ONE reduce-only processor (core-processor.ts) folded INSIDE the commit
+//     transaction, always on: who this context is, which incarnation runs, whether appends are
+//     paused, the CAPABILITY MOUNTS every call routes through (capability-table.ts reads them) and
+//     the SUBSCRIPTION rows every commit is sent to (subscriptions.ts builds their events). Runtime
+//     state IS reduced state — observability is its snapshot (`itx.facets.get('core')`);
 //   • SUBSCRIPTION DELIVERY — ONE loop (subscription-delivery.ts) run from onCommit: evaluate each
 //     subscription's target and look at the value — a facet or a live stub owns its progress and
 //     is pushed; anything else gets a cursor the stream keeps, at-least-once, retries on this DO's
@@ -41,7 +41,7 @@ import {
   versionedFacet,
   type WorkerSource,
 } from "./context/worker-loader.ts";
-import { assertCanAppend, CoreStreamProcessor, type CoreState } from "./stream/core-processor.ts";
+import { CoreContract, CoreStreamProcessor, type CoreState } from "./stream/core-processor.ts";
 import { codedError, reportIssue } from "./lib/errors.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/events.ts";
 import {
@@ -56,7 +56,7 @@ import {
   serveCapabilityFetchLane,
   type PartialFetch,
 } from "./fetch/fetch-capabilities.ts";
-import { InlineReduces } from "./stream/inline-reduces.ts";
+import { InlineReduce } from "./stream/inline-reduce.ts";
 import { invokePath } from "./context/dispatch.ts";
 import { FacetHandle, RpcStubHandle } from "./context/invoke-handle.ts";
 import { localContext, Stream, type WaitForEventFilter } from "./stream/stream.ts";
@@ -68,14 +68,17 @@ import {
 } from "./context/hibernatable-rpc-stub.ts";
 import { DurableObjectNameCodec } from "./context/durable-object-names.ts";
 import { itxEntrypointFor } from "./itx-entrypoint.ts";
-import { CapabilityTableProcessor, type CapabilityTable } from "./context/capability-table.ts";
-import type { StreamProcessor } from "./stream/processor.ts";
+import {
+  CapabilityResolver,
+  capabilityProvidedEvent,
+  capabilityRevokedEvent,
+} from "./context/capability-table.ts";
 import {
   buildBuiltIns,
   type BuiltInsEnv,
   type SubscriptionListEntry,
 } from "./context/built-ins.ts";
-import { SubscriptionsProcessor, type SubscriptionsState } from "./stream/subscriptions.ts";
+import { subscriptionConfiguredEvent, subscriptionRemovedEvent } from "./stream/subscriptions.ts";
 import { SubscriptionDelivery } from "./stream/subscription-delivery.ts";
 
 function parseIterateContextDurableObjectName(name: string | undefined) {
@@ -86,18 +89,13 @@ function parseIterateContextDurableObjectName(name: string | undefined) {
   return DurableObjectNameCodec.parse(name);
 }
 
-/** The three reduce-only processors this DO reduces inline at the commit point — always on, never
- *  deletable; their slugs are facet-shaped addresses (`itx.facets.get('core')`) and reserved as
- *  subscription names. */
 /** How long one facet call may take before the facet is aborted (see #invokeFacet). Generous: a
  *  processor's cold catch-up over a long log is legitimate work; a call still silent after this is
  *  a hang, and a hung facet would pin this actor awake forever. */
 const FACET_CALL_TIMEOUT_MS = 60_000;
-const INLINE_REDUCE_SLUGS = ["core", "capability-table", "subscriptions"] as const;
-const isInlineReduce = (slug: string): boolean =>
-  (INLINE_REDUCE_SLUGS as readonly string[]).includes(slug);
-/** The core processor is stateless (pure reduce) — one module-level instance serves every DO. */
-const CORE_PROCESSOR = new CoreStreamProcessor();
+/** The core reduce's facet-shaped address (`itx.facets.get('core')`) — always on, never deletable,
+ *  and reserved as a subscription name. */
+const CORE = CoreContract.slug;
 
 /** The startup memo of a hosted facet — `facet:<name>` in this DO's kv: which loaded class it is.
  *  A CACHE, not truth (the truth is the expression that first named it —
@@ -106,17 +104,17 @@ const CORE_PROCESSOR = new CoreStreamProcessor();
  *  expression in hand. */
 type FacetMemo = { source: string; className: string };
 
-// The parent hosts the INLINE REDUCES (the routing table, the subscriptions, the core reduce),
+// The parent folds the CORE REDUCE inline (identity, pause, the routing table, the subscriptions),
 // so it needs the full roots env.
 export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
-  /** WHO THIS DO IS — parsed ONCE from the unforgeable codec name; carries projectId, path
-   *  AND its canonical string form (`.name`). A stream is only ever reached `getByName`; an
-   *  id-addressed instance fails right here in the constructor, before it can touch anything. */
-  readonly #address = parseIterateContextDurableObjectName(this.ctx.id.name);
+  /** WHO THIS DO IS — the first line, the apps/os shape: the DO name parsed ONCE into `{ name,
+   *  projectId, path }` (`name` is the codec string itself). A context is only ever reached
+   *  `getByName`; an id-addressed instance fails right here, before it can touch anything. */
+  readonly #name = parseIterateContextDurableObjectName(this.ctx.id.name);
   /** The `env.ITX` / `globalOutbound` stub every worker this context loads receives — a loopback onto
    *  this worker's own ItxEntrypoint with this context's name as its one prop. Minted once: it names
    *  the context, not an incarnation, and a warm loader never re-reads it anyway. */
-  readonly #itxHost = itxEntrypointFor(this.ctx, this.#address.name);
+  readonly #itxHost = itxEntrypointFor(this.ctx, this.#name.name);
   /** The live-capability fetch subsystem (fetch/fetch-capabilities.ts) — the DO wires its three
    *  halves directly: the upgrade-leg door (fetch), frame forwarding (webSocketMessage), and
    *  peer close (webSocketClose); the rpc-stub directory borrows it for serve(). */
@@ -153,32 +151,32 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
     this.ctx.setWebSocketAutoResponse(
       new WebSocketRequestResponsePair(STUB_PAGER_KEEPALIVE_REQUEST, STUB_PAGER_KEEPALIVE_RESPONSE),
     );
+    // THE WAKE RECORD, synchronously, before any door opens (the apps/os shape): the first
+    // incarnation appends `stream/created { projectId, path }`, every incarnation `stream/woken` —
+    // so the core reduce knows who it is and which incarnation runs before the first append, read
+    // or facet call, and the wake fan-out re-establishes deliveries after hibernation.
+    this.#stream.wake();
   }
 
-  /** THE STREAM — the commit point (see stream/stream.ts: validation + admission + idempotency +
-   *  offsets + the wake record + waitForEvent + the alarm armer, one DI'd class). The name check
-   *  already happened in the constructor (`#address`); the stream itself is storage-lazy. Its
-   *  three deps close over this DO: `assertCanAppend` reads the core reduce (all pause/breaker
-   *  reasoning lives in core-processor.ts), `reduceAtCommit` runs the INLINE REDUCES inside the
-   *  commit transaction (the routing table, the subscriptions and the core state are atomically
-   *  exact as of the last committed event, always), and `onCommit` is the post-commit fan-out:
-   *  the ONE delivery loop, then the inline reduces' own live-state deltas. */
+  /** THE STREAM — the commit point (see stream/stream.ts: validation + the pause check + idempotency
+   *  + offsets + the wake record + waitForEvent + the alarm armer, one DI'd class). The name check
+   *  already happened above (`#name`). Its deps close over this DO: `paused` reads the core reduce,
+   *  `reduceAtCommit` runs the core reduce inside the commit transaction (the routing table, the
+   *  subscriptions and the pause state are atomically exact as of the last committed event, always),
+   *  and `onCommit` is the post-commit fan-out: the ONE delivery loop, then core's live-state delta. */
   readonly #stream = new Stream({
     storage: this.ctx.storage,
-    path: this.#address.path,
-    assertCanAppend: (inputs) =>
-      assertCanAppend(this.#coreState(), inputs, Date.now(), (k) =>
-        this.#stream.hasIdempotencyKey(k),
-      ),
+    path: this.#name.path,
+    projectId: this.#name.projectId,
+    paused: () => this.#core().paused,
     reduceAtCommit: (justCommitted, after, next) =>
-      this.#inlineReduces.reduceAtCommit(justCommitted, after, next),
+      this.#coreReduce.reduceAtCommit(justCommitted, after, next),
     onCommit: (fresh, scannedAfterOffset, nextOffset) => {
       this.#delivery.onCommit(fresh, scannedAfterOffset, nextOffset);
-      // INLINE LIVE STATE, post-commit (the InlineReduces seam — the stream stays ignorant of which
-      // reduces are inline): each commit-changed entry `set`s its state, appending the standard
-      // ephemeral live-state/changed delta back through this DO's own append door (a nested
-      // commit — terminating, because the delta changes no inline state).
-      this.#inlineReduces.publishLiveStateChanges();
+      // CORE LIVE STATE, post-commit: a commit that changed the core state `set`s it, appending the
+      // standard ephemeral live-state/changed delta back through this DO's own append door (a
+      // nested commit — terminating, because the delta changes no core state).
+      this.#coreReduce.publishLiveStateChange();
     },
   });
 
@@ -208,43 +206,34 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
     return this.#stream.read(afterOffset, limit);
   }
 
-  // ── THE INLINE REDUCES: reduce-only processors reduced at the stream's commit point. The engine —
-  // rehydrate / catch up / reduce-at-commit / checkpoint / publish-live-state — lives in
-  // stream/inline-reduces.ts; this DO owns only the DEFS (which processors are inline), because
-  // BUILDING them is its wiring below. ──
-  readonly #inlineReduces = new InlineReduces({
+  // ── THE CORE REDUCE, hosted inline at the stream's commit point (stream/inline-reduce.ts:
+  // rehydrate / catch up / reduce-at-commit / checkpoint / publish-live-state). Its state is
+  // everything this DO reads synchronously: pause (the append door), mounts (every invoke),
+  // subscriptions (the delivery loop), and who/which incarnation this is. ──
+  readonly #coreReduce = new InlineReduce(new CoreStreamProcessor(), {
     kv: this.ctx.storage.kv,
     read: (after, limit) => this.#stream.read(after, limit),
-    head: () => this.#stream.durableMark(), // inline reduces fold durables: their head is the mark
-    defs: () => this.#inlineReduceDefs(),
+    head: () => this.#stream.durableMark(), // the reduce folds durables: its head is the mark
     // The live-state deltas ride this DO's OWN append door, so they are admitted, committed, and
     // fanned out like any other ephemeral event (and a paused stream refuses them — the
     // lossy-by-contract gap LiveState.set contains).
     sink: { append: (event) => this.append(event) },
   });
-  #capabilityTableInstance?: CapabilityTableProcessor;
-  #subscriptionsInstance?: SubscriptionsProcessor;
-
-  /** The three inline reduced states, typed in ONE place. */
-  #table(): CapabilityTable {
-    return this.#inlineReduces.entry("capability-table").state as CapabilityTable;
-  }
-  #coreState(): CoreState {
-    return this.#inlineReduces.entry("core").state as CoreState;
-  }
-  #subscriptions(): SubscriptionsState {
-    return this.#inlineReduces.entry("subscriptions").state as SubscriptionsState;
+  /** The core state, current as of the last commit. */
+  #core(): CoreState {
+    return this.#coreReduce.entry().state;
   }
 
-  /** THE capability host, parent-constructed: same class, same contract, zero distance. */
-  #capabilityTableProcessor(): CapabilityTableProcessor {
-    if (this.#capabilityTableInstance) return this.#capabilityTableInstance;
-    const { projectId, path } = this.#address;
+  #resolverInstance?: CapabilityResolver;
+  /** THE DISPATCHER, parent-constructed over the built-ins (context/capability-table.ts). */
+  #resolver(): CapabilityResolver {
+    if (this.#resolverInstance) return this.#resolverInstance;
+    const { projectId, path } = this.#name;
     const ownContext = localContext(this); // the own DO as a uniform-async Context (stream/stream.ts)
     const builtIns = buildBuiltIns({
       projectId,
       path,
-      contextName: this.#address.name,
+      contextName: this.#name.name,
       env: this.env,
       invoke: (call) => this.invoke(call),
       context: (p) =>
@@ -256,8 +245,16 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
       // RpcTarget so `itx.rpcStubs.get('k').hello()` pipelines the mid-chain `.hello()` on every lane
       // — workerd's classifier rejects a Proxy, #6873), branded RpcStubHandle for the delivery loop.
       rpcStubs: {
+        // Re-note AFTER the call: this invoke may have paged the stub in, and a retained stub is
+        // exactly what the quiet clock exists to dispose — the arm must not wait for the next call.
         get: (key) =>
-          new RpcStubHandle((segments, args) => this.#rpcStubs.invoke(key, segments, args)),
+          new RpcStubHandle(async (segments, args) => {
+            try {
+              return await this.#rpcStubs.invoke(key, segments, args);
+            } finally {
+              this.#noteActivity();
+            }
+          }),
         list: () => this.#rpcStubs.list(),
       },
       // The facets view is PARENT-LOCAL — the facets live here and can never move (workerd#6702:
@@ -272,48 +269,18 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
       },
       exportsCtx: this.ctx,
     });
-    const proc = new CapabilityTableProcessor({
-      stream: {
-        append: (...events) => this.append(...events),
-        read: (after, limit) => Promise.resolve(this.read(after, limit)),
-      },
+    return (this.#resolverInstance = new CapabilityResolver({
       builtIns,
-      // Resolve one call against the CURRENT table (the `itx` recursion symbol re-enters here).
+      // Resolve one call against the CURRENT mounts (the `itx` recursion symbol re-enters here).
       resolveCurrent: (call, depth) => this.invoke(call, depth),
-    });
-    this.#capabilityTableInstance = proc;
-    return proc;
-  }
-
-  #subscriptionsProcessor(): SubscriptionsProcessor {
-    return (this.#subscriptionsInstance ??= new SubscriptionsProcessor(
-      {
-        append: (...events) => this.append(...events),
-        read: (after, limit) => Promise.resolve(this.read(after, limit)),
-      },
-      INLINE_REDUCE_SLUGS,
-    ));
-  }
-
-  #inlineReduceDefs(): { slug: string; proc: StreamProcessor<unknown> }[] {
-    return [
-      { slug: "core", proc: CORE_PROCESSOR as StreamProcessor<unknown> },
-      {
-        slug: "capability-table",
-        proc: this.#capabilityTableProcessor() as StreamProcessor<unknown>,
-      },
-      {
-        slug: "subscriptions",
-        proc: this.#subscriptionsProcessor() as StreamProcessor<unknown>,
-      },
-    ];
+    }));
   }
 
   // ── SUBSCRIPTION DELIVERY: the one loop (subscription-delivery.ts), wired to this DO ──
 
   readonly #delivery = new SubscriptionDelivery({
     kv: this.ctx.storage.kv,
-    subscriptions: () => this.#subscriptions(),
+    subscriptions: () => this.#core().subscriptions,
     read: (after, limit) => this.#stream.read(after, limit),
     head: () => this.#stream.durableMark(), // a persisted cursor may never point past the mark
     append: (event) => this.append(event),
@@ -333,18 +300,24 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
     target: ItxExpression;
     consumes?: string[];
   }): Promise<{ name: string; configuredAtOffset: number }> {
-    return this.#subscriptionsProcessor().configure(this.#subscriptions(), input);
+    const rows = this.#core().subscriptions;
+    const event = subscriptionConfiguredEvent(rows, input);
+    if (!event)
+      return { name: input.name, configuredAtOffset: rows[input.name].configuredAtOffset };
+    const [committed] = await this.append(event);
+    return { name: input.name, configuredAtOffset: committed.offset };
   }
 
   /** Remove a subscription. Idempotent. A cursor target's cursor goes with it — the delivery loop
    *  drops it when the removed event commits (so a hand-appended removal is honoured the same way). */
   async removeSubscription(name: string): Promise<void> {
-    await this.#subscriptionsProcessor().remove(this.#subscriptions(), name);
+    const event = subscriptionRemovedEvent(this.#core().subscriptions, name);
+    if (event) await this.append(event);
   }
 
   /** The `itx.subscriptions` view: the reduced table joined with the delivery loop's cursors. */
   #subscriptionList(): SubscriptionListEntry[] {
-    return Object.entries(this.#subscriptions().subscriptions).map(([name, s]) => {
+    return Object.entries(this.#core().subscriptions).map(([name, s]) => {
       const cursor = this.#delivery.cursor(name);
       return {
         name,
@@ -370,15 +343,12 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   #lastActivityMs = 0;
   #noteActivity(): void {
     this.#lastActivityMs = Date.now();
-    // VIRGIN-PROBE GUARD (the storage-lazy doctrine, stream/stream.ts header): skip the quiet-clock
-    // arm when there is NOTHING the quiet clock exists for — no live facet to quiesce and a stream
-    // that never wrote (`currentIncarnation()` is a non-minting kv read). Without this, a bare
-    // probe (`itx.facets.get('core').snapshot()` rides invoke → here) wrote a durable alarm on a
-    // NEVER-TOUCHED context: one storage write + one billed wake, and workerd defers auto-deleting
-    // the empty object until the pointless alarm fires. `#lastActivityMs` still updates, so the
-    // first real write (or facet materialization — #invokeFacet's `finally` re-notes after
-    // `#liveFacets` grows) arms with an honest quiet-period start.
-    if (this.#liveFacets.size === 0 && this.#stream.currentIncarnation() === 0) return;
+    // NOTHING TO QUIESCE, NO ALARM: the quiet clock exists to abort idle facets and dispose paged-in
+    // stubs (alarm()). With neither, arming it is one storage write plus one billed wake for
+    // nothing — a bare probe (`itx.facets.get('core').snapshot()` rides invoke → here) must not pay
+    // that. `#lastActivityMs` still updates, so the first facet materialization (#invokeFacet's
+    // `finally` re-notes after `#liveFacets` grows) or page-in arms with an honest quiet-period start.
+    if (this.#liveFacets.size === 0 && !this.#rpcStubs.hasRetainedStubs()) return;
     this.#stream.armNoLaterThan(this.#lastActivityMs + 60_000);
   }
 
@@ -456,7 +426,7 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
         call,
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
-            if (!isInlineReduce(facetName)) {
+            if (facetName !== CORE) {
               try {
                 this.ctx.facets.abort(facetName, "call timed out");
               } catch {
@@ -515,11 +485,11 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
       };
       return this.#facet(ref.name ?? ref.className, memo);
     }
-    if (isInlineReduce(ref)) {
-      const entry = this.#inlineReduces.entry(ref);
+    if (ref === CORE) {
+      const entry = this.#coreReduce.entry();
       return {
         snapshot: () => ({ offset: entry.throughOffset, state: entry.state }),
-        liveSnapshot: () => this.#inlineReduces.liveSnapshot(ref),
+        liveSnapshot: () => this.#coreReduce.liveSnapshot(),
         waitUntilProcessed: () => ({ ok: true }),
       };
     }
@@ -562,7 +532,7 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
       invoke: (e) => this.invoke(e),
       host: this.#itxHost,
       kind: "facet",
-      owner: facetLoaderOwner(this.#address.name, memo.className),
+      owner: facetLoaderOwner(this.#name.name, memo.className),
       source: parse(memo.source) as WorkerSource,
       mainModule: "cap.js",
       what: `facet "${name}"`,
@@ -580,7 +550,7 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
       facetName: name,
       markerKey: `facet:${name}:version`,
       version,
-      props: { contextName: this.#address.name, name },
+      props: { contextName: this.#name.name, name },
     });
     this.#liveFacets.add(name); // live from here: the quiesce alarm aborts it when idle
     return facet;
@@ -589,8 +559,7 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   /** Delete a facet, storage included (`itx.facets.delete(name)`; `disableProcessor` ends here). A
    *  re-load into the same name is a clean rebuild, never a resume from orphaned state. */
   #deleteFacet(name: string): void {
-    if (isInlineReduce(name))
-      throw new Error(`"${name}" is an inline reduce — always on, never a facet`);
+    if (name === CORE) throw new Error(`"${name}" is the core reduce — always on, never a facet`);
     // facets.delete exists unconditionally on every runtime we run (production workerd,
     // wrangler-local, the vitest-plugin lane).
     this.ctx.facets.delete(name);
@@ -600,15 +569,14 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
     this.#resolvedFacetSource.delete(name);
   }
 
-  // ── dispatch (ONE path: the routing table — the inline capability-table reduce, zero distance) ──
+  // ── dispatch (ONE path: the routing table — the core reduce's mounts, zero distance) ──
 
   /** Resolve + run one call against the current table. The ONE dispatch door — `IterateContext` builds the
    *  call Expression client-side and hands it here (the ARRAY half can carry call args a dotted
    *  STRING never could — callbacks, Dates, bytes: `["itx","tools",["transform",21,cb]]`). */
   async invoke(call: ItxExpression, depth = 0): Promise<unknown> {
     this.#noteActivity();
-    const state = this.#table();
-    return this.#capabilityTableProcessor().resolve(state, toExpression(call), undefined, depth);
+    return this.#resolver().resolve(this.#core().mounts, toExpression(call), undefined, depth);
   }
 
   /** Mount a capability: `path ⇒ target` (an expression rooted at itx). That is the whole event.
@@ -626,7 +594,10 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
     const winner = this.#newestMountAt(pathString);
     if (winner && print(winner.target) === targetString)
       return { providedAtOffset: winner.providedAtOffset };
-    return this.#capabilityTableProcessor().provide({ path: pathString, target: input.target });
+    const [committed] = await this.append(
+      capabilityProvidedEvent({ path: pathString, target: input.target }),
+    );
+    return { providedAtOffset: committed.offset };
   }
 
   /** Revoke by the mount's identity — or by its capability path (pops the newest winner at that
@@ -639,19 +610,19 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
     if (input.providedAtOffset !== undefined) {
       // By identity: append the revoked event even for an already-gone row (idempotent through
       // the reduce — a benign double-revoke must stay silent).
-      await this.#capabilityTableProcessor().revoke({ providedAtOffset: input.providedAtOffset });
+      await this.append(capabilityRevokedEvent(input.providedAtOffset));
       return;
     }
     if (!input.path) throw new Error("revokeCapability: pass providedAtOffset or path");
     const pathString = canonicalCapabilityPath(input.path);
     const winner = this.#newestMountAt(pathString);
     if (!winner) throw new Error(`no mount at path ${JSON.stringify(pathString)}`);
-    await this.#capabilityTableProcessor().revoke({ providedAtOffset: winner.providedAtOffset });
+    await this.append(capabilityRevokedEvent(winner.providedAtOffset));
   }
 
   /** The mount answering at a canonical path right now — the newest of its shadow stack. */
   #newestMountAt(pathString: string) {
-    return this.#table()
+    return this.#core()
       .mounts.filter((m) => m.path.join(".") === pathString)
       .sort((a, b) => b.providedAtOffset - a.providedAtOffset)[0];
   }
@@ -669,7 +640,7 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
       (r) => this.#liveCapabilityFetch.acceptFetchUpgradeLeg(r),
       (r) =>
         serveCapabilityFetchLane(r, (expr, req) =>
-          this.#capabilityTableProcessor().resolveFetch(this.#table(), expr, req),
+          this.#resolver().resolveFetch(this.#core().mounts, expr, req),
         ),
     ];
     for (const door of doors) {
@@ -679,12 +650,11 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
     return this.#egress(request);
   }
 
-  // OBSERVABILITY has no dedicated verb: runtime state IS reduced state. Incarnation, pause, and
-  // the breaker are the core reduce (`itx.facets.get('core').snapshot()`); mounts are the
-  // capability table (`itx.facets.get('capability-table').snapshot()`); subscriptions and their
-  // cursors are `itx.subscriptions.list()`. The snapshots read the inline reduces only — on a
-  // VIRGIN context a probe mints nothing, the quiet-clock alarm included (#noteActivity skips the
-  // arm when no facet is live and the stream never wrote; pinned in __workers-tests__/do-doors).
+  // OBSERVABILITY has no dedicated verb: runtime state IS reduced state. Identity, incarnation,
+  // pause, the mounts and the subscription rows are ONE snapshot — `itx.facets.get('core').snapshot()`;
+  // subscriptions joined with their cursors are `itx.subscriptions.list()`. A snapshot reads the
+  // core reduce only: it never arms the quiet-clock alarm (#noteActivity arms only once a facet is
+  // live or the stream wrote beyond its own wake record).
   // PRESENCE — which stubs have a transport RIGHT NOW — is physical, never event-derivable:
   // `itx.rpcStubs.list()` on the itx surface, and the socket census below for the probes.
 
@@ -704,7 +674,7 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   async #egress(request: Request): Promise<Response> {
     const sub = await substituteHeaderSecrets(request, "project", (name) =>
       this.env.SECRETS_KV
-        ? this.env.SECRETS_KV.get(`secret:${this.#address.projectId}:${name}`)
+        ? this.env.SECRETS_KV.get(`secret:${this.#name.projectId}:${name}`)
         : null,
     );
     const unresolvedProjectToken = (value: string) =>

@@ -129,7 +129,7 @@ export async function presence(itx: any): Promise<string[]> {
 /** The paths of the table's LIVE MOUNTS — rows whose target names the `itx.rpcStubs` registry.
  *  Pure data: this set does NOT shrink when a provider dies; it shrinks on revoke. */
 export async function rpcStubMountPaths(itx: any): Promise<string[]> {
-  const snap: any = await itx.invokeCapability("itx.facets.get('capability-table').snapshot()");
+  const snap: any = await itx.invokeCapability("itx.facets.get('core').snapshot()");
   return (snap.state.mounts as { path: string[]; target: unknown }[])
     .filter((m) => Array.isArray(m.target) && m.target[0] === "itx" && m.target[1] === "rpcStubs")
     .map((m) => m.path.join("."));

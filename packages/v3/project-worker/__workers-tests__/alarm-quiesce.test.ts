@@ -159,7 +159,7 @@ test("QUIESCE THEN EVICT THEN WAKE: the facet re-drives from its durable checkpo
   await evictDurableObject(s);
 
   const after = await snapCounter(ctx); // wakes a fresh incarnation → catch-up from the durable checkpoint
-  expect(after.state.n).toBeGreaterThanOrEqual(5); // subscription-configured (1) + b/1..b/4 (4), + the wake record
+  expect(after.state.n).toBeGreaterThanOrEqual(7); // created + woken (2) + subscription-configured (1) + b/1..b/4 (4), + the new incarnation's woken
   expect(after.state.n).toBe(await durableCount(ctx)); // EXACTLY one reduce per durable event across the eviction
 });
 
@@ -236,7 +236,7 @@ test("SCALE DROP + QUIESCE + EVICT + WAKE: a revoked live capability stays gone;
 
   // The mount at itx.k3 is gone from the table (revoke popped it), and the survivors' mounts
   // stayed — the table is data, untouched by the eviction.
-  const snap = (await caller.invokeCapability("itx.facets.get('capability-table').snapshot()")) as {
+  const snap = (await caller.invokeCapability("itx.facets.get('core').snapshot()")) as {
     state: { mounts: { path: string[] }[] };
   };
   const mounted = snap.state.mounts.map((m) => m.path.join("."));

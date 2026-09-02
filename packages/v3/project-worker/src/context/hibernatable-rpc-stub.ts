@@ -218,6 +218,12 @@ export class HibernatableRpcStubManager {
   readonly #closedSockets = new WeakSet<WebSocket>();
 
   /** Observability: `dormant` ⇒ nothing paged in (the DO can hibernate; stubs stay attached). */
+  /** Is any stub paged in right now? O(1) — the quiet clock's reason to exist (a retained stub pins
+   *  the actor awake until the idle quiesce disposes it). */
+  hasRetainedStubs(): boolean {
+    return this.#retained.size > 0;
+  }
+
   state(): Record<string, unknown> {
     return {
       stubs: this.all().length,

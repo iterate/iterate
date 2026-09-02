@@ -14,7 +14,6 @@ type ErrorCode =
   | "NO_CAPABILITY_MATCH"
   | "IDEMPOTENCY_CONFLICT"
   | "STREAM_PAUSED"
-  | "STREAM_BREAKER_OPEN"
   | "CONNECTION_OFFLINE" // a live capability's transport is gone right now (row present, stub unreachable)
   | "NOT_A_METHOD" // the dotted path's terminal segment is not callable on the target
   | "NO_FACET" // no facet of that name has been loaded into this context

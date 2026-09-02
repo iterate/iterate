@@ -54,9 +54,9 @@ test("a provider drops and re-provides at the same path — offline in between (
   const ctx = freshCtx("recon");
   const itx = openItx(ctx);
   const mountsAtP = async (): Promise<unknown[]> =>
-    (
-      await itx.invokeCapability("itx.facets.get('capability-table').snapshot()")
-    ).state.mounts.filter((m: { path: string[] }) => m.path.join(".") === "itx.p");
+    (await itx.invokeCapability("itx.facets.get('core').snapshot()")).state.mounts.filter(
+      (m: { path: string[] }) => m.path.join(".") === "itx.p",
+    );
 
   // 1. provider provides a live capability at itx.p → callable through the path.
   let providerSession = session();
