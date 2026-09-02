@@ -25,7 +25,10 @@ test("registration lands on the runner's own expected-fail variant", async () =>
   // what makes the pin native to the runner's reporting (summary counts,
   // telemetry expectedState).
   expect(plain).not.toHaveBeenCalled();
-  expect(registered).toMatchObject([{ args: ["name", { timeout: 123 }] }]);
+  // The registrar timeout is forced to the wrapper's own deadline + 1s so the
+  // runner never fires before the wrapper's race resolves — a caller-passed
+  // timeout (123) is overridden (default timeoutMs 30_000 → 31_000).
+  expect(registered).toMatchObject([{ args: ["name", { timeout: 31_000 }] }]);
   // The wrapped body forwards playwright-style fixtures, and a pinned throw
   // passes through to satisfy the expected-fail machinery.
   await expect(registered[0]!.body({ page: "fake-page" })).rejects.toThrow(/pinned/);

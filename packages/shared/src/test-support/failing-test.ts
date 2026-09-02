@@ -67,6 +67,7 @@ export function failing<TestFn extends (...args: any[]) => any>(
     // ({ page, ... }, testInfo), vitest context — whatever the wrapped test
     // function provides.
     const wrapped = async (...bodyArgs: any[]) => {
+      (test as any).setTimeout?.(timeoutMs + 1000);
       // Race the body against the wrapper's own deadline: a hung body must
       // fail as NOT-the-pinned-failure rather than letting the runner's test
       // timeout fire, which the expected-fail machinery would count as the
@@ -86,9 +87,10 @@ export function failing<TestFn extends (...args: any[]) => any>(
       ]).finally(() => clearTimeout(timer));
 
       if (outcome.kind === "failed") {
-        // The ONLY throw allowed out: the pinned failure, which satisfies the
-        // runner's expected-fail machinery.
-        if (failure.test(String(outcome.error))) throw outcome.error;
+        if (failure.test(String(outcome.error))) {
+          throw outcome.error; // The ONLY throw allowed out: the pinned failure, which satisfies the runner's expected-fail machinery.
+        }
+
         console.error(
           `[failing-test] Expected failure to match /${failure.source}/, got a different failure — ` +
             `this run proves nothing about the pinned bug:`,
@@ -116,7 +118,8 @@ export function failing<TestFn extends (...args: any[]) => any>(
     // the runner would instantiate none of them — so present the body's own
     // source when the runner looks.
     Object.defineProperty(wrapped, "toString", { value: () => body.toString() });
-    return failer(...args.slice(0, -1), wrapped);
+    const options = Object.assign({}, ...args.slice(1, -1), { timeout: timeoutMs + 1000 });
+    return failer(args[0], options, wrapped);
   };
   // The cast restates the contract the wrapper keeps by construction: it
   // forwards every argument unchanged except the trailing body, which it

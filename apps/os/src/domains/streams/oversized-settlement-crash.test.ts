@@ -29,7 +29,7 @@
 import { execFileSync } from "node:child_process";
 import { rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, test } from "vitest";
 import { failing } from "@iterate-com/shared/test-support/failing-test";
 
 const ISOLATE_BUDGET_MB = 96;
@@ -44,7 +44,7 @@ const OOM_SIGNATURE =
 describe("stream DO isolate under an oversized settlement (real processors)", () => {
   // Guard rail: the real folds + deliveries over a small settlement fit the
   // budget comfortably. If this fails, the fixture is what OOMs, not the bug.
-  it("survives comfortably when the settlement is small", () => {
+  test("survives comfortably when the settlement is small", { timeout: 10_000 }, () => {
     const control = runReplay(CONTROL_CHARS);
     expect(control.kind).toBe("survived");
     expect(control.output).toContain("SURVIVED");
@@ -69,7 +69,7 @@ describe("stream DO isolate under an oversized settlement (real processors)", ()
   //   (import error, etc.)   other-failure" → does NOT match → failing() reports
   //                          red. A child abort that is not a real OOM proves
   //                          nothing and must not hold the pin.
-  const failOOM = failing(it, /Incident kind: oom/);
+  const failOOM = failing(test, /Incident kind: oom/);
   failOOM("survives the real folds re-materializing an oversized settlement", () => {
     const incident = runReplay(INCIDENT_CHARS);
     const message = `Incident kind: ${incident.kind}. Budget: ${ISOLATE_BUDGET_MB}MB. Output:\n${incident.output.slice(-500)}`;
